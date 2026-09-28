@@ -1,0 +1,7 @@
+#!/bin/sh
+# Install as root-owned /usr/local/libexec/eu4-powermetrics; accepts no arguments.
+set -eu
+if [ "$#" -ne 0 ]; then
+  exit 64
+fi
+exec /usr/bin/powermetrics -i 1000 -n 420 -s tasks,cpu_power,gpu_power,thermal -f plist --show-process-gpu
