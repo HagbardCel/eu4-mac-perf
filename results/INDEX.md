@@ -9,5 +9,7 @@
 | `20260927T141040Z-state-cache` | State-cache validation (six phases) | [validation.md](20260927T141040Z-state-cache/validation.md) |
 | `20260928T065747Z-autonomous` | Unattended Venice paused baseline | [summary.md](20260928T065747Z-autonomous/summary.md) |
 | (aggregate) | Autonomous reproducibility | [autonomous-reproducibility.json](autonomous-reproducibility.json) |
+| `20260928T112439Z-draw-trace` | Draw tracer baseline gate stopped before capture | `manifest.json` |
+| `20260928T113359Z-draw-trace` | One paused draw window; screening only | [draw-screening.md](20260928T113359Z-draw-trace/draw-screening.md) |
 
 For frame-rate and multithreaded GL work, see [analysis/frame-rate.md](../analysis/frame-rate.md).

@@ -11,5 +11,6 @@ results/**/powermetrics.stderr
 results/**/*.png
 results/_save_backups/
 results/**/telemetry.csv
+results/**/trace.bin
 results/.autonomous.lock
 results/.autonomous-recovery.json

@@ -1,0 +1,442 @@
+{
+  "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "image_base": 4294967296,
+  "direct_sites": [
+    {
+      "callsite_offset": 6260993,
+      "return_offset": 6260998,
+      "operation": "GfxDraw2dLines",
+      "instruction": "callq",
+      "owner_symbol": "__ZN9CEU3Idler20RenderGuiBoundsDebugEv",
+      "owner": "CEU3Idler::RenderGuiBoundsDebug()",
+      "category": "debug"
+    },
+    {
+      "callsite_offset": 14751303,
+      "return_offset": 14751308,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN22CCountryNameCollection11RenderNamesEP21GfxDeferredContextGFXP17ConstantBufferGFXS3_PK10SGfxEffectRK10CEU3CameraffffP10TextureGFXSB_",
+      "owner": "CCountryNameCollection::RenderNames(GfxDeferredContextGFX*, ConstantBufferGFX*, ConstantBufferGFX*, SGfxEffect const*, CEU3Camera const&, float, float, float, float, TextureGFX*, TextureGFX*)",
+      "category": "map_text"
+    },
+    {
+      "callsite_offset": 15507585,
+      "return_offset": 15507590,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN14CEU3BitmapFont10RenderFlagEP21GfxDeferredContextGFXPKciiRK14STextConstantsiPK10SGfxEffect",
+      "owner": "CEU3BitmapFont::RenderFlag(GfxDeferredContextGFX*, char const*, int, int, STextConstants const&, int, SGfxEffect const*)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 15563684,
+      "return_offset": 15563689,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN16CEU3GraphicalMap17RenderPostEffectsEb",
+      "owner": "CEU3GraphicalMap::RenderPostEffects(bool)",
+      "category": "postprocess"
+    },
+    {
+      "callsite_offset": 15563889,
+      "return_offset": 15563894,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN16CEU3GraphicalMap17RenderPostEffectsEb",
+      "owner": "CEU3GraphicalMap::RenderPostEffects(bool)",
+      "category": "postprocess"
+    },
+    {
+      "callsite_offset": 15564232,
+      "return_offset": 15564237,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN16CEU3GraphicalMap17RenderPostEffectsEb",
+      "owner": "CEU3GraphicalMap::RenderPostEffects(bool)",
+      "category": "postprocess"
+    },
+    {
+      "callsite_offset": 15596748,
+      "return_offset": 15596753,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN12CEU3Graphics17ShowBasicLoadTextERK7CStringbb",
+      "owner": "CEU3Graphics::ShowBasicLoadText(CString const&, bool, bool)",
+      "category": "unclassified"
+    },
+    {
+      "callsite_offset": 15686053,
+      "return_offset": 15686058,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN15CFlagTexturemap22CreateTexturesFromDiscERK7CStringP16CCountryDataBaseR12CEU3Graphicsb",
+      "owner": "CFlagTexturemap::CreateTexturesFromDisc(CString const&, CCountryDataBase*, CEU3Graphics&, bool)",
+      "category": "texture_generation"
+    },
+    {
+      "callsite_offset": 17019843,
+      "return_offset": 17019848,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN17CMaskedSpriteType18RenderMaskedSpriteEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEP10TextureGFXRK8CVector4IfESD_i",
+      "owner": "CMaskedSpriteType::RenderMaskedSprite(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, TextureGFX*, CVector4<float> const&, CVector4<float> const&, int)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 17020871,
+      "return_offset": 17020876,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN17CMaskedSpriteType16RenderCustomFlagEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEP10TextureGFXRK8CVector4IfESD_i",
+      "owner": "CMaskedSpriteType::RenderCustomFlag(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, TextureGFX*, CVector4<float> const&, CVector4<float> const&, int)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 17021584,
+      "return_offset": 17021589,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN17CMaskedSpriteType11RenderFrameEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEi",
+      "owner": "CMaskedSpriteType::RenderFrame(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, int)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 17022270,
+      "return_offset": 17022275,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN17CMaskedSpriteType13RenderOverlayEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEii",
+      "owner": "CMaskedSpriteType::RenderOverlay(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, int, int)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 17613544,
+      "return_offset": 17613549,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
+      "owner": "CPdxMapBorderLayer::DrawBorders(GfxDeferredContextGFX*, CEU3Camera const*, SBorderDrawInfoSet&, CArray<int>, int, int, float, CWrapWorldShadowMap*, char)",
+      "category": "borders"
+    },
+    {
+      "callsite_offset": 17613650,
+      "return_offset": 17613655,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
+      "owner": "CPdxMapBorderLayer::DrawBorders(GfxDeferredContextGFX*, CEU3Camera const*, SBorderDrawInfoSet&, CArray<int>, int, int, float, CWrapWorldShadowMap*, char)",
+      "category": "borders"
+    },
+    {
+      "callsite_offset": 17613752,
+      "return_offset": 17613757,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
+      "owner": "CPdxMapBorderLayer::DrawBorders(GfxDeferredContextGFX*, CEU3Camera const*, SBorderDrawInfoSet&, CArray<int>, int, int, float, CWrapWorldShadowMap*, char)",
+      "category": "borders"
+    },
+    {
+      "callsite_offset": 17619323,
+      "return_offset": 17619328,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN16CPdxMapLakeLayer9DrawLakesEPK7CCameraP21GfxDeferredContextGFXfP19CWrapWorldShadowMap",
+      "owner": "CPdxMapLakeLayer::DrawLakes(CCamera const*, GfxDeferredContextGFX*, float, CWrapWorldShadowMap*)",
+      "category": "lakes_and_rivers"
+    },
+    {
+      "callsite_offset": 17623293,
+      "return_offset": 17623298,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN23CPdxMapInlandWaterLayer15DrawInlandWaterEPK7CCameraP21GfxDeferredContextGFXfP19CWrapWorldShadowMap",
+      "owner": "CPdxMapInlandWaterLayer::DrawInlandWater(CCamera const*, GfxDeferredContextGFX*, float, CWrapWorldShadowMap*)",
+      "category": "lakes_and_rivers"
+    },
+    {
+      "callsite_offset": 17623401,
+      "return_offset": 17623406,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN23CPdxMapInlandWaterLayer15DrawInlandWaterEPK7CCameraP21GfxDeferredContextGFXfP19CWrapWorldShadowMap",
+      "owner": "CPdxMapInlandWaterLayer::DrawInlandWater(CCamera const*, GfxDeferredContextGFX*, float, CWrapWorldShadowMap*)",
+      "category": "lakes_and_rivers"
+    },
+    {
+      "callsite_offset": 17623505,
+      "return_offset": 17623510,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN23CPdxMapInlandWaterLayer15DrawInlandWaterEPK7CCameraP21GfxDeferredContextGFXfP19CWrapWorldShadowMap",
+      "owner": "CPdxMapInlandWaterLayer::DrawInlandWater(CCamera const*, GfxDeferredContextGFX*, float, CWrapWorldShadowMap*)",
+      "category": "lakes_and_rivers"
+    },
+    {
+      "callsite_offset": 17638846,
+      "return_offset": 17638851,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN15CPdxMapSkyLayer7DrawSkyEP21GfxDeferredContextGFXPK10CEU3Camera",
+      "owner": "CPdxMapSkyLayer::DrawSky(GfxDeferredContextGFX*, CEU3Camera const*)",
+      "category": "sky"
+    },
+    {
+      "callsite_offset": 17649227,
+      "return_offset": 17649232,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN19CPdxMapTerrainLayer11DrawTerrainEP21GfxDeferredContextGFXPK10CEU3Camera12ETerrainPassfP19CWrapWorldShadowMapci",
+      "owner": "CPdxMapTerrainLayer::DrawTerrain(GfxDeferredContextGFX*, CEU3Camera const*, ETerrainPass, float, CWrapWorldShadowMap*, char, int)",
+      "category": "terrain"
+    },
+    {
+      "callsite_offset": 17650423,
+      "return_offset": 17650428,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN19CPdxMapTerrainLayer9DrawWaterEP21GfxDeferredContextGFX10EWaterPassfP19CWrapWorldShadowMapi",
+      "owner": "CPdxMapTerrainLayer::DrawWater(GfxDeferredContextGFX*, EWaterPass, float, CWrapWorldShadowMap*, int)",
+      "category": "terrain"
+    },
+    {
+      "callsite_offset": 17656064,
+      "return_offset": 17656069,
+      "operation": "GfxDrawIndexedInstanced",
+      "instruction": "callq",
+      "owner_symbol": "__ZN16CPdxMapTreeLayer9DrawTreesEPK7CCameraP21GfxDeferredContextGFXf9ETreePassP19CWrapWorldShadowMapci",
+      "owner": "CPdxMapTreeLayer::DrawTrees(CCamera const*, GfxDeferredContextGFX*, float, ETreePass, CWrapWorldShadowMap*, char, int)",
+      "category": "trees"
+    },
+    {
+      "callsite_offset": 17657303,
+      "return_offset": 17657308,
+      "operation": "GfxDrawIndexedInstanced",
+      "instruction": "callq",
+      "owner_symbol": "__ZN16CPdxMapTreeLayer19DrawTreesShadowPassEP21GfxDeferredContextGFXc",
+      "owner": "CPdxMapTreeLayer::DrawTreesShadowPass(GfxDeferredContextGFX*, char)",
+      "category": "trees"
+    },
+    {
+      "callsite_offset": 18758066,
+      "return_offset": 18758071,
+      "operation": "GfxDraw2dLines",
+      "instruction": "callq",
+      "owner_symbol": "__Z17RenderTimingStatsP9CGraphics",
+      "owner": "RenderTimingStats(CGraphics*)",
+      "category": "debug"
+    },
+    {
+      "callsite_offset": 18758223,
+      "return_offset": 18758228,
+      "operation": "GfxDraw2dLines",
+      "instruction": "callq",
+      "owner_symbol": "__Z17RenderTimingStatsP9CGraphics",
+      "owner": "RenderTimingStats(CGraphics*)",
+      "category": "debug"
+    },
+    {
+      "callsite_offset": 21427868,
+      "return_offset": 21427873,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN11CBitmapFont15RenderToTextureEP21GfxDeferredContextGFXP10TextureGFXR8CVector2IiES6_RK7CStringS3_jjRKS4_IjE14FontFormattingbjbb",
+      "owner": "CBitmapFont::RenderToTexture(GfxDeferredContextGFX*, TextureGFX*, CVector2<int>&, CVector2<int>&, CString const&, TextureGFX*, unsigned int, unsigned int, CVector2<unsigned int> const&, FontFormatting, bool, unsigned int, bool, bool)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21431412,
+      "return_offset": 21431417,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN11CBitmapFont15RenderToTextureEP21GfxDeferredContextGFXP10TextureGFXR8CVector2IiES6_RK7CStringS3_jjRKS4_IjE14FontFormattingbjbb",
+      "owner": "CBitmapFont::RenderToTexture(GfxDeferredContextGFX*, TextureGFX*, CVector2<int>&, CVector2<int>&, CString const&, TextureGFX*, unsigned int, unsigned int, CVector2<unsigned int> const&, FontFormatting, bool, unsigned int, bool, bool)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21434139,
+      "return_offset": 21434144,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN11CBitmapFont14RenderToScreenERK7CString14FontFormatting22EFontVerticalAlignment15EGuiOrientationPK8CMatrix4IfE5CRectIiE8CVector2IiEPSD_ib",
+      "owner": "CBitmapFont::RenderToScreen(CString const&, FontFormatting, EFontVerticalAlignment, EGuiOrientation, CMatrix4<float> const*, CRect<int>, CVector2<int>, CVector2<int>*, int, bool)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21440127,
+      "return_offset": 21440132,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN11CBitmapFont14RenderToScreenERK7CString14FontFormatting22EFontVerticalAlignment15EGuiOrientationPK8CMatrix4IfE5CRectIiE8CVector2IiEPSD_ib",
+      "owner": "CBitmapFont::RenderToScreen(CString const&, FontFormatting, EFontVerticalAlignment, EGuiOrientation, CMatrix4<float> const*, CRect<int>, CVector2<int>, CVector2<int>*, int, bool)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21441810,
+      "return_offset": 21441815,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN11CBitmapFont14RenderToScreenERK7CString14FontFormatting22EFontVerticalAlignment15EGuiOrientationPK8CMatrix4IfE5CRectIiE8CVector2IiEPSD_ib",
+      "owner": "CBitmapFont::RenderToScreen(CString const&, FontFormatting, EFontVerticalAlignment, EGuiOrientation, CMatrix4<float> const*, CRect<int>, CVector2<int>, CVector2<int>*, int, bool)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21441962,
+      "return_offset": 21441967,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN11CBitmapFont14RenderToScreenERK7CString14FontFormatting22EFontVerticalAlignment15EGuiOrientationPK8CMatrix4IfE5CRectIiE8CVector2IiEPSD_ib",
+      "owner": "CBitmapFont::RenderToScreen(CString const&, FontFormatting, EFontVerticalAlignment, EGuiOrientation, CMatrix4<float> const*, CRect<int>, CVector2<int>, CVector2<int>*, int, bool)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21448731,
+      "return_offset": 21448736,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN11CBitmapFont8Render3dERK7CString14FontFormattingiRKN5Eigen6MatrixIfLi3ELi1ELi0ELi3ELi1EEES8_S8_ffPK7CCameraii",
+      "owner": "CBitmapFont::Render3d(CString const&, FontFormatting, int, Eigen::Matrix<float, 3, 1, 0, 3, 1> const&, Eigen::Matrix<float, 3, 1, 0, 3, 1> const&, Eigen::Matrix<float, 3, 1, 0, 3, 1> const&, float, float, CCamera const*, int, int)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21460217,
+      "return_offset": 21460222,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN11CBitmapFont14RenderIconQuadEP21GfxDeferredContextGFXP10TextureGFXRK8CVector2IiES7_RKNS_7SUVInfoEPK10SGfxEffect",
+      "owner": "CBitmapFont::RenderIconQuad(GfxDeferredContextGFX*, TextureGFX*, CVector2<int> const&, CVector2<int> const&, CBitmapFont::SUVInfo const&, SGfxEffect const*)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21523156,
+      "return_offset": 21523161,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN23CCorneredTileSpriteType6RenderEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEftP10TextureGFXRK6CColorP15VertexBufferGFX",
+      "owner": "CCorneredTileSpriteType::Render(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, float, unsigned short, TextureGFX*, CColor const&, VertexBufferGFX*)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21528663,
+      "return_offset": 21528668,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZNK16CDebugLineHelper16Draw3dDebugLinesEP19GfxMasterContextGFXP9CGraphicsRKN5Eigen6MatrixIfLi4ELi4ELi0ELi4ELi4EEEjPKfPKhi",
+      "owner": "CDebugLineHelper::Draw3dDebugLines(GfxMasterContextGFX*, CGraphics*, Eigen::Matrix<float, 4, 4, 0, 4, 4> const&, unsigned int, float const*, unsigned char const*, int) const",
+      "category": "debug"
+    },
+    {
+      "callsite_offset": 21662566,
+      "return_offset": 21662571,
+      "operation": "GfxDraw2dLines",
+      "instruction": "callq",
+      "owner_symbol": "__ZN9NGuiDebug15RenderGuiBoundsE7CString",
+      "owner": "NGuiDebug::RenderGuiBounds(CString)",
+      "category": "debug"
+    },
+    {
+      "callsite_offset": 21791748,
+      "return_offset": 21791753,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN14CPdxMeshObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraibb",
+      "owner": "CPdxMeshObject::RenderBuckets(CGraphics*, GfxDeferredContextGFX*, CCamera const*, int, bool, bool)",
+      "category": "mesh_object"
+    },
+    {
+      "callsite_offset": 21793094,
+      "return_offset": 21793099,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN14CPdxMeshObject23RenderBucketsShadowPassEP9CGraphicsRP21GfxDeferredContextGFXRKN5Eigen6MatrixIfLi4ELi4ELi0ELi4ELi4EEEPK7CCamerai",
+      "owner": "CPdxMeshObject::RenderBucketsShadowPass(CGraphics*, GfxDeferredContextGFX*&, Eigen::Matrix<float, 4, 4, 0, 4, 4> const&, CCamera const*, int)",
+      "category": "mesh_object"
+    },
+    {
+      "callsite_offset": 21794286,
+      "return_offset": 21794291,
+      "operation": "GfxDrawIndexedInstanced",
+      "instruction": "callq",
+      "owner_symbol": "__ZN14CPdxMeshObject13RenderNormalsEP9CGraphicsP21GfxDeferredContextGFXPK7CCamerai",
+      "owner": "CPdxMeshObject::RenderNormals(CGraphics*, GfxDeferredContextGFX*, CCamera const*, int)",
+      "category": "mesh_object"
+    },
+    {
+      "callsite_offset": 21801199,
+      "return_offset": 21801204,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN14CPdxMeshObject23RenderBucketsShadowBlurEP9CGraphicsRP21GfxDeferredContextGFXPK7CCameraPKN5Eigen6MatrixIfLi4ELi4ELi0ELi4ELi4EEERP10TextureGFXi",
+      "owner": "CPdxMeshObject::RenderBucketsShadowBlur(CGraphics*, GfxDeferredContextGFX*&, CCamera const*, Eigen::Matrix<float, 4, 4, 0, 4, 4> const*, TextureGFX*&, int)",
+      "category": "mesh_object"
+    },
+    {
+      "callsite_offset": 21830010,
+      "return_offset": 21830015,
+      "operation": "GfxDrawIndexed",
+      "instruction": "callq",
+      "owner_symbol": "__ZN11C2dPieChart6RenderEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEftP10TextureGFX",
+      "owner": "C2dPieChart::Render(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, float, unsigned short, TextureGFX*)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21838382,
+      "return_offset": 21838387,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN22CProgressbarSpriteType6RenderEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEiRK6CColorSA_SA_",
+      "owner": "CProgressbarSpriteType::Render(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, int, CColor const&, CColor const&, CColor const&)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 21843730,
+      "return_offset": 21843735,
+      "operation": "GfxDrawIndexedInstanced",
+      "instruction": "callq",
+      "owner_symbol": "__ZN18CPdxParticleObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraP23ParticleContextPARTICLEi",
+      "owner": "CPdxParticleObject::RenderBuckets(CGraphics*, GfxDeferredContextGFX*, CCamera const*, ParticleContextPARTICLE*, int)",
+      "category": "particles"
+    },
+    {
+      "callsite_offset": 21845466,
+      "return_offset": 21845471,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN18CPdxParticleObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraP23ParticleContextPARTICLEi",
+      "owner": "CPdxParticleObject::RenderBuckets(CGraphics*, GfxDeferredContextGFX*, CCamera const*, ParticleContextPARTICLE*, int)",
+      "category": "particles"
+    },
+    {
+      "callsite_offset": 21982230,
+      "return_offset": 21982235,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN11CSpriteType14RenderInternalEP9CGraphicsPK10SGfxEffectP21GfxDeferredContextGFXRK8CMatrix4IfEftP10TextureGFXi",
+      "owner": "CSpriteType::RenderInternal(CGraphics*, SGfxEffect const*, GfxDeferredContextGFX*, CMatrix4<float> const&, float, unsigned short, TextureGFX*, int)",
+      "category": "ui_or_text"
+    },
+    {
+      "callsite_offset": 22075574,
+      "return_offset": 22075579,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN19CWrapWorldShadowMap19EndShadowScreenBlurER9CGraphicsb",
+      "owner": "CWrapWorldShadowMap::EndShadowScreenBlur(CGraphics&, bool)",
+      "category": "postprocess"
+    },
+    {
+      "callsite_offset": 22075861,
+      "return_offset": 22075866,
+      "operation": "GfxDraw",
+      "instruction": "callq",
+      "owner_symbol": "__ZN19CWrapWorldShadowMap19EndShadowScreenBlurER9CGraphicsb",
+      "owner": "CWrapWorldShadowMap::EndShadowScreenBlur(CGraphics&, bool)",
+      "category": "postprocess"
+    }
+  ],
+  "limits": [
+    "Direct call/jump inventory only; indirect calls and GL draws outside these helpers require dynamic attribution.",
+    "Static categories are broad; counts are established by the passive trace."
+  ]
+}

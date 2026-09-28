@@ -7,7 +7,7 @@ This directory holds timestamped benchmark captures. Git tracks **derived eviden
 - `metadata.json`, `manifest.json` — provenance (paths use `$HOME/` placeholders)
 - `summary.md`, `summary.json`, `validation.md`, `validation.json`, `root-cause.md`, `root-cause.json`
 - `*.csv` except `telemetry.csv`
-- `events.jsonl`, `*.bin`, `cpu-sample.txt`, `sample.stderr`
+- `events.jsonl`, small `*.bin` control files, `cpu-sample.txt`, `sample.stderr`
 - `autonomous-reproducibility.json`
 
 ## Local only (gitignored)
@@ -15,6 +15,7 @@ This directory holds timestamped benchmark captures. Git tracks **derived eviden
 - `**/*.pliststream`, `**/powermetrics.stderr` — raw `powermetrics` streams
 - `**/*.png` — scene screenshots and diagnostic images
 - `**/telemetry.csv` — high-volume diagnostic series (summaries remain tracked)
+- `**/trace.bin` — high-volume draw records (derived `draw-screening.*` remains tracked)
 - `_save_backups/` — save-file recovery copies
 
 Regenerate ignored artifacts with the commands in the project [README](../README.md) (`record`, `diagnostic`, `autonomous_runner`, etc.).

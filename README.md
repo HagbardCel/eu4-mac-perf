@@ -1,5 +1,24 @@
 # EU IV GOG power benchmark
 
+## Current Phase II result
+
+The GOG v1.37.5 draw-path inventory and passive trace are documented in
+[the Phase II decision](analysis/draw-path-decision.md). One unattended capture
+produced 31 complete paused frames at 5,863 draws/frame. A large recurring
+border-draw run makes **border-specific multi-draw consolidation** the next
+prototype candidate. The trace exceeded its 5% intrusion gate, so this is a
+screening result rather than a measured optimization. No further broad
+diagnostic game run is needed before the prototype. The local raw trace can be
+re-screened without launching EU IV:
+
+```sh
+python3 benchmark/eu4_draw_trace.py screen-partial results/20260928T113359Z-draw-trace
+```
+
+The pinned offline inventory and synthetic GL harness can be verified with
+`python3 benchmark/eu4_draw_static.py verify` and
+`python3 benchmark/eu4_draw_trace.py preflight`.
+
 This repository measures the **GOG** copy of Europa Universalis IV at
 `/Applications/EuropaUniversalisIV`. The collector refuses to record a game run
 unless the running `eu4` process has that exact executable path. It reads the

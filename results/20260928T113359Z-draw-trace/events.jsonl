@@ -1,0 +1,6 @@
+{"event": "clock_anchor", "monotonic_ns": 658064104649708, "wall_ns": 1790595239926960000}
+{"cpu_ms_s": 1085.1, "event": "ready", "monotonic_ns": 658110130391458, "ready_ns": 658110130358708, "swap_rate": 52.47, "wall_ns": 1790595285952735000}
+{"event": "warmup_complete", "monotonic_ns": 658202824210916, "wall_ns": 1790595378646624000}
+{"event": "baseline_start", "monotonic_ns": 658203365840500, "name": "before", "wall_ns": 1790595379188254000}
+{"event": "baseline_end", "monotonic_ns": 658215371113291, "name": "before", "wall_ns": 1790595391193536000}
+{"event": "trace_start", "monotonic_ns": 658217380492416, "wall_ns": 1790595393202916000, "window": 1}

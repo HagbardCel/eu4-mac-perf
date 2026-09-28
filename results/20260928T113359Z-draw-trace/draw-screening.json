@@ -1,0 +1,209 @@
+{
+  "status": "screening_only",
+  "formal_decision": "inconclusive",
+  "recommended_next_experiment": "border_and_map_text_multi_draw_prototype",
+  "quality_gate": {
+    "three_windows": false,
+    "trace_intrusion_below_5_percent": false,
+    "broad_category_coverage": true,
+    "no_overflow_or_bad_state": true
+  },
+  "header": {
+    "used": 186179,
+    "overflow": 0,
+    "gl_draws": 36583158,
+    "known_callers": 0,
+    "completed_windows": 1,
+    "bad_flags": 0,
+    "image_base": 4294967296,
+    "window_draws": [
+      186179,
+      0,
+      0
+    ],
+    "window_start_ns": [
+      658217380486458,
+      0,
+      0
+    ],
+    "window_end_ns": [
+      658218054401916,
+      0,
+      0
+    ]
+  },
+  "analysis": {
+    "total_draws": 186179,
+    "known_caller_draws": 185091,
+    "unknown_or_unclassified_draws": 1088,
+    "unsafe_draws": 0,
+    "categories": {
+      "borders": 71818,
+      "unknown": 1088,
+      "map_text": 12192,
+      "mesh_object": 88768,
+      "postprocess": 158,
+      "ui_or_text": 8032,
+      "terrain": 465,
+      "lakes_and_rivers": 3658
+    },
+    "top_callers": [
+      [
+        "CPdxMeshObject::RenderBuckets(CGraphics*, GfxDeferredContextGFX*, CCamera const*, int, bool, bool)",
+        88768
+      ],
+      [
+        "CPdxMapBorderLayer::DrawBorders(GfxDeferredContextGFX*, CEU3Camera const*, SBorderDrawInfoSet&, CArray<int>, int, int, float, CWrapWorldShadowMap*, char)",
+        71818
+      ],
+      [
+        "CCountryNameCollection::RenderNames(GfxDeferredContextGFX*, ConstantBufferGFX*, ConstantBufferGFX*, SGfxEffect const*, CEU3Camera const&, float, float, float, float, TextureGFX*, TextureGFX*)",
+        12192
+      ],
+      [
+        "CSpriteType::RenderInternal(CGraphics*, SGfxEffect const*, GfxDeferredContextGFX*, CMatrix4<float> const&, float, unsigned short, TextureGFX*, int)",
+        4800
+      ],
+      [
+        "CPdxMapInlandWaterLayer::DrawInlandWater(CCamera const*, GfxDeferredContextGFX*, float, CWrapWorldShadowMap*)",
+        3503
+      ],
+      [
+        "CBitmapFont::RenderToScreen(CString const&, FontFormatting, EFontVerticalAlignment, EGuiOrientation, CMatrix4<float> const*, CRect<int>, CVector2<int>, CVector2<int>*, int, bool)",
+        1312
+      ],
+      [
+        "unknown+0x11cfddf",
+        928
+      ],
+      [
+        "CProgressbarSpriteType::Render(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, int, CColor const&, CColor const&, CColor const&)",
+        640
+      ],
+      [
+        "CMaskedSpriteType::RenderMaskedSprite(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, TextureGFX*, CVector4<float> const&, CVector4<float> const&, int)",
+        640
+      ],
+      [
+        "CMaskedSpriteType::RenderFrame(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, int)",
+        640
+      ],
+      [
+        "CPdxMapTerrainLayer::DrawTerrain(GfxDeferredContextGFX*, CEU3Camera const*, ETerrainPass, float, CWrapWorldShadowMap*, char, int)",
+        465
+      ],
+      [
+        "CPdxMapLakeLayer::DrawLakes(CCamera const*, GfxDeferredContextGFX*, float, CWrapWorldShadowMap*)",
+        155
+      ],
+      [
+        "CEU3GraphicalMap::RenderPostEffects(bool)",
+        96
+      ],
+      [
+        "unknown+0x15048ba",
+        96
+      ],
+      [
+        "CWrapWorldShadowMap::EndShadowScreenBlur(CGraphics&, bool)",
+        62
+      ],
+      [
+        "unknown+0x10d2993",
+        32
+      ],
+      [
+        "unknown+0x0",
+        32
+      ]
+    ],
+    "window_categories": {
+      "1": {
+        "borders": 71818,
+        "unknown": 1088,
+        "map_text": 12192,
+        "mesh_object": 88768,
+        "postprocess": 158,
+        "ui_or_text": 8032,
+        "terrain": 465,
+        "lakes_and_rivers": 3658
+      },
+      "2": {},
+      "3": {}
+    },
+    "frames": {
+      "1:6269": 4426,
+      "1:6270": 5863,
+      "1:6271": 5863,
+      "1:6272": 5863,
+      "1:6273": 5863,
+      "1:6274": 5863,
+      "1:6275": 5863,
+      "1:6276": 5863,
+      "1:6277": 5863,
+      "1:6278": 5863,
+      "1:6279": 5863,
+      "1:6280": 5863,
+      "1:6281": 5863,
+      "1:6282": 5863,
+      "1:6283": 5863,
+      "1:6284": 5863,
+      "1:6285": 5863,
+      "1:6286": 5863,
+      "1:6287": 5863,
+      "1:6288": 5863,
+      "1:6289": 5863,
+      "1:6290": 5863,
+      "1:6291": 5863,
+      "1:6292": 5863,
+      "1:6293": 5863,
+      "1:6294": 5863,
+      "1:6295": 5863,
+      "1:6296": 5863,
+      "1:6297": 5863,
+      "1:6298": 5863,
+      "1:6299": 5863,
+      "1:6300": 5863
+    },
+    "median_draws_per_frame": 5863.0,
+    "same_state_adjacent": 60290,
+    "multi_draw_screening_adjacent": 60290,
+    "multi_draw_screening_by_category": {
+      "borders": 48418,
+      "map_text": 11744,
+      "mesh_object": 128
+    },
+    "contiguous_index_adjacent": 0,
+    "instancing_screening_adjacent": 11296,
+    "same_state_run_lengths": {
+      "2": 2432,
+      "3": 635,
+      "9": 32,
+      "4": 94,
+      "246": 32,
+      "104": 32,
+      "122": 32,
+      "49": 32,
+      "78": 32,
+      "22": 32,
+      "32": 32,
+      "30": 32,
+      "13": 32,
+      "39": 32,
+      "19": 32,
+      "59": 32,
+      "35": 32,
+      "5": 32,
+      "943": 31
+    },
+    "conservative_batch_fraction": 0.0,
+    "instancing_screening_fraction": 0.060672793387009274
+  },
+  "complete_equal_sized_frames": 31,
+  "baseline_swaps_s": 52.53791742292138,
+  "trace_swaps_s": [
+    47.48370084130048
+  ],
+  "known_caller_fraction": 0.9941561615434609,
+  "multi_draw_screening_fraction": 0.32382814388303727
+}
