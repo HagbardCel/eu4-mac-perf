@@ -289,6 +289,32 @@ new game run.
 
 ## State-cache validation
 
+The final fine-grained state hypothesis is tested separately by the
+[sampler-uniform controller](benchmark/eu4_sampler_uniform.py). It uses the
+same unattended Venice fixture and installed power helper, then runs a paused
+`A–U–A–U–A` comparison with 30-second phases after a 90-second warm-up. `A`
+forwards every sampler assignment; `U` suppresses duplicate assignments only
+from the 16 verified `SShaderOpenGL::SetAll()` loop calls. The seventeenth
+tail-called assignment always forwards. The shim discards its cache on GL
+context switches, which occur frequently in EU IV.
+
+```sh
+python3 benchmark/eu4_sampler_uniform.py preflight
+python3 benchmark/eu4_sampler_uniform.py run
+```
+
+The run saves a manifest, aligned power/swap/sampler counts, five phase
+screenshots and `validation.json`/`.md`. The completed
+[validation](results/20260928T081714Z-sampler-uniform/validation.md) suppressed
+about 68% of the targeted calls in both U phases, but found no repeatable CPU
+or power saving. The five captured screenshots show the same paused scene;
+the [interpretation](analysis/sampler-uniform-validation.md) explains why this
+does not justify a direct executable patch. The related
+[draw-bucket analysis](analysis/render-buckets.md) uses the pinned binary only;
+it does not require another game launch.
+
+## Earlier state-cache validation
+
 The state-cache experiment uses a single GOG launch with a lightweight, switchable
 [state-cache controller](benchmark/eu4_state_cache.py). The executable hash is
 pinned to the installed GOG v1.37.5 build. The shim starts in pass-through
