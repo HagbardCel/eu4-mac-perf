@@ -13,8 +13,8 @@ class SamplerUniformTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "sampler.csv"
             path.write_text("S,1,2,3,4,5\n"
-                            "U,1,2,1000000000,1,100,10,90,0\n"
-                            "U,2,3,1000000000,1,100,10,80,0\n"
+                            "U,1,2,1000000000,1,100,10,90,0,2\n"
+                            "U,2,3,1000000000,1,100,10,80,0,2\n"
                             "U,3,4,1000000000,0,100,100\n")
             observed = sampler.rows(path)
             self.assertEqual(len(observed), 1)
@@ -63,7 +63,7 @@ class SamplerUniformTests(unittest.TestCase):
                                      "mode": mode, "attempted": 100_000,
                                      "forwarded": 50_000 if mode else 100_000,
                                      "suppressed": 50_000 if mode else 0,
-                                     "unsafe": 0})
+                                     "unsafe": 0, "context_switches": 2})
         with patch.object(sampler.auto, "probe_rows", return_value=swap_rows), \
              patch.object(sampler, "rows", return_value=uniform_rows), \
              patch.object(sampler.diagnostic, "summarize_power", return_value=power):

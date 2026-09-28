@@ -64,13 +64,18 @@ int main(int argc,char **argv) {
     if (index<0 || color<0) return 7;
     CGLFlushDrawable(context); // Establish the rendering thread.
     use((GLhandleARB)(uintptr_t)program);
-    if (argc>1 && !strcmp(argv[1],"--unsafe-context")) {
+    if (argc>1 && !strcmp(argv[1],"--contexts")) {
         if (!set_mode(1)) return 13;
         CGLFlushDrawable(context);
         CGLContextObj second=NULL;
         if (CGLCreateContext(format,context,&second)!=kCGLNoError || !second) return 14;
         if (CGLSetCurrentContext(second)!=kCGLNoError) return 15;
-        usleep(1100000);CGLFlushDrawable(second);
+        use((GLhandleARB)(uintptr_t)program);
+        for (int i=0;i<100;i++) uniform(index,2);
+        if (CGLSetCurrentContext(context)!=kCGLNoError) return 16;
+        use((GLhandleARB)(uintptr_t)program);
+        uniform(index,2);
+        usleep(1100000);CGLFlushDrawable(context);
         return 0;
     }
     if (argc>1 && !strcmp(argv[1],"--stress")) {

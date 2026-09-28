@@ -61,10 +61,11 @@ def rows(path: Path) -> list[dict]:
     output = []
     with path.open(newline="") as source:
         for row in csv.reader(source):
-            if len(row) != 9 or row[0] != "U":
+            if len(row) != 10 or row[0] != "U":
                 continue
             try:
-                clock, wall, interval, mode, attempted, forwarded, suppressed, unsafe = map(int, row[1:])
+                (clock, wall, interval, mode, attempted, forwarded,
+                 suppressed, unsafe, switches) = map(int, row[1:])
             except ValueError:
                 continue
             if (interval <= 0 or mode not in (0, 1) or
@@ -74,7 +75,7 @@ def rows(path: Path) -> list[dict]:
             output.append({"clock_ns": clock, "wall_ns": wall, "interval_ns": interval,
                            "mode": mode, "attempted": attempted,
                            "forwarded": forwarded, "suppressed": suppressed,
-                           "unsafe": unsafe})
+                           "unsafe": unsafe, "context_switches": switches})
     return output
 
 
@@ -114,13 +115,16 @@ def offline_preflight() -> dict:
                 not any(item["suppressed"] >= 999 for item in on) or
                 any(item["unsafe"] for item in observed)):
             raise base.BenchmarkError("Offline sampler pass-through or suppression counts are invalid")
-        context_log = root / "unsafe-context.csv"
-        context_test = subprocess.run([str(HARNESS), "--unsafe-context"],
+        context_log = root / "contexts.csv"
+        context_test = subprocess.run([str(HARNESS), "--contexts"],
             env={**env, "EU4_SAMPLER_LOG": str(context_log)},
             capture_output=True, text=True, timeout=15, check=False)
+        context_rows = rows(context_log)
         if (context_test.returncode or
-                not any(item["unsafe"] & 1 for item in rows(context_log))):
-            raise base.BenchmarkError("Sampler did not fail open on a second GL context")
+                not any(item["context_switches"] >= 2 and item["forwarded"] >= 2
+                        for item in context_rows) or
+                any(item["unsafe"] for item in context_rows)):
+            raise base.BenchmarkError("Sampler did not re-prime after context switches")
         stress = {"bare": [], "pass_through": []}
         for _ in range(3):
             for label, environment in (("bare", os.environ), ("pass_through", {
@@ -189,13 +193,22 @@ def phase_samples(probe: Path, phases: list[dict], anchor: dict, raw_power: list
                         "attempted": sum(item["attempted"] for item in selected_uniforms),
                         "forwarded": sum(item["forwarded"] for item in selected_uniforms),
                         "suppressed": sum(item["suppressed"] for item in selected_uniforms),
+                        "context_switches": sum(item["context_switches"]
+                                                for item in selected_uniforms),
                         "unsafe": max(item["unsafe"] for item in selected_uniforms),
                         **power[name]}
     return output
 
 
 def report(phases: dict, visual_ok: bool | None = None, save_changed: bool = False) -> dict:
-    metrics = ("eu4_cputime_ms_per_s", "combined_w", "median_swaps_s")
+    phases = {name: {**item,
+                     "eu4_cpu_ms_per_swap": round(item["eu4_cputime_ms_per_s"] /
+                                                    item["median_swaps_s"], 4),
+                     "joules_per_swap": round(item["combined_w"] /
+                                               item["median_swaps_s"], 5)}
+              for name, item in phases.items()}
+    metrics = ("eu4_cputime_ms_per_s", "combined_w", "median_swaps_s",
+               "eu4_cpu_ms_per_swap", "joules_per_swap")
     comparisons = {}
     for candidate, controls in (("u1", ("a1", "a2")), ("u2", ("a2", "a3"))):
         comparisons[candidate] = {}
@@ -246,20 +259,25 @@ def write_report(run_dir: Path, phases: list[dict], anchor: dict, game_pid: int,
     lines = ["# GOG EU IV sampler-uniform validation", "",
              "One unattended A–U–A–U–A session; U suppresses duplicate assignments from "
              "the 16 verified `SShaderOpenGL::SetAll()` loop calls.", "",
-             "| Phase | Swaps/s | EU IV CPU ms/s | Combined W | Attempted | Forwarded | Suppressed |",
-             "|---|---:|---:|---:|---:|---:|---:|"]
+             "| Phase | Swaps/s | EU IV CPU ms/s | Combined W | CPU ms/swap | J/swap | Attempted | Forwarded | Suppressed |",
+             "|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for name, _ in PHASES:
-        item = summary[name]
+        item = result["phases"][name]
         lines.append(f"| {name} | {item['median_swaps_s']} | {item['eu4_cputime_ms_per_s']} | "
-                     f"{item['combined_w']} | {item['attempted']:,} | {item['forwarded']:,} | "
+                     f"{item['combined_w']} | {item['eu4_cpu_ms_per_swap']} | "
+                     f"{item['joules_per_swap']} | {item['attempted']:,} | {item['forwarded']:,} | "
                      f"{item['suppressed']:,} |")
     lines.extend(["", "Paired change versus adjacent A phases (negative means reduction):", ""])
     for name in ("u1", "u2"):
         comparison = result["paired_change_pct"][name]
         lines.append(f"- {name}: CPU {comparison['eu4_cputime_ms_per_s']:+.2f}%, "
                      f"combined power {comparison['combined_w']:+.2f}%, "
-                     f"swaps {comparison['median_swaps_s']:+.2f}%.")
+                     f"swaps {comparison['median_swaps_s']:+.2f}%, "
+                     f"CPU/swap {comparison['eu4_cpu_ms_per_swap']:+.2f}%, "
+                     f"J/swap {comparison['joules_per_swap']:+.2f}%.")
     lines.extend(["", f"Decision: **{result['decision']}**. Visual review: {visual_ok}.",
+                  "Context switches by phase: " + str({name: summary[name]["context_switches"]
+                                                      for name, _ in PHASES}),
                   "Power estimates are system-wide; swaps are an in-process frame proxy.", ""])
     (run_dir / "validation.md").write_text("\n".join(lines))
     return result

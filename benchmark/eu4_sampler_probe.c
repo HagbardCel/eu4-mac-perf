@@ -21,7 +21,7 @@
 #include <unistd.h>
 
 enum { TABLE_SIZE=16384, SET_ALL_RETURN=0x15ebc7a };
-enum { UNSAFE_CONTEXT=1, UNSAFE_THREAD=2, UNSAFE_TABLE=4 };
+enum { UNSAFE_THREAD=2, UNSAFE_TABLE=4 };
 typedef struct {
     uintptr_t program;
     GLint location, value;
@@ -34,7 +34,7 @@ static uintptr_t image_base, current_program;
 static _Atomic(CGLContextObj) render_context;
 static _Atomic uint64_t render_thread;
 static uint64_t bucket_start, swaps, paused_swaps;
-static uint64_t attempted, forwarded, suppressed;
+static uint64_t attempted, forwarded, suppressed, context_switches;
 static _Atomic unsigned current_mode;
 static _Atomic unsigned unsafe_flags;
 static void *(*app_instance)(void);
@@ -86,10 +86,11 @@ static unsigned requested_mode(void) { return control && *control==1 && log_fd>=
 static void change_mode(unsigned mode) {
     if (mode==atomic_load(&current_mode)) return;
     memset(table,0,sizeof(table));
+    current_program=0;
     atomic_store(&current_mode,mode);
     atomic_store(&unsafe_flags,0);
     if (mode) atomic_store(&render_context,CGLGetCurrentContext());
-    attempted=forwarded=suppressed=0;
+    attempted=forwarded=suppressed=context_switches=0;
     bucket_start=swaps=paused_swaps=0;
 }
 static Entry *entry(uintptr_t program,GLint location) {
@@ -174,9 +175,18 @@ static void tracked_delete(GLhandleARB object) {
 static CGLError tracked_set_context(CGLContextObj context) {
     CGLError result=CGLSetCurrentContext(context);
     CGLContextObj owner=atomic_load(&render_context);
-    if (result==kCGLNoError && atomic_load(&current_mode) &&
-            owner && context && context!=owner)
-        atomic_fetch_or(&unsafe_flags,UNSAFE_CONTEXT);
+    if (result==kCGLNoError && owner && context && context!=owner) {
+        uint64_t thread=atomic_load(&render_thread);
+        if (thread && thread!=thread_id()) {
+            if (atomic_load(&current_mode)) atomic_fetch_or(&unsafe_flags,UNSAFE_THREAD);
+        }
+        else {
+            memset(table,0,sizeof(table));
+            current_program=0;
+            context_switches++;
+            atomic_store(&render_context,context);
+        }
+    }
     return result;
 }
 static CGLError tracked_flush(CGLContextObj context) {
@@ -194,7 +204,12 @@ static CGLError tracked_flush(CGLContextObj context) {
         return result;
     }
     CGLContextObj owner=atomic_load(&render_context);
-    if (mode && owner && owner!=context) atomic_fetch_or(&unsafe_flags,UNSAFE_CONTEXT);
+    if (owner && owner!=context) {
+        memset(table,0,sizeof(table));
+        current_program=0;
+        context_switches++;
+        atomic_store(&render_context,context);
+    }
     uint64_t now=clock_ns(CLOCK_UPTIME_RAW);
     pthread_mutex_lock(&lock);
     change_mode(mode);
@@ -205,16 +220,17 @@ static CGLError tracked_flush(CGLContextObj context) {
         char line[256];
         uint64_t wall=clock_ns(CLOCK_REALTIME);
         int n=snprintf(line,sizeof(line),"S,%llu,%llu,%llu,%llu,%llu\n"
-            "U,%llu,%llu,%llu,%u,%llu,%llu,%llu,%u\n",
+            "U,%llu,%llu,%llu,%u,%llu,%llu,%llu,%u,%llu\n",
             (unsigned long long)now,(unsigned long long)wall,
             (unsigned long long)(now-bucket_start),(unsigned long long)swaps,
             (unsigned long long)paused_swaps,
             (unsigned long long)now,(unsigned long long)wall,
             (unsigned long long)(now-bucket_start),mode,
             (unsigned long long)attempted,(unsigned long long)forwarded,
-            (unsigned long long)suppressed,atomic_load(&unsafe_flags));
+            (unsigned long long)suppressed,atomic_load(&unsafe_flags),
+            (unsigned long long)context_switches);
         if (n>0 && (size_t)n<sizeof(line)) (void)write(log_fd,line,(size_t)n);
-        bucket_start=now;swaps=paused_swaps=attempted=forwarded=suppressed=0;
+        bucket_start=now;swaps=paused_swaps=attempted=forwarded=suppressed=context_switches=0;
     }
     pthread_mutex_unlock(&lock);
     return result;
