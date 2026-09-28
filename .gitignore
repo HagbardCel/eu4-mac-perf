@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+benchmark/.build/
+
+# Local fixtures (not tracked; see results/README.md)
+fixtures/
+
+# Tier B: heavy or local-only run artifacts
+results/**/*.pliststream
+results/**/powermetrics.stderr
+results/**/*.png
+results/_save_backups/
+results/**/telemetry.csv
+results/.autonomous.lock
+results/.autonomous-recovery.json
