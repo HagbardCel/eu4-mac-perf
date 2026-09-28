@@ -1,1 +1,6 @@
 {"event": "clock_anchor", "monotonic_ns": 645432017186083, "wall_ns": 1790582607815274000}
+{"cpu_ms_s": 1101.26, "event": "ready", "monotonic_ns": 645470494004958, "ready_ns": 645470493970041, "swap_rate": 51.59, "wall_ns": 1790582646292233000}
+{"event": "warmup_complete", "monotonic_ns": 645563139248666, "wall_ns": 1790582738937813000}
+{"event": "phase_start", "mode": 0, "monotonic_ns": 645563679407291, "phase": "a1", "wall_ns": 1790582739477974000}
+{"event": "phase_end", "mode": 0, "monotonic_ns": 645593684645208, "phase": "a1", "wall_ns": 1790582769483321000}
+{"event": "phase_start", "mode": 1, "monotonic_ns": 645594216943083, "phase": "u1", "wall_ns": 1790582770015621000}

@@ -1,0 +1,342 @@
+{
+  "status": "complete",
+  "started_utc": "2026-09-28T08:17:14.902637+00:00",
+  "run_dir": "results/20260928T081714Z-sampler-uniform",
+  "baseline_evidence": {
+    "fixture": {
+      "save_sha256": "a04bc2e86eeda8025d7a914efb11b18b82dea423631fdcf48c50471578369607",
+      "eu4_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "render_settings_sha256": "cffdd7b53b8abdf8c3f698b32be208c659bd227fa0965efae78fe15f1474bd84",
+      "dlc_load_sha256": "83383e74e90d240c8ec8f420acf648459e0bfed1963710260a7ee8e9c090b705",
+      "country": "VEN",
+      "date": "1444.11.11",
+      "speed": 0,
+      "resolution": "3456x2234",
+      "refresh_hz": 120,
+      "power_mode": "normal"
+    },
+    "gog": {
+      "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+      "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "gog_game_id": "2057001589",
+      "gog_build_id": "59158198792514056",
+      "gog_package_version": "1",
+      "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
+      "eu4_branch": "release_1.37.5-gog-fix",
+      "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
+      "gog_user_data": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG",
+      "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
+      "linked_graphics": [
+        "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
+        "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
+      ]
+    },
+    "settings": {
+      "path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/settings.txt",
+      "sha256": "ef20417e1b05978cb6ed873b0597de1971967c90aa97dfdfea8371fb2ddd0499",
+      "render_settings_sha256": "cffdd7b53b8abdf8c3f698b32be208c659bd227fa0965efae78fe15f1474bd84",
+      "refreshRate": "60",
+      "fullScreen": "yes",
+      "borderless": "no",
+      "vsync": "yes",
+      "multi_sampling": "0",
+      "game_ui_scale": "1.500",
+      "autosave": "\"NEVER\"",
+      "game_resolution": "3456x2234"
+    },
+    "dlc_mods": {
+      "path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/dlc_load.json",
+      "sha256": "83383e74e90d240c8ec8f420acf648459e0bfed1963710260a7ee8e9c090b705",
+      "selection": {
+        "enabled_mods": [
+          "mod/976a3320-468c-11ef-8896-71de0eb2c4d7.mod"
+        ],
+        "disabled_dlcs": []
+      }
+    },
+    "display": {
+      "display_id": 1,
+      "width": 1728,
+      "height": 1117,
+      "pixel_width": 3456,
+      "pixel_height": 2234,
+      "refresh_hz": 120.0,
+      "available_refresh_hz_at_current_resolution": [
+        47.94999694824219,
+        48.0,
+        50.0,
+        59.93998718261719,
+        60.0,
+        120.0
+      ],
+      "verified": true
+    },
+    "power": {
+      "source": "AC Power",
+      "mode": "normal",
+      "all_modes": {
+        "Battery Power": "normal",
+        "AC Power": "normal"
+      }
+    },
+    "launcher_args": [
+      "-enabletelemetry",
+      "-gdpr-compliant"
+    ],
+    "probe_sha256": "a78074a7032487f3fb900236da53b78e226f9e7e728e1496d7a7f5cef6038532",
+    "probe_source_sha256": "539527655d7fe698a80e9a6d4a8a5109d4c62a6fd020e16f3941a175ed39f979",
+    "focus_source_sha256": "4e9894231186736fc14cbdb81827f8bbe0f63b42daa8854950eb4e8616e3f73e",
+    "powermetrics_helper_sha256": "8baf0d0a6b7ebc6bd2d835cef04c0d5512391b2b6f126f5623431e3e6e4dcc01"
+  },
+  "sampler_preflight": {
+    "gog": {
+      "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+      "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "gog_game_id": "2057001589",
+      "gog_build_id": "59158198792514056",
+      "gog_package_version": "1",
+      "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
+      "eu4_branch": "release_1.37.5-gog-fix",
+      "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
+      "gog_user_data": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG",
+      "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
+      "linked_graphics": [
+        "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
+        "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
+      ]
+    },
+    "library_sha256": "3fc9a723b8da10743135586122bdbc827e94e4a44e1cba152bdcad713f27ac62",
+    "library_source_sha256": "4c588e5b1efc86cd8cf8dab8a6965588bfb40d2ca63189ca25a44fe2ce1d42de",
+    "harness": "passed",
+    "callsite": "eu4+0x15ebc7a",
+    "projected_pass_through_overhead_pct": 0.45
+  },
+  "clock_anchor": {
+    "event": "clock_anchor",
+    "monotonic_ns": 646259102513833,
+    "wall_ns": 1790583434902873000
+  },
+  "working_save": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/save games/EU4Benchmark_a04bc2e86eeda802.eu4",
+  "game_pid": 20954,
+  "readiness": {
+    "ready_ns": 646294447460041,
+    "swap_rate": 52.08,
+    "cpu_ms_s": 1106.09
+  },
+  "display_with_game": {
+    "display_id": 1,
+    "width": 3456,
+    "height": 2234,
+    "pixel_width": 3456,
+    "pixel_height": 2234,
+    "refresh_hz": 120.0,
+    "available_refresh_hz_at_current_resolution": [
+      47.94999694824219,
+      48.0,
+      50.0,
+      59.93998718261719,
+      60.0,
+      120.0
+    ],
+    "verified": true
+  },
+  "warmup": {
+    "start_ns": 646296460510250,
+    "end_ns": 646387139872458
+  },
+  "scene_alignment": {
+    "mean_rgb_delta": 8.88,
+    "shift_x_px": 0,
+    "shift_y_px": 0
+  },
+  "phases": [
+    {
+      "name": "a1",
+      "mode": 0,
+      "start_ns": 646387681609000,
+      "end_ns": 646417681941458
+    },
+    {
+      "name": "u1",
+      "mode": 1,
+      "start_ns": 646418208098041,
+      "end_ns": 646448211955208
+    },
+    {
+      "name": "a2",
+      "mode": 0,
+      "start_ns": 646448740055791,
+      "end_ns": 646478744785916
+    },
+    {
+      "name": "u2",
+      "mode": 1,
+      "start_ns": 646479268479166,
+      "end_ns": 646509277203000
+    },
+    {
+      "name": "a3",
+      "mode": 0,
+      "start_ns": 646509796688750,
+      "end_ns": 646539799031791
+    }
+  ],
+  "validation": {
+    "phases": {
+      "a1": {
+        "swap_samples": 24,
+        "sampler_samples": 24,
+        "median_swaps_s": 52.431,
+        "attempted": 6920078,
+        "forwarded": 6920078,
+        "suppressed": 0,
+        "context_switches": 2654,
+        "unsafe": 0,
+        "cpu_w": 7.578,
+        "gpu_w": 2.011,
+        "combined_w": 9.569,
+        "gpu_active_pct": 72.466,
+        "cpu_P0-Cluster_mhz": 2159.78,
+        "cpu_P1-Cluster_mhz": 2485.22,
+        "cpu_S-Cluster_mhz": 4332.355,
+        "gpu_mhz": 338.0,
+        "eu4_timer_wakeups_per_s": 1567.555,
+        "eu4_idle_wakeups_per_s": 64.024,
+        "eu4_cputime_ms_per_s": 1109.175,
+        "samples": 24,
+        "eu4_cpu_ms_per_swap": 21.1549,
+        "joules_per_swap": 0.18251
+      },
+      "u1": {
+        "swap_samples": 24,
+        "sampler_samples": 24,
+        "median_swaps_s": 57.799,
+        "attempted": 7098040,
+        "forwarded": 2226534,
+        "suppressed": 4871506,
+        "context_switches": 2724,
+        "unsafe": 0,
+        "cpu_w": 8.251,
+        "gpu_w": 2.171,
+        "combined_w": 10.423,
+        "gpu_active_pct": 72.487,
+        "cpu_P0-Cluster_mhz": 2138.28,
+        "cpu_P1-Cluster_mhz": 2518.185,
+        "cpu_S-Cluster_mhz": 4344.245,
+        "gpu_mhz": 338.0,
+        "eu4_timer_wakeups_per_s": 1568.24,
+        "eu4_idle_wakeups_per_s": 60.651,
+        "eu4_cputime_ms_per_s": 1229.21,
+        "samples": 24,
+        "eu4_cpu_ms_per_swap": 21.267,
+        "joules_per_swap": 0.18033
+      },
+      "a2": {
+        "swap_samples": 24,
+        "sampler_samples": 24,
+        "median_swaps_s": 51.806,
+        "attempted": 6560641,
+        "forwarded": 6560641,
+        "suppressed": 0,
+        "context_switches": 2516,
+        "unsafe": 0,
+        "cpu_w": 7.483,
+        "gpu_w": 1.986,
+        "combined_w": 9.491,
+        "gpu_active_pct": 71.707,
+        "cpu_P0-Cluster_mhz": 2180.055,
+        "cpu_P1-Cluster_mhz": 2378.005,
+        "cpu_S-Cluster_mhz": 4313.105,
+        "gpu_mhz": 340.261,
+        "eu4_timer_wakeups_per_s": 1568.125,
+        "eu4_idle_wakeups_per_s": 57.738,
+        "eu4_cputime_ms_per_s": 1103.05,
+        "samples": 24,
+        "eu4_cpu_ms_per_swap": 21.2919,
+        "joules_per_swap": 0.1832
+      },
+      "u2": {
+        "swap_samples": 24,
+        "sampler_samples": 24,
+        "median_swaps_s": 51.891,
+        "attempted": 6756102,
+        "forwarded": 2135433,
+        "suppressed": 4620669,
+        "context_switches": 2594,
+        "unsafe": 0,
+        "cpu_w": 7.891,
+        "gpu_w": 1.995,
+        "combined_w": 9.875,
+        "gpu_active_pct": 71.814,
+        "cpu_P0-Cluster_mhz": 2157.11,
+        "cpu_P1-Cluster_mhz": 2398.365,
+        "cpu_S-Cluster_mhz": 4313.25,
+        "gpu_mhz": 338.0,
+        "eu4_timer_wakeups_per_s": 1568.21,
+        "eu4_idle_wakeups_per_s": 52.397,
+        "eu4_cputime_ms_per_s": 1104.015,
+        "samples": 24,
+        "eu4_cpu_ms_per_swap": 21.2757,
+        "joules_per_swap": 0.1903
+      },
+      "a3": {
+        "swap_samples": 24,
+        "sampler_samples": 24,
+        "median_swaps_s": 52.284,
+        "attempted": 6821413,
+        "forwarded": 6821413,
+        "suppressed": 0,
+        "context_switches": 2616,
+        "unsafe": 0,
+        "cpu_w": 7.799,
+        "gpu_w": 2.066,
+        "combined_w": 9.811,
+        "gpu_active_pct": 72.321,
+        "cpu_P0-Cluster_mhz": 2164.56,
+        "cpu_P1-Cluster_mhz": 2431.18,
+        "cpu_S-Cluster_mhz": 4317.75,
+        "gpu_mhz": 338.0,
+        "eu4_timer_wakeups_per_s": 1312.64,
+        "eu4_idle_wakeups_per_s": 50.405,
+        "eu4_cputime_ms_per_s": 1116.34,
+        "samples": 25,
+        "eu4_cpu_ms_per_swap": 21.3515,
+        "joules_per_swap": 0.18765
+      }
+    },
+    "paired_change_pct": {
+      "u1": {
+        "eu4_cputime_ms_per_s": 11.129,
+        "combined_w": 9.37,
+        "median_swaps_s": 10.899,
+        "eu4_cpu_ms_per_swap": 0.205,
+        "joules_per_swap": -1.381
+      },
+      "u2": {
+        "eu4_cputime_ms_per_s": -0.512,
+        "combined_w": 2.321,
+        "median_swaps_s": -0.296,
+        "eu4_cpu_ms_per_swap": -0.216,
+        "joules_per_swap": 2.629
+      }
+    },
+    "baseline_variation_fraction": {
+      "eu4_cputime_ms_per_s": 0.012048411223425814,
+      "combined_w": 0.03371615214413648,
+      "median_swaps_s": 0.012064239663359455
+    },
+    "quality": {
+      "baseline_stable": true,
+      "attempts_seen": true,
+      "suppression_engaged": true,
+      "pass_through_exact": true,
+      "single_safe_context": true,
+      "swap_rate_preserved": true,
+      "save_unchanged": true,
+      "visual_ok": true
+    },
+    "decision": "no_major_benefit"
+  },
+  "working_save_changed": false,
+  "ended_utc": "2026-09-28T08:21:59.361125+00:00"
+}

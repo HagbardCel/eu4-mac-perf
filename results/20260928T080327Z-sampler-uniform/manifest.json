@@ -1,7 +1,7 @@
 {
-  "status": "starting",
+  "status": "incomplete",
   "started_utc": "2026-09-28T08:03:27.815038+00:00",
-  "run_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/results/20260928T080327Z-sampler-uniform",
+  "run_dir": "results/20260928T080327Z-sampler-uniform",
   "baseline_evidence": {
     "fixture": {
       "save_sha256": "a04bc2e86eeda8025d7a914efb11b18b82dea423631fdcf48c50471578369607",
@@ -24,7 +24,7 @@
       "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
       "eu4_branch": "release_1.37.5-gog-fix",
       "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
-      "gog_user_data": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG",
+      "gog_user_data": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG",
       "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
       "linked_graphics": [
         "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
@@ -32,7 +32,7 @@
       ]
     },
     "settings": {
-      "path": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG/settings.txt",
+      "path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/settings.txt",
       "sha256": "ef20417e1b05978cb6ed873b0597de1971967c90aa97dfdfea8371fb2ddd0499",
       "render_settings_sha256": "cffdd7b53b8abdf8c3f698b32be208c659bd227fa0965efae78fe15f1474bd84",
       "refreshRate": "60",
@@ -45,7 +45,7 @@
       "game_resolution": "3456x2234"
     },
     "dlc_mods": {
-      "path": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG/dlc_load.json",
+      "path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/dlc_load.json",
       "sha256": "83383e74e90d240c8ec8f420acf648459e0bfed1963710260a7ee8e9c090b705",
       "selection": {
         "enabled_mods": [
@@ -98,7 +98,7 @@
       "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
       "eu4_branch": "release_1.37.5-gog-fix",
       "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
-      "gog_user_data": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG",
+      "gog_user_data": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG",
       "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
       "linked_graphics": [
         "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
@@ -110,5 +110,46 @@
     "harness": "passed",
     "callsite": "eu4+0x15ebc7a",
     "projected_pass_through_overhead_pct": 0.55
-  }
+  },
+  "clock_anchor": {
+    "event": "clock_anchor",
+    "monotonic_ns": 645432017186083,
+    "wall_ns": 1790582607815274000
+  },
+  "working_save": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/save games/EU4Benchmark_a04bc2e86eeda802.eu4",
+  "game_pid": 18563,
+  "readiness": {
+    "ready_ns": 645470493970041,
+    "swap_rate": 51.59,
+    "cpu_ms_s": 1101.26
+  },
+  "display_with_game": {
+    "display_id": 1,
+    "width": 3456,
+    "height": 2234,
+    "pixel_width": 3456,
+    "pixel_height": 2234,
+    "refresh_hz": 120.0,
+    "available_refresh_hz_at_current_resolution": [
+      47.94999694824219,
+      48.0,
+      50.0,
+      59.93998718261719,
+      60.0,
+      120.0
+    ],
+    "verified": true
+  },
+  "warmup": {
+    "start_ns": 645472503248666,
+    "end_ns": 645563139233166
+  },
+  "scene_alignment": {
+    "mean_rgb_delta": 8.12,
+    "shift_x_px": 0,
+    "shift_y_px": 0
+  },
+  "error": "Sampler cache detected another GL thread or context",
+  "working_save_changed": false,
+  "ended_utc": "2026-09-28T08:06:12.221599+00:00"
 }
