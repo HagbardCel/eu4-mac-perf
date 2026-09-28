@@ -1,0 +1,603 @@
+{
+  "phases": {
+    "calibration_passthrough": {
+      "seconds": 10.005341667,
+      "snapshot_count": 8,
+      "frames_per_snapshot_mean": 59.0,
+      "power": {
+        "cpu_w": 8.672,
+        "gpu_w": 2.175,
+        "combined_w": 10.874,
+        "gpu_active_pct": 76.113,
+        "cpu_P0-Cluster_mhz": 2136.9,
+        "cpu_P1-Cluster_mhz": 2590.21,
+        "cpu_S-Cluster_mhz": 4406.96,
+        "gpu_mhz": 338.0,
+        "eu4_timer_wakeups_per_s": 1568.14,
+        "eu4_idle_wakeups_per_s": 48.515,
+        "eu4_cputime_ms_per_s": 1340.79,
+        "samples": 9
+      },
+      "calls": {
+        "CGLFlushDrawable": 472
+      },
+      "redundant": {
+        "CGLFlushDrawable": 0
+      },
+      "unknown_gl_lookups": {},
+      "draws": 0,
+      "adjacent_draws": {},
+      "submitted_vertices": 0,
+      "draw_modes": {},
+      "draw_sizes": {},
+      "pass_draws": 0,
+      "pass_repeated_draws": 0,
+      "passes": {},
+      "overflow": {
+        "callers": 0,
+        "shadow_state": 0,
+        "unknown_lookups": 0
+      },
+      "deep_stacks": [],
+      "uniform_calls": 0,
+      "uniform_redundant": 0,
+      "wait_buckets": {},
+      "top_callers": [],
+      "thread_calls": {
+        "9961049": 472
+      }
+    },
+    "calibration_full": {
+      "seconds": 10.00527275,
+      "snapshot_count": 8,
+      "frames_per_snapshot_mean": 46.375,
+      "power": {
+        "cpu_w": 7.658,
+        "gpu_w": 1.773,
+        "combined_w": 9.556,
+        "gpu_active_pct": 57.561,
+        "cpu_P0-Cluster_mhz": 2185.825,
+        "cpu_P1-Cluster_mhz": 2547.57,
+        "cpu_S-Cluster_mhz": 4373.695,
+        "gpu_mhz": 338.0,
+        "eu4_timer_wakeups_per_s": 1568.765,
+        "eu4_idle_wakeups_per_s": 22.324,
+        "eu4_cputime_ms_per_s": 1193.305,
+        "samples": 10
+      },
+      "calls": {
+        "nanosleep": 1123,
+        "pthread_cond_timedwait": 6357,
+        "CGLFlushDrawable": 371,
+        "glDrawElements": 1078722,
+        "glDrawElementsBaseVertex": 987602,
+        "glDrawArrays": 161385,
+        "glClear": 2968,
+        "glViewport": 4823,
+        "glBindTexture": 2949383,
+        "glEnable": 14469,
+        "glDisable": 14098,
+        "glBlendFunc": 3710,
+        "glDepthMask": 7420,
+        "glColorMask": 8904,
+        "glUniform1i": 7395629,
+        "glCopyTexSubImage2D": 371,
+        "glScissor": 2968,
+        "glTexParameteri": 1786176,
+        "glTexParameterf": 264231,
+        "glFramebufferTexture2D": 371,
+        "glBegin": 371,
+        "glClearColor": 2968,
+        "glColor4f": 371,
+        "glEnd": 371,
+        "glFrontFace": 2968,
+        "glLineWidth": 371,
+        "glLoadIdentity": 1484,
+        "glMatrixMode": 1484,
+        "glOrtho": 742,
+        "glTexEnvf": 2947899,
+        "glVertex2f": 2968,
+        "glActiveTextureARB": 2948270,
+        "glBindBufferARB": 2386947,
+        "glBindFramebufferEXT": 4081,
+        "glUseProgramObjectARB": 435779,
+        "glVertexAttribPointerARB": 4923407,
+        "glEnableVertexAttribArrayARB": 4923407,
+        "glDisableVertexAttribArrayARB": 7268735,
+        "glBufferDataARB": 93492,
+        "glUniform4fvARB": 3053263
+      },
+      "redundant": {
+        "nanosleep": 0,
+        "pthread_cond_timedwait": 0,
+        "CGLFlushDrawable": 0,
+        "glDrawElements": 0,
+        "glDrawElementsBaseVertex": 0,
+        "glDrawArrays": 0,
+        "glClear": 0,
+        "glViewport": 2597,
+        "glBindTexture": 476735,
+        "glEnable": 371,
+        "glDisable": 0,
+        "glBlendFunc": 0,
+        "glDepthMask": 0,
+        "glColorMask": 5936,
+        "glUniform1i": 1972990,
+        "glCopyTexSubImage2D": 0,
+        "glScissor": 1484,
+        "glTexParameteri": 0,
+        "glTexParameterf": 0,
+        "glFramebufferTexture2D": 0,
+        "glBegin": 0,
+        "glClearColor": 0,
+        "glColor4f": 0,
+        "glEnd": 0,
+        "glFrontFace": 0,
+        "glLineWidth": 0,
+        "glLoadIdentity": 0,
+        "glMatrixMode": 0,
+        "glOrtho": 0,
+        "glTexEnvf": 0,
+        "glVertex2f": 0,
+        "glActiveTextureARB": 130963,
+        "glBindBufferARB": 334271,
+        "glBindFramebufferEXT": 371,
+        "glUseProgramObjectARB": 0,
+        "glVertexAttribPointerARB": 702449,
+        "glEnableVertexAttribArrayARB": 0,
+        "glDisableVertexAttribArrayARB": 2345328,
+        "glBufferDataARB": 0,
+        "glUniform4fvARB": 87093
+      },
+      "unknown_gl_lookups": {},
+      "draws": 2227709,
+      "adjacent_draws": {
+        "program": 1793785,
+        "textures": 1189797,
+        "buffers": 981295,
+        "render": 1792672,
+        "uniforms": 789396,
+        "complete": 573938
+      },
+      "submitted_vertices": 781756344,
+      "draw_modes": {
+        "4": 2104166,
+        "5": 123172,
+        "7": 371
+      },
+      "draw_sizes": {
+        "1": 215922,
+        "2": 1430205,
+        "3": 557467,
+        "4": 24115
+      },
+      "pass_draws": 2227709,
+      "pass_repeated_draws": 0,
+      "passes": {
+        "0": {
+          "count": 742,
+          "draws": 2225854,
+          "repeated_draws": 0
+        },
+        "1": {
+          "count": 371,
+          "draws": 371,
+          "repeated_draws": 0
+        },
+        "2": {
+          "count": 371,
+          "draws": 371,
+          "repeated_draws": 0
+        },
+        "3": {
+          "count": 371,
+          "draws": 371,
+          "repeated_draws": 0
+        },
+        "7": {
+          "count": 371,
+          "draws": 371,
+          "repeated_draws": 0
+        },
+        "8": {
+          "count": 371,
+          "draws": 371,
+          "repeated_draws": 0
+        }
+      },
+      "overflow": {
+        "callers": 0,
+        "shadow_state": 4823,
+        "unknown_lookups": 0
+      },
+      "deep_stacks": [],
+      "uniform_calls": 10448892,
+      "uniform_redundant": 2060083,
+      "wait_buckets": {
+        "nanosleep:requested:0": 371,
+        "nanosleep:requested:4": 752,
+        "nanosleep:actual:0": 371,
+        "nanosleep:actual:4": 752,
+        "pthread_cond_timedwait:actual:1": 6356
+      },
+      "top_callers": [
+        {
+          "thread_id": "9961049",
+          "function": "glUniform1i",
+          "image": "eu4",
+          "offset": "0x15ebc7a",
+          "sampled_calls": 217505
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glEnableVertexAttribArrayARB",
+          "image": "eu4",
+          "offset": "0x15eaa47",
+          "sampled_calls": 157310
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glDisableVertexAttribArrayARB",
+          "image": "eu4",
+          "offset": "0x15ebfa1",
+          "sampled_calls": 155492
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glVertexAttribPointerARB",
+          "image": "eu4",
+          "offset": "0x15eaa27",
+          "sampled_calls": 150619
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glBindTexture",
+          "image": "eu4",
+          "offset": "0x15ecd25",
+          "sampled_calls": 93135
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glActiveTextureARB",
+          "image": "eu4",
+          "offset": "0x15ecd08",
+          "sampled_calls": 92204
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glTexEnvf",
+          "image": "eu4",
+          "offset": "0x15ecd44",
+          "sampled_calls": 91948
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glUniform4fvARB",
+          "image": "eu4",
+          "offset": "0x15eaaf8",
+          "sampled_calls": 88830
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glDisableVertexAttribArrayARB",
+          "image": "eu4",
+          "offset": "0x15ebc06",
+          "sampled_calls": 65419
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glBindBufferARB",
+          "image": "eu4",
+          "offset": "0x15ea9ba",
+          "sampled_calls": 41342
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glDrawElements",
+          "image": "eu4",
+          "offset": "0x14c8409",
+          "sampled_calls": 33914
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glBindBufferARB",
+          "image": "eu4",
+          "offset": "0x15ec2b1",
+          "sampled_calls": 29483
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glDrawElementsBaseVertex",
+          "image": "eu4",
+          "offset": "0x10cc3bd",
+          "sampled_calls": 26500
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glUseProgramObjectARB",
+          "image": "eu4",
+          "offset": "0x15ebc65",
+          "sampled_calls": 15522
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glUniform1i",
+          "image": "eu4",
+          "offset": "0x15ebc1b",
+          "sampled_calls": 11947
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glTexParameteri",
+          "image": "eu4",
+          "offset": "0x15ecde5",
+          "sampled_calls": 8480
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glTexParameteri",
+          "image": "eu4",
+          "offset": "0x15ecdc3",
+          "sampled_calls": 8408
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glTexParameteri",
+          "image": "eu4",
+          "offset": "0x15ecdb2",
+          "sampled_calls": 8100
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glTexParameterf",
+          "image": "eu4",
+          "offset": "0x15ecdfd",
+          "sampled_calls": 8100
+        },
+        {
+          "thread_id": "9961049",
+          "function": "glTexParameteri",
+          "image": "eu4",
+          "offset": "0x15ecdd4",
+          "sampled_calls": 8048
+        }
+      ],
+      "thread_calls": {
+        "9961452": 78,
+        "9961566": 674,
+        "9961072": 6357,
+        "9961049": 43683350
+      }
+    },
+    "paused_idle": {
+      "seconds": 60.026470334,
+      "snapshot_count": 57,
+      "frames_per_snapshot_mean": 48.03508771929825,
+      "power": {
+        "cpu_w": 7.611,
+        "gpu_w": 1.719,
+        "combined_w": 9.323,
+        "gpu_active_pct": 56.332,
+        "cpu_P0-Cluster_mhz": 2223.6,
+        "cpu_P1-Cluster_mhz": 2566.39,
+        "cpu_S-Cluster_mhz": 4380.63,
+        "gpu_mhz": 338.0,
+        "eu4_timer_wakeups_per_s": 1568.55,
+        "eu4_idle_wakeups_per_s": 20.378,
+        "eu4_cputime_ms_per_s": 1187.48,
+        "samples": 59
+      },
+      "calls": {
+        "nanosleep": 8073,
+        "pthread_cond_timedwait": 45138,
+        "CGLFlushDrawable": 2738,
+        "glDrawElements": 7961695,
+        "glDrawElementsBaseVertex": 7288556,
+        "glDrawArrays": 1191030,
+        "glClear": 21904,
+        "glViewport": 35594,
+        "glBindTexture": 21766835,
+        "glEnable": 106782,
+        "glDisable": 104044,
+        "glBlendFunc": 27380,
+        "glDepthMask": 54760,
+        "glColorMask": 65712,
+        "glUniform1i": 54570901,
+        "glCopyTexSubImage2D": 2738,
+        "glScissor": 21904,
+        "glTexParameteri": 13186247,
+        "glTexParameterf": 1951397,
+        "glFramebufferTexture2D": 2738,
+        "glBegin": 2738,
+        "glClearColor": 21904,
+        "glColor4f": 2738,
+        "glEnd": 2738,
+        "glFrontFace": 21904,
+        "glLineWidth": 2738,
+        "glLoadIdentity": 10952,
+        "glMatrixMode": 10952,
+        "glOrtho": 5476,
+        "glTexEnvf": 21755883,
+        "glVertex2f": 21904,
+        "glActiveTextureARB": 21758621,
+        "glBindBufferARB": 17614167,
+        "glBindFramebufferEXT": 30118,
+        "glUseProgramObjectARB": 3215529,
+        "glVertexAttribPointerARB": 36330909,
+        "glEnableVertexAttribArrayARB": 36330909,
+        "glDisableVertexAttribArrayARB": 53635456,
+        "glBufferDataARB": 689976,
+        "glUniform4fvARB": 22535251,
+        "glDeleteTextures": 76
+      },
+      "redundant": {
+        "nanosleep": 0,
+        "pthread_cond_timedwait": 0,
+        "CGLFlushDrawable": 0,
+        "glDrawElements": 0,
+        "glDrawElementsBaseVertex": 0,
+        "glDrawArrays": 0,
+        "glClear": 0,
+        "glViewport": 19155,
+        "glBindTexture": 3518107,
+        "glEnable": 2596,
+        "glDisable": 0,
+        "glBlendFunc": 0,
+        "glDepthMask": 0,
+        "glColorMask": 43699,
+        "glUniform1i": 14552932,
+        "glCopyTexSubImage2D": 0,
+        "glScissor": 10843,
+        "glTexParameteri": 0,
+        "glTexParameterf": 0,
+        "glFramebufferTexture2D": 0,
+        "glBegin": 0,
+        "glClearColor": 0,
+        "glColor4f": 0,
+        "glEnd": 0,
+        "glFrontFace": 0,
+        "glLineWidth": 0,
+        "glLoadIdentity": 0,
+        "glMatrixMode": 0,
+        "glOrtho": 0,
+        "glTexEnvf": 0,
+        "glVertex2f": 0,
+        "glActiveTextureARB": 966446,
+        "glBindBufferARB": 2466904,
+        "glBindFramebufferEXT": 2629,
+        "glUseProgramObjectARB": 0,
+        "glVertexAttribPointerARB": 5182931,
+        "glEnableVertexAttribArrayARB": 0,
+        "glDisableVertexAttribArrayARB": 17303832,
+        "glBufferDataARB": 0,
+        "glUniform4fvARB": 637580,
+        "glDeleteTextures": 0
+      },
+      "unknown_gl_lookups": {},
+      "draws": 16441281,
+      "adjacent_draws": {
+        "program": 13239374,
+        "textures": 8781044,
+        "buffers": 7243188,
+        "render": 13231194,
+        "uniforms": 5820682,
+        "complete": 4235689
+      },
+      "submitted_vertices": 5771867589,
+      "draw_modes": {
+        "4": 15529527,
+        "5": 909016,
+        "7": 2738
+      },
+      "draw_sizes": {
+        "1": 1593516,
+        "2": 10554990,
+        "3": 4114805,
+        "4": 177970
+      },
+      "pass_draws": 16441281,
+      "pass_repeated_draws": 0,
+      "passes": {
+        "0": {
+          "count": 5510,
+          "draws": 16427625,
+          "repeated_draws": 0
+        },
+        "1": {
+          "count": 2704,
+          "draws": 2704,
+          "repeated_draws": 0
+        },
+        "2": {
+          "count": 2738,
+          "draws": 2738,
+          "repeated_draws": 0
+        },
+        "3": {
+          "count": 2738,
+          "draws": 2738,
+          "repeated_draws": 0
+        },
+        "7": {
+          "count": 2738,
+          "draws": 2738,
+          "repeated_draws": 0
+        },
+        "8": {
+          "count": 2738,
+          "draws": 2738,
+          "repeated_draws": 0
+        }
+      },
+      "overflow": {
+        "callers": 0,
+        "shadow_state": 81120,
+        "unknown_lookups": 0
+      },
+      "deep_stacks": [],
+      "uniform_calls": 77106152,
+      "uniform_redundant": 15190512,
+      "wait_buckets": {},
+      "top_callers": [],
+      "thread_calls": {
+        "9961452": 555,
+        "9961566": 4780,
+        "9961072": 45138,
+        "9961049": 322366632
+      }
+    }
+  },
+  "candidate_ranking": [
+    {
+      "family": "GL state suppression",
+      "signal": 0.154,
+      "reason": "29,495,358 of 191,033,008 observed state calls repeated tracked values; sampled call time was disabled for this phase",
+      "status": "coverage limited"
+    },
+    {
+      "family": "uniform update suppression",
+      "signal": 0.197,
+      "reason": "15,190,512 of 77,106,152 observed uniform updates repeated a tracked value (arrays larger than 256 bytes are excluded)",
+      "status": "low"
+    },
+    {
+      "family": "timer/wait source",
+      "signal": 53211,
+      "reason": "886/s observed wait calls versus 1568.55 EU IV short timer wakeups/s; inspect caller and duration histograms before any change",
+      "status": "investigate"
+    },
+    {
+      "family": "render-pass caching",
+      "signal": 0.0,
+      "reason": "0 of 16,441,281 draw calls occurred in structurally repeated passes; pixel identity unproven",
+      "status": "low"
+    },
+    {
+      "family": "draw batching",
+      "signal": 0.258,
+      "reason": "4,235,689 of 16,441,281 adjacent draws shared the tracked state signature; ordering constraints untested",
+      "status": "research only"
+    }
+  ],
+  "screen_images": {
+    "status": "captured",
+    "before_sha256": "7c4f144579175f2971d798c2a56482f2831681ffaac55be116aa89e86462bef8",
+    "after_sha256": "8704a430d52b4141c130c3d703ee1cdb2579e4449df2c4fe8090eec42e0422bf",
+    "whole_screen_changed_fraction": 0.606386,
+    "map_center_changed_fraction": 0.625734,
+    "upper_left_ui_changed_fraction": 0.565597,
+    "lower_right_ui_changed_fraction": 0.319768
+  },
+  "limitations": [
+    "Swap calls are not independently measured displayed frames.",
+    "Call durations are sampled inclusive elapsed time, not GPU time.",
+    "Redundancy is inferred from per-thread shadow state and can be uncertain if a GL context moves between threads or an unwrapped call changes state.",
+    "Draw-state matches are batching upper bounds; pass hashes do not prove equal pixels.",
+    "Power values are estimated system-wide SoC power, not EU IV-only watts."
+  ],
+  "calibration": {
+    "counter_median_swaps_s": 60.0,
+    "full_median_swaps_s": 48.0,
+    "relative_change_pct": -20.0
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "runs": [
+    "results/20260928T064432Z-autonomous",
+    "results/20260928T065512Z-autonomous",
+    "results/20260928T065747Z-autonomous"
+  ],
+  "summary": {
+    "eu4_cpu_ms_per_s": {
+      "median": 1094.12,
+      "mean": 1098.7866666666666,
+      "standard_deviation": 10.78079259094108
+    },
+    "combined_w": {
+      "median": 9.431,
+      "mean": 9.442,
+      "standard_deviation": 0.04196029869610845
+    },
+    "median_swaps_s": {
+      "median": 52.615,
+      "mean": 52.609,
+      "standard_deviation": 0.14213373983681665
+    }
+  },
+  "variation_fraction": {
+    "eu4_cpu_ms_per_s": 0.02309494281383495,
+    "combined_w": 0.010748111099286861,
+    "median_swaps_s": 0.006637168141592875
+  },
+  "stable": true
+}

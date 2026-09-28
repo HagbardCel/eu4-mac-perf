@@ -1,0 +1,129 @@
+{
+  "status": "incomplete",
+  "started_utc": "2026-09-28T07:55:17.666967+00:00",
+  "run_dir": "results/20260928T075517Z-sampler-uniform",
+  "baseline_evidence": {
+    "fixture": {
+      "save_sha256": "a04bc2e86eeda8025d7a914efb11b18b82dea423631fdcf48c50471578369607",
+      "eu4_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "render_settings_sha256": "cffdd7b53b8abdf8c3f698b32be208c659bd227fa0965efae78fe15f1474bd84",
+      "dlc_load_sha256": "83383e74e90d240c8ec8f420acf648459e0bfed1963710260a7ee8e9c090b705",
+      "country": "VEN",
+      "date": "1444.11.11",
+      "speed": 0,
+      "resolution": "3456x2234",
+      "refresh_hz": 120,
+      "power_mode": "normal"
+    },
+    "gog": {
+      "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+      "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "gog_game_id": "2057001589",
+      "gog_build_id": "59158198792514056",
+      "gog_package_version": "1",
+      "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
+      "eu4_branch": "release_1.37.5-gog-fix",
+      "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
+      "gog_user_data": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG",
+      "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
+      "linked_graphics": [
+        "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
+        "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
+      ]
+    },
+    "settings": {
+      "path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/settings.txt",
+      "sha256": "ef20417e1b05978cb6ed873b0597de1971967c90aa97dfdfea8371fb2ddd0499",
+      "render_settings_sha256": "cffdd7b53b8abdf8c3f698b32be208c659bd227fa0965efae78fe15f1474bd84",
+      "refreshRate": "60",
+      "fullScreen": "yes",
+      "borderless": "no",
+      "vsync": "yes",
+      "multi_sampling": "0",
+      "game_ui_scale": "1.500",
+      "autosave": "\"NEVER\"",
+      "game_resolution": "3456x2234"
+    },
+    "dlc_mods": {
+      "path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/dlc_load.json",
+      "sha256": "83383e74e90d240c8ec8f420acf648459e0bfed1963710260a7ee8e9c090b705",
+      "selection": {
+        "enabled_mods": [
+          "mod/976a3320-468c-11ef-8896-71de0eb2c4d7.mod"
+        ],
+        "disabled_dlcs": []
+      }
+    },
+    "display": {
+      "display_id": 1,
+      "width": 1728,
+      "height": 1117,
+      "pixel_width": 3456,
+      "pixel_height": 2234,
+      "refresh_hz": 120.0,
+      "available_refresh_hz_at_current_resolution": [
+        47.94999694824219,
+        48.0,
+        50.0,
+        59.93998718261719,
+        60.0,
+        120.0
+      ],
+      "verified": true
+    },
+    "power": {
+      "source": "AC Power",
+      "mode": "normal",
+      "all_modes": {
+        "Battery Power": "normal",
+        "AC Power": "normal"
+      }
+    },
+    "launcher_args": [
+      "-enabletelemetry",
+      "-gdpr-compliant"
+    ],
+    "probe_sha256": "a78074a7032487f3fb900236da53b78e226f9e7e728e1496d7a7f5cef6038532",
+    "probe_source_sha256": "539527655d7fe698a80e9a6d4a8a5109d4c62a6fd020e16f3941a175ed39f979",
+    "focus_source_sha256": "4e9894231186736fc14cbdb81827f8bbe0f63b42daa8854950eb4e8616e3f73e",
+    "powermetrics_helper_sha256": "8baf0d0a6b7ebc6bd2d835cef04c0d5512391b2b6f126f5623431e3e6e4dcc01"
+  },
+  "sampler_preflight": {
+    "gog": {
+      "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+      "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "gog_game_id": "2057001589",
+      "gog_build_id": "59158198792514056",
+      "gog_package_version": "1",
+      "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
+      "eu4_branch": "release_1.37.5-gog-fix",
+      "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
+      "gog_user_data": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG",
+      "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
+      "linked_graphics": [
+        "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
+        "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
+      ]
+    },
+    "library_sha256": "420a9c4f6014bfad34d168b52211111b7dd15b55dc08f077d4d891b6a21d6054",
+    "library_source_sha256": "63053f3a493120b50c1bb1891d952af3ef10ca556c00bc2edd93acb43fd56b5c",
+    "harness": "passed",
+    "callsite": "eu4+0x15ebc7a",
+    "projected_pass_through_overhead_pct": 0.48
+  },
+  "clock_anchor": {
+    "event": "clock_anchor",
+    "monotonic_ns": 644941870908166,
+    "wall_ns": 1790582117667216000
+  },
+  "working_save": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/save games/EU4Benchmark_a04bc2e86eeda802.eu4",
+  "game_pid": 17899,
+  "readiness": {
+    "ready_ns": 644989673014541,
+    "swap_rate": 52.92,
+    "cpu_ms_s": 1101.22
+  },
+  "error": "Pinned sampler call site did not engage safely before warm-up",
+  "working_save_changed": false,
+  "ended_utc": "2026-09-28T07:56:06.599628+00:00"
+}

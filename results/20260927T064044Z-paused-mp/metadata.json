@@ -1,0 +1,96 @@
+{
+  "status": "complete",
+  "started_utc": "2026-09-27T06:40:44.048505+00:00",
+  "gog": {
+    "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "gog_game_id": "2057001589",
+    "gog_build_id": "59158198792514056",
+    "gog_package_version": "1",
+    "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
+    "eu4_branch": "release_1.37.5-gog-fix",
+    "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
+    "gog_user_data": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG",
+    "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
+    "linked_graphics": [
+      "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
+      "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
+    ]
+  },
+  "save_path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/save games/Venice1444_11_11.eu4",
+  "save_sha256": "3905618dfdef75f614aec31708ed4f6dc9ef6ea9860ed3b268e45b7ee3146401",
+  "counter_library": "benchmark/.build/libeu4_frame_counter.dylib",
+  "counter_source_sha256": "ec0ab9ba2a7205dcfd9bd4f5ebc3e8a210ef34e2221a4d0f942cb4ea8c55c75c",
+  "requested_seconds": 10,
+  "multithreaded_gl_requested": true,
+  "game_pid": 72696,
+  "multithreaded_gl_contexts": [
+    {
+      "query_before": 0,
+      "before": 0,
+      "enable_error": 0,
+      "query_after": 0,
+      "after": 1
+    },
+    {
+      "query_before": 0,
+      "before": 0,
+      "enable_error": 0,
+      "query_after": 0,
+      "after": 1
+    }
+  ],
+  "display": {
+    "display_id": 1,
+    "width": 3456,
+    "height": 2234,
+    "pixel_width": 3456,
+    "pixel_height": 2234,
+    "refresh_hz": 120.0,
+    "available_refresh_hz_at_current_resolution": [
+      47.94999694824219,
+      48.0,
+      50.0,
+      59.93998718261719,
+      60.0,
+      120.0
+    ],
+    "verified": true
+  },
+  "settings": {
+    "path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/settings.txt",
+    "sha256": "fb641df3a0d36fd749784191f7a13ba579a295aa830497c753d7d91b6fb18665",
+    "render_settings_sha256": "92748b90d84ab8e19f82c60b102db351a7240699baab58b924fadc8fe107f2e3",
+    "refreshRate": "60",
+    "fullScreen": "yes",
+    "borderless": "no",
+    "vsync": "yes",
+    "multi_sampling": "0",
+    "game_ui_scale": "2.000",
+    "autosave": "\"NEVER\"",
+    "game_resolution": "3456x2234"
+  },
+  "power": {
+    "source": "AC Power",
+    "mode": "normal",
+    "all_modes": {
+      "Battery Power": "normal",
+      "AC Power": "normal"
+    }
+  },
+  "dlc_mods": {
+    "path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/dlc_load.json",
+    "sha256": "d4b85788efdb0380d21c518ba8d3aebc49a46b6bce47f26b9d6ba0157745f78f",
+    "selection": {
+      "enabled_mods": [
+        "mod/ugc_173103497.mod"
+      ],
+      "disabled_dlcs": []
+    }
+  },
+  "full_buckets": 9,
+  "median_swaps_per_second": 66.89651109733242,
+  "min_swaps_per_second": 66.19493717408874,
+  "max_swaps_per_second": 68.14713856091021,
+  "ended_utc": "2026-09-27T06:41:50.557178+00:00"
+}

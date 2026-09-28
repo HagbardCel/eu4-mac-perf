@@ -1,0 +1,13 @@
+{"event": "clock_anchor", "monotonic_ns": 104162703333, "wall_ns": 1790517070032877000}
+{"event": "phase_start", "mode": 0, "monotonic_ns": 106205365958, "phase": "a1", "wall_ns": 1790517072075542000}
+{"event": "phase_end", "monotonic_ns": 126206339375, "phase": "a1", "wall_ns": 1790517092076559000}
+{"event": "phase_start", "mode": 1, "monotonic_ns": 126223829333, "phase": "b", "wall_ns": 1790517092094048000}
+{"event": "phase_end", "monotonic_ns": 146229105208, "phase": "b", "wall_ns": 1790517112099367000}
+{"event": "phase_start", "mode": 0, "monotonic_ns": 146248602375, "phase": "a2", "wall_ns": 1790517112118864000}
+{"event": "phase_end", "monotonic_ns": 166253879083, "phase": "a2", "wall_ns": 1790517132124184000}
+{"event": "phase_start", "mode": 2, "monotonic_ns": 166273163500, "phase": "c", "wall_ns": 1790517132143468000}
+{"event": "phase_end", "monotonic_ns": 186276400958, "phase": "c", "wall_ns": 1790517152147952000}
+{"event": "phase_start", "mode": 0, "monotonic_ns": 186294392958, "phase": "a3", "wall_ns": 1790517152165944000}
+{"event": "phase_end", "monotonic_ns": 206299659541, "phase": "a3", "wall_ns": 1790517172171693000}
+{"event": "phase_start", "mode": 3, "monotonic_ns": 206317341833, "phase": "d", "wall_ns": 1790517172189375000}
+{"event": "phase_end", "monotonic_ns": 226320689333, "phase": "d", "wall_ns": 1790517192192898000}

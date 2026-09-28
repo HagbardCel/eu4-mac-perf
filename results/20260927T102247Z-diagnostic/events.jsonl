@@ -1,0 +1,7 @@
+{"event": "clock_anchor", "monotonic_ns": 102159073041, "wall_ns": 1790504655643953000}
+{"event": "phase_start", "mode": 3, "monotonic_ns": 102489257083, "phase": "calibration_passthrough", "wall_ns": 1790504655974137000}
+{"event": "phase_end", "monotonic_ns": 112494598750, "phase": "calibration_passthrough", "wall_ns": 1790504665979484000}
+{"event": "phase_start", "mode": 1, "monotonic_ns": 112494862833, "phase": "calibration_full", "wall_ns": 1790504665979747000}
+{"event": "phase_end", "monotonic_ns": 122500135583, "phase": "calibration_full", "wall_ns": 1790504675985026000}
+{"event": "phase_start", "mode": 2, "monotonic_ns": 122503227416, "phase": "paused_idle", "wall_ns": 1790504675988117000}
+{"event": "phase_end", "monotonic_ns": 182529697750, "phase": "paused_idle", "wall_ns": 1790504736014618000}
