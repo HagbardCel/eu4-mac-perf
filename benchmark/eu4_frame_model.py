@@ -34,11 +34,14 @@ DETOUR_HARNESS_SOURCE = ROOT / "tests/frame_model_detour_harness.c"
 DETOUR_HARNESS = ROOT / "benchmark/.build/frame_model_detour_harness"
 RENDER_GATE_HARNESS_SOURCE = ROOT / "tests/frame_model_render_gate_harness.c"
 RENDER_GATE_HARNESS = ROOT / "benchmark/.build/frame_model_render_gate_harness"
+SCOPE_HARNESS = ROOT / "benchmark/.build/frame_model_scope_harness"
+GPU_HARNESS = ROOT / "benchmark/.build/frame_model_gpu_harness"
 POWER_HELPER_SOURCE = ROOT / "benchmark/power_mode_helper"
 POWER_HELPER_INSTALLED = Path("/usr/local/libexec/eu4-power-mode")
 CONTROL_SIZE = 4096
-CONTROL = struct.Struct("<6I6Q")
-CONTROL_COMMAND = struct.Struct("<6I3Q")
+FORMAT_VERSION = 2
+CONTROL = struct.Struct("<6I8Q")
+CONTROL_COMMAND = struct.Struct("<6I4Q")
 EXPECTED = engine.EXPECTED_SHA256
 MODE = {"off": 0, "profile": 1, "skip_render": 2, "drop_draws": 3,
         "raster_suppress": 4, "cadence_30": 5, "cadence_15": 6}
@@ -58,7 +61,9 @@ FRAME_FIELDS = ("update_id", "render_id", "present_id", "phase", "thread_id",
                 "render_wall_ns", "render_cpu_ns", "map_wall_ns", "map_cpu_ns",
                 "present_wall_ns", "present_cpu_ns", "wait_ns", "wait_cpu_ns", "sleep_ns", "flags",
                 "forwarded_draws", "suppressed_draws", "render_attempts",
-                "render_executed", "present_scene_calls", "present_calls")
+                "render_executed", "present_scene_calls", "present_calls", "measurement_epoch", "start_ns", "end_ns",
+                "render_start_ns", "render_end_ns", "present_time_ns")
+LEGACY_FRAME_FIELDS = FRAME_FIELDS[:-6]
 HOOK_NAMES = ("UpdateOneFrame", "CInGameIdler::Idle", "CInGameIdler::Render",
               "CEU3GraphicalMap::Render", "CGraphics::PresentScene",
               "CPdxMeshObject::AddToBucket", "CArray<SFlushData>::Append",
@@ -90,11 +95,13 @@ def build() -> dict:
         ["clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-Werror",
          "-o", str(RENDER_GATE_HARNESS), str(RENDER_GATE_HARNESS_SOURCE)],
     )
+    commands += tuple(["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror",
+        "-o",str(path),str(ROOT/"tests"/(path.name+".c"))] for path in (SCOPE_HARNESS,GPU_HARNESS))
     for command in commands:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode:
             raise base.BenchmarkError(f"Build failed: {result.stderr.strip()}")
-    for path in (LIBRARY, HARNESS, ARB_HARNESS, DETOUR_HARNESS, RENDER_GATE_HARNESS):
+    for path in (LIBRARY, HARNESS, ARB_HARNESS, DETOUR_HARNESS, RENDER_GATE_HARNESS,SCOPE_HARNESS,GPU_HARNESS):
         if base.command("lipo", "-archs", str(path)).strip() != "x86_64":
             raise base.BenchmarkError(f"{path.name} is not x86_64")
     return {"executable_sha256": base.sha256(base.GOG_EXE),
@@ -125,6 +132,20 @@ def offline_render_gate_harness() -> dict:
     return {"status":"passed","output":run.stdout.strip()}
 
 
+def offline_producer_harnesses() -> dict:
+    evidence={}
+    for path in (SCOPE_HARNESS,GPU_HARNESS):
+        run=subprocess.run([str(path)],capture_output=True,text=True,timeout=10,check=False)
+        if run.returncode: raise base.BenchmarkError(f"{path.name} failed: {run.stderr}")
+        evidence[path.name]={"status":"passed","output":run.stdout.strip()}
+        if path==SCOPE_HARNESS:
+            rows=list(csv.reader(run.stdout.splitlines()))
+            tree=scope_tree_summary(rows,[{"name":"A0"}])["phases"]["1"]
+            if tree["tree_reconciliation"]!="passed":
+                raise base.BenchmarkError("Production scope serialization failed analyzer reconciliation")
+    return evidence
+
+
 def offline_arb_harness() -> dict:
     run=subprocess.run([str(ARB_HARNESS),str(LIBRARY.resolve())],
                        capture_output=True,text=True,timeout=10,check=False)
@@ -140,7 +161,7 @@ def offline_harness(library: Path | None = None, mode: int = 1, loops: int = 150
     with tempfile.TemporaryDirectory(prefix="eu4-frame-model-") as directory:
         root = Path(directory)
         control_path, log_path = root / "control.bin", root / "trace.csv"
-        fields = [1,2,mode,1,3,0,0,0,1,0,0,0]
+        fields = [FORMAT_VERSION,2,mode,1,3,0,0,0,1,1,0,0,0,0]
         control_path.write_bytes(CONTROL.pack(*fields) + bytes(CONTROL_SIZE-CONTROL.size))
         env = os.environ.copy()
         if library:
@@ -170,26 +191,29 @@ def offline_harness(library: Path | None = None, mode: int = 1, loops: int = 150
                 "hook_failures": next((int(row[1]) for row in rows if row[0] == "Z"), None)}
 
 
-def preflight(run_gl: bool = True, require_privilege: bool = False) -> dict:
+def preflight(run_gl: bool = True, require_privilege: bool = False, require_power_mode: bool=True) -> dict:
     if base.sha256(base.GOG_EXE) != EXPECTED:
         raise base.BenchmarkError("Installed GOG executable differs from the pinned v1.37.5 build")
     static = build()
     detour = offline_detour_harness()
     render_gate=offline_render_gate_harness()
     arb=offline_arb_harness()
+    producers=offline_producer_harnesses()
     auto_evidence = auto.preflight(require_privilege=require_privilege)
-    power_helper = _power_helper_preflight() if require_privilege else {"status":"not checked"}
+    power_helper = _power_helper_preflight() if require_privilege and require_power_mode else {"status":"not checked"}
     if not run_gl:
         return {"status": "static_ready", "build": static, "autonomous": auto_evidence,
                 "detour_harness":detour,
                 "render_gate_harness":render_gate,
-                "arb_handle_harness":arb,
+                "arb_handle_harness":arb,"producer_harnesses":producers,
                 "power_mode_helper":power_helper,
                 "overhead_gate": "not measured", "live_hooks": "not installed in EU IV"}
     bare, wrapped = [], []
     for _ in range(3):
-        bare.append(offline_harness(loops=12000))
-        wrapped.append(offline_harness(LIBRARY, loops=12000))
+        for stage,target in (("bare",None),("counters",LIBRARY)):
+            try: sample=offline_harness(target,loops=12000)
+            except base.BenchmarkError as exc: raise base.BenchmarkError(f"{stage} GL preflight: {exc}") from exc
+            (bare if target is None else wrapped).append(sample)
     median_bare=statistics.median(item["elapsed_ns"] for item in bare)
     median_wrapped=statistics.median(item["elapsed_ns"] for item in wrapped)
     overhead = median_wrapped/median_bare-1 if median_bare else 1.0
@@ -200,7 +224,7 @@ def preflight(run_gl: bool = True, require_privilege: bool = False) -> dict:
     return {"status": "ready", "build": static, "autonomous": auto_evidence,
             "detour_harness":detour,
             "render_gate_harness":render_gate,
-            "arb_handle_harness":arb,
+            "arb_handle_harness":arb,"producer_harnesses":producers,
             "power_mode_helper":power_helper,
             "bare_ns": [item["elapsed_ns"] for item in bare],
             "counters_ns": [item["elapsed_ns"] for item in wrapped],
@@ -210,7 +234,7 @@ def preflight(run_gl: bool = True, require_privilege: bool = False) -> dict:
             "counters_cpu_overhead_fraction": round(cpu_overhead,5),
             "overhead_gate": "passed", "limitations": [
                 "Synthetic GL test validates draw interposition and overhead, not engine detours under Rosetta.",
-                "Coarse asynchronous timestamp queries are sampled by render and map scope; compatibility varies by CGL context.",
+                "GPU timestamps are context/pass timeline segments; compatibility varies by CGL context.",
                 "Six draw APIs are wrapped; draw-range, multi-draw, and extension-specific entry points remain uncovered."]}
 
 
@@ -224,17 +248,46 @@ def read_rows(path: Path) -> list[list[str]]:
 def frame_rows(path: Path) -> list[dict]:
     result = []
     for row in read_rows(path):
-        if not row or row[0] != "F" or len(row) != len(FRAME_FIELDS)+1:
+        if not row or row[0] != "F" or len(row) not in (len(FRAME_FIELDS)+1,len(LEGACY_FRAME_FIELDS)+1):
             continue
         try:
-            result.append(dict(zip(FRAME_FIELDS, map(int, row[1:]))))
+            result.append(dict(zip(FRAME_FIELDS if len(row)==len(FRAME_FIELDS)+1 else LEGACY_FRAME_FIELDS, map(int, row[1:]))))
         except ValueError:
             continue
     return result
 
 
-def phase_summary(rows: list[dict], name: str, seconds: float) -> dict:
-    selected = [row for row in rows if row["phase"] == PHASE_NUMBER[name]]
+def eligible_frame(row: dict, window: dict | None) -> bool:
+    if window is None or "measurement_epoch" not in window:
+        return not (row.get("flags",0)&(1|512|1024))
+    offset=window.get("clock_offset_ns",0)
+    uncertainty=window.get("alignment_uncertainty_ns",0)
+    return (row.get("measurement_epoch")==window["measurement_epoch"] and
+            row["phase"]==PHASE_NUMBER[window["name"]] and
+            not row.get("flags",0)&(1|512|1024|4096) and
+            row.get("start_ns",0)+offset>=window["start_ns"]+uncertainty and
+            row.get("end_ns",0)+offset<=window["end_ns"]-uncertainty)
+
+
+def eligible_trace(trace: list[list[str]], frames: list[dict], windows: list[dict]) -> list[list[str]]:
+    if not any("measurement_epoch" in w for w in windows): return trace
+    eligible={(r["measurement_epoch"],r["update_id"]) for w in windows for r in frames
+              if eligible_frame(r,w)}
+    result=[]
+    for row in trace:
+        try:
+            if row[0]=="Q": key=(int(row[10]),int(row[1])) if len(row)==13 else None
+            elif row[0]=="G": key=(int(row[8]),int(row[9])) if len(row)>=13 else None
+            elif row[0] in {"D","S","U","u","V","W","B","b","T","t"}:
+                key=(int(row[13]),int(row[14])) if len(row)==16 else None
+            else: result.append(row); continue
+            if key in eligible: result.append(row[:13] if row[0] not in {"Q","G"} else row)
+        except (ValueError,IndexError): continue
+    return result
+
+
+def phase_summary(rows: list[dict], name: str, seconds: float, window: dict | None=None, events_rows: list[list[str]] | None=None) -> dict:
+    selected = [row for row in rows if row["phase"] == PHASE_NUMBER[name] and eligible_frame(row,window)]
     if not selected:
         return {"phase": name, "status": "missing", "updates": 0}
     def median(field: str) -> float:
@@ -296,6 +349,33 @@ def phase_summary(rows: list[dict], name: str, seconds: float) -> dict:
                   row["render_executed"]==0 for row in selected),
               "cadence_overruns": sum(bool(row["flags"] & 2) for row in selected),
               "record_flags": sorted({row["flags"] for row in selected})}
+    if window and "measurement_epoch" in window:
+        # Rates count timestamped events in [start,end), including events in frames
+        # crossing a boundary. Cost distributions require whole eligible frames.
+        population=[r for r in rows if r["phase"]==PHASE_NUMBER[name] and
+                    r.get("measurement_epoch")==window["measurement_epoch"]]
+        offset=window.get("clock_offset_ns",0)
+        def events(field: str,count: str | None=None) -> int:
+            return sum((r.get(count,0) if count else 1) for r in population
+                       if window["start_ns"]<=r.get(field,0)+offset<window["end_ns"])
+        result.update(update_attempts_s=events("start_ns")/observed_seconds,
+                      render_attempts_s=events("render_start_ns","render_attempts")/observed_seconds,
+                      executed_renders_s=events("render_start_ns","render_executed")/observed_seconds,
+                      present_calls_s=events("present_time_ns","present_calls")/observed_seconds,
+                      excluded_boundary_or_invalid_frames=len(population)-len(selected))
+        if events_rows is not None:
+            counts={kind:0 for kind in (1,2,3,4)}
+            for r in events_rows:
+                if not r or r[0]!="E" or len(r)<6: continue
+                epoch,update,phase,kind,timestamp=map(int,r[1:6])
+                if (epoch==window["measurement_epoch"] and phase==PHASE_NUMBER[name] and
+                    window["start_ns"]<=timestamp+offset<window["end_ns"] and kind in counts):
+                    counts[kind]+=1
+            for kind,key in ((1,"update_attempts_s"),(2,"render_attempts_s"),(3,"executed_renders_s"),(4,"present_calls_s")):
+                result[key]=counts[kind]/observed_seconds
+            result["rate_policy"]="timestamped events in acknowledged window; boundary frames excluded only from cost statistics"
+        result["invalid_scope_frames"]=sum(bool(r.get("flags",0)&(512|1024)) for r in population)
+
     result["exclusive_scope_coverage"]={"cpu_fraction":None,"wall_fraction":None,
         "status":"not instrumented","identified_cpu_ms":None,"identified_wall_ms":None,
         "unattributed_cpu_ms":None,"unattributed_wall_ms":None}
@@ -472,118 +552,179 @@ def temporal_differences(trace: list[list[str]]) -> dict:
 
 
 def gpu_summary(trace: list[list[str]]) -> dict:
-    by_phase: dict[int,dict[int,dict[str,list[int]]]] = {}
+    groups={}; missing={}; legacy=[]
     for row in trace:
-        if not row or row[0]!="G" or len(row)<5: continue
+        if not row or row[0]!="G": continue
         try:
-            phase,render_id,whole,map_ns=map(int,row[1:5])
-            context=int(row[5]) if len(row)>5 else 0
-        except ValueError:
-            continue
-        slot=by_phase.setdefault(phase,{}).setdefault(context,
-            {"whole_ns":[],"map_ns":[],"render_ids":[]})
-        slot["whole_ns"].append(whole); slot["render_ids"].append(render_id)
-        if map_ns: slot["map_ns"].append(map_ns)
+            if len(row)<13:
+                legacy.append({"phase":int(row[1]),"render_id":int(row[2]),
+                    "legacy_interval_ms":int(row[3])/1e6,"context":int(row[5]) if len(row)>5 else 0,
+                    "status":"unqualified legacy interval; no whole-render interpretation"}); continue
+            phase,render,start,end,lifetime,pass_id,seq,epoch,update,reason=map(int,row[1:11])
+            if reason:
+                counts=missing.setdefault(str(phase),{})
+                counts[str(reason)]=counts.get(str(reason),0)+1; continue
+            if end<start: continue
+            groups.setdefault(str(phase),{}).setdefault((lifetime,pass_id),[]).append(
+                {"epoch":epoch,"update_id":update,"render_id":render,"sequence":seq,
+                 "start_timestamp_ns":start,"end_timestamp_ns":end,"interval_ms":(end-start)/1e6})
+        except ValueError: continue
     result={}
-    for phase,values in by_phase.items():
-        segments={str(context):{"available_samples":len(sample["whole_ns"]),
-            "median_whole_render_ms":statistics.median(sample["whole_ns"])/1e6,
-            "median_map_ms":statistics.median(sample["map_ns"])/1e6 if sample["map_ns"] else None,
-            "map_samples":len(sample["map_ns"]),"first_render_id":min(sample["render_ids"]),
-            "last_render_id":max(sample["render_ids"])} for context,sample in values.items()}
-        one=next(iter(segments.values())) if len(segments)==1 else None
-        result[str(phase)]={"context_segments":segments,
-            "available_samples":sum(item["available_samples"] for item in segments.values()),
-            "median_whole_render_ms":one["median_whole_render_ms"] if one else None,
-            "median_map_ms":one["median_map_ms"] if one else None,
-            "context_count":len(segments),"cross_context_aggregation":"not performed"}
-    return {"status":"available" if result else "unavailable_or_unsupported",
-            "phases":result,"query_policy":"per-context asynchronous timestamps; unavailable results are never synchronously requested"}
+    for phase in groups.keys() | missing.keys():
+        contexts=groups.get(phase,{})
+        result[phase]={"context_pass_segments":{f"{ctx}:{pass_id}":{
+            "context_lifetime":ctx,"pass":pass_id,"available_samples":len(records),
+            "median_interval_ms":statistics.median(r["interval_ms"] for r in records),
+            "intervals":records} for (ctx,pass_id),records in contexts.items()},
+            "context_count":len({ctx for ctx,_ in contexts}),
+            "missing_segment_counts":missing.get(phase,{}),
+            "median_whole_render_ms":None,"median_map_ms":None,
+            "cross_context_aggregation":"not performed"}
+    return {"status":"segmented_partial" if result else "unavailable_or_unsupported",
+            "phases":result,"legacy_unqualified_samples":legacy,
+            "missing_reasons":{"1":"null context","2":"unsupported","3":"context capacity",
+                "4":"query pool exhaustion","5":"unexpected owner","6":"destroyed",
+                "7":"uncollected at measurement stop","8":"invalid timestamps"},
+            "query_policy":"Completed queries polled only in their owning current context; intervals are timeline elapsed time, never whole-render GPU busy time."}
+
+
+SEMANTIC_SCOPES = {4,5,6,7,9}
+ENVELOPE_SCOPES = {0,1,2,3,8}
 
 
 def scope_tree_summary(trace: list[list[str]], phases: list[dict]) -> dict:
-    phase_ids={PHASE_NUMBER[item["name"]] for item in phases
-               if item.get("name") in PHASE_NUMBER}
-    totals={phase:{} for phase in phase_ids}
-    per_update={phase:{} for phase in phase_ids}
+    populations={}; legacy=[]
     for row in trace:
-        if not row or row[0]!="Q" or len(row)<10: continue
-        try:
-            update,phase,parent,child,calls,in_wall,in_cpu,ex_wall,ex_cpu=map(int,row[1:10])
-        except ValueError:
+        if not row or row[0]!="Q": continue
+        if len(row)!=13:
+            if len(row)>=10:
+                legacy.append({"update_id":row[1],"phase":row[2],"parent_scope":row[3],
+                    "scope":row[4],"calls":row[5],"inclusive_wall_ns":row[6],
+                    "inclusive_cpu_ns":row[7],"exclusive_wall_ns":row[8],"exclusive_cpu_ns":row[9]})
             continue
-        if phase not in phase_ids or not 0<=child<len(SCOPE_NAMES): continue
-        scope=totals[phase].setdefault((parent,child),[0,0,0,0,0])
-        for index,value in enumerate((calls,in_wall,in_cpu,ex_wall,ex_cpu)):
-            scope[index]+=value
-        update_scopes=per_update[phase].setdefault(update,{})
-        update_scope=update_scopes.setdefault((parent,child),[0,0,0,0,0])
-        for index,value in enumerate((calls,in_wall,in_cpu,ex_wall,ex_cpu)):
-            update_scope[index]+=value
-    output={}
-    for phase_id,entries in totals.items():
-        nodes=[]
-        for (parent,child),values in sorted(entries.items()):
-            samples=[scope_values.get((parent,child),[0,0,0,0,0])
-                     for scope_values in per_update[phase_id].values()]
-            nodes.append({"parent":SCOPE_NAMES[parent] if 0<=parent<len(SCOPE_NAMES) else None,
-                "name":SCOPE_NAMES[child],"calls":values[0],
-                "inclusive_wall_ms":values[1]/1e6,"inclusive_cpu_ms":values[2]/1e6,
-                "exclusive_wall_ms":values[3]/1e6,"exclusive_cpu_ms":values[4]/1e6,
-                "median_inclusive_wall_ms_per_update":statistics.median(x[1] for x in samples)/1e6,
-                "median_inclusive_cpu_ms_per_update":statistics.median(x[2] for x in samples)/1e6,
-                "median_exclusive_wall_ms_per_update":statistics.median(x[3] for x in samples)/1e6,
-                "median_exclusive_cpu_ms_per_update":statistics.median(x[4] for x in samples)/1e6})
-        root=entries.get((-1,SCOPE_LOOP),[0,0,0,0,0])
-        # Every named scope's exclusive interval is disjoint from its ancestors
-        # and children. Include render/map exclusive time as named work; counting
-        # only leaf scopes would mislabel all work inside those scopes as residual.
-        identified_ids=tuple(index for index in range(len(SCOPE_NAMES))
-                             if index!=SCOPE_LOOP)
-        identified_cpu=sum(values[4] for (parent,child),values in entries.items()
-                           if child in identified_ids)
-        identified_wall=sum(values[3] for (parent,child),values in entries.items()
-                            if child in identified_ids)
-        cpu_coverage=[];wall_coverage=[];cpu_residual=[];wall_residual=[]
-        for scope_values in per_update[phase_id].values():
-            update_root=scope_values.get((-1,SCOPE_LOOP),[0,0,0,0,0])
-            if update_root[2]:
-                leaf_cpu=sum(value[4] for (_parent,child),value in scope_values.items()
-                             if child in identified_ids)
-                cpu_coverage.append(leaf_cpu/update_root[2])
-            if update_root[1]:
-                leaf_wall=sum(value[3] for (_parent,child),value in scope_values.items()
-                              if child in identified_ids)
-                wall_coverage.append(leaf_wall/update_root[1])
-            cpu_residual.append(update_root[2]-sum(value[2] for (parent,_),value in scope_values.items() if parent==SCOPE_LOOP))
-            wall_residual.append(update_root[1]-sum(value[1] for (parent,_),value in scope_values.items() if parent==SCOPE_LOOP))
-        immediate_cpu=sum(values[2] for (parent,_child),values in entries.items() if parent==SCOPE_LOOP)
-        immediate_wall=sum(values[1] for (parent,_child),values in entries.items() if parent==SCOPE_LOOP)
-        output[str(phase_id)]={"nodes":nodes,"root_loop_cpu_ms":root[2]/1e6,
-            "root_loop_wall_ms":root[1]/1e6,
-            "root_unattributed_exclusive_cpu_ms":max(0,root[2]-immediate_cpu)/1e6,
-            "root_unattributed_exclusive_wall_ms":max(0,root[1]-immediate_wall)/1e6,
-            "identified_exclusive_scope_cpu_ms":identified_cpu/1e6,
-            "identified_exclusive_scope_wall_ms":identified_wall/1e6,
-            "identified_exclusive_scope_cpu_fraction":identified_cpu/root[2] if root[2] else None,
-            "identified_exclusive_scope_wall_fraction":identified_wall/root[1] if root[1] else None,
-            "median_identified_exclusive_scope_cpu_fraction_per_update":statistics.median(cpu_coverage) if cpu_coverage else None,
-            "median_identified_exclusive_scope_wall_fraction_per_update":statistics.median(wall_coverage) if wall_coverage else None,
-            "median_root_unattributed_exclusive_cpu_ms_per_update":statistics.median(cpu_residual)/1e6 if cpu_residual else None,
-            "median_root_unattributed_exclusive_wall_ms_per_update":statistics.median(wall_residual)/1e6 if wall_residual else None,
-            "coverage_95_percent_gate":"passed" if cpu_coverage and wall_coverage and
-                statistics.median(cpu_coverage)>=.95 and statistics.median(wall_coverage)>=.95 else "not met",
-            "coverage_status":"partial" if root[2] else "missing scope records",
-            "coverage_policy":"Exclusive intervals from every instrumented child scope (including UpdateOneFrame, Render, map, and cadence sleep) are summed once; HookedUpdateLoop exclusive time remains explicit residual"}
-    return {"scope_names":list(SCOPE_NAMES),"phases":output,
-            "status":"available" if output else "unavailable",
-            "wall_cpu_policy":"exclusive CPU and wall are separate; HookedUpdateLoop spans UpdateOneFrame plus pacing sleep; wall residual can include blocking and descheduling"}
+        try:
+            update,phase,parent,scope,calls,iw,ic,ew,ec,epoch,node,flags=map(int,row[1:])
+            if not 0<=scope<len(SCOPE_NAMES): flags|=1024
+            nodes=populations.setdefault((phase,epoch,update),{})
+            if node in nodes: flags|=1024
+            nodes[node]={"node":node,"parent_node":parent,"scope":scope,"calls":calls,
+                         "iw":iw,"ic":ic,"ew":ew,"ec":ec,"flags":flags}
+        except ValueError: continue
+    phase_ids={PHASE_NUMBER[p["name"]] for p in phases if p.get("name") in PHASE_NUMBER}
+    output={}; residuals=[]
+    for phase in phase_ids:
+        trees=[]; invalid=0
+        for (pid,epoch,update),nodes in populations.items():
+            if pid!=phase: continue
+            good=bool(nodes) and sum(n["parent_node"]==-1 for n in nodes.values())==1
+            for index,n in nodes.items():
+                children=[c for c in nodes.values() if c["parent_node"]==index]
+                good &= (not n["flags"] and n["calls"]>0 and 0<=n["scope"]<len(SCOPE_NAMES) and
+                         (n["parent_node"]==-1 or n["parent_node"] in nodes) and
+                         n["iw"]==n["ew"]+sum(c["iw"] for c in children) and
+                         n["ic"]==n["ec"]+sum(c["ic"] for c in children))
+                seen={index}; parent=n["parent_node"]
+                while parent!=-1 and parent in nodes:
+                    if parent in seen: good=False; break
+                    seen.add(parent); parent=nodes[parent]["parent_node"]
+            if not good: invalid+=1; continue
+            trees.append(nodes)
+        totals={}; gates={}; distributions={}
+        def descendants(nodes,index):
+            return [n for n in nodes.values() if under(nodes,n,index)]
+        def under(nodes,n,index):
+            seen=set()
+            while n["node"] not in seen:
+                if n["node"]==index: return True
+                seen.add(n["node"])
+                if n["parent_node"]==-1: return False
+                n=nodes[n["parent_node"]]
+            return False
+        for scope in (0,2):
+            inclusive=[0,0]; identified=[0,0]; ratios=[[],[]]
+            for nodes in trees:
+                # Only outermost occurrence supplies denominator; recursion remains
+                # in its subtree and each exclusive interval is counted once.
+                for index,n in nodes.items():
+                    if n["scope"]!=scope: continue
+                    parent=n["parent_node"]; recursive=False
+                    while parent!=-1:
+                        if nodes[parent]["scope"]==scope: recursive=True
+                        parent=nodes[parent]["parent_node"]
+                    if recursive: continue
+                    semantic=[c for c in descendants(nodes,index) if c["scope"] in SEMANTIC_SCOPES and c["scope"]!=9]
+                    for axis,(inc,exc) in enumerate((("ic","ec"),("iw","ew"))):
+                        amount=sum(c[exc] for c in semantic)
+                        inclusive[axis]+=n[inc]; identified[axis]+=amount
+                        if n[inc]: ratios[axis].append(amount/n[inc])
+            fractions=[identified[i]/inclusive[i] if inclusive[i] else None for i in (0,1)]
+            passed=bool(trees) and not invalid and all(v is not None and v>=.95 for v in fractions)
+            gates[SCOPE_NAMES[scope]]={"cpu_fraction":fractions[0],"wall_fraction":fractions[1],
+                "inclusive_cpu_ms":inclusive[0]/1e6,"inclusive_wall_ms":inclusive[1]/1e6,
+                "identified_cpu_ms":identified[0]/1e6,"identified_wall_ms":identified[1]/1e6,
+                "residual_cpu_ms":(inclusive[0]-identified[0])/1e6,
+                "residual_wall_ms":(inclusive[1]-identified[1])/1e6,
+                "gate":"passed" if passed else "not met"}
+            def distribution(values):
+                if not values: return None
+                ordered=sorted(values)
+                return {"samples":len(values),"min":ordered[0],"median":statistics.median(values),
+                        "p95":ordered[min(len(ordered)-1,int(.95*len(ordered)))],"max":ordered[-1]}
+            distributions[SCOPE_NAMES[scope]]={"cpu":distribution(ratios[0]),"wall":distribution(ratios[1])}
+        for nodes in trees:
+            for n in nodes.values():
+                path=[]; current=n
+                while True:
+                    path.append(current["scope"])
+                    if current["parent_node"]==-1: break
+                    current=nodes[current["parent_node"]]
+                path=tuple(reversed(path))
+                total=totals.setdefault(path,{"name":SCOPE_NAMES[n["scope"]],"scope_path":[SCOPE_NAMES[i] for i in path],
+                    "classification":"envelope" if n["scope"] in ENVELOPE_SCOPES else "semantic",
+                    "calls":0,"inclusive_cpu_ms":0,"inclusive_wall_ms":0,"exclusive_cpu_ms":0,"exclusive_wall_ms":0,
+                    "residual_cpu_ms":0,"residual_wall_ms":0,"non_cpu_elapsed_ms":0})
+                total["calls"]+=n["calls"]
+                for field,key in (("ic","inclusive_cpu_ms"),("iw","inclusive_wall_ms"),("ec","exclusive_cpu_ms"),("ew","exclusive_wall_ms")):
+                    total[key]+=n[field]/1e6
+                total["non_cpu_elapsed_ms"]+=(n["ew"]-n["ec"])/1e6
+                if n["scope"] in ENVELOPE_SCOPES:
+                    total["residual_cpu_ms"]+=n["ec"]/1e6;total["residual_wall_ms"]+=n["ew"]/1e6
+        for path,total in totals.items():
+            samples=[]
+            for nodes in trees:
+                costs=[0,0]
+                for n in nodes.values():
+                    node_path=[]; current=n
+                    while True:
+                        node_path.append(current["scope"])
+                        if current["parent_node"]==-1: break
+                        current=nodes[current["parent_node"]]
+                    if tuple(reversed(node_path))==path:
+                        costs[0]+=n["ec"]/1e6; costs[1]+=n["ew"]/1e6
+                samples.append(costs)
+            def costs_distribution(axis):
+                values=sorted(cost[axis] for cost in samples)
+                return {"samples":len(values),"median":statistics.median(values),
+                        "p95":values[min(len(values)-1,int(.95*len(values)))],"max":values[-1]} if values else None
+            total["per_frame_exclusive_cpu_ms"]=costs_distribution(0)
+            total["per_frame_exclusive_wall_ms"]=costs_distribution(1)
+            if total["classification"]=="envelope": residuals.append({"phase":phase,**total})
+        output[str(phase)]={"nodes":list(totals.values()),"valid_frames":len(trees),"invalid_frames":invalid,
+            "tree_reconciliation":"passed" if trees and not invalid else "unusable or missing",
+            "envelope_coverage":gates,"per_frame_coverage_distributions":distributions,
+            "pacing_cpu_ms":sum(n["ec"] for nodes in trees for n in nodes.values() if n["scope"]==9)/1e6,
+            "pacing_wall_ms":sum(n["ew"] for nodes in trees for n in nodes.values() if n["scope"]==9)/1e6,
+            "coverage_95_percent_gate":"passed" if all(g["gate"]=="passed" for g in gates.values()) else "not met"}
+    return {"status":"available" if populations else "legacy_or_unavailable","phases":output,
+            "legacy_records":legacy,"ranked_residuals":sorted(residuals,key=lambda n:n["residual_cpu_ms"],reverse=True),
+            "coverage_policy":"Only explicitly semantic exclusive intervals count. Envelope exclusive time remains residual. Pacing never improves UpdateOneFrame or executed Render gates. Ratios use aggregate CPU and wall totals separately.",
+            "wall_cpu_policy":"Wall minus thread CPU is non-CPU elapsed time and may include waiting or descheduling."}
 
 
 PHASE_NUMBER = {name: i+1 for i, (name, *_rest) in enumerate(PHASES)}
 PHASE_NUMBER.update({"P0": 100, "P1": 101, "P2": 102, "TAIL": 103,
                      "LPM0": 104, "LPM": 105, "LPM1": 106,
-                     "LPMF0": 107, "LPMF": 108, "LPMF1": 109})
+                     "LPMF0": 107, "LPMF": 108, "LPMF1": 109, "ANATIVE":110})
 
 
 def analyze(run_dir: Path) -> dict:
@@ -596,7 +737,9 @@ def analyze(run_dir: Path) -> dict:
     phases = list(manifest.get("calibration",{}).get("phases",[])) + list(manifest.get("phases",[]))
     if manifest.get("profiling_tail"):
         phases.append(manifest["profiling_tail"])
-    summaries = [phase_summary(frames, item["name"], item["duration_s"])
+    event_rows=trace
+    trace = eligible_trace(trace,frames,phases)
+    summaries = [phase_summary(frames, item["name"], item["duration_s"],item,event_rows)
                  for item in phases if item.get("name") in PHASE_NUMBER]
     counters = {}
     for row in trace:
@@ -612,6 +755,12 @@ def analyze(run_dir: Path) -> dict:
     temporal = temporal_differences(trace)
     gpu = gpu_summary(trace)
     scope_tree=scope_tree_summary(trace,phases)
+    for summary in summaries:
+        coverage=scope_tree["phases"].get(str(PHASE_NUMBER[summary["phase"]]),{})
+        if summary.get("invalid_scope_frames"):
+            coverage["tree_reconciliation"]="invalid frames excluded"
+            coverage["coverage_95_percent_gate"]="not met"
+        summary["exclusive_scope_coverage"]=coverage
     a_rows = [p for p in summaries if p["phase"].startswith("A") and p["status"] == "complete"]
     drift = {}
     for field in ("median_update_cpu_ms", "median_render_cpu_ms", "median_draws"):
@@ -620,7 +769,9 @@ def analyze(run_dir: Path) -> dict:
     reference = json.loads((ROOT / "results/autonomous-reproducibility.json").read_text())
     base_cpu_ms_swap = (reference["summary"]["eu4_cpu_ms_per_s"]["median"] /
                         reference["summary"]["median_swaps_s"]["median"])
-    output = {"status": manifest.get("status"), "run_dir": str(run_dir),
+    output = {"format_version":FORMAT_VERSION,"report_kind":manifest.get("report_kind","causal"),
+              "metal_feasibility":"feasibility seed; go/no-go undetermined",
+              "status": manifest.get("status"), "run_dir": str(run_dir),
               "executable_sha256": manifest.get("executable_sha256"),
               "phases": summaries, "hook_totals": counters,
               "update_render_present_totals":{"update_calls":totals[0],"render_attempts":totals[1],"presents":totals[2]},
@@ -639,6 +790,16 @@ def analyze(run_dir: Path) -> dict:
               "conclusions": derive_conclusions(summaries, drift,manifest.get("power_by_phase",{})),
               "recommendations": derive_recommendations(summaries,manifest.get("power_by_phase",{}),temporal,gpu),
               "limitations": manifest.get("limitations", [])}
+    baseline=[p for p in summaries if p["phase"] in {name for name,*_ in PHASES if name.startswith("A")}]
+    output["diagnosis_status"]=("eligible for causal assessment" if manifest.get("status")=="complete" and
+        manifest.get("probe_integrity",{}).get("status")=="passed" and baseline and all(
+        p["exclusive_scope_coverage"].get("coverage_95_percent_gate")=="passed" for p in baseline)
+        else "partial attribution")
+    if output["report_kind"]=="residual_discovery" or output["diagnosis_status"]=="partial attribution":
+        output["conclusions"]=["Residual discovery identifies missing attribution; reconciliation alone does not establish a diagnosis."]
+        output["recommendations"]=[{"intervention":"expand verified semantic hooks in the largest residual envelopes",
+            "signal":"ranked residual CPU/wall table","estimated_reduction_fraction":None,
+            "evidence":"add 3–8 ABI-verified semantic hooks per iteration and repeat perturbation validation"}]
     (run_dir / "report.json").write_text(json.dumps(output, indent=2)+"\n")
     (run_dir / "report.md").write_text(render_report(output))
     return output
@@ -810,6 +971,10 @@ def derive_conclusions(phases: list[dict], drift: dict,power: dict | None=None) 
 
 def derive_recommendations(phases: list[dict],power: dict,temporal: dict,gpu: dict) -> list[dict]:
     by_name={item["phase"]:item for item in phases if item.get("status")=="complete"}
+    if any(p.get("exclusive_scope_coverage",{}).get("coverage_95_percent_gate")!="passed"
+           for p in by_name.values() if p["phase"].startswith("A")):
+        return [{"intervention":"no architectural recommendation yet","signal":"semantic coverage incomplete",
+                 "estimated_reduction_fraction":None,"evidence":"UpdateOneFrame and executed Render require separate ≥95% CPU/wall gates"}]
     candidates=[]
     for name,before,after,label in (
         ("B","A0","A1","adaptive/event-driven render scheduling"),
@@ -869,9 +1034,9 @@ def derive_recommendations(phases: list[dict],power: dict,temporal: dict,gpu: di
 
 
 def render_report(data: dict) -> str:
-    lines=["# Paused EU IV frame model", "", f"Run status: {data['status']}.", "",
+    lines=["# Paused EU IV frame model", "", f"Run status: {data['status']}; report kind: {data.get('report_kind','legacy')}.", "",
            f"Historical process CPU reference: {data['historical_process_cpu_ms_per_swap']:.2f} ms/swap.",
-           "", "Asynchronous render/map timestamp results appear when supported by the active CGL context; missing results leave GPU accounting partial.",
+           "", "Context/pass GPU timeline segments appear when supported by the active CGL context; missing results leave GPU accounting partial.",
            "", "## Phase accounting", "",
            "| Phase | Updates/s | Render attempts/s | Executed renders/s | Presents/s | Loop wall ms | Loop CPU ms | Update CPU ms | Render CPU/update ms | Render CPU/executed ms | Present wall ms | Flush wall ms | Draws/update | Triangles est. | Bucket appends | Flags |",
            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"]
@@ -887,6 +1052,11 @@ def render_report(data: dict) -> str:
         lines.extend(["","## Exclusive CPU and wall cost tree", "",
                       "Wall and thread CPU remain separate. Root scopes do not count as explained cost; residuals and coverage are emitted per phase.",
                       json.dumps(data.get("exclusive_cost_tree",{}),indent=2,sort_keys=True)])
+    lines.extend(["","## Ranked envelope residuals","",
+        "| Phase | Envelope path | Residual CPU ms | Residual wall ms | Non-CPU elapsed ms |",
+        "|---|---|---:|---:|---:|"])
+    for r in data.get("exclusive_cost_tree",{}).get("ranked_residuals",[]):
+        lines.append(f"| {r['phase']} | {' → '.join(r['scope_path'])} | {r['residual_cpu_ms']:.3f} | {r['residual_wall_ms']:.3f} | {r['non_cpu_elapsed_ms']:.3f} |")
     lines.extend(["", "## Per-frame graphics work", "",
                   "| Phase | Buffer calls | Buffer bytes | Buffer upload bytes | Texture calls | Texture bytes est. | Uniform calls | Uniform bytes | State calls | Program switches | Bucket adds | Flush records |",
                   "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"])
@@ -920,8 +1090,8 @@ def render_report(data: dict) -> str:
     lines.extend(["", "## Coverage and limitations", "",
                   "The hook library counts six draw APIs, common depth/blend/stencil/raster/viewport/scissor/texture-parameter state calls, selected resource binds/uploads, and observed scalar/vector/matrix float/int uniform families. Texture byte counts are estimates; PBO sources, mapped writes, unsigned/double/non-square uniforms, resource create/delete lifecycle, culling/LOD decisions, bucket sorting, buffer changed-byte ranges, and other draw entry points remain uncovered.",
                   "", "Sampled draw records include API, callsite, program, a VAO/enabled-attribute source signature, element buffer, mode, count, index type/offset or first vertex, signed base vertex, and instance count. Sampled uniform calls retain callsite/program/location/size/hash; consecutive `glUniform4fv` payloads up to 256 bytes report changed 32-bit elements. C requires zero forwarded draws among covered APIs. D uses `GL_RASTERIZER_DISCARD` around `Render()` and requires clean state flags.",
-                  "", "Engine scopes emit actual parent, inclusive and exclusive wall/CPU, and per-update totals. Exclusive intervals from named scopes count toward coverage; the unscoped root residual remains explicit. Update loop wall includes pacing sleep. `PresentScene` and `CGLFlushDrawable` are distinct. Render CPU is shown both per update and per executed render.",
-                  "", "Frame flags: 1 frame queue overflow, 2 update cadence overrun, 4 unknown texture byte estimate, 8 unavailable raster-suppression state API/context, 16 restoration failure, 32 raster context capacity exceeded, 64 GPU query slot unavailable, 128 unknown primitive topology, 512 scope-stack overflow, 1024 scope mismatch/child-time inconsistency, and 2048 unavailable sampled GL-state seed.",
+                  "", "Engine scopes emit actual parent, inclusive and exclusive wall/CPU, and per-update totals. Only verified semantic exclusive intervals count toward coverage; all envelope exclusive time remains residual. Pacing is separate. Update loop wall includes pacing sleep. `PresentScene` and `CGLFlushDrawable` are distinct. Render CPU is shown both per update and per executed render.",
+                  "", "Frame flags: 1 frame queue overflow, 2 update cadence overrun, 4 unknown texture byte estimate, 8 unavailable raster-suppression state API/context, 16 restoration failure, 32 raster context capacity exceeded, 64 GPU query slot unavailable, 128 unknown primitive topology, 512 scope-stack overflow, 1024 scope mismatch/child-time inconsistency, and 2048 unavailable sampled GL-state seed, 4096 measurement/mode boundary crossed.",
                   "", "GPU timestamps stay segmented by CGL context and are not combined across contexts. They represent same-context GPU timeline intervals, not guaranteed busy time. The static backend graph remains a candidate mapping until implementation and resource/state dependencies are confirmed.", ""])
     return "\n".join(lines)
 
@@ -931,34 +1101,41 @@ class SharedControl:
         self.path=path
         self.file=path.open("r+b")
         self.map=mmap.mmap(self.file.fileno(),CONTROL_SIZE)
-        values=[1,0,0,0,0,0,0,0,0,0,0,0]
+        values=[FORMAT_VERSION]+[0]*13
         self.map[:CONTROL.size]=CONTROL.pack(*values)
         self.generation=0
         self.command_seq=0
+        self.measurement_epoch=0
+        self.measuring=False
     def set(self,mode: str,phase: int,update_period_ns: int=0,
             render_period_ns: int=0,detail_frames: int=0,
             measurement: bool=True) -> int:
+        if measurement and not self.measuring: self.measurement_epoch+=1
+        self.measuring=measurement
         self.generation+=1
+        self.command_sent_ns=time.monotonic_ns()
         self.command_seq+=1
         odd=self.command_seq*2-1
         even=self.command_seq*2
         struct.pack_into("<I",self.map,4,odd)
         self.map.flush()
         flags=(1 if mode!="off" else 0) | (2 if measurement else 0)
-        command=CONTROL_COMMAND.pack(1,odd,MODE[mode],phase,flags,
+        command=CONTROL_COMMAND.pack(FORMAT_VERSION,odd,MODE[mode],phase,flags,
                                      detail_frames,update_period_ns,render_period_ns,
-                                     self.generation)
+                                     self.generation,self.measurement_epoch if measurement else 0)
         self.map[:4]=command[:4]
         self.map[8:CONTROL_COMMAND.size]=command[8:]
         struct.pack_into("<I",self.map,4,even)
         self.map.flush()
         return self.generation
     def acknowledged(self) -> int:
-        return struct.unpack_from("<Q",self.map,48)[0]
-    def hook_failures(self) -> int:
         return struct.unpack_from("<Q",self.map,56)[0]
-    def dropped_records(self) -> int:
+    def hook_failures(self) -> int:
         return struct.unpack_from("<Q",self.map,64)[0]
+    def dropped_records(self) -> int:
+        return struct.unpack_from("<Q",self.map,72)[0]
+    def ack_time(self) -> int:
+        return struct.unpack_from("<Q",self.map,80)[0]
     def close(self) -> None:
         self.map.close(); self.file.close()
 
@@ -1063,7 +1240,14 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
     generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,
                            detail_frames_per_window if detail else 0,True)
     measurement_generation=generation
-    start=auto.mark(events,"phase_start",phase=name)
+    _wait_ack(game,control,generation,name+" measurement enable")
+    received_ns=time.monotonic_ns()
+    ack_ns=control.ack_time()
+    lower,upper=control.command_sent_ns-ack_ns,received_ns-ack_ns
+    clock_offset=(lower+upper)//2
+    uncertainty=max(abs(lower-clock_offset),abs(upper-clock_offset))
+    epoch=control.measurement_epoch
+    start=auto.mark(events,"phase_start",phase=name,measurement_epoch=epoch)
     auto.mark(events,"measurement_enabled",phase=name,generation=generation)
     if detail:
         auto.mark(events,"detail_sample_armed",phase=name,generation=generation,
@@ -1080,11 +1264,10 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
         if detail and detail_armed<detail_windows and now>=next_detail:
             generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,
                                    detail_frames_per_window,True)
-            measurement_generation=generation
             detail_armed+=1
             auto.mark(events,"detail_sample_armed",phase=name,generation=generation,
                       render_frames=detail_frames_per_window,window=detail_armed)
-            next_detail=measurement_started+duration*(detail_armed+1)/detail_windows
+            next_detail=measurement_started+duration*detail_armed/detail_windows
         next_wake=min(end_by,next_detail) if detail_armed<detail_windows else end_by
         time.sleep(min(1,max(0,next_wake-time.monotonic())))
     end=auto.mark(events,"phase_end",phase=name)
@@ -1094,23 +1277,33 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
     return {"name":name,"duration_s":(end["monotonic_ns"]-start["monotonic_ns"])/1e9,
             "requested_duration_s":duration,"start_ns":start["monotonic_ns"],
             "end_ns":end["monotonic_ns"],"settle_s":5,"mode":mode,
-            "measurement_generation":measurement_generation,
+            "measurement_epoch":epoch,"clock_domain":"CLOCK_UPTIME_RAW calibrated to controller monotonic_ns by acknowledgement bracket",
+            "clock_offset_ns":clock_offset,"alignment_uncertainty_ns":uncertainty,
+            "ack_time_ns":ack_ns,"enable_generation":measurement_generation,
+            "update_period_ns":cadence,"render_period_ns":render_period_ns,
             "stop_generation":stop_generation}
 
 
+def causal_schedule(period: int, residual_discovery: bool=False) -> list[dict]:
+    phases=(("A0","profile",20,True),) if residual_discovery else PHASES
+    return [{"name":name,"mode":mode,"duration_s":duration,"detail":detail,
+             "update_period_ns":period,"render_period_ns":int(1e9/30) if name=="E30" else
+             int(1e9/15) if name=="E15" else 0} for name,mode,duration,detail in phases]
+
+
 def run(output_root: Path, include_low_power: bool=True,
-        include_fixed_cadence_lpm: bool=False) -> Path:
-    evidence=preflight(run_gl=True,require_privilege=True)
+        include_fixed_cadence_lpm: bool=False, residual_discovery: bool=False) -> Path:
+    if residual_discovery: include_low_power=False; include_fixed_cadence_lpm=False
+    evidence=preflight(run_gl=True,require_privilege=True,require_power_mode=include_low_power)
     base.running_game_pid("idle")
     if not auto.SCENE.is_file() or not auto.SCENE_MANIFEST.is_file():
         raise base.BenchmarkError("Register the reviewed Venice scene before this diagnostic run")
-    if subprocess.run(["sudo","-v"],check=False).returncode:
-        raise base.BenchmarkError("Administrator authorization is required for powermetrics")
     output_root.mkdir(parents=True,exist_ok=True)
     run_dir=output_root/f"{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}-frame-model"
     run_dir.mkdir(parents=True,exist_ok=False)
     manifest_path=run_dir/"manifest.json"
-    manifest={"status":"starting","executable_sha256":evidence["build"]["executable_sha256"],
+    manifest={"format_version":FORMAT_VERSION,"report_kind":"residual_discovery" if residual_discovery else "causal",
+              "status":"starting","executable_sha256":evidence["build"]["executable_sha256"],
               "evidence":evidence,"coverage":{"engine_hooks":7,"gl_draw_apis":6,
               "gpu_timing":"asynchronous render/map timestamps when supported","exact_payload_diff":"sampled uniform4fv element-level; buffer uploads hash-level"},
               "limitations":["GPU timer query support depends on the active CGL context; absent results are reported as unavailable.",
@@ -1121,6 +1314,8 @@ def run(output_root: Path, include_low_power: bool=True,
     manifest_path.write_text(json.dumps(manifest,indent=2)+"\n")
     events=run_dir/"events.jsonl"
     anchor=auto.mark(events,"clock_anchor")
+    manifest["clock_anchor"]=anchor
+    manifest["power_window_policy"]="Power samples use the same controller phase start/end timestamps as frame/event analysis"
     control_path=run_dir/"control.bin"
     control_path.write_bytes(bytes(CONTROL_SIZE))
     game=pm=None; control=None; installed=False; low_power_active=False
@@ -1165,7 +1360,7 @@ def run(output_root: Path, include_low_power: bool=True,
                         detail_frames_per_window=1 if name=="P1" else 2))
                 profile_rows=frame_rows(run_dir/"telemetry.csv")
                 p1_phase=next(item for item in calibration_phases if item["name"]=="P1")
-                p1=phase_summary(profile_rows,"P1",p1_phase["duration_s"])
+                p1=phase_summary(profile_rows,"P1",p1_phase["duration_s"],p1_phase,read_rows(run_dir/"telemetry.csv"))
                 if p1["status"]!="complete" or p1["median_update_cpu_ms"]<=0 or p1["median_render_wall_ms"]<=0:
                     raise base.BenchmarkError("Profiler hooks did not record live update/render scopes")
                 probe=auto.probe_rows(run_dir/"auto-probe.csv",anchor)
@@ -1177,7 +1372,7 @@ def run(output_root: Path, include_low_power: bool=True,
                 cpu_perturbation=cpu_rates[1]/statistics.mean((cpu_rates[0],cpu_rates[2]))-1
                 if abs(cpu_perturbation)>.03:
                     raise base.BenchmarkError(f"Counters-only profiler CPU perturbation is {cpu_perturbation:+.1%}; stop before causal phases")
-                detail_rows=[row for row in profile_rows if row["phase"]==PHASE_NUMBER["P1"]]
+                detail_rows=[row for row in profile_rows if eligible_frame(row,p1_phase)]
                 detail_ids={int(row[1]) for row in read_rows(run_dir/"telemetry.csv") if row[0]=="D" and len(row)>1}
                 traced=[row["update_cpu_ns"] for row in detail_rows if row["render_id"] in detail_ids]
                 plain=[row["update_cpu_ns"] for row in detail_rows if row["render_id"] not in detail_ids]
@@ -1207,16 +1402,18 @@ def run(output_root: Path, include_low_power: bool=True,
                 if p1["median_update_cpu_ms"]>p1["median_update_wall_ms"]*1.05:
                     raise base.BenchmarkError("Thread CPU exceeds update wall time; timing is inconsistent")
 
-                phases=[]
-                for name,mode,duration,detail in PHASES:
-                    update_period=0 if name=="A0" else baseline_period
-                    render_period=int(1e9/30) if name=="E30" else int(1e9/15) if name=="E15" else 0
-                    phase=_wait_phase(game,duration,control,events,name,mode,update_period,
-                                      detail=detail,render_period_ns=render_period)
+                phases=[_wait_phase(game,20,control,events,"ANATIVE","profile",0)]
+                manifest["phases"]=phases
+                for config in causal_schedule(baseline_period,residual_discovery):
+                    name,mode=config["name"],config["mode"]
+                    phase=_wait_phase(game,config["duration_s"],control,events,name,mode,
+                        config["update_period_ns"],detail=config["detail"],render_period_ns=config["render_period_ns"])
                     phases.append(phase)
-                    observed=phase_summary(frame_rows(run_dir/"telemetry.csv"),name,phase["duration_s"])
+                    observed=phase_summary(frame_rows(run_dir/"telemetry.csv"),name,phase["duration_s"],phase,read_rows(run_dir/"telemetry.csv"))
                     if observed["status"]!="complete": raise base.BenchmarkError(f"No frame records in {name}")
-                    if name in {"B","C","D","E30","E15"}:
+                    if observed.get("invalid_scope_frames"):
+                        raise base.BenchmarkError(f"Scope integrity failed in {name}")
+                    if name in {"A0","A1","A2","A3","A4","A5","B","C","D","E30","E15"}:
                         update_delta=abs(observed["update_attempts_s"]/p1["update_attempts_s"]-1)
                         if update_delta>.03:
                             raise base.BenchmarkError(f"{name} changed update cadence by {update_delta:.1%}; its causal comparison is invalid")
@@ -1229,8 +1426,17 @@ def run(output_root: Path, include_low_power: bool=True,
                         raise base.BenchmarkError("D raster-work suppression state/context restoration failed")
                     if name.startswith("A") and observed["median_draws"]==0:
                         raise base.BenchmarkError(f"Control phase {name} had no observed draws")
+                    manifest["phases"]=phases
+                    manifest_path.write_text(json.dumps(manifest,indent=2)+"\n")
+                    if name.startswith("A") and not residual_discovery:
+                        raw=frame_rows(run_dir/"telemetry.csv")
+                        rows=eligible_trace(read_rows(run_dir/"telemetry.csv"),raw,[phase])
+                        tree=scope_tree_summary(rows,[phase])["phases"][str(PHASE_NUMBER[name])]
+                        if control.hook_failures() or control.dropped_records() or observed.get("invalid_scope_frames") or tree["coverage_95_percent_gate"]!="passed":
+                            raise base.BenchmarkError("Baseline integrity/semantic CPU and wall coverage gates block causal interventions; use --residual-discovery to expand attribution")
                 manifest["phases"]=phases
-                manifest["profiling_tail"]=_wait_phase(game,30,control,events,"TAIL","profile",baseline_period,True)
+                if not residual_discovery:
+                    manifest["profiling_tail"]=_wait_phase(game,30,control,events,"TAIL","profile",baseline_period,True)
                 if include_low_power:
                     low={"phases":[],"transition_settle_s":10}
                     low["phases"].append(_wait_phase(game,15,control,events,"LPM0","profile",0))
@@ -1275,7 +1481,7 @@ def run(output_root: Path, include_low_power: bool=True,
                 if hook_failures or dropped_records:
                     raise base.BenchmarkError(f"Profiler integrity failed: {integrity}")
                 auto.stop_process(pm,5); pm=None; power_tail.poll()
-                all_phases=calibration_phases+manifest["phases"]+[manifest["profiling_tail"]]
+                all_phases=calibration_phases+manifest["phases"]+([manifest["profiling_tail"]] if "profiling_tail" in manifest else [])
                 manifest["power_by_phase"]=diagnostic.summarize_power(power_tail.samples,all_phases,anchor,game.pid)
                 manifest["status"]="complete"
                 manifest["power_mode_comparison"]="natural cadence completed" if include_low_power else "not requested"
@@ -1318,6 +1524,7 @@ def main() -> int:
     pf.add_argument("--require-power-helper",action="store_true")
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
+    run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
     run_parser.add_argument("--fixed-cadence-lpm",action="store_true",
         help="add a separately reported fixed-throughput Low Power DVFS comparison")
     report=sub.add_parser("report",help="regenerate a report from a captured run")
@@ -1336,7 +1543,7 @@ def main() -> int:
             print(json.dumps(_restore_power_mode(Path(args.journal).expanduser().resolve()),indent=2))
         else:
             print(run(Path(args.output).expanduser().resolve(),
-                      include_fixed_cadence_lpm=args.fixed_cadence_lpm))
+                      include_fixed_cadence_lpm=args.fixed_cadence_lpm,residual_discovery=args.residual_discovery))
     except (base.BenchmarkError,OSError,ValueError,subprocess.SubprocessError,KeyboardInterrupt) as exc:
         print(f"Error: {exc}",file=sys.stderr); return 1
     return 0

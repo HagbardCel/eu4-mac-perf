@@ -160,7 +160,8 @@ def backend_graph() -> dict:
         item["callers"].append({"symbol": row.get("owner_symbol"), "name": row.get("owner"),
                                 "category": row.get("category"),
                                 "callsite_offset": row.get("callsite_offset")})
-    return {"schema": 2, "executable_sha256": data.get("executable_sha256"),
+    return {"schema": 3, "status":"feasibility seed", "metal_go_no_go":"undetermined",
+            "executable_sha256": data.get("executable_sha256"),
             "source": "analysis/draw-callers.json", "operations": list(grouped.values()),
             "backend_areas":[{"area":area,"candidate_gl_operations":gl_ops,
                 "resources_and_contract":resources,"runtime_coverage":coverage,

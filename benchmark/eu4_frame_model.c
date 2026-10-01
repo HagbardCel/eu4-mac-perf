@@ -13,6 +13,7 @@ extern void glUseProgramObjectARB(GLhandleARB);
 #include <mach/mach_vm.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -24,6 +25,8 @@ extern void glUseProgramObjectARB(GLhandleARB);
 #include "eu4_frame_model_sites.h"
 #include "eu4_detour.h"
 #include "eu4_render_gate.h"
+#include "eu4_scope_tree.h"
+#include "eu4_gpu_segments.h"
 #ifndef GL_QUAD_STRIP
 #define GL_QUAD_STRIP 0x0008
 #endif
@@ -55,15 +58,15 @@ typedef struct {
     uint32_t version;
     _Atomic uint32_t command_seq;
     uint32_t mode, phase, flags, detail_frames;
-    uint64_t update_period_ns, render_period_ns, generation;
-    _Atomic uint64_t ack_generation, hook_failures, dropped_records;
+    uint64_t update_period_ns, render_period_ns, generation, measurement_epoch;
+    _Atomic uint64_t ack_generation, hook_failures, dropped_records, ack_time_ns;
 } Control;
+_Static_assert(offsetof(Control,ack_generation)==56,"control v2 ack layout");
+_Static_assert(offsetof(Control,ack_time_ns)==80,"control v2 clock layout");
 typedef struct {
     uint32_t mode, phase, flags, detail_frames;
-    uint64_t update_period_ns, render_period_ns, generation;
+    uint64_t update_period_ns, render_period_ns, generation, measurement_epoch;
 } ControlSnapshot;
-typedef struct { uint64_t calls,inclusive_wall,inclusive_cpu,exclusive_wall,exclusive_cpu; }
-    ScopeAccum;
 typedef struct {
     uint64_t update_id, render_id, present_id, phase, thread_id;
     uint64_t wall_ns, cpu_ns, update_wall_ns, update_cpu_ns;
@@ -77,11 +80,11 @@ typedef struct {
     uint64_t map_wall_ns, map_cpu_ns, present_wall_ns, present_cpu_ns;
     uint64_t wait_ns, wait_cpu_ns, sleep_ns, flags, forwarded_draws, suppressed_draws;
     uint64_t render_attempts, render_executed, present_scene_calls, present_calls;
-    ScopeAccum scopes[SCOPE_COUNT+1][SCOPE_COUNT];
+    uint64_t measurement_epoch,start_ns,end_ns,render_start_ns,render_end_ns,present_time_ns;
+    Eu4ScopeTree scopes;
 } Frame;
-typedef struct { int parent; unsigned id; uint64_t start_wall,start_cpu,child_wall,child_cpu; } ScopeEntry;
 typedef struct { _Atomic uint64_t ready; Frame frame; } FrameSlot;
-typedef struct { _Atomic uint64_t ready; char kind; uint64_t a,b,c,d,e,f,g,h,i,j,k,l; } DetailSlot;
+typedef struct { _Atomic uint64_t ready; char kind; uint64_t a,b,c,d,e,f,g,h,i,j,k,l,epoch,update,phase; } DetailSlot;
 #define FRAME_CAPACITY 8192u
 #define DETAIL_CAPACITY 262144u
 static FrameSlot frames[FRAME_CAPACITY];
@@ -92,8 +95,6 @@ static _Atomic uint64_t call_counts[HOOK_COUNT];
 static _Atomic uint64_t call_wall_ns[HOOK_COUNT], call_cpu_ns[HOOK_COUNT];
 static _Thread_local Frame current_frame;
 static _Thread_local ControlSnapshot frame_control;
-static _Thread_local ScopeEntry scope_stack[64];
-static _Thread_local unsigned scope_depth;
 static _Thread_local uintptr_t active_program;
 static _Thread_local GLuint bound_array_buffer, bound_element_buffer;
 static _Thread_local CGLContextObj state_context;
@@ -118,12 +119,7 @@ typedef struct { CGLContextObj context; GLboolean enabled_before; } RasterContex
 static _Thread_local RasterContext raster_contexts[64];
 static _Thread_local unsigned raster_context_count;
 static _Thread_local bool raster_active;
-typedef struct { GLuint q[4]; bool pending,has_map; uint64_t render_id,phase; } GpuSlot;
-typedef struct { CGLContextObj context; GpuSlot slots[8]; unsigned cursor,index;
-                 int active_slot; bool ready,attempted,map_started; } GpuContext;
-static _Thread_local GpuContext gpu_contexts[16];
-static _Thread_local unsigned gpu_context_count;
-static _Thread_local GpuContext *gpu_current;
+static _Thread_local Eu4GpuManager gpu_manager;
 static bool extension_has(const char *extensions,const char *name) {
     if(!extensions || !name) return false;
     size_t length=strlen(name);
@@ -154,7 +150,7 @@ static bool writer_started;
 static uint64_t now_ns(clockid_t id);
 
 static bool snapshot_control(ControlSnapshot *out) {
-    if(!control || control==MAP_FAILED) return false;
+    if(!control || control==MAP_FAILED || control->version!=2) return false;
     for(unsigned attempt=0;attempt<100;attempt++) {
         uint32_t before=atomic_load_explicit(&control->command_seq,memory_order_acquire);
         if(before&1u) continue;
@@ -163,6 +159,7 @@ static bool snapshot_control(ControlSnapshot *out) {
         out->update_period_ns=control->update_period_ns;
         out->render_period_ns=control->render_period_ns;
         out->generation=control->generation;
+        out->measurement_epoch=control->measurement_epoch;
         atomic_thread_fence(memory_order_acquire);
         if(before==atomic_load_explicit(&control->command_seq,memory_order_relaxed)) return true;
     }
@@ -178,38 +175,14 @@ static bool measurement_active(void) {
 }
 static int scope_begin(unsigned id) {
     if(!measurement_active()) return 0;
-    if(scope_depth>=sizeof(scope_stack)/sizeof(scope_stack[0])) {
-        current_frame.flags|=512; return 0;
-    }
-    ScopeEntry *entry=&scope_stack[scope_depth++];
-    *entry=(ScopeEntry){.id=id,.parent=scope_depth? (int)scope_stack[scope_depth-1].id:-1,
-                        .start_wall=now_ns(CLOCK_UPTIME_RAW),
-                        .start_cpu=now_ns(CLOCK_THREAD_CPUTIME_ID)};
-    return 1;
+    return eu4_scope_begin(&current_frame.scopes,id,true,now_ns(CLOCK_UPTIME_RAW),
+                           now_ns(CLOCK_THREAD_CPUTIME_ID));
 }
 static void scope_end(unsigned id,int entered) {
     if(!entered) return;
-    if(!scope_depth || scope_stack[scope_depth-1].id!=id) {
-        current_frame.flags|=1024; scope_depth=0; return;
-    }
-    ScopeEntry entry=scope_stack[--scope_depth];
-    uint64_t wall=now_ns(CLOCK_UPTIME_RAW)-entry.start_wall;
-    uint64_t cpu=now_ns(CLOCK_THREAD_CPUTIME_ID)-entry.start_cpu;
-    if(entry.child_wall>wall || entry.child_cpu>cpu) current_frame.flags|=1024;
-    uint64_t exclusive_wall=wall>entry.child_wall?wall-entry.child_wall:0;
-    uint64_t exclusive_cpu=cpu>entry.child_cpu?cpu-entry.child_cpu:0;
-    if(id<SCOPE_COUNT) {
-        ScopeAccum *accum=&current_frame.scopes[entry.parent+1][id];
-        accum->calls++;
-        accum->inclusive_wall+=wall;
-        accum->inclusive_cpu+=cpu;
-        accum->exclusive_wall+=exclusive_wall;
-        accum->exclusive_cpu+=exclusive_cpu;
-    }
-    if(scope_depth) {
-        scope_stack[scope_depth-1].child_wall+=wall;
-        scope_stack[scope_depth-1].child_cpu+=cpu;
-    }
+    eu4_scope_end(&current_frame.scopes,id,entered,now_ns(CLOCK_UPTIME_RAW),
+                  now_ns(CLOCK_THREAD_CPUTIME_ID));
+    current_frame.flags|=current_frame.scopes.flags;
 }
 
 static uint64_t now_ns(clockid_t id) {
@@ -293,7 +266,7 @@ static void *writer(void *unused) {
             FrameSlot *s=&frames[t%FRAME_CAPACITY];
             if(atomic_load_explicit(&s->ready,memory_order_acquire)!=t+1) break;
             Frame f=s->frame;
-            char line[768];
+            char line[1536];
             unsigned long long values[]={f.update_id,f.render_id,f.present_id,f.phase,
                 f.thread_id,f.wall_ns,f.cpu_ns,f.update_wall_ns,f.update_cpu_ns,
                 f.draws,f.indices,f.triangles,f.draw_wall_ns,f.draw_cpu_ns,f.draw_timed_samples,
@@ -304,24 +277,17 @@ static void *writer(void *unused) {
                 f.render_wall_ns,f.render_cpu_ns,f.map_wall_ns,f.map_cpu_ns,
                 f.present_wall_ns,f.present_cpu_ns,f.wait_ns,f.wait_cpu_ns,f.sleep_ns,f.flags,
                 f.forwarded_draws,f.suppressed_draws,f.render_attempts,f.render_executed,
-                f.present_scene_calls,f.present_calls};
+                f.present_scene_calls,f.present_calls,f.measurement_epoch,f.start_ns,f.end_ns,
+                f.render_start_ns,f.render_end_ns,f.present_time_ns};
             size_t used=(size_t)snprintf(line,sizeof(line),"F");
             for(size_t i=0;i<sizeof(values)/sizeof(values[0]) && used<sizeof(line);i++)
                 used+=(size_t)snprintf(line+used,sizeof(line)-used,",%llu",values[i]);
             int n=(int)used;
             if(used<sizeof(line)) { line[used++]='\n'; line[used]='\0'; n=(int)used; }
             if(n>0 && (size_t)n<sizeof(line)) (void)write(log_fd,line,(size_t)n);
-            for(unsigned parent=0;parent<=SCOPE_COUNT;parent++) {
-                for(unsigned scope=0;scope<SCOPE_COUNT;scope++) {
-                    const ScopeAccum *q=&f.scopes[parent][scope];
-                    if(!q->calls) continue;
-                    int m=snprintf(line,sizeof(line),"Q,%llu,%llu,%d,%u,%llu,%llu,%llu,%llu,%llu\n",
-                        (unsigned long long)f.update_id,(unsigned long long)f.phase,
-                        (int)parent-1,scope,(unsigned long long)q->calls,
-                        (unsigned long long)q->inclusive_wall,(unsigned long long)q->inclusive_cpu,
-                        (unsigned long long)q->exclusive_wall,(unsigned long long)q->exclusive_cpu);
-                    if(m>0 && (size_t)m<sizeof(line)) (void)write(log_fd,line,(size_t)m);
-                }
+            for(unsigned node=0;node<f.scopes.count;node++) {
+                int m=eu4_scope_record(line,sizeof(line),&f.scopes,node,f.update_id,f.phase,f.measurement_epoch);
+                if(m>0 && (size_t)m<sizeof(line)) (void)write(log_fd,line,(size_t)m);
             }
             atomic_store_explicit(&s->ready,0,memory_order_relaxed); t++;
             atomic_store_explicit(&frame_tail,t,memory_order_release);
@@ -332,13 +298,14 @@ static void *writer(void *unused) {
             DetailSlot *s=&details[dt%DETAIL_CAPACITY];
             if(atomic_load_explicit(&s->ready,memory_order_acquire)!=dt+1) break;
             char line[384];
-            int n=snprintf(line,sizeof(line),"%c,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",s->kind,
+            int n=snprintf(line,sizeof(line),"%c,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",s->kind,
                 (unsigned long long)s->a,(unsigned long long)s->b,
                 (unsigned long long)s->c,(unsigned long long)s->d,
                 (unsigned long long)s->e,(unsigned long long)s->f,
                 (unsigned long long)s->g,(unsigned long long)s->h,
                 (unsigned long long)s->i,(unsigned long long)s->j,
-                (unsigned long long)s->k,(unsigned long long)s->l);
+                (unsigned long long)s->k,(unsigned long long)s->l,
+                (unsigned long long)s->epoch,(unsigned long long)s->update,(unsigned long long)s->phase);
             if(n>0 && (size_t)n<sizeof(line)) (void)write(log_fd,line,(size_t)n);
             atomic_store_explicit(&s->ready,0,memory_order_relaxed); dt++;
             atomic_store_explicit(&detail_tail,dt,memory_order_release);
@@ -369,6 +336,7 @@ static void detail_line(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64
     if(h-t>=DETAIL_CAPACITY) { atomic_fetch_add(&control->dropped_records,1); return; }
     DetailSlot *s=&details[h%DETAIL_CAPACITY]; s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;
     s->e=s->f=s->g=s->h=s->i=s->j=s->k=s->l=0;
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase;
     atomic_store_explicit(&s->ready,h+1,memory_order_release);
     atomic_store_explicit(&detail_head,h+1,memory_order_release);
 }
@@ -379,6 +347,7 @@ static void detail_line5(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint6
     if(h-t>=DETAIL_CAPACITY) { atomic_fetch_add(&control->dropped_records,1); return; }
     DetailSlot *s=&details[h%DETAIL_CAPACITY]; s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;
     s->f=s->g=s->h=s->i=s->j=s->k=s->l=0;
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase;
     atomic_store_explicit(&s->ready,h+1,memory_order_release);
     atomic_store_explicit(&detail_head,h+1,memory_order_release);
 }
@@ -391,6 +360,7 @@ static void detail_line7(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint6
     DetailSlot *s=&details[h%DETAIL_CAPACITY]; s->kind=kind[0];
     s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;s->f=f;s->g=g;
     s->h=s->i=s->j=s->k=s->l=0;
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase;
     atomic_store_explicit(&s->ready,h+1,memory_order_release);
     atomic_store_explicit(&detail_head,h+1,memory_order_release);
 }
@@ -404,8 +374,14 @@ static void detail_line12(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint
     DetailSlot *s=&details[head%DETAIL_CAPACITY]; s->kind=kind[0];
     s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;s->f=f;s->g=g;s->h=h;
     s->i=i;s->j=j;s->k=k;s->l=l;
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase;
     atomic_store_explicit(&s->ready,head+1,memory_order_release);
     atomic_store_explicit(&detail_head,head+1,memory_order_release);
+}
+static void timestamp_event(unsigned kind,uint64_t timestamp) {
+    if(!measurement_active()) return;
+    detail_line12("E",current_frame.measurement_epoch,current_frame.update_id,
+        current_frame.phase,kind,timestamp,current_frame.render_id,current_frame.present_id,0,0,0,0,0);
 }
 static VertexArrayState *vertex_state_for(CGLContextObj ctx,GLuint vao,bool create) {
     for(unsigned i=0;i<vertex_array_count;i++)
@@ -468,25 +444,8 @@ static void draw_detail(uintptr_t caller,uint64_t api,GLenum mode,GLsizei count,
         vertex_source_signature(),bound_element_buffer,mode,(uint32_t)count,type,
         index_offset?index_offset:first,(uint32_t)base,(uint32_t)instances);
 }
-static void gpu_initialize(void) {
-    CGLContextObj ctx=CGLGetCurrentContext();
-    if(!ctx) return;
-    gpu_current=NULL;
-    for(unsigned i=0;i<gpu_context_count;i++) if(gpu_contexts[i].context==ctx) {
-        gpu_current=&gpu_contexts[i]; break;
-    }
-    if(!gpu_current) {
-        unsigned index=0;
-        while(index<gpu_context_count && gpu_contexts[index].context) index++;
-        if(index>=16) { current_frame.flags|=64; return; }
-        if(index==gpu_context_count) gpu_context_count++;
-        gpu_current=&gpu_contexts[index];
-        memset(gpu_current,0,sizeof(*gpu_current));
-        gpu_current->context=ctx; gpu_current->index=index+1;
-        gpu_current->active_slot=-1; gpu_context_count++;
-    }
-    if(gpu_current->ready || gpu_current->attempted) return;
-    gpu_current->attempted=true;
+static uintptr_t gpu_context(void) { return (uintptr_t)CGLGetCurrentContext(); }
+static bool gpu_initialize_queries(unsigned *ids,unsigned count) {
     const GLubyte *version=glGetString(GL_VERSION);
     int major=0,minor=0;
     if(version) (void)sscanf((const char *)version,"%d.%d",&major,&minor);
@@ -495,7 +454,7 @@ static void gpu_initialize(void) {
         extensions=(const char *)glGetString(GL_EXTENSIONS);
     if((major<3 || (major==3 && minor<3)) &&
        !extension_has(extensions,"GL_ARB_timer_query") &&
-       !extension_has(extensions,"GL_EXT_timer_query")) return;
+       !extension_has(extensions,"GL_EXT_timer_query")) return false;
     gpu_gen_queries=dlsym(RTLD_DEFAULT,"glGenQueries");
     gpu_query_counter=dlsym(RTLD_DEFAULT,"glQueryCounter");
     gpu_get_query_iv=dlsym(RTLD_DEFAULT,"glGetQueryObjectiv");
@@ -503,70 +462,29 @@ static void gpu_initialize(void) {
     if(!gpu_query_counter) gpu_query_counter=dlsym(RTLD_DEFAULT,"glQueryCounterEXT");
     if(!gpu_get_query_iv) gpu_get_query_iv=dlsym(RTLD_DEFAULT,"glGetQueryObjectivEXT");
     if(!gpu_get_query_u64) gpu_get_query_u64=dlsym(RTLD_DEFAULT,"glGetQueryObjectui64vEXT");
-    if(!gpu_gen_queries || !gpu_query_counter || !gpu_get_query_iv || !gpu_get_query_u64) return;
-    GLuint ids[32]={0}; gpu_gen_queries(32,ids);
-    for(unsigned i=0;i<32;i++) if(!ids[i]) return;
-    for(unsigned i=0;i<8;i++) memcpy(gpu_current->slots[i].q,ids+i*4,4*sizeof(GLuint));
-    gpu_current->ready=true;
-}
-static bool gpu_available(GpuSlot *slot) {
-    GLint ready=0;
-    gpu_get_query_iv(slot->q[0],GL_QUERY_AVAILABLE_MODEL,&ready); if(!ready) return false;
-    gpu_get_query_iv(slot->q[3],GL_QUERY_AVAILABLE_MODEL,&ready); if(!ready) return false;
-    if(slot->has_map) {
-        gpu_get_query_iv(slot->q[1],GL_QUERY_AVAILABLE_MODEL,&ready); if(!ready) return false;
-        gpu_get_query_iv(slot->q[2],GL_QUERY_AVAILABLE_MODEL,&ready); if(!ready) return false;
-    }
+    if(!gpu_gen_queries || !gpu_query_counter || !gpu_get_query_iv || !gpu_get_query_u64) return false;
+    gpu_gen_queries((GLsizei)count,ids);
+    for(unsigned i=0;i<count;i++) if(!ids[i]) return false;
     return true;
 }
-static void gpu_poll(GpuContext *context) {
-    if(!context || !context->ready) return;
-    for(unsigned i=0;i<8;i++) {
-        GpuSlot *slot=&context->slots[i]; if(!slot->pending || !gpu_available(slot)) continue;
-        GLuint64 start=0,end=0,map_start=0,map_end=0;
-        gpu_get_query_u64(slot->q[0],GL_QUERY_RESULT_MODEL,&start);
-        gpu_get_query_u64(slot->q[3],GL_QUERY_RESULT_MODEL,&end);
-        if(slot->has_map) {
-            gpu_get_query_u64(slot->q[1],GL_QUERY_RESULT_MODEL,&map_start);
-            gpu_get_query_u64(slot->q[2],GL_QUERY_RESULT_MODEL,&map_end);
-        }
-        if(end>=start && (!slot->has_map || map_end>=map_start))
-            detail_line5("G",slot->phase,slot->render_id,end-start,
-                         slot->has_map?map_end-map_start:0,context->index);
-        slot->pending=false;
-    }
+static void gpu_stamp(unsigned query) { gpu_query_counter(query,GL_TIMESTAMP_MODEL); }
+static bool gpu_available(unsigned query) {
+    GLint ready=0; gpu_get_query_iv(query,GL_QUERY_AVAILABLE_MODEL,&ready); return ready!=0;
 }
+static uint64_t gpu_result(unsigned query) {
+    GLuint64 value=0; gpu_get_query_u64(query,GL_QUERY_RESULT_MODEL,&value); return value;
+}
+static void gpu_emit(Eu4GpuIdentity id,uint64_t start,uint64_t end,unsigned missing) {
+    detail_line12("G",id.phase,id.render,start,end,id.lifetime,id.pass,id.sequence,
+                  id.epoch,id.update,missing,0,0);
+}
+static Eu4GpuApi gpu_api={gpu_context,gpu_initialize_queries,gpu_stamp,gpu_available,gpu_result,gpu_emit};
 static void gpu_begin_render(void) {
-    gpu_initialize(); if(!gpu_current || !gpu_current->ready) return;
-    GpuContext *context=gpu_current;
-    gpu_poll(context);
-    for(unsigned n=0;n<8;n++) {
-        unsigned i=(context->cursor+n)%8; GpuSlot *slot=&context->slots[i];
-        if(slot->pending) continue;
-        slot->pending=true; slot->has_map=false; slot->render_id=current_frame.render_id;
-        slot->phase=current_frame.phase; context->active_slot=(int)i;
-        context->map_started=false;
-        gpu_query_counter(slot->q[0],GL_TIMESTAMP_MODEL);
-        context->cursor=(i+1)%8; return;
-    }
-    current_frame.flags|=64; context->active_slot=-1;
+    eu4_gpu_begin(&gpu_manager,&gpu_api,(Eu4GpuIdentity){.phase=current_frame.phase,
+        .render=current_frame.render_id,.epoch=current_frame.measurement_epoch,.update=current_frame.update_id});
 }
-static void gpu_map_marker(unsigned marker) {
-    if(!gpu_current || gpu_current->active_slot<0 || !gpu_current->ready || marker>1) return;
-    GpuContext *context=gpu_current;
-    GpuSlot *slot=&context->slots[(unsigned)context->active_slot];
-    if(marker==0 && !context->map_started) {
-        gpu_query_counter(slot->q[1],GL_TIMESTAMP_MODEL); context->map_started=true;
-    } else if(marker==1 && context->map_started && !slot->has_map) {
-        gpu_query_counter(slot->q[2],GL_TIMESTAMP_MODEL); slot->has_map=true;
-    }
-}
-static void gpu_end_render(void) {
-    if(!gpu_current || gpu_current->active_slot<0 || !gpu_current->ready) return;
-    GpuContext *context=gpu_current;
-    gpu_query_counter(context->slots[(unsigned)context->active_slot].q[3],GL_TIMESTAMP_MODEL);
-    context->active_slot=-1;
-}
+static void gpu_map_marker(unsigned marker) { eu4_gpu_pass(&gpu_manager,&gpu_api,marker?0:1); }
+static void gpu_end_render(void) { eu4_gpu_end(&gpu_manager,&gpu_api); }
 static void uniform_snapshot(uint64_t site,uintptr_t program,GLint location,
                              const GLfloat *payload,size_t bytes) {
     if(bytes>256) {
@@ -622,21 +540,28 @@ static AddFn real_add; static AppendFn real_append;
 static _Atomic uint64_t updates, renders, presents;
 
 static void hook_update(void *self,bool force) {
+    uint64_t previous_period=frame_control.update_period_ns;
+    uint32_t previous_mode=frame_control.mode;
     uint64_t id=atomic_fetch_add(&updates,1)+1;
     if(!snapshot_control(&frame_control)) {
         real_update(self,force);
         return;
     }
+    if(previous_period!=frame_control.update_period_ns || previous_mode!=frame_control.mode) {
+        next_deadline=0; next_render_deadline=0;
+    }
     bool measuring=measurement_active();
     if(measuring && !was_measurement_active) {
         state_seeded=false;vertex_array_state=NULL;
     }
+    if(!measuring && was_measurement_active) eu4_gpu_drain(&gpu_manager,&gpu_api);
     was_measurement_active=measuring;
     if(!measuring) current_frame=(Frame){0};
     uint64_t start=now_ns(CLOCK_UPTIME_RAW), cpu=now_ns(CLOCK_THREAD_CPUTIME_ID);
     if(measuring) current_frame=(Frame){.update_id=id,.phase=frame_control.phase,
-                                       .thread_id=tid()};
-    if(scope_depth) { current_frame.flags|=1024; scope_depth=0; }
+                                       .thread_id=tid(),.measurement_epoch=frame_control.measurement_epoch,.start_ns=start};
+
+    if(measuring) timestamp_event(1,start);
     int loop_scope=scope_begin(SCOPE_LOOP);
     int update_scope=scope_begin(SCOPE_UPDATE);
     real_update(self,force);
@@ -666,12 +591,17 @@ static void hook_update(void *self,bool force) {
     if(measuring) {
         current_frame.wall_ns=now_ns(CLOCK_UPTIME_RAW)-start;
         current_frame.cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-cpu;
+        current_frame.end_ns=now_ns(CLOCK_UPTIME_RAW);
+        if(current_frame.scopes.depth) current_frame.flags|=EU4_SCOPE_INVALID;
         ControlSnapshot after={0};
-        if(snapshot_control(&after) && after.generation==frame_control.generation &&
+        if(snapshot_control(&after) && after.measurement_epoch==frame_control.measurement_epoch && after.mode==frame_control.mode &&
            (after.flags&MEASURE_ENABLED)) publish_frame(&current_frame);
+        else { current_frame.flags|=4096; publish_frame(&current_frame); }
     }
-    if(control) atomic_store_explicit(&control->ack_generation,frame_control.generation,
-                                      memory_order_release);
+    if(control && atomic_load(&control->ack_generation)!=frame_control.generation) {
+        atomic_store(&control->ack_time_ns,now_ns(CLOCK_UPTIME_RAW));
+        atomic_store_explicit(&control->ack_generation,frame_control.generation,memory_order_release);
+    }
 }
 static void hook_idle(void *self,bool force) {
     if(!control || !(frame_control.flags&MEASURE_ENABLED) || frame_control.mode==OFF) {
@@ -689,7 +619,7 @@ static void hook_render(void *self) {
     uint64_t id=atomic_fetch_add(&renders,1)+1;
     if(!control) { real_render(self); return; }
     if(measurement_active())
-        { current_frame.render_id=id; current_frame.render_attempts++; }
+        { current_frame.render_id=id; current_frame.render_attempts++; current_frame.render_start_ns=now_ns(CLOCK_UPTIME_RAW); timestamp_event(2,current_frame.render_start_ns); }
     uint32_t mode=frame_control.mode;
     uint64_t now=now_ns(CLOCK_UPTIME_RAW);
     uint64_t render_period=frame_control.render_period_ns;
@@ -707,7 +637,7 @@ static void hook_render(void *self) {
     if(detail_active) detail_remaining--;
     bool skip=mode==SKIP_RENDER;
     if(skip) { detail_active=false; return; }
-    if(measurement_active()) current_frame.render_executed++;
+    if(measurement_active()) { current_frame.render_executed++; current_frame.render_start_ns=now_ns(CLOCK_UPTIME_RAW); timestamp_event(3,current_frame.render_start_ns); }
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
     if(measurement_active()) gpu_begin_render();
     CGLContextObj render_context=NULL;
@@ -716,7 +646,7 @@ static void hook_render(void *self) {
     if(mode==RASTER_SUPPRESS) {
         if(!enable) enable=dlsym(RTLD_DEFAULT,"glEnable");
         if(!disable) disable=dlsym(RTLD_DEFAULT,"glDisable");
-        if(!set_context) set_context=dlsym(RTLD_NEXT,"CGLSetCurrentContext");
+        if(!set_context) set_context=CGLSetCurrentContext;
         render_context=CGLGetCurrentContext();
         raster_active=true; raster_context_count=0;
         if(render_context && enable) {
@@ -734,7 +664,7 @@ static void hook_render(void *self) {
     int render_scope=scope_begin(SCOPE_RENDER);
     real_render(self);
     scope_end(SCOPE_RENDER,render_scope);
-    if(measurement_active()) gpu_end_render();
+    if(measurement_active()) { gpu_end_render(); current_frame.render_end_ns=now_ns(CLOCK_UPTIME_RAW); }
     if(mode==RASTER_SUPPRESS) {
         CGLContextObj restore=CGLGetCurrentContext();
         if(render_context && set_context && disable) {
@@ -812,10 +742,10 @@ static void install_one(unsigned i,void *replacement,void **original) {
 
 static CGLError hooked_flush(CGLContextObj ctx) {
     uint64_t id=atomic_fetch_add(&presents,1)+1; current_frame.present_id=id;
-    if(measurement_active()) current_frame.present_calls++;
+    if(measurement_active()) { current_frame.present_calls++; current_frame.present_time_ns=now_ns(CLOCK_UPTIME_RAW); timestamp_event(4,current_frame.present_time_ns); }
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
     static CGLError (*real_flush)(CGLContextObj);
-    if(!real_flush) real_flush=dlsym(RTLD_NEXT,"CGLFlushDrawable");
+    if(!real_flush) real_flush=CGLFlushDrawable;
     int flush_scope=scope_begin(SCOPE_FLUSH);
     CGLError result=real_flush?real_flush(ctx):kCGLBadContext;
     scope_end(SCOPE_FLUSH,flush_scope);
@@ -828,7 +758,7 @@ static CGLError hooked_flush(CGLContextObj ctx) {
 }
 static void gl_draw_elements(GLenum mode,GLsizei count,GLenum type,const void *indices) {
     static void (*real_fn)(GLenum,GLsizei,GLenum,const void *);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawElements");
+    if(!real_fn) real_fn=glDrawElements;
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices); return; }
     current_frame.draws++; if(count>0) current_frame.indices+=(uint64_t)count;
     current_frame.triangles+=estimated_triangles(mode,count,1);
@@ -848,7 +778,7 @@ static void gl_draw_elements(GLenum mode,GLsizei count,GLenum type,const void *i
 }
 static void gl_draw_base(GLenum mode,GLsizei count,GLenum type,const void *indices,GLint base) {
     static void (*real_fn)(GLenum,GLsizei,GLenum,const void *,GLint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawElementsBaseVertex");
+    if(!real_fn) real_fn=glDrawElementsBaseVertex;
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,base); return; }
     current_frame.draws++; if(count>0) current_frame.indices+=(uint64_t)count;
     current_frame.triangles+=estimated_triangles(mode,count,1);
@@ -869,7 +799,7 @@ static void gl_draw_base(GLenum mode,GLsizei count,GLenum type,const void *indic
 }
 static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
     static void (*real_fn)(GLenum,GLint,GLsizei);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawArrays");
+    if(!real_fn) real_fn=glDrawArrays;
     if(!intervention_active()) { if(real_fn) real_fn(mode,first,count); return; }
     current_frame.draws++; if(count>0) current_frame.indices+=(uint64_t)count;
     current_frame.triangles+=estimated_triangles(mode,count,1);
@@ -891,7 +821,7 @@ static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
 static void gl_draw_elements_instanced(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances) {
     static void (*real_fn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawElementsInstanced");
+    if(!real_fn) real_fn=glDrawElementsInstanced;
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,instances); return; }
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
@@ -912,7 +842,7 @@ static void gl_draw_elements_instanced(GLenum mode,GLsizei count,GLenum type,
 }
 static void gl_draw_arrays_instanced(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
     static void (*real_fn)(GLenum,GLint,GLsizei,GLsizei);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawArraysInstanced");
+    if(!real_fn) real_fn=glDrawArraysInstanced;
     if(!intervention_active()) { if(real_fn) real_fn(mode,first,count,instances); return; }
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
@@ -934,7 +864,7 @@ static void gl_draw_arrays_instanced(GLenum mode,GLint first,GLsizei count,GLsiz
 static void gl_draw_elements_instanced_base(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances,GLint base) {
     static void (*real_fn)(GLenum,GLsizei,GLenum,const void *,GLsizei,GLint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawElementsInstancedBaseVertex");
+    if(!real_fn) real_fn=glDrawElementsInstancedBaseVertex;
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,instances,base); return; }
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
@@ -955,7 +885,7 @@ static void gl_draw_elements_instanced_base(GLenum mode,GLsizei count,GLenum typ
 }
 static void gl_buffer_data(GLenum target,GLsizeiptr size,const void *data,GLenum usage) {
     static void (*real_fn)(GLenum,GLsizeiptr,const void *,GLenum);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBufferData");
+    if(!real_fn) real_fn=glBufferData;
     if(!intervention_active()) { if(real_fn) real_fn(target,size,data,usage); return; }
     event(HOOK_GL_UPLOAD,0,0);
     current_frame.buffer_calls++; if(size>0) {
@@ -970,7 +900,7 @@ static void gl_buffer_data(GLenum target,GLsizeiptr size,const void *data,GLenum
 }
 static void gl_buffer_subdata(GLenum target,GLintptr offset,GLsizeiptr size,const void *data) {
     static void (*real_fn)(GLenum,GLintptr,GLsizeiptr,const void *);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBufferSubData");
+    if(!real_fn) real_fn=glBufferSubData;
     if(!intervention_active()) { if(real_fn) real_fn(target,offset,size,data); return; }
     event(HOOK_GL_UPLOAD,0,0);
     current_frame.buffer_calls++; if(size>0) {
@@ -997,7 +927,7 @@ static void uniform_record(uintptr_t site,GLint location,const void *data,size_t
 }
 static void gl_uniform4fv(GLint location,GLsizei count,const GLfloat *data) {
     static void (*real_fn)(GLint,GLsizei,const GLfloat *);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glUniform4fv");
+    if(!real_fn) real_fn=glUniform4fv;
     if(!intervention_active()) { if(real_fn) real_fn(location,count,data); return; }
     size_t bytes=count>0?(size_t)count*16:0;
     uintptr_t caller=(uintptr_t)__builtin_return_address(0);
@@ -1010,7 +940,7 @@ static void gl_uniform4fv(GLint location,GLsizei count,const GLfloat *data) {
 #define DEFINE_UNIFORM_VECTOR(name,type,components) \
 static void gl_##name(GLint location,GLsizei count,const type *data) { \
     typedef void (*Fn)(GLint,GLsizei,const type *); static Fn real_fn; \
-    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!real_fn) real_fn=name; \
     if(!intervention_active()) { if(real_fn) real_fn(location,count,data); return; } \
     size_t bytes=count>0?(size_t)count*(components)*sizeof(type):0; \
     uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
@@ -1020,7 +950,7 @@ static void gl_##name(GLint location,GLsizei count,const type *data) { \
 #define DEFINE_UNIFORM_SCALAR(name,type) \
 static void gl_##name(GLint location,type value) { \
     typedef void (*Fn)(GLint,type); static Fn real_fn; \
-    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!real_fn) real_fn=name; \
     if(!intervention_active()) { if(real_fn) real_fn(location,value); return; } \
     uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
     uniform_record(caller>=image_base?caller-image_base:0,location,&value,sizeof(value)); \
@@ -1029,7 +959,7 @@ static void gl_##name(GLint location,type value) { \
 #define DEFINE_UNIFORM_MATRIX(name,dim) \
 static void gl_##name(GLint location,GLsizei count,GLboolean transpose,const GLfloat *data) { \
     typedef void (*Fn)(GLint,GLsizei,GLboolean,const GLfloat *); static Fn real_fn; \
-    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!real_fn) real_fn=name; \
     if(!intervention_active()) { if(real_fn) real_fn(location,count,transpose,data); return; } \
     size_t bytes=count>0?(size_t)count*(dim)*(dim)*sizeof(GLfloat):0; \
     uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
@@ -1039,7 +969,7 @@ static void gl_##name(GLint location,GLsizei count,GLboolean transpose,const GLf
 #define DEFINE_UNIFORM_COMPONENTS_3(name,type) \
 static void gl_##name(GLint location,type v0,type v1,type v2) { \
     typedef void (*Fn)(GLint,type,type,type); static Fn real_fn; \
-    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!real_fn) real_fn=name; \
     if(!intervention_active()) { if(real_fn) real_fn(location,v0,v1,v2); return; } \
     type values[3]={v0,v1,v2}; uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
     uniform_record(caller>=image_base?caller-image_base:0,location,values,3*sizeof(type)); \
@@ -1048,7 +978,7 @@ static void gl_##name(GLint location,type v0,type v1,type v2) { \
 #define DEFINE_UNIFORM_COMPONENTS_4(name,type) \
 static void gl_##name(GLint location,type v0,type v1,type v2,type v3) { \
     typedef void (*Fn)(GLint,type,type,type,type); static Fn real_fn; \
-    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!real_fn) real_fn=name; \
     if(!intervention_active()) { if(real_fn) real_fn(location,v0,v1,v2,v3); return; } \
     type values[4]={v0,v1,v2,v3}; uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
     uniform_record(caller>=image_base?caller-image_base:0,location,values,4*sizeof(type)); \
@@ -1057,7 +987,7 @@ static void gl_##name(GLint location,type v0,type v1,type v2,type v3) { \
 #define DEFINE_UNIFORM_COMPONENTS_2(name,type) \
 static void gl_##name(GLint location,type v0,type v1) { \
     typedef void (*Fn)(GLint,type,type); static Fn real_fn; \
-    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!real_fn) real_fn=name; \
     if(!intervention_active()) { if(real_fn) real_fn(location,v0,v1); return; } \
     type values[2]={v0,v1}; uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
     uniform_record(caller>=image_base?caller-image_base:0,location,values,2*sizeof(type)); \
@@ -1088,7 +1018,7 @@ DEFINE_UNIFORM_COMPONENTS_4(glUniform4i,GLint)
 #undef DEFINE_UNIFORM_COMPONENTS_2
 static void gl_uniform1i(GLint location,GLint value) {
     static void (*real_fn)(GLint,GLint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glUniform1i");
+    if(!real_fn) real_fn=glUniform1i;
     if(measurement_active()) {
         event(HOOK_GL_UNIFORM,0,0); current_frame.uniform_calls++;
         current_frame.uniform_bytes+=sizeof(value);
@@ -1113,7 +1043,7 @@ static void state_record(uintptr_t caller,uint64_t operation,uint64_t value) {
 #define DEFINE_STATE_ONE(name,type,op) \
 static void gl_##name(type value) { \
     typedef void (*Fn)(type); static Fn real_fn; \
-    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!real_fn) real_fn=name; \
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),op,(uint64_t)value); \
     if(real_fn) real_fn(value); \
 }
@@ -1126,49 +1056,49 @@ DEFINE_STATE_ONE(glClear,GLbitfield,25)
 DEFINE_STATE_ONE(glBlendEquation,GLenum,36)
 static void gl_glBlendFunc(GLenum source,GLenum destination) {
     static void (*real_fn)(GLenum,GLenum);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBlendFunc");
+    if(!real_fn) real_fn=glBlendFunc;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),26,
         ((uint64_t)source<<32)|destination);
     if(real_fn) real_fn(source,destination);
 }
 static void gl_glBlendFuncSeparate(GLenum sr,GLenum dr,GLenum sa,GLenum da) {
     static void (*real_fn)(GLenum,GLenum,GLenum,GLenum);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBlendFuncSeparate");
+    if(!real_fn) real_fn=glBlendFuncSeparate;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),27,
         state_pack3(((uint64_t)sr<<32)|dr,sa,da));
     if(real_fn) real_fn(sr,dr,sa,da);
 }
 static void gl_glBlendEquationSeparate(GLenum rgb,GLenum alpha) {
     static void (*real_fn)(GLenum,GLenum);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBlendEquationSeparate");
+    if(!real_fn) real_fn=glBlendEquationSeparate;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),37,
         ((uint64_t)rgb<<32)|alpha);
     if(real_fn) real_fn(rgb,alpha);
 }
 static void gl_glColorMask(GLboolean r,GLboolean g,GLboolean b,GLboolean a) {
     static void (*real_fn)(GLboolean,GLboolean,GLboolean,GLboolean);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glColorMask");
+    if(!real_fn) real_fn=glColorMask;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),28,
         ((uint64_t)r<<3)|((uint64_t)g<<2)|((uint64_t)b<<1)|a);
     if(real_fn) real_fn(r,g,b,a);
 }
 static void gl_glStencilFunc(GLenum func,GLint ref,GLuint mask) {
     static void (*real_fn)(GLenum,GLint,GLuint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glStencilFunc");
+    if(!real_fn) real_fn=glStencilFunc;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),29,
         state_pack3(func,(uint32_t)ref,mask));
     if(real_fn) real_fn(func,ref,mask);
 }
 static void gl_glStencilOp(GLenum fail,GLenum depth_fail,GLenum pass) {
     static void (*real_fn)(GLenum,GLenum,GLenum);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glStencilOp");
+    if(!real_fn) real_fn=glStencilOp;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),30,
         state_pack3(fail,depth_fail,pass));
     if(real_fn) real_fn(fail,depth_fail,pass);
 }
 static void gl_glScissor(GLint x,GLint y,GLsizei w,GLsizei h) {
     static void (*real_fn)(GLint,GLint,GLsizei,GLsizei);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glScissor");
+    if(!real_fn) real_fn=glScissor;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),31,
         (((uint64_t)(uint32_t)x<<32)|(uint32_t)y) ^
         (((uint64_t)(uint32_t)w<<32)|(uint32_t)h));
@@ -1176,7 +1106,7 @@ static void gl_glScissor(GLint x,GLint y,GLsizei w,GLsizei h) {
 }
 static void gl_glViewport(GLint x,GLint y,GLsizei w,GLsizei h) {
     static void (*real_fn)(GLint,GLint,GLsizei,GLsizei);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glViewport");
+    if(!real_fn) real_fn=glViewport;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),32,
         (((uint64_t)(uint32_t)x<<32)|(uint32_t)y) ^
         (((uint64_t)(uint32_t)w<<32)|(uint32_t)h));
@@ -1184,14 +1114,14 @@ static void gl_glViewport(GLint x,GLint y,GLsizei w,GLsizei h) {
 }
 static void gl_glTexParameteri(GLenum target,GLenum pname,GLint value) {
     static void (*real_fn)(GLenum,GLenum,GLint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glTexParameteri");
+    if(!real_fn) real_fn=glTexParameteri;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),33,
         ((uint64_t)target<<32)^((uint64_t)pname<<16)^(uint32_t)value);
     if(real_fn) real_fn(target,pname,value);
 }
 static void gl_glTexParameterf(GLenum target,GLenum pname,GLfloat value) {
     static void (*real_fn)(GLenum,GLenum,GLfloat);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glTexParameterf");
+    if(!real_fn) real_fn=glTexParameterf;
     uint32_t bits=0;memcpy(&bits,&value,sizeof(bits));
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),34,
         ((uint64_t)target<<32)^((uint64_t)pname<<16)^bits);
@@ -1199,21 +1129,21 @@ static void gl_glTexParameterf(GLenum target,GLenum pname,GLfloat value) {
 }
 static void gl_glPixelStorei(GLenum pname,GLint value) {
     static void (*real_fn)(GLenum,GLint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glPixelStorei");
+    if(!real_fn) real_fn=glPixelStorei;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),35,
         ((uint64_t)pname<<32)|(uint32_t)value);
     if(real_fn) real_fn(pname,value);
 }
 static void gl_glPolygonMode(GLenum face,GLenum mode) {
     static void (*real_fn)(GLenum,GLenum);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glPolygonMode");
+    if(!real_fn) real_fn=glPolygonMode;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),38,
         ((uint64_t)face<<32)|mode);
     if(real_fn) real_fn(face,mode);
 }
 static void gl_glBindFramebuffer(GLenum target,GLuint framebuffer) {
     static void (*real_fn)(GLenum,GLuint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBindFramebuffer");
+    if(!real_fn) real_fn=glBindFramebuffer;
     if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),39,
         ((uint64_t)target<<32)|framebuffer);
     if(real_fn) real_fn(target,framebuffer);
@@ -1221,7 +1151,7 @@ static void gl_glBindFramebuffer(GLenum target,GLuint framebuffer) {
 #undef DEFINE_STATE_ONE
 static void gl_use_program(GLuint program) {
     static void (*real_fn)(GLuint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glUseProgram");
+    if(!real_fn) real_fn=glUseProgram;
     if(intervention_active()) {
         if(measurement_active()) {
             event(HOOK_GL_STATE,0,0);
@@ -1242,7 +1172,7 @@ void eu4_frame_model_forward_arb(GLhandleARB program,UseProgramArbFn forward) {
 }
 static void gl_use_program_arb(GLhandleARB program) {
     static UseProgramArbFn real_fn;
-    if(!real_fn) real_fn=(UseProgramArbFn)dlsym(RTLD_NEXT,"glUseProgramObjectARB");
+    if(!real_fn) real_fn=glUseProgramObjectARB;
     if(intervention_active()) {
         uintptr_t handle=(uintptr_t)program;
         if(measurement_active()) {
@@ -1260,7 +1190,7 @@ static void gl_use_program_arb(GLhandleARB program) {
 }
 static void gl_bind_buffer(GLenum target,GLuint buffer) {
     static void (*real_fn)(GLenum,GLuint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBindBuffer");
+    if(!real_fn) real_fn=glBindBuffer;
     if(intervention_active()) {
         if(measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;current_frame.buffer_binds++;}
         if(target==GL_ARRAY_BUFFER) bound_array_buffer=buffer;
@@ -1278,7 +1208,7 @@ static void gl_bind_buffer(GLenum target,GLuint buffer) {
 }
 static void gl_bind_vertex_array(GLuint vao) {
     static void (*real_fn)(GLuint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBindVertexArray");
+    if(!real_fn) real_fn=glBindVertexArray;
     if(real_fn) real_fn(vao);
     if(!intervention_active()) return;
     CGLContextObj ctx=CGLGetCurrentContext();
@@ -1296,7 +1226,7 @@ static void gl_bind_vertex_array(GLuint vao) {
 static void gl_vertex_attrib_pointer(GLuint index,GLint size,GLenum type,
         GLboolean normalized,GLsizei stride,const void *pointer) {
     static void (*real_fn)(GLuint,GLint,GLenum,GLboolean,GLsizei,const void *);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glVertexAttribPointer");
+    if(!real_fn) real_fn=glVertexAttribPointer;
     if(real_fn) real_fn(index,size,type,normalized,stride,pointer);
     if(!intervention_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
@@ -1310,7 +1240,7 @@ static void gl_vertex_attrib_pointer(GLuint index,GLint size,GLenum type,
 }
 static void gl_enable_vertex_attrib(GLuint index) {
     static void (*real_fn)(GLuint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glEnableVertexAttribArray");
+    if(!real_fn) real_fn=glEnableVertexAttribArray;
     if(real_fn) real_fn(index);
     if(!intervention_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
@@ -1319,7 +1249,7 @@ static void gl_enable_vertex_attrib(GLuint index) {
 }
 static void gl_disable_vertex_attrib(GLuint index) {
     static void (*real_fn)(GLuint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDisableVertexAttribArray");
+    if(!real_fn) real_fn=glDisableVertexAttribArray;
     if(real_fn) real_fn(index);
     if(!intervention_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
@@ -1328,7 +1258,7 @@ static void gl_disable_vertex_attrib(GLuint index) {
 }
 static void gl_vertex_attrib_divisor(GLuint index,GLuint divisor) {
     static void (*real_fn)(GLuint,GLuint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glVertexAttribDivisor");
+    if(!real_fn) real_fn=glVertexAttribDivisor;
     if(real_fn) real_fn(index,divisor);
     if(!intervention_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
@@ -1338,7 +1268,7 @@ static void gl_vertex_attrib_divisor(GLuint index,GLuint divisor) {
 static void gl_tex_image_2d(GLenum target,GLint level,GLint internal,GLsizei width,
         GLsizei height,GLint border,GLenum format,GLenum type,const void *pixels) {
     static void (*real_fn)(GLenum,GLint,GLint,GLsizei,GLsizei,GLint,GLenum,GLenum,const void *);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glTexImage2D");
+    if(!real_fn) real_fn=glTexImage2D;
     if(!intervention_active()) {
         if(real_fn) real_fn(target,level,internal,width,height,border,format,type,pixels); return;
     }
@@ -1362,7 +1292,7 @@ static void gl_tex_image_2d(GLenum target,GLint level,GLint internal,GLsizei wid
 static void gl_tex_sub_image_2d(GLenum target,GLint level,GLint x,GLint y,GLsizei width,
         GLsizei height,GLenum format,GLenum type,const void *pixels) {
     static void (*real_fn)(GLenum,GLint,GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,const void *);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glTexSubImage2D");
+    if(!real_fn) real_fn=glTexSubImage2D;
     if(!intervention_active()) {
         if(real_fn) real_fn(target,level,x,y,width,height,format,type,pixels); return;
     }
@@ -1385,7 +1315,7 @@ static void gl_tex_sub_image_2d(GLenum target,GLint level,GLint x,GLint y,GLsize
 }
 static void gl_bind_texture(GLenum target,GLuint texture) {
     static void (*real_fn)(GLenum,GLuint);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBindTexture");
+    if(!real_fn) real_fn=glBindTexture;
     if(measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++; current_frame.texture_binds++;
@@ -1399,7 +1329,7 @@ static void gl_bind_texture(GLenum target,GLuint texture) {
 }
 static void gl_enable(GLenum cap) {
     static void (*real_fn)(GLenum);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glEnable");
+    if(!real_fn) real_fn=glEnable;
     if(measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
@@ -1413,7 +1343,7 @@ static void gl_enable(GLenum cap) {
 }
 static void gl_disable(GLenum cap) {
     static void (*real_fn)(GLenum);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDisable");
+    if(!real_fn) real_fn=glDisable;
     if(measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
@@ -1427,7 +1357,7 @@ static void gl_disable(GLenum cap) {
 }
 static void gl_active_texture(GLenum unit) {
     static void (*real_fn)(GLenum);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glActiveTexture");
+    if(!real_fn) real_fn=glActiveTexture;
     if(measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
@@ -1438,10 +1368,15 @@ static void gl_active_texture(GLenum unit) {
     }
     if(real_fn) real_fn(unit);
 }
+// Forward through this interposer image's direct framework imports. Looking up
+// re-exported CGL symbols with RTLD_NEXT can return our replacement and recurse.
 static CGLError tracked_set_context(CGLContextObj ctx) {
     static CGLError (*real_fn)(CGLContextObj);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"CGLSetCurrentContext");
+    if(!real_fn) real_fn=CGLSetCurrentContext;
+    bool segment=gpu_manager.rendering;
+    if(segment) eu4_gpu_close(&gpu_manager,&gpu_api);
     CGLError result=real_fn?real_fn(ctx):kCGLBadContext;
+    if(segment) eu4_gpu_open(&gpu_manager,&gpu_api);
     if(result==kCGLNoError && ctx!=state_context) {
         state_seeded=false;vertex_array_state=NULL;
     }
@@ -1470,17 +1405,17 @@ static CGLError tracked_set_context(CGLContextObj ctx) {
 }
 static CGLError tracked_destroy_context(CGLContextObj ctx) {
     static CGLError (*real_fn)(CGLContextObj);
-    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"CGLDestroyContext");
+    if(!real_fn) real_fn=CGLDestroyContext;
+    bool closing=gpu_manager.rendering && gpu_manager.owner && gpu_manager.owner->context==(uintptr_t)ctx;
+    if(closing) eu4_gpu_close(&gpu_manager,&gpu_api);
     CGLError result=real_fn?real_fn(ctx):kCGLBadContext;
     if(result==kCGLNoError) {
-        for(unsigned i=0;i<gpu_context_count;i++) if(gpu_contexts[i].context==ctx) {
-            memset(&gpu_contexts[i],0,sizeof(gpu_contexts[i]));
-            if(gpu_current==&gpu_contexts[i]) gpu_current=NULL;
-        }
+        eu4_gpu_destroy(&gpu_manager,&gpu_api,(uintptr_t)ctx);
         for(unsigned i=0;i<vertex_array_count;i++)
             if(vertex_arrays[i].context==ctx) memset(&vertex_arrays[i],0,sizeof(vertex_arrays[i]));
         if(state_context==ctx) {state_context=NULL;state_seeded=false;}
     }
+    if(closing && result!=kCGLNoError) eu4_gpu_open(&gpu_manager,&gpu_api);
     return result;
 }
 
@@ -1558,6 +1493,7 @@ static void initialize(void) {
     const char *log=getenv("EU4_FRAME_MODEL_LOG");
     if(log) log_fd=open(log,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600);
     if(!control || control==MAP_FAILED || log_fd<0) return;
+    (void)write(log_fd,"H,2\n",4);
     const char *auto_path=getenv("EU4_AUTO_PROBE_LOG");
     if(auto_path) auto_log_fd=open(auto_path,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC,0600);
     if(auto_path && auto_log_fd<0) atomic_fetch_add(&control->hook_failures,1);

@@ -422,59 +422,87 @@ after the experiment.
 
 ## Paused-frame causal profiler
 
-`benchmark/eu4_frame_model.py` builds a version-pinned x86-64 profiler and
-static engine/backend inventories. It records independent update, render, and
-present IDs; thread CPU and wall time; major engine scopes; bucket append counts;
-selected GL draws, state calls and uploads; sampled draw/uniform/buffer changes;
-and asynchronous whole-render/map GPU timestamps when the active CGL context
-supports them. The generated [engine call inventory](analysis/frame-model-engine.json)
-and [Gfx-to-backend graph](analysis/frame-model-backend.json) are tied to the
-pinned GOG executable hash.
+`benchmark/eu4_frame_model.py` builds the pinned x86-64 profiler and engine
+inventory. Protocol, telemetry, and reports are version 2. The shared production
+scope stack and GPU segment manager have native and x86-64/Rosetta harnesses.
+The analyzer verifies the production scope serializer. Legacy telemetry remains
+readable, but cannot satisfy the current coverage gates.
 
-The full live run requires the registered paused Venice scene, the verified
-120 Hz display, Normal power mode, AC power, and the existing narrow
-`powermetrics` privilege helper. Its run length now exceeds the old 420-sample
-helper limit. Refresh that installed helper once from an interactive Terminal:
+Begin with a residual-discovery pilot:
+
+```sh
+python3 benchmark/eu4_frame_model.py preflight --static-only
+python3 benchmark/eu4_frame_model.py preflight
+python3 benchmark/eu4_frame_model.py run --residual-discovery
+```
+
+The pilot keeps warm-up and calibration, then captures 20 seconds of unrestricted
+`ANATIVE` (ID 110) and 20 seconds of paced A0 with two windows of two consecutive
+sampled render frames. It omits interventions and power-mode transitions. Its
+report kind is `residual_discovery`, with ranked envelope residuals. A balanced
+timing tree does not establish semantic coverage or a definitive diagnosis.
+
+Live runs require the registered paused Venice scene, a verified 120 Hz display,
+Normal power mode, AC power, and the exact reviewed root-owned powermetrics
+helper with noninteractive authorization. The current helper collects up to 720
+one-second samples. Refresh an older installation from an interactive Terminal:
 
 ```sh
 sudo sh benchmark/install_powermetrics_helper.sh
 ```
 
-Then run the offline instrumentation-overhead gate. It measures thread CPU and
-wall time over bare and wrapped synthetic GL workloads; both must stay within
-3%. The live calibration also compares process CPU and swap rate against two
-pass-through phases and rejects profiler CPU/swap perturbations above 3% or
-sampled trace perturbation above 5%.
+The 3% counters-only wall/thread CPU overhead gate and the live 3% CPU/cadence
+and 5% sampled-tracing perturbation gates remain mandatory. A failed gate stops
+before live profiling or causal interventions. Static preflight alone cannot
+measure overhead. See [the correction verification record](analysis/frame-model-verification.md)
+for checks actually performed and current blockers.
 
-```sh
-python3 benchmark/eu4_frame_model.py preflight --require-power-helper
-```
+Every A0–A5 control and B/C/D/E intervention holds the same calibrated update
+period. ANATIVE and natural Low Power comparisons retain unrestricted cadence.
+E30/E15 gate renderer execution at absolute 30/15 Hz deadlines while updates
+continue at the calibrated rate. The controller awaits measurement-enable
+acknowledgement before starting its window. Detail rearming changes command
+generation, while retaining the measurement epoch. Stop is acknowledged before
+any power-mode transition; restoration uses the exact journaled prior setting.
+There is no `sudo -v` credential-cache dependency.
 
-When the gate passes, start the unattended experiment:
+The [protocol reference](analysis/frame-model-protocol.md) documents timestamps,
+clock calibration, uncertainty, and the shared frame eligibility policy. Cost
+statistics and all scope/detail/GPU analyses exclude boundary-crossing and
+invalid frames. Rates count individual timestamped events inside the same
+window used for power analysis.
+
+Coverage counts only exclusive intervals in explicitly classified semantic
+scopes: bucket insertion, flush-record creation, presentation, and drawable
+flush. Pacing is reported separately and never improves acceptance. Update,
+Idle, Render, graphical-map Render, and the hooked loop are envelopes; their
+exclusive CPU and wall remain residual. The aggregate CPU and wall gates must
+reach 95% independently for UpdateOneFrame and executed Render in baseline
+controls. Per-frame distributions accompany the ratios. Wall minus thread CPU
+is non-CPU elapsed time, which can include waiting and descheduling.
+
+GPU timestamps are context-lifetime/pass segments, with measurement epoch,
+render identity, and sequence. Active queries are never polled. Completed
+results are collected only while their owning context is current; collection
+never changes contexts or waits synchronously. Missing segments are explicit.
+Different context timelines are never summed, and segment intervals are never
+reported as whole-render GPU busy time. Partial GPU evidence is compatible with
+complete CPU accounting.
+
+After residual discovery, add 3–8 verified semantic hooks targeting the largest
+residuals per iteration, with ABI and overhead validation repeated. Keep these
+hook additions separately reviewable. Only after integrity, cadence, overhead,
+and semantic coverage pass should the long causal run be used:
 
 ```sh
 python3 benchmark/eu4_frame_model.py run
 ```
 
-It captures native controls around renderer-skip, draw-suppression,
-raster-work-suppression, 30 FPS, and 15 FPS phases. B/C/D retain the calibrated
-native attempted-update cadence; the 30/15 FPS phases use explicit 33/67 ms
-deadlines. A short Low Power comparison follows on AC: Normal, Low Power, then
-Normal, with a restoration path and a mode-change journal. The runner returns
-the machine to Normal mode after an interrupted Low Power phase when cleanup
-runs. The powermetrics helper collects up to 720 one-second samples.
-
-The result directory contains raw frame telemetry, sampled command details,
-events, power samples, a manifest, and a generated `report.md`/`report.json`.
-The report places GPU timings in a separate lane from CPU timings and compares
-each intervention with its neighboring A controls. It identifies draw
-topology stability and uniform/buffer payload changes by callsite and resource
-keys. Consecutive sampled `glUniform4fv` calls up to 256 bytes include exact
-changed 32-bit element values; larger uniforms and buffer contents use hashes.
-Complete scene culling/LOD accounting, allocations, all GL entry points, and
-full resource/state semantics for a Metal backend are not currently captured;
-those gaps are called out in the report. Missing GPU query support leaves GPU
-timing partial without invalidating the CPU report.
+The [Gfx-to-backend matrix](analysis/frame-model-backend.json) is a **feasibility
+seed**; Metal go/no-go remains undetermined. Further reconstruction needs concrete
+caller → Gfx implementation → GL evidence, resource lifecycle and state contracts,
+shader features, measured frequencies, prospective Metal mappings, and unresolved
+edges. The current seed does not establish a replacement boundary.
 
 Raw `powermetrics` plists, stderr, metadata, parsed samples, and EU IV process
 CPU samples are retained in a timestamped directory under `results/`.

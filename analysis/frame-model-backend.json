@@ -1,5 +1,7 @@
 {
-  "schema": 2,
+  "schema": 3,
+  "status": "feasibility seed",
+  "metal_go_no_go": "undetermined",
   "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "source": "analysis/draw-callers.json",
   "operations": [
