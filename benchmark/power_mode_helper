@@ -1,0 +1,9 @@
+#!/bin/sh
+# Install as root-owned /usr/local/libexec/eu4-power-mode.
+set -eu
+[ "$#" -eq 2 ] || exit 64
+case "$1:$2" in
+  powermode:0|powermode:1|powermode:2|lowpowermode:0|lowpowermode:1) ;;
+  *) echo "unsupported power-mode setting" >&2; exit 64 ;;
+esac
+exec /usr/bin/pmset -c "$1" "$2"

@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "source": "analysis/draw-callers.json",
   "operations": [
@@ -342,6 +342,178 @@
       "metal_equivalent": "draw operations have direct Metal equivalents; resource translation is unverified"
     }
   ],
+  "backend_areas": [
+    {
+      "area": "device_context_lifecycle",
+      "candidate_gl_operations": [
+        "CGLCreateContext",
+        "CGLSetCurrentContext",
+        "CGLDestroyContext"
+      ],
+      "resources_and_contract": "context and device creation/destruction",
+      "runtime_coverage": "CGL compatibility context is observed; creation paths/frequencies are not counted",
+      "metal_equivalent_and_difficulty": "Metal device, command queue, and drawable lifecycle; medium risk",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    },
+    {
+      "area": "shader_program_lifecycle",
+      "candidate_gl_operations": [
+        "glCreateShader",
+        "glShaderSource",
+        "glCompileShader",
+        "glCreateProgram",
+        "glAttachShader",
+        "glLinkProgram",
+        "glUseProgram"
+      ],
+      "resources_and_contract": "shader/program objects and GLSL source",
+      "runtime_coverage": "program binds are sampled; shader sources, compile/link calls, and GLSL feature corpus are not inventoried",
+      "metal_equivalent_and_difficulty": "GLSL translation and shader validation; high risk until corpus is captured",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    },
+    {
+      "area": "textures",
+      "candidate_gl_operations": [
+        "glGenTextures",
+        "glBindTexture",
+        "glTexImage*",
+        "glTexSubImage*",
+        "glDeleteTextures"
+      ],
+      "resources_and_contract": "texture objects, formats, allocation, updates, and sampling",
+      "runtime_coverage": "binds and selected uploads are counted; creation, deletion, formats, sampler state, and PBO paths are partial",
+      "metal_equivalent_and_difficulty": "MTLTexture and sampler conversion; format and lifetime mapping unknown",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    },
+    {
+      "area": "vertex_index_buffers",
+      "candidate_gl_operations": [
+        "glGenBuffers",
+        "glBindBuffer",
+        "glBufferData",
+        "glBufferSubData",
+        "glDeleteBuffers"
+      ],
+      "resources_and_contract": "vertex/index buffer objects and uploaded ranges",
+      "runtime_coverage": "selected binds/uploads are counted; mapping, storage flags, full lifecycle, and changed ranges are unknown",
+      "metal_equivalent_and_difficulty": "MTLBuffer allocation and update strategy; lifecycle mapping unknown",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    },
+    {
+      "area": "constants_uniforms",
+      "candidate_gl_operations": [
+        "glUniform*",
+        "glBindBufferRange",
+        "glMapBuffer*"
+      ],
+      "resources_and_contract": "uniform payloads and constant data",
+      "runtime_coverage": "scalar float/int, float/int vectors, matrix2/3/4, glUniform1i and glUniform4fv are counted; sampled payload hashes are recorded, exact element diffs cover glUniform4fv only; unsigned/double/non-square families and buffer-backed constants remain uncovered",
+      "metal_equivalent_and_difficulty": "argument buffers or per-frame constant buffers; layout/reflection work required",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    },
+    {
+      "area": "render_targets",
+      "candidate_gl_operations": [
+        "glGenFramebuffers",
+        "glBindFramebuffer",
+        "glFramebufferTexture*",
+        "glBlitFramebuffer"
+      ],
+      "resources_and_contract": "FBO attachments, render targets, and resolve/copy paths",
+      "runtime_coverage": "not inventoried by the current runtime hooks",
+      "metal_equivalent_and_difficulty": "MTLRenderPassDescriptor and attachment lifecycle; topology unknown",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    },
+    {
+      "area": "depth_stencil_blend_raster",
+      "candidate_gl_operations": [
+        "glDepth*",
+        "glStencil*",
+        "glBlend*",
+        "glCullFace",
+        "glPolygon*",
+        "glEnable",
+        "glDisable"
+      ],
+      "resources_and_contract": "depth/stencil, blend, culling, and raster state",
+      "runtime_coverage": "only selected enable/disable and raster-discard state are observed; complete values and transitions unknown",
+      "metal_equivalent_and_difficulty": "MTLDepthStencilState and pipeline-state mapping; state key coverage unknown",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    },
+    {
+      "area": "vertex_input",
+      "candidate_gl_operations": [
+        "glVertexAttribPointer",
+        "glEnableVertexAttribArray",
+        "glVertexAttribDivisor",
+        "glBindVertexArray"
+      ],
+      "resources_and_contract": "vertex formats, VAOs, divisors, and element-buffer bindings",
+      "runtime_coverage": "vertex source identity is sampled for detailed draws; lifecycle and all attribute state are partial",
+      "metal_equivalent_and_difficulty": "MTLVertexDescriptor and argument mapping; compatibility client arrays must be ruled out",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    },
+    {
+      "area": "draw_submission",
+      "candidate_gl_operations": [
+        "GfxDraw*",
+        "glDrawArrays*",
+        "glDrawElements*"
+      ],
+      "resources_and_contract": "direct, indexed, instanced, and base-vertex draws",
+      "runtime_coverage": "static direct Gfx callsites are inventoried; six GL draw forms are hooked; indirect/multi-draw and extension paths remain uncovered",
+      "metal_equivalent_and_difficulty": "MTLRenderCommandEncoder draw variants; straightforward only after full call coverage",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    },
+    {
+      "area": "copies_readback",
+      "candidate_gl_operations": [
+        "glCopyTex*",
+        "glReadPixels",
+        "glGetTexImage",
+        "glBlitFramebuffer"
+      ],
+      "resources_and_contract": "resource copies, readback, and capture operations",
+      "runtime_coverage": "not inventoried by the current runtime hooks",
+      "metal_equivalent_and_difficulty": "blit/compute/readback equivalents depend on actual usage",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    },
+    {
+      "area": "synchronization",
+      "candidate_gl_operations": [
+        "glFenceSync",
+        "glClientWaitSync",
+        "glFinish",
+        "CGLFlushDrawable"
+      ],
+      "resources_and_contract": "GPU fences, waits, flush, and drawable presentation",
+      "runtime_coverage": "CGLFlushDrawable wait is timed; GL sync-object coverage is absent",
+      "metal_equivalent_and_difficulty": "MTLSharedEvent/command-buffer completion and CAMetalLayer presentation; ordering semantics unknown",
+      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "runtime_frequency": "not measured or not covered by current hook set",
+      "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
+    }
+  ],
   "observed_runtime_gl_entrypoints": [
     "draw",
     "buffer",
@@ -351,7 +523,7 @@
     "state",
     "present"
   ],
-  "mapping_confidence": "candidate mapping only; Gfx implementation and resource/state semantics still need disassembly or runtime tracing",
+  "mapping_confidence": "seed feasibility matrix; Gfx implementation and resource/state semantics still need disassembly or runtime tracing",
   "known_limits": [
     "Direct call/jump inventory only; indirect calls and GL draws outside these helpers require dynamic attribution.",
     "Static categories are broad; counts are established by the passive trace."

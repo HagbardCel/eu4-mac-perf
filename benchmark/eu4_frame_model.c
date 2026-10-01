@@ -3,6 +3,7 @@
 #define GL_SILENCE_DEPRECATION 1
 #include <OpenGL/OpenGL.h>
 #include <OpenGL/gl3.h>
+extern void glUseProgramObjectARB(GLhandleARB);
 #include <CoreGraphics/CoreGraphics.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -21,6 +22,8 @@
 #include <time.h>
 #include <unistd.h>
 #include "eu4_frame_model_sites.h"
+#include "eu4_detour.h"
+#include "eu4_render_gate.h"
 #ifndef GL_QUAD_STRIP
 #define GL_QUAD_STRIP 0x0008
 #endif
@@ -41,14 +44,26 @@
 #endif
 
 enum { OFF, PROFILE, SKIP_RENDER, DROP_DRAWS, RASTER_SUPPRESS, CADENCE_30, CADENCE_15 };
+enum { INTERVENTION_ACTIVE=1u, MEASURE_ENABLED=2u };
+enum { SCOPE_UPDATE, SCOPE_IDLE, SCOPE_RENDER, SCOPE_MAP,
+       SCOPE_PRESENT, SCOPE_ADD_BUCKET, SCOPE_APPEND, SCOPE_FLUSH,
+       SCOPE_LOOP, SCOPE_CADENCE_SLEEP, SCOPE_COUNT };
 enum { HOOK_UPDATE, HOOK_IDLE, HOOK_RENDER, HOOK_MAP, HOOK_PRESENT_SCENE,
        HOOK_ADD_BUCKET, HOOK_APPEND, HOOK_GL_DRAW, HOOK_GL_UPLOAD,
        HOOK_GL_UNIFORM, HOOK_SWAP, HOOK_GL_STATE, HOOK_COUNT };
 typedef struct {
-    uint32_t version, mode, phase, flags, detail_frames, reserved;
-    uint64_t cadence_ns, generation;
-    _Atomic uint64_t ack_generation, hook_failures;
+    uint32_t version;
+    _Atomic uint32_t command_seq;
+    uint32_t mode, phase, flags, detail_frames;
+    uint64_t update_period_ns, render_period_ns, generation;
+    _Atomic uint64_t ack_generation, hook_failures, dropped_records;
 } Control;
+typedef struct {
+    uint32_t mode, phase, flags, detail_frames;
+    uint64_t update_period_ns, render_period_ns, generation;
+} ControlSnapshot;
+typedef struct { uint64_t calls,inclusive_wall,inclusive_cpu,exclusive_wall,exclusive_cpu; }
+    ScopeAccum;
 typedef struct {
     uint64_t update_id, render_id, present_id, phase, thread_id;
     uint64_t wall_ns, cpu_ns, update_wall_ns, update_cpu_ns;
@@ -61,10 +76,13 @@ typedef struct {
     uint64_t idle_wall_ns, idle_cpu_ns, render_wall_ns, render_cpu_ns;
     uint64_t map_wall_ns, map_cpu_ns, present_wall_ns, present_cpu_ns;
     uint64_t wait_ns, wait_cpu_ns, sleep_ns, flags, forwarded_draws, suppressed_draws;
+    uint64_t render_attempts, render_executed, present_scene_calls, present_calls;
+    ScopeAccum scopes[SCOPE_COUNT+1][SCOPE_COUNT];
 } Frame;
+typedef struct { int parent; unsigned id; uint64_t start_wall,start_cpu,child_wall,child_cpu; } ScopeEntry;
 typedef struct { _Atomic uint64_t ready; Frame frame; } FrameSlot;
-typedef struct { _Atomic uint64_t ready; char kind; uint64_t a,b,c,d,e,f,g; } DetailSlot;
-#define FRAME_CAPACITY 32768u
+typedef struct { _Atomic uint64_t ready; char kind; uint64_t a,b,c,d,e,f,g,h,i,j,k,l; } DetailSlot;
+#define FRAME_CAPACITY 8192u
 #define DETAIL_CAPACITY 262144u
 static FrameSlot frames[FRAME_CAPACITY];
 static DetailSlot details[DETAIL_CAPACITY];
@@ -73,11 +91,26 @@ static _Atomic uint64_t detail_head, detail_tail;
 static _Atomic uint64_t call_counts[HOOK_COUNT];
 static _Atomic uint64_t call_wall_ns[HOOK_COUNT], call_cpu_ns[HOOK_COUNT];
 static _Thread_local Frame current_frame;
-static _Thread_local GLuint active_program;
+static _Thread_local ControlSnapshot frame_control;
+static _Thread_local ScopeEntry scope_stack[64];
+static _Thread_local unsigned scope_depth;
+static _Thread_local uintptr_t active_program;
 static _Thread_local GLuint bound_array_buffer, bound_element_buffer;
+static _Thread_local CGLContextObj state_context;
+static _Thread_local bool state_seeded;
+static _Thread_local bool was_measurement_active;
+typedef struct { GLuint buffer; GLint size; GLenum type; GLboolean normalized,enabled;
+                 GLsizei stride; uintptr_t pointer; GLuint divisor; } VertexAttribute;
+typedef struct { bool used; CGLContextObj context; GLuint vao,element_buffer;
+                 VertexAttribute attributes[32]; } VertexArrayState;
+static _Thread_local VertexArrayState vertex_arrays[64];
+static _Thread_local unsigned vertex_array_count;
+static _Thread_local VertexArrayState *vertex_array_state;
 static _Thread_local bool detail_active;
 static _Thread_local uint32_t draw_sample_seq;
-typedef struct { bool used; uint64_t site,render_id; GLuint program; GLint location;
+static _Thread_local uint64_t detail_generation;
+static _Thread_local uint32_t detail_remaining;
+typedef struct { bool used; uint64_t site,render_id,program; GLint location;
                  size_t bytes; unsigned char data[256]; } UniformSnapshot;
 static _Thread_local UniformSnapshot uniform_snapshots[256];
 static _Thread_local unsigned uniform_snapshot_evict;
@@ -86,14 +119,11 @@ static _Thread_local RasterContext raster_contexts[64];
 static _Thread_local unsigned raster_context_count;
 static _Thread_local bool raster_active;
 typedef struct { GLuint q[4]; bool pending,has_map; uint64_t render_id,phase; } GpuSlot;
-static _Thread_local CGLContextObj gpu_context;
-static _Thread_local GpuSlot gpu_slots[8];
-static _Thread_local unsigned gpu_cursor;
-static _Thread_local int gpu_active_slot=-1;
-static _Thread_local bool gpu_ready;
-static _Thread_local bool gpu_attempted;
-static _Thread_local bool gpu_map_started;
-static _Thread_local bool gpu_context_changed;
+typedef struct { CGLContextObj context; GpuSlot slots[8]; unsigned cursor,index;
+                 int active_slot; bool ready,attempted,map_started; } GpuContext;
+static _Thread_local GpuContext gpu_contexts[16];
+static _Thread_local unsigned gpu_context_count;
+static _Thread_local GpuContext *gpu_current;
 static bool extension_has(const char *extensions,const char *name) {
     if(!extensions || !name) return false;
     size_t length=strlen(name);
@@ -117,9 +147,70 @@ static bool (*auto_actually_paused)(void *);
 static void *auto_idler_vtable;
 static uintptr_t image_base;
 static uint64_t next_deadline;
+static uint64_t next_render_deadline;
 static pthread_t writer_thread;
 static _Atomic int writer_running;
 static bool writer_started;
+static uint64_t now_ns(clockid_t id);
+
+static bool snapshot_control(ControlSnapshot *out) {
+    if(!control || control==MAP_FAILED) return false;
+    for(unsigned attempt=0;attempt<100;attempt++) {
+        uint32_t before=atomic_load_explicit(&control->command_seq,memory_order_acquire);
+        if(before&1u) continue;
+        out->mode=control->mode; out->phase=control->phase;
+        out->flags=control->flags; out->detail_frames=control->detail_frames;
+        out->update_period_ns=control->update_period_ns;
+        out->render_period_ns=control->render_period_ns;
+        out->generation=control->generation;
+        atomic_thread_fence(memory_order_acquire);
+        if(before==atomic_load_explicit(&control->command_seq,memory_order_relaxed)) return true;
+    }
+    return false;
+}
+static bool intervention_active(void) {
+    if(control && frame_control.generation==0) (void)snapshot_control(&frame_control);
+    return control && frame_control.mode!=OFF &&
+           (frame_control.flags&INTERVENTION_ACTIVE)!=0;
+}
+static bool measurement_active(void) {
+    return intervention_active() && (frame_control.flags&MEASURE_ENABLED)!=0;
+}
+static int scope_begin(unsigned id) {
+    if(!measurement_active()) return 0;
+    if(scope_depth>=sizeof(scope_stack)/sizeof(scope_stack[0])) {
+        current_frame.flags|=512; return 0;
+    }
+    ScopeEntry *entry=&scope_stack[scope_depth++];
+    *entry=(ScopeEntry){.id=id,.parent=scope_depth? (int)scope_stack[scope_depth-1].id:-1,
+                        .start_wall=now_ns(CLOCK_UPTIME_RAW),
+                        .start_cpu=now_ns(CLOCK_THREAD_CPUTIME_ID)};
+    return 1;
+}
+static void scope_end(unsigned id,int entered) {
+    if(!entered) return;
+    if(!scope_depth || scope_stack[scope_depth-1].id!=id) {
+        current_frame.flags|=1024; scope_depth=0; return;
+    }
+    ScopeEntry entry=scope_stack[--scope_depth];
+    uint64_t wall=now_ns(CLOCK_UPTIME_RAW)-entry.start_wall;
+    uint64_t cpu=now_ns(CLOCK_THREAD_CPUTIME_ID)-entry.start_cpu;
+    if(entry.child_wall>wall || entry.child_cpu>cpu) current_frame.flags|=1024;
+    uint64_t exclusive_wall=wall>entry.child_wall?wall-entry.child_wall:0;
+    uint64_t exclusive_cpu=cpu>entry.child_cpu?cpu-entry.child_cpu:0;
+    if(id<SCOPE_COUNT) {
+        ScopeAccum *accum=&current_frame.scopes[entry.parent+1][id];
+        accum->calls++;
+        accum->inclusive_wall+=wall;
+        accum->inclusive_cpu+=cpu;
+        accum->exclusive_wall+=exclusive_wall;
+        accum->exclusive_cpu+=exclusive_cpu;
+    }
+    if(scope_depth) {
+        scope_stack[scope_depth-1].child_wall+=wall;
+        scope_stack[scope_depth-1].child_cpu+=cpu;
+    }
+}
 
 static uint64_t now_ns(clockid_t id) {
     struct timespec t;
@@ -182,7 +273,9 @@ static void event(unsigned id,uint64_t wall,uint64_t cpu) {
 static void publish_frame(Frame *f) {
     uint64_t h=atomic_load_explicit(&frame_head,memory_order_relaxed);
     uint64_t t=atomic_load_explicit(&frame_tail,memory_order_acquire);
-    if(h-t>=FRAME_CAPACITY) { f->flags|=1; return; }
+    if(h-t>=FRAME_CAPACITY) {
+        f->flags|=1; atomic_fetch_add(&control->dropped_records,1); return;
+    }
     FrameSlot *s=&frames[h%FRAME_CAPACITY]; s->frame=*f;
     atomic_store_explicit(&s->ready,h+1,memory_order_release);
     atomic_store_explicit(&frame_head,h+1,memory_order_release);
@@ -210,13 +303,26 @@ static void *writer(void *unused) {
                 f.bucket_calls,f.append_calls,f.idle_wall_ns,f.idle_cpu_ns,
                 f.render_wall_ns,f.render_cpu_ns,f.map_wall_ns,f.map_cpu_ns,
                 f.present_wall_ns,f.present_cpu_ns,f.wait_ns,f.wait_cpu_ns,f.sleep_ns,f.flags,
-                f.forwarded_draws,f.suppressed_draws};
+                f.forwarded_draws,f.suppressed_draws,f.render_attempts,f.render_executed,
+                f.present_scene_calls,f.present_calls};
             size_t used=(size_t)snprintf(line,sizeof(line),"F");
             for(size_t i=0;i<sizeof(values)/sizeof(values[0]) && used<sizeof(line);i++)
                 used+=(size_t)snprintf(line+used,sizeof(line)-used,",%llu",values[i]);
             int n=(int)used;
             if(used<sizeof(line)) { line[used++]='\n'; line[used]='\0'; n=(int)used; }
             if(n>0 && (size_t)n<sizeof(line)) (void)write(log_fd,line,(size_t)n);
+            for(unsigned parent=0;parent<=SCOPE_COUNT;parent++) {
+                for(unsigned scope=0;scope<SCOPE_COUNT;scope++) {
+                    const ScopeAccum *q=&f.scopes[parent][scope];
+                    if(!q->calls) continue;
+                    int m=snprintf(line,sizeof(line),"Q,%llu,%llu,%d,%u,%llu,%llu,%llu,%llu,%llu\n",
+                        (unsigned long long)f.update_id,(unsigned long long)f.phase,
+                        (int)parent-1,scope,(unsigned long long)q->calls,
+                        (unsigned long long)q->inclusive_wall,(unsigned long long)q->inclusive_cpu,
+                        (unsigned long long)q->exclusive_wall,(unsigned long long)q->exclusive_cpu);
+                    if(m>0 && (size_t)m<sizeof(line)) (void)write(log_fd,line,(size_t)m);
+                }
+            }
             atomic_store_explicit(&s->ready,0,memory_order_relaxed); t++;
             atomic_store_explicit(&frame_tail,t,memory_order_release);
         }
@@ -225,12 +331,14 @@ static void *writer(void *unused) {
         while(dt<dh) {
             DetailSlot *s=&details[dt%DETAIL_CAPACITY];
             if(atomic_load_explicit(&s->ready,memory_order_acquire)!=dt+1) break;
-            char line[256];
-            int n=snprintf(line,sizeof(line),"%c,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",s->kind,
+            char line[384];
+            int n=snprintf(line,sizeof(line),"%c,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",s->kind,
                 (unsigned long long)s->a,(unsigned long long)s->b,
                 (unsigned long long)s->c,(unsigned long long)s->d,
                 (unsigned long long)s->e,(unsigned long long)s->f,
-                (unsigned long long)s->g);
+                (unsigned long long)s->g,(unsigned long long)s->h,
+                (unsigned long long)s->i,(unsigned long long)s->j,
+                (unsigned long long)s->k,(unsigned long long)s->l);
             if(n>0 && (size_t)n<sizeof(line)) (void)write(log_fd,line,(size_t)n);
             atomic_store_explicit(&s->ready,0,memory_order_relaxed); dt++;
             atomic_store_explicit(&detail_tail,dt,memory_order_release);
@@ -258,8 +366,9 @@ static void detail_line(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64
     if(log_fd<0 || !kind || !kind[0]) return;
     uint64_t h=atomic_load_explicit(&detail_head,memory_order_relaxed);
     uint64_t t=atomic_load_explicit(&detail_tail,memory_order_acquire);
-    if(h-t>=DETAIL_CAPACITY) { atomic_fetch_add(&control->hook_failures,1); return; }
-    DetailSlot *s=&details[h%DETAIL_CAPACITY]; s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;s->e=0;s->f=0;s->g=0;
+    if(h-t>=DETAIL_CAPACITY) { atomic_fetch_add(&control->dropped_records,1); return; }
+    DetailSlot *s=&details[h%DETAIL_CAPACITY]; s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;
+    s->e=s->f=s->g=s->h=s->i=s->j=s->k=s->l=0;
     atomic_store_explicit(&s->ready,h+1,memory_order_release);
     atomic_store_explicit(&detail_head,h+1,memory_order_release);
 }
@@ -267,8 +376,9 @@ static void detail_line5(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint6
     if(log_fd<0 || !kind || !kind[0]) return;
     uint64_t h=atomic_load_explicit(&detail_head,memory_order_relaxed);
     uint64_t t=atomic_load_explicit(&detail_tail,memory_order_acquire);
-    if(h-t>=DETAIL_CAPACITY) { atomic_fetch_add(&control->hook_failures,1); return; }
-    DetailSlot *s=&details[h%DETAIL_CAPACITY]; s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;s->f=0;s->g=0;
+    if(h-t>=DETAIL_CAPACITY) { atomic_fetch_add(&control->dropped_records,1); return; }
+    DetailSlot *s=&details[h%DETAIL_CAPACITY]; s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;
+    s->f=s->g=s->h=s->i=s->j=s->k=s->l=0;
     atomic_store_explicit(&s->ready,h+1,memory_order_release);
     atomic_store_explicit(&detail_head,h+1,memory_order_release);
 }
@@ -277,19 +387,106 @@ static void detail_line7(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint6
     if(log_fd<0 || !kind || !kind[0]) return;
     uint64_t h=atomic_load_explicit(&detail_head,memory_order_relaxed);
     uint64_t t=atomic_load_explicit(&detail_tail,memory_order_acquire);
-    if(h-t>=DETAIL_CAPACITY) { atomic_fetch_add(&control->hook_failures,1); return; }
+    if(h-t>=DETAIL_CAPACITY) { atomic_fetch_add(&control->dropped_records,1); return; }
     DetailSlot *s=&details[h%DETAIL_CAPACITY]; s->kind=kind[0];
     s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;s->f=f;s->g=g;
+    s->h=s->i=s->j=s->k=s->l=0;
     atomic_store_explicit(&s->ready,h+1,memory_order_release);
     atomic_store_explicit(&detail_head,h+1,memory_order_release);
 }
+static void detail_line12(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64_t d,
+                          uint64_t e,uint64_t f,uint64_t g,uint64_t h,uint64_t i,
+                          uint64_t j,uint64_t k,uint64_t l) {
+    if(log_fd<0 || !kind || !kind[0]) return;
+    uint64_t head=atomic_load_explicit(&detail_head,memory_order_relaxed);
+    uint64_t tail=atomic_load_explicit(&detail_tail,memory_order_acquire);
+    if(head-tail>=DETAIL_CAPACITY) { atomic_fetch_add(&control->dropped_records,1); return; }
+    DetailSlot *s=&details[head%DETAIL_CAPACITY]; s->kind=kind[0];
+    s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;s->f=f;s->g=g;s->h=h;
+    s->i=i;s->j=j;s->k=k;s->l=l;
+    atomic_store_explicit(&s->ready,head+1,memory_order_release);
+    atomic_store_explicit(&detail_head,head+1,memory_order_release);
+}
+static VertexArrayState *vertex_state_for(CGLContextObj ctx,GLuint vao,bool create) {
+    for(unsigned i=0;i<vertex_array_count;i++)
+        if(vertex_arrays[i].used && vertex_arrays[i].context==ctx && vertex_arrays[i].vao==vao)
+            return &vertex_arrays[i];
+    if(!create || vertex_array_count>=64) return NULL;
+    VertexArrayState *state=&vertex_arrays[vertex_array_count++];
+    memset(state,0,sizeof(*state));state->used=true;state->context=ctx;state->vao=vao;
+    return state;
+}
+static void seed_gl_state(void) {
+    CGLContextObj ctx=CGLGetCurrentContext();
+    if(!ctx || (state_seeded && state_context==ctx)) return;
+    void (*get_integer)(GLenum,GLint *)=dlsym(RTLD_NEXT,"glGetIntegerv");
+    if(!get_integer) { current_frame.flags|=2048; return; }
+    GLint value=0,vao=0;
+    get_integer(0x8B8D,&value); active_program=(GLuint)value;
+    get_integer(0x8894,&value); bound_array_buffer=(GLuint)value;
+    get_integer(0x8895,&value); bound_element_buffer=(GLuint)value;
+    get_integer(0x85B5,&vao);
+    vertex_array_state=vertex_state_for(ctx,(GLuint)vao,true);
+    if(!vertex_array_state) {current_frame.flags|=2048;return;}
+    vertex_array_state->element_buffer=bound_element_buffer;
+    void (*get_attrib)(GLuint,GLenum,GLint *)=dlsym(RTLD_NEXT,"glGetVertexAttribiv");
+    void (*get_pointer)(GLuint,GLenum,void **)=dlsym(RTLD_NEXT,"glGetVertexAttribPointerv");
+    if(!get_attrib || !get_pointer) {current_frame.flags|=2048;return;}
+    get_integer(0x8869,&value); if(value>32) value=32;
+    for(GLuint i=0;i<(GLuint)value;i++) {
+        VertexAttribute *a=&vertex_array_state->attributes[i]; GLint field=0;
+        get_attrib(i,0x8622,&field);a->enabled=(GLboolean)field;
+        get_attrib(i,0x8623,&a->size);get_attrib(i,0x8625,&field);a->type=(GLenum)field;
+        get_attrib(i,0x886A,&field);a->normalized=(GLboolean)field;
+        get_attrib(i,0x8624,&a->stride);get_attrib(i,0x889F,&field);a->buffer=(GLuint)field;
+        get_attrib(i,0x88FE,&field);a->divisor=(GLuint)field;
+        void *pointer=NULL;get_pointer(i,0x8645,&pointer);a->pointer=(uintptr_t)pointer;
+    }
+    bound_element_buffer=vertex_array_state->element_buffer;
+    state_context=ctx; state_seeded=true;
+}
+static uint64_t vertex_source_signature(void) {
+    if(!vertex_array_state) return 0;
+    uint64_t hash=1469598103934665603ull;
+    uint64_t identity=((uint64_t)(uintptr_t)vertex_array_state->context<<32)|vertex_array_state->vao;
+    hash=(hash^identity)*1099511628211ull;
+    for(unsigned i=0;i<32;i++) {
+        VertexAttribute *a=&vertex_array_state->attributes[i];
+        if(!a->enabled) continue;
+        uint64_t fields[]={i,a->buffer,(uint32_t)a->size,a->type,a->normalized,
+                           (uint32_t)a->stride,a->pointer,a->divisor};
+        for(size_t j=0;j<sizeof(fields)/sizeof(fields[0]);j++)
+            hash=(hash^fields[j])*1099511628211ull;
+    }
+    return hash;
+}
+static void draw_detail(uintptr_t caller,uint64_t api,GLenum mode,GLsizei count,
+        GLenum type,uint64_t index_offset,uint64_t first,GLint base,GLsizei instances) {
+    seed_gl_state();
+    detail_line12("D",current_frame.render_id,
+        caller>=image_base?caller-image_base:0,api,(uintptr_t)active_program,
+        vertex_source_signature(),bound_element_buffer,mode,(uint32_t)count,type,
+        index_offset?index_offset:first,(uint32_t)base,(uint32_t)instances);
+}
 static void gpu_initialize(void) {
-    if(gpu_context_changed) return;
     CGLContextObj ctx=CGLGetCurrentContext();
     if(!ctx) return;
-    if(gpu_context && gpu_context!=ctx) { gpu_ready=false; gpu_active_slot=-1; return; }
-    if(gpu_ready || gpu_attempted) return;
-    gpu_attempted=true;
+    gpu_current=NULL;
+    for(unsigned i=0;i<gpu_context_count;i++) if(gpu_contexts[i].context==ctx) {
+        gpu_current=&gpu_contexts[i]; break;
+    }
+    if(!gpu_current) {
+        unsigned index=0;
+        while(index<gpu_context_count && gpu_contexts[index].context) index++;
+        if(index>=16) { current_frame.flags|=64; return; }
+        if(index==gpu_context_count) gpu_context_count++;
+        gpu_current=&gpu_contexts[index];
+        memset(gpu_current,0,sizeof(*gpu_current));
+        gpu_current->context=ctx; gpu_current->index=index+1;
+        gpu_current->active_slot=-1; gpu_context_count++;
+    }
+    if(gpu_current->ready || gpu_current->attempted) return;
+    gpu_current->attempted=true;
     const GLubyte *version=glGetString(GL_VERSION);
     int major=0,minor=0;
     if(version) (void)sscanf((const char *)version,"%d.%d",&major,&minor);
@@ -299,7 +496,6 @@ static void gpu_initialize(void) {
     if((major<3 || (major==3 && minor<3)) &&
        !extension_has(extensions,"GL_ARB_timer_query") &&
        !extension_has(extensions,"GL_EXT_timer_query")) return;
-    gpu_context=ctx;
     gpu_gen_queries=dlsym(RTLD_DEFAULT,"glGenQueries");
     gpu_query_counter=dlsym(RTLD_DEFAULT,"glQueryCounter");
     gpu_get_query_iv=dlsym(RTLD_DEFAULT,"glGetQueryObjectiv");
@@ -310,8 +506,8 @@ static void gpu_initialize(void) {
     if(!gpu_gen_queries || !gpu_query_counter || !gpu_get_query_iv || !gpu_get_query_u64) return;
     GLuint ids[32]={0}; gpu_gen_queries(32,ids);
     for(unsigned i=0;i<32;i++) if(!ids[i]) return;
-    for(unsigned i=0;i<8;i++) memcpy(gpu_slots[i].q,ids+i*4,4*sizeof(GLuint));
-    gpu_ready=true;
+    for(unsigned i=0;i<8;i++) memcpy(gpu_current->slots[i].q,ids+i*4,4*sizeof(GLuint));
+    gpu_current->ready=true;
 }
 static bool gpu_available(GpuSlot *slot) {
     GLint ready=0;
@@ -323,10 +519,10 @@ static bool gpu_available(GpuSlot *slot) {
     }
     return true;
 }
-static void gpu_poll(void) {
-    if(!gpu_ready) return;
+static void gpu_poll(GpuContext *context) {
+    if(!context || !context->ready) return;
     for(unsigned i=0;i<8;i++) {
-        GpuSlot *slot=&gpu_slots[i]; if(!slot->pending || !gpu_available(slot)) continue;
+        GpuSlot *slot=&context->slots[i]; if(!slot->pending || !gpu_available(slot)) continue;
         GLuint64 start=0,end=0,map_start=0,map_end=0;
         gpu_get_query_u64(slot->q[0],GL_QUERY_RESULT_MODEL,&start);
         gpu_get_query_u64(slot->q[3],GL_QUERY_RESULT_MODEL,&end);
@@ -336,39 +532,42 @@ static void gpu_poll(void) {
         }
         if(end>=start && (!slot->has_map || map_end>=map_start))
             detail_line5("G",slot->phase,slot->render_id,end-start,
-                         slot->has_map?map_end-map_start:0,0);
+                         slot->has_map?map_end-map_start:0,context->index);
         slot->pending=false;
     }
 }
 static void gpu_begin_render(void) {
-    gpu_initialize(); if(!gpu_ready) return;
-    gpu_poll();
+    gpu_initialize(); if(!gpu_current || !gpu_current->ready) return;
+    GpuContext *context=gpu_current;
+    gpu_poll(context);
     for(unsigned n=0;n<8;n++) {
-        unsigned i=(gpu_cursor+n)%8; GpuSlot *slot=&gpu_slots[i];
+        unsigned i=(context->cursor+n)%8; GpuSlot *slot=&context->slots[i];
         if(slot->pending) continue;
         slot->pending=true; slot->has_map=false; slot->render_id=current_frame.render_id;
-        slot->phase=current_frame.phase; gpu_active_slot=(int)i;
-        gpu_map_started=false;
+        slot->phase=current_frame.phase; context->active_slot=(int)i;
+        context->map_started=false;
         gpu_query_counter(slot->q[0],GL_TIMESTAMP_MODEL);
-        gpu_cursor=(i+1)%8; return;
+        context->cursor=(i+1)%8; return;
     }
-    current_frame.flags|=64; gpu_active_slot=-1;
+    current_frame.flags|=64; context->active_slot=-1;
 }
 static void gpu_map_marker(unsigned marker) {
-    if(gpu_active_slot<0 || !gpu_ready || marker>1) return;
-    GpuSlot *slot=&gpu_slots[(unsigned)gpu_active_slot];
-    if(marker==0 && !gpu_map_started) {
-        gpu_query_counter(slot->q[1],GL_TIMESTAMP_MODEL); gpu_map_started=true;
-    } else if(marker==1 && gpu_map_started && !slot->has_map) {
+    if(!gpu_current || gpu_current->active_slot<0 || !gpu_current->ready || marker>1) return;
+    GpuContext *context=gpu_current;
+    GpuSlot *slot=&context->slots[(unsigned)context->active_slot];
+    if(marker==0 && !context->map_started) {
+        gpu_query_counter(slot->q[1],GL_TIMESTAMP_MODEL); context->map_started=true;
+    } else if(marker==1 && context->map_started && !slot->has_map) {
         gpu_query_counter(slot->q[2],GL_TIMESTAMP_MODEL); slot->has_map=true;
     }
 }
 static void gpu_end_render(void) {
-    if(gpu_active_slot<0 || !gpu_ready) return;
-    gpu_query_counter(gpu_slots[(unsigned)gpu_active_slot].q[3],GL_TIMESTAMP_MODEL);
-    gpu_active_slot=-1;
+    if(!gpu_current || gpu_current->active_slot<0 || !gpu_current->ready) return;
+    GpuContext *context=gpu_current;
+    gpu_query_counter(context->slots[(unsigned)context->active_slot].q[3],GL_TIMESTAMP_MODEL);
+    context->active_slot=-1;
 }
-static void uniform_snapshot(uint64_t site,GLuint program,GLint location,
+static void uniform_snapshot(uint64_t site,uintptr_t program,GLint location,
                              const GLfloat *payload,size_t bytes) {
     if(bytes>256) {
         detail_line7("W",current_frame.render_id,site,program,(uint32_t)location,bytes,0,1);
@@ -405,24 +604,12 @@ static void uniform_snapshot(uint64_t site,GLuint program,GLint location,
     memcpy(item->data,payload,bytes);
 }
 
-static void jump_stub(unsigned char *at,uintptr_t target) {
-    at[0]=0x49; at[1]=0xbb; memcpy(at+2,&target,8); at[10]=0x41; at[11]=0xff; at[12]=0xe3;
-}
-typedef struct { unsigned char bytes[32]; void *trampoline; uintptr_t site; size_t patch; } Detour;
+typedef EU4Detour Detour;
 static Detour detours[EU4_HOOK_COUNT];
 static void restore_detours(void) {
     for(unsigned i=0;i<EU4_HOOK_COUNT;i++) {
-        Detour *d=&detours[i]; if(!d->site || !d->trampoline || d->trampoline==MAP_FAILED) continue;
-        long page=sysconf(_SC_PAGESIZE); uintptr_t begin=d->site&~((uintptr_t)page-1);
-        bool restored=false;
-        if(mach_vm_protect(mach_task_self(),begin,(mach_vm_size_t)page,false,
-                           VM_PROT_READ|VM_PROT_WRITE|VM_PROT_COPY)==KERN_SUCCESS) {
-            memcpy((void *)d->site,d->bytes,d->patch); sys_icache_invalidate((void *)d->site,d->patch);
-            restored=mach_vm_protect(mach_task_self(),begin,(mach_vm_size_t)page,false,
-                                     VM_PROT_READ|VM_PROT_EXECUTE)==KERN_SUCCESS;
-        }
-        if(restored) { (void)munmap(d->trampoline,4096); d->trampoline=NULL; }
-        else atomic_fetch_add(&control->hook_failures,1);
+        if(detours[i].site && !eu4_detour_restore(&detours[i]))
+            atomic_fetch_add(&control->hook_failures,1);
     }
 }
 typedef void (*UpdateFn)(void *,bool); typedef void (*IdleFn)(void *,bool);
@@ -436,53 +623,93 @@ static _Atomic uint64_t updates, renders, presents;
 
 static void hook_update(void *self,bool force) {
     uint64_t id=atomic_fetch_add(&updates,1)+1;
-    if(!control || control->mode==OFF) {
+    if(!snapshot_control(&frame_control)) {
         real_update(self,force);
-        if(control) atomic_store(&control->ack_generation,control->generation);
         return;
     }
+    bool measuring=measurement_active();
+    if(measuring && !was_measurement_active) {
+        state_seeded=false;vertex_array_state=NULL;
+    }
+    was_measurement_active=measuring;
+    if(!measuring) current_frame=(Frame){0};
     uint64_t start=now_ns(CLOCK_UPTIME_RAW), cpu=now_ns(CLOCK_THREAD_CPUTIME_ID);
-    current_frame=(Frame){.update_id=id,.phase=control?control->phase:0,.thread_id=tid()};
+    if(measuring) current_frame=(Frame){.update_id=id,.phase=frame_control.phase,
+                                       .thread_id=tid()};
+    if(scope_depth) { current_frame.flags|=1024; scope_depth=0; }
+    int loop_scope=scope_begin(SCOPE_LOOP);
+    int update_scope=scope_begin(SCOPE_UPDATE);
     real_update(self,force);
+    scope_end(SCOPE_UPDATE,update_scope);
     uint64_t end=now_ns(CLOCK_UPTIME_RAW), end_cpu=now_ns(CLOCK_THREAD_CPUTIME_ID);
-    current_frame.update_wall_ns=end-start; current_frame.update_cpu_ns=end_cpu-cpu;
-    event(HOOK_UPDATE,end-start,end_cpu-cpu);
-    uint64_t cadence=control?control->cadence_ns:0;
-    if(cadence && control->mode!=OFF) {
-        if(!next_deadline) next_deadline=end+cadence;
+    if(measuring) {
+        current_frame.update_wall_ns=end-start; current_frame.update_cpu_ns=end_cpu-cpu;
+        event(HOOK_UPDATE,end-start,end_cpu-cpu);
+    }
+    uint64_t period=intervention_active()?frame_control.update_period_ns:0;
+    if(period) {
+        if(!next_deadline) next_deadline=end+period;
         else if(end<next_deadline) {
-            uint64_t deadline=next_deadline;
-            uint64_t remain=deadline-end;
+            uint64_t deadline=next_deadline,remain=deadline-end;
             struct timespec ts={(time_t)(remain/1000000000ull),(long)(remain%1000000000ull)};
+            int sleep_scope=scope_begin(SCOPE_CADENCE_SLEEP);
             (void)nanosleep(&ts,NULL);
-            current_frame.sleep_ns=now_ns(CLOCK_UPTIME_RAW)-end;
-            next_deadline=deadline+cadence;
-        } else { current_frame.flags|=2; next_deadline=end+cadence; }
+            scope_end(SCOPE_CADENCE_SLEEP,sleep_scope);
+            if(measuring) current_frame.sleep_ns=now_ns(CLOCK_UPTIME_RAW)-end;
+            next_deadline=deadline+period;
+        } else {
+            if(measuring) current_frame.flags|=2;
+            next_deadline=end+period;
+        }
     } else next_deadline=0;
-    current_frame.wall_ns=now_ns(CLOCK_UPTIME_RAW)-start;
-    current_frame.cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-cpu;
-    if(control && control->mode!=OFF) publish_frame(&current_frame);
-    if(control) atomic_store(&control->ack_generation,control->generation);
+    scope_end(SCOPE_LOOP,loop_scope);
+    if(measuring) {
+        current_frame.wall_ns=now_ns(CLOCK_UPTIME_RAW)-start;
+        current_frame.cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-cpu;
+        ControlSnapshot after={0};
+        if(snapshot_control(&after) && after.generation==frame_control.generation &&
+           (after.flags&MEASURE_ENABLED)) publish_frame(&current_frame);
+    }
+    if(control) atomic_store_explicit(&control->ack_generation,frame_control.generation,
+                                      memory_order_release);
 }
 static void hook_idle(void *self,bool force) {
-    if(!control || control->mode==OFF) { real_idle(self,force); return; }
+    if(!control || !(frame_control.flags&MEASURE_ENABLED) || frame_control.mode==OFF) {
+        real_idle(self,force); return;
+    }
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
+    int entered=scope_begin(SCOPE_IDLE);
     real_idle(self,force);
+    scope_end(SCOPE_IDLE,entered);
     current_frame.idle_wall_ns=now_ns(CLOCK_UPTIME_RAW)-w;
     current_frame.idle_cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-c;
     event(HOOK_IDLE,current_frame.idle_wall_ns,current_frame.idle_cpu_ns);
 }
 static void hook_render(void *self) {
     uint64_t id=atomic_fetch_add(&renders,1)+1;
-    if(!control || control->mode==OFF) { real_render(self); return; }
-    current_frame.render_id=id;
-    detail_active=control && control->detail_frames>0;
-    if(detail_active) control->detail_frames--;
-    uint32_t mode=control?control->mode:OFF;
+    if(!control) { real_render(self); return; }
+    if(measurement_active())
+        { current_frame.render_id=id; current_frame.render_attempts++; }
+    uint32_t mode=frame_control.mode;
+    uint64_t now=now_ns(CLOCK_UPTIME_RAW);
+    uint64_t render_period=frame_control.render_period_ns;
+    if(render_period && (mode==CADENCE_30 || mode==CADENCE_15)) {
+        if(!eu4_render_due(now,&next_render_deadline,render_period)) {
+            detail_active=false; return;
+        }
+    } else next_render_deadline=0;
+    if(mode==OFF || !(frame_control.flags&INTERVENTION_ACTIVE)) { real_render(self); return; }
+    if(detail_generation!=frame_control.generation) {
+        detail_generation=frame_control.generation;
+        detail_remaining=frame_control.detail_frames;
+    }
+    detail_active=detail_remaining>0;
+    if(detail_active) detail_remaining--;
     bool skip=mode==SKIP_RENDER;
-    if(skip) return;
+    if(skip) { detail_active=false; return; }
+    if(measurement_active()) current_frame.render_executed++;
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
-    gpu_begin_render();
+    if(measurement_active()) gpu_begin_render();
     CGLContextObj render_context=NULL;
     static void (*enable)(GLenum); static void (*disable)(GLenum);
     static CGLError (*set_context)(CGLContextObj);
@@ -504,8 +731,10 @@ static void hook_render(void *self) {
             } else current_frame.flags|=8;
         } else current_frame.flags|=8;
     }
+    int render_scope=scope_begin(SCOPE_RENDER);
     real_render(self);
-    gpu_end_render();
+    scope_end(SCOPE_RENDER,render_scope);
+    if(measurement_active()) gpu_end_render();
     if(mode==RASTER_SUPPRESS) {
         CGLContextObj restore=CGLGetCurrentContext();
         if(render_context && set_context && disable) {
@@ -520,34 +749,43 @@ static void hook_render(void *self) {
     current_frame.render_wall_ns=now_ns(CLOCK_UPTIME_RAW)-w;
     current_frame.render_cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-c;
     event(HOOK_RENDER,current_frame.render_wall_ns,current_frame.render_cpu_ns);
+    detail_active=false;
 }
 static void hook_map(void *self,void *ctx,const void *camera,float alpha,bool flag) {
-    if(!control || control->mode==OFF) { real_map(self,ctx,camera,alpha,flag); return; }
+    if(!intervention_active()) { real_map(self,ctx,camera,alpha,flag); return; }
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
+    int entered=scope_begin(SCOPE_MAP);
     gpu_map_marker(0);
     real_map(self,ctx,camera,alpha,flag);
     gpu_map_marker(1);
+    scope_end(SCOPE_MAP,entered);
     current_frame.map_wall_ns=now_ns(CLOCK_UPTIME_RAW)-w;
     current_frame.map_cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-c;
     event(HOOK_MAP,current_frame.map_wall_ns,current_frame.map_cpu_ns);
 }
 static void hook_present(void *self) {
-    if(!control || control->mode==OFF) { real_present(self); return; }
+    if(!intervention_active()) { real_present(self); return; }
+    if(measurement_active()) current_frame.present_scene_calls++;
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
+    int entered=scope_begin(SCOPE_PRESENT);
     real_present(self);
+    scope_end(SCOPE_PRESENT,entered);
     current_frame.present_wall_ns=now_ns(CLOCK_UPTIME_RAW)-w;
     current_frame.present_cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-c;
     event(HOOK_PRESENT_SCENE,current_frame.present_wall_ns,current_frame.present_cpu_ns);
 }
 static void hook_add(const void *self,int layer,const void *camera) {
-    if(!control || control->mode==OFF) { real_add(self,layer,camera); return; }
+    if(!intervention_active()) { real_add(self,layer,camera); return; }
     current_frame.bucket_calls++; uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
-    real_add(self,layer,camera); event(HOOK_ADD_BUCKET,now_ns(CLOCK_UPTIME_RAW)-w,
+    int entered=scope_begin(SCOPE_ADD_BUCKET);
+    real_add(self,layer,camera); scope_end(SCOPE_ADD_BUCKET,entered);
+    event(HOOK_ADD_BUCKET,now_ns(CLOCK_UPTIME_RAW)-w,
                                       now_ns(CLOCK_THREAD_CPUTIME_ID)-c);
 }
 static void hook_append(void *self,const void *record) {
-    if(!control || control->mode==OFF) { real_append(self,record); return; }
-    current_frame.append_calls++; real_append(self,record);
+    if(!intervention_active()) { real_append(self,record); return; }
+    current_frame.append_calls++; int entered=scope_begin(SCOPE_APPEND);
+    real_append(self,record); scope_end(SCOPE_APPEND,entered);
     event(HOOK_APPEND,0,0);
 }
 
@@ -565,174 +803,160 @@ static void install_one(unsigned i,void *replacement,void **original) {
         expected[j]=(unsigned char)strtoul(pair,NULL,16);
     }
     if(memcmp((void *)at,expected,patch)!=0) { atomic_fetch_add(&control->hook_failures,1); return; }
-    long page=sysconf(_SC_PAGESIZE); uintptr_t begin=at&~((uintptr_t)page-1);
-    if(mach_vm_protect(mach_task_self(),begin,(mach_vm_size_t)page,false,
-                       VM_PROT_READ|VM_PROT_WRITE|VM_PROT_COPY)!=KERN_SUCCESS) {
+    Detour *d=&detours[i];
+    if(!eu4_detour_install(d,(void *)at,patch,expected,replacement,NULL,0)) {
         atomic_fetch_add(&control->hook_failures,1); return;
     }
-    Detour *d=&detours[i]; d->site=at; d->patch=patch; memcpy(d->bytes,(void *)at,patch);
-    d->trampoline=mmap(NULL,4096,PROT_READ|PROT_WRITE|PROT_EXEC,
-                       MAP_PRIVATE|MAP_ANON,-1,0);
-    if(d->trampoline==MAP_FAILED) {
-        atomic_fetch_add(&control->hook_failures,1);
-        (void)mach_vm_protect(mach_task_self(),begin,(mach_vm_size_t)page,false,
-                              VM_PROT_READ|VM_PROT_EXECUTE);
-        return;
-    }
-    memcpy(d->trampoline,d->bytes,patch);
-    jump_stub((unsigned char *)d->trampoline+patch,at+patch);
-    sys_icache_invalidate(d->trampoline,patch+13);
-    jump_stub((unsigned char *)at,(uintptr_t)replacement);
-    for(size_t j=13;j<patch;j++) *((unsigned char *)at+j)=0x90;
-    sys_icache_invalidate((void *)at,patch);
-    if(mach_vm_protect(mach_task_self(),begin,(mach_vm_size_t)page,false,
-                       VM_PROT_READ|VM_PROT_EXECUTE)!=KERN_SUCCESS)
-        atomic_fetch_add(&control->hook_failures,1);
     *original=d->trampoline;
 }
 
 static CGLError hooked_flush(CGLContextObj ctx) {
     uint64_t id=atomic_fetch_add(&presents,1)+1; current_frame.present_id=id;
+    if(measurement_active()) current_frame.present_calls++;
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
     static CGLError (*real_flush)(CGLContextObj);
     if(!real_flush) real_flush=dlsym(RTLD_NEXT,"CGLFlushDrawable");
+    int flush_scope=scope_begin(SCOPE_FLUSH);
     CGLError result=real_flush?real_flush(ctx):kCGLBadContext;
-    if(!control || control->mode==OFF) { auto_probe_swap(result); return result; }
+    scope_end(SCOPE_FLUSH,flush_scope);
+    if(!intervention_active()) { auto_probe_swap(result); return result; }
     uint64_t dw=now_ns(CLOCK_UPTIME_RAW)-w,dc=now_ns(CLOCK_THREAD_CPUTIME_ID)-c;
     current_frame.wait_ns+=dw; current_frame.wait_cpu_ns+=dc; event(HOOK_SWAP,dw,dc);
-    if(control && control->mode!=OFF) count_line("P",id,control->phase,dw);
+    if(measurement_active()) count_line("P",id,frame_control.phase,dw);
     auto_probe_swap(result);
     return result;
 }
 static void gl_draw_elements(GLenum mode,GLsizei count,GLenum type,const void *indices) {
     static void (*real_fn)(GLenum,GLsizei,GLenum,const void *);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawElements");
-    if(!control || control->mode==OFF) { if(real_fn) real_fn(mode,count,type,indices); return; }
+    if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices); return; }
     current_frame.draws++; if(count>0) current_frame.indices+=(uint64_t)count;
     current_frame.triangles+=estimated_triangles(mode,count,1);
     if(detail_active) {
         uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        detail_line5("D",current_frame.render_id,caller>=image_base?caller-image_base:0,
-                   mode,(uint32_t)count,type);
+        draw_detail(caller,1,mode,count,type,(uintptr_t)indices,0,0,1);
     }
-    bool timed=(++draw_sample_seq&255u)==1u;
+    bool measuring=measurement_active();
+    bool timed=measuring && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
-    if(control && control->mode==DROP_DRAWS) current_frame.suppressed_draws++;
+    if(control && frame_control.mode==DROP_DRAWS) current_frame.suppressed_draws++;
     else { if(real_fn) real_fn(mode,count,type,indices); current_frame.forwarded_draws++; }
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256; current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
-    event(HOOK_GL_DRAW,dw,dc);
+    if(measuring) event(HOOK_GL_DRAW,dw,dc);
 }
 static void gl_draw_base(GLenum mode,GLsizei count,GLenum type,const void *indices,GLint base) {
     static void (*real_fn)(GLenum,GLsizei,GLenum,const void *,GLint);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawElementsBaseVertex");
-    if(!control || control->mode==OFF) { if(real_fn) real_fn(mode,count,type,indices,base); return; }
+    if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,base); return; }
     current_frame.draws++; if(count>0) current_frame.indices+=(uint64_t)count;
     current_frame.triangles+=estimated_triangles(mode,count,1);
     if(detail_active) {
         uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        detail_line5("D",current_frame.render_id,caller>=image_base?caller-image_base:0,
-                   mode,(uint32_t)count,((uint64_t)(uint32_t)base<<32)|type);
+        draw_detail(caller,2,mode,count,type,(uintptr_t)indices,0,base,1);
     }
-    bool timed=(++draw_sample_seq&255u)==1u;
+    bool measuring=measurement_active();
+    bool timed=measuring && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
-    uint32_t m=control?control->mode:OFF;
+    uint32_t m=control?frame_control.mode:OFF;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
     else { if(real_fn) real_fn(mode,count,type,indices,base); current_frame.forwarded_draws++; }
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256; current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
-    event(HOOK_GL_DRAW,dw,dc);
+    if(measuring) event(HOOK_GL_DRAW,dw,dc);
 }
 static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
     static void (*real_fn)(GLenum,GLint,GLsizei);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawArrays");
-    if(!control || control->mode==OFF) { if(real_fn) real_fn(mode,first,count); return; }
+    if(!intervention_active()) { if(real_fn) real_fn(mode,first,count); return; }
     current_frame.draws++; if(count>0) current_frame.indices+=(uint64_t)count;
     current_frame.triangles+=estimated_triangles(mode,count,1);
     if(detail_active) {
         uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        detail_line5("D",current_frame.render_id,caller>=image_base?caller-image_base:0,
-                   mode,(uint32_t)first,(uint32_t)count);
+        draw_detail(caller,3,mode,count,0,0,(uint32_t)first,0,1);
     }
-    bool timed=(++draw_sample_seq&255u)==1u;
+    bool measuring=measurement_active();
+    bool timed=measuring && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
-    uint32_t m=control?control->mode:OFF;
+    uint32_t m=control?frame_control.mode:OFF;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
     else { if(real_fn) real_fn(mode,first,count); current_frame.forwarded_draws++; }
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256; current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
-    event(HOOK_GL_DRAW,dw,dc);
+    if(measuring) event(HOOK_GL_DRAW,dw,dc);
 }
 static void gl_draw_elements_instanced(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances) {
     static void (*real_fn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawElementsInstanced");
-    if(!control || control->mode==OFF) { if(real_fn) real_fn(mode,count,type,indices,instances); return; }
+    if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,instances); return; }
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
     if(detail_active) {
         uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        detail_line5("D",current_frame.render_id,caller>=image_base?caller-image_base:0,
-                     mode,(uint32_t)count,((uint64_t)(uint32_t)instances<<32)|type);
+        draw_detail(caller,4,mode,count,type,(uintptr_t)indices,0,0,instances);
     }
-    bool timed=(++draw_sample_seq&255u)==1u;
+    bool measuring=measurement_active();
+    bool timed=measuring && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
-    uint32_t m=control->mode;
+    uint32_t m=frame_control.mode;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
     else { if(real_fn) real_fn(mode,count,type,indices,instances); current_frame.forwarded_draws++; }
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256;current_frame.draw_cpu_ns+=dc*256;
-    if(timed) current_frame.draw_timed_samples++; event(HOOK_GL_DRAW,dw,dc);
+    if(timed) current_frame.draw_timed_samples++;
+    if(measuring) event(HOOK_GL_DRAW,dw,dc);
 }
 static void gl_draw_arrays_instanced(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
     static void (*real_fn)(GLenum,GLint,GLsizei,GLsizei);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawArraysInstanced");
-    if(!control || control->mode==OFF) { if(real_fn) real_fn(mode,first,count,instances); return; }
+    if(!intervention_active()) { if(real_fn) real_fn(mode,first,count,instances); return; }
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
     if(detail_active) {
         uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        detail_line5("D",current_frame.render_id,caller>=image_base?caller-image_base:0,
-                     mode,(uint32_t)first,((uint64_t)(uint32_t)count<<32)|(uint32_t)instances);
+        draw_detail(caller,5,mode,count,0,0,(uint32_t)first,0,instances);
     }
-    bool timed=(++draw_sample_seq&255u)==1u;
+    bool measuring=measurement_active();
+    bool timed=measuring && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
-    uint32_t m=control->mode;
+    uint32_t m=frame_control.mode;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
     else { if(real_fn) real_fn(mode,first,count,instances); current_frame.forwarded_draws++; }
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256;current_frame.draw_cpu_ns+=dc*256;
-    if(timed) current_frame.draw_timed_samples++; event(HOOK_GL_DRAW,dw,dc);
+    if(timed) current_frame.draw_timed_samples++;
+    if(measuring) event(HOOK_GL_DRAW,dw,dc);
 }
 static void gl_draw_elements_instanced_base(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances,GLint base) {
     static void (*real_fn)(GLenum,GLsizei,GLenum,const void *,GLsizei,GLint);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDrawElementsInstancedBaseVertex");
-    if(!control || control->mode==OFF) { if(real_fn) real_fn(mode,count,type,indices,instances,base); return; }
+    if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,instances,base); return; }
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
     if(detail_active) {
         uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        detail_line5("D",current_frame.render_id,caller>=image_base?caller-image_base:0,
-                     mode,(uint32_t)count,((uint64_t)(uint32_t)instances<<32)|
-                     ((uint64_t)(uint16_t)base<<16)|type);
+        draw_detail(caller,6,mode,count,type,(uintptr_t)indices,0,base,instances);
     }
-    bool timed=(++draw_sample_seq&255u)==1u;
+    bool measuring=measurement_active();
+    bool timed=measuring && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
-    uint32_t m=control->mode;
+    uint32_t m=frame_control.mode;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
     else { if(real_fn) real_fn(mode,count,type,indices,instances,base); current_frame.forwarded_draws++; }
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256;current_frame.draw_cpu_ns+=dc*256;
-    if(timed) current_frame.draw_timed_samples++; event(HOOK_GL_DRAW,dw,dc);
+    if(timed) current_frame.draw_timed_samples++;
+    if(measuring) event(HOOK_GL_DRAW,dw,dc);
 }
 static void gl_buffer_data(GLenum target,GLsizeiptr size,const void *data,GLenum usage) {
     static void (*real_fn)(GLenum,GLsizeiptr,const void *,GLenum);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBufferData");
-    if(!control || control->mode==OFF) { if(real_fn) real_fn(target,size,data,usage); return; }
+    if(!intervention_active()) { if(real_fn) real_fn(target,size,data,usage); return; }
     event(HOOK_GL_UPLOAD,0,0);
     current_frame.buffer_calls++; if(size>0) {
         current_frame.buffer_bytes+=(uint64_t)size;
@@ -747,7 +971,7 @@ static void gl_buffer_data(GLenum target,GLsizeiptr size,const void *data,GLenum
 static void gl_buffer_subdata(GLenum target,GLintptr offset,GLsizeiptr size,const void *data) {
     static void (*real_fn)(GLenum,GLintptr,GLsizeiptr,const void *);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBufferSubData");
-    if(!control || control->mode==OFF) { if(real_fn) real_fn(target,offset,size,data); return; }
+    if(!intervention_active()) { if(real_fn) real_fn(target,offset,size,data); return; }
     event(HOOK_GL_UPLOAD,0,0);
     current_frame.buffer_calls++; if(size>0) {
         current_frame.buffer_bytes+=(uint64_t)size;
@@ -758,46 +982,293 @@ static void gl_buffer_subdata(GLenum target,GLintptr offset,GLsizeiptr size,cons
         (uint64_t)size,(uint64_t)offset,hash_bytes(data,(size_t)size));
     if(real_fn) real_fn(target,offset,size,data);
 }
+static void uniform_record(uintptr_t site,GLint location,const void *data,size_t bytes) {
+    if(!intervention_active()) return;
+    if(measurement_active()) {
+        event(HOOK_GL_UNIFORM,0,0);
+        current_frame.uniform_calls++;
+        current_frame.uniform_bytes+=bytes;
+    }
+    if(measurement_active() && detail_active && data && bytes>0 && bytes<=1048576) {
+        detail_line5("U",current_frame.render_id,site,
+            active_program,(uint32_t)location,((uint64_t)bytes<<32)|
+            (uint32_t)hash_bytes(data,bytes));
+    }
+}
 static void gl_uniform4fv(GLint location,GLsizei count,const GLfloat *data) {
     static void (*real_fn)(GLint,GLsizei,const GLfloat *);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glUniform4fv");
-    if(!control || control->mode==OFF) { if(real_fn) real_fn(location,count,data); return; }
-    event(HOOK_GL_UNIFORM,0,0);
-    current_frame.uniform_calls++; if(count>0) current_frame.uniform_bytes+=(uint64_t)count*16;
-    if(detail_active && data && count>0) {
-        uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        detail_line5("U",current_frame.render_id,caller>=image_base?caller-image_base:0,
-                   active_program,(uint32_t)location,
-                   ((uint64_t)(uint32_t)count<<32)|(uint32_t)hash_bytes(data,(size_t)count*16));
-        uniform_snapshot(caller>=image_base?caller-image_base:0,active_program,location,
-                         data,(size_t)count*16);
+    if(!intervention_active()) { if(real_fn) real_fn(location,count,data); return; }
+    size_t bytes=count>0?(size_t)count*16:0;
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+    uniform_record(caller>=image_base?caller-image_base:0,location,data,bytes);
+    if(measurement_active() && detail_active && data && count>0 && bytes<=256) {
+        uniform_snapshot(caller>=image_base?caller-image_base:0,active_program,location,data,bytes);
     }
     if(real_fn) real_fn(location,count,data);
 }
+#define DEFINE_UNIFORM_VECTOR(name,type,components) \
+static void gl_##name(GLint location,GLsizei count,const type *data) { \
+    typedef void (*Fn)(GLint,GLsizei,const type *); static Fn real_fn; \
+    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!intervention_active()) { if(real_fn) real_fn(location,count,data); return; } \
+    size_t bytes=count>0?(size_t)count*(components)*sizeof(type):0; \
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
+    uniform_record(caller>=image_base?caller-image_base:0,location,data,bytes); \
+    if(real_fn) real_fn(location,count,data); \
+}
+#define DEFINE_UNIFORM_SCALAR(name,type) \
+static void gl_##name(GLint location,type value) { \
+    typedef void (*Fn)(GLint,type); static Fn real_fn; \
+    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!intervention_active()) { if(real_fn) real_fn(location,value); return; } \
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
+    uniform_record(caller>=image_base?caller-image_base:0,location,&value,sizeof(value)); \
+    if(real_fn) real_fn(location,value); \
+}
+#define DEFINE_UNIFORM_MATRIX(name,dim) \
+static void gl_##name(GLint location,GLsizei count,GLboolean transpose,const GLfloat *data) { \
+    typedef void (*Fn)(GLint,GLsizei,GLboolean,const GLfloat *); static Fn real_fn; \
+    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!intervention_active()) { if(real_fn) real_fn(location,count,transpose,data); return; } \
+    size_t bytes=count>0?(size_t)count*(dim)*(dim)*sizeof(GLfloat):0; \
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
+    uniform_record(caller>=image_base?caller-image_base:0,location,data,bytes); \
+    if(real_fn) real_fn(location,count,transpose,data); \
+}
+#define DEFINE_UNIFORM_COMPONENTS_3(name,type) \
+static void gl_##name(GLint location,type v0,type v1,type v2) { \
+    typedef void (*Fn)(GLint,type,type,type); static Fn real_fn; \
+    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!intervention_active()) { if(real_fn) real_fn(location,v0,v1,v2); return; } \
+    type values[3]={v0,v1,v2}; uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
+    uniform_record(caller>=image_base?caller-image_base:0,location,values,3*sizeof(type)); \
+    if(real_fn) real_fn(location,v0,v1,v2); \
+}
+#define DEFINE_UNIFORM_COMPONENTS_4(name,type) \
+static void gl_##name(GLint location,type v0,type v1,type v2,type v3) { \
+    typedef void (*Fn)(GLint,type,type,type,type); static Fn real_fn; \
+    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!intervention_active()) { if(real_fn) real_fn(location,v0,v1,v2,v3); return; } \
+    type values[4]={v0,v1,v2,v3}; uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
+    uniform_record(caller>=image_base?caller-image_base:0,location,values,4*sizeof(type)); \
+    if(real_fn) real_fn(location,v0,v1,v2,v3); \
+}
+#define DEFINE_UNIFORM_COMPONENTS_2(name,type) \
+static void gl_##name(GLint location,type v0,type v1) { \
+    typedef void (*Fn)(GLint,type,type); static Fn real_fn; \
+    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(!intervention_active()) { if(real_fn) real_fn(location,v0,v1); return; } \
+    type values[2]={v0,v1}; uintptr_t caller=(uintptr_t)__builtin_return_address(0); \
+    uniform_record(caller>=image_base?caller-image_base:0,location,values,2*sizeof(type)); \
+    if(real_fn) real_fn(location,v0,v1); \
+}
+DEFINE_UNIFORM_VECTOR(glUniform1fv,GLfloat,1)
+DEFINE_UNIFORM_VECTOR(glUniform2fv,GLfloat,2)
+DEFINE_UNIFORM_VECTOR(glUniform3fv,GLfloat,3)
+DEFINE_UNIFORM_VECTOR(glUniform1iv,GLint,1)
+DEFINE_UNIFORM_VECTOR(glUniform2iv,GLint,2)
+DEFINE_UNIFORM_VECTOR(glUniform3iv,GLint,3)
+DEFINE_UNIFORM_VECTOR(glUniform4iv,GLint,4)
+DEFINE_UNIFORM_MATRIX(glUniformMatrix2fv,2)
+DEFINE_UNIFORM_MATRIX(glUniformMatrix3fv,3)
+DEFINE_UNIFORM_MATRIX(glUniformMatrix4fv,4)
+DEFINE_UNIFORM_SCALAR(glUniform1f,GLfloat)
+DEFINE_UNIFORM_COMPONENTS_2(glUniform2f,GLfloat)
+DEFINE_UNIFORM_COMPONENTS_2(glUniform2i,GLint)
+DEFINE_UNIFORM_COMPONENTS_3(glUniform3f,GLfloat)
+DEFINE_UNIFORM_COMPONENTS_4(glUniform4f,GLfloat)
+DEFINE_UNIFORM_COMPONENTS_3(glUniform3i,GLint)
+DEFINE_UNIFORM_COMPONENTS_4(glUniform4i,GLint)
+#undef DEFINE_UNIFORM_VECTOR
+#undef DEFINE_UNIFORM_SCALAR
+#undef DEFINE_UNIFORM_MATRIX
+#undef DEFINE_UNIFORM_COMPONENTS_3
+#undef DEFINE_UNIFORM_COMPONENTS_4
+#undef DEFINE_UNIFORM_COMPONENTS_2
+static void gl_uniform1i(GLint location,GLint value) {
+    static void (*real_fn)(GLint,GLint);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glUniform1i");
+    if(measurement_active()) {
+        event(HOOK_GL_UNIFORM,0,0); current_frame.uniform_calls++;
+        current_frame.uniform_bytes+=sizeof(value);
+        if(measurement_active() && detail_active) {
+            uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+            detail_line5("u",current_frame.render_id,
+                caller>=image_base?caller-image_base:0,active_program,
+                (uint32_t)location,(uint32_t)value);
+        }
+    }
+    if(real_fn) real_fn(location,value);
+}
+static uint64_t state_pack3(uint64_t a,uint64_t b,uint64_t c) {
+    return ((a&0x1fffffull)<<42)|((b&0x1fffffull)<<21)|(c&0x1fffffull);
+}
+static void state_record(uintptr_t caller,uint64_t operation,uint64_t value) {
+    if(!measurement_active()) return;
+    event(HOOK_GL_STATE,0,0); current_frame.state_calls++;
+    if(detail_active) detail_line("S",current_frame.render_id,
+        caller>=image_base?caller-image_base:0,operation,value);
+}
+#define DEFINE_STATE_ONE(name,type,op) \
+static void gl_##name(type value) { \
+    typedef void (*Fn)(type); static Fn real_fn; \
+    if(!real_fn) real_fn=(Fn)dlsym(RTLD_NEXT,#name); \
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),op,(uint64_t)value); \
+    if(real_fn) real_fn(value); \
+}
+DEFINE_STATE_ONE(glDepthFunc,GLenum,20)
+DEFINE_STATE_ONE(glDepthMask,GLboolean,21)
+DEFINE_STATE_ONE(glCullFace,GLenum,22)
+DEFINE_STATE_ONE(glFrontFace,GLenum,23)
+DEFINE_STATE_ONE(glStencilMask,GLuint,24)
+DEFINE_STATE_ONE(glClear,GLbitfield,25)
+DEFINE_STATE_ONE(glBlendEquation,GLenum,36)
+static void gl_glBlendFunc(GLenum source,GLenum destination) {
+    static void (*real_fn)(GLenum,GLenum);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBlendFunc");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),26,
+        ((uint64_t)source<<32)|destination);
+    if(real_fn) real_fn(source,destination);
+}
+static void gl_glBlendFuncSeparate(GLenum sr,GLenum dr,GLenum sa,GLenum da) {
+    static void (*real_fn)(GLenum,GLenum,GLenum,GLenum);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBlendFuncSeparate");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),27,
+        state_pack3(((uint64_t)sr<<32)|dr,sa,da));
+    if(real_fn) real_fn(sr,dr,sa,da);
+}
+static void gl_glBlendEquationSeparate(GLenum rgb,GLenum alpha) {
+    static void (*real_fn)(GLenum,GLenum);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBlendEquationSeparate");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),37,
+        ((uint64_t)rgb<<32)|alpha);
+    if(real_fn) real_fn(rgb,alpha);
+}
+static void gl_glColorMask(GLboolean r,GLboolean g,GLboolean b,GLboolean a) {
+    static void (*real_fn)(GLboolean,GLboolean,GLboolean,GLboolean);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glColorMask");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),28,
+        ((uint64_t)r<<3)|((uint64_t)g<<2)|((uint64_t)b<<1)|a);
+    if(real_fn) real_fn(r,g,b,a);
+}
+static void gl_glStencilFunc(GLenum func,GLint ref,GLuint mask) {
+    static void (*real_fn)(GLenum,GLint,GLuint);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glStencilFunc");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),29,
+        state_pack3(func,(uint32_t)ref,mask));
+    if(real_fn) real_fn(func,ref,mask);
+}
+static void gl_glStencilOp(GLenum fail,GLenum depth_fail,GLenum pass) {
+    static void (*real_fn)(GLenum,GLenum,GLenum);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glStencilOp");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),30,
+        state_pack3(fail,depth_fail,pass));
+    if(real_fn) real_fn(fail,depth_fail,pass);
+}
+static void gl_glScissor(GLint x,GLint y,GLsizei w,GLsizei h) {
+    static void (*real_fn)(GLint,GLint,GLsizei,GLsizei);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glScissor");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),31,
+        (((uint64_t)(uint32_t)x<<32)|(uint32_t)y) ^
+        (((uint64_t)(uint32_t)w<<32)|(uint32_t)h));
+    if(real_fn) real_fn(x,y,w,h);
+}
+static void gl_glViewport(GLint x,GLint y,GLsizei w,GLsizei h) {
+    static void (*real_fn)(GLint,GLint,GLsizei,GLsizei);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glViewport");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),32,
+        (((uint64_t)(uint32_t)x<<32)|(uint32_t)y) ^
+        (((uint64_t)(uint32_t)w<<32)|(uint32_t)h));
+    if(real_fn) real_fn(x,y,w,h);
+}
+static void gl_glTexParameteri(GLenum target,GLenum pname,GLint value) {
+    static void (*real_fn)(GLenum,GLenum,GLint);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glTexParameteri");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),33,
+        ((uint64_t)target<<32)^((uint64_t)pname<<16)^(uint32_t)value);
+    if(real_fn) real_fn(target,pname,value);
+}
+static void gl_glTexParameterf(GLenum target,GLenum pname,GLfloat value) {
+    static void (*real_fn)(GLenum,GLenum,GLfloat);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glTexParameterf");
+    uint32_t bits=0;memcpy(&bits,&value,sizeof(bits));
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),34,
+        ((uint64_t)target<<32)^((uint64_t)pname<<16)^bits);
+    if(real_fn) real_fn(target,pname,value);
+}
+static void gl_glPixelStorei(GLenum pname,GLint value) {
+    static void (*real_fn)(GLenum,GLint);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glPixelStorei");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),35,
+        ((uint64_t)pname<<32)|(uint32_t)value);
+    if(real_fn) real_fn(pname,value);
+}
+static void gl_glPolygonMode(GLenum face,GLenum mode) {
+    static void (*real_fn)(GLenum,GLenum);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glPolygonMode");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),38,
+        ((uint64_t)face<<32)|mode);
+    if(real_fn) real_fn(face,mode);
+}
+static void gl_glBindFramebuffer(GLenum target,GLuint framebuffer) {
+    static void (*real_fn)(GLenum,GLuint);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBindFramebuffer");
+    if(intervention_active()) state_record((uintptr_t)__builtin_return_address(0),39,
+        ((uint64_t)target<<32)|framebuffer);
+    if(real_fn) real_fn(target,framebuffer);
+}
+#undef DEFINE_STATE_ONE
 static void gl_use_program(GLuint program) {
     static void (*real_fn)(GLuint);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glUseProgram");
-    if(control && control->mode!=OFF) {
-        event(HOOK_GL_STATE,0,0);
-        current_frame.state_calls++;
-        if(active_program!=program) current_frame.program_switches++;
+    if(intervention_active()) {
+        if(measurement_active()) {
+            event(HOOK_GL_STATE,0,0);
+            current_frame.state_calls++;
+            if(active_program!=program) current_frame.program_switches++;
+        }
         active_program=program;
-        if(detail_active) {
+        if(measurement_active() && detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
             detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,1,program);
         }
     }
     if(real_fn) real_fn(program);
 }
+typedef void (*UseProgramArbFn)(GLhandleARB);
+void eu4_frame_model_forward_arb(GLhandleARB program,UseProgramArbFn forward) {
+    if(forward) forward(program);
+}
+static void gl_use_program_arb(GLhandleARB program) {
+    static UseProgramArbFn real_fn;
+    if(!real_fn) real_fn=(UseProgramArbFn)dlsym(RTLD_NEXT,"glUseProgramObjectARB");
+    if(intervention_active()) {
+        uintptr_t handle=(uintptr_t)program;
+        if(measurement_active()) {
+            event(HOOK_GL_STATE,0,0); current_frame.state_calls++;
+            if(active_program!=handle) current_frame.program_switches++;
+        }
+        active_program=handle;
+        if(measurement_active() && detail_active) {
+            uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+            detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,
+                        6,handle);
+        }
+    }
+    eu4_frame_model_forward_arb(program,real_fn);
+}
 static void gl_bind_buffer(GLenum target,GLuint buffer) {
     static void (*real_fn)(GLenum,GLuint);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBindBuffer");
-    if(control && control->mode!=OFF) {
-        event(HOOK_GL_STATE,0,0);
-        current_frame.state_calls++; current_frame.buffer_binds++;
+    if(intervention_active()) {
+        if(measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;current_frame.buffer_binds++;}
         if(target==GL_ARRAY_BUFFER) bound_array_buffer=buffer;
-        if(target==GL_ELEMENT_ARRAY_BUFFER) bound_element_buffer=buffer;
-        if(detail_active) {
+        if(target==GL_ELEMENT_ARRAY_BUFFER) {
+            bound_element_buffer=buffer;
+            if(vertex_array_state) vertex_array_state->element_buffer=buffer;
+        }
+        if(measurement_active() && detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
             detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,2,
                         ((uint64_t)target<<32)|buffer);
@@ -805,11 +1276,70 @@ static void gl_bind_buffer(GLenum target,GLuint buffer) {
     }
     if(real_fn) real_fn(target,buffer);
 }
+static void gl_bind_vertex_array(GLuint vao) {
+    static void (*real_fn)(GLuint);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBindVertexArray");
+    if(real_fn) real_fn(vao);
+    if(!intervention_active()) return;
+    CGLContextObj ctx=CGLGetCurrentContext();
+    vertex_array_state=vertex_state_for(ctx,vao,true);
+    if(!vertex_array_state) {current_frame.flags|=2048;return;}
+    bound_element_buffer=vertex_array_state->element_buffer;
+    if(measurement_active()) {
+        event(HOOK_GL_STATE,0,0);current_frame.state_calls++;
+        if(detail_active) {
+            uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+            detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,7,vao);
+        }
+    }
+}
+static void gl_vertex_attrib_pointer(GLuint index,GLint size,GLenum type,
+        GLboolean normalized,GLsizei stride,const void *pointer) {
+    static void (*real_fn)(GLuint,GLint,GLenum,GLboolean,GLsizei,const void *);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glVertexAttribPointer");
+    if(real_fn) real_fn(index,size,type,normalized,stride,pointer);
+    if(!intervention_active()) return;
+    if(!vertex_array_state || !state_seeded) seed_gl_state();
+    if(vertex_array_state && index<32) {
+        VertexAttribute *a=&vertex_array_state->attributes[index];
+        *a=(VertexAttribute){.buffer=bound_array_buffer,.size=size,.type=type,
+            .normalized=normalized,.stride=stride,.pointer=(uintptr_t)pointer,
+            .divisor=a->divisor,.enabled=a->enabled};
+    }
+    if(measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+}
+static void gl_enable_vertex_attrib(GLuint index) {
+    static void (*real_fn)(GLuint);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glEnableVertexAttribArray");
+    if(real_fn) real_fn(index);
+    if(!intervention_active()) return;
+    if(!vertex_array_state || !state_seeded) seed_gl_state();
+    if(vertex_array_state && index<32) vertex_array_state->attributes[index].enabled=GL_TRUE;
+    if(measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+}
+static void gl_disable_vertex_attrib(GLuint index) {
+    static void (*real_fn)(GLuint);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDisableVertexAttribArray");
+    if(real_fn) real_fn(index);
+    if(!intervention_active()) return;
+    if(!vertex_array_state || !state_seeded) seed_gl_state();
+    if(vertex_array_state && index<32) vertex_array_state->attributes[index].enabled=GL_FALSE;
+    if(measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+}
+static void gl_vertex_attrib_divisor(GLuint index,GLuint divisor) {
+    static void (*real_fn)(GLuint,GLuint);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glVertexAttribDivisor");
+    if(real_fn) real_fn(index,divisor);
+    if(!intervention_active()) return;
+    if(!vertex_array_state || !state_seeded) seed_gl_state();
+    if(vertex_array_state && index<32) vertex_array_state->attributes[index].divisor=divisor;
+    if(measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+}
 static void gl_tex_image_2d(GLenum target,GLint level,GLint internal,GLsizei width,
         GLsizei height,GLint border,GLenum format,GLenum type,const void *pixels) {
     static void (*real_fn)(GLenum,GLint,GLint,GLsizei,GLsizei,GLint,GLenum,GLenum,const void *);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glTexImage2D");
-    if(!control || control->mode==OFF) {
+    if(!intervention_active()) {
         if(real_fn) real_fn(target,level,internal,width,height,border,format,type,pixels); return;
     }
     event(HOOK_GL_UPLOAD,0,0);
@@ -833,7 +1363,7 @@ static void gl_tex_sub_image_2d(GLenum target,GLint level,GLint x,GLint y,GLsize
         GLsizei height,GLenum format,GLenum type,const void *pixels) {
     static void (*real_fn)(GLenum,GLint,GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,const void *);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glTexSubImage2D");
-    if(!control || control->mode==OFF) {
+    if(!intervention_active()) {
         if(real_fn) real_fn(target,level,x,y,width,height,format,type,pixels); return;
     }
     event(HOOK_GL_UPLOAD,0,0);
@@ -856,7 +1386,7 @@ static void gl_tex_sub_image_2d(GLenum target,GLint level,GLint x,GLint y,GLsize
 static void gl_bind_texture(GLenum target,GLuint texture) {
     static void (*real_fn)(GLenum,GLuint);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glBindTexture");
-    if(control && control->mode!=OFF) {
+    if(measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++; current_frame.texture_binds++;
         if(detail_active) {
@@ -870,7 +1400,7 @@ static void gl_bind_texture(GLenum target,GLuint texture) {
 static void gl_enable(GLenum cap) {
     static void (*real_fn)(GLenum);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glEnable");
-    if(control && control->mode!=OFF) {
+    if(measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
         if(detail_active) {
@@ -884,7 +1414,7 @@ static void gl_enable(GLenum cap) {
 static void gl_disable(GLenum cap) {
     static void (*real_fn)(GLenum);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glDisable");
-    if(control && control->mode!=OFF) {
+    if(measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
         if(detail_active) {
@@ -898,7 +1428,7 @@ static void gl_disable(GLenum cap) {
 static void gl_active_texture(GLenum unit) {
     static void (*real_fn)(GLenum);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"glActiveTexture");
-    if(control && control->mode!=OFF) {
+    if(measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
         if(detail_active) {
@@ -912,9 +1442,8 @@ static CGLError tracked_set_context(CGLContextObj ctx) {
     static CGLError (*real_fn)(CGLContextObj);
     if(!real_fn) real_fn=dlsym(RTLD_NEXT,"CGLSetCurrentContext");
     CGLError result=real_fn?real_fn(ctx):kCGLBadContext;
-    if(result==kCGLNoError && gpu_context && ctx!=gpu_context) {
-        gpu_context_changed=true; gpu_ready=false; gpu_active_slot=-1;
-        current_frame.flags|=256;
+    if(result==kCGLNoError && ctx!=state_context) {
+        state_seeded=false;vertex_array_state=NULL;
     }
     if(result==kCGLNoError && raster_active && ctx) {
         bool found=false;
@@ -939,6 +1468,21 @@ static CGLError tracked_set_context(CGLContextObj ctx) {
     }
     return result;
 }
+static CGLError tracked_destroy_context(CGLContextObj ctx) {
+    static CGLError (*real_fn)(CGLContextObj);
+    if(!real_fn) real_fn=dlsym(RTLD_NEXT,"CGLDestroyContext");
+    CGLError result=real_fn?real_fn(ctx):kCGLBadContext;
+    if(result==kCGLNoError) {
+        for(unsigned i=0;i<gpu_context_count;i++) if(gpu_contexts[i].context==ctx) {
+            memset(&gpu_contexts[i],0,sizeof(gpu_contexts[i]));
+            if(gpu_current==&gpu_contexts[i]) gpu_current=NULL;
+        }
+        for(unsigned i=0;i<vertex_array_count;i++)
+            if(vertex_arrays[i].context==ctx) memset(&vertex_arrays[i],0,sizeof(vertex_arrays[i]));
+        if(state_context==ctx) {state_context=NULL;state_seeded=false;}
+    }
+    return result;
+}
 
 static void *tracked_dlsym(void *handle,const char *name) {
     void *original=dlsym(handle,name);
@@ -952,8 +1496,52 @@ static void *tracked_dlsym(void *handle,const char *name) {
     if(!strcmp(name,"glBufferData") || !strcmp(name,"glBufferDataARB")) return gl_buffer_data;
     if(!strcmp(name,"glBufferSubData") || !strcmp(name,"glBufferSubDataARB")) return gl_buffer_subdata;
     if(!strcmp(name,"glUniform4fv") || !strcmp(name,"glUniform4fvARB")) return gl_uniform4fv;
-    if(!strcmp(name,"glUseProgram") || !strcmp(name,"glUseProgramObjectARB")) return gl_use_program;
+    if(!strcmp(name,"glUniform1i") || !strcmp(name,"glUniform1iARB")) return gl_uniform1i;
+    if(!strcmp(name,"glUniform1fv") || !strcmp(name,"glUniform1fvARB")) return gl_glUniform1fv;
+    if(!strcmp(name,"glUniform2fv") || !strcmp(name,"glUniform2fvARB")) return gl_glUniform2fv;
+    if(!strcmp(name,"glUniform3fv") || !strcmp(name,"glUniform3fvARB")) return gl_glUniform3fv;
+    if(!strcmp(name,"glUniform1iv") || !strcmp(name,"glUniform1ivARB")) return gl_glUniform1iv;
+    if(!strcmp(name,"glUniform2iv") || !strcmp(name,"glUniform2ivARB")) return gl_glUniform2iv;
+    if(!strcmp(name,"glUniform3iv") || !strcmp(name,"glUniform3ivARB")) return gl_glUniform3iv;
+    if(!strcmp(name,"glUniform4iv") || !strcmp(name,"glUniform4ivARB")) return gl_glUniform4iv;
+    if(!strcmp(name,"glUniformMatrix2fv") || !strcmp(name,"glUniformMatrix2fvARB")) return gl_glUniformMatrix2fv;
+    if(!strcmp(name,"glUniformMatrix3fv") || !strcmp(name,"glUniformMatrix3fvARB")) return gl_glUniformMatrix3fv;
+    if(!strcmp(name,"glUniformMatrix4fv") || !strcmp(name,"glUniformMatrix4fvARB")) return gl_glUniformMatrix4fv;
+    if(!strcmp(name,"glUniform1f") || !strcmp(name,"glUniform1fARB")) return gl_glUniform1f;
+    if(!strcmp(name,"glUniform2f") || !strcmp(name,"glUniform2fARB")) return gl_glUniform2f;
+    if(!strcmp(name,"glUniform3f") || !strcmp(name,"glUniform3fARB")) return gl_glUniform3f;
+    if(!strcmp(name,"glUniform4f") || !strcmp(name,"glUniform4fARB")) return gl_glUniform4f;
+    if(!strcmp(name,"glUniform2i") || !strcmp(name,"glUniform2iARB")) return gl_glUniform2i;
+    if(!strcmp(name,"glUniform3i") || !strcmp(name,"glUniform3iARB")) return gl_glUniform3i;
+    if(!strcmp(name,"glUniform4i") || !strcmp(name,"glUniform4iARB")) return gl_glUniform4i;
+    if(!strcmp(name,"glUseProgram")) return gl_use_program;
+    if(!strcmp(name,"glUseProgramObjectARB")) return gl_use_program_arb;
+    if(!strcmp(name,"glDepthFunc")) return gl_glDepthFunc;
+    if(!strcmp(name,"glDepthMask")) return gl_glDepthMask;
+    if(!strcmp(name,"glCullFace")) return gl_glCullFace;
+    if(!strcmp(name,"glFrontFace")) return gl_glFrontFace;
+    if(!strcmp(name,"glStencilMask")) return gl_glStencilMask;
+    if(!strcmp(name,"glClear")) return gl_glClear;
+    if(!strcmp(name,"glBlendFunc")) return gl_glBlendFunc;
+    if(!strcmp(name,"glBlendFuncSeparate")) return gl_glBlendFuncSeparate;
+    if(!strcmp(name,"glColorMask")) return gl_glColorMask;
+    if(!strcmp(name,"glStencilFunc")) return gl_glStencilFunc;
+    if(!strcmp(name,"glStencilOp")) return gl_glStencilOp;
+    if(!strcmp(name,"glScissor")) return gl_glScissor;
+    if(!strcmp(name,"glViewport")) return gl_glViewport;
+    if(!strcmp(name,"glTexParameteri")) return gl_glTexParameteri;
+    if(!strcmp(name,"glTexParameterf")) return gl_glTexParameterf;
+    if(!strcmp(name,"glPixelStorei")) return gl_glPixelStorei;
+    if(!strcmp(name,"glPolygonMode")) return gl_glPolygonMode;
+    if(!strcmp(name,"glBlendEquation")) return gl_glBlendEquation;
+    if(!strcmp(name,"glBlendEquationSeparate")) return gl_glBlendEquationSeparate;
+    if(!strcmp(name,"glBindFramebuffer") || !strcmp(name,"glBindFramebufferEXT")) return gl_glBindFramebuffer;
     if(!strcmp(name,"glBindBuffer") || !strcmp(name,"glBindBufferARB")) return gl_bind_buffer;
+    if(!strcmp(name,"glBindVertexArray") || !strcmp(name,"glBindVertexArrayAPPLE")) return gl_bind_vertex_array;
+    if(!strcmp(name,"glVertexAttribPointer") || !strcmp(name,"glVertexAttribPointerARB")) return gl_vertex_attrib_pointer;
+    if(!strcmp(name,"glEnableVertexAttribArray") || !strcmp(name,"glEnableVertexAttribArrayARB")) return gl_enable_vertex_attrib;
+    if(!strcmp(name,"glDisableVertexAttribArray") || !strcmp(name,"glDisableVertexAttribArrayARB")) return gl_disable_vertex_attrib;
+    if(!strcmp(name,"glVertexAttribDivisor") || !strcmp(name,"glVertexAttribDivisorARB")) return gl_vertex_attrib_divisor;
     if(!strcmp(name,"glTexImage2D") || !strcmp(name,"glTexImage2DEXT")) return gl_tex_image_2d;
     if(!strcmp(name,"glTexSubImage2D") || !strcmp(name,"glTexSubImage2DEXT")) return gl_tex_sub_image_2d;
     if(!strcmp(name,"glBindTexture")) return gl_bind_texture;
@@ -1021,13 +1609,58 @@ static const struct { const void *replacement,*replacee; } interposes[]={
     {(const void *)gl_buffer_data,(const void *)glBufferData},
     {(const void *)gl_buffer_subdata,(const void *)glBufferSubData},
     {(const void *)gl_uniform4fv,(const void *)glUniform4fv},
+    {(const void *)gl_uniform1i,(const void *)glUniform1i},
+    {(const void *)gl_glUniform1fv,(const void *)glUniform1fv},
+    {(const void *)gl_glUniform2fv,(const void *)glUniform2fv},
+    {(const void *)gl_glUniform3fv,(const void *)glUniform3fv},
+    {(const void *)gl_glUniform1iv,(const void *)glUniform1iv},
+    {(const void *)gl_glUniform2iv,(const void *)glUniform2iv},
+    {(const void *)gl_glUniform3iv,(const void *)glUniform3iv},
+    {(const void *)gl_glUniform4iv,(const void *)glUniform4iv},
+    {(const void *)gl_glUniformMatrix2fv,(const void *)glUniformMatrix2fv},
+    {(const void *)gl_glUniformMatrix3fv,(const void *)glUniformMatrix3fv},
+    {(const void *)gl_glUniformMatrix4fv,(const void *)glUniformMatrix4fv},
+    {(const void *)gl_glUniform1f,(const void *)glUniform1f},
+    {(const void *)gl_glUniform2f,(const void *)glUniform2f},
+    {(const void *)gl_glUniform3f,(const void *)glUniform3f},
+    {(const void *)gl_glUniform4f,(const void *)glUniform4f},
+    {(const void *)gl_glUniform2i,(const void *)glUniform2i},
+    {(const void *)gl_glUniform3i,(const void *)glUniform3i},
+    {(const void *)gl_glUniform4i,(const void *)glUniform4i},
+    {(const void *)gl_glDepthFunc,(const void *)glDepthFunc},
+    {(const void *)gl_glDepthMask,(const void *)glDepthMask},
+    {(const void *)gl_glCullFace,(const void *)glCullFace},
+    {(const void *)gl_glFrontFace,(const void *)glFrontFace},
+    {(const void *)gl_glStencilMask,(const void *)glStencilMask},
+    {(const void *)gl_glClear,(const void *)glClear},
+    {(const void *)gl_glBlendFunc,(const void *)glBlendFunc},
+    {(const void *)gl_glBlendFuncSeparate,(const void *)glBlendFuncSeparate},
+    {(const void *)gl_glColorMask,(const void *)glColorMask},
+    {(const void *)gl_glStencilFunc,(const void *)glStencilFunc},
+    {(const void *)gl_glStencilOp,(const void *)glStencilOp},
+    {(const void *)gl_glScissor,(const void *)glScissor},
+    {(const void *)gl_glViewport,(const void *)glViewport},
+    {(const void *)gl_glTexParameteri,(const void *)glTexParameteri},
+    {(const void *)gl_glTexParameterf,(const void *)glTexParameterf},
+    {(const void *)gl_glPixelStorei,(const void *)glPixelStorei},
+    {(const void *)gl_glPolygonMode,(const void *)glPolygonMode},
+    {(const void *)gl_glBlendEquation,(const void *)glBlendEquation},
+    {(const void *)gl_glBlendEquationSeparate,(const void *)glBlendEquationSeparate},
+    {(const void *)gl_glBindFramebuffer,(const void *)glBindFramebuffer},
     {(const void *)gl_use_program,(const void *)glUseProgram},
+    {(const void *)gl_use_program_arb,(const void *)glUseProgramObjectARB},
     {(const void *)gl_bind_buffer,(const void *)glBindBuffer},
+    {(const void *)gl_bind_vertex_array,(const void *)glBindVertexArray},
+    {(const void *)gl_vertex_attrib_pointer,(const void *)glVertexAttribPointer},
+    {(const void *)gl_enable_vertex_attrib,(const void *)glEnableVertexAttribArray},
+    {(const void *)gl_disable_vertex_attrib,(const void *)glDisableVertexAttribArray},
+    {(const void *)gl_vertex_attrib_divisor,(const void *)glVertexAttribDivisor},
     {(const void *)gl_tex_image_2d,(const void *)glTexImage2D},
     {(const void *)gl_tex_sub_image_2d,(const void *)glTexSubImage2D},
     {(const void *)gl_bind_texture,(const void *)glBindTexture},
     {(const void *)gl_enable,(const void *)glEnable},
     {(const void *)gl_disable,(const void *)glDisable},
     {(const void *)gl_active_texture,(const void *)glActiveTexture},
-    {(const void *)tracked_set_context,(const void *)CGLSetCurrentContext}
+    {(const void *)tracked_set_context,(const void *)CGLSetCurrentContext},
+    {(const void *)tracked_destroy_context,(const void *)CGLDestroyContext}
 };

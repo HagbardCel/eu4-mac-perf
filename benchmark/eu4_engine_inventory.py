@@ -36,6 +36,30 @@ GFX_GL = {
     "GfxDrawInstanced": ["glDrawArraysInstanced", "glDrawElementsInstanced"],
     "GfxDraw2dLines": ["glDrawArrays", "glDrawElements"],
 }
+BACKEND_AREAS = (
+    ("device_context_lifecycle", ["CGLCreateContext", "CGLSetCurrentContext", "CGLDestroyContext"],
+     "context and device creation/destruction", "CGL compatibility context is observed; creation paths/frequencies are not counted", "Metal device, command queue, and drawable lifecycle; medium risk"),
+    ("shader_program_lifecycle", ["glCreateShader", "glShaderSource", "glCompileShader", "glCreateProgram", "glAttachShader", "glLinkProgram", "glUseProgram"],
+     "shader/program objects and GLSL source", "program binds are sampled; shader sources, compile/link calls, and GLSL feature corpus are not inventoried", "GLSL translation and shader validation; high risk until corpus is captured"),
+    ("textures", ["glGenTextures", "glBindTexture", "glTexImage*", "glTexSubImage*", "glDeleteTextures"],
+     "texture objects, formats, allocation, updates, and sampling", "binds and selected uploads are counted; creation, deletion, formats, sampler state, and PBO paths are partial", "MTLTexture and sampler conversion; format and lifetime mapping unknown"),
+    ("vertex_index_buffers", ["glGenBuffers", "glBindBuffer", "glBufferData", "glBufferSubData", "glDeleteBuffers"],
+     "vertex/index buffer objects and uploaded ranges", "selected binds/uploads are counted; mapping, storage flags, full lifecycle, and changed ranges are unknown", "MTLBuffer allocation and update strategy; lifecycle mapping unknown"),
+    ("constants_uniforms", ["glUniform*", "glBindBufferRange", "glMapBuffer*"],
+     "uniform payloads and constant data", "scalar float/int, float/int vectors, matrix2/3/4, glUniform1i and glUniform4fv are counted; sampled payload hashes are recorded, exact element diffs cover glUniform4fv only; unsigned/double/non-square families and buffer-backed constants remain uncovered", "argument buffers or per-frame constant buffers; layout/reflection work required"),
+    ("render_targets", ["glGenFramebuffers", "glBindFramebuffer", "glFramebufferTexture*", "glBlitFramebuffer"],
+     "FBO attachments, render targets, and resolve/copy paths", "not inventoried by the current runtime hooks", "MTLRenderPassDescriptor and attachment lifecycle; topology unknown"),
+    ("depth_stencil_blend_raster", ["glDepth*", "glStencil*", "glBlend*", "glCullFace", "glPolygon*", "glEnable", "glDisable"],
+     "depth/stencil, blend, culling, and raster state", "only selected enable/disable and raster-discard state are observed; complete values and transitions unknown", "MTLDepthStencilState and pipeline-state mapping; state key coverage unknown"),
+    ("vertex_input", ["glVertexAttribPointer", "glEnableVertexAttribArray", "glVertexAttribDivisor", "glBindVertexArray"],
+     "vertex formats, VAOs, divisors, and element-buffer bindings", "vertex source identity is sampled for detailed draws; lifecycle and all attribute state are partial", "MTLVertexDescriptor and argument mapping; compatibility client arrays must be ruled out"),
+    ("draw_submission", ["GfxDraw*", "glDrawArrays*", "glDrawElements*"],
+     "direct, indexed, instanced, and base-vertex draws", "static direct Gfx callsites are inventoried; six GL draw forms are hooked; indirect/multi-draw and extension paths remain uncovered", "MTLRenderCommandEncoder draw variants; straightforward only after full call coverage"),
+    ("copies_readback", ["glCopyTex*", "glReadPixels", "glGetTexImage", "glBlitFramebuffer"],
+     "resource copies, readback, and capture operations", "not inventoried by the current runtime hooks", "blit/compute/readback equivalents depend on actual usage"),
+    ("synchronization", ["glFenceSync", "glClientWaitSync", "glFinish", "CGLFlushDrawable"],
+     "GPU fences, waits, flush, and drawable presentation", "CGLFlushDrawable wait is timed; GL sync-object coverage is absent", "MTLSharedEvent/command-buffer completion and CAMetalLayer presentation; ordering semantics unknown"),
+)
 ADDRESS = re.compile(r"^([0-9a-f]{16}) \(__TEXT,__text\) .*? (\S+)$")
 
 
@@ -136,10 +160,17 @@ def backend_graph() -> dict:
         item["callers"].append({"symbol": row.get("owner_symbol"), "name": row.get("owner"),
                                 "category": row.get("category"),
                                 "callsite_offset": row.get("callsite_offset")})
-    return {"schema": 1, "executable_sha256": data.get("executable_sha256"),
+    return {"schema": 2, "executable_sha256": data.get("executable_sha256"),
             "source": "analysis/draw-callers.json", "operations": list(grouped.values()),
+            "backend_areas":[{"area":area,"candidate_gl_operations":gl_ops,
+                "resources_and_contract":resources,"runtime_coverage":coverage,
+                "metal_equivalent_and_difficulty":metal,
+                "clausewitz_gfx_implementation":"not yet mapped to a concrete implementation symbol",
+                "runtime_frequency":"not measured or not covered by current hook set",
+                "compatibility_profile_assumptions":"must be confirmed from the pinned binary and live contexts"}
+                for area,gl_ops,resources,coverage,metal in BACKEND_AREAS],
             "observed_runtime_gl_entrypoints": ["draw", "buffer", "texture", "uniform", "program", "state", "present"],
-            "mapping_confidence": "candidate mapping only; Gfx implementation and resource/state semantics still need disassembly or runtime tracing",
+            "mapping_confidence": "seed feasibility matrix; Gfx implementation and resource/state semantics still need disassembly or runtime tracing",
             "known_limits": data.get("limits", [])}
 
 
