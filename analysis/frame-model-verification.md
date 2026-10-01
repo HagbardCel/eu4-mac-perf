@@ -78,10 +78,12 @@ The portable CI workflow runs Python 3.10/3.14 and native producer tests on
 Ubuntu. It does not claim Rosetta, driver overhead, or installed-game validation.
 Remote CI is checked after publication and reported separately from these local
 results. Its current status is available on the [portable workflow page](https://github.com/HagbardCel/eu4-mac-perf/actions/workflows/profiler.yml);
-the evidence above is local and source-hashed. Published commit `22539e3` passed
-both portable jobs in [CI run 36917943869](https://github.com/HagbardCel/eu4-mac-perf/actions/runs/36917943869).
-The final worker-control and shutdown follow-up is checked in a subsequent run;
-the earlier CI result does not validate those later changes.
+the evidence above is local and source-hashed. Final code commit `373f3ff` passed
+both Python 3.10 and 3.14 jobs in
+[CI run 36923891574](https://github.com/HagbardCel/eu4-mac-perf/actions/runs/36923891574),
+including the worker-control and shutdown follow-up. Commit `22539e3` had also
+passed the preceding portable run. Display-dependent GL overhead remains local
+evidence and failed acceptance independently of CI.
 
 The next live action remains the short `run --residual-discovery` pilot after
 offline overhead and exact helper checks pass. Its two A0 windows contain two
