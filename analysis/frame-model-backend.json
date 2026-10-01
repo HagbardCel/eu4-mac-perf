@@ -1,0 +1,359 @@
+{
+  "schema": 1,
+  "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "source": "analysis/draw-callers.json",
+  "operations": [
+    {
+      "gfx_operation": "GfxDraw2dLines",
+      "callers": [
+        {
+          "symbol": "__ZN9CEU3Idler20RenderGuiBoundsDebugEv",
+          "name": "CEU3Idler::RenderGuiBoundsDebug()",
+          "category": "debug",
+          "callsite_offset": 6260993
+        },
+        {
+          "symbol": "__Z17RenderTimingStatsP9CGraphics",
+          "name": "RenderTimingStats(CGraphics*)",
+          "category": "debug",
+          "callsite_offset": 18758066
+        },
+        {
+          "symbol": "__Z17RenderTimingStatsP9CGraphics",
+          "name": "RenderTimingStats(CGraphics*)",
+          "category": "debug",
+          "callsite_offset": 18758223
+        },
+        {
+          "symbol": "__ZN9NGuiDebug15RenderGuiBoundsE7CString",
+          "name": "NGuiDebug::RenderGuiBounds(CString)",
+          "category": "debug",
+          "callsite_offset": 21662566
+        }
+      ],
+      "candidate_opengl_operations": [
+        "glDrawArrays",
+        "glDrawElements"
+      ],
+      "resources_consumed_or_produced": "unknown from callsite alone",
+      "state_dependencies": "unknown without implementation/runtime state capture",
+      "compatibility_profile_assumptions": "unverified",
+      "metal_equivalent": "draw operations have direct Metal equivalents; resource translation is unverified"
+    },
+    {
+      "gfx_operation": "GfxDrawIndexed",
+      "callers": [
+        {
+          "symbol": "__ZN22CCountryNameCollection11RenderNamesEP21GfxDeferredContextGFXP17ConstantBufferGFXS3_PK10SGfxEffectRK10CEU3CameraffffP10TextureGFXSB_",
+          "name": "CCountryNameCollection::RenderNames(GfxDeferredContextGFX*, ConstantBufferGFX*, ConstantBufferGFX*, SGfxEffect const*, CEU3Camera const&, float, float, float, float, TextureGFX*, TextureGFX*)",
+          "category": "map_text",
+          "callsite_offset": 14751303
+        },
+        {
+          "symbol": "__ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
+          "name": "CPdxMapBorderLayer::DrawBorders(GfxDeferredContextGFX*, CEU3Camera const*, SBorderDrawInfoSet&, CArray<int>, int, int, float, CWrapWorldShadowMap*, char)",
+          "category": "borders",
+          "callsite_offset": 17613544
+        },
+        {
+          "symbol": "__ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
+          "name": "CPdxMapBorderLayer::DrawBorders(GfxDeferredContextGFX*, CEU3Camera const*, SBorderDrawInfoSet&, CArray<int>, int, int, float, CWrapWorldShadowMap*, char)",
+          "category": "borders",
+          "callsite_offset": 17613650
+        },
+        {
+          "symbol": "__ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
+          "name": "CPdxMapBorderLayer::DrawBorders(GfxDeferredContextGFX*, CEU3Camera const*, SBorderDrawInfoSet&, CArray<int>, int, int, float, CWrapWorldShadowMap*, char)",
+          "category": "borders",
+          "callsite_offset": 17613752
+        },
+        {
+          "symbol": "__ZN23CPdxMapInlandWaterLayer15DrawInlandWaterEPK7CCameraP21GfxDeferredContextGFXfP19CWrapWorldShadowMap",
+          "name": "CPdxMapInlandWaterLayer::DrawInlandWater(CCamera const*, GfxDeferredContextGFX*, float, CWrapWorldShadowMap*)",
+          "category": "lakes_and_rivers",
+          "callsite_offset": 17623293
+        },
+        {
+          "symbol": "__ZN23CPdxMapInlandWaterLayer15DrawInlandWaterEPK7CCameraP21GfxDeferredContextGFXfP19CWrapWorldShadowMap",
+          "name": "CPdxMapInlandWaterLayer::DrawInlandWater(CCamera const*, GfxDeferredContextGFX*, float, CWrapWorldShadowMap*)",
+          "category": "lakes_and_rivers",
+          "callsite_offset": 17623401
+        },
+        {
+          "symbol": "__ZN23CPdxMapInlandWaterLayer15DrawInlandWaterEPK7CCameraP21GfxDeferredContextGFXfP19CWrapWorldShadowMap",
+          "name": "CPdxMapInlandWaterLayer::DrawInlandWater(CCamera const*, GfxDeferredContextGFX*, float, CWrapWorldShadowMap*)",
+          "category": "lakes_and_rivers",
+          "callsite_offset": 17623505
+        },
+        {
+          "symbol": "__ZN19CPdxMapTerrainLayer11DrawTerrainEP21GfxDeferredContextGFXPK10CEU3Camera12ETerrainPassfP19CWrapWorldShadowMapci",
+          "name": "CPdxMapTerrainLayer::DrawTerrain(GfxDeferredContextGFX*, CEU3Camera const*, ETerrainPass, float, CWrapWorldShadowMap*, char, int)",
+          "category": "terrain",
+          "callsite_offset": 17649227
+        },
+        {
+          "symbol": "__ZN14CPdxMeshObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraibb",
+          "name": "CPdxMeshObject::RenderBuckets(CGraphics*, GfxDeferredContextGFX*, CCamera const*, int, bool, bool)",
+          "category": "mesh_object",
+          "callsite_offset": 21791748
+        },
+        {
+          "symbol": "__ZN14CPdxMeshObject23RenderBucketsShadowPassEP9CGraphicsRP21GfxDeferredContextGFXRKN5Eigen6MatrixIfLi4ELi4ELi0ELi4ELi4EEEPK7CCamerai",
+          "name": "CPdxMeshObject::RenderBucketsShadowPass(CGraphics*, GfxDeferredContextGFX*&, Eigen::Matrix<float, 4, 4, 0, 4, 4> const&, CCamera const*, int)",
+          "category": "mesh_object",
+          "callsite_offset": 21793094
+        },
+        {
+          "symbol": "__ZN14CPdxMeshObject23RenderBucketsShadowBlurEP9CGraphicsRP21GfxDeferredContextGFXPK7CCameraPKN5Eigen6MatrixIfLi4ELi4ELi0ELi4ELi4EEERP10TextureGFXi",
+          "name": "CPdxMeshObject::RenderBucketsShadowBlur(CGraphics*, GfxDeferredContextGFX*&, CCamera const*, Eigen::Matrix<float, 4, 4, 0, 4, 4> const*, TextureGFX*&, int)",
+          "category": "mesh_object",
+          "callsite_offset": 21801199
+        },
+        {
+          "symbol": "__ZN11C2dPieChart6RenderEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEftP10TextureGFX",
+          "name": "C2dPieChart::Render(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, float, unsigned short, TextureGFX*)",
+          "category": "ui_or_text",
+          "callsite_offset": 21830010
+        }
+      ],
+      "candidate_opengl_operations": [
+        "glDrawElements",
+        "glDrawElementsBaseVertex"
+      ],
+      "resources_consumed_or_produced": "unknown from callsite alone",
+      "state_dependencies": "unknown without implementation/runtime state capture",
+      "compatibility_profile_assumptions": "unverified",
+      "metal_equivalent": "draw operations have direct Metal equivalents; resource translation is unverified"
+    },
+    {
+      "gfx_operation": "GfxDraw",
+      "callers": [
+        {
+          "symbol": "__ZN14CEU3BitmapFont10RenderFlagEP21GfxDeferredContextGFXPKciiRK14STextConstantsiPK10SGfxEffect",
+          "name": "CEU3BitmapFont::RenderFlag(GfxDeferredContextGFX*, char const*, int, int, STextConstants const&, int, SGfxEffect const*)",
+          "category": "ui_or_text",
+          "callsite_offset": 15507585
+        },
+        {
+          "symbol": "__ZN16CEU3GraphicalMap17RenderPostEffectsEb",
+          "name": "CEU3GraphicalMap::RenderPostEffects(bool)",
+          "category": "postprocess",
+          "callsite_offset": 15563684
+        },
+        {
+          "symbol": "__ZN16CEU3GraphicalMap17RenderPostEffectsEb",
+          "name": "CEU3GraphicalMap::RenderPostEffects(bool)",
+          "category": "postprocess",
+          "callsite_offset": 15563889
+        },
+        {
+          "symbol": "__ZN16CEU3GraphicalMap17RenderPostEffectsEb",
+          "name": "CEU3GraphicalMap::RenderPostEffects(bool)",
+          "category": "postprocess",
+          "callsite_offset": 15564232
+        },
+        {
+          "symbol": "__ZN12CEU3Graphics17ShowBasicLoadTextERK7CStringbb",
+          "name": "CEU3Graphics::ShowBasicLoadText(CString const&, bool, bool)",
+          "category": "unclassified",
+          "callsite_offset": 15596748
+        },
+        {
+          "symbol": "__ZN15CFlagTexturemap22CreateTexturesFromDiscERK7CStringP16CCountryDataBaseR12CEU3Graphicsb",
+          "name": "CFlagTexturemap::CreateTexturesFromDisc(CString const&, CCountryDataBase*, CEU3Graphics&, bool)",
+          "category": "texture_generation",
+          "callsite_offset": 15686053
+        },
+        {
+          "symbol": "__ZN17CMaskedSpriteType18RenderMaskedSpriteEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEP10TextureGFXRK8CVector4IfESD_i",
+          "name": "CMaskedSpriteType::RenderMaskedSprite(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, TextureGFX*, CVector4<float> const&, CVector4<float> const&, int)",
+          "category": "ui_or_text",
+          "callsite_offset": 17019843
+        },
+        {
+          "symbol": "__ZN17CMaskedSpriteType16RenderCustomFlagEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEP10TextureGFXRK8CVector4IfESD_i",
+          "name": "CMaskedSpriteType::RenderCustomFlag(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, TextureGFX*, CVector4<float> const&, CVector4<float> const&, int)",
+          "category": "ui_or_text",
+          "callsite_offset": 17020871
+        },
+        {
+          "symbol": "__ZN17CMaskedSpriteType11RenderFrameEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEi",
+          "name": "CMaskedSpriteType::RenderFrame(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, int)",
+          "category": "ui_or_text",
+          "callsite_offset": 17021584
+        },
+        {
+          "symbol": "__ZN17CMaskedSpriteType13RenderOverlayEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEii",
+          "name": "CMaskedSpriteType::RenderOverlay(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, int, int)",
+          "category": "ui_or_text",
+          "callsite_offset": 17022270
+        },
+        {
+          "symbol": "__ZN16CPdxMapLakeLayer9DrawLakesEPK7CCameraP21GfxDeferredContextGFXfP19CWrapWorldShadowMap",
+          "name": "CPdxMapLakeLayer::DrawLakes(CCamera const*, GfxDeferredContextGFX*, float, CWrapWorldShadowMap*)",
+          "category": "lakes_and_rivers",
+          "callsite_offset": 17619323
+        },
+        {
+          "symbol": "__ZN15CPdxMapSkyLayer7DrawSkyEP21GfxDeferredContextGFXPK10CEU3Camera",
+          "name": "CPdxMapSkyLayer::DrawSky(GfxDeferredContextGFX*, CEU3Camera const*)",
+          "category": "sky",
+          "callsite_offset": 17638846
+        },
+        {
+          "symbol": "__ZN19CPdxMapTerrainLayer9DrawWaterEP21GfxDeferredContextGFX10EWaterPassfP19CWrapWorldShadowMapi",
+          "name": "CPdxMapTerrainLayer::DrawWater(GfxDeferredContextGFX*, EWaterPass, float, CWrapWorldShadowMap*, int)",
+          "category": "terrain",
+          "callsite_offset": 17650423
+        },
+        {
+          "symbol": "__ZN11CBitmapFont15RenderToTextureEP21GfxDeferredContextGFXP10TextureGFXR8CVector2IiES6_RK7CStringS3_jjRKS4_IjE14FontFormattingbjbb",
+          "name": "CBitmapFont::RenderToTexture(GfxDeferredContextGFX*, TextureGFX*, CVector2<int>&, CVector2<int>&, CString const&, TextureGFX*, unsigned int, unsigned int, CVector2<unsigned int> const&, FontFormatting, bool, unsigned int, bool, bool)",
+          "category": "ui_or_text",
+          "callsite_offset": 21427868
+        },
+        {
+          "symbol": "__ZN11CBitmapFont15RenderToTextureEP21GfxDeferredContextGFXP10TextureGFXR8CVector2IiES6_RK7CStringS3_jjRKS4_IjE14FontFormattingbjbb",
+          "name": "CBitmapFont::RenderToTexture(GfxDeferredContextGFX*, TextureGFX*, CVector2<int>&, CVector2<int>&, CString const&, TextureGFX*, unsigned int, unsigned int, CVector2<unsigned int> const&, FontFormatting, bool, unsigned int, bool, bool)",
+          "category": "ui_or_text",
+          "callsite_offset": 21431412
+        },
+        {
+          "symbol": "__ZN11CBitmapFont14RenderToScreenERK7CString14FontFormatting22EFontVerticalAlignment15EGuiOrientationPK8CMatrix4IfE5CRectIiE8CVector2IiEPSD_ib",
+          "name": "CBitmapFont::RenderToScreen(CString const&, FontFormatting, EFontVerticalAlignment, EGuiOrientation, CMatrix4<float> const*, CRect<int>, CVector2<int>, CVector2<int>*, int, bool)",
+          "category": "ui_or_text",
+          "callsite_offset": 21434139
+        },
+        {
+          "symbol": "__ZN11CBitmapFont14RenderToScreenERK7CString14FontFormatting22EFontVerticalAlignment15EGuiOrientationPK8CMatrix4IfE5CRectIiE8CVector2IiEPSD_ib",
+          "name": "CBitmapFont::RenderToScreen(CString const&, FontFormatting, EFontVerticalAlignment, EGuiOrientation, CMatrix4<float> const*, CRect<int>, CVector2<int>, CVector2<int>*, int, bool)",
+          "category": "ui_or_text",
+          "callsite_offset": 21440127
+        },
+        {
+          "symbol": "__ZN11CBitmapFont14RenderToScreenERK7CString14FontFormatting22EFontVerticalAlignment15EGuiOrientationPK8CMatrix4IfE5CRectIiE8CVector2IiEPSD_ib",
+          "name": "CBitmapFont::RenderToScreen(CString const&, FontFormatting, EFontVerticalAlignment, EGuiOrientation, CMatrix4<float> const*, CRect<int>, CVector2<int>, CVector2<int>*, int, bool)",
+          "category": "ui_or_text",
+          "callsite_offset": 21441810
+        },
+        {
+          "symbol": "__ZN11CBitmapFont14RenderToScreenERK7CString14FontFormatting22EFontVerticalAlignment15EGuiOrientationPK8CMatrix4IfE5CRectIiE8CVector2IiEPSD_ib",
+          "name": "CBitmapFont::RenderToScreen(CString const&, FontFormatting, EFontVerticalAlignment, EGuiOrientation, CMatrix4<float> const*, CRect<int>, CVector2<int>, CVector2<int>*, int, bool)",
+          "category": "ui_or_text",
+          "callsite_offset": 21441962
+        },
+        {
+          "symbol": "__ZN11CBitmapFont8Render3dERK7CString14FontFormattingiRKN5Eigen6MatrixIfLi3ELi1ELi0ELi3ELi1EEES8_S8_ffPK7CCameraii",
+          "name": "CBitmapFont::Render3d(CString const&, FontFormatting, int, Eigen::Matrix<float, 3, 1, 0, 3, 1> const&, Eigen::Matrix<float, 3, 1, 0, 3, 1> const&, Eigen::Matrix<float, 3, 1, 0, 3, 1> const&, float, float, CCamera const*, int, int)",
+          "category": "ui_or_text",
+          "callsite_offset": 21448731
+        },
+        {
+          "symbol": "__ZN11CBitmapFont14RenderIconQuadEP21GfxDeferredContextGFXP10TextureGFXRK8CVector2IiES7_RKNS_7SUVInfoEPK10SGfxEffect",
+          "name": "CBitmapFont::RenderIconQuad(GfxDeferredContextGFX*, TextureGFX*, CVector2<int> const&, CVector2<int> const&, CBitmapFont::SUVInfo const&, SGfxEffect const*)",
+          "category": "ui_or_text",
+          "callsite_offset": 21460217
+        },
+        {
+          "symbol": "__ZN23CCorneredTileSpriteType6RenderEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEftP10TextureGFXRK6CColorP15VertexBufferGFX",
+          "name": "CCorneredTileSpriteType::Render(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, float, unsigned short, TextureGFX*, CColor const&, VertexBufferGFX*)",
+          "category": "ui_or_text",
+          "callsite_offset": 21523156
+        },
+        {
+          "symbol": "__ZNK16CDebugLineHelper16Draw3dDebugLinesEP19GfxMasterContextGFXP9CGraphicsRKN5Eigen6MatrixIfLi4ELi4ELi0ELi4ELi4EEEjPKfPKhi",
+          "name": "CDebugLineHelper::Draw3dDebugLines(GfxMasterContextGFX*, CGraphics*, Eigen::Matrix<float, 4, 4, 0, 4, 4> const&, unsigned int, float const*, unsigned char const*, int) const",
+          "category": "debug",
+          "callsite_offset": 21528663
+        },
+        {
+          "symbol": "__ZN22CProgressbarSpriteType6RenderEP9CGraphicsP21GfxDeferredContextGFXRK8CMatrix4IfEiRK6CColorSA_SA_",
+          "name": "CProgressbarSpriteType::Render(CGraphics*, GfxDeferredContextGFX*, CMatrix4<float> const&, int, CColor const&, CColor const&, CColor const&)",
+          "category": "ui_or_text",
+          "callsite_offset": 21838382
+        },
+        {
+          "symbol": "__ZN18CPdxParticleObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraP23ParticleContextPARTICLEi",
+          "name": "CPdxParticleObject::RenderBuckets(CGraphics*, GfxDeferredContextGFX*, CCamera const*, ParticleContextPARTICLE*, int)",
+          "category": "particles",
+          "callsite_offset": 21845466
+        },
+        {
+          "symbol": "__ZN11CSpriteType14RenderInternalEP9CGraphicsPK10SGfxEffectP21GfxDeferredContextGFXRK8CMatrix4IfEftP10TextureGFXi",
+          "name": "CSpriteType::RenderInternal(CGraphics*, SGfxEffect const*, GfxDeferredContextGFX*, CMatrix4<float> const&, float, unsigned short, TextureGFX*, int)",
+          "category": "ui_or_text",
+          "callsite_offset": 21982230
+        },
+        {
+          "symbol": "__ZN19CWrapWorldShadowMap19EndShadowScreenBlurER9CGraphicsb",
+          "name": "CWrapWorldShadowMap::EndShadowScreenBlur(CGraphics&, bool)",
+          "category": "postprocess",
+          "callsite_offset": 22075574
+        },
+        {
+          "symbol": "__ZN19CWrapWorldShadowMap19EndShadowScreenBlurER9CGraphicsb",
+          "name": "CWrapWorldShadowMap::EndShadowScreenBlur(CGraphics&, bool)",
+          "category": "postprocess",
+          "callsite_offset": 22075861
+        }
+      ],
+      "candidate_opengl_operations": [
+        "glDrawArrays",
+        "glDrawElements",
+        "glDrawElementsBaseVertex"
+      ],
+      "resources_consumed_or_produced": "unknown from callsite alone",
+      "state_dependencies": "unknown without implementation/runtime state capture",
+      "compatibility_profile_assumptions": "unverified",
+      "metal_equivalent": "draw operations have direct Metal equivalents; resource translation is unverified"
+    },
+    {
+      "gfx_operation": "GfxDrawIndexedInstanced",
+      "callers": [
+        {
+          "symbol": "__ZN16CPdxMapTreeLayer9DrawTreesEPK7CCameraP21GfxDeferredContextGFXf9ETreePassP19CWrapWorldShadowMapci",
+          "name": "CPdxMapTreeLayer::DrawTrees(CCamera const*, GfxDeferredContextGFX*, float, ETreePass, CWrapWorldShadowMap*, char, int)",
+          "category": "trees",
+          "callsite_offset": 17656064
+        },
+        {
+          "symbol": "__ZN16CPdxMapTreeLayer19DrawTreesShadowPassEP21GfxDeferredContextGFXc",
+          "name": "CPdxMapTreeLayer::DrawTreesShadowPass(GfxDeferredContextGFX*, char)",
+          "category": "trees",
+          "callsite_offset": 17657303
+        },
+        {
+          "symbol": "__ZN14CPdxMeshObject13RenderNormalsEP9CGraphicsP21GfxDeferredContextGFXPK7CCamerai",
+          "name": "CPdxMeshObject::RenderNormals(CGraphics*, GfxDeferredContextGFX*, CCamera const*, int)",
+          "category": "mesh_object",
+          "callsite_offset": 21794286
+        },
+        {
+          "symbol": "__ZN18CPdxParticleObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraP23ParticleContextPARTICLEi",
+          "name": "CPdxParticleObject::RenderBuckets(CGraphics*, GfxDeferredContextGFX*, CCamera const*, ParticleContextPARTICLE*, int)",
+          "category": "particles",
+          "callsite_offset": 21843730
+        }
+      ],
+      "candidate_opengl_operations": [],
+      "resources_consumed_or_produced": "unknown from callsite alone",
+      "state_dependencies": "unknown without implementation/runtime state capture",
+      "compatibility_profile_assumptions": "unverified",
+      "metal_equivalent": "draw operations have direct Metal equivalents; resource translation is unverified"
+    }
+  ],
+  "observed_runtime_gl_entrypoints": [
+    "draw",
+    "buffer",
+    "texture",
+    "uniform",
+    "program",
+    "state",
+    "present"
+  ],
+  "mapping_confidence": "candidate mapping only; Gfx implementation and resource/state semantics still need disassembly or runtime tracing",
+  "known_limits": [
+    "Direct call/jump inventory only; indirect calls and GL draws outside these helpers require dynamic attribution.",
+    "Static categories are broad; counts are established by the passive trace."
+  ]
+}

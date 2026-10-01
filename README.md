@@ -72,8 +72,10 @@ both idle and game measurements so its background activity is comparable.
 
 `powermetrics` requires administrator access. The `record` command asks `sudo`
 to authenticate **before** the timed scenario starts. Enter the password only
-in your own Terminal; it is never stored by this project. The script does not
-alter system power or display settings.
+in your own Terminal; it is never stored by this project. The standard
+`eu4_benchmark.py record` command does not alter system power or display
+settings. The separate paused-frame profiler temporarily switches to Low Power
+Mode for its final comparison and restores Normal mode in cleanup.
 
 Before the full matrix, verify the local `powermetrics` format with a short
 idle smoke test (**EU IV closed**). This command does not launch the game:
@@ -417,6 +419,62 @@ engage.
 Defer a full idle run until game-attributable incremental power is needed; the earlier five-second
 idle capture only validated the parser. Restore your preferred system settings
 after the experiment.
+
+## Paused-frame causal profiler
+
+`benchmark/eu4_frame_model.py` builds a version-pinned x86-64 profiler and
+static engine/backend inventories. It records independent update, render, and
+present IDs; thread CPU and wall time; major engine scopes; bucket append counts;
+selected GL draws, state calls and uploads; sampled draw/uniform/buffer changes;
+and asynchronous whole-render/map GPU timestamps when the active CGL context
+supports them. The generated [engine call inventory](analysis/frame-model-engine.json)
+and [Gfx-to-backend graph](analysis/frame-model-backend.json) are tied to the
+pinned GOG executable hash.
+
+The full live run requires the registered paused Venice scene, the verified
+120 Hz display, Normal power mode, AC power, and the existing narrow
+`powermetrics` privilege helper. Its run length now exceeds the old 420-sample
+helper limit. Refresh that installed helper once from an interactive Terminal:
+
+```sh
+sudo sh benchmark/install_powermetrics_helper.sh
+```
+
+Then run the offline instrumentation-overhead gate. It measures thread CPU and
+wall time over bare and wrapped synthetic GL workloads; both must stay within
+3%. The live calibration also compares process CPU and swap rate against two
+pass-through phases and rejects profiler CPU/swap perturbations above 3% or
+sampled trace perturbation above 5%.
+
+```sh
+python3 benchmark/eu4_frame_model.py preflight --require-power-helper
+```
+
+When the gate passes, start the unattended experiment:
+
+```sh
+python3 benchmark/eu4_frame_model.py run
+```
+
+It captures native controls around renderer-skip, draw-suppression,
+raster-work-suppression, 30 FPS, and 15 FPS phases. B/C/D retain the calibrated
+native attempted-update cadence; the 30/15 FPS phases use explicit 33/67 ms
+deadlines. A short Low Power comparison follows on AC: Normal, Low Power, then
+Normal, with a restoration path and a mode-change journal. The runner returns
+the machine to Normal mode after an interrupted Low Power phase when cleanup
+runs. The powermetrics helper collects up to 720 one-second samples.
+
+The result directory contains raw frame telemetry, sampled command details,
+events, power samples, a manifest, and a generated `report.md`/`report.json`.
+The report places GPU timings in a separate lane from CPU timings and compares
+each intervention with its neighboring A controls. It identifies draw
+topology stability and uniform/buffer payload changes by callsite and resource
+keys. Consecutive sampled `glUniform4fv` calls up to 256 bytes include exact
+changed 32-bit element values; larger uniforms and buffer contents use hashes.
+Complete scene culling/LOD accounting, allocations, all GL entry points, and
+full resource/state semantics for a Metal backend are not currently captured;
+those gaps are called out in the report. Missing GPU query support leaves GPU
+timing partial without invalidating the CPU report.
 
 Raw `powermetrics` plists, stderr, metadata, parsed samples, and EU IV process
 CPU samples are retained in a timestamped directory under `results/`.

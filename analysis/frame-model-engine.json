@@ -1,0 +1,768 @@
+{
+  "schema": 1,
+  "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "image_base": 4294967296,
+  "hooks": [
+    {
+      "name": "update_one_frame",
+      "symbol": "__ZN12CApplication14UpdateOneFrameEb",
+      "offset": 20754304,
+      "abi": "void(this,bool)",
+      "scope": "loop",
+      "patch_bytes": 13,
+      "expected_prefix": "554889e54157415653504189f6",
+      "instructions": [
+        {
+          "address": 4315721600,
+          "bytes": "55",
+          "mnemonic": "pushq",
+          "operands": "%rbp"
+        },
+        {
+          "address": 4315721601,
+          "bytes": "4889e5",
+          "mnemonic": "movq",
+          "operands": "%rsp, %rbp"
+        },
+        {
+          "address": 4315721604,
+          "bytes": "4157",
+          "mnemonic": "pushq",
+          "operands": "%r15"
+        },
+        {
+          "address": 4315721606,
+          "bytes": "4156",
+          "mnemonic": "pushq",
+          "operands": "%r14"
+        },
+        {
+          "address": 4315721608,
+          "bytes": "53",
+          "mnemonic": "pushq",
+          "operands": "%rbx"
+        },
+        {
+          "address": 4315721609,
+          "bytes": "50",
+          "mnemonic": "pushq",
+          "operands": "%rax"
+        },
+        {
+          "address": 4315721610,
+          "bytes": "4189f6",
+          "mnemonic": "movl",
+          "operands": "%esi, %r14d"
+        },
+        {
+          "address": 4315721613,
+          "bytes": "4889fb",
+          "mnemonic": "movq",
+          "operands": "%rdi, %rbx"
+        }
+      ]
+    },
+    {
+      "name": "idler_idle",
+      "symbol": "__ZN12CInGameIdler4IdleEb",
+      "offset": 7380244,
+      "abi": "void(this,bool)",
+      "scope": "idle",
+      "patch_bytes": 13,
+      "expected_prefix": "554889e5415741564155415453",
+      "instructions": [
+        {
+          "address": 4302347540,
+          "bytes": "55",
+          "mnemonic": "pushq",
+          "operands": "%rbp"
+        },
+        {
+          "address": 4302347541,
+          "bytes": "4889e5",
+          "mnemonic": "movq",
+          "operands": "%rsp, %rbp"
+        },
+        {
+          "address": 4302347544,
+          "bytes": "4157",
+          "mnemonic": "pushq",
+          "operands": "%r15"
+        },
+        {
+          "address": 4302347546,
+          "bytes": "4156",
+          "mnemonic": "pushq",
+          "operands": "%r14"
+        },
+        {
+          "address": 4302347548,
+          "bytes": "4155",
+          "mnemonic": "pushq",
+          "operands": "%r13"
+        },
+        {
+          "address": 4302347550,
+          "bytes": "4154",
+          "mnemonic": "pushq",
+          "operands": "%r12"
+        },
+        {
+          "address": 4302347552,
+          "bytes": "53",
+          "mnemonic": "pushq",
+          "operands": "%rbx"
+        },
+        {
+          "address": 4302347553,
+          "bytes": "4881ec48030000",
+          "mnemonic": "subq",
+          "operands": "$0x348, %rsp            ## imm = 0x348"
+        }
+      ]
+    },
+    {
+      "name": "idler_render",
+      "symbol": "__ZN12CInGameIdler6RenderEv",
+      "offset": 7351614,
+      "abi": "void(this)",
+      "scope": "render",
+      "patch_bytes": 13,
+      "expected_prefix": "554889e5415741564155415453",
+      "instructions": [
+        {
+          "address": 4302318910,
+          "bytes": "55",
+          "mnemonic": "pushq",
+          "operands": "%rbp"
+        },
+        {
+          "address": 4302318911,
+          "bytes": "4889e5",
+          "mnemonic": "movq",
+          "operands": "%rsp, %rbp"
+        },
+        {
+          "address": 4302318914,
+          "bytes": "4157",
+          "mnemonic": "pushq",
+          "operands": "%r15"
+        },
+        {
+          "address": 4302318916,
+          "bytes": "4156",
+          "mnemonic": "pushq",
+          "operands": "%r14"
+        },
+        {
+          "address": 4302318918,
+          "bytes": "4155",
+          "mnemonic": "pushq",
+          "operands": "%r13"
+        },
+        {
+          "address": 4302318920,
+          "bytes": "4154",
+          "mnemonic": "pushq",
+          "operands": "%r12"
+        },
+        {
+          "address": 4302318922,
+          "bytes": "53",
+          "mnemonic": "pushq",
+          "operands": "%rbx"
+        },
+        {
+          "address": 4302318923,
+          "bytes": "4881ecd8020000",
+          "mnemonic": "subq",
+          "operands": "$0x2d8, %rsp            ## imm = 0x2D8"
+        }
+      ]
+    },
+    {
+      "name": "graphical_map_render",
+      "symbol": "__ZN16CEU3GraphicalMap6RenderEP21GfxDeferredContextGFXRK10CEU3Camerafb",
+      "offset": 15551176,
+      "abi": "void(this,context,camera,float,bool)",
+      "scope": "map",
+      "patch_bytes": 13,
+      "expected_prefix": "554889e5415741564155415453",
+      "instructions": [
+        {
+          "address": 4310518472,
+          "bytes": "55",
+          "mnemonic": "pushq",
+          "operands": "%rbp"
+        },
+        {
+          "address": 4310518473,
+          "bytes": "4889e5",
+          "mnemonic": "movq",
+          "operands": "%rsp, %rbp"
+        },
+        {
+          "address": 4310518476,
+          "bytes": "4157",
+          "mnemonic": "pushq",
+          "operands": "%r15"
+        },
+        {
+          "address": 4310518478,
+          "bytes": "4156",
+          "mnemonic": "pushq",
+          "operands": "%r14"
+        },
+        {
+          "address": 4310518480,
+          "bytes": "4155",
+          "mnemonic": "pushq",
+          "operands": "%r13"
+        },
+        {
+          "address": 4310518482,
+          "bytes": "4154",
+          "mnemonic": "pushq",
+          "operands": "%r12"
+        },
+        {
+          "address": 4310518484,
+          "bytes": "53",
+          "mnemonic": "pushq",
+          "operands": "%rbx"
+        },
+        {
+          "address": 4310518485,
+          "bytes": "4883ec58",
+          "mnemonic": "subq",
+          "operands": "$0x58, %rsp"
+        }
+      ]
+    },
+    {
+      "name": "present_scene",
+      "symbol": "__ZN9CGraphics12PresentSceneEv",
+      "offset": 21617392,
+      "abi": "void(this)",
+      "scope": "present_scene",
+      "patch_bytes": 13,
+      "expected_prefix": "554889e5535080bfe804000000",
+      "instructions": [
+        {
+          "address": 4316584688,
+          "bytes": "55",
+          "mnemonic": "pushq",
+          "operands": "%rbp"
+        },
+        {
+          "address": 4316584689,
+          "bytes": "4889e5",
+          "mnemonic": "movq",
+          "operands": "%rsp, %rbp"
+        },
+        {
+          "address": 4316584692,
+          "bytes": "53",
+          "mnemonic": "pushq",
+          "operands": "%rbx"
+        },
+        {
+          "address": 4316584693,
+          "bytes": "50",
+          "mnemonic": "pushq",
+          "operands": "%rax"
+        },
+        {
+          "address": 4316584694,
+          "bytes": "80bfe804000000",
+          "mnemonic": "cmpb",
+          "operands": "$0x0, 0x4e8(%rdi)"
+        },
+        {
+          "address": 4316584701,
+          "bytes": "7415",
+          "mnemonic": "je",
+          "operands": "0x10149db14 <__ZN9CGraphics12PresentSceneEv+0x24>"
+        },
+        {
+          "address": 4316584703,
+          "bytes": "4889fb",
+          "mnemonic": "movq",
+          "operands": "%rdi, %rbx"
+        },
+        {
+          "address": 4316584706,
+          "bytes": "488bbf80000000",
+          "mnemonic": "movq",
+          "operands": "0x80(%rdi), %rdi"
+        }
+      ]
+    },
+    {
+      "name": "mesh_add_to_bucket",
+      "symbol": "__ZNK14CPdxMeshObject11AddToBucketEiPK7CCamera",
+      "offset": 21786984,
+      "abi": "void(this,int,camera)",
+      "scope": "bucket",
+      "patch_bytes": 13,
+      "expected_prefix": "554889e541574156534883ec58",
+      "instructions": [
+        {
+          "address": 4316754280,
+          "bytes": "55",
+          "mnemonic": "pushq",
+          "operands": "%rbp"
+        },
+        {
+          "address": 4316754281,
+          "bytes": "4889e5",
+          "mnemonic": "movq",
+          "operands": "%rsp, %rbp"
+        },
+        {
+          "address": 4316754284,
+          "bytes": "4157",
+          "mnemonic": "pushq",
+          "operands": "%r15"
+        },
+        {
+          "address": 4316754286,
+          "bytes": "4156",
+          "mnemonic": "pushq",
+          "operands": "%r14"
+        },
+        {
+          "address": 4316754288,
+          "bytes": "53",
+          "mnemonic": "pushq",
+          "operands": "%rbx"
+        },
+        {
+          "address": 4316754289,
+          "bytes": "4883ec58",
+          "mnemonic": "subq",
+          "operands": "$0x58, %rsp"
+        },
+        {
+          "address": 4316754293,
+          "bytes": "f6475001",
+          "mnemonic": "testb",
+          "operands": "$0x1, 0x50(%rdi)"
+        },
+        {
+          "address": 4316754297,
+          "bytes": "0f8426010000",
+          "mnemonic": "je",
+          "operands": "0x1014c72a5 <__ZNK14CPdxMeshObject11AddToBucketEiPK7CCamera+0x13d>"
+        }
+      ]
+    },
+    {
+      "name": "append_flush_data",
+      "symbol": "__ZN6CArrayI10SFlushDataE6AppendERKS0_",
+      "offset": 21787312,
+      "abi": "void(this,SFlushData*)",
+      "scope": "bucket_append",
+      "patch_bytes": 15,
+      "expected_prefix": "554889e5415741564154534883ec30",
+      "instructions": [
+        {
+          "address": 4316754608,
+          "bytes": "55",
+          "mnemonic": "pushq",
+          "operands": "%rbp"
+        },
+        {
+          "address": 4316754609,
+          "bytes": "4889e5",
+          "mnemonic": "movq",
+          "operands": "%rsp, %rbp"
+        },
+        {
+          "address": 4316754612,
+          "bytes": "4157",
+          "mnemonic": "pushq",
+          "operands": "%r15"
+        },
+        {
+          "address": 4316754614,
+          "bytes": "4156",
+          "mnemonic": "pushq",
+          "operands": "%r14"
+        },
+        {
+          "address": 4316754616,
+          "bytes": "4154",
+          "mnemonic": "pushq",
+          "operands": "%r12"
+        },
+        {
+          "address": 4316754618,
+          "bytes": "53",
+          "mnemonic": "pushq",
+          "operands": "%rbx"
+        },
+        {
+          "address": 4316754619,
+          "bytes": "4883ec30",
+          "mnemonic": "subq",
+          "operands": "$0x30, %rsp"
+        },
+        {
+          "address": 4316754623,
+          "bytes": "4889f3",
+          "mnemonic": "movq",
+          "operands": "%rsi, %rbx"
+        }
+      ]
+    }
+  ],
+  "call_graph": {
+    "__ZN12CInGameIdler6RenderEv": [
+      "__ZN7CLogger14AccessInstanceEv",
+      "__ZN7CLogger3LogEPKcji",
+      "__ZN10CLogStreamlsEPKc",
+      "__ZN10CLogStreamD1Ev",
+      "__ZN9CSettings14AccessInstanceEv",
+      "__ZN16CBackgroundSound6UpdateER12CEU3GraphicsRK10CEU3Camera",
+      "__ZN9CEU3Idler18AccessGraphicalMapEv",
+      "__ZN16CEU3GraphicalMap18UpdateColorTextureE22EPdxMapColorUpdateMode31EPdxMapSecondaryColorUpdateMode",
+      "__ZN7CSystem14AccessInstanceEv",
+      "__ZNK9CGraphics10IsDeviceOKEv",
+      "__Z19EU4ChangeAudioStatebbbb",
+      "__ZN9CGraphics11CheckDeviceEv",
+      "__ZN16CEU3GraphicalMap9PreRenderERK10CEU3CameraRbS3_S3_S3_S3_",
+      "__ZN9CGraphics10BeginSceneEb",
+      "__ZN9CGraphics10ClearSceneEPKf",
+      "__ZN16CEU3GraphicalMap6RenderEP21GfxDeferredContextGFXRK10CEU3Camerafb",
+      "__ZN15CInGameMapInput11DrawDragBoxEv",
+      "__ZNK10CEU3Dialog7IsShownEv",
+      "__ZN16CEU3GraphicalMap10PostRenderERK10CEU3Camerab",
+      "__ZN15C3DCombatResult6RenderER7CCamera",
+      "__ZN9CGraphics23Render2dObjectsToScreenEb",
+      "__ZN9CGraphics34RenderAlwaysInFrontObjectsToScreenEb",
+      "__ZN9CEU3Idler20RenderGuiBoundsDebugEv",
+      "__ZNK8CAdvisor14GetMonthlyCostE11CCountryTagP7CString",
+      "__ZNK11CAIStrategy16GetLongtermMoneyEv",
+      "__ZNK8CCountry25GetEstimatedMonthlyIncomeEP7CStringbb",
+      "__ZN7CStringC1Ev",
+      "__ZNK11CCountryTag7GetNameEbbb",
+      "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC1IDnEEPKc",
+      "__ZN7CStringpLEPKc",
+      "__ZN7CStringpLEOS_",
+      "__ZN7CStringC1Efi",
+      "__ZN7CStringC1E11CFixedPointib",
+      "__ZN7CStringC1EPKc",
+      "__ZN9CGraphics7GetFontERK7CString",
+      "__ZN9CSettings11GetInstanceEv",
+      "__ZNK9CSettings19GetMapRenderOptionsEv",
+      "__ZN7CStringC1Ei",
+      "__ZNK16CEU3GraphicalMap21GetHeightIntersectionERK8CVector2IfEb",
+      "__ZNK9CGraphics13GetResolutionEv",
+      "__ZN7CStringpLERKS_",
+      "__ZNK10CGuiObject8GetScopeEv",
+      "__ZN7CStringC1Ef",
+      "__Z21PdxLocalizeAndReplacePKcPK24CPdxLocalizeKeyValuePairi",
+      "__ZN12CEU3Graphics17ShowBasicLoadTextERK7CStringbb",
+      "__ZN9CGraphics8EndSceneEv",
+      "__ZN7CTiming11GetInstanceEv",
+      "__Z17RenderTimingStatsP9CGraphics",
+      "__ZN9CGraphics12PresentSceneEv"
+    ],
+    "__ZN12CInGameIdler4IdleEb": [
+      "__ZN7CRandom11IsForbiddenEv",
+      "__ZN7CRandom12SetForBiddenEb",
+      "__ZN9CSettings11GetInstanceEv",
+      "__ZN7CStringC1EPKc",
+      "__ZN12CApplication14AccessInstanceEv",
+      "__ZNK11SNetAddress7IsValidEv",
+      "__ZN11SNetAddressC1Ev",
+      "__ZN15CEU4Application21SetMatchmakingConnectERK11SNetAddressbRK7CString",
+      "__ZN10CEU3DialogC1EP9CEU3IdlerRK7CStringRKNSt3__18functionIFvvEEESA_",
+      "__Z21PdxLocalizeAndReplacePKcPK24CPdxLocalizeKeyValuePairi",
+      "__ZN10CEU3Dialog8SetTitleERK7CString",
+      "__ZN10CEU3Dialog14SetDescriptionERK7CString",
+      "__ZN9CEU3Idler13AddUpdateableEP11CUpdateable",
+      "__ZNK10CGameSpeed16IsActuallyPausedEv",
+      "__ZN7CLogger14AccessInstanceEv",
+      "__ZN7CLogger3LogEPKcji",
+      "__ZN10CLogStreamlsEPKc",
+      "__ZNK8CEU3Date12GetEu3StringEv",
+      "__ZlsRNSt3__113basic_ostreamIcNS_11char_traitsIcEEEERK7CString",
+      "__ZNSt3__124__put_character_sequenceIcNS_11char_traitsIcEEEERNS_13basic_ostreamIT_T0_EES7_PKS4_m",
+      "__ZNSt3__113basic_ostreamIcNS_11char_traitsIcEEE5flushEv",
+      "__ZN10CLogStreamD1Ev",
+      "__ZN11COOSHandler6UpdateEv",
+      "__ZNK17CCurrentGameState18GetTutorialChapterEv",
+      "__ZN12CInGameIdler11SetTutorialEbi",
+      "__ZN20CForbidRandomInScopeD2Ev",
+      "__ZN12CInGameIdler13HandleNewChatEv",
+      "__ZN15CEU4Application6UpdateEv",
+      "__ZN15CInGameMapInput17ValidateSelectionEv",
+      "__ZNSt3__16vectorI14CBasicChecksumNS_9allocatorIS1_EEEC2Em",
+      "__Z13CalcChecksumsI14CBasicChecksumEvPK10CGameStateR6CArrayIT_E",
+      "__ZNK10CGameState9GetPlayerEv",
+      "__ZN7CLedger10SetCountryE11CCountryTag",
+      "__ZN9CEU3Idler18AccessGraphicalMapEv",
+      "__ZN16CEU3GraphicalMap17ClearVisibleListsEv",
+      "__ZN9CEU3Idler4IdleEb",
+      "__ZN8CSession4PostENSt3__110unique_ptrI8CCommandNS0_14default_deleteIS2_EEEE",
+      "__ZN12CIngameLobby7IsShownEv",
+      "__ZN12CIngameLobby4ShowEv",
+      "__ZN6CArrayIPK17CDiplomaticActionE6AppendERKS2_",
+      "__ZN12CIngameLobby6UpdateEv",
+      "__ZN19CMultiplayerHandler6UpdateEv",
+      "__ZN13CMinimapPanel6UpdateEv",
+      "__ZN13CMinimapPanel20UpdateMinimapTextureEb",
+      "__ZN23CPlayerAiPrefsInterface8PopShownEv",
+      "__ZN12CInGameIdler15CloseIngameMenuEv",
+      "__ZN12CInGameIdler14OpenIngameMenuEv",
+      "__ZNK23CPlayerAiPrefsInterface7IsShownEv",
+      "__ZN23CPlayerAiPrefsInterface6UpdateEv",
+      "__ZN25CMessageInterfaceListItem17UpdateReturnAliveEv",
+      "__ZN5CListIjE6RemoveENS0_8IteratorE",
+      "__ZN12CInGameIdler22IsIconAllowedByFiltersEP25CMessageInterfaceListItem",
+      "__ZNK11CWindowType11GetPositionEv",
+      "__ZN9CSettings14AccessInstanceEv",
+      "__ZN12CInGameIdler21UpdateOutlinerMaxSizeEv",
+      "__ZNK9COutLiner7IsShownEv",
+      "__ZN9COutLiner6UpdateEv",
+      "__ZN15CTabletOutliner6UpdateEv",
+      "__ZN15CMessageLogView19MaintainMessageListEv",
+      "__ZN12CInGameIdler12MaintainChatEv",
+      "__ZN23CTriggeredModifiersView7IsShownEv",
+      "__ZN23CTriggeredModifiersView6UpdateEv",
+      "__ZN12CHintManager14AccessInstanceEv",
+      "__ZN12CHintManager11UpdateHintsEv",
+      "__ZNK10CEU3Dialog7IsShownEv",
+      "__ZN20CEndGameConfirmation10ShowWindowE12EEndGameMode",
+      "__ZN12CInGameIdler29SendSessionOverTelemetryEventEbb",
+      "__ZN12CInGameIdler19PerformAutotestTaskEb",
+      "__ZN10CGameSpeed10PauseLocalEv",
+      "__ZNK11CEmpireBase23GetNextAvailableReformsEb",
+      "__ZN15CPdxHybridArrayIPK15CImperialReformLj16EiEC2ILj16EEEOS_IS2_XT_EiE",
+      "__ZNK7CEmpire17CanEnactNewReformE11CCountryTagPK15CImperialReformP7CString",
+      "__ZNK8CHREView7IsShownEv",
+      "__ZN8CHREView6UpdateEv",
+      "__ZNK14CBlessingsView7IsShownEv",
+      "__ZN14CBlessingsView6UpdateEv",
+      "__ZNK21CEstatePrivilegesView7IsShownEv",
+      "__ZN21CEstatePrivilegesView6UpdateEv",
+      "__ZNK12CNativesView7IsShownEv",
+      "__ZNK12CReformsView7IsShownEv",
+      "__ZNK12CFactionView7IsShownEv",
+      "__ZN12CFactionView6UpdateEv",
+      "__ZN20CCelestialEmpireView6UpdateEv",
+      "__ZN12CInGameIdler16HandleScreenshotEv",
+      "__ZNK10CPeaceView7IsShownEv",
+      "__ZN10CPeaceView6UpdateEv",
+      "__ZNK11CPapacyView7IsShownEv",
+      "__ZN11CPapacyView6UpdateEv",
+      "__ZN16CGreatPowersView6UpdateEv",
+      "__ZNK15CParliamentView7IsShownEv",
+      "__ZN15CParliamentView6UpdateEv",
+      "__ZNK19CCountryHistoryView7IsShownEv",
+      "__ZN19CCountryHistoryView6UpdateEv",
+      "__ZN19CUnitViewController6OnIdleEv",
+      "__ZNK19CUnitViewController12AnyUnitViewsEv",
+      "__ZN12CInGameIdler16UpdateCombatViewEv",
+      "__ZN11CCombatView12ShouldDeleteEv",
+      "__ZN12CInGameIdler11DeselectAllEv",
+      "__ZN11CCombatView6UpdateEv",
+      "__ZN10CSiegeView6UpdateEv",
+      "__ZNK10CSiegeView7IsShownEv",
+      "__ZN10CSiegeView4HideEb",
+      "__ZNK9CGraphics15HasResetOccuredEv",
+      "__ZN9CGraphics15SetResetOccuredEb",
+      "__ZNK9CEU3Idler14GetNeedsUpdateEv",
+      "__ZN9CEU3Idler15SetMapModeDirtyE22EPdxMapColorUpdateMode",
+      "__ZN9CEU3Idler24SetSecondaryMapModeDirtyE31EPdxMapSecondaryColorUpdateMode",
+      "__ZN9CEU3Idler16ResetNeedsUpdateEv",
+      "__ZN23CProvinceViewController6OnIdleEv",
+      "__ZNK14CTradeNodeView7IsShownEv",
+      "__ZN14CTradeNodeView6UpdateEv",
+      "__ZN17CPowerActionsView6UpdateEv",
+      "__ZNK20CMacroBuildInterface7IsShownEv",
+      "__ZN20CMacroBuildInterface6UpdateEv",
+      "__ZN14CMessageWindow6UpdateEv",
+      "__ZN12CInGameIdler17ProcessInputQueueEv",
+      "__ZN7CStringC1Ev",
+      "__ZN8CCountry15GetProvinceListERK5CListIPK9CProvinceE",
+      "__ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEC1IDnEEPKc",
+      "__ZN5CListI13CMessageValueE6AppendEOS0_",
+      "__ZNK11CCountryTag7GetNameEbbb",
+      "__ZN15CMessageHandler14AccessInstanceEv",
+      "__ZNK15CMessageHandler14GetMessageTypeERK7CString",
+      "__ZN8CMessageC1EPK12CMessageTypeO5CListI13CMessageValueE11CCountryTagPK10CRebelTypePK9CProvinceS7_SA_7CString3CID",
+      "__ZN15CMessageHandler9DoMessageE8CMessage",
+      "__ZN8CMessageD2Ev",
+      "__ZN12CInGameIdler17DetermineFogOfWarEv",
+      "__ZN16CEU3GraphicalMap21GenerateProvinceNamesEv",
+      "__ZN5CListI13CMessageValueE9RemoveAllEv",
+      "__ZN12CInGameIdler14HandleWriteMapEv",
+      "__ZN12CInGameIdler14HandleAutosaveEv",
+      "__ZN10CGameState4TickEf",
+      "__ZN12CInGameIdler8DeselectEP11CSelectable",
+      "__ZN15CInGameMapInput6SelectER11CSelectable",
+      "__ZN13CAlertManager6UpdateEv",
+      "__ZN19CTimelineController14AccessInstanceEv",
+      "__ZN19CTimelineController6UpdateEf",
+      "__ZN16CEU3GraphicalMap18UpdateBorderColorsEv",
+      "__ZN19CTimelineController11GetInstanceEv",
+      "__ZNK19CTimelineController17GetCurrentInstantEv",
+      "__ZN12CWarOverview7IsShownEv",
+      "__ZN12CWarOverview6UpdateEv",
+      "__ZNK12CInGameIdler19IsCountryPanelShownEv",
+      "__ZN19CUnitViewController15UpdateUnitViewsEv",
+      "__ZNK12CIngameLobby11GameStartedEv",
+      "__ZN12CIngameLobby4HideEv",
+      "__ZN5CListIPN8CTernaryIi13STernaryTraitIiEE8LockDataEE6AppendIS5_EENSt3__19enable_ifIXeqsr3std21is_copy_constructibleIT_EE5valueLb1EEvE4typeERKS5_",
+      "__ZN12CInGameIdler17UpdatePausedStateEv",
+      "__ZN9CTutorial6UpdateEv",
+      "__ZN15CInGameMapInput12UpdateCursorEPK6CMouse",
+      "__ZNK23CPdxGameControllerGroup17GetMainControllerEv",
+      "__ZNK18CPdxGameController11IsConnectedEv",
+      "__ZN10CEU3Camera16UpdateControllerEPK18CPdxGameControllerf",
+      "__ZN11COOSHandler13MakeSyncCheckERK6CArrayI14CBasicChecksumE",
+      "__ZN10CTopbarGui7RefreshEv",
+      "__ZN14CTopRightPanel6UpdateEv",
+      "__ZNK9CGraphics10IsDeviceOKEv",
+      "__ZN16CEU3GraphicalMap6UpdateERK10CEU3CamerafR9CEU3Idler",
+      "__ZNK17CDirectionPointer9IsEnabledEv",
+      "__ZN17CDirectionPointer6UpdateEPK10CEU3Camera",
+      "__ZN12CApplication15SubsystemUpdateEddPPK7CCameraii",
+      "__ZN12CInGameIdler6RenderEv",
+      "__ZN17CBorderHighlights23ClearAllHoverHighlightsEv",
+      "__ZN9CEU3Idler13UpdateTooltipEf",
+      "__ZN12CMusicPlayer6UpdateEv",
+      "__ZN12CInGameIdler25SetGuiBlockedForSpectatorEb",
+      "__ZN17CScopedBusyCursorC1Ev",
+      "__ZN12CInGameIdler19NiceMultiplayerExitEv",
+      "__ZN17EU4SaveGameHelper17HandleIronmanSaveEv",
+      "__ZN12CApplication11GetInstanceEv",
+      "__ZNK12CApplication10CanRestartEv",
+      "__ZNSt3__16vectorI7CStringNS_9allocatorIS1_EEEC2EmRKS1_",
+      "__ZN12CApplication7RestartERK6CArrayI7CStringE",
+      "__ZNSt3__113__vector_baseINS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEENS4_IS6_EEED2Ev",
+      "__ZN12CInGameIdler9HideViewsEv",
+      "__ZN13CAlertManagerD1Ev",
+      "__Z12EU4MusicStopv",
+      "__ZN4CGui7KillAllEv",
+      "__ZN11CButtonMenu5ResetEv",
+      "__ZN13CMinimapPanel6OnQuitEv",
+      "__ZN16CEU3GraphicalMap19PurgeMapIconWindowsEv",
+      "__ZN11NBusyCursor7SetBusyEb",
+      "__ZN15CEU4Application25CreateLoadScreenIfAllowedEb",
+      "__ZN15CEU4Application29ShowLoadscreenWindowIfAllowedEv",
+      "__ZN15CEU4Application25RenderLoadScreenIfAllowedERK7CStringbb",
+      "__ZN17CCurrentGameState14SetGameStartedEb",
+      "__ZNK10CGameState16IsRandomNewWorldEv",
+      "__ZNK10CGameState21GetRandomNewWorldSeedEv",
+      "__ZN10CGameState21SetRandomNewWorldSeedEi",
+      "__ZN10CGameState17SetRandomNewWorldEb",
+      "__ZN13CMapRandomize7RestoreEb",
+      "__ZN10CGameState19UpdateUsedProvincesEv",
+      "__ZN12CInGameIdler14ResetGamestateEb",
+      "__ZN9CFrontEndC1EP12CEU3GraphicsP7CEU3GuiR15CEU4Application",
+      "__ZN9CFrontEnd8SetStateEN13CFrontEndView10EViewStateE",
+      "__ZN12CApplication8SetIdlerENSt3__110unique_ptrI6CIdlerNS0_14default_deleteIS2_EEEEb",
+      "__ZN9CEU3Idler8UpdateTIEv",
+      "__ZN17CScopedBusyCursorD1Ev",
+      "__ZN10CPdxEvents14AccessInstanceEv",
+      "__ZN12CInGameIdler23UpdateMembershipButtonsEv",
+      "__ZNK7CLedger7IsShownEv",
+      "__ZN12CInGameIdler22UpdateStatisticsLedgerEv",
+      "__ZN16CDiplomacyStatus6GetWarEv",
+      "__ZNK4CWar12GetAttackersEv",
+      "__ZNK4CWar12GetDefendersEv",
+      "__ZN20CStandardlistboxItemC1ER4CGuiRK7CString",
+      "__ZN7CEU3Gui26ApplyCountryShieldToButtonEP7TButton11CCountryTagbbbbb",
+      "__ZN7CStringpLEPKc",
+      "__ZN5CListIPK9CProvinceEaSERKS3_",
+      "__ZNK7CString7GetSizeEv",
+      "__ZNK10CGuiObject8GetScopeEv",
+      "__ZNK7CString12GetSubstringEii",
+      "__ZN16CCountryDataBaseC1Ev",
+      "__ZNK16CCountryDataBase6GetTagEPKcb",
+      "__ZNK4CWar11GetWarScoreE11CCountryTagS0_P7CStringb",
+      "__Z21CreateGreenRedPercentib",
+      "__ZNK15CInstantTextBox9GetStringEv",
+      "__ZNK7CStringeqERKS_",
+      "__ZN15CInstantTextBox12ChangeStringERK7CStringb",
+      "__ZNK4CWar17GetEnemyWarLeaderE11CCountryTag",
+      "__ZNK4CWar22GetWarEnthusiasmLeaderE11CCountryTagP7CString",
+      "__ZN15CMessageLogView6UpdateEv",
+      "__ZN15CShortcutPicker6UpdateEv",
+      "__ZN17CFlagshipDesigner6UpdateEv",
+      "__ZNK15CMessageFilters7IsShownEv",
+      "__ZN15CMessageFilters4HideEv",
+      "__ZN15CMessageFilters6UpdateEv",
+      "__ZN15CInGameMapInput6OnIdleEv",
+      "__ZNK17CGamePlaySettings8GetValueE8ESetting",
+      "__ZNSt3__113__vector_baseI19SBECelestialEmperorNS_9allocatorIS1_EEED2Ev",
+      "__ZN10CGameState26SetSelectedObserverCountryE11CCountryTag",
+      "__ZN12CInGameIdler17ChangeObserveModeE11CCountryTag12EObserveModeS0_",
+      "__ZNK8CSession20GetInternalSessionIDEv",
+      "__ZN28CSetCountryControllerCommandC1E11CCountryTagibbb",
+      "__ZN8CSession4PostEP8CCommand",
+      "__ZN19CUnitViewController14RemoveAllUnitsEv",
+      "__ZN12CInGameIdler16HideCountryPanelEb",
+      "__ZN12CInGameIdler19HideFullScreenViewsEv",
+      "__ZN12CInGameIdler9HidePeaceEv",
+      "__ZN9COutLiner4HideEv",
+      "__ZN12CInGameIdler17ShowEndGameDialogE12EEndGameMode",
+      "__ZN12CInGameIdler4IdleEb.cold.1"
+    ],
+    "__ZN16CEU3GraphicalMap6RenderEP21GfxDeferredContextGFXRK10CEU3Camerafb": [
+      "__ZN7CSystem14AccessInstanceEv",
+      "__ZNK7CSystem7GetTimeEv",
+      "__ZN16CEU3GraphicalMap14SetMapNameModeE12EMapNameModeb",
+      "__ZN9CSettings11GetInstanceEv",
+      "__ZNK9CSettings19GetMapRenderOptionsEv",
+      "__ZN16CEU3GraphicalMap13RenderShadowsEP21GfxDeferredContextGFXRK10CEU3CameraP19CWrapWorldShadowMap",
+      "__ZN7CPdxMap6RenderEP21GfxDeferredContextGFXPK10CEU3CamerafffP19CWrapWorldShadowMapb",
+      "__ZNK14CEffectHandler12GetGfxEffectEi",
+      "__ZN22CCountryNameCollection11RenderNamesEP21GfxDeferredContextGFXP17ConstantBufferGFXS3_PK10SGfxEffectRK10CEU3CameraffffP10TextureGFXSB_",
+      "__ZN9CGraphics13RenderBucketsEPK7CCamerai",
+      "__ZN17CTradeRouteObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCamerai",
+      "__ZN9CGraphics24RenderTransparentBucketsEPK7CCamerai"
+    ],
+    "__ZN12CApplication14UpdateOneFrameEb": [
+      "__Z12PdxGOGUpdateb",
+      "__ZN12CPopsWrapper14AccessInstanceEv",
+      "__ZN12CPopsWrapper6UpdateEv",
+      "__ZN17CPdxNakamaWrapper14AccessInstanceEv",
+      "__ZN17CPdxNakamaWrapper6UpdateEv",
+      "__ZN11CPdxProgram14AccessInstanceEv",
+      "__ZN11CPdxProgram11UpdateInputEP16CPdxEventHandler",
+      "__ZNK9CGraphics10IsDeviceOKEv",
+      "__ZN7CSystem14AccessInstanceEv",
+      "__ZNK7CSystem7GetTimeEv",
+      "__ZN12CApplication17UpdateAudioVolumeEv",
+      "__ZN11CPdxProgram11AccessMouseEv",
+      "__ZNK11CPdxProgram11GetKeyBoardEv",
+      "__ZN15CTextureHandler19PurgeUnusedTexturesEv",
+      "__ZN15PdxTextToSpeech14AccessInstanceEv",
+      "__ZN15PdxTextToSpeech6UpdateEv",
+      "__ZN13HotkeyManager14AccessInstanceEv",
+      "__ZN13HotkeyManager6UpdateEv"
+    ],
+    "__ZN9CGraphics12PresentSceneEv": [],
+    "__ZNK14CPdxMeshObject11AddToBucketEiPK7CCamera": [
+      "__ZN6CArrayI10SFlushDataE6AppendERKS0_"
+    ],
+    "__ZN6CArrayI10SFlushDataE6AppendERKS0_": [
+      "__ZNSt3__114__split_bufferI10SFlushDataRNS_9allocatorIS1_EEEC2EmmS4_",
+      "__ZNSt3__16vectorI10SFlushDataNS_9allocatorIS1_EEE26__swap_out_circular_bufferERNS_14__split_bufferIS1_RS3_EE"
+    ]
+  },
+  "backend_inventory": {
+    "status": "static Gfx callsites mapped to candidate GL operations; runtime resource/state mapping remains partial",
+    "known_gl_sites": "analysis/draw-callers.json",
+    "backend_graph": "analysis/frame-model-backend.json"
+  },
+  "limitations": [
+    "Indirect edges and runtime-loaded graphics calls require dynamic attribution.",
+    "SFlushData records expose established fields only; unknown fields remain opaque."
+  ]
+}

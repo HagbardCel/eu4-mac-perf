@@ -4,4 +4,4 @@ set -eu
 if [ "$#" -ne 0 ]; then
   exit 64
 fi
-exec /usr/bin/powermetrics -i 1000 -n 420 -s tasks,cpu_power,gpu_power,thermal -f plist --show-process-gpu
+exec /usr/bin/powermetrics -i 1000 -n 720 -s tasks,cpu_power,gpu_power,thermal -f plist --show-process-gpu
