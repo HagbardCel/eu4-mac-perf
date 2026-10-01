@@ -18,6 +18,11 @@ typedef struct {
     Eu4ScopeEntry stack[EU4_SCOPE_DEPTH];
     unsigned count,depth,flags;
 } Eu4ScopeTree;
+typedef struct { Eu4ScopeNode nodes[EU4_SCOPE_NODES]; unsigned count,flags; } Eu4ScopeSnapshot;
+static inline void eu4_scope_snapshot(Eu4ScopeSnapshot *out,const Eu4ScopeTree *tree) {
+    out->count=tree->count; out->flags=tree->flags|(tree->depth?EU4_SCOPE_INVALID:0);
+    memcpy(out->nodes,tree->nodes,tree->count*sizeof(tree->nodes[0]));
+}
 static inline int eu4_scope_begin(Eu4ScopeTree *tree,unsigned id,bool enabled,
                                   uint64_t wall,uint64_t cpu) {
     if(!enabled) return 0;

@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 import eu4_benchmark as base
+import frame_model_static as static
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "analysis/frame-model-engine.json"
@@ -113,7 +114,9 @@ def inventory() -> dict:
         if address%4096+patch_bytes>4096:
             raise base.BenchmarkError(f"Hook patch crosses a page boundary: {symbol}")
         rows.append({"name": name, "symbol": symbol, "offset": offset,
-                     "abi": abi, "scope": scope, "patch_bytes": patch_bytes,
+                     "abi": abi, "scope": scope,"instruction_lengths":[len(bytes.fromhex(i["bytes"])) for i in prologue],
+                     "classification":"semantic" if name in {"present_scene","mesh_add_to_bucket","append_flush_data"} else "envelope",
+                     "return_convention":"current wrapper returns void; argument forwarding tested separately from binary ABI evidence", "patch_bytes": patch_bytes,
                      "expected_prefix": bytes(first[:patch_bytes]).hex(),
                      "instructions": instructions[:8]})
 
@@ -134,7 +137,12 @@ def inventory() -> dict:
             edge = re.search(r"\b(?:callq|jmpq)\s+.*?<(__Z[^>]+)>", line)
             if edge and edge[1] not in graph[current]:
                 graph[current].append(edge[1])
-    return {"schema": 1, "executable_sha256": digest, "image_base": IMAGE_BASE,
+    roots=[row["symbol"] for row in rows]+[s for s in symbols if s.startswith("_Gfx") or
+        re.match(r"__ZN\d+S(?:Shader|VertexBuffer|IndexBuffer|Texture).*OpenGL",s)]
+    evidence={"executable_sha256":digest,"graph":static.graph(binary,symbols,roots),
+        "shaders":static.shaders(base.GOG_ROOT,base.USER_DATA)}
+    static.OUTPUT.write_text(json.dumps(evidence,indent=2)+"\n")
+    return {"schema": 2,"static_evidence":"analysis/frame-model-static.json", "executable_sha256": digest, "image_base": IMAGE_BASE,
             "hooks": rows, "call_graph": graph,
             "backend_inventory": {"status": "static Gfx callsites mapped to candidate GL operations; runtime resource/state mapping remains partial",
                                   "known_gl_sites": "analysis/draw-callers.json",
@@ -160,13 +168,29 @@ def backend_graph() -> dict:
         item["callers"].append({"symbol": row.get("owner_symbol"), "name": row.get("owner"),
                                 "category": row.get("category"),
                                 "callsite_offset": row.get("callsite_offset")})
-    return {"schema": 3, "status":"feasibility seed", "metal_go_no_go":"undetermined",
+    concrete=json.loads(static.OUTPUT.read_text())["graph"]["nodes"] if static.OUTPUT.is_file() else {}
+    def matches(operations,area):
+        boundary={"device_context_lifecycle":{"_GfxInit","_GfxShutdown","_GfxReset","_GfxCreateDeferredContext","_GfxDestroyDeferredContext"},
+                  "synchronization":{"_GfxPresent","_GfxBeginScene","_GfxEndScene"}}.get(area,set())
+        selected=[]
+        for symbol,node in concrete.items():
+            refs=[ref for ref in node["gl_pointer_references"] if any(
+                re.sub(r"^gl", "",op).rstrip("*").lower() in str(ref).lower() for op in operations)]
+            edges=[edge for edge in node["edges"] if any(op.rstrip("*").lower() in edge["target"].lower() for op in operations)]
+            if refs or edges or symbol in boundary:
+                selected.append({"symbol":symbol,"address":node["address"],"direct_edges":edges,
+                    "pointer_references":refs,"indirect_edges":node["indirect_edges"],
+                    "callers":[{"symbol":caller,"address":e["address"]} for caller,n in concrete.items()
+                        for e in n["edges"] if e["target"]==symbol]})
+        return selected
+    return {"schema": 4, "status":"feasibility seed", "static_evidence":"analysis/frame-model-static.json", "metal_go_no_go":"undetermined",
             "executable_sha256": data.get("executable_sha256"),
             "source": "analysis/draw-callers.json", "operations": list(grouped.values()),
             "backend_areas":[{"area":area,"candidate_gl_operations":gl_ops,
                 "resources_and_contract":resources,"runtime_coverage":coverage,
                 "metal_equivalent_and_difficulty":metal,
-                "clausewitz_gfx_implementation":"not yet mapped to a concrete implementation symbol",
+                "clausewitz_gfx_implementation":matches(gl_ops,area),
+                "unresolved_edges":"indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
                 "runtime_frequency":"not measured or not covered by current hook set",
                 "compatibility_profile_assumptions":"must be confirmed from the pinned binary and live contexts"}
                 for area,gl_ops,resources,coverage,metal in BACKEND_AREAS],
@@ -177,11 +201,14 @@ def backend_graph() -> dict:
 
 def write_header(data: dict) -> None:
     lines = ["// Generated by eu4_engine_inventory.py for the pinned GOG binary.",
-             "typedef struct { const char *name; uintptr_t offset; unsigned patch; const char *prefix; } EU4HookSite;",
+             "typedef struct { const char *name; uintptr_t offset; unsigned patch; const char *prefix; unsigned instruction_count; uint8_t lengths[8]; } EU4HookSite;",
              f"#define EU4_HOOK_COUNT {len(data['hooks'])}u",
              "static const EU4HookSite eu4_hook_sites[EU4_HOOK_COUNT] = {"]
-    lines.extend(f'    {{"{row["name"]}", 0x{row["offset"]:x}u, {row["patch_bytes"]}u, "{row["expected_prefix"]}"}},'
-                 for row in data["hooks"])
+    for row in data["hooks"]:
+        lengths=row["instruction_lengths"]
+        if len(lengths)>8: raise base.BenchmarkError("Too many instructions for pinned site")
+        values=",".join(map(str,lengths))
+        lines.append(f'    {{"{row["name"]}", 0x{row["offset"]:x}u, {row["patch_bytes"]}u, "{row["expected_prefix"]}", {len(lengths)}u, {{{values}}}}},')
     lines.append("};")
     HEADER.write_text("\n".join(lines) + "\n")
 

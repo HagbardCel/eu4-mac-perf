@@ -1,9 +1,38 @@
 # Paused-frame profiler correction plan
 
-Reviewed against `54cbcc43` (`Add paused frame causal profiler`). This plan
-accepts all findings in the feedback. The full EU IV experiment stays gated
-until the corrections and offline validation below pass. This document plans
-implementation; it does not claim the corrections have been made or measured.
+The design below remains the acceptance contract. The status table describes
+implementation and verification on 2026-10-01; passing native tests does not
+mean the live release gates have passed. The original review was against
+`54cbcc43`; corrective work builds on `96a9d2d` and is packaged in the
+release-gate follow-up. Publication and CI evidence are recorded separately in
+[the verification record](frame-model-verification.md).
+
+| Area | Status | Evidence / remaining work |
+|---|---|---|
+| Parent generation, recursion, path identities | DONE | Shared C producer/serializer; injected clocks and native tests |
+| Measurement-off settling and enable acknowledgement | DONE | Epochs, boundary timestamps, calibrated clock uncertainty; native/Python checks |
+| Semantic coverage and residuals | DONE | Envelopes do not count; independent aggregate CPU/wall Update and Render gates |
+| Long-run and recommendation gates | DONE | Missing evidence fails closed; baseline coverage checked before interventions |
+| Matched A/B/C/D/E cadence, ANATIVE | DONE | Existing phase IDs preserved; unrestricted ANATIVE ID 110 |
+| E deadline/rate acceptance | DONE | Absolute deadlines, lateness, missed deadlines, skip fraction, render overruns |
+| D forced discard | DONE / live unmeasured | Engine requests retained while discard stays forced; exact final state restored; failures invalidate D |
+| GPU allocation and segmentation | DONE / driver partial | Shared lifetime registry; context/pass segments; ownership and migration tests; sampled driver timing only |
+| Bounded per-thread publication | DONE | Shared SPSC protocol; four-producer saturation/reuse test; origins include thread and window |
+| Production detours and argument forwarding | PARTIAL | Pinned prologue lengths, native rollback; test-only library exercises seven production wrappers; installed-game ABI/live behavior still unmeasured |
+| Counters ≤3%, sampled ≤5% overhead | **BLOCKING** | Valid structural recipes fail; raw seven-pair evidence retained; no threshold relaxed |
+| Live reference calibration | OPEN | Reference/counters/reference and six four-render windows implemented; no game launched |
+| Residual-discovery pilot | **BLOCKING** | Offline overhead gate failed; installed power helper also stale |
+| Semantic hook expansion | OPEN | Seven hooks; add 3–8 verified hooks per residual-driven iteration, separately reviewable |
+| Recursive static Gfx / GL evidence | PARTIAL | Bounded traversal, aliases, caller/callee addresses, unresolved indirect edges |
+| Shader and Metal mapping | PARTIAL | Static shader hashes/includes/features and concrete Gfx evidence; resource dataflow, live frequency and translation remain open |
+| Natural/fixed LPM, restoration | DONE / live unmeasured | Journaled exact restoration; bounded helper source; oversized combined schedule rejected |
+| CI | IMPLEMENTED | Portable Python 3.10/3.14 and native producer checks; remote execution status recorded separately |
+
+**Next authorized live action:** the short residual-discovery pilot, after
+mandatory offline overhead and exact helper checks pass. Stop on any mandatory
+failure and retain a partial report. No definitive diagnosis or Metal go/no-go
+can follow from reconciliation alone. Historical border batching is superseded
+as the immediate next action.
 
 ## 1. Repair phase membership and control publication first
 
@@ -55,7 +84,7 @@ the swap rate is not automatically the update rate.
 
 | Phase | Update/input policy | Render policy |
 |---|---|---|
-| A controls | Original native loop | Original renderer |
+| A controls | Same calibrated update period as B/C/D/E | Original renderer |
 | B | Hold adjacent native update cadence | Record attempts; skip renderer |
 | C | Hold adjacent native update cadence | Run renderer; suppress covered draws |
 | D | Hold adjacent native update cadence | Run renderer with validated raster suppression |

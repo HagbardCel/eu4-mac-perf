@@ -61,7 +61,13 @@ int main(void) {
     if(synthetic_mixed(&value,5,3.0f,true)!=mixed_before+100) return 8;
     if(!eu4_detour_restore(&second) ||
        synthetic_mixed(&value,5,3.0f,true)!=mixed_before) return 9;
+    EU4Detour transaction[2]={0};
+    if(!install(&transaction[0],long_code_mem,(void *)replace_long,lengths)) return 10;
+    if(eu4_detour_install(&transaction[1],mixed_code_mem,13,wrong,
+                         (void *)replace_mixed,lengths,3)) return 11;
+    if(!eu4_detour_rollback(transaction,2) || synthetic_long(4)!=before ||
+       synthetic_mixed(&value,5,3.0f,true)!=mixed_before) return 12;
     (void)munmap(long_code_mem,4096); (void)munmap(mixed_code_mem,4096);
-    puts("detour trampoline, forwarding, recursion, boundary rejection, and restore passed");
+    puts("detour trampoline, forwarding, recursion, boundary rejection, partial-install rollback, and restore passed");
     return 0;
 }

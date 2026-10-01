@@ -1,5 +1,6 @@
 {
-  "schema": 1,
+  "schema": 2,
+  "static_evidence": "analysis/frame-model-static.json",
   "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "image_base": 4294967296,
   "hooks": [
@@ -9,6 +10,17 @@
       "offset": 20754304,
       "abi": "void(this,bool)",
       "scope": "loop",
+      "instruction_lengths": [
+        1,
+        3,
+        2,
+        2,
+        1,
+        1,
+        3
+      ],
+      "classification": "envelope",
+      "return_convention": "current wrapper returns void; argument forwarding tested separately from binary ABI evidence",
       "patch_bytes": 13,
       "expected_prefix": "554889e54157415653504189f6",
       "instructions": [
@@ -68,6 +80,17 @@
       "offset": 7380244,
       "abi": "void(this,bool)",
       "scope": "idle",
+      "instruction_lengths": [
+        1,
+        3,
+        2,
+        2,
+        2,
+        2,
+        1
+      ],
+      "classification": "envelope",
+      "return_convention": "current wrapper returns void; argument forwarding tested separately from binary ABI evidence",
       "patch_bytes": 13,
       "expected_prefix": "554889e5415741564155415453",
       "instructions": [
@@ -127,6 +150,17 @@
       "offset": 7351614,
       "abi": "void(this)",
       "scope": "render",
+      "instruction_lengths": [
+        1,
+        3,
+        2,
+        2,
+        2,
+        2,
+        1
+      ],
+      "classification": "envelope",
+      "return_convention": "current wrapper returns void; argument forwarding tested separately from binary ABI evidence",
       "patch_bytes": 13,
       "expected_prefix": "554889e5415741564155415453",
       "instructions": [
@@ -186,6 +220,17 @@
       "offset": 15551176,
       "abi": "void(this,context,camera,float,bool)",
       "scope": "map",
+      "instruction_lengths": [
+        1,
+        3,
+        2,
+        2,
+        2,
+        2,
+        1
+      ],
+      "classification": "envelope",
+      "return_convention": "current wrapper returns void; argument forwarding tested separately from binary ABI evidence",
       "patch_bytes": 13,
       "expected_prefix": "554889e5415741564155415453",
       "instructions": [
@@ -245,6 +290,15 @@
       "offset": 21617392,
       "abi": "void(this)",
       "scope": "present_scene",
+      "instruction_lengths": [
+        1,
+        3,
+        1,
+        1,
+        7
+      ],
+      "classification": "semantic",
+      "return_convention": "current wrapper returns void; argument forwarding tested separately from binary ABI evidence",
       "patch_bytes": 13,
       "expected_prefix": "554889e5535080bfe804000000",
       "instructions": [
@@ -304,6 +358,16 @@
       "offset": 21786984,
       "abi": "void(this,int,camera)",
       "scope": "bucket",
+      "instruction_lengths": [
+        1,
+        3,
+        2,
+        2,
+        1,
+        4
+      ],
+      "classification": "semantic",
+      "return_convention": "current wrapper returns void; argument forwarding tested separately from binary ABI evidence",
       "patch_bytes": 13,
       "expected_prefix": "554889e541574156534883ec58",
       "instructions": [
@@ -363,6 +427,17 @@
       "offset": 21787312,
       "abi": "void(this,SFlushData*)",
       "scope": "bucket_append",
+      "instruction_lengths": [
+        1,
+        3,
+        2,
+        2,
+        2,
+        1,
+        4
+      ],
+      "classification": "semantic",
+      "return_convention": "current wrapper returns void; argument forwarding tested separately from binary ABI evidence",
       "patch_bytes": 15,
       "expected_prefix": "554889e5415741564154534883ec30",
       "instructions": [

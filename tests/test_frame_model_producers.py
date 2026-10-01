@@ -13,10 +13,10 @@ class ProducerTests(unittest.TestCase):
         compiler=shutil.which("clang") or shutil.which("cc")
         if not compiler: self.skipTest("C compiler unavailable")
         with tempfile.TemporaryDirectory() as directory:
-            for name in ("scope","gpu"):
+            for name in ("scope","gpu","queue","render_gate"):
                 executable=Path(directory)/name
                 source=model.ROOT/"tests"/f"frame_model_{name}_harness.c"
-                subprocess.run([compiler,"-O2","-Wall","-Wextra","-Werror","-o",str(executable),str(source)],check=True,capture_output=True)
+                subprocess.run([compiler,"-pthread","-O2","-Wall","-Wextra","-Werror","-o",str(executable),str(source)],check=True,capture_output=True)
                 run=subprocess.run([str(executable)],check=True,capture_output=True,text=True)
                 if name=="scope":
                     result=model.scope_tree_summary(list(csv.reader(run.stdout.splitlines())),[{"name":"A0"}])["phases"]["1"]

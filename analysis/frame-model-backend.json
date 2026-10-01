@@ -1,6 +1,7 @@
 {
-  "schema": 3,
+  "schema": 4,
   "status": "feasibility seed",
+  "static_evidence": "analysis/frame-model-static.json",
   "metal_go_no_go": "undetermined",
   "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "source": "analysis/draw-callers.json",
@@ -355,7 +356,125 @@
       "resources_and_contract": "context and device creation/destruction",
       "runtime_coverage": "CGL compatibility context is observed; creation paths/frequencies are not counted",
       "metal_equivalent_and_difficulty": "Metal device, command queue, and drawable lifecycle; medium risk",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "_GfxInit",
+          "address": 4317941408,
+          "direct_edges": [],
+          "pointer_references": [],
+          "indirect_edges": [
+            {
+              "address": 4317941908,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317942133,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317942429,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317942605,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317942773,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317942941,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317943109,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317943277,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317943445,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317943613,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317943784,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317944656,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317944760,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317944859,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxShutdown",
+          "address": 4317946924,
+          "direct_edges": [],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxReset",
+          "address": 4317946987,
+          "direct_edges": [],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": [
+            {
+              "symbol": "__ZN9CGraphics11CheckDeviceEv",
+              "address": 4316589677
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxCreateDeferredContext",
+          "address": 4317947744,
+          "direct_edges": [],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxDestroyDeferredContext",
+          "address": 4317947753,
+          "direct_edges": [],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": []
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     },
@@ -373,7 +492,344 @@
       "resources_and_contract": "shader/program objects and GLSL source",
       "runtime_coverage": "program binds are sampled; shader sources, compile/link calls, and GLSL feature corpus are not inventoried",
       "metal_equivalent_and_difficulty": "GLSL translation and shader validation; high risk until corpus is captured",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "_GfxDraw2dLines",
+          "address": 4317949319,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eadaa: 48 8d 05 57 85 c6 00        \tleaq\t, %rax <___glewUseProgramObjectARB>",
+              "targets": [
+                "___glewUseProgramObjectARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015eae80: 48 8d 05 81 84 c6 00        \tleaq\t, %rax <___glewUseProgramObjectARB>",
+              "targets": [
+                "___glewUseProgramObjectARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317949363,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317949589,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN9CEU3Idler20RenderGuiBoundsDebugEv",
+              "address": 4301228289
+            },
+            {
+              "symbol": "__Z17RenderTimingStatsP9CGraphics",
+              "address": 4313725362
+            },
+            {
+              "symbol": "__Z17RenderTimingStatsP9CGraphics",
+              "address": 4313725519
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxCreateShader",
+          "address": 4317949591,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eaeb2: 48 8d 05 37 83 c6 00        \tleaq\t, %rax <___glewCreateProgramObjectARB>",
+              "targets": [
+                "___glewCreateProgramObjectARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317949625,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxAddVertexShader",
+          "address": 4317949870,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eafee: 48 8d 05 03 82 c6 00        \tleaq\t, %rax <___glewCreateShaderObjectARB>",
+              "targets": [
+                "___glewCreateShaderObjectARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015eaffe: 48 8d 05 63 82 c6 00        \tleaq\t, %rax <___glewShaderSourceARB>",
+              "targets": [
+                "___glewShaderSourceARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015eb017: 48 8d 05 ca 81 c6 00        \tleaq\t, %rax <___glewCompileShaderARB>",
+              "targets": [
+                "___glewCompileShaderARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317949927,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317949946,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317949973,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317949984,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317950010,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317950033,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317950087,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317950226,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317950348,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "_GfxBuildAndAddVertexShader",
+              "address": 4317950944
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxAddPixelShader",
+          "address": 4317951013,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eb465: 48 8d 05 8c 7d c6 00        \tleaq\t, %rax <___glewCreateShaderObjectARB>",
+              "targets": [
+                "___glewCreateShaderObjectARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015eb475: 48 8d 05 ec 7d c6 00        \tleaq\t, %rax <___glewShaderSourceARB>",
+              "targets": [
+                "___glewShaderSourceARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015eb48e: 48 8d 05 53 7d c6 00        \tleaq\t, %rax <___glewCompileShaderARB>",
+              "targets": [
+                "___glewCompileShaderARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317951070,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317951089,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317951116,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317951127,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317951153,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317951176,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317951227,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317951351,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317951473,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317951659,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317951781,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "_GfxBuildAndAddPixelShader",
+              "address": 4317952063
+            }
+          ]
+        },
+        {
+          "symbol": "__ZN13SShaderOpenGL11LinkProgramEv",
+          "address": 4317952146,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eb941: 48 8d 05 18 79 c6 00        \tleaq\t, %rax <___glewLinkProgramARB>",
+              "targets": [
+                "___glewLinkProgramARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317952222,
+              "operand": "*(%rbx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317952231,
+              "operand": "*(%rbx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317952306,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317952331,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317952358,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317952416,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317952529,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317952651,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "__ZN13SShaderOpenGL6SetAllEv",
+          "address": 4317953088,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ebc59: 48 8d 05 a8 76 c6 00        \tleaq\t, %rax <___glewUseProgramObjectARB>",
+              "targets": [
+                "___glewUseProgramObjectARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317953123,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953144,
+              "operand": "*%rax",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953177,
+              "operand": "*%rax",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "_GfxSetShader",
+              "address": 4317953046
+            }
+          ]
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     },
@@ -389,7 +845,36 @@
       "resources_and_contract": "texture objects, formats, allocation, updates, and sampling",
       "runtime_coverage": "binds and selected uploads are counted; creation, deletion, formats, sampler state, and PBO paths are partial",
       "metal_equivalent_and_difficulty": "MTLTexture and sampler conversion; format and lifetime mapping unknown",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "_GfxInitializeTexture",
+          "address": 4317955131,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ec51d: 48 8d 05 84 59 c6 00        \tleaq\t, %rax <___glewCompressedTexImage2D>",
+              "targets": [
+                "___glewCompressedTexImage2D"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317955575,
+              "operand": "*%r12",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "_GfxCreateTexture",
+              "address": 4317955678
+            }
+          ]
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     },
@@ -405,7 +890,351 @@
       "resources_and_contract": "vertex/index buffer objects and uploaded ranges",
       "runtime_coverage": "selected binds/uploads are counted; mapping, storage flags, full lifecycle, and changed ranges are unknown",
       "metal_equivalent_and_difficulty": "MTLBuffer allocation and update strategy; lifecycle mapping unknown",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+          "address": 4317948272,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ea9b1: 48 8d 05 58 8c c6 00        \tleaq\t, %rax <___glewBindBufferARB>",
+              "targets": [
+                "___glewBindBufferARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317948344,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948453,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948472,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948485,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "_GfxDraw",
+              "address": 4317948186
+            },
+            {
+              "symbol": "_GfxDrawIndexed",
+              "address": 4317948936
+            },
+            {
+              "symbol": "_GfxDrawIndexedInstanced",
+              "address": 4317949261
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxCreateVertexBuffer",
+          "address": 4317953203,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ebcf0: 48 8d 05 39 79 c6 00        \tleaq\t, %rax <___glewGenBuffersARB>",
+              "targets": [
+                "___glewGenBuffersARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ebd02: 4c 8d 3d 07 79 c6 00        \tleaq\t, %r15 <___glewBindBufferARB>",
+              "targets": [
+                "___glewBindBufferARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ebd14: 48 8d 05 fd 78 c6 00        \tleaq\t, %rax <___glewBufferDataARB>",
+              "targets": [
+                "___glewBufferDataARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317953280,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953297,
+              "operand": "*(%r15)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953326,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953335,
+              "operand": "*(%r15)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxDestroyVertexBuffer",
+          "address": 4317953356,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ebd5a: 48 8d 05 c7 78 c6 00        \tleaq\t, %rax <___glewDeleteBuffersARB>",
+              "targets": [
+                "___glewDeleteBuffersARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317953386,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxUpdateVertexBuffer",
+          "address": 4317953409,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ebdb7: 48 8d 05 52 78 c6 00        \tleaq\t, %rax <___glewBindBufferARB>",
+              "targets": [
+                "___glewBindBufferARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ebdca: 48 8d 05 4f 78 c6 00        \tleaq\t, %rax <___glewBufferSubDataARB>",
+              "targets": [
+                "___glewBufferSubDataARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ebde7: 48 8d 05 2a 78 c6 00        \tleaq\t, %rax <___glewBufferDataARB>",
+              "targets": [
+                "___glewBufferDataARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317953475,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953507,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953538,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953591,
+              "operand": "*(%r12)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxUpdateVertexBufferMultiple",
+          "address": 4317953631,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ebe8f: 48 8d 05 7a 77 c6 00        \tleaq\t, %rax <___glewBindBufferARB>",
+              "targets": [
+                "___glewBindBufferARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ebec6: 48 8d 05 53 77 c6 00        \tleaq\t, %rax <___glewBufferSubDataARB>",
+              "targets": [
+                "___glewBufferSubDataARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317953694,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953741,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953817,
+              "operand": "*(%r12)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxCreateIndexBuffer",
+          "address": 4317954388,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ec199: 48 8d 05 90 74 c6 00        \tleaq\t, %rax <___glewGenBuffersARB>",
+              "targets": [
+                "___glewGenBuffersARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ec1ab: 48 8d 05 5e 74 c6 00        \tleaq\t, %rax <___glewBindBufferARB>",
+              "targets": [
+                "___glewBindBufferARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ec1bc: 48 8d 05 55 74 c6 00        \tleaq\t, %rax <___glewBufferDataARB>",
+              "targets": [
+                "___glewBufferDataARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317954473,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317954490,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317954518,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxDestroyIndexBuffer",
+          "address": 4317954534,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ec1f4: 48 8d 05 2d 74 c6 00        \tleaq\t, %rax <___glewDeleteBuffersARB>",
+              "targets": [
+                "___glewDeleteBuffersARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317954564,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxUpdateIndexBuffer",
+          "address": 4317954620,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ec258: 48 8d 05 b1 73 c6 00        \tleaq\t, %rax <___glewBindBufferARB>",
+              "targets": [
+                "___glewBindBufferARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ec266: 48 8d 05 ab 73 c6 00        \tleaq\t, %rax <___glewBufferDataARB>",
+              "targets": [
+                "___glewBufferDataARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317954660,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317954695,
+              "operand": "*%rax",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxSetIndexBuffer",
+          "address": 4317954702,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ec2a0: 48 8d 05 69 73 c6 00        \tleaq\t, %rax <___glewBindBufferARB>",
+              "targets": [
+                "___glewBindBufferARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317954735,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN22CCountryNameCollection11RenderNamesEP21GfxDeferredContextGFXP17ConstantBufferGFXS3_PK10SGfxEffectRK10CEU3CameraffffP10TextureGFXSB_",
+              "address": 4309717951
+            }
+          ]
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     },
@@ -419,7 +1248,179 @@
       "resources_and_contract": "uniform payloads and constant data",
       "runtime_coverage": "scalar float/int, float/int vectors, matrix2/3/4, glUniform1i and glUniform4fv are counted; sampled payload hashes are recorded, exact element diffs cover glUniform4fv only; unsigned/double/non-square families and buffer-backed constants remain uncovered",
       "metal_equivalent_and_difficulty": "argument buffers or per-frame constant buffers; layout/reflection work required",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "_GfxDraw",
+          "address": 4317947785,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ea7de: 4c 8d 2d f3 8a c6 00        \tleaq\t, %r13 <___glewUniform4fvARB>",
+              "targets": [
+                "___glewUniform4fvARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317947910,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948070,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN12CEU3Graphics17ShowBasicLoadTextERK7CStringbb",
+              "address": 4310564044
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxDrawIndexed",
+          "address": 4317948535,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eaacc: 4c 8d 2d 05 88 c6 00        \tleaq\t, %r13 <___glewUniform4fvARB>",
+              "targets": [
+                "___glewUniform4fvARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317948660,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948820,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317949000,
+              "operand": "*%rax",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN22CCountryNameCollection11RenderNamesEP21GfxDeferredContextGFXP17ConstantBufferGFXS3_PK10SGfxEffectRK10CEU3CameraffffP10TextureGFXSB_",
+              "address": 4309718599
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxDrawIndexedInstanced",
+          "address": 4317949084,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eacda: 4c 8d 2d f7 85 c6 00        \tleaq\t, %r13 <___glewUniform4fvARB>",
+              "targets": [
+                "___glewUniform4fvARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317949186,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317949317,
+              "operand": "*%rax",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "__ZN13SShaderOpenGL6SetAllEv",
+          "address": 4317953088,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ebc65: 4c 8d 3d cc 66 c6 00        \tleaq\t, %r15 <___glewUniform1i>",
+              "targets": [
+                "___glewUniform1i"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317953123,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953144,
+              "operand": "*%rax",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953177,
+              "operand": "*%rax",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "_GfxSetShader",
+              "address": 4317953046
+            }
+          ]
+        },
+        {
+          "symbol": "__ZN13SShaderOpenGL19SetUniformLocationsEv",
+          "address": 4317960700,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eda24: 4c 8d 2d 1d 58 c6 00        \tleaq\t, %r13 <___glewGetUniformLocationARB>",
+              "targets": [
+                "___glewGetUniformLocationARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317960762,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317960821,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317960872,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN13SShaderOpenGL11LinkProgramEv",
+              "address": 4317952369
+            }
+          ]
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     },
@@ -434,7 +1435,239 @@
       "resources_and_contract": "FBO attachments, render targets, and resolve/copy paths",
       "runtime_coverage": "not inventoried by the current runtime hooks",
       "metal_equivalent_and_difficulty": "MTLRenderPassDescriptor and attachment lifecycle; topology unknown",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "_GfxInitializeRenderTargetTexture",
+          "address": 4317956322,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eca67: 48 8d 05 92 7b c6 00        \tleaq\t, %rax <___glewGenFramebuffersEXT>",
+              "targets": [
+                "___glewGenFramebuffersEXT"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015eca79: 48 8d 05 38 7b c6 00        \tleaq\t, %rax <___glewBindFramebufferEXT>",
+              "targets": [
+                "___glewBindFramebufferEXT"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ecacd: 48 8d 05 2c 7b c6 00        \tleaq\t, %rax <___glewGenFramebuffersEXT>",
+              "targets": [
+                "___glewGenFramebuffersEXT"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ecadf: 4c 8d 35 d2 7a c6 00        \tleaq\t, %r14 <___glewBindFramebufferEXT>",
+              "targets": [
+                "___glewBindFramebufferEXT"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ecaf1: 48 8d 05 f8 7a c6 00        \tleaq\t, %rax <___glewFramebufferTexture2DEXT>",
+              "targets": [
+                "___glewFramebufferTexture2DEXT"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317956542,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956559,
+              "operand": "*(%r14)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956594,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956621,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956630,
+              "operand": "*(%r14)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956666,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956683,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956709,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956727,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956744,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956771,
+              "operand": "*(%r14)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956792,
+              "operand": "*(%r14)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956807,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956829,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956846,
+              "operand": "*(%r14)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956877,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956915,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956935,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317956944,
+              "operand": "*(%r14)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "_GfxCreateRenderTargetTexture",
+              "address": 4317957083
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxResolveTexture",
+          "address": 4317957731,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ece82: 4c 8d 25 2f 77 c6 00        \tleaq\t, %r12 <___glewBindFramebufferEXT>",
+              "targets": [
+                "___glewBindFramebufferEXT"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ecea2: 4c 8d 15 ff 76 c6 00        \tleaq\t, %r10 <___glewBlitFramebufferEXT>",
+              "targets": [
+                "___glewBlitFramebufferEXT"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317957777,
+              "operand": "*(%r12)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317957790,
+              "operand": "*(%r12)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317957837,
+              "operand": "*(%r10)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317957856,
+              "operand": "*(%r12)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN15C3DCombatResult6RenderER7CCamera",
+              "address": 4307844122
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxSetRenderTarget",
+          "address": 4317958148,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ed023: 48 8d 05 8e 75 c6 00        \tleaq\t, %rax <___glewBindFramebufferEXT>",
+              "targets": [
+                "___glewBindFramebufferEXT"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317958203,
+              "operand": "*%rax",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317958222,
+              "operand": "*%rax",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN15C3DCombatResult6RenderER7CCamera",
+              "address": 4307844000
+            },
+            {
+              "symbol": "__ZN15C3DCombatResult6RenderER7CCamera",
+              "address": 4307844132
+            }
+          ]
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     },
@@ -452,7 +1685,572 @@
       "resources_and_contract": "depth/stencil, blend, culling, and raster state",
       "runtime_coverage": "only selected enable/disable and raster-discard state are observed; complete values and transitions unknown",
       "metal_equivalent_and_difficulty": "MTLDepthStencilState and pipeline-state mapping; state key coverage unknown",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "_GfxInit",
+          "address": 4317941408,
+          "direct_edges": [
+            {
+              "address": 4317944074,
+              "target": "__ZN17SOpenGLBlendState4InitEPK15SBlendStateInfo",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317944160,
+              "target": "__ZN24SOpenGLDepthStencilState4InitEPK24SDepthStencilDescription",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317944343,
+              "target": "__ZL33GetOpenGLContextDepthStencilStateR24SOpenGLDepthStencilState",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317944355,
+              "target": "__ZL26GetOpenGLContextBlendStateR17SOpenGLBlendState",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [
+            {
+              "address": 4317941908,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317942133,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317942429,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317942605,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317942773,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317942941,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317943109,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317943277,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317943445,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317943613,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317943784,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317944656,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317944760,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317944859,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxCreateBlendState",
+          "address": 4317945105,
+          "direct_edges": [
+            {
+              "address": 4317945172,
+              "target": "__ZN17SOpenGLBlendState4InitEPK15SBlendStateInfo",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxCreateDepthStencilState",
+          "address": 4317945185,
+          "direct_edges": [
+            {
+              "address": 4317945253,
+              "target": "__ZN24SOpenGLDepthStencilState4InitEPK24SDepthStencilDescription",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxSetBlendState",
+          "address": 4317946047,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ea150: 48 8d 05 b9 7e c6 00        \tleaq\t, %rax <___glewBlendFuncSeparate>",
+              "targets": [
+                "___glewBlendFuncSeparate"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ea1bc: 48 8d 05 5d 80 c6 00        \tleaq\t, %rax <___glewBlendEquationSeparate>",
+              "targets": [
+                "___glewBlendEquationSeparate"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015ea1cf: 48 8d 05 32 7e c6 00        \tleaq\t, %rax <___glewBlendEquation>",
+              "targets": [
+                "___glewBlendEquation"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317946211,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317946311,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317946326,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "_GfxInit",
+              "address": 4317944371
+            },
+            {
+              "symbol": "_GfxOnResetMasterContext",
+              "address": 4317947081
+            },
+            {
+              "symbol": "_GfxBeginScene",
+              "address": 4317947714
+            },
+            {
+              "symbol": "__ZN22CCountryNameCollection11RenderNamesEP21GfxDeferredContextGFXP17ConstantBufferGFXS3_PK10SGfxEffectRK10CEU3CameraffffP10TextureGFXSB_",
+              "address": 4309717517
+            },
+            {
+              "symbol": "__ZN17CTradeRouteObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCamerai",
+              "address": 4313644324
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxReset",
+          "address": 4317946987,
+          "direct_edges": [
+            {
+              "address": 4317947000,
+              "target": "__ZL26GetOpenGLContextBlendStateR17SOpenGLBlendState",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317947021,
+              "target": "__ZL33GetOpenGLContextDepthStencilStateR24SOpenGLDepthStencilState",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": [
+            {
+              "symbol": "__ZN9CGraphics11CheckDeviceEv",
+              "address": 4316589677
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxOnResetMasterContext",
+          "address": 4317947035,
+          "direct_edges": [
+            {
+              "address": 4317947057,
+              "target": "__ZL33GetOpenGLContextDepthStencilStateR24SOpenGLDepthStencilState",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317947066,
+              "target": "__ZL26GetOpenGLContextBlendStateR17SOpenGLBlendState",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxBeginScene",
+          "address": 4317947615,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ea711: 4c 8d 2d 60 8f c6 00        \tleaq\t, %r13 <___glewDisableVertexAttribArrayARB>",
+              "targets": [
+                "___glewDisableVertexAttribArrayARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317947679,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN9CGraphics23Render2dObjectsToScreenEb",
+              "address": 4316582065
+            },
+            {
+              "symbol": "__ZN9CGraphics10BeginSceneEb",
+              "address": 4316582436
+            },
+            {
+              "symbol": "__ZN9CGraphics34RenderAlwaysInFrontObjectsToScreenEb",
+              "address": 4316583857
+            }
+          ]
+        },
+        {
+          "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+          "address": 4317948272,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eaa3e: 48 8d 05 3b 8c c6 00        \tleaq\t, %rax <___glewEnableVertexAttribArrayARB>",
+              "targets": [
+                "___glewEnableVertexAttribArrayARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317948344,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948453,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948472,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948485,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "_GfxDraw",
+              "address": 4317948186
+            },
+            {
+              "symbol": "_GfxDrawIndexed",
+              "address": 4317948936
+            },
+            {
+              "symbol": "_GfxDrawIndexedInstanced",
+              "address": 4317949261
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxSetShader",
+          "address": 4317952944,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ebbf4: 4c 8d 35 7d 7a c6 00        \tleaq\t, %r14 <___glewDisableVertexAttribArrayARB>",
+              "targets": [
+                "___glewDisableVertexAttribArrayARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317953027,
+              "operand": "*(%r14)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN22CCountryNameCollection11RenderNamesEP21GfxDeferredContextGFXP17ConstantBufferGFXS3_PK10SGfxEffectRK10CEU3CameraffffP10TextureGFXSB_",
+              "address": 4309717533
+            },
+            {
+              "symbol": "__ZN12CEU3Graphics17ShowBasicLoadTextERK7CStringbb",
+              "address": 4310563990
+            },
+            {
+              "symbol": "__ZN17CTradeRouteObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCamerai",
+              "address": 4313644335
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxUpdateVertexBuffer",
+          "address": 4317953409,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ebe29: 4c 8d 25 48 78 c6 00        \tleaq\t, %r12 <___glewDisableVertexAttribArrayARB>",
+              "targets": [
+                "___glewDisableVertexAttribArrayARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317953475,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953507,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953538,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953591,
+              "operand": "*(%r12)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxUpdateVertexBufferMultiple",
+          "address": 4317953631,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ebf0b: 4c 8d 25 66 77 c6 00        \tleaq\t, %r12 <___glewDisableVertexAttribArrayARB>",
+              "targets": [
+                "___glewDisableVertexAttribArrayARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317953694,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953741,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317953817,
+              "operand": "*(%r12)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "_GfxSetVertexBuffers",
+          "address": 4317953857,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ebf8f: 4c 8d 2d e2 76 c6 00        \tleaq\t, %r13 <___glewDisableVertexAttribArrayARB>",
+              "targets": [
+                "___glewDisableVertexAttribArrayARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317953949,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317954154,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN22CCountryNameCollection11RenderNamesEP21GfxDeferredContextGFXP17ConstantBufferGFXS3_PK10SGfxEffectRK10CEU3CameraffffP10TextureGFXSB_",
+              "address": 4309718569
+            },
+            {
+              "symbol": "__ZN12CEU3Graphics17ShowBasicLoadTextERK7CStringbb",
+              "address": 4310563966
+            }
+          ]
+        },
+        {
+          "symbol": "__ZN17SOpenGLBlendState4InitEPK15SBlendStateInfo",
+          "address": 4317960918,
+          "direct_edges": [
+            {
+              "address": 4317960944,
+              "target": "__Z14GetOpenGLBlend13EGfxBlendMode",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317960956,
+              "target": "__Z14GetOpenGLBlend13EGfxBlendMode",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317960968,
+              "target": "__Z16GetOpenGLBlendOp11EGfxBlendOp",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317960980,
+              "target": "__Z14GetOpenGLBlend13EGfxBlendMode",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317960992,
+              "target": "__Z14GetOpenGLBlend13EGfxBlendMode",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317961004,
+              "target": "__Z16GetOpenGLBlendOp11EGfxBlendOp",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": [
+            {
+              "symbol": "_GfxInit",
+              "address": 4317944074
+            },
+            {
+              "symbol": "_GfxCreateBlendState",
+              "address": 4317945172
+            }
+          ]
+        },
+        {
+          "symbol": "__ZN24SOpenGLDepthStencilState4InitEPK24SDepthStencilDescription",
+          "address": 4317961100,
+          "direct_edges": [
+            {
+              "address": 4317961173,
+              "target": "__Z32GetOpenGLStencilOperatorFunction13EGfxStencilOp",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317961185,
+              "target": "__Z32GetOpenGLStencilOperatorFunction13EGfxStencilOp",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4317961197,
+              "target": "__Z32GetOpenGLStencilOperatorFunction13EGfxStencilOp",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": [
+            {
+              "symbol": "_GfxInit",
+              "address": 4317944160
+            },
+            {
+              "symbol": "_GfxCreateDepthStencilState",
+              "address": 4317945253
+            }
+          ]
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     },
@@ -467,7 +2265,73 @@
       "resources_and_contract": "vertex formats, VAOs, divisors, and element-buffer bindings",
       "runtime_coverage": "vertex source identity is sampled for detailed draws; lifecycle and all attribute state are partial",
       "metal_equivalent_and_difficulty": "MTLVertexDescriptor and argument mapping; compatibility client arrays must be ruled out",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+          "address": 4317948272,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eaa1e: 48 8d 05 2b 8e c6 00        \tleaq\t, %rax <___glewVertexAttribPointerARB>",
+              "targets": [
+                "___glewVertexAttribPointerARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015eaa31: 48 8d 05 e0 82 c6 00        \tleaq\t, %rax <___glewVertexAttribDivisorARB>",
+              "targets": [
+                "___glewVertexAttribDivisorARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            },
+            {
+              "instruction": "1015eaa3e: 48 8d 05 3b 8c c6 00        \tleaq\t, %rax <___glewEnableVertexAttribArrayARB>",
+              "targets": [
+                "___glewEnableVertexAttribArrayARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317948344,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948453,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948472,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948485,
+              "operand": "*(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "_GfxDraw",
+              "address": 4317948186
+            },
+            {
+              "symbol": "_GfxDrawIndexed",
+              "address": 4317948936
+            },
+            {
+              "symbol": "_GfxDrawIndexedInstanced",
+              "address": 4317949261
+            }
+          ]
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     },
@@ -481,7 +2345,254 @@
       "resources_and_contract": "direct, indexed, instanced, and base-vertex draws",
       "runtime_coverage": "static direct Gfx callsites are inventoried; six GL draw forms are hooked; indirect/multi-draw and extension paths remain uncovered",
       "metal_equivalent_and_difficulty": "MTLRenderCommandEncoder draw variants; straightforward only after full call coverage",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "_GfxDrawIndexed",
+          "address": 4317948535,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015eac1b: 48 8d 05 c6 7d c6 00        \tleaq\t, %rax <___glewDrawElementsBaseVertex>",
+              "targets": [
+                "___glewDrawElementsBaseVertex"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317948660,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317948820,
+              "operand": "*0x38(%rcx)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317949000,
+              "operand": "*%rax",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN22CCountryNameCollection11RenderNamesEP21GfxDeferredContextGFXP17ConstantBufferGFXS3_PK10SGfxEffectRK10CEU3CameraffffP10TextureGFXSB_",
+              "address": 4309718599
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxDrawIndexedInstanced",
+          "address": 4317949084,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ead5b: 48 8d 05 ae 7f c6 00        \tleaq\t, %rax <___glewDrawElementsInstancedARB>",
+              "targets": [
+                "___glewDrawElementsInstancedARB"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317949186,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317949317,
+              "operand": "*%rax",
+              "status": "unresolved"
+            }
+          ],
+          "callers": []
+        },
+        {
+          "symbol": "__ZN9CEU3Idler20RenderGuiBoundsDebugEv",
+          "address": 4301227726,
+          "direct_edges": [
+            {
+              "address": 4301228289,
+              "target": "_GfxDraw2dLines",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [
+            {
+              "address": 4301227814,
+              "operand": "*0x10(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4301227843,
+              "operand": "*0x18(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4301227914,
+              "operand": "*0xc0(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4301227973,
+              "operand": "*0xe0(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4301227989,
+              "operand": "*0xe8(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4301228244,
+              "operand": "*0x78(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4301228348,
+              "operand": "*0x78(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4301228491,
+              "operand": "*0x70(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4301228508,
+              "operand": "*0x48(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4301228713,
+              "operand": "*0xa8(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4301229069,
+              "operand": "*%rax",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN12CInGameIdler6RenderEv",
+              "address": 4302320278
+            }
+          ]
+        },
+        {
+          "symbol": "__ZN22CCountryNameCollection11RenderNamesEP21GfxDeferredContextGFXP17ConstantBufferGFXS3_PK10SGfxEffectRK10CEU3CameraffffP10TextureGFXSB_",
+          "address": 4309717302,
+          "direct_edges": [
+            {
+              "address": 4309718599,
+              "target": "_GfxDrawIndexed",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": [
+            {
+              "symbol": "__ZN16CEU3GraphicalMap6RenderEP21GfxDeferredContextGFXRK10CEU3Camerafb",
+              "address": 4310519280
+            },
+            {
+              "symbol": "__ZN16CEU3GraphicalMap6RenderEP21GfxDeferredContextGFXRK10CEU3Camerafb",
+              "address": 4310519370
+            }
+          ]
+        },
+        {
+          "symbol": "__ZN12CEU3Graphics17ShowBasicLoadTextERK7CStringbb",
+          "address": 4310563576,
+          "direct_edges": [
+            {
+              "address": 4310564044,
+              "target": "_GfxDraw",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [
+            {
+              "address": 4310564166,
+              "operand": "*0x58(%rax)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN12CInGameIdler6RenderEv",
+              "address": 4302335337
+            },
+            {
+              "symbol": "__ZN12CInGameIdler6RenderEv",
+              "address": 4302335451
+            },
+            {
+              "symbol": "__ZN12CInGameIdler6RenderEv",
+              "address": 4302335565
+            }
+          ]
+        },
+        {
+          "symbol": "__Z17RenderTimingStatsP9CGraphics",
+          "address": 4313723659,
+          "direct_edges": [
+            {
+              "address": 4313725362,
+              "target": "_GfxDraw2dLines",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            },
+            {
+              "address": 4313725519,
+              "target": "_GfxDraw2dLines",
+              "kind": "call",
+              "confidence": "direct symbolized instruction"
+            }
+          ],
+          "pointer_references": [],
+          "indirect_edges": [
+            {
+              "address": 4313723862,
+              "operand": "*0x90(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4313723962,
+              "operand": "*%rax",
+              "status": "unresolved"
+            },
+            {
+              "address": 4313724773,
+              "operand": "*0x90(%rax)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4313724865,
+              "operand": "*%rax",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN12CInGameIdler6RenderEv",
+              "address": 4302335627
+            }
+          ]
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     },
@@ -496,7 +2607,51 @@
       "resources_and_contract": "resource copies, readback, and capture operations",
       "runtime_coverage": "not inventoried by the current runtime hooks",
       "metal_equivalent_and_difficulty": "blit/compute/readback equivalents depend on actual usage",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "_GfxResolveTexture",
+          "address": 4317957731,
+          "direct_edges": [],
+          "pointer_references": [
+            {
+              "instruction": "1015ecea2: 4c 8d 15 ff 76 c6 00        \tleaq\t, %r10 <___glewBlitFramebufferEXT>",
+              "targets": [
+                "___glewBlitFramebufferEXT"
+              ],
+              "confidence": "symbol reference; indirect call/dataflow still requires verification"
+            }
+          ],
+          "indirect_edges": [
+            {
+              "address": 4317957777,
+              "operand": "*(%r12)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317957790,
+              "operand": "*(%r12)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317957837,
+              "operand": "*(%r10)",
+              "status": "unresolved"
+            },
+            {
+              "address": 4317957856,
+              "operand": "*(%r12)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN15C3DCombatResult6RenderER7CCamera",
+              "address": 4307844122
+            }
+          ]
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     },
@@ -511,7 +2666,57 @@
       "resources_and_contract": "GPU fences, waits, flush, and drawable presentation",
       "runtime_coverage": "CGLFlushDrawable wait is timed; GL sync-object coverage is absent",
       "metal_equivalent_and_difficulty": "MTLSharedEvent/command-buffer completion and CAMetalLayer presentation; ordering semantics unknown",
-      "clausewitz_gfx_implementation": "not yet mapped to a concrete implementation symbol",
+      "clausewitz_gfx_implementation": [
+        {
+          "symbol": "_GfxPresent",
+          "address": 4317947595,
+          "direct_edges": [],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": [
+            {
+              "symbol": "__ZN9CGraphics12PresentSceneEv",
+              "address": 4316584713
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxBeginScene",
+          "address": 4317947615,
+          "direct_edges": [],
+          "pointer_references": [],
+          "indirect_edges": [
+            {
+              "address": 4317947679,
+              "operand": "*(%r13)",
+              "status": "unresolved"
+            }
+          ],
+          "callers": [
+            {
+              "symbol": "__ZN9CGraphics23Render2dObjectsToScreenEb",
+              "address": 4316582065
+            },
+            {
+              "symbol": "__ZN9CGraphics10BeginSceneEb",
+              "address": 4316582436
+            },
+            {
+              "symbol": "__ZN9CGraphics34RenderAlwaysInFrontObjectsToScreenEb",
+              "address": 4316583857
+            }
+          ]
+        },
+        {
+          "symbol": "_GfxEndScene",
+          "address": 4317947736,
+          "direct_edges": [],
+          "pointer_references": [],
+          "indirect_edges": [],
+          "callers": []
+        }
+      ],
+      "unresolved_edges": "indirect pointer calls need dataflow and live verification; empty area mapping is unavailable",
       "runtime_frequency": "not measured or not covered by current hook set",
       "compatibility_profile_assumptions": "must be confirmed from the pinned binary and live contexts"
     }

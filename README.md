@@ -1,15 +1,18 @@
 # EU IV GOG power benchmark
 
-## Current Phase II result
+## Current profiler status
 
-The GOG v1.37.5 draw-path inventory and passive trace are documented in
-[the Phase II decision](analysis/draw-path-decision.md). One unattended capture
-produced 31 complete paused frames at 5,863 draws/frame. A large recurring
-border-draw run makes **border-specific multi-draw consolidation** the next
-prototype candidate. The trace exceeded its 5% intrusion gate, so this is a
-screening result rather than a measured optimization. No further broad
-diagnostic game run is needed before the prototype. The local raw trace can be
-re-screened without launching EU IV:
+The paused-frame investigation supersedes border batching as the immediate next
+action. The profiler now reports semantic attribution and envelope residuals,
+uses acknowledged measurement epochs, and segments GPU timestamps by context
+and pass. **Live profiling remains blocked by the overhead gates.** See
+[the verification record](analysis/frame-model-verification.md) and
+[the current correction status](analysis/frame-model-correction-plan.md).
+
+The [Phase II draw-path decision](analysis/draw-path-decision.md) remains
+historical screening evidence: 31 complete paused frames at 5,863 draws/frame
+identified a recurring border run. Its trace failed its intrusion gate, so it
+does not establish an optimization benefit. The local trace can be re-screened:
 
 ```sh
 python3 benchmark/eu4_draw_trace.py screen-partial results/20260928T113359Z-draw-trace
@@ -423,12 +426,12 @@ after the experiment.
 ## Paused-frame causal profiler
 
 `benchmark/eu4_frame_model.py` builds the pinned x86-64 profiler and engine
-inventory. Protocol, telemetry, and reports are version 2. The shared production
+inventory. Protocol, telemetry, and reports are version 3. The shared production
 scope stack and GPU segment manager have native and x86-64/Rosetta harnesses.
 The analyzer verifies the production scope serializer. Legacy telemetry remains
 readable, but cannot satisfy the current coverage gates.
 
-Begin with a residual-discovery pilot:
+After offline overhead acceptance, use the residual-discovery pilot:
 
 ```sh
 python3 benchmark/eu4_frame_model.py preflight --static-only
@@ -444,22 +447,31 @@ timing tree does not establish semantic coverage or a definitive diagnosis.
 
 Live runs require the registered paused Venice scene, a verified 120 Hz display,
 Normal power mode, AC power, and the exact reviewed root-owned powermetrics
-helper with noninteractive authorization. The current helper collects up to 720
+helper with noninteractive authorization. The current helper collects up to 1,200
 one-second samples. Refresh an older installation from an interactive Terminal:
 
 ```sh
 sudo sh benchmark/install_powermetrics_helper.sh
 ```
 
-The 3% counters-only wall/thread CPU overhead gate and the live 3% CPU/cadence
-and 5% sampled-tracing perturbation gates remain mandatory. A failed gate stops
+The 3% counters-only wall/thread CPU overhead gate on validated structural rendering recipes and the live 3% CPU/cadence
+and 5% sampled-tracing perturbation gates remain mandatory. Calibration uses
+reference → counters → reference, with six windows of four consecutive sampled
+renders. The tiny-call workload is retained as a diagnostic. Each representative
+recipe has seven paired trials, alternating order, raw timings, and confidence
+intervals in `analysis/frame-model-offline-evidence.json`. A failed gate stops
 before live profiling or causal interventions. Static preflight alone cannot
 measure overhead. See [the correction verification record](analysis/frame-model-verification.md)
 for checks actually performed and current blockers.
 
 Every A0–A5 control and B/C/D/E intervention holds the same calibrated update
 period. ANATIVE and natural Low Power comparisons retain unrestricted cadence.
-E30/E15 gate renderer execution at absolute 30/15 Hz deadlines while updates
+The controller rejects schedules whose worst-case budget exceeds 1,140 seconds;
+the helper reserves a further minute for restoration. The combined natural and
+fixed LPM schedule currently exceeds this bound and is rejected before launch.
+E30/E15 report achieved rate, skip fraction, lateness, missed deadlines, and
+render overruns, and require the achieved rate within 3% of target. They gate
+renderer execution at absolute 30/15 Hz deadlines while updates
 continue at the calibrated rate. The controller awaits measurement-enable
 acknowledgement before starting its window. Detail rearming changes command
 generation, while retaining the measurement epoch. Stop is acknowledged before
@@ -481,13 +493,20 @@ reach 95% independently for UpdateOneFrame and executed Render in baseline
 controls. Per-frame distributions accompany the ratios. Wall minus thread CPU
 is non-CPU elapsed time, which can include waiting and descheduling.
 
-GPU timestamps are context-lifetime/pass segments, with measurement epoch,
+GPU timestamps are sampled context-lifetime/pass segments, with measurement epoch,
 render identity, and sequence. Active queries are never polled. Completed
 results are collected only while their owning context is current; collection
 never changes contexts or waits synchronously. Missing segments are explicit.
 Different context timelines are never summed, and segment intervals are never
 reported as whole-render GPU busy time. Partial GPU evidence is compatible with
 complete CPU accounting.
+
+The [static evidence](analysis/frame-model-static.json) records bounded recursive
+call/tail traversal, aliases, indirect edges, shader hashes/includes/features,
+and enabled-mod shader override status. It stores no shader payloads. The
+[Metal matrix](analysis/frame-model-backend.json) records concrete Gfx symbols
+and evidence addresses while marking unresolved pointer-call dependencies and
+unmeasured runtime frequencies. Metal go/no-go remains undetermined.
 
 After residual discovery, add 3–8 verified semantic hooks targeting the largest
 residuals per iteration, with ABI and overhead validation repeated. Keep these

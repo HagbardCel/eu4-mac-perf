@@ -1,62 +1,88 @@
-# Corrective profiler verification — 2026-10-01
+# Profiler verification — 2026-10-01
 
-The corrective implementation includes the shared production scope stack and
-serializer, path identities and validity checks, semantic coverage and envelope
-residuals, v2 commands/epochs/telemetry, acknowledged windows with clock uncertainty,
-matched control cadence, context/pass GPU query state management, the discovery
-schedule, and the feasibility-seed label. No semantic hooks were added speculatively.
+The release-gate follow-up builds on local corrective commit `96a9d2d`.
+The corrective code fixes scope parent production, semantic coverage, acknowledged
+epochs/windows, matched cadence, and context/pass GPU segmentation. The follow-up
+adds v3 origins, per-thread bounded queues/local counters, a shared GPU lifetime
+registry, D state enforcement/restoration, render deadline metrics and rate
+acceptance, reference calibration, fail-closed evidence, partial reports, bounded
+power collection, and portable CI. Static backend evidence remains a feasibility
+seed. Seven engine hooks are installed; additional semantic hooks remain a
+separately reviewed residual-driven step.
 
-Verification completed:
+## Local verification
 
-- `python3 -m unittest discover -s tests`: 72 tests passed, including native
-  producer compilation, injected-clock accounting, busy/sleep smoke, controller
-  acknowledgement and detail-epoch tests, aggregate coverage, timestamped event
-  rates, boundary filtering, legacy decoding, and discovery report generation.
-- `python3 benchmark/eu4_frame_model.py preflight --static-only`: x86-64 build
-  passed; detour, render-gate, exact ARB-handle forwarding, production scope,
-  serializer/analyzer integration, and GPU state-machine harnesses ran under
-  Rosetta and passed. Static preflight is not an overhead acceptance.
-- `python3 benchmark/eu4_engine_inventory.py verify`: seven pinned engine
-  entry points and generated backend inventory verified.
-- `git diff --check`: passed.
+- `python3 -m unittest discover -s tests`: **78 tests passed**. Native shared
+  scope/GPU/queue/render-gate harnesses compile and run, with Python serializer
+  analysis, four concurrent producers, capacity/reuse, migration/stale cursors,
+  acknowledged windows, epoch preservation, V/W exclusion, sample-window pairing,
+  local-neighbor perturbation, cadence, missing gates, budget rejection and
+  legacy decoding.
+- `python3 benchmark/eu4_frame_model.py preflight --static-only`: x86-64 build and
+  Rosetta detour, partial-install rollback, render gate, ARB forwarding, shared
+  producer and serializer/analyzer harnesses **passed**.
+- `python3 benchmark/eu4_engine_inventory.py verify`: **passed**, including pinned
+  prologue lengths and deterministic generated inventory. Bounded recursive
+  static traversal and local shader hashes/includes/features are recorded in
+  [the static evidence](frame-model-static.json). Enabled Proper 2K UI has no
+  `gfx/FX` shader override directory. Indirect dataflow and runtime frequencies
+  remain unresolved.
+- `git diff --check`: **passed**.
 
-The shared GPU harness exercises A→B→A in one render, failed switches, pass
-splits, null and unsupported contexts, active versus pending queries, delayed
-availability, wrong-owner polling, unexpected ownership, destruction/reuse,
-query exhaustion, context capacity, and uncollected results. Mock callbacks
-assert every stamp/result operation uses the owning context and every result
-read was preceded by availability. This is state-machine evidence, not proof
-of a driver’s timer-query support in EU IV.
+## Display-dependent overhead
 
-The sandbox cannot expose an accelerated CGL pixel format. An authorized
-unsandboxed OpenGL preflight reached the real GL workload. It initially found
-recursive CGL forwarding through `RTLD_NEXT`; the macOS crash report showed
-repeated `tracked_set_context` frames. Forwarding now uses direct framework
-imports from the interposer image. Repeating the unsandboxed preflight completed
-the bare and wrapped GL runs without that recursion crash.
+The sandbox cannot create an accelerated CGL pixel format. Authorized
+unsandboxed preflight ran valid core-profile GL workloads. The test-only library
+exercises the seven actual production wrappers with pointer, integer, bool and
+float sentinels, plus scope production, queues, serialization and the writer.
+The GL harness checks linked shaders, VBO/IBO bounds, FBO completeness, error-free
+draws and nonzero output. Recipes retain observed counts, topology/API categories
+and adjacent tracked state-change frequencies from one complete passive frame.
+They use generated payloads/shaders; they do not reproduce the original assets,
+all GL calls between draws, or engine computation. No sleeps or extra busywork
+inflate the baseline. Thread CPU and wall timing remain distinct.
 
-**The counters-only overhead gate failed:** wall overhead **+632.1%**, thread CPU
-**+626.1%** on the current synthetic GL workload, versus the retained 3% limit.
-These are observed synthetic perturbations, not estimates of EU IV overhead.
-No live counters or sampled-tracing perturbation gate has passed. Do not adjust
-the thresholds or infer that real-game overhead is acceptable from static tests.
-The instrumentation/workload must be investigated before another live attempt.
+Each recipe has seven paired trials with alternating stage order. Raw timings,
+recipe/source/library hashes, median fractions and paired bootstrap 95%
+intervals are in [the offline evidence](frame-model-offline-evidence.json).
+Acceptance requires the median and interval to remain inside the unchanged
+3% reference/counters and 5% sampled limits for every recipe and axis. The
+old tiny-call workload remains a diagnostic, with its raw trials retained.
 
-`run --residual-discovery` was attempted. Sandboxed preflight could not verify
-the display. Authorized unsandboxed preflight verified the display but rejected
-the installed powermetrics helper: it still has the old 420-sample limit, while
-the exact reviewed source uses 720 samples. Installed SHA-256:
-`8baf0d0a6b7ebc6bd2d835cef04c0d5512391b2b6f126f5623431e3e6e4dcc01`;
-reviewed source SHA-256:
-`e93423069f7c79debb81d858b4709c0d889401a5c073ce4cf72a8611af258733`.
-No privileged helper or sudoers files were changed. Exact helper checks remain.
+**The overhead gates failed.** Median perturbations on the final source:
 
-**Pilot status: blocked before game launch.** There is no captured ANATIVE/A0
-residual population, power result, or evidence-driven hook expansion to report.
-No EU IV launch, fixture mutation, or power-mode transition occurred in the
-failed pilot attempt. Metal go/no-go remains undetermined. After overhead is
-resolved and the reviewed helper is refreshed, repeat the discovery pilot;
-then add 3–8 verified semantic hooks per iteration based on its residual table,
-with separate commits and repeated ABI/overhead checks. The long causal run
-additionally requires the independent UpdateOneFrame and executed Render CPU
-and wall coverage gates.
+| Recipe | Draws/frame | Counters wall | Counters CPU | Sampled wall | Sampled CPU |
+|---|---:|---:|---:|---:|---:|
+| mesh | 2774 | +20.7% | +20.7% | +515.0% | +48.3% |
+| borders | 2285 | +10.4% | +10.9% | +376.9% | +87.8% |
+| text_ui | 632 | +18.8% | +20.7% | +295.1% | +193.0% |
+
+Reference overhead also fails its 3% gate. These are structural-surrogate
+perturbations, not estimates of installed-game overhead. Native correctness and
+successful valid GL rendering do not override the measurement acceptance gates.
+No live calibration, ANATIVE/A0 residual population, intervention, power result,
+or Metal go/no-go is claimed.
+
+## Live status and publication
+
+**Residual-discovery pilot: blocked before launch.** The retained overhead gates
+reject this source. The installed powermetrics helper also differs from the
+reviewed 1,200-sample source; it still has the older 420-sample limit. No privileged
+helper/sudoers changes were made. Source refresh remains an exact checked installer
+step after overhead acceptance. No EU IV launch, fixture mutation or power-mode
+transition occurred in this follow-up. The controller does not rely on `sudo -v`.
+
+The portable CI workflow runs Python 3.10/3.14 and native producer tests on
+Ubuntu. It does not claim Rosetta, driver overhead, or installed-game validation.
+Remote CI is checked after publication and reported separately from these local
+results. Its current status is available on the [portable workflow page](https://github.com/HagbardCel/eu4-mac-perf/actions/workflows/profiler.yml);
+the evidence above is local and source-hashed.
+
+The next live action remains the short `run --residual-discovery` pilot after
+offline overhead and exact helper checks pass. Its two A0 windows contain two
+consecutive renders each, following unrestricted ANATIVE. Calibration separately
+requires six windows of four consecutive renders and local unsampled neighbors.
+Rank residual CPU/wall envelopes, then add 3–8 ABI-verified semantic hooks per
+iteration. The long experiment additionally requires every baseline's independent
+≥95% Update/Render CPU and wall coverage, integrity, cadence, intervention and
+control-drift evidence. Missing evidence blocks architectural recommendations.

@@ -21,6 +21,8 @@ import autonomous_runner as auto
 import eu4_benchmark as base
 import eu4_diagnostic as diagnostic
 import eu4_engine_inventory as engine
+import frame_model_workload as workload
+from frame_model_gates import GateEvidence, run_budget, RUN_DEADLINE_SECONDS
 from fixture_manager import FixtureManager
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,15 +38,18 @@ RENDER_GATE_HARNESS_SOURCE = ROOT / "tests/frame_model_render_gate_harness.c"
 RENDER_GATE_HARNESS = ROOT / "benchmark/.build/frame_model_render_gate_harness"
 SCOPE_HARNESS = ROOT / "benchmark/.build/frame_model_scope_harness"
 GPU_HARNESS = ROOT / "benchmark/.build/frame_model_gpu_harness"
+QUEUE_HARNESS = ROOT / "benchmark/.build/frame_model_queue_harness"
+TEST_LIBRARY=ROOT/"benchmark/.build/libeu4_frame_model_test.dylib"
+WORKLOAD_HARNESS=ROOT/"benchmark/.build/frame_model_workload_harness"
 POWER_HELPER_SOURCE = ROOT / "benchmark/power_mode_helper"
 POWER_HELPER_INSTALLED = Path("/usr/local/libexec/eu4-power-mode")
 CONTROL_SIZE = 4096
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 CONTROL = struct.Struct("<6I8Q")
 CONTROL_COMMAND = struct.Struct("<6I4Q")
 EXPECTED = engine.EXPECTED_SHA256
 MODE = {"off": 0, "profile": 1, "skip_render": 2, "drop_draws": 3,
-        "raster_suppress": 4, "cadence_30": 5, "cadence_15": 6}
+        "raster_suppress": 4, "cadence_30": 5, "cadence_15": 6,"reference":7}
 PHASES = (("A0", "profile", 20, True), ("B", "skip_render", 20, False),
           ("A1", "profile", 20, False), ("C", "drop_draws", 20, True),
           ("A2", "profile", 20, False), ("D", "raster_suppress", 20, True),
@@ -63,7 +68,10 @@ FRAME_FIELDS = ("update_id", "render_id", "present_id", "phase", "thread_id",
                 "forwarded_draws", "suppressed_draws", "render_attempts",
                 "render_executed", "present_scene_calls", "present_calls", "measurement_epoch", "start_ns", "end_ns",
                 "render_start_ns", "render_end_ns", "present_time_ns")
-LEGACY_FRAME_FIELDS = FRAME_FIELDS[:-6]
+V2_FRAME_FIELDS = FRAME_FIELDS
+FRAME_FIELDS += ("generation", "sample_window", "render_deadline_ns", "render_lateness_ns",
+                 "render_missed_deadlines", "render_overruns", "raster_challenges")
+LEGACY_FRAME_FIELDS = V2_FRAME_FIELDS[:-6]
 HOOK_NAMES = ("UpdateOneFrame", "CInGameIdler::Idle", "CInGameIdler::Render",
               "CEU3GraphicalMap::Render", "CGraphics::PresentScene",
               "CPdxMeshObject::AddToBucket", "CArray<SFlushData>::Append",
@@ -83,6 +91,10 @@ def build() -> dict:
         raise base.BenchmarkError(generated.stderr.strip() or generated.stdout.strip())
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
     commands = (
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-DEU4_FRAME_MODEL_TEST",
+         "-dynamiclib","-framework","OpenGL","-framework","CoreGraphics","-o",str(TEST_LIBRARY),str(SOURCE)],
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
+         "-o",str(WORKLOAD_HARNESS),str(ROOT/"tests/frame_model_workload_harness.c")],
         ["clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-Werror",
          "-dynamiclib", "-framework", "OpenGL", "-framework", "CoreGraphics",
          "-o", str(LIBRARY), str(SOURCE)],
@@ -96,7 +108,7 @@ def build() -> dict:
          "-o", str(RENDER_GATE_HARNESS), str(RENDER_GATE_HARNESS_SOURCE)],
     )
     commands += tuple(["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror",
-        "-o",str(path),str(ROOT/"tests"/(path.name+".c"))] for path in (SCOPE_HARNESS,GPU_HARNESS))
+        "-o",str(path),str(ROOT/"tests"/(path.name+".c"))] for path in (SCOPE_HARNESS,GPU_HARNESS,QUEUE_HARNESS))
     for command in commands:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode:
@@ -110,6 +122,7 @@ def build() -> dict:
             "engine_sites": len(json.loads(engine.OUTPUT.read_text())["hooks"]),
             "library_sha256": base.sha256(LIBRARY),
             "library_source_sha256": base.sha256(SOURCE),
+            "native_source_hashes":{p.name:base.sha256(p) for p in (SOURCE,ROOT/"benchmark/eu4_scope_tree.h",ROOT/"benchmark/eu4_gpu_segments.h",ROOT/"benchmark/eu4_spsc.h",ROOT/"benchmark/eu4_raster_policy.h",ROOT/"benchmark/eu4_render_gate.h",ROOT/"benchmark/eu4_detour.h",engine.HEADER)},
             "architecture": "x86_64"}
 
 
@@ -134,7 +147,7 @@ def offline_render_gate_harness() -> dict:
 
 def offline_producer_harnesses() -> dict:
     evidence={}
-    for path in (SCOPE_HARNESS,GPU_HARNESS):
+    for path in (SCOPE_HARNESS,GPU_HARNESS,QUEUE_HARNESS):
         run=subprocess.run([str(path)],capture_output=True,text=True,timeout=10,check=False)
         if run.returncode: raise base.BenchmarkError(f"{path.name} failed: {run.stderr}")
         evidence[path.name]={"status":"passed","output":run.stdout.strip()}
@@ -208,34 +221,69 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
                 "arb_handle_harness":arb,"producer_harnesses":producers,
                 "power_mode_helper":power_helper,
                 "overhead_gate": "not measured", "live_hooks": "not installed in EU IV"}
-    bare, wrapped = [], []
-    for _ in range(3):
-        for stage,target in (("bare",None),("counters",LIBRARY)):
-            try: sample=offline_harness(target,loops=12000)
-            except base.BenchmarkError as exc: raise base.BenchmarkError(f"{stage} GL preflight: {exc}") from exc
-            (bare if target is None else wrapped).append(sample)
-    median_bare=statistics.median(item["elapsed_ns"] for item in bare)
-    median_wrapped=statistics.median(item["elapsed_ns"] for item in wrapped)
-    overhead = median_wrapped/median_bare-1 if median_bare else 1.0
-    bare_cpu,wrapped_cpu=statistics.median([item["cpu_ns"] for item in bare]),statistics.median([item["cpu_ns"] for item in wrapped])
-    cpu_overhead=wrapped_cpu/bare_cpu-1 if bare_cpu else 1.0
-    if max(abs(overhead),abs(cpu_overhead)) > .03:
-        raise base.BenchmarkError(f"Counters-only instrumentation adds wall {overhead:.1%}, thread CPU {cpu_overhead:.1%}; reduce it before a game run")
-    return {"status": "ready", "build": static, "autonomous": auto_evidence,
-            "detour_harness":detour,
-            "render_gate_harness":render_gate,
-            "arb_handle_harness":arb,"producer_harnesses":producers,
-            "power_mode_helper":power_helper,
-            "bare_ns": [item["elapsed_ns"] for item in bare],
-            "counters_ns": [item["elapsed_ns"] for item in wrapped],
-            "bare_cpu_ns": [item["cpu_ns"] for item in bare],
-            "counters_cpu_ns": [item["cpu_ns"] for item in wrapped],
-            "counters_overhead_fraction": round(overhead, 5),
-            "counters_cpu_overhead_fraction": round(cpu_overhead,5),
-            "overhead_gate": "passed", "limitations": [
-                "Synthetic GL test validates draw interposition and overhead, not engine detours under Rosetta.",
-                "GPU timestamps are context/pass timeline segments; compatibility varies by CGL context.",
-                "Six draw APIs are wrapped; draw-range, multi-draw, and extension-specific entry points remain uncovered."]}
+    diagnostic_samples={}
+    for name,target in (("bare",None),("counters",LIBRARY)):
+        diagnostic_samples[name]=[offline_harness(target,loops=12000) for _ in range(3)]
+    representative=offline_workloads()
+    evidence={"status":"ready" if representative["status"]=="passed" else "blocked", "build":static,
+        "autonomous":auto_evidence,"detour_harness":detour,"render_gate_harness":render_gate,
+        "arb_handle_harness":arb,"producer_harnesses":producers,"power_mode_helper":power_helper,
+        "tiny_call_diagnostic":diagnostic_samples,"representative_workloads":representative,
+        "overhead_gate":representative["status"],
+        "limitations":["Structural recipes reproduce observed draw counts and state-change frequencies with generated shaders/resources. Live calibration is independently mandatory.",
+            "GPU evidence remains segmented and may be partial."]}
+    path=ROOT/"analysis/frame-model-offline-evidence.json"
+    path.write_text(json.dumps(evidence,indent=2)+"\n")
+    if representative["status"]!="passed":
+        raise base.BenchmarkError(f"Representative overhead gates failed; raw evidence: {path}")
+    return evidence
+
+
+def offline_workloads() -> dict:
+    with tempfile.TemporaryDirectory(prefix="eu4-representative-") as temporary:
+        root=Path(temporary); recipes=workload.recipes(root); evidence=[]
+        for recipe in recipes:
+            trials=[]
+            for trial in range(7):
+                stages=("bare","reference","counters","sampled")
+                if trial%2: stages=tuple(reversed(stages))
+                values={}
+                for stage in stages:
+                    control_path=root/"control.bin";log_path=root/f"{recipe['name']}-{trial}-{stage}.csv"
+                    mode=MODE["reference"] if stage=="reference" else MODE["profile"]
+                    frames=4
+                    fields=[FORMAT_VERSION,2,mode,1,1,0,0,0,1,0,0,0,0,0]
+                    control_path.write_bytes(CONTROL.pack(*fields)+bytes(CONTROL_SIZE-CONTROL.size))
+                    env={k:v for k,v in os.environ.items() if k not in ("DYLD_INSERT_LIBRARIES","EU4_FRAME_MODEL_CONTROL","EU4_FRAME_MODEL_LOG")}
+                    if stage!="bare":
+                        env.update(DYLD_INSERT_LIBRARIES=str(TEST_LIBRARY),EU4_FRAME_MODEL_CONTROL=str(control_path),EU4_FRAME_MODEL_LOG=str(log_path))
+                        if stage=="sampled": env["EU4_TEST_SAMPLED"]="1"
+                    run=subprocess.run([str(WORKLOAD_HARNESS),recipe["path"],str(frames)],env=env,
+                        capture_output=True,text=True,timeout=60,check=False)
+                    if run.returncode:
+                        raise base.BenchmarkError(f"Valid workload {recipe['name']} {stage} failed ({run.returncode}): {run.stderr}")
+                    measured={k:int(v) for k,v in (p.split("=",1) for p in run.stdout.split() if "=" in p)}
+                    if stage!="bare":
+                        rows=frame_rows(log_path);trace=read_rows(log_path)
+                        tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
+                        failure=next((int(r[1]) for r in trace if r[0]=="Z"),None)
+                        if len(rows)!=frames or failure!=0 or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|4096) for r in rows):
+                            raise base.BenchmarkError("Representative workload did not exercise valid production wrappers, scopes, and writer")
+                        if stage!="reference" and sum(r["draws"] for r in rows)!=frames*recipe["draws"]:
+                            raise base.BenchmarkError("Representative producer draw counts differ from passive recipe")
+                        measured.update(frames=len(rows),tree_reconciliation=tree["tree_reconciliation"])
+                    values[stage]=measured
+                trials.append({"trial":trial,"order":list(stages),"stages":values})
+            gates={}
+            for stage,reference,limit in (("reference","bare",.03),("counters","reference",.03),("sampled","reference",.05)):
+                for axis in ("elapsed_ns","cpu_ns"):
+                    gates[stage+"_"+axis]=workload.paired_summary([
+                        {"instrumented":t["stages"][stage][axis],"reference":t["stages"][reference][axis]} for t in trials],limit)
+            evidence.append({"recipe":{k:v for k,v in recipe.items() if k!="path"},"trials":trials,"gates":gates})
+        return {"status":"passed" if all(g["status"]=="passed" for r in evidence for g in r["gates"].values()) else "failed",
+                "recipes":evidence,"test_library_sha256":base.sha256(TEST_LIBRARY),
+                "harness_source_sha256":base.sha256(ROOT/"tests/frame_model_workload_harness.c"),
+                "profiler_source_sha256":base.sha256(SOURCE)}
 
 
 def read_rows(path: Path) -> list[list[str]]:
@@ -248,10 +296,10 @@ def read_rows(path: Path) -> list[list[str]]:
 def frame_rows(path: Path) -> list[dict]:
     result = []
     for row in read_rows(path):
-        if not row or row[0] != "F" or len(row) not in (len(FRAME_FIELDS)+1,len(LEGACY_FRAME_FIELDS)+1):
+        if not row or row[0] != "F" or len(row) not in (len(FRAME_FIELDS)+1,len(V2_FRAME_FIELDS)+1,len(LEGACY_FRAME_FIELDS)+1):
             continue
         try:
-            result.append(dict(zip(FRAME_FIELDS if len(row)==len(FRAME_FIELDS)+1 else LEGACY_FRAME_FIELDS, map(int, row[1:]))))
+            result.append(dict(zip(FRAME_FIELDS if len(row)==len(FRAME_FIELDS)+1 else V2_FRAME_FIELDS if len(row)==len(V2_FRAME_FIELDS)+1 else LEGACY_FRAME_FIELDS, map(int, row[1:]))))
         except ValueError:
             continue
     return result
@@ -276,14 +324,21 @@ def eligible_trace(trace: list[list[str]], frames: list[dict], windows: list[dic
     result=[]
     for row in trace:
         try:
-            if row[0]=="Q": key=(int(row[10]),int(row[1])) if len(row)==13 else None
+            if row[0]=="Q": key=(int(row[10]),int(row[1])) if len(row) in (13,16) else None
             elif row[0]=="G": key=(int(row[8]),int(row[9])) if len(row)>=13 else None
             elif row[0] in {"D","S","U","u","V","W","B","b","T","t"}:
-                key=(int(row[13]),int(row[14])) if len(row)==16 else None
+                key=(int(row[13]),int(row[14])) if len(row) in (16,20) else None
             else: result.append(row); continue
-            if key in eligible: result.append(row[:13] if row[0] not in {"Q","G"} else row)
+            if key in eligible: result.append(row)
         except (ValueError,IndexError): continue
     return result
+
+
+def _distribution(values):
+    if not values: return {"count":0,"median":None,"p95":None,"max":None}
+    values=sorted(values)
+    return {"count":len(values),"median":statistics.median(values),
+            "p95":values[min(len(values)-1,int(.95*len(values)))],"max":values[-1]}
 
 
 def phase_summary(rows: list[dict], name: str, seconds: float, window: dict | None=None, events_rows: list[list[str]] | None=None) -> dict:
@@ -348,6 +403,12 @@ def phase_summary(rows: list[dict], name: str, seconds: float, window: dict | No
               "updates_without_render_execution": sum(row["render_attempts"]>0 and
                   row["render_executed"]==0 for row in selected),
               "cadence_overruns": sum(bool(row["flags"] & 2) for row in selected),
+              "target_render_rate":(1e9/window["render_period_ns"] if window and window.get("render_period_ns") else None),
+              "skipped_render_fraction":(1-sum(r["render_executed"] for r in selected)/sum(r["render_attempts"] for r in selected) if sum(r["render_attempts"] for r in selected) else None),
+              "render_missed_deadlines":sum(r.get("render_missed_deadlines",0) for r in selected),
+              "render_overruns":sum(r.get("render_overruns",0) for r in selected),
+              "render_lateness_ns":_distribution([r.get("render_lateness_ns",0) for r in selected if r["render_executed"]]),
+              "raster_challenges":sum(r.get("raster_challenges",0) for r in selected),
               "record_flags": sorted({row["flags"] for row in selected})}
     if window and "measurement_epoch" in window:
         # Rates count timestamped events in [start,end), including events in frames
@@ -393,6 +454,12 @@ def temporal_differences(trace: list[list[str]]) -> dict:
     buffer_frames: dict[int,dict[tuple[int,int,int,int],int]] = {}
     texture_frames: dict[int,dict[tuple[int,int],int]] = {}
     combined_frames: dict[int,list[tuple[str,tuple[str,...]]]] = {}
+    origins={}
+    for row in trace:
+        if row and row[0] in {"D","S","U","u","B","b","T","t"} and len(row)==20:
+            origins[int(row[1])]=(row[13],row[16],row[18]) # epoch/thread/sample window
+    def same_window(a,b):
+        return b==a+1 and (not origins or (a in origins and origins.get(a)==origins.get(b)))
     uniform_exact=[]; uniform_compared_calls=0; uniform_changed_elements=0
     uniform_omitted_elements=0; uniform_oversize_calls=0
     draw_samples=[];draw_sample_total=0
@@ -417,23 +484,23 @@ def temporal_differences(trace: list[list[str]]) -> dict:
                         "index_offset":draw_identity[8] if draw_identity[1] in (1,2,4,6) else None,
                         "first_vertex":draw_identity[8] if draw_identity[1] in (3,5) else None,
                         "base_vertex":draw_identity[9],"instance_count":draw_identity[10]})
-                combined_frames.setdefault(int(row[1]),[]).append((row[0],tuple(row[2:])))
+                combined_frames.setdefault(int(row[1]),[]).append((row[0],tuple(row[2:13])))
             elif row[0]=="S" and len(row)>=5:
                 state_frames.setdefault(int(row[1]),[]).append((int(row[2]),int(row[3]),int(row[4])))
-                combined_frames.setdefault(int(row[1]),[]).append((row[0],tuple(row[2:])))
+                combined_frames.setdefault(int(row[1]),[]).append((row[0],tuple(row[2:13])))
             elif row[0]=="U" and len(row)>=6:
                 frame,key_program,location=int(row[1]),int(row[3]),int(row[4])
                 size_hash=int(row[5]); byte_size=size_hash>>32; payload_hash=size_hash&0xffffffff
                 key=(int(row[2]),key_program,location)
                 uniform_frames.setdefault(frame,{})[key]=(byte_size,payload_hash)
                 uniform_sequences.setdefault(frame,[]).append((key,(byte_size,payload_hash)))
-                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:])))
+                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:13])))
             elif row[0]=="u" and len(row)>=6:
                 frame=int(row[1]); program=int(row[3]); location=int(row[4])
                 key=(int(row[2]),program,location); value=(4,int(row[5]))
                 uniform_frames.setdefault(frame,{})[key]=value
                 uniform_sequences.setdefault(frame,[]).append((key,value))
-                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:])))
+                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:13])))
             elif row[0]=="V" and len(row)>=8:
                 if len(uniform_exact)<512:
                     uniform_exact.append({"render_id":int(row[1]),"callsite_offset":int(row[2]),
@@ -441,7 +508,6 @@ def temporal_differences(trace: list[list[str]]) -> dict:
                         "byte_offset":int(row[5]),"element_index":int(row[5])//4,
                         "previous_u32_hex":f"0x{int(row[6]):08x}",
                         "current_u32_hex":f"0x{int(row[7]):08x}"})
-                combined_frames.setdefault(int(row[1]),[]).append((row[0],tuple(row[2:])))
             elif row[0]=="W" and len(row)>=8:
                 byte_size,changed,omitted=map(int,row[5:8])
                 if omitted==1 and changed==0 and byte_size>256: uniform_oversize_calls+=1
@@ -449,19 +515,18 @@ def temporal_differences(trace: list[list[str]]) -> dict:
                     uniform_compared_calls+=1
                     uniform_changed_elements+=changed
                     uniform_omitted_elements+=omitted
-                combined_frames.setdefault(int(row[1]),[]).append((row[0],tuple(row[2:])))
             elif row[0] in ("T","t") and len(row)>=4:
                 frame,site,dimensions=int(row[1]),int(row[2]),int(row[3])
                 texture_frames.setdefault(frame,{})[(ord(row[0]),site)]=dimensions
-                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:])))
+                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:13])))
             elif row[0]=="B" and len(row)>=6:
                 frame,key,size,digest=int(row[1]),int(row[2]),int(row[3]),int(row[4])
                 buffer_frames.setdefault(frame,{})[(ord("B"),key,0,size)]=digest
-                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:])))
+                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:13])))
             elif row[0]=="b" and len(row)>=6:
                 frame,key,size,offset,digest=int(row[1]),int(row[2]),int(row[3]),int(row[4]),int(row[5])
                 buffer_frames.setdefault(frame,{})[(ord("b"),key,offset,size)]=digest
-                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:])))
+                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:13])))
         except (ValueError,IndexError):
             continue
 
@@ -469,7 +534,7 @@ def temporal_differences(trace: list[list[str]]) -> dict:
         ids=sorted(series)
         compared=identical=0; changes=[]
         for previous,current in zip(ids,ids[1:]):
-            if current!=previous+1: continue
+            if not same_window(previous,current): continue
             left,right=series[previous],series[current]
             common=set(left)&set(right)
             compared+=len(common)
@@ -487,11 +552,11 @@ def temporal_differences(trace: list[list[str]]) -> dict:
                 "note":f"{label}: hashes/dimensions identify changed records; exact changed byte ranges are not captured."}
 
     ids=sorted(draw_frames)
-    draw_pairs=[(a,b) for a,b in zip(ids,ids[1:]) if b==a+1]
+    draw_pairs=[(a,b) for a,b in zip(ids,ids[1:]) if same_window(a,b)]
     same=sum(draw_frames[a]==draw_frames[b] for a,b in draw_pairs)
     pairs=len(draw_pairs)
     state_ids=sorted(state_frames)
-    state_pairs_list=[(a,b) for a,b in zip(state_ids,state_ids[1:]) if b==a+1]
+    state_pairs_list=[(a,b) for a,b in zip(state_ids,state_ids[1:]) if same_window(a,b)]
     same_state=sum(state_frames[a]==state_frames[b] for a,b in state_pairs_list)
     state_pairs=len(state_pairs_list)
     state_changes=[]
@@ -504,10 +569,10 @@ def temporal_differences(trace: list[list[str]]) -> dict:
                 state_changes.append({"previous_render_id":a,"render_id":b,
                     "sequence_index":index,"previous_call":previous,"current_call":current})
     combined_ids=sorted(combined_frames)
-    combined_pairs=[(a,b) for a,b in zip(combined_ids,combined_ids[1:]) if b==a+1]
+    combined_pairs=[(a,b) for a,b in zip(combined_ids,combined_ids[1:]) if same_window(a,b)]
     combined_same=sum(combined_frames[a]==combined_frames[b] for a,b in combined_pairs)
     uniform_ids=sorted(uniform_sequences)
-    uniform_pairs=[(a,b) for a,b in zip(uniform_ids,uniform_ids[1:]) if b==a+1]
+    uniform_pairs=[(a,b) for a,b in zip(uniform_ids,uniform_ids[1:]) if same_window(a,b)]
     uniform_changed=[]
     uniform_equal_calls=0; uniform_total_calls=0
     for previous,current in uniform_pairs:
@@ -588,7 +653,8 @@ def gpu_summary(trace: list[list[str]]) -> dict:
             "query_policy":"Completed queries polled only in their owning current context; intervals are timeline elapsed time, never whole-render GPU busy time."}
 
 
-SEMANTIC_SCOPES = {4,5,6,7,9}
+PACING_SCOPES = {9}
+SEMANTIC_SCOPES = {4,5,6,7}
 ENVELOPE_SCOPES = {0,1,2,3,8}
 
 
@@ -596,14 +662,14 @@ def scope_tree_summary(trace: list[list[str]], phases: list[dict]) -> dict:
     populations={}; legacy=[]
     for row in trace:
         if not row or row[0]!="Q": continue
-        if len(row)!=13:
+        if len(row) not in (13,16):
             if len(row)>=10:
                 legacy.append({"update_id":row[1],"phase":row[2],"parent_scope":row[3],
                     "scope":row[4],"calls":row[5],"inclusive_wall_ns":row[6],
                     "inclusive_cpu_ns":row[7],"exclusive_wall_ns":row[8],"exclusive_cpu_ns":row[9]})
             continue
         try:
-            update,phase,parent,scope,calls,iw,ic,ew,ec,epoch,node,flags=map(int,row[1:])
+            update,phase,parent,scope,calls,iw,ic,ew,ec,epoch,node,flags=map(int,row[1:13])
             if not 0<=scope<len(SCOPE_NAMES): flags|=1024
             nodes=populations.setdefault((phase,epoch,update),{})
             if node in nodes: flags|=1024
@@ -680,7 +746,7 @@ def scope_tree_summary(trace: list[list[str]], phases: list[dict]) -> dict:
                     current=nodes[current["parent_node"]]
                 path=tuple(reversed(path))
                 total=totals.setdefault(path,{"name":SCOPE_NAMES[n["scope"]],"scope_path":[SCOPE_NAMES[i] for i in path],
-                    "classification":"envelope" if n["scope"] in ENVELOPE_SCOPES else "semantic",
+                    "classification":"envelope" if n["scope"] in ENVELOPE_SCOPES else "pacing" if n["scope"] in PACING_SCOPES else "semantic",
                     "calls":0,"inclusive_cpu_ms":0,"inclusive_wall_ms":0,"exclusive_cpu_ms":0,"exclusive_wall_ms":0,
                     "residual_cpu_ms":0,"residual_wall_ms":0,"non_cpu_elapsed_ms":0})
                 total["calls"]+=n["calls"]
@@ -755,13 +821,19 @@ def analyze(run_dir: Path) -> dict:
     temporal = temporal_differences(trace)
     gpu = gpu_summary(trace)
     scope_tree=scope_tree_summary(trace,phases)
+    format_qualified=(manifest.get("format_version")==FORMAT_VERSION and ["H","3"] in trace and
+                      bool(frames) and all("generation" in f for f in frames))
+    if not format_qualified:
+        for coverage in scope_tree["phases"].values():
+            coverage["coverage_95_percent_gate"]="not met"
+            coverage["format_gate"]="legacy/missing v3 provenance"
     for summary in summaries:
         coverage=scope_tree["phases"].get(str(PHASE_NUMBER[summary["phase"]]),{})
         if summary.get("invalid_scope_frames"):
             coverage["tree_reconciliation"]="invalid frames excluded"
             coverage["coverage_95_percent_gate"]="not met"
         summary["exclusive_scope_coverage"]=coverage
-    a_rows = [p for p in summaries if p["phase"].startswith("A") and p["status"] == "complete"]
+    a_rows = [p for p in summaries if p["phase"] in {name for name,*_ in PHASES if name.startswith("A")} and p["status"] == "complete"]
     drift = {}
     for field in ("median_update_cpu_ms", "median_render_cpu_ms", "median_draws"):
         values = [p[field] for p in a_rows]
@@ -769,8 +841,18 @@ def analyze(run_dir: Path) -> dict:
     reference = json.loads((ROOT / "results/autonomous-reproducibility.json").read_text())
     base_cpu_ms_swap = (reference["summary"]["eu4_cpu_ms_per_s"]["median"] /
                         reference["summary"]["median_swaps_s"]["median"])
+    report_gates=GateEvidence(dict(manifest.get("gates",{})))
+    is_v3=format_qualified
+    report_gates.record("format_v3","passed" if is_v3 else "failed","v3 header, manifest, and frame layout required")
+    expected_baselines={name for name,*_ in PHASES if name.startswith("A")}
+    baselines=[p for p in summaries if p["phase"] in expected_baselines]
+    coverage_ok=({p["phase"] for p in baselines}==expected_baselines and all(
+        p.get("exclusive_scope_coverage",{}).get("coverage_95_percent_gate")=="passed" for p in baselines))
+    report_gates.record("semantic_coverage","passed" if coverage_ok else "failed","Every baseline needs independent ≥95% Update/Render CPU and wall coverage")
     output = {"format_version":FORMAT_VERSION,"report_kind":manifest.get("report_kind","causal"),
               "metal_feasibility":"feasibility seed; go/no-go undetermined",
+              "release_gates":report_gates.entries,
+              "release_blockers":report_gates.blockers(),
               "status": manifest.get("status"), "run_dir": str(run_dir),
               "executable_sha256": manifest.get("executable_sha256"),
               "phases": summaries, "hook_totals": counters,
@@ -788,11 +870,13 @@ def analyze(run_dir: Path) -> dict:
               "causal_contrasts": causal_contrasts(summaries),
               "power_fps_scaling":power_fps_scaling(summaries,manifest.get("power_by_phase",{})),
               "conclusions": derive_conclusions(summaries, drift,manifest.get("power_by_phase",{})),
-              "recommendations": derive_recommendations(summaries,manifest.get("power_by_phase",{}),temporal,gpu),
+              "recommendations": derive_recommendations(summaries,manifest.get("power_by_phase",{}),temporal,gpu,report_gates.entries),
               "limitations": manifest.get("limitations", [])}
     baseline=[p for p in summaries if p["phase"] in {name for name,*_ in PHASES if name.startswith("A")}]
     output["diagnosis_status"]=("eligible for causal assessment" if manifest.get("status")=="complete" and
-        manifest.get("probe_integrity",{}).get("status")=="passed" and baseline and all(
+        not output["release_blockers"] and manifest.get("format_version")==FORMAT_VERSION and
+        manifest.get("probe_integrity",{}).get("status")=="passed" and
+        {p["phase"] for p in baseline}=={name for name,*_ in PHASES if name.startswith("A")} and all(
         p["exclusive_scope_coverage"].get("coverage_95_percent_gate")=="passed" for p in baseline)
         else "partial attribution")
     if output["report_kind"]=="residual_discovery" or output["diagnosis_status"]=="partial attribution":
@@ -969,10 +1053,14 @@ def derive_conclusions(phases: list[dict], drift: dict,power: dict | None=None) 
     return output
 
 
-def derive_recommendations(phases: list[dict],power: dict,temporal: dict,gpu: dict) -> list[dict]:
+def derive_recommendations(phases: list[dict],power: dict,temporal: dict,gpu: dict,gates: dict | None=None) -> list[dict]:
+    blockers=GateEvidence(gates or {}).blockers()
+    if blockers:
+        return [{"intervention":"complete release evidence", "status":"blocked",
+                 "signal":"mandatory gates missing or failed","estimated_reduction_fraction":None,"evidence":blockers}]
     by_name={item["phase"]:item for item in phases if item.get("status")=="complete"}
     if any(p.get("exclusive_scope_coverage",{}).get("coverage_95_percent_gate")!="passed"
-           for p in by_name.values() if p["phase"].startswith("A")):
+           for p in by_name.values() if p["phase"] in {name for name,*_ in PHASES if name.startswith("A")}):
         return [{"intervention":"no architectural recommendation yet","signal":"semantic coverage incomplete",
                  "estimated_reduction_fraction":None,"evidence":"UpdateOneFrame and executed Render require separate ≥95% CPU/wall gates"}]
     candidates=[]
@@ -1047,11 +1135,14 @@ def render_report(data: dict) -> str:
         render_per_frame=(f"{p['mean_render_cpu_ms_per_executed_render']:.3f}"
                           if p['mean_render_cpu_ms_per_executed_render'] is not None else "—")
         lines.append(f"| {p['phase']} | {p['update_attempts_s']:.2f} | {p['render_attempts_s']:.2f} | {p['executed_renders_s']:.2f} | {p['present_calls_s']:.2f} | {p['median_loop_wall_ms']:.3f} | {p['median_loop_cpu_ms']:.3f} | {p['median_update_cpu_ms']:.3f} | {p['median_render_cpu_ms']:.3f} | {render_per_frame} | {p['median_present_wall_ms']:.3f} | {p['median_cglflush_wall_ms']:.3f} | {p['median_draws']:.0f} | {p['median_triangles_est']:.0f} | {p['median_flush_records']:.0f} | {p['record_flags']} |")
-    normal=[p for p in data["phases"] if p["phase"].startswith("A") and p["status"]=="complete"]
+    normal=[p for p in data["phases"] if p["phase"] in {name for name,*_ in PHASES if name.startswith("A")} and p["status"]=="complete"]
     if normal:
         lines.extend(["","## Exclusive CPU and wall cost tree", "",
                       "Wall and thread CPU remain separate. Root scopes do not count as explained cost; residuals and coverage are emitted per phase.",
                       json.dumps(data.get("exclusive_cost_tree",{}),indent=2,sort_keys=True)])
+    if data.get("release_blockers"):
+        lines.extend(["", "## Release blockers", ""])
+        lines.extend(f"- {name}: {entry['reason']} ({entry['status']})" for name,entry in data["release_blockers"].items())
     lines.extend(["","## Ranked envelope residuals","",
         "| Phase | Envelope path | Residual CPU ms | Residual wall ms | Non-CPU elapsed ms |",
         "|---|---|---:|---:|---:|"])
@@ -1141,7 +1232,7 @@ class SharedControl:
 
 
 def _wait_ack(game: subprocess.Popen, control: SharedControl, generation: int,
-              label: str, timeout: float=5.0) -> None:
+              label: str, timeout: float=4.0) -> None:
     deadline=time.monotonic()+timeout
     while time.monotonic()<deadline:
         if game.poll() is not None:
@@ -1185,7 +1276,7 @@ def _set_power_mode(mode: str, journal: Path | None = None) -> dict:
                "recorded_at":dt.datetime.now(dt.timezone.utc).isoformat()}
         journal.write_text(json.dumps(entry,indent=2)+"\n")
     result=subprocess.run(["sudo","-n",str(POWER_HELPER_INSTALLED),key,value],
-                          capture_output=True,text=True,check=False)
+                          capture_output=True,text=True,check=False,timeout=10)
     if result.returncode:
         raise base.BenchmarkError(f"Could not set {mode} power mode: {result.stderr.strip()}")
     observed=base.power_state()
@@ -1202,7 +1293,7 @@ def _restore_power_mode(journal: Path) -> dict:
     if key not in ("powermode","lowpowermode") or value not in ("0","1","2"):
         raise base.BenchmarkError("Power-mode recovery journal has invalid setting data")
     result=subprocess.run(["sudo","-n",str(POWER_HELPER_INSTALLED),key,value],
-                          capture_output=True,text=True,check=False)
+                          capture_output=True,text=True,check=False,timeout=10)
     if result.returncode:
         raise base.BenchmarkError(f"Could not restore the saved AC power mode: {result.stderr.strip()}")
     observed=base.power_state()
@@ -1229,16 +1320,45 @@ def _power_helper_preflight() -> dict:
     return {"status":"ready","setting":key,"commands":checks}
 
 
+def sampled_perturbation(frames, windows=6, consecutive=4):
+    """Compare each complete sampled window to its nearest unsampled neighbors."""
+    groups={}
+    plain=sorted((f for f in frames if not f.get("sample_window")),key=lambda f:f["update_id"])
+    for frame in frames:
+        if frame.get("sample_window"):
+            groups.setdefault(frame["sample_window"],[]).append(frame)
+    evidence=[]
+    if len(groups)!=windows:
+        return {"status":"unavailable","reason":"complete sampled window count differs", "windows":len(groups)}
+    for identity,group in sorted(groups.items()):
+        group=sorted(group,key=lambda f:f["render_id"])
+        if len(group)!=consecutive or any(b["render_id"]!=a["render_id"]+1 for a,b in zip(group,group[1:])):
+            return {"status":"unavailable","reason":"sampled renders are incomplete or nonconsecutive","window":identity}
+        before=[f for f in plain if f["update_id"]<group[0]["update_id"]][-consecutive:]
+        after=[f for f in plain if f["update_id"]>group[-1]["update_id"]][:consecutive]
+        if not before or not after:
+            return {"status":"unavailable","reason":"unsampled neighbors missing","window":identity}
+        ratios={}
+        for field in ("update_cpu_ns","update_wall_ns","render_cpu_ns","render_wall_ns"):
+            reference=statistics.median(f[field] for f in before+after)
+            if reference<=0: return {"status":"unavailable","reason":"nonpositive neighbor cost","window":identity}
+            ratios[field]=statistics.median(f[field] for f in group)/reference-1
+        evidence.append({"sample_window":identity,"renders":[f["render_id"] for f in group],"fractions":ratios})
+    passed=all(abs(value)<=.05 for w in evidence for value in w["fractions"].values())
+    return {"status":"passed" if passed else "failed","reason":"each window's CPU/wall update/render medians must remain within 5% of local neighbors","windows":evidence}
+
+
 def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
                 events: Path, name: str, mode: str, cadence: int,
                 detail: bool=False, render_period_ns: int=0,
                 detail_windows: int=2,detail_frames_per_window: int=2) -> dict:
+    if time.monotonic()+duration+17>getattr(control,"deadline",float("inf")):
+        raise base.BenchmarkError("Controller deadline leaves insufficient measurement and restoration time")
     generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,0,False)
     auto.mark(events,"phase_transition",phase=name,mode=mode,generation=generation)
     _wait_ack(game,control,generation,name+" transition")
     time.sleep(5)
-    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,
-                           detail_frames_per_window if detail else 0,True)
+    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,0,True)
     measurement_generation=generation
     _wait_ack(game,control,generation,name+" measurement enable")
     received_ns=time.monotonic_ns()
@@ -1250,6 +1370,7 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
     start=auto.mark(events,"phase_start",phase=name,measurement_epoch=epoch)
     auto.mark(events,"measurement_enabled",phase=name,generation=generation)
     if detail:
+        generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,detail_frames_per_window,True)
         auto.mark(events,"detail_sample_armed",phase=name,generation=generation,
                   render_frames=detail_frames_per_window)
     end_by=time.monotonic()+duration
@@ -1294,6 +1415,8 @@ def causal_schedule(period: int, residual_discovery: bool=False) -> list[dict]:
 def run(output_root: Path, include_low_power: bool=True,
         include_fixed_cadence_lpm: bool=False, residual_discovery: bool=False) -> Path:
     if residual_discovery: include_low_power=False; include_fixed_cadence_lpm=False
+    try: budget=run_budget(causal_schedule(1,residual_discovery),include_low_power,include_fixed_cadence_lpm,residual_discovery)
+    except ValueError as exc: raise base.BenchmarkError(str(exc)) from exc
     evidence=preflight(run_gl=True,require_privilege=True,require_power_mode=include_low_power)
     base.running_game_pid("idle")
     if not auto.SCENE.is_file() or not auto.SCENE_MANIFEST.is_file():
@@ -1302,10 +1425,13 @@ def run(output_root: Path, include_low_power: bool=True,
     run_dir=output_root/f"{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}-frame-model"
     run_dir.mkdir(parents=True,exist_ok=False)
     manifest_path=run_dir/"manifest.json"
-    manifest={"format_version":FORMAT_VERSION,"report_kind":"residual_discovery" if residual_discovery else "causal",
+    gates=GateEvidence()
+    gates.record("format_v3","passed","Versioned producer and controller",version=FORMAT_VERSION)
+    gates.record("offline_overhead","passed" if evidence.get("overhead_gate")=="passed" else "unavailable","Offline overhead preflight",evidence=evidence.get("overhead_gate"))
+    manifest={"gates":gates.entries,"worst_case_budget_s":budget,"format_version":FORMAT_VERSION,"report_kind":"residual_discovery" if residual_discovery else "causal",
               "status":"starting","executable_sha256":evidence["build"]["executable_sha256"],
               "evidence":evidence,"coverage":{"engine_hooks":7,"gl_draw_apis":6,
-              "gpu_timing":"asynchronous render/map timestamps when supported","exact_payload_diff":"sampled uniform4fv element-level; buffer uploads hash-level"},
+              "gpu_timing":"sampled asynchronous context/pass timestamp segments when supported","exact_payload_diff":"sampled uniform4fv element-level; buffer uploads hash-level"},
               "limitations":["GPU timer query support depends on the active CGL context; absent results are reported as unavailable.",
                   "Thread CPU is measured on the UpdateOneFrame thread; worker-thread totals are outside the per-frame tree.",
                   "Scene membership, visibility decisions, LOD, sorting, and allocation counts are not instrumented.",
@@ -1329,6 +1455,7 @@ def run(output_root: Path, include_low_power: bool=True,
                 control=SharedControl(control_path)
                 old_log=(base.USER_DATA/"logs/game.log").read_bytes() if (base.USER_DATA/"logs/game.log").is_file() else b""
                 pm=_start_power(run_dir/"powermetrics.pliststream")
+                control.deadline=time.monotonic()+RUN_DEADLINE_SECONDS
                 # The frame-model library also emits the autonomous readiness
                 # probe so only one CGLFlushDrawable interposer owns present IDs.
                 libraries=str(LIBRARY)
@@ -1354,15 +1481,27 @@ def run(output_root: Path, include_low_power: bool=True,
                 manifest["scene_alignment"]=auto.verify_scene(run_dir/"ready-scene.png",False)
 
                 calibration_phases=[]
-                for name,mode,detail in (("P0","off",False),("P1","profile",True),("P2","off",False)):
+                for name,mode,detail in (("P0","reference",False),("P1","profile",True),("P2","reference",False)):
                     calibration_phases.append(_wait_phase(game,15,control,events,name,mode,0,
                         detail=detail,detail_windows=6 if name=="P1" else 2,
-                        detail_frames_per_window=1 if name=="P1" else 2))
+                        detail_frames_per_window=4 if name=="P1" else 2))
+                manifest["calibration"]={"phases":calibration_phases}
+                manifest_path.write_text(json.dumps(manifest,indent=2)+"\n")
                 profile_rows=frame_rows(run_dir/"telemetry.csv")
                 p1_phase=next(item for item in calibration_phases if item["name"]=="P1")
                 p1=phase_summary(profile_rows,"P1",p1_phase["duration_s"],p1_phase,read_rows(run_dir/"telemetry.csv"))
                 if p1["status"]!="complete" or p1["median_update_cpu_ms"]<=0 or p1["median_render_wall_ms"]<=0:
                     raise base.BenchmarkError("Profiler hooks did not record live update/render scopes")
+                reference_summaries=[phase_summary(profile_rows,p["name"],p["duration_s"],p,
+                    read_rows(run_dir/"telemetry.csv")) for p in calibration_phases if p["name"] in {"P0","P2"}]
+                frame_perturbation={}
+                for field in ("median_update_cpu_ms","mean_render_cpu_ms_per_executed_render","update_attempts_s","executed_renders_s","present_calls_s"):
+                    values=[p.get(field) for p in reference_summaries]
+                    if len(values)!=2 or any(v is None or v<=0 for v in values):
+                        raise base.BenchmarkError(f"Reference timing unavailable for {field}")
+                    frame_perturbation[field]=p1[field]/statistics.mean(values)-1
+                if any(abs(v)>.03 for v in frame_perturbation.values()):
+                    raise base.BenchmarkError(f"Frame-normalized counters perturbation failed: {frame_perturbation}")
                 probe=auto.probe_rows(run_dir/"auto-probe.csv",anchor)
                 power_tail.poll()
                 calibration_power=diagnostic.summarize_power(power_tail.samples,calibration_phases,anchor,game.pid)
@@ -1373,13 +1512,10 @@ def run(output_root: Path, include_low_power: bool=True,
                 if abs(cpu_perturbation)>.03:
                     raise base.BenchmarkError(f"Counters-only profiler CPU perturbation is {cpu_perturbation:+.1%}; stop before causal phases")
                 detail_rows=[row for row in profile_rows if eligible_frame(row,p1_phase)]
-                detail_ids={int(row[1]) for row in read_rows(run_dir/"telemetry.csv") if row[0]=="D" and len(row)>1}
-                traced=[row["update_cpu_ns"] for row in detail_rows if row["render_id"] in detail_ids]
-                plain=[row["update_cpu_ns"] for row in detail_rows if row["render_id"] not in detail_ids]
-                trace_perturbation=(statistics.median(traced)/statistics.median(plain)-1
-                    if traced and plain and statistics.median(plain)>0 else None)
-                if len(traced)<6 or trace_perturbation is None or abs(trace_perturbation)>.05:
-                    raise base.BenchmarkError(f"Sampled detail trace perturbation {trace_perturbation} exceeds the 5% gate")
+                trace_evidence=sampled_perturbation(detail_rows)
+                if trace_evidence["status"]!="passed":
+                    raise base.BenchmarkError(f"Sampled detail perturbation failed: {trace_evidence}")
+                trace_perturbation=max(abs(v) for w in trace_evidence["windows"] for v in w["fractions"].values())
                 measured_rate=statistics.median(row["swaps_s"] for row in probe
                     if calibration_phases[1]["start_ns"]<=row["monotonic_ns"]<calibration_phases[1]["end_ns"])
                 controls=[]
@@ -1394,9 +1530,11 @@ def run(output_root: Path, include_low_power: bool=True,
                 reference_rate=historical["summary"]["median_swaps_s"]["median"]
                 if abs(measured_rate/reference_rate-1)>.03:
                     raise base.BenchmarkError("Profiler cadence differs from the established native swap rate by over 3%")
+                gates.record("live_counters","passed","Calibrated process CPU and present cadence",cpu=cpu_perturbation,swaps=swap_perturbation)
+                gates.record("live_sampled","passed","Six four-frame windows",cpu=trace_perturbation,windows=trace_evidence["windows"])
                 baseline_period=int(1e9/max(p1["update_attempts_s"],1))
                 manifest["calibration"]={"phases":calibration_phases,"profile":p1,"power":calibration_power,
-                    "cpu_perturbation_fraction":cpu_perturbation,"sampled_trace_perturbation_fraction":trace_perturbation,
+                    "frame_perturbation_fraction":frame_perturbation,"cpu_perturbation_fraction":cpu_perturbation,"sampled_trace_perturbation_fraction":trace_perturbation,"sampled_window_evidence":trace_evidence,
                     "swap_rate":measured_rate,"historical_swap_rate":reference_rate,"target_cadence_ns":baseline_period,
                     "limits":{"counters_cpu_frame":.03,"swap_rate":.03,"sampled_trace":.05}}
                 if p1["median_update_cpu_ms"]>p1["median_update_wall_ms"]*1.05:
@@ -1417,6 +1555,8 @@ def run(output_root: Path, include_low_power: bool=True,
                         update_delta=abs(observed["update_attempts_s"]/p1["update_attempts_s"]-1)
                         if update_delta>.03:
                             raise base.BenchmarkError(f"{name} changed update cadence by {update_delta:.1%}; its causal comparison is invalid")
+                    if name in {"E30","E15"} and abs(observed["executed_renders_s"]/(30 if name=="E30" else 15)-1)>.03:
+                        raise base.BenchmarkError(f"{name} did not achieve its render-rate target within 3%")
                     if name=="B" and (observed["total_executed_renders"]!=0 or
                                        observed["total_present_scene_calls"]!=0):
                         raise base.BenchmarkError("B did not skip Render/Present")
@@ -1478,11 +1618,22 @@ def run(output_root: Path, include_low_power: bool=True,
                 integrity={"hook_failures":hook_failures,"dropped_records":dropped_records,
                            "status":"passed" if hook_failures==0 and dropped_records==0 else "failed"}
                 manifest["probe_integrity"]=integrity
+                gates.record("integrity",integrity["status"],"Hook installation and record retention",**{k:v for k,v in integrity.items() if k!="status"})
                 if hook_failures or dropped_records:
                     raise base.BenchmarkError(f"Profiler integrity failed: {integrity}")
                 auto.stop_process(pm,5); pm=None; power_tail.poll()
                 all_phases=calibration_phases+manifest["phases"]+([manifest["profiling_tail"]] if "profiling_tail" in manifest else [])
                 manifest["power_by_phase"]=diagnostic.summarize_power(power_tail.samples,all_phases,anchor,game.pid)
+                gates.record("cadence","passed","All scheduled phases met the cadence checks")
+                if not residual_discovery:
+                    gates.record("semantic_coverage","passed","Every A baseline passed independent Update and Render CPU/wall gates")
+                    gates.record("interventions","passed","B/C/D and achieved E targets checked")
+                    summaries=[phase_summary(frame_rows(run_dir/"telemetry.csv"),p["name"],p["duration_s"],p,read_rows(run_dir/"telemetry.csv")) for p in phases if p["name"] in {n for n,*_ in PHASES}]
+                    contrasts=causal_contrasts(summaries)
+                    drift=[contrasts[n].get("control_cpu_drift_fraction") for n in ("B","C","D","E30","E15")]
+                    gates.record("control_drift","passed" if drift and all(d is not None and d<=.03 for d in drift) else "failed","Adjacent baseline CPU drift must be within 3%",fractions=drift)
+                    try: gates.require()
+                    except ValueError as exc: raise base.BenchmarkError(str(exc)) from exc
                 manifest["status"]="complete"
                 manifest["power_mode_comparison"]="natural cadence completed" if include_low_power else "not requested"
                 manifest["fixed_cadence_dvfs_status"]=(
@@ -1511,7 +1662,9 @@ def run(output_root: Path, include_low_power: bool=True,
                     raise base.BenchmarkError(f"Failed to restore Normal power mode: {restore_failure}")
     except BaseException as exc:
         manifest["status"]="incomplete"; manifest["error"]=str(exc)
+        gates.record("run_completion","failed",str(exc))
         manifest_path.write_text(json.dumps(manifest,indent=2,default=str)+"\n")
+        analyze(run_dir)
         raise
     return run_dir
 

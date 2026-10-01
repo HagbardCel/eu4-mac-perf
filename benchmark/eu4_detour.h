@@ -34,6 +34,8 @@ static inline void eu4_detour_jump(unsigned char *at,uintptr_t target) {
     at[10]=0x41; at[11]=0xff; at[12]=0xe3;
 }
 
+static inline bool eu4_detour_restore(EU4Detour *detour);
+
 static inline bool eu4_detour_install(EU4Detour *detour,void *site,size_t patch,
         const unsigned char *expected,void *replacement,const uint8_t *lengths,
         size_t instruction_count) {
@@ -62,7 +64,9 @@ static inline bool eu4_detour_install(EU4Detour *detour,void *site,size_t patch,
     for(size_t i=13;i<patch;i++) ((unsigned char *)site)[i]=0x90;
     sys_icache_invalidate(site,patch);
     if(mach_vm_protect(mach_task_self(),begin,(mach_vm_size_t)page,false,
-                       VM_PROT_READ|VM_PROT_EXECUTE)!=KERN_SUCCESS) return false;
+                       VM_PROT_READ|VM_PROT_EXECUTE)!=KERN_SUCCESS) {
+        (void)eu4_detour_restore(detour); return false;
+    }
     return true;
 }
 
@@ -81,4 +85,14 @@ static inline bool eu4_detour_restore(EU4Detour *detour) {
     memset(detour,0,sizeof(*detour));
     return true;
 }
+/* Roll back in reverse install order, preserving any failed restoration state. */
+static inline bool eu4_detour_rollback(EU4Detour *detours,unsigned count) {
+    bool valid=true;
+    while(count) {
+        EU4Detour *d=&detours[--count];
+        if(d->site && !eu4_detour_restore(d)) valid=false;
+    }
+    return valid;
+}
+
 #endif

@@ -1,8 +1,9 @@
 # Phase II draw-path decision (GOG EU IV 1.37.5)
 
-The next intervention to prototype is **border-specific multi-draw
-consolidation**. Map text is a secondary candidate. General mesh-bucket
-batching and instancing are lower priorities on the available evidence.
+**Historical screening decision, superseded as the immediate next action by
+the paused-frame causal investigation.** Border-specific multi-draw consolidation
+and map text remain candidates to assess after profiler release gates pass.
+The current profiler status is in [the verification record](frame-model-verification.md).
 
 This is a **screening decision**, not a measured optimization result. The
 unattended diagnostic stopped after one 32-frame window because its C caller
