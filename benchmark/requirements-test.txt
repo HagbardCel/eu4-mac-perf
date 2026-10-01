@@ -1,0 +1,2 @@
+# Required by the existing screenshot/scene-guard regression tests.
+Pillow==12.3.0
