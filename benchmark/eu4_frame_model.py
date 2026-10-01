@@ -41,6 +41,7 @@ GPU_HARNESS = ROOT / "benchmark/.build/frame_model_gpu_harness"
 QUEUE_HARNESS = ROOT / "benchmark/.build/frame_model_queue_harness"
 TEST_LIBRARY=ROOT/"benchmark/.build/libeu4_frame_model_test.dylib"
 WORKLOAD_HARNESS=ROOT/"benchmark/.build/frame_model_workload_harness"
+CONTROL_HARNESS=ROOT/"benchmark/.build/frame_model_control_harness"
 POWER_HELPER_SOURCE = ROOT / "benchmark/power_mode_helper"
 POWER_HELPER_INSTALLED = Path("/usr/local/libexec/eu4-power-mode")
 CONTROL_SIZE = 4096
@@ -91,6 +92,7 @@ def build() -> dict:
         raise base.BenchmarkError(generated.stderr.strip() or generated.stdout.strip())
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
     commands = (
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(CONTROL_HARNESS),str(ROOT/"tests/frame_model_control_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-DEU4_FRAME_MODEL_TEST",
          "-dynamiclib","-framework","OpenGL","-framework","CoreGraphics","-o",str(TEST_LIBRARY),str(SOURCE)],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
@@ -159,6 +161,19 @@ def offline_producer_harnesses() -> dict:
     return evidence
 
 
+def offline_control_harness():
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory);path=root/"control";log=root/"trace"
+        path.write_bytes(CONTROL.pack(FORMAT_VERSION,2,0,0,0,0,0,0,1,0,0,0,0,0)+bytes(CONTROL_SIZE-CONTROL.size))
+        run=subprocess.run([str(CONTROL_HARNESS),str(TEST_LIBRARY)],
+            env={**os.environ,"EU4_FRAME_MODEL_CONTROL":str(path),"EU4_FRAME_MODEL_LOG":str(log)},
+            capture_output=True,text=True,timeout=10,check=False)
+        origins=[r for r in read_rows(log) if r[0]=="O"]
+        if run.returncode or len(origins)!=2 or [int(r[1]) for r in origins]!=[7,8] or any(int(r[14]) for r in origins):
+            raise base.BenchmarkError(f"Unowned control/origin harness failed: {run.stderr}, {origins}")
+        return {"status":"passed","output":run.stdout.strip(),"unknown_origin_records":origins}
+
+
 def offline_arb_harness() -> dict:
     run=subprocess.run([str(ARB_HARNESS),str(LIBRARY.resolve())],
                        capture_output=True,text=True,timeout=10,check=False)
@@ -212,6 +227,7 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
     render_gate=offline_render_gate_harness()
     arb=offline_arb_harness()
     producers=offline_producer_harnesses()
+    producers["unowned_control"]=offline_control_harness()
     auto_evidence = auto.preflight(require_privilege=require_privilege)
     power_helper = _power_helper_preflight() if require_privilege and require_power_mode else {"status":"not checked"}
     if not run_gl:
@@ -341,6 +357,22 @@ def _distribution(values):
             "p95":values[min(len(values)-1,int(.95*len(values)))],"max":values[-1]}
 
 
+def unassociated_origins(trace, windows):
+    result=[]
+    for row in trace:
+        if not row or row[0]!="O" or len(row)<6: continue
+        try:
+            epoch,thread,phase,timestamp,context=map(int,row[1:6])
+            for window in windows:
+                if (epoch==window.get("measurement_epoch") and phase==PHASE_NUMBER[window["name"]] and
+                    window["start_ns"]<=timestamp+window.get("clock_offset_ns",0)<window["end_ns"]):
+                    result.append({"measurement_epoch":epoch,"thread_id":thread,"phase":window["name"],
+                        "timestamp_ns":timestamp,"context":context,"origin":"unassociated; no guessed frame"})
+                    break
+        except (ValueError,KeyError): continue
+    return result
+
+
 def phase_summary(rows: list[dict], name: str, seconds: float, window: dict | None=None, events_rows: list[list[str]] | None=None) -> dict:
     selected = [row for row in rows if row["phase"] == PHASE_NUMBER[name] and eligible_frame(row,window)]
     if not selected:
@@ -460,6 +492,9 @@ def temporal_differences(trace: list[list[str]]) -> dict:
             origins[int(row[1])]=(row[13],row[16],row[18]) # epoch/thread/sample window
     def same_window(a,b):
         return b==a+1 and (not origins or (a in origins and origins.get(a)==origins.get(b)))
+    def command_payload(row):
+        payload=tuple(row[2:13])
+        return payload+("context",row[19]) if len(row)==20 else payload
     uniform_exact=[]; uniform_compared_calls=0; uniform_changed_elements=0
     uniform_omitted_elements=0; uniform_oversize_calls=0
     draw_samples=[];draw_sample_total=0
@@ -484,23 +519,23 @@ def temporal_differences(trace: list[list[str]]) -> dict:
                         "index_offset":draw_identity[8] if draw_identity[1] in (1,2,4,6) else None,
                         "first_vertex":draw_identity[8] if draw_identity[1] in (3,5) else None,
                         "base_vertex":draw_identity[9],"instance_count":draw_identity[10]})
-                combined_frames.setdefault(int(row[1]),[]).append((row[0],tuple(row[2:13])))
+                combined_frames.setdefault(int(row[1]),[]).append((row[0],command_payload(row)))
             elif row[0]=="S" and len(row)>=5:
                 state_frames.setdefault(int(row[1]),[]).append((int(row[2]),int(row[3]),int(row[4])))
-                combined_frames.setdefault(int(row[1]),[]).append((row[0],tuple(row[2:13])))
+                combined_frames.setdefault(int(row[1]),[]).append((row[0],command_payload(row)))
             elif row[0]=="U" and len(row)>=6:
                 frame,key_program,location=int(row[1]),int(row[3]),int(row[4])
                 size_hash=int(row[5]); byte_size=size_hash>>32; payload_hash=size_hash&0xffffffff
                 key=(int(row[2]),key_program,location)
                 uniform_frames.setdefault(frame,{})[key]=(byte_size,payload_hash)
                 uniform_sequences.setdefault(frame,[]).append((key,(byte_size,payload_hash)))
-                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:13])))
+                combined_frames.setdefault(frame,[]).append((row[0],command_payload(row)))
             elif row[0]=="u" and len(row)>=6:
                 frame=int(row[1]); program=int(row[3]); location=int(row[4])
                 key=(int(row[2]),program,location); value=(4,int(row[5]))
                 uniform_frames.setdefault(frame,{})[key]=value
                 uniform_sequences.setdefault(frame,[]).append((key,value))
-                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:13])))
+                combined_frames.setdefault(frame,[]).append((row[0],command_payload(row)))
             elif row[0]=="V" and len(row)>=8:
                 if len(uniform_exact)<512:
                     uniform_exact.append({"render_id":int(row[1]),"callsite_offset":int(row[2]),
@@ -518,15 +553,15 @@ def temporal_differences(trace: list[list[str]]) -> dict:
             elif row[0] in ("T","t") and len(row)>=4:
                 frame,site,dimensions=int(row[1]),int(row[2]),int(row[3])
                 texture_frames.setdefault(frame,{})[(ord(row[0]),site)]=dimensions
-                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:13])))
+                combined_frames.setdefault(frame,[]).append((row[0],command_payload(row)))
             elif row[0]=="B" and len(row)>=6:
                 frame,key,size,digest=int(row[1]),int(row[2]),int(row[3]),int(row[4])
                 buffer_frames.setdefault(frame,{})[(ord("B"),key,0,size)]=digest
-                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:13])))
+                combined_frames.setdefault(frame,[]).append((row[0],command_payload(row)))
             elif row[0]=="b" and len(row)>=6:
                 frame,key,size,offset,digest=int(row[1]),int(row[2]),int(row[3]),int(row[4]),int(row[5])
                 buffer_frames.setdefault(frame,{})[(ord("b"),key,offset,size)]=digest
-                combined_frames.setdefault(frame,[]).append((row[0],tuple(row[2:13])))
+                combined_frames.setdefault(frame,[]).append((row[0],command_payload(row)))
         except (ValueError,IndexError):
             continue
 
@@ -848,10 +883,12 @@ def analyze(run_dir: Path) -> dict:
     baselines=[p for p in summaries if p["phase"] in expected_baselines]
     coverage_ok=({p["phase"] for p in baselines}==expected_baselines and all(
         p.get("exclusive_scope_coverage",{}).get("coverage_95_percent_gate")=="passed" for p in baselines))
+    unknown=unassociated_origins(trace,phases)
+    report_gates.record("origin_integrity","failed" if unknown else "passed" if format_qualified else "unavailable","Measured calls outside owned update frames must be attributed before causal acceptance",records=unknown)
     report_gates.record("semantic_coverage","passed" if coverage_ok else "failed","Every baseline needs independent ≥95% Update/Render CPU and wall coverage")
     output = {"format_version":FORMAT_VERSION,"report_kind":manifest.get("report_kind","causal"),
               "metal_feasibility":"feasibility seed; go/no-go undetermined",
-              "release_gates":report_gates.entries,
+              "unassociated_origins":unknown,"release_gates":report_gates.entries,
               "release_blockers":report_gates.blockers(),
               "status": manifest.get("status"), "run_dir": str(run_dir),
               "executable_sha256": manifest.get("executable_sha256"),
@@ -1369,8 +1406,12 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
     epoch=control.measurement_epoch
     start=auto.mark(events,"phase_start",phase=name,measurement_epoch=epoch)
     auto.mark(events,"measurement_enabled",phase=name,generation=generation)
+    # A post-start command lets unowned producers distinguish the timed window
+    # from enable acknowledgement, without changing the measurement epoch.
+    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,
+                           detail_frames_per_window if detail else 0,True)
+    window_generation=generation
     if detail:
-        generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,detail_frames_per_window,True)
         auto.mark(events,"detail_sample_armed",phase=name,generation=generation,
                   render_frames=detail_frames_per_window)
     end_by=time.monotonic()+duration
@@ -1400,7 +1441,7 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
             "end_ns":end["monotonic_ns"],"settle_s":5,"mode":mode,
             "measurement_epoch":epoch,"clock_domain":"CLOCK_UPTIME_RAW calibrated to controller monotonic_ns by acknowledgement bracket",
             "clock_offset_ns":clock_offset,"alignment_uncertainty_ns":uncertainty,
-            "ack_time_ns":ack_ns,"enable_generation":measurement_generation,
+            "ack_time_ns":ack_ns,"enable_generation":measurement_generation,"window_generation":window_generation,
             "update_period_ns":cadence,"render_period_ns":render_period_ns,
             "stop_generation":stop_generation}
 
@@ -1549,6 +1590,10 @@ def run(output_root: Path, include_low_power: bool=True,
                     phases.append(phase)
                     observed=phase_summary(frame_rows(run_dir/"telemetry.csv"),name,phase["duration_s"],phase,read_rows(run_dir/"telemetry.csv"))
                     if observed["status"]!="complete": raise base.BenchmarkError(f"No frame records in {name}")
+                    unknown=unassociated_origins(read_rows(run_dir/"telemetry.csv"),[phase])
+                    if unknown and not residual_discovery:
+                        gates.record("origin_integrity","failed","Unassociated measured calls",records=unknown)
+                        raise base.BenchmarkError(f"Unassociated calls block causal interventions in {name}")
                     if observed.get("invalid_scope_frames"):
                         raise base.BenchmarkError(f"Scope integrity failed in {name}")
                     if name in {"A0","A1","A2","A3","A4","A5","B","C","D","E30","E15"}:
@@ -1624,6 +1669,8 @@ def run(output_root: Path, include_low_power: bool=True,
                 auto.stop_process(pm,5); pm=None; power_tail.poll()
                 all_phases=calibration_phases+manifest["phases"]+([manifest["profiling_tail"]] if "profiling_tail" in manifest else [])
                 manifest["power_by_phase"]=diagnostic.summarize_power(power_tail.samples,all_phases,anchor,game.pid)
+                unknown=unassociated_origins(read_rows(run_dir/"telemetry.csv"),calibration_phases+phases)
+                gates.record("origin_integrity","failed" if unknown else "passed","Origin ownership checked; unknown calls block diagnosis",records=unknown)
                 gates.record("cadence","passed","All scheduled phases met the cadence checks")
                 if not residual_discovery:
                     gates.record("semantic_coverage","passed","Every A baseline passed independent Update and Render CPU/wall gates")

@@ -12,15 +12,17 @@ separately reviewed residual-driven step.
 
 ## Local verification
 
-- `python3 -m unittest discover -s tests`: **78 tests passed**. Native shared
+- `python3 -m unittest discover -s tests`: **79 tests passed**. Native shared
   scope/GPU/queue/render-gate harnesses compile and run, with Python serializer
   analysis, four concurrent producers, capacity/reuse, migration/stale cursors,
   acknowledged windows, epoch preservation, V/W exclusion, sample-window pairing,
   local-neighbor perturbation, cadence, missing gates, budget rejection and
-  legacy decoding.
+  legacy decoding and unassociated event-window qualification.
 - `python3 benchmark/eu4_frame_model.py preflight --static-only`: x86-64 build and
   Rosetta detour, partial-install rollback, render gate, ARB forwarding, shared
-  producer and serializer/analyzer harnesses **passed**.
+  producer and serializer/analyzer harnesses **passed**. The production test
+  library also verifies worker control refresh across profile/draw-suppression/OFF
+  transitions, explicit unknown origins, and final queued records at shutdown.
 - `python3 benchmark/eu4_engine_inventory.py verify`: **passed**, including pinned
   prologue lengths and deterministic generated inventory. Bounded recursive
   static traversal and local shader hashes/includes/features are recorded in
@@ -53,11 +55,11 @@ old tiny-call workload remains a diagnostic, with its raw trials retained.
 
 | Recipe | Draws/frame | Counters wall | Counters CPU | Sampled wall | Sampled CPU |
 |---|---:|---:|---:|---:|---:|
-| mesh | 2774 | +20.7% | +20.7% | +515.0% | +48.3% |
-| borders | 2285 | +10.4% | +10.9% | +376.9% | +87.8% |
-| text_ui | 632 | +18.8% | +20.7% | +295.1% | +193.0% |
+| mesh | 2774 | +15.4% | +15.4% | +513.8% | +45.9% |
+| borders | 2285 | +13.8% | +13.8% | +378.2% | +94.8% |
+| text_ui | 632 | +19.5% | +19.5% | +204.7% | +189.7% |
 
-Reference overhead also fails its 3% gate. These are structural-surrogate
+Reference overhead also fails the aggregate 3% acceptance gate. These are structural-surrogate
 perturbations, not estimates of installed-game overhead. Native correctness and
 successful valid GL rendering do not override the measurement acceptance gates.
 No live calibration, ANATIVE/A0 residual population, intervention, power result,
@@ -76,7 +78,10 @@ The portable CI workflow runs Python 3.10/3.14 and native producer tests on
 Ubuntu. It does not claim Rosetta, driver overhead, or installed-game validation.
 Remote CI is checked after publication and reported separately from these local
 results. Its current status is available on the [portable workflow page](https://github.com/HagbardCel/eu4-mac-perf/actions/workflows/profiler.yml);
-the evidence above is local and source-hashed.
+the evidence above is local and source-hashed. Published commit `22539e3` passed
+both portable jobs in [CI run 36917943869](https://github.com/HagbardCel/eu4-mac-perf/actions/runs/36917943869).
+The final worker-control and shutdown follow-up is checked in a subsequent run;
+the earlier CI result does not validate those later changes.
 
 The next live action remains the short `run --residual-discovery` pilot after
 offline overhead and exact helper checks pass. Its two A0 windows contain two

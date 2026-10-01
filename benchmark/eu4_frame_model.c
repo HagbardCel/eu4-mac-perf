@@ -94,7 +94,7 @@ typedef struct { char kind; uint64_t a,b,c,d,e,f,g,h,i,j,k,l,epoch,update,phase,
 typedef struct {
     FrameSlot frames[FRAME_CAPACITY]; DetailSlot details[DETAIL_CAPACITY];
     Eu4Spsc frame_queue,detail_queue;
-    uint64_t counts[HOOK_COUNT],wall[HOOK_COUNT],cpu[HOOK_COUNT];
+    uint64_t counts[HOOK_COUNT],wall[HOOK_COUNT],cpu[HOOK_COUNT],unassociated_generation;
 } Producer;
 static Producer *producers[PRODUCER_CAPACITY];
 static _Atomic unsigned producer_count;
@@ -105,6 +105,8 @@ static _Atomic uint64_t call_wall_ns[HOOK_COUNT], call_cpu_ns[HOOK_COUNT];
 static _Thread_local Frame current_frame;
 static _Thread_local Eu4ScopeTree scope_tree;
 static _Thread_local ControlSnapshot frame_control;
+static _Thread_local bool inside_update;
+static _Thread_local uint32_t observed_command_seq;
 static _Thread_local uintptr_t active_program;
 static _Thread_local GLuint bound_array_buffer, bound_element_buffer;
 static _Thread_local CGLContextObj state_context;
@@ -178,14 +180,25 @@ static bool snapshot_control(ControlSnapshot *out) {
     }
     return false;
 }
+static void refresh_unowned_control(void) {
+    if(!control || inside_update) return;
+    uint32_t sequence=atomic_load_explicit(&control->command_seq,memory_order_acquire);
+    if(!(sequence&1u) && sequence!=observed_command_seq) {
+        ControlSnapshot next={0};
+        if(snapshot_control(&next)) { frame_control=next; observed_command_seq=sequence; }
+    }
+}
 static bool intervention_active(void) {
-    if(control && frame_control.generation==0) (void)snapshot_control(&frame_control);
+    refresh_unowned_control();
     return control && frame_control.mode!=OFF && frame_control.mode!=REFERENCE &&
            (frame_control.flags&INTERVENTION_ACTIVE)!=0;
 }
 static bool measurement_active(void) {
-    if(control && frame_control.generation==0) (void)snapshot_control(&frame_control);
+    refresh_unowned_control();
     return control && frame_control.mode!=OFF && (frame_control.flags&MEASURE_ENABLED)!=0;
+}
+static bool gl_measurement_active(void) {
+    return measurement_active() && frame_control.mode!=REFERENCE;
 }
 static int scope_begin(unsigned id) {
     if(!measurement_active() || (frame_control.mode==REFERENCE && id!=SCOPE_UPDATE &&
@@ -268,9 +281,16 @@ static Producer *producer(void) {
     if(!local_producer && control) atomic_fetch_add(&control->dropped_records,1);
     return local_producer;
 }
+static void detail_line12(const char *,uint64_t,uint64_t,uint64_t,uint64_t,
+                          uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 static void event(unsigned id,uint64_t wall,uint64_t cpu) {
     Producer *p=producer(); if(!p) return;
     p->counts[id]++; p->wall[id]+=wall; p->cpu[id]+=cpu;
+    if(!inside_update && measurement_active() && p->unassociated_generation!=frame_control.generation) {
+        p->unassociated_generation=frame_control.generation;
+        detail_line12("O",frame_control.measurement_epoch,tid(),frame_control.phase,
+            now_ns(CLOCK_UPTIME_RAW),(uintptr_t)CGLGetCurrentContext(),0,0,0,0,0,0,0);
+    }
 }
 static void flush_counters(void) {
     Producer *p=local_producer; if(!p) return;
@@ -300,9 +320,9 @@ static void write_record(const char *line,size_t size) {
 }
 static void *writer(void *unused) {
     (void)unused;
-    bool pending=true;
-    while(atomic_load(&writer_running) || pending) {
-        pending=false;
+    for(;;) {
+        bool running=atomic_load_explicit(&writer_running,memory_order_acquire)!=0;
+        bool pending=false;
         unsigned count=atomic_load_explicit(&producer_count,memory_order_acquire);
         for(unsigned index=0;index<count;index++) {
         Producer *p=producers[index];
@@ -361,6 +381,9 @@ static void *writer(void *unused) {
             atomic_store_explicit(&p->detail_queue.tail,dt,memory_order_release);
         }
         }
+        /* A stop observed before this drain orders all completed publications.
+           Never exit using an empty snapshot taken before observing stop. */
+        if(!running && !pending) break;
         struct timespec nap={0,1000000}; (void)nanosleep(&nap,NULL);
     }
     return NULL;
@@ -612,7 +635,7 @@ static AddFn real_add; static AppendFn real_append;
 static _Atomic uint64_t updates, renders, presents;
 
 static void hook_update(void *self,bool force) {
-    if(scope_tree.depth) {
+    if(inside_update) {
         /* Recursive updates stay on the same physical frame and scope path. */
         atomic_fetch_add(&updates,1);
         int nested=scope_begin(SCOPE_UPDATE);
@@ -626,6 +649,7 @@ static void hook_update(void *self,bool force) {
         real_update(self,force);
         return;
     }
+    inside_update=true;
     if(previous_period!=frame_control.update_period_ns || previous_mode!=frame_control.mode) {
         next_deadline=0; next_render_deadline=0;
     }
@@ -684,9 +708,10 @@ static void hook_update(void *self,bool force) {
         atomic_store(&control->ack_time_ns,now_ns(CLOCK_UPTIME_RAW));
         atomic_store_explicit(&control->ack_generation,frame_control.generation,memory_order_release);
     }
+    inside_update=false; current_frame=(Frame){0};
 }
 static void hook_idle(void *self,bool force) {
-    if(!control || !(frame_control.flags&MEASURE_ENABLED) || (frame_control.mode==OFF || frame_control.mode==REFERENCE)) {
+    if(!gl_measurement_active()) {
         real_idle(self,force); return;
     }
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
@@ -992,12 +1017,12 @@ static void gl_buffer_subdata(GLenum target,GLintptr offset,GLsizeiptr size,cons
 }
 static void uniform_record(uintptr_t site,GLint location,const void *data,size_t bytes) {
     if(!intervention_active()) return;
-    if(frame_control.mode!=REFERENCE && measurement_active()) {
+    if(gl_measurement_active()) {
         event(HOOK_GL_UNIFORM,0,0);
         current_frame.uniform_calls++;
         current_frame.uniform_bytes+=bytes;
     }
-    if(frame_control.mode!=REFERENCE && measurement_active() && detail_active && data && bytes>0 && bytes<=1048576) {
+    if(gl_measurement_active() && detail_active && data && bytes>0 && bytes<=1048576) {
         detail_line5("U",current_frame.render_id,site,
             active_program,(uint32_t)location,((uint64_t)bytes<<32)|
             (uint32_t)hash_bytes(data,bytes));
@@ -1009,7 +1034,7 @@ static void gl_uniform4fv(GLint location,GLsizei count,const GLfloat *data) {
     size_t bytes=count>0?(size_t)count*16:0;
     uintptr_t caller=(uintptr_t)__builtin_return_address(0);
     uniform_record(caller>=image_base?caller-image_base:0,location,data,bytes);
-    if(frame_control.mode!=REFERENCE && measurement_active() && detail_active && data && count>0 && bytes<=256) {
+    if(gl_measurement_active() && detail_active && data && count>0 && bytes<=256) {
         uniform_snapshot(caller>=image_base?caller-image_base:0,active_program,location,data,bytes);
     }
     if(real_fn) real_fn(location,count,data);
@@ -1095,10 +1120,10 @@ DEFINE_UNIFORM_COMPONENTS_4(glUniform4i,GLint)
 #undef DEFINE_UNIFORM_COMPONENTS_2
 static void gl_uniform1i(GLint location,GLint value) {
     static void (*real_fn)(GLint,GLint)=glUniform1i;
-    if(frame_control.mode!=REFERENCE && measurement_active()) {
+    if(gl_measurement_active()) {
         event(HOOK_GL_UNIFORM,0,0); current_frame.uniform_calls++;
         current_frame.uniform_bytes+=sizeof(value);
-        if(frame_control.mode!=REFERENCE && measurement_active() && detail_active) {
+        if(gl_measurement_active() && detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
             detail_line5("u",current_frame.render_id,
                 caller>=image_base?caller-image_base:0,active_program,
@@ -1215,13 +1240,13 @@ static void gl_glBindFramebuffer(GLenum target,GLuint framebuffer) {
 static void gl_use_program(GLuint program) {
     static void (*real_fn)(GLuint)=glUseProgram;
     if(intervention_active()) {
-        if(frame_control.mode!=REFERENCE && measurement_active()) {
+        if(gl_measurement_active()) {
             event(HOOK_GL_STATE,0,0);
             current_frame.state_calls++;
             if(active_program!=program) current_frame.program_switches++;
         }
         active_program=program;
-        if(frame_control.mode!=REFERENCE && measurement_active() && detail_active) {
+        if(gl_measurement_active() && detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
             detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,1,program);
         }
@@ -1237,12 +1262,12 @@ static void gl_use_program_arb(GLhandleARB program) {
     if(!real_fn) real_fn=glUseProgramObjectARB;
     if(intervention_active()) {
         uintptr_t handle=(uintptr_t)program;
-        if(frame_control.mode!=REFERENCE && measurement_active()) {
+        if(gl_measurement_active()) {
             event(HOOK_GL_STATE,0,0); current_frame.state_calls++;
             if(active_program!=handle) current_frame.program_switches++;
         }
         active_program=handle;
-        if(frame_control.mode!=REFERENCE && measurement_active() && detail_active) {
+        if(gl_measurement_active() && detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
             detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,
                         6,handle);
@@ -1253,13 +1278,13 @@ static void gl_use_program_arb(GLhandleARB program) {
 static void gl_bind_buffer(GLenum target,GLuint buffer) {
     static void (*real_fn)(GLenum,GLuint)=glBindBuffer;
     if(intervention_active()) {
-        if(frame_control.mode!=REFERENCE && measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;current_frame.buffer_binds++;}
+        if(gl_measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;current_frame.buffer_binds++;}
         if(target==GL_ARRAY_BUFFER) bound_array_buffer=buffer;
         if(target==GL_ELEMENT_ARRAY_BUFFER) {
             bound_element_buffer=buffer;
             if(vertex_array_state) vertex_array_state->element_buffer=buffer;
         }
-        if(frame_control.mode!=REFERENCE && measurement_active() && detail_active) {
+        if(gl_measurement_active() && detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
             detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,2,
                         ((uint64_t)target<<32)|buffer);
@@ -1275,7 +1300,7 @@ static void gl_bind_vertex_array(GLuint vao) {
     vertex_array_state=vertex_state_for(ctx,vao,true);
     if(!vertex_array_state) {current_frame.flags|=2048;return;}
     bound_element_buffer=vertex_array_state->element_buffer;
-    if(frame_control.mode!=REFERENCE && measurement_active()) {
+    if(gl_measurement_active()) {
         event(HOOK_GL_STATE,0,0);current_frame.state_calls++;
         if(detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
@@ -1295,7 +1320,7 @@ static void gl_vertex_attrib_pointer(GLuint index,GLint size,GLenum type,
             .normalized=normalized,.stride=stride,.pointer=(uintptr_t)pointer,
             .divisor=a->divisor,.enabled=a->enabled};
     }
-    if(frame_control.mode!=REFERENCE && measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
 }
 static void gl_enable_vertex_attrib(GLuint index) {
     static void (*real_fn)(GLuint)=glEnableVertexAttribArray;
@@ -1303,7 +1328,7 @@ static void gl_enable_vertex_attrib(GLuint index) {
     if(!intervention_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
     if(vertex_array_state && index<32) vertex_array_state->attributes[index].enabled=GL_TRUE;
-    if(frame_control.mode!=REFERENCE && measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
 }
 static void gl_disable_vertex_attrib(GLuint index) {
     static void (*real_fn)(GLuint)=glDisableVertexAttribArray;
@@ -1311,7 +1336,7 @@ static void gl_disable_vertex_attrib(GLuint index) {
     if(!intervention_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
     if(vertex_array_state && index<32) vertex_array_state->attributes[index].enabled=GL_FALSE;
-    if(frame_control.mode!=REFERENCE && measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
 }
 static void gl_vertex_attrib_divisor(GLuint index,GLuint divisor) {
     static void (*real_fn)(GLuint,GLuint)=glVertexAttribDivisor;
@@ -1319,7 +1344,7 @@ static void gl_vertex_attrib_divisor(GLuint index,GLuint divisor) {
     if(!intervention_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
     if(vertex_array_state && index<32) vertex_array_state->attributes[index].divisor=divisor;
-    if(frame_control.mode!=REFERENCE && measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
 }
 static void gl_tex_image_2d(GLenum target,GLint level,GLint internal,GLsizei width,
         GLsizei height,GLint border,GLenum format,GLenum type,const void *pixels) {
@@ -1369,7 +1394,7 @@ static void gl_tex_sub_image_2d(GLenum target,GLint level,GLint x,GLint y,GLsize
 }
 static void gl_bind_texture(GLenum target,GLuint texture) {
     static void (*real_fn)(GLenum,GLuint)=glBindTexture;
-    if(frame_control.mode!=REFERENCE && measurement_active()) {
+    if(gl_measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++; current_frame.texture_binds++;
         if(detail_active) {
@@ -1382,7 +1407,7 @@ static void gl_bind_texture(GLenum target,GLuint texture) {
 }
 static void gl_enable(GLenum cap) {
     static void (*real_fn)(GLenum)=glEnable;
-    if(frame_control.mode!=REFERENCE && measurement_active()) {
+    if(gl_measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
         if(detail_active) {
@@ -1404,7 +1429,7 @@ static void gl_enable(GLenum cap) {
 }
 static void gl_disable(GLenum cap) {
     static void (*real_fn)(GLenum)=glDisable;
-    if(frame_control.mode!=REFERENCE && measurement_active()) {
+    if(gl_measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
         if(detail_active) {
@@ -1426,7 +1451,7 @@ static void gl_disable(GLenum cap) {
 }
 static void gl_active_texture(GLenum unit) {
     static void (*real_fn)(GLenum)=glActiveTexture;
-    if(frame_control.mode!=REFERENCE && measurement_active()) {
+    if(gl_measurement_active()) {
         event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
         if(detail_active) {
@@ -1582,6 +1607,11 @@ static void test_idle(void *self,bool force) {
 }
 static void test_update(void *self,bool force) {
     test_expect(self==&test_self && force); hook_idle(self,false);
+}
+__attribute__((visibility("default"))) unsigned eu4_frame_model_test_observe_unowned(void) {
+    bool active=intervention_active(),measuring=measurement_active();
+    event(HOOK_GL_STATE,0,0);
+    return (active?frame_control.mode:0u)|(measuring?256u:0u);
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_arm(unsigned frames) {
     atomic_store_explicit(&control->command_seq,3,memory_order_release);

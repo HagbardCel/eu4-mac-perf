@@ -5,10 +5,10 @@
     "engine_inventory_sha256": "0e22dc4d18c3fc067070f6b76fd89c2e6003cbc9cc51449321bf20c01461bf1d",
     "backend_graph_sha256": "9cda7372d0b9d7c55419a9a8dab2e21a5199ccac86fa550d52653faec298e545",
     "engine_sites": 7,
-    "library_sha256": "ad640351be615b2021839512a4d44ae2eaba0251131a7a0a3407e7183761e8e8",
-    "library_source_sha256": "1e3be6d3f4e5faf040fb8022441d7752d2e29c84e9e92f56565bbfeea42088ca",
+    "library_sha256": "8fc49af373fbea5bc268fe301e5478b80dd994dc2013641baa6d8f043dc00b15",
+    "library_source_sha256": "732dc2da3226b516d8e913a81cde92b660017f56b1e97da3484813528a8bb904",
     "native_source_hashes": {
-      "eu4_frame_model.c": "1e3be6d3f4e5faf040fb8022441d7752d2e29c84e9e92f56565bbfeea42088ca",
+      "eu4_frame_model.c": "732dc2da3226b516d8e913a81cde92b660017f56b1e97da3484813528a8bb904",
       "eu4_scope_tree.h": "cb3e09dc6daefbf557b81dc9e16fdea24f33490d610839998eec6d45987867cf",
       "eu4_gpu_segments.h": "11c88be56c68ba832c0adc97af3e9c1f829497ddaa8fd9f51089f63236262ff9",
       "eu4_spsc.h": "53abd60e288d6bff7c404b2c61e7368c46bfa6d2eabfbc7882011788f5258219",
@@ -89,7 +89,7 @@
       "verified": true
     },
     "power": {
-      "source": "Battery Power",
+      "source": "AC Power",
       "mode": "normal",
       "all_modes": {
         "Battery Power": "normal",
@@ -137,6 +137,56 @@
     "frame_model_queue_harness": {
       "status": "passed",
       "output": "four independent producers, saturation, reuse, ordered publication, and raster restoration policy passed"
+    },
+    "unowned_control": {
+      "status": "passed",
+      "output": "unowned thread observes profile, draw suppression, and measurement-off commands",
+      "unknown_origin_records": [
+        [
+          "O",
+          "7",
+          "12535286",
+          "1",
+          "708620983642583",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "12535286",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "O",
+          "8",
+          "12535286",
+          "4",
+          "708620983648958",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "12535286",
+          "3",
+          "0",
+          "0"
+        ]
+      ]
     }
   },
   "power_mode_helper": {
@@ -145,22 +195,22 @@
   "tiny_call_diagnostic": {
     "bare": [
       {
-        "elapsed_ns": 78334,
-        "cpu_ns": 1896,
+        "elapsed_ns": 75500,
+        "cpu_ns": 1827,
         "draws_observed": 0,
         "trace_rows": 0,
         "hook_failures": null
       },
       {
-        "elapsed_ns": 68834,
-        "cpu_ns": 1668,
+        "elapsed_ns": 79959,
+        "cpu_ns": 1940,
         "draws_observed": 0,
         "trace_rows": 0,
         "hook_failures": null
       },
       {
-        "elapsed_ns": 72250,
-        "cpu_ns": 1745,
+        "elapsed_ns": 75208,
+        "cpu_ns": 1825,
         "draws_observed": 0,
         "trace_rows": 0,
         "hook_failures": null
@@ -168,22 +218,22 @@
     ],
     "counters": [
       {
-        "elapsed_ns": 598166,
-        "cpu_ns": 14375,
+        "elapsed_ns": 953333,
+        "cpu_ns": 22887,
         "draws_observed": 12000,
         "trace_rows": 15,
         "hook_failures": 1
       },
       {
-        "elapsed_ns": 591958,
-        "cpu_ns": 14229,
+        "elapsed_ns": 930583,
+        "cpu_ns": 22341,
         "draws_observed": 12000,
         "trace_rows": 15,
         "hook_failures": 1
       },
       {
-        "elapsed_ns": 591084,
-        "cpu_ns": 14203,
+        "elapsed_ns": 942625,
+        "cpu_ns": 22630,
         "draws_observed": 12000,
         "trace_rows": 15,
         "hook_failures": 1
@@ -218,15 +268,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 11483333,
-                "cpu_ns": 275302,
+                "elapsed_ns": 11077667,
+                "cpu_ns": 265709,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 12507625,
-                "cpu_ns": 300074,
+                "elapsed_ns": 11869416,
+                "cpu_ns": 284261,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -234,8 +284,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 13338250,
-                "cpu_ns": 319985,
+                "elapsed_ns": 13571583,
+                "cpu_ns": 325527,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -243,8 +293,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 72389458,
-                "cpu_ns": 401493,
+                "elapsed_ns": 72554292,
+                "cpu_ns": 400026,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -263,8 +313,8 @@
             ],
             "stages": {
               "sampled": {
-                "elapsed_ns": 72369167,
-                "cpu_ns": 418349,
+                "elapsed_ns": 72829625,
+                "cpu_ns": 416825,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -272,8 +322,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 14314375,
-                "cpu_ns": 343414,
+                "elapsed_ns": 13406417,
+                "cpu_ns": 321583,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -281,8 +331,8 @@
                 "tree_reconciliation": "passed"
               },
               "reference": {
-                "elapsed_ns": 11768125,
-                "cpu_ns": 282123,
+                "elapsed_ns": 11746416,
+                "cpu_ns": 281701,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -290,8 +340,8 @@
                 "tree_reconciliation": "passed"
               },
               "bare": {
-                "elapsed_ns": 11125208,
-                "cpu_ns": 266838,
+                "elapsed_ns": 11441292,
+                "cpu_ns": 274097,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255
@@ -308,15 +358,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 17800042,
-                "cpu_ns": 409192,
+                "elapsed_ns": 11291583,
+                "cpu_ns": 270817,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 12616542,
-                "cpu_ns": 301876,
+                "elapsed_ns": 11895292,
+                "cpu_ns": 285205,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -324,8 +374,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 13056000,
-                "cpu_ns": 312468,
+                "elapsed_ns": 13689667,
+                "cpu_ns": 328234,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -333,8 +383,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 72511708,
-                "cpu_ns": 400111,
+                "elapsed_ns": 72522666,
+                "cpu_ns": 404666,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -353,8 +403,8 @@
             ],
             "stages": {
               "sampled": {
-                "elapsed_ns": 72557125,
-                "cpu_ns": 408519,
+                "elapsed_ns": 72638541,
+                "cpu_ns": 411907,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -362,8 +412,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 14375167,
-                "cpu_ns": 344345,
+                "elapsed_ns": 13633042,
+                "cpu_ns": 326847,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -371,8 +421,8 @@
                 "tree_reconciliation": "passed"
               },
               "reference": {
-                "elapsed_ns": 11642041,
-                "cpu_ns": 279245,
+                "elapsed_ns": 11769500,
+                "cpu_ns": 282272,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -380,8 +430,8 @@
                 "tree_reconciliation": "passed"
               },
               "bare": {
-                "elapsed_ns": 11110500,
-                "cpu_ns": 266679,
+                "elapsed_ns": 11279917,
+                "cpu_ns": 270584,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255
@@ -398,15 +448,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 10871375,
-                "cpu_ns": 260712,
+                "elapsed_ns": 11300375,
+                "cpu_ns": 270983,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 11815250,
-                "cpu_ns": 283205,
+                "elapsed_ns": 11925000,
+                "cpu_ns": 286051,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -414,8 +464,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 13706208,
-                "cpu_ns": 328661,
+                "elapsed_ns": 13757209,
+                "cpu_ns": 330042,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -423,8 +473,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 72913625,
-                "cpu_ns": 423428,
+                "elapsed_ns": 73422250,
+                "cpu_ns": 417623,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -443,8 +493,8 @@
             ],
             "stages": {
               "sampled": {
-                "elapsed_ns": 73289500,
-                "cpu_ns": 430343,
+                "elapsed_ns": 72843500,
+                "cpu_ns": 419319,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -452,8 +502,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 14698416,
-                "cpu_ns": 351433,
+                "elapsed_ns": 14123167,
+                "cpu_ns": 338844,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -461,8 +511,8 @@
                 "tree_reconciliation": "passed"
               },
               "reference": {
-                "elapsed_ns": 11964458,
-                "cpu_ns": 286796,
+                "elapsed_ns": 11987583,
+                "cpu_ns": 287500,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -470,8 +520,8 @@
                 "tree_reconciliation": "passed"
               },
               "bare": {
-                "elapsed_ns": 11294292,
-                "cpu_ns": 270753,
+                "elapsed_ns": 11288959,
+                "cpu_ns": 270634,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255
@@ -488,15 +538,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 11953459,
-                "cpu_ns": 284849,
+                "elapsed_ns": 11225833,
+                "cpu_ns": 269100,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 11521084,
-                "cpu_ns": 276321,
+                "elapsed_ns": 11822875,
+                "cpu_ns": 283425,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -504,8 +554,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 13902500,
-                "cpu_ns": 333386,
+                "elapsed_ns": 13741334,
+                "cpu_ns": 329422,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -513,8 +563,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 72921583,
-                "cpu_ns": 422248,
+                "elapsed_ns": 72567042,
+                "cpu_ns": 408444,
                 "draws": 11096,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -526,234 +576,234 @@
         ],
         "gates": {
           "reference_elapsed_ns": {
-            "median_fraction": 0.0577892116713683,
+            "median_fraction": 0.05346539984694787,
             "confidence_interval_95": [
-              -0.03617153829699005,
-              0.08682204412965233
+              0.04340306759349377,
+              0.06188559990341003
             ],
             "pairs": [
               {
-                "instrumented": 12507625,
-                "reference": 11483333
+                "instrumented": 11869416,
+                "reference": 11077667
               },
               {
-                "instrumented": 11768125,
-                "reference": 11125208
+                "instrumented": 11746416,
+                "reference": 11441292
               },
               {
-                "instrumented": 12616542,
-                "reference": 17800042
+                "instrumented": 11895292,
+                "reference": 11291583
               },
               {
-                "instrumented": 11642041,
-                "reference": 11110500
+                "instrumented": 11769500,
+                "reference": 11279917
               },
               {
-                "instrumented": 11815250,
-                "reference": 10871375
+                "instrumented": 11925000,
+                "reference": 11300375
               },
               {
-                "instrumented": 11964458,
-                "reference": 11294292
+                "instrumented": 11987583,
+                "reference": 11288959
               },
               {
-                "instrumented": 11521084,
-                "reference": 11953459
+                "instrumented": 11822875,
+                "reference": 11225833
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "reference_cpu_ns": {
-            "median_fraction": 0.05728194634947048,
+            "median_fraction": 0.053232998885172744,
             "confidence_interval_95": [
-              -0.029938669259853445,
-              0.08627527693393477
+              0.043195458711527746,
+              0.06232032930082698
             ],
             "pairs": [
               {
-                "instrumented": 300074,
-                "reference": 275302
+                "instrumented": 284261,
+                "reference": 265709
               },
               {
-                "instrumented": 282123,
-                "reference": 266838
+                "instrumented": 281701,
+                "reference": 274097
               },
               {
-                "instrumented": 301876,
-                "reference": 409192
+                "instrumented": 285205,
+                "reference": 270817
               },
               {
-                "instrumented": 279245,
-                "reference": 266679
+                "instrumented": 282272,
+                "reference": 270584
               },
               {
-                "instrumented": 283205,
-                "reference": 260712
+                "instrumented": 286051,
+                "reference": 270983
               },
               {
-                "instrumented": 286796,
-                "reference": 270753
+                "instrumented": 287500,
+                "reference": 270634
               },
               {
-                "instrumented": 276321,
-                "reference": 284849
+                "instrumented": 283425,
+                "reference": 269100
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "counters_elapsed_ns": {
-            "median_fraction": 0.20670068892822924,
+            "median_fraction": 0.15364436058700215,
             "confidence_interval_95": [
-              0.06640949021097131,
-              0.22850663189256037
+              0.14340781383009915,
+              0.1622667075478681
             ],
             "pairs": [
               {
-                "instrumented": 13338250,
-                "reference": 12507625
+                "instrumented": 13571583,
+                "reference": 11869416
               },
               {
-                "instrumented": 14314375,
-                "reference": 11768125
+                "instrumented": 13406417,
+                "reference": 11746416
               },
               {
-                "instrumented": 13056000,
-                "reference": 12616542
+                "instrumented": 13689667,
+                "reference": 11895292
               },
               {
-                "instrumented": 14375167,
-                "reference": 11642041
+                "instrumented": 13633042,
+                "reference": 11769500
               },
               {
-                "instrumented": 13706208,
-                "reference": 11815250
+                "instrumented": 13757209,
+                "reference": 11925000
               },
               {
-                "instrumented": 14698416,
-                "reference": 11964458
+                "instrumented": 14123167,
+                "reference": 11987583
               },
               {
-                "instrumented": 13902500,
-                "reference": 11521084
+                "instrumented": 13741334,
+                "reference": 11822875
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "counters_cpu_ns": {
-            "median_fraction": 0.2065170580592861,
+            "median_fraction": 0.15378726171207235,
             "confidence_interval_95": [
-              0.06635363277058315,
-              0.22537622560984105
+              0.14516940417433277,
+              0.16228984740231112
             ],
             "pairs": [
               {
-                "instrumented": 319985,
-                "reference": 300074
+                "instrumented": 325527,
+                "reference": 284261
               },
               {
-                "instrumented": 343414,
-                "reference": 282123
+                "instrumented": 321583,
+                "reference": 281701
               },
               {
-                "instrumented": 312468,
-                "reference": 301876
+                "instrumented": 328234,
+                "reference": 285205
               },
               {
-                "instrumented": 344345,
-                "reference": 279245
+                "instrumented": 326847,
+                "reference": 282272
               },
               {
-                "instrumented": 328661,
-                "reference": 283205
+                "instrumented": 330042,
+                "reference": 286051
               },
               {
-                "instrumented": 351433,
-                "reference": 286796
+                "instrumented": 338844,
+                "reference": 287500
               },
               {
-                "instrumented": 333386,
-                "reference": 276321
+                "instrumented": 329422,
+                "reference": 283425
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "sampled_elapsed_ns": {
-            "median_fraction": 5.149591969833767,
+            "median_fraction": 5.137850734275715,
             "confidence_interval_95": [
-              4.787626188025304,
-              5.232337182114374
+              5.096753740891774,
+              5.1717609923955985
             ],
             "pairs": [
               {
-                "instrumented": 72389458,
-                "reference": 12507625
+                "instrumented": 72554292,
+                "reference": 11869416
               },
               {
-                "instrumented": 72369167,
-                "reference": 11768125
+                "instrumented": 72829625,
+                "reference": 11746416
               },
               {
-                "instrumented": 72511708,
-                "reference": 12616542
+                "instrumented": 72522666,
+                "reference": 11895292
               },
               {
-                "instrumented": 72557125,
-                "reference": 11642041
+                "instrumented": 72638541,
+                "reference": 11769500
               },
               {
-                "instrumented": 72913625,
-                "reference": 11815250
+                "instrumented": 73422250,
+                "reference": 11925000
               },
               {
-                "instrumented": 73289500,
-                "reference": 11964458
+                "instrumented": 72843500,
+                "reference": 11987583
               },
               {
-                "instrumented": 72921583,
-                "reference": 11521084
+                "instrumented": 72567042,
+                "reference": 11822875
               }
             ],
             "limit": 0.05,
             "status": "failed"
           },
           "sampled_cpu_ns": {
-            "median_fraction": 0.4828603127004889,
+            "median_fraction": 0.4585008695652173,
             "confidence_interval_95": [
-              0.337979964941981,
-              0.5005195330478807
+              0.4188601181606213,
+              0.4599599372139933
             ],
             "pairs": [
               {
-                "instrumented": 401493,
-                "reference": 300074
+                "instrumented": 400026,
+                "reference": 284261
               },
               {
-                "instrumented": 418349,
-                "reference": 282123
+                "instrumented": 416825,
+                "reference": 281701
               },
               {
-                "instrumented": 400111,
-                "reference": 301876
+                "instrumented": 404666,
+                "reference": 285205
               },
               {
-                "instrumented": 408519,
-                "reference": 279245
+                "instrumented": 411907,
+                "reference": 282272
               },
               {
-                "instrumented": 423428,
-                "reference": 283205
+                "instrumented": 417623,
+                "reference": 286051
               },
               {
-                "instrumented": 430343,
-                "reference": 286796
+                "instrumented": 419319,
+                "reference": 287500
               },
               {
-                "instrumented": 422248,
-                "reference": 276321
+                "instrumented": 408444,
+                "reference": 283425
               }
             ],
             "limit": 0.05,
@@ -786,15 +836,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 3580958,
-                "cpu_ns": 85824,
+                "elapsed_ns": 3645125,
+                "cpu_ns": 87336,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 3448583,
-                "cpu_ns": 82606,
+                "elapsed_ns": 3512625,
+                "cpu_ns": 84312,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -802,8 +852,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 4150000,
-                "cpu_ns": 99538,
+                "elapsed_ns": 3998084,
+                "cpu_ns": 95962,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -811,8 +861,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 17575292,
-                "cpu_ns": 165156,
+                "elapsed_ns": 17357791,
+                "cpu_ns": 164244,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -831,8 +881,8 @@
             ],
             "stages": {
               "sampled": {
-                "elapsed_ns": 17861834,
-                "cpu_ns": 168041,
+                "elapsed_ns": 17347708,
+                "cpu_ns": 167266,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -840,8 +890,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 4134417,
-                "cpu_ns": 99236,
+                "elapsed_ns": 4022542,
+                "cpu_ns": 96408,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -849,8 +899,8 @@
                 "tree_reconciliation": "passed"
               },
               "reference": {
-                "elapsed_ns": 3745250,
-                "cpu_ns": 89476,
+                "elapsed_ns": 3701875,
+                "cpu_ns": 88854,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -858,8 +908,8 @@
                 "tree_reconciliation": "passed"
               },
               "bare": {
-                "elapsed_ns": 3540958,
-                "cpu_ns": 85005,
+                "elapsed_ns": 3520125,
+                "cpu_ns": 84514,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255
@@ -876,15 +926,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 3768250,
-                "cpu_ns": 90293,
+                "elapsed_ns": 3421833,
+                "cpu_ns": 82144,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 3625500,
-                "cpu_ns": 86874,
+                "elapsed_ns": 3524375,
+                "cpu_ns": 84597,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -892,8 +942,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 4322583,
-                "cpu_ns": 103599,
+                "elapsed_ns": 4197625,
+                "cpu_ns": 100597,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -901,8 +951,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 18327333,
-                "cpu_ns": 180663,
+                "elapsed_ns": 18151208,
+                "cpu_ns": 177351,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -921,8 +971,8 @@
             ],
             "stages": {
               "sampled": {
-                "elapsed_ns": 18009625,
-                "cpu_ns": 177387,
+                "elapsed_ns": 17820959,
+                "cpu_ns": 172221,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -930,8 +980,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 4159750,
-                "cpu_ns": 99843,
+                "elapsed_ns": 4138417,
+                "cpu_ns": 99178,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -939,8 +989,8 @@
                 "tree_reconciliation": "passed"
               },
               "reference": {
-                "elapsed_ns": 3718250,
-                "cpu_ns": 89247,
+                "elapsed_ns": 3612542,
+                "cpu_ns": 86556,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -948,8 +998,8 @@
                 "tree_reconciliation": "passed"
               },
               "bare": {
-                "elapsed_ns": 3970000,
-                "cpu_ns": 95075,
+                "elapsed_ns": 3778667,
+                "cpu_ns": 90582,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255
@@ -966,15 +1016,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 4124125,
-                "cpu_ns": 97562,
+                "elapsed_ns": 3765500,
+                "cpu_ns": 89855,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 4423666,
-                "cpu_ns": 105094,
+                "elapsed_ns": 3716292,
+                "cpu_ns": 89033,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -982,8 +1032,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 4285459,
-                "cpu_ns": 102745,
+                "elapsed_ns": 4162833,
+                "cpu_ns": 99561,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -991,8 +1041,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 18012834,
-                "cpu_ns": 178078,
+                "elapsed_ns": 17771792,
+                "cpu_ns": 171794,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1011,8 +1061,8 @@
             ],
             "stages": {
               "sampled": {
-                "elapsed_ns": 17959083,
-                "cpu_ns": 171306,
+                "elapsed_ns": 17681208,
+                "cpu_ns": 176175,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1020,8 +1070,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 4132667,
-                "cpu_ns": 98949,
+                "elapsed_ns": 4244083,
+                "cpu_ns": 101874,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1029,8 +1079,8 @@
                 "tree_reconciliation": "passed"
               },
               "reference": {
-                "elapsed_ns": 3828417,
-                "cpu_ns": 91688,
+                "elapsed_ns": 3697083,
+                "cpu_ns": 88737,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1038,8 +1088,8 @@
                 "tree_reconciliation": "passed"
               },
               "bare": {
-                "elapsed_ns": 3960584,
-                "cpu_ns": 94936,
+                "elapsed_ns": 3621833,
+                "cpu_ns": 86722,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255
@@ -1056,15 +1106,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 3979667,
-                "cpu_ns": 95406,
+                "elapsed_ns": 3425709,
+                "cpu_ns": 82132,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 4663292,
-                "cpu_ns": 110213,
+                "elapsed_ns": 3805250,
+                "cpu_ns": 91189,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1072,8 +1122,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 4257708,
-                "cpu_ns": 101984,
+                "elapsed_ns": 4069833,
+                "cpu_ns": 97686,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1081,8 +1131,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 17605375,
-                "cpu_ns": 175049,
+                "elapsed_ns": 17466708,
+                "cpu_ns": 168664,
                 "draws": 9140,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1094,234 +1144,234 @@
         ],
         "gates": {
           "reference_elapsed_ns": {
-            "median_fraction": -0.033370583732096115,
+            "median_fraction": 0.02077677242434972,
             "confidence_interval_95": [
-              -0.03788230611026333,
-              0.07263140666201928
+              -0.036349919412914544,
+              0.05163168921558192
             ],
             "pairs": [
               {
-                "instrumented": 3448583,
-                "reference": 3580958
+                "instrumented": 3512625,
+                "reference": 3645125
               },
               {
-                "instrumented": 3745250,
-                "reference": 3540958
+                "instrumented": 3701875,
+                "reference": 3520125
               },
               {
-                "instrumented": 3625500,
-                "reference": 3768250
+                "instrumented": 3524375,
+                "reference": 3421833
               },
               {
-                "instrumented": 3718250,
-                "reference": 3970000
+                "instrumented": 3612542,
+                "reference": 3778667
               },
               {
-                "instrumented": 4423666,
-                "reference": 4124125
+                "instrumented": 3716292,
+                "reference": 3765500
               },
               {
-                "instrumented": 3828417,
-                "reference": 3960584
+                "instrumented": 3697083,
+                "reference": 3621833
               },
               {
-                "instrumented": 4663292,
-                "reference": 3979667
+                "instrumented": 3805250,
+                "reference": 3425709
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "reference_cpu_ns": {
-            "median_fraction": -0.03421252212016512,
+            "median_fraction": 0.023235165240653943,
             "confidence_interval_95": [
-              -0.03786561527471677,
-              0.07720218937701162
+              -0.03462489694971149,
+              0.0513524386492179
             ],
             "pairs": [
               {
-                "instrumented": 82606,
-                "reference": 85824
+                "instrumented": 84312,
+                "reference": 87336
               },
               {
-                "instrumented": 89476,
-                "reference": 85005
+                "instrumented": 88854,
+                "reference": 84514
               },
               {
-                "instrumented": 86874,
-                "reference": 90293
+                "instrumented": 84597,
+                "reference": 82144
               },
               {
-                "instrumented": 89247,
-                "reference": 95075
+                "instrumented": 86556,
+                "reference": 90582
               },
               {
-                "instrumented": 105094,
-                "reference": 97562
+                "instrumented": 89033,
+                "reference": 89855
               },
               {
-                "instrumented": 91688,
-                "reference": 94936
+                "instrumented": 88737,
+                "reference": 86722
               },
               {
-                "instrumented": 110213,
-                "reference": 95406
+                "instrumented": 91189,
+                "reference": 82132
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "counters_elapsed_ns": {
-            "median_fraction": 0.10390948534810751,
+            "median_fraction": 0.1382040496779473,
             "confidence_interval_95": [
-              -0.031242639023832286,
-              0.19227223831195706
+              0.08662286003714326,
+              0.14795448195239325
             ],
             "pairs": [
               {
-                "instrumented": 4150000,
-                "reference": 3448583
+                "instrumented": 3998084,
+                "reference": 3512625
               },
               {
-                "instrumented": 4134417,
-                "reference": 3745250
+                "instrumented": 4022542,
+                "reference": 3701875
               },
               {
-                "instrumented": 4322583,
-                "reference": 3625500
+                "instrumented": 4197625,
+                "reference": 3524375
               },
               {
-                "instrumented": 4159750,
-                "reference": 3718250
+                "instrumented": 4138417,
+                "reference": 3612542
               },
               {
-                "instrumented": 4285459,
-                "reference": 4423666
+                "instrumented": 4162833,
+                "reference": 3716292
               },
               {
-                "instrumented": 4132667,
-                "reference": 3828417
+                "instrumented": 4244083,
+                "reference": 3697083
               },
               {
-                "instrumented": 4257708,
-                "reference": 4663292
+                "instrumented": 4069833,
+                "reference": 3805250
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "counters_cpu_ns": {
-            "median_fraction": 0.10907952970628987,
+            "median_fraction": 0.13817724641806617,
             "confidence_interval_95": [
-              -0.022351418729898986,
-              0.19252020167138606
+              0.08501586872847589,
+              0.14804422056188504
             ],
             "pairs": [
               {
-                "instrumented": 99538,
-                "reference": 82606
+                "instrumented": 95962,
+                "reference": 84312
               },
               {
-                "instrumented": 99236,
-                "reference": 89476
+                "instrumented": 96408,
+                "reference": 88854
               },
               {
-                "instrumented": 103599,
-                "reference": 86874
+                "instrumented": 100597,
+                "reference": 84597
               },
               {
-                "instrumented": 99843,
-                "reference": 89247
+                "instrumented": 99178,
+                "reference": 86556
               },
               {
-                "instrumented": 102745,
-                "reference": 105094
+                "instrumented": 99561,
+                "reference": 89033
               },
               {
-                "instrumented": 98949,
-                "reference": 91688
+                "instrumented": 101874,
+                "reference": 88737
               },
               {
-                "instrumented": 101984,
-                "reference": 110213
+                "instrumented": 97686,
+                "reference": 91189
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "sampled_elapsed_ns": {
-            "median_fraction": 3.7691967158400637,
+            "median_fraction": 3.7824752649588875,
             "confidence_interval_95": [
-              3.071924507862936,
-              4.055118742242449
+              3.686194968765828,
+              3.9415440019928116
             ],
             "pairs": [
               {
-                "instrumented": 17575292,
-                "reference": 3448583
+                "instrumented": 17357791,
+                "reference": 3512625
               },
               {
-                "instrumented": 17861834,
-                "reference": 3745250
+                "instrumented": 17347708,
+                "reference": 3701875
               },
               {
-                "instrumented": 18327333,
-                "reference": 3625500
+                "instrumented": 18151208,
+                "reference": 3524375
               },
               {
-                "instrumented": 18009625,
-                "reference": 3718250
+                "instrumented": 17820959,
+                "reference": 3612542
               },
               {
-                "instrumented": 18012834,
-                "reference": 4423666
+                "instrumented": 17771792,
+                "reference": 3716292
               },
               {
-                "instrumented": 17959083,
-                "reference": 3828417
+                "instrumented": 17681208,
+                "reference": 3697083
               },
               {
-                "instrumented": 17605375,
-                "reference": 4663292
+                "instrumented": 17466708,
+                "reference": 3805250
               }
             ],
             "limit": 0.05,
             "status": "failed"
           },
           "sampled_cpu_ns": {
-            "median_fraction": 0.8780566855916669,
+            "median_fraction": 0.9480500996299459,
             "confidence_interval_95": [
-              0.6944640036538718,
-              0.9993220831416605
+              0.8824813739392712,
+              0.9897060862331901
             ],
             "pairs": [
               {
-                "instrumented": 165156,
-                "reference": 82606
+                "instrumented": 164244,
+                "reference": 84312
               },
               {
-                "instrumented": 168041,
-                "reference": 89476
+                "instrumented": 167266,
+                "reference": 88854
               },
               {
-                "instrumented": 180663,
-                "reference": 86874
+                "instrumented": 177351,
+                "reference": 84597
               },
               {
-                "instrumented": 177387,
-                "reference": 89247
+                "instrumented": 172221,
+                "reference": 86556
               },
               {
-                "instrumented": 178078,
-                "reference": 105094
+                "instrumented": 171794,
+                "reference": 89033
               },
               {
-                "instrumented": 171306,
-                "reference": 91688
+                "instrumented": 176175,
+                "reference": 88737
               },
               {
-                "instrumented": 175049,
-                "reference": 110213
+                "instrumented": 168664,
+                "reference": 91189
               }
             ],
             "limit": 0.05,
@@ -1354,15 +1404,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 1449334,
-                "cpu_ns": 34622,
+                "elapsed_ns": 1354833,
+                "cpu_ns": 32537,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 1695584,
-                "cpu_ns": 40323,
+                "elapsed_ns": 1527000,
+                "cpu_ns": 36660,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1370,8 +1420,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 1988166,
-                "cpu_ns": 47413,
+                "elapsed_ns": 1824709,
+                "cpu_ns": 43804,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1379,8 +1429,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 4700958,
-                "cpu_ns": 112240,
+                "elapsed_ns": 3806750,
+                "cpu_ns": 91161,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1399,8 +1449,8 @@
             ],
             "stages": {
               "sampled": {
-                "elapsed_ns": 6748208,
-                "cpu_ns": 120748,
+                "elapsed_ns": 4727250,
+                "cpu_ns": 109721,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1408,8 +1458,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 2222667,
-                "cpu_ns": 51593,
+                "elapsed_ns": 1884708,
+                "cpu_ns": 45242,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1417,8 +1467,8 @@
                 "tree_reconciliation": "passed"
               },
               "reference": {
-                "elapsed_ns": 1612792,
-                "cpu_ns": 38719,
+                "elapsed_ns": 1551541,
+                "cpu_ns": 37247,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1426,8 +1476,8 @@
                 "tree_reconciliation": "passed"
               },
               "bare": {
-                "elapsed_ns": 1521292,
-                "cpu_ns": 36538,
+                "elapsed_ns": 1393792,
+                "cpu_ns": 33475,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255
@@ -1444,15 +1494,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 1520125,
-                "cpu_ns": 36511,
+                "elapsed_ns": 1404667,
+                "cpu_ns": 33733,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 1652208,
-                "cpu_ns": 39670,
+                "elapsed_ns": 1645125,
+                "cpu_ns": 39391,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1460,8 +1510,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 2127958,
-                "cpu_ns": 50214,
+                "elapsed_ns": 1971000,
+                "cpu_ns": 47222,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1469,8 +1519,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 6675667,
-                "cpu_ns": 116692,
+                "elapsed_ns": 4801084,
+                "cpu_ns": 114932,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1489,8 +1539,8 @@
             ],
             "stages": {
               "sampled": {
-                "elapsed_ns": 7036042,
-                "cpu_ns": 126479,
+                "elapsed_ns": 6509541,
+                "cpu_ns": 114365,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1498,8 +1548,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 1884125,
-                "cpu_ns": 45231,
+                "elapsed_ns": 1919834,
+                "cpu_ns": 46088,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1507,8 +1557,8 @@
                 "tree_reconciliation": "passed"
               },
               "reference": {
-                "elapsed_ns": 1648667,
-                "cpu_ns": 39430,
+                "elapsed_ns": 1647625,
+                "cpu_ns": 39483,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1516,8 +1566,8 @@
                 "tree_reconciliation": "passed"
               },
               "bare": {
-                "elapsed_ns": 1580541,
-                "cpu_ns": 37959,
+                "elapsed_ns": 1484875,
+                "cpu_ns": 35511,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255
@@ -1534,15 +1584,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 1489208,
-                "cpu_ns": 35768,
+                "elapsed_ns": 1439708,
+                "cpu_ns": 34577,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 1686167,
-                "cpu_ns": 40232,
+                "elapsed_ns": 1591417,
+                "cpu_ns": 37831,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1550,8 +1600,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 1889583,
-                "cpu_ns": 45358,
+                "elapsed_ns": 1856542,
+                "cpu_ns": 44568,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1559,8 +1609,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 6662583,
-                "cpu_ns": 111394,
+                "elapsed_ns": 4079042,
+                "cpu_ns": 95924,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1579,8 +1629,8 @@
             ],
             "stages": {
               "sampled": {
-                "elapsed_ns": 5283541,
-                "cpu_ns": 111254,
+                "elapsed_ns": 6647250,
+                "cpu_ns": 112133,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1588,8 +1638,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 1962666,
-                "cpu_ns": 47114,
+                "elapsed_ns": 1913292,
+                "cpu_ns": 45927,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1597,8 +1647,8 @@
                 "tree_reconciliation": "passed"
               },
               "reference": {
-                "elapsed_ns": 1581667,
-                "cpu_ns": 37974,
+                "elapsed_ns": 1808750,
+                "cpu_ns": 43148,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1606,8 +1656,8 @@
                 "tree_reconciliation": "passed"
               },
               "bare": {
-                "elapsed_ns": 1493958,
-                "cpu_ns": 35879,
+                "elapsed_ns": 1531958,
+                "cpu_ns": 36381,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255
@@ -1624,15 +1674,15 @@
             ],
             "stages": {
               "bare": {
-                "elapsed_ns": 1450542,
-                "cpu_ns": 34834,
+                "elapsed_ns": 1456958,
+                "cpu_ns": 34597,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255
               },
               "reference": {
-                "elapsed_ns": 1735208,
-                "cpu_ns": 40429,
+                "elapsed_ns": 1549875,
+                "cpu_ns": 37208,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1640,8 +1690,8 @@
                 "tree_reconciliation": "passed"
               },
               "counters": {
-                "elapsed_ns": 2060666,
-                "cpu_ns": 48818,
+                "elapsed_ns": 2005250,
+                "cpu_ns": 48016,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1649,8 +1699,8 @@
                 "tree_reconciliation": "passed"
               },
               "sampled": {
-                "elapsed_ns": 6507000,
-                "cpu_ns": 114677,
+                "elapsed_ns": 4954125,
+                "cpu_ns": 117799,
                 "draws": 2528,
                 "valid": 1,
                 "pixel_alpha": 255,
@@ -1662,234 +1712,234 @@
         ],
         "gates": {
           "reference_elapsed_ns": {
-            "median_fraction": 0.08688956500287803,
+            "median_fraction": 0.11317972839562862,
             "confidence_interval_95": [
-              0.05870914711123065,
-              0.1699056256183875
+              0.10537483989809049,
+              0.17118505667179473
             ],
             "pairs": [
               {
-                "instrumented": 1695584,
-                "reference": 1449334
+                "instrumented": 1527000,
+                "reference": 1354833
               },
               {
-                "instrumented": 1612792,
-                "reference": 1521292
+                "instrumented": 1551541,
+                "reference": 1393792
               },
               {
-                "instrumented": 1652208,
-                "reference": 1520125
+                "instrumented": 1645125,
+                "reference": 1404667
               },
               {
-                "instrumented": 1648667,
-                "reference": 1580541
+                "instrumented": 1647625,
+                "reference": 1484875
               },
               {
-                "instrumented": 1686167,
-                "reference": 1489208
+                "instrumented": 1591417,
+                "reference": 1439708
               },
               {
-                "instrumented": 1581667,
-                "reference": 1493958
+                "instrumented": 1808750,
+                "reference": 1531958
               },
               {
-                "instrumented": 1735208,
-                "reference": 1450542
+                "instrumented": 1549875,
+                "reference": 1456958
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "reference_cpu_ns": {
-            "median_fraction": 0.08652187012133328,
+            "median_fraction": 0.11268110530246456,
             "confidence_interval_95": [
-              0.058390702081997814,
-              0.16061893552276518
+              0.09410880064782945,
+              0.16772893012776802
             ],
             "pairs": [
               {
-                "instrumented": 40323,
-                "reference": 34622
+                "instrumented": 36660,
+                "reference": 32537
               },
               {
-                "instrumented": 38719,
-                "reference": 36538
+                "instrumented": 37247,
+                "reference": 33475
               },
               {
-                "instrumented": 39670,
-                "reference": 36511
+                "instrumented": 39391,
+                "reference": 33733
               },
               {
-                "instrumented": 39430,
-                "reference": 37959
+                "instrumented": 39483,
+                "reference": 35511
               },
               {
-                "instrumented": 40232,
-                "reference": 35768
+                "instrumented": 37831,
+                "reference": 34577
               },
               {
-                "instrumented": 37974,
-                "reference": 35879
+                "instrumented": 43148,
+                "reference": 36381
               },
               {
-                "instrumented": 40429,
-                "reference": 34834
+                "instrumented": 37208,
+                "reference": 34597
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "counters_elapsed_ns": {
-            "median_fraction": 0.1875613759272663,
+            "median_fraction": 0.19496332678454475,
             "confidence_interval_95": [
-              0.14281719716595287,
-              0.2879480065463913
+              0.16521295804567182,
+              0.21473296548399312
             ],
             "pairs": [
               {
-                "instrumented": 1988166,
-                "reference": 1695584
+                "instrumented": 1824709,
+                "reference": 1527000
               },
               {
-                "instrumented": 2222667,
-                "reference": 1612792
+                "instrumented": 1884708,
+                "reference": 1551541
               },
               {
-                "instrumented": 2127958,
-                "reference": 1652208
+                "instrumented": 1971000,
+                "reference": 1645125
               },
               {
-                "instrumented": 1884125,
-                "reference": 1648667
+                "instrumented": 1919834,
+                "reference": 1647625
               },
               {
-                "instrumented": 1889583,
-                "reference": 1686167
+                "instrumented": 1856542,
+                "reference": 1591417
               },
               {
-                "instrumented": 1962666,
-                "reference": 1581667
+                "instrumented": 1913292,
+                "reference": 1808750
               },
               {
-                "instrumented": 2060666,
-                "reference": 1735208
+                "instrumented": 2005250,
+                "reference": 1549875
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "counters_cpu_ns": {
-            "median_fraction": 0.2074995671423978,
+            "median_fraction": 0.19487179487179485,
             "confidence_interval_95": [
-              0.14712148110575707,
-              0.26579279052180493
+              0.16728718689056055,
+              0.21464815958332206
             ],
             "pairs": [
               {
-                "instrumented": 47413,
-                "reference": 40323
+                "instrumented": 43804,
+                "reference": 36660
               },
               {
-                "instrumented": 51593,
-                "reference": 38719
+                "instrumented": 45242,
+                "reference": 37247
               },
               {
-                "instrumented": 50214,
-                "reference": 39670
+                "instrumented": 47222,
+                "reference": 39391
               },
               {
-                "instrumented": 45231,
-                "reference": 39430
+                "instrumented": 46088,
+                "reference": 39483
               },
               {
-                "instrumented": 45358,
-                "reference": 40232
+                "instrumented": 44568,
+                "reference": 37831
               },
               {
-                "instrumented": 47114,
-                "reference": 37974
+                "instrumented": 45927,
+                "reference": 43148
               },
               {
-                "instrumented": 48818,
-                "reference": 40429
+                "instrumented": 48016,
+                "reference": 37208
               }
             ],
             "limit": 0.03,
             "status": "failed"
           },
           "sampled_elapsed_ns": {
-            "median_fraction": 2.951318582323103,
+            "median_fraction": 2.046809591238646,
             "confidence_interval_95": [
-              2.340488863964412,
-              3.1841775008804607
+              1.5631509528929248,
+              2.675051831375259
             ],
             "pairs": [
               {
-                "instrumented": 4700958,
-                "reference": 1695584
+                "instrumented": 3806750,
+                "reference": 1527000
               },
               {
-                "instrumented": 6748208,
-                "reference": 1612792
+                "instrumented": 4727250,
+                "reference": 1551541
               },
               {
-                "instrumented": 6675667,
-                "reference": 1652208
+                "instrumented": 4801084,
+                "reference": 1645125
               },
               {
-                "instrumented": 7036042,
-                "reference": 1648667
+                "instrumented": 6509541,
+                "reference": 1647625
               },
               {
-                "instrumented": 6662583,
-                "reference": 1686167
+                "instrumented": 4079042,
+                "reference": 1591417
               },
               {
-                "instrumented": 5283541,
-                "reference": 1581667
+                "instrumented": 6647250,
+                "reference": 1808750
               },
               {
-                "instrumented": 6507000,
-                "reference": 1735208
+                "instrumented": 4954125,
+                "reference": 1549875
               }
             ],
             "limit": 0.05,
             "status": "failed"
           },
           "sampled_cpu_ns": {
-            "median_fraction": 1.9297414020119028,
+            "median_fraction": 1.8965630777803106,
             "confidence_interval_95": [
-              1.783523051360266,
-              2.11857227717658
+              1.5355925035024187,
+              1.945767444357935
             ],
             "pairs": [
               {
-                "instrumented": 112240,
-                "reference": 40323
+                "instrumented": 91161,
+                "reference": 36660
               },
               {
-                "instrumented": 120748,
-                "reference": 38719
+                "instrumented": 109721,
+                "reference": 37247
               },
               {
-                "instrumented": 116692,
-                "reference": 39670
+                "instrumented": 114932,
+                "reference": 39391
               },
               {
-                "instrumented": 126479,
-                "reference": 39430
+                "instrumented": 114365,
+                "reference": 39483
               },
               {
-                "instrumented": 111394,
-                "reference": 40232
+                "instrumented": 95924,
+                "reference": 37831
               },
               {
-                "instrumented": 111254,
-                "reference": 37974
+                "instrumented": 112133,
+                "reference": 43148
               },
               {
-                "instrumented": 114677,
-                "reference": 40429
+                "instrumented": 117799,
+                "reference": 37208
               }
             ],
             "limit": 0.05,
@@ -1898,9 +1948,9 @@
         }
       }
     ],
-    "test_library_sha256": "d413b7657d94e0086cae688e7057946b5593d0b21348666dedac46368fe96819",
+    "test_library_sha256": "3ebf13863a5046cacdaf691778770560617e9e25720d028f758e3035b5a4eb99",
     "harness_source_sha256": "894122d8b29cb4954bb4dbc4c563672314973a231ee9e13e1262a2a5f5149000",
-    "profiler_source_sha256": "1e3be6d3f4e5faf040fb8022441d7752d2e29c84e9e92f56565bbfeea42088ca"
+    "profiler_source_sha256": "732dc2da3226b516d8e913a81cde92b660017f56b1e97da3484813528a8bb904"
   },
   "overhead_gate": "failed",
   "limitations": [

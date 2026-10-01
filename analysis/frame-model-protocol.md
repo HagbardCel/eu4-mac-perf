@@ -4,7 +4,8 @@ The v3 command is little-endian `<6I4Q>`: version, publication sequence, mode,
 phase, flags, detail frame budget, update period, render period, command
 generation, measurement epoch. Controller publication uses an odd sequence while
 writing and an even sequence when complete. The probe snapshots at update
-boundaries. A detail command preserves the epoch. Disabling measurement sets
+boundaries; calls outside an owned update refresh their thread's snapshot when
+the publication sequence changes. A detail command preserves the epoch. Disabling measurement sets
 command epoch zero; the next enable assigns a new nonzero epoch.
 
 Probe-owned fields follow the command: acknowledged generation (offset 56),
@@ -13,7 +14,10 @@ all uint64. Commands never overwrite them. Acknowledgement time is written
 before publishing its generation, after completion of the update using that
 snapshot. The controller waits for enable acknowledgement before `phase_start`,
 and for disable acknowledgement before the next transition. Enable generation
-and epoch are recorded separately in the phase manifest.
+and epoch are recorded separately in the phase manifest. A post-start command
+with the same epoch establishes `window_generation`, even without detailed
+sampling, so unowned producers can distinguish enable acknowledgement from the
+timed window.
 
 Telemetry begins `H,3`. F retains all v1 columns, followed by epoch, update
 start/end, render start/end, and last present timestamp (v2). V3 appends generation, sample-window command
@@ -35,11 +39,19 @@ boundary. Existing flag 2048 retains its GL state-seeding meaning.
 Detail records have 12 payload columns, followed by originating epoch, update,
 phase, thread, generation, sample-window identity, and collecting context pointer.
 Detail comparisons require consecutive render IDs in the same epoch/thread/window;
-origin fields are excluded from command payload equality. V/W are derived uniform
+epoch/update/thread/generation/window fields are excluded from command payload
+equality; the collecting context remains part of the ordered command identity.
+V/W are derived uniform
 comparison metadata and never enter command-stream equality. E payload begins `epoch,update,phase,event_kind,timestamp,render,present`;
 kinds 1/2/3/4 mean update start, render attempt, render execution, and drawable
 flush attempt. E records count individual events, including multiple presents
 and skipped render attempts; F cost statistics require complete eligible frames.
+
+O payload begins `epoch,thread,phase,timestamp,context` and marks a measured call
+outside an owned update. Each producer emits one marker per command generation;
+no frame is guessed. Markers use the same mapped half-open event window. Any
+in-window marker fails the separate origin-integrity gate for causal acceptance;
+residual discovery may retain this partial evidence.
 
 G payload begins:
 
@@ -99,7 +111,9 @@ counters accumulate locally and flush at frame boundaries. Each producer owns
 its bounded SPSC queues (128 frames, 32,768 detail records, at most 16 producers);
 writer publication uses release/acquire ordering. Capacity failures increment
 the retained dropped-record counter and fail integrity. Scope snapshots exclude
-the live stack. GPU/payload/GL timing runs only in sampled windows.
+the live stack. Shutdown observes the stop flag before taking a fresh queue
+snapshot and drains all completed publications. GPU/payload/GL timing runs only
+in sampled windows.
 
 D preserves forced rasterizer discard despite engine enable/disable attempts,
 counts challenges, and restores each context's last requested state. Context

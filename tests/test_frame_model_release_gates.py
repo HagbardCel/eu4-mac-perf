@@ -58,4 +58,12 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(model.sampled_perturbation(frames,1)["status"],"failed")
         self.assertEqual(model.sampled_perturbation(frames,6)["status"],"unavailable")
 
+    def test_unassociated_origins_are_window_events_not_guessed_frames(self):
+        window={"name":"A0","measurement_epoch":7,"start_ns":100,"end_ns":200,"clock_offset_ns":10}
+        rows=[["O","7","55","1",str(t),"99"] for t in (89,90,120,190)]
+        rows.append(["O","8","55","1","120","99"])
+        records=model.unassociated_origins(rows,[window])
+        self.assertEqual([r["timestamp_ns"] for r in records],[90,120])
+        self.assertEqual({r["origin"] for r in records},{"unassociated; no guessed frame"})
+
 if __name__=='__main__':unittest.main()

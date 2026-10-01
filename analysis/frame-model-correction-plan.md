@@ -17,7 +17,7 @@ release-gate follow-up. Publication and CI evidence are recorded separately in
 | E deadline/rate acceptance | DONE | Absolute deadlines, lateness, missed deadlines, skip fraction, render overruns |
 | D forced discard | DONE / live unmeasured | Engine requests retained while discard stays forced; exact final state restored; failures invalidate D |
 | GPU allocation and segmentation | DONE / driver partial | Shared lifetime registry; context/pass segments; ownership and migration tests; sampled driver timing only |
-| Bounded per-thread publication | DONE | Shared SPSC protocol; four-producer saturation/reuse test; origins include thread and window |
+| Bounded per-thread publication | DONE | Shared SPSC protocol; saturation/reuse and shutdown drain tests; worker control refresh and explicit unassociated origins |
 | Production detours and argument forwarding | PARTIAL | Pinned prologue lengths, native rollback; test-only library exercises seven production wrappers; installed-game ABI/live behavior still unmeasured |
 | Counters ≤3%, sampled ≤5% overhead | **BLOCKING** | Valid structural recipes fail; raw seven-pair evidence retained; no threshold relaxed |
 | Live reference calibration | OPEN | Reference/counters/reference and six four-render windows implemented; no game launched |
