@@ -276,6 +276,132 @@ def offline_harness(library: Path | None = None, mode: int = 1, loops: int = 150
                 "hook_failures": next((int(row[1]) for row in rows if row[0] == "Z"), None)}
 
 
+OFFLINE_EVIDENCE_DIR = ROOT / "analysis/evidence"
+OFFLINE_EVIDENCE_POINTER = ROOT / "analysis/frame-model-offline-evidence.json"
+OFFLINE_EVIDENCE_SCHEMA_VERSION = "stage1-immutable-v1"
+OFFLINE_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
+OFFLINE_ABLATION_POLICY_VERSION = "harness_ablation_vs_sampled_5pct_v1"
+OFFLINE_DIAGNOSTIC_POLICY_VERSION = "diag_matrix_vs_diag_A_no_acceptance_v1"
+
+
+def _git_commit_metadata() -> dict:
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        short = subprocess.run(
+            ["git", "rev-parse", "--short=7", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return {"git_commit": None, "git_commit_short": None}
+    return {"git_commit": commit, "git_commit_short": short}
+
+
+def _offline_evidence_id(now: dt.datetime | None = None) -> str:
+    moment = now or dt.datetime.now(dt.timezone.utc)
+    return moment.strftime("%Y%m%dT%H%M%SZ")
+
+
+def _offline_artifact_hashes(representative: dict) -> dict:
+    keys = (
+        "test_library_sha256", "harness_source_sha256", "profiler_source_sha256",
+        "gpu_segments_source_sha256",
+    )
+    artifacts = {key: representative.get(key) for key in keys}
+    recipes = representative.get("recipes") or []
+    artifacts["recipe_sha256"] = {
+        entry["recipe"]["name"]: entry["recipe"]["sha256"] for entry in recipes if "recipe" in entry
+    }
+    return artifacts
+
+
+def _offline_gate_summary(representative: dict) -> list:
+    summary = []
+    for entry in representative.get("recipes") or []:
+        recipe = entry.get("recipe") or {}
+        summary.append({
+            "recipe": recipe.get("name"),
+            "gates": {name: gate.get("status") for name, gate in (entry.get("gates") or {}).items()},
+            "ablations": {
+                component: {axis: values.get("status") for axis, values in axes.items()}
+                for component, axes in (entry.get("ablations") or {}).items()
+            },
+        })
+    return summary
+
+
+def _offline_environment_metadata() -> dict:
+    return {
+        "platform": sys.platform,
+        "python_version": sys.version.split()[0],
+        "gog_executable_sha256": base.sha256(base.GOG_EXE),
+    }
+
+
+def _offline_policy_versions(representative: dict) -> dict:
+    first = (representative.get("recipes") or [{}])[0]
+    return {
+        "seven_pair_gate": OFFLINE_SEVEN_PAIR_POLICY_VERSION,
+        "ablation_gate": OFFLINE_ABLATION_POLICY_VERSION,
+        "diagnostic_matrix": OFFLINE_DIAGNOSTIC_POLICY_VERSION,
+        "ablation_policy_text": first.get("ablation_policy"),
+        "diagnostic_policy_text": (first.get("diagnostic_matrix") or {}).get("policy"),
+    }
+
+
+def write_offline_evidence_archive(
+    preflight_evidence: dict,
+    *,
+    evidence_id: str | None = None,
+    now: dt.datetime | None = None,
+) -> tuple[Path, str]:
+    """Write immutable offline preflight evidence; return archive path and evidence ID."""
+    representative = preflight_evidence.get("representative_workloads") or {}
+    run_id = evidence_id or _offline_evidence_id(now)
+    git_meta = _git_commit_metadata()
+    short = git_meta.get("git_commit_short") or "unknown"
+    OFFLINE_EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+    archive = OFFLINE_EVIDENCE_DIR / f"frame-model-offline-{short}-{run_id}.json"
+    if archive.exists():
+        raise base.BenchmarkError(f"Refusing to overwrite immutable evidence archive: {archive}")
+    record = {
+        "evidence_id": run_id,
+        "schema_version": OFFLINE_EVIDENCE_SCHEMA_VERSION,
+        "recorded_at_utc": run_id,
+        **git_meta,
+        "environment": _offline_environment_metadata(),
+        "policy_versions": _offline_policy_versions(representative),
+        "artifact_hashes": _offline_artifact_hashes(representative),
+        "preflight": preflight_evidence,
+    }
+    archive.write_text(json.dumps(record, indent=2) + "\n")
+    return archive, run_id
+
+
+def write_offline_evidence_pointer(
+    preflight_evidence: dict, evidence_id: str, archive_path: Path,
+) -> None:
+    representative = preflight_evidence.get("representative_workloads") or {}
+    git_meta = _git_commit_metadata()
+    pointer = {
+        "schema_version": OFFLINE_EVIDENCE_SCHEMA_VERSION,
+        "evidence_id": evidence_id,
+        "archive_path": str(archive_path.relative_to(ROOT)),
+        "recorded_at_utc": evidence_id,
+        **git_meta,
+        "status": preflight_evidence.get("status"),
+        "overhead_gate": preflight_evidence.get("overhead_gate"),
+        "artifact_hashes": _offline_artifact_hashes(representative),
+        "policy_versions": _offline_policy_versions(representative),
+        "representative_workloads": {
+            "status": representative.get("status"),
+            "gate_summary": _offline_gate_summary(representative),
+        },
+        "limitations": preflight_evidence.get("limitations"),
+    }
+    OFFLINE_EVIDENCE_POINTER.write_text(json.dumps(pointer, indent=2) + "\n")
+
+
 def preflight(run_gl: bool = True, require_privilege: bool = False, require_power_mode: bool=True) -> dict:
     if base.sha256(base.GOG_EXE) != EXPECTED:
         raise base.BenchmarkError("Installed GOG executable differs from the pinned v1.37.5 build")
@@ -308,10 +434,15 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
         "overhead_gate":representative["status"],
         "limitations":["Structural recipes reproduce observed draw counts and state-change frequencies with generated shaders/resources. Live calibration is independently mandatory.",
             "GPU evidence remains segmented and may be partial."]}
-    path=ROOT/"analysis/frame-model-offline-evidence.json"
-    path.write_text(json.dumps(evidence,indent=2)+"\n")
+    archive_path, evidence_id = write_offline_evidence_archive(evidence)
+    evidence["immutable_evidence"] = {
+        "evidence_id": evidence_id,
+        "archive_path": str(archive_path.relative_to(ROOT)),
+    }
+    write_offline_evidence_pointer(evidence, evidence_id, archive_path)
     if representative["status"]!="passed":
-        raise base.BenchmarkError(f"Representative overhead gates failed; raw evidence: {path}")
+        raise base.BenchmarkError(
+            f"Representative overhead gates failed; immutable evidence: {archive_path}")
     return evidence
 
 
