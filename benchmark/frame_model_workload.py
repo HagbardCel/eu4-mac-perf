@@ -32,6 +32,9 @@ TIER1_PAIR_COUNT = 7
 # Minimum structural draw records for terrain_odd selection (not the seven benchmark trial pairs).
 HELD_OUT_MIN_DRAW_RECORDS = 7
 HELD_OUT_SELECTION_RULE_ID = "terrain_odd_ordinal_within_frame_v1"
+HELD_OUT_SOURCE_DIR = ROOT / "analysis/held-out-source"
+HELD_OUT_SOURCE_PROJECTION = HELD_OUT_SOURCE_DIR / "terrain-frame-1-6270-projection.json"
+FROZEN_HELD_OUT_RECIPE_SHA256 = "dbb0af0e7964777b7ab9f0fecde068692377719bde1670c2a082ecbb26281503"
 
 # Recipe bytes already measured without a pre-committed fixture (exploratory archives).
 EXPLORATORY_HELD_OUT_SHA256S = frozenset(
@@ -99,21 +102,7 @@ def _row_category(row, sites):
     return sites.get(offset)
 
 
-def build_held_out_fixture_material(*, rows=None, key=None, sites=None) -> tuple[bytes, dict]:
-    """Materialize held-out recipe bytes from the frozen selection rule (no harness timing)."""
-    if rows is None:
-        if not SOURCE.is_file():
-            raise base.BenchmarkError("Passive trace is unavailable for held-out fixture materialization")
-        rows = list(trace.read_records(SOURCE, trace.read_header(SOURCE)["used"]))
-    if key is None:
-        key = _trace_frame_key(rows)
-    if sites is None:
-        sites = {row["return_offset"]: row["category"] for row in json.loads(INVENTORY.read_text())["direct_sites"]}
-    terrain_rows = [
-        row
-        for row in rows
-        if (row["window"], row["frame"]) == key and _row_category(row, sites) in HELD_OUT_CATEGORIES
-    ]
+def _select_held_out_terrain_rows(terrain_rows: list[dict]) -> list[dict]:
     selected = [row for index, row in enumerate(terrain_rows) if index % 2 == 1]
     if len(selected) < HELD_OUT_MIN_DRAW_RECORDS:
         raise base.BenchmarkError(
@@ -124,6 +113,15 @@ def build_held_out_fixture_material(*, rows=None, key=None, sites=None) -> tuple
         row["flags"] or row["api"] not in (1, 2, 3) or row["mode"] not in (4, 5) for row in selected
     ):
         raise base.BenchmarkError("Invalid held-out selection rows for structural recipe")
+    return selected
+
+
+def _finalize_held_out_fixture(
+    selected: list[dict],
+    key: tuple[int, int],
+    *,
+    source_sha256: str | None,
+) -> tuple[bytes, dict]:
     payload = _build_recipe_payload(selected)
     sha256 = hashlib.sha256(payload).hexdigest()
     if sha256 in EXPLORATORY_HELD_OUT_SHA256S:
@@ -143,7 +141,52 @@ def build_held_out_fixture_material(*, rows=None, key=None, sites=None) -> tuple
     meta["sha256"] = sha256
     meta["draws"] = len(selected)
     meta["indices"] = sum(row["count"] for row in selected)
+    if source_sha256 is not None:
+        meta["source_sha256"] = source_sha256
     return payload, meta
+
+
+def build_held_out_fixture_material_from_projection(
+    projection_path: Path = HELD_OUT_SOURCE_PROJECTION,
+) -> tuple[bytes, dict]:
+    """Rebuild held-out bytes from the committed terrain source projection (CI replay)."""
+    if not projection_path.is_file():
+        raise base.BenchmarkError(f"Held-out source projection missing: {projection_path}")
+    projection = json.loads(projection_path.read_text())
+    if projection.get("selection_rule") != HELD_OUT_SELECTION_RULE_ID:
+        raise base.BenchmarkError("Held-out source projection selection_rule mismatch")
+    key = tuple(projection["source_frame"])
+    terrain_rows = projection["terrain_records"]
+    selected = _select_held_out_terrain_rows(terrain_rows)
+    return _finalize_held_out_fixture(
+        selected,
+        key,
+        source_sha256=projection.get("source_trace_sha256"),
+    )
+
+
+def build_held_out_fixture_material(*, rows=None, key=None, sites=None) -> tuple[bytes, dict]:
+    """Materialize held-out recipe bytes from the frozen selection rule (no harness timing)."""
+    if rows is None and not SOURCE.is_file() and HELD_OUT_SOURCE_PROJECTION.is_file():
+        return build_held_out_fixture_material_from_projection()
+    if rows is None:
+        if not SOURCE.is_file():
+            raise base.BenchmarkError(
+                "Passive trace and held-out source projection are unavailable for fixture materialization",
+            )
+        rows = list(trace.read_records(SOURCE, trace.read_header(SOURCE)["used"]))
+    if key is None:
+        key = _trace_frame_key(rows)
+    if sites is None:
+        sites = {row["return_offset"]: row["category"] for row in json.loads(INVENTORY.read_text())["direct_sites"]}
+    terrain_rows = [
+        row
+        for row in rows
+        if (row["window"], row["frame"]) == key and _row_category(row, sites) in HELD_OUT_CATEGORIES
+    ]
+    selected = _select_held_out_terrain_rows(terrain_rows)
+    source_sha256 = base.sha256(SOURCE) if SOURCE.is_file() else None
+    return _finalize_held_out_fixture(selected, key, source_sha256=source_sha256)
 
 
 def write_held_out_fixture_files() -> dict:
