@@ -1190,6 +1190,24 @@ static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
 typedef void (*DrawElementsInstancedFn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
 typedef void (*DrawArraysInstancedFn)(GLenum,GLint,GLsizei,GLsizei);
 typedef void (*DrawElementsInstancedBaseFn)(GLenum,GLsizei,GLenum,const void *,GLsizei,GLint);
+static DrawElementsInstancedFn eu4_gl_draw_elements_instanced_arb_symbol(void) {
+    static DrawElementsInstancedFn fn;
+    static char once;
+    if(!once) {
+        fn=(DrawElementsInstancedFn)dlsym(RTLD_DEFAULT,"glDrawElementsInstancedARB");
+        once=1;
+    }
+    return fn;
+}
+static DrawArraysInstancedFn eu4_gl_draw_arrays_instanced_arb_symbol(void) {
+    static DrawArraysInstancedFn fn;
+    static char once;
+    if(!once) {
+        fn=(DrawArraysInstancedFn)dlsym(RTLD_DEFAULT,"glDrawArraysInstancedARB");
+        once=1;
+    }
+    return fn;
+}
 #ifdef EU4_FRAME_MODEL_TEST
 static DrawElementsInstancedFn test_elements_instanced_forward;
 static DrawArraysInstancedFn test_arrays_instanced_forward;
@@ -1211,9 +1229,12 @@ static void test_hit_arb_elements(GLenum mode,GLsizei count,GLenum type,const vo
 static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,uintptr_t caller,GLenum mode,GLsizei count,
         GLenum type,const void *indices,GLsizei instances) {
 #ifdef EU4_FRAME_MODEL_TEST
-    if(real_fn==(DrawElementsInstancedFn)glDrawElementsInstanced) test_elements_instanced_real_fn_arb=0;
-    else if(real_fn==(DrawElementsInstancedFn)glDrawElementsInstancedARB) test_elements_instanced_real_fn_arb=1;
-    else test_elements_instanced_real_fn_arb=2;
+    if(real_fn==glDrawElementsInstanced) test_elements_instanced_real_fn_arb=0;
+    else {
+        DrawElementsInstancedFn arb=eu4_gl_draw_elements_instanced_arb_symbol();
+        if(arb && real_fn==arb) test_elements_instanced_real_fn_arb=1;
+        else test_elements_instanced_real_fn_arb=2;
+    }
 #endif
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,instances); return; }
     observe_draw_api(4,frame_control.mode==DROP_DRAWS);
@@ -1239,9 +1260,12 @@ static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,uint
 static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,uintptr_t caller,GLenum mode,GLint first,
         GLsizei count,GLsizei instances) {
 #ifdef EU4_FRAME_MODEL_TEST
-    if(real_fn==(DrawArraysInstancedFn)glDrawArraysInstanced) test_arrays_instanced_real_fn_arb=0;
-    else if(real_fn==(DrawArraysInstancedFn)glDrawArraysInstancedARB) test_arrays_instanced_real_fn_arb=1;
-    else test_arrays_instanced_real_fn_arb=2;
+    if(real_fn==glDrawArraysInstanced) test_arrays_instanced_real_fn_arb=0;
+    else {
+        DrawArraysInstancedFn arb=eu4_gl_draw_arrays_instanced_arb_symbol();
+        if(arb && real_fn==arb) test_arrays_instanced_real_fn_arb=1;
+        else test_arrays_instanced_real_fn_arb=2;
+    }
 #endif
     if(!intervention_active()) { if(real_fn) real_fn(mode,first,count,instances); return; }
     observe_draw_api(5,frame_control.mode==DROP_DRAWS);
@@ -1291,7 +1315,12 @@ static void gl_draw_elements_instanced(GLenum mode,GLsizei count,GLenum type,
 }
 static void gl_draw_elements_instanced_arb(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances) {
-    static DrawElementsInstancedFn real_fn=glDrawElementsInstancedARB;
+    static DrawElementsInstancedFn real_fn;
+    static char real_fn_ready;
+    if(!real_fn_ready) {
+        real_fn=eu4_gl_draw_elements_instanced_arb_symbol();
+        real_fn_ready=1;
+    }
     uintptr_t caller=(uintptr_t)__builtin_return_address(0);
     gl_draw_elements_instanced_with(real_fn,caller,mode,count,type,indices,instances);
 }
@@ -1301,7 +1330,12 @@ static void gl_draw_arrays_instanced(GLenum mode,GLint first,GLsizei count,GLsiz
     gl_draw_arrays_instanced_with(real_fn,caller,mode,first,count,instances);
 }
 static void gl_draw_arrays_instanced_arb(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
-    static DrawArraysInstancedFn real_fn=glDrawArraysInstancedARB;
+    static DrawArraysInstancedFn real_fn;
+    static char real_fn_ready;
+    if(!real_fn_ready) {
+        real_fn=eu4_gl_draw_arrays_instanced_arb_symbol();
+        real_fn_ready=1;
+    }
     uintptr_t caller=(uintptr_t)__builtin_return_address(0);
     gl_draw_arrays_instanced_with(real_fn,caller,mode,first,count,instances);
 }
