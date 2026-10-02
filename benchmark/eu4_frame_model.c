@@ -2140,19 +2140,21 @@ __attribute__((visibility("default"))) void *eu4_frame_model_test_resolve_draw(c
     return draw_observer_resolve(name);
 }
 __attribute__((visibility("default"))) int eu4_frame_model_test_verify_arb_instanced_interpose(void) {
-    static const struct { const char *arb; void *wrapper; } rows[] = {
-        {"glDrawArraysInstancedARB",(void *)gl_draw_arrays_instanced_arb},
-        {"glDrawElementsInstancedARB",(void *)gl_draw_elements_instanced_arb},
-    };
-    for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);i++) {
-        void *forward_target=i==0?(void *)glDrawArraysInstancedARB:(void *)glDrawElementsInstancedARB;
-        if(draw_observer_resolve(rows[i].arb)!=rows[i].wrapper) return (int)(i+10);
-        if(!forward_target || forward_target==rows[i].wrapper) {
-            fprintf(stderr,"%s: wrapper=%p forward_target=%p\n",rows[i].arb,rows[i].wrapper,
-                    forward_target);
-            return (int)(i+1);
-        }
+    void *arrays_arb=draw_observer_resolve("glDrawArraysInstancedARB");
+    void *arrays_core=draw_observer_resolve("glDrawArraysInstanced");
+    void *elements_arb=draw_observer_resolve("glDrawElementsInstancedARB");
+    void *elements_core=draw_observer_resolve("glDrawElementsInstanced");
+    if(!arrays_arb||!arrays_core||arrays_arb==arrays_core) {
+        fprintf(stderr,"glDrawArraysInstanced: arb=%p core=%p\n",arrays_arb,arrays_core);
+        return 1;
     }
+    if(!elements_arb||!elements_core||elements_arb==elements_core) {
+        fprintf(stderr,"glDrawElementsInstanced: arb=%p core=%p\n",elements_arb,elements_core);
+        return 2;
+    }
+    if(arrays_arb!=(void *)gl_draw_arrays_instanced_arb
+            ||elements_arb!=(void *)gl_draw_elements_instanced_arb)
+        return 10;
     return 0;
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_reset_draw_alias(void) {

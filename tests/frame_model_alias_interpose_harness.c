@@ -14,11 +14,11 @@ int main(void) {
     }
     int code = verify();
     if (code == 1) {
-        fprintf(stderr, "glDrawArraysInstancedARB: profiler wrapper must not self-forward\n");
+        fprintf(stderr, "glDrawArraysInstancedARB: distinct ARB/core profiler wrappers required\n");
         return 2;
     }
     if (code == 2) {
-        fprintf(stderr, "glDrawElementsInstancedARB: profiler wrapper must not self-forward\n");
+        fprintf(stderr, "glDrawElementsInstancedARB: distinct ARB/core profiler wrappers required\n");
         return 3;
     }
     if (code == 10 || code == 11) {
@@ -29,6 +29,6 @@ int main(void) {
         fprintf(stderr, "unexpected verify code %d\n", code);
         return 5;
     }
-    puts("ARB instanced interpose: launch injection active, wrappers do not self-forward");
+    puts("ARB instanced interpose: launch injection active, distinct ARB/core wrappers");
     return 0;
 }
