@@ -2,20 +2,30 @@
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-static int check_interposed(const char *name) {
-    void *wrapped = dlsym(RTLD_DEFAULT, name);
-    void *next = dlsym(RTLD_NEXT, name);
+static void *underlying_gl_symbol(const char *arb_name, const char *core_name) {
+    void *next = dlsym(RTLD_NEXT, arb_name);
+    if (!next && core_name)
+        next = dlsym(RTLD_NEXT, core_name);
+    return next;
+}
+
+static int check_profiler_wrapper(const char *arb_name, const char *core_name,
+        void *(*resolve)(const char *)) {
+    void *wrapper = resolve(arb_name);
+    void *next = underlying_gl_symbol(arb_name, core_name);
+    if (!wrapper) {
+        fprintf(stderr, "%s: profiler resolver returned NULL\n", arb_name);
+        return 1;
+    }
     if (!next) {
-        fprintf(stderr, "%s: RTLD_NEXT symbol is NULL\n", name);
+        fprintf(stderr, "%s: no RTLD_NEXT target (%s%s)\n", arb_name, arb_name,
+                core_name ? " or core" : "");
         return 1;
     }
-    if (!wrapped) {
-        fprintf(stderr, "%s: RTLD_DEFAULT symbol is NULL with interposer loaded\n", name);
-        return 1;
-    }
-    if (wrapped == next) {
-        fprintf(stderr, "%s: profiler wrapper must differ from RTLD_NEXT target\n", name);
+    if (wrapper == next) {
+        fprintf(stderr, "%s: profiler wrapper must differ from RTLD_NEXT target\n", arb_name);
         return 1;
     }
     return 0;
@@ -26,20 +36,17 @@ int main(void) {
     const char *log_path = getenv("EU4_FRAME_MODEL_LOG");
     if (!control_path || !log_path)
         return 1;
-    if (check_interposed("glDrawArraysInstancedARB"))
-        return 2;
-    if (check_interposed("glDrawElementsInstancedARB"))
-        return 3;
     void *(*resolve)(const char *) = dlsym(RTLD_DEFAULT, "eu4_frame_model_test_resolve_draw");
-    if (resolve) {
-        void *arrays = resolve("glDrawArraysInstancedARB");
-        void *elements = resolve("glDrawElementsInstancedARB");
-        assert(arrays && elements);
-        assert(arrays == dlsym(RTLD_DEFAULT, "glDrawArraysInstancedARB"));
-        assert(elements == dlsym(RTLD_DEFAULT, "glDrawElementsInstancedARB"));
-        assert(arrays != dlsym(RTLD_NEXT, "glDrawArraysInstancedARB"));
-        assert(elements != dlsym(RTLD_NEXT, "glDrawElementsInstancedARB"));
+    if (!resolve) {
+        fprintf(stderr, "interposer not loaded: eu4_frame_model_test_resolve_draw missing\n");
+        return 1;
     }
+    if (check_profiler_wrapper("glDrawArraysInstancedARB", "glDrawArraysInstanced", resolve))
+        return 2;
+    if (check_profiler_wrapper("glDrawElementsInstancedARB", "glDrawElementsInstanced", resolve))
+        return 3;
+    assert(resolve("glDrawArraysInstancedARB") != resolve("glDrawArraysInstanced"));
+    assert(resolve("glDrawElementsInstancedARB") != resolve("glDrawElementsInstanced"));
     puts("ARB instanced interpose: profiler wrappers differ from RTLD_NEXT and targets are non-NULL");
     return 0;
 }
