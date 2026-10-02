@@ -193,7 +193,6 @@ static void *(*auto_app_instance)(void);
 static bool (*auto_actually_paused)(void *);
 static void *auto_idler_vtable;
 static uintptr_t image_base;
-static char eu4_profiler_dylib_anchor;
 static _Thread_local uint64_t next_deadline;
 static _Thread_local uint64_t next_render_deadline;
 static pthread_t writer_thread;
