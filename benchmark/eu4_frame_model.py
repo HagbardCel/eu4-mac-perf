@@ -46,6 +46,7 @@ TEST_LIBRARY=ROOT/"benchmark/.build/libeu4_frame_model_test.dylib"
 WORKLOAD_HARNESS=ROOT/"benchmark/.build/frame_model_workload_harness"
 WRITER_PRODUCTION_HARNESS=ROOT/"benchmark/.build/frame_model_writer_production_harness"
 DRAW_ALIAS_HARNESS=ROOT/"benchmark/.build/frame_model_draw_alias_harness"
+ALIAS_INTERPOSE_HARNESS=ROOT/"benchmark/.build/frame_model_alias_interpose_harness"
 CONTROL_HARNESS=ROOT/"benchmark/.build/frame_model_control_harness"
 POWER_HELPER_SOURCE = ROOT / "benchmark/power_mode_helper"
 POWER_HELPER_INSTALLED = Path("/usr/local/libexec/eu4-power-mode")
@@ -99,6 +100,7 @@ def build() -> dict:
     commands = (
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-pthread","-o",str(WRITER_PRODUCTION_HARNESS),str(ROOT/"tests/frame_model_writer_production_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(DRAW_ALIAS_HARNESS),str(ROOT/"tests/frame_model_draw_alias_harness.c")],
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(ALIAS_INTERPOSE_HARNESS),str(ROOT/"tests/frame_model_alias_interpose_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(CONTROL_HARNESS),str(ROOT/"tests/frame_model_control_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-DEU4_FRAME_MODEL_TEST",
          "-dynamiclib","-framework","OpenGL","-framework","CoreGraphics","-o",str(TEST_LIBRARY),str(SOURCE)],
@@ -194,6 +196,20 @@ def offline_draw_alias_harness():
         return {"status":"passed","output":run.stdout.strip()}
 
 
+def offline_alias_interpose_harness():
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory);path=root/"control";log=root/"trace"
+        path.write_bytes(CONTROL.pack(FORMAT_VERSION,2,1,1,3,0,0,0,1,7,0,0,0,0)+bytes(CONTROL_SIZE-CONTROL.size))
+        run=subprocess.run([str(ALIAS_INTERPOSE_HARNESS)],
+            env={**os.environ,"DYLD_INSERT_LIBRARIES":str(TEST_LIBRARY),
+                 "EU4_FRAME_MODEL_CONTROL":str(path),"EU4_FRAME_MODEL_LOG":str(log)},
+            capture_output=True,text=True,timeout=10,check=False)
+        if run.returncode:
+            raise base.BenchmarkError(
+                f"ARB interpose launch harness failed: {run.stderr.strip() or run.stdout.strip()}")
+        return {"status":"passed","output":run.stdout.strip()}
+
+
 def offline_writer_production_harness():
     with tempfile.TemporaryDirectory() as directory:
         root=Path(directory);path=root/"control";log=root/"trace"
@@ -271,6 +287,7 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
     producers["unowned_control"]=offline_control_harness()
     producers["production_writer"]=offline_writer_production_harness()
     producers["draw_alias"]=offline_draw_alias_harness()
+    producers["alias_interpose"]=offline_alias_interpose_harness()
     auto_evidence = auto.preflight(require_privilege=require_privilege)
     power_helper = _power_helper_preflight() if require_privilege and require_power_mode else {"status":"not checked"}
     if not run_gl:

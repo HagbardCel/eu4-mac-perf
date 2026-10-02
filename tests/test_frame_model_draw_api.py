@@ -113,3 +113,10 @@ class DrawAliasHarnessTests(unittest.TestCase):
         if not shutil.which("clang"): self.skipTest("clang unavailable")
         model.build()
         model.offline_draw_alias_harness()
+
+    def test_alias_interpose_harness_on_mac(self):
+        if sys.platform!="darwin": self.skipTest("macOS dylib interpose harness")
+        import eu4_frame_model as model
+        if not shutil.which("clang"): self.skipTest("clang unavailable")
+        model.build()
+        model.offline_alias_interpose_harness()

@@ -45,7 +45,7 @@ Design contracts and gate model in this document were frozen against profiler br
 
 | Topic | Status |
 |--------|--------|
-| **Stage 0** | PR [#1](https://github.com/HagbardCel/eu4-mac-perf/pull/1) on `cursor/stage-0-stabilize-60a0` — portable CI green; round-2 fixes landed (instanced caller provenance, strengthened alias harness with core/ARB `real_fn` proof, generator suppression-capable aliases). **Pending:** Mac `preflight()` / dylib alias harness + observer regen if manifest hash drifts. |
+| **Stage 0** | PR [#1](https://github.com/HagbardCel/eu4-mac-perf/pull/1) on `cursor/stage-0-stabilize-60a0` — portable CI green; round-2/3 fixes (RTLD_NEXT ARB forward targets, NULL-forward probe failure, launch-time ARB interpose harness). **Mac acceptance:** run `preflight()` + dylib harnesses on self-hosted macOS for final SHA; regen observers only if manifest hash drifts. |
 | **Core architecture** | **`f2cf2fb`**: 92 tests + native checks; **gate model not yet aligned** with split causal/forensic admission (above). |
 | **Branch CI** | Stage 0 PR fixes argparse `--residual-discovery` indent; verify on PR branch. |
 | **Production aliases** | ARB instanced draws must use canonical C wrappers with per-entry `real_fn` (not header `observe_draw_api(..., true)` stubs). |

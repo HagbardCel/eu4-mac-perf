@@ -1194,7 +1194,7 @@ static DrawElementsInstancedFn eu4_gl_draw_elements_instanced_arb_symbol(void) {
     static DrawElementsInstancedFn fn;
     static char once;
     if(!once) {
-        fn=(DrawElementsInstancedFn)dlsym(RTLD_DEFAULT,"glDrawElementsInstancedARB");
+        fn=(DrawElementsInstancedFn)dlsym(RTLD_NEXT,"glDrawElementsInstancedARB");
         once=1;
     }
     return fn;
@@ -1203,10 +1203,13 @@ static DrawArraysInstancedFn eu4_gl_draw_arrays_instanced_arb_symbol(void) {
     static DrawArraysInstancedFn fn;
     static char once;
     if(!once) {
-        fn=(DrawArraysInstancedFn)dlsym(RTLD_DEFAULT,"glDrawArraysInstancedARB");
+        fn=(DrawArraysInstancedFn)dlsym(RTLD_NEXT,"glDrawArraysInstancedARB");
         once=1;
     }
     return fn;
+}
+static void mark_draw_forward_probe_failure(void) {
+    if(measurement_active()) {current_frame.flags|=2048;unowned_event();}
 }
 #ifdef EU4_FRAME_MODEL_TEST
 static DrawElementsInstancedFn test_elements_instanced_forward;
@@ -1231,12 +1234,16 @@ static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,uint
 #ifdef EU4_FRAME_MODEL_TEST
     if(real_fn==glDrawElementsInstanced) test_elements_instanced_real_fn_arb=0;
     else {
-        DrawElementsInstancedFn arb=eu4_gl_draw_elements_instanced_arb_symbol();
+        DrawElementsInstancedFn arb=(DrawElementsInstancedFn)dlsym(RTLD_NEXT,"glDrawElementsInstancedARB");
         if(arb && real_fn==arb) test_elements_instanced_real_fn_arb=1;
         else test_elements_instanced_real_fn_arb=2;
     }
 #endif
-    if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,instances); return; }
+    if(!intervention_active()) {
+        if(real_fn) real_fn(mode,count,type,indices,instances);
+        else mark_draw_forward_probe_failure();
+        return;
+    }
     observe_draw_api(4,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
@@ -1250,7 +1257,8 @@ static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,uint
     if(test_elements_instanced_forward) forward=test_elements_instanced_forward;
 #endif
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
-    else { if(forward) forward(mode,count,type,indices,instances); current_frame.forwarded_draws++; }
+    else if(forward) { forward(mode,count,type,indices,instances); current_frame.forwarded_draws++; }
+    else mark_draw_forward_probe_failure();
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256;current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
@@ -1262,12 +1270,16 @@ static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,uintptr_
 #ifdef EU4_FRAME_MODEL_TEST
     if(real_fn==glDrawArraysInstanced) test_arrays_instanced_real_fn_arb=0;
     else {
-        DrawArraysInstancedFn arb=eu4_gl_draw_arrays_instanced_arb_symbol();
+        DrawArraysInstancedFn arb=(DrawArraysInstancedFn)dlsym(RTLD_NEXT,"glDrawArraysInstancedARB");
         if(arb && real_fn==arb) test_arrays_instanced_real_fn_arb=1;
         else test_arrays_instanced_real_fn_arb=2;
     }
 #endif
-    if(!intervention_active()) { if(real_fn) real_fn(mode,first,count,instances); return; }
+    if(!intervention_active()) {
+        if(real_fn) real_fn(mode,first,count,instances);
+        else mark_draw_forward_probe_failure();
+        return;
+    }
     observe_draw_api(5,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
@@ -1281,7 +1293,8 @@ static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,uintptr_
     if(test_arrays_instanced_forward) forward=test_arrays_instanced_forward;
 #endif
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
-    else { if(forward) forward(mode,first,count,instances); current_frame.forwarded_draws++; }
+    else if(forward) { forward(mode,first,count,instances); current_frame.forwarded_draws++; }
+    else mark_draw_forward_probe_failure();
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256;current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
