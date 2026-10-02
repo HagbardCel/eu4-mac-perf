@@ -1192,11 +1192,11 @@ static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
 typedef void (*DrawElementsInstancedFn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
 typedef void (*DrawArraysInstancedFn)(GLenum,GLint,GLsizei,GLsizei);
 typedef void (*DrawElementsInstancedBaseFn)(GLenum,GLsizei,GLenum,const void *,GLsizei,GLint);
-static DrawElementsInstancedFn eu4_gl_draw_elements_instanced_arb_symbol(void) {
-    return (DrawElementsInstancedFn)(void *)glDrawElementsInstancedARB;
+static bool eu4_arb_elements_instanced_replacee_available(void) {
+    return (void *)(uintptr_t)glDrawElementsInstancedARB!=NULL;
 }
-static DrawArraysInstancedFn eu4_gl_draw_arrays_instanced_arb_symbol(void) {
-    return (DrawArraysInstancedFn)(void *)glDrawArraysInstancedARB;
+static bool eu4_arb_arrays_instanced_replacee_available(void) {
+    return (void *)(uintptr_t)glDrawArraysInstancedARB!=NULL;
 }
 static void mark_draw_forward_probe_failure(void) {
     if(measurement_active()) {current_frame.flags|=2048;unowned_event();}
@@ -1206,6 +1206,8 @@ static DrawElementsInstancedFn test_elements_instanced_forward;
 static DrawArraysInstancedFn test_arrays_instanced_forward;
 static unsigned test_forward_core_hits,test_forward_arb_hits;
 static unsigned test_arrays_instanced_real_fn_arb=3,test_elements_instanced_real_fn_arb=3;
+static unsigned test_arb_arrays_instanced_depth,test_arb_elements_instanced_depth;
+static unsigned test_arb_arrays_instanced_depth_max,test_arb_elements_instanced_depth_max;
 static void test_hit_core_arrays(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
     (void)mode;(void)first;(void)count;(void)instances; test_forward_core_hits++;
 }
@@ -1219,15 +1221,19 @@ static void test_hit_arb_elements(GLenum mode,GLsizei count,GLenum type,const vo
     (void)mode;(void)count;(void)type;(void)indices;(void)instances; test_forward_arb_hits++;
 }
 #endif
-static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,uintptr_t caller,GLenum mode,GLsizei count,
-        GLenum type,const void *indices,GLsizei instances) {
+static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,int arb_replacee,uintptr_t caller,GLenum mode,
+        GLsizei count,GLenum type,const void *indices,GLsizei instances) {
 #ifdef EU4_FRAME_MODEL_TEST
-    if(real_fn==glDrawElementsInstanced) test_elements_instanced_real_fn_arb=0;
-    else if(real_fn==eu4_gl_draw_elements_instanced_arb_symbol()) test_elements_instanced_real_fn_arb=1;
+    if(arb_replacee) test_elements_instanced_real_fn_arb=1;
+    else if(real_fn==glDrawElementsInstanced) test_elements_instanced_real_fn_arb=0;
     else test_elements_instanced_real_fn_arb=2;
 #endif
     if(!intervention_active()) {
-        if(real_fn) real_fn(mode,count,type,indices,instances);
+        if(arb_replacee) {
+            if(eu4_arb_elements_instanced_replacee_available())
+                glDrawElementsInstancedARB(mode,count,type,indices,instances);
+            else mark_draw_forward_probe_failure();
+        } else if(real_fn) real_fn(mode,count,type,indices,instances);
         else mark_draw_forward_probe_failure();
         return;
     }
@@ -1239,28 +1245,52 @@ static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,uint
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
     uint32_t m=frame_control.mode;
-    DrawElementsInstancedFn forward=real_fn;
-#ifdef EU4_FRAME_MODEL_TEST
-    if(test_elements_instanced_forward) forward=test_elements_instanced_forward;
-#endif
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
-    else if(forward) { forward(mode,count,type,indices,instances); current_frame.forwarded_draws++; }
-    else mark_draw_forward_probe_failure();
+    else {
+#ifdef EU4_FRAME_MODEL_TEST
+        if(test_elements_instanced_forward) {
+            test_elements_instanced_forward(mode,count,type,indices,instances);
+            current_frame.forwarded_draws++;
+        } else if(arb_replacee) {
+            if(eu4_arb_elements_instanced_replacee_available()) {
+                glDrawElementsInstancedARB(mode,count,type,indices,instances);
+                current_frame.forwarded_draws++;
+            } else mark_draw_forward_probe_failure();
+        } else if(real_fn) {
+            real_fn(mode,count,type,indices,instances);
+            current_frame.forwarded_draws++;
+        } else mark_draw_forward_probe_failure();
+#else
+        if(arb_replacee) {
+            if(eu4_arb_elements_instanced_replacee_available()) {
+                glDrawElementsInstancedARB(mode,count,type,indices,instances);
+                current_frame.forwarded_draws++;
+            } else mark_draw_forward_probe_failure();
+        } else if(real_fn) {
+            real_fn(mode,count,type,indices,instances);
+            current_frame.forwarded_draws++;
+        } else mark_draw_forward_probe_failure();
+#endif
+    }
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256;current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
     current_frame.draw_wall_raw+=dw;current_frame.draw_cpu_raw+=dc;
     if(measuring) gl_event(HOOK_GL_DRAW,dw,dc);
 }
-static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,uintptr_t caller,GLenum mode,GLint first,
-        GLsizei count,GLsizei instances) {
+static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,int arb_replacee,uintptr_t caller,GLenum mode,
+        GLint first,GLsizei count,GLsizei instances) {
 #ifdef EU4_FRAME_MODEL_TEST
-    if(real_fn==glDrawArraysInstanced) test_arrays_instanced_real_fn_arb=0;
-    else if(real_fn==eu4_gl_draw_arrays_instanced_arb_symbol()) test_arrays_instanced_real_fn_arb=1;
+    if(arb_replacee) test_arrays_instanced_real_fn_arb=1;
+    else if(real_fn==glDrawArraysInstanced) test_arrays_instanced_real_fn_arb=0;
     else test_arrays_instanced_real_fn_arb=2;
 #endif
     if(!intervention_active()) {
-        if(real_fn) real_fn(mode,first,count,instances);
+        if(arb_replacee) {
+            if(eu4_arb_arrays_instanced_replacee_available())
+                glDrawArraysInstancedARB(mode,first,count,instances);
+            else mark_draw_forward_probe_failure();
+        } else if(real_fn) real_fn(mode,first,count,instances);
         else mark_draw_forward_probe_failure();
         return;
     }
@@ -1272,13 +1302,33 @@ static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,uintptr_
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
     uint32_t m=frame_control.mode;
-    DrawArraysInstancedFn forward=real_fn;
-#ifdef EU4_FRAME_MODEL_TEST
-    if(test_arrays_instanced_forward) forward=test_arrays_instanced_forward;
-#endif
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
-    else if(forward) { forward(mode,first,count,instances); current_frame.forwarded_draws++; }
-    else mark_draw_forward_probe_failure();
+    else {
+#ifdef EU4_FRAME_MODEL_TEST
+        if(test_arrays_instanced_forward) {
+            test_arrays_instanced_forward(mode,first,count,instances);
+            current_frame.forwarded_draws++;
+        } else if(arb_replacee) {
+            if(eu4_arb_arrays_instanced_replacee_available()) {
+                glDrawArraysInstancedARB(mode,first,count,instances);
+                current_frame.forwarded_draws++;
+            } else mark_draw_forward_probe_failure();
+        } else if(real_fn) {
+            real_fn(mode,first,count,instances);
+            current_frame.forwarded_draws++;
+        } else mark_draw_forward_probe_failure();
+#else
+        if(arb_replacee) {
+            if(eu4_arb_arrays_instanced_replacee_available()) {
+                glDrawArraysInstancedARB(mode,first,count,instances);
+                current_frame.forwarded_draws++;
+            } else mark_draw_forward_probe_failure();
+        } else if(real_fn) {
+            real_fn(mode,first,count,instances);
+            current_frame.forwarded_draws++;
+        } else mark_draw_forward_probe_failure();
+#endif
+    }
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256;current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
@@ -1308,33 +1358,35 @@ static void gl_draw_elements_instanced(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances) {
     static DrawElementsInstancedFn real_fn=glDrawElementsInstanced;
     uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-    gl_draw_elements_instanced_with(real_fn,caller,mode,count,type,indices,instances);
+    gl_draw_elements_instanced_with(real_fn,0,caller,mode,count,type,indices,instances);
 }
 static void gl_draw_elements_instanced_arb(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances) {
-    static DrawElementsInstancedFn real_fn;
-    static char real_fn_ready;
-    if(!real_fn_ready) {
-        real_fn=eu4_gl_draw_elements_instanced_arb_symbol();
-        real_fn_ready=1;
-    }
     uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-    gl_draw_elements_instanced_with(real_fn,caller,mode,count,type,indices,instances);
+#ifdef EU4_FRAME_MODEL_TEST
+    unsigned depth=++test_arb_elements_instanced_depth;
+    if(depth>test_arb_elements_instanced_depth_max) test_arb_elements_instanced_depth_max=depth;
+#endif
+    gl_draw_elements_instanced_with(NULL,1,caller,mode,count,type,indices,instances);
+#ifdef EU4_FRAME_MODEL_TEST
+    test_arb_elements_instanced_depth--;
+#endif
 }
 static void gl_draw_arrays_instanced(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
     static DrawArraysInstancedFn real_fn=glDrawArraysInstanced;
     uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-    gl_draw_arrays_instanced_with(real_fn,caller,mode,first,count,instances);
+    gl_draw_arrays_instanced_with(real_fn,0,caller,mode,first,count,instances);
 }
 static void gl_draw_arrays_instanced_arb(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
-    static DrawArraysInstancedFn real_fn;
-    static char real_fn_ready;
-    if(!real_fn_ready) {
-        real_fn=eu4_gl_draw_arrays_instanced_arb_symbol();
-        real_fn_ready=1;
-    }
     uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-    gl_draw_arrays_instanced_with(real_fn,caller,mode,first,count,instances);
+#ifdef EU4_FRAME_MODEL_TEST
+    unsigned depth=++test_arb_arrays_instanced_depth;
+    if(depth>test_arb_arrays_instanced_depth_max) test_arb_arrays_instanced_depth_max=depth;
+#endif
+    gl_draw_arrays_instanced_with(NULL,1,caller,mode,first,count,instances);
+#ifdef EU4_FRAME_MODEL_TEST
+    test_arb_arrays_instanced_depth--;
+#endif
 }
 static void gl_draw_elements_instanced_base(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances,GLint base) {
@@ -2139,22 +2191,43 @@ __attribute__((visibility("default"))) uint64_t eu4_frame_model_test_measured_qu
 __attribute__((visibility("default"))) void *eu4_frame_model_test_resolve_draw(const char *name) {
     return draw_observer_resolve(name);
 }
+void eu4_frame_model_test_reset_draw_alias(void);
+void eu4_frame_model_test_arm_draw_alias(unsigned mode);
+void eu4_frame_model_test_invoke_draw_alias(const char *name);
 __attribute__((visibility("default"))) int eu4_frame_model_test_verify_arb_instanced_interpose(void) {
-    void *arrays_arb=draw_observer_resolve("glDrawArraysInstancedARB");
+    static const struct { const char *arb; void *wrapper; unsigned elements; } rows[] = {
+        {"glDrawArraysInstancedARB",(void *)gl_draw_arrays_instanced_arb,0},
+        {"glDrawElementsInstancedARB",(void *)gl_draw_elements_instanced_arb,1},
+    };
     void *arrays_core=draw_observer_resolve("glDrawArraysInstanced");
-    void *elements_arb=draw_observer_resolve("glDrawElementsInstancedARB");
     void *elements_core=draw_observer_resolve("glDrawElementsInstanced");
-    if(!arrays_arb||!arrays_core||arrays_arb==arrays_core) {
-        fprintf(stderr,"glDrawArraysInstanced: arb=%p core=%p\n",arrays_arb,arrays_core);
-        return 1;
+    for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);i++) {
+        void *arb=draw_observer_resolve(rows[i].arb);
+        void *core=rows[i].elements?elements_core:arrays_core;
+        if(!arb||!core||arb==core) {
+            fprintf(stderr,"%s: arb=%p core=%p\n",rows[i].arb,arb,core);
+            return (int)(i+1);
+        }
+        if(arb!=rows[i].wrapper) return (int)(i+10);
     }
-    if(!elements_arb||!elements_core||elements_arb==elements_core) {
-        fprintf(stderr,"glDrawElementsInstanced: arb=%p core=%p\n",elements_arb,elements_core);
-        return 2;
+    eu4_frame_model_test_reset_draw_alias();
+    eu4_frame_model_test_arm_draw_alias(1);
+    test_arb_arrays_instanced_depth_max=test_arb_elements_instanced_depth_max=0;
+    eu4_frame_model_test_invoke_draw_alias("glDrawArraysInstancedARB");
+    if(test_arb_arrays_instanced_depth_max>1) {
+        fprintf(stderr,"glDrawArraysInstancedARB: PROFILE forward re-entered wrapper (depth=%u)\n",
+                test_arb_arrays_instanced_depth_max);
+        return 3;
     }
-    if(arrays_arb!=(void *)gl_draw_arrays_instanced_arb
-            ||elements_arb!=(void *)gl_draw_elements_instanced_arb)
-        return 10;
+    eu4_frame_model_test_reset_draw_alias();
+    eu4_frame_model_test_arm_draw_alias(1);
+    test_arb_elements_instanced_depth_max=0;
+    eu4_frame_model_test_invoke_draw_alias("glDrawElementsInstancedARB");
+    if(test_arb_elements_instanced_depth_max>1) {
+        fprintf(stderr,"glDrawElementsInstancedARB: PROFILE forward re-entered wrapper (depth=%u)\n",
+                test_arb_elements_instanced_depth_max);
+        return 4;
+    }
     return 0;
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_reset_draw_alias(void) {
@@ -2163,6 +2236,8 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_reset_draw_alia
     test_arrays_instanced_forward=NULL;
     test_elements_instanced_forward=NULL;
     test_arrays_instanced_real_fn_arb=test_elements_instanced_real_fn_arb=3;
+    test_arb_arrays_instanced_depth=test_arb_elements_instanced_depth=0;
+    test_arb_arrays_instanced_depth_max=test_arb_elements_instanced_depth_max=0;
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_arm_draw_alias(unsigned mode) {
     frame_control.mode=mode;

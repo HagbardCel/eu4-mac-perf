@@ -45,10 +45,10 @@ Design contracts and gate model in this document were frozen against profiler br
 
 | Topic | Status |
 |--------|--------|
-| **Stage 0** | PR [#1](https://github.com/HagbardCel/eu4-mac-perf/pull/1) on `cursor/stage-0-stabilize-60a0` — portable CI green; round-2/3 fixes (RTLD_NEXT ARB forward targets, NULL-forward probe failure, launch-time ARB interpose harness). **Mac acceptance:** run `preflight()` + dylib harnesses on self-hosted macOS for final SHA; regen observers only if manifest hash drifts. |
+| **Stage 0** | PR [#1](https://github.com/HagbardCel/eu4-mac-perf/pull/1) on `cursor/stage-0-stabilize-60a0` — portable CI green; ARB instanced PROFILE forwards via direct interpose replacee calls (no function-pointer self-forward under `DYLD_INSERT_LIBRARIES`); launch-time verify proves wrapper depth stays 1 on PROFILE invoke. **Mac acceptance:** run `preflight()` + dylib harnesses on self-hosted macOS for final SHA; regen observers only if manifest hash drifts. |
 | **Core architecture** | **`f2cf2fb`**: 92 tests + native checks; **gate model not yet aligned** with split causal/forensic admission (above). |
 | **Branch CI** | Stage 0 PR fixes argparse `--residual-discovery` indent; verify on PR branch. |
-| **Production aliases** | ARB instanced draws must use canonical C wrappers with per-entry `real_fn` (not header `observe_draw_api(..., true)` stubs). |
+| **Production aliases** | ARB instanced draws use distinct wrappers; PROFILE forwards with direct `glDraw*InstancedARB(...)` replacee calls (core entries keep `real_fn` → `glDraw*Instanced`). |
 | **Offline counters (`f2cf2fb`)** | ~**8.1–10.6%** wall/thread CPU; ~**1–7 µs/frame** absolute (synthetic). |
 | **Offline forensic** | **+226–467%** wall — must not block causal admission once gates split. |
 | **Evidence file** | `preflight()` overwrites latest pointer — **immutable archives need unique evidence IDs** (Stage 1). |
