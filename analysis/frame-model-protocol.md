@@ -19,6 +19,11 @@ with the same epoch establishes `window_generation`, even without detailed
 sampling, so unowned producers can distinguish enable acknowledgement from the
 timed window.
 
+Control flags use bit 1 for intervention mode, bit 2 for measurement, and bit 4
+for a forensic phase. E forensic timing records are limited to armed sample
+renders. Other phases use the F record's update/render/present timestamps for
+rate calculations; an incomplete E stream never overrides those frame counts.
+
 Telemetry begins `H,3`. F retains all v1 columns, followed by epoch, update
 start/end, render start/end, and last present timestamp (v2). V3 appends generation, sample-window command
 identity, render deadline, lateness, missed deadlines, render overruns, and
@@ -130,8 +135,8 @@ seconds, with pre-launch budget rejection and journaled restoration.
 
 The immediate post-start provenance command always carries `detail_frames=0`
 and preserves the enable epoch. N requested arm times are `start+i*duration/(N+1)`
-for i=1…N. P1 requires six four-render groups; the residual pilot requires two
-two-render groups. The controller incrementally reads complete telemetry lines,
+for i=1…N. Forensic `TAIL` capture requires six four-render groups, after causal
+and power-mode phases. The controller incrementally reads complete telemetry lines,
 uses the same eligibility filter, waits for the preceding plain renders, then
 waits for the complete sampled group and its trailing plain renders before the
 next arm. Requested times, command generations, observed preceding identities,
@@ -139,7 +144,11 @@ actual sampled identities and both neighbor groups are retained in phase evidenc
 Duration and unattended deadlines are unchanged. A missing group, overwritten or
 late command, incomplete neighbor group, mixed phase/epoch/thread population,
 nonconsecutive render IDs or multiple executed renders per participating frame
-makes calibration unavailable. P1/A0 perturbation failure stops progression.
+makes the forensic capture unavailable. The capture has role `forensic`; its
+frames and enclosing scopes are excluded from causal phase summaries. The live
+capture-intrusion result is recorded separately and does not qualify the
+counters-only reference calibration. The offline sampled gate remains a hard
+preflight prerequisite.
 
 GL shadow preparation runs with measurement disabled on the owning current
 context. Bounded thread-owned caches hold 16 contexts and 64 VAOs; a serialized

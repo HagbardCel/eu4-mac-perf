@@ -1,10 +1,12 @@
 # Profiler verification — 2026-10-02
 
 **Offline acceptance still fails; residual discovery remains blocked before launch.**
-The scheduling, shadow preparation, accounting, writer and draw-coverage changes
-are implemented. The 3% reference/counters and 5% sampled gates are unchanged.
-No engine hooks were added. Metal remains a feasibility seed with go/no-go
-undetermined. No live calibration, ANATIVE/A0 pilot or long causal result is claimed.
+The measurements below are from reviewed commit `f2cf2fb`. The current worktree
+adds diagnostic feature controls, a provenance-aware draw manifest, capture-free
+causal phases and a separate forensic tail, but those code changes have not been
+built or measured. The 3% offline/reference/counters gates remain unchanged; the
+offline 5% sampled result is still a hard preflight gate. No live calibration,
+ANATIVE/A0 pilot or long causal result is claimed.
 
 ## Implemented and verified
 
@@ -37,7 +39,8 @@ undetermined. No live calibration, ANATIVE/A0 pilot or long causal result is cla
 The sandbox cannot create an accelerated CGL pixel format. The authorized
 unsandboxed GL run completed on the final source and retained its source/library/
 header/harness hashes in [the offline evidence](frame-model-offline-evidence.json).
-The production C source SHA-256 is `1ae5be10c48afcd2d6cb4dd7a19154fb04c1d32d6c446d15373216795330780a`.
+At the measured evidence revision, the production C source SHA-256 was
+`1ae5be10c48afcd2d6cb4dd7a19154fb04c1d32d6c446d15373216795330780a`.
 Unavailable live checks are recorded as blocked, not successful or unmeasured
 passes. The root helper was not refreshed because offline acceptance failed.
 
@@ -90,14 +93,12 @@ acceptance and strong A−C recommendations. Partial C reports are labelled expl
 F/Q layouts remain compatible; older records remain readable but cannot pass the
 new gate. Global hook totals are labelled partial supporting telemetry.
 
-Only after offline acceptance may the exact reviewed root helper be refreshed
-through its installer and noninteractive authorization checks, then
-`run --residual-discovery` launched. Mandatory live reference/counters/reference
-and six-window sampled calibration remain prerequisites. A successful pilot would
-capture unrestricted ANATIVE and paced A0, rank residuals, and support a separately
-reviewed addition of 3–8 semantic hooks. The long causal experiment remains behind
-all release gates. Threshold revisions or a forensic/causal split require a
-separate plan.
+The current worktree adds `run --calibration-only`, which performs capture-free
+reference/counters/reference calibration and a separate forensic tail, then stops
+before ANATIVE or interventions. It remains behind the unchanged offline
+acceptance, exact helper, scene and restoration checks. Residual discovery still
+requires a later reviewed launch after calibration and draw coverage qualify. No
+threshold revision or live result is claimed here.
 
 ---
 

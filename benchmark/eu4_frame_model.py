@@ -55,9 +55,9 @@ CONTROL_COMMAND = struct.Struct("<6I4Q")
 EXPECTED = engine.EXPECTED_SHA256
 MODE = {"off": 0, "profile": 1, "skip_render": 2, "drop_draws": 3,
         "raster_suppress": 4, "cadence_30": 5, "cadence_15": 6,"reference":7}
-PHASES = (("A0", "profile", 20, True), ("B", "skip_render", 20, False),
-          ("A1", "profile", 20, False), ("C", "drop_draws", 20, True),
-          ("A2", "profile", 20, False), ("D", "raster_suppress", 20, True),
+PHASES = (("A0", "profile", 20, False), ("B", "skip_render", 20, False),
+          ("A1", "profile", 20, False), ("C", "drop_draws", 20, False),
+          ("A2", "profile", 20, False), ("D", "raster_suppress", 20, False),
           ("A3", "profile", 20, False), ("E30", "cadence_30", 30, False),
           ("A4", "profile", 20, False), ("E15", "cadence_15", 30, False),
           ("A5", "profile", 20, False))
@@ -283,51 +283,84 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
     return evidence
 
 
+def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
+    control_path=root/"control.bin";log_path=root/f"{recipe['name']}-{trial}-{stage}.csv"
+    frames=4
+    mode=MODE["reference"] if stage=="reference" else MODE["profile"]
+    fields=[FORMAT_VERSION,2,mode,1,1,0,0,0,1,0,0,0,0,0]
+    control_path.write_bytes(CONTROL.pack(*fields)+bytes(CONTROL_SIZE-CONTROL.size))
+    private=("DYLD_INSERT_LIBRARIES","EU4_FRAME_MODEL_CONTROL","EU4_FRAME_MODEL_LOG",
+        "EU4_TEST_ABLATION","EU4_TEST_SAMPLED","EU4_TEST_GPU_TIMESTAMPS",
+        "EU4_TEST_FORENSIC_RECORDS","EU4_TEST_CACHED_METADATA")
+    env={k:v for k,v in os.environ.items() if k not in private}
+    if stage.startswith("ablation_"):
+        env["EU4_TEST_ABLATION"]=stage.removeprefix("ablation_")
+    if stage!="bare":
+        env.update(DYLD_INSERT_LIBRARIES=str(TEST_LIBRARY),
+            EU4_FRAME_MODEL_CONTROL=str(control_path),EU4_FRAME_MODEL_LOG=str(log_path))
+        if stage=="sampled" or stage.startswith("ablation_") or stage.startswith("diag_"):
+            env["EU4_TEST_SAMPLED"]="1"
+    diagnostic=stage.startswith("diag_")
+    if diagnostic:
+        features={"diag_A":(0,0,0),"diag_B_gpu":(1,0,0),
+            "diag_C_detail":(0,1,0),"diag_D_cached_detail":(0,1,1),
+            "diag_E_full":(1,1,0),"diag_F_full_cached":(1,1,1)}[stage]
+        env.update(EU4_TEST_GPU_TIMESTAMPS=str(features[0]),
+            EU4_TEST_FORENSIC_RECORDS=str(features[1]),EU4_TEST_CACHED_METADATA=str(features[2]))
+    run=subprocess.run([str(WORKLOAD_HARNESS),recipe["path"],str(frames)],env=env,
+        capture_output=True,text=True,timeout=60,check=False)
+    if run.returncode:
+        raise base.BenchmarkError(f"Valid workload {recipe['name']} {stage} failed ({run.returncode}): {run.stderr}")
+    measured={k:int(v) for k,v in (p.split("=",1) for p in run.stdout.split() if "=" in p)}
+    if stage=="bare": return measured,None
+    rows=frame_rows(log_path);trace=read_rows(log_path)
+    tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
+    failure=next((int(r[1]) for r in trace if r[0]=="Z"),None)
+    dropped=next((int(r[3]) for r in trace if r[0]=="Z" and len(r)>3),0)
+    if len(rows)!=frames or failure!=0 or dropped or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
+        raise base.BenchmarkError("Representative workload did not exercise valid production wrappers, scopes, and writer")
+    if stage!="reference" and sum(r["draws"] for r in rows)!=frames*recipe["draws"]:
+        raise base.BenchmarkError("Representative producer draw counts differ from passive recipe")
+    if stage!="reference":
+        counts={int(r[1]):tuple(map(int,r[2:5])) for r in trace if r[0]=="C"}
+        for hook,field in ((7,"draws"),(9,"uniform_calls"),(11,"state_calls")):
+            if counts[hook][0]!=sum(f[field] for f in rows):
+                raise base.BenchmarkError(f"Accounting totals differ for {field}")
+        if counts[8][0]!=sum(f["buffer_calls"]+f["texture_calls"] for f in rows):
+            raise base.BenchmarkError("Upload totals differ")
+        if counts[7][1:]!=tuple(sum(f[field] for f in rows)//256 for field in ("draw_wall_ns_est","draw_cpu_ns_est")):
+            raise base.BenchmarkError("Sampled draw timing totals differ")
+    measured.update(frames=len(rows),tree_reconciliation=tree["tree_reconciliation"])
+    if diagnostic:
+        gpu_metrics=next((list(map(int,row[1:4])) for row in trace if row and row[0]=="M"),[0,0,0])
+        record_total=next((int(row[1]) for row in trace if row and row[0]=="N"),0)
+        measured["features"]={"gpu_timestamps":bool(features[0]),"forensic_records":bool(features[1]),
+            "cached_metadata":bool(features[2]),"sampled_draw_clocks":True}
+        measured["operations"]={"gpu_stamps":gpu_metrics[0],"gpu_availability_polls":gpu_metrics[1],
+            "gpu_results_read":gpu_metrics[2],"detail_records":record_total,
+            "hook_failures":failure,"dropped_records":dropped}
+        measured["record_counts"]={kind:sum(1 for row in trace if row and row[0]==kind)
+            for kind in ("D","S","U","V","W","B","b","T","t","G")}
+        if not features[0] and any(gpu_metrics):
+            raise base.BenchmarkError(f"{stage} issued GPU timestamp/poll/result calls while disabled")
+        if not features[1] and any(measured["record_counts"][kind]
+            for kind in ("D","S","U","V","W","B","b","T","t")):
+            raise base.BenchmarkError(f"{stage} emitted disabled forensic record families")
+    return measured,trace
+
+
 def offline_workloads() -> dict:
     with tempfile.TemporaryDirectory(prefix="eu4-representative-") as temporary:
-        root=Path(temporary); recipes=workload.recipes(root); evidence=[]
+        root=Path(temporary); recipes=workload.recipes(root); evidence=[];frames=4
+        base_stages=("bare","reference","counters","sampled","ablation_accounting","ablation_writer","ablation_preparation")
+        diagnostic_stages=("diag_A","diag_B_gpu","diag_C_detail","diag_D_cached_detail","diag_E_full","diag_F_full_cached")
         for recipe in recipes:
             trials=[]
             for trial in range(7):
-                stages=("bare","reference","counters","sampled","ablation_accounting","ablation_writer","ablation_preparation")
-                if trial%2: stages=tuple(reversed(stages))
+                stages=tuple(reversed(base_stages)) if trial%2 else base_stages
                 values={}
                 for stage in stages:
-                    control_path=root/"control.bin";log_path=root/f"{recipe['name']}-{trial}-{stage}.csv"
-                    mode=MODE["reference"] if stage=="reference" else MODE["profile"]
-                    frames=4
-                    fields=[FORMAT_VERSION,2,mode,1,1,0,0,0,1,0,0,0,0,0]
-                    control_path.write_bytes(CONTROL.pack(*fields)+bytes(CONTROL_SIZE-CONTROL.size))
-                    env={k:v for k,v in os.environ.items() if k not in ("DYLD_INSERT_LIBRARIES","EU4_FRAME_MODEL_CONTROL","EU4_FRAME_MODEL_LOG","EU4_TEST_ABLATION","EU4_TEST_SAMPLED")}
-                    if stage.startswith("ablation_"):
-                        env["EU4_TEST_ABLATION"]=stage.removeprefix("ablation_")
-                    if stage!="bare":
-                        env.update(DYLD_INSERT_LIBRARIES=str(TEST_LIBRARY),EU4_FRAME_MODEL_CONTROL=str(control_path),EU4_FRAME_MODEL_LOG=str(log_path))
-                        if stage=="sampled" or stage.startswith("ablation_"): env["EU4_TEST_SAMPLED"]="1"
-                    run=subprocess.run([str(WORKLOAD_HARNESS),recipe["path"],str(frames)],env=env,
-                        capture_output=True,text=True,timeout=60,check=False)
-                    if run.returncode:
-                        raise base.BenchmarkError(f"Valid workload {recipe['name']} {stage} failed ({run.returncode}): {run.stderr}")
-                    measured={k:int(v) for k,v in (p.split("=",1) for p in run.stdout.split() if "=" in p)}
-                    if stage!="bare":
-                        rows=frame_rows(log_path);trace=read_rows(log_path)
-                        tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
-                        failure=next((int(r[1]) for r in trace if r[0]=="Z"),None)
-                        if len(rows)!=frames or failure!=0 or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
-                            raise base.BenchmarkError("Representative workload did not exercise valid production wrappers, scopes, and writer")
-                        if stage!="reference" and sum(r["draws"] for r in rows)!=frames*recipe["draws"]:
-                            raise base.BenchmarkError("Representative producer draw counts differ from passive recipe")
-                        if stage!="reference":
-                            counts={int(r[1]):tuple(map(int,r[2:5])) for r in trace if r[0]=="C"}
-                            for hook,field in ((7,"draws"),(9,"uniform_calls"),(11,"state_calls")):
-                                if counts[hook][0]!=sum(f[field] for f in rows):
-                                    raise base.BenchmarkError(f"Accounting totals differ for {field}")
-                            if counts[8][0]!=sum(f["buffer_calls"]+f["texture_calls"] for f in rows):
-                                raise base.BenchmarkError("Upload totals differ")
-                            if counts[7][1:]!=tuple(sum(f[field] for f in rows)//256 for field in ("draw_wall_ns_est","draw_cpu_ns_est")):
-                                raise base.BenchmarkError("Sampled draw timing totals differ")
-                        measured.update(frames=len(rows),tree_reconciliation=tree["tree_reconciliation"])
-                    values[stage]=measured
+                    values[stage],_= _offline_workload_stage(root,recipe,trial,stage)
                 trials.append({"trial":trial,"order":list(stages),"stages":values})
             gates={}
             for stage,reference,limit in (("reference","bare",.03),("counters","reference",.03),("sampled","reference",.05)):
@@ -339,11 +372,37 @@ def offline_workloads() -> dict:
                 ablations[component]={axis:workload.paired_summary([
                     {"instrumented":t["stages"]["ablation_"+component][axis],"reference":t["stages"]["sampled"][axis]} for t in trials],.05,frames)
                     for axis in ("elapsed_ns","cpu_ns")}
-            evidence.append({"ablations":ablations,"ablation_policy":"Harness-only restoration of per-call accounting, unbatched writing, or measured state/query preparation; diagnostic, excluded from acceptance gates.","recipe":{k:v for k,v in recipe.items() if k!="path"},"trials":trials,"gates":gates})
+            # Run the original acceptance suite to completion before adding diagnostic
+            # conditions, preserving its paired stage order and thermal sequence.
+            diagnostic_trials=[]
+            for trial in range(7):
+                stages=tuple(reversed(diagnostic_stages)) if trial%2 else diagnostic_stages
+                values={}
+                for stage in stages:
+                    values[stage],_= _offline_workload_stage(root,recipe,trial,stage)
+                diagnostic_trials.append({"trial":trial,"order":list(stages),"stages":values})
+            matrix={}
+            for stage in diagnostic_stages[1:]:
+                matrix[stage]={}
+                for axis in ("elapsed_ns","cpu_ns"):
+                    comparison=workload.paired_summary([
+                        {"instrumented":t["stages"][stage][axis],"reference":t["stages"]["diag_A"][axis]}
+                        for t in diagnostic_trials],1.0,frames)
+                    comparison.pop("limit",None)
+                    comparison["status"]="diagnostic"
+                    comparison["acceptance_gate"]=False
+                    matrix[stage][axis]=comparison
+            evidence.append({"ablations":ablations,
+                "ablation_policy":"Harness-only restoration of per-call accounting, unbatched writing, or measured state/query preparation; diagnostic, excluded from acceptance gates.",
+                "diagnostic_matrix":{"baseline":"diag_A","comparisons":matrix,
+                    "trials":diagnostic_trials,
+                    "policy":"Paired causal decomposition diagnostics only; no acceptance limit and no causal attribution from percentage medians alone."},
+                "recipe":{k:v for k,v in recipe.items() if k!="path"},"trials":trials,"gates":gates})
         return {"status":"passed" if all(g["status"]=="passed" for r in evidence for g in r["gates"].values()) else "failed",
                 "recipes":evidence,"test_library_sha256":base.sha256(TEST_LIBRARY),
                 "harness_source_sha256":base.sha256(ROOT/"tests/frame_model_workload_harness.c"),
-                "profiler_source_sha256":base.sha256(SOURCE)}
+                "profiler_source_sha256":base.sha256(SOURCE),
+                "gpu_segments_source_sha256":base.sha256(ROOT/"benchmark/eu4_gpu_segments.h")}
 
 
 def read_rows(path: Path) -> list[list[str]]:
@@ -524,15 +583,25 @@ def phase_summary(rows: list[dict], name: str, seconds: float, window: dict | No
                       excluded_boundary_or_invalid_frames=len(population)-len(selected))
         if events_rows is not None:
             counts={kind:0 for kind in (1,2,3,4)}
+            observed_kinds=set()
             for r in events_rows:
                 if not r or r[0]!="E" or len(r)<6: continue
                 epoch,update,phase,kind,timestamp=map(int,r[1:6])
                 if (epoch==window["measurement_epoch"] and phase==PHASE_NUMBER[name] and
                     window["start_ns"]<=timestamp+offset<window["end_ns"] and kind in counts):
                     counts[kind]+=1
-            for kind,key in ((1,"update_attempts_s"),(2,"render_attempts_s"),(3,"executed_renders_s"),(4,"present_calls_s")):
-                result[key]=counts[kind]/observed_seconds
-            result["rate_policy"]="timestamped events in acknowledged window; boundary frames excluded only from cost statistics"
+                    observed_kinds.add(kind)
+            expected={1:events("start_ns"),
+                2:events("render_start_ns","render_attempts"),
+                3:events("render_start_ns","render_executed"),
+                4:events("present_time_ns","present_calls")}
+            complete_events=(bool(observed_kinds) and all(counts[kind]==expected[kind] for kind in counts))
+            if complete_events:
+                for kind,key in ((1,"update_attempts_s"),(2,"render_attempts_s"),(3,"executed_renders_s"),(4,"present_calls_s")):
+                    result[key]=counts[kind]/observed_seconds
+                result["rate_policy"]="complete timestamped events in acknowledged window; boundary frames excluded only from cost statistics"
+            else:
+                result["rate_policy"]="frame timestamps; timestamp-event stream absent or incomplete"
         result["invalid_scope_frames"]=sum(bool(r.get("flags",0)&(512|1024)) for r in population)
 
     result["exclusive_scope_coverage"]={"cpu_fraction":None,"wall_fraction":None,
@@ -907,7 +976,7 @@ def analyze(run_dir: Path) -> dict:
     event_rows=trace
     trace = eligible_trace(trace,frames,phases)
     summaries = [phase_summary(frames, item["name"], item["duration_s"],item,event_rows)
-                 for item in phases if item.get("name") in PHASE_NUMBER]
+                 for item in phases if item.get("name") in PHASE_NUMBER and item.get("role")!="forensic"]
     counters = {}
     for row in trace:
         if row[0] == "C" and len(row) >= 5:
@@ -946,24 +1015,43 @@ def analyze(run_dir: Path) -> dict:
     report_gates=GateEvidence(dict(manifest.get("gates",{})))
     is_v3=format_qualified
     report_gates.record("format_v3","passed" if is_v3 else "failed","v3 header, manifest, and frame layout required")
-    expected_baselines={name for name,*_ in PHASES if name.startswith("A")}
+    report_kind=manifest.get("report_kind","causal")
+    expected_baselines=({name for name,*_ in PHASES if name.startswith("A")}
+        if report_kind=="causal" else {"A0"} if report_kind=="residual_discovery" else set())
     baselines=[p for p in summaries if p["phase"] in expected_baselines]
     coverage_ok=({p["phase"] for p in baselines}==expected_baselines and all(
         p.get("exclusive_scope_coverage",{}).get("coverage_95_percent_gate")=="passed" for p in baselines))
     unknown=unassociated_origins(trace,phases)
     report_gates.record("origin_integrity","failed" if unknown else "passed" if format_qualified else "unavailable","Measured calls outside owned update frames must be attributed before causal acceptance",records=unknown)
-    report_gates.record("semantic_coverage","passed" if coverage_ok else "failed","Every baseline needs independent ≥95% Update/Render CPU and wall coverage")
+    semantic_status=("unavailable" if not expected_baselines else "passed" if coverage_ok else "failed")
+    semantic_reason=("No causal baseline is scheduled in calibration-only reports" if not expected_baselines else
+        "Every scheduled baseline needs independent ≥95% Update/Render CPU and wall coverage")
+    report_gates.record("semantic_coverage",semantic_status,semantic_reason)
     build_evidence=manifest.get("evidence",{}).get("build",{})
     candidate_manifest=build_evidence.get("draw_api_manifest")
     if candidate_manifest and (candidate_manifest.get("executable_sha256")!=manifest.get("executable_sha256") or
         candidate_manifest.get("observer_header_sha256")!=build_evidence.get("native_source_hashes",{}).get(draw_api.HEADER.name)):
         candidate_manifest=None
     qualified_frames=[f for w in phases for f in frames if eligible_frame(f,w)]
+    residual_discovery=report_kind=="residual_discovery"
+    present_phases={p.get("name") for p in phases if p.get("name") in PHASE_NUMBER}
+    coverage_phases={PHASE_NUMBER[name] for name in present_phases
+                     if name.startswith("A") or name in {"C","P0","P1","P2"}}
     draw_coverage=draw_api.coverage(candidate_manifest,qualified_frames,trace,
-        {PHASE_NUMBER[n] for n in expected_baselines}|{PHASE_NUMBER["C"]})
+        coverage_phases,require_c=manifest.get("report_kind")=="causal" and "C" in present_phases)
+    pre_c_only=(manifest.get("report_kind") in {"residual_discovery","calibration_only"}
+                and "C" not in present_phases)
+    if "C" not in present_phases:
+        draw_coverage={**draw_coverage,"status":"unavailable",
+            "stage":"not_applicable" if pre_c_only else "incomplete",
+            "pre_c_diagnostics":draw_coverage,
+            "reason":"C was not scheduled; pre-C draw diagnostics only" if pre_c_only else
+                "C has no captured evidence in this causal report; pre-C diagnostics cannot qualify the intervention",
+            "c_intervention":"not applicable"}
     report_gates.record("draw_api_coverage",draw_coverage["status"],draw_coverage["reason"],evidence=draw_coverage)
 
-    output = {"format_version":FORMAT_VERSION,"report_kind":manifest.get("report_kind","causal"),
+    output = {"format_version":FORMAT_VERSION,"report_kind":report_kind,
+              "phase_roles":{p.get("name"):p.get("role","causal") for p in phases},
               "metal_feasibility":"feasibility seed; go/no-go undetermined",
               "unassociated_origins":unknown,"release_gates":report_gates.entries,
               "release_blockers":report_gates.blockers(),
@@ -972,7 +1060,8 @@ def analyze(run_dir: Path) -> dict:
               "phases": summaries, "hook_totals": counters,
               "hook_totals_status":"partial supporting telemetry; worker producer flush completeness unproven",
               "draw_api_coverage":draw_coverage,
-              "C_intervention":"complete draw suppression" if draw_coverage["status"]=="passed" else "partial draw-suppression intervention",
+              "C_intervention":"not applicable — C not scheduled" if pre_c_only else
+                  "complete draw suppression" if draw_coverage["status"]=="passed" else "partial draw-suppression intervention",
               "structural_evidence_incomplete":[render_identity(f) for f in qualified_frames if f.get("flags",0)&2048],
               "structural_evidence_missing_reasons":[r for r in trace if r and r[0]=="L"],
               "update_render_present_totals":{"update_calls":totals[0],"render_attempts":totals[1],"presents":totals[2]},
@@ -998,11 +1087,14 @@ def analyze(run_dir: Path) -> dict:
         {p["phase"] for p in baseline}=={name for name,*_ in PHASES if name.startswith("A")} and all(
         p["exclusive_scope_coverage"].get("coverage_95_percent_gate")=="passed" for p in baseline)
         else "partial attribution")
-    if output["report_kind"]=="residual_discovery" or output["diagnosis_status"]=="partial attribution":
+    if output["report_kind"]=="residual_discovery":
         output["conclusions"]=["Residual discovery identifies missing attribution; reconciliation alone does not establish a diagnosis."]
         output["recommendations"]=[{"intervention":"expand verified semantic hooks in the largest residual envelopes",
             "signal":"ranked residual CPU/wall table","estimated_reduction_fraction":None,
             "evidence":"add 3–8 ABI-verified semantic hooks per iteration and repeat perturbation validation"}]
+    elif output["diagnosis_status"]=="partial attribution":
+        output["conclusions"]=["The captured evidence does not meet the full causal diagnosis gates."]
+        output["recommendations"]=[]
     if draw_coverage["status"]!="passed":
         for key in ("C","C_minus_B"):
             if key in output["causal_contrasts"]:
@@ -1325,7 +1417,7 @@ class SharedControl:
         self.measuring=False
     def set(self,mode: str,phase: int,update_period_ns: int=0,
             render_period_ns: int=0,detail_frames: int=0,
-            measurement: bool=True) -> int:
+            measurement: bool=True,forensic: bool=False) -> int:
         if measurement and not self.measuring: self.measurement_epoch+=1
         self.measuring=measurement
         self.generation+=1
@@ -1335,7 +1427,7 @@ class SharedControl:
         even=self.command_seq*2
         struct.pack_into("<I",self.map,4,odd)
         self.map.flush()
-        flags=(1 if mode!="off" else 0) | (2 if measurement else 0)
+        flags=(1 if mode!="off" else 0) | (2 if measurement else 0) | (4 if forensic else 0)
         command=CONTROL_COMMAND.pack(FORMAT_VERSION,odd,MODE[mode],phase,flags,
                                      detail_frames,update_period_ns,render_period_ns,
                                      self.generation,self.measurement_epoch if measurement else 0)
@@ -1494,11 +1586,11 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
                 detail_windows: int=2,detail_frames_per_window: int=2) -> dict:
     if time.monotonic()+duration+17>getattr(control,"deadline",float("inf")):
         raise base.BenchmarkError("Controller deadline leaves insufficient measurement and restoration time")
-    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,0,False)
+    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,0,False,detail)
     auto.mark(events,"phase_transition",phase=name,mode=mode,generation=generation)
     _wait_ack(game,control,generation,name+" transition")
     time.sleep(5)
-    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,0,True)
+    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,0,True,detail)
     measurement_generation=generation
     _wait_ack(game,control,generation,name+" measurement enable")
     received_ns=time.monotonic_ns()
@@ -1511,7 +1603,7 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
     auto.mark(events,"measurement_enabled",phase=name,generation=generation)
     # A post-start command lets unowned producers distinguish the timed window
     # from enable acknowledgement, without changing the measurement epoch.
-    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,0,True)
+    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,0,True,detail)
     window_generation=generation
     measurement_started=start["monotonic_ns"]/1e9
     end_by=measurement_started+duration
@@ -1539,7 +1631,8 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
                    all(f["render_executed"]==1 for f in preceding) and
                    all(b["render_id"]==a["render_id"]+1 for a,b in zip(preceding,preceding[1:])))
             if ready:
-                generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,detail_frames_per_window,True)
+                generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,
+                    detail_frames_per_window,True,detail)
                 arm={"requested_arm_ns":int(requested[len(arms)]*1e9),"actual_arm_ns":control.command_sent_ns,
                      "generation":generation,"preceding_observed":[render_identity(f) for f in preceding]}
                 arms.append(arm)
@@ -1580,9 +1673,14 @@ def causal_schedule(period: int, residual_discovery: bool=False) -> list[dict]:
 
 
 def run(output_root: Path, include_low_power: bool=True,
-        include_fixed_cadence_lpm: bool=False, residual_discovery: bool=False) -> Path:
-    if residual_discovery: include_low_power=False; include_fixed_cadence_lpm=False
-    try: budget=run_budget(causal_schedule(1,residual_discovery),include_low_power,include_fixed_cadence_lpm,residual_discovery)
+        include_fixed_cadence_lpm: bool=False, residual_discovery: bool=False,
+        calibration_only: bool=False) -> Path:
+    if residual_discovery and calibration_only:
+        raise base.BenchmarkError("Choose either residual discovery or calibration-only mode")
+    if residual_discovery or calibration_only:
+        include_low_power=False; include_fixed_cadence_lpm=False
+    try: budget=run_budget([] if calibration_only else causal_schedule(1,residual_discovery),
+        include_low_power,include_fixed_cadence_lpm,residual_discovery or calibration_only)
     except ValueError as exc: raise base.BenchmarkError(str(exc)) from exc
     evidence=preflight(run_gl=True,require_privilege=True,require_power_mode=include_low_power)
     base.running_game_pid("idle")
@@ -1595,7 +1693,8 @@ def run(output_root: Path, include_low_power: bool=True,
     gates=GateEvidence()
     gates.record("format_v3","passed","Versioned producer and controller",version=FORMAT_VERSION)
     gates.record("offline_overhead","passed" if evidence.get("overhead_gate")=="passed" else "unavailable","Offline overhead preflight",evidence=evidence.get("overhead_gate"))
-    manifest={"gates":gates.entries,"worst_case_budget_s":budget,"format_version":FORMAT_VERSION,"report_kind":"residual_discovery" if residual_discovery else "causal",
+    manifest={"gates":gates.entries,"worst_case_budget_s":budget,"format_version":FORMAT_VERSION,
+              "report_kind":"calibration_only" if calibration_only else "residual_discovery" if residual_discovery else "causal",
               "status":"starting","executable_sha256":evidence["build"]["executable_sha256"],
               "evidence":evidence,"coverage":{"engine_hooks":7,"suppressed_gl_draw_apis":6,
               "draw_candidate_entrypoints":len(evidence["build"]["draw_api_manifest"]["apis"]),
@@ -1651,10 +1750,9 @@ def run(output_root: Path, include_low_power: bool=True,
                 manifest["scene_alignment"]=auto.verify_scene(run_dir/"ready-scene.png",False)
 
                 calibration_phases=[]
-                for name,mode,detail in (("P0","reference",False),("P1","profile",True),("P2","reference",False)):
+                for name,mode,detail in (("P0","reference",False),("P1","profile",False),("P2","reference",False)):
                     calibration_phases.append(_wait_phase(game,15,control,events,name,mode,0,
-                        detail=detail,detail_windows=6 if name=="P1" else 2,
-                        detail_frames_per_window=4 if name=="P1" else 2))
+                        detail=detail))
                 manifest["calibration"]={"phases":calibration_phases}
                 manifest_path.write_text(json.dumps(manifest,indent=2)+"\n")
                 profile_rows=frame_rows(run_dir/"telemetry.csv")
@@ -1681,11 +1779,6 @@ def run(output_root: Path, include_low_power: bool=True,
                 cpu_perturbation=cpu_rates[1]/statistics.mean((cpu_rates[0],cpu_rates[2]))-1
                 if abs(cpu_perturbation)>.03:
                     raise base.BenchmarkError(f"Counters-only profiler CPU perturbation is {cpu_perturbation:+.1%}; stop before causal phases")
-                detail_rows=[row for row in profile_rows if eligible_frame(row,p1_phase)]
-                trace_evidence=sampled_perturbation(detail_rows)
-                if trace_evidence["status"]!="passed":
-                    raise base.BenchmarkError(f"Sampled detail perturbation failed: {trace_evidence}")
-                trace_perturbation=max(abs(v) for w in trace_evidence["windows"] for v in w["fractions"].values())
                 measured_rate=statistics.median(row["swaps_s"] for row in probe
                     if calibration_phases[1]["start_ns"]<=row["monotonic_ns"]<calibration_phases[1]["end_ns"])
                 controls=[]
@@ -1701,18 +1794,17 @@ def run(output_root: Path, include_low_power: bool=True,
                 if abs(measured_rate/reference_rate-1)>.03:
                     raise base.BenchmarkError("Profiler cadence differs from the established native swap rate by over 3%")
                 gates.record("live_counters","passed","Calibrated process CPU and present cadence",cpu=cpu_perturbation,swaps=swap_perturbation)
-                gates.record("live_sampled","passed","Six four-frame windows",cpu=trace_perturbation,windows=trace_evidence["windows"])
                 baseline_period=int(1e9/max(p1["update_attempts_s"],1))
                 manifest["calibration"]={"phases":calibration_phases,"profile":p1,"power":calibration_power,
-                    "frame_perturbation_fraction":frame_perturbation,"cpu_perturbation_fraction":cpu_perturbation,"sampled_trace_perturbation_fraction":trace_perturbation,"sampled_window_evidence":trace_evidence,
+                    "frame_perturbation_fraction":frame_perturbation,"cpu_perturbation_fraction":cpu_perturbation,
                     "swap_rate":measured_rate,"historical_swap_rate":reference_rate,"target_cadence_ns":baseline_period,
-                    "limits":{"counters_cpu_frame":.03,"swap_rate":.03,"sampled_trace":.05}}
+                    "limits":{"counters_cpu_frame":.03,"swap_rate":.03}}
                 if p1["median_update_cpu_ms"]>p1["median_update_wall_ms"]*1.05:
                     raise base.BenchmarkError("Thread CPU exceeds update wall time; timing is inconsistent")
 
-                phases=[_wait_phase(game,20,control,events,"ANATIVE","profile",0)]
+                phases=[] if calibration_only else [_wait_phase(game,20,control,events,"ANATIVE","profile",0)]
                 manifest["phases"]=phases
-                for config in causal_schedule(baseline_period,residual_discovery):
+                for config in (() if calibration_only else causal_schedule(baseline_period,residual_discovery)):
                     name,mode=config["name"],config["mode"]
                     if name=="C":
                         raw=frame_rows(run_dir/"telemetry.csv")
@@ -1763,8 +1855,6 @@ def run(output_root: Path, include_low_power: bool=True,
                         if control.hook_failures() or control.dropped_records() or observed.get("invalid_scope_frames") or tree["coverage_95_percent_gate"]!="passed":
                             raise base.BenchmarkError("Baseline integrity/semantic CPU and wall coverage gates block causal interventions; use --residual-discovery to expand attribution")
                 manifest["phases"]=phases
-                if not residual_discovery:
-                    manifest["profiling_tail"]=_wait_phase(game,30,control,events,"TAIL","profile",baseline_period,True)
                 if include_low_power:
                     low={"phases":[],"transition_settle_s":10}
                     low["phases"].append(_wait_phase(game,15,control,events,"LPM0","profile",0))
@@ -1801,6 +1891,24 @@ def run(output_root: Path, include_low_power: bool=True,
                             "LPMF1","profile",baseline_period))
                         manifest["fixed_cadence_dvfs_comparison"]=fixed
                         manifest["phases"].extend(fixed["phases"])
+                profiling_tail=_wait_phase(game,20 if residual_discovery or calibration_only else 30,
+                    control,events,"TAIL","profile",baseline_period,True,
+                    detail_windows=6,detail_frames_per_window=4)
+                profiling_tail["role"]="forensic"
+                manifest["profiling_tail"]=profiling_tail
+                manifest_path.write_text(json.dumps(manifest,indent=2)+"\n")
+                tail_frames=[row for row in frame_rows(run_dir/"telemetry.csv")
+                             if eligible_frame(row,profiling_tail)]
+                trace_evidence=sampled_perturbation(tail_frames)
+                trace_perturbation=(max(abs(value) for window in trace_evidence.get("windows",[])
+                    for value in window["fractions"].values()) if trace_evidence.get("windows") else None)
+                forensic_status="passed" if trace_evidence["status"]=="passed" else "failed"
+                gates.record("forensic_capture",forensic_status,
+                    "Post-causal six-window capture intrusion and pairing diagnostic",
+                    perturbation_fraction=trace_perturbation,evidence=trace_evidence)
+                manifest["forensic_capture"]={"phase":"TAIL","role":"forensic",
+                    "sampled_trace_perturbation_fraction":trace_perturbation,
+                    "sampled_window_evidence":trace_evidence}
                 hook_failures=control.hook_failures()
                 dropped_records=control.dropped_records()
                 integrity={"hook_failures":hook_failures,"dropped_records":dropped_records,
@@ -1812,10 +1920,10 @@ def run(output_root: Path, include_low_power: bool=True,
                 auto.stop_process(pm,5); pm=None; power_tail.poll()
                 all_phases=calibration_phases+manifest["phases"]+([manifest["profiling_tail"]] if "profiling_tail" in manifest else [])
                 manifest["power_by_phase"]=diagnostic.summarize_power(power_tail.samples,all_phases,anchor,game.pid)
-                unknown=unassociated_origins(read_rows(run_dir/"telemetry.csv"),calibration_phases+phases)
+                unknown=unassociated_origins(read_rows(run_dir/"telemetry.csv"),all_phases)
                 gates.record("origin_integrity","failed" if unknown else "passed","Origin ownership checked; unknown calls block diagnosis",records=unknown)
                 gates.record("cadence","passed","All scheduled phases met the cadence checks")
-                if not residual_discovery:
+                if not residual_discovery and not calibration_only:
                     gates.record("semantic_coverage","passed","Every A baseline passed independent Update and Render CPU/wall gates")
                     gates.record("interventions","passed","B/C/D and achieved E targets checked")
                     summaries=[phase_summary(frame_rows(run_dir/"telemetry.csv"),p["name"],p["duration_s"],p,read_rows(run_dir/"telemetry.csv")) for p in phases if p["name"] in {n for n,*_ in PHASES}]
@@ -1867,7 +1975,9 @@ def main() -> int:
     pf.add_argument("--require-power-helper",action="store_true")
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
-    run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
+        run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
+    run_parser.add_argument("--calibration-only",action="store_true",
+        help="run bounded reference/counters/reference calibration and forensic capture, then stop before ANATIVE or interventions")
     run_parser.add_argument("--fixed-cadence-lpm",action="store_true",
         help="add a separately reported fixed-throughput Low Power DVFS comparison")
     report=sub.add_parser("report",help="regenerate a report from a captured run")
@@ -1886,7 +1996,8 @@ def main() -> int:
             print(json.dumps(_restore_power_mode(Path(args.journal).expanduser().resolve()),indent=2))
         else:
             print(run(Path(args.output).expanduser().resolve(),
-                      include_fixed_cadence_lpm=args.fixed_cadence_lpm,residual_discovery=args.residual_discovery))
+                      include_fixed_cadence_lpm=args.fixed_cadence_lpm,residual_discovery=args.residual_discovery,
+                      calibration_only=args.calibration_only))
     except (base.BenchmarkError,OSError,ValueError,subprocess.SubprocessError,KeyboardInterrupt) as exc:
         print(f"Error: {exc}",file=sys.stderr); return 1
     return 0

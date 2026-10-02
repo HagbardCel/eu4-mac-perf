@@ -1,7 +1,7 @@
 """Shared, fail-closed release evidence for controller and report consumers."""
 from dataclasses import dataclass, field
 
-REQUIRED = ("format_v3", "offline_overhead", "live_counters", "live_sampled",
+REQUIRED = ("format_v3", "offline_overhead", "live_counters",
             "integrity", "origin_integrity", "draw_api_coverage", "semantic_coverage", "cadence", "interventions", "control_drift")
 
 @dataclass
@@ -31,8 +31,7 @@ def run_budget(phases, low_power=False, fixed=False, discovery=False):
     # Readiness 180, warmup 90 + bounded 60 extension; every phase has 5-second
     # settling and three 4-second acknowledgement allowances. Cleanup reserves 40.
     durations = [15, 15, 15, 20] + [p['duration_s'] for p in phases]
-    if not discovery:
-        durations += [30]
+    durations += [20 if discovery else 30]  # isolated forensic capture after causal phases
     transitions = 0
     if low_power:
         durations += [15, 30, 15]; transitions += 20

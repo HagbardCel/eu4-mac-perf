@@ -52,7 +52,7 @@ extern void glUseProgramObjectARB(GLhandleARB);
 #endif
 
 enum { OFF, PROFILE, SKIP_RENDER, DROP_DRAWS, RASTER_SUPPRESS, CADENCE_30, CADENCE_15, REFERENCE };
-enum { INTERVENTION_ACTIVE=1u, MEASURE_ENABLED=2u };
+enum { INTERVENTION_ACTIVE=1u, MEASURE_ENABLED=2u, FORENSIC_CAPTURE=4u };
 enum { SCOPE_UPDATE, SCOPE_IDLE, SCOPE_RENDER, SCOPE_MAP,
        SCOPE_PRESENT, SCOPE_ADD_BUCKET, SCOPE_APPEND, SCOPE_FLUSH,
        SCOPE_LOOP, SCOPE_CADENCE_SLEEP, SCOPE_COUNT };
@@ -99,7 +99,7 @@ typedef struct { char kind; uint64_t publication_sequence,a,b,c,d,e,f,g,h,i,j,k,
 typedef struct {
     FrameSlot frames[FRAME_CAPACITY]; DetailSlot details[DETAIL_CAPACITY];
     Eu4Spsc frame_queue,detail_queue;
-    uint64_t publication_sequence,consumed_sequence;
+    uint64_t publication_sequence,consumed_sequence,thread_id;
     uint64_t counts[HOOK_COUNT],wall[HOOK_COUNT],cpu[HOOK_COUNT],unassociated_generation;
 } Producer;
 static Producer *producers[PRODUCER_CAPACITY];
@@ -167,6 +167,8 @@ static _Thread_local Eu4GpuManager gpu_manager;
 static Eu4GpuRegistry gpu_registry;
 static pthread_mutex_t gpu_lock=PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local const Eu4GpuIdentity *detail_gpu_origin;
+static _Thread_local uintptr_t detail_context_cache;
+static _Thread_local bool detail_context_valid;
 static bool extension_has(const char *extensions,const char *name) {
     if(!extensions || !name) return false;
     size_t length=strlen(name);
@@ -199,7 +201,60 @@ static uint64_t now_ns(clockid_t id);
 /* Diagnostics only: these branches are absent from the production library. */
 static unsigned test_ablation;
 static uint64_t test_measured_state_queries,test_measured_gpu_initializations;
+static bool test_gpu_timestamps=true,test_forensic_records=true,test_cached_metadata=false;
+static _Atomic uint64_t test_gpu_stamps,test_gpu_polls,test_gpu_results,test_detail_records;
 #endif
+
+static bool gpu_timestamps_enabled(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    return test_gpu_timestamps;
+#else
+    return true;
+#endif
+}
+static bool forensic_records_enabled(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    return test_forensic_records;
+#else
+    return true;
+#endif
+}
+static uint64_t detail_thread_id(Producer *p) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_cached_metadata && p) return p->thread_id;
+#else
+    if(p) return p->thread_id;
+#endif
+    return tid();
+}
+static void cache_current_detail_context(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_cached_metadata) {
+        detail_context_cache=(uintptr_t)CGLGetCurrentContext();
+        detail_context_valid=true;
+    }
+#else
+    detail_context_cache=(uintptr_t)CGLGetCurrentContext();
+    detail_context_valid=true;
+#endif
+}
+static uintptr_t detail_context_id(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_cached_metadata && detail_context_valid) return detail_context_cache;
+#else
+    if(detail_context_valid) return detail_context_cache;
+    return 0;
+#endif
+    return (uintptr_t)CGLGetCurrentContext();
+}
+static bool detail_kind_enabled(char kind) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(!test_forensic_records && strchr("DSUuVWBbTtPELJ",kind)) return false;
+#else
+    (void)kind;
+#endif
+    return true;
+}
 
 static bool snapshot_control(ControlSnapshot *out) {
     if(!control || control==MAP_FAILED || control->version!=3) return false;
@@ -310,6 +365,7 @@ static Producer *producer(void) {
     if(count<PRODUCER_CAPACITY) {
         local_producer=calloc(1,sizeof(Producer));
         if(local_producer) {
+            local_producer->thread_id=tid();
             producers[count]=local_producer;
             atomic_store_explicit(&producer_count,count+1,memory_order_release);
         }
@@ -506,68 +562,84 @@ static void hook_line(unsigned id) {
     if(n>0 && (size_t)n<sizeof(line)) write_record(line,(size_t)n);
 }
 static void detail_line(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64_t d) {
-    if(log_fd<0 || !kind || !kind[0]) return;
+    if(log_fd<0 || !kind || !kind[0] || !detail_kind_enabled(kind[0])) return;
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_detail_records,1,memory_order_relaxed);
+#endif
     Producer *p=producer(); uint64_t h;
     if(!p || !eu4_spsc_reserve(&p->detail_queue,DETAIL_CAPACITY,&h)) { atomic_fetch_add(&control->dropped_records,1); return; }
     DetailSlot *s=&p->details[h%DETAIL_CAPACITY];s->publication_sequence=++p->publication_sequence;s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;
     s->e=s->f=s->g=s->h=s->i=s->j=s->k=s->l=0;
-    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=tid(); s->generation=frame_control.generation;
-    s->window=current_frame.sample_window; s->context=(uintptr_t)CGLGetCurrentContext();
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=detail_thread_id(p); s->generation=frame_control.generation;
+    s->window=current_frame.sample_window; s->context=detail_context_id();
     if(detail_gpu_origin) {
         s->epoch=detail_gpu_origin->epoch; s->update=detail_gpu_origin->update; s->phase=detail_gpu_origin->phase;
         s->thread=detail_gpu_origin->thread; s->generation=detail_gpu_origin->generation; s->window=detail_gpu_origin->window;
+        s->context=detail_gpu_origin->context;
     }
     eu4_spsc_publish(&p->detail_queue,h);
 }
 static void detail_line5(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e) {
-    if(log_fd<0 || !kind || !kind[0]) return;
+    if(log_fd<0 || !kind || !kind[0] || !detail_kind_enabled(kind[0])) return;
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_detail_records,1,memory_order_relaxed);
+#endif
     Producer *p=producer(); uint64_t h;
     if(!p || !eu4_spsc_reserve(&p->detail_queue,DETAIL_CAPACITY,&h)) { atomic_fetch_add(&control->dropped_records,1); return; }
     DetailSlot *s=&p->details[h%DETAIL_CAPACITY];s->publication_sequence=++p->publication_sequence;s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;
     s->f=s->g=s->h=s->i=s->j=s->k=s->l=0;
-    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=tid(); s->generation=frame_control.generation;
-    s->window=current_frame.sample_window; s->context=(uintptr_t)CGLGetCurrentContext();
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=detail_thread_id(p); s->generation=frame_control.generation;
+    s->window=current_frame.sample_window; s->context=detail_context_id();
     if(detail_gpu_origin) {
         s->epoch=detail_gpu_origin->epoch; s->update=detail_gpu_origin->update; s->phase=detail_gpu_origin->phase;
         s->thread=detail_gpu_origin->thread; s->generation=detail_gpu_origin->generation; s->window=detail_gpu_origin->window;
+        s->context=detail_gpu_origin->context;
     }
     eu4_spsc_publish(&p->detail_queue,h);
 }
 static void detail_line7(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64_t d,
                          uint64_t e,uint64_t f,uint64_t g) {
-    if(log_fd<0 || !kind || !kind[0]) return;
+    if(log_fd<0 || !kind || !kind[0] || !detail_kind_enabled(kind[0])) return;
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_detail_records,1,memory_order_relaxed);
+#endif
     Producer *p=producer(); uint64_t h;
     if(!p || !eu4_spsc_reserve(&p->detail_queue,DETAIL_CAPACITY,&h)) { atomic_fetch_add(&control->dropped_records,1); return; }
     DetailSlot *s=&p->details[h%DETAIL_CAPACITY];s->publication_sequence=++p->publication_sequence;s->kind=kind[0];
     s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;s->f=f;s->g=g;
     s->h=s->i=s->j=s->k=s->l=0;
-    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=tid(); s->generation=frame_control.generation;
-    s->window=current_frame.sample_window; s->context=(uintptr_t)CGLGetCurrentContext();
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=detail_thread_id(p); s->generation=frame_control.generation;
+    s->window=current_frame.sample_window; s->context=detail_context_id();
     if(detail_gpu_origin) {
         s->epoch=detail_gpu_origin->epoch; s->update=detail_gpu_origin->update; s->phase=detail_gpu_origin->phase;
         s->thread=detail_gpu_origin->thread; s->generation=detail_gpu_origin->generation; s->window=detail_gpu_origin->window;
+        s->context=detail_gpu_origin->context;
     }
     eu4_spsc_publish(&p->detail_queue,h);
 }
 static void detail_line12(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64_t d,
                           uint64_t e,uint64_t f,uint64_t g,uint64_t h,uint64_t i,
                           uint64_t j,uint64_t k,uint64_t l) {
-    if(log_fd<0 || !kind || !kind[0]) return;
+    if(log_fd<0 || !kind || !kind[0] || !detail_kind_enabled(kind[0])) return;
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_detail_records,1,memory_order_relaxed);
+#endif
     Producer *p=producer(); uint64_t head;
     if(!p || !eu4_spsc_reserve(&p->detail_queue,DETAIL_CAPACITY,&head)) { atomic_fetch_add(&control->dropped_records,1); return; }
     DetailSlot *s=&p->details[head%DETAIL_CAPACITY];s->publication_sequence=++p->publication_sequence;s->kind=kind[0];
     s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;s->f=f;s->g=g;s->h=h;
     s->i=i;s->j=j;s->k=k;s->l=l;
-    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=tid(); s->generation=frame_control.generation;
-    s->window=current_frame.sample_window; s->context=(uintptr_t)CGLGetCurrentContext();
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=detail_thread_id(p); s->generation=frame_control.generation;
+    s->window=current_frame.sample_window; s->context=detail_context_id();
     if(detail_gpu_origin) {
         s->epoch=detail_gpu_origin->epoch; s->update=detail_gpu_origin->update; s->phase=detail_gpu_origin->phase;
         s->thread=detail_gpu_origin->thread; s->generation=detail_gpu_origin->generation; s->window=detail_gpu_origin->window;
+        s->context=detail_gpu_origin->context;
     }
     eu4_spsc_publish(&p->detail_queue,head);
 }
 static void timestamp_event(unsigned kind,uint64_t timestamp) {
-    if(!measurement_active()) return;
+    if(!measurement_active() || !(frame_control.flags&FORENSIC_CAPTURE) || !detail_active) return;
     detail_line12("E",current_frame.measurement_epoch,current_frame.update_id,
         current_frame.phase,kind,timestamp,current_frame.render_id,current_frame.present_id,0,0,0,0,0);
 }
@@ -656,6 +728,7 @@ static uint64_t vertex_source_signature(void) {
 }
 static void draw_detail(uintptr_t caller,uint64_t api,GLenum mode,GLsizei count,
         GLenum type,uint64_t index_offset,uint64_t first,GLint base,GLsizei instances) {
+    if(!forensic_records_enabled()) return;
     seed_gl_state();
     if(!state_seeded || !vertex_array_state || !vertex_array_state->prepared) {
         current_frame.flags|=2048;return;
@@ -665,7 +738,12 @@ static void draw_detail(uintptr_t caller,uint64_t api,GLenum mode,GLsizei count,
         vertex_source_signature(),bound_element_buffer,mode,(uint32_t)count,type,
         index_offset?index_offset:first,(uint32_t)base,(uint32_t)instances);
 }
-static uintptr_t gpu_context(void) { return (uintptr_t)CGLGetCurrentContext(); }
+static uintptr_t gpu_context(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_cached_metadata && detail_context_valid) return detail_context_cache;
+#endif
+    return (uintptr_t)CGLGetCurrentContext();
+}
 static bool gpu_initialize_queries(unsigned *ids,unsigned count) {
 #ifdef EU4_FRAME_MODEL_TEST
     if(measurement_active()) test_measured_gpu_initializations++;
@@ -697,11 +775,22 @@ static bool gpu_initialize_queries(unsigned *ids,unsigned count) {
     for(unsigned i=0;i<count;i++) if(!ids[i]) return false;
     return true;
 }
-static void gpu_stamp(unsigned query) { gpu_query_counter(query,GL_TIMESTAMP_MODEL); }
+static void gpu_stamp(unsigned query) {
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_gpu_stamps,1,memory_order_relaxed);
+#endif
+    gpu_query_counter(query,GL_TIMESTAMP_MODEL);
+}
 static bool gpu_available(unsigned query) {
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_gpu_polls,1,memory_order_relaxed);
+#endif
     GLint ready=0; gpu_get_query_iv(query,GL_QUERY_AVAILABLE_MODEL,&ready); return ready!=0;
 }
 static uint64_t gpu_result(unsigned query) {
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_gpu_results,1,memory_order_relaxed);
+#endif
     GLuint64 value=0; gpu_get_query_u64(query,GL_QUERY_RESULT_MODEL,&value); return value;
 }
 static void gpu_emit(Eu4GpuIdentity id,uint64_t start,uint64_t end,unsigned missing) {
@@ -712,17 +801,21 @@ static void gpu_emit(Eu4GpuIdentity id,uint64_t start,uint64_t end,unsigned miss
 }
 static Eu4GpuApi gpu_api={gpu_context,gpu_initialize_queries,gpu_stamp,gpu_available,gpu_result,gpu_emit};
 static void gpu_begin_render(void) {
+    if(!gpu_timestamps_enabled()) return;
     pthread_mutex_lock(&gpu_lock); gpu_manager.registry=&gpu_registry;
-    eu4_gpu_begin(&gpu_manager,&gpu_api,(Eu4GpuIdentity){.phase=current_frame.phase,
-        .render=current_frame.render_id,.epoch=current_frame.measurement_epoch,.update=current_frame.update_id,.thread=tid(),.generation=frame_control.generation,.window=current_frame.sample_window});
+    Eu4GpuIdentity identity={.phase=current_frame.phase,.render=current_frame.render_id,
+        .epoch=current_frame.measurement_epoch,.update=current_frame.update_id,
+        .thread=detail_thread_id(local_producer),.generation=frame_control.generation,
+        .window=current_frame.sample_window,.context=detail_context_id()};
+    eu4_gpu_begin(&gpu_manager,&gpu_api,identity);
     pthread_mutex_unlock(&gpu_lock);
 }
 static void gpu_map_marker(unsigned marker) {
-    if(!gpu_manager.rendering) return;
+    if(!gpu_timestamps_enabled() || !gpu_manager.rendering) return;
     pthread_mutex_lock(&gpu_lock); eu4_gpu_pass(&gpu_manager,&gpu_api,marker?0:1); pthread_mutex_unlock(&gpu_lock);
 }
 static void gpu_end_render(void) {
-    if(!gpu_manager.rendering) return;
+    if(!gpu_timestamps_enabled() || !gpu_manager.rendering) return;
     pthread_mutex_lock(&gpu_lock); eu4_gpu_end(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock);
 }
 static void uniform_snapshot(uint64_t site,uintptr_t program,GLint location,
@@ -800,7 +893,9 @@ static void hook_update(void *self,bool force) {
     bool measuring=measurement_active();
     scope_tree=(Eu4ScopeTree){0};
     if(!measuring && was_measurement_active) {
-        pthread_mutex_lock(&gpu_lock); eu4_gpu_drain(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock);
+        if(gpu_timestamps_enabled()) {
+            pthread_mutex_lock(&gpu_lock); eu4_gpu_drain(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock);
+        }
     }
     was_measurement_active=measuring;
     if(!measuring) current_frame=(Frame){0};
@@ -891,6 +986,8 @@ static void hook_render(void *self) {
         detail_remaining=frame_control.detail_frames;
     }
     detail_active=measurement_active() && detail_remaining>0;
+    if(detail_active && (forensic_records_enabled() || gpu_timestamps_enabled()))
+        cache_current_detail_context();
     if(detail_active) { detail_remaining--; current_frame.sample_window=detail_generation; }
     bool skip=mode==SKIP_RENDER;
     if(skip) { detail_active=false; return; }
@@ -1655,6 +1752,15 @@ static CGLError tracked_set_context(CGLContextObj ctx) {
     bool segment=gpu_manager.rendering;
     if(segment) { pthread_mutex_lock(&gpu_lock); eu4_gpu_close(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock); }
     CGLError result=real_fn?real_fn(ctx):kCGLBadContext;
+#ifdef EU4_FRAME_MODEL_TEST
+    if(result==kCGLNoError && test_cached_metadata) {
+        detail_context_cache=(uintptr_t)ctx; detail_context_valid=true;
+    }
+#else
+    if(result==kCGLNoError) {
+        detail_context_cache=(uintptr_t)ctx; detail_context_valid=true;
+    }
+#endif
     if(segment) { pthread_mutex_lock(&gpu_lock); eu4_gpu_open(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock); }
     if(result==kCGLNoError) {
         save_gl_state();state_seeded=false;vertex_array_state=NULL;
@@ -1692,6 +1798,12 @@ static CGLError tracked_destroy_context(CGLContextObj ctx) {
     if(closing) eu4_gpu_close(&gpu_manager,&gpu_api);
     CGLError result=real_fn?real_fn(ctx):kCGLBadContext;
     if(result==kCGLNoError) {
+#ifdef EU4_FRAME_MODEL_TEST
+        if(test_cached_metadata && detail_context_valid && detail_context_cache==(uintptr_t)ctx)
+            detail_context_valid=false;
+#else
+        if(detail_context_valid && detail_context_cache==(uintptr_t)ctx) detail_context_valid=false;
+#endif
         eu4_gpu_destroy(&gpu_manager,&gpu_api,(uintptr_t)ctx);
         (void)context_stamp(ctx,true);eu4_shadow_invalidate(&gl_shadow,(uintptr_t)ctx);
         if(state_context==ctx) {state_context=NULL;state_seeded=false;}
@@ -1964,7 +2076,10 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_arm(unsigned fr
         pthread_mutex_lock(&gpu_lock);memset(&gpu_registry,0,sizeof(gpu_registry));pthread_mutex_unlock(&gpu_lock);
     }
     atomic_store_explicit(&control->command_seq,3,memory_order_release);
-    control->flags|=MEASURE_ENABLED; control->detail_frames=frames;
+    control->flags|=MEASURE_ENABLED;
+    if(frames) control->flags|=FORENSIC_CAPTURE;
+    else control->flags&=~FORENSIC_CAPTURE;
+    control->detail_frames=frames;
     control->generation=2; control->measurement_epoch=1;
     atomic_store_explicit(&control->command_seq,4,memory_order_release);
 }
@@ -1976,11 +2091,23 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_frame(void (*wo
 #endif
 
 static void initialize(void) __attribute__((constructor));
+#ifdef EU4_FRAME_MODEL_TEST
+static bool test_read_toggle(const char *name,bool fallback,bool *value) {
+    const char *raw=getenv(name);
+    if(!raw) { *value=fallback; return true; }
+    if(!strcmp(raw,"0")) { *value=false; return true; }
+    if(!strcmp(raw,"1")) { *value=true; return true; }
+    return false;
+}
+#endif
 static void initialize(void) {
 #ifdef EU4_FRAME_MODEL_TEST
     const char *ablation=getenv("EU4_TEST_ABLATION");
     test_ablation=ablation && !strcmp(ablation,"accounting")?1:ablation && !strcmp(ablation,"writer")?2:
         ablation && !strcmp(ablation,"preparation")?3:0;
+    if(!test_read_toggle("EU4_TEST_GPU_TIMESTAMPS",true,&test_gpu_timestamps) ||
+       !test_read_toggle("EU4_TEST_FORENSIC_RECORDS",true,&test_forensic_records) ||
+       !test_read_toggle("EU4_TEST_CACHED_METADATA",false,&test_cached_metadata)) abort();
 #endif
     const char *path=getenv("EU4_FRAME_MODEL_CONTROL");
     if(path) { int fd=open(path,O_RDWR); if(fd>=0) { control=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0); close(fd); } }
@@ -2033,6 +2160,10 @@ static void shutdown_probe(void) {
     restore_detours();
     for(unsigned i=0;i<HOOK_COUNT;i++) hook_line(i);
     count_line("X",atomic_load(&updates),atomic_load(&renders),atomic_load(&presents));
+#ifdef EU4_FRAME_MODEL_TEST
+    count_line("M",atomic_load(&test_gpu_stamps),atomic_load(&test_gpu_polls),atomic_load(&test_gpu_results));
+    count_line("N",atomic_load(&test_detail_records),0,0);
+#endif
     count_line("Z",atomic_load(&control->hook_failures),EU4_HOOK_COUNT,atomic_load(&control->dropped_records));
     flush_output();
     if(log_fd>=0) close(log_fd);

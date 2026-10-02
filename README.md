@@ -457,12 +457,16 @@ one-second samples. Refresh an older installation from an interactive Terminal:
 sudo sh benchmark/install_powermetrics_helper.sh
 ```
 
-The 3% counters-only wall/thread CPU overhead gate on validated structural rendering recipes and the live 3% CPU/cadence
-and 5% sampled-tracing perturbation gates remain mandatory. Calibration uses
-reference → counters → reference, with six windows of four consecutive sampled
-renders, scheduled inside the phase at `start+i*duration/(N+1)` with full plain
-neighbors on both sides. The immediate post-start command arms zero detail frames
-and preserves the epoch. The tiny-call workload is retained as a diagnostic. Each representative
+The offline 3% reference/counters and 5% sampled gates remain hard prerequisites.
+Live reference → counters → reference calibration runs without detailed GL
+records or timestamp queries. Forensic sampling then runs in a separate tail
+after causal and power-mode phases, so those frames cannot enter causal phase
+summaries. It uses six windows of four consecutive sampled renders, scheduled at
+`start+i*duration/(N+1)` with full plain neighbors on both sides. Its live 5%
+intrusion result is reported as forensic suitability evidence. The
+`--calibration-only` option stops after bounded calibration and forensic capture;
+it does not skip applicable preflight, scene or restoration checks. The immediate
+post-start command arms zero detail frames and preserves the epoch. The tiny-call workload is retained as a diagnostic. Each representative
 recipe has seven paired trials, alternating order, raw timings, and confidence
 intervals plus absolute CPU/wall microseconds per frame and diagnostic ablations
 in `analysis/frame-model-offline-evidence.json`. Complete C acceptance also requires

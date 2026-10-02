@@ -1,9 +1,4 @@
-"""Canonical submission manifest and fail-closed runtime qualification.
-
-SDK declarations provide ABIs; export stubs, executable imports/symbol references,
-and historical observations are independent evidence. Generated observers forward
-candidate APIs outside the six suppression wrappers.
-"""
+"""Submission API candidates, executable path provenance, and runtime qualification."""
 from __future__ import annotations
 import hashlib
 import json
@@ -22,14 +17,24 @@ IDS = {name: i+1 for i,name in enumerate(SUPPRESSED)}
 # State-selection operations with misleading names are not submissions.
 EXCLUDED = {'glDrawBuffer','glDrawBuffers','glDrawBuffersARB','glDrawBuffersATI',
             'glDrawBuffersIndexedEXT','glDrawBuffersIndexedOES'}
+# Only aliases whose signatures and submission semantics have been reviewed are
+# folded. Other suffixes describe distinct or currently unverified entrypoints.
+ALIASES = {
+    'glArrayElementEXT':'glArrayElement',
+    'glDrawArraysEXT':'glDrawArrays',
+    'glDrawArraysInstancedARB':'glDrawArraysInstanced',
+    'glDrawElementsInstancedARB':'glDrawElementsInstanced',
+    'glDrawRangeElementsEXT':'glDrawRangeElements',
+    'glMultiDrawArraysEXT':'glMultiDrawArrays',
+    'glMultiDrawElementsEXT':'glMultiDrawElements',
+}
 
 def candidate(name):
     return name not in EXCLUDED and bool(re.match(
         r'^gl(?:Draw|MultiDraw|Begin$|End$|CallLists?$|ArrayElement|Bitmap$|CopyPixels$|Rect|EvalMesh|EvalPoint|EvalCoord|Vertex[234])', name))
 
 def canonical(name):
-    # Only fold an alias when its unsuffixed entry is in the candidate catalog.
-    return re.sub(r'(ARB|EXT|APPLE|NV|ATI|OES)$', '', name)
+    return ALIASES.get(name,name)
 
 def generate(binary, symbols, static_graph, verify=False):
     sdk = Path(subprocess.run(['xcrun','--show-sdk-path'],capture_output=True,text=True,check=True).stdout.strip())
@@ -41,12 +46,23 @@ def generate(binary, symbols, static_graph, verify=False):
         for name,args in re.findall(r'(?:extern|GLAPI)\s+void\s+(?:APIENTRY\s+)?(gl\w+)\s*\(([^;]*?)\)',(framework/'Headers'/filename).read_text()):
             if candidate(name): declarations[name]=' '.join(args.replace('GLvoid','void').split())
     imported = set(re.findall(r'_(gl\w+)',subprocess.run(['nm','-u',str(binary)],capture_output=True,text=True,check=True).stdout))
-    static_names = set(re.findall(r'(?:_gl|glew)([A-Z]\w+)', symbols+json.dumps(static_graph)))
-    references = {'gl'+n for n in static_names if candidate('gl'+n)}
-    # String/pointer references include names outside bounded disassembly.
+    # Keep graph pointer slots separate from names that merely occur in strings.
+    pointer_targets=set()
+    for node in static_graph.get('nodes',{}).values():
+        for reference in node.get('gl_pointer_references',[]):
+            pointer_targets.update(reference.get('targets',[]))
+    glew_references=set()
+    for target in pointer_targets:
+        match=re.search(r'glew(?:__)?(?:gl)?([A-Z]\w+)',target,re.I)
+        if match:
+            api_name='gl'+match[1]
+            if candidate(api_name): glew_references.add(api_name)
+    static_names=set(re.findall(r'(?:_gl|glew)([A-Z]\w+)',symbols))
+    symbol_references={'gl'+n for n in static_names if candidate('gl'+n)}
+    # Strings are candidate-universe evidence only; they do not establish a call.
     blob=binary.read_bytes()
     strings = {m.decode('ascii') for m in re.findall(rb'gl[A-Z][A-Za-z0-9_]+',blob) if candidate(m.decode('ascii'))}
-    names = exports | {n for n in imported if candidate(n)} | references | strings
+    names = exports | {n for n in imported if candidate(n)} | symbol_references | strings | glew_references
     # Future or non-exported resolver requests must remain explicitly uncovered.
     names |= {'glDrawArraysIndirect','glDrawElementsIndirect','glMultiDrawArraysIndirect','glMultiDrawElementsIndirect'}
     ids=dict(IDS)
@@ -58,9 +74,24 @@ def generate(binary, symbols, static_graph, verify=False):
     for name in sorted(names):
         core=canonical(name);api=ids[core];args=declarations.get(name)
         supported=name in exports and args is not None
+        imported_here=name in imported
+        symbol_here=name in symbol_references
+        glew_here=name in glew_references
+        string_here=name in strings
+        provenance=[]
+        if imported_here: provenance.append('macho_import')
+        if symbol_here: provenance.append('executable_symbol_reference')
+        if glew_here: provenance.append('glew_pointer_slot')
+        if string_here: provenance.append('embedded_string')
+        # Only Mach-O imports prove a direct loader-bound call. Non-import symbol
+        # references require call/dataflow evidence before they can be qualified.
+        reachability='reachable' if imported_here else 'unresolved' if symbol_here or glew_here else 'candidate'
+        observer_paths=['macho_interpose','dlsym'] if supported else []
         rows.append({'name':name,'canonical':core,'id':api,'exported':name in exports,
-            'imported':name in imported,'static_reference':name in references or name in strings,
+            'imported':imported_here,'evidence_provenance':provenance,
+            'reachability':reachability,'glew_pointer_reference':glew_here,
             'observer':'import and dlsym' if supported else 'uncovered',
+            'observer_paths':observer_paths,
             'suppression':core in SUPPRESSED and supported,'abi':args})
         if not supported: continue
         code.append(f'extern void {name}({args});')
@@ -84,14 +115,19 @@ def generate(binary, symbols, static_graph, verify=False):
     raw_imports=subprocess.run(['nm','-u',str(binary)],capture_output=True,text=True,check=True).stdout
     gaps+=re.findall(r'_(\w*(?:GetProcAddress|LookupSymbol\w*|AddressOfSymbol)\w*)',raw_imports)
     header='\n'.join(code)+'\n'
-    manifest={'schema':1,'executable_sha256':hashlib.sha256(blob).hexdigest(),
+    unresolved_paths=[r['name'] for r in rows if r['reachability']=='unresolved']
+    reachable_gaps=[r['name'] for r in rows if r['reachability']=='reachable' and r['observer']=='uncovered']
+    manifest={'schema':2,'executable_sha256':hashlib.sha256(blob).hexdigest(),
         'observer_header_sha256':hashlib.sha256(header.encode()).hexdigest(),
         'export_stub_sha256':hashlib.sha256(exports_text.encode()).hexdigest(),
         'candidate_policy':'draw/range/multi/indirect plus immediate-mode, display-list, evaluator, rect, bitmap and pixel paths; buffer selectors excluded',
         'apis':rows,'resolver_gaps':sorted(set(gaps)),
+        'unresolved_executable_paths':sorted(set(unresolved_paths)),
+        'reachable_observer_gaps':sorted(set(reachable_gaps)),
+        'aliases':ALIASES,
         'historical_observed_ids':[1,2,3,4,5,6],
         'historical_policy':'historical observations never establish completeness',
-        'status':'complete observers' if not gaps and all(r['observer']!='uncovered' for r in rows if r['exported'] or r['imported'] or r['static_reference']) else 'coverage gaps'}
+        'status':'complete observers' if not gaps and not unresolved_paths and not reachable_gaps else 'coverage gaps'}
     artifacts={HEADER:header,ROOT/'benchmark/eu4_draw_api_ids.h':capacity_header,
                OUTPUT:json.dumps(manifest,indent=2)+'\n'}
     for path,content in artifacts.items():
@@ -103,12 +139,13 @@ def generate(binary, symbols, static_graph, verify=False):
 
 
 def coverage(manifest, frames, trace, phase_numbers, *, require_c=True):
-    if not manifest or manifest.get('schema')!=1 or not manifest.get('apis'):
+    if not manifest or manifest.get('schema')!=2 or not manifest.get('apis'):
         return {'status':'unavailable','reason':'draw manifest missing; historical six-API evidence cannot qualify C'}
-    gaps=[r['name'] for r in manifest['apis'] if (r['exported'] or r['imported'] or r['static_reference']) and r['observer']=='uncovered']
+    gaps=[r['name'] for r in manifest['apis'] if r.get('reachability')=='reachable' and r['observer']=='uncovered']
+    unresolved=[r['name'] for r in manifest['apis'] if r.get('reachability')=='unresolved']
     resolver_gaps=manifest.get('resolver_gaps',[])
-    if gaps or resolver_gaps or any(r and r[0]=='R' for r in trace):
-        return {'status':'failed','reason':'candidate or resolver paths uncovered','uncovered':gaps,'resolver_gaps':resolver_gaps,
+    if gaps or unresolved or resolver_gaps or any(r and r[0]=='R' for r in trace):
+        return {'status':'failed','reason':'reachable or unresolved executable submission paths lack observer proof','uncovered':gaps,'unresolved_executable_paths':unresolved,'resolver_gaps':resolver_gaps,
                 'resolver_records':[r for r in trace if r and r[0]=='R']}
     expected={(f['measurement_epoch'],f['update_id'],f['thread_id']) for f in frames if f['phase'] in phase_numbers}
     markers=set();observations={};rows=[]
