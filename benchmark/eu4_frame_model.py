@@ -318,9 +318,10 @@ def _git_commit_metadata() -> dict:
 def _git_tree_clean_for_evidence() -> bool:
     """Return whether the worktree is clean for canonical offline evidence.
 
-    Immutable archives under ``analysis/evidence/`` and the rolling pointer file
-    ``analysis/frame-model-offline-evidence.json`` are generated outputs; changes
-    confined to those paths do not mark the tree dirty for source identity.
+    Untracked files under ``analysis/evidence/`` and updates to the rolling
+    pointer ``analysis/frame-model-offline-evidence.json`` are generated outputs
+    and are ignored. Modifications or deletions of tracked evidence archives
+    under ``analysis/evidence/`` still fail closed.
     """
     try:
         result = subprocess.run(
@@ -335,11 +336,14 @@ def _git_tree_clean_for_evidence() -> bool:
     for line in result.stdout.splitlines():
         if not line.strip():
             continue
+        status = line[:2]
         path = line[3:].strip()
         if " -> " in path:
             path = path.split(" -> ", 1)[1]
         if path.startswith(OFFLINE_EVIDENCE_GENERATED_PREFIX):
-            continue
+            if status == "??":
+                continue
+            return False
         if path == OFFLINE_EVIDENCE_POINTER_REL:
             continue
         return False
@@ -382,14 +386,28 @@ def _require_git_identity_stable(identity_start: dict, identity_end: dict) -> No
             )
 
 
-def _offline_executed_artifact_snapshot(build_info: dict) -> dict:
-    """Hashes of compiled artifacts used by offline harness/workload runs."""
+def _offline_executed_artifact_snapshot() -> dict:
+    """Hashes of on-disk compiled artifacts used during offline preflight."""
     return {
-        "profiler_dylib_sha256": build_info.get("library_sha256"),
+        "profiler_dylib_sha256": _sha256_optional(LIBRARY),
         "test_library_sha256": _sha256_optional(TEST_LIBRARY),
         "workload_harness_sha256": _sha256_optional(WORKLOAD_HARNESS),
-        "draw_manifest_sha256": build_info.get("draw_manifest_sha256") or _sha256_optional(draw_api.OUTPUT),
+        "draw_manifest_sha256": _sha256_optional(draw_api.OUTPUT),
     }
+
+
+def _require_build_executed_artifacts_match(build_info: dict, artifact_snapshot: dict) -> None:
+    """Ensure build metadata matches the compiled artifacts immediately after build()."""
+    for key, build_key in (
+        ("profiler_dylib_sha256", "library_sha256"),
+        ("draw_manifest_sha256", "draw_manifest_sha256"),
+    ):
+        expected = build_info.get(build_key)
+        actual = artifact_snapshot.get(key)
+        if expected and actual != expected:
+            raise base.BenchmarkError(
+                f"Post-build {key} does not match build metadata; refusing immutable evidence",
+            )
 
 
 def _require_executed_artifacts_stable(artifact_start: dict, artifact_end: dict) -> None:
@@ -436,18 +454,20 @@ def _offline_artifact_hashes(
     build_info: dict | None = None,
     *,
     identity_end: dict | None = None,
+    executed_artifacts: dict | None = None,
 ) -> dict:
     build_info = build_info or {}
     native = build_info.get("native_source_hashes") or {}
+    executed = executed_artifacts or {}
     artifacts = {
-        "profiler_dylib_sha256": build_info.get("library_sha256"),
-        "test_library_sha256": representative.get("test_library_sha256"),
-        "workload_harness_sha256": representative.get("workload_harness_sha256"),
+        "profiler_dylib_sha256": executed.get("profiler_dylib_sha256"),
+        "test_library_sha256": executed.get("test_library_sha256"),
+        "workload_harness_sha256": executed.get("workload_harness_sha256"),
         "harness_source_sha256": representative.get("harness_source_sha256"),
         "profiler_source_sha256": representative.get("profiler_source_sha256"),
         "gpu_segments_source_sha256": representative.get("gpu_segments_source_sha256"),
         "draw_observers_sha256": native.get(draw_api.HEADER.name) or _sha256_optional(draw_api.HEADER),
-        "draw_manifest_sha256": build_info.get("draw_manifest_sha256"),
+        "draw_manifest_sha256": executed.get("draw_manifest_sha256"),
         "site_header_sha256": native.get(engine.HEADER.name) or _sha256_optional(engine.HEADER),
         "controller_sha256": (identity_end or {}).get("controller_sha256") or _sha256_optional(CONTROLLER),
         "game_executable_sha256": build_info.get("executable_sha256"),
@@ -546,7 +566,10 @@ def build_offline_evidence_metadata(
         "environment": _offline_environment_metadata(),
         "policy_versions": _offline_policy_versions(representative),
         "artifact_hashes": _offline_artifact_hashes(
-            representative, build_info, identity_end=identity_end,
+            representative,
+            build_info,
+            identity_end=identity_end,
+            executed_artifacts=executed_artifact_start,
         ),
     }
 
@@ -605,7 +628,8 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
             )
     static = build()
     if run_gl:
-        artifact_start = _offline_executed_artifact_snapshot(static)
+        artifact_start = _offline_executed_artifact_snapshot()
+        _require_build_executed_artifacts_match(static, artifact_start)
     detour = offline_detour_harness()
     render_gate=offline_render_gate_harness()
     arb=offline_arb_harness()
@@ -627,7 +651,7 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
     for name,target in (("bare",None),("counters",LIBRARY)):
         diagnostic_samples[name]=[offline_harness(target,loops=12000) for _ in range(3)]
     representative=offline_workloads(executed_artifacts_start=artifact_start)
-    artifact_end = _offline_executed_artifact_snapshot(static)
+    artifact_end = _offline_executed_artifact_snapshot()
     _require_executed_artifacts_stable(artifact_start, artifact_end)
     identity_end = _offline_git_identity_snapshot()
     _require_git_identity_stable(identity_start, identity_end)

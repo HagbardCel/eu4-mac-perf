@@ -176,7 +176,36 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
         ):
             self.assertTrue(model._git_tree_clean_for_evidence())
 
-    def test_offline_evidence_id_has_subsecond_and_suffix(self):
+    def test_git_tree_clean_flags_tracked_evidence_archive_edits(self):
+        porcelain = (
+            " M analysis/evidence/frame-model-offline-legacy-373f3ff-20261001T204509Z.json"
+        )
+        with mock.patch.object(
+            model.subprocess,
+            "run",
+            return_value=mock.Mock(stdout=porcelain, returncode=0),
+        ):
+            self.assertFalse(model._git_tree_clean_for_evidence())
+
+    def test_require_build_executed_artifacts_match(self):
+        build_info = {"library_sha256": "expected-lib", "draw_manifest_sha256": "expected-manifest"}
+        snapshot = {
+            "profiler_dylib_sha256": "expected-lib",
+            "draw_manifest_sha256": "wrong-manifest",
+        }
+        with self.assertRaises(model.base.BenchmarkError):
+            model._require_build_executed_artifacts_match(build_info, snapshot)
+        model._require_build_executed_artifacts_match(build_info, {
+            "profiler_dylib_sha256": "expected-lib",
+            "draw_manifest_sha256": "expected-manifest",
+        })
+
+    def test_executed_artifact_snapshot_hashes_disk_paths(self):
+        with mock.patch.object(model, "_sha256_optional", side_effect=["p", "t", "w", "m"]) as sha:
+            result = model._offline_executed_artifact_snapshot()
+        self.assertEqual(result["profiler_dylib_sha256"], "p")
+        self.assertEqual(sha.call_args_list[0][0][0], model.LIBRARY)
+        self.assertEqual(sha.call_args_list[3][0][0], model.draw_api.OUTPUT)
         fixed = dt.datetime(2026, 10, 2, 12, 0, 0, 42, tzinfo=dt.timezone.utc)
         with mock.patch.object(model.uuid, "uuid4", return_value=mock.Mock(hex="abcd1234ef567890")):
             run_id = model._offline_evidence_id(fixed)
