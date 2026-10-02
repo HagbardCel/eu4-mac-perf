@@ -4,6 +4,8 @@
 #include <OpenGL/OpenGL.h>
 #include <OpenGL/gl3.h>
 extern void glUseProgramObjectARB(GLhandleARB);
+extern void glDrawArraysInstancedARB(GLenum,GLint,GLsizei,GLsizei);
+extern void glDrawElementsInstancedARB(GLenum,GLsizei,GLenum,const void *,GLsizei);
 #include <CoreGraphics/CoreGraphics.h>
 #include <dlfcn.h>
 #include <errno.h>
