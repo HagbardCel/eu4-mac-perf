@@ -36,12 +36,18 @@ class DrawCoverageTests(unittest.TestCase):
         self.assertEqual(api.coverage(m,f[:1],r,{1},require_c=False)['stage'],'pre-C')
         self.assertEqual(api.coverage(m,f[:1],r,{1})['status'],'failed')
 
-    def test_uncovered_export_or_static_path_fails_even_when_unobserved(self):
+    def test_candidate_export_only_does_not_block_coverage(self):
+        m,f,r=self.fixture()
+        m['apis'].append({'name':'glMultiDrawElementsIndirectAPPLE','canonical':'glMultiDrawElementsIndirect',
+            'id':7,'exported':True,'imported':False,'reachability':'candidate','observer':'uncovered','suppression':False})
+        self.assertEqual(api.coverage(m,f,r,{1,4})['status'],'passed')
+
+    def test_reachable_or_unresolved_uncovered_still_fails(self):
         m,f,r=self.fixture()
         m['apis'].append({'name':'glMultiDrawElements','canonical':'glMultiDrawElements','id':7,'exported':True,'imported':False,
             'reachability':'reachable','observer':'uncovered','suppression':False})
         self.assertEqual(api.coverage(m,f,r,{1,4})['status'],'failed')
-        m['apis'][-1].update(exported=False,static_reference=True,reachability='unresolved')
+        m['apis'][-1].update(reachability='unresolved')
         self.assertEqual(api.coverage(m,f,r,{1,4})['status'],'failed')
 
     def test_legacy_observers_report_partial_suppression(self):
