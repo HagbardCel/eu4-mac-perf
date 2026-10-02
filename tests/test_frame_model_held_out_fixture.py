@@ -51,6 +51,11 @@ class HeldOutFixtureReplayTests(unittest.TestCase):
         self.assertEqual(meta["sha256"], workload.FROZEN_HELD_OUT_RECIPE_SHA256)
         self.assertEqual(payload, workload.HELD_OUT_FIXTURE.read_bytes())
 
+    def test_projection_loader_matches_committed_recipe(self):
+        via_loader, meta_loader = workload.build_held_out_fixture_material_from_projection()
+        self.assertEqual(meta_loader["sha256"], EXPECTED_HELD_OUT_SHA256)
+        self.assertEqual(via_loader, workload.HELD_OUT_FIXTURE.read_bytes())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,9 +34,11 @@ def main() -> int:
         "terrain_record_count": len(terrain_rows),
         "terrain_records": terrain_rows,
     }
+    payload, meta = workload.build_held_out_fixture_material(rows=rows, key=key, sites=sites)
+    if meta["sha256"] != workload.FROZEN_HELD_OUT_RECIPE_SHA256:
+        raise SystemExit("Projection does not reproduce frozen held-out SHA")
     workload.HELD_OUT_SOURCE_DIR.mkdir(parents=True, exist_ok=True)
     workload.HELD_OUT_SOURCE_PROJECTION.write_text(json.dumps(projection, indent=2) + "\n")
-    payload, meta = workload.build_held_out_fixture_material(rows=rows, key=key, sites=sites)
     print(
         projection["terrain_record_count"],
         "terrain records;",
@@ -44,8 +46,6 @@ def main() -> int:
         meta["draws"],
         "selected draws",
     )
-    if meta["sha256"] != workload.FROZEN_HELD_OUT_RECIPE_SHA256:
-        raise SystemExit("Projection does not reproduce frozen held-out SHA")
     return 0
 
 
