@@ -2155,6 +2155,19 @@ __attribute__((visibility("default"))) uint64_t eu4_frame_model_test_measured_qu
 __attribute__((visibility("default"))) void *eu4_frame_model_test_resolve_draw(const char *name) {
     return draw_observer_resolve(name);
 }
+__attribute__((visibility("default"))) int eu4_frame_model_test_verify_arb_instanced_interpose(void) {
+    static const struct { const char *arb; const char *core; void *wrapper; } rows[] = {
+        {"glDrawArraysInstancedARB","glDrawArraysInstanced",(void *)gl_draw_arrays_instanced_arb},
+        {"glDrawElementsInstancedARB","glDrawElementsInstanced",(void *)gl_draw_elements_instanced_arb},
+    };
+    for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);i++) {
+        void *next=dlsym(RTLD_NEXT,rows[i].arb);
+        if(!next) next=dlsym(RTLD_NEXT,rows[i].core);
+        if(!next || !rows[i].wrapper || next==rows[i].wrapper) return (int)(i+1);
+        if(draw_observer_resolve(rows[i].arb)!=rows[i].wrapper) return (int)(i+10);
+    }
+    return 0;
+}
 __attribute__((visibility("default"))) void eu4_frame_model_test_reset_draw_alias(void) {
     memset(&current_frame,0,sizeof(current_frame));
     test_forward_core_hits=test_forward_arb_hits=0;
