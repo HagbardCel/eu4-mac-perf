@@ -924,7 +924,7 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
         )
     frames=4
     mode=MODE["reference"] if stage=="reference" else MODE["profile"]
-    fields=[FORMAT_VERSION,2,mode,1,1,0,0,0,1,0,0,0,0,0]
+    fields=[FORMAT_VERSION,2,mode,1,3,0,0,0,1,0,0,0,0,0]
     control_path.write_bytes(CONTROL.pack(*fields)+bytes(CONTROL_SIZE-CONTROL.size))
     private=("DYLD_INSERT_LIBRARIES","EU4_FRAME_MODEL_CONTROL","EU4_FRAME_MODEL_LOG",
         "EU4_TEST_ABLATION","EU4_TEST_SAMPLED","EU4_TEST_GPU_TIMESTAMPS",

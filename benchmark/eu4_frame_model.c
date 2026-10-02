@@ -292,6 +292,12 @@ static bool measurement_active(void) {
 static bool gl_measurement_active(void) {
     return measurement_active() && frame_control.mode!=REFERENCE;
 }
+static bool reference_pass_through_mode(void) {
+    return control && frame_control.mode==REFERENCE;
+}
+static bool gl_shadow_needed(void) {
+    return control && frame_control.mode!=OFF && frame_control.mode!=REFERENCE;
+}
 static int scope_begin(unsigned id) {
     if(!measurement_active() || (frame_control.mode==REFERENCE && id!=SCOPE_UPDATE &&
         id!=SCOPE_LOOP && id!=SCOPE_RENDER && id!=SCOPE_PRESENT)) return 0;
@@ -980,6 +986,25 @@ static void hook_render(void *self) {
             detail_active=false; return;
         }
     } else next_render_deadline=0;
+    if(mode==REFERENCE) {
+        if(measurement_active()) {
+            current_frame.render_executed++;
+            current_frame.render_start_ns=now_ns(CLOCK_UPTIME_RAW);
+            timestamp_event(3,current_frame.render_start_ns);
+        }
+        uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
+        int render_scope=scope_begin(SCOPE_RENDER);
+        real_render(self);
+        scope_end(SCOPE_RENDER,render_scope);
+        if(measurement_active()) {
+            current_frame.render_end_ns=now_ns(CLOCK_UPTIME_RAW);
+            current_frame.render_wall_ns=now_ns(CLOCK_UPTIME_RAW)-w;
+            current_frame.render_cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-c;
+            event(HOOK_RENDER,current_frame.render_wall_ns,current_frame.render_cpu_ns);
+        }
+        detail_active=false;
+        return;
+    }
     if(mode==OFF || !(frame_control.flags&INTERVENTION_ACTIVE)) { real_render(self); return; }
     if(detail_generation!=frame_control.generation) {
         detail_generation=frame_control.generation;
@@ -1554,8 +1579,11 @@ static void gl_glBindFramebuffer(GLenum target,GLuint framebuffer) {
 }
 #undef DEFINE_STATE_ONE
 static bool shadow_tracking_active(void) {
+    if(!gl_shadow_needed()) {
+        if(!control || frame_control.mode==OFF) invalidate_gl_state(EU4_SHADOW_MUTATION);
+        return false;
+    }
     refresh_unowned_control();
-    if(!control || frame_control.mode==OFF) {invalidate_gl_state(EU4_SHADOW_MUTATION);return false;}
     return true;
 }
 static void gl_use_program(GLuint program) {
@@ -1811,7 +1839,7 @@ static CGLError tracked_set_context(CGLContextObj ctx) {
     }
 #endif
     if(segment) { pthread_mutex_lock(&gpu_lock); eu4_gpu_open(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock); }
-    if(result==kCGLNoError) {
+    if(result==kCGLNoError && !reference_pass_through_mode()) {
         save_gl_state();state_seeded=false;vertex_array_state=NULL;
         /* A fresh core context may have no valid VAO yet. Queries wait for a
            settling Render/VAO bind; measured switches only select cached state. */
