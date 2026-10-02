@@ -289,10 +289,12 @@ OFFLINE_EVIDENCE_SCHEMA_VERSION = "stage2-split-v2"
 OFFLINE_EVIDENCE_SCHEMA_VERSION_V1 = "stage2-split-v1"
 OFFLINE_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
 OFFLINE_ABLATION_POLICY_VERSION = "harness_ablation_vs_sampled_5pct_v1"
-OFFLINE_DIAGNOSTIC_POLICY_VERSION = "diag_matrix_counters_baseline_v2"
+OFFLINE_DIAGNOSTIC_POLICY_VERSION = "diag_matrix_diag_counters_baseline_v3"
+OFFLINE_DIAGNOSTIC_POLICY_VERSION_INVALID_V2 = "diag_matrix_counters_baseline_v2"
 TRAINING_ONLY_VALIDATION_SCOPE = "training_only"
 FORENSIC_DETAIL_RECORD_KINDS = ("D", "S", "U", "V", "W", "B", "b", "T", "t")
 PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE = "profiler_overhead_diagnosis_v1"
+DIAGNOSTIC_MATRIX_COUNTERS_STAGE = "diag_counters"
 DIAGNOSTIC_MATRIX_BASELINE = "diag_A"
 DIAGNOSTIC_MATRIX_STAGES = (
     "diag_A",
@@ -310,7 +312,7 @@ DIAGNOSTIC_MATRIX_FEATURES = {
     "diag_E_full": (1, 1, 0),
     "diag_F_full_cached": (1, 1, 1),
 }
-DIAGNOSTIC_MATRIX_TRIAL_STAGES = ("counters",) + DIAGNOSTIC_MATRIX_STAGES
+DIAGNOSTIC_MATRIX_TRIAL_STAGES = (DIAGNOSTIC_MATRIX_COUNTERS_STAGE,) + DIAGNOSTIC_MATRIX_STAGES
 CONTROLLER = Path(__file__)
 KEY_OFFLINE_SOURCE_PATHS = (
     SOURCE,
@@ -898,8 +900,27 @@ def _validate_diagnostic_stage_features(
             )
 
 
+def offline_workload_log_path(root: Path, recipe: dict, trial: int, stage: str) -> Path:
+    return root / f"{recipe['name']}-{trial}-{stage}.csv"
+
+
+def offline_workload_telemetry_paths_for_recipe_trial(recipe_name: str, trial: int) -> list[str]:
+    """All telemetry CSV basenames for one recipe trial (causal block + diagnostic matrix)."""
+    forensic_stages = ("sampled", "ablation_accounting", "ablation_writer", "ablation_preparation")
+    causal = ("bare", "reference", "counters") + forensic_stages
+    diagnostic = DIAGNOSTIC_MATRIX_TRIAL_STAGES
+    paths = [f"{recipe_name}-{trial}-{stage}.csv" for stage in causal if stage != "bare"]
+    paths.extend(f"{recipe_name}-{trial}-{stage}.csv" for stage in diagnostic)
+    return paths
+
+
 def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
-    control_path=root/"control.bin";log_path=root/f"{recipe['name']}-{trial}-{stage}.csv"
+    control_path=root/"control.bin"
+    log_path=offline_workload_log_path(root, recipe, trial, stage)
+    if log_path.exists():
+        raise base.BenchmarkError(
+            f"Refusing to reuse telemetry path {log_path.name} (stale or colliding stage identity)",
+        )
     frames=4
     mode=MODE["reference"] if stage=="reference" else MODE["profile"]
     fields=[FORMAT_VERSION,2,mode,1,1,0,0,0,1,0,0,0,0,0]
@@ -913,9 +934,12 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
     if stage!="bare":
         env.update(DYLD_INSERT_LIBRARIES=str(TEST_LIBRARY),
             EU4_FRAME_MODEL_CONTROL=str(control_path),EU4_FRAME_MODEL_LOG=str(log_path))
-        if stage=="sampled" or stage.startswith("ablation_") or stage.startswith("diag_"):
+        sampled_stage = stage == "sampled" or stage.startswith("ablation_") or (
+            stage.startswith("diag_") and stage != DIAGNOSTIC_MATRIX_COUNTERS_STAGE
+        )
+        if sampled_stage:
             env["EU4_TEST_SAMPLED"]="1"
-    diagnostic=stage.startswith("diag_")
+    diagnostic=stage.startswith("diag_") and stage != DIAGNOSTIC_MATRIX_COUNTERS_STAGE
     if diagnostic:
         features = DIAGNOSTIC_MATRIX_FEATURES[stage]
         env.update(EU4_TEST_GPU_TIMESTAMPS=str(features[0]),
@@ -1041,24 +1065,31 @@ def _offline_recipe_evidence(root: Path, recipe: dict, *, frames: int = 4, inclu
             stage: _diagnostic_matrix_paired_summary(
                 diagnostic_trials,
                 stage,
-                "counters",
+                DIAGNOSTIC_MATRIX_COUNTERS_STAGE,
                 frames=frames,
             )
             for stage in diagnostic_stages
         }
+        vs_diag_counters = _diagnostic_matrix_paired_summary(
+            diagnostic_trials,
+            DIAGNOSTIC_MATRIX_BASELINE,
+            DIAGNOSTIC_MATRIX_COUNTERS_STAGE,
+            frames=frames,
+        )
         diagnostic_matrix = {
             "policy_version": OFFLINE_DIAGNOSTIC_POLICY_VERSION,
             "trial_stages": list(trial_stages),
-            "baseline_counters": "counters",
+            "baseline_counters": DIAGNOSTIC_MATRIX_COUNTERS_STAGE,
             "baseline_sampled_minimal": DIAGNOSTIC_MATRIX_BASELINE,
             "baseline": DIAGNOSTIC_MATRIX_BASELINE,
             "vs_diag_A": vs_diag_a,
             "vs_counters": vs_counters,
+            "diag_A_vs_diag_counters": vs_diag_counters,
             "comparisons": vs_diag_a,
             "trials": diagnostic_trials,
             "policy": (
-                "Interleaved counters baseline per trial; paired A–F vs counters and vs diag_A. "
-                "Non-acceptance diagnostics only; no causal attribution from percentage medians alone."
+                "Interleaved diag_counters baseline per trial (distinct telemetry path from Tier-1 counters); "
+                "paired A–F vs diag_counters and vs diag_A. Non-acceptance diagnostics only."
             ),
         }
     recipe_meta = {key: value for key, value in recipe.items() if key != "path"}

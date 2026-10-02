@@ -32,7 +32,7 @@ Technical detail: [`analysis/frame-model-next-iteration-plan.md`](../analysis/fr
 | WP | Focus | Deliverable |
 |----|--------|-------------|
 | **0** | Branch + docs + CI | This plan; portable green |
-| **1** | A–F decomposition (P0) | Mac archives via `diagnostic-matrix` subcommand; [diagnosis memo](profiler-overhead-diagnosis-memo-20261002.md) (interim from Stage-2 embedded matrix; manifest entry pending capture) |
+| **1** | A–F decomposition (P0) | Mac archives via `diagnostic-matrix` subcommand (policy `diag_matrix_diag_counters_baseline_v3`); [diagnosis memo](profiler-overhead-diagnosis-memo-20261002.md) |
 | **2** | Draw path / pointers (P1) | Schema-2 manifest; parallel to WP1 |
 | **3** | Causal vs forensic split | Gate tests; capture-free calibration |
 | **5** | Reference fast path | After WP1 identifies reference cost |
@@ -41,9 +41,9 @@ Technical detail: [`analysis/frame-model-next-iteration-plan.md`](../analysis/fr
 
 ### WP1 — A–F matrix (training only)
 
-Each diagnostic trial interleaves **`counters` → `diag_A` → B → … → F** (alternating forward/reverse order) so **A vs counters** and **B–F vs counters** are paired within the same trial block.
+Each diagnostic trial interleaves **`diag_counters` → `diag_A` → B → … → F** (alternating forward/reverse order). `diag_counters` uses a **distinct telemetry path** from Tier-1 `counters` in the causal block (v2 reused `mesh-N-counters.csv` and invalidated `vs_counters`).
 
-Conditions (sampled-minimal baseline `diag_A`; counters baseline per trial):
+Conditions (sampled-minimal baseline `diag_A`; matrix counters baseline `diag_counters` per trial):
 
 | Stage | GPU timestamps | Forensic GL records | Cached metadata |
 |-------|----------------|---------------------|-----------------|

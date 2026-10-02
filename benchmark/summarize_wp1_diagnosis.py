@@ -16,6 +16,8 @@ TRAINING_RECIPES = ("mesh", "borders", "text_ui")
 EXPECTED_PURPOSE = "profiler_overhead_diagnosis_v1"
 EXPECTED_STATUS = "diagnostic_complete"
 EXPECTED_SCOPE = "training_only"
+EXPECTED_DIAGNOSTIC_POLICY = "diag_matrix_diag_counters_baseline_v3"
+INVALID_DIAGNOSTIC_POLICY_V2 = "diag_matrix_counters_baseline_v2"
 
 
 def _load_archive(path: Path) -> dict:
@@ -121,6 +123,18 @@ def summarize_markdown(archive_path: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _diagnostic_policy_version(archive: dict) -> str | None:
+    policies = archive.get("policy_versions") or {}
+    version = policies.get("diagnostic_matrix")
+    if version:
+        return version
+    for entry in _recipe_entries(archive):
+        dm = entry.get("diagnostic_matrix") or {}
+        if dm.get("policy_version"):
+            return dm["policy_version"]
+    return None
+
+
 def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
     payload = _payload(archive)
     purpose = payload.get("purpose")
@@ -131,6 +145,41 @@ def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
     scope = payload.get("validation_scope")
     if scope != EXPECTED_SCOPE:
         raise ValueError(f"expected validation_scope {EXPECTED_SCOPE}, got {scope!r}")
+
+    if archive.get("git_provenance_verified") is not True:
+        raise ValueError("git_provenance_verified must be true")
+    if archive.get("git_tree_clean") is not True:
+        raise ValueError("git_tree_clean must be true")
+    identity_start = archive.get("identity_start") or {}
+    identity_end = archive.get("identity_end") or {}
+    if identity_start.get("git_tree_clean") is not True or identity_end.get("git_tree_clean") is not True:
+        raise ValueError("identity_start/end git_tree_clean must be true")
+    start_commit = identity_start.get("git_commit")
+    end_commit = identity_end.get("git_commit")
+    if not start_commit or start_commit != end_commit:
+        raise ValueError("identity_start and identity_end git_commit must match")
+    artifact_start = archive.get("executed_artifact_start") or {}
+    artifact_end = archive.get("executed_artifact_end") or {}
+    if artifact_start != artifact_end:
+        raise ValueError("executed_artifact_start and executed_artifact_end must match")
+
+    policy = _diagnostic_policy_version(archive)
+    if policy == INVALID_DIAGNOSTIC_POLICY_V2:
+        raise ValueError(
+            "diagnostic_matrix policy v2 has invalid vs_counters (Tier-1 counters log path collision); "
+            "remap to diagnostic_archives_historical or recapture with v3",
+        )
+    if policy != EXPECTED_DIAGNOSTIC_POLICY:
+        raise ValueError(f"expected diagnostic_matrix policy {EXPECTED_DIAGNOSTIC_POLICY}, got {policy!r}")
+
+    recipe_names = {
+        entry.get("recipe", {}).get("name")
+        for entry in _recipe_entries(archive)
+        if entry.get("recipe", {}).get("role") != "held_out"
+    }
+    missing = set(TRAINING_RECIPES) - recipe_names
+    if missing:
+        raise ValueError(f"missing training recipes: {sorted(missing)}")
 
     rel_path = archive_path.relative_to(ROOT).as_posix()
     body = archive_path.read_bytes()
@@ -183,8 +232,13 @@ def register_manifest(archive_path: Path) -> dict:
     entry = validate_wp1_archive(archive, archive_path)
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     archives = manifest.setdefault("diagnostic_archives", [])
-    if any(item.get("evidence_id") == entry["evidence_id"] for item in archives):
-        return entry
+    for item in archives:
+        if item.get("evidence_id") == entry["evidence_id"]:
+            if item.get("archive_sha256") != entry["archive_sha256"]:
+                raise ValueError(
+                    f"evidence_id {entry['evidence_id']} already registered with a different archive_sha256",
+                )
+            return entry
     archives.append(entry)
     MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return entry
