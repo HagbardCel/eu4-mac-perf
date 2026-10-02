@@ -1194,6 +1194,7 @@ typedef void (*DrawElementsInstancedBaseFn)(GLenum,GLsizei,GLenum,const void *,G
 static DrawElementsInstancedFn test_elements_instanced_forward;
 static DrawArraysInstancedFn test_arrays_instanced_forward;
 static unsigned test_forward_core_hits,test_forward_arb_hits;
+static unsigned test_arrays_instanced_real_fn_arb=3,test_elements_instanced_real_fn_arb=3;
 static void test_hit_core_arrays(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
     (void)mode;(void)first;(void)count;(void)instances; test_forward_core_hits++;
 }
@@ -1207,16 +1208,18 @@ static void test_hit_arb_elements(GLenum mode,GLsizei count,GLenum type,const vo
     (void)mode;(void)count;(void)type;(void)indices;(void)instances; test_forward_arb_hits++;
 }
 #endif
-static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,GLenum mode,GLsizei count,
+static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,uintptr_t caller,GLenum mode,GLsizei count,
         GLenum type,const void *indices,GLsizei instances) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(real_fn==(DrawElementsInstancedFn)glDrawElementsInstanced) test_elements_instanced_real_fn_arb=0;
+    else if(real_fn==(DrawElementsInstancedFn)glDrawElementsInstancedARB) test_elements_instanced_real_fn_arb=1;
+    else test_elements_instanced_real_fn_arb=2;
+#endif
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,instances); return; }
     observe_draw_api(4,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
-    if(detail_active) {
-        uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        draw_detail(caller,4,mode,count,type,(uintptr_t)indices,0,0,instances);
-    }
+    if(detail_active) draw_detail(caller,4,mode,count,type,(uintptr_t)indices,0,0,instances);
     bool measuring=measurement_active();
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
@@ -1233,16 +1236,18 @@ static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,GLen
     current_frame.draw_wall_raw+=dw;current_frame.draw_cpu_raw+=dc;
     if(measuring) gl_event(HOOK_GL_DRAW,dw,dc);
 }
-static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,GLenum mode,GLint first,
+static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,uintptr_t caller,GLenum mode,GLint first,
         GLsizei count,GLsizei instances) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(real_fn==(DrawArraysInstancedFn)glDrawArraysInstanced) test_arrays_instanced_real_fn_arb=0;
+    else if(real_fn==(DrawArraysInstancedFn)glDrawArraysInstancedARB) test_arrays_instanced_real_fn_arb=1;
+    else test_arrays_instanced_real_fn_arb=2;
+#endif
     if(!intervention_active()) { if(real_fn) real_fn(mode,first,count,instances); return; }
     observe_draw_api(5,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
-    if(detail_active) {
-        uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        draw_detail(caller,5,mode,count,0,0,(uint32_t)first,0,instances);
-    }
+    if(detail_active) draw_detail(caller,5,mode,count,0,0,(uint32_t)first,0,instances);
     bool measuring=measurement_active();
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
@@ -1259,16 +1264,13 @@ static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,GLenum m
     current_frame.draw_wall_raw+=dw;current_frame.draw_cpu_raw+=dc;
     if(measuring) gl_event(HOOK_GL_DRAW,dw,dc);
 }
-static void gl_draw_elements_instanced_base_with(DrawElementsInstancedBaseFn real_fn,GLenum mode,GLsizei count,
+static void gl_draw_elements_instanced_base_with(DrawElementsInstancedBaseFn real_fn,uintptr_t caller,GLenum mode,GLsizei count,
         GLenum type,const void *indices,GLsizei instances,GLint base) {
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,instances,base); return; }
     observe_draw_api(6,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
-    if(detail_active) {
-        uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        draw_detail(caller,6,mode,count,type,(uintptr_t)indices,0,base,instances);
-    }
+    if(detail_active) draw_detail(caller,6,mode,count,type,(uintptr_t)indices,0,base,instances);
     bool measuring=measurement_active();
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
@@ -1284,25 +1286,30 @@ static void gl_draw_elements_instanced_base_with(DrawElementsInstancedBaseFn rea
 static void gl_draw_elements_instanced(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances) {
     static DrawElementsInstancedFn real_fn=glDrawElementsInstanced;
-    gl_draw_elements_instanced_with(real_fn,mode,count,type,indices,instances);
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+    gl_draw_elements_instanced_with(real_fn,caller,mode,count,type,indices,instances);
 }
 static void gl_draw_elements_instanced_arb(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances) {
     static DrawElementsInstancedFn real_fn=glDrawElementsInstancedARB;
-    gl_draw_elements_instanced_with(real_fn,mode,count,type,indices,instances);
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+    gl_draw_elements_instanced_with(real_fn,caller,mode,count,type,indices,instances);
 }
 static void gl_draw_arrays_instanced(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
     static DrawArraysInstancedFn real_fn=glDrawArraysInstanced;
-    gl_draw_arrays_instanced_with(real_fn,mode,first,count,instances);
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+    gl_draw_arrays_instanced_with(real_fn,caller,mode,first,count,instances);
 }
 static void gl_draw_arrays_instanced_arb(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
     static DrawArraysInstancedFn real_fn=glDrawArraysInstancedARB;
-    gl_draw_arrays_instanced_with(real_fn,mode,first,count,instances);
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+    gl_draw_arrays_instanced_with(real_fn,caller,mode,first,count,instances);
 }
 static void gl_draw_elements_instanced_base(GLenum mode,GLsizei count,GLenum type,
         const void *indices,GLsizei instances,GLint base) {
     static DrawElementsInstancedBaseFn real_fn=glDrawElementsInstancedBaseVertex;
-    gl_draw_elements_instanced_base_with(real_fn,mode,count,type,indices,instances,base);
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+    gl_draw_elements_instanced_base_with(real_fn,caller,mode,count,type,indices,instances,base);
 }
 static void gl_buffer_data(GLenum target,GLsizeiptr size,const void *data,GLenum usage) {
     static void (*real_fn)(GLenum,GLsizeiptr,const void *,GLenum)=glBufferData;
@@ -2105,6 +2112,7 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_reset_draw_alia
     memset(&current_frame,0,sizeof(current_frame));
     test_forward_core_hits=test_forward_arb_hits=0;
     test_arrays_instanced_forward=test_elements_instanced_forward=NULL;
+    test_arrays_instanced_real_fn_arb=test_elements_instanced_real_fn_arb=3;
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_arm_draw_alias(unsigned mode) {
     frame_control.mode=mode;
@@ -2128,18 +2136,27 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_set_draw_alias_
 __attribute__((visibility("default"))) unsigned eu4_frame_model_test_draw_alias_forward_hits(unsigned arb) {
     return arb?test_forward_arb_hits:test_forward_core_hits;
 }
-__attribute__((visibility("default"))) void eu4_frame_model_test_invoke_draw_alias(const char *name) {
-    typedef void (*ArraysFn)(GLenum,GLint,GLsizei,GLsizei);
-    ArraysFn fn=(ArraysFn)draw_observer_resolve(name);
-    if(fn) fn(GL_TRIANGLES,0,6,2);
+__attribute__((visibility("default"))) unsigned eu4_frame_model_test_draw_alias_real_fn_is_arb(unsigned elements) {
+    return elements?test_elements_instanced_real_fn_arb:test_arrays_instanced_real_fn_arb;
 }
-__attribute__((visibility("default"))) void eu4_frame_model_test_read_draw_alias_stats(uint64_t *draws,uint64_t *suppressed,
-        uint64_t *forwarded,uint64_t *api_count,uint64_t *api_suppressed) {
+__attribute__((visibility("default"))) void eu4_frame_model_test_invoke_draw_alias(const char *name) {
+    void *resolved=draw_observer_resolve(name);
+    if(!resolved) return;
+    if(!strcmp(name,"glDrawElementsInstanced") || !strcmp(name,"glDrawElementsInstancedARB")) {
+        typedef void (*ElementsFn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
+        ((ElementsFn)resolved)(GL_TRIANGLES,6,GL_UNSIGNED_INT,(const void *)(uintptr_t)0x10,2);
+        return;
+    }
+    typedef void (*ArraysFn)(GLenum,GLint,GLsizei,GLsizei);
+    ((ArraysFn)resolved)(GL_TRIANGLES,0,6,2);
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_read_draw_alias_stats(unsigned api_id,uint64_t *draws,
+        uint64_t *suppressed,uint64_t *forwarded,uint64_t *api_count,uint64_t *api_suppressed) {
     *draws=current_frame.draws;
     *suppressed=current_frame.suppressed_draws;
     *forwarded=current_frame.forwarded_draws;
-    *api_count=current_frame.api_counts[5];
-    *api_suppressed=current_frame.api_suppressed[5];
+    *api_count=current_frame.api_counts[api_id];
+    *api_suppressed=current_frame.api_suppressed[api_id];
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_emit_records(unsigned count) {
     test_expect(snapshot_control(&frame_control));
