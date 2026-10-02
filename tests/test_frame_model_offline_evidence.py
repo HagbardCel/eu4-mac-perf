@@ -48,12 +48,20 @@ def _verified_identity(**overrides):
 
 
 def _build_metadata(preflight, evidence_id, identity_start, identity_end, build_info):
+    executed = {
+        "profiler_dylib_sha256": build_info.get("library_sha256"),
+        "test_library_sha256": "test-lib",
+        "workload_harness_sha256": "workload-bin",
+        "draw_manifest_sha256": build_info.get("draw_manifest_sha256", "manifest"),
+    }
     return model.build_offline_evidence_metadata(
         preflight,
         evidence_id,
         identity_start=identity_start,
         identity_end=identity_end,
         build_info=build_info,
+        executed_artifact_start=executed,
+        executed_artifact_end=executed,
     )
 
 
@@ -63,6 +71,7 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
         build_info = {
             "executable_sha256": "game-exe",
             "library_sha256": "profiler-dylib",
+            "draw_manifest_sha256": "draw-manifest",
             "native_source_hashes": {
                 "eu4_draw_observers.h": "draw-obs",
                 "eu4_frame_model_sites.h": "sites",
@@ -97,6 +106,7 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
                 self.assertEqual(hashes["workload_harness_sha256"], "workload-bin")
                 self.assertEqual(hashes["draw_observers_sha256"], "draw-obs")
                 self.assertEqual(hashes["controller_sha256"], model._sha256_optional(model.CONTROLLER))
+                self.assertEqual(hashes["draw_manifest_sha256"], "draw-manifest")
                 self.assertEqual(hashes["recipe_sha256"]["mesh"], "recipe-hash")
                 summary = json.loads(pointer.read_text())
                 self.assertEqual(summary["archive_path"], str(archive1.relative_to(root)))
@@ -171,6 +181,25 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
         with mock.patch.object(model.uuid, "uuid4", return_value=mock.Mock(hex="abcd1234ef567890")):
             run_id = model._offline_evidence_id(fixed)
         self.assertEqual(run_id, "20261002T120000.000042Z-abcd1234")
+
+    def test_require_executed_artifacts_stable_mismatch(self):
+        start = {"test_library_sha256": "a", "workload_harness_sha256": "b"}
+        end = {"test_library_sha256": "a", "workload_harness_sha256": "c"}
+        with self.assertRaises(model.base.BenchmarkError):
+            model._require_executed_artifacts_stable(start, end)
+
+    def test_offline_workloads_uses_frozen_executed_hashes(self):
+        frozen = {
+            "profiler_dylib_sha256": "profiler",
+            "test_library_sha256": "frozen-test",
+            "workload_harness_sha256": "frozen-workload",
+            "draw_manifest_sha256": "manifest",
+        }
+        with mock.patch.object(model, "workload") as workload_mock:
+            workload_mock.recipes.return_value = []
+            result = model.offline_workloads(executed_artifacts_start=frozen)
+        self.assertEqual(result["test_library_sha256"], "frozen-test")
+        self.assertEqual(result["workload_harness_sha256"], "frozen-workload")
 
     def test_pointer_archive_hash_matches_bytes(self):
         preflight = _representative_preflight()
