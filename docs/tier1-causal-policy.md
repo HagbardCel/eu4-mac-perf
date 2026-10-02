@@ -1,21 +1,33 @@
 # Tier-1 offline causal admission policy
 
-Policy identity: **`tier1_causal_rel3pct_abs50us_v1`**
+Policy identity (current): **`tier1_causal_rel3pct_abs50us_v2`**
+
+Evidence schema for new immutable archives: **`stage2-split-v2`**
 
 This document freezes the Stage-2 Tier-1 admission rule **before** interpreting held-out
-measurements. Thresholds are an a priori error budget for representative GL structural
-recipes, not tuned to mesh/borders/text_ui outcomes.
+measurements. Numeric thresholds (3%, 50 µs/frame) are an a priori error budget, not tuned
+to mesh/borders/text_ui outcomes. **v2** additionally freezes evaluator semantics: seven-pair
+raw trials, tri-state results, qualified held-out provenance, contaminated-SHA denylist, and
+bootstrap parameters bound into computation.
+
+## Historical: `tier1_causal_rel3pct_abs50us_v1` / `stage2-split-v1`
+
+The exploratory Mac archive `ab00679` was recorded under **v1** before these semantics
+were finalized (boolean gate results, unqualified held-out treated as ordinary failure, no
+seven-pair enforcement in replay). **Do not re-interpret v1 archives under v2 without
+recording both version IDs** — the rolling pointer stores `archive_recorded_under` vs
+`current_replay_under`.
 
 ## Scope
 
 - **Training recipes (in-sample):** `mesh`, `borders`, `text_ui` — reference and counters
   paired gates only.
 - **Held-out recipe (mandatory for admission pass):** hash-frozen under
-  `analysis/held-out/` before first timing. Exploratory archives measured without a frozen
-  fixture (for example `ab00679`) are development evidence, not independent validation.
+  `analysis/held-out/` before first timing; SHA must not appear in
+  `EXPLORATORY_HELD_OUT_SHA256S`.
 - **Forensic suitability:** sampled + ablation gates under legacy
   `reference_counters_3pct_sampled_5pct_v1`; reported in `release_gates` but **not**
-  required for full causal or calibration-only progression (roadmap Stage 2 default).
+  required for full causal or calibration-only progression.
 
 ## Gate metrics
 
@@ -24,7 +36,7 @@ For each causal gate (`reference_elapsed_ns`, `reference_cpu_ns`, `counters_elap
 
 1. **Relative limit:** 3% — pass only if median paired fraction and the 95% bootstrap
    interval endpoints are all within ±3%.
-2. **Absolute floor:** 50 µs per frame — pass only if per-frame overhead (median and 95%
+2. **Absolute cap:** 50 µs per frame — pass only if per-frame overhead (median and 95%
    interval) is within ±50 µs/frame.
 
 Both limits must pass (fail-closed).
@@ -50,15 +62,11 @@ stored medians alone are not trusted.
 
 | Status | Meaning |
 |--------|---------|
-| `passed` | All required gates and held-out validation satisfied |
+| `passed` | All required gates and qualified held-out validation satisfied |
 | `failed` | Complete evidence present but limits exceeded |
-| `unavailable` | Missing gates, missing metrics, missing held-out fixture/run, or legacy archive without held-out |
-
-Partial causal evidence never passes. Missing held-out validation never passes Stage-2
-admission.
+| `unavailable` | Missing gates, missing pairs, unqualified/contaminated held-out, etc. |
 
 ## Changing the policy
 
-If limits or bootstrap settings change after observing training workloads, treat existing
-archives as development evidence and introduce a **new** policy version plus a **new**
-held-out workload frozen before remeasurement.
+Bump `tier1_causal_rel3pct_abs50us_v*` (and usually `stage2-split-v*`) when evaluator
+semantics change. Do not alter immutable archives; record replay under the new version.

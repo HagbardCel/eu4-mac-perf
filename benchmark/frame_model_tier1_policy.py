@@ -8,7 +8,8 @@ from pathlib import PurePosixPath
 import frame_model_workload as workload
 
 LEGACY_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
-TIER1_CAUSAL_POLICY_VERSION = "tier1_causal_rel3pct_abs50us_v1"
+TIER1_CAUSAL_POLICY_VERSION_V1 = "tier1_causal_rel3pct_abs50us_v1"
+TIER1_CAUSAL_POLICY_VERSION = "tier1_causal_rel3pct_abs50us_v2"
 
 EXPECTED_CAUSAL_GATE_NAMES = (
     "reference_elapsed_ns",

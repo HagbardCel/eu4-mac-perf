@@ -285,7 +285,8 @@ OFFLINE_EVIDENCE_DIR = ROOT / "analysis/evidence"
 OFFLINE_EVIDENCE_POINTER = ROOT / "analysis/frame-model-offline-evidence.json"
 OFFLINE_EVIDENCE_POINTER_REL = "analysis/frame-model-offline-evidence.json"
 OFFLINE_EVIDENCE_GENERATED_PREFIX = "analysis/evidence/"
-OFFLINE_EVIDENCE_SCHEMA_VERSION = "stage2-split-v1"
+OFFLINE_EVIDENCE_SCHEMA_VERSION = "stage2-split-v2"
+OFFLINE_EVIDENCE_SCHEMA_VERSION_V1 = "stage2-split-v1"
 OFFLINE_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
 OFFLINE_ABLATION_POLICY_VERSION = "harness_ablation_vs_sampled_5pct_v1"
 OFFLINE_DIAGNOSTIC_POLICY_VERSION = "diag_matrix_vs_diag_A_no_acceptance_v1"
@@ -647,8 +648,17 @@ def write_offline_evidence_pointer(
     held = next((entry for entry in recipes if (entry.get("recipe") or {}).get("role") == "held_out"), None)
     admission_summary = tier1.summarize_admission(training, held, require_held_out=True)
     forensic_summary = tier1.summarize_forensic(training)
+    recorded_policy = (metadata.get("policy_versions") or {}).get("tier1_causal_gate")
     pointer = {
         **metadata,
+        "schema_version": OFFLINE_EVIDENCE_SCHEMA_VERSION,
+        "archive_recorded_under": {
+            "schema_version": metadata.get("schema_version"),
+            "tier1_causal_policy": recorded_policy,
+        },
+        "current_replay_under": {
+            "tier1_causal_policy": tier1.TIER1_CAUSAL_POLICY_VERSION,
+        },
         "archive_path": str(archive_path.relative_to(ROOT)),
         "archive_sha256": hashlib.sha256(archive_body).hexdigest(),
         "status": preflight_evidence.get("status"),

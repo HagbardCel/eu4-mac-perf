@@ -149,7 +149,7 @@ frames and enclosing scopes are excluded from causal phase summaries. The live
 capture-intrusion result is recorded separately and does not qualify the
 counters-only reference calibration. Stage 2 splits offline admission:
 
-- **`offline_causal_admission`** — bare/reference/counters seven-pair gates on training recipes plus hash-frozen **held-out** recipe; Tier-1 policy `tier1_causal_rel3pct_abs50us_v1` (relative 3% + absolute µs/frame cap). **Blocks** calibration and live causal work when failed.
+- **`offline_causal_admission`** — bare/reference/counters seven-pair gates on training recipes plus hash-frozen **held-out** recipe; Tier-1 policy `tier1_causal_rel3pct_abs50us_v2` (relative 3% + absolute µs/frame cap). **Blocks** calibration and live causal work when failed.
 - **`offline_forensic_suitability`** — sampled/ablation/A–F evidence; reported independently and **does not** block `calibration-only` when causal admission passes.
 
 Legacy combined `representative_workloads.status` remains in archives for replay only.
@@ -211,7 +211,7 @@ producer's frame and detail queues in publication order; F and its associated
 Q/K/A/L records remain a publication bundle. Producers remain independent.
 EINTR and short writes are retried, permanent failures are visible through shared
 hook-failure counters, and parsing retains incomplete lines until serialization
-finishes. Under Tier-1 policy `tier1_causal_rel3pct_abs50us_v1`, relative 3% and
+finishes. Under Tier-1 policy `tier1_causal_rel3pct_abs50us_v2`, relative 3% and
 absolute 50 µs/frame are **both** mandatory admission bounds for offline causal gates;
 neither can override failure of the other. Legacy forensic sampled/ablation gates still
 use percentage limits only. Harness-only ablations restore repeated accounting, unbatched

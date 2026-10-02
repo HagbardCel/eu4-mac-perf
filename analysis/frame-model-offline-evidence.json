@@ -1,6 +1,6 @@
 {
   "evidence_id": "20261002T182324.368965Z-4f253c80",
-  "schema_version": "stage2-split-v1",
+  "schema_version": "stage2-split-v2",
   "recorded_at_utc": "20261002T182324.368965Z-4f253c80",
   "identity_start": {
     "git_commit": "ab00679cc7f40ab097354430988d8bcc944b0ff5",
@@ -81,13 +81,20 @@
       "terrain_surrogate": "284365e71435d8b6744440c5f5a028803527f5f1848f56365b85b5957c579188"
     }
   },
+  "archive_recorded_under": {
+    "schema_version": "stage2-split-v1",
+    "tier1_causal_policy": "tier1_causal_rel3pct_abs50us_v1"
+  },
+  "current_replay_under": {
+    "tier1_causal_policy": "tier1_causal_rel3pct_abs50us_v2"
+  },
   "archive_path": "analysis/evidence/frame-model-offline-ab00679-20261002T182324.368965Z-4f253c80.json",
   "archive_sha256": "21bcbdb4a0ccc7eab40f6a38ada58ec45bd688e6c4aff862b8583ace83747473",
   "status": "blocked",
   "overhead_gate": "failed",
   "offline_causal_admission": {
     "status": "failed",
-    "policy_version": "tier1_causal_rel3pct_abs50us_v1",
+    "policy_version": "tier1_causal_rel3pct_abs50us_v2",
     "training": {
       "mesh": "failed",
       "borders": "failed",
