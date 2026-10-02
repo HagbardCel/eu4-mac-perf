@@ -32,7 +32,7 @@ Technical detail: [`analysis/frame-model-next-iteration-plan.md`](../analysis/fr
 | WP | Focus | Deliverable |
 |----|--------|-------------|
 | **0** | Branch + docs + CI | This plan; portable green |
-| **1** | A–F decomposition (P0) | Mac archives via `diagnostic-matrix` subcommand; diagnosis memo |
+| **1** | A–F decomposition (P0) | Mac archives via `diagnostic-matrix` subcommand; [diagnosis memo](profiler-overhead-diagnosis-memo-20261002.md) (interim from Stage-2 embedded matrix; manifest entry pending capture) |
 | **2** | Draw path / pointers (P1) | Schema-2 manifest; parallel to WP1 |
 | **3** | Causal vs forensic split | Gate tests; capture-free calibration |
 | **5** | Reference fast path | After WP1 identifies reference cost |
