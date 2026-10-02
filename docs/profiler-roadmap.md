@@ -2,7 +2,7 @@
 
 **Scope:** Primary track = **paused-frame profiler** on [`profiler-overhead-calibration`](https://github.com/HagbardCel/eu4-mac-perf/tree/profiler-overhead-calibration) at **`bad232c7`** (CI red: argparse indent). **Parallel track 2** = exhaustive Metal static feasibility (independent gates). **Roadmap + implementation contracts frozen** — remaining work is execution (Stage 0 onward), not experimental design.
 
-**Contracts:** [analysis/frame-model-correction-plan.md](analysis/frame-model-correction-plan.md), [analysis/frame-model-protocol.md](analysis/frame-model-protocol.md).
+**Contracts:** [analysis/frame-model-correction-plan.md](../analysis/frame-model-correction-plan.md), [analysis/frame-model-protocol.md](../analysis/frame-model-protocol.md).
 
 **Numbering:** **Stages 0–6** only.
 
@@ -37,13 +37,18 @@ forensic_integrity      TAIL only
 
 ---
 
-## Current state
+## Baseline at roadmap freeze (`bad232c7`)
+
+Design contracts and gate model in this document were frozen against profiler branch HEAD **`bad232c7`** (causal/forensic split, schema-2 draw coverage direction). That snapshot is the **baseline**, not a permanent branch HEAD.
+
+## Execution status
 
 | Topic | Status |
 |--------|--------|
-| **Core architecture** | **`f2cf2fb`**: 92 tests + native checks. Causal/forensic design on **`bad232c7`**; **gate model not yet aligned** (above). |
-| **Branch CI** | **Red** — `IndentationError` on `--residual-discovery` argparse (~line 1978). |
-| **Production aliases** | May forward ARB/EXT through core symbol — **production fix** + native alias test. |
+| **Stage 0** | PR [#1](https://github.com/HagbardCel/eu4-mac-perf/pull/1) on `cursor/stage-0-stabilize-60a0` — portable CI green; merge blocked on ARB draw semantics, alias harness, and `coverage()` reachability-only blocking. |
+| **Core architecture** | **`f2cf2fb`**: 92 tests + native checks; **gate model not yet aligned** with split causal/forensic admission (above). |
+| **Branch CI** | Stage 0 PR fixes argparse `--residual-discovery` indent; verify on PR branch. |
+| **Production aliases** | ARB instanced draws must use canonical C wrappers with per-entry `real_fn` (not header `observe_draw_api(..., true)` stubs). |
 | **Offline counters (`f2cf2fb`)** | ~**8.1–10.6%** wall/thread CPU; ~**1–7 µs/frame** absolute (synthetic). |
 | **Offline forensic** | **+226–467%** wall — must not block causal admission once gates split. |
 | **Evidence file** | `preflight()` overwrites latest pointer — **immutable archives need unique evidence IDs** (Stage 1). |
@@ -297,7 +302,7 @@ The held-out recipe (e.g. mixed paused frame, terrain-heavy, UI-light, postproce
 
 5. **Tier 2a and 2b** remain non-negotiable for live qualification; freeze **tier2a_policy_version** before first 2a run; do not claim “total profiler ≤3%” from 2b alone.
 
-### Code: split monolithic `overhead_gate` ([benchmark/eu4_frame_model.py](benchmark/eu4_frame_model.py) `preflight()`)
+### Code: split monolithic `overhead_gate` ([benchmark/eu4_frame_model.py](../benchmark/eu4_frame_model.py) `preflight()`)
 
 Implement explicitly:
 
@@ -324,7 +329,7 @@ Implement **report-kind-specific `REQUIRED` gate sets** (table above) in analyze
 
 ## Stage 3 — Helper + calibration-only + integrity split
 
-1. Reinstall **installed** [powermetrics helper](benchmark/powermetrics_helper) only if stale (repo already 1200). **Power-mode/LPM helper** is separate — hash and verify independently before Stage 6 LPM work. **One helper lifecycle per sub-run** (Q/N0, Q/R, Q/N1), not stretched across the full qualification.
+1. Reinstall **installed** [powermetrics helper](../benchmark/powermetrics_helper) only if stale (repo already 1200). **Power-mode/LPM helper** is separate — hash and verify independently before Stage 6 LPM work. **One helper lifecycle per sub-run** (Q/N0, Q/R, Q/N1), not stretched across the full qualification.
 2. `run --calibration-only`: logical **qualification_id** with three sub-runs (N0, profiled P0/P1/P2/TAIL, N1); Tier **2a** + **2b** on **process CPU ms/s**; cadence per frozen Option A/B; extended gate outcomes for inconclusive/partial.
 3. **Integrity hierarchy** (implement in controller/run path):
 
@@ -386,7 +391,7 @@ residual-discovery run N
 
 **Decision:** Once ≥95% meaningful Update/Render attribution is achieved, **stop hook expansion** and proceed toward C-readiness gate + definitive matrix prep.
 
-**Config isolation:** parallel [benchmark/eu4_benchmark.py](benchmark/eu4_benchmark.py) runs must **restore** canonical profiler fixture/settings/playset/display before paired profiler work.
+**Config isolation:** parallel [benchmark/eu4_benchmark.py](../benchmark/eu4_benchmark.py) runs must **restore** canonical profiler fixture/settings/playset/display before paired profiler work.
 
 ---
 
