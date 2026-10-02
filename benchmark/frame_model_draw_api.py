@@ -19,6 +19,10 @@ SUPPRESSED_ALIAS_WRAPPERS = {
     'glDrawElementsInstancedARB': 'gl_draw_elements_instanced_arb',
 }
 
+def suppression_capable(name):
+    core = canonical(name)
+    return (name == core and core in SUPPRESSED) or name in SUPPRESSED_ALIAS_WRAPPERS
+
 def observer_wrapper_symbol(name):
     core = canonical(name)
     if name in SUPPRESSED_ALIAS_WRAPPERS:
@@ -104,7 +108,7 @@ def generate(binary, symbols, static_graph, verify=False):
             'reachability':reachability,'glew_pointer_reference':glew_here,
             'observer':'import and dlsym' if supported else 'uncovered',
             'observer_paths':observer_paths,
-            'suppression':core in SUPPRESSED and supported,'abi':args})
+            'suppression':suppression_capable(name) and supported,'abi':args})
         if not supported: continue
         code.append(f'extern void {name}({args});')
         arguments=[]
@@ -114,7 +118,7 @@ def generate(binary, symbols, static_graph, verify=False):
                 if not m: raise ValueError(f'No argument name for {name}: {argument}')
                 arguments.append(m[1])
         call=f'{name}({",".join(arguments)})'
-        suppressed=core in SUPPRESSED
+        suppressed=suppression_capable(name)
         wrapper=observer_wrapper_symbol(name)
         if wrapper.startswith('observe_exact_'):
             code.append(f'static void {wrapper}({args}) {{\n    observe_draw_api({api},{str(suppressed).lower()});\n    {call};\n}}')

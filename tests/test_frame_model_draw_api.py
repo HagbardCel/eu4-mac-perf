@@ -36,6 +36,12 @@ class DrawCoverageTests(unittest.TestCase):
         self.assertEqual(api.observer_wrapper_symbol('glDrawElementsInstancedARB'),'gl_draw_elements_instanced_arb')
         self.assertTrue(api.observer_wrapper_symbol('glDrawRangeElementsEXT').startswith('observe_exact_'))
 
+    def test_suppression_capable_includes_alias_wrappers(self):
+        self.assertTrue(api.suppression_capable('glDrawArraysInstanced'))
+        self.assertTrue(api.suppression_capable('glDrawArraysInstancedARB'))
+        self.assertTrue(api.suppression_capable('glDrawElementsInstancedARB'))
+        self.assertFalse(api.suppression_capable('glDrawRangeElementsEXT'))
+
     def test_complete_coverage_and_alias_canonicalization(self):
         m,f,r=self.fixture()
         self.assertEqual(api.canonical('glDrawArraysInstancedARB'),'glDrawArraysInstanced')
