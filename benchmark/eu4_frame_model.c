@@ -193,6 +193,7 @@ static void *(*auto_app_instance)(void);
 static bool (*auto_actually_paused)(void *);
 static void *auto_idler_vtable;
 static uintptr_t image_base;
+static char eu4_profiler_dylib_anchor;
 static _Thread_local uint64_t next_deadline;
 static _Thread_local uint64_t next_render_deadline;
 static pthread_t writer_thread;
@@ -1192,8 +1193,25 @@ static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
 typedef void (*DrawElementsInstancedFn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
 typedef void (*DrawArraysInstancedFn)(GLenum,GLint,GLsizei,GLsizei);
 typedef void (*DrawElementsInstancedBaseFn)(GLenum,GLsizei,GLenum,const void *,GLsizei,GLint);
+static void gl_draw_arrays_instanced(GLenum,GLint,GLsizei,GLsizei);
 static void gl_draw_arrays_instanced_arb(GLenum,GLint,GLsizei,GLsizei);
+static void gl_draw_elements_instanced(GLenum,GLsizei,GLenum,const void *,GLsizei);
 static void gl_draw_elements_instanced_arb(GLenum,GLsizei,GLenum,const void *,GLsizei);
+static bool eu4_pointer_outside_profiler_dylib(const void *ptr) {
+    static const void *profiler_base;
+    static char once;
+    Dl_info info;
+    if(!once) {
+        if(dladdr((void *)&eu4_profiler_dylib_anchor,&info) && info.dli_fbase)
+            profiler_base=info.dli_fbase;
+        once=1;
+    }
+    if(!profiler_base || !ptr || !dladdr((void *)ptr,&info) || !info.dli_fbase)
+        return false;
+    return info.dli_fbase!=profiler_base;
+}
+/* ARB instanced PROFILE forwards via RTLD_NEXT core GL entrypoints (semantic canonical
+   forwarding for the pinned GOG binary; not exact-symbol ARB forwarding). */
 static DrawElementsInstancedFn eu4_original_glDrawElementsInstanced(void) {
     static DrawElementsInstancedFn fn;
     static char once;
@@ -1214,11 +1232,17 @@ static DrawArraysInstancedFn eu4_original_glDrawArraysInstanced(void) {
 }
 static bool eu4_arb_elements_instanced_forward_available(void) {
     DrawElementsInstancedFn fn=eu4_original_glDrawElementsInstanced();
-    return fn && (void *)(uintptr_t)fn!=(void *)gl_draw_elements_instanced_arb;
+    void *target=(void *)(uintptr_t)fn;
+    return fn && target!=(void *)gl_draw_elements_instanced_arb
+        && target!=(void *)gl_draw_elements_instanced
+        && eu4_pointer_outside_profiler_dylib(target);
 }
 static bool eu4_arb_arrays_instanced_forward_available(void) {
     DrawArraysInstancedFn fn=eu4_original_glDrawArraysInstanced();
-    return fn && (void *)(uintptr_t)fn!=(void *)gl_draw_arrays_instanced_arb;
+    void *target=(void *)(uintptr_t)fn;
+    return fn && target!=(void *)gl_draw_arrays_instanced_arb
+        && target!=(void *)gl_draw_arrays_instanced
+        && eu4_pointer_outside_profiler_dylib(target);
 }
 static void mark_draw_forward_probe_failure(void) {
     if(measurement_active()) {current_frame.flags|=2048;unowned_event();}
