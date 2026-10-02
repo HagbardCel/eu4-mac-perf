@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field
 
 REQUIRED = ("format_v3", "offline_overhead", "live_counters", "live_sampled",
-            "integrity", "origin_integrity", "semantic_coverage", "cadence", "interventions", "control_drift")
+            "integrity", "origin_integrity", "draw_api_coverage", "semantic_coverage", "cadence", "interventions", "control_drift")
 
 @dataclass
 class GateEvidence:

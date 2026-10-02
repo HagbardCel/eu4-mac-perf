@@ -11,6 +11,7 @@ from pathlib import Path
 
 import eu4_benchmark as base
 import frame_model_static as static
+import frame_model_draw_api as draw_api
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "analysis/frame-model-engine.json"
@@ -64,7 +65,7 @@ BACKEND_AREAS = (
 ADDRESS = re.compile(r"^([0-9a-f]{16}) \(__TEXT,__text\) .*? (\S+)$")
 
 
-def inventory() -> dict:
+def inventory(verify_generated=False) -> dict:
     binary = base.GOG_EXE
     digest = base.sha256(binary)
     if digest != EXPECTED_SHA256:
@@ -142,6 +143,7 @@ def inventory() -> dict:
     evidence={"executable_sha256":digest,"graph":static.graph(binary,symbols,roots),
         "shaders":static.shaders(base.GOG_ROOT,base.USER_DATA)}
     static.OUTPUT.write_text(json.dumps(evidence,indent=2)+"\n")
+    draw_api.generate(binary,listed,evidence["graph"],verify=verify_generated)
     return {"schema": 2,"static_evidence":"analysis/frame-model-static.json", "executable_sha256": digest, "image_base": IMAGE_BASE,
             "hooks": rows, "call_graph": graph,
             "backend_inventory": {"status": "static Gfx callsites mapped to candidate GL operations; runtime resource/state mapping remains partial",
@@ -218,7 +220,7 @@ def main() -> int:
     parser.add_argument("command", choices=("generate", "verify"))
     args = parser.parse_args()
     try:
-        data = inventory()
+        data = inventory(verify_generated=args.command=="verify")
         if args.command == "generate":
             OUTPUT.write_text(json.dumps(data, indent=2) + "\n")
             write_header(data)

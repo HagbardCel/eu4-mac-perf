@@ -43,12 +43,16 @@ def recipes(directory):
     return result
 
 
-def paired_summary(pairs, limit):
+def paired_summary(pairs, limit, frames=1):
     ratios=[p['instrumented']/p['reference']-1 for p in pairs]
     # Deterministic paired bootstrap of the median; retain raw trials for audit.
     rng=random.Random(1729)
     bootstrap=sorted(statistics.median(rng.choices(ratios,k=len(ratios))) for _ in range(2000))
     interval=[bootstrap[50],bootstrap[1950]]
+    absolute=[(p['instrumented']-p['reference'])/(1000*frames) for p in pairs]
+    absolute_bootstrap=sorted(statistics.median(rng.choices(absolute,k=len(absolute))) for _ in range(2000))
     median=statistics.median(ratios)
     return {'median_fraction':median,'confidence_interval_95':interval,'pairs':pairs,
+            'overhead_us_per_frame':statistics.median(absolute),'overhead_us_per_frame_ci95':[absolute_bootstrap[50],absolute_bootstrap[1950]],
+            'absolute_metric_policy':'diagnostic; cannot override fractional acceptance',
             'limit':limit,'status':'passed' if max(abs(median),abs(interval[0]),abs(interval[1]))<=limit else 'failed'}

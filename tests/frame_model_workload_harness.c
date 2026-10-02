@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 typedef struct { uint32_t api,mode,count,uniform,texture,state,vertex,program; } Command;
 static Command *commands; static unsigned command_count;
@@ -59,17 +60,22 @@ int main(int argc,char **argv) {
     glViewport(0,0,64,64);
     void (*frame)(void (*)(void))=dlsym(RTLD_DEFAULT,"eu4_frame_model_test_frame");
     unsigned frames=(unsigned)strtoul(argv[2],NULL,10);if(frames<4 || frames>60) return 1;
+    uint64_t preparation_cpu=now(CLOCK_THREAD_CPUTIME_ID),preparation_wall=now(CLOCK_UPTIME_RAW);
     if(frame) frame(workload);else workload();
-    glFinish();if(glGetError()!=GL_NO_ERROR) return 11;
+    preparation_wall=now(CLOCK_UPTIME_RAW)-preparation_wall;
+    preparation_cpu=now(CLOCK_THREAD_CPUTIME_ID)-preparation_cpu;
+    glFinish();GLenum warm_error=glGetError();if(warm_error!=GL_NO_ERROR) {fprintf(stderr,"warmup GL error=%u\n",warm_error);return 11;}
     void (*arm)(unsigned)=dlsym(RTLD_DEFAULT,"eu4_frame_model_test_arm");
     if(arm) arm(getenv("EU4_TEST_SAMPLED")?frames:0);
     uint64_t cpu=now(CLOCK_THREAD_CPUTIME_ID),wall=now(CLOCK_UPTIME_RAW);
     for(unsigned i=0;i<frames;i++) { if(frame) frame(workload);else workload(); }
     uint64_t elapsed=now(CLOCK_UPTIME_RAW)-wall,thread=now(CLOCK_THREAD_CPUTIME_ID)-cpu;
+    uint64_t (*measured_queries)(void)=dlsym(RTLD_DEFAULT,"eu4_frame_model_test_measured_queries");
+    if(measured_queries && (!getenv("EU4_TEST_ABLATION") || strcmp(getenv("EU4_TEST_ABLATION"),"preparation")) && measured_queries()) return 13;
     unsigned char pixel[4];glReadPixels(16,16,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
     GLenum error=glGetError();
     if(error!=GL_NO_ERROR || !pixel[3]) { fprintf(stderr,"validation: GL error=%u alpha=%u\n",error,pixel[3]);return 12; }
-    printf("elapsed_ns=%llu cpu_ns=%llu draws=%u valid=1 pixel_alpha=%u\n",(unsigned long long)elapsed,(unsigned long long)thread,frames*command_count,pixel[3]);
+    printf("elapsed_ns=%llu cpu_ns=%llu draws=%u valid=1 pixel_alpha=%u preparation_wall_ns=%llu preparation_cpu_ns=%llu\n",(unsigned long long)elapsed,(unsigned long long)thread,frames*command_count,pixel[3],(unsigned long long)preparation_wall,(unsigned long long)preparation_cpu);
     CGLSetCurrentContext(NULL);CGLDestroyContext(ctx);CGLDestroyPixelFormat(pf);
     free(vertices);free(indices);free(commands);return 0;
 }

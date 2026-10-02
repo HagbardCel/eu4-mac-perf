@@ -22,6 +22,7 @@ import eu4_benchmark as base
 import eu4_diagnostic as diagnostic
 import eu4_engine_inventory as engine
 import frame_model_workload as workload
+import frame_model_draw_api as draw_api
 from frame_model_gates import GateEvidence, run_budget, RUN_DEADLINE_SECONDS
 from fixture_manager import FixtureManager
 
@@ -39,8 +40,11 @@ RENDER_GATE_HARNESS = ROOT / "benchmark/.build/frame_model_render_gate_harness"
 SCOPE_HARNESS = ROOT / "benchmark/.build/frame_model_scope_harness"
 GPU_HARNESS = ROOT / "benchmark/.build/frame_model_gpu_harness"
 QUEUE_HARNESS = ROOT / "benchmark/.build/frame_model_queue_harness"
+SHADOW_HARNESS = ROOT / "benchmark/.build/frame_model_shadow_harness"
+WRITER_HARNESS = ROOT / "benchmark/.build/frame_model_writer_harness"
 TEST_LIBRARY=ROOT/"benchmark/.build/libeu4_frame_model_test.dylib"
 WORKLOAD_HARNESS=ROOT/"benchmark/.build/frame_model_workload_harness"
+WRITER_PRODUCTION_HARNESS=ROOT/"benchmark/.build/frame_model_writer_production_harness"
 CONTROL_HARNESS=ROOT/"benchmark/.build/frame_model_control_harness"
 POWER_HELPER_SOURCE = ROOT / "benchmark/power_mode_helper"
 POWER_HELPER_INSTALLED = Path("/usr/local/libexec/eu4-power-mode")
@@ -92,6 +96,7 @@ def build() -> dict:
         raise base.BenchmarkError(generated.stderr.strip() or generated.stdout.strip())
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
     commands = (
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-pthread","-o",str(WRITER_PRODUCTION_HARNESS),str(ROOT/"tests/frame_model_writer_production_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(CONTROL_HARNESS),str(ROOT/"tests/frame_model_control_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-DEU4_FRAME_MODEL_TEST",
          "-dynamiclib","-framework","OpenGL","-framework","CoreGraphics","-o",str(TEST_LIBRARY),str(SOURCE)],
@@ -110,7 +115,7 @@ def build() -> dict:
          "-o", str(RENDER_GATE_HARNESS), str(RENDER_GATE_HARNESS_SOURCE)],
     )
     commands += tuple(["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror",
-        "-o",str(path),str(ROOT/"tests"/(path.name+".c"))] for path in (SCOPE_HARNESS,GPU_HARNESS,QUEUE_HARNESS))
+        "-o",str(path),str(ROOT/"tests"/(path.name+".c"))] for path in (SCOPE_HARNESS,GPU_HARNESS,QUEUE_HARNESS,SHADOW_HARNESS,WRITER_HARNESS))
     for command in commands:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode:
@@ -124,7 +129,8 @@ def build() -> dict:
             "engine_sites": len(json.loads(engine.OUTPUT.read_text())["hooks"]),
             "library_sha256": base.sha256(LIBRARY),
             "library_source_sha256": base.sha256(SOURCE),
-            "native_source_hashes":{p.name:base.sha256(p) for p in (SOURCE,ROOT/"benchmark/eu4_scope_tree.h",ROOT/"benchmark/eu4_gpu_segments.h",ROOT/"benchmark/eu4_spsc.h",ROOT/"benchmark/eu4_raster_policy.h",ROOT/"benchmark/eu4_render_gate.h",ROOT/"benchmark/eu4_detour.h",engine.HEADER)},
+            "native_source_hashes":{p.name:base.sha256(p) for p in (SOURCE,ROOT/"benchmark/eu4_scope_tree.h",ROOT/"benchmark/eu4_gpu_segments.h",ROOT/"benchmark/eu4_spsc.h",ROOT/"benchmark/eu4_raster_policy.h",ROOT/"benchmark/eu4_render_gate.h",ROOT/"benchmark/eu4_detour.h",ROOT/"benchmark/eu4_gl_shadow.h",ROOT/"benchmark/eu4_writer_buffer.h",draw_api.HEADER,ROOT/"benchmark/eu4_draw_api_ids.h",engine.HEADER)},
+            "draw_api_manifest":json.loads(draw_api.OUTPUT.read_text()),
             "architecture": "x86_64"}
 
 
@@ -149,7 +155,7 @@ def offline_render_gate_harness() -> dict:
 
 def offline_producer_harnesses() -> dict:
     evidence={}
-    for path in (SCOPE_HARNESS,GPU_HARNESS,QUEUE_HARNESS):
+    for path in (SCOPE_HARNESS,GPU_HARNESS,QUEUE_HARNESS,SHADOW_HARNESS,WRITER_HARNESS):
         run=subprocess.run([str(path)],capture_output=True,text=True,timeout=10,check=False)
         if run.returncode: raise base.BenchmarkError(f"{path.name} failed: {run.stderr}")
         evidence[path.name]={"status":"passed","output":run.stdout.strip()}
@@ -172,6 +178,27 @@ def offline_control_harness():
         if run.returncode or len(origins)!=2 or [int(r[1]) for r in origins]!=[7,8] or any(int(r[14]) for r in origins):
             raise base.BenchmarkError(f"Unowned control/origin harness failed: {run.stderr}, {origins}")
         return {"status":"passed","output":run.stdout.strip(),"unknown_origin_records":origins}
+
+
+def offline_writer_production_harness():
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory);path=root/"control";log=root/"trace"
+        path.write_bytes(CONTROL.pack(FORMAT_VERSION,2,1,1,3,0,0,0,1,7,0,0,0,0)+bytes(CONTROL_SIZE-CONTROL.size))
+        run=subprocess.run([str(WRITER_PRODUCTION_HARNESS),str(TEST_LIBRARY)],
+            env={**os.environ,"EU4_FRAME_MODEL_CONTROL":str(path),"EU4_FRAME_MODEL_LOG":str(log)},
+            capture_output=True,text=True,timeout=10,check=False)
+        rows=read_rows(log);frames=decode_frames(rows)
+        streams={}
+        for r in rows:
+            if r[0] not in {"J","F"}: continue
+            thread=int(r[16] if r[0]=="J" else r[5])
+            streams.setdefault(thread,[]).append((r[0],int(r[1])))
+        ordered=all(len(stream)==64 and all(a==("J",b[1]) and b[0]=="F" for a,b in zip(stream[::2],stream[1::2])) for stream in streams.values())
+        if run.returncode or len(frames)!=128 or len(streams)!=4 or not ordered or len([r for r in rows if r[0]=="O"])!=4:
+            raise base.BenchmarkError(f"Production writer ordering/shutdown failed: {run.stderr}")
+        if next((int(r[1]) for r in reversed(rows) if r[0]=="Z"),None)!=0:
+            raise base.BenchmarkError("Production writer reported failure")
+        return {"status":"passed","output":run.stdout.strip(),"frames":len(frames),"producers":len(streams)}
 
 
 def offline_arb_harness() -> dict:
@@ -228,6 +255,7 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
     arb=offline_arb_harness()
     producers=offline_producer_harnesses()
     producers["unowned_control"]=offline_control_harness()
+    producers["production_writer"]=offline_writer_production_harness()
     auto_evidence = auto.preflight(require_privilege=require_privilege)
     power_helper = _power_helper_preflight() if require_privilege and require_power_mode else {"status":"not checked"}
     if not run_gl:
@@ -261,7 +289,7 @@ def offline_workloads() -> dict:
         for recipe in recipes:
             trials=[]
             for trial in range(7):
-                stages=("bare","reference","counters","sampled")
+                stages=("bare","reference","counters","sampled","ablation_accounting","ablation_writer","ablation_preparation")
                 if trial%2: stages=tuple(reversed(stages))
                 values={}
                 for stage in stages:
@@ -270,10 +298,12 @@ def offline_workloads() -> dict:
                     frames=4
                     fields=[FORMAT_VERSION,2,mode,1,1,0,0,0,1,0,0,0,0,0]
                     control_path.write_bytes(CONTROL.pack(*fields)+bytes(CONTROL_SIZE-CONTROL.size))
-                    env={k:v for k,v in os.environ.items() if k not in ("DYLD_INSERT_LIBRARIES","EU4_FRAME_MODEL_CONTROL","EU4_FRAME_MODEL_LOG")}
+                    env={k:v for k,v in os.environ.items() if k not in ("DYLD_INSERT_LIBRARIES","EU4_FRAME_MODEL_CONTROL","EU4_FRAME_MODEL_LOG","EU4_TEST_ABLATION","EU4_TEST_SAMPLED")}
+                    if stage.startswith("ablation_"):
+                        env["EU4_TEST_ABLATION"]=stage.removeprefix("ablation_")
                     if stage!="bare":
                         env.update(DYLD_INSERT_LIBRARIES=str(TEST_LIBRARY),EU4_FRAME_MODEL_CONTROL=str(control_path),EU4_FRAME_MODEL_LOG=str(log_path))
-                        if stage=="sampled": env["EU4_TEST_SAMPLED"]="1"
+                        if stage=="sampled" or stage.startswith("ablation_"): env["EU4_TEST_SAMPLED"]="1"
                     run=subprocess.run([str(WORKLOAD_HARNESS),recipe["path"],str(frames)],env=env,
                         capture_output=True,text=True,timeout=60,check=False)
                     if run.returncode:
@@ -283,10 +313,19 @@ def offline_workloads() -> dict:
                         rows=frame_rows(log_path);trace=read_rows(log_path)
                         tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
                         failure=next((int(r[1]) for r in trace if r[0]=="Z"),None)
-                        if len(rows)!=frames or failure!=0 or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|4096) for r in rows):
+                        if len(rows)!=frames or failure!=0 or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
                             raise base.BenchmarkError("Representative workload did not exercise valid production wrappers, scopes, and writer")
                         if stage!="reference" and sum(r["draws"] for r in rows)!=frames*recipe["draws"]:
                             raise base.BenchmarkError("Representative producer draw counts differ from passive recipe")
+                        if stage!="reference":
+                            counts={int(r[1]):tuple(map(int,r[2:5])) for r in trace if r[0]=="C"}
+                            for hook,field in ((7,"draws"),(9,"uniform_calls"),(11,"state_calls")):
+                                if counts[hook][0]!=sum(f[field] for f in rows):
+                                    raise base.BenchmarkError(f"Accounting totals differ for {field}")
+                            if counts[8][0]!=sum(f["buffer_calls"]+f["texture_calls"] for f in rows):
+                                raise base.BenchmarkError("Upload totals differ")
+                            if counts[7][1:]!=tuple(sum(f[field] for f in rows)//256 for field in ("draw_wall_ns_est","draw_cpu_ns_est")):
+                                raise base.BenchmarkError("Sampled draw timing totals differ")
                         measured.update(frames=len(rows),tree_reconciliation=tree["tree_reconciliation"])
                     values[stage]=measured
                 trials.append({"trial":trial,"order":list(stages),"stages":values})
@@ -294,8 +333,13 @@ def offline_workloads() -> dict:
             for stage,reference,limit in (("reference","bare",.03),("counters","reference",.03),("sampled","reference",.05)):
                 for axis in ("elapsed_ns","cpu_ns"):
                     gates[stage+"_"+axis]=workload.paired_summary([
-                        {"instrumented":t["stages"][stage][axis],"reference":t["stages"][reference][axis]} for t in trials],limit)
-            evidence.append({"recipe":{k:v for k,v in recipe.items() if k!="path"},"trials":trials,"gates":gates})
+                        {"instrumented":t["stages"][stage][axis],"reference":t["stages"][reference][axis]} for t in trials],limit,frames)
+            ablations={}
+            for component in ("accounting","writer","preparation"):
+                ablations[component]={axis:workload.paired_summary([
+                    {"instrumented":t["stages"]["ablation_"+component][axis],"reference":t["stages"]["sampled"][axis]} for t in trials],.05,frames)
+                    for axis in ("elapsed_ns","cpu_ns")}
+            evidence.append({"ablations":ablations,"ablation_policy":"Harness-only restoration of per-call accounting, unbatched writing, or measured state/query preparation; diagnostic, excluded from acceptance gates.","recipe":{k:v for k,v in recipe.items() if k!="path"},"trials":trials,"gates":gates})
         return {"status":"passed" if all(g["status"]=="passed" for r in evidence for g in r["gates"].values()) else "failed",
                 "recipes":evidence,"test_library_sha256":base.sha256(TEST_LIBRARY),
                 "harness_source_sha256":base.sha256(ROOT/"tests/frame_model_workload_harness.c"),
@@ -309,16 +353,37 @@ def read_rows(path: Path) -> list[list[str]]:
         return [row for row in csv.reader(source) if row]
 
 
-def frame_rows(path: Path) -> list[dict]:
+def decode_frames(rows):
     result = []
-    for row in read_rows(path):
-        if not row or row[0] != "F" or len(row) not in (len(FRAME_FIELDS)+1,len(V2_FRAME_FIELDS)+1,len(LEGACY_FRAME_FIELDS)+1):
+    layouts = {len(fields)+1: fields for fields in (FRAME_FIELDS, V2_FRAME_FIELDS, LEGACY_FRAME_FIELDS)}
+    for row in rows:
+        if not row or row[0] != "F" or len(row) not in layouts:
             continue
         try:
-            result.append(dict(zip(FRAME_FIELDS if len(row)==len(FRAME_FIELDS)+1 else V2_FRAME_FIELDS if len(row)==len(V2_FRAME_FIELDS)+1 else LEGACY_FRAME_FIELDS, map(int, row[1:]))))
+            result.append(dict(zip(layouts[len(row)], map(int, row[1:]))))
         except ValueError:
             continue
     return result
+
+
+def frame_rows(path: Path) -> list[dict]:
+    return decode_frames(read_rows(path))
+
+
+class TelemetryReader:
+    """Read each serialized byte once; retain an unfinished line until publication."""
+    def __init__(self, path):
+        self.path, self.offset, self.pending = path, 0, b""
+
+    def poll(self):
+        if not self.path.is_file(): return []
+        with self.path.open("rb") as source:
+            source.seek(self.offset)
+            data = source.read()
+            self.offset = source.tell()
+        lines = (self.pending + data).split(b"\n")
+        self.pending = lines.pop()
+        return decode_frames(csv.reader(line.decode("ascii") for line in lines))
 
 
 def eligible_frame(row: dict, window: dict | None) -> bool:
@@ -337,6 +402,7 @@ def eligible_trace(trace: list[list[str]], frames: list[dict], windows: list[dic
     if not any("measurement_epoch" in w for w in windows): return trace
     eligible={(r["measurement_epoch"],r["update_id"]) for w in windows for r in frames
               if eligible_frame(r,w)}
+    incomplete={(r.get("measurement_epoch"),r["update_id"]) for r in frames if r.get("flags",0)&2048}
     result=[]
     for row in trace:
         try:
@@ -345,7 +411,7 @@ def eligible_trace(trace: list[list[str]], frames: list[dict], windows: list[dic
             elif row[0] in {"D","S","U","u","V","W","B","b","T","t"}:
                 key=(int(row[13]),int(row[14])) if len(row) in (16,20) else None
             else: result.append(row); continue
-            if key in eligible: result.append(row)
+            if key in eligible and not (row[0] in {"D","S","U","u","V","W","B","b","T","t"} and key in incomplete): result.append(row)
         except (ValueError,IndexError): continue
     return result
 
@@ -848,6 +914,7 @@ def analyze(run_dir: Path) -> dict:
             index=int(row[1]); name=HOOK_NAMES[index] if index<len(HOOK_NAMES) else f"hook_{index}"
             counters[name] = {"calls": int(row[2]), "wall_ns_sum": int(row[3]),
                               "thread_cpu_ns_sum":int(row[4]),
+                              "completeness":"partial supporting telemetry",
                               "timing":"sampled" if index==7 else "count_only" if index in (8,9,11) else "inclusive/scope"}
     totals=next((list(map(int,row[1:4])) for row in trace if row[0]=="X" and len(row)>=4),[0,0,0])
     hook_failures=next((int(row[1]) for row in reversed(trace) if row[0]=="Z" and len(row)>=2),None)
@@ -886,6 +953,16 @@ def analyze(run_dir: Path) -> dict:
     unknown=unassociated_origins(trace,phases)
     report_gates.record("origin_integrity","failed" if unknown else "passed" if format_qualified else "unavailable","Measured calls outside owned update frames must be attributed before causal acceptance",records=unknown)
     report_gates.record("semantic_coverage","passed" if coverage_ok else "failed","Every baseline needs independent ≥95% Update/Render CPU and wall coverage")
+    build_evidence=manifest.get("evidence",{}).get("build",{})
+    candidate_manifest=build_evidence.get("draw_api_manifest")
+    if candidate_manifest and (candidate_manifest.get("executable_sha256")!=manifest.get("executable_sha256") or
+        candidate_manifest.get("observer_header_sha256")!=build_evidence.get("native_source_hashes",{}).get(draw_api.HEADER.name)):
+        candidate_manifest=None
+    qualified_frames=[f for w in phases for f in frames if eligible_frame(f,w)]
+    draw_coverage=draw_api.coverage(candidate_manifest,qualified_frames,trace,
+        {PHASE_NUMBER[n] for n in expected_baselines}|{PHASE_NUMBER["C"]})
+    report_gates.record("draw_api_coverage",draw_coverage["status"],draw_coverage["reason"],evidence=draw_coverage)
+
     output = {"format_version":FORMAT_VERSION,"report_kind":manifest.get("report_kind","causal"),
               "metal_feasibility":"feasibility seed; go/no-go undetermined",
               "unassociated_origins":unknown,"release_gates":report_gates.entries,
@@ -893,6 +970,11 @@ def analyze(run_dir: Path) -> dict:
               "status": manifest.get("status"), "run_dir": str(run_dir),
               "executable_sha256": manifest.get("executable_sha256"),
               "phases": summaries, "hook_totals": counters,
+              "hook_totals_status":"partial supporting telemetry; worker producer flush completeness unproven",
+              "draw_api_coverage":draw_coverage,
+              "C_intervention":"complete draw suppression" if draw_coverage["status"]=="passed" else "partial draw-suppression intervention",
+              "structural_evidence_incomplete":[render_identity(f) for f in qualified_frames if f.get("flags",0)&2048],
+              "structural_evidence_missing_reasons":[r for r in trace if r and r[0]=="L"],
               "update_render_present_totals":{"update_calls":totals[0],"render_attempts":totals[1],"presents":totals[2]},
               "hook_failures":hook_failures,
               "sampled_trace_rows": detail, "normal_A_drift_fraction": drift,
@@ -921,6 +1003,10 @@ def analyze(run_dir: Path) -> dict:
         output["recommendations"]=[{"intervention":"expand verified semantic hooks in the largest residual envelopes",
             "signal":"ranked residual CPU/wall table","estimated_reduction_fraction":None,
             "evidence":"add 3–8 ABI-verified semantic hooks per iteration and repeat perturbation validation"}]
+    if draw_coverage["status"]!="passed":
+        for key in ("C","C_minus_B"):
+            if key in output["causal_contrasts"]:
+                output["causal_contrasts"][key].update(status="partial intervention",interpretation="partial draw-suppression intervention; API coverage incomplete")
     (run_dir / "report.json").write_text(json.dumps(output, indent=2)+"\n")
     (run_dir / "report.md").write_text(render_report(output))
     return output
@@ -1203,6 +1289,8 @@ def render_report(data: dict) -> str:
                   json.dumps(data.get("power_by_phase", {}), indent=2, sort_keys=True), "",
                   "## Render cadence and power scaling", "",
                   json.dumps(data.get("power_fps_scaling",{}),indent=2,sort_keys=True), "",
+                  "## Draw API coverage", "", json.dumps(data.get("draw_api_coverage",{}),indent=2), "",
+                  data.get("C_intervention","partial draw-suppression intervention"), "",
                   "## Asynchronous GPU timing", "",
                   json.dumps(data.get("gpu_by_phase", {}), indent=2, sort_keys=True), "",
                   "## Consecutive-frame changes", "",
@@ -1216,10 +1304,10 @@ def render_report(data: dict) -> str:
     lines.extend(f"- **{item['intervention']}** — {item['signal']}: {item.get('estimated_reduction_fraction')}; {item['evidence']}"
                  for item in data.get("recommendations",[]))
     lines.extend(["", "## Coverage and limitations", "",
-                  "The hook library counts six draw APIs, common depth/blend/stencil/raster/viewport/scissor/texture-parameter state calls, selected resource binds/uploads, and observed scalar/vector/matrix float/int uniform families. Texture byte counts are estimates; PBO sources, mapped writes, unsigned/double/non-square uniforms, resource create/delete lifecycle, culling/LOD decisions, bucket sorting, buffer changed-byte ranges, and other draw entry points remain uncovered.",
-                  "", "Sampled draw records include API, callsite, program, a VAO/enabled-attribute source signature, element buffer, mode, count, index type/offset or first vertex, signed base vertex, and instance count. Sampled uniform calls retain callsite/program/location/size/hash; consecutive `glUniform4fv` payloads up to 256 bytes report changed 32-bit elements. C requires zero forwarded draws among covered APIs. D uses `GL_RASTERIZER_DISCARD` around `Render()` and requires clean state flags.",
+                  "The hook library suppresses six draw APIs and separately observes candidate submission paths from the executable/SDK manifest. Missing observers or resolver paths block complete C acceptance. Global hook totals are partial supporting telemetry. It counts common depth/blend/stencil/raster/viewport/scissor/texture-parameter state calls, selected resource binds/uploads, and observed scalar/vector/matrix float/int uniform families. Texture byte counts are estimates; PBO sources, mapped writes, unsigned/double/non-square uniforms, resource create/delete lifecycle, culling/LOD decisions, bucket sorting, buffer changed-byte ranges, and other draw entry points remain uncovered.",
+                  "", "Sampled draw records include API, callsite, program, a VAO/enabled-attribute source signature, element buffer, mode, count, index type/offset or first vertex, signed base vertex, and instance count. Sampled uniform calls retain callsite/program/location/size/hash; consecutive `glUniform4fv` payloads up to 256 bytes report changed 32-bit elements. C requires complete draw API observer evidence, no submissions outside the suppression set in its baselines, positive suppression and zero forwarded covered draws. D uses `GL_RASTERIZER_DISCARD` around `Render()` and requires clean state flags.",
                   "", "Engine scopes emit actual parent, inclusive and exclusive wall/CPU, and per-update totals. Only verified semantic exclusive intervals count toward coverage; all envelope exclusive time remains residual. Pacing is separate. Update loop wall includes pacing sleep. `PresentScene` and `CGLFlushDrawable` are distinct. Render CPU is shown both per update and per executed render.",
-                  "", "Frame flags: 1 frame queue overflow, 2 update cadence overrun, 4 unknown texture byte estimate, 8 unavailable raster-suppression state API/context, 16 restoration failure, 32 raster context capacity exceeded, 64 GPU query slot unavailable, 128 unknown primitive topology, 512 scope-stack overflow, 1024 scope mismatch/child-time inconsistency, and 2048 unavailable sampled GL-state seed, 4096 measurement/mode boundary crossed.",
+                  "", "Frame flags: 1 frame queue overflow, 2 update cadence overrun, 4 unknown texture byte estimate, 8 unavailable raster-suppression state API/context, 16 restoration failure, 32 raster context capacity exceeded, 64 GPU query slot unavailable, 128 unknown primitive topology, 512 scope-stack overflow, 1024 scope mismatch/child-time inconsistency, and 2048 incomplete GL shadow identity (see L reason; structural claims excluded, CPU scopes retained), 4096 measurement/mode boundary crossed.",
                   "", "GPU timestamps stay segmented by CGL context and are not combined across contexts. They represent same-context GPU timeline intervals, not guaranteed busy time. The static backend graph remains a candidate mapping until implementation and resource/state dependencies are confirmed.", ""])
     return "\n".join(lines)
 
@@ -1357,32 +1445,47 @@ def _power_helper_preflight() -> dict:
     return {"status":"ready","setting":key,"commands":checks}
 
 
+def render_identity(frame):
+    return {key: frame.get(key) for key in
+            ("phase", "measurement_epoch", "thread_id", "generation", "update_id", "render_id")}
+
+
 def sampled_perturbation(frames, windows=6, consecutive=4):
-    """Compare each complete sampled window to its nearest unsampled neighbors."""
-    groups={}
-    plain=sorted((f for f in frames if not f.get("sample_window")),key=lambda f:f["update_id"])
-    for frame in frames:
-        if frame.get("sample_window"):
-            groups.setdefault(frame["sample_window"],[]).append(frame)
-    evidence=[]
-    if len(groups)!=windows:
-        return {"status":"unavailable","reason":"complete sampled window count differs", "windows":len(groups)}
-    for identity,group in sorted(groups.items()):
-        group=sorted(group,key=lambda f:f["render_id"])
-        if len(group)!=consecutive or any(b["render_id"]!=a["render_id"]+1 for a,b in zip(group,group[1:])):
-            return {"status":"unavailable","reason":"sampled renders are incomplete or nonconsecutive","window":identity}
-        before=[f for f in plain if f["update_id"]<group[0]["update_id"]][-consecutive:]
-        after=[f for f in plain if f["update_id"]>group[-1]["update_id"]][:consecutive]
-        if not before or not after:
-            return {"status":"unavailable","reason":"unsampled neighbors missing","window":identity}
-        ratios={}
-        for field in ("update_cpu_ns","update_wall_ns","render_cpu_ns","render_wall_ns"):
-            reference=statistics.median(f[field] for f in before+after)
-            if reference<=0: return {"status":"unavailable","reason":"nonpositive neighbor cost","window":identity}
-            ratios[field]=statistics.median(f[field] for f in group)/reference-1
-        evidence.append({"sample_window":identity,"renders":[f["render_id"] for f in group],"fractions":ratios})
-    passed=all(abs(value)<=.05 for w in evidence for value in w["fractions"].values())
-    return {"status":"passed" if passed else "failed","reason":"each window's CPU/wall update/render medians must remain within 5% of local neighbors","windows":evidence}
+    """Qualify a single render population and complete local paired windows."""
+    participating = sorted((f for f in frames if f.get("render_executed", 0) or f.get("sample_window")),
+                           key=lambda f: f["render_id"])
+    populations = {(f.get("phase"), f.get("measurement_epoch"), f.get("thread_id")) for f in participating}
+    if len(populations) != 1 or any(f.get("render_executed") != 1 for f in participating):
+        return {"status":"unavailable", "reason":"unsupported render population; require one phase/epoch/thread and one render per frame"}
+    groups = {}
+    for f in participating:
+        if f.get("sample_window"): groups.setdefault(f["sample_window"], []).append(f)
+    if len(groups) != windows:
+        return {"status":"unavailable", "reason":"complete sampled window count differs", "windows":len(groups)}
+    evidence = []
+    for identity, group in sorted(groups.items()):
+        first = participating.index(group[0]); last = participating.index(group[-1])
+        before = participating[max(0, first-consecutive):first]
+        after = participating[last+1:last+1+consecutive]
+        if len(group) != consecutive:
+            return {"status":"unavailable", "reason":"sampled renders are incomplete or nonconsecutive", "window":identity}
+        if len(before) != consecutive or len(after) != consecutive or any(f.get("sample_window") for f in before+after):
+            return {"status":"unavailable", "reason":"full unsampled neighbors missing", "window":identity}
+        local = before+group+after
+        if any(b["render_id"] != a["render_id"]+1 for a,b in zip(local,local[1:])):
+            return {"status":"unavailable", "reason":"sampled renders or neighbors are nonconsecutive", "window":identity}
+        ratios, absolute = {}, {}
+        for field in ("update_cpu_ns", "update_wall_ns", "render_cpu_ns", "render_wall_ns"):
+            reference = statistics.median(f[field] for f in before+after)
+            if reference <= 0: return {"status":"unavailable", "reason":"nonpositive neighbor cost", "window":identity}
+            delta = statistics.median(f[field] for f in group)-reference
+            ratios[field], absolute[field] = delta/reference, delta/1000
+        evidence.append({"sample_window":identity, "renders":[f["render_id"] for f in group],
+                         "sampled":[render_identity(f) for f in group],
+                         "before":[render_identity(f) for f in before], "after":[render_identity(f) for f in after],
+                         "fractions":ratios, "overhead_us_per_frame":absolute})
+    passed = all(abs(value)<=.05 for w in evidence for value in w["fractions"].values())
+    return {"status":"passed" if passed else "failed", "reason":"each window's CPU/wall update/render medians must remain within 5% of local neighbors", "windows":evidence}
 
 
 def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
@@ -1408,42 +1511,65 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
     auto.mark(events,"measurement_enabled",phase=name,generation=generation)
     # A post-start command lets unowned producers distinguish the timed window
     # from enable acknowledgement, without changing the measurement epoch.
-    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,
-                           detail_frames_per_window if detail else 0,True)
+    generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,0,True)
     window_generation=generation
-    if detail:
-        auto.mark(events,"detail_sample_armed",phase=name,generation=generation,
-                  render_frames=detail_frames_per_window)
-    end_by=time.monotonic()+duration
-    measurement_started=end_by-duration
-    next_detail=(measurement_started+duration/max(detail_windows,1)
-                 if detail and detail_windows>1 else end_by)
-    detail_armed=1 if detail else 0
+    measurement_started=start["monotonic_ns"]/1e9
+    end_by=measurement_started+duration
+    reader=TelemetryReader(events.parent/"telemetry.csv")
+    window={"name":name,"measurement_epoch":epoch,"start_ns":start["monotonic_ns"],
+            "end_ns":int(end_by*1e9),"clock_offset_ns":clock_offset,"alignment_uncertainty_ns":uncertainty}
+    observed=[]; arms=[]; completed=0
+    requested=[measurement_started+duration*i/(detail_windows+1) for i in range(1,detail_windows+1)] if detail else []
+    last_focus=measurement_started-1
     while time.monotonic()<end_by:
         if game.poll() is not None: raise base.BenchmarkError(f"EU IV exited during {name}")
-        if not auto.focus("interior",game.pid): raise base.BenchmarkError(f"EU IV lost focus during {name}")
         now=time.monotonic()
-        if detail and detail_armed<detail_windows and now>=next_detail:
-            generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,
-                                   detail_frames_per_window,True)
-            detail_armed+=1
-            auto.mark(events,"detail_sample_armed",phase=name,generation=generation,
-                      render_frames=detail_frames_per_window,window=detail_armed)
-            next_detail=measurement_started+duration*detail_armed/detail_windows
-        next_wake=min(end_by,next_detail) if detail_armed<detail_windows else end_by
-        time.sleep(min(1,max(0,next_wake-time.monotonic())))
+        if now-last_focus>=1:
+            if not auto.focus("interior",game.pid): raise base.BenchmarkError(f"EU IV lost focus during {name}")
+            last_focus=now
+        observed.extend(f for f in reader.poll() if eligible_frame(f,window))
+        if arms and completed<len(arms):
+            result=sampled_perturbation(observed,len(arms),detail_frames_per_window)
+            if result["status"] in {"passed","failed"}: completed=len(arms)
+        if detail and len(arms)<detail_windows and now>=requested[len(arms)] and completed==len(arms):
+            plain=[f for f in observed if f.get("render_executed") and not f.get("sample_window")]
+            preceding=plain[-detail_frames_per_window:]
+            ready=(len(preceding)==detail_frames_per_window and
+                   len({(f["phase"],f["measurement_epoch"],f["thread_id"]) for f in preceding})==1 and
+                   all(f["render_executed"]==1 for f in preceding) and
+                   all(b["render_id"]==a["render_id"]+1 for a,b in zip(preceding,preceding[1:])))
+            if ready:
+                generation=control.set(mode,PHASE_NUMBER[name],cadence,render_period_ns,detail_frames_per_window,True)
+                arm={"requested_arm_ns":int(requested[len(arms)]*1e9),"actual_arm_ns":control.command_sent_ns,
+                     "generation":generation,"preceding_observed":[render_identity(f) for f in preceding]}
+                arms.append(arm)
+                auto.mark(events,"detail_sample_armed",phase=name,render_frames=detail_frames_per_window,window=len(arms),**arm)
+        time.sleep(min(.05,max(0,end_by-time.monotonic())))
     end=auto.mark(events,"phase_end",phase=name)
     stop_generation=control.set(mode,0,cadence,render_period_ns,0,False)
     _wait_ack(game,control,stop_generation,name+" measurement stop")
     auto.mark(events,"measurement_disabled",phase=name)
-    return {"name":name,"duration_s":(end["monotonic_ns"]-start["monotonic_ns"])/1e9,
+    result={"name":name,"duration_s":(end["monotonic_ns"]-start["monotonic_ns"])/1e9,
             "requested_duration_s":duration,"start_ns":start["monotonic_ns"],
             "end_ns":end["monotonic_ns"],"settle_s":5,"mode":mode,
             "measurement_epoch":epoch,"clock_domain":"CLOCK_UPTIME_RAW calibrated to controller monotonic_ns by acknowledgement bracket",
             "clock_offset_ns":clock_offset,"alignment_uncertainty_ns":uncertainty,
             "ack_time_ns":ack_ns,"enable_generation":measurement_generation,"window_generation":window_generation,
             "update_period_ns":cadence,"render_period_ns":render_period_ns,
-            "stop_generation":stop_generation}
+            "stop_generation":stop_generation,"sample_requests":arms}
+    if detail:
+        observed.extend(f for f in reader.poll() if eligible_frame(f,result))
+        observed=[f for f in observed if eligible_frame(f,result)]
+        result["sampled_window_evidence"]=sampled_perturbation(observed,detail_windows,detail_frames_per_window)
+        if len(arms)!=detail_windows or result["sampled_window_evidence"]["status"]=="unavailable":
+            auto.mark(events,"sample_calibration_failed",phase=name,evidence=result)
+            raise base.BenchmarkError(f"{name} incomplete sample calibration: {result['sampled_window_evidence']}")
+        actual={w["sample_window"] for w in result["sampled_window_evidence"]["windows"]}
+        if name in {"P1","A0"} and result["sampled_window_evidence"]["status"]!="passed":
+            raise base.BenchmarkError(f"{name} sampled perturbation gate failed: {result['sampled_window_evidence']}")
+        if actual!={a["generation"] for a in arms}:
+            raise base.BenchmarkError(f"{name} delayed or overwritten sample commands")
+    return result
 
 
 def causal_schedule(period: int, residual_discovery: bool=False) -> list[dict]:
@@ -1471,7 +1597,10 @@ def run(output_root: Path, include_low_power: bool=True,
     gates.record("offline_overhead","passed" if evidence.get("overhead_gate")=="passed" else "unavailable","Offline overhead preflight",evidence=evidence.get("overhead_gate"))
     manifest={"gates":gates.entries,"worst_case_budget_s":budget,"format_version":FORMAT_VERSION,"report_kind":"residual_discovery" if residual_discovery else "causal",
               "status":"starting","executable_sha256":evidence["build"]["executable_sha256"],
-              "evidence":evidence,"coverage":{"engine_hooks":7,"gl_draw_apis":6,
+              "evidence":evidence,"coverage":{"engine_hooks":7,"suppressed_gl_draw_apis":6,
+              "draw_candidate_entrypoints":len(evidence["build"]["draw_api_manifest"]["apis"]),
+              "draw_observer_status":evidence["build"]["draw_api_manifest"]["status"],
+              "global_hook_totals":"partial supporting telemetry",
               "gpu_timing":"sampled asynchronous context/pass timestamp segments when supported","exact_payload_diff":"sampled uniform4fv element-level; buffer uploads hash-level"},
               "limitations":["GPU timer query support depends on the active CGL context; absent results are reported as unavailable.",
                   "Thread CPU is measured on the UpdateOneFrame thread; worker-thread totals are outside the per-frame tree.",
@@ -1585,6 +1714,13 @@ def run(output_root: Path, include_low_power: bool=True,
                 manifest["phases"]=phases
                 for config in causal_schedule(baseline_period,residual_discovery):
                     name,mode=config["name"],config["mode"]
+                    if name=="C":
+                        raw=frame_rows(run_dir/"telemetry.csv")
+                        qualified=[f for w in phases for f in raw if eligible_frame(f,w)]
+                        check=draw_api.coverage(evidence["build"]["draw_api_manifest"],qualified,read_rows(run_dir/"telemetry.csv"),
+                            {PHASE_NUMBER[w["name"]] for w in phases},require_c=False)
+                        gates.record("draw_api_coverage",check["status"],check["reason"],evidence=check)
+                        if check["status"]!="passed": raise base.BenchmarkError(f"Draw API coverage blocks C: {check}")
                     phase=_wait_phase(game,config["duration_s"],control,events,name,mode,
                         config["update_period_ns"],detail=config["detail"],render_period_ns=config["render_period_ns"])
                     phases.append(phase)
@@ -1607,6 +1743,13 @@ def run(output_root: Path, include_low_power: bool=True,
                         raise base.BenchmarkError("B did not skip Render/Present")
                     if name=="C" and (observed["total_suppressed_draws"]==0 or observed["total_forwarded_draws"]!=0):
                         raise base.BenchmarkError("C did not suppress every covered draw call")
+                    if name=="C":
+                        raw=frame_rows(run_dir/"telemetry.csv")
+                        qualified=[f for w in phases for f in raw if eligible_frame(f,w)]
+                        check=draw_api.coverage(evidence["build"]["draw_api_manifest"],qualified,read_rows(run_dir/"telemetry.csv"),
+                            {PHASE_NUMBER[w["name"]] for w in phases})
+                        gates.record("draw_api_coverage",check["status"],check["reason"],evidence=check)
+                        if check["status"]!="passed": raise base.BenchmarkError(f"C is partial draw suppression: {check}")
                     if name=="D" and any(flags&(8|16|32) for flags in observed["record_flags"]):
                         raise base.BenchmarkError("D raster-work suppression state/context restoration failed")
                     if name.startswith("A") and observed["median_draws"]==0:
