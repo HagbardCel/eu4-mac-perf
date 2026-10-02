@@ -289,7 +289,9 @@ OFFLINE_EVIDENCE_SCHEMA_VERSION = "stage2-split-v2"
 OFFLINE_EVIDENCE_SCHEMA_VERSION_V1 = "stage2-split-v1"
 OFFLINE_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
 OFFLINE_ABLATION_POLICY_VERSION = "harness_ablation_vs_sampled_5pct_v1"
-OFFLINE_DIAGNOSTIC_POLICY_VERSION = "diag_matrix_vs_diag_A_no_acceptance_v1"
+OFFLINE_DIAGNOSTIC_POLICY_VERSION = "diag_matrix_counters_baseline_v2"
+TRAINING_ONLY_VALIDATION_SCOPE = "training_only"
+FORENSIC_DETAIL_RECORD_KINDS = ("D", "S", "U", "V", "W", "B", "b", "T", "t")
 PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE = "profiler_overhead_diagnosis_v1"
 DIAGNOSTIC_MATRIX_BASELINE = "diag_A"
 DIAGNOSTIC_MATRIX_STAGES = (
@@ -308,6 +310,7 @@ DIAGNOSTIC_MATRIX_FEATURES = {
     "diag_E_full": (1, 1, 0),
     "diag_F_full_cached": (1, 1, 1),
 }
+DIAGNOSTIC_MATRIX_TRIAL_STAGES = ("counters",) + DIAGNOSTIC_MATRIX_STAGES
 CONTROLLER = Path(__file__)
 KEY_OFFLINE_SOURCE_PATHS = (
     SOURCE,
@@ -753,6 +756,7 @@ def profiler_overhead_diagnosis(run_gl: bool = True) -> dict:
     forensic_suitability = representative["offline_forensic_suitability"]
     evidence = {
         "purpose": PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE,
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
         "status": "diagnostic_complete",
         "build": static,
         "representative_workloads": representative,
@@ -848,6 +852,52 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
     return evidence
 
 
+def _diagnostic_matrix_paired_summary(
+    diagnostic_trials: list[dict],
+    instrumented_stage: str,
+    reference_stage: str,
+    *,
+    frames: int,
+) -> dict[str, dict]:
+    summary = {}
+    for axis in ("elapsed_ns", "cpu_ns"):
+        comparison = workload.paired_summary(
+            [
+                {
+                    "instrumented": trial["stages"][instrumented_stage][axis],
+                    "reference": trial["stages"][reference_stage][axis],
+                }
+                for trial in diagnostic_trials
+            ],
+            1.0,
+            frames,
+        )
+        comparison.pop("limit", None)
+        comparison["status"] = "diagnostic"
+        comparison["acceptance_gate"] = False
+        summary[axis] = comparison
+    return summary
+
+
+def _validate_diagnostic_stage_features(
+    stage: str,
+    features: tuple[int, int, int],
+    gpu_metrics: list[int],
+    record_total: int,
+    record_counts: dict[str, int],
+) -> None:
+    if features[0] and gpu_metrics[0] <= 0:
+        raise base.BenchmarkError(
+            f"{stage} enabled GPU timestamps but issued none (gpu_stamps={gpu_metrics[0]})",
+        )
+    if features[1]:
+        detail_total = sum(record_counts.get(kind, 0) for kind in FORENSIC_DETAIL_RECORD_KINDS)
+        if detail_total <= 0 and record_total <= 0:
+            raise base.BenchmarkError(
+                f"{stage} enabled forensic records but emitted none",
+            )
+
+
 def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
     control_path=root/"control.bin";log_path=root/f"{recipe['name']}-{trial}-{stage}.csv"
     frames=4
@@ -907,8 +957,15 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
         if not features[0] and any(gpu_metrics):
             raise base.BenchmarkError(f"{stage} issued GPU timestamp/poll/result calls while disabled")
         if not features[1] and any(measured["record_counts"][kind]
-            for kind in ("D","S","U","V","W","B","b","T","t")):
+            for kind in FORENSIC_DETAIL_RECORD_KINDS):
             raise base.BenchmarkError(f"{stage} emitted disabled forensic record families")
+        _validate_diagnostic_stage_features(
+            stage,
+            features,
+            gpu_metrics,
+            record_total,
+            measured["record_counts"],
+        )
     return measured,trace
 
 
@@ -964,38 +1021,44 @@ def _offline_recipe_evidence(root: Path, recipe: dict, *, frames: int = 4, inclu
     diagnostic_trials = []
     diagnostic_matrix = None
     if include_forensic:
+        trial_stages = DIAGNOSTIC_MATRIX_TRIAL_STAGES
         for trial in range(7):
-            stages = tuple(reversed(diagnostic_stages)) if trial % 2 else diagnostic_stages
+            stages = tuple(reversed(trial_stages)) if trial % 2 else trial_stages
             values = {}
             for stage in stages:
                 values[stage], _ = _offline_workload_stage(root, recipe, trial, stage)
             diagnostic_trials.append({"trial": trial, "order": list(stages), "stages": values})
-        matrix = {}
-        for stage in diagnostic_stages[1:]:  # baseline diag_A
-            matrix[stage] = {}
-            for axis in ("elapsed_ns", "cpu_ns"):
-                comparison = workload.paired_summary(
-                    [
-                        {
-                            "instrumented": trial["stages"][stage][axis],
-                            "reference": trial["stages"]["diag_A"][axis],
-                        }
-                        for trial in diagnostic_trials
-                    ],
-                    1.0,
-                    frames,
-                )
-                comparison.pop("limit", None)
-                comparison["status"] = "diagnostic"
-                comparison["acceptance_gate"] = False
-                matrix[stage][axis] = comparison
+        vs_diag_a = {
+            stage: _diagnostic_matrix_paired_summary(
+                diagnostic_trials,
+                stage,
+                DIAGNOSTIC_MATRIX_BASELINE,
+                frames=frames,
+            )
+            for stage in diagnostic_stages[1:]
+        }
+        vs_counters = {
+            stage: _diagnostic_matrix_paired_summary(
+                diagnostic_trials,
+                stage,
+                "counters",
+                frames=frames,
+            )
+            for stage in diagnostic_stages
+        }
         diagnostic_matrix = {
-            "baseline": "diag_A",
-            "comparisons": matrix,
+            "policy_version": OFFLINE_DIAGNOSTIC_POLICY_VERSION,
+            "trial_stages": list(trial_stages),
+            "baseline_counters": "counters",
+            "baseline_sampled_minimal": DIAGNOSTIC_MATRIX_BASELINE,
+            "baseline": DIAGNOSTIC_MATRIX_BASELINE,
+            "vs_diag_A": vs_diag_a,
+            "vs_counters": vs_counters,
+            "comparisons": vs_diag_a,
             "trials": diagnostic_trials,
             "policy": (
-                "Paired causal decomposition diagnostics only; no acceptance limit and "
-                "no causal attribution from percentage medians alone."
+                "Interleaved counters baseline per trial; paired A–F vs counters and vs diag_A. "
+                "Non-acceptance diagnostics only; no causal attribution from percentage medians alone."
             ),
         }
     recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
@@ -1038,6 +1101,11 @@ def offline_workloads(
             held_out,
             require_held_out=include_held_out,
         )
+        if not include_held_out:
+            offline_causal_admission = {
+                **offline_causal_admission,
+                "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+            }
         offline_forensic_suitability = tier1.summarize_forensic(training)
         if executed_artifacts_start:
             test_library_sha256 = executed_artifacts_start["test_library_sha256"]
@@ -1050,7 +1118,7 @@ def offline_workloads(
             if all(gate["status"] == "passed" for entry in evidence for gate in entry["gates"].values())
             else "failed"
         )
-        return {
+        payload = {
             "status": legacy_combined,
             "offline_causal_admission": offline_causal_admission,
             "offline_forensic_suitability": offline_forensic_suitability,
@@ -1061,6 +1129,9 @@ def offline_workloads(
             "profiler_source_sha256": base.sha256(SOURCE),
             "gpu_segments_source_sha256": base.sha256(ROOT / "benchmark/eu4_gpu_segments.h"),
         }
+        if not include_held_out:
+            payload["validation_scope"] = TRAINING_ONLY_VALIDATION_SCOPE
+        return payload
 
 
 def read_rows(path: Path) -> list[list[str]]:

@@ -41,7 +41,9 @@ Technical detail: [`analysis/frame-model-next-iteration-plan.md`](../analysis/fr
 
 ### WP1 — A–F matrix (training only)
 
-Conditions (baseline `diag_A`):
+Each diagnostic trial interleaves **`counters` → `diag_A` → B → … → F** (alternating forward/reverse order) so **A vs counters** and **B–F vs counters** are paired within the same trial block.
+
+Conditions (sampled-minimal baseline `diag_A`; counters baseline per trial):
 
 | Stage | GPU timestamps | Forensic GL records | Cached metadata |
 |-------|----------------|---------------------|-----------------|
