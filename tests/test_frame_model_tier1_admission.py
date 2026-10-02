@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmark"))
+import eu4_benchmark as base  # noqa: E402
 import frame_model_gates as gates  # noqa: E402
 import frame_model_tier1_policy as tier1  # noqa: E402
 import frame_model_workload as workload  # noqa: E402
@@ -60,6 +61,14 @@ class Tier1AdmissionGateTests(unittest.TestCase):
 
 
 class Tier1FailClosedTests(unittest.TestCase):
+    def test_exploratory_fixture_sha_is_rejected(self):
+        contaminated = (
+            "284365e71435d8b6744440c5f5a028803527f5f1848f56365b85b5957c579188"
+        )
+        self.assertIn(contaminated, workload.EXPLORATORY_HELD_OUT_SHA256S)
+        with self.assertRaises(base.BenchmarkError):
+            workload._reject_contaminated_fixture_sha(contaminated)
+
     def test_partial_causal_gates_are_unavailable(self):
         entry = {
             "recipe": {"name": "mesh"},

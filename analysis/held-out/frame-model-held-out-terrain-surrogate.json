@@ -1,0 +1,18 @@
+{
+  "name": "terrain_surrogate",
+  "role": "held_out",
+  "sha256": "dbb0af0e7964777b7ab9f0fecde068692377719bde1670c2a082ecbb26281503",
+  "draws": 7,
+  "indices": 172032,
+  "source_frame": [
+    1,
+    6270
+  ],
+  "source_sha256": "0ed07e0aa58c66dcd1ab60fdf08dbf8dc626932d6a106f0260fe42e1f50f028a",
+  "categories": [
+    "terrain"
+  ],
+  "policy": "Observed draw counts/topology/API and adjacent state-change frequencies; generated valid resources and shaders, no sleeps or added busywork.",
+  "limits": "GL structural surrogate; original resource payloads, shaders, and unobserved between-draw commands are not reconstructed. Live perturbation remains mandatory.",
+  "held_out_selection_rule": "terrain_odd_ordinal_within_frame_v1"
+}

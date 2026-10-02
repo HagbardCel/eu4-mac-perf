@@ -51,7 +51,7 @@ Design contracts and gate model in this document were frozen against profiler br
 | **Production aliases** | Stage 0: ARB instanced draws are manifest-only unresolved (no interposer/resolver substitution); **C remains blocked** until paths are qualified. Stage 5 adds safe observation and suppression-capable PROFILE forwarding once interposer-safe. Core entries keep `gl_draw_*_instanced` + `real_fn` → `glDraw*Instanced`. |
 | **Offline counters (`f2cf2fb`)** | ~**8.1–10.6%** wall/thread CPU; ~**1–7 µs/frame** absolute (synthetic). |
 | **Offline forensic** | **+226–467%** wall — must not block causal admission once gates split. |
-| **Evidence file** | `preflight()` overwrites latest pointer — **immutable archives need unique evidence IDs** (Stage 1). |
+| **Evidence file** | Stage 1 canonical archives (`legacy`, `50643ce`, exploratory `ab00679`). Stage 2 prep PR [#3](https://github.com/HagbardCel/eu4-mac-perf/pull/3). **Stage 2 validation (PR [#4](https://github.com/HagbardCel/eu4-mac-perf/pull/4)):** no-peeking held-out complete; **Tier-1 v2 admission failed** — see [stage-2-validation-outcome.md](stage-2-validation-outcome.md). **Stage 3 blocked** until offline causal admission passes. |
 | **Powermetrics** | Repo **1200**; **installed** copy may be 420. |
 | **C manifest** | 43 **unresolved** executable paths; immediate-mode not suppressible like indexed draws. |
 
@@ -502,7 +502,7 @@ Static work **may** support a technical “contained backend replacement appears
 
 1. **Stage 0** — CI green; capture-free A0; aliases; schema-2 tests.
 2. **Stage 1** — A–F documented; **immutable** evidence with unique **evidence IDs**; checkpoint decision on forensic role.
-3. **Stage 2** — Split offline gates; Tier-1 validated with hash-frozen held-out (no peeking). See [stage-2-tier1-admission-plan.md](stage-2-tier1-admission-plan.md).
+3. **Stage 2** — Split offline gates; no-peeking held-out validation executed under `tier1_causal_rel3pct_abs50us_v2` (**failed** — primary archive `00924cb`, replication `8c71c47`). Infrastructure complete; **success checkpoint not passed**. See [stage-2-validation-outcome.md](stage-2-validation-outcome.md). **Stage 3 requires passing offline causal admission first.**
 4. **Stage 3** — Tier **2a+2b** + calibration-only; **calibration_integrity** + **causal_run_integrity** + forensic split; async origin classification; checkpoint if live gates pass.
 5. **Stage 4** — Hook loop with live **N+1**; ≥95% then stop hooks; re-qualification after interposer changes.
 6. **Stage 5** — C-readiness (four-state); re-qualification before Stage 6 if hot path changed.

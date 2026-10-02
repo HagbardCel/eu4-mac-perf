@@ -8,7 +8,9 @@
 - Frozen historical failures: `analysis/evidence/frame-model-offline-legacy-373f3ff-20261001T204509Z.json` + canonical `…50643ce-20261002T180048.506022Z-549ac568.json`.
 - **Checkpoint decision** (Fabian): demote forensic to non-blocking for calibration-only *or* fix forensic first — record in project notes before locking Tier-1 numbers.
 
-**Success criterion (roadmap):** Split offline gates; Tier-1 validated with **hash-frozen held-out** recipe (no peeking); portable CI + targeted Mac evidence.
+**Execution status (2026-10-02):** Offline gate split and no-peeking held-out validation are **complete** — [stage-2-validation-outcome.md](stage-2-validation-outcome.md).
+
+**Success checkpoint (roadmap):** Tier-1 causal admission **passes** on the hash-frozen held-out validation archive (training recipes **and** qualified held-out under `tier1_causal_rel3pct_abs50us_v2`). **Not passed** on primary `00924cb` or replication `8c71c47`. **Stage 3 blocked.**
 
 ---
 
