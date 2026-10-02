@@ -21,22 +21,10 @@ int main(void) {
         fprintf(stderr, "glDrawElementsInstancedARB: distinct ARB/core profiler wrappers required\n");
         return 3;
     }
-    if (code == 30) {
-        fprintf(stderr, "glDrawArraysInstancedARB: safe RTLD_NEXT forward target required\n");
-        return 4;
-    }
-    if (code == 31) {
-        fprintf(stderr, "glDrawElementsInstancedARB: safe RTLD_NEXT forward target required\n");
-        return 5;
-    }
-    if (code == 10 || code == 11) {
-        fprintf(stderr, "draw_observer_resolve disagrees with profiler wrapper (code %d)\n", code);
-        return 6;
-    }
     if (code != 0) {
         fprintf(stderr, "unexpected verify code %d\n", code);
         return 7;
     }
-    puts("ARB instanced interpose: distinct wrappers and safe RTLD_NEXT forward targets");
+    puts("ARB instanced interpose: distinct ARB/core resolver wrappers (Stage 5 defers PROFILE forward)");
     return 0;
 }

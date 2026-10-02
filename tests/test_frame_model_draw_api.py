@@ -30,16 +30,16 @@ class DrawCoverageTests(unittest.TestCase):
             rows.extend([record('K',f,1),record('A',f,3,10,10 if f['phase']==4 else 0,0 if f['phase']==4 else 10)])
         return manifest,frames,rows
 
-    def test_suppressed_alias_wrapper_symbols(self):
+    def test_observer_wrapper_symbols_stage0_core_only_suppression(self):
         self.assertEqual(api.observer_wrapper_symbol('glDrawArraysInstanced'),'gl_draw_arrays_instanced')
-        self.assertEqual(api.observer_wrapper_symbol('glDrawArraysInstancedARB'),'gl_draw_arrays_instanced_arb')
-        self.assertEqual(api.observer_wrapper_symbol('glDrawElementsInstancedARB'),'gl_draw_elements_instanced_arb')
+        self.assertEqual(api.observer_wrapper_symbol('glDrawArraysInstancedARB'),'observe_exact_glDrawArraysInstancedARB')
+        self.assertEqual(api.observer_wrapper_symbol('glDrawElementsInstancedARB'),'observe_exact_glDrawElementsInstancedARB')
         self.assertTrue(api.observer_wrapper_symbol('glDrawRangeElementsEXT').startswith('observe_exact_'))
 
-    def test_suppression_capable_includes_alias_wrappers(self):
+    def test_suppression_capable_excludes_arb_instanced_stage5_deferred(self):
         self.assertTrue(api.suppression_capable('glDrawArraysInstanced'))
-        self.assertTrue(api.suppression_capable('glDrawArraysInstancedARB'))
-        self.assertTrue(api.suppression_capable('glDrawElementsInstancedARB'))
+        self.assertFalse(api.suppression_capable('glDrawArraysInstancedARB'))
+        self.assertFalse(api.suppression_capable('glDrawElementsInstancedARB'))
         self.assertFalse(api.suppression_capable('glDrawRangeElementsEXT'))
 
     def test_complete_coverage_and_alias_canonicalization(self):

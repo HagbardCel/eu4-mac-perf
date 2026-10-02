@@ -14,19 +14,16 @@ SUPPRESSED = {'glDrawElements': 'gl_draw_elements', 'glDrawElementsBaseVertex': 
     'glDrawArraysInstanced': 'gl_draw_arrays_instanced',
     'glDrawElementsInstancedBaseVertex': 'gl_draw_elements_instanced_base'}
 IDS = {name: i+1 for i,name in enumerate(SUPPRESSED)}
-SUPPRESSED_ALIAS_WRAPPERS = {
-    'glDrawArraysInstancedARB': 'gl_draw_arrays_instanced_arb',
-    'glDrawElementsInstancedARB': 'gl_draw_elements_instanced_arb',
-}
+# Stage 0: ARB instanced aliases are documented in ALIASES but not suppression-capable
+# wrappers (macOS DYLD_INSERT_LIBRARIES cannot safely PROFILE-forward ARB instanced entry
+# points). Exact forwarding + DROP_DRAWS for ARB instanced draws is deferred to Stage 5.
 
 def suppression_capable(name):
     core = canonical(name)
-    return (name == core and core in SUPPRESSED) or name in SUPPRESSED_ALIAS_WRAPPERS
+    return name == core and core in SUPPRESSED
 
 def observer_wrapper_symbol(name):
     core = canonical(name)
-    if name in SUPPRESSED_ALIAS_WRAPPERS:
-        return SUPPRESSED_ALIAS_WRAPPERS[name]
     if name == core and core in SUPPRESSED:
         return SUPPRESSED[core]
     return f'observe_exact_{name}'
