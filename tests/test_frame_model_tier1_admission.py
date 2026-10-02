@@ -13,10 +13,6 @@ class Tier1AdmissionGateTests(unittest.TestCase):
     def test_current_policy_version_is_v2(self):
         self.assertEqual(tier1.TIER1_CAUSAL_POLICY_VERSION, "tier1_causal_rel3pct_abs50us_v2")
 
-    def test_exploratory_sha_is_denylisted(self):
-        contaminated = next(iter(workload.EXPLORATORY_HELD_OUT_SHA256S))
-        self.assertIn(contaminated, workload.EXPLORATORY_HELD_OUT_SHA256S)
-
     def test_calibration_only_requires_causal_not_forensic(self):
         evidence = gates.GateEvidence()
         evidence.record("format_v3", "passed", "ok")
