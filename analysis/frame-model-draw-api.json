@@ -1855,6 +1855,10 @@
     "glMultiDrawArraysEXT": "glMultiDrawArrays",
     "glMultiDrawElementsEXT": "glMultiDrawElements"
   },
+  "deferred_unsafe_observers": [
+    "glDrawArraysInstancedARB",
+    "glDrawElementsInstancedARB"
+  ],
   "historical_observed_ids": [
     1,
     2,
@@ -1864,9 +1868,5 @@
     6
   ],
   "historical_policy": "historical observations never establish completeness",
-  "status": "coverage gaps",
-  "deferred_unsafe_observers": [
-    "glDrawArraysInstancedARB",
-    "glDrawElementsInstancedARB"
-  ]
+  "status": "coverage gaps"
 }
