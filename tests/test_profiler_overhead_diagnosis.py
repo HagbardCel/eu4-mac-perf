@@ -136,6 +136,31 @@ class ProfilerOverheadDiagnosisTests(unittest.TestCase):
         self.assertEqual(result["validation_scope"], model.TRAINING_ONLY_VALIDATION_SCOPE)
 
 
+    def test_discover_wp1_lists_historical_v2_without_crashing(self):
+        import summarize_wp1_diagnosis as wp1
+
+        discoveries = wp1.discover_wp1_archives()
+        roles = {item.path.name: item.role for item in discoveries}
+        self.assertIn(
+            "frame-model-offline-dac4da4-20261002T213942.617917Z-27ab7b86.json",
+            roles,
+        )
+        self.assertEqual(
+            roles["frame-model-offline-dac4da4-20261002T213942.617917Z-27ab7b86.json"],
+            "HISTORICAL",
+        )
+        valid = [item for item in discoveries if item.role == "VALID"]
+        self.assertTrue(
+            any("129e5bf5" in item.evidence_id for item in valid),
+            "expected v3 authoritative capture among VALID discoveries",
+        )
+        if len(valid) >= 2:
+            ordered = sorted(valid, key=lambda item: item.captured_at_utc, reverse=True)
+            self.assertEqual(
+                wp1._newest_valid_discovery(discoveries).evidence_id,
+                ordered[0].evidence_id,
+            )
+
     def test_summarize_wp1_reads_preflight_payload_on_disk(self):
         import summarize_wp1_diagnosis as wp1
 
@@ -170,6 +195,7 @@ class ProfilerOverheadDiagnosisTests(unittest.TestCase):
             entry = wp1.validate_wp1_archive(json.loads(temp_path.read_text()), temp_path)
             self.assertEqual(entry["evidence_id"], "20261002T220000.000000Z-abc12345")
             self.assertEqual(entry["git_commit"], commit)
+            self.assertIn("archive_sha256_committed", entry)
 
 
 if __name__ == "__main__":

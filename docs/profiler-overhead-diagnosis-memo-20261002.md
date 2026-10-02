@@ -6,11 +6,14 @@
 
 ## Authoritative WP1 source (v3)
 
+Sanitized **committed copy** of the Mac immutable capture (measurement payload unchanged; path strings may differ).
+
 | Field | Value |
 |-------|--------|
-| Archive | `analysis/evidence/frame-model-offline-9a063f0-20261002T220742.210844Z-129e5bf5.json` |
+| Archive (committed) | `analysis/evidence/frame-model-offline-9a063f0-20261002T220742.210844Z-129e5bf5.json` |
 | `evidence_id` | `20261002T220742.210844Z-129e5bf5` |
-| `archive_sha256` (committed, post–path-sanitize) | `ce3198535c1944e8b3825f87f4f82b5e6a4aef02fe5a107893ae7c59bf26d6ae` |
+| `source_archive_sha256_mac_capture` (pre-sanitize emit) | `a5198332167edf4198c1d349e170400b2788513b91cf8c140717278d68eb75b9` |
+| `archive_sha256_committed` (post–path-sanitize) | `ce3198535c1944e8b3825f87f4f82b5e6a4aef02fe5a107893ae7c59bf26d6ae` |
 | `git_commit` | `9a063f09a26918011ea34c98b156954d30b6c454` |
 | `validation_scope` | `training_only` |
 | `status` | `diagnostic_complete` |

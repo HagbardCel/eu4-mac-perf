@@ -894,9 +894,10 @@ def _validate_diagnostic_stage_features(
         )
     if features[1]:
         detail_total = sum(record_counts.get(kind, 0) for kind in FORENSIC_DETAIL_RECORD_KINDS)
-        if detail_total <= 0 and record_total <= 0:
+        if detail_total <= 0:
             raise base.BenchmarkError(
-                f"{stage} enabled forensic records but emitted none",
+                f"{stage} enabled forensic GL detail records but emitted none "
+                f"(detail_total={detail_total}, record_total={record_total})",
             )
 
 

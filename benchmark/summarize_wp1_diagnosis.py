@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,16 @@ EXPECTED_STATUS = "diagnostic_complete"
 EXPECTED_SCOPE = "training_only"
 EXPECTED_DIAGNOSTIC_POLICY = "diag_matrix_diag_counters_baseline_v3"
 INVALID_DIAGNOSTIC_POLICY_V2 = "diag_matrix_counters_baseline_v2"
+
+
+@dataclass(frozen=True)
+class Wp1Discovery:
+    role: str  # VALID | HISTORICAL
+    path: Path
+    evidence_id: str
+    captured_at_utc: str
+    detail: str
+    entry: dict | None = None
 
 
 def _load_archive(path: Path) -> dict:
@@ -135,6 +146,16 @@ def _diagnostic_policy_version(archive: dict) -> str | None:
     return None
 
 
+def _evidence_id_from_archive(archive: dict) -> str | None:
+    payload = _payload(archive)
+    immutable = payload.get("immutable_evidence") or archive.get("immutable_evidence") or {}
+    return immutable.get("evidence_id") or archive.get("evidence_id")
+
+
+def _captured_at_utc(archive: dict, evidence_id: str) -> str:
+    return archive.get("recorded_at_utc") or evidence_id
+
+
 def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
     payload = _payload(archive)
     purpose = payload.get("purpose")
@@ -183,13 +204,13 @@ def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
 
     rel_path = archive_path.relative_to(ROOT).as_posix()
     body = archive_path.read_bytes()
-    archive_sha256 = hashlib.sha256(body).hexdigest()
+    archive_sha256_committed = hashlib.sha256(body).hexdigest()
 
     immutable = payload.get("immutable_evidence") or archive.get("immutable_evidence") or {}
     evidence_id = immutable.get("evidence_id") or archive.get("evidence_id")
     if not evidence_id:
         raise ValueError("archive missing evidence_id (top-level metadata)")
-    if immutable.get("archive_sha256") and immutable["archive_sha256"] != archive_sha256:
+    if immutable.get("archive_sha256") and immutable["archive_sha256"] != archive_sha256_committed:
         raise ValueError("immutable_evidence.archive_sha256 does not match file on disk")
     if immutable.get("archive_path"):
         expected = (ROOT / immutable["archive_path"]).resolve()
@@ -203,43 +224,87 @@ def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
         or (archive.get("identity_end") or {}).get("git_commit")
         or (archive.get("identity_start") or {}).get("git_commit")
     )
-    captured_at = archive.get("recorded_at_utc") or evidence_id
+    captured_at = _captured_at_utc(archive, evidence_id)
     return {
         "evidence_id": evidence_id,
         "archive_path": rel_path,
-        "archive_sha256": archive_sha256,
+        "archive_sha256_committed": archive_sha256_committed,
         "git_commit": git_commit,
         "captured_at_utc": captured_at,
     }
 
 
-def find_wp1_archives() -> list[Path]:
+def discover_wp1_archives() -> list[Wp1Discovery]:
     if not EVIDENCE_DIR.is_dir():
         return []
-    found: list[Path] = []
+    discoveries: list[Wp1Discovery] = []
     for path in sorted(EVIDENCE_DIR.glob("frame-model-offline-*.json")):
         try:
             archive = _load_archive(path)
         except (OSError, json.JSONDecodeError):
             continue
-        if _payload(archive).get("purpose") == EXPECTED_PURPOSE:
-            found.append(path)
-    return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
+        if _payload(archive).get("purpose") != EXPECTED_PURPOSE:
+            continue
+        evidence_id = _evidence_id_from_archive(archive) or path.name
+        captured_at = _captured_at_utc(archive, evidence_id)
+        try:
+            entry = validate_wp1_archive(archive, path)
+            discoveries.append(
+                Wp1Discovery(
+                    role="VALID",
+                    path=path,
+                    evidence_id=entry["evidence_id"],
+                    captured_at_utc=entry["captured_at_utc"],
+                    detail=entry["archive_sha256_committed"][:16] + "…",
+                    entry=entry,
+                ),
+            )
+        except ValueError as error:
+            policy = _diagnostic_policy_version(archive)
+            if policy == INVALID_DIAGNOSTIC_POLICY_V2:
+                discoveries.append(
+                    Wp1Discovery(
+                        role="HISTORICAL",
+                        path=path,
+                        evidence_id=evidence_id,
+                        captured_at_utc=captured_at,
+                        detail=f"invalid vs_counters ({policy}): {error}",
+                    ),
+                )
+    discoveries.sort(key=lambda item: item.captured_at_utc, reverse=True)
+    return discoveries
 
 
-def register_manifest(archive_path: Path) -> dict:
+def _newest_valid_discovery(discoveries: list[Wp1Discovery]) -> Wp1Discovery | None:
+    valid = [item for item in discoveries if item.role == "VALID"]
+    if not valid:
+        return None
+    return max(valid, key=lambda item: item.captured_at_utc)
+
+
+def register_manifest(archive_path: Path, *, source_archive_sha256_mac_capture: str | None = None) -> dict:
     archive = _load_archive(archive_path)
     entry = validate_wp1_archive(archive, archive_path)
+    if source_archive_sha256_mac_capture:
+        entry["source_archive_sha256_mac_capture"] = source_archive_sha256_mac_capture
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     archives = manifest.setdefault("diagnostic_archives", [])
+    committed = entry["archive_sha256_committed"]
     for item in archives:
         if item.get("evidence_id") == entry["evidence_id"]:
-            if item.get("archive_sha256") != entry["archive_sha256"]:
+            existing = item.get("archive_sha256_committed") or item.get("archive_sha256")
+            if existing and existing != committed:
                 raise ValueError(
-                    f"evidence_id {entry['evidence_id']} already registered with a different archive_sha256",
+                    f"evidence_id {entry['evidence_id']} already registered with a different "
+                    f"archive_sha256_committed",
                 )
-            return entry
+            return item
     archives.append(entry)
+    manifest["diagnostic_archives"] = sorted(
+        archives,
+        key=lambda item: item.get("captured_at_utc") or "",
+        reverse=True,
+    )
     MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return entry
 
@@ -250,7 +315,7 @@ def main() -> int:
     parser.add_argument(
         "--find",
         action="store_true",
-        help="list WP1 archives under analysis/evidence/ (newest first); no path required",
+        help="list VALID and HISTORICAL WP1 archives (newest capture first); no path required",
     )
     parser.add_argument(
         "--register",
@@ -260,22 +325,31 @@ def main() -> int:
     parser.add_argument(
         "--register-latest",
         action="store_true",
-        help="register the newest WP1 archive from --find",
+        help="register the newest VALID WP1 archive by recorded_at_utc / evidence_id",
+    )
+    parser.add_argument(
+        "--source-sha256",
+        metavar="SHA256",
+        help="Mac-emitted archive SHA before path sanitization (stored alongside committed SHA)",
     )
     parser.add_argument("--markdown", action="store_true", help="print recipe tables to stdout")
     args = parser.parse_args()
 
     if args.find or args.register_latest:
-        matches = find_wp1_archives()
-        if not matches:
+        discoveries = discover_wp1_archives()
+        if not discoveries:
             print("No profiler_overhead_diagnosis_v1 archives under analysis/evidence/", file=sys.stderr)
             return 1
         if args.find:
-            for path in matches:
-                entry = validate_wp1_archive(_load_archive(path), path)
-                print(f"{path.relative_to(ROOT)}\t{entry['evidence_id']}\t{entry['archive_sha256'][:16]}…")
+            for item in discoveries:
+                rel = item.path.relative_to(ROOT)
+                print(f"{item.role}\t{rel}\t{item.evidence_id}\t{item.captured_at_utc}\t{item.detail}")
         if args.register_latest:
-            entry = register_manifest(matches[0])
+            newest = _newest_valid_discovery(discoveries)
+            if newest is None or newest.entry is None:
+                print("No VALID v3 WP1 archive found to register", file=sys.stderr)
+                return 1
+            entry = register_manifest(newest.path, source_archive_sha256_mac_capture=args.source_sha256)
             print(json.dumps(entry, indent=2))
         return 0
 
@@ -286,7 +360,7 @@ def main() -> int:
         print(f"Error: {path} not found", file=sys.stderr)
         return 1
     if args.register:
-        entry = register_manifest(path)
+        entry = register_manifest(path, source_archive_sha256_mac_capture=args.source_sha256)
         print(json.dumps(entry, indent=2))
     if args.markdown or not args.register:
         print(summarize_markdown(path))
