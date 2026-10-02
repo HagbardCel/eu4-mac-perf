@@ -29,6 +29,7 @@ HELD_OUT_FIXTURE = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.recipe
 HELD_OUT_FIXTURE_META = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.json"
 HELD_OUT_FIXTURE_PATH = HELD_OUT_FIXTURE.relative_to(ROOT).as_posix()
 TIER1_PAIR_COUNT = 7
+HELD_OUT_SELECTION_RULE_ID = "terrain_odd_ordinal_within_frame_v1"
 
 # Recipe bytes already measured without a pre-committed fixture (exploratory archives).
 EXPLORATORY_HELD_OUT_SHA256S = frozenset(
@@ -89,6 +90,66 @@ def held_out_fixture_ready() -> bool:
     if expected in EXPLORATORY_HELD_OUT_SHA256S:
         return False
     return True
+
+
+def _row_category(row, sites):
+    offset = row.get("return_offset", row.get("caller_offset", row.get("immediate_offset")))
+    return sites.get(offset)
+
+
+def build_held_out_fixture_material(*, rows=None, key=None, sites=None) -> tuple[bytes, dict]:
+    """Materialize held-out recipe bytes from the frozen selection rule (no harness timing)."""
+    if rows is None:
+        if not SOURCE.is_file():
+            raise base.BenchmarkError("Passive trace is unavailable for held-out fixture materialization")
+        rows = list(trace.read_records(SOURCE, trace.read_header(SOURCE)["used"]))
+    if key is None:
+        key = _trace_frame_key(rows)
+    if sites is None:
+        sites = {row["return_offset"]: row["category"] for row in json.loads(INVENTORY.read_text())["direct_sites"]}
+    terrain_rows = [
+        row
+        for row in rows
+        if (row["window"], row["frame"]) == key and _row_category(row, sites) in HELD_OUT_CATEGORIES
+    ]
+    selected = [row for index, row in enumerate(terrain_rows) if index % 2 == 1]
+    if len(selected) < TIER1_PAIR_COUNT:
+        raise base.BenchmarkError(
+            f"Held-out selection {HELD_OUT_SELECTION_RULE_ID} produced {len(selected)} draws; need >= {TIER1_PAIR_COUNT}",
+        )
+    if any(
+        row["flags"] or row["api"] not in (1, 2, 3) or row["mode"] not in (4, 5) for row in selected
+    ):
+        raise base.BenchmarkError("Invalid held-out selection rows for structural recipe")
+    payload = _build_recipe_payload(selected)
+    sha256 = hashlib.sha256(payload).hexdigest()
+    if sha256 in EXPLORATORY_HELD_OUT_SHA256S:
+        raise base.BenchmarkError(
+            "Held-out selection matches exploratory denylist SHA; choose a different selection rule",
+        )
+    meta = _recipe_dict(
+        HELD_OUT_RECIPE_NAME,
+        HELD_OUT_FIXTURE,
+        payload,
+        key,
+        role="held_out",
+        categories=HELD_OUT_CATEGORIES,
+    )
+    meta.pop("path", None)
+    meta["held_out_selection_rule"] = HELD_OUT_SELECTION_RULE_ID
+    meta["sha256"] = sha256
+    meta["draws"] = len(selected)
+    meta["indices"] = sum(row["count"] for row in selected)
+    return payload, meta
+
+
+def write_held_out_fixture_files() -> dict:
+    """Write analysis/held-out/* from passive trace using the frozen selection rule."""
+    payload, meta = build_held_out_fixture_material()
+    HELD_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    HELD_OUT_FIXTURE.write_bytes(payload)
+    HELD_OUT_FIXTURE_META.write_text(json.dumps(meta, indent=2) + "\n")
+    return meta
 
 
 def _trace_frame_key(rows):
