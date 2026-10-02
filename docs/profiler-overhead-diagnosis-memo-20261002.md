@@ -107,11 +107,18 @@ Paired within the same diagnostic trial block. **median_fraction** on `elapsed_n
 | 4. Next code PR | **WP5** (above). |
 | 5. Re-qualification | After fix PR + new artifact only. |
 
-**Mac capture (unchanged):**
+**Mac capture** — you do **not** need the full stdout. The run always writes the immutable file under `analysis/evidence/` (`frame-model-offline-<git-short>-<evidence_id>.json`). Stdout is optional.
 
 ```bash
-python3 benchmark/eu4_frame_model.py diagnostic-matrix | tee /tmp/wp1-diagnostic.json
-python3 benchmark/sanitize_paths.py analysis/evidence/<archive-from-immutable_evidence>.json
+# Optional: tiny manifest fields only (~4 lines)
+python3 benchmark/eu4_frame_model.py diagnostic-matrix --registry-json
+
+# Or locate the on-disk archive (newest WP1 capture)
+python3 benchmark/summarize_wp1_diagnosis.py --find
+python3 benchmark/summarize_wp1_diagnosis.py --register-latest
+
+# Or register a known path
+python3 benchmark/sanitize_paths.py analysis/evidence/<archive>.json
 python3 benchmark/summarize_wp1_diagnosis.py --register analysis/evidence/<archive>.json
 git add analysis/evidence/<archive>.json analysis/profiler-overhead-diagnosis-manifest.json
 ```

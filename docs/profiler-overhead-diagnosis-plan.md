@@ -60,11 +60,15 @@ Harness env: `EU4_TEST_GPU_TIMESTAMPS`, `EU4_TEST_FORENSIC_RECORDS`, `EU4_TEST_C
 
 ```bash
 python3 benchmark/eu4_frame_model.py diagnostic-matrix
+# optional: manifest-sized stdout only
+python3 benchmark/eu4_frame_model.py diagnostic-matrix --registry-json
+python3 benchmark/summarize_wp1_diagnosis.py --find
+python3 benchmark/summarize_wp1_diagnosis.py --register-latest
 ```
 
-Writes immutable evidence under `analysis/evidence/` with `purpose: profiler_overhead_diagnosis_v1`. Does **not** require held-out; does **not** exit non-zero solely because causal gates still fail.
+Writes immutable evidence under `analysis/evidence/` with `purpose: profiler_overhead_diagnosis_v1` (under the archive’s `preflight` object). Does **not** require held-out; does **not** exit non-zero solely because causal gates still fail.
 
-Register new archives in [`analysis/profiler-overhead-diagnosis-manifest.json`](../analysis/profiler-overhead-diagnosis-manifest.json).
+Register new archives in [`analysis/profiler-overhead-diagnosis-manifest.json`](../analysis/profiler-overhead-diagnosis-manifest.json) via `summarize_wp1_diagnosis.py --register` or `--register-latest`.
 
 ## Re-qualification → Stage 3
 

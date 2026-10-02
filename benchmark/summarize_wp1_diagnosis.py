@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+EVIDENCE_DIR = ROOT / "analysis/evidence"
 MANIFEST = ROOT / "analysis/profiler-overhead-diagnosis-manifest.json"
 TRAINING_RECIPES = ("mesh", "borders", "text_ui")
 EXPECTED_PURPOSE = "profiler_overhead_diagnosis_v1"
@@ -21,8 +22,19 @@ def _load_archive(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _payload(archive: dict) -> dict:
+    """On-disk immutable archives store capture under `preflight`; CLI stdout is flat."""
+    if archive.get("purpose") == EXPECTED_PURPOSE:
+        return archive
+    preflight = archive.get("preflight")
+    if isinstance(preflight, dict) and preflight.get("purpose") == EXPECTED_PURPOSE:
+        return preflight
+    return archive
+
+
 def _recipe_entries(archive: dict) -> list[dict]:
-    rw = archive.get("representative_workloads")
+    payload = _payload(archive)
+    rw = payload.get("representative_workloads")
     if isinstance(rw, dict) and rw.get("recipes"):
         return rw["recipes"]
     preflight = archive.get("preflight") or {}
@@ -48,12 +60,13 @@ def _format_comparison_row(recipe: str, stage: str, comp: dict) -> str:
 
 def summarize_markdown(archive_path: Path) -> str:
     archive = _load_archive(archive_path)
+    payload = _payload(archive)
     lines = [
         f"# WP1 matrix summary for `{archive_path.relative_to(ROOT)}`",
         "",
-        f"- `purpose`: {archive.get('purpose')}",
-        f"- `status`: {archive.get('status')}",
-        f"- `validation_scope`: {archive.get('validation_scope')}",
+        f"- `purpose`: {payload.get('purpose')}",
+        f"- `status`: {payload.get('status')}",
+        f"- `validation_scope`: {payload.get('validation_scope')}",
         "",
         "## Causal gates (elapsed_ns)",
         "",
@@ -76,6 +89,7 @@ def summarize_markdown(archive_path: Path) -> str:
             "|--------|-------|-------------------------|--------------|---------------------|----------|",
         ],
     )
+    has_vs_counters = False
     for entry in _recipe_entries(archive):
         name = entry.get("recipe", {}).get("name")
         if name not in TRAINING_RECIPES:
@@ -83,8 +97,9 @@ def summarize_markdown(archive_path: Path) -> str:
         dm = entry.get("diagnostic_matrix") or {}
         vs_counters = dm.get("vs_counters") or {}
         for stage in sorted(vs_counters):
+            has_vs_counters = True
             lines.append(_format_comparison_row(name, stage, vs_counters[stage]))
-    if not any("diag_" in line for line in lines):
+    if not has_vs_counters:
         lines.append("| *(none)* | | | | | |")
     lines.extend(
         [
@@ -107,27 +122,33 @@ def summarize_markdown(archive_path: Path) -> str:
 
 
 def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
-    purpose = archive.get("purpose")
+    payload = _payload(archive)
+    purpose = payload.get("purpose")
     if purpose != EXPECTED_PURPOSE:
         raise ValueError(f"expected purpose {EXPECTED_PURPOSE}, got {purpose!r}")
-    if archive.get("status") != EXPECTED_STATUS:
-        raise ValueError(f"expected status {EXPECTED_STATUS}, got {archive.get('status')!r}")
-    scope = archive.get("validation_scope")
+    if payload.get("status") != EXPECTED_STATUS:
+        raise ValueError(f"expected status {EXPECTED_STATUS}, got {payload.get('status')!r}")
+    scope = payload.get("validation_scope")
     if scope != EXPECTED_SCOPE:
         raise ValueError(f"expected validation_scope {EXPECTED_SCOPE}, got {scope!r}")
-    immutable = archive.get("immutable_evidence") or {}
-    evidence_id = immutable.get("evidence_id")
-    rel_path = immutable.get("archive_path")
-    archive_sha256 = immutable.get("archive_sha256")
-    if not evidence_id or not rel_path or not archive_sha256:
-        raise ValueError("immutable_evidence must include evidence_id, archive_path, archive_sha256")
-    resolved = (ROOT / rel_path).resolve()
-    if resolved != archive_path.resolve():
-        raise ValueError(f"immutable_evidence.archive_path {rel_path} does not match file {archive_path}")
+
+    rel_path = archive_path.relative_to(ROOT).as_posix()
     body = archive_path.read_bytes()
-    digest = hashlib.sha256(body).hexdigest()
-    if digest != archive_sha256:
-        raise ValueError("archive_sha256 does not match file on disk")
+    archive_sha256 = hashlib.sha256(body).hexdigest()
+
+    immutable = payload.get("immutable_evidence") or archive.get("immutable_evidence") or {}
+    evidence_id = immutable.get("evidence_id") or archive.get("evidence_id")
+    if not evidence_id:
+        raise ValueError("archive missing evidence_id (top-level metadata)")
+    if immutable.get("archive_sha256") and immutable["archive_sha256"] != archive_sha256:
+        raise ValueError("immutable_evidence.archive_sha256 does not match file on disk")
+    if immutable.get("archive_path"):
+        expected = (ROOT / immutable["archive_path"]).resolve()
+        if expected != archive_path.resolve():
+            raise ValueError(
+                f"immutable_evidence.archive_path {immutable['archive_path']} does not match file {archive_path}",
+            )
+
     git_commit = (
         archive.get("git_commit")
         or (archive.get("identity_end") or {}).get("git_commit")
@@ -136,11 +157,25 @@ def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
     captured_at = archive.get("recorded_at_utc") or evidence_id
     return {
         "evidence_id": evidence_id,
-        "archive_path": rel_path.replace("\\", "/"),
+        "archive_path": rel_path,
         "archive_sha256": archive_sha256,
         "git_commit": git_commit,
         "captured_at_utc": captured_at,
     }
+
+
+def find_wp1_archives() -> list[Path]:
+    if not EVIDENCE_DIR.is_dir():
+        return []
+    found: list[Path] = []
+    for path in sorted(EVIDENCE_DIR.glob("frame-model-offline-*.json")):
+        try:
+            archive = _load_archive(path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if _payload(archive).get("purpose") == EXPECTED_PURPOSE:
+            found.append(path)
+    return sorted(found, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 def register_manifest(archive_path: Path) -> dict:
@@ -159,14 +194,39 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("archive", type=Path, nargs="?", help="WP1 evidence JSON under analysis/evidence/")
     parser.add_argument(
+        "--find",
+        action="store_true",
+        help="list WP1 archives under analysis/evidence/ (newest first); no path required",
+    )
+    parser.add_argument(
         "--register",
         action="store_true",
-        help="append validated immutable_evidence entry to profiler-overhead-diagnosis-manifest.json",
+        help="append validated entry to profiler-overhead-diagnosis-manifest.json",
+    )
+    parser.add_argument(
+        "--register-latest",
+        action="store_true",
+        help="register the newest WP1 archive from --find",
     )
     parser.add_argument("--markdown", action="store_true", help="print recipe tables to stdout")
     args = parser.parse_args()
+
+    if args.find or args.register_latest:
+        matches = find_wp1_archives()
+        if not matches:
+            print("No profiler_overhead_diagnosis_v1 archives under analysis/evidence/", file=sys.stderr)
+            return 1
+        if args.find:
+            for path in matches:
+                entry = validate_wp1_archive(_load_archive(path), path)
+                print(f"{path.relative_to(ROOT)}\t{entry['evidence_id']}\t{entry['archive_sha256'][:16]}…")
+        if args.register_latest:
+            entry = register_manifest(matches[0])
+            print(json.dumps(entry, indent=2))
+        return 0
+
     if not args.archive:
-        parser.error("archive path is required")
+        parser.error("archive path is required unless --find or --register-latest is used")
     path = args.archive.expanduser().resolve()
     if not path.is_file():
         print(f"Error: {path} not found", file=sys.stderr)

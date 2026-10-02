@@ -2727,9 +2727,14 @@ def main() -> int:
     pf=sub.add_parser("preflight",help="pin/build the profiler and validate offline probes")
     pf.add_argument("--static-only",action="store_true")
     pf.add_argument("--require-power-helper",action="store_true")
-    sub.add_parser(
+    dm=sub.add_parser(
         "diagnostic-matrix",
         help="training-only offline workloads + A–F matrix; writes immutable evidence without held-out",
+    )
+    dm.add_argument(
+        "--registry-json",
+        action="store_true",
+        help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
     )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
@@ -2749,7 +2754,10 @@ def main() -> int:
             print(json.dumps(result,indent=2))
         elif args.command=="diagnostic-matrix":
             result=profiler_overhead_diagnosis()
-            print(json.dumps(result,indent=2))
+            if args.registry_json:
+                print(json.dumps(result.get("immutable_evidence") or {},indent=2))
+            else:
+                print(json.dumps(result,indent=2))
         elif args.command=="report":
             print(json.dumps(analyze(Path(args.run_dir).expanduser().resolve()),indent=2))
         elif args.command=="recover-power":

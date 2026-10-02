@@ -1,4 +1,6 @@
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -125,6 +127,28 @@ class ProfilerOverheadDiagnosisTests(unittest.TestCase):
         publish.assert_called_once()
         self.assertFalse(publish.call_args.kwargs["update_rolling_pointer"])
         self.assertEqual(result["validation_scope"], model.TRAINING_ONLY_VALIDATION_SCOPE)
+
+
+    def test_summarize_wp1_reads_preflight_payload_on_disk(self):
+        import summarize_wp1_diagnosis as wp1
+
+        archive = {
+            "evidence_id": "20261002T220000.000000Z-abc12345",
+            "recorded_at_utc": "20261002T220000.000000Z-abc12345",
+            "git_commit": "deadbeef",
+            "preflight": {
+                "purpose": wp1.EXPECTED_PURPOSE,
+                "status": wp1.EXPECTED_STATUS,
+                "validation_scope": wp1.EXPECTED_SCOPE,
+                "representative_workloads": {"recipes": []},
+            },
+        }
+        with tempfile.TemporaryDirectory(dir=wp1.ROOT) as temporary:
+            temp_path = Path(temporary) / "wp1-test-archive.json"
+            temp_path.write_text(json.dumps(archive), encoding="utf-8")
+            entry = wp1.validate_wp1_archive(json.loads(temp_path.read_text()), temp_path)
+            self.assertEqual(entry["evidence_id"], "20261002T220000.000000Z-abc12345")
+            self.assertEqual(entry["git_commit"], "deadbeef")
 
 
 if __name__ == "__main__":
