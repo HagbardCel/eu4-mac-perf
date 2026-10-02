@@ -96,7 +96,7 @@
     "held_out_status": "unavailable",
     "held_out_recipe": "terrain_surrogate",
     "held_out_qualification": "exploratory",
-    "held_out_reason": "held-out evidence was not frozen before timing"
+    "held_out_reason": "held-out fixture was previously measured as exploratory evidence"
   },
   "offline_forensic_suitability": {
     "status": "failed",

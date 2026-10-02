@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 import frame_model_workload as workload
 
@@ -37,6 +38,18 @@ TIER1_FRAMES_PER_TRIAL = 4
 TIER1_PAIR_COUNT = workload.TIER1_PAIR_COUNT
 HELD_OUT_FIXTURE_PREFIX = "analysis/held-out/"
 HELD_OUT_UNQUALIFIED_REASON = "held-out evidence was not frozen before timing"
+HELD_OUT_CONTAMINATED_REASON = (
+    "held-out fixture was previously measured as exploratory evidence"
+)
+
+
+def _normalized_fixture_path(path: str) -> str | None:
+    if not path:
+        return None
+    normalized = PurePosixPath(path.replace("\\", "/"))
+    if ".." in normalized.parts:
+        return None
+    return normalized.as_posix()
 
 
 def held_out_admission_qualified(entry: dict | None) -> bool:
@@ -47,10 +60,24 @@ def held_out_admission_qualified(entry: dict | None) -> bool:
         return False
     if recipe.get("admission_qualified") is not True or recipe.get("fixture_committed") is not True:
         return False
-    fixture_path = (recipe.get("fixture_path") or "").replace("\\", "/")
-    if not fixture_path.startswith(HELD_OUT_FIXTURE_PREFIX):
+    fixture_path = _normalized_fixture_path(recipe.get("fixture_path") or "")
+    if fixture_path != workload.HELD_OUT_FIXTURE_PATH:
         return False
-    return bool(recipe.get("fixture_sha256"))
+    fixture_sha = recipe.get("fixture_sha256")
+    recipe_sha = recipe.get("sha256")
+    if not fixture_sha or not recipe_sha or fixture_sha != recipe_sha:
+        return False
+    if fixture_sha in workload.EXPLORATORY_HELD_OUT_SHA256S:
+        return False
+    return True
+
+
+def held_out_disqualification_reason(entry: dict) -> str:
+    recipe = entry.get("recipe") or {}
+    sha = recipe.get("fixture_sha256") or recipe.get("sha256")
+    if sha in workload.EXPLORATORY_HELD_OUT_SHA256S:
+        return HELD_OUT_CONTAMINATED_REASON
+    return HELD_OUT_UNQUALIFIED_REASON
 
 
 def validate_pairs(pairs) -> tuple[bool, str | None]:
@@ -256,7 +283,7 @@ def summarize_admission(
         recipe_meta = held_out.get("recipe") or {}
         held_eval = {
             "status": "unavailable",
-            "reason": HELD_OUT_UNQUALIFIED_REASON,
+            "reason": held_out_disqualification_reason(held_out),
             "qualification": "exploratory",
             "policy_version": policy.version,
             "recipe": recipe_meta.get("name"),

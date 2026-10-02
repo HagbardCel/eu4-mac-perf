@@ -231,7 +231,7 @@ class Tier1ReplayTests(unittest.TestCase):
         replay = tier1.replay_archive_preflight(preflight)
         held = replay["offline_causal_admission"]["held_out_recipe"]
         self.assertEqual(held["status"], "unavailable")
-        self.assertEqual(held["reason"], tier1.HELD_OUT_UNQUALIFIED_REASON)
+        self.assertEqual(held["reason"], tier1.HELD_OUT_CONTAMINATED_REASON)
         self.assertEqual(held["qualification"], "exploratory")
         self.assertEqual(replay["offline_causal_admission"]["status"], "failed")
 
@@ -248,6 +248,44 @@ class Tier1ReplayTests(unittest.TestCase):
             replay["offline_causal_admission"]["held_out_recipe"]["status"],
             "unavailable",
         )
+
+    def test_ab00679_sha_cannot_be_laundered_with_provenance(self):
+        contaminated = next(iter(workload.EXPLORATORY_HELD_OUT_SHA256S))
+        gates = Tier1FailClosedTests._passing_gates()
+        held = {
+            "recipe": {
+                "name": "terrain_surrogate",
+                "role": "held_out",
+                "sha256": contaminated,
+                "admission_qualified": True,
+                "fixture_committed": True,
+                "fixture_path": workload.HELD_OUT_FIXTURE_PATH,
+                "fixture_sha256": contaminated,
+            },
+            "gates": gates,
+        }
+        self.assertFalse(tier1.held_out_admission_qualified(held))
+        preflight = {"representative_workloads": {"recipes": [held]}}
+        replay = tier1.replay_archive_preflight(preflight)
+        held_out = replay["offline_causal_admission"]["held_out_recipe"]
+        self.assertEqual(held_out["status"], "unavailable")
+        self.assertEqual(held_out["reason"], tier1.HELD_OUT_CONTAMINATED_REASON)
+
+    def test_mismatched_fixture_and_recipe_sha_not_qualified(self):
+        gates = Tier1FailClosedTests._passing_gates()
+        held = {
+            "recipe": {
+                "name": "terrain_surrogate",
+                "role": "held_out",
+                "sha256": "a" * 64,
+                "admission_qualified": True,
+                "fixture_committed": True,
+                "fixture_path": workload.HELD_OUT_FIXTURE_PATH,
+                "fixture_sha256": "b" * 64,
+            },
+            "gates": gates,
+        }
+        self.assertFalse(tier1.held_out_admission_qualified(held))
 
 
 if __name__ == "__main__":

@@ -48,7 +48,13 @@ After the `.recipe` and `.json` (with matching `sha256`) are committed, prefligh
 }
 ```
 
-Replay and admission require this provenance; archives with only `role: held_out` (e.g. exploratory `ab00679`) are **not** treated as no-peeking validation.
+Replay and admission require this provenance and matching `fixture_sha256 == sha256`;
+archives with only `role: held_out` (e.g. exploratory `ab00679`) are **not** treated as
+no-peeking validation.
+
+The exploratory `ab00679` recipe SHA is permanently disqualified in
+`EXPLORATORY_HELD_OUT_SHA256S` — committing those exact bytes under `analysis/held-out/`
+cannot qualify them for held-out admission.
 
 ## Exploratory evidence
 

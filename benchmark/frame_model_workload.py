@@ -27,7 +27,15 @@ HELD_OUT_CATEGORIES = frozenset({"terrain"})
 HELD_OUT_DIR = ROOT / "analysis/held-out"
 HELD_OUT_FIXTURE = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.recipe"
 HELD_OUT_FIXTURE_META = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.json"
+HELD_OUT_FIXTURE_PATH = HELD_OUT_FIXTURE.relative_to(ROOT).as_posix()
 TIER1_PAIR_COUNT = 7
+
+# Recipe bytes already measured without a pre-committed fixture (exploratory archives).
+EXPLORATORY_HELD_OUT_SHA256S = frozenset(
+    {
+        "284365e71435d8b6744440c5f5a028803527f5f1848f56365b85b5957c579188",
+    },
+)
 
 
 def _git_tracked_at_head(path: Path) -> bool:
@@ -45,16 +53,25 @@ def _git_tracked_at_head(path: Path) -> bool:
         return False
 
 
+def _reject_contaminated_fixture_sha(sha256: str) -> None:
+    if sha256 in EXPLORATORY_HELD_OUT_SHA256S:
+        raise base.BenchmarkError(
+            "Held-out fixture was previously measured as exploratory evidence "
+            f"(sha256 {sha256}); choose fresh recipe bytes",
+        )
+
+
 def held_out_fixture_provenance() -> dict:
     """Provenance stamped on recipes measured from the committed held-out fixture."""
     meta = json.loads(HELD_OUT_FIXTURE_META.read_text())
     expected = meta.get("sha256")
     if not expected or base.sha256(HELD_OUT_FIXTURE) != expected:
         raise base.BenchmarkError("Held-out fixture SHA256 does not match frozen metadata")
+    _reject_contaminated_fixture_sha(expected)
     return {
         "admission_qualified": True,
         "fixture_committed": True,
-        "fixture_path": HELD_OUT_FIXTURE.relative_to(ROOT).as_posix(),
+        "fixture_path": HELD_OUT_FIXTURE_PATH,
         "fixture_sha256": expected,
     }
 
@@ -67,7 +84,11 @@ def held_out_fixture_ready() -> bool:
         return False
     meta = json.loads(HELD_OUT_FIXTURE_META.read_text())
     expected = meta.get("sha256")
-    return bool(expected and base.sha256(HELD_OUT_FIXTURE) == expected)
+    if not expected or base.sha256(HELD_OUT_FIXTURE) != expected:
+        return False
+    if expected in EXPLORATORY_HELD_OUT_SHA256S:
+        return False
+    return True
 
 
 def _trace_frame_key(rows):
