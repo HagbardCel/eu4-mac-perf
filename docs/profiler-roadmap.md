@@ -51,7 +51,7 @@ Design contracts and gate model in this document were frozen against profiler br
 | **Production aliases** | Stage 0: ARB instanced draws are manifest-only unresolved (no interposer/resolver substitution); **C remains blocked** until paths are qualified. Stage 5 adds safe observation and suppression-capable PROFILE forwarding once interposer-safe. Core entries keep `gl_draw_*_instanced` + `real_fn` → `glDraw*Instanced`. |
 | **Offline counters (`f2cf2fb`)** | ~**8.1–10.6%** wall/thread CPU; ~**1–7 µs/frame** absolute (synthetic). |
 | **Offline forensic** | **+226–467%** wall — must not block causal admission once gates split. |
-| **Evidence file** | `preflight()` overwrites latest pointer — **immutable archives need unique evidence IDs** (Stage 1). |
+| **Evidence file** | Stage 1: immutable archives + slim pointer; Stage 2 prep merged PR [#3](https://github.com/HagbardCel/eu4-mac-perf/pull/3) (`stage2-split-v2`, `tier1_causal_rel3pct_abs50us_v2`). **Held-out validation:** freeze fixture then Mac preflight on `cursor/stage-2-complete-0759`. |
 | **Powermetrics** | Repo **1200**; **installed** copy may be 420. |
 | **C manifest** | 43 **unresolved** executable paths; immediate-mode not suppressible like indexed draws. |
 
