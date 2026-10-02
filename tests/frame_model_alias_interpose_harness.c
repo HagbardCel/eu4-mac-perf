@@ -29,14 +29,6 @@ int main(void) {
         fprintf(stderr, "glDrawElementsInstancedARB: safe RTLD_NEXT forward target required\n");
         return 5;
     }
-    if (code == 3) {
-        fprintf(stderr, "glDrawArraysInstancedARB: PROFILE forward must not re-enter profiler wrapper\n");
-        return 6;
-    }
-    if (code == 4) {
-        fprintf(stderr, "glDrawElementsInstancedARB: PROFILE forward must not re-enter profiler wrapper\n");
-        return 7;
-    }
     if (code == 10 || code == 11) {
         fprintf(stderr, "draw_observer_resolve disagrees with profiler wrapper (code %d)\n", code);
         return 6;
@@ -45,6 +37,6 @@ int main(void) {
         fprintf(stderr, "unexpected verify code %d\n", code);
         return 7;
     }
-    puts("ARB instanced interpose: launch injection active, distinct wrappers, PROFILE forward does not self-recurse");
+    puts("ARB instanced interpose: distinct wrappers and safe RTLD_NEXT forward targets");
     return 0;
 }

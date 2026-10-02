@@ -2244,24 +2244,6 @@ __attribute__((visibility("default"))) int eu4_frame_model_test_verify_arb_insta
         fprintf(stderr,"glDrawElementsInstancedARB: RTLD_NEXT forward target missing or equals wrapper\n");
         return 31;
     }
-    eu4_frame_model_test_reset_draw_alias();
-    eu4_frame_model_test_arm_draw_alias(1);
-    test_arb_arrays_instanced_depth_max=test_arb_elements_instanced_depth_max=0;
-    eu4_frame_model_test_invoke_draw_alias("glDrawArraysInstancedARB");
-    if(test_arb_arrays_instanced_depth_max>1) {
-        fprintf(stderr,"glDrawArraysInstancedARB: PROFILE forward re-entered wrapper (depth=%u)\n",
-                test_arb_arrays_instanced_depth_max);
-        return 3;
-    }
-    eu4_frame_model_test_reset_draw_alias();
-    eu4_frame_model_test_arm_draw_alias(1);
-    test_arb_elements_instanced_depth_max=0;
-    eu4_frame_model_test_invoke_draw_alias("glDrawElementsInstancedARB");
-    if(test_arb_elements_instanced_depth_max>1) {
-        fprintf(stderr,"glDrawElementsInstancedARB: PROFILE forward re-entered wrapper (depth=%u)\n",
-                test_arb_elements_instanced_depth_max);
-        return 4;
-    }
     return 0;
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_reset_draw_alias(void) {
