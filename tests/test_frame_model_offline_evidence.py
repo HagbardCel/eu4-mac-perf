@@ -176,6 +176,17 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
         ):
             self.assertTrue(model._git_tree_clean_for_evidence())
 
+    def test_git_tree_clean_reports_violation_paths(self):
+        porcelain = "?? internal/notes.md"
+        with mock.patch.object(
+            model.subprocess,
+            "run",
+            return_value=mock.Mock(stdout=porcelain, returncode=0),
+        ):
+            violations = model._git_tree_clean_violations_for_evidence()
+        self.assertEqual(violations, ["internal/notes.md"])
+        self.assertFalse(model._git_tree_clean_for_evidence())
+
     def test_git_tree_clean_flags_tracked_evidence_archive_edits(self):
         porcelain = (
             " M analysis/evidence/frame-model-offline-legacy-373f3ff-20261001T204509Z.json"

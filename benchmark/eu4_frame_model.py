@@ -315,14 +315,8 @@ def _git_commit_metadata() -> dict:
     return {"git_commit": commit, "git_commit_short": commit[:7]}
 
 
-def _git_tree_clean_for_evidence() -> bool:
-    """Return whether the worktree is clean for canonical offline evidence.
-
-    Untracked files under ``analysis/evidence/`` and updates to the rolling
-    pointer ``analysis/frame-model-offline-evidence.json`` are generated outputs
-    and are ignored. Modifications or deletions of tracked evidence archives
-    under ``analysis/evidence/`` still fail closed.
-    """
+def _git_tree_clean_violations_for_evidence() -> list[str]:
+    """Paths that block canonical offline evidence (see ``_git_tree_clean_for_evidence``)."""
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain", "-uall"],
@@ -332,7 +326,8 @@ def _git_tree_clean_for_evidence() -> bool:
             check=True,
         )
     except (OSError, subprocess.CalledProcessError):
-        return False
+        return ["<git status unavailable>"]
+    violations: list[str] = []
     for line in result.stdout.splitlines():
         if not line.strip():
             continue
@@ -343,11 +338,23 @@ def _git_tree_clean_for_evidence() -> bool:
         if path.startswith(OFFLINE_EVIDENCE_GENERATED_PREFIX):
             if status == "??":
                 continue
-            return False
+            violations.append(path)
+            continue
         if path == OFFLINE_EVIDENCE_POINTER_REL:
             continue
-        return False
-    return True
+        violations.append(path)
+    return violations
+
+
+def _git_tree_clean_for_evidence() -> bool:
+    """Return whether the worktree is clean for canonical offline evidence.
+
+    Untracked files under ``analysis/evidence/`` and updates to the rolling
+    pointer ``analysis/frame-model-offline-evidence.json`` are generated outputs
+    and are ignored. Modifications or deletions of tracked evidence archives
+    under ``analysis/evidence/`` still fail closed.
+    """
+    return not _git_tree_clean_violations_for_evidence()
 
 
 def _offline_git_identity_snapshot() -> dict:
@@ -623,8 +630,13 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
     if run_gl:
         identity_start = _offline_git_identity_snapshot()
         if not identity_start.get("git_tree_clean"):
+            violations = _git_tree_clean_violations_for_evidence()
+            detail = ", ".join(violations[:8])
+            if len(violations) > 8:
+                detail += f", … (+{len(violations) - 8} more)"
             raise base.BenchmarkError(
-                "Source tree dirty before offline preflight (excluding generated evidence outputs)",
+                "Source tree dirty before offline preflight (excluding generated evidence outputs)"
+                + (f": {detail}" if detail else ""),
             )
     static = build()
     if run_gl:

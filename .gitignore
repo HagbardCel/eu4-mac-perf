@@ -5,6 +5,9 @@ benchmark/.build/
 # Local fixtures (not tracked; see results/README.md)
 fixtures/
 
+# Cursor/agent scratch at repo root (not part of the benchmark tree)
+/internal/
+
 # Tier B: heavy or local-only run artifacts
 results/**/*.pliststream
 results/**/powermetrics.stderr
