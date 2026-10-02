@@ -1192,11 +1192,33 @@ static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
 typedef void (*DrawElementsInstancedFn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
 typedef void (*DrawArraysInstancedFn)(GLenum,GLint,GLsizei,GLsizei);
 typedef void (*DrawElementsInstancedBaseFn)(GLenum,GLsizei,GLenum,const void *,GLsizei,GLint);
-static bool eu4_arb_elements_instanced_replacee_available(void) {
-    return (void *)(uintptr_t)glDrawElementsInstancedARB!=NULL;
+static void gl_draw_arrays_instanced_arb(GLenum,GLint,GLsizei,GLsizei);
+static void gl_draw_elements_instanced_arb(GLenum,GLsizei,GLenum,const void *,GLsizei);
+static DrawElementsInstancedFn eu4_original_glDrawElementsInstanced(void) {
+    static DrawElementsInstancedFn fn;
+    static char once;
+    if(!once) {
+        fn=(DrawElementsInstancedFn)dlsym(RTLD_NEXT,"glDrawElementsInstanced");
+        once=1;
+    }
+    return fn;
 }
-static bool eu4_arb_arrays_instanced_replacee_available(void) {
-    return (void *)(uintptr_t)glDrawArraysInstancedARB!=NULL;
+static DrawArraysInstancedFn eu4_original_glDrawArraysInstanced(void) {
+    static DrawArraysInstancedFn fn;
+    static char once;
+    if(!once) {
+        fn=(DrawArraysInstancedFn)dlsym(RTLD_NEXT,"glDrawArraysInstanced");
+        once=1;
+    }
+    return fn;
+}
+static bool eu4_arb_elements_instanced_forward_available(void) {
+    DrawElementsInstancedFn fn=eu4_original_glDrawElementsInstanced();
+    return fn && (void *)(uintptr_t)fn!=(void *)gl_draw_elements_instanced_arb;
+}
+static bool eu4_arb_arrays_instanced_forward_available(void) {
+    DrawArraysInstancedFn fn=eu4_original_glDrawArraysInstanced();
+    return fn && (void *)(uintptr_t)fn!=(void *)gl_draw_arrays_instanced_arb;
 }
 static void mark_draw_forward_probe_failure(void) {
     if(measurement_active()) {current_frame.flags|=2048;unowned_event();}
@@ -1230,8 +1252,8 @@ static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,int 
 #endif
     if(!intervention_active()) {
         if(arb_replacee) {
-            if(eu4_arb_elements_instanced_replacee_available())
-                glDrawElementsInstancedARB(mode,count,type,indices,instances);
+            DrawElementsInstancedFn forward=eu4_original_glDrawElementsInstanced();
+            if(eu4_arb_elements_instanced_forward_available()) forward(mode,count,type,indices,instances);
             else mark_draw_forward_probe_failure();
         } else if(real_fn) real_fn(mode,count,type,indices,instances);
         else mark_draw_forward_probe_failure();
@@ -1252,8 +1274,9 @@ static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,int 
             test_elements_instanced_forward(mode,count,type,indices,instances);
             current_frame.forwarded_draws++;
         } else if(arb_replacee) {
-            if(eu4_arb_elements_instanced_replacee_available()) {
-                glDrawElementsInstancedARB(mode,count,type,indices,instances);
+            DrawElementsInstancedFn forward=eu4_original_glDrawElementsInstanced();
+            if(eu4_arb_elements_instanced_forward_available()) {
+                forward(mode,count,type,indices,instances);
                 current_frame.forwarded_draws++;
             } else mark_draw_forward_probe_failure();
         } else if(real_fn) {
@@ -1262,8 +1285,9 @@ static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,int 
         } else mark_draw_forward_probe_failure();
 #else
         if(arb_replacee) {
-            if(eu4_arb_elements_instanced_replacee_available()) {
-                glDrawElementsInstancedARB(mode,count,type,indices,instances);
+            DrawElementsInstancedFn forward=eu4_original_glDrawElementsInstanced();
+            if(eu4_arb_elements_instanced_forward_available()) {
+                forward(mode,count,type,indices,instances);
                 current_frame.forwarded_draws++;
             } else mark_draw_forward_probe_failure();
         } else if(real_fn) {
@@ -1287,8 +1311,8 @@ static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,int arb_
 #endif
     if(!intervention_active()) {
         if(arb_replacee) {
-            if(eu4_arb_arrays_instanced_replacee_available())
-                glDrawArraysInstancedARB(mode,first,count,instances);
+            DrawArraysInstancedFn forward=eu4_original_glDrawArraysInstanced();
+            if(eu4_arb_arrays_instanced_forward_available()) forward(mode,first,count,instances);
             else mark_draw_forward_probe_failure();
         } else if(real_fn) real_fn(mode,first,count,instances);
         else mark_draw_forward_probe_failure();
@@ -1309,8 +1333,9 @@ static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,int arb_
             test_arrays_instanced_forward(mode,first,count,instances);
             current_frame.forwarded_draws++;
         } else if(arb_replacee) {
-            if(eu4_arb_arrays_instanced_replacee_available()) {
-                glDrawArraysInstancedARB(mode,first,count,instances);
+            DrawArraysInstancedFn forward=eu4_original_glDrawArraysInstanced();
+            if(eu4_arb_arrays_instanced_forward_available()) {
+                forward(mode,first,count,instances);
                 current_frame.forwarded_draws++;
             } else mark_draw_forward_probe_failure();
         } else if(real_fn) {
@@ -1319,8 +1344,9 @@ static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,int arb_
         } else mark_draw_forward_probe_failure();
 #else
         if(arb_replacee) {
-            if(eu4_arb_arrays_instanced_replacee_available()) {
-                glDrawArraysInstancedARB(mode,first,count,instances);
+            DrawArraysInstancedFn forward=eu4_original_glDrawArraysInstanced();
+            if(eu4_arb_arrays_instanced_forward_available()) {
+                forward(mode,first,count,instances);
                 current_frame.forwarded_draws++;
             } else mark_draw_forward_probe_failure();
         } else if(real_fn) {
@@ -2209,6 +2235,14 @@ __attribute__((visibility("default"))) int eu4_frame_model_test_verify_arb_insta
             return (int)(i+1);
         }
         if(arb!=rows[i].wrapper) return (int)(i+10);
+    }
+    if(!eu4_arb_arrays_instanced_forward_available()) {
+        fprintf(stderr,"glDrawArraysInstancedARB: RTLD_NEXT forward target missing or equals wrapper\n");
+        return 30;
+    }
+    if(!eu4_arb_elements_instanced_forward_available()) {
+        fprintf(stderr,"glDrawElementsInstancedARB: RTLD_NEXT forward target missing or equals wrapper\n");
+        return 31;
     }
     eu4_frame_model_test_reset_draw_alias();
     eu4_frame_model_test_arm_draw_alias(1);

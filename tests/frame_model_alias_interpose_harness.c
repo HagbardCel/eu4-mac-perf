@@ -21,13 +21,21 @@ int main(void) {
         fprintf(stderr, "glDrawElementsInstancedARB: distinct ARB/core profiler wrappers required\n");
         return 3;
     }
+    if (code == 30) {
+        fprintf(stderr, "glDrawArraysInstancedARB: safe RTLD_NEXT forward target required\n");
+        return 4;
+    }
+    if (code == 31) {
+        fprintf(stderr, "glDrawElementsInstancedARB: safe RTLD_NEXT forward target required\n");
+        return 5;
+    }
     if (code == 3) {
         fprintf(stderr, "glDrawArraysInstancedARB: PROFILE forward must not re-enter profiler wrapper\n");
-        return 4;
+        return 6;
     }
     if (code == 4) {
         fprintf(stderr, "glDrawElementsInstancedARB: PROFILE forward must not re-enter profiler wrapper\n");
-        return 5;
+        return 7;
     }
     if (code == 10 || code == 11) {
         fprintf(stderr, "draw_observer_resolve disagrees with profiler wrapper (code %d)\n", code);
