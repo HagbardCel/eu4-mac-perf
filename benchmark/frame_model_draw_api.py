@@ -170,15 +170,14 @@ def coverage(manifest, frames, trace, phase_numbers, *, require_c=True):
     if not manifest or manifest.get('schema')!=2 or not manifest.get('apis'):
         return {'status':'unavailable','reason':'draw manifest missing; historical six-API evidence cannot qualify C'}
     gaps=[r['name'] for r in manifest['apis'] if r.get('reachability')=='reachable' and r['observer']=='uncovered']
-    unresolved=[r['name'] for r in manifest['apis'] if r.get('reachability')=='unresolved' and r.get('observer')=='uncovered'
-                and r['name'] not in DEFERRED_UNSAFE_OBSERVERS]
+    unresolved=[r['name'] for r in manifest['apis'] if r.get('reachability')=='unresolved']
     resolver_gaps=manifest.get('resolver_gaps',[])
-    deferred_hashes={submission_resolver_hash(n) for n in DEFERRED_UNSAFE_OBSERVERS}
     resolver_records=[r for r in trace if r and r[0]=='R']
-    unexpected_resolvers=[r for r in resolver_records if int(r[1]) not in deferred_hashes]
-    if gaps or unresolved or resolver_gaps or unexpected_resolvers:
+    deferred_hashes={submission_resolver_hash(n) for n in DEFERRED_UNSAFE_OBSERVERS}
+    if gaps or unresolved or resolver_gaps or resolver_records:
         return {'status':'failed','reason':'reachable or unresolved executable submission paths lack observer proof','uncovered':gaps,'unresolved_executable_paths':unresolved,'resolver_gaps':resolver_gaps,
-                'resolver_records':unexpected_resolvers,'deferred_resolver_records':[r for r in resolver_records if int(r[1]) in deferred_hashes]}
+                'resolver_records':resolver_records,
+                'deferred_resolver_records':[r for r in resolver_records if int(r[1]) in deferred_hashes]}
     expected={(f['measurement_epoch'],f['update_id'],f['thread_id']) for f in frames if f['phase'] in phase_numbers}
     markers=set();observations={};rows=[]
     for r in trace:

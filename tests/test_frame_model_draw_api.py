@@ -84,7 +84,7 @@ class DrawCoverageTests(unittest.TestCase):
         m['resolver_gaps']=[]
         self.assertEqual(api.coverage(m,f,r+[['R','99','2']],{1,4})['status'],'failed')
         arb_hash=str(api.submission_resolver_hash('glDrawArraysInstancedARB'))
-        self.assertEqual(api.coverage(m,f,r+[['R',arb_hash,'1']],{1,4})['status'],'passed')
+        self.assertEqual(api.coverage(m,f,r+[['R',arb_hash,'1']],{1,4})['status'],'failed')
         self.assertEqual(api.coverage(m,f,[row for row in r if row[0]!='K'],{1,4})['status'],'unavailable')
         self.assertEqual(api.coverage(None,f,r,{1,4})['status'],'unavailable')
 
