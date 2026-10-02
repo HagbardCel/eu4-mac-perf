@@ -206,6 +206,8 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
         self.assertEqual(result["profiler_dylib_sha256"], "p")
         self.assertEqual(sha.call_args_list[0][0][0], model.LIBRARY)
         self.assertEqual(sha.call_args_list[3][0][0], model.draw_api.OUTPUT)
+
+    def test_offline_evidence_id_has_subsecond_and_suffix(self):
         fixed = dt.datetime(2026, 10, 2, 12, 0, 0, 42, tzinfo=dt.timezone.utc)
         with mock.patch.object(model.uuid, "uuid4", return_value=mock.Mock(hex="abcd1234ef567890")):
             run_id = model._offline_evidence_id(fixed)
