@@ -25,7 +25,6 @@ REQUIRED_RESIDUAL_DISCOVERY = REQUIRED_CALIBRATION_ONLY + (
     "integrity",
     "origin_integrity",
     "cadence",
-    "control_drift",
 )
 
 REQUIRED_BY_REPORT_KIND = {

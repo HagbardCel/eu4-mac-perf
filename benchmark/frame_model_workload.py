@@ -23,8 +23,27 @@ TRAINING_GROUPS = {
 }
 HELD_OUT_RECIPE_NAME = "terrain_surrogate"
 HELD_OUT_CATEGORIES = frozenset({"terrain"})
-HELD_OUT_FIXTURE = ROOT / "analysis/fixtures/frame-model-held-out-terrain-surrogate.recipe"
-HELD_OUT_FIXTURE_META = ROOT / "analysis/fixtures/frame-model-held-out-terrain-surrogate.json"
+HELD_OUT_DIR = ROOT / "analysis/held-out"
+HELD_OUT_FIXTURE = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.recipe"
+HELD_OUT_FIXTURE_META = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.json"
+# Legacy path (gitignored fixtures/); still accepted if present.
+HELD_OUT_FIXTURE_LEGACY = ROOT / "analysis/fixtures/frame-model-held-out-terrain-surrogate.recipe"
+HELD_OUT_FIXTURE_META_LEGACY = ROOT / "analysis/fixtures/frame-model-held-out-terrain-surrogate.json"
+
+
+def held_out_fixture_ready() -> bool:
+    """True when a hash-frozen held-out recipe is committed (required before first timing)."""
+    for recipe_path, meta_path in (
+        (HELD_OUT_FIXTURE, HELD_OUT_FIXTURE_META),
+        (HELD_OUT_FIXTURE_LEGACY, HELD_OUT_FIXTURE_META_LEGACY),
+    ):
+        if not recipe_path.is_file() or not meta_path.is_file():
+            continue
+        meta = json.loads(meta_path.read_text())
+        expected = meta.get("sha256")
+        if expected and base.sha256(recipe_path) == expected:
+            return True
+    return False
 
 
 def _trace_frame_key(rows):
@@ -109,38 +128,35 @@ def recipes(directory, *, include_held_out: bool = False):
         for name, categories in TRAINING_GROUPS.items()
     ]
     if include_held_out:
+        if not held_out_fixture_ready():
+            raise base.BenchmarkError(
+                "include_held_out requires a committed hash-frozen fixture under analysis/held-out/",
+            )
         result.append(held_out_recipe(directory, rows=rows, key=key, sites=sites))
     return result
 
 
 def held_out_recipe(directory, *, rows=None, key=None, sites=None):
-    """Hash-frozen held-out workload (fixture preferred; else built from passive trace)."""
-    if HELD_OUT_FIXTURE.is_file() and HELD_OUT_FIXTURE_META.is_file():
-        meta = json.loads(HELD_OUT_FIXTURE_META.read_text())
-        expected = meta.get("sha256")
-        if expected and base.sha256(HELD_OUT_FIXTURE) != expected:
-            raise base.BenchmarkError("Held-out fixture SHA256 does not match frozen metadata")
-        path = directory / HELD_OUT_FIXTURE.name
-        shutil.copy2(HELD_OUT_FIXTURE, path)
-        recipe = dict(meta)
-        recipe["path"] = str(path)
-        recipe.setdefault("role", "held_out")
-        recipe.setdefault("name", HELD_OUT_RECIPE_NAME)
-        return recipe
-    if rows is None or key is None or sites is None:
-        if not SOURCE.is_file():
-            raise base.BenchmarkError("Held-out recipe requires passive trace or committed fixture")
-        rows = list(trace.read_records(SOURCE, trace.read_header(SOURCE)["used"]))
-        key = _trace_frame_key(rows)
-        sites = {row["return_offset"]: row["category"] for row in json.loads(INVENTORY.read_text())["direct_sites"]}
-    return _recipe_from_categories(
-        HELD_OUT_RECIPE_NAME,
-        HELD_OUT_CATEGORIES,
-        rows,
-        key,
-        sites,
-        directory,
-        role="held_out",
+    """Load the hash-frozen held-out workload; dynamic trace builds are not used for admission."""
+    for recipe_path, meta_path in (
+        (HELD_OUT_FIXTURE, HELD_OUT_FIXTURE_META),
+        (HELD_OUT_FIXTURE_LEGACY, HELD_OUT_FIXTURE_META_LEGACY),
+    ):
+        if recipe_path.is_file() and meta_path.is_file():
+            meta = json.loads(meta_path.read_text())
+            expected = meta.get("sha256")
+            if expected and base.sha256(recipe_path) != expected:
+                raise base.BenchmarkError("Held-out fixture SHA256 does not match frozen metadata")
+            path = directory / recipe_path.name
+            shutil.copy2(recipe_path, path)
+            recipe = dict(meta)
+            recipe["path"] = str(path)
+            recipe.setdefault("role", "held_out")
+            recipe.setdefault("name", HELD_OUT_RECIPE_NAME)
+            return recipe
+    raise base.BenchmarkError(
+        "Held-out recipe fixture is not hash-frozen in the repository "
+        f"(commit {HELD_OUT_FIXTURE} and {HELD_OUT_FIXTURE_META} before measuring held-out performance)",
     )
 
 

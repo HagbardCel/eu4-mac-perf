@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmark"))
 import frame_model_gates as gates  # noqa: E402
 import frame_model_tier1_policy as tier1  # noqa: E402
+import frame_model_workload as workload  # noqa: E402
 
 
 class Tier1AdmissionGateTests(unittest.TestCase):
@@ -30,6 +31,64 @@ class Tier1AdmissionGateTests(unittest.TestCase):
         evidence.record("offline_forensic_suitability", "passed", "ok")
         with self.assertRaises(ValueError):
             evidence.require(gates.required_gates_for_report_kind("calibration_only"))
+
+    def test_calibration_only_blockers_ignore_forensic_failure(self):
+        evidence = gates.GateEvidence()
+        evidence.record("format_v3", "passed", "ok")
+        evidence.record("offline_causal_admission", "passed", "ok")
+        evidence.record("offline_forensic_suitability", "failed", "forensic fail")
+        required = gates.required_gates_for_report_kind("calibration_only")
+        self.assertEqual(evidence.blockers(required), {})
+
+    def test_causal_blockers_include_forensic_failure(self):
+        evidence = gates.GateEvidence()
+        evidence.record("format_v3", "passed", "ok")
+        evidence.record("offline_causal_admission", "passed", "ok")
+        evidence.record("offline_forensic_suitability", "failed", "forensic fail")
+        blockers = evidence.blockers(gates.required_gates_for_report_kind("causal"))
+        self.assertIn("offline_forensic_suitability", blockers)
+
+    def test_residual_discovery_required_set_is_satisfiable(self):
+        evidence = gates.GateEvidence()
+        for name in gates.required_gates_for_report_kind("residual_discovery"):
+            evidence.record(name, "passed", "ok")
+        evidence.require(gates.required_gates_for_report_kind("residual_discovery"))
+
+
+class Tier1FailClosedTests(unittest.TestCase):
+    def test_partial_causal_gates_are_unavailable(self):
+        entry = {
+            "recipe": {"name": "mesh"},
+            "gates": {"reference_elapsed_ns": {"median_fraction": 0.0, "status": "passed"}},
+        }
+        result = tier1.evaluate_recipe_causal(entry)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_missing_metrics_are_unavailable_not_pass(self):
+        entry = {
+            "recipe": {"name": "mesh"},
+            "gates": {name: {} for name in tier1.EXPECTED_CAUSAL_GATE_NAMES},
+        }
+        result = tier1.evaluate_recipe_causal(entry)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_admission_without_held_out_is_unavailable(self):
+        training = [{"recipe": {"name": "mesh"}, "gates": self._passing_gates()}]
+        summary = tier1.summarize_admission(training, None, require_held_out=True)
+        self.assertEqual(summary["status"], "unavailable")
+        self.assertEqual(summary["held_out_recipe"]["status"], "unavailable")
+
+    def test_forensic_without_gates_is_unavailable(self):
+        result = tier1.evaluate_recipe_forensic({"recipe": {"name": "mesh"}, "gates": {}})
+        self.assertEqual(result["status"], "unavailable")
+
+    @staticmethod
+    def _passing_gates():
+        gates_out = {}
+        for name in tier1.EXPECTED_CAUSAL_GATE_NAMES:
+            summary = workload.paired_summary([{"reference": 100, "instrumented": 101}] * 7, 0.03, 4)
+            gates_out[name] = summary
+        return gates_out
 
 
 class Tier1ReplayTests(unittest.TestCase):
@@ -61,6 +120,25 @@ class Tier1ReplayTests(unittest.TestCase):
             self.skipTest("50643ce archive missing")
         preflight = self._load_preflight(matches[0])
         replay = tier1.replay_archive_preflight(preflight)
+        self.assertEqual(replay["offline_causal_admission"]["status"], "failed")
+
+    def test_replay_recomputes_statistics_from_pairs(self):
+        pairs = [{"reference": 100, "instrumented": 130}] * 7
+        summary = workload.paired_summary(pairs, tier1.TIER1_RELATIVE_LIMIT, 4)
+        entry = {
+            "recipe": {"name": "mesh", "role": "training"},
+            "gates": {
+                name: {
+                    **summary,
+                    "median_fraction": 0.0,
+                    "confidence_interval_95": [0.0, 0.0],
+                    "pairs": pairs,
+                }
+                for name in tier1.EXPECTED_CAUSAL_GATE_NAMES
+            },
+        }
+        preflight = {"representative_workloads": {"recipes": [entry]}}
+        replay = tier1.replay_archive_preflight(preflight, require_held_out=False)
         self.assertEqual(replay["offline_causal_admission"]["status"], "failed")
 
 

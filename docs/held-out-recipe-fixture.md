@@ -1,29 +1,51 @@
 # Held-out Tier-1 recipe fixture
 
-Stage 2 requires a **hash-frozen** held-out structural recipe (`terrain_surrogate`) that is chosen before performance measurement.
+Stage 2 requires a **hash-frozen** held-out structural recipe (`terrain_surrogate`) that is
+chosen and committed **before** its first performance measurement.
 
-On a Mac machine with the passive draw trace available, generate and commit:
+## Tracked paths
+
+```
+analysis/held-out/
+  frame-model-held-out-terrain-surrogate.recipe
+  frame-model-held-out-terrain-surrogate.json
+```
+
+Legacy copies under `analysis/fixtures/` are still accepted if present, but new fixtures
+should use `analysis/held-out/` (not gitignored).
+
+## Freeze workflow (Mac + passive trace)
+
+Select a structural slice that was **not** used to tune thresholds. Commit exact recipe
+bytes and metadata, then run preflight:
 
 ```bash
 python3 - <<'PY'
-import hashlib, json, tempfile
+import hashlib, json, shutil, tempfile
 from pathlib import Path
 import sys
 sys.path.insert(0, "benchmark")
 import frame_model_workload as workload
 
-root = Path("analysis/fixtures")
-root.mkdir(parents=True, exist_ok=True)
+dest_dir = Path("analysis/held-out")
+dest_dir.mkdir(parents=True, exist_ok=True)
+# Build candidate offline (development only — do not archive as validation until frozen):
 with tempfile.TemporaryDirectory() as tmp:
-    recipe = workload.held_out_recipe(Path(tmp))
-    payload = Path(recipe["path"]).read_bytes()
-    dest = root / "frame-model-held-out-terrain-surrogate.recipe"
-    dest.write_bytes(payload)
-    meta = {k: recipe[k] for k in recipe if k != "path"}
-    meta["sha256"] = hashlib.sha256(payload).hexdigest()
-    (root / "frame-model-held-out-terrain-surrogate.json").write_text(json.dumps(meta, indent=2) + "\n")
-    print(meta["sha256"], meta["draws"], "draws")
+    raise SystemExit(
+        "Choose a fresh held-out slice offline, write .recipe bytes, then set sha256 in .json"
+    )
 PY
 ```
 
-Until the fixture is committed, preflight builds the held-out recipe from the local trace at run time (same categories, non-frozen path).
+After the `.recipe` and `.json` (with matching `sha256`) are committed, preflight may set
+`include_held_out=True` and measure the held-out role once.
+
+## Exploratory evidence
+
+The archive `frame-model-offline-ab00679-20261002T182324.368965Z-4f253c80.json` recorded a
+`terrain_surrogate` held-out workload **before** a repository fixture existed. Preserve it
+as honest failed admission / exploratory evidence; do not treat it as the mandatory
+no-peeking held-out validation.
+
+Dynamic trace-derived held-out recipes are **disabled** for admission: without a frozen
+fixture, causal admission reports `held-out validation absent` (`unavailable`).

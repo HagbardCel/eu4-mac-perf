@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+
+import frame_model_workload as workload
 
 LEGACY_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
 TIER1_CAUSAL_POLICY_VERSION = "tier1_causal_rel3pct_abs50us_v1"
 
-CAUSAL_GATE_SUFFIXES = (
+EXPECTED_CAUSAL_GATE_NAMES = (
     "reference_elapsed_ns",
     "reference_cpu_ns",
     "counters_elapsed_ns",
@@ -18,9 +19,19 @@ FORENSIC_GATE_SUFFIXES = (
     "sampled_cpu_ns",
 )
 
-# A priori error budget (not tuned to mesh/borders/text_ui outcomes).
+# Frozen a priori error budget — see docs/tier1-causal-policy.md
 TIER1_RELATIVE_LIMIT = 0.03
 TIER1_ABSOLUTE_US_PER_FRAME = 50.0
+TIER1_BOOTSTRAP_SEED = 1729
+TIER1_BOOTSTRAP_SAMPLES = 2000
+TIER1_FRAMES_PER_TRIAL = 4
+
+REQUIRED_GATE_METRICS = (
+    "median_fraction",
+    "confidence_interval_95",
+    "overhead_us_per_frame",
+    "overhead_us_per_frame_ci95",
+)
 
 
 @dataclass(frozen=True)
@@ -28,17 +39,39 @@ class Tier1CausalPolicy:
     version: str
     relative_limit: float
     absolute_us_per_frame: float
+    bootstrap_seed: int = TIER1_BOOTSTRAP_SEED
+    bootstrap_samples: int = TIER1_BOOTSTRAP_SAMPLES
+    frames_per_trial: int = TIER1_FRAMES_PER_TRIAL
 
     def gate_passes(self, gate: dict) -> bool:
-        median = abs(gate.get("median_fraction", 0.0))
-        interval = gate.get("confidence_interval_95") or [median, median]
-        if max(median, abs(interval[0]), abs(interval[1])) > self.relative_limit:
+        if not all(key in gate for key in REQUIRED_GATE_METRICS):
             return False
-        overhead = abs(gate.get("overhead_us_per_frame", 0.0))
-        ci = gate.get("overhead_us_per_frame_ci95") or [overhead, overhead]
-        if max(overhead, abs(ci[0]), abs(ci[1])) > self.absolute_us_per_frame:
+        interval = gate["confidence_interval_95"]
+        if not isinstance(interval, (list, tuple)) or len(interval) != 2:
+            return False
+        median = abs(float(gate["median_fraction"]))
+        if max(median, abs(float(interval[0])), abs(float(interval[1]))) > self.relative_limit:
+            return False
+        overhead = abs(float(gate["overhead_us_per_frame"]))
+        ci = gate["overhead_us_per_frame_ci95"]
+        if not isinstance(ci, (list, tuple)) or len(ci) != 2:
+            return False
+        if max(overhead, abs(float(ci[0])), abs(float(ci[1]))) > self.absolute_us_per_frame:
             return False
         return True
+
+    def summarize_gate(self, gate: dict) -> tuple[str, dict, str | None]:
+        """Return status, evaluated gate dict, and optional unavailable reason."""
+        pairs = gate.get("pairs")
+        if pairs:
+            evaluated = workload.paired_summary(pairs, self.relative_limit, self.frames_per_trial)
+        else:
+            evaluated = dict(gate)
+        if not all(key in evaluated for key in REQUIRED_GATE_METRICS):
+            return "unavailable", evaluated, "missing paired summary metrics"
+        if self.gate_passes(evaluated):
+            return "passed", evaluated, None
+        return "failed", evaluated, None
 
 
 TIER1_CAUSAL_POLICY = Tier1CausalPolicy(
@@ -48,16 +81,14 @@ TIER1_CAUSAL_POLICY = Tier1CausalPolicy(
 )
 
 
-def causal_gate_names(gates: dict) -> list[str]:
-    return [name for name in gates if any(name.endswith(suffix) for suffix in CAUSAL_GATE_SUFFIXES)]
-
-
-def forensic_gate_names(gates: dict) -> list[str]:
-    names = [name for name in gates if any(name.endswith(suffix) for suffix in FORENSIC_GATE_SUFFIXES)]
-    for component, axes in (gates.get("_ablations") or {}).items():
-        for axis, gate in axes.items():
-            names.append(f"ablation_{component}_{axis}")
-    return names
+def _merge_status(*statuses: str) -> str:
+    if "failed" in statuses:
+        return "failed"
+    if "unavailable" in statuses:
+        return "unavailable"
+    if statuses and all(status == "passed" for status in statuses):
+        return "passed"
+    return "unavailable"
 
 
 def _ablation_gates(recipe_entry: dict) -> dict[str, dict]:
@@ -70,14 +101,28 @@ def _ablation_gates(recipe_entry: dict) -> dict[str, dict]:
 
 def evaluate_recipe_causal(recipe_entry: dict, policy: Tier1CausalPolicy = TIER1_CAUSAL_POLICY) -> dict:
     gates = recipe_entry.get("gates") or {}
-    causal = {name: gates[name] for name in causal_gate_names(gates)}
-    results = {name: policy.gate_passes(gate) for name, gate in causal.items()}
+    missing = [name for name in EXPECTED_CAUSAL_GATE_NAMES if name not in gates]
+    if missing:
+        return {
+            "recipe": (recipe_entry.get("recipe") or {}).get("name"),
+            "policy_version": policy.version,
+            "status": "unavailable",
+            "reason": f"missing causal gates: {', '.join(missing)}",
+            "gates": {},
+            "results": {},
+        }
+    evaluated_gates: dict[str, dict] = {}
+    results: dict[str, str] = {}
+    for name in EXPECTED_CAUSAL_GATE_NAMES:
+        status, evaluated, reason = policy.summarize_gate(gates[name])
+        evaluated_gates[name] = evaluated
+        results[name] = status if reason is None else "unavailable"
     return {
         "recipe": (recipe_entry.get("recipe") or {}).get("name"),
         "policy_version": policy.version,
-        "gates": causal,
+        "gates": evaluated_gates,
         "results": results,
-        "status": "passed" if results and all(results.values()) else "failed",
+        "status": _merge_status(*results.values()),
     }
 
 
@@ -86,7 +131,15 @@ def evaluate_recipe_forensic(recipe_entry: dict) -> dict:
     sampled = {name: gates[name] for name in gates if name.startswith("sampled_")}
     ablations = _ablation_gates(recipe_entry)
     all_gates = {**sampled, **ablations}
-    legacy_limit_pass = all(g.get("status") == "passed" for g in all_gates.values()) if all_gates else True
+    if not all_gates:
+        return {
+            "recipe": (recipe_entry.get("recipe") or {}).get("name"),
+            "policy_version": LEGACY_SEVEN_PAIR_POLICY_VERSION,
+            "status": "unavailable",
+            "reason": "no forensic gates present",
+            "gates": {},
+        }
+    legacy_limit_pass = all(gate.get("status") == "passed" for gate in all_gates.values())
     return {
         "recipe": (recipe_entry.get("recipe") or {}).get("name"),
         "policy_version": LEGACY_SEVEN_PAIR_POLICY_VERSION,
@@ -101,18 +154,30 @@ def summarize_admission(
     held_out: dict | None,
     *,
     policy: Tier1CausalPolicy = TIER1_CAUSAL_POLICY,
+    require_held_out: bool = True,
 ) -> dict:
     training_eval = [evaluate_recipe_causal(entry, policy) for entry in training]
-    held_eval = evaluate_recipe_causal(held_out, policy) if held_out else None
+    if held_out is None:
+        held_eval = {
+            "status": "unavailable",
+            "reason": "held-out validation absent",
+            "policy_version": policy.version,
+            "recipe": None,
+            "gates": {},
+            "results": {},
+        }
+    else:
+        held_eval = evaluate_recipe_causal(held_out, policy)
     statuses = [item["status"] for item in training_eval]
-    if held_eval:
+    if require_held_out:
         statuses.append(held_eval["status"])
-    overall = "passed" if statuses and all(status == "passed" for status in statuses) else "failed"
     return {
-        "status": overall,
+        "status": _merge_status(*statuses) if statuses else "unavailable",
         "policy_version": policy.version,
         "relative_limit": policy.relative_limit,
         "absolute_us_per_frame": policy.absolute_us_per_frame,
+        "bootstrap_seed": policy.bootstrap_seed,
+        "bootstrap_samples": policy.bootstrap_samples,
         "training_recipes": training_eval,
         "held_out_recipe": held_eval,
     }
@@ -120,21 +185,34 @@ def summarize_admission(
 
 def summarize_forensic(recipes: list[dict]) -> dict:
     evaluations = [evaluate_recipe_forensic(entry) for entry in recipes]
-    status = "passed" if evaluations and all(item["status"] == "passed" for item in evaluations) else "failed"
+    if not evaluations:
+        return {
+            "status": "unavailable",
+            "reason": "no training recipes for forensic evaluation",
+            "policy_version": LEGACY_SEVEN_PAIR_POLICY_VERSION,
+            "recipes": [],
+        }
     return {
-        "status": status,
+        "status": _merge_status(*(item["status"] for item in evaluations)),
         "policy_version": LEGACY_SEVEN_PAIR_POLICY_VERSION,
         "recipes": evaluations,
     }
 
 
-def replay_archive_preflight(preflight: dict, *, policy: Tier1CausalPolicy = TIER1_CAUSAL_POLICY) -> dict:
+def replay_archive_preflight(
+    preflight: dict,
+    *,
+    policy: Tier1CausalPolicy = TIER1_CAUSAL_POLICY,
+    require_held_out: bool = False,
+) -> dict:
     """Re-evaluate embedded trials under a Tier-1 policy without re-running harnesses."""
     representative = preflight.get("representative_workloads") or {}
     recipes = representative.get("recipes") or []
     training = [entry for entry in recipes if (entry.get("recipe") or {}).get("role") != "held_out"]
     held = next((entry for entry in recipes if (entry.get("recipe") or {}).get("role") == "held_out"), None)
     return {
-        "offline_causal_admission": summarize_admission(training, held, policy=policy),
-        "offline_forensic_suitability": summarize_forensic(recipes),
+        "offline_causal_admission": summarize_admission(
+            training, held, policy=policy, require_held_out=require_held_out,
+        ),
+        "offline_forensic_suitability": summarize_forensic(training),
     }

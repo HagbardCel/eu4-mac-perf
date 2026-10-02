@@ -883,7 +883,8 @@ def _offline_recipe_evidence(root: Path, recipe: dict, *, frames: int = 4, inclu
 def offline_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
     with tempfile.TemporaryDirectory(prefix="eu4-representative-") as temporary:
         root = Path(temporary)
-        recipe_specs = workload.recipes(root, include_held_out=True)
+        include_held = workload.held_out_fixture_ready()
+        recipe_specs = workload.recipes(root, include_held_out=include_held)
         evidence = [
             _offline_recipe_evidence(
                 root,
@@ -894,7 +895,7 @@ def offline_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
         ]
         training = [entry for entry in evidence if entry["recipe"].get("role") != "held_out"]
         held_out = next((entry for entry in evidence if entry["recipe"].get("role") == "held_out"), None)
-        offline_causal_admission = tier1.summarize_admission(training, held_out)
+        offline_causal_admission = tier1.summarize_admission(training, held_out, require_held_out=True)
         offline_forensic_suitability = tier1.summarize_forensic(training)
         if executed_artifacts_start:
             test_library_sha256 = executed_artifacts_start["test_library_sha256"]
@@ -1565,11 +1566,12 @@ def analyze(run_dir: Path) -> dict:
             "c_intervention":"not applicable"}
     report_gates.record("draw_api_coverage",draw_coverage["status"],draw_coverage["reason"],evidence=draw_coverage)
 
+    required = required_gates_for_report_kind(report_kind)
     output = {"format_version":FORMAT_VERSION,"report_kind":report_kind,
               "phase_roles":{p.get("name"):p.get("role","causal") for p in phases},
               "metal_feasibility":"feasibility seed; go/no-go undetermined",
               "unassociated_origins":unknown,"release_gates":report_gates.entries,
-              "release_blockers":report_gates.blockers(),
+              "release_blockers":report_gates.blockers(required),
               "status": manifest.get("status"), "run_dir": str(run_dir),
               "executable_sha256": manifest.get("executable_sha256"),
               "phases": summaries, "hook_totals": counters,
