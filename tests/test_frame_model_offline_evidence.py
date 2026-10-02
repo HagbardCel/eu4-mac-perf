@@ -9,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmark"))
 import eu4_frame_model as model  # noqa: E402
+import frame_model_tier1_policy as tier1  # noqa: E402
 
 
 def _representative_preflight():
@@ -30,6 +31,17 @@ def _representative_preflight():
     return {
         "status": "ready",
         "overhead_gate": "passed",
+        "offline_causal_admission": {
+            "status": "passed",
+            "policy_version": tier1.TIER1_CAUSAL_POLICY_VERSION,
+            "training_recipes": [{"recipe": "mesh", "status": "passed"}],
+            "held_out_recipe": {"status": "unavailable", "recipe": None},
+        },
+        "offline_forensic_suitability": {
+            "status": "failed",
+            "policy_version": "reference_counters_3pct_sampled_5pct_v1",
+            "recipes": [{"recipe": "mesh", "status": "failed"}],
+        },
         "representative_workloads": representative,
         "limitations": ["test"],
     }
@@ -84,6 +96,11 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
             evidence_dir = root / "analysis/evidence"
             pointer = root / "analysis/frame-model-offline-evidence.json"
             metadata = _build_metadata(preflight, evidence_id, identity, identity, build_info)
+            metadata["schema_version"] = model.OFFLINE_EVIDENCE_SCHEMA_VERSION_V1
+            metadata["policy_versions"] = {
+                **metadata["policy_versions"],
+                "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION_V1,
+            }
             with mock.patch.object(model, "ROOT", root), mock.patch.object(
                 model, "OFFLINE_EVIDENCE_DIR", evidence_dir,
             ), mock.patch.object(model, "OFFLINE_EVIDENCE_POINTER", pointer), mock.patch.object(
@@ -114,6 +131,22 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
                 self.assertEqual(summary["evidence_id"], run_id1)
                 self.assertEqual(summary["artifact_hashes"]["profiler_dylib_sha256"], "profiler-dylib")
                 self.assertEqual(summary["representative_workloads"]["gate_summary"][0]["recipe"], "mesh")
+                self.assertIn("training", summary["offline_causal_admission"])
+                self.assertNotIn("training_recipes", summary["offline_causal_admission"])
+                self.assertIn("recipes", summary["offline_forensic_suitability"])
+                self.assertEqual(summary["schema_version"], model.OFFLINE_EVIDENCE_SCHEMA_VERSION)
+                self.assertEqual(
+                    summary["archive_recorded_under"]["schema_version"],
+                    model.OFFLINE_EVIDENCE_SCHEMA_VERSION_V1,
+                )
+                self.assertEqual(
+                    summary["archive_recorded_under"]["tier1_causal_policy"],
+                    tier1.TIER1_CAUSAL_POLICY_VERSION_V1,
+                )
+                self.assertEqual(
+                    summary["current_replay_under"]["tier1_causal_policy"],
+                    tier1.TIER1_CAUSAL_POLICY_VERSION,
+                )
 
     def test_refuses_overwrite_exclusive_create(self):
         preflight = {"representative_workloads": {"recipes": []}, "status": "blocked", "overhead_gate": "failed"}

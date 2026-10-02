@@ -3,56 +3,238 @@ import collections
 import hashlib
 import json
 import random
+import shutil
 import statistics
 import struct
 import subprocess
 from pathlib import Path
+
 import eu4_draw_trace as trace
 import eu4_benchmark as base
 
-SOURCE=trace.ROOT/'results/20260928T113359Z-draw-trace/trace.bin'
-INVENTORY=trace.ROOT/'analysis/draw-callers.json'
-RECORD=struct.Struct('<8I')
+SOURCE = trace.ROOT / "results/20260928T113359Z-draw-trace/trace.bin"
+INVENTORY = trace.ROOT / "analysis/draw-callers.json"
+RECORD = struct.Struct("<8I")
+ROOT = trace.ROOT
 
-def recipes(directory):
-    if not SOURCE.is_file(): raise base.BenchmarkError('Passive trace is unavailable for representative recipes')
-    rows=list(trace.read_records(SOURCE,trace.read_header(SOURCE)['used']))
-    frames=collections.Counter((r['window'],r['frame']) for r in rows)
-    key=next((key for key,count in frames.items() if count==5863),None)
-    if key is None: raise base.BenchmarkError('No complete 5863-draw passive frame for recipe validation')
-    sites={r['return_offset']:r['category'] for r in json.loads(INVENTORY.read_text())['direct_sites']}
-    groups={'mesh':{'mesh_object'},'borders':{'borders'},'text_ui':{'map_text','ui_or_text'}}
-    result=[]
-    for name,categories in groups.items():
-        selected=[r for r in rows if (r['window'],r['frame'])==key and
-                  sites.get(r['caller_offset'],sites.get(r['immediate_offset'])) in categories]
-        if not selected or any(r['flags'] or r['api'] not in (1,2,3) or r['mode'] not in (4,5) for r in selected):
-            raise base.BenchmarkError(f'Invalid or unsupported trace recipe: {name}')
-        payload=bytearray();previous=None
-        for r in selected:
-            change=lambda field: int(previous is None or r[field]!=previous[field])
-            payload.extend(RECORD.pack(r['api'],r['mode'],r['count'],change('uniform_sig'),
-                change('texture_sig'),change('render_sig'),change('vertex_sig'),change('program')))
-            previous=r
-        path=directory/(name+'.recipe');path.write_bytes(payload)
-        result.append({'name':name,'path':str(path),'sha256':hashlib.sha256(payload).hexdigest(),
-            'draws':len(selected),'indices':sum(r['count'] for r in selected),
-            'source_frame':list(key),'source_sha256':base.sha256(SOURCE),
-            'policy':'Observed draw counts/topology/API and adjacent state-change frequencies; generated valid resources and shaders, no sleeps or added busywork.',
-            'limits':'GL structural surrogate; original resource payloads, shaders, and unobserved between-draw commands are not reconstructed. Live perturbation remains mandatory.'})
+TRAINING_GROUPS = {
+    "mesh": {"mesh_object"},
+    "borders": {"borders"},
+    "text_ui": {"map_text", "ui_or_text"},
+}
+HELD_OUT_RECIPE_NAME = "terrain_surrogate"
+HELD_OUT_CATEGORIES = frozenset({"terrain"})
+HELD_OUT_DIR = ROOT / "analysis/held-out"
+HELD_OUT_FIXTURE = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.recipe"
+HELD_OUT_FIXTURE_META = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.json"
+HELD_OUT_FIXTURE_PATH = HELD_OUT_FIXTURE.relative_to(ROOT).as_posix()
+TIER1_PAIR_COUNT = 7
+
+# Recipe bytes already measured without a pre-committed fixture (exploratory archives).
+EXPLORATORY_HELD_OUT_SHA256S = frozenset(
+    {
+        "284365e71435d8b6744440c5f5a028803527f5f1848f56365b85b5957c579188",
+    },
+)
+
+
+def _git_tracked_at_head(path: Path) -> bool:
+    """True when path exists as a blob in the current HEAD tree (committed, not index-only)."""
+    relative = path.relative_to(ROOT).as_posix()
+    try:
+        subprocess.run(
+            ["git", "cat-file", "-e", f"HEAD:{relative}"],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+        )
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
+def _reject_contaminated_fixture_sha(sha256: str) -> None:
+    if sha256 in EXPLORATORY_HELD_OUT_SHA256S:
+        raise base.BenchmarkError(
+            "Held-out fixture was previously measured as exploratory evidence "
+            f"(sha256 {sha256}); choose fresh recipe bytes",
+        )
+
+
+def held_out_fixture_provenance() -> dict:
+    """Provenance stamped on recipes measured from the committed held-out fixture."""
+    meta = json.loads(HELD_OUT_FIXTURE_META.read_text())
+    expected = meta.get("sha256")
+    if not expected or base.sha256(HELD_OUT_FIXTURE) != expected:
+        raise base.BenchmarkError("Held-out fixture SHA256 does not match frozen metadata")
+    _reject_contaminated_fixture_sha(expected)
+    return {
+        "admission_qualified": True,
+        "fixture_committed": True,
+        "fixture_path": HELD_OUT_FIXTURE_PATH,
+        "fixture_sha256": expected,
+    }
+
+
+def held_out_fixture_ready() -> bool:
+    """True when hash-frozen held-out recipe bytes are committed at HEAD (not gitignored locals)."""
+    if not HELD_OUT_FIXTURE.is_file() or not HELD_OUT_FIXTURE_META.is_file():
+        return False
+    if not _git_tracked_at_head(HELD_OUT_FIXTURE) or not _git_tracked_at_head(HELD_OUT_FIXTURE_META):
+        return False
+    meta = json.loads(HELD_OUT_FIXTURE_META.read_text())
+    expected = meta.get("sha256")
+    if not expected or base.sha256(HELD_OUT_FIXTURE) != expected:
+        return False
+    if expected in EXPLORATORY_HELD_OUT_SHA256S:
+        return False
+    return True
+
+
+def _trace_frame_key(rows):
+    frames = collections.Counter((r["window"], r["frame"]) for r in rows)
+    key = next((key for key, count in frames.items() if count == 5863), None)
+    if key is None:
+        raise base.BenchmarkError("No complete 5863-draw passive frame for recipe validation")
+    return key
+
+
+def _build_recipe_payload(selected):
+    payload = bytearray()
+    previous = None
+    for record in selected:
+        change = lambda field, row=record, prev=previous: int(prev is None or row[field] != prev[field])
+        payload.extend(
+            RECORD.pack(
+                record["api"],
+                record["mode"],
+                record["count"],
+                change("uniform_sig"),
+                change("texture_sig"),
+                change("render_sig"),
+                change("vertex_sig"),
+                change("program"),
+            ),
+        )
+        previous = record
+    return payload
+
+
+def _recipe_dict(name, path, payload, key, *, role: str, categories: set[str]) -> dict:
+    return {
+        "name": name,
+        "role": role,
+        "path": str(path),
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "draws": len(payload) // RECORD.size if payload else 0,
+        "indices": 0,
+        "source_frame": list(key),
+        "source_sha256": base.sha256(SOURCE) if SOURCE.is_file() else None,
+        "categories": sorted(categories),
+        "policy": (
+            "Observed draw counts/topology/API and adjacent state-change frequencies; "
+            "generated valid resources and shaders, no sleeps or added busywork."
+        ),
+        "limits": (
+            "GL structural surrogate; original resource payloads, shaders, and unobserved "
+            "between-draw commands are not reconstructed. Live perturbation remains mandatory."
+        ),
+    }
+
+
+def _recipe_from_categories(name, categories, rows, key, sites, directory, *, role: str):
+    selected = [
+        row
+        for row in rows
+        if (row["window"], row["frame"]) == key
+        and sites.get(row["caller_offset"], sites.get(row["immediate_offset"])) in categories
+    ]
+    if not selected or any(
+        row["flags"] or row["api"] not in (1, 2, 3) or row["mode"] not in (4, 5) for row in selected
+    ):
+        raise base.BenchmarkError(f"Invalid or unsupported trace recipe: {name}")
+    payload = _build_recipe_payload(selected)
+    path = directory / f"{name}.recipe"
+    path.write_bytes(payload)
+    recipe = _recipe_dict(name, path, payload, key, role=role, categories=set(categories))
+    recipe["indices"] = sum(row["count"] for row in selected)
+    recipe["draws"] = len(selected)
+    return recipe
+
+
+def recipes(directory, *, include_held_out: bool = False):
+    if not SOURCE.is_file():
+        raise base.BenchmarkError("Passive trace is unavailable for representative recipes")
+    rows = list(trace.read_records(SOURCE, trace.read_header(SOURCE)["used"]))
+    key = _trace_frame_key(rows)
+    sites = {row["return_offset"]: row["category"] for row in json.loads(INVENTORY.read_text())["direct_sites"]}
+    result = [
+        _recipe_from_categories(name, categories, rows, key, sites, directory, role="training")
+        for name, categories in TRAINING_GROUPS.items()
+    ]
+    if include_held_out:
+        if not held_out_fixture_ready():
+            raise base.BenchmarkError(
+                "include_held_out requires a committed hash-frozen fixture under analysis/held-out/",
+            )
+        result.append(held_out_recipe(directory, rows=rows, key=key, sites=sites))
     return result
 
 
-def paired_summary(pairs, limit, frames=1):
-    ratios=[p['instrumented']/p['reference']-1 for p in pairs]
-    # Deterministic paired bootstrap of the median; retain raw trials for audit.
-    rng=random.Random(1729)
-    bootstrap=sorted(statistics.median(rng.choices(ratios,k=len(ratios))) for _ in range(2000))
-    interval=[bootstrap[50],bootstrap[1950]]
-    absolute=[(p['instrumented']-p['reference'])/(1000*frames) for p in pairs]
-    absolute_bootstrap=sorted(statistics.median(rng.choices(absolute,k=len(absolute))) for _ in range(2000))
-    median=statistics.median(ratios)
-    return {'median_fraction':median,'confidence_interval_95':interval,'pairs':pairs,
-            'overhead_us_per_frame':statistics.median(absolute),'overhead_us_per_frame_ci95':[absolute_bootstrap[50],absolute_bootstrap[1950]],
-            'absolute_metric_policy':'diagnostic; cannot override fractional acceptance',
-            'limit':limit,'status':'passed' if max(abs(median),abs(interval[0]),abs(interval[1]))<=limit else 'failed'}
+def held_out_recipe(directory, *, rows=None, key=None, sites=None):
+    """Load the hash-frozen held-out workload committed under analysis/held-out/."""
+    if not held_out_fixture_ready():
+        raise base.BenchmarkError(
+            "Held-out recipe fixture is not hash-frozen in the repository "
+            f"(commit {HELD_OUT_FIXTURE} and {HELD_OUT_FIXTURE_META} before measuring held-out performance)",
+        )
+    meta = json.loads(HELD_OUT_FIXTURE_META.read_text())
+    expected = meta.get("sha256")
+    if expected and base.sha256(HELD_OUT_FIXTURE) != expected:
+        raise base.BenchmarkError("Held-out fixture SHA256 does not match frozen metadata")
+    path = directory / HELD_OUT_FIXTURE.name
+    shutil.copy2(HELD_OUT_FIXTURE, path)
+    recipe = dict(meta)
+    recipe["path"] = str(path)
+    recipe.setdefault("role", "held_out")
+    recipe.setdefault("name", HELD_OUT_RECIPE_NAME)
+    recipe.update(held_out_fixture_provenance())
+    return recipe
+
+
+def paired_summary(
+    pairs,
+    limit,
+    frames=1,
+    *,
+    bootstrap_seed=1729,
+    bootstrap_samples=2000,
+    ci_low_index=50,
+    ci_high_index=1950,
+):
+    ratios = [pair["instrumented"] / pair["reference"] - 1 for pair in pairs]
+    rng = random.Random(bootstrap_seed)
+    bootstrap = sorted(
+        statistics.median(rng.choices(ratios, k=len(ratios))) for _ in range(bootstrap_samples)
+    )
+    interval = [bootstrap[ci_low_index], bootstrap[ci_high_index]]
+    absolute = [(pair["instrumented"] - pair["reference"]) / (1000 * frames) for pair in pairs]
+    absolute_bootstrap = sorted(
+        statistics.median(rng.choices(absolute, k=len(absolute))) for _ in range(bootstrap_samples)
+    )
+    median = statistics.median(ratios)
+    return {
+        "median_fraction": median,
+        "confidence_interval_95": interval,
+        "pairs": pairs,
+        "overhead_us_per_frame": statistics.median(absolute),
+        "overhead_us_per_frame_ci95": [absolute_bootstrap[ci_low_index], absolute_bootstrap[ci_high_index]],
+        "bootstrap_seed": bootstrap_seed,
+        "bootstrap_samples": bootstrap_samples,
+        "bootstrap_ci_indices": [ci_low_index, ci_high_index],
+        "absolute_metric_policy": "Tier-1 absolute cap enforced in frame_model_tier1_policy",
+        "limit": limit,
+        "status": "passed"
+        if max(abs(median), abs(interval[0]), abs(interval[1])) <= limit
+        else "failed",
+    }

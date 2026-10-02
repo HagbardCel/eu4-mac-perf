@@ -147,8 +147,12 @@ nonconsecutive render IDs or multiple executed renders per participating frame
 makes the forensic capture unavailable. The capture has role `forensic`; its
 frames and enclosing scopes are excluded from causal phase summaries. The live
 capture-intrusion result is recorded separately and does not qualify the
-counters-only reference calibration. The offline sampled gate remains a hard
-preflight prerequisite.
+counters-only reference calibration. Stage 2 splits offline admission:
+
+- **`offline_causal_admission`** — bare/reference/counters seven-pair gates on training recipes plus hash-frozen **held-out** recipe; Tier-1 policy `tier1_causal_rel3pct_abs50us_v2` (relative 3% + absolute µs/frame cap). **Blocks** calibration and live causal work when failed.
+- **`offline_forensic_suitability`** — sampled/ablation/A–F evidence; reported independently and **does not** block `calibration-only` when causal admission passes.
+
+Legacy combined `representative_workloads.status` remains in archives for replay only.
 
 GL shadow preparation runs with measurement disabled on the owning current
 context. Bounded thread-owned caches hold 16 contexts and 64 VAOs; a serialized
@@ -207,7 +211,9 @@ producer's frame and detail queues in publication order; F and its associated
 Q/K/A/L records remain a publication bundle. Producers remain independent.
 EINTR and short writes are retried, permanent failures are visible through shared
 hook-failure counters, and parsing retains incomplete lines until serialization
-finishes. Absolute CPU/wall overhead and confidence intervals in microseconds per
-frame are diagnostics and cannot override a failed percentage gate. Harness-only
-ablations restore repeated accounting, unbatched writing or measured preparation;
-they are absent from the production library and excluded from acceptance.
+finishes. Under Tier-1 policy `tier1_causal_rel3pct_abs50us_v2`, relative 3% and
+absolute 50 µs/frame are **both** mandatory admission bounds for offline causal gates;
+neither can override failure of the other. Legacy forensic sampled/ablation gates still
+use percentage limits only. Harness-only ablations restore repeated accounting, unbatched
+writing or measured preparation; they are absent from the production library and excluded
+from causal acceptance.

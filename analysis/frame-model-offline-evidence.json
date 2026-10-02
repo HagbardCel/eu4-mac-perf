@@ -1,28 +1,28 @@
 {
-  "evidence_id": "20261002T180048.506022Z-549ac568",
-  "schema_version": "stage1-immutable-v1",
-  "recorded_at_utc": "20261002T180048.506022Z-549ac568",
+  "evidence_id": "20261002T182324.368965Z-4f253c80",
+  "schema_version": "stage2-split-v2",
+  "recorded_at_utc": "20261002T182324.368965Z-4f253c80",
   "identity_start": {
-    "git_commit": "50643cecd323bf78b24ef118bd0e9cc14a689f1b",
-    "git_commit_short": "50643ce",
+    "git_commit": "ab00679cc7f40ab097354430988d8bcc944b0ff5",
+    "git_commit_short": "ab00679",
     "git_tree_clean": true,
-    "controller_sha256": "e3b6b1980b0ee666714780008dbdbc94f4bee0c095c218aafb75279a62014fd5",
+    "controller_sha256": "0cff468dffac921c3c07eb7ea38ca0b947f255efec087b8544e36c4b7f0bf242",
     "key_source_hashes": {
       "eu4_frame_model.c": "2ed095332f2a0e8f1c1c865498410287ba2f146f8899eb65e2fe0b9f0f3f6af3",
-      "eu4_frame_model.py": "e3b6b1980b0ee666714780008dbdbc94f4bee0c095c218aafb75279a62014fd5",
+      "eu4_frame_model.py": "0cff468dffac921c3c07eb7ea38ca0b947f255efec087b8544e36c4b7f0bf242",
       "eu4_gpu_segments.h": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
       "eu4_draw_observers.h": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
       "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
     }
   },
   "identity_end": {
-    "git_commit": "50643cecd323bf78b24ef118bd0e9cc14a689f1b",
-    "git_commit_short": "50643ce",
+    "git_commit": "ab00679cc7f40ab097354430988d8bcc944b0ff5",
+    "git_commit_short": "ab00679",
     "git_tree_clean": true,
-    "controller_sha256": "e3b6b1980b0ee666714780008dbdbc94f4bee0c095c218aafb75279a62014fd5",
+    "controller_sha256": "0cff468dffac921c3c07eb7ea38ca0b947f255efec087b8544e36c4b7f0bf242",
     "key_source_hashes": {
       "eu4_frame_model.c": "2ed095332f2a0e8f1c1c865498410287ba2f146f8899eb65e2fe0b9f0f3f6af3",
-      "eu4_frame_model.py": "e3b6b1980b0ee666714780008dbdbc94f4bee0c095c218aafb75279a62014fd5",
+      "eu4_frame_model.py": "0cff468dffac921c3c07eb7ea38ca0b947f255efec087b8544e36c4b7f0bf242",
       "eu4_gpu_segments.h": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
       "eu4_draw_observers.h": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
       "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
@@ -30,8 +30,8 @@
   },
   "git_tree_clean": true,
   "git_provenance_verified": true,
-  "git_commit": "50643cecd323bf78b24ef118bd0e9cc14a689f1b",
-  "git_commit_short": "50643ce",
+  "git_commit": "ab00679cc7f40ab097354430988d8bcc944b0ff5",
+  "git_commit_short": "ab00679",
   "executed_artifact_start": {
     "profiler_dylib_sha256": "83a21be2685cdbf7830af6c0eb57600ab1d7a65cac0487bf371a39301d201ddc",
     "test_library_sha256": "731ba0852a5455925855878b5eff7167fb327fc095ce5e92982bc604e85ceee8",
@@ -56,6 +56,7 @@
   },
   "policy_versions": {
     "seven_pair_gate": "reference_counters_3pct_sampled_5pct_v1",
+    "tier1_causal_gate": "tier1_causal_rel3pct_abs50us_v1",
     "ablation_gate": "harness_ablation_vs_sampled_5pct_v1",
     "diagnostic_matrix": "diag_matrix_vs_diag_A_no_acceptance_v1",
     "ablation_policy_text": "Harness-only restoration of per-call accounting, unbatched writing, or measured state/query preparation; diagnostic, excluded from acceptance gates.",
@@ -71,18 +72,48 @@
     "draw_observers_sha256": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
     "draw_manifest_sha256": "9c508d76da2ec56697416ad3788655a1b5a638fa150c5f3c30b4756e1db6a2c0",
     "site_header_sha256": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6",
-    "controller_sha256": "e3b6b1980b0ee666714780008dbdbc94f4bee0c095c218aafb75279a62014fd5",
+    "controller_sha256": "0cff468dffac921c3c07eb7ea38ca0b947f255efec087b8544e36c4b7f0bf242",
     "game_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
     "recipe_sha256": {
       "mesh": "496f29d0ec8a47f35d8ca60437e28ed47d0b6a28f0744ebe4f48b0fa74ff4592",
       "borders": "bea909b039639260614f312adffbc8869512e5baad33fffa2251cca1ef56ab9f",
-      "text_ui": "d279b947d868a895dee13e31bf7efb5ea77a79c08d041b926e4a58a572aa2fbd"
+      "text_ui": "d279b947d868a895dee13e31bf7efb5ea77a79c08d041b926e4a58a572aa2fbd",
+      "terrain_surrogate": "284365e71435d8b6744440c5f5a028803527f5f1848f56365b85b5957c579188"
     }
   },
-  "archive_path": "analysis/evidence/frame-model-offline-50643ce-20261002T180048.506022Z-549ac568.json",
-  "archive_sha256": "1d40c211e85e6ce3e24a7001f00e0a3d60cb73e720ff6f9038f8dc07b656f916",
+  "archive_recorded_under": {
+    "schema_version": "stage2-split-v1",
+    "tier1_causal_policy": "tier1_causal_rel3pct_abs50us_v1"
+  },
+  "current_replay_under": {
+    "tier1_causal_policy": "tier1_causal_rel3pct_abs50us_v2"
+  },
+  "archive_path": "analysis/evidence/frame-model-offline-ab00679-20261002T182324.368965Z-4f253c80.json",
+  "archive_sha256": "21bcbdb4a0ccc7eab40f6a38ada58ec45bd688e6c4aff862b8583ace83747473",
   "status": "blocked",
   "overhead_gate": "failed",
+  "offline_causal_admission": {
+    "status": "failed",
+    "policy_version": "tier1_causal_rel3pct_abs50us_v2",
+    "training": {
+      "mesh": "failed",
+      "borders": "failed",
+      "text_ui": "failed"
+    },
+    "held_out_status": "unavailable",
+    "held_out_recipe": "terrain_surrogate",
+    "held_out_qualification": "exploratory",
+    "held_out_reason": "held-out fixture was previously measured as exploratory evidence"
+  },
+  "offline_forensic_suitability": {
+    "status": "failed",
+    "policy_version": "reference_counters_3pct_sampled_5pct_v1",
+    "recipes": {
+      "mesh": "failed",
+      "borders": "failed",
+      "text_ui": "failed"
+    }
+  },
   "representative_workloads": {
     "status": "failed",
     "gate_summary": [
@@ -99,7 +130,7 @@
         "ablations": {
           "accounting": {
             "elapsed_ns": "passed",
-            "cpu_ns": "failed"
+            "cpu_ns": "passed"
           },
           "writer": {
             "elapsed_ns": "passed",
@@ -107,7 +138,7 @@
           },
           "preparation": {
             "elapsed_ns": "passed",
-            "cpu_ns": "failed"
+            "cpu_ns": "passed"
           }
         }
       },
@@ -124,15 +155,15 @@
         "ablations": {
           "accounting": {
             "elapsed_ns": "passed",
-            "cpu_ns": "failed"
+            "cpu_ns": "passed"
           },
           "writer": {
             "elapsed_ns": "passed",
-            "cpu_ns": "failed"
+            "cpu_ns": "passed"
           },
           "preparation": {
             "elapsed_ns": "passed",
-            "cpu_ns": "failed"
+            "cpu_ns": "passed"
           }
         }
       },
@@ -153,13 +184,23 @@
           },
           "writer": {
             "elapsed_ns": "failed",
-            "cpu_ns": "failed"
+            "cpu_ns": "passed"
           },
           "preparation": {
             "elapsed_ns": "failed",
             "cpu_ns": "failed"
           }
         }
+      },
+      {
+        "recipe": "terrain_surrogate",
+        "gates": {
+          "reference_elapsed_ns": "failed",
+          "reference_cpu_ns": "failed",
+          "counters_elapsed_ns": "failed",
+          "counters_cpu_ns": "failed"
+        },
+        "ablations": {}
       }
     ]
   },
