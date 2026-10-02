@@ -1,4 +1,6 @@
 """Structural GL overhead recipes from a complete passive frame, with no asset payloads."""
+from __future__ import annotations
+
 import collections
 import hashlib
 import json
