@@ -62,7 +62,7 @@ def _recipe_dict(name, path, payload, key, *, role: str, categories: set[str]) -
         "role": role,
         "path": str(path),
         "sha256": hashlib.sha256(payload).hexdigest(),
-        "draws": len(struct.iter_unpack("<8I", payload)) if payload else 0,
+        "draws": len(payload) // RECORD.size if payload else 0,
         "indices": 0,
         "source_frame": list(key),
         "source_sha256": base.sha256(SOURCE) if SOURCE.is_file() else None,
