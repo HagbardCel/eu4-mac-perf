@@ -14,17 +14,21 @@ int main(void) {
     }
     int code = verify();
     if (code == 1) {
-        fprintf(stderr, "glDrawArraysInstancedARB: distinct ARB/core profiler wrappers required\n");
+        fprintf(stderr, "glDrawArraysInstancedARB: profiler wrapper must stay uninterposed in Stage 0\n");
         return 2;
     }
     if (code == 2) {
-        fprintf(stderr, "glDrawElementsInstancedARB: distinct ARB/core profiler wrappers required\n");
+        fprintf(stderr, "glDrawElementsInstancedARB: profiler wrapper must stay uninterposed in Stage 0\n");
         return 3;
+    }
+    if (code == 3) {
+        fprintf(stderr, "core instanced suppression wrappers missing\n");
+        return 4;
     }
     if (code != 0) {
         fprintf(stderr, "unexpected verify code %d\n", code);
         return 7;
     }
-    puts("ARB instanced interpose: distinct ARB/core resolver wrappers (Stage 5 defers PROFILE forward)");
+    puts("ARB instanced aliases uncovered in Stage 0 (core suppression wrappers present)");
     return 0;
 }

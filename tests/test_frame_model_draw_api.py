@@ -32,9 +32,20 @@ class DrawCoverageTests(unittest.TestCase):
 
     def test_observer_wrapper_symbols_stage0_core_only_suppression(self):
         self.assertEqual(api.observer_wrapper_symbol('glDrawArraysInstanced'),'gl_draw_arrays_instanced')
-        self.assertEqual(api.observer_wrapper_symbol('glDrawArraysInstancedARB'),'observe_exact_glDrawArraysInstancedARB')
-        self.assertEqual(api.observer_wrapper_symbol('glDrawElementsInstancedARB'),'observe_exact_glDrawElementsInstancedARB')
+        self.assertIsNone(api.observer_wrapper_symbol('glDrawArraysInstancedARB'))
+        self.assertIsNone(api.observer_wrapper_symbol('glDrawElementsInstancedARB'))
         self.assertTrue(api.observer_wrapper_symbol('glDrawRangeElementsEXT').startswith('observe_exact_'))
+
+    def test_deferred_arb_manifest_fields(self):
+        manifest=json.loads(api.OUTPUT.read_text())
+        deferred=set(manifest.get('deferred_unsafe_observers',[]))
+        self.assertEqual(deferred, set(api.DEFERRED_UNSAFE_OBSERVERS))
+        for name in api.DEFERRED_UNSAFE_OBSERVERS:
+            row=next(r for r in manifest['apis'] if r['name']==name)
+            self.assertEqual(row['observer'],'uncovered')
+            self.assertEqual(row['observer_paths'],[])
+            self.assertFalse(row['suppression'])
+            self.assertEqual(row['reachability'],'unresolved')
 
     def test_suppression_capable_excludes_arb_instanced_stage5_deferred(self):
         self.assertTrue(api.suppression_capable('glDrawArraysInstanced'))
@@ -72,6 +83,8 @@ class DrawCoverageTests(unittest.TestCase):
         self.assertEqual(api.coverage(m,f,r,{1,4})['status'],'failed')
         m['resolver_gaps']=[]
         self.assertEqual(api.coverage(m,f,r+[['R','99','2']],{1,4})['status'],'failed')
+        arb_hash=str(api.submission_resolver_hash('glDrawArraysInstancedARB'))
+        self.assertEqual(api.coverage(m,f,r+[['R',arb_hash,'1']],{1,4})['status'],'passed')
         self.assertEqual(api.coverage(m,f,[row for row in r if row[0]!='K'],{1,4})['status'],'unavailable')
         self.assertEqual(api.coverage(None,f,r,{1,4})['status'],'unavailable')
 

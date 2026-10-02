@@ -36,11 +36,6 @@ static void observe_exact_glDrawArraysIndirect(GLenum mode, const void *indirect
     glDrawArraysIndirect(mode,indirect);
 }
 extern void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount);
-extern void glDrawArraysInstancedARB(GLenum mode, GLint first, GLsizei count, GLsizei primcount);
-static void observe_exact_glDrawArraysInstancedARB(GLenum mode, GLint first, GLsizei count, GLsizei primcount) {
-    observe_draw_api(5,false);
-    glDrawArraysInstancedARB(mode,first,count,primcount);
-}
 extern void glDrawElementArrayAPPLE(GLenum mode, GLint first, GLsizei count);
 static void observe_exact_glDrawElementArrayAPPLE(GLenum mode, GLint first, GLsizei count) {
     observe_draw_api(17,false);
@@ -54,11 +49,6 @@ static void observe_exact_glDrawElementsIndirect(GLenum mode, GLenum type, const
     glDrawElementsIndirect(mode,type,indirect);
 }
 extern void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei instancecount);
-extern void glDrawElementsInstancedARB(GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei primcount);
-static void observe_exact_glDrawElementsInstancedARB(GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei primcount) {
-    observe_draw_api(4,false);
-    glDrawElementsInstancedARB(mode,count,type,indices,primcount);
-}
 extern void glDrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei instancecount, GLint basevertex);
 extern void glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const void *pixels);
 static void observe_exact_glDrawPixels(GLsizei width, GLsizei height, GLenum format, GLenum type, const void *pixels) {
@@ -365,13 +355,11 @@ static void *draw_observer_resolve(const char *name) {
     if(!strcmp(name,"glDrawArrays")) {resolved_draw_api(3);return (void *)gl_draw_arrays;}
     if(!strcmp(name,"glDrawArraysIndirect")) {resolved_draw_api(13);return (void *)observe_exact_glDrawArraysIndirect;}
     if(!strcmp(name,"glDrawArraysInstanced")) {resolved_draw_api(5);return (void *)gl_draw_arrays_instanced;}
-    if(!strcmp(name,"glDrawArraysInstancedARB")) {resolved_draw_api(5);return (void *)observe_exact_glDrawArraysInstancedARB;}
     if(!strcmp(name,"glDrawElementArrayAPPLE")) {resolved_draw_api(17);return (void *)observe_exact_glDrawElementArrayAPPLE;}
     if(!strcmp(name,"glDrawElements")) {resolved_draw_api(1);return (void *)gl_draw_elements;}
     if(!strcmp(name,"glDrawElementsBaseVertex")) {resolved_draw_api(2);return (void *)gl_draw_base;}
     if(!strcmp(name,"glDrawElementsIndirect")) {resolved_draw_api(19);return (void *)observe_exact_glDrawElementsIndirect;}
     if(!strcmp(name,"glDrawElementsInstanced")) {resolved_draw_api(4);return (void *)gl_draw_elements_instanced;}
-    if(!strcmp(name,"glDrawElementsInstancedARB")) {resolved_draw_api(4);return (void *)observe_exact_glDrawElementsInstancedARB;}
     if(!strcmp(name,"glDrawElementsInstancedBaseVertex")) {resolved_draw_api(6);return (void *)gl_draw_elements_instanced_base;}
     if(!strcmp(name,"glDrawPixels")) {resolved_draw_api(23);return (void *)observe_exact_glDrawPixels;}
     if(!strcmp(name,"glDrawRangeElementArrayAPPLE")) {resolved_draw_api(24);return (void *)observe_exact_glDrawRangeElementArrayAPPLE;}
@@ -444,13 +432,11 @@ static void *draw_observer_resolve(const char *name) {
     {(const void *)gl_draw_arrays,(const void *)glDrawArrays}, \
     {(const void *)observe_exact_glDrawArraysIndirect,(const void *)glDrawArraysIndirect}, \
     {(const void *)gl_draw_arrays_instanced,(const void *)glDrawArraysInstanced}, \
-    {(const void *)observe_exact_glDrawArraysInstancedARB,(const void *)glDrawArraysInstancedARB}, \
     {(const void *)observe_exact_glDrawElementArrayAPPLE,(const void *)glDrawElementArrayAPPLE}, \
     {(const void *)gl_draw_elements,(const void *)glDrawElements}, \
     {(const void *)gl_draw_base,(const void *)glDrawElementsBaseVertex}, \
     {(const void *)observe_exact_glDrawElementsIndirect,(const void *)glDrawElementsIndirect}, \
     {(const void *)gl_draw_elements_instanced,(const void *)glDrawElementsInstanced}, \
-    {(const void *)observe_exact_glDrawElementsInstancedARB,(const void *)glDrawElementsInstancedARB}, \
     {(const void *)gl_draw_elements_instanced_base,(const void *)glDrawElementsInstancedBaseVertex}, \
     {(const void *)observe_exact_glDrawPixels,(const void *)glDrawPixels}, \
     {(const void *)observe_exact_glDrawRangeElementArrayAPPLE,(const void *)glDrawRangeElementArrayAPPLE}, \

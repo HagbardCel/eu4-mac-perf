@@ -37,11 +37,9 @@ int main(int argc, char **argv) {
     void *(*resolve)(const char *) = dlsym(library, "eu4_frame_model_test_resolve_draw");
     if (!reset || !arm || !set_stub || !hits || !invoke || !stats || !resolve) return 3;
     assert(resolve("glDrawArraysInstanced"));
-    assert(resolve("glDrawArraysInstancedARB"));
     assert(resolve("glDrawElementsInstanced"));
-    assert(resolve("glDrawElementsInstancedARB"));
-    assert(resolve("glDrawArraysInstanced") != resolve("glDrawArraysInstancedARB"));
-    assert(resolve("glDrawElementsInstanced") != resolve("glDrawElementsInstancedARB"));
+    assert(!resolve("glDrawArraysInstancedARB"));
+    assert(!resolve("glDrawElementsInstancedARB"));
 
     uint64_t draws, suppressed, forwarded, api_count, api_suppressed;
 
@@ -78,6 +76,6 @@ int main(int argc, char **argv) {
     assert(draws == 1 && suppressed == 1 && forwarded == 0 && api_count == 1 && api_suppressed == 1);
 
     dlclose(library);
-    puts("core instanced suppression and distinct ARB resolver targets passed");
+    puts("core instanced suppression; ARB aliases uncovered in Stage 0");
     return 0;
 }

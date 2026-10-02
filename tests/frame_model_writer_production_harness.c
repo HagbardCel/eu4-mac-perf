@@ -9,8 +9,7 @@ int main(int argc,char **argv) {
     void *library=dlopen(argv[1],RTLD_NOW);assert(library);
     emit=dlsym(library,"eu4_frame_model_test_emit_records");assert(emit);
     void *(*resolve)(const char *)=dlsym(library,"eu4_frame_model_test_resolve_draw");assert(resolve);
-    assert(resolve("glDrawArrays") && resolve("glDrawArraysInstancedARB") && resolve("glBegin"));
-    assert(resolve("glDrawArraysInstanced")!=resolve("glDrawArraysInstancedARB"));
+    assert(resolve("glDrawArrays") && !resolve("glDrawArraysInstancedARB") && resolve("glBegin"));
     assert(resolve("glDrawRangeElements") && resolve("glMultiDrawElements") && resolve("glDrawArraysIndirect"));
     assert(!resolve("glDrawBuffers") && !resolve("glUnknownDraw"));
     pthread_t workers[4];

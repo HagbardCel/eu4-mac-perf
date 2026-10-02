@@ -4,8 +4,6 @@
 #include <OpenGL/OpenGL.h>
 #include <OpenGL/gl3.h>
 extern void glUseProgramObjectARB(GLhandleARB);
-extern void glDrawArraysInstancedARB(GLenum,GLint,GLsizei,GLsizei);
-extern void glDrawElementsInstancedARB(GLenum,GLsizei,GLenum,const void *,GLsizei);
 #include <CoreGraphics/CoreGraphics.h>
 #include <dlfcn.h>
 #include <errno.h>
@@ -2111,13 +2109,17 @@ __attribute__((visibility("default"))) int eu4_frame_model_test_verify_arb_insta
     void *arrays_core=draw_observer_resolve("glDrawArraysInstanced");
     void *elements_arb=draw_observer_resolve("glDrawElementsInstancedARB");
     void *elements_core=draw_observer_resolve("glDrawElementsInstanced");
-    if(!arrays_arb||!arrays_core||arrays_arb==arrays_core) {
-        fprintf(stderr,"glDrawArraysInstancedARB: arb=%p core=%p\n",arrays_arb,arrays_core);
+    if(arrays_arb) {
+        fprintf(stderr,"glDrawArraysInstancedARB: unexpected profiler wrapper %p\n",arrays_arb);
         return 1;
     }
-    if(!elements_arb||!elements_core||elements_arb==elements_core) {
-        fprintf(stderr,"glDrawElementsInstancedARB: arb=%p core=%p\n",elements_arb,elements_core);
+    if(elements_arb) {
+        fprintf(stderr,"glDrawElementsInstancedARB: unexpected profiler wrapper %p\n",elements_arb);
         return 2;
+    }
+    if(!arrays_core||!elements_core) {
+        fprintf(stderr,"core instanced wrappers missing: arrays=%p elements=%p\n",arrays_core,elements_core);
+        return 3;
     }
     return 0;
 }
@@ -2149,7 +2151,7 @@ __attribute__((visibility("default"))) unsigned eu4_frame_model_test_draw_alias_
 __attribute__((visibility("default"))) void eu4_frame_model_test_invoke_draw_alias(const char *name) {
     void *resolved=draw_observer_resolve(name);
     if(!resolved) return;
-    if(!strcmp(name,"glDrawElementsInstanced") || !strcmp(name,"glDrawElementsInstancedARB")) {
+    if(!strcmp(name,"glDrawElementsInstanced")) {
         typedef void (*ElementsFn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
         ((ElementsFn)resolved)(GL_TRIANGLES,6,GL_UNSIGNED_INT,(const void *)(uintptr_t)0x10,2);
         return;
