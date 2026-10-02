@@ -1192,12 +1192,20 @@ typedef void (*DrawArraysInstancedFn)(GLenum,GLint,GLsizei,GLsizei);
 typedef void (*DrawElementsInstancedBaseFn)(GLenum,GLsizei,GLenum,const void *,GLsizei,GLint);
 static void *eu4_opengl_framework_symbol(const char *name) {
     static void *image;
-    if(!image) image=dlopen("/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",RTLD_LAZY|RTLD_LOCAL);
+    if(!image) {
+        image=dlopen("/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",RTLD_LAZY|RTLD_LOCAL);
+        if(!image) image=dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL",RTLD_LAZY|RTLD_LOCAL);
+    }
     return image?dlsym(image,name):NULL;
+}
+static void *eu4_opengl_instanced_core_import(const char *core_name) {
+    if(!strcmp(core_name,"glDrawArraysInstanced")) return (void *)glDrawArraysInstanced;
+    if(!strcmp(core_name,"glDrawElementsInstanced")) return (void *)glDrawElementsInstanced;
+    return NULL;
 }
 static void *eu4_opengl_instanced_arb_export(const char *arb_name,const char *core_name) {
     void *sym=eu4_opengl_framework_symbol(arb_name);
-    return sym?sym:eu4_opengl_framework_symbol(core_name);
+    return sym?sym:eu4_opengl_instanced_core_import(core_name);
 }
 static DrawElementsInstancedFn eu4_gl_draw_elements_instanced_arb_symbol(void) {
     static DrawElementsInstancedFn fn;
@@ -2161,14 +2169,19 @@ __attribute__((visibility("default"))) void *eu4_frame_model_test_resolve_draw(c
     return draw_observer_resolve(name);
 }
 __attribute__((visibility("default"))) int eu4_frame_model_test_verify_arb_instanced_interpose(void) {
-    static const struct { const char *arb; const char *core; void *wrapper; } rows[] = {
-        {"glDrawArraysInstancedARB","glDrawArraysInstanced",(void *)gl_draw_arrays_instanced_arb},
-        {"glDrawElementsInstancedARB","glDrawElementsInstanced",(void *)gl_draw_elements_instanced_arb},
+    static const struct { const char *arb; void *wrapper; void *forward_target; } rows[] = {
+        {"glDrawArraysInstancedARB",(void *)gl_draw_arrays_instanced_arb,
+            (void *)eu4_gl_draw_arrays_instanced_arb_symbol()},
+        {"glDrawElementsInstancedARB",(void *)gl_draw_elements_instanced_arb,
+            (void *)eu4_gl_draw_elements_instanced_arb_symbol()},
     };
     for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);i++) {
-        void *underlying=eu4_opengl_instanced_arb_export(rows[i].arb,rows[i].core);
-        if(!underlying || !rows[i].wrapper || underlying==rows[i].wrapper) return (int)(i+1);
         if(draw_observer_resolve(rows[i].arb)!=rows[i].wrapper) return (int)(i+10);
+        if(!rows[i].forward_target || rows[i].forward_target==rows[i].wrapper) {
+            fprintf(stderr,"%s: wrapper=%p forward_target=%p\n",rows[i].arb,rows[i].wrapper,
+                    rows[i].forward_target);
+            return (int)(i+1);
+        }
     }
     return 0;
 }
