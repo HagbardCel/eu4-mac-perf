@@ -1,10 +1,10 @@
 {
-  "evidence_id": "20261002T195901.482894Z-f6b27087",
+  "evidence_id": "20261002T203853.173597Z-2fff669c",
   "schema_version": "stage2-split-v2",
-  "recorded_at_utc": "20261002T195901.482894Z-f6b27087",
+  "recorded_at_utc": "20261002T203853.173597Z-2fff669c",
   "identity_start": {
-    "git_commit": "00924cb8191f82254fa229d4745071093fdd9d08",
-    "git_commit_short": "00924cb",
+    "git_commit": "8c71c47ba445f3c9adae7591fbe60d40ffe3d441",
+    "git_commit_short": "8c71c47",
     "git_tree_clean": true,
     "controller_sha256": "e208f342ae6ffe223e4e3f2029ed17d2e3680de53f2e53919c54494a47145bfc",
     "key_source_hashes": {
@@ -16,8 +16,8 @@
     }
   },
   "identity_end": {
-    "git_commit": "00924cb8191f82254fa229d4745071093fdd9d08",
-    "git_commit_short": "00924cb",
+    "git_commit": "8c71c47ba445f3c9adae7591fbe60d40ffe3d441",
+    "git_commit_short": "8c71c47",
     "git_tree_clean": true,
     "controller_sha256": "e208f342ae6ffe223e4e3f2029ed17d2e3680de53f2e53919c54494a47145bfc",
     "key_source_hashes": {
@@ -30,8 +30,8 @@
   },
   "git_tree_clean": true,
   "git_provenance_verified": true,
-  "git_commit": "00924cb8191f82254fa229d4745071093fdd9d08",
-  "git_commit_short": "00924cb",
+  "git_commit": "8c71c47ba445f3c9adae7591fbe60d40ffe3d441",
+  "git_commit_short": "8c71c47",
   "executed_artifact_start": {
     "profiler_dylib_sha256": "83a21be2685cdbf7830af6c0eb57600ab1d7a65cac0487bf371a39301d201ddc",
     "test_library_sha256": "731ba0852a5455925855878b5eff7167fb327fc095ce5e92982bc604e85ceee8",
@@ -88,8 +88,8 @@
   "current_replay_under": {
     "tier1_causal_policy": "tier1_causal_rel3pct_abs50us_v2"
   },
-  "archive_path": "analysis/evidence/frame-model-offline-00924cb-20261002T195901.482894Z-f6b27087.json",
-  "archive_sha256": "2b585e906a21e68d36dbddfd698ce62688c279fa7274cada4fc49d040d288bbf",
+  "archive_path": "analysis/evidence/frame-model-offline-8c71c47-20261002T203853.173597Z-2fff669c.json",
+  "archive_sha256": "ff44134247258c5b317c9ce01c54a32564e1e2522200c0fd039fb25e631217c6",
   "status": "blocked",
   "overhead_gate": "failed",
   "offline_causal_admission": {
@@ -138,7 +138,7 @@
           },
           "preparation": {
             "elapsed_ns": "passed",
-            "cpu_ns": "failed"
+            "cpu_ns": "passed"
           }
         }
       },
@@ -163,7 +163,7 @@
           },
           "preparation": {
             "elapsed_ns": "passed",
-            "cpu_ns": "failed"
+            "cpu_ns": "passed"
           }
         }
       },
@@ -184,7 +184,7 @@
           },
           "writer": {
             "elapsed_ns": "failed",
-            "cpu_ns": "failed"
+            "cpu_ns": "passed"
           },
           "preparation": {
             "elapsed_ns": "failed",
