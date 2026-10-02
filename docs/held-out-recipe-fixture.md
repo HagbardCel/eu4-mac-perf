@@ -37,8 +37,18 @@ with tempfile.TemporaryDirectory() as tmp:
 PY
 ```
 
-After the `.recipe` and `.json` (with matching `sha256`) are committed, preflight may set
-`include_held_out=True` and measure the held-out role once.
+After the `.recipe` and `.json` (with matching `sha256`) are committed, preflight stamps recipe metadata:
+
+```json
+{
+  "admission_qualified": true,
+  "fixture_committed": true,
+  "fixture_path": "analysis/held-out/frame-model-held-out-terrain-surrogate.recipe",
+  "fixture_sha256": "<sha256 of recipe bytes>"
+}
+```
+
+Replay and admission require this provenance; archives with only `role: held_out` (e.g. exploratory `ab00679`) are **not** treated as no-peeking validation.
 
 ## Exploratory evidence
 

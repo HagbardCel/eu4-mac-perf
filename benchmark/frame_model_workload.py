@@ -31,10 +31,11 @@ TIER1_PAIR_COUNT = 7
 
 
 def _git_tracked_at_head(path: Path) -> bool:
-    relative = path.relative_to(ROOT)
+    """True when path exists as a blob in the current HEAD tree (committed, not index-only)."""
+    relative = path.relative_to(ROOT).as_posix()
     try:
         subprocess.run(
-            ["git", "ls-files", "--error-unmatch", str(relative)],
+            ["git", "cat-file", "-e", f"HEAD:{relative}"],
             cwd=ROOT,
             capture_output=True,
             check=True,
@@ -42,6 +43,20 @@ def _git_tracked_at_head(path: Path) -> bool:
         return True
     except (OSError, subprocess.CalledProcessError):
         return False
+
+
+def held_out_fixture_provenance() -> dict:
+    """Provenance stamped on recipes measured from the committed held-out fixture."""
+    meta = json.loads(HELD_OUT_FIXTURE_META.read_text())
+    expected = meta.get("sha256")
+    if not expected or base.sha256(HELD_OUT_FIXTURE) != expected:
+        raise base.BenchmarkError("Held-out fixture SHA256 does not match frozen metadata")
+    return {
+        "admission_qualified": True,
+        "fixture_committed": True,
+        "fixture_path": HELD_OUT_FIXTURE.relative_to(ROOT).as_posix(),
+        "fixture_sha256": expected,
+    }
 
 
 def held_out_fixture_ready() -> bool:
@@ -162,6 +177,7 @@ def held_out_recipe(directory, *, rows=None, key=None, sites=None):
     recipe["path"] = str(path)
     recipe.setdefault("role", "held_out")
     recipe.setdefault("name", HELD_OUT_RECIPE_NAME)
+    recipe.update(held_out_fixture_provenance())
     return recipe
 
 

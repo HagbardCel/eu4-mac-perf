@@ -93,8 +93,10 @@
       "borders": "failed",
       "text_ui": "failed"
     },
-    "held_out_status": "failed",
-    "held_out_recipe": "terrain_surrogate"
+    "held_out_status": "unavailable",
+    "held_out_recipe": "terrain_surrogate",
+    "held_out_qualification": "exploratory",
+    "held_out_reason": "held-out evidence was not frozen before timing"
   },
   "offline_forensic_suitability": {
     "status": "failed",

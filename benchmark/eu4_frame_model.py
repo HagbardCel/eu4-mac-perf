@@ -517,6 +517,8 @@ def _offline_admission_pointer_summary(admission: dict | None) -> dict:
         "training": training,
         "held_out_status": held.get("status"),
         "held_out_recipe": held.get("recipe"),
+        "held_out_qualification": held.get("qualification"),
+        "held_out_reason": held.get("reason"),
     }
 
 
@@ -640,18 +642,19 @@ def write_offline_evidence_pointer(
     archive_body: bytes,
 ) -> None:
     representative = preflight_evidence.get("representative_workloads") or {}
+    recipes = representative.get("recipes") or []
+    training = [entry for entry in recipes if (entry.get("recipe") or {}).get("role") != "held_out"]
+    held = next((entry for entry in recipes if (entry.get("recipe") or {}).get("role") == "held_out"), None)
+    admission_summary = tier1.summarize_admission(training, held, require_held_out=True)
+    forensic_summary = tier1.summarize_forensic(training)
     pointer = {
         **metadata,
         "archive_path": str(archive_path.relative_to(ROOT)),
         "archive_sha256": hashlib.sha256(archive_body).hexdigest(),
         "status": preflight_evidence.get("status"),
         "overhead_gate": preflight_evidence.get("overhead_gate"),
-        "offline_causal_admission": _offline_admission_pointer_summary(
-            preflight_evidence.get("offline_causal_admission"),
-        ),
-        "offline_forensic_suitability": _offline_forensic_pointer_summary(
-            preflight_evidence.get("offline_forensic_suitability"),
-        ),
+        "offline_causal_admission": _offline_admission_pointer_summary(admission_summary),
+        "offline_forensic_suitability": _offline_forensic_pointer_summary(forensic_summary),
         "representative_workloads": {
             "status": representative.get("status"),
             "gate_summary": _offline_gate_summary(representative),

@@ -35,6 +35,22 @@ TIER1_BOOTSTRAP_CI_LOW_INDEX = 50
 TIER1_BOOTSTRAP_CI_HIGH_INDEX = 1950
 TIER1_FRAMES_PER_TRIAL = 4
 TIER1_PAIR_COUNT = workload.TIER1_PAIR_COUNT
+HELD_OUT_FIXTURE_PREFIX = "analysis/held-out/"
+HELD_OUT_UNQUALIFIED_REASON = "held-out evidence was not frozen before timing"
+
+
+def held_out_admission_qualified(entry: dict | None) -> bool:
+    if not entry:
+        return False
+    recipe = entry.get("recipe") or {}
+    if recipe.get("role") != "held_out":
+        return False
+    if recipe.get("admission_qualified") is not True or recipe.get("fixture_committed") is not True:
+        return False
+    fixture_path = (recipe.get("fixture_path") or "").replace("\\", "/")
+    if not fixture_path.startswith(HELD_OUT_FIXTURE_PREFIX):
+        return False
+    return bool(recipe.get("fixture_sha256"))
 
 
 def validate_pairs(pairs) -> tuple[bool, str | None]:
@@ -66,6 +82,17 @@ class Tier1CausalPolicy:
     bootstrap_ci_low_index: int = TIER1_BOOTSTRAP_CI_LOW_INDEX
     bootstrap_ci_high_index: int = TIER1_BOOTSTRAP_CI_HIGH_INDEX
     frames_per_trial: int = TIER1_FRAMES_PER_TRIAL
+
+    def __post_init__(self) -> None:
+        if self.relative_limit < 0 or self.absolute_us_per_frame < 0:
+            raise ValueError("Tier-1 limits must be non-negative")
+        if self.frames_per_trial <= 0:
+            raise ValueError("frames_per_trial must be positive")
+        if self.bootstrap_samples <= 0:
+            raise ValueError("bootstrap_samples must be positive")
+        low, high = self.bootstrap_ci_low_index, self.bootstrap_ci_high_index
+        if not (0 <= low <= high < self.bootstrap_samples):
+            raise ValueError("bootstrap CI indices must satisfy 0 <= low <= high < bootstrap_samples")
 
     def gate_passes(self, gate: dict) -> bool:
         for key in (
@@ -219,13 +246,29 @@ def summarize_admission(
         held_eval = {
             "status": "unavailable",
             "reason": "held-out validation absent",
+            "qualification": "absent",
             "policy_version": policy.version,
             "recipe": None,
             "gates": {},
             "results": {},
         }
+    elif require_held_out and not held_out_admission_qualified(held_out):
+        recipe_meta = held_out.get("recipe") or {}
+        held_eval = {
+            "status": "unavailable",
+            "reason": HELD_OUT_UNQUALIFIED_REASON,
+            "qualification": "exploratory",
+            "policy_version": policy.version,
+            "recipe": recipe_meta.get("name"),
+            "gates": {},
+            "results": {},
+        }
     else:
         held_eval = evaluate_recipe_causal(held_out, policy)
+        held_eval = {
+            **held_eval,
+            "qualification": "qualified" if held_out_admission_qualified(held_out) else "exploratory",
+        }
     statuses = [item["status"] for item in training_eval]
     if require_held_out:
         statuses.append(held_eval["status"])

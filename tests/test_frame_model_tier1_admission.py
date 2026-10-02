@@ -118,14 +118,42 @@ class Tier1FailClosedTests(unittest.TestCase):
         result = tier1.evaluate_recipe_forensic(entry)
         self.assertEqual(result["status"], "unavailable")
 
-    def test_bootstrap_seed_is_honored(self):
-        pairs = [{"reference": 100 + index, "instrumented": 101 + index * 2} for index in range(7)]
-        default = workload.paired_summary(pairs, 0.03, 4)
-        other = workload.paired_summary(pairs, 0.03, 4, bootstrap_seed=42)
-        self.assertNotEqual(
-            default["confidence_interval_95"],
-            other["confidence_interval_95"],
+    def test_bootstrap_parameters_are_wired(self):
+        pairs = [{"reference": 100 + index, "instrumented": 101 + index} for index in range(7)]
+        policy = tier1.Tier1CausalPolicy(
+            tier1.TIER1_CAUSAL_POLICY_VERSION,
+            0.03,
+            50.0,
+            bootstrap_seed=7,
+            bootstrap_samples=1,
+            bootstrap_ci_low_index=0,
+            bootstrap_ci_high_index=0,
+            frames_per_trial=4,
         )
+        status, evaluated, reason = policy.summarize_gate({"pairs": pairs})
+        self.assertIsNone(reason)
+        expected = workload.paired_summary(
+            pairs,
+            0.03,
+            4,
+            bootstrap_seed=7,
+            bootstrap_samples=1,
+            ci_low_index=0,
+            ci_high_index=0,
+        )
+        self.assertEqual(evaluated["confidence_interval_95"], expected["confidence_interval_95"])
+        self.assertEqual(evaluated["bootstrap_seed"], 7)
+        self.assertEqual(evaluated["bootstrap_samples"], 1)
+
+    def test_invalid_bootstrap_indices_rejected(self):
+        with self.assertRaises(ValueError):
+            tier1.Tier1CausalPolicy(
+                tier1.TIER1_CAUSAL_POLICY_VERSION,
+                0.03,
+                50.0,
+                bootstrap_samples=100,
+                bootstrap_ci_high_index=1950,
+            )
 
     @staticmethod
     def _passing_gates():
@@ -192,6 +220,34 @@ class Tier1ReplayTests(unittest.TestCase):
         preflight = {"representative_workloads": {"recipes": [entry]}}
         replay = tier1.replay_archive_preflight(preflight, require_held_out=False)
         self.assertEqual(replay["offline_causal_admission"]["status"], "failed")
+
+    def test_ab00679_exploratory_held_out_is_not_qualified(self):
+        path = Path(__file__).resolve().parents[1] / (
+            "analysis/evidence/frame-model-offline-ab00679-20261002T182324.368965Z-4f253c80.json"
+        )
+        if not path.is_file():
+            self.skipTest("ab00679 archive missing")
+        preflight = self._load_preflight(path)
+        replay = tier1.replay_archive_preflight(preflight)
+        held = replay["offline_causal_admission"]["held_out_recipe"]
+        self.assertEqual(held["status"], "unavailable")
+        self.assertEqual(held["reason"], tier1.HELD_OUT_UNQUALIFIED_REASON)
+        self.assertEqual(held["qualification"], "exploratory")
+        self.assertEqual(replay["offline_causal_admission"]["status"], "failed")
+
+    def test_exploratory_held_out_passing_gates_do_not_qualify_admission(self):
+        gates = Tier1FailClosedTests._passing_gates()
+        recipes = [
+            {"recipe": {"name": "mesh", "role": "training"}, "gates": gates},
+            {"recipe": {"name": "terrain_surrogate", "role": "held_out"}, "gates": gates},
+        ]
+        preflight = {"representative_workloads": {"recipes": recipes}}
+        replay = tier1.replay_archive_preflight(preflight)
+        self.assertEqual(replay["offline_causal_admission"]["status"], "unavailable")
+        self.assertEqual(
+            replay["offline_causal_admission"]["held_out_recipe"]["status"],
+            "unavailable",
+        )
 
 
 if __name__ == "__main__":
