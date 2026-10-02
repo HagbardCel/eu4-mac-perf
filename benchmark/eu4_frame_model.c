@@ -1198,14 +1198,9 @@ static void *eu4_opengl_framework_symbol(const char *name) {
     }
     return image?dlsym(image,name):NULL;
 }
-static void *eu4_opengl_instanced_core_import(const char *core_name) {
-    if(!strcmp(core_name,"glDrawArraysInstanced")) return (void *)glDrawArraysInstanced;
-    if(!strcmp(core_name,"glDrawElementsInstanced")) return (void *)glDrawElementsInstanced;
-    return NULL;
-}
 static void *eu4_opengl_instanced_arb_export(const char *arb_name,const char *core_name) {
     void *sym=eu4_opengl_framework_symbol(arb_name);
-    return sym?sym:eu4_opengl_instanced_core_import(core_name);
+    return sym?sym:eu4_opengl_framework_symbol(core_name);
 }
 static DrawElementsInstancedFn eu4_gl_draw_elements_instanced_arb_symbol(void) {
     static DrawElementsInstancedFn fn;
