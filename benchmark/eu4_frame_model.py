@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import hashlib
 import json
 import mmap
 import os
+import platform
 import re
 import statistics
 import struct
@@ -15,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 import autonomous_runner as auto
@@ -278,10 +281,27 @@ def offline_harness(library: Path | None = None, mode: int = 1, loops: int = 150
 
 OFFLINE_EVIDENCE_DIR = ROOT / "analysis/evidence"
 OFFLINE_EVIDENCE_POINTER = ROOT / "analysis/frame-model-offline-evidence.json"
+OFFLINE_EVIDENCE_POINTER_REL = "analysis/frame-model-offline-evidence.json"
+OFFLINE_EVIDENCE_GENERATED_PREFIX = "analysis/evidence/"
 OFFLINE_EVIDENCE_SCHEMA_VERSION = "stage1-immutable-v1"
 OFFLINE_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
 OFFLINE_ABLATION_POLICY_VERSION = "harness_ablation_vs_sampled_5pct_v1"
 OFFLINE_DIAGNOSTIC_POLICY_VERSION = "diag_matrix_vs_diag_A_no_acceptance_v1"
+CONTROLLER = Path(__file__)
+KEY_OFFLINE_SOURCE_PATHS = (
+    SOURCE,
+    CONTROLLER,
+    ROOT / "benchmark/eu4_gpu_segments.h",
+    draw_api.HEADER,
+    engine.HEADER,
+)
+
+
+def _sha256_optional(path: Path) -> str | None:
+    try:
+        return base.sha256(path)
+    except OSError:
+        return None
 
 
 def _git_commit_metadata() -> dict:
@@ -297,20 +317,124 @@ def _git_commit_metadata() -> dict:
     return {"git_commit": commit, "git_commit_short": short}
 
 
+def _git_tree_clean_for_evidence() -> bool:
+    """Return whether the worktree is clean for canonical offline evidence.
+
+    Immutable archives under ``analysis/evidence/`` and the rolling pointer file
+    ``analysis/frame-model-offline-evidence.json`` are generated outputs; changes
+    confined to those paths do not mark the tree dirty for source identity.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "-uall"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path.startswith(OFFLINE_EVIDENCE_GENERATED_PREFIX):
+            continue
+        if path == OFFLINE_EVIDENCE_POINTER_REL:
+            continue
+        return False
+    return True
+
+
+def _offline_git_identity_snapshot() -> dict:
+    git_meta = _git_commit_metadata()
+    return {
+        **git_meta,
+        "git_tree_clean": _git_tree_clean_for_evidence(),
+        "controller_sha256": _sha256_optional(CONTROLLER),
+        "key_source_hashes": {
+            path.name: digest
+            for path in KEY_OFFLINE_SOURCE_PATHS
+            if (digest := _sha256_optional(path)) is not None
+        },
+    }
+
+
+def _require_git_identity_stable(identity_start: dict, identity_end: dict) -> None:
+    if identity_start.get("git_commit") != identity_end.get("git_commit"):
+        raise base.BenchmarkError("HEAD moved during offline preflight; refusing immutable evidence")
+    if not identity_start.get("git_tree_clean"):
+        raise base.BenchmarkError(
+            "Source tree dirty before offline preflight (excluding generated evidence outputs)",
+        )
+    if not identity_end.get("git_tree_clean"):
+        raise base.BenchmarkError(
+            "Source tree dirty after offline preflight (excluding generated evidence outputs)",
+        )
+    if identity_start.get("controller_sha256") != identity_end.get("controller_sha256"):
+        raise base.BenchmarkError("Controller changed during offline preflight; refusing immutable evidence")
+    start_sources = identity_start.get("key_source_hashes") or {}
+    end_sources = identity_end.get("key_source_hashes") or {}
+    for name, digest in start_sources.items():
+        if end_sources.get(name) != digest:
+            raise base.BenchmarkError(
+                f"Source identity changed during offline preflight ({name}); refusing immutable evidence",
+            )
+
+
+def _offline_git_provenance(identity_start: dict, identity_end: dict) -> dict:
+    head_stable = bool(
+        identity_start.get("git_commit")
+        and identity_start.get("git_commit") == identity_end.get("git_commit"),
+    )
+    source_clean = bool(
+        identity_start.get("git_tree_clean") and identity_end.get("git_tree_clean"),
+    )
+    verified = head_stable and source_clean
+    provenance = {
+        "identity_start": identity_start,
+        "identity_end": identity_end,
+        "git_tree_clean": source_clean,
+        "git_provenance_verified": verified,
+    }
+    if verified:
+        provenance["git_commit"] = identity_start["git_commit"]
+        provenance["git_commit_short"] = identity_start.get("git_commit_short")
+    else:
+        provenance["git_commit"] = None
+        provenance["git_commit_short"] = None
+    return provenance
+
+
 def _offline_evidence_id(now: dt.datetime | None = None) -> str:
     moment = now or dt.datetime.now(dt.timezone.utc)
-    return moment.strftime("%Y%m%dT%H%M%SZ")
+    suffix = uuid.uuid4().hex[:8]
+    return f"{moment.strftime('%Y%m%dT%H%M%S')}.{moment.microsecond:06d}Z-{suffix}"
 
 
-def _offline_artifact_hashes(representative: dict) -> dict:
-    keys = (
-        "test_library_sha256", "harness_source_sha256", "profiler_source_sha256",
-        "gpu_segments_source_sha256",
-    )
-    artifacts = {key: representative.get(key) for key in keys}
-    recipes = representative.get("recipes") or []
-    artifacts["recipe_sha256"] = {
-        entry["recipe"]["name"]: entry["recipe"]["sha256"] for entry in recipes if "recipe" in entry
+def _offline_artifact_hashes(representative: dict, build_info: dict | None = None) -> dict:
+    build_info = build_info or {}
+    native = build_info.get("native_source_hashes") or {}
+    artifacts = {
+        "profiler_dylib_sha256": build_info.get("library_sha256"),
+        "test_library_sha256": representative.get("test_library_sha256"),
+        "workload_harness_sha256": representative.get("workload_harness_sha256")
+        or _sha256_optional(WORKLOAD_HARNESS),
+        "harness_source_sha256": representative.get("harness_source_sha256"),
+        "profiler_source_sha256": representative.get("profiler_source_sha256"),
+        "gpu_segments_source_sha256": representative.get("gpu_segments_source_sha256"),
+        "draw_observers_sha256": native.get(draw_api.HEADER.name) or _sha256_optional(draw_api.HEADER),
+        "draw_manifest_sha256": _sha256_optional(draw_api.OUTPUT),
+        "site_header_sha256": native.get(engine.HEADER.name) or _sha256_optional(engine.HEADER),
+        "controller_sha256": _sha256_optional(CONTROLLER),
+        "game_executable_sha256": build_info.get("executable_sha256"),
+        "recipe_sha256": {
+            entry["recipe"]["name"]: entry["recipe"]["sha256"]
+            for entry in (representative.get("recipes") or [])
+            if "recipe" in entry
+        },
     }
     return artifacts
 
@@ -331,11 +455,41 @@ def _offline_gate_summary(representative: dict) -> list:
 
 
 def _offline_environment_metadata() -> dict:
-    return {
+    meta: dict = {
         "platform": sys.platform,
         "python_version": sys.version.split()[0],
-        "gog_executable_sha256": base.sha256(base.GOG_EXE),
+        "arch": platform.machine(),
+        "gog_executable_sha256": _sha256_optional(base.GOG_EXE),
     }
+    if sys.platform == "darwin":
+        try:
+            meta["macos_version"] = platform.mac_ver()[0]
+            meta["macos_build"] = subprocess.run(
+                ["sw_vers", "-buildVersion"], capture_output=True, text=True, check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            meta.setdefault("macos_version", None)
+            meta.setdefault("macos_build", None)
+        try:
+            meta["chip_model"] = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            meta["chip_model"] = None
+    else:
+        meta["macos_version"] = None
+        meta["macos_build"] = None
+        meta["chip_model"] = None
+    try:
+        meta["clang_version"] = subprocess.run(
+            ["clang", "--version"], capture_output=True, text=True, check=True,
+        ).stdout.splitlines()[0]
+    except (OSError, subprocess.CalledProcessError, IndexError):
+        meta["clang_version"] = None
+    return meta
 
 
 def _offline_policy_versions(representative: dict) -> dict:
@@ -349,50 +503,59 @@ def _offline_policy_versions(representative: dict) -> dict:
     }
 
 
-def write_offline_evidence_archive(
+def build_offline_evidence_metadata(
     preflight_evidence: dict,
+    evidence_id: str,
     *,
-    evidence_id: str | None = None,
-    now: dt.datetime | None = None,
-) -> tuple[Path, str]:
-    """Write immutable offline preflight evidence; return archive path and evidence ID."""
+    identity_start: dict,
+    identity_end: dict,
+    build_info: dict,
+) -> dict:
+    """Shared top-level metadata for the immutable archive and rolling pointer."""
     representative = preflight_evidence.get("representative_workloads") or {}
-    run_id = evidence_id or _offline_evidence_id(now)
-    git_meta = _git_commit_metadata()
-    short = git_meta.get("git_commit_short") or "unknown"
-    OFFLINE_EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-    archive = OFFLINE_EVIDENCE_DIR / f"frame-model-offline-{short}-{run_id}.json"
-    if archive.exists():
-        raise base.BenchmarkError(f"Refusing to overwrite immutable evidence archive: {archive}")
-    record = {
-        "evidence_id": run_id,
+    return {
+        "evidence_id": evidence_id,
         "schema_version": OFFLINE_EVIDENCE_SCHEMA_VERSION,
-        "recorded_at_utc": run_id,
-        **git_meta,
+        "recorded_at_utc": evidence_id,
+        **_offline_git_provenance(identity_start, identity_end),
         "environment": _offline_environment_metadata(),
         "policy_versions": _offline_policy_versions(representative),
-        "artifact_hashes": _offline_artifact_hashes(representative),
-        "preflight": preflight_evidence,
+        "artifact_hashes": _offline_artifact_hashes(representative, build_info),
     }
-    archive.write_text(json.dumps(record, indent=2) + "\n")
-    return archive, run_id
+
+
+def write_offline_evidence_archive(
+    preflight_evidence: dict,
+    metadata: dict,
+) -> tuple[Path, str, bytes]:
+    """Write immutable offline preflight evidence; return path, evidence ID, and exact bytes."""
+    run_id = metadata["evidence_id"]
+    short = metadata.get("git_commit_short") or "unknown"
+    OFFLINE_EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+    archive = OFFLINE_EVIDENCE_DIR / f"frame-model-offline-{short}-{run_id}.json"
+    record = {**metadata, "preflight": preflight_evidence}
+    body = (json.dumps(record, indent=2) + "\n").encode("utf-8")
+    try:
+        with archive.open("xb") as handle:
+            handle.write(body)
+    except FileExistsError as error:
+        raise base.BenchmarkError(f"Refusing to overwrite immutable evidence archive: {archive}") from error
+    return archive, run_id, body
 
 
 def write_offline_evidence_pointer(
-    preflight_evidence: dict, evidence_id: str, archive_path: Path,
+    preflight_evidence: dict,
+    metadata: dict,
+    archive_path: Path,
+    archive_body: bytes,
 ) -> None:
     representative = preflight_evidence.get("representative_workloads") or {}
-    git_meta = _git_commit_metadata()
     pointer = {
-        "schema_version": OFFLINE_EVIDENCE_SCHEMA_VERSION,
-        "evidence_id": evidence_id,
+        **metadata,
         "archive_path": str(archive_path.relative_to(ROOT)),
-        "recorded_at_utc": evidence_id,
-        **git_meta,
+        "archive_sha256": hashlib.sha256(archive_body).hexdigest(),
         "status": preflight_evidence.get("status"),
         "overhead_gate": preflight_evidence.get("overhead_gate"),
-        "artifact_hashes": _offline_artifact_hashes(representative),
-        "policy_versions": _offline_policy_versions(representative),
         "representative_workloads": {
             "status": representative.get("status"),
             "gate_summary": _offline_gate_summary(representative),
@@ -423,10 +586,13 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
                 "arb_handle_harness":arb,"producer_harnesses":producers,
                 "power_mode_helper":power_helper,
                 "overhead_gate": "not measured", "live_hooks": "not installed in EU IV"}
+    identity_start = _offline_git_identity_snapshot()
     diagnostic_samples={}
     for name,target in (("bare",None),("counters",LIBRARY)):
         diagnostic_samples[name]=[offline_harness(target,loops=12000) for _ in range(3)]
     representative=offline_workloads()
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
     evidence={"status":"ready" if representative["status"]=="passed" else "blocked", "build":static,
         "autonomous":auto_evidence,"detour_harness":detour,"render_gate_harness":render_gate,
         "arb_handle_harness":arb,"producer_harnesses":producers,"power_mode_helper":power_helper,
@@ -434,12 +600,16 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
         "overhead_gate":representative["status"],
         "limitations":["Structural recipes reproduce observed draw counts and state-change frequencies with generated shaders/resources. Live calibration is independently mandatory.",
             "GPU evidence remains segmented and may be partial."]}
-    archive_path, evidence_id = write_offline_evidence_archive(evidence)
+    evidence_id = _offline_evidence_id()
+    metadata = build_offline_evidence_metadata(
+        evidence, evidence_id, identity_start=identity_start, identity_end=identity_end, build_info=static,
+    )
+    archive_path, evidence_id, archive_body = write_offline_evidence_archive(evidence, metadata)
     evidence["immutable_evidence"] = {
         "evidence_id": evidence_id,
         "archive_path": str(archive_path.relative_to(ROOT)),
     }
-    write_offline_evidence_pointer(evidence, evidence_id, archive_path)
+    write_offline_evidence_pointer(evidence, metadata, archive_path, archive_body)
     if representative["status"]!="passed":
         raise base.BenchmarkError(
             f"Representative overhead gates failed; immutable evidence: {archive_path}")
@@ -563,6 +733,7 @@ def offline_workloads() -> dict:
                 "recipe":{k:v for k,v in recipe.items() if k!="path"},"trials":trials,"gates":gates})
         return {"status":"passed" if all(g["status"]=="passed" for r in evidence for g in r["gates"].values()) else "failed",
                 "recipes":evidence,"test_library_sha256":base.sha256(TEST_LIBRARY),
+                "workload_harness_sha256":base.sha256(WORKLOAD_HARNESS),
                 "harness_source_sha256":base.sha256(ROOT/"tests/frame_model_workload_harness.c"),
                 "profiler_source_sha256":base.sha256(SOURCE),
                 "gpu_segments_source_sha256":base.sha256(ROOT/"benchmark/eu4_gpu_segments.h")}
