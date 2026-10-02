@@ -34,14 +34,16 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual({p["update_period_ns"] for p in phases},{19_000_000})
         pilot=model.causal_schedule(19_000_000,True)
         self.assertEqual([p["name"] for p in pilot],["A0"])
-        self.assertTrue(pilot[0]["detail"])
+        self.assertFalse(pilot[0]["detail"])
         self.assertEqual(model.PHASE_NUMBER["A0"],1)
         self.assertEqual(model.PHASE_NUMBER["ANATIVE"],110)
 
     def test_timestamped_event_rates_use_same_window_even_for_boundary_frames(self):
         window={"name":"A0","measurement_epoch":7,"start_ns":100,"end_ns":200}
         frame={key:0 for key in model.FRAME_FIELDS}
-        frame.update(phase=1,measurement_epoch=7,update_id=1,start_ns=110,end_ns=130)
+        frame.update(phase=1,measurement_epoch=7,update_id=1,start_ns=110,end_ns=130,
+                     render_start_ns=120,render_attempts=1,render_executed=1,
+                     present_time_ns=150,present_calls=2)
         events=[["E","7","1","1",str(kind),str(timestamp)] for kind,timestamp in
                 ((1,99),(1,110),(2,120),(3,120),(4,150),(4,190),(4,200))]
         result=model.phase_summary([frame],"A0",1,window,events)

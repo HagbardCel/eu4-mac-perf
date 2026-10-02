@@ -14,6 +14,31 @@ SUPPRESSED = {'glDrawElements': 'gl_draw_elements', 'glDrawElementsBaseVertex': 
     'glDrawArraysInstanced': 'gl_draw_arrays_instanced',
     'glDrawElementsInstancedBaseVertex': 'gl_draw_elements_instanced_base'}
 IDS = {name: i+1 for i,name in enumerate(SUPPRESSED)}
+# Stage 0: ARB instanced aliases stay in ALIASES for canonical IDs but must not be
+# interposed or dlsym-substituted (observe_exact_* re-enters the interposer on forward).
+# Suppression-capable PROFILE forwarding for ARB instanced draws is deferred to Stage 5.
+DEFERRED_UNSAFE_OBSERVERS = frozenset({
+    'glDrawArraysInstancedARB',
+    'glDrawElementsInstancedARB',
+})
+
+def submission_resolver_hash(name: str) -> int:
+    h = 1469598103934665603
+    for byte in name.encode('ascii'):
+        h = (h ^ byte) * 1099511628211
+    return h & ((1 << 64) - 1)
+
+def suppression_capable(name):
+    core = canonical(name)
+    return name == core and core in SUPPRESSED
+
+def observer_wrapper_symbol(name):
+    if name in DEFERRED_UNSAFE_OBSERVERS:
+        return None
+    core = canonical(name)
+    if name == core and core in SUPPRESSED:
+        return SUPPRESSED[core]
+    return f'observe_exact_{name}'
 # State-selection operations with misleading names are not submissions.
 EXCLUDED = {'glDrawBuffer','glDrawBuffers','glDrawBuffersARB','glDrawBuffersATI',
             'glDrawBuffersIndexedEXT','glDrawBuffersIndexedOES'}
@@ -86,25 +111,27 @@ def generate(binary, symbols, static_graph, verify=False):
         # Only Mach-O imports prove a direct loader-bound call. Non-import symbol
         # references require call/dataflow evidence before they can be qualified.
         reachability='reachable' if imported_here else 'unresolved' if symbol_here or glew_here else 'candidate'
-        observer_paths=['macho_interpose','dlsym'] if supported else []
+        observe=supported and name not in DEFERRED_UNSAFE_OBSERVERS
+        observer_paths=['macho_interpose','dlsym'] if observe else []
         rows.append({'name':name,'canonical':core,'id':api,'exported':name in exports,
             'imported':imported_here,'evidence_provenance':provenance,
             'reachability':reachability,'glew_pointer_reference':glew_here,
-            'observer':'import and dlsym' if supported else 'uncovered',
+            'observer':'import and dlsym' if observe else 'uncovered',
             'observer_paths':observer_paths,
-            'suppression':core in SUPPRESSED and supported,'abi':args})
-        if not supported: continue
+            'suppression':suppression_capable(name) and observe,'abi':args})
+        if not observe: continue
         code.append(f'extern void {name}({args});')
-        wrapper=SUPPRESSED.get(core)
-        if not wrapper:
-            wrapper='observe_'+name
-            arguments=[]
-            if args!='void':
-                for argument in args.split(','):
-                    m=re.search(r'(\w+)\s*(?:\[.*?\])?$',argument)
-                    if not m: raise ValueError(f'No argument name for {name}: {argument}')
-                    arguments.append(m[1])
-            code.append(f'static void {wrapper}({args}) {{\n    observe_draw_api({api},false);\n    {name}({",".join(arguments)});\n}}')
+        arguments=[]
+        if args!='void':
+            for argument in args.split(','):
+                m=re.search(r'(\w+)\s*(?:\[.*?\])?$',argument)
+                if not m: raise ValueError(f'No argument name for {name}: {argument}')
+                arguments.append(m[1])
+        call=f'{name}({",".join(arguments)})'
+        suppressed=suppression_capable(name)
+        wrapper=observer_wrapper_symbol(name)
+        if wrapper.startswith('observe_exact_'):
+            code.append(f'static void {wrapper}({args}) {{\n    observe_draw_api({api},{str(suppressed).lower()});\n    {call};\n}}')
         resolver.append(f'    if(!strcmp(name,"{name}")) {{resolved_draw_api({api});return (void *){wrapper};}}')
         interposes.append(f'    {{(const void *){wrapper},(const void *){name}}},')
     code+=['static void *draw_observer_resolve(const char *name) {']+resolver+['    return NULL;','}']
@@ -125,6 +152,7 @@ def generate(binary, symbols, static_graph, verify=False):
         'unresolved_executable_paths':sorted(set(unresolved_paths)),
         'reachable_observer_gaps':sorted(set(reachable_gaps)),
         'aliases':ALIASES,
+        'deferred_unsafe_observers':sorted(DEFERRED_UNSAFE_OBSERVERS),
         'historical_observed_ids':[1,2,3,4,5,6],
         'historical_policy':'historical observations never establish completeness',
         'status':'complete observers' if not gaps and not unresolved_paths and not reachable_gaps else 'coverage gaps'}
@@ -144,9 +172,12 @@ def coverage(manifest, frames, trace, phase_numbers, *, require_c=True):
     gaps=[r['name'] for r in manifest['apis'] if r.get('reachability')=='reachable' and r['observer']=='uncovered']
     unresolved=[r['name'] for r in manifest['apis'] if r.get('reachability')=='unresolved']
     resolver_gaps=manifest.get('resolver_gaps',[])
-    if gaps or unresolved or resolver_gaps or any(r and r[0]=='R' for r in trace):
+    resolver_records=[r for r in trace if r and r[0]=='R']
+    deferred_hashes={submission_resolver_hash(n) for n in DEFERRED_UNSAFE_OBSERVERS}
+    if gaps or unresolved or resolver_gaps or resolver_records:
         return {'status':'failed','reason':'reachable or unresolved executable submission paths lack observer proof','uncovered':gaps,'unresolved_executable_paths':unresolved,'resolver_gaps':resolver_gaps,
-                'resolver_records':[r for r in trace if r and r[0]=='R']}
+                'resolver_records':resolver_records,
+                'deferred_resolver_records':[r for r in resolver_records if int(r[1]) in deferred_hashes]}
     expected={(f['measurement_epoch'],f['update_id'],f['thread_id']) for f in frames if f['phase'] in phase_numbers}
     markers=set();observations={};rows=[]
     for r in trace:

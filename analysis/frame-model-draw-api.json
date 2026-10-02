@@ -1,7 +1,7 @@
 {
   "schema": 2,
   "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-  "observer_header_sha256": "391a515fa8d1ab73e76c6b42009091de2adf269ffa330b4b2c74e7874778480a",
+  "observer_header_sha256": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
   "export_stub_sha256": "869633f04031fbfb30f2b6c053280538a9d2cc674eaf6e583cd7303d0a1b77a2",
   "candidate_policy": "draw/range/multi/indirect plus immediate-mode, display-list, evaluator, rect, bitmap and pixel paths; buffer selectors excluded",
   "apis": [
@@ -218,12 +218,9 @@
       ],
       "reachability": "unresolved",
       "glew_pointer_reference": false,
-      "observer": "import and dlsym",
-      "observer_paths": [
-        "macho_interpose",
-        "dlsym"
-      ],
-      "suppression": true,
+      "observer": "uncovered",
+      "observer_paths": [],
+      "suppression": false,
       "abi": "GLenum mode, GLint first, GLsizei count, GLsizei primcount"
     },
     {
@@ -409,12 +406,9 @@
       ],
       "reachability": "unresolved",
       "glew_pointer_reference": true,
-      "observer": "import and dlsym",
-      "observer_paths": [
-        "macho_interpose",
-        "dlsym"
-      ],
-      "suppression": true,
+      "observer": "uncovered",
+      "observer_paths": [],
+      "suppression": false,
       "abi": "GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei primcount"
     },
     {
@@ -1861,6 +1855,10 @@
     "glMultiDrawArraysEXT": "glMultiDrawArrays",
     "glMultiDrawElementsEXT": "glMultiDrawElements"
   },
+  "deferred_unsafe_observers": [
+    "glDrawArraysInstancedARB",
+    "glDrawElementsInstancedARB"
+  ],
   "historical_observed_ids": [
     1,
     2,

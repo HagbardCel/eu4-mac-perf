@@ -45,6 +45,8 @@ WRITER_HARNESS = ROOT / "benchmark/.build/frame_model_writer_harness"
 TEST_LIBRARY=ROOT/"benchmark/.build/libeu4_frame_model_test.dylib"
 WORKLOAD_HARNESS=ROOT/"benchmark/.build/frame_model_workload_harness"
 WRITER_PRODUCTION_HARNESS=ROOT/"benchmark/.build/frame_model_writer_production_harness"
+DRAW_ALIAS_HARNESS=ROOT/"benchmark/.build/frame_model_draw_alias_harness"
+ALIAS_INTERPOSE_HARNESS=ROOT/"benchmark/.build/frame_model_alias_interpose_harness"
 CONTROL_HARNESS=ROOT/"benchmark/.build/frame_model_control_harness"
 POWER_HELPER_SOURCE = ROOT / "benchmark/power_mode_helper"
 POWER_HELPER_INSTALLED = Path("/usr/local/libexec/eu4-power-mode")
@@ -97,6 +99,8 @@ def build() -> dict:
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
     commands = (
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-pthread","-o",str(WRITER_PRODUCTION_HARNESS),str(ROOT/"tests/frame_model_writer_production_harness.c")],
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(DRAW_ALIAS_HARNESS),str(ROOT/"tests/frame_model_draw_alias_harness.c")],
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(ALIAS_INTERPOSE_HARNESS),str(ROOT/"tests/frame_model_alias_interpose_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(CONTROL_HARNESS),str(ROOT/"tests/frame_model_control_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-DEU4_FRAME_MODEL_TEST",
          "-dynamiclib","-framework","OpenGL","-framework","CoreGraphics","-o",str(TEST_LIBRARY),str(SOURCE)],
@@ -180,6 +184,32 @@ def offline_control_harness():
         return {"status":"passed","output":run.stdout.strip(),"unknown_origin_records":origins}
 
 
+def offline_draw_alias_harness():
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory);path=root/"control";log=root/"trace"
+        path.write_bytes(CONTROL.pack(FORMAT_VERSION,2,1,1,3,0,0,0,1,7,0,0,0,0)+bytes(CONTROL_SIZE-CONTROL.size))
+        run=subprocess.run([str(DRAW_ALIAS_HARNESS),str(TEST_LIBRARY)],
+            env={**os.environ,"EU4_FRAME_MODEL_CONTROL":str(path),"EU4_FRAME_MODEL_LOG":str(log)},
+            capture_output=True,text=True,timeout=10,check=False)
+        if run.returncode:
+            raise base.BenchmarkError(f"Draw alias behavioral harness failed: {run.stderr.strip() or run.stdout.strip()}")
+        return {"status":"passed","output":run.stdout.strip()}
+
+
+def offline_alias_interpose_harness():
+    with tempfile.TemporaryDirectory() as directory:
+        root=Path(directory);path=root/"control";log=root/"trace"
+        path.write_bytes(CONTROL.pack(FORMAT_VERSION,2,1,1,3,0,0,0,1,7,0,0,0,0)+bytes(CONTROL_SIZE-CONTROL.size))
+        run=subprocess.run([str(ALIAS_INTERPOSE_HARNESS)],
+            env={**os.environ,"DYLD_INSERT_LIBRARIES":str(TEST_LIBRARY),
+                 "EU4_FRAME_MODEL_CONTROL":str(path),"EU4_FRAME_MODEL_LOG":str(log)},
+            capture_output=True,text=True,timeout=10,check=False)
+        if run.returncode:
+            raise base.BenchmarkError(
+                f"ARB interpose launch harness failed: {run.stderr.strip() or run.stdout.strip()}")
+        return {"status":"passed","output":run.stdout.strip()}
+
+
 def offline_writer_production_harness():
     with tempfile.TemporaryDirectory() as directory:
         root=Path(directory);path=root/"control";log=root/"trace"
@@ -256,6 +286,8 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
     producers=offline_producer_harnesses()
     producers["unowned_control"]=offline_control_harness()
     producers["production_writer"]=offline_writer_production_harness()
+    producers["draw_alias"]=offline_draw_alias_harness()
+    producers["alias_interpose"]=offline_alias_interpose_harness()
     auto_evidence = auto.preflight(require_privilege=require_privilege)
     power_helper = _power_helper_preflight() if require_privilege and require_power_mode else {"status":"not checked"}
     if not run_gl:
@@ -1666,7 +1698,7 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
 
 
 def causal_schedule(period: int, residual_discovery: bool=False) -> list[dict]:
-    phases=(("A0","profile",20,True),) if residual_discovery else PHASES
+    phases=(("A0","profile",20,False),) if residual_discovery else PHASES
     return [{"name":name,"mode":mode,"duration_s":duration,"detail":detail,
              "update_period_ns":period,"render_period_ns":int(1e9/30) if name=="E30" else
              int(1e9/15) if name=="E15" else 0} for name,mode,duration,detail in phases]
@@ -1975,7 +2007,7 @@ def main() -> int:
     pf.add_argument("--require-power-helper",action="store_true")
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
-        run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
+    run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
     run_parser.add_argument("--calibration-only",action="store_true",
         help="run bounded reference/counters/reference calibration and forensic capture, then stop before ANATIVE or interventions")
     run_parser.add_argument("--fixed-cadence-lpm",action="store_true",

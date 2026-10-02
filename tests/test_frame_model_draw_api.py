@@ -4,15 +4,24 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import shutil
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'benchmark'))
 import frame_model_draw_api as api
 import eu4_frame_model as model
 
+def _api_row(name, **extra):
+    core=api.canonical(name)
+    row={'name':name,'canonical':core,'id':api.IDS.get(core,99),'exported':True,'imported':True,
+         'reachability':'reachable','observer':'import and dlsym','suppression':core in api.SUPPRESSED}
+    row.update(extra)
+    return row
+
 class DrawCoverageTests(unittest.TestCase):
     def fixture(self):
-        manifest={'schema':1,'apis':[
-            {'name':'glDrawArrays','canonical':'glDrawArrays','id':3,'exported':True,'imported':True,'static_reference':True,'observer':'import and dlsym','suppression':True},
-            {'name':'glDrawArraysARB','canonical':'glDrawArrays','id':3,'exported':True,'imported':False,'static_reference':False,'observer':'import and dlsym','suppression':True}], 'resolver_gaps':[]}
+        manifest={'schema':2,'apis':[
+            _api_row('glDrawArrays'),
+            _api_row('glDrawArraysARB',reachability='candidate',imported=False,suppression=True)],
+            'resolver_gaps':[]}
         frames=[{'phase':phase,'measurement_epoch':7,'update_id':update,'thread_id':11,'draws':10} for update,phase in ((1,1),(2,4))]
         def record(kind,frame,*payload):
             return list(map(str,[kind,*payload,*([0]*(12-len(payload))),7,frame['update_id'],frame['phase'],11,9,0,0]))
@@ -21,6 +30,29 @@ class DrawCoverageTests(unittest.TestCase):
             rows.extend([record('K',f,1),record('A',f,3,10,10 if f['phase']==4 else 0,0 if f['phase']==4 else 10)])
         return manifest,frames,rows
 
+    def test_observer_wrapper_symbols_stage0_core_only_suppression(self):
+        self.assertEqual(api.observer_wrapper_symbol('glDrawArraysInstanced'),'gl_draw_arrays_instanced')
+        self.assertIsNone(api.observer_wrapper_symbol('glDrawArraysInstancedARB'))
+        self.assertIsNone(api.observer_wrapper_symbol('glDrawElementsInstancedARB'))
+        self.assertTrue(api.observer_wrapper_symbol('glDrawRangeElementsEXT').startswith('observe_exact_'))
+
+    def test_deferred_arb_manifest_fields(self):
+        manifest=json.loads(api.OUTPUT.read_text())
+        deferred=set(manifest.get('deferred_unsafe_observers',[]))
+        self.assertEqual(deferred, set(api.DEFERRED_UNSAFE_OBSERVERS))
+        for name in api.DEFERRED_UNSAFE_OBSERVERS:
+            row=next(r for r in manifest['apis'] if r['name']==name)
+            self.assertEqual(row['observer'],'uncovered')
+            self.assertEqual(row['observer_paths'],[])
+            self.assertFalse(row['suppression'])
+            self.assertEqual(row['reachability'],'unresolved')
+
+    def test_suppression_capable_excludes_arb_instanced_stage5_deferred(self):
+        self.assertTrue(api.suppression_capable('glDrawArraysInstanced'))
+        self.assertFalse(api.suppression_capable('glDrawArraysInstancedARB'))
+        self.assertFalse(api.suppression_capable('glDrawElementsInstancedARB'))
+        self.assertFalse(api.suppression_capable('glDrawRangeElementsEXT'))
+
     def test_complete_coverage_and_alias_canonicalization(self):
         m,f,r=self.fixture()
         self.assertEqual(api.canonical('glDrawArraysInstancedARB'),'glDrawArraysInstanced')
@@ -28,11 +60,18 @@ class DrawCoverageTests(unittest.TestCase):
         self.assertEqual(api.coverage(m,f[:1],r,{1},require_c=False)['stage'],'pre-C')
         self.assertEqual(api.coverage(m,f[:1],r,{1})['status'],'failed')
 
-    def test_uncovered_export_or_static_path_fails_even_when_unobserved(self):
+    def test_candidate_export_only_does_not_block_coverage(self):
         m,f,r=self.fixture()
-        m['apis'].append({'name':'glMultiDrawElements','id':7,'exported':True,'imported':False,'static_reference':False,'observer':'uncovered','suppression':False})
+        m['apis'].append({'name':'glMultiDrawElementsIndirectAPPLE','canonical':'glMultiDrawElementsIndirect',
+            'id':7,'exported':True,'imported':False,'reachability':'candidate','observer':'uncovered','suppression':False})
+        self.assertEqual(api.coverage(m,f,r,{1,4})['status'],'passed')
+
+    def test_reachable_or_unresolved_uncovered_still_fails(self):
+        m,f,r=self.fixture()
+        m['apis'].append({'name':'glMultiDrawElements','canonical':'glMultiDrawElements','id':7,'exported':True,'imported':False,
+            'reachability':'reachable','observer':'uncovered','suppression':False})
         self.assertEqual(api.coverage(m,f,r,{1,4})['status'],'failed')
-        m['apis'][-1].update(exported=False,static_reference=True)
+        m['apis'][-1].update(reachability='unresolved')
         self.assertEqual(api.coverage(m,f,r,{1,4})['status'],'failed')
 
     def test_legacy_observers_report_partial_suppression(self):
@@ -44,6 +83,8 @@ class DrawCoverageTests(unittest.TestCase):
         self.assertEqual(api.coverage(m,f,r,{1,4})['status'],'failed')
         m['resolver_gaps']=[]
         self.assertEqual(api.coverage(m,f,r+[['R','99','2']],{1,4})['status'],'failed')
+        arb_hash=str(api.submission_resolver_hash('glDrawArraysInstancedARB'))
+        self.assertEqual(api.coverage(m,f,r+[['R',arb_hash,'1']],{1,4})['status'],'failed')
         self.assertEqual(api.coverage(m,f,[row for row in r if row[0]!='K'],{1,4})['status'],'unavailable')
         self.assertEqual(api.coverage(None,f,r,{1,4})['status'],'unavailable')
 
@@ -77,3 +118,18 @@ class DrawCoverageTests(unittest.TestCase):
         q=['Q','1','1','-1','0','1','40','30','40','30','7','0','0','11','9','3']
         rows=model.eligible_trace([d,q],[f],[{'name':'A0','measurement_epoch':7,'start_ns':100,'end_ns':200}])
         self.assertEqual(rows,[q])
+
+class DrawAliasHarnessTests(unittest.TestCase):
+    def test_draw_alias_harness_on_mac(self):
+        if sys.platform!="darwin": self.skipTest("macOS dylib harness")
+        import eu4_frame_model as model
+        if not shutil.which("clang"): self.skipTest("clang unavailable")
+        model.build()
+        model.offline_draw_alias_harness()
+
+    def test_alias_interpose_harness_on_mac(self):
+        if sys.platform!="darwin": self.skipTest("macOS dylib interpose harness")
+        import eu4_frame_model as model
+        if not shutil.which("clang"): self.skipTest("clang unavailable")
+        model.build()
+        model.offline_alias_interpose_harness()
