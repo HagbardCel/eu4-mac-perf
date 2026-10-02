@@ -14,11 +14,11 @@ int main(void) {
     }
     int code = verify();
     if (code == 1) {
-        fprintf(stderr, "glDrawArraysInstancedARB: wrapper must differ from RTLD_NEXT (from interposer)\n");
+        fprintf(stderr, "glDrawArraysInstancedARB: wrapper must differ from OpenGL.framework export\n");
         return 2;
     }
     if (code == 2) {
-        fprintf(stderr, "glDrawElementsInstancedARB: wrapper must differ from RTLD_NEXT (from interposer)\n");
+        fprintf(stderr, "glDrawElementsInstancedARB: wrapper must differ from OpenGL.framework export\n");
         return 3;
     }
     if (code == 10 || code == 11) {
@@ -29,6 +29,6 @@ int main(void) {
         fprintf(stderr, "unexpected verify code %d\n", code);
         return 5;
     }
-    puts("ARB instanced interpose: profiler wrappers differ from RTLD_NEXT and targets are non-NULL");
+    puts("ARB instanced interpose: profiler wrappers differ from OpenGL.framework and targets are non-NULL");
     return 0;
 }
