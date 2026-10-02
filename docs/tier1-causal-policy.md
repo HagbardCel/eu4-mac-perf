@@ -14,7 +14,8 @@ recipes, not tuned to mesh/borders/text_ui outcomes.
   `analysis/held-out/` before first timing. Exploratory archives measured without a frozen
   fixture (for example `ab00679`) are development evidence, not independent validation.
 - **Forensic suitability:** sampled + ablation gates under legacy
-  `reference_counters_3pct_sampled_5pct_v1`; non-blocking for `calibration_only` runs.
+  `reference_counters_3pct_sampled_5pct_v1`; reported in `release_gates` but **not**
+  required for full causal or calibration-only progression (roadmap Stage 2 default).
 
 ## Gate metrics
 
@@ -35,14 +36,15 @@ Implemented in `frame_model_workload.paired_summary()` and invoked by
 
 | Parameter | Value |
 |-----------|-------|
+| Paired trials per gate | **7** (required; fewer or stored summaries alone → `unavailable`) |
 | Bootstrap seed | 1729 |
 | Bootstrap resamples | 2000 |
 | CI indices (sorted resamples) | 50 / 1950 (95%) |
 | Statistic | median of paired fractions |
 | Frames per trial | 4 (offline harness default) |
 
-Replay **must** recompute summaries from archived `pairs`; stored medians alone are not
-trusted for policy audit.
+Replay **must** recompute summaries from archived `pairs` with these parameters;
+stored medians alone are not trusted.
 
 ## Tri-state outcomes
 

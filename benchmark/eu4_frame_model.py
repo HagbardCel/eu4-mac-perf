@@ -503,6 +503,37 @@ def _offline_gate_summary(representative: dict) -> list:
     return summary
 
 
+def _offline_admission_pointer_summary(admission: dict | None) -> dict:
+    if not admission:
+        return {"status": "unavailable"}
+    training = {
+        item.get("recipe") or "?": item.get("status")
+        for item in admission.get("training_recipes") or []
+    }
+    held = admission.get("held_out_recipe") or {}
+    return {
+        "status": admission.get("status"),
+        "policy_version": admission.get("policy_version"),
+        "training": training,
+        "held_out_status": held.get("status"),
+        "held_out_recipe": held.get("recipe"),
+    }
+
+
+def _offline_forensic_pointer_summary(forensic: dict | None) -> dict:
+    if not forensic:
+        return {"status": "unavailable"}
+    recipes = {
+        item.get("recipe") or "?": item.get("status")
+        for item in forensic.get("recipes") or []
+    }
+    return {
+        "status": forensic.get("status"),
+        "policy_version": forensic.get("policy_version"),
+        "recipes": recipes,
+    }
+
+
 def _offline_environment_metadata() -> dict:
     meta: dict = {
         "platform": sys.platform,
@@ -615,8 +646,12 @@ def write_offline_evidence_pointer(
         "archive_sha256": hashlib.sha256(archive_body).hexdigest(),
         "status": preflight_evidence.get("status"),
         "overhead_gate": preflight_evidence.get("overhead_gate"),
-        "offline_causal_admission": preflight_evidence.get("offline_causal_admission"),
-        "offline_forensic_suitability": preflight_evidence.get("offline_forensic_suitability"),
+        "offline_causal_admission": _offline_admission_pointer_summary(
+            preflight_evidence.get("offline_causal_admission"),
+        ),
+        "offline_forensic_suitability": _offline_forensic_pointer_summary(
+            preflight_evidence.get("offline_forensic_suitability"),
+        ),
         "representative_workloads": {
             "status": representative.get("status"),
             "gate_summary": _offline_gate_summary(representative),

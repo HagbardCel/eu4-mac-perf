@@ -11,8 +11,8 @@ analysis/held-out/
   frame-model-held-out-terrain-surrogate.json
 ```
 
-Legacy copies under `analysis/fixtures/` are still accepted if present, but new fixtures
-should use `analysis/held-out/` (not gitignored).
+Legacy copies under `analysis/fixtures/` are **not** accepted for admission (that path is
+gitignored and would bypass the clean-tree invariant).
 
 ## Freeze workflow (Mac + passive trace)
 

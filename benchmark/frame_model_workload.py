@@ -6,6 +6,7 @@ import random
 import shutil
 import statistics
 import struct
+import subprocess
 from pathlib import Path
 
 import eu4_draw_trace as trace
@@ -26,24 +27,32 @@ HELD_OUT_CATEGORIES = frozenset({"terrain"})
 HELD_OUT_DIR = ROOT / "analysis/held-out"
 HELD_OUT_FIXTURE = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.recipe"
 HELD_OUT_FIXTURE_META = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.json"
-# Legacy path (gitignored fixtures/); still accepted if present.
-HELD_OUT_FIXTURE_LEGACY = ROOT / "analysis/fixtures/frame-model-held-out-terrain-surrogate.recipe"
-HELD_OUT_FIXTURE_META_LEGACY = ROOT / "analysis/fixtures/frame-model-held-out-terrain-surrogate.json"
+TIER1_PAIR_COUNT = 7
+
+
+def _git_tracked_at_head(path: Path) -> bool:
+    relative = path.relative_to(ROOT)
+    try:
+        subprocess.run(
+            ["git", "ls-files", "--error-unmatch", str(relative)],
+            cwd=ROOT,
+            capture_output=True,
+            check=True,
+        )
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
 
 
 def held_out_fixture_ready() -> bool:
-    """True when a hash-frozen held-out recipe is committed (required before first timing)."""
-    for recipe_path, meta_path in (
-        (HELD_OUT_FIXTURE, HELD_OUT_FIXTURE_META),
-        (HELD_OUT_FIXTURE_LEGACY, HELD_OUT_FIXTURE_META_LEGACY),
-    ):
-        if not recipe_path.is_file() or not meta_path.is_file():
-            continue
-        meta = json.loads(meta_path.read_text())
-        expected = meta.get("sha256")
-        if expected and base.sha256(recipe_path) == expected:
-            return True
-    return False
+    """True when hash-frozen held-out recipe bytes are committed at HEAD (not gitignored locals)."""
+    if not HELD_OUT_FIXTURE.is_file() or not HELD_OUT_FIXTURE_META.is_file():
+        return False
+    if not _git_tracked_at_head(HELD_OUT_FIXTURE) or not _git_tracked_at_head(HELD_OUT_FIXTURE_META):
+        return False
+    meta = json.loads(HELD_OUT_FIXTURE_META.read_text())
+    expected = meta.get("sha256")
+    return bool(expected and base.sha256(HELD_OUT_FIXTURE) == expected)
 
 
 def _trace_frame_key(rows):
@@ -137,43 +146,55 @@ def recipes(directory, *, include_held_out: bool = False):
 
 
 def held_out_recipe(directory, *, rows=None, key=None, sites=None):
-    """Load the hash-frozen held-out workload; dynamic trace builds are not used for admission."""
-    for recipe_path, meta_path in (
-        (HELD_OUT_FIXTURE, HELD_OUT_FIXTURE_META),
-        (HELD_OUT_FIXTURE_LEGACY, HELD_OUT_FIXTURE_META_LEGACY),
-    ):
-        if recipe_path.is_file() and meta_path.is_file():
-            meta = json.loads(meta_path.read_text())
-            expected = meta.get("sha256")
-            if expected and base.sha256(recipe_path) != expected:
-                raise base.BenchmarkError("Held-out fixture SHA256 does not match frozen metadata")
-            path = directory / recipe_path.name
-            shutil.copy2(recipe_path, path)
-            recipe = dict(meta)
-            recipe["path"] = str(path)
-            recipe.setdefault("role", "held_out")
-            recipe.setdefault("name", HELD_OUT_RECIPE_NAME)
-            return recipe
-    raise base.BenchmarkError(
-        "Held-out recipe fixture is not hash-frozen in the repository "
-        f"(commit {HELD_OUT_FIXTURE} and {HELD_OUT_FIXTURE_META} before measuring held-out performance)",
-    )
+    """Load the hash-frozen held-out workload committed under analysis/held-out/."""
+    if not held_out_fixture_ready():
+        raise base.BenchmarkError(
+            "Held-out recipe fixture is not hash-frozen in the repository "
+            f"(commit {HELD_OUT_FIXTURE} and {HELD_OUT_FIXTURE_META} before measuring held-out performance)",
+        )
+    meta = json.loads(HELD_OUT_FIXTURE_META.read_text())
+    expected = meta.get("sha256")
+    if expected and base.sha256(HELD_OUT_FIXTURE) != expected:
+        raise base.BenchmarkError("Held-out fixture SHA256 does not match frozen metadata")
+    path = directory / HELD_OUT_FIXTURE.name
+    shutil.copy2(HELD_OUT_FIXTURE, path)
+    recipe = dict(meta)
+    recipe["path"] = str(path)
+    recipe.setdefault("role", "held_out")
+    recipe.setdefault("name", HELD_OUT_RECIPE_NAME)
+    return recipe
 
 
-def paired_summary(pairs, limit, frames=1):
+def paired_summary(
+    pairs,
+    limit,
+    frames=1,
+    *,
+    bootstrap_seed=1729,
+    bootstrap_samples=2000,
+    ci_low_index=50,
+    ci_high_index=1950,
+):
     ratios = [pair["instrumented"] / pair["reference"] - 1 for pair in pairs]
-    rng = random.Random(1729)
-    bootstrap = sorted(statistics.median(rng.choices(ratios, k=len(ratios))) for _ in range(2000))
-    interval = [bootstrap[50], bootstrap[1950]]
+    rng = random.Random(bootstrap_seed)
+    bootstrap = sorted(
+        statistics.median(rng.choices(ratios, k=len(ratios))) for _ in range(bootstrap_samples)
+    )
+    interval = [bootstrap[ci_low_index], bootstrap[ci_high_index]]
     absolute = [(pair["instrumented"] - pair["reference"]) / (1000 * frames) for pair in pairs]
-    absolute_bootstrap = sorted(statistics.median(rng.choices(absolute, k=len(absolute))) for _ in range(2000))
+    absolute_bootstrap = sorted(
+        statistics.median(rng.choices(absolute, k=len(absolute))) for _ in range(bootstrap_samples)
+    )
     median = statistics.median(ratios)
     return {
         "median_fraction": median,
         "confidence_interval_95": interval,
         "pairs": pairs,
         "overhead_us_per_frame": statistics.median(absolute),
-        "overhead_us_per_frame_ci95": [absolute_bootstrap[50], absolute_bootstrap[1950]],
+        "overhead_us_per_frame_ci95": [absolute_bootstrap[ci_low_index], absolute_bootstrap[ci_high_index]],
+        "bootstrap_seed": bootstrap_seed,
+        "bootstrap_samples": bootstrap_samples,
+        "bootstrap_ci_indices": [ci_low_index, ci_high_index],
         "absolute_metric_policy": "Tier-1 absolute cap enforced in frame_model_tier1_policy",
         "limit": limit,
         "status": "passed"

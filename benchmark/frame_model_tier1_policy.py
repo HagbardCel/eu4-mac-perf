@@ -1,6 +1,7 @@
 """Tier-1 offline causal admission policies and replay over frozen trial data."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import frame_model_workload as workload
@@ -14,9 +15,15 @@ EXPECTED_CAUSAL_GATE_NAMES = (
     "counters_elapsed_ns",
     "counters_cpu_ns",
 )
-FORENSIC_GATE_SUFFIXES = (
+EXPECTED_FORENSIC_GATE_NAMES = (
     "sampled_elapsed_ns",
     "sampled_cpu_ns",
+    "ablation_accounting_elapsed_ns",
+    "ablation_accounting_cpu_ns",
+    "ablation_writer_elapsed_ns",
+    "ablation_writer_cpu_ns",
+    "ablation_preparation_elapsed_ns",
+    "ablation_preparation_cpu_ns",
 )
 
 # Frozen a priori error budget — see docs/tier1-causal-policy.md
@@ -24,14 +31,29 @@ TIER1_RELATIVE_LIMIT = 0.03
 TIER1_ABSOLUTE_US_PER_FRAME = 50.0
 TIER1_BOOTSTRAP_SEED = 1729
 TIER1_BOOTSTRAP_SAMPLES = 2000
+TIER1_BOOTSTRAP_CI_LOW_INDEX = 50
+TIER1_BOOTSTRAP_CI_HIGH_INDEX = 1950
 TIER1_FRAMES_PER_TRIAL = 4
+TIER1_PAIR_COUNT = workload.TIER1_PAIR_COUNT
 
-REQUIRED_GATE_METRICS = (
-    "median_fraction",
-    "confidence_interval_95",
-    "overhead_us_per_frame",
-    "overhead_us_per_frame_ci95",
-)
+
+def validate_pairs(pairs) -> tuple[bool, str | None]:
+    if not isinstance(pairs, list):
+        return False, "pairs missing"
+    if len(pairs) != TIER1_PAIR_COUNT:
+        return False, f"expected {TIER1_PAIR_COUNT} valid pairs, found {len(pairs)}"
+    for index, pair in enumerate(pairs):
+        if not isinstance(pair, dict):
+            return False, f"pair {index} invalid"
+        for key in ("reference", "instrumented"):
+            value = pair.get(key)
+            if not isinstance(value, (int, float)) or not math.isfinite(value):
+                return False, f"pair {index} {key} invalid"
+        if pair["reference"] <= 0:
+            return False, f"pair {index} reference must be > 0"
+        if pair["instrumented"] < 0:
+            return False, f"pair {index} instrumented must be >= 0"
+    return True, None
 
 
 @dataclass(frozen=True)
@@ -41,11 +63,19 @@ class Tier1CausalPolicy:
     absolute_us_per_frame: float
     bootstrap_seed: int = TIER1_BOOTSTRAP_SEED
     bootstrap_samples: int = TIER1_BOOTSTRAP_SAMPLES
+    bootstrap_ci_low_index: int = TIER1_BOOTSTRAP_CI_LOW_INDEX
+    bootstrap_ci_high_index: int = TIER1_BOOTSTRAP_CI_HIGH_INDEX
     frames_per_trial: int = TIER1_FRAMES_PER_TRIAL
 
     def gate_passes(self, gate: dict) -> bool:
-        if not all(key in gate for key in REQUIRED_GATE_METRICS):
-            return False
+        for key in (
+            "median_fraction",
+            "confidence_interval_95",
+            "overhead_us_per_frame",
+            "overhead_us_per_frame_ci95",
+        ):
+            if key not in gate:
+                return False
         interval = gate["confidence_interval_95"]
         if not isinstance(interval, (list, tuple)) or len(interval) != 2:
             return False
@@ -63,12 +93,18 @@ class Tier1CausalPolicy:
     def summarize_gate(self, gate: dict) -> tuple[str, dict, str | None]:
         """Return status, evaluated gate dict, and optional unavailable reason."""
         pairs = gate.get("pairs")
-        if pairs:
-            evaluated = workload.paired_summary(pairs, self.relative_limit, self.frames_per_trial)
-        else:
-            evaluated = dict(gate)
-        if not all(key in evaluated for key in REQUIRED_GATE_METRICS):
-            return "unavailable", evaluated, "missing paired summary metrics"
+        valid, reason = validate_pairs(pairs)
+        if not valid:
+            return "unavailable", dict(gate), reason
+        evaluated = workload.paired_summary(
+            pairs,
+            self.relative_limit,
+            self.frames_per_trial,
+            bootstrap_seed=self.bootstrap_seed,
+            bootstrap_samples=self.bootstrap_samples,
+            ci_low_index=self.bootstrap_ci_low_index,
+            ci_high_index=self.bootstrap_ci_high_index,
+        )
         if self.gate_passes(evaluated):
             return "passed", evaluated, None
         return "failed", evaluated, None
@@ -131,6 +167,15 @@ def evaluate_recipe_forensic(recipe_entry: dict) -> dict:
     sampled = {name: gates[name] for name in gates if name.startswith("sampled_")}
     ablations = _ablation_gates(recipe_entry)
     all_gates = {**sampled, **ablations}
+    missing = [name for name in EXPECTED_FORENSIC_GATE_NAMES if name not in all_gates]
+    if missing:
+        return {
+            "recipe": (recipe_entry.get("recipe") or {}).get("name"),
+            "policy_version": LEGACY_SEVEN_PAIR_POLICY_VERSION,
+            "status": "unavailable",
+            "reason": f"missing forensic gates: {', '.join(missing)}",
+            "gates": all_gates,
+        }
     if not all_gates:
         return {
             "recipe": (recipe_entry.get("recipe") or {}).get("name"),
@@ -138,6 +183,19 @@ def evaluate_recipe_forensic(recipe_entry: dict) -> dict:
             "status": "unavailable",
             "reason": "no forensic gates present",
             "gates": {},
+        }
+    incomplete = [
+        name
+        for name, gate in all_gates.items()
+        if gate.get("status") not in ("passed", "failed")
+    ]
+    if incomplete:
+        return {
+            "recipe": (recipe_entry.get("recipe") or {}).get("name"),
+            "policy_version": LEGACY_SEVEN_PAIR_POLICY_VERSION,
+            "status": "unavailable",
+            "reason": f"incomplete forensic gate status: {', '.join(incomplete)}",
+            "gates": all_gates,
         }
     legacy_limit_pass = all(gate.get("status") == "passed" for gate in all_gates.values())
     return {
@@ -178,6 +236,7 @@ def summarize_admission(
         "absolute_us_per_frame": policy.absolute_us_per_frame,
         "bootstrap_seed": policy.bootstrap_seed,
         "bootstrap_samples": policy.bootstrap_samples,
+        "bootstrap_ci_indices": [policy.bootstrap_ci_low_index, policy.bootstrap_ci_high_index],
         "training_recipes": training_eval,
         "held_out_recipe": held_eval,
     }
@@ -203,7 +262,7 @@ def replay_archive_preflight(
     preflight: dict,
     *,
     policy: Tier1CausalPolicy = TIER1_CAUSAL_POLICY,
-    require_held_out: bool = False,
+    require_held_out: bool = True,
 ) -> dict:
     """Re-evaluate embedded trials under a Tier-1 policy without re-running harnesses."""
     representative = preflight.get("representative_workloads") or {}
@@ -211,6 +270,7 @@ def replay_archive_preflight(
     training = [entry for entry in recipes if (entry.get("recipe") or {}).get("role") != "held_out"]
     held = next((entry for entry in recipes if (entry.get("recipe") or {}).get("role") == "held_out"), None)
     return {
+        "validation_scope": "full_admission" if require_held_out else "training_only",
         "offline_causal_admission": summarize_admission(
             training, held, policy=policy, require_held_out=require_held_out,
         ),

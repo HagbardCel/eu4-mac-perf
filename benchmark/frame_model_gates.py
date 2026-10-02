@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 REQUIRED = (
     "format_v3",
     "offline_causal_admission",
-    "offline_forensic_suitability",
     "live_counters",
     "integrity",
     "origin_integrity",

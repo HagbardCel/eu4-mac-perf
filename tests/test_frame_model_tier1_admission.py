@@ -40,13 +40,14 @@ class Tier1AdmissionGateTests(unittest.TestCase):
         required = gates.required_gates_for_report_kind("calibration_only")
         self.assertEqual(evidence.blockers(required), {})
 
-    def test_causal_blockers_include_forensic_failure(self):
+    def test_causal_blockers_ignore_forensic_failure(self):
         evidence = gates.GateEvidence()
-        evidence.record("format_v3", "passed", "ok")
-        evidence.record("offline_causal_admission", "passed", "ok")
+        for name in gates.required_gates_for_report_kind("causal"):
+            evidence.record(name, "passed", "ok")
         evidence.record("offline_forensic_suitability", "failed", "forensic fail")
         blockers = evidence.blockers(gates.required_gates_for_report_kind("causal"))
-        self.assertIn("offline_forensic_suitability", blockers)
+        self.assertNotIn("offline_forensic_suitability", blockers)
+        self.assertEqual(blockers, {})
 
     def test_residual_discovery_required_set_is_satisfiable(self):
         evidence = gates.GateEvidence()
@@ -64,10 +65,37 @@ class Tier1FailClosedTests(unittest.TestCase):
         result = tier1.evaluate_recipe_causal(entry)
         self.assertEqual(result["status"], "unavailable")
 
-    def test_missing_metrics_are_unavailable_not_pass(self):
+    def test_missing_pairs_are_unavailable_not_pass(self):
         entry = {
             "recipe": {"name": "mesh"},
             "gates": {name: {} for name in tier1.EXPECTED_CAUSAL_GATE_NAMES},
+        }
+        result = tier1.evaluate_recipe_causal(entry)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_single_pair_is_unavailable(self):
+        entry = {
+            "recipe": {"name": "mesh"},
+            "gates": {
+                name: {"pairs": [{"reference": 1000, "instrumented": 1001}]}
+                for name in tier1.EXPECTED_CAUSAL_GATE_NAMES
+            },
+        }
+        result = tier1.evaluate_recipe_causal(entry)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_stored_summary_without_pairs_is_unavailable(self):
+        entry = {
+            "recipe": {"name": "mesh"},
+            "gates": {
+                name: {
+                    "median_fraction": 0.0,
+                    "confidence_interval_95": [0.0, 0.0],
+                    "overhead_us_per_frame": 0.0,
+                    "overhead_us_per_frame_ci95": [0.0, 0.0],
+                }
+                for name in tier1.EXPECTED_CAUSAL_GATE_NAMES
+            },
         }
         result = tier1.evaluate_recipe_causal(entry)
         self.assertEqual(result["status"], "unavailable")
@@ -81,6 +109,23 @@ class Tier1FailClosedTests(unittest.TestCase):
     def test_forensic_without_gates_is_unavailable(self):
         result = tier1.evaluate_recipe_forensic({"recipe": {"name": "mesh"}, "gates": {}})
         self.assertEqual(result["status"], "unavailable")
+
+    def test_partial_forensic_gate_set_is_unavailable(self):
+        entry = {
+            "recipe": {"name": "mesh"},
+            "gates": {"sampled_elapsed_ns": {"status": "passed"}},
+        }
+        result = tier1.evaluate_recipe_forensic(entry)
+        self.assertEqual(result["status"], "unavailable")
+
+    def test_bootstrap_seed_is_honored(self):
+        pairs = [{"reference": 100 + index, "instrumented": 101 + index * 2} for index in range(7)]
+        default = workload.paired_summary(pairs, 0.03, 4)
+        other = workload.paired_summary(pairs, 0.03, 4, bootstrap_seed=42)
+        self.assertNotEqual(
+            default["confidence_interval_95"],
+            other["confidence_interval_95"],
+        )
 
     @staticmethod
     def _passing_gates():
@@ -106,7 +151,7 @@ class Tier1ReplayTests(unittest.TestCase):
         if not path.is_file():
             self.skipTest("legacy archive missing")
         preflight = self._load_preflight(path)
-        replay = tier1.replay_archive_preflight(preflight)
+        replay = tier1.replay_archive_preflight(preflight, require_held_out=False)
         self.assertEqual(replay["offline_causal_admission"]["status"], "failed")
         self.assertEqual(replay["offline_forensic_suitability"]["status"], "failed")
 
@@ -119,8 +164,15 @@ class Tier1ReplayTests(unittest.TestCase):
         if not matches:
             self.skipTest("50643ce archive missing")
         preflight = self._load_preflight(matches[0])
-        replay = tier1.replay_archive_preflight(preflight)
+        replay = tier1.replay_archive_preflight(preflight, require_held_out=False)
         self.assertEqual(replay["offline_causal_admission"]["status"], "failed")
+
+    def test_replay_defaults_require_held_out(self):
+        training = [{"recipe": {"name": "mesh"}, "gates": Tier1FailClosedTests._passing_gates()}]
+        preflight = {"representative_workloads": {"recipes": training}}
+        replay = tier1.replay_archive_preflight(preflight)
+        self.assertEqual(replay["validation_scope"], "full_admission")
+        self.assertEqual(replay["offline_causal_admission"]["status"], "unavailable")
 
     def test_replay_recomputes_statistics_from_pairs(self):
         pairs = [{"reference": 100, "instrumented": 130}] * 7

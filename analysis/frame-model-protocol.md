@@ -211,7 +211,9 @@ producer's frame and detail queues in publication order; F and its associated
 Q/K/A/L records remain a publication bundle. Producers remain independent.
 EINTR and short writes are retried, permanent failures are visible through shared
 hook-failure counters, and parsing retains incomplete lines until serialization
-finishes. Absolute CPU/wall overhead and confidence intervals in microseconds per
-frame are diagnostics and cannot override a failed percentage gate. Harness-only
-ablations restore repeated accounting, unbatched writing or measured preparation;
-they are absent from the production library and excluded from acceptance.
+finishes. Under Tier-1 policy `tier1_causal_rel3pct_abs50us_v1`, relative 3% and
+absolute 50 µs/frame are **both** mandatory admission bounds for offline causal gates;
+neither can override failure of the other. Legacy forensic sampled/ablation gates still
+use percentage limits only. Harness-only ablations restore repeated accounting, unbatched
+writing or measured preparation; they are absent from the production library and excluded
+from causal acceptance.

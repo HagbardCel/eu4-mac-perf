@@ -207,11 +207,9 @@ Merge order: A → B → C → D (or A+B one PR if small, then C with Mac, then 
 
 ---
 
-## 11. Open decisions (resolve before Phase B numbers)
+## 11. Open decisions (resolved in PR #3 — see docs/tier1-causal-policy.md)
 
-1. **Checkpoint:** forensic demoted vs must-pass for any run type?
-2. **Absolute per-frame floor** (µs): propose from hardware-agnostic budget or from M5 Max baseline noise?
-3. **Held-out recipe identity:** which passive trace slice / structural surrogate?
-4. **Retain 3%/5% as legacy policy version** for replay only, or map to new policy with documented equivalence?
-
-Record decisions in project checkpoint notes, then freeze `tier1_causal_policy_version`.
+1. **Checkpoint:** forensic demoted for calibration-only and full causal release blockers; remains in `release_gates` for audit.
+2. **Absolute per-frame floor:** frozen at 50 µs/frame under `tier1_causal_rel3pct_abs50us_v1`.
+3. **Held-out recipe identity:** `terrain_surrogate` candidate documented; mandatory validation requires `analysis/held-out/` fixture committed before first timing (exploratory `ab00679` archive preserved).
+4. **Legacy 3%/5% policy:** retained as `reference_counters_3pct_sampled_5pct_v1` for forensic replay only.

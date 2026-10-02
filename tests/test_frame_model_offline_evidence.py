@@ -30,6 +30,17 @@ def _representative_preflight():
     return {
         "status": "ready",
         "overhead_gate": "passed",
+        "offline_causal_admission": {
+            "status": "passed",
+            "policy_version": "tier1_causal_rel3pct_abs50us_v1",
+            "training_recipes": [{"recipe": "mesh", "status": "passed"}],
+            "held_out_recipe": {"status": "unavailable", "recipe": None},
+        },
+        "offline_forensic_suitability": {
+            "status": "failed",
+            "policy_version": "reference_counters_3pct_sampled_5pct_v1",
+            "recipes": [{"recipe": "mesh", "status": "failed"}],
+        },
         "representative_workloads": representative,
         "limitations": ["test"],
     }
@@ -114,6 +125,9 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
                 self.assertEqual(summary["evidence_id"], run_id1)
                 self.assertEqual(summary["artifact_hashes"]["profiler_dylib_sha256"], "profiler-dylib")
                 self.assertEqual(summary["representative_workloads"]["gate_summary"][0]["recipe"], "mesh")
+                self.assertIn("training", summary["offline_causal_admission"])
+                self.assertNotIn("training_recipes", summary["offline_causal_admission"])
+                self.assertIn("recipes", summary["offline_forensic_suitability"])
 
     def test_refuses_overwrite_exclusive_create(self):
         preflight = {"representative_workloads": {"recipes": []}, "status": "blocked", "overhead_gate": "failed"}
