@@ -26,7 +26,8 @@ import eu4_diagnostic as diagnostic
 import eu4_engine_inventory as engine
 import frame_model_workload as workload
 import frame_model_draw_api as draw_api
-from frame_model_gates import GateEvidence, run_budget, RUN_DEADLINE_SECONDS
+import frame_model_tier1_policy as tier1
+from frame_model_gates import GateEvidence, required_gates_for_report_kind, run_budget, RUN_DEADLINE_SECONDS
 from fixture_manager import FixtureManager
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -284,7 +285,7 @@ OFFLINE_EVIDENCE_DIR = ROOT / "analysis/evidence"
 OFFLINE_EVIDENCE_POINTER = ROOT / "analysis/frame-model-offline-evidence.json"
 OFFLINE_EVIDENCE_POINTER_REL = "analysis/frame-model-offline-evidence.json"
 OFFLINE_EVIDENCE_GENERATED_PREFIX = "analysis/evidence/"
-OFFLINE_EVIDENCE_SCHEMA_VERSION = "stage1-immutable-v1"
+OFFLINE_EVIDENCE_SCHEMA_VERSION = "stage2-split-v1"
 OFFLINE_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
 OFFLINE_ABLATION_POLICY_VERSION = "harness_ablation_vs_sampled_5pct_v1"
 OFFLINE_DIAGNOSTIC_POLICY_VERSION = "diag_matrix_vs_diag_A_no_acceptance_v1"
@@ -544,6 +545,7 @@ def _offline_policy_versions(representative: dict) -> dict:
     first = (representative.get("recipes") or [{}])[0]
     return {
         "seven_pair_gate": OFFLINE_SEVEN_PAIR_POLICY_VERSION,
+        "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
         "ablation_gate": OFFLINE_ABLATION_POLICY_VERSION,
         "diagnostic_matrix": OFFLINE_DIAGNOSTIC_POLICY_VERSION,
         "ablation_policy_text": first.get("ablation_policy"),
@@ -613,6 +615,8 @@ def write_offline_evidence_pointer(
         "archive_sha256": hashlib.sha256(archive_body).hexdigest(),
         "status": preflight_evidence.get("status"),
         "overhead_gate": preflight_evidence.get("overhead_gate"),
+        "offline_causal_admission": preflight_evidence.get("offline_causal_admission"),
+        "offline_forensic_suitability": preflight_evidence.get("offline_forensic_suitability"),
         "representative_workloads": {
             "status": representative.get("status"),
             "gate_summary": _offline_gate_summary(representative),
@@ -667,11 +671,15 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
     _require_executed_artifacts_stable(artifact_start, artifact_end)
     identity_end = _offline_git_identity_snapshot()
     _require_git_identity_stable(identity_start, identity_end)
-    evidence={"status":"ready" if representative["status"]=="passed" else "blocked", "build":static,
+    causal_admission = representative["offline_causal_admission"]
+    forensic_suitability = representative["offline_forensic_suitability"]
+    evidence={"status":"ready" if causal_admission["status"]=="passed" else "blocked", "build":static,
         "autonomous":auto_evidence,"detour_harness":detour,"render_gate_harness":render_gate,
         "arb_handle_harness":arb,"producer_harnesses":producers,"power_mode_helper":power_helper,
         "tiny_call_diagnostic":diagnostic_samples,"representative_workloads":representative,
-        "overhead_gate":representative["status"],
+        "offline_causal_admission":causal_admission,
+        "offline_forensic_suitability":forensic_suitability,
+        "overhead_gate":causal_admission["status"],
         "limitations":["Structural recipes reproduce observed draw counts and state-change frequencies with generated shaders/resources. Live calibration is independently mandatory.",
             "GPU evidence remains segmented and may be partial."]}
     evidence_id = _offline_evidence_id()
@@ -692,9 +700,9 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
         "archive_sha256": archive_sha256,
     }
     write_offline_evidence_pointer(evidence, metadata, archive_path, archive_body)
-    if representative["status"]!="passed":
+    if causal_admission["status"] != "passed":
         raise base.BenchmarkError(
-            f"Representative overhead gates failed; immutable evidence: {archive_path}")
+            f"Offline causal admission failed; immutable evidence: {archive_path}")
     return evidence
 
 
@@ -764,67 +772,152 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
     return measured,trace
 
 
+def _offline_recipe_evidence(root: Path, recipe: dict, *, frames: int = 4, include_forensic: bool = True) -> dict:
+    causal_stages = ("bare", "reference", "counters")
+    forensic_stages = ("sampled", "ablation_accounting", "ablation_writer", "ablation_preparation")
+    base_stages = causal_stages + forensic_stages if include_forensic else causal_stages
+    diagnostic_stages = (
+        "diag_A",
+        "diag_B_gpu",
+        "diag_C_detail",
+        "diag_D_cached_detail",
+        "diag_E_full",
+        "diag_F_full_cached",
+    )
+    trials = []
+    for trial in range(7):
+        stages = tuple(reversed(base_stages)) if trial % 2 else base_stages
+        values = {}
+        for stage in stages:
+            values[stage], _ = _offline_workload_stage(root, recipe, trial, stage)
+        trials.append({"trial": trial, "order": list(stages), "stages": values})
+    gates = {}
+    for stage, reference, limit in (
+        ("reference", "bare", 0.03),
+        ("counters", "reference", 0.03),
+        ("sampled", "reference", 0.05),
+    ):
+        if stage == "sampled" and not include_forensic:
+            continue
+        for axis in ("elapsed_ns", "cpu_ns"):
+            gates[f"{stage}_{axis}"] = workload.paired_summary(
+                [
+                    {
+                        "instrumented": trial["stages"][stage][axis],
+                        "reference": trial["stages"][reference][axis],
+                    }
+                    for trial in trials
+                ],
+                limit,
+                frames,
+            )
+    ablations = {}
+    if include_forensic:
+        for component in ("accounting", "writer", "preparation"):
+            ablations[component] = {
+                axis: workload.paired_summary(
+                    [
+                        {
+                            "instrumented": trial["stages"][f"ablation_{component}"][axis],
+                            "reference": trial["stages"]["sampled"][axis],
+                        }
+                        for trial in trials
+                    ],
+                    0.05,
+                    frames,
+                )
+                for axis in ("elapsed_ns", "cpu_ns")
+            }
+    diagnostic_trials = []
+    diagnostic_matrix = None
+    if include_forensic:
+        for trial in range(7):
+            stages = tuple(reversed(diagnostic_stages)) if trial % 2 else diagnostic_stages
+            values = {}
+            for stage in stages:
+                values[stage], _ = _offline_workload_stage(root, recipe, trial, stage)
+            diagnostic_trials.append({"trial": trial, "order": list(stages), "stages": values})
+        matrix = {}
+        for stage in diagnostic_stages[1:]:
+            matrix[stage] = {}
+            for axis in ("elapsed_ns", "cpu_ns"):
+                comparison = workload.paired_summary(
+                    [
+                        {
+                            "instrumented": trial["stages"][stage][axis],
+                            "reference": trial["stages"]["diag_A"][axis],
+                        }
+                        for trial in diagnostic_trials
+                    ],
+                    1.0,
+                    frames,
+                )
+                comparison.pop("limit", None)
+                comparison["status"] = "diagnostic"
+                comparison["acceptance_gate"] = False
+                matrix[stage][axis] = comparison
+        diagnostic_matrix = {
+            "baseline": "diag_A",
+            "comparisons": matrix,
+            "trials": diagnostic_trials,
+            "policy": (
+                "Paired causal decomposition diagnostics only; no acceptance limit and "
+                "no causal attribution from percentage medians alone."
+            ),
+        }
+    recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
+    entry = {
+        "ablations": ablations,
+        "ablation_policy": (
+            "Harness-only restoration of per-call accounting, unbatched writing, or measured "
+            "state/query preparation; diagnostic, excluded from acceptance gates."
+        ),
+        "diagnostic_matrix": diagnostic_matrix,
+        "recipe": recipe_meta,
+        "trials": trials,
+        "gates": gates,
+    }
+    return entry
+
+
 def offline_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
     with tempfile.TemporaryDirectory(prefix="eu4-representative-") as temporary:
-        root=Path(temporary); recipes=workload.recipes(root); evidence=[];frames=4
-        base_stages=("bare","reference","counters","sampled","ablation_accounting","ablation_writer","ablation_preparation")
-        diagnostic_stages=("diag_A","diag_B_gpu","diag_C_detail","diag_D_cached_detail","diag_E_full","diag_F_full_cached")
-        for recipe in recipes:
-            trials=[]
-            for trial in range(7):
-                stages=tuple(reversed(base_stages)) if trial%2 else base_stages
-                values={}
-                for stage in stages:
-                    values[stage],_= _offline_workload_stage(root,recipe,trial,stage)
-                trials.append({"trial":trial,"order":list(stages),"stages":values})
-            gates={}
-            for stage,reference,limit in (("reference","bare",.03),("counters","reference",.03),("sampled","reference",.05)):
-                for axis in ("elapsed_ns","cpu_ns"):
-                    gates[stage+"_"+axis]=workload.paired_summary([
-                        {"instrumented":t["stages"][stage][axis],"reference":t["stages"][reference][axis]} for t in trials],limit,frames)
-            ablations={}
-            for component in ("accounting","writer","preparation"):
-                ablations[component]={axis:workload.paired_summary([
-                    {"instrumented":t["stages"]["ablation_"+component][axis],"reference":t["stages"]["sampled"][axis]} for t in trials],.05,frames)
-                    for axis in ("elapsed_ns","cpu_ns")}
-            # Run the original acceptance suite to completion before adding diagnostic
-            # conditions, preserving its paired stage order and thermal sequence.
-            diagnostic_trials=[]
-            for trial in range(7):
-                stages=tuple(reversed(diagnostic_stages)) if trial%2 else diagnostic_stages
-                values={}
-                for stage in stages:
-                    values[stage],_= _offline_workload_stage(root,recipe,trial,stage)
-                diagnostic_trials.append({"trial":trial,"order":list(stages),"stages":values})
-            matrix={}
-            for stage in diagnostic_stages[1:]:
-                matrix[stage]={}
-                for axis in ("elapsed_ns","cpu_ns"):
-                    comparison=workload.paired_summary([
-                        {"instrumented":t["stages"][stage][axis],"reference":t["stages"]["diag_A"][axis]}
-                        for t in diagnostic_trials],1.0,frames)
-                    comparison.pop("limit",None)
-                    comparison["status"]="diagnostic"
-                    comparison["acceptance_gate"]=False
-                    matrix[stage][axis]=comparison
-            evidence.append({"ablations":ablations,
-                "ablation_policy":"Harness-only restoration of per-call accounting, unbatched writing, or measured state/query preparation; diagnostic, excluded from acceptance gates.",
-                "diagnostic_matrix":{"baseline":"diag_A","comparisons":matrix,
-                    "trials":diagnostic_trials,
-                    "policy":"Paired causal decomposition diagnostics only; no acceptance limit and no causal attribution from percentage medians alone."},
-                "recipe":{k:v for k,v in recipe.items() if k!="path"},"trials":trials,"gates":gates})
+        root = Path(temporary)
+        recipe_specs = workload.recipes(root, include_held_out=True)
+        evidence = [
+            _offline_recipe_evidence(
+                root,
+                recipe,
+                include_forensic=recipe.get("role") != "held_out",
+            )
+            for recipe in recipe_specs
+        ]
+        training = [entry for entry in evidence if entry["recipe"].get("role") != "held_out"]
+        held_out = next((entry for entry in evidence if entry["recipe"].get("role") == "held_out"), None)
+        offline_causal_admission = tier1.summarize_admission(training, held_out)
+        offline_forensic_suitability = tier1.summarize_forensic(training)
         if executed_artifacts_start:
             test_library_sha256 = executed_artifacts_start["test_library_sha256"]
             workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
         else:
             test_library_sha256 = base.sha256(TEST_LIBRARY)
             workload_harness_sha256 = base.sha256(WORKLOAD_HARNESS)
-        return {"status":"passed" if all(g["status"]=="passed" for r in evidence for g in r["gates"].values()) else "failed",
-                "recipes":evidence,"test_library_sha256":test_library_sha256,
-                "workload_harness_sha256":workload_harness_sha256,
-                "harness_source_sha256":base.sha256(ROOT/"tests/frame_model_workload_harness.c"),
-                "profiler_source_sha256":base.sha256(SOURCE),
-                "gpu_segments_source_sha256":base.sha256(ROOT/"benchmark/eu4_gpu_segments.h")}
+        legacy_combined = (
+            "passed"
+            if all(gate["status"] == "passed" for entry in evidence for gate in entry["gates"].values())
+            else "failed"
+        )
+        return {
+            "status": legacy_combined,
+            "offline_causal_admission": offline_causal_admission,
+            "offline_forensic_suitability": offline_forensic_suitability,
+            "recipes": evidence,
+            "test_library_sha256": test_library_sha256,
+            "workload_harness_sha256": workload_harness_sha256,
+            "harness_source_sha256": base.sha256(ROOT / "tests/frame_model_workload_harness.c"),
+            "profiler_source_sha256": base.sha256(SOURCE),
+            "gpu_segments_source_sha256": base.sha256(ROOT / "benchmark/eu4_gpu_segments.h"),
+        }
 
 
 def read_rows(path: Path) -> list[list[str]]:
@@ -2114,9 +2207,31 @@ def run(output_root: Path, include_low_power: bool=True,
     manifest_path=run_dir/"manifest.json"
     gates=GateEvidence()
     gates.record("format_v3","passed","Versioned producer and controller",version=FORMAT_VERSION)
-    gates.record("offline_overhead","passed" if evidence.get("overhead_gate")=="passed" else "unavailable","Offline overhead preflight",evidence=evidence.get("overhead_gate"))
+    causal=evidence.get("offline_causal_admission") or {}
+    forensic=evidence.get("offline_forensic_suitability") or {}
+    causal_status=causal.get("status")
+    forensic_status=forensic.get("status")
+    gates.record(
+        "offline_causal_admission",
+        "passed" if causal_status == "passed" else "failed" if causal_status else "unavailable",
+        "Tier-1 offline causal admission (reference + counters + held-out)",
+        evidence=causal,
+    )
+    gates.record(
+        "offline_forensic_suitability",
+        "passed" if forensic_status == "passed" else "failed" if forensic_status else "unavailable",
+        "Forensic sampled/ablation suitability (non-blocking for calibration-only)",
+        evidence=forensic,
+    )
+    gates.record(
+        "offline_overhead",
+        "passed" if causal_status == "passed" else "failed" if causal_status else "unavailable",
+        "Deprecated alias of offline_causal_admission",
+        evidence=causal_status,
+    )
+    report_kind="calibration_only" if calibration_only else "residual_discovery" if residual_discovery else "causal"
     manifest={"gates":gates.entries,"worst_case_budget_s":budget,"format_version":FORMAT_VERSION,
-              "report_kind":"calibration_only" if calibration_only else "residual_discovery" if residual_discovery else "causal",
+              "report_kind":report_kind,
               "status":"starting","executable_sha256":evidence["build"]["executable_sha256"],
               "evidence":evidence,"coverage":{"engine_hooks":7,"suppressed_gl_draw_apis":6,
               "draw_candidate_entrypoints":len(evidence["build"]["draw_api_manifest"]["apis"]),
@@ -2352,8 +2467,10 @@ def run(output_root: Path, include_low_power: bool=True,
                     contrasts=causal_contrasts(summaries)
                     drift=[contrasts[n].get("control_cpu_drift_fraction") for n in ("B","C","D","E30","E15")]
                     gates.record("control_drift","passed" if drift and all(d is not None and d<=.03 for d in drift) else "failed","Adjacent baseline CPU drift must be within 3%",fractions=drift)
-                    try: gates.require()
-                    except ValueError as exc: raise base.BenchmarkError(str(exc)) from exc
+                try:
+                    gates.require(required_gates_for_report_kind(manifest["report_kind"]))
+                except ValueError as exc:
+                    raise base.BenchmarkError(str(exc)) from exc
                 manifest["status"]="complete"
                 manifest["power_mode_comparison"]="natural cadence completed" if include_low_power else "not requested"
                 manifest["fixed_cadence_dvfs_status"]=(

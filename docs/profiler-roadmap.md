@@ -502,7 +502,7 @@ Static work **may** support a technical “contained backend replacement appears
 
 1. **Stage 0** — CI green; capture-free A0; aliases; schema-2 tests.
 2. **Stage 1** — A–F documented; **immutable** evidence with unique **evidence IDs**; checkpoint decision on forensic role.
-3. **Stage 2** — Split offline gates; Tier-1 validated with hash-frozen held-out (no peeking).
+3. **Stage 2** — Split offline gates; Tier-1 validated with hash-frozen held-out (no peeking). See [stage-2-tier1-admission-plan.md](stage-2-tier1-admission-plan.md).
 4. **Stage 3** — Tier **2a+2b** + calibration-only; **calibration_integrity** + **causal_run_integrity** + forensic split; async origin classification; checkpoint if live gates pass.
 5. **Stage 4** — Hook loop with live **N+1**; ≥95% then stop hooks; re-qualification after interposer changes.
 6. **Stage 5** — C-readiness (four-state); re-qualification before Stage 6 if hot path changed.

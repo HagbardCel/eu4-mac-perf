@@ -147,8 +147,12 @@ nonconsecutive render IDs or multiple executed renders per participating frame
 makes the forensic capture unavailable. The capture has role `forensic`; its
 frames and enclosing scopes are excluded from causal phase summaries. The live
 capture-intrusion result is recorded separately and does not qualify the
-counters-only reference calibration. The offline sampled gate remains a hard
-preflight prerequisite.
+counters-only reference calibration. Stage 2 splits offline admission:
+
+- **`offline_causal_admission`** — bare/reference/counters seven-pair gates on training recipes plus hash-frozen **held-out** recipe; Tier-1 policy `tier1_causal_rel3pct_abs50us_v1` (relative 3% + absolute µs/frame cap). **Blocks** calibration and live causal work when failed.
+- **`offline_forensic_suitability`** — sampled/ablation/A–F evidence; reported independently and **does not** block `calibration-only` when causal admission passes.
+
+Legacy combined `representative_workloads.status` remains in archives for replay only.
 
 GL shadow preparation runs with measurement disabled on the owning current
 context. Bounded thread-owned caches hold 16 contexts and 64 VAOs; a serialized
