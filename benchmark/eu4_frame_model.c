@@ -1192,37 +1192,11 @@ static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
 typedef void (*DrawElementsInstancedFn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
 typedef void (*DrawArraysInstancedFn)(GLenum,GLint,GLsizei,GLsizei);
 typedef void (*DrawElementsInstancedBaseFn)(GLenum,GLsizei,GLenum,const void *,GLsizei,GLint);
-static void *eu4_opengl_framework_symbol(const char *name) {
-    static void *image;
-    if(!image) {
-        image=dlopen("/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",RTLD_LAZY|RTLD_LOCAL);
-        if(!image) image=dlopen("/System/Library/Frameworks/OpenGL.framework/OpenGL",RTLD_LAZY|RTLD_LOCAL);
-    }
-    return image?dlsym(image,name):NULL;
-}
-static void *eu4_opengl_instanced_arb_export(const char *arb_name,const char *core_name) {
-    void *sym=eu4_opengl_framework_symbol(arb_name);
-    return sym?sym:eu4_opengl_framework_symbol(core_name);
-}
 static DrawElementsInstancedFn eu4_gl_draw_elements_instanced_arb_symbol(void) {
-    static DrawElementsInstancedFn fn;
-    static char once;
-    if(!once) {
-        fn=(DrawElementsInstancedFn)eu4_opengl_instanced_arb_export(
-            "glDrawElementsInstancedARB","glDrawElementsInstanced");
-        once=1;
-    }
-    return fn;
+    return (DrawElementsInstancedFn)(void *)glDrawElementsInstancedARB;
 }
 static DrawArraysInstancedFn eu4_gl_draw_arrays_instanced_arb_symbol(void) {
-    static DrawArraysInstancedFn fn;
-    static char once;
-    if(!once) {
-        fn=(DrawArraysInstancedFn)eu4_opengl_instanced_arb_export(
-            "glDrawArraysInstancedARB","glDrawArraysInstanced");
-        once=1;
-    }
-    return fn;
+    return (DrawArraysInstancedFn)(void *)glDrawArraysInstancedARB;
 }
 static void mark_draw_forward_probe_failure(void) {
     if(measurement_active()) {current_frame.flags|=2048;unowned_event();}
@@ -2171,8 +2145,7 @@ __attribute__((visibility("default"))) int eu4_frame_model_test_verify_arb_insta
         {"glDrawElementsInstancedARB",(void *)gl_draw_elements_instanced_arb},
     };
     for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);i++) {
-        void *forward_target=i==0?(void *)eu4_gl_draw_arrays_instanced_arb_symbol()
-            :(void *)eu4_gl_draw_elements_instanced_arb_symbol();
+        void *forward_target=i==0?(void *)glDrawArraysInstancedARB:(void *)glDrawElementsInstancedARB;
         if(draw_observer_resolve(rows[i].arb)!=rows[i].wrapper) return (int)(i+10);
         if(!forward_target || forward_target==rows[i].wrapper) {
             fprintf(stderr,"%s: wrapper=%p forward_target=%p\n",rows[i].arb,rows[i].wrapper,
