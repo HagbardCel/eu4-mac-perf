@@ -12,7 +12,7 @@
 
 **`offline_causal_admission`: failed** on all training recipes and qualified held-out under frozen 3% / 50 µs/frame.
 
-Do **not** change fixture, thresholds, or policy based on this outcome. Next work is profiler overhead diagnosis (REFERENCE + counters on training workloads), not Stage 3 calibration-only.
+Do **not** change fixture, thresholds, or policy based on this outcome. Next work is [profiler overhead diagnosis](profiler-overhead-diagnosis-plan.md) (REFERENCE + counters on training workloads), not Stage 3 calibration-only.
 
 ## Canonical archives
 
