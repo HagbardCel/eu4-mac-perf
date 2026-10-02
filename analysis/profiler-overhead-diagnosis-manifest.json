@@ -1,0 +1,8 @@
+{
+  "purpose": "profiler_overhead_diagnosis_v1",
+  "baseline_stage2_archives": {
+    "primary_no_peeking": "analysis/evidence/frame-model-offline-00924cb-20261002T195901.482894Z-f6b27087.json",
+    "replication": "analysis/evidence/frame-model-offline-8c71c47-20261002T203853.173597Z-2fff669c.json"
+  },
+  "diagnostic_archives": []
+}

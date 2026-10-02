@@ -290,6 +290,24 @@ OFFLINE_EVIDENCE_SCHEMA_VERSION_V1 = "stage2-split-v1"
 OFFLINE_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
 OFFLINE_ABLATION_POLICY_VERSION = "harness_ablation_vs_sampled_5pct_v1"
 OFFLINE_DIAGNOSTIC_POLICY_VERSION = "diag_matrix_vs_diag_A_no_acceptance_v1"
+PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE = "profiler_overhead_diagnosis_v1"
+DIAGNOSTIC_MATRIX_BASELINE = "diag_A"
+DIAGNOSTIC_MATRIX_STAGES = (
+    "diag_A",
+    "diag_B_gpu",
+    "diag_C_detail",
+    "diag_D_cached_detail",
+    "diag_E_full",
+    "diag_F_full_cached",
+)
+DIAGNOSTIC_MATRIX_FEATURES = {
+    "diag_A": (0, 0, 0),
+    "diag_B_gpu": (1, 0, 0),
+    "diag_C_detail": (0, 1, 0),
+    "diag_D_cached_detail": (0, 1, 1),
+    "diag_E_full": (1, 1, 0),
+    "diag_F_full_cached": (1, 1, 1),
+}
 CONTROLLER = Path(__file__)
 KEY_OFFLINE_SOURCE_PATHS = (
     SOURCE,
@@ -674,6 +692,91 @@ def write_offline_evidence_pointer(
     OFFLINE_EVIDENCE_POINTER.write_text(json.dumps(pointer, indent=2) + "\n")
 
 
+def _publish_offline_immutable_evidence(
+    evidence: dict,
+    *,
+    identity_start: dict,
+    identity_end: dict,
+    build_info: dict,
+    artifact_start: dict,
+    artifact_end: dict,
+    update_rolling_pointer: bool = True,
+) -> dict:
+    evidence_id = _offline_evidence_id()
+    metadata = build_offline_evidence_metadata(
+        evidence,
+        evidence_id,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=build_info,
+        executed_artifact_start=artifact_start,
+        executed_artifact_end=artifact_end,
+    )
+    archive_path, evidence_id, archive_body = write_offline_evidence_archive(evidence, metadata)
+    archive_sha256 = hashlib.sha256(archive_body).hexdigest()
+    evidence["immutable_evidence"] = {
+        "evidence_id": evidence_id,
+        "archive_path": str(archive_path.relative_to(ROOT)),
+        "archive_sha256": archive_sha256,
+    }
+    if update_rolling_pointer:
+        write_offline_evidence_pointer(evidence, metadata, archive_path, archive_body)
+    return evidence
+
+
+def profiler_overhead_diagnosis(run_gl: bool = True) -> dict:
+    """Capture training-only offline workloads + A–F matrix; never blocks on causal failure."""
+    if not run_gl:
+        raise base.BenchmarkError("profiler-overhead-diagnosis requires GL workload execution")
+    identity_start = _offline_git_identity_snapshot()
+    if not identity_start.get("git_tree_clean"):
+        violations = _git_tree_clean_violations_for_evidence()
+        detail = ", ".join(violations[:8])
+        if len(violations) > 8:
+            detail += f", … (+{len(violations) - 8} more)"
+        raise base.BenchmarkError(
+            "Source tree dirty before profiler overhead diagnosis (excluding generated evidence outputs)"
+            + (f": {detail}" if detail else ""),
+        )
+    static = build()
+    artifact_start = _offline_executed_artifact_snapshot()
+    _require_build_executed_artifacts_match(static, artifact_start)
+    representative = offline_workloads(
+        executed_artifacts_start=artifact_start,
+        include_held_out=False,
+    )
+    artifact_end = _offline_executed_artifact_snapshot()
+    _require_executed_artifacts_stable(artifact_start, artifact_end)
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
+    causal_admission = representative["offline_causal_admission"]
+    forensic_suitability = representative["offline_forensic_suitability"]
+    evidence = {
+        "purpose": PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE,
+        "status": "diagnostic_complete",
+        "build": static,
+        "representative_workloads": representative,
+        "offline_causal_admission": causal_admission,
+        "offline_forensic_suitability": forensic_suitability,
+        "overhead_gate": causal_admission["status"],
+        "diagnostic_matrix_policy": OFFLINE_DIAGNOSTIC_POLICY_VERSION,
+        "limitations": [
+            "Training recipes only; held-out not measured.",
+            "Diagnostic matrix comparisons are non-acceptance; causal gates may still fail.",
+            "Register archive path in analysis/profiler-overhead-diagnosis-manifest.json.",
+        ],
+    }
+    return _publish_offline_immutable_evidence(
+        evidence,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=static,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
+        update_rolling_pointer=False,
+    )
+
+
 def preflight(run_gl: bool = True, require_privilege: bool = False, require_power_mode: bool=True) -> dict:
     if base.sha256(base.GOG_EXE) != EXPECTED:
         raise base.BenchmarkError("Installed GOG executable differs from the pinned v1.37.5 build")
@@ -730,24 +833,15 @@ def preflight(run_gl: bool = True, require_privilege: bool = False, require_powe
         "overhead_gate":causal_admission["status"],
         "limitations":["Structural recipes reproduce observed draw counts and state-change frequencies with generated shaders/resources. Live calibration is independently mandatory.",
             "GPU evidence remains segmented and may be partial."]}
-    evidence_id = _offline_evidence_id()
-    metadata = build_offline_evidence_metadata(
+    evidence = _publish_offline_immutable_evidence(
         evidence,
-        evidence_id,
         identity_start=identity_start,
         identity_end=identity_end,
         build_info=static,
-        executed_artifact_start=artifact_start,
-        executed_artifact_end=artifact_end,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
     )
-    archive_path, evidence_id, archive_body = write_offline_evidence_archive(evidence, metadata)
-    archive_sha256 = hashlib.sha256(archive_body).hexdigest()
-    evidence["immutable_evidence"] = {
-        "evidence_id": evidence_id,
-        "archive_path": str(archive_path.relative_to(ROOT)),
-        "archive_sha256": archive_sha256,
-    }
-    write_offline_evidence_pointer(evidence, metadata, archive_path, archive_body)
+    archive_path = ROOT / evidence["immutable_evidence"]["archive_path"]
     if causal_admission["status"] != "passed":
         raise base.BenchmarkError(
             f"Offline causal admission failed; immutable evidence: {archive_path}")
@@ -773,9 +867,7 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
             env["EU4_TEST_SAMPLED"]="1"
     diagnostic=stage.startswith("diag_")
     if diagnostic:
-        features={"diag_A":(0,0,0),"diag_B_gpu":(1,0,0),
-            "diag_C_detail":(0,1,0),"diag_D_cached_detail":(0,1,1),
-            "diag_E_full":(1,1,0),"diag_F_full_cached":(1,1,1)}[stage]
+        features = DIAGNOSTIC_MATRIX_FEATURES[stage]
         env.update(EU4_TEST_GPU_TIMESTAMPS=str(features[0]),
             EU4_TEST_FORENSIC_RECORDS=str(features[1]),EU4_TEST_CACHED_METADATA=str(features[2]))
     run=subprocess.run([str(WORKLOAD_HARNESS),recipe["path"],str(frames)],env=env,
@@ -824,14 +916,7 @@ def _offline_recipe_evidence(root: Path, recipe: dict, *, frames: int = 4, inclu
     causal_stages = ("bare", "reference", "counters")
     forensic_stages = ("sampled", "ablation_accounting", "ablation_writer", "ablation_preparation")
     base_stages = causal_stages + forensic_stages if include_forensic else causal_stages
-    diagnostic_stages = (
-        "diag_A",
-        "diag_B_gpu",
-        "diag_C_detail",
-        "diag_D_cached_detail",
-        "diag_E_full",
-        "diag_F_full_cached",
-    )
+    diagnostic_stages = DIAGNOSTIC_MATRIX_STAGES
     trials = []
     for trial in range(7):
         stages = tuple(reversed(base_stages)) if trial % 2 else base_stages
@@ -886,7 +971,7 @@ def _offline_recipe_evidence(root: Path, recipe: dict, *, frames: int = 4, inclu
                 values[stage], _ = _offline_workload_stage(root, recipe, trial, stage)
             diagnostic_trials.append({"trial": trial, "order": list(stages), "stages": values})
         matrix = {}
-        for stage in diagnostic_stages[1:]:
+        for stage in diagnostic_stages[1:]:  # baseline diag_A
             matrix[stage] = {}
             for axis in ("elapsed_ns", "cpu_ns"):
                 comparison = workload.paired_summary(
@@ -928,11 +1013,16 @@ def _offline_recipe_evidence(root: Path, recipe: dict, *, frames: int = 4, inclu
     return entry
 
 
-def offline_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
+def offline_workloads(
+    *,
+    executed_artifacts_start: dict | None = None,
+    include_held_out: bool | None = None,
+) -> dict:
     with tempfile.TemporaryDirectory(prefix="eu4-representative-") as temporary:
         root = Path(temporary)
-        include_held = workload.held_out_fixture_ready()
-        recipe_specs = workload.recipes(root, include_held_out=include_held)
+        if include_held_out is None:
+            include_held_out = workload.held_out_fixture_ready()
+        recipe_specs = workload.recipes(root, include_held_out=include_held_out)
         evidence = [
             _offline_recipe_evidence(
                 root,
@@ -943,7 +1033,11 @@ def offline_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
         ]
         training = [entry for entry in evidence if entry["recipe"].get("role") != "held_out"]
         held_out = next((entry for entry in evidence if entry["recipe"].get("role") == "held_out"), None)
-        offline_causal_admission = tier1.summarize_admission(training, held_out, require_held_out=True)
+        offline_causal_admission = tier1.summarize_admission(
+            training,
+            held_out,
+            require_held_out=include_held_out,
+        )
         offline_forensic_suitability = tier1.summarize_forensic(training)
         if executed_artifacts_start:
             test_library_sha256 = executed_artifacts_start["test_library_sha256"]
@@ -2562,6 +2656,10 @@ def main() -> int:
     pf=sub.add_parser("preflight",help="pin/build the profiler and validate offline probes")
     pf.add_argument("--static-only",action="store_true")
     pf.add_argument("--require-power-helper",action="store_true")
+    sub.add_parser(
+        "diagnostic-matrix",
+        help="training-only offline workloads + A–F matrix; writes immutable evidence without held-out",
+    )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
     run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
@@ -2577,6 +2675,9 @@ def main() -> int:
     try:
         if args.command=="preflight":
             result=preflight(not args.static_only,args.require_power_helper)
+            print(json.dumps(result,indent=2))
+        elif args.command=="diagnostic-matrix":
+            result=profiler_overhead_diagnosis()
             print(json.dumps(result,indent=2))
         elif args.command=="report":
             print(json.dumps(analyze(Path(args.run_dir).expanduser().resolve()),indent=2))
