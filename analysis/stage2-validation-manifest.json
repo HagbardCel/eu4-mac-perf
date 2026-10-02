@@ -1,0 +1,30 @@
+{
+  "schema_version": "stage2-validation-manifest-v1",
+  "tier1_causal_policy": "tier1_causal_rel3pct_abs50us_v2",
+  "offline_evidence_schema": "stage2-split-v2",
+  "held_out_fixture_sha256": "dbb0af0e7964777b7ab9f0fecde068692377719bde1670c2a082ecbb26281503",
+  "held_out_selection_rule": "terrain_odd_ordinal_within_frame_v1",
+  "outcome": {
+    "offline_causal_admission": "failed",
+    "stage2_success_checkpoint": "not_passed",
+    "stage3_progression": "blocked"
+  },
+  "archives": {
+    "primary_no_peeking_validation": {
+      "git_commit_short": "00924cb",
+      "path": "analysis/evidence/frame-model-offline-00924cb-20261002T195901.482894Z-f6b27087.json",
+      "evidence_id": "20261002T195901.482894Z-f6b27087",
+      "note": "First performance measurement after fixture freeze at 00924cb"
+    },
+    "same_policy_replication": {
+      "git_commit_short": "8c71c47",
+      "path": "analysis/evidence/frame-model-offline-8c71c47-20261002T203853.173597Z-2fff669c.json",
+      "evidence_id": "20261002T203853.173597Z-2fff669c",
+      "note": "Repeat preflight after primary evidence commit; unchanged profiler artifacts"
+    }
+  },
+  "rolling_pointer": {
+    "points_to": "same_policy_replication",
+    "archive_path": "analysis/evidence/frame-model-offline-8c71c47-20261002T203853.173597Z-2fff669c.json"
+  }
+}

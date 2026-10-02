@@ -90,6 +90,14 @@
   },
   "archive_path": "analysis/evidence/frame-model-offline-8c71c47-20261002T203853.173597Z-2fff669c.json",
   "archive_sha256": "ff44134247258c5b317c9ce01c54a32564e1e2522200c0fd039fb25e631217c6",
+  "stage2_validation": {
+    "manifest": "analysis/stage2-validation-manifest.json",
+    "primary_no_peeking_archive": "analysis/evidence/frame-model-offline-00924cb-20261002T195901.482894Z-f6b27087.json",
+    "same_policy_replication_archive": "analysis/evidence/frame-model-offline-8c71c47-20261002T203853.173597Z-2fff669c.json",
+    "rolling_pointer_role": "same_policy_replication",
+    "offline_causal_admission": "failed",
+    "stage2_success_checkpoint": "not_passed"
+  },
   "status": "blocked",
   "overhead_gate": "failed",
   "offline_causal_admission": {

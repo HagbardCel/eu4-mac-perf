@@ -29,6 +29,8 @@ HELD_OUT_FIXTURE = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.recipe
 HELD_OUT_FIXTURE_META = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.json"
 HELD_OUT_FIXTURE_PATH = HELD_OUT_FIXTURE.relative_to(ROOT).as_posix()
 TIER1_PAIR_COUNT = 7
+# Minimum structural draw records for terrain_odd selection (not the seven benchmark trial pairs).
+HELD_OUT_MIN_DRAW_RECORDS = 7
 HELD_OUT_SELECTION_RULE_ID = "terrain_odd_ordinal_within_frame_v1"
 
 # Recipe bytes already measured without a pre-committed fixture (exploratory archives).
@@ -113,9 +115,10 @@ def build_held_out_fixture_material(*, rows=None, key=None, sites=None) -> tuple
         if (row["window"], row["frame"]) == key and _row_category(row, sites) in HELD_OUT_CATEGORIES
     ]
     selected = [row for index, row in enumerate(terrain_rows) if index % 2 == 1]
-    if len(selected) < TIER1_PAIR_COUNT:
+    if len(selected) < HELD_OUT_MIN_DRAW_RECORDS:
         raise base.BenchmarkError(
-            f"Held-out selection {HELD_OUT_SELECTION_RULE_ID} produced {len(selected)} draws; need >= {TIER1_PAIR_COUNT}",
+            f"Held-out selection {HELD_OUT_SELECTION_RULE_ID} produced {len(selected)} draw records; "
+            f"need >= {HELD_OUT_MIN_DRAW_RECORDS}",
         )
     if any(
         row["flags"] or row["api"] not in (1, 2, 3) or row["mode"] not in (4, 5) for row in selected
