@@ -2145,7 +2145,8 @@ __attribute__((visibility("default"))) void *eu4_frame_model_test_resolve_draw(c
 __attribute__((visibility("default"))) void eu4_frame_model_test_reset_draw_alias(void) {
     memset(&current_frame,0,sizeof(current_frame));
     test_forward_core_hits=test_forward_arb_hits=0;
-    test_arrays_instanced_forward=test_elements_instanced_forward=NULL;
+    test_arrays_instanced_forward=NULL;
+    test_elements_instanced_forward=NULL;
     test_arrays_instanced_real_fn_arb=test_elements_instanced_real_fn_arb=3;
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_arm_draw_alias(unsigned mode) {
