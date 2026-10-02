@@ -2169,17 +2169,17 @@ __attribute__((visibility("default"))) void *eu4_frame_model_test_resolve_draw(c
     return draw_observer_resolve(name);
 }
 __attribute__((visibility("default"))) int eu4_frame_model_test_verify_arb_instanced_interpose(void) {
-    static const struct { const char *arb; void *wrapper; void *forward_target; } rows[] = {
-        {"glDrawArraysInstancedARB",(void *)gl_draw_arrays_instanced_arb,
-            (void *)eu4_gl_draw_arrays_instanced_arb_symbol()},
-        {"glDrawElementsInstancedARB",(void *)gl_draw_elements_instanced_arb,
-            (void *)eu4_gl_draw_elements_instanced_arb_symbol()},
+    static const struct { const char *arb; void *wrapper; } rows[] = {
+        {"glDrawArraysInstancedARB",(void *)gl_draw_arrays_instanced_arb},
+        {"glDrawElementsInstancedARB",(void *)gl_draw_elements_instanced_arb},
     };
     for(unsigned i=0;i<sizeof(rows)/sizeof(rows[0]);i++) {
+        void *forward_target=i==0?(void *)eu4_gl_draw_arrays_instanced_arb_symbol()
+            :(void *)eu4_gl_draw_elements_instanced_arb_symbol();
         if(draw_observer_resolve(rows[i].arb)!=rows[i].wrapper) return (int)(i+10);
-        if(!rows[i].forward_target || rows[i].forward_target==rows[i].wrapper) {
+        if(!forward_target || forward_target==rows[i].wrapper) {
             fprintf(stderr,"%s: wrapper=%p forward_target=%p\n",rows[i].arb,rows[i].wrapper,
-                    rows[i].forward_target);
+                    forward_target);
             return (int)(i+1);
         }
     }
