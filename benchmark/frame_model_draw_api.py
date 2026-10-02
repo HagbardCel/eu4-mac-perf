@@ -14,6 +14,18 @@ SUPPRESSED = {'glDrawElements': 'gl_draw_elements', 'glDrawElementsBaseVertex': 
     'glDrawArraysInstanced': 'gl_draw_arrays_instanced',
     'glDrawElementsInstancedBaseVertex': 'gl_draw_elements_instanced_base'}
 IDS = {name: i+1 for i,name in enumerate(SUPPRESSED)}
+SUPPRESSED_ALIAS_WRAPPERS = {
+    'glDrawArraysInstancedARB': 'gl_draw_arrays_instanced_arb',
+    'glDrawElementsInstancedARB': 'gl_draw_elements_instanced_arb',
+}
+
+def observer_wrapper_symbol(name):
+    core = canonical(name)
+    if name in SUPPRESSED_ALIAS_WRAPPERS:
+        return SUPPRESSED_ALIAS_WRAPPERS[name]
+    if name == core and core in SUPPRESSED:
+        return SUPPRESSED[core]
+    return f'observe_exact_{name}'
 # State-selection operations with misleading names are not submissions.
 EXCLUDED = {'glDrawBuffer','glDrawBuffers','glDrawBuffersARB','glDrawBuffersATI',
             'glDrawBuffersIndexedEXT','glDrawBuffersIndexedOES'}
@@ -103,10 +115,8 @@ def generate(binary, symbols, static_graph, verify=False):
                 arguments.append(m[1])
         call=f'{name}({",".join(arguments)})'
         suppressed=core in SUPPRESSED
-        if name==core and suppressed:
-            wrapper=SUPPRESSED[core]
-        else:
-            wrapper=f'observe_exact_{name}'
+        wrapper=observer_wrapper_symbol(name)
+        if wrapper.startswith('observe_exact_'):
             code.append(f'static void {wrapper}({args}) {{\n    observe_draw_api({api},{str(suppressed).lower()});\n    {call};\n}}')
         resolver.append(f'    if(!strcmp(name,"{name}")) {{resolved_draw_api({api});return (void *){wrapper};}}')
         interposes.append(f'    {{(const void *){wrapper},(const void *){name}}},')

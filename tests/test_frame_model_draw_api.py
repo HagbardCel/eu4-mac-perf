@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+import shutil
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'benchmark'))
 import frame_model_draw_api as api
 import eu4_frame_model as model
@@ -28,6 +29,12 @@ class DrawCoverageTests(unittest.TestCase):
         for f in frames:
             rows.extend([record('K',f,1),record('A',f,3,10,10 if f['phase']==4 else 0,0 if f['phase']==4 else 10)])
         return manifest,frames,rows
+
+    def test_suppressed_alias_wrapper_symbols(self):
+        self.assertEqual(api.observer_wrapper_symbol('glDrawArraysInstanced'),'gl_draw_arrays_instanced')
+        self.assertEqual(api.observer_wrapper_symbol('glDrawArraysInstancedARB'),'gl_draw_arrays_instanced_arb')
+        self.assertEqual(api.observer_wrapper_symbol('glDrawElementsInstancedARB'),'gl_draw_elements_instanced_arb')
+        self.assertTrue(api.observer_wrapper_symbol('glDrawRangeElementsEXT').startswith('observe_exact_'))
 
     def test_complete_coverage_and_alias_canonicalization(self):
         m,f,r=self.fixture()
@@ -92,3 +99,11 @@ class DrawCoverageTests(unittest.TestCase):
         q=['Q','1','1','-1','0','1','40','30','40','30','7','0','0','11','9','3']
         rows=model.eligible_trace([d,q],[f],[{'name':'A0','measurement_epoch':7,'start_ns':100,'end_ns':200}])
         self.assertEqual(rows,[q])
+
+class DrawAliasHarnessTests(unittest.TestCase):
+    def test_draw_alias_harness_on_mac(self):
+        if sys.platform!="darwin": self.skipTest("macOS dylib harness")
+        import eu4_frame_model as model
+        if not shutil.which("clang"): self.skipTest("clang unavailable")
+        model.build()
+        model.offline_draw_alias_harness()
