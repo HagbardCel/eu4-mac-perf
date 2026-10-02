@@ -1666,7 +1666,7 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
 
 
 def causal_schedule(period: int, residual_discovery: bool=False) -> list[dict]:
-    phases=(("A0","profile",20,True),) if residual_discovery else PHASES
+    phases=(("A0","profile",20,False),) if residual_discovery else PHASES
     return [{"name":name,"mode":mode,"duration_s":duration,"detail":detail,
              "update_period_ns":period,"render_period_ns":int(1e9/30) if name=="E30" else
              int(1e9/15) if name=="E15" else 0} for name,mode,duration,detail in phases]
@@ -1975,7 +1975,7 @@ def main() -> int:
     pf.add_argument("--require-power-helper",action="store_true")
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
-        run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
+    run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
     run_parser.add_argument("--calibration-only",action="store_true",
         help="run bounded reference/counters/reference calibration and forensic capture, then stop before ANATIVE or interventions")
     run_parser.add_argument("--fixed-cadence-lpm",action="store_true",

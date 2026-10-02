@@ -8,11 +8,19 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'benchmark'))
 import frame_model_draw_api as api
 import eu4_frame_model as model
 
+def _api_row(name, **extra):
+    core=api.canonical(name)
+    row={'name':name,'canonical':core,'id':api.IDS.get(core,99),'exported':True,'imported':True,
+         'reachability':'reachable','observer':'import and dlsym','suppression':core in api.SUPPRESSED}
+    row.update(extra)
+    return row
+
 class DrawCoverageTests(unittest.TestCase):
     def fixture(self):
-        manifest={'schema':1,'apis':[
-            {'name':'glDrawArrays','canonical':'glDrawArrays','id':3,'exported':True,'imported':True,'static_reference':True,'observer':'import and dlsym','suppression':True},
-            {'name':'glDrawArraysARB','canonical':'glDrawArrays','id':3,'exported':True,'imported':False,'static_reference':False,'observer':'import and dlsym','suppression':True}], 'resolver_gaps':[]}
+        manifest={'schema':2,'apis':[
+            _api_row('glDrawArrays'),
+            _api_row('glDrawArraysARB',reachability='candidate',imported=False,suppression=True)],
+            'resolver_gaps':[]}
         frames=[{'phase':phase,'measurement_epoch':7,'update_id':update,'thread_id':11,'draws':10} for update,phase in ((1,1),(2,4))]
         def record(kind,frame,*payload):
             return list(map(str,[kind,*payload,*([0]*(12-len(payload))),7,frame['update_id'],frame['phase'],11,9,0,0]))
@@ -30,9 +38,10 @@ class DrawCoverageTests(unittest.TestCase):
 
     def test_uncovered_export_or_static_path_fails_even_when_unobserved(self):
         m,f,r=self.fixture()
-        m['apis'].append({'name':'glMultiDrawElements','id':7,'exported':True,'imported':False,'static_reference':False,'observer':'uncovered','suppression':False})
+        m['apis'].append({'name':'glMultiDrawElements','canonical':'glMultiDrawElements','id':7,'exported':True,'imported':False,
+            'reachability':'reachable','observer':'uncovered','suppression':False})
         self.assertEqual(api.coverage(m,f,r,{1,4})['status'],'failed')
-        m['apis'][-1].update(exported=False,static_reference=True)
+        m['apis'][-1].update(exported=False,static_reference=True,reachability='unresolved')
         self.assertEqual(api.coverage(m,f,r,{1,4})['status'],'failed')
 
     def test_legacy_observers_report_partial_suppression(self):

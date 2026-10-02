@@ -95,16 +95,19 @@ def generate(binary, symbols, static_graph, verify=False):
             'suppression':core in SUPPRESSED and supported,'abi':args})
         if not supported: continue
         code.append(f'extern void {name}({args});')
-        wrapper=SUPPRESSED.get(core)
-        if not wrapper:
-            wrapper='observe_'+name
-            arguments=[]
-            if args!='void':
-                for argument in args.split(','):
-                    m=re.search(r'(\w+)\s*(?:\[.*?\])?$',argument)
-                    if not m: raise ValueError(f'No argument name for {name}: {argument}')
-                    arguments.append(m[1])
-            code.append(f'static void {wrapper}({args}) {{\n    observe_draw_api({api},false);\n    {name}({",".join(arguments)});\n}}')
+        arguments=[]
+        if args!='void':
+            for argument in args.split(','):
+                m=re.search(r'(\w+)\s*(?:\[.*?\])?$',argument)
+                if not m: raise ValueError(f'No argument name for {name}: {argument}')
+                arguments.append(m[1])
+        call=f'{name}({",".join(arguments)})'
+        suppressed=core in SUPPRESSED
+        if name==core and suppressed:
+            wrapper=SUPPRESSED[core]
+        else:
+            wrapper=f'observe_exact_{name}'
+            code.append(f'static void {wrapper}({args}) {{\n    observe_draw_api({api},{str(suppressed).lower()});\n    {call};\n}}')
         resolver.append(f'    if(!strcmp(name,"{name}")) {{resolved_draw_api({api});return (void *){wrapper};}}')
         interposes.append(f'    {{(const void *){wrapper},(const void *){name}}},')
     code+=['static void *draw_observer_resolve(const char *name) {']+resolver+['    return NULL;','}']
@@ -143,9 +146,11 @@ def coverage(manifest, frames, trace, phase_numbers, *, require_c=True):
         return {'status':'unavailable','reason':'draw manifest missing; historical six-API evidence cannot qualify C'}
     gaps=[r['name'] for r in manifest['apis'] if r.get('reachability')=='reachable' and r['observer']=='uncovered']
     unresolved=[r['name'] for r in manifest['apis'] if r.get('reachability')=='unresolved']
+    uncovered_policy=[r['name'] for r in manifest['apis'] if r.get('observer')=='uncovered' and (
+        r.get('exported') or r.get('static_reference') or r.get('reachability') in ('reachable','unresolved'))]
     resolver_gaps=manifest.get('resolver_gaps',[])
-    if gaps or unresolved or resolver_gaps or any(r and r[0]=='R' for r in trace):
-        return {'status':'failed','reason':'reachable or unresolved executable submission paths lack observer proof','uncovered':gaps,'unresolved_executable_paths':unresolved,'resolver_gaps':resolver_gaps,
+    if gaps or unresolved or uncovered_policy or resolver_gaps or any(r and r[0]=='R' for r in trace):
+        return {'status':'failed','reason':'reachable or unresolved executable submission paths lack observer proof','uncovered':gaps or uncovered_policy,'unresolved_executable_paths':unresolved,'resolver_gaps':resolver_gaps,
                 'resolver_records':[r for r in trace if r and r[0]=='R']}
     expected={(f['measurement_epoch'],f['update_id'],f['thread_id']) for f in frames if f['phase'] in phase_numbers}
     markers=set();observations={};rows=[]

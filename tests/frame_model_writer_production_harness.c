@@ -10,7 +10,7 @@ int main(int argc,char **argv) {
     emit=dlsym(library,"eu4_frame_model_test_emit_records");assert(emit);
     void *(*resolve)(const char *)=dlsym(library,"eu4_frame_model_test_resolve_draw");assert(resolve);
     assert(resolve("glDrawArrays") && resolve("glDrawArraysInstancedARB") && resolve("glBegin"));
-    assert(resolve("glDrawArraysInstanced")==resolve("glDrawArraysInstancedARB"));
+    assert(resolve("glDrawArraysInstanced")!=resolve("glDrawArraysInstancedARB"));
     assert(resolve("glDrawRangeElements") && resolve("glMultiDrawElements") && resolve("glDrawArraysIndirect"));
     assert(!resolve("glDrawBuffers") && !resolve("glUnknownDraw"));
     pthread_t workers[4];
