@@ -48,6 +48,8 @@ SHADOW_HARNESS = ROOT / "benchmark/.build/frame_model_shadow_harness"
 WRITER_HARNESS = ROOT / "benchmark/.build/frame_model_writer_harness"
 TEST_LIBRARY=ROOT/"benchmark/.build/libeu4_frame_model_test.dylib"
 WORKLOAD_HARNESS=ROOT/"benchmark/.build/frame_model_workload_harness"
+WARMUP_BOUNDARY_HARNESS=ROOT/"benchmark/.build/frame_model_warmup_boundary_harness"
+REFERENCE_TRANSITION_HARNESS=ROOT/"benchmark/.build/frame_model_reference_transition_harness"
 WRITER_PRODUCTION_HARNESS=ROOT/"benchmark/.build/frame_model_writer_production_harness"
 DRAW_ALIAS_HARNESS=ROOT/"benchmark/.build/frame_model_draw_alias_harness"
 ALIAS_INTERPOSE_HARNESS=ROOT/"benchmark/.build/frame_model_alias_interpose_harness"
@@ -110,6 +112,10 @@ def build() -> dict:
          "-dynamiclib","-framework","OpenGL","-framework","CoreGraphics","-o",str(TEST_LIBRARY),str(SOURCE)],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
          "-o",str(WORKLOAD_HARNESS),str(ROOT/"tests/frame_model_workload_harness.c")],
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
+         "-o",str(WARMUP_BOUNDARY_HARNESS),str(ROOT/"tests/frame_model_warmup_boundary_harness.c")],
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
+         "-o",str(REFERENCE_TRANSITION_HARNESS),str(ROOT/"tests/frame_model_reference_transition_harness.c")],
         ["clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-Werror",
          "-dynamiclib", "-framework", "OpenGL", "-framework", "CoreGraphics",
          "-o", str(LIBRARY), str(SOURCE)],
@@ -924,7 +930,7 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
         )
     frames=4
     mode=MODE["reference"] if stage=="reference" else MODE["profile"]
-    fields=[FORMAT_VERSION,2,mode,1,3,0,0,0,1,0,0,0,0,0]
+    fields=[FORMAT_VERSION,2,mode,1,1,0,0,0,1,0,0,0,0,0]
     control_path.write_bytes(CONTROL.pack(*fields)+bytes(CONTROL_SIZE-CONTROL.size))
     private=("DYLD_INSERT_LIBRARIES","EU4_FRAME_MODEL_CONTROL","EU4_FRAME_MODEL_LOG",
         "EU4_TEST_ABLATION","EU4_TEST_SAMPLED","EU4_TEST_GPU_TIMESTAMPS",

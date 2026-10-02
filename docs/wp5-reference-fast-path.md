@@ -8,7 +8,8 @@
 - **REFERENCE render:** `hook_render` takes a dedicated path — `SCOPE_RENDER` + `real_render` only (no `save_gl_state` / `seed_gl_state` / forensic GPU prep).
 - **GL shadow:** `shadow_tracking_active()` is false when `mode==REFERENCE` (no per-draw shadow/query work).
 - **Context switches:** skip shadow seeding on `CGLSetCurrentContext` success in REFERENCE mode.
-- **Workload control:** offline stages use `flags=3` (`INTERVENTION_ACTIVE|MEASURE_ENABLED`) so reference/counters gates measure consistently.
+- **Workload control:** offline stages keep initial `flags=1` (`INTERVENTION_ACTIVE` only); `eu4_frame_model_test_arm()` enables `MEASURE_ENABLED` so warm-up stays unmeasured (four published frames after arm).
+- **Mode transitions:** entering/leaving `REFERENCE` drops shadow cache quietly (no frame `2048`); unowned threads refresh control before shadow/REFERENCE predicates; `save_gl_state()` is a no-op in REFERENCE.
 
 ## Validation
 
