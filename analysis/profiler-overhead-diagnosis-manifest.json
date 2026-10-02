@@ -4,5 +4,13 @@
     "primary_no_peeking": "analysis/evidence/frame-model-offline-00924cb-20261002T195901.482894Z-f6b27087.json",
     "replication": "analysis/evidence/frame-model-offline-8c71c47-20261002T203853.173597Z-2fff669c.json"
   },
-  "diagnostic_archives": []
+  "diagnostic_archives": [
+    {
+      "evidence_id": "20261002T213942.617917Z-27ab7b86",
+      "archive_path": "analysis/evidence/frame-model-offline-dac4da4-20261002T213942.617917Z-27ab7b86.json",
+      "archive_sha256": "9e1c6689fcd23848aa38eb2fe770c1f4812bbcfe762a37edf73442c6fd1edfba",
+      "git_commit": "dac4da478b7731129fe85c60311248a8d6a65999",
+      "captured_at_utc": "20261002T213942.617917Z-27ab7b86"
+    }
+  ]
 }
