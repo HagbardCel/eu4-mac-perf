@@ -1,0 +1,1296 @@
+{
+  "format_version": 3,
+  "report_kind": "intrusive_diagnostic",
+  "measurement_contract": {
+    "mode": "intrusive_diagnostic_v1",
+    "intrusive": true,
+    "tier1_qualification_terminal": {
+      "evidence_id": "20261003T173210.094480Z-33339073",
+      "policy_version": "tier1_causal_steady_state_hybrid_v4",
+      "overhead_gate": "failed"
+    },
+    "prohibitions": [
+      "held_out_qualification_claims",
+      "absolute_profiler_timing_as_uninstrumented_eu4_truth"
+    ],
+    "allows": [
+      "relative_attribution_with_explicit_observer_effect"
+    ],
+    "mode_requires_qualification_pass": false,
+    "quantitative_claims_allowed": false
+  },
+  "status": "complete_with_attribution_gap",
+  "run_dir": "results/20261003T210202Z-intrusive-diagnostic",
+  "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "observer_effect": {
+    "brackets": {
+      "C1": {
+        "reference_phases": [
+          "R1",
+          "R2"
+        ],
+        "frame_perturbation_fraction": {
+          "median_update_cpu_ms": 0.6484455820880484,
+          "median_loop_cpu_ms": 0.6484745676152983,
+          "update_attempts_s": -0.33571461578231865
+        },
+        "cpu_perturbation_fraction": 0.003045620379629632,
+        "power_perturbation_fraction": {
+          "eu4_cputime_ms_per_s": 0.003045620379629632,
+          "cpu_w": -0.01935656120678142,
+          "gpu_w": -0.363771712158809,
+          "combined_w": -0.09435348446683456
+        },
+        "swap_perturbation_fraction": -0.33482402769860586,
+        "swap_rate": 35.92512532520996,
+        "live_update_cpu_delta_us_per_update_intrusive": 234.89925,
+        "live_process_cpu_delta_us_per_update_intrusive": 10332.874384841147,
+        "label": "intrusive/unqualified"
+      },
+      "C2": {
+        "reference_phases": [
+          "R2",
+          "R3"
+        ],
+        "frame_perturbation_fraction": {
+          "median_update_cpu_ms": 0.6479442831118511,
+          "median_loop_cpu_ms": 0.6479731990532094,
+          "update_attempts_s": -0.33594044429054115
+        },
+        "cpu_perturbation_fraction": -0.0017050453842961666,
+        "power_perturbation_fraction": {
+          "eu4_cputime_ms_per_s": -0.0017050453842961666,
+          "cpu_w": -0.020034726859890495,
+          "gpu_w": -0.3716249386352479,
+          "combined_w": -0.09715602576860627
+        },
+        "swap_perturbation_fraction": -0.3357926780780581,
+        "swap_rate": 35.84273599223879,
+        "live_update_cpu_delta_us_per_update_intrusive": 235.28250000000006,
+        "live_process_cpu_delta_us_per_update_intrusive": 10227.37679291267,
+        "label": "intrusive/unqualified"
+      }
+    },
+    "aggregate": {
+      "frame_perturbation_fraction": {
+        "median_update_cpu_ms": 0.6483330583552511,
+        "median_loop_cpu_ms": 0.6483620114792241,
+        "update_attempts_s": -0.33545474450311463
+      },
+      "cpu_perturbation_fraction": 0.0014604083968536852,
+      "power_perturbation_fraction": {
+        "eu4_cputime_ms_per_s": 0.0014604083968536852,
+        "cpu_w": -0.01921535447096545,
+        "gpu_w": -0.367094861660079,
+        "combined_w": -0.09500489715964755
+      },
+      "swap_perturbation_fraction": -0.33500319781092913,
+      "swap_rate": 35.883930658724374,
+      "live_update_cpu_delta_us_per_update_intrusive": 235.12133333333335,
+      "live_process_cpu_delta_us_per_update_intrusive": 10284.779890592217
+    },
+    "bracket_replicate_spread": {
+      "cpu_perturbation_fraction": 0.004750665763925799,
+      "live_update_cpu_delta_us_per_update_intrusive": 0.3832500000000607
+    },
+    "frame_perturbation_fraction": {
+      "median_update_cpu_ms": 0.6483330583552511,
+      "median_loop_cpu_ms": 0.6483620114792241,
+      "update_attempts_s": -0.33545474450311463
+    },
+    "cpu_perturbation_fraction": 0.0014604083968536852,
+    "power_perturbation_fraction": {
+      "eu4_cputime_ms_per_s": 0.0014604083968536852,
+      "cpu_w": -0.01921535447096545,
+      "gpu_w": -0.367094861660079,
+      "combined_w": -0.09500489715964755
+    },
+    "swap_perturbation_fraction": -0.33500319781092913,
+    "swap_rate": 35.883930658724374,
+    "historical_swap_rate": 52.615,
+    "offline_prior_check": {
+      "mesh_counters_incremental_prior_ns_per_frame": 9246.519047619047,
+      "mesh_counters_incremental_prior_us_per_frame": 9.246519047619048,
+      "live_aggregate_update_cpu_delta_us_per_update_intrusive": 235.12133333333335,
+      "live_aggregate_process_cpu_delta_us_per_update_intrusive": 10284.779890592217,
+      "bracket_delta_spread_us": 0.3832500000000607,
+      "interpretation": "Offline prior is whole-workload invocation tax; live process CPU/update is the preferred order-of-magnitude sanity bracket (not a calibrated equality test)."
+    },
+    "qualified_intrusion_limit": 0.03,
+    "policy": "recorded_for_diagnostic_ranking_not_qualified_gate",
+    "lean_reference_fields": [
+      "median_update_cpu_ms",
+      "median_loop_cpu_ms",
+      "update_attempts_s"
+    ]
+  },
+  "profile_attribution": {
+    "exclusive_scope_windows": {
+      "C1": {
+        "exclusive_cpu_shares": {
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CPdxMeshObject::AddToBucket": 0.5539310326218381,
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CPdxMeshObject::AddToBucket → CArray<SFlushData>::Append": 0.3472226328939522,
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render → CGraphics::PresentScene": 0.0022840587810588667,
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render → CGraphics::PresentScene → CGLFlushDrawable": 0.09656227570315076
+        },
+        "rank_order": [
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CPdxMeshObject::AddToBucket",
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CPdxMeshObject::AddToBucket → CArray<SFlushData>::Append",
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render → CGraphics::PresentScene → CGLFlushDrawable",
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render → CGraphics::PresentScene"
+        ],
+        "scope_tree_gate": "not met",
+        "semantic_coverage_adequate": false,
+        "envelope_coverage": {
+          "update_cpu_fraction": 0.13167829671099943,
+          "render_cpu_fraction": 0.01832463814274429
+        },
+        "envelope_residuals": [
+          {
+            "path": "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render → CEU3GraphicalMap::Render",
+            "residual_cpu_ms": 271.5708499999999
+          },
+          {
+            "path": "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle",
+            "residual_cpu_ms": 63.919283000000014
+          },
+          {
+            "path": "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render",
+            "residual_cpu_ms": 27.50560200000001
+          },
+          {
+            "path": "HookedUpdateLoop → UpdateOneFrame",
+            "residual_cpu_ms": 9.443669000000009
+          },
+          {
+            "path": "HookedUpdateLoop",
+            "residual_cpu_ms": 0.01237700000000002
+          }
+        ],
+        "ranked_residuals": [
+          {
+            "phase": 112,
+            "name": "CEU3GraphicalMap::Render",
+            "scope_path": [
+              "HookedUpdateLoop",
+              "UpdateOneFrame",
+              "CInGameIdler::Idle",
+              "CInGameIdler::Render",
+              "CEU3GraphicalMap::Render"
+            ],
+            "classification": "envelope",
+            "calls": 716,
+            "inclusive_cpu_ms": 271.5708499999999,
+            "inclusive_wall_ms": 11328.488800999998,
+            "exclusive_cpu_ms": 271.5708499999999,
+            "exclusive_wall_ms": 11328.488800999998,
+            "residual_cpu_ms": 271.5708499999999,
+            "residual_wall_ms": 11328.488800999998,
+            "non_cpu_elapsed_ms": 11056.917951,
+            "per_frame_exclusive_cpu_ms": {
+              "samples": 716,
+              "median": 0.3785545,
+              "p95": 0.387054,
+              "max": 0.402615
+            },
+            "per_frame_exclusive_wall_ms": {
+              "samples": 716,
+              "median": 15.7894375,
+              "p95": 16.142375,
+              "max": 16.788375
+            }
+          },
+          {
+            "phase": 112,
+            "name": "CInGameIdler::Idle",
+            "scope_path": [
+              "HookedUpdateLoop",
+              "UpdateOneFrame",
+              "CInGameIdler::Idle"
+            ],
+            "classification": "envelope",
+            "calls": 716,
+            "inclusive_cpu_ms": 419.47501700000026,
+            "inclusive_wall_ms": 17661.821705,
+            "exclusive_cpu_ms": 63.919283000000014,
+            "exclusive_wall_ms": 2678.127619999998,
+            "residual_cpu_ms": 63.919283000000014,
+            "residual_wall_ms": 2678.127619999998,
+            "non_cpu_elapsed_ms": 2614.2083369999996,
+            "per_frame_exclusive_cpu_ms": {
+              "samples": 716,
+              "median": 0.0889595,
+              "p95": 0.093747,
+              "max": 0.100573
+            },
+            "per_frame_exclusive_wall_ms": {
+              "samples": 716,
+              "median": 3.7271254999999996,
+              "p95": 3.927126,
+              "max": 4.22951
+            }
+          },
+          {
+            "phase": 112,
+            "name": "CInGameIdler::Render",
+            "scope_path": [
+              "HookedUpdateLoop",
+              "UpdateOneFrame",
+              "CInGameIdler::Idle",
+              "CInGameIdler::Render"
+            ],
+            "classification": "envelope",
+            "calls": 716,
+            "inclusive_cpu_ms": 304.65922200000006,
+            "inclusive_wall_ms": 12862.98991199999,
+            "exclusive_cpu_ms": 27.50560200000001,
+            "exclusive_wall_ms": 1149.178018,
+            "residual_cpu_ms": 27.50560200000001,
+            "residual_wall_ms": 1149.178018,
+            "non_cpu_elapsed_ms": 1121.6724160000017,
+            "per_frame_exclusive_cpu_ms": {
+              "samples": 716,
+              "median": 0.038221500000000005,
+              "p95": 0.040613,
+              "max": 0.045212
+            },
+            "per_frame_exclusive_wall_ms": {
+              "samples": 716,
+              "median": 1.5976875000000001,
+              "p95": 1.705541,
+              "max": 1.884626
+            }
+          },
+          {
+            "phase": 112,
+            "name": "UpdateOneFrame",
+            "scope_path": [
+              "HookedUpdateLoop",
+              "UpdateOneFrame"
+            ],
+            "classification": "envelope",
+            "calls": 716,
+            "inclusive_cpu_ms": 428.9186859999999,
+            "inclusive_wall_ms": 19915.722422000013,
+            "exclusive_cpu_ms": 9.443669000000009,
+            "exclusive_wall_ms": 2253.900717,
+            "residual_cpu_ms": 9.443669000000009,
+            "residual_wall_ms": 2253.900717,
+            "non_cpu_elapsed_ms": 2244.457047999999,
+            "per_frame_exclusive_cpu_ms": {
+              "samples": 716,
+              "median": 0.0131135,
+              "p95": 0.015042,
+              "max": 0.017337
+            },
+            "per_frame_exclusive_wall_ms": {
+              "samples": 716,
+              "median": 3.11675,
+              "p95": 3.682208,
+              "max": 5.191459
+            }
+          },
+          {
+            "phase": 112,
+            "name": "HookedUpdateLoop",
+            "scope_path": [
+              "HookedUpdateLoop"
+            ],
+            "classification": "envelope",
+            "calls": 716,
+            "inclusive_cpu_ms": 428.93106300000005,
+            "inclusive_wall_ms": 19916.245685000013,
+            "exclusive_cpu_ms": 0.01237700000000002,
+            "exclusive_wall_ms": 0.523262999999997,
+            "residual_cpu_ms": 0.01237700000000002,
+            "residual_wall_ms": 0.523262999999997,
+            "non_cpu_elapsed_ms": 0.5108860000000021,
+            "per_frame_exclusive_cpu_ms": {
+              "samples": 716,
+              "median": 1.7e-05,
+              "p95": 2.1e-05,
+              "max": 2.4e-05
+            },
+            "per_frame_exclusive_wall_ms": {
+              "samples": 716,
+              "median": 0.000708,
+              "p95": 0.000876,
+              "max": 0.001084
+            }
+          }
+        ]
+      },
+      "C2": {
+        "exclusive_cpu_shares": {
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CPdxMeshObject::AddToBucket": 0.5542426187996201,
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CPdxMeshObject::AddToBucket → CArray<SFlushData>::Append": 0.3476999042674686,
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render → CGraphics::PresentScene": 0.0022132534872408884,
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render → CGraphics::PresentScene → CGLFlushDrawable": 0.09584422344567044
+        },
+        "rank_order": [
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CPdxMeshObject::AddToBucket",
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CPdxMeshObject::AddToBucket → CArray<SFlushData>::Append",
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render → CGraphics::PresentScene → CGLFlushDrawable",
+          "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render → CGraphics::PresentScene"
+        ],
+        "scope_tree_gate": "not met",
+        "semantic_coverage_adequate": false,
+        "envelope_coverage": {
+          "update_cpu_fraction": 0.13157466319397487,
+          "render_cpu_fraction": 0.018149732970302736
+        },
+        "envelope_residuals": [
+          {
+            "path": "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render → CEU3GraphicalMap::Render",
+            "residual_cpu_ms": 271.43980700000014
+          },
+          {
+            "path": "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle",
+            "residual_cpu_ms": 63.61751800000002
+          },
+          {
+            "path": "HookedUpdateLoop → UpdateOneFrame → CInGameIdler::Idle → CInGameIdler::Render",
+            "residual_cpu_ms": 27.43618699999999
+          },
+          {
+            "path": "HookedUpdateLoop → UpdateOneFrame",
+            "residual_cpu_ms": 9.380231000000002
+          },
+          {
+            "path": "HookedUpdateLoop",
+            "residual_cpu_ms": 0.012268999999999997
+          }
+        ],
+        "ranked_residuals": [
+          {
+            "phase": 114,
+            "name": "CEU3GraphicalMap::Render",
+            "scope_path": [
+              "HookedUpdateLoop",
+              "UpdateOneFrame",
+              "CInGameIdler::Idle",
+              "CInGameIdler::Render",
+              "CEU3GraphicalMap::Render"
+            ],
+            "classification": "envelope",
+            "calls": 714,
+            "inclusive_cpu_ms": 271.43980700000014,
+            "inclusive_wall_ms": 11323.039893000005,
+            "exclusive_cpu_ms": 271.43980700000014,
+            "exclusive_wall_ms": 11323.039893000005,
+            "residual_cpu_ms": 271.43980700000014,
+            "residual_wall_ms": 11323.039893000005,
+            "non_cpu_elapsed_ms": 11051.600085999982,
+            "per_frame_exclusive_cpu_ms": {
+              "samples": 714,
+              "median": 0.3797425,
+              "p95": 0.387075,
+              "max": 0.397166
+            },
+            "per_frame_exclusive_wall_ms": {
+              "samples": 714,
+              "median": 15.8403545,
+              "p95": 16.144333,
+              "max": 16.561042
+            }
+          },
+          {
+            "phase": 114,
+            "name": "CInGameIdler::Idle",
+            "scope_path": [
+              "HookedUpdateLoop",
+              "UpdateOneFrame",
+              "CInGameIdler::Idle"
+            ],
+            "classification": "envelope",
+            "calls": 714,
+            "inclusive_cpu_ms": 418.8359059999997,
+            "inclusive_wall_ms": 17628.66009999998,
+            "exclusive_cpu_ms": 63.61751800000002,
+            "exclusive_wall_ms": 2665.1893979999977,
+            "residual_cpu_ms": 63.61751800000002,
+            "residual_wall_ms": 2665.1893979999977,
+            "non_cpu_elapsed_ms": 2601.571880000003,
+            "per_frame_exclusive_cpu_ms": {
+              "samples": 714,
+              "median": 0.088807,
+              "p95": 0.092945,
+              "max": 0.100369
+            },
+            "per_frame_exclusive_wall_ms": {
+              "samples": 714,
+              "median": 3.719671,
+              "p95": 3.88495,
+              "max": 4.21048
+            }
+          },
+          {
+            "phase": 114,
+            "name": "CInGameIdler::Render",
+            "scope_path": [
+              "HookedUpdateLoop",
+              "UpdateOneFrame",
+              "CInGameIdler::Idle",
+              "CInGameIdler::Render"
+            ],
+            "classification": "envelope",
+            "calls": 714,
+            "inclusive_cpu_ms": 304.40078700000004,
+            "inclusive_wall_ms": 12846.081054000011,
+            "exclusive_cpu_ms": 27.43618699999999,
+            "exclusive_wall_ms": 1146.198162,
+            "residual_cpu_ms": 27.43618699999999,
+            "residual_wall_ms": 1146.198162,
+            "non_cpu_elapsed_ms": 1118.7619750000003,
+            "per_frame_exclusive_cpu_ms": {
+              "samples": 714,
+              "median": 0.038286,
+              "p95": 0.040903,
+              "max": 0.04494
+            },
+            "per_frame_exclusive_wall_ms": {
+              "samples": 714,
+              "median": 1.600896,
+              "p95": 1.707833,
+              "max": 1.873333
+            }
+          },
+          {
+            "phase": 114,
+            "name": "UpdateOneFrame",
+            "scope_path": [
+              "HookedUpdateLoop",
+              "UpdateOneFrame"
+            ],
+            "classification": "envelope",
+            "calls": 714,
+            "inclusive_cpu_ms": 428.216137,
+            "inclusive_wall_ms": 19909.125552000005,
+            "exclusive_cpu_ms": 9.380231000000002,
+            "exclusive_wall_ms": 2280.465451999999,
+            "residual_cpu_ms": 9.380231000000002,
+            "residual_wall_ms": 2280.465451999999,
+            "non_cpu_elapsed_ms": 2271.085221000002,
+            "per_frame_exclusive_cpu_ms": {
+              "samples": 714,
+              "median": 0.013056,
+              "p95": 0.014694,
+              "max": 0.017744
+            },
+            "per_frame_exclusive_wall_ms": {
+              "samples": 714,
+              "median": 3.1764585,
+              "p95": 3.71725,
+              "max": 4.664416
+            }
+          },
+          {
+            "phase": 114,
+            "name": "HookedUpdateLoop",
+            "scope_path": [
+              "HookedUpdateLoop"
+            ],
+            "classification": "envelope",
+            "calls": 714,
+            "inclusive_cpu_ms": 428.22840599999995,
+            "inclusive_wall_ms": 19909.64511399999,
+            "exclusive_cpu_ms": 0.012268999999999997,
+            "exclusive_wall_ms": 0.5195619999999976,
+            "residual_cpu_ms": 0.012268999999999997,
+            "residual_wall_ms": 0.5195619999999976,
+            "non_cpu_elapsed_ms": 0.5072930000000012,
+            "per_frame_exclusive_cpu_ms": {
+              "samples": 714,
+              "median": 1.7e-05,
+              "p95": 2.1e-05,
+              "max": 2.5e-05
+            },
+            "per_frame_exclusive_wall_ms": {
+              "samples": 714,
+              "median": 0.000708,
+              "p95": 0.000875,
+              "max": 0.001125
+            }
+          }
+        ]
+      }
+    },
+    "exclusive_rank_stable": true,
+    "gl_work_counts": {
+      "C1": {
+        "draws": 5863.0,
+        "buffer_calls": 150.0,
+        "uniform_calls": 26479.0,
+        "state_calls": 85950.0,
+        "draw_timed_samples": 0.0
+      },
+      "C2": {
+        "draws": 5864.0,
+        "buffer_calls": 150.0,
+        "uniform_calls": 26516.0,
+        "state_calls": 86048.0,
+        "draw_timed_samples": 0.0
+      }
+    },
+    "gl_work_rank_order": {
+      "C1": [
+        "state_calls",
+        "uniform_calls",
+        "draws",
+        "buffer_calls",
+        "draw_timed_samples"
+      ],
+      "C2": [
+        "state_calls",
+        "uniform_calls",
+        "draws",
+        "buffer_calls",
+        "draw_timed_samples"
+      ]
+    },
+    "gl_work_rank_stable": true,
+    "interpretation": "Exclusive semantic shares partition identified semantic CPU only; envelope residuals and coverage show unattributed Update/Render/Map CPU. GL rows are per-frame medians (counts/samples)."
+  },
+  "forensic_tail": {
+    "phase": "TAIL",
+    "role": "forensic",
+    "draw_timed_samples": 184,
+    "sampled_window_evidence": {
+      "status": "failed",
+      "reason": "each window's CPU/wall update/render medians must remain within 5% of local neighbors",
+      "windows": [
+        {
+          "sample_window": 24,
+          "renders": [
+            11527,
+            11528,
+            11529,
+            11530
+          ],
+          "sampled": [
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11531,
+              "render_id": 11527
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11532,
+              "render_id": 11528
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11533,
+              "render_id": 11529
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11534,
+              "render_id": 11530
+            }
+          ],
+          "before": [
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 23,
+              "update_id": 11527,
+              "render_id": 11523
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 23,
+              "update_id": 11528,
+              "render_id": 11524
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 23,
+              "update_id": 11529,
+              "render_id": 11525
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 23,
+              "update_id": 11530,
+              "render_id": 11526
+            }
+          ],
+          "after": [
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11535,
+              "render_id": 11531
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11536,
+              "render_id": 11532
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11537,
+              "render_id": 11533
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11538,
+              "render_id": 11534
+            }
+          ],
+          "fractions": {
+            "update_cpu_ns": 0.23383791396345788,
+            "update_wall_ns": 0.20707141465991794,
+            "render_cpu_ns": 0.3106761145487482,
+            "render_wall_ns": 0.3006275688029138
+          },
+          "overhead_us_per_frame": {
+            "update_cpu_ns": 141.632,
+            "update_wall_ns": 5781.188,
+            "render_cpu_ns": 132.826,
+            "render_wall_ns": 5417.146
+          }
+        },
+        {
+          "sample_window": 25,
+          "renders": [
+            11764,
+            11765,
+            11766,
+            11767
+          ],
+          "sampled": [
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 25,
+              "update_id": 11768,
+              "render_id": 11764
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 25,
+              "update_id": 11769,
+              "render_id": 11765
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 25,
+              "update_id": 11770,
+              "render_id": 11766
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 25,
+              "update_id": 11771,
+              "render_id": 11767
+            }
+          ],
+          "before": [
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11764,
+              "render_id": 11760
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11765,
+              "render_id": 11761
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11766,
+              "render_id": 11762
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 24,
+              "update_id": 11767,
+              "render_id": 11763
+            }
+          ],
+          "after": [
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 25,
+              "update_id": 11772,
+              "render_id": 11768
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 25,
+              "update_id": 11773,
+              "render_id": 11769
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 25,
+              "update_id": 11774,
+              "render_id": 11770
+            },
+            {
+              "phase": 103,
+              "measurement_epoch": 6,
+              "thread_id": 1247338,
+              "generation": 25,
+              "update_id": 11775,
+              "render_id": 11771
+            }
+          ],
+          "fractions": {
+            "update_cpu_ns": 0.20909368375031964,
+            "update_wall_ns": 0.19247999527075255,
+            "render_cpu_ns": 0.3000580328946295,
+            "render_wall_ns": 0.2937691429215079
+          },
+          "overhead_us_per_frame": {
+            "update_cpu_ns": 126.739,
+            "update_wall_ns": 5375.6455,
+            "render_cpu_ns": 128.745,
+            "render_wall_ns": 5299.583
+          }
+        }
+      ]
+    },
+    "record_counts": {
+      "H": 1,
+      "Z": 1,
+      "Y": 34,
+      "R": 4,
+      "F": 5401,
+      "P": 2155,
+      "L": 2155,
+      "K": 2155,
+      "A": 12930,
+      "Q": 6408,
+      "E": 16,
+      "G": 40
+    },
+    "draw_records": 0,
+    "draw_submission_count_sum": 0,
+    "state_operation_counts": {},
+    "top_state_callers": [],
+    "temporal_differences": {
+      "draw_identity": {
+        "sampled_render_frames": 0,
+        "identical_consecutive_fraction": null,
+        "sampled_draws": [],
+        "sampled_draw_count": 0,
+        "omitted_draw_records": 0,
+        "identity_fields": [
+          "API",
+          "caller",
+          "program",
+          "vertex-input signature (VAO and enabled attribute VBO/formats/offsets)",
+          "IBO",
+          "mode",
+          "count",
+          "index type",
+          "index offset/first",
+          "signed base vertex",
+          "instance count"
+        ]
+      },
+      "draw_topology": {
+        "sampled_render_frames": 0,
+        "identical_consecutive_fraction": null
+      },
+      "combined_command_state_resource": {
+        "sampled_render_frames": 0,
+        "compared_consecutive_pairs": 0,
+        "identical_consecutive_fraction": null,
+        "comparison": "ordered draw, state, uniform, resource upload, and texture records"
+      },
+      "render_state": {
+        "sampled_render_frames": 0,
+        "identical_consecutive_fraction": null,
+        "changed_calls": [],
+        "change_limit": 100,
+        "note": "Call tuple is (game callsite offset, operation kind, state value)."
+      },
+      "uniform_payloads": {
+        "sampled_render_frames": 0,
+        "compared_payloads": 0,
+        "identical_fraction": null,
+        "observed_changes": [],
+        "change_limit": 100,
+        "key_fields": [
+          "game_callsite_offset",
+          "program_id",
+          "uniform_location"
+        ],
+        "note": "Uniform payloads: hashes/dimensions identify changed records; exact changed byte ranges are not captured."
+      },
+      "uniform_call_sequence": {
+        "compared_consecutive_pairs": 0,
+        "compared_calls": 0,
+        "identical_fraction": null,
+        "changes": [],
+        "change_limit": 256,
+        "comparison": "ordered calls retain repeated callsite/program/location updates"
+      },
+      "uniform_exact_elements": {
+        "compared_calls": 0,
+        "changed_32bit_elements": 0,
+        "omitted_element_changes": 0,
+        "oversize_payload_calls_without_byte_diff": 0,
+        "captured_changes": [],
+        "capture_limit": 512,
+        "note": "Exact raw 32-bit elements for consecutive sampled glUniform4fv payloads up to 256 bytes; larger payloads retain hashes only."
+      },
+      "buffer_uploads": {
+        "sampled_render_frames": 0,
+        "compared_payloads": 0,
+        "identical_fraction": null,
+        "observed_changes": [],
+        "change_limit": 100,
+        "key_fields": [
+          "operation_code (66=BufferData, 98=BufferSubData)",
+          "target_and_buffer_id",
+          "offset",
+          "byte_size"
+        ],
+        "note": "Buffer upload payloads: hashes/dimensions identify changed records; exact changed byte ranges are not captured."
+      },
+      "texture_upload_calls": {
+        "sampled_render_frames": 0,
+        "compared_payloads": 0,
+        "identical_fraction": null,
+        "observed_changes": [],
+        "change_limit": 100,
+        "key_fields": [
+          "operation_code (84=TexImage2D, 116=TexSubImage2D)",
+          "game_callsite_offset"
+        ],
+        "note": "Texture upload call dimensions: hashes/dimensions identify changed records; exact changed byte ranges are not captured."
+      }
+    },
+    "gpu_segments": {
+      "status": "segmented_partial",
+      "phases": {
+        "103": {
+          "context_pass_segments": {},
+          "context_count": 0,
+          "missing_segment_counts": {
+            "2": 32,
+            "9": 8
+          },
+          "median_whole_render_ms": null,
+          "median_map_ms": null,
+          "cross_context_aggregation": "not performed"
+        }
+      },
+      "legacy_unqualified_samples": [],
+      "missing_reasons": {
+        "1": "null context",
+        "2": "unsupported",
+        "3": "context capacity",
+        "4": "query pool exhaustion",
+        "5": "unexpected owner",
+        "6": "destroyed",
+        "7": "uncollected at measurement stop",
+        "8": "invalid timestamps"
+      },
+      "query_policy": "Completed queries polled only in their owning current context; intervals are timeline elapsed time, never whole-render GPU busy time."
+    },
+    "caveat": "Forensic tail is isolated from R/C observer-effect brackets; timings are intrusive and unqualified.",
+    "structural_capture_status": "failed",
+    "sample_perturbation_status": "failed",
+    "timing_interpretation": "highly_intrusive_sample_windows_failed_calibration",
+    "status": "failed",
+    "gate_reason": "Forensic tail produced no D/S/U/B/T detail records"
+  },
+  "attribution_gap": true,
+  "observer_bias_calibration": {
+    "calibration_version": "observer_bias_calibration_v1",
+    "bias_table": [
+      {
+        "primitive_id": "gl_interpose_dispatch",
+        "role": "instrumentation_diagnostic",
+        "unit": "intercepted_draw_loop",
+        "low_stage": "bare_harness",
+        "high_stage": "instrumented_harness",
+        "slope_ns_per_op": 2.9475142857142855,
+        "slope_se_ns_per_op": 0.016227214083734124,
+        "fit_status": "ok"
+      },
+      {
+        "primitive_id": "reference_activation",
+        "role": "aggregate_control",
+        "unit": "published_frame",
+        "low_stage": "loaded-disabled",
+        "high_stage": "reference",
+        "slope_ns_per_op": -177.48333333333332,
+        "slope_se_ns_per_op": 431.23292007650554,
+        "fit_status": "ok"
+      },
+      {
+        "primitive_id": "counters_incremental",
+        "role": "aggregate_control",
+        "unit": "published_frame",
+        "low_stage": "reference",
+        "high_stage": "counters",
+        "slope_ns_per_op": 9246.519047619047,
+        "slope_se_ns_per_op": 448.0266138303341,
+        "fit_status": "ok"
+      },
+      {
+        "primitive_id": "scope_pair_clocks",
+        "role": "decomposition_diagnostic",
+        "unit": "scope_pair",
+        "low_stage": "counters_lite",
+        "high_stage": "counters",
+        "slope_ns_per_op": 62.82202380952381,
+        "slope_se_ns_per_op": 40.649253751104006,
+        "fit_status": "ok"
+      },
+      {
+        "primitive_id": "per_frame_counter_flush",
+        "role": "decomposition_diagnostic",
+        "unit": "published_frame",
+        "low_stage": "counters_lite_deferred_flush",
+        "high_stage": "counters_lite",
+        "slope_ns_per_op": -1281.0,
+        "slope_se_ns_per_op": 375.4575513045818,
+        "fit_status": "ok"
+      },
+      {
+        "primitive_id": "gpu_timestamp_call",
+        "role": "forensic_addon",
+        "unit": "gpu_timestamp_call",
+        "low_stage": "sampled",
+        "high_stage": "sampled",
+        "slope_ns_per_op": -2192.0607142857143,
+        "slope_se_ns_per_op": 236.73841398444125,
+        "fit_status": "ok"
+      },
+      {
+        "primitive_id": "timed_gl_sample",
+        "role": "forensic_addon",
+        "unit": "timed_gl_sample",
+        "low_stage": "sampled",
+        "high_stage": "sampled",
+        "slope_ns_per_op": 26.368019909001784,
+        "slope_se_ns_per_op": 44.551893684878756,
+        "fit_status": "ok"
+      }
+    ],
+    "additive_slopes": {
+      "scope_pair_clocks": {
+        "slope_ns_per_op": 62.82202380952381,
+        "slope_se_ns_per_op": 40.649253751104006,
+        "unit": "scope_pair",
+        "role": "decomposition_diagnostic",
+        "low_stage": "counters_lite",
+        "high_stage": "counters"
+      },
+      "per_frame_counter_flush": {
+        "slope_ns_per_op": -1281.0,
+        "slope_se_ns_per_op": 375.4575513045818,
+        "unit": "published_frame",
+        "role": "decomposition_diagnostic",
+        "low_stage": "counters_lite_deferred_flush",
+        "high_stage": "counters_lite"
+      }
+    },
+    "aggregate_slopes": {
+      "reference_activation": {
+        "slope_ns_per_op": -177.48333333333332,
+        "slope_se_ns_per_op": 431.23292007650554,
+        "unit": "published_frame",
+        "role": "aggregate_control",
+        "low_stage": "loaded-disabled",
+        "high_stage": "reference"
+      },
+      "counters_incremental": {
+        "slope_ns_per_op": 9246.519047619047,
+        "slope_se_ns_per_op": 448.0266138303341,
+        "unit": "published_frame",
+        "role": "aggregate_control",
+        "low_stage": "reference",
+        "high_stage": "counters"
+      }
+    },
+    "forensic_slopes": {
+      "gpu_timestamp_call": {
+        "slope_ns_per_op": -2192.0607142857143,
+        "slope_se_ns_per_op": 236.73841398444125,
+        "unit": "gpu_timestamp_call",
+        "role": "forensic_addon",
+        "low_stage": "sampled",
+        "high_stage": "sampled"
+      },
+      "timed_gl_sample": {
+        "slope_ns_per_op": 26.368019909001784,
+        "slope_se_ns_per_op": 44.551893684878756,
+        "unit": "timed_gl_sample",
+        "role": "forensic_addon",
+        "low_stage": "sampled",
+        "high_stage": "sampled"
+      }
+    },
+    "instrumentation_slopes": {
+      "gl_interpose_dispatch": {
+        "slope_ns_per_op": 2.9475142857142855,
+        "slope_se_ns_per_op": 0.016227214083734124,
+        "unit": "intercepted_draw_loop",
+        "role": "instrumentation_diagnostic",
+        "low_stage": "bare_harness",
+        "high_stage": "instrumented_harness"
+      }
+    },
+    "consistency": {
+      "status": "ok",
+      "aggregate_counters_incremental_ns": 36986.07619047619,
+      "decomposed_sum_ns": -3113.695238095238,
+      "explained_fraction": -0.08418560601183765,
+      "components_ns": {
+        "scope_pair_clocks": 2010.304761904762,
+        "per_frame_counter_flush": -5124.0
+      },
+      "reconciliation_primitives": [
+        "per_frame_counter_flush",
+        "scope_pair_clocks"
+      ],
+      "published_frames": 4.0
+    },
+    "phase_c_interpretation": {
+      "calibration_version": "observer_bias_calibration_v1",
+      "mesh_counters_incremental_prior_ns_per_frame": 9246.519047619047,
+      "mesh_counters_incremental_prior_us_per_frame": 9.246519047619048,
+      "component_bias_correction": {
+        "component_bias_correction_allowed": false,
+        "reasons": [
+          "decomposition explained_fraction=-0.084 (minimum 0.5)",
+          "negative additive slope for per_frame_counter_flush"
+        ],
+        "explained_fraction": -0.08418560601183765
+      },
+      "ranking_and_relative_shares_allowed": true,
+      "bias_adjusted_absolute_timings_allowed": false,
+      "forensic_numeric_correction_allowed": false
+    }
+  },
+  "release_gates": {
+    "format_v3": {
+      "status": "passed",
+      "reason": "Versioned producer and controller",
+      "version": 3
+    },
+    "offline_causal_admission": {
+      "status": "failed",
+      "reason": "Contract-only preflight; WP11 terminal record is non-blocking",
+      "evidence": {
+        "evidence_id": "20261003T173210.094480Z-33339073",
+        "archive_path": "analysis/evidence/frame-model-offline-7b7fc77-20261003T173210.094480Z-33339073.json",
+        "archive_sha256_committed": "1557a23865de6f3c274199402468e08ee58f958740320d5621eae6d8d4053da6",
+        "tier1_v4_admission": "failed",
+        "overhead_gate": "failed",
+        "policy_version": "tier1_causal_steady_state_hybrid_v4"
+      }
+    },
+    "diagnostic_authorization": {
+      "status": "passed",
+      "reason": "Explicit intrusive_diagnostic_v1 capture (--diagnostic-only)",
+      "measurement_contract": {
+        "mode": "intrusive_diagnostic_v1",
+        "intrusive": true,
+        "tier1_qualification_terminal": {
+          "evidence_id": "20261003T173210.094480Z-33339073",
+          "policy_version": "tier1_causal_steady_state_hybrid_v4",
+          "overhead_gate": "failed"
+        },
+        "prohibitions": [
+          "held_out_qualification_claims",
+          "absolute_profiler_timing_as_uninstrumented_eu4_truth"
+        ],
+        "allows": [
+          "relative_attribution_with_explicit_observer_effect"
+        ],
+        "mode_requires_qualification_pass": false,
+        "quantitative_claims_allowed": false
+      }
+    },
+    "live_observer_effect": {
+      "status": "passed",
+      "reason": "Recorded bracketed live R vs C perturbation (not a 3% qualified stop)",
+      "brackets": {
+        "C1": {
+          "reference_phases": [
+            "R1",
+            "R2"
+          ],
+          "frame_perturbation_fraction": {
+            "median_update_cpu_ms": 0.6484455820880484,
+            "median_loop_cpu_ms": 0.6484745676152983,
+            "update_attempts_s": -0.33571461578231865
+          },
+          "cpu_perturbation_fraction": 0.003045620379629632,
+          "power_perturbation_fraction": {
+            "eu4_cputime_ms_per_s": 0.003045620379629632,
+            "cpu_w": -0.01935656120678142,
+            "gpu_w": -0.363771712158809,
+            "combined_w": -0.09435348446683456
+          },
+          "swap_perturbation_fraction": -0.33482402769860586,
+          "swap_rate": 35.92512532520996,
+          "live_update_cpu_delta_us_per_update_intrusive": 234.89925,
+          "live_process_cpu_delta_us_per_update_intrusive": 10332.874384841147,
+          "label": "intrusive/unqualified"
+        },
+        "C2": {
+          "reference_phases": [
+            "R2",
+            "R3"
+          ],
+          "frame_perturbation_fraction": {
+            "median_update_cpu_ms": 0.6479442831118511,
+            "median_loop_cpu_ms": 0.6479731990532094,
+            "update_attempts_s": -0.33594044429054115
+          },
+          "cpu_perturbation_fraction": -0.0017050453842961666,
+          "power_perturbation_fraction": {
+            "eu4_cputime_ms_per_s": -0.0017050453842961666,
+            "cpu_w": -0.020034726859890495,
+            "gpu_w": -0.3716249386352479,
+            "combined_w": -0.09715602576860627
+          },
+          "swap_perturbation_fraction": -0.3357926780780581,
+          "swap_rate": 35.84273599223879,
+          "live_update_cpu_delta_us_per_update_intrusive": 235.28250000000006,
+          "live_process_cpu_delta_us_per_update_intrusive": 10227.37679291267,
+          "label": "intrusive/unqualified"
+        }
+      },
+      "aggregate": {
+        "frame_perturbation_fraction": {
+          "median_update_cpu_ms": 0.6483330583552511,
+          "median_loop_cpu_ms": 0.6483620114792241,
+          "update_attempts_s": -0.33545474450311463
+        },
+        "cpu_perturbation_fraction": 0.0014604083968536852,
+        "power_perturbation_fraction": {
+          "eu4_cputime_ms_per_s": 0.0014604083968536852,
+          "cpu_w": -0.01921535447096545,
+          "gpu_w": -0.367094861660079,
+          "combined_w": -0.09500489715964755
+        },
+        "swap_perturbation_fraction": -0.33500319781092913,
+        "swap_rate": 35.883930658724374,
+        "live_update_cpu_delta_us_per_update_intrusive": 235.12133333333335,
+        "live_process_cpu_delta_us_per_update_intrusive": 10284.779890592217
+      },
+      "offline_prior_check": {
+        "mesh_counters_incremental_prior_ns_per_frame": 9246.519047619047,
+        "mesh_counters_incremental_prior_us_per_frame": 9.246519047619048,
+        "live_aggregate_update_cpu_delta_us_per_update_intrusive": 235.12133333333335,
+        "live_aggregate_process_cpu_delta_us_per_update_intrusive": 10284.779890592217,
+        "bracket_delta_spread_us": 0.3832500000000607,
+        "interpretation": "Offline prior is whole-workload invocation tax; live process CPU/update is the preferred order-of-magnitude sanity bracket (not a calibrated equality test)."
+      }
+    },
+    "integrity": {
+      "status": "degraded",
+      "reason": "Hooks intact; 191966 profiler records dropped under load (intrusive diagnostic allows degraded telemetry retention)",
+      "hook_failures": 0,
+      "dropped_records": 191966
+    },
+    "origin_integrity": {
+      "status": "passed",
+      "reason": "Origin ownership checked; unknown calls block diagnostic acceptance",
+      "records": []
+    },
+    "cadence": {
+      "status": "passed",
+      "reason": "Reference windows stable within 3% update cadence"
+    },
+    "diagnostic_attribution": {
+      "status": "failed",
+      "reason": "Scope-tree 95% semantic coverage gate not met for a counters window"
+    },
+    "forensic_tail": {
+      "status": "failed",
+      "reason": "Forensic tail produced no D/S/U/B/T detail records"
+    }
+  },
+  "release_blockers": {
+    "integrity": {
+      "status": "degraded",
+      "reason": "Hooks intact; 191966 profiler records dropped under load (intrusive diagnostic allows degraded telemetry retention)",
+      "hook_failures": 0,
+      "dropped_records": 191966
+    }
+  },
+  "diagnosis_status": "intrusive diagnostic capture; not eligible for causal or qualified assessment",
+  "causal_contrasts": {},
+  "conclusions": [
+    "Profiler timings in this report are quantitatively unqualified.",
+    "Do not treat inclusive CPU microseconds as uninstrumented EU IV measurements.",
+    "Tier-1 offline admission failure is recorded but is not a diagnostic release gate."
+  ],
+  "recommendations": [],
+  "limitations": [
+    "Intrusive diagnostic contract preflight only; no offline_workloads or held-out timing.",
+    "No immutable qualification evidence archive is written and the rolling pointer is not updated.",
+    "Terminal Tier-1 v4 qualification: 20261003T173210.094480Z-33339073 (failed).",
+    "Live intrusive capture uses `run --diagnostic-only` (Phase C R–C–R–C–R schedule).",
+    "Phase C records live R↔C observer effect for ranking; it does not qualify causal claims.",
+    "Component-level bias subtraction is disabled for the authoritative observer-bias archive.",
+    "Profiler dropped 191966 records; attribution and forensic tail are partial."
+  ]
+}

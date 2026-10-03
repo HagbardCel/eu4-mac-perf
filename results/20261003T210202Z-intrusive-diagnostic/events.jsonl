@@ -1,0 +1,33 @@
+{"event": "clock_anchor", "monotonic_ns": 55672269406791, "wall_ns": 1791061322037563000}
+{"event": "phase_transition", "generation": 1, "mode": "reference", "monotonic_ns": 55796738693416, "phase": "R1", "wall_ns": 1791061446507231000}
+{"event": "phase_start", "measurement_epoch": 1, "monotonic_ns": 55801804208375, "phase": "R1", "wall_ns": 1791061451572761000}
+{"event": "measurement_enabled", "generation": 2, "monotonic_ns": 55801804383166, "phase": "R1", "wall_ns": 1791061451572935000}
+{"event": "phase_end", "monotonic_ns": 55821809242708, "phase": "R1", "wall_ns": 1791061471577857000}
+{"event": "measurement_disabled", "monotonic_ns": 55821845029375, "phase": "R1", "wall_ns": 1791061471613644000}
+{"event": "phase_transition", "generation": 5, "mode": "profile", "monotonic_ns": 55821854641583, "phase": "C1", "wall_ns": 1791061471623255000}
+{"event": "phase_start", "measurement_epoch": 2, "monotonic_ns": 55826918542500, "phase": "C1", "wall_ns": 1791061476687173000}
+{"event": "measurement_enabled", "generation": 6, "monotonic_ns": 55826919402000, "phase": "C1", "wall_ns": 1791061476688031000}
+{"event": "phase_end", "monotonic_ns": 55846918598541, "phase": "C1", "wall_ns": 1791061496687290000}
+{"event": "measurement_disabled", "monotonic_ns": 55846964306125, "phase": "C1", "wall_ns": 1791061496732998000}
+{"event": "phase_transition", "generation": 9, "mode": "reference", "monotonic_ns": 55846995436500, "phase": "R2", "wall_ns": 1791061496764127000}
+{"event": "phase_start", "measurement_epoch": 3, "monotonic_ns": 55852056226458, "phase": "R2", "wall_ns": 1791061501824933000}
+{"event": "measurement_enabled", "generation": 10, "monotonic_ns": 55852056429583, "phase": "R2", "wall_ns": 1791061501825135000}
+{"event": "phase_end", "monotonic_ns": 55872056462458, "phase": "R2", "wall_ns": 1791061521825230000}
+{"event": "measurement_disabled", "monotonic_ns": 55872090397416, "phase": "R2", "wall_ns": 1791061521859165000}
+{"event": "phase_transition", "generation": 13, "mode": "profile", "monotonic_ns": 55872127360791, "phase": "C2", "wall_ns": 1791061521896129000}
+{"event": "phase_start", "measurement_epoch": 4, "monotonic_ns": 55877211775041, "phase": "C2", "wall_ns": 1791061526980558000}
+{"event": "measurement_enabled", "generation": 14, "monotonic_ns": 55877211971041, "phase": "C2", "wall_ns": 1791061526980754000}
+{"event": "phase_end", "monotonic_ns": 55897216232833, "phase": "C2", "wall_ns": 1791061546985078000}
+{"event": "measurement_disabled", "monotonic_ns": 55897274455541, "phase": "C2", "wall_ns": 1791061547043301000}
+{"event": "phase_transition", "generation": 17, "mode": "reference", "monotonic_ns": 55897357627500, "phase": "R3", "wall_ns": 1791061547126472000}
+{"event": "phase_start", "measurement_epoch": 5, "monotonic_ns": 55902442509625, "phase": "R3", "wall_ns": 1791061552211370000}
+{"event": "measurement_enabled", "generation": 18, "monotonic_ns": 55902442711750, "phase": "R3", "wall_ns": 1791061552211571000}
+{"event": "phase_end", "monotonic_ns": 55922442947416, "phase": "R3", "wall_ns": 1791061572211874000}
+{"event": "measurement_disabled", "monotonic_ns": 55922465729000, "phase": "R3", "wall_ns": 1791061572234651000}
+{"event": "phase_transition", "generation": 21, "mode": "profile", "monotonic_ns": 55922532403166, "phase": "TAIL", "wall_ns": 1791061572301325000}
+{"event": "phase_start", "measurement_epoch": 6, "monotonic_ns": 55927606592958, "phase": "TAIL", "wall_ns": 1791061577375530000}
+{"event": "measurement_enabled", "generation": 22, "monotonic_ns": 55927606799875, "phase": "TAIL", "wall_ns": 1791061577375737000}
+{"actual_arm_ns": 55934309865083, "event": "detail_sample_armed", "generation": 24, "monotonic_ns": 55934310278500, "phase": "TAIL", "preceding_observed": [{"generation": 23, "measurement_epoch": 6, "phase": 103, "render_id": 11522, "thread_id": 1247338, "update_id": 11526}, {"generation": 23, "measurement_epoch": 6, "phase": 103, "render_id": 11523, "thread_id": 1247338, "update_id": 11527}, {"generation": 23, "measurement_epoch": 6, "phase": 103, "render_id": 11524, "thread_id": 1247338, "update_id": 11528}, {"generation": 23, "measurement_epoch": 6, "phase": 103, "render_id": 11525, "thread_id": 1247338, "update_id": 11529}], "render_frames": 4, "requested_arm_ns": 55934273259624, "wall_ns": 1791061584079236000, "window": 1}
+{"actual_arm_ns": 55940949220083, "event": "detail_sample_armed", "generation": 25, "monotonic_ns": 55940949373916, "phase": "TAIL", "preceding_observed": [{"generation": 24, "measurement_epoch": 6, "phase": 103, "render_id": 11759, "thread_id": 1247338, "update_id": 11763}, {"generation": 24, "measurement_epoch": 6, "phase": 103, "render_id": 11760, "thread_id": 1247338, "update_id": 11764}, {"generation": 24, "measurement_epoch": 6, "phase": 103, "render_id": 11761, "thread_id": 1247338, "update_id": 11765}, {"generation": 24, "measurement_epoch": 6, "phase": 103, "render_id": 11762, "thread_id": 1247338, "update_id": 11766}], "render_frames": 4, "requested_arm_ns": 55940939926291, "wall_ns": 1791061590718352000, "window": 2}
+{"event": "phase_end", "monotonic_ns": 55947611625791, "phase": "TAIL", "wall_ns": 1791061597380625000}
+{"event": "measurement_disabled", "monotonic_ns": 55947647067625, "phase": "TAIL", "wall_ns": 1791061597416067000}

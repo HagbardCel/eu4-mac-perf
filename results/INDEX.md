@@ -11,5 +11,6 @@
 | (aggregate) | Autonomous reproducibility | [autonomous-reproducibility.json](autonomous-reproducibility.json) |
 | `20260928T112439Z-draw-trace` | Draw tracer baseline gate stopped before capture | `manifest.json` |
 | `20260928T113359Z-draw-trace` | One paused draw window; screening only | [draw-screening.md](20260928T113359Z-draw-trace/draw-screening.md) |
+| `20261003T210202Z-intrusive-diagnostic` | Phase C live intrusive R–C–R–C–R (Venice paused) | [report.md](20261003T210202Z-intrusive-diagnostic/report.md) |
 
 For frame-rate and multithreaded GL work, see [analysis/frame-rate.md](../analysis/frame-rate.md).
