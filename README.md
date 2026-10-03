@@ -8,9 +8,18 @@ uses acknowledged measurement epochs, and segments GPU timestamps by context
 and pass. Sample windows now require complete plain neighbors, state/query
 preparation runs unmeasured, GL accounting is aggregated per frame, and writer
 output is batched. Draw API coverage fails closed for unknown submission paths.
-**Live profiling remains blocked by the overhead gates.** See
-[the verification record](analysis/frame-model-verification.md) and
-[the current correction status](analysis/frame-model-correction-plan.md).
+**Tier-1 qualification ended with WP11** (`33339073`, failed v4 admission). Absolute
+timings are **not** quantitatively qualified for production claims. **Intrusive
+live diagnostic** profiling is explicitly supported:
+
+```sh
+python3 benchmark/eu4_frame_model.py run --diagnostic-only
+```
+
+See [live diagnostic measurement contract](docs/live-diagnostic-measurement-contract.md),
+[post-WP11 roadmap](docs/eu4-live-diagnostic-roadmap.md), and
+[the verification record](analysis/frame-model-verification.md).
+Default `run` (without `--diagnostic-only`) still requires passing offline causal admission.
 
 The [Phase II draw-path decision](analysis/draw-path-decision.md) remains
 historical screening evidence: 31 complete paused frames at 5,863 draws/frame
