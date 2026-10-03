@@ -320,6 +320,13 @@ static bool measurement_active(void) {
     refresh_unowned_control();
     return control && frame_control.mode!=OFF && (frame_control.flags&MEASURE_ENABLED)!=0;
 }
+static bool reference_lean_measurement(void) {
+    if(!measurement_active() || frame_control.mode!=REFERENCE) return false;
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_passive_reference_hooks()) return false;
+#endif
+    return true;
+}
 static bool gl_measurement_active(void) {
     return measurement_active() && frame_control.mode!=REFERENCE;
 }
@@ -939,6 +946,11 @@ static void hook_update(void *self,bool force) {
             return;
         }
 #endif
+        if(reference_lean_measurement()) {
+            atomic_fetch_add(&updates,1);
+            real_update(self,force);
+            return;
+        }
         /* Recursive updates stay on the same physical frame and scope path. */
         atomic_fetch_add(&updates,1);
         int nested=scope_begin(SCOPE_UPDATE);
@@ -971,6 +983,31 @@ static void hook_update(void *self,bool force) {
         next_deadline=0; next_render_deadline=0;
     }
     bool measuring=measurement_active();
+    if(reference_lean_measurement()) {
+        was_measurement_active=true;
+        uint64_t start=now_ns(CLOCK_UPTIME_RAW),cpu=now_ns(CLOCK_THREAD_CPUTIME_ID);
+        current_frame=(Frame){.update_id=id,.phase=frame_control.phase,.thread_id=tid(),
+            .measurement_epoch=frame_control.measurement_epoch,.start_ns=start,.generation=frame_control.generation};
+        real_update(self,force);
+        uint64_t end=now_ns(CLOCK_UPTIME_RAW),end_cpu=now_ns(CLOCK_THREAD_CPUTIME_ID);
+        current_frame.wall_ns=end-start;
+        current_frame.cpu_ns=end_cpu-cpu;
+        current_frame.end_ns=end;
+        current_frame.update_wall_ns=current_frame.wall_ns;
+        current_frame.update_cpu_ns=current_frame.cpu_ns;
+        ControlSnapshot after={0};
+        if(snapshot_control(&after) && after.measurement_epoch==frame_control.measurement_epoch &&
+           after.mode==frame_control.mode && (after.flags&MEASURE_ENABLED))
+            publish_frame(&current_frame);
+        else { current_frame.flags|=4096; publish_frame(&current_frame); }
+        if(control && atomic_load(&control->ack_generation)!=frame_control.generation) {
+            atomic_store(&control->ack_time_ns,now_ns(CLOCK_UPTIME_RAW));
+            atomic_store_explicit(&control->ack_generation,frame_control.generation,memory_order_release);
+        }
+        inside_update=false;
+        current_frame=(Frame){0};
+        return;
+    }
     scope_tree=(Eu4ScopeTree){0};
     if(!measuring && was_measurement_active) {
         if(gpu_timestamps_enabled()) {
@@ -1058,6 +1095,10 @@ static void hook_render(void *self) {
         return;
     }
 #endif
+    if(reference_lean_measurement()) {
+        real_render(self);
+        return;
+    }
     if(measurement_active())
         { current_frame.render_id=id; current_frame.render_attempts++; current_frame.render_start_ns=now_ns(CLOCK_UPTIME_RAW); timestamp_event(2,current_frame.render_start_ns); }
     uint32_t mode=frame_control.mode;
@@ -1176,6 +1217,10 @@ static void hook_present(void *self) {
         return;
     }
 #endif
+    if(reference_lean_measurement()) {
+        real_present(self);
+        return;
+    }
     if(!measurement_active()) { real_present(self); return; }
     if(measurement_active()) current_frame.present_scene_calls++;
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);

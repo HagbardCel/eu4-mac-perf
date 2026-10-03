@@ -165,7 +165,7 @@ Short memo (like [WP5 requalification timing memo](wp5-requalification-timing-me
 - [x] Phase B ladder: `loaded-disabled` v2 passive hooks + `reference-cpu-decomposition` CLI.
 - [x] Phase B `minimal-reference` contract (`wp6_minimal_reference_v2`) + `minimal-reference-reconciliation` CLI.
 - [x] Minimal-reference reconciliation capture — [`a1dfde61`](wp6-reference-cpu-ladder-memo-20261003.md) @ `529e58a`.
-- [ ] Marginal REFERENCE ablations only if reconciliation leaves unexplained residual.
+- [x] WP6 closed — marginal ablations **not planned** (reconciliation `a1dfde61` sufficient). See [WP7 lean REFERENCE](wp7-lean-reference.md).
 - [x] Phase C v1 Mac capture — historical [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md) @ `82922f3` (`wp6_loaded_disabled_v1`).
 - [x] Phase C v2 Mac capture (pre–stage-validation) — [`95f3513c`](wp6-reference-cpu-ladder-memo-20261003.md) @ `cb4b762` (`wp6_loaded_disabled_v2`).
 - [x] Ladder harness: `loaded-disabled` trace validation in `_offline_workload_stage`.
