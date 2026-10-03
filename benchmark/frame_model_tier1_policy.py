@@ -312,6 +312,8 @@ class Tier1CausalPolicyV3:
             interval[1],
             limit=self.completion_wall_admission_relative_limit,
         )
+        evaluated["relative_diagnostic_status"] = evaluated["status"]
+        evaluated["status"] = status
         return status, evaluated, reason
 
     def _hybrid_limits_for_gate(self, gate_name: str) -> tuple[float, float]:
@@ -392,9 +394,10 @@ class Tier1CausalPolicyV3:
         evaluated["hybrid_allowed_us_per_frame"] = allowed
         evaluated["hybrid_absolute_floor_us"] = floor_us
         evaluated["hybrid_relative_limit"] = relative_limit
-        if self.hybrid_gate_passes(gate, gate_name=gate_name, frames=frames):
-            return "passed", evaluated, None
-        return "failed", evaluated, None
+        evaluated["relative_diagnostic_status"] = evaluated["status"]
+        final_status = "passed" if self.hybrid_gate_passes(gate, gate_name=gate_name, frames=frames) else "failed"
+        evaluated["status"] = final_status
+        return final_status, evaluated, None
 
 
 TIER1_CAUSAL_POLICY_V3 = Tier1CausalPolicyV3(TIER1_CAUSAL_POLICY_VERSION_V3)
@@ -415,14 +418,14 @@ def _sorted_wp8_trials(recipe_entry: dict) -> list[dict]:
     return sorted(trials, key=lambda item: int(item["trial"]))
 
 
+def _require_strict_int(value: object, *, field: str) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
 def _parse_trial_id(trial: dict, *, recipe_name: str) -> int | None:
-    raw = trial.get("trial")
-    if raw is None:
-        return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return None
+    return _require_strict_int(trial.get("trial"), field="trial")
 
 
 def validate_wp8_steady_state_recipe_experiment_layout(recipe_entry: dict) -> str | None:
@@ -497,10 +500,9 @@ def validate_wp8_steady_state_recipe_measurement_contract(
     meta = next((item for item in variants_meta if item.get("name") == variant), None)
     if meta is None:
         return f"measurement_variants missing {variant}"
-    try:
-        meta_prime = int(meta.get("post_arm_prime_frames", -1))
-        meta_measured = int(meta.get("measured_frames", -1))
-    except (TypeError, ValueError):
+    meta_prime = _require_strict_int(meta.get("post_arm_prime_frames"), field="post_arm_prime_frames")
+    meta_measured = _require_strict_int(meta.get("measured_frames"), field="measured_frames")
+    if meta_prime is None or meta_measured is None:
         return f"variant {variant} invalid measurement_variants metadata"
     if meta_prime != post_arm_prime_frames:
         return (
@@ -515,15 +517,19 @@ def validate_wp8_steady_state_recipe_measurement_contract(
     expected_published = post_arm_prime_frames + measured_frames
     recipe_name = (recipe_entry.get("recipe") or {}).get("name", "?")
     for trial in _sorted_wp8_trials(recipe_entry):
-        trial_id = int(trial["trial"])
+        trial_id = _parse_trial_id(trial, recipe_name=recipe_name)
+        if trial_id is None:
+            return f"recipe {recipe_name} invalid or missing trial id"
         block = (trial.get("variants") or {}).get(variant)
         if block is None:
             return f"recipe {recipe_name} trial {trial_id} missing variant {variant}"
         measurement = block.get("measurement") or {}
-        try:
-            meas_prime = int(measurement.get("post_arm_prime_frames", -1))
-            meas_frames = int(measurement.get("measured_frames", -1))
-        except (TypeError, ValueError):
+        meas_prime = _require_strict_int(
+            measurement.get("post_arm_prime_frames"),
+            field="post_arm_prime_frames",
+        )
+        meas_frames = _require_strict_int(measurement.get("measured_frames"), field="measured_frames")
+        if meas_prime is None or meas_frames is None:
             return f"recipe {recipe_name} trial {trial_id} invalid variant measurement metadata"
         if meas_prime != post_arm_prime_frames:
             return (
@@ -552,10 +558,12 @@ def validate_wp8_steady_state_recipe_measurement_contract(
                         f"recipe {recipe_name} trial {trial_id} stage {stage_name} "
                         f"missing metric {metric}"
                     )
-            try:
-                prime_reported = int(stage.get("post_arm_prime_frames", -1))
-                measured_reported = int(stage.get("measured_frames", -1))
-            except (TypeError, ValueError):
+            prime_reported = _require_strict_int(
+                stage.get("post_arm_prime_frames"),
+                field="post_arm_prime_frames",
+            )
+            measured_reported = _require_strict_int(stage.get("measured_frames"), field="measured_frames")
+            if prime_reported is None or measured_reported is None:
                 return f"recipe {recipe_name} trial {trial_id} stage {stage_name} invalid harness counts"
             if prime_reported != post_arm_prime_frames:
                 return (
@@ -569,12 +577,11 @@ def validate_wp8_steady_state_recipe_measurement_contract(
                 )
         reference = stages["reference"]
         counters = stages["counters"]
-        try:
-            ref_frames = int(reference.get("frames", -1))
-            ref_published = int(reference.get("published_frames", -1))
-            ctr_frames = int(counters.get("frames", -1))
-            ctr_published = int(counters.get("published_frames", -1))
-        except (TypeError, ValueError):
+        ref_frames = _require_strict_int(reference.get("frames"), field="frames")
+        ref_published = _require_strict_int(reference.get("published_frames"), field="published_frames")
+        ctr_frames = _require_strict_int(counters.get("frames"), field="frames")
+        ctr_published = _require_strict_int(counters.get("published_frames"), field="published_frames")
+        if None in (ref_frames, ref_published, ctr_frames, ctr_published):
             return f"recipe {recipe_name} trial {trial_id} invalid frame metadata"
         if ref_frames != measured_frames:
             return f"recipe {recipe_name} trial {trial_id} reference frames mismatch"

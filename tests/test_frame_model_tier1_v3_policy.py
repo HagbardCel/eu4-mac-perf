@@ -177,6 +177,35 @@ class Tier1V3Wp8ReplayTests(unittest.TestCase):
             "unavailable",
         )
 
+    def test_gate_embedded_status_matches_results_for_all_admission_gates(self):
+        if not WP8_ARCHIVE.is_file():
+            self.skipTest("WP8 archive missing")
+        preflight = json.loads(WP8_ARCHIVE.read_text())["preflight"]
+        replay = tier1.evaluate_wp8_steady_state_training_v3(preflight)
+        for recipe_eval in replay["training_recipes"]:
+            for gate_name in tier1.EXPECTED_V3_ADMISSION_GATE_NAMES:
+                self.assertEqual(
+                    recipe_eval["gates"][gate_name]["status"],
+                    recipe_eval["results"][gate_name],
+                    msg=f"{recipe_eval['recipe']} {gate_name}",
+                )
+            for gate_name in tier1.EXPECTED_CAUSAL_GATE_NAMES_V3:
+                self.assertIn("relative_diagnostic_status", recipe_eval["gates"][gate_name])
+
+    def test_fractional_measured_frames_rejected(self):
+        if not WP8_ARCHIVE.is_file():
+            self.skipTest("WP8 archive missing")
+        preflight = json.loads(WP8_ARCHIVE.read_text())["preflight"]
+        block = json.loads(json.dumps(preflight["steady_state_tier1_diagnosis"]))
+        meta = block["recipes"][0]["measurement_variants"]
+        prime_meta = next(m for m in meta if m["name"] == tier1.TIER1_V3_CPU_MEASUREMENT_VARIANT)
+        prime_meta["measured_frames"] = 4.9
+        replay = tier1.evaluate_wp8_steady_state_training_v3(
+            {"steady_state_tier1_diagnosis": block},
+        )
+        mesh = next(item for item in replay["training_recipes"] if item["recipe"] == "mesh")
+        self.assertEqual(mesh["status"], "unavailable")
+
     def test_wp8_overall_unavailable_due_to_text_ui_wall_variance(self):
         if not WP8_ARCHIVE.is_file():
             self.skipTest("WP8 archive missing")

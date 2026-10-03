@@ -63,10 +63,12 @@ Raw submission-window elapsed gates are not used.
 |overhead_us| ≤ min(50 µs, max(relative_limit × baseline_us, absolute_floor_us))
 ```
 
-| Gate | `relative_limit` (diagnostic) | `absolute_floor_us` |
-|------|-------------------------------|---------------------|
-| `reference_cpu_ns` | 3% | 6.0 |
-| `counters_cpu_ns` | 12% | 11.0 |
+| Gate | Relative component (not independently gated) | `absolute_floor_us` |
+|------|---------------------------------------------|---------------------|
+| `reference_cpu_ns` | 3% of baseline µs/frame in `max(·, floor)` | 6.0 |
+| `counters_cpu_ns` | 12% of baseline µs/frame in `max(·, floor)` | 11.0 |
+
+The legacy ±relative `paired_summary` outcome is preserved as `relative_diagnostic_status` on each gate; authoritative v3 admission is `gates[].status` == `results[]`.
 
 For the **CPU admission variant** (`four_frame_post_arm_prime_1`), training medians are roughly **~12–16%** and **~1.3–9.4 µs/frame** counters-over-reference (mesh ~13.5% / 9.4 µs; text_ui ~16.3% / 1.3 µs). The **11 µs floor** dominates pass/fail; the 12% relative limit is not the binding constraint on this variant.
 
