@@ -113,7 +113,7 @@ static _Thread_local Eu4ScopeTree scope_tree;
 static _Thread_local ControlSnapshot frame_control;
 static _Thread_local bool inside_update;
 static _Thread_local uint32_t observed_command_seq;
-static _Thread_local uint32_t last_shadow_mode;
+static _Thread_local uint32_t last_shadow_mode=UINT32_MAX;
 #ifdef EU4_FRAME_MODEL_TEST
 static _Atomic unsigned test_published_frames;
 #endif
@@ -291,10 +291,6 @@ static void note_mode_transition(uint32_t mode) {
     if(mode==last_shadow_mode) return;
     uint32_t previous=last_shadow_mode;
     last_shadow_mode=mode;
-    if(previous==UINT32_MAX) {
-        if(mode==REFERENCE && gl_shadow.active) invalidate_shadow_cache_quiet();
-        return;
-    }
     if(previous==REFERENCE || mode==REFERENCE) invalidate_shadow_cache_quiet();
 }
 static void refresh_unowned_control(void) {
@@ -696,6 +692,10 @@ static void invalidate_gl_state(unsigned reason) {
     eu4_shadow_invalidate(&gl_shadow,(uintptr_t)ctx);gl_shadow.reason=reason;
     state_seeded=false;vertex_array_state=NULL;
     if(measurement_active()) {current_frame.flags|=2048;unowned_event();}
+}
+static bool shadow_cache_fresh(void) {
+    if(!state_stamp_pointer || !gl_shadow.active) return false;
+    return atomic_load_explicit(state_stamp_pointer,memory_order_acquire)==gl_shadow.active->stamp;
 }
 static void seed_gl_state(void) {
     CGLContextObj ctx=CGLGetCurrentContext();
@@ -1686,7 +1686,7 @@ static void gl_bind_vertex_array(GLuint vao) {
     vertex_array_state=vertex_state_for(ctx,vao,true);
     if(!vertex_array_state) {current_frame.flags|=2048;return;}
     if(gl_shadow.active) gl_shadow.active->vao=vao;
-    if(!vertex_array_state->prepared) {
+    if(!vertex_array_state->prepared || !shadow_cache_fresh()) {
         state_seeded=false;seed_gl_state();
         if(!vertex_array_state || !vertex_array_state->prepared) current_frame.flags|=2048;
     }
@@ -1873,11 +1873,18 @@ static CGLError tracked_set_context(CGLContextObj ctx) {
     }
 #endif
     if(segment) { pthread_mutex_lock(&gpu_lock); eu4_gpu_open(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock); }
-    if(result==kCGLNoError && !reference_pass_through_mode()) {
-        save_gl_state();state_seeded=false;vertex_array_state=NULL;
-        /* A fresh core context may have no valid VAO yet. Queries wait for a
-           settling Render/VAO bind; measured switches only select cached state. */
-        if(measurement_active()) seed_gl_state();
+    if(result==kCGLNoError) {
+        if(reference_pass_through_mode()) {
+            (void)context_stamp(ctx,false);
+            state_seeded=false;
+            vertex_array_state=NULL;
+            state_context=NULL;
+        } else {
+            save_gl_state();state_seeded=false;vertex_array_state=NULL;
+            /* A fresh core context may have no valid VAO yet. Queries wait for a
+               settling Render/VAO bind; measured switches only select cached state. */
+            if(measurement_active()) seed_gl_state();
+        }
     }
     if(result==kCGLNoError && raster_active && ctx) {
         bool found=false;
@@ -2285,6 +2292,26 @@ __attribute__((visibility("default"))) unsigned eu4_frame_model_test_cached_shad
 __attribute__((visibility("default"))) void eu4_frame_model_test_touch_shadow_vao(unsigned vao) {
     refresh_unowned_control();
     gl_bind_vertex_array(vao);
+}
+__attribute__((visibility("default"))) uint64_t eu4_frame_model_test_lifetime_stamp(uintptr_t context) {
+    uint64_t stamp=0;
+    pthread_mutex_lock(&shadow_lock);
+    for(unsigned i=0;i<64;i++) {
+        ShadowLifetime *l=&shadow_lifetimes[i];
+        if(l->context==context) {
+            stamp=atomic_load_explicit(&l->stamp,memory_order_acquire);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&shadow_lock);
+    return stamp;
+}
+__attribute__((visibility("default"))) uintptr_t eu4_frame_model_test_tls_shadow_program(uintptr_t context) {
+    for(unsigned i=0;i<EU4_SHADOW_CONTEXTS;i++) {
+        Eu4ShadowContext *c=&gl_shadow.contexts[i];
+        if(c->context==context && c->prepared) return c->program;
+    }
+    return 0;
 }
 __attribute__((visibility("default"))) unsigned eu4_frame_model_test_observe_unowned(void) {
     bool active=intervention_active(),measuring=measurement_active();

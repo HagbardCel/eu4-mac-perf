@@ -114,7 +114,7 @@ def build() -> dict:
          "-o",str(WORKLOAD_HARNESS),str(ROOT/"tests/frame_model_workload_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
          "-o",str(WARMUP_BOUNDARY_HARNESS),str(ROOT/"tests/frame_model_warmup_boundary_harness.c")],
-        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-pthread","-framework","OpenGL",
          "-o",str(REFERENCE_TRANSITION_HARNESS),str(ROOT/"tests/frame_model_reference_transition_harness.c")],
         ["clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-Werror",
          "-dynamiclib", "-framework", "OpenGL", "-framework", "CoreGraphics",
