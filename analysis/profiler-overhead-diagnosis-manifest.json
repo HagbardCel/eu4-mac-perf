@@ -4,14 +4,21 @@
     "primary_no_peeking": "analysis/evidence/frame-model-offline-00924cb-20261002T195901.482894Z-f6b27087.json",
     "replication": "analysis/evidence/frame-model-offline-8c71c47-20261002T203853.173597Z-2fff669c.json"
   },
-  "diagnostic_archives": [
+  "requalification_archives": [
     {
+      "work_package": "WP5",
+      "purpose": "reference_fast_path_training_requalification",
+      "baseline_evidence_id": "20261002T220742.210844Z-129e5bf5",
       "evidence_id": "20261003T064756.277190Z-37f57796",
       "archive_path": "analysis/evidence/frame-model-offline-7a86153-20261003T064756.277190Z-37f57796.json",
       "archive_sha256_committed": "88daf745070000ed1b713c1b93cb9b912b2da84f7b73262e74ce5f8255b21d81",
       "git_commit": "7a861536103612989d64ccc3992babc65b04d2b2",
-      "captured_at_utc": "20261003T064756.277190Z-37f57796"
-    },
+      "captured_at_utc": "20261003T064756.277190Z-37f57796",
+      "tier1_causal_admission": "failed",
+      "notes": "Post-PR#8 training-only capture; timing decomposition in docs/wp5-requalification-timing-memo-20261003.md. Not authoritative WP1."
+    }
+  ],
+  "diagnostic_archives": [
     {
       "evidence_id": "20261002T220742.210844Z-129e5bf5",
       "archive_path": "analysis/evidence/frame-model-offline-9a063f0-20261002T220742.210844Z-129e5bf5.json",
