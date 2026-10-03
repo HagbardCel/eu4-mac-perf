@@ -16,61 +16,53 @@ Requirements:
 - Accelerated CGL pixel format (synthetic GL harness).
 - Training **mesh** recipe; scale factors **1, 2, 4**; **5** paired repetitions per scale with alternating low→high / high→low order.
 
-Immutable evidence is written under `analysis/evidence/` (rolling pointer is **not** updated). Metadata identifies `observer_bias_calibration_v1` explicitly.
+Immutable evidence is written under `analysis/evidence/` (rolling pointer is **not** updated). Metadata identifies `observer_bias_calibration_v1`.
 
 ## Model layers
 
 ### Aggregate controls (not additive)
-
-Use for validation and coarse live R vs C checks; **never** sum with decomposition primitives.
 
 | ID | Pair | Unit |
 |----|------|------|
 | `reference_activation` | loaded-disabled → reference | published frame |
 | `counters_incremental` | reference → counters | published frame |
 
-### Decomposition diagnostics (additive for Phase C)
+### Base additive decomposition (normal COUNTERS path)
 
-Use with **observed operation counts** from the live capture:
+Use with **observed operation counts** from live capture. `bias_adjust_inclusive_cpu()` subtracts **only** this layer.
 
 | ID | Pair | Unit |
 |----|------|------|
-| `scope_pair_clocks` | counters-lite → counters | scope pair (from trace `Q` call counts) |
+| `scope_pair_clocks` | counters-lite → counters | scope pair (approximate; includes Q-tree snapshot work) |
 | `per_frame_counter_flush` | deferred flush → counters-lite | published frame |
-| `gpu_timestamp_segment` | counters GPU timestamps off → on | GPU timestamp segment (`M` line) |
-| `timed_gl_sample` | counters → sampled | timed GL sample (`D`/`S` records) |
+
+`consistency.explained_fraction` reconciles **only** the two rows above against `counters_incremental` (not forensic add-ons).
 
 ### Instrumentation
 
 | ID | Pair | Unit |
 |----|------|------|
-| `gl_interpose_dispatch` | bare harness → dylib interposed | intercepted draw loop |
+| `gl_interpose_dispatch` | bare harness ↔ dylib interposed (order alternates) | intercepted draw loop |
+
+### Forensic add-ons (detail/sample window only)
+
+Reported in `forensic_slopes`; use `estimate_bias_ns(..., allow_forensic=True)` in Phase C when a phase arms forensic detail. **Not** summed into counters reconciliation.
+
+| ID | Pair | Unit |
+|----|------|------|
+| `gpu_timestamp_segment` | sampled, records off: GPU timestamps 0 → 1 | GPU timestamp segment (`M` line) |
+| `timed_gl_sample` | sampled, records/GPU off: `EU4_TEST_DRAW_TIMED_SAMPLES` 0 → 1 | `F.draw_timed_samples` |
 
 ## Phase C correction
 
-Prefer:
-
 \[
-T_i^\text{adjusted} \approx T_i^\text{measured} - \sum_j N_{ij}\, c_j
+T_i^\text{adjusted} \approx T_i^\text{measured} - \sum_{j \in \text{base}} N_{ij}\, c_j - \sum_{k \in \text{forensic}} N_{ik}\, c_k
 \]
 
-where \(N_{ij}\) are **observed** primitive counts on path \(i\) and \(c_j\) are **decomposition** slopes only (`bias_adjust_inclusive_cpu()` enforces this).
+Base slopes never include aggregate controls. Forensic slopes apply only when the live phase actually executes detail windows with the corresponding operations.
 
-Reconciliation: `consistency.explained_fraction` compares the decomposition sum at mesh scale-1 counts to the aggregate `counters_incremental` slope × frames. If the sum explains far more than 100% of the aggregate tax, do not trust the decomposition for attribution.
+## Helpers
 
-## Reporting helpers
-
-`benchmark/frame_model_observer_bias.py`:
-
-- `build_bias_model()` — separates `additive_slopes` vs `aggregate_slopes`.
-- `bias_adjust_inclusive_cpu()` — decomposition layer only.
-- `bias_aware_interval()` — uses `slope_se_ns_per_op × operation_count` for margin.
-- `reconcile_counters_decomposition()` — aggregate vs decomposition check.
-
-## Limitations
-
-- Synthetic mesh workload only; live EU IV mixtures differ.
-- Slopes are diagnostic, not qualification gates.
-- `timed_gl_sample` compares counters vs sampled stages and remains a coarse proxy for forensic draw timing cost.
+`benchmark/frame_model_observer_bias.py` — `build_bias_model()`, `bias_adjust_inclusive_cpu()`, `reconcile_counters_decomposition()`, `bias_aware_interval()`.
 
 See [live diagnostic roadmap](eu4-live-diagnostic-roadmap.md) and [measurement contract](live-diagnostic-measurement-contract.md).

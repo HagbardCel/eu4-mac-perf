@@ -1491,6 +1491,7 @@ def _offline_workload_private_env() -> frozenset[str]:
         "EU4_TEST_MINIMAL_REFERENCE",
         "EU4_TEST_COUNTERS_LITE",
         "EU4_TEST_COUNTERS_DEFERRED_FLUSH",
+        "EU4_TEST_DRAW_TIMED_SAMPLES",
     })
 
 
@@ -2779,7 +2780,7 @@ def _observer_bias_operations_for_primitive(
     if unit == "gpu_timestamp_segment":
         return observer_bias.count_gpu_timestamp_segments_from_trace(high_trace)
     if unit == "timed_gl_sample":
-        return observer_bias.count_timed_gl_samples_from_trace(high_trace)
+        return observer_bias.count_draw_timed_samples_from_trace(high_trace)
     raise base.BenchmarkError(f"Unknown observer-bias unit {unit}")
 
 
@@ -2793,12 +2794,18 @@ def _observer_bias_measure_primitive(
         for repetition in range(observer_bias.OBSERVER_BIAS_REPETITIONS):
             if spec["primitive_id"] == "gl_interpose_dispatch":
                 loops = observer_bias.scaled_draw_loops(scale)
-                bare = offline_harness(library=None, loops=loops)
-                instrumented = offline_harness(library=LIBRARY, loops=loops)
+                if repetition % 2 == 0:
+                    bare = offline_harness(library=None, loops=loops)
+                    instrumented = offline_harness(library=LIBRARY, loops=loops)
+                    measurement_order = "low_high"
+                else:
+                    instrumented = offline_harness(library=LIBRARY, loops=loops)
+                    bare = offline_harness(library=None, loops=loops)
+                    measurement_order = "high_low"
                 low_cpu, high_cpu = int(bare["cpu_ns"]), int(instrumented["cpu_ns"])
                 low_trace = high_trace = None
-                low_measured = high_measured = {}
             else:
+                measurement_order = "low_high" if repetition % 2 == 0 else "high_low"
                 low_env = spec.get("low_env")
                 high_env = spec.get("high_env")
                 low_cpu, high_cpu, low_trace, high_trace, low_measured, high_measured = (
@@ -2824,7 +2831,7 @@ def _observer_bias_measure_primitive(
                 {
                     "scale": scale,
                     "repetition": repetition,
-                    "measurement_order": "low_high" if repetition % 2 == 0 else "high_low",
+                    "measurement_order": measurement_order,
                     "operations": operations,
                     "cpu_low_ns": low_cpu,
                     "cpu_high_ns": high_cpu,
@@ -2872,8 +2879,6 @@ def observer_bias_calibration_workloads(
         reconciliation_counts = {
             "scope_pair_clocks": _scale1_ops("scope_pair_clocks"),
             "per_frame_counter_flush": float(observer_bias.published_frame_operations(1)),
-            "gpu_timestamp_segment": _scale1_ops("gpu_timestamp_segment"),
-            "timed_gl_sample": _scale1_ops("timed_gl_sample"),
         }
         provisional = observer_bias.build_bias_model(primitives)
         model = observer_bias.build_bias_model(
@@ -3640,6 +3645,7 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
             "bias_table": bias_calibration.get("bias_table") or observer_bias.bias_aware_table_rows(bias_model),
             "additive_slopes": bias_model.get("additive_slopes") or {},
             "aggregate_slopes": bias_model.get("aggregate_slopes") or {},
+            "forensic_slopes": bias_model.get("forensic_slopes") or {},
             "consistency": bias_model.get("consistency") or {},
         }
         if bias_model

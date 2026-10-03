@@ -52,6 +52,68 @@ class ObserverBiasFitTests(unittest.TestCase):
         self.assertEqual(result["estimated_bias_ns"], 500.0)
         self.assertEqual(result["bias_adjusted_cpu_ns"], 999_500.0)
 
+    def test_forensic_slopes_excluded_from_default_bias_adjust(self):
+        bias_model = observer_bias.build_bias_model(
+            [
+                {
+                    "primitive_id": "timed_gl_sample",
+                    "role": observer_bias.ROLE_FORENSIC_ADDON,
+                    "unit": "timed_gl_sample",
+                    "low_stage": "sampled",
+                    "high_stage": "sampled",
+                    "fit": {"slope_ns_per_op": 100.0},
+                },
+            ],
+        )
+        result = observer_bias.bias_adjust_inclusive_cpu(1_000_000, {"timed_gl_sample": 10}, bias_model)
+        self.assertEqual(result["estimated_bias_ns"], 0.0)
+
+    def test_reconcile_counters_ignores_forensic_primitives(self):
+        bias_model = observer_bias.build_bias_model(
+            [
+                {
+                    "primitive_id": "counters_incremental",
+                    "role": observer_bias.ROLE_AGGREGATE_CONTROL,
+                    "unit": "published_frame",
+                    "low_stage": "reference",
+                    "high_stage": "counters",
+                    "fit": {"slope_ns_per_op": 1000.0},
+                },
+                {
+                    "primitive_id": "scope_pair_clocks",
+                    "role": observer_bias.ROLE_DECOMPOSITION,
+                    "unit": "scope_pair",
+                    "low_stage": "counters_lite",
+                    "high_stage": "counters",
+                    "fit": {"slope_ns_per_op": 10.0},
+                },
+                {
+                    "primitive_id": "gpu_timestamp_segment",
+                    "role": observer_bias.ROLE_FORENSIC_ADDON,
+                    "unit": "gpu_timestamp_segment",
+                    "low_stage": "sampled",
+                    "high_stage": "sampled",
+                    "fit": {"slope_ns_per_op": 500.0},
+                },
+            ],
+        )
+        report = observer_bias.reconcile_counters_decomposition(
+            bias_model,
+            operation_counts={
+                "scope_pair_clocks": 10.0,
+                "gpu_timestamp_segment": 100.0,
+            },
+            published_frames=4.0,
+        )
+        self.assertEqual(report["decomposed_sum_ns"], 100.0)
+
+    def test_count_draw_timed_samples_from_f_rows(self):
+        trace = [
+            ["F"] + ["0"] * 14 + ["3"],
+            ["F"] + ["0"] * 14 + ["2"],
+        ]
+        self.assertEqual(observer_bias.count_draw_timed_samples_from_trace(trace), 5)
+
     def test_bias_aware_interval_uses_slope_se_per_op(self):
         interval = observer_bias.bias_aware_interval(
             1_000_000.0,
@@ -74,6 +136,18 @@ class ObserverBiasSpecTests(unittest.TestCase):
         spec = next(p for p in observer_bias.PRIMITIVE_SPECS if p["primitive_id"] == "per_frame_counter_flush")
         self.assertEqual(spec["low_stage"], "counters_lite_deferred_flush")
         self.assertEqual(spec["high_stage"], "counters_lite")
+
+    def test_gpu_timestamp_uses_sampled_window_with_records_off(self):
+        spec = next(p for p in observer_bias.PRIMITIVE_SPECS if p["primitive_id"] == "gpu_timestamp_segment")
+        self.assertEqual(spec["low_stage"], "sampled")
+        self.assertEqual(spec["high_stage"], "sampled")
+        self.assertEqual(spec["role"], observer_bias.ROLE_FORENSIC_ADDON)
+        self.assertEqual(spec["low_env"]["EU4_TEST_FORENSIC_RECORDS"], "0")
+
+    def test_timed_gl_sample_isolated_on_sampled_stage(self):
+        spec = next(p for p in observer_bias.PRIMITIVE_SPECS if p["primitive_id"] == "timed_gl_sample")
+        self.assertEqual(spec["low_stage"], "sampled")
+        self.assertEqual(spec["high_env"]["EU4_TEST_DRAW_TIMED_SAMPLES"], "1")
 
     def test_telemetry_suffixes_are_unique_per_side(self):
         low = observer_bias.telemetry_suffix("scope_pair_clocks", 2, 3, "low")

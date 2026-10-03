@@ -15,6 +15,16 @@ OBSERVER_BIAS_RECIPE_NAME = "mesh"
 ROLE_AGGREGATE_CONTROL = "aggregate_control"
 ROLE_DECOMPOSITION = "decomposition_diagnostic"
 ROLE_INSTRUMENTATION = "instrumentation_diagnostic"
+ROLE_FORENSIC_ADDON = "forensic_addon"
+
+COUNTERS_RECONCILIATION_PRIMITIVES = frozenset(
+    {"scope_pair_clocks", "per_frame_counter_flush"},
+)
+
+SAMPLED_FORENSIC_BASE_ENV = {
+    "EU4_TEST_FORENSIC_RECORDS": "0",
+    "EU4_TEST_GPU_TIMESTAMPS": "0",
+}
 
 MeasureCpu = Callable[[int], tuple[int, int]]
 
@@ -65,11 +75,19 @@ def count_gpu_timestamp_segments_from_trace(trace: Sequence[Sequence[str]] | Non
     return 0
 
 
-def count_timed_gl_samples_from_trace(trace: Sequence[Sequence[str]] | None) -> int:
+def count_draw_timed_samples_from_trace(trace: Sequence[Sequence[str]] | None) -> int:
+    """Sum Frame.draw_timed_samples from published F rows (not D/S detail records)."""
     if not trace:
         return 0
-    kinds = ("D", "S")
-    return sum(1 for row in trace if row and row[0] in kinds)
+    total = 0
+    for row in trace:
+        if not row or row[0] != "F" or len(row) <= 15:
+            continue
+        try:
+            total += int(row[15])
+        except ValueError:
+            continue
+    return total
 
 
 def fit_slope_zero_intercept(points: Sequence[tuple[float, float]]) -> dict:
@@ -140,6 +158,7 @@ def build_bias_model(
 ) -> dict:
     additive: dict[str, dict] = {}
     aggregates: dict[str, dict] = {}
+    forensic: dict[str, dict] = {}
     for entry in primitives:
         fit = entry.get("fit") or {}
         slope = fit.get("slope_ns_per_op")
@@ -153,9 +172,12 @@ def build_bias_model(
             "low_stage": entry.get("low_stage"),
             "high_stage": entry.get("high_stage"),
         }
-        if entry.get("role") == ROLE_AGGREGATE_CONTROL:
+        role = entry.get("role")
+        if role == ROLE_AGGREGATE_CONTROL:
             aggregates[entry["primitive_id"]] = payload
-        elif entry.get("role") in {ROLE_DECOMPOSITION, ROLE_INSTRUMENTATION}:
+        elif role == ROLE_FORENSIC_ADDON:
+            forensic[entry["primitive_id"]] = payload
+        elif role in {ROLE_DECOMPOSITION, ROLE_INSTRUMENTATION}:
             additive[entry["primitive_id"]] = payload
     return {
         "calibration_version": OBSERVER_BIAS_CALIBRATION_VERSION,
@@ -164,6 +186,7 @@ def build_bias_model(
         "primitives": list(primitives),
         "additive_slopes": additive,
         "aggregate_slopes": aggregates,
+        "forensic_slopes": forensic,
         "consistency": dict(consistency or {}),
     }
 
@@ -173,10 +196,13 @@ def estimate_bias_ns(
     model: Mapping[str, object],
     *,
     allow_aggregates: bool = False,
+    allow_forensic: bool = False,
 ) -> dict[str, float]:
-    slopes = model.get("additive_slopes") or {}
+    slopes = dict(model.get("additive_slopes") or {})
+    if allow_forensic:
+        slopes.update(model.get("forensic_slopes") or {})
     if allow_aggregates:
-        slopes = {**slopes, **(model.get("aggregate_slopes") or {})}
+        slopes.update(model.get("aggregate_slopes") or {})
     estimated: dict[str, float] = {}
     for primitive_id, count in operation_counts.items():
         spec = slopes.get(primitive_id)
@@ -235,11 +261,16 @@ def reconcile_counters_decomposition(
     operation_counts: Mapping[str, float],
     published_frames: float,
 ) -> dict:
-    """Compare summed decomposition estimates to aggregate counters_incremental tax."""
+    """Compare always-on COUNTERS decomposition to aggregate counters_incremental tax."""
     aggregate = (model.get("aggregate_slopes") or {}).get("counters_incremental")
     if not aggregate:
         return {"status": "missing_aggregate"}
-    decomposed = estimate_bias_ns(operation_counts, model, allow_aggregates=False)
+    counters_only = {
+        key: value
+        for key, value in operation_counts.items()
+        if key in COUNTERS_RECONCILIATION_PRIMITIVES
+    }
+    decomposed = estimate_bias_ns(counters_only, model, allow_aggregates=False)
     decomposed_total = sum(decomposed.values())
     aggregate_total = float(aggregate["slope_ns_per_op"]) * published_frames
     if aggregate_total <= 0:
@@ -252,6 +283,7 @@ def reconcile_counters_decomposition(
         "decomposed_sum_ns": decomposed_total,
         "explained_fraction": fraction,
         "components_ns": decomposed,
+        "reconciliation_primitives": sorted(COUNTERS_RECONCILIATION_PRIMITIVES),
         "published_frames": published_frames,
     }
 
@@ -310,7 +342,10 @@ PRIMITIVE_SPECS: tuple[dict, ...] = (
         "low_stage": "counters_lite",
         "high_stage": "counters",
         "label": "scope_begin/end + scope snapshot",
-        "description": "Counters-lite (scopes disabled) → full counters (scopes restored).",
+        "description": (
+            "Counters-lite (scopes disabled) → full counters (scopes restored). "
+            "Slope is an approximate ns/scope-call bundle (includes Q-tree snapshot work)."
+        ),
     },
     {
         "primitive_id": "per_frame_counter_flush",
@@ -323,23 +358,31 @@ PRIMITIVE_SPECS: tuple[dict, ...] = (
     },
     {
         "primitive_id": "gpu_timestamp_segment",
-        "role": ROLE_DECOMPOSITION,
+        "role": ROLE_FORENSIC_ADDON,
         "unit": "gpu_timestamp_segment",
-        "low_stage": "counters",
-        "high_stage": "counters",
+        "low_stage": "sampled",
+        "high_stage": "sampled",
         "label": "GPU timestamp segment",
-        "description": "Counters with EU4_TEST_GPU_TIMESTAMPS=0 → 1; operations from M-line stamp count.",
-        "high_env": {"EU4_TEST_GPU_TIMESTAMPS": "1"},
-        "low_env": {"EU4_TEST_GPU_TIMESTAMPS": "0"},
+        "description": (
+            "Sampled detail window, forensic records off: GPU timestamps 0 → 1. "
+            "Not part of counters_incremental reconciliation."
+        ),
+        "low_env": {**SAMPLED_FORENSIC_BASE_ENV, "EU4_TEST_GPU_TIMESTAMPS": "0"},
+        "high_env": {**SAMPLED_FORENSIC_BASE_ENV, "EU4_TEST_GPU_TIMESTAMPS": "1"},
     },
     {
         "primitive_id": "timed_gl_sample",
-        "role": ROLE_DECOMPOSITION,
+        "role": ROLE_FORENSIC_ADDON,
         "unit": "timed_gl_sample",
-        "low_stage": "counters",
+        "low_stage": "sampled",
         "high_stage": "sampled",
-        "label": "sparse timed GL sample",
-        "description": "Counters aggregate timing → sampled forensic draw timing records.",
+        "label": "sparse timed GL draw clock",
+        "description": (
+            "Sampled window with forensic/GPU off: draw timed-sample clocks 0 → 1 "
+            "(EU4_TEST_DRAW_TIMED_SAMPLES). Operations from F.draw_timed_samples."
+        ),
+        "low_env": {**SAMPLED_FORENSIC_BASE_ENV, "EU4_TEST_DRAW_TIMED_SAMPLES": "0"},
+        "high_env": {**SAMPLED_FORENSIC_BASE_ENV, "EU4_TEST_DRAW_TIMED_SAMPLES": "1"},
     },
 )
 
