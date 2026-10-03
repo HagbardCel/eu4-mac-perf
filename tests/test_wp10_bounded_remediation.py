@@ -5,6 +5,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmark"))
 import eu4_frame_model as model  # noqa: E402
+import frame_model_workload as workload  # noqa: E402
 
 _FROZEN_ARTIFACTS = {
     "test_library_sha256": "frozen-test-library",
@@ -13,6 +14,26 @@ _FROZEN_ARTIFACTS = {
 
 
 class Wp10BoundedRemediationTests(unittest.TestCase):
+    def test_wp10_cpu_overhead_uses_raw_totals_not_double_scaled(self):
+        trials = [
+            {
+                "stages": {
+                    "reference": {"cpu_ns": 40_000, "frames": 4},
+                    "counters": {"cpu_ns": 80_000, "frames": 4},
+                },
+            },
+        ]
+        pairs = model._wp10_cpu_overhead_pairs(trials, "counters")
+        summary = workload.paired_summary(pairs, 0.03, model.WP10_MESH_MEASURED_FRAMES)
+        self.assertAlmostEqual(summary["overhead_us_per_frame"], 10.0)
+
+    def test_text_wall_block_schedule_counts(self):
+        total_40 = sum(sum(1 for f in block if f == 40) for block in model.WP10_TEXT_WALL_BLOCK_SCHEDULE)
+        total_400 = sum(sum(1 for f in block if f == 400) for block in model.WP10_TEXT_WALL_BLOCK_SCHEDULE)
+        self.assertEqual(total_40, 21)
+        self.assertEqual(total_400, 7)
+        self.assertEqual(len(model.WP10_TEXT_WALL_BLOCK_SCHEDULE), 7)
+
     def test_policy_versions_for_bounded_remediation(self):
         versions = model._offline_policy_versions({"bounded_remediation": True})
         self.assertEqual(versions["wp10_bounded_remediation"], model.WP10_BOUNDED_REMEDIATION_PURPOSE)
@@ -57,7 +78,17 @@ class Wp10BoundedRemediationTests(unittest.TestCase):
         self.assertIn("counters_lite_deferred_flush", stage_calls)
         engineering = result["mesh_counters_cpu"]["engineering_success"]
         self.assertEqual(engineering["target_counters_lite_max_us_per_frame"], 5.0)
+        self.assertIn("a73ea57b", engineering["criterion"])
         self.assertTrue(result["bounded_remediation"])
+        schedule = result["text_ui_completion_wall"]["execution_schedule"]
+        self.assertEqual(schedule["block_count"], 7)
+        self.assertEqual(len(result["text_ui_completion_wall"]["interleaved_trials"]), 28)
+        forty = next(v for v in result["text_ui_completion_wall"]["variants"] if v["name"] == "forty_frame_21_trials")
+        four_hundred = next(
+            v for v in result["text_ui_completion_wall"]["variants"] if v["name"] == "four_hundred_frame_7_trials"
+        )
+        self.assertEqual(len(forty["trials"]), 21)
+        self.assertEqual(len(four_hundred["trials"]), 7)
 
     def test_offline_artifact_hashes_include_wp10_recipes(self):
         representative = {

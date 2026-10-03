@@ -334,6 +334,20 @@ WP10_TEXT_WALL_VARIANTS = (
     ("forty_frame_21_trials", {"post_arm_prime_frames": 1, "measured_frames": 40, "trial_count": 21}),
     ("four_hundred_frame_7_trials", {"post_arm_prime_frames": 1, "measured_frames": 400, "trial_count": 7}),
 )
+# Seven blocks interleave 21×40f and 7×400f trials (alternating long-window placement).
+WP10_TEXT_WALL_BLOCK_SCHEDULE = (
+    (40, 40, 40, 400),
+    (400, 40, 40, 40),
+    (40, 40, 40, 400),
+    (400, 40, 40, 40),
+    (40, 40, 40, 400),
+    (400, 40, 40, 40),
+    (40, 40, 40, 400),
+)
+WP10_COUNTERS_LITE_ENGINEERING_CRITERION = (
+    "median counters-lite minus reference CPU <= 5 µs/frame "
+    "(pre-specified; ~50% below a73ea57b mesh counters baseline 9.63 µs/frame)"
+)
 STEADY_STATE_MEASUREMENT_VARIANTS = (
     ("four_frame_baseline", {"post_arm_prime_frames": 0, "measured_frames": 4}),
     ("four_frame_post_arm_prime_1", {"post_arm_prime_frames": 1, "measured_frames": 4}),
@@ -1689,16 +1703,15 @@ def _offline_steady_state_recipe_evidence(root: Path, recipe: dict) -> dict:
 
 
 def _wp10_cpu_overhead_pairs(trials: list[dict], instrumented: str, reference: str = "reference") -> list[dict]:
+    """Return raw stage cpu_ns totals; paired_summary() applies per-frame scaling."""
     pairs: list[dict] = []
     for trial in trials:
         inst_stage = trial["stages"][instrumented]
         ref_stage = trial["stages"][reference]
-        inst_frames = inst_stage.get("frames") or WP10_MESH_MEASURED_FRAMES
-        ref_frames = ref_stage.get("frames") or WP10_MESH_MEASURED_FRAMES
         pairs.append(
             {
-                "instrumented": inst_stage["cpu_ns"] / inst_frames,
-                "reference": ref_stage["cpu_ns"] / ref_frames,
+                "instrumented": inst_stage["cpu_ns"],
+                "reference": ref_stage["cpu_ns"],
             },
         )
     return pairs
@@ -1728,7 +1741,7 @@ def _wp10_mesh_counters_recipe_evidence(root: Path, recipe: dict) -> dict:
     counters_full = comparisons["counters"]["overhead_us_per_frame"]
     counters_lite = comparisons["counters_lite"]["overhead_us_per_frame"]
     engineering = {
-        "criterion": ">=50% median counters-minus-reference CPU reduction vs full counters on mesh",
+        "criterion": WP10_COUNTERS_LITE_ENGINEERING_CRITERION,
         "baseline_requalification_evidence_id": "20261003T144237.317611Z-a73ea57b",
         "baseline_mesh_counters_overhead_us_per_frame": 9.63,
         "target_counters_lite_max_us_per_frame": WP10_COUNTERS_LITE_ENGINEERING_MAX_US_PER_FRAME,
@@ -1752,27 +1765,45 @@ def _wp10_mesh_counters_recipe_evidence(root: Path, recipe: dict) -> dict:
 
 
 def _wp10_text_ui_completion_evidence(root: Path, recipe: dict) -> dict:
-    variants: list[dict] = []
-    for variant_name, spec in WP10_TEXT_WALL_VARIANTS:
-        measured_frames = int(spec["measured_frames"])
-        prime = int(spec["post_arm_prime_frames"])
-        trial_count = int(spec["trial_count"])
-        trials: list[dict] = []
-        for trial in range(trial_count):
-            order = list(reversed(COMPLETION_CAUSAL_STAGES)) if trial % 2 else list(COMPLETION_CAUSAL_STAGES)
+    prime = WP10_TEXT_WALL_VARIANTS[0][1]["post_arm_prime_frames"]
+    interleaved_trials: list[dict] = []
+    global_trial = 0
+    for block_id, block in enumerate(WP10_TEXT_WALL_BLOCK_SCHEDULE):
+        for slot, measured_frames in enumerate(block):
+            order = list(reversed(COMPLETION_CAUSAL_STAGES)) if global_trial % 2 else list(COMPLETION_CAUSAL_STAGES)
             stages: dict = {}
+            suffix = f"text_wall_{measured_frames}f_b{block_id}s{slot}"
             for stage in order:
                 stages[stage], _ = _offline_workload_stage(
                     root,
                     recipe,
-                    trial,
+                    global_trial,
                     stage,
                     completion_timing=True,
                     post_arm_prime_frames=prime,
                     measured_frames=measured_frames,
-                    telemetry_suffix=variant_name,
+                    telemetry_suffix=suffix,
                 )
-            trials.append({"trial": trial, "order": order, "stages": stages})
+            interleaved_trials.append(
+                {
+                    "trial": global_trial,
+                    "block": block_id,
+                    "slot": slot,
+                    "measured_frames": measured_frames,
+                    "order": order,
+                    "stages": stages,
+                },
+            )
+            global_trial += 1
+    variants: list[dict] = []
+    for variant_name, spec in WP10_TEXT_WALL_VARIANTS:
+        measured_frames = int(spec["measured_frames"])
+        trials = [trial for trial in interleaved_trials if trial["measured_frames"] == measured_frames]
+        if len(trials) != int(spec["trial_count"]):
+            raise base.BenchmarkError(
+                f"text_ui interleaved schedule expected {spec['trial_count']} trials at {measured_frames} frames, "
+                f"got {len(trials)}",
+            )
         comparisons = _completion_stage_comparisons(trials, frames=measured_frames)
         variants.append(
             {
@@ -1783,7 +1814,20 @@ def _wp10_text_ui_completion_evidence(root: Path, recipe: dict) -> dict:
             },
         )
     recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
-    return {"recipe": recipe_meta, "variants": variants}
+    return {
+        "recipe": recipe_meta,
+        "execution_schedule": {
+            "block_count": len(WP10_TEXT_WALL_BLOCK_SCHEDULE),
+            "blocks": [list(block) for block in WP10_TEXT_WALL_BLOCK_SCHEDULE],
+            "post_arm_prime_frames": prime,
+            "interleaved_execution_order": [
+                {"trial": trial["trial"], "block": trial["block"], "slot": trial["slot"], "measured_frames": trial["measured_frames"]}
+                for trial in interleaved_trials
+            ],
+        },
+        "interleaved_trials": interleaved_trials,
+        "variants": variants,
+    }
 
 
 def bounded_remediation_workloads(*, executed_artifacts_start: dict | None = None) -> dict:

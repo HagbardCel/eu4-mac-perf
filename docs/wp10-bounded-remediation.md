@@ -32,14 +32,17 @@ Harness env (test library only):
 
 Pre-specified engineering success (not a policy gate): **median counters-minus-reference CPU ≤ 5 µs/frame** on mesh (~50% reduction from ~9.6 µs in `a73ea57b`).
 
-**text_ui completion** (`prime=1`, completion timing on all stages):
+**text_ui completion** (`prime=1`, completion timing on all stages): **28 trials interleaved** in 7 blocks so 40-frame and 400-frame windows share the same session (avoids attributing regime shifts to window length):
 
-| Variant | Trials | Measured frames |
-|---------|--------|-----------------|
-| `forty_frame_21_trials` | 21 | 40 |
-| `four_hundred_frame_7_trials` | 7 | 400 |
+```text
+block 0: 40f, 40f, 40f, 400f
+block 1: 400f, 40f, 40f, 40f
+… (alternating) …
+block 6: 40f, 40f, 40f, 400f
+→ 21 × 40f + 7 × 400f total
+```
 
-Compare completion-wall CIs in the archive; tri-state v3 rules are replayable offline but **this capture does not assert admission**.
+The archive stores `execution_schedule` plus per-variant comparisons (`forty_frame_21_trials`, `four_hundred_frame_7_trials`). **This capture does not assert admission.**
 
 ## After capture
 
