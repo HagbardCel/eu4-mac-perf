@@ -277,11 +277,9 @@ static bool snapshot_control(ControlSnapshot *out) {
     return false;
 }
 static void invalidate_shadow_cache_quiet(void) {
-    CGLContextObj ctx=CGLGetCurrentContext();
-    eu4_shadow_invalidate(&gl_shadow,(uintptr_t)ctx);
-    gl_shadow.active=NULL;
-    gl_shadow.vertex=NULL;
+    memset(&gl_shadow,0,sizeof(gl_shadow));
     gl_shadow.reason=EU4_SHADOW_INVALIDATED;
+    state_stamp_pointer=NULL;
     state_seeded=false;
     vertex_array_state=NULL;
     state_context=NULL;
@@ -2260,10 +2258,33 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_apply_mode(unsi
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_simulate_seeded_shadow(void) {
     CGLContextObj ctx=CGLGetCurrentContext();
-    gl_shadow.contexts[0]=(Eu4ShadowContext){.context=(uintptr_t)ctx,.stamp=1,.prepared=true,.program=1};
-    gl_shadow.active=&gl_shadow.contexts[0];
-    state_seeded=true;
-    state_context=ctx;
+    for(unsigned i=0;i<EU4_SHADOW_CONTEXTS;i++) {
+        if(gl_shadow.contexts[i].context==(uintptr_t)ctx) {
+            gl_shadow.contexts[i].prepared=true;
+            gl_shadow.contexts[i].program=1;
+            gl_shadow.active=&gl_shadow.contexts[i];
+            state_seeded=true;
+            state_context=ctx;
+            return;
+        }
+        if(!gl_shadow.contexts[i].context) {
+            gl_shadow.contexts[i]=(Eu4ShadowContext){.context=(uintptr_t)ctx,.stamp=1,.prepared=true,.program=1};
+            gl_shadow.active=&gl_shadow.contexts[i];
+            state_seeded=true;
+            state_context=ctx;
+            return;
+        }
+    }
+}
+__attribute__((visibility("default"))) unsigned eu4_frame_model_test_cached_shadow_contexts(void) {
+    unsigned count=0;
+    for(unsigned i=0;i<EU4_SHADOW_CONTEXTS;i++)
+        if(gl_shadow.contexts[i].context) count++;
+    return count;
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_touch_shadow_vao(unsigned vao) {
+    refresh_unowned_control();
+    gl_bind_vertex_array(vao);
 }
 __attribute__((visibility("default"))) unsigned eu4_frame_model_test_observe_unowned(void) {
     bool active=intervention_active(),measuring=measurement_active();
