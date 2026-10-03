@@ -83,12 +83,15 @@ def intrusive_diagnostic_run_budget(
     *,
     readiness_s: int = 180,
     warmup_s: int = 150,
+    forensic_tail_s: int = 20,
     cleanup_s: int = 40,
 ) -> int:
-    """Worst-case controller budget for Phase C R–C–R–C–R (5 s settle + ack per phase)."""
+    """Worst-case controller budget for Phase C R–C–R–C–R plus isolated forensic tail."""
     per_phase_overhead = 17
     settle_s = 5
     durations = [phase_duration_s] * phase_count
+    if forensic_tail_s:
+        durations.append(forensic_tail_s)
     budget = (
         readiness_s
         + warmup_s

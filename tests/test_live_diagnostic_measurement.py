@@ -60,6 +60,54 @@ class IntrusiveDiagnosticGatePolicyTests(unittest.TestCase):
         evidence.require(gates.required_gates_for_report_kind("intrusive_diagnostic"))
 
 
+def _phase_c_synthetic_frame(phase_name: str, *, counters: bool) -> dict:
+    """Counters windows are fully instrumented; reference matches lean REFERENCE semantics."""
+    multiplier = 1.1 if counters else 1.0
+    return {
+        "phase": model.PHASE_NUMBER[phase_name],
+        "render_executed": 1 if counters else 0,
+        "render_attempts": 1 if counters else 0,
+        "present_calls": 1 if counters else 0,
+        "present_scene_calls": 0,
+        "update_wall_ns": int(8e6),
+        "update_cpu_ns": int(4e6 * multiplier),
+        "render_wall_ns": int(2e6) if counters else 0,
+        "render_cpu_ns": int(1e6 * multiplier) if counters else 0,
+        "idle_wall_ns": 0,
+        "idle_cpu_ns": 0,
+        "present_wall_ns": int(1e6) if counters else 0,
+        "present_cpu_ns": int(5e5) if counters else 0,
+        "wait_ns": 0,
+        "wait_cpu_ns": 0,
+        "wall_ns": int(12e6),
+        "cpu_ns": int(6e6 * multiplier),
+        "draws": 10 if counters else 0,
+        "indices": 100,
+        "triangles": 50,
+        "draw_wall_ns_est": 0,
+        "draw_cpu_ns_est": 0,
+        "draw_timed_samples": 2 if counters else 0,
+        "buffer_calls": 3 if counters else 0,
+        "buffer_bytes": 0,
+        "buffer_storage_bytes": 0,
+        "buffer_upload_bytes": 0,
+        "texture_calls": 0,
+        "texture_bytes": 0,
+        "uniform_calls": 4 if counters else 0,
+        "uniform_bytes": 0,
+        "state_calls": 5 if counters else 0,
+        "texture_binds": 0,
+        "buffer_binds": 0,
+        "program_switches": 0,
+        "bucket_calls": 0,
+        "append_calls": 0,
+        "forwarded_draws": 0,
+        "suppressed_draws": 0,
+        "flags": 0,
+        "sleep_ns": 0,
+    }
+
+
 class PhaseCScheduleTests(unittest.TestCase):
     def test_intrusive_diagnostic_phase_schedule(self):
         names = [item["name"] for item in model.intrusive_diagnostic_phase_schedule()]
@@ -72,7 +120,7 @@ class PhaseCScheduleTests(unittest.TestCase):
     def test_intrusive_diagnostic_run_budget_within_deadline(self):
         self.assertLessEqual(gates.intrusive_diagnostic_run_budget(), gates.RUN_DEADLINE_SECONDS)
 
-    def test_compute_live_rc_observer_effect_synthetic(self):
+    def test_compute_live_rc_observer_effect_lean_reference_semantics(self):
         phases = []
         base_ns = 1_000_000_000
         for index, name in enumerate(("R1", "C1", "R2", "C2", "R3")):
@@ -86,52 +134,9 @@ class PhaseCScheduleTests(unittest.TestCase):
             )
         profile_rows = []
         for phase in phases:
-            multiplier = 1.1 if phase["name"].startswith("C") else 1.0
+            counters = phase["name"].startswith("C")
             for _ in range(100):
-                profile_rows.append(
-                    {
-                        "phase": model.PHASE_NUMBER[phase["name"]],
-                        "render_executed": 1,
-                        "render_attempts": 1,
-                        "present_calls": 1,
-                        "update_wall_ns": int(8e6),
-                        "update_cpu_ns": int(4e6 * multiplier),
-                        "render_wall_ns": int(2e6),
-                        "render_cpu_ns": int(1e6 * multiplier),
-                        "idle_wall_ns": 0,
-                        "idle_cpu_ns": 0,
-                        "present_wall_ns": int(1e6),
-                        "present_cpu_ns": int(5e5),
-                        "wait_ns": 0,
-                        "wait_cpu_ns": 0,
-                        "wall_ns": int(12e6),
-                        "cpu_ns": int(6e6 * multiplier),
-                        "draws": 10,
-                        "indices": 100,
-                        "triangles": 50,
-                        "draw_wall_ns_est": 0,
-                        "draw_cpu_ns_est": 0,
-                        "buffer_calls": 0,
-                        "buffer_bytes": 0,
-                        "buffer_storage_bytes": 0,
-                        "buffer_upload_bytes": 0,
-                        "texture_calls": 0,
-                        "texture_bytes": 0,
-                        "uniform_calls": 0,
-                        "uniform_bytes": 0,
-                        "state_calls": 0,
-                        "texture_binds": 0,
-                        "buffer_binds": 0,
-                        "program_switches": 0,
-                        "bucket_calls": 0,
-                        "append_calls": 0,
-                        "forwarded_draws": 0,
-                        "suppressed_draws": 0,
-                        "present_scene_calls": 0,
-                        "flags": 0,
-                        "sleep_ns": 0,
-                    },
-                )
+                profile_rows.append(_phase_c_synthetic_frame(phase["name"], counters=counters))
         probe = []
         for phase in phases:
             rate = 120.0 if phase["name"].startswith("R") else 118.0
@@ -162,12 +167,22 @@ class PhaseCScheduleTests(unittest.TestCase):
                 {"monotonic_ns": 0},
                 12345,
             )
-        self.assertGreater(effect["cpu_perturbation_fraction"], 0.05)
+        self.assertGreater(effect["aggregate"]["cpu_perturbation_fraction"], 0.05)
         self.assertIn("median_update_cpu_ms", effect["frame_perturbation_fraction"])
-        attribution = model.intrusive_diagnostic_profile_attribution(effect["phase_summaries"])
-        self.assertIn("C1", attribution["windows"])
-        self.assertIn("rank_stable", attribution)
-
+        self.assertIn("C1", effect["brackets"])
+        self.assertIn("live_update_cpu_delta_us_per_update_intrusive", effect["brackets"]["C1"])
+        self.assertAlmostEqual(
+            effect["brackets"]["C1"]["reference_phases"],
+            ["R1", "R2"],
+        )
+        attribution = model.intrusive_diagnostic_exclusive_attribution(
+            [],
+            phases,
+            profile_rows,
+            effect["phase_summaries"],
+        )
+        self.assertIn("C1", attribution["exclusive_scope_windows"])
+        self.assertIn("exclusive_rank_stable", attribution)
 
 class RunDiagnosticOnlyTests(unittest.TestCase):
     @mock.patch.object(model, "_run_intrusive_diagnostic_phase_c")

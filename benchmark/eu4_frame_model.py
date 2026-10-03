@@ -342,12 +342,20 @@ INTRUSIVE_DIAGNOSTIC_PHASE_C = (
 )
 INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES = ("R1", "R2", "R3")
 INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES = ("C1", "C2")
-_PROFILE_ATTRIBUTION_FIELDS = (
-    ("UpdateOneFrame", "median_update_cpu_ms"),
-    ("Idle", "median_idle_cpu_ms"),
-    ("Render", "median_render_cpu_ms"),
-    ("Present", "median_present_cpu_ms"),
-    ("CGLFlush wait", "median_cglflush_cpu_ms"),
+INTRUSIVE_DIAGNOSTIC_RC_PHASES = INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES + INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES
+INTRUSIVE_DIAGNOSTIC_FORENSIC_TAIL_S = 20
+INTRUSIVE_DIAGNOSTIC_FORENSIC_DETAIL_WINDOWS = 2
+INTRUSIVE_DIAGNOSTIC_FORENSIC_FRAMES_PER_WINDOW = 4
+LEAN_RC_OBSERVER_FRAME_FIELDS = (
+    "median_update_cpu_ms",
+    "median_loop_cpu_ms",
+    "update_attempts_s",
+)
+INTRUSIVE_DIAGNOSTIC_POWER_RC_FIELDS = (
+    "eu4_cputime_ms_per_s",
+    "cpu_w",
+    "gpu_w",
+    "combined_w",
 )
 QUALIFIED_LIVE_INTRUSION_LIMIT = 0.03
 WP10_BOUNDED_REMEDIATION_PURPOSE = "wp10_bounded_remediation_v1"
@@ -3699,6 +3707,71 @@ def intrusive_diagnostic_phase_schedule() -> list[dict]:
     ]
 
 
+def _rc_perturbation_ratio(profile_value: float, reference_value: float) -> float:
+    if reference_value <= 0:
+        raise base.BenchmarkError("Reference metric must be positive for R/C perturbation")
+    return profile_value / reference_value - 1
+
+
+def _median_probe_swap(probe: list[dict], window: dict) -> float:
+    values = [row["swaps_s"] for row in probe if window["start_ns"] <= row["monotonic_ns"] < window["end_ns"]]
+    if not values:
+        raise base.BenchmarkError(f"Swap probe missed window {window.get('name')}")
+    return statistics.median(values)
+
+
+def _power_metric(power_by_phase: dict, phase_name: str, field: str) -> float | None:
+    return (power_by_phase.get(phase_name) or {}).get(field)
+
+
+def _rc_bracket_effect(
+    *,
+    counters_name: str,
+    reference_names: tuple[str, ...],
+    summaries: dict[str, dict],
+    phase_by_name: dict[str, dict],
+    probe: list[dict],
+    power_by_phase: dict,
+) -> dict:
+    counters = summaries[counters_name]
+    references = [summaries[name] for name in reference_names]
+    frame: dict[str, float] = {}
+    for field in LEAN_RC_OBSERVER_FRAME_FIELDS:
+        ref_value = statistics.mean([item[field] for item in references])
+        prof_value = counters[field]
+        if prof_value is None or prof_value <= 0 or ref_value is None or ref_value <= 0:
+            raise base.BenchmarkError(f"{counters_name} bracket missing lean-compatible field {field}")
+        frame[field] = _rc_perturbation_ratio(prof_value, ref_value)
+    ref_update_ms = statistics.mean([item["median_update_cpu_ms"] for item in references])
+    prof_update_ms = counters["median_update_cpu_ms"]
+    power: dict[str, float] = {}
+    for field in INTRUSIVE_DIAGNOSTIC_POWER_RC_FIELDS:
+        ref_values = [_power_metric(power_by_phase, name, field) for name in reference_names]
+        prof_power = _power_metric(power_by_phase, counters_name, field)
+        if any(value is None for value in ref_values) or prof_power is None:
+            if field == "eu4_cputime_ms_per_s":
+                raise base.BenchmarkError(f"{counters_name} bracket missing external EU IV CPU samples")
+            continue
+        ref_power = statistics.mean(ref_values)
+        if ref_power <= 0:
+            raise base.BenchmarkError(f"{counters_name} bracket missing power field {field}")
+        power[field] = _rc_perturbation_ratio(prof_power, ref_power)
+    if "eu4_cputime_ms_per_s" not in power:
+        raise base.BenchmarkError(f"{counters_name} bracket missing external EU IV CPU samples")
+    ref_swap = statistics.mean([_median_probe_swap(probe, phase_by_name[name]) for name in reference_names])
+    prof_swap = _median_probe_swap(probe, phase_by_name[counters_name])
+    return {
+        "reference_phases": list(reference_names),
+        "frame_perturbation_fraction": frame,
+        "cpu_perturbation_fraction": power["eu4_cputime_ms_per_s"],
+        "power_perturbation_fraction": power,
+        "swap_perturbation_fraction": _rc_perturbation_ratio(prof_swap, ref_swap),
+        "swap_rate": prof_swap,
+        "live_update_cpu_delta_us_per_update_intrusive": (prof_update_ms - ref_update_ms) * 1000.0,
+        "label": "intrusive/unqualified",
+    }
+
+
 def compute_live_rc_observer_effect(
     phases: list[dict],
     profile_rows: list[dict],
@@ -3707,9 +3780,12 @@ def compute_live_rc_observer_effect(
     power_samples: list,
     anchor: dict,
     game_pid: int,
+    *,
+    mesh_prior_ns_per_frame: float | None = None,
 ) -> dict:
-    """Aggregate R vs C observer perturbation for Phase C (recorded, not hard-stopped)."""
-    phase_by_name = {item["name"]: item for item in phases}
+    """Bracketed R vs C observer perturbation using lean-REFERENCE-compatible telemetry."""
+    rc_phases = [item for item in phases if item["name"] in INTRUSIVE_DIAGNOSTIC_RC_PHASES]
+    phase_by_name = {item["name"]: item for item in rc_phases}
     summaries = {
         name: phase_summary(profile_rows, name, phase_by_name[name]["duration_s"], phase_by_name[name], trace_rows)
         for name in phase_by_name
@@ -3717,81 +3793,234 @@ def compute_live_rc_observer_effect(
     for name, summary in summaries.items():
         if summary.get("status") != "complete":
             raise base.BenchmarkError(f"Phase {name} did not produce complete frame telemetry")
-    reference_summaries = [summaries[name] for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES]
-    profile_summaries = [summaries[name] for name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES]
+    power_by_phase = diagnostic.summarize_power(power_samples, rc_phases, anchor, game_pid)
+    brackets = {
+        "C1": _rc_bracket_effect(
+            counters_name="C1",
+            reference_names=("R1", "R2"),
+            summaries=summaries,
+            phase_by_name=phase_by_name,
+            probe=probe,
+            power_by_phase=power_by_phase,
+        ),
+        "C2": _rc_bracket_effect(
+            counters_name="C2",
+            reference_names=("R2", "R3"),
+            summaries=summaries,
+            phase_by_name=phase_by_name,
+            probe=probe,
+            power_by_phase=power_by_phase,
+        ),
+    }
+    aggregate_refs = [summaries[name] for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES]
+    aggregate_profs = [summaries[name] for name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES]
     frame_perturbation: dict[str, float] = {}
-    for field in (
-        "median_update_cpu_ms",
-        "mean_render_cpu_ms_per_executed_render",
-        "update_attempts_s",
-        "executed_renders_s",
-        "present_calls_s",
-    ):
-        ref_values = [item[field] for item in reference_summaries]
-        prof_values = [item[field] for item in profile_summaries]
-        if any(value is None or value <= 0 for value in ref_values + prof_values):
-            raise base.BenchmarkError(f"Reference/profile timing unavailable for {field}")
-        frame_perturbation[field] = statistics.mean(prof_values) / statistics.mean(ref_values) - 1
-    phase_power = diagnostic.summarize_power(power_samples, phases, anchor, game_pid)
-    ref_cpu = [
-        phase_power.get(name, {}).get("eu4_cputime_ms_per_s") for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES
-    ]
-    prof_cpu = [
-        phase_power.get(name, {}).get("eu4_cputime_ms_per_s") for name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES
-    ]
-    if any(value is None for value in ref_cpu + prof_cpu):
-        raise base.BenchmarkError("Power samples do not cover every Phase C R/C window")
-    cpu_perturbation = statistics.mean(prof_cpu) / statistics.mean(ref_cpu) - 1
-    prof_windows = [phase_by_name[name] for name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES]
-    ref_windows = [phase_by_name[name] for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES]
-    prof_swap_rates = []
-    for window in prof_windows:
-        values = [row["swaps_s"] for row in probe if window["start_ns"] <= row["monotonic_ns"] < window["end_ns"]]
-        if not values:
-            raise base.BenchmarkError("Swap probe missed a Phase C counters window")
-        prof_swap_rates.append(statistics.median(values))
-    ref_swap_rates = []
-    for window in ref_windows:
-        values = [row["swaps_s"] for row in probe if window["start_ns"] <= row["monotonic_ns"] < window["end_ns"]]
-        if not values:
-            raise base.BenchmarkError("Swap probe missed a Phase C reference window")
-        ref_swap_rates.append(statistics.median(values))
-    swap_perturbation = statistics.mean(prof_swap_rates) / statistics.mean(ref_swap_rates) - 1
-    measured_rate = statistics.mean(prof_swap_rates)
+    for field in LEAN_RC_OBSERVER_FRAME_FIELDS:
+        ref_value = statistics.mean([item[field] for item in aggregate_refs])
+        prof_value = statistics.mean([item[field] for item in aggregate_profs])
+        frame_perturbation[field] = _rc_perturbation_ratio(prof_value, ref_value)
+    power_aggregate: dict[str, float] = {}
+    for field in INTRUSIVE_DIAGNOSTIC_POWER_RC_FIELDS:
+        ref_values = [_power_metric(power_by_phase, name, field) for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES]
+        prof_values = [_power_metric(power_by_phase, name, field) for name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES]
+        if any(value is None for value in ref_values + prof_values):
+            if field == "eu4_cputime_ms_per_s":
+                raise base.BenchmarkError("Aggregate R/C bracket missing external EU IV CPU samples")
+            continue
+        ref_power = statistics.mean(ref_values)
+        prof_power = statistics.mean(prof_values)
+        power_aggregate[field] = _rc_perturbation_ratio(prof_power, ref_power)
+    if "eu4_cputime_ms_per_s" not in power_aggregate:
+        raise base.BenchmarkError("Aggregate R/C bracket missing external EU IV CPU samples")
+    ref_swap = statistics.mean(
+        [_median_probe_swap(probe, phase_by_name[name]) for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES],
+    )
+    prof_swap = statistics.mean(
+        [_median_probe_swap(probe, phase_by_name[name]) for name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES],
+    )
+    ref_update_ms = statistics.mean([item["median_update_cpu_ms"] for item in aggregate_refs])
+    prof_update_ms = statistics.mean([item["median_update_cpu_ms"] for item in aggregate_profs])
+    bracket_deltas = [brackets[key]["live_update_cpu_delta_us_per_update_intrusive"] for key in ("C1", "C2")]
     historical = json.loads((ROOT / "results/autonomous-reproducibility.json").read_text(encoding="utf-8"))
     reference_rate = historical["summary"]["median_swaps_s"]["median"]
+    prior_check = None
+    if mesh_prior_ns_per_frame:
+        aggregate_delta_ns = (prof_update_ms - ref_update_ms) * 1e6
+        prior_check = {
+            "mesh_counters_incremental_prior_ns_per_frame": mesh_prior_ns_per_frame,
+            "live_aggregate_update_cpu_delta_ns_per_update_intrusive": aggregate_delta_ns,
+            "ratio_to_offline_prior": aggregate_delta_ns / mesh_prior_ns_per_frame,
+            "bracket_delta_spread_us": max(bracket_deltas) - min(bracket_deltas),
+        }
     return {
         "phase_summaries": summaries,
+        "brackets": brackets,
+        "bracket_replicate_spread": {
+            "cpu_perturbation_fraction": abs(brackets["C1"]["cpu_perturbation_fraction"] - brackets["C2"]["cpu_perturbation_fraction"]),
+            "live_update_cpu_delta_us_per_update_intrusive": abs(bracket_deltas[0] - bracket_deltas[1]),
+        },
+        "aggregate": {
+            "frame_perturbation_fraction": frame_perturbation,
+            "cpu_perturbation_fraction": power_aggregate["eu4_cputime_ms_per_s"],
+            "power_perturbation_fraction": power_aggregate,
+            "swap_perturbation_fraction": _rc_perturbation_ratio(prof_swap, ref_swap),
+            "swap_rate": prof_swap,
+            "live_update_cpu_delta_us_per_update_intrusive": (prof_update_ms - ref_update_ms) * 1000.0,
+        },
         "frame_perturbation_fraction": frame_perturbation,
-        "cpu_perturbation_fraction": cpu_perturbation,
-        "swap_perturbation_fraction": swap_perturbation,
-        "swap_rate": measured_rate,
+        "cpu_perturbation_fraction": power_aggregate["eu4_cputime_ms_per_s"],
+        "power_perturbation_fraction": power_aggregate,
+        "swap_perturbation_fraction": _rc_perturbation_ratio(prof_swap, ref_swap),
+        "swap_rate": prof_swap,
         "historical_swap_rate": reference_rate,
+        "offline_prior_check": prior_check,
         "limits": {"counters_cpu_frame": QUALIFIED_LIVE_INTRUSION_LIMIT, "swap_rate": QUALIFIED_LIVE_INTRUSION_LIMIT},
         "policy": "recorded_for_diagnostic_ranking_not_qualified_gate",
+        "lean_reference_fields": list(LEAN_RC_OBSERVER_FRAME_FIELDS),
     }
 
 
-def intrusive_diagnostic_profile_attribution(phase_summaries: dict[str, dict]) -> dict:
-    """Relative inclusive-CPU-ish shares across the two counters windows (unqualified)."""
+def intrusive_diagnostic_exclusive_attribution(
+    trace_rows: list[list[str]],
+    phases: list[dict],
+    profile_rows: list[dict],
+    phase_summaries: dict[str, dict],
+) -> dict:
+    """Exclusive semantic scope CPU shares for counters windows (C1/C2)."""
     windows: dict[str, dict] = {}
     for phase_name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES:
-        summary = phase_summaries[phase_name]
-        weights = {
-            label: float(summary.get(field) or 0.0) for label, field in _PROFILE_ATTRIBUTION_FIELDS
+        window = next(item for item in phases if item["name"] == phase_name)
+        frames = [row for row in profile_rows if eligible_frame(row, window)]
+        filtered = eligible_trace(trace_rows, frames, [window])
+        tree = scope_tree_summary(filtered, [window])
+        phase_id = str(PHASE_NUMBER[phase_name])
+        phase_data = tree["phases"].get(phase_id, {})
+        semantic = [node for node in phase_data.get("nodes", []) if node.get("classification") == "semantic"]
+        total_exclusive = sum(node.get("exclusive_cpu_ms", 0.0) for node in semantic)
+        shares = {
+            node["name"]: (node.get("exclusive_cpu_ms", 0.0) / total_exclusive if total_exclusive else 0.0)
+            for node in semantic
         }
-        total = sum(weights.values())
-        shares = {label: (value / total if total else 0.0) for label, value in weights.items()}
         windows[phase_name] = {
-            "shares": shares,
+            "exclusive_cpu_shares": shares,
             "rank_order": sorted(shares, key=shares.get, reverse=True),
+            "scope_tree_gate": phase_data.get("coverage_95_percent_gate"),
         }
-    rank_stable = windows["C1"]["rank_order"] == windows["C2"]["rank_order"]
-    return {
-        "windows": windows,
-        "rank_stable": rank_stable,
-        "interpretation": "Relative shares from median per-frame CPU scopes; not bias-adjusted absolutes.",
+    gl_frame_fields = ("draws", "buffer_calls", "uniform_calls", "state_calls", "draw_timed_samples")
+    gl_counts: dict[str, dict] = {}
+    for phase_name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES:
+        window = next(item for item in phases if item["name"] == phase_name)
+        frames = [row for row in profile_rows if eligible_frame(row, window)]
+        gl_counts[phase_name] = {
+            field: (statistics.median([row.get(field, 0) for row in frames]) if frames else None)
+            for field in gl_frame_fields
+        }
+    gl_rank = {
+        phase_name: sorted(gl_counts[phase_name], key=lambda key: gl_counts[phase_name].get(key) or 0, reverse=True)
+        for phase_name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES
     }
+    return {
+        "exclusive_scope_windows": windows,
+        "exclusive_rank_stable": windows["C1"]["rank_order"] == windows["C2"]["rank_order"],
+        "gl_work_counts": gl_counts,
+        "gl_work_rank_order": gl_rank,
+        "gl_work_rank_stable": gl_rank["C1"] == gl_rank["C2"],
+        "interpretation": "Exclusive semantic CPU shares partition scope-tree costs; GL rows are per-frame medians (counts/samples).",
+    }
+
+
+def intrusive_diagnostic_forensic_tail_summary(
+    trace_rows: list[list[str]],
+    tail_phase: dict,
+    anchor: dict,
+    profile_rows: list[dict],
+) -> dict:
+    tail_frames = [row for row in profile_rows if eligible_frame(row, tail_phase)]
+    sampled = sampled_perturbation(tail_frames)
+    telemetry: dict = {}
+    try:
+        telemetry = diagnostic.summarize_telemetry(trace_rows, [tail_phase], anchor)
+    except base.BenchmarkError:
+        telemetry = {}
+    tail_bucket = telemetry.get(tail_phase["name"], {})
+    calls = tail_bucket.get("calls")
+    top_callers = []
+    if calls:
+        top_callers = [{"function": name, "calls": count} for name, count in calls.most_common(12)]
+    return {
+        "phase": tail_phase["name"],
+        "role": tail_phase.get("role", "forensic"),
+        "draw_timed_samples": sum(row.get("draw_timed_samples", 0) for row in tail_frames),
+        "sampled_window_evidence": tail_phase.get("sampled_window_evidence") or sampled,
+        "top_gl_call_counts": top_callers,
+        "draw_records": tail_bucket.get("draws", 0),
+        "submitted_vertices": tail_bucket.get("submitted_vertices", 0),
+        "caveat": "Forensic tail is isolated from R/C observer-effect brackets; timings are intrusive and unqualified.",
+    }
+
+
+def _format_percent(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:+.1%}"
+
+
+def _render_intrusive_diagnostic_report_md(report: dict) -> str:
+    effect = report.get("observer_effect") or {}
+    aggregate = effect.get("aggregate") or {}
+    brackets = effect.get("brackets") or {}
+    attribution = report.get("profile_attribution") or {}
+    forensic = report.get("forensic_tail") or {}
+    bias = (report.get("observer_bias_calibration") or {}).get("phase_c_interpretation") or {}
+    prior_us = bias.get("mesh_counters_incremental_prior_us_per_frame")
+    lines = [
+        "# Intrusive diagnostic report (Phase C)",
+        "",
+        "This capture is **not** eligible for causal or qualified assessment.",
+        "",
+        "## Live observer effect (intrusive / unqualified)",
+        "",
+    ]
+    for key, bracket in brackets.items():
+        ref = ",".join(bracket.get("reference_phases") or [])
+        delta = bracket.get("live_update_cpu_delta_us_per_update_intrusive")
+        delta_label = f"{delta:.1f} µs/update" if isinstance(delta, (int, float)) else "n/a"
+        lines.append(
+            f"- **{key} vs {ref}**: CPU {_format_percent(bracket.get('cpu_perturbation_fraction'))}, "
+            f"swaps {_format_percent(bracket.get('swap_perturbation_fraction'))}, "
+            f"update CPU Δ {delta_label}",
+        )
+    agg_delta = aggregate.get("live_update_cpu_delta_us_per_update_intrusive")
+    agg_delta_label = f"{agg_delta:.1f} µs/update" if isinstance(agg_delta, (int, float)) else "n/a"
+    lines.extend([
+        f"- **Aggregate**: CPU {_format_percent(aggregate.get('cpu_perturbation_fraction'))}, "
+        f"swaps {_format_percent(aggregate.get('swap_perturbation_fraction'))}, "
+        f"update CPU Δ {agg_delta_label}",
+        "",
+        "## Offline mesh prior",
+        "",
+        f"- Aggregate counters incremental prior: **~{prior_us:.2f} µs/frame**" if prior_us else "- Aggregate counters prior: see `observer_bias_calibration`",
+        f"- Component-level bias correction: **{'allowed' if bias.get('bias_adjusted_absolute_timings_allowed') else 'unavailable'}**",
+        "",
+        "## C1/C2 attribution",
+        "",
+    ])
+    for phase_name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES:
+        window = (attribution.get("exclusive_scope_windows") or {}).get(phase_name, {})
+        order = window.get("rank_order") or []
+        if order:
+            lines.append(f"- **{phase_name} exclusive semantic rank**: {', '.join(order[:5])}")
+    lines.append(
+        f"- Exclusive rank stable across C1/C2: **{attribution.get('exclusive_rank_stable')}**; "
+        f"GL work-count rank stable: **{attribution.get('gl_work_rank_stable')}**",
+    )
+    lines.extend(["", "## Forensic tail", ""])
+    lines.append(f"- Draw timed samples: **{forensic.get('draw_timed_samples', 0)}**")
+    evidence = forensic.get("sampled_window_evidence") or {}
+    lines.append(f"- Sample-window calibration: **{evidence.get('status', 'n/a')}**")
+    lines.append(f"- {forensic.get('caveat', '')}")
+    lines.append("")
+    return "\n".join(lines) + "\n"
 
 
 def _intrusive_diagnostic_cadence_gate(phase_summaries: dict[str, dict]) -> tuple[str, str]:
@@ -3810,17 +4039,32 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
     contract = manifest.get("measurement_contract") or {}
     calibration = manifest.get("calibration") or {}
     observer_effect = {
+        "brackets": calibration.get("brackets"),
+        "aggregate": calibration.get("aggregate"),
+        "bracket_replicate_spread": calibration.get("bracket_replicate_spread"),
         "frame_perturbation_fraction": calibration.get("frame_perturbation_fraction"),
         "cpu_perturbation_fraction": calibration.get("cpu_perturbation_fraction"),
+        "power_perturbation_fraction": calibration.get("power_perturbation_fraction"),
         "swap_perturbation_fraction": calibration.get("swap_perturbation_fraction"),
         "swap_rate": calibration.get("swap_rate"),
         "historical_swap_rate": calibration.get("historical_swap_rate"),
+        "offline_prior_check": calibration.get("offline_prior_check"),
         "qualified_intrusion_limit": calibration.get("limits", {}).get("counters_cpu_frame"),
         "policy": calibration.get("policy"),
+        "lean_reference_fields": calibration.get("lean_reference_fields"),
     }
     profile_attribution = manifest.get("profile_attribution")
     if profile_attribution is None and manifest.get("phase_summaries"):
-        profile_attribution = intrusive_diagnostic_profile_attribution(manifest["phase_summaries"])
+        trace_rows = read_rows(run_dir / "telemetry.csv")
+        profile_rows = frame_rows(run_dir / "telemetry.csv")
+        phases = list(manifest.get("phases") or [])
+        profile_attribution = intrusive_diagnostic_exclusive_attribution(
+            trace_rows,
+            phases,
+            profile_rows,
+            manifest["phase_summaries"],
+        )
+    forensic_tail = manifest.get("forensic_tail")
     bias_calibration = manifest.get("observer_bias_calibration") or {}
     bias_model = bias_calibration.get("bias_model") or {}
     output = {
@@ -3832,6 +4076,7 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
         "executable_sha256": manifest.get("executable_sha256"),
         "observer_effect": observer_effect,
         "profile_attribution": profile_attribution,
+        "forensic_tail": forensic_tail,
         "observer_bias_calibration": {
             "calibration_version": bias_calibration.get("calibration_version"),
             "bias_table": bias_calibration.get("bias_table") or observer_bias.bias_aware_table_rows(bias_model),
@@ -3861,11 +4106,7 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
         "limitations": manifest.get("limitations", []),
     }
     (run_dir / "report.json").write_text(json.dumps(output, indent=2) + "\n")
-    (run_dir / "report.md").write_text(
-        "# Intrusive diagnostic report\n\n"
-        "This capture is **not** eligible for causal or qualified assessment. "
-        "See `measurement_contract` in `report.json`.\n",
-    )
+    (run_dir / "report.md").write_text(_render_intrusive_diagnostic_report_md(output))
     return output
 
 
@@ -4598,6 +4839,7 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
         require_privilege=True,
         require_power_mode=False,
         live_measurement_mode=LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC,
+        intrusive_contract_only=True,
     )
     base.running_game_pid("idle")
     if not auto.SCENE.is_file() or not auto.SCENE_MANIFEST.is_file():
@@ -4608,24 +4850,16 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
     manifest_path = run_dir / "manifest.json"
     gates = GateEvidence()
     gates.record("format_v3", "passed", "Versioned producer and controller", version=FORMAT_VERSION)
-    causal = evidence.get("offline_causal_admission") or {}
-    forensic = evidence.get("offline_forensic_suitability") or {}
-    causal_status = causal.get("status")
+    terminal = evidence.get("terminal_tier1_v4_evidence") or {}
     gates.record(
         "offline_causal_admission",
-        "passed" if causal_status == "passed" else "failed" if causal_status else "unavailable",
-        "Recorded for context; not a diagnostic release gate",
-        evidence=causal,
-    )
-    gates.record(
-        "offline_forensic_suitability",
-        "passed" if forensic.get("status") == "passed" else "failed" if forensic.get("status") else "unavailable",
-        "Forensic suitability (non-blocking for intrusive diagnostic)",
-        evidence=forensic,
+        "failed",
+        "Contract-only preflight; WP11 terminal record is non-blocking",
+        evidence=terminal,
     )
     contract = finalize_measurement_contract(
         evidence.get("measurement_contract") or live_measurement_contract(LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC),
-        admission_passed=causal_status == "passed",
+        admission_passed=False,
     )
     gates.record(
         "diagnostic_authorization",
@@ -4752,10 +4986,26 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                     manifest["phases"] = phases
                     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
+                tail = _wait_phase(
+                    game,
+                    INTRUSIVE_DIAGNOSTIC_FORENSIC_TAIL_S,
+                    control,
+                    events,
+                    "TAIL",
+                    "profile",
+                    0,
+                    detail=True,
+                    detail_windows=INTRUSIVE_DIAGNOSTIC_FORENSIC_DETAIL_WINDOWS,
+                    detail_frames_per_window=INTRUSIVE_DIAGNOSTIC_FORENSIC_FRAMES_PER_WINDOW,
+                )
+                tail["role"] = "forensic"
+                manifest["profiling_tail"] = tail
+
                 profile_rows = frame_rows(run_dir / "telemetry.csv")
                 trace_rows = read_rows(run_dir / "telemetry.csv")
                 probe = auto.probe_rows(run_dir / "auto-probe.csv", anchor)
                 power_tail.poll()
+                mesh_prior = observer_bias.mesh_counters_incremental_prior_ns_per_frame(bias_model)
                 observer_effect = compute_live_rc_observer_effect(
                     phases,
                     profile_rows,
@@ -4764,6 +5014,7 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                     power_tail.samples,
                     anchor,
                     game.pid,
+                    mesh_prior_ns_per_frame=mesh_prior,
                 )
                 manifest["calibration"] = {
                     "phases": phases,
@@ -4771,23 +5022,25 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                     **{key: observer_effect[key] for key in observer_effect if key != "phase_summaries"},
                 }
                 manifest["phase_summaries"] = observer_effect["phase_summaries"]
-                manifest["profile_attribution"] = intrusive_diagnostic_profile_attribution(
+                manifest["profile_attribution"] = intrusive_diagnostic_exclusive_attribution(
+                    trace_rows,
+                    phases,
+                    profile_rows,
                     observer_effect["phase_summaries"],
+                )
+                manifest["forensic_tail"] = intrusive_diagnostic_forensic_tail_summary(
+                    trace_rows,
+                    tail,
+                    anchor,
+                    profile_rows,
                 )
                 gates.record(
                     "live_observer_effect",
                     "passed",
-                    "Recorded live R vs C perturbation (not a 3% qualified stop)",
-                    **{
-                        key: observer_effect[key]
-                        for key in (
-                            "frame_perturbation_fraction",
-                            "cpu_perturbation_fraction",
-                            "swap_perturbation_fraction",
-                            "swap_rate",
-                            "historical_swap_rate",
-                        )
-                    },
+                    "Recorded bracketed live R vs C perturbation (not a 3% qualified stop)",
+                    brackets=observer_effect.get("brackets"),
+                    aggregate=observer_effect.get("aggregate"),
+                    offline_prior_check=observer_effect.get("offline_prior_check"),
                 )
                 hook_failures = control.hook_failures()
                 dropped_records = control.dropped_records()
@@ -4814,7 +5067,7 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                     anchor,
                     game.pid,
                 )
-                unknown = unassociated_origins(trace_rows, phases)
+                unknown = unassociated_origins(trace_rows, phases + [tail])
                 gates.record(
                     "origin_integrity",
                     "failed" if unknown else "passed",
