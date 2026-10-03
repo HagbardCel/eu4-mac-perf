@@ -39,4 +39,4 @@ Compare `reference_*` and `counters_*` on:
 - `submission_elapsed_ns` (current Tier-1 quantity)
 - `submission_plus_drain_elapsed_ns` (submission + completion)
 
-If REFERENCE is slow only on submission but `submission_plus_drain` aligns with bare, async queueing is supported. If both remain bad, investigate REFERENCE CPU paths.
+If REFERENCE is slow only on submission but `submission_plus_drain` aligns with bare, async queueing is supported. If both remain bad, investigate REFERENCE CPU paths — see [WP6 plan](wp6-reference-cpu-decomposition.md).
