@@ -9,7 +9,13 @@ v3 training requalification **failed**; **held-out remains blocked**. This work 
 
 ## Authoritative capture
 
-Registered **`d07347df`** @ `a8200ea` under `bounded_remediation_archives` (mesh counters-lite engineering target **not** met; see manifest notes).
+Registered **`d07347df`** @ `a8200ea` under `bounded_remediation_archives`.
+
+**Outcome summary** (full analysis: [`wp10-evidence-memo-20261003.md`](wp10-evidence-memo-20261003.md)):
+
+- Mesh counters-lite **failed** the ≤5 µs engineering target; paired lite−full / deferred−lite contrasts are **inconclusive** (optimize scopes/flush not justified).
+- text_ui **21×40f** completion-wall CIs fall inside v3 ±5%; **7×400f** is weaker — prefer **more trials**, not longer windows.
+- Next qualification step (if any): **v4 statistical replication** ([`tier1-v4-statistical-replication-proposal.md`](tier1-v4-statistical-replication-proposal.md)), not further profiler architecture work.
 
 ## Mac capture
 
@@ -48,8 +54,8 @@ block 6: 40f, 40f, 40f, 400f
 
 The archive stores `execution_schedule` plus per-variant comparisons (`forty_frame_21_trials`, `four_hundred_frame_7_trials`). **This capture does not assert admission.**
 
-## After capture
+## After `d07347df` (decision)
 
-- If counters-lite meets the engineering target → productionize lean steady-state counters (scopes only in forensic windows); freeze policy/implementation; **one** fresh v3 training requalification; then held-out if training passes.
-- If text stabilizes only with a new window/trial contract → define **v4** (new policy version), do not reinterpret v3.
-- If neither path is viable → stop extending qualification infrastructure; use profiler as diagnostic only and return to EU IV hypotheses.
+- **Do not** productionize counters-lite or pursue flush-path optimization for qualification.
+- **Do not** change v3 6/11 µs thresholds based on WP10.
+- **Proposed:** freeze **v4** with **21 paired trials** (uniform), same gates/windows as v3 → one training requalification → held-out only if pass; else stop qualification work (see v4 proposal doc).

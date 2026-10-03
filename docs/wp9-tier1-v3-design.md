@@ -106,4 +106,4 @@ v3 did not pass fresh training requalification: **mesh counters CPU failed**; **
 
 Do **not** repeat the same capture until one passes without a pre-specified aggregation rule (that would be qualification-by-luck). Do **not** loosen 11 → 12 µs because the independent run landed at 11.35 µs on the CI upper bound.
 
-Next bounded step: **`wp10-bounded-remediation`** — see `docs/wp10-bounded-remediation.md` (diagnostic only; one Mac capture).
+WP10 diagnostic **`d07347df`** complete — counters-lite rejected; favor v4 **21-trial** replication over implementation changes. See `docs/wp10-evidence-memo-20261003.md` and `docs/tier1-v4-statistical-replication-proposal.md`.

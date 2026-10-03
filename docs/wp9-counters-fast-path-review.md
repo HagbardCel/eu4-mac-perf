@@ -37,8 +37,8 @@ Lean REFERENCE deliberately avoids the per-frame **`flush_counters()` → atomic
 ## Recommendation
 
 1. After authoritative requalification **`a73ea57b`**, **mesh `counters_cpu_ns` is a real v3 blocker** (see `docs/wp9-tier1-v3-design.md`). Counters optimization is justified only via bounded WP10 diagnostics — not threshold relaxation.
-2. Prototype **`counters-lite`** (hook `C` rows + frame header without per-frame `Q` tree) under `EU4_TEST_COUNTERS_LITE` and remeasure on **mesh** via `wp10-bounded-remediation` — one diagnostic Mac capture, not a requalification.
-3. Skip broad WP6-style ladders unless `counters-lite` shows ≥50% reduction in the measured `counters − reference` CPU step.
+2. WP10 **`d07347df`**: counters-lite and deferred flush showed **no measurable CPU gain** vs full counters on mesh — **do not** productionize lite from this evidence (`docs/wp10-evidence-memo-20261003.md`).
+3. Remaining mesh v3 tension is plausibly **N=7 bootstrap instability** at ~9.5 µs/frame, not missing scope/flush optimizations — see v4 21-trial proposal.
 
 ## Related code
 

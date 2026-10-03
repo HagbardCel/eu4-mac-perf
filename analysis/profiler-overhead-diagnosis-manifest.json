@@ -83,7 +83,13 @@
       "mesh_counters_overhead_us_per_frame": 9.54175,
       "mesh_counters_lite_overhead_us_per_frame": 9.603,
       "mesh_counters_lite_deferred_flush_overhead_us_per_frame": 11.0235,
-      "notes": "Authoritative Mac WP10 diagnostic @ a8200ea. Mesh: scope-tree removal did not materially cut counters CPU (lite ~9.60 vs full ~9.54 µs/frame; deferred-flush ~11.02 µs); engineering target <=5 µs not met — do not productionize counters-lite on this evidence alone. text_ui completion-wall variants in archive (21×40f + 7×400f interleaved). Diagnostic only; not Tier-1 admission. Memo: docs/wp10-bounded-remediation.md."
+      "mesh_paired_contrast_us_per_frame_median": {
+        "lite_minus_full": 1.21,
+        "deferred_minus_lite": -0.15,
+        "deferred_minus_full": 0.39
+      },
+      "text_forty_frame_21_trials_wall_ci_inside_v3_band": true,
+      "notes": "Authoritative Mac WP10 @ a8200ea. Counters-lite engineering target (<=5 µs) not met. Direct paired lite/full and deferred/lite contrasts inconclusive (CIs span 0) — neither scope-tree removal nor deferred flush shows measurable CPU gain; do not productionize lite. Mesh full counters ~9.54 µs/frame stable vs WP8/WP9; v3 a73ea57b fail plausibly N=7 CI instability at ~9.5 µs true overhead. text_ui: 21×40f completion-wall CIs wholly inside ±5%; 7×400f fits but less precise — favor more trials not longer windows. Diagnostic only. Memo: docs/wp10-evidence-memo-20261003.md; v4 proposal: docs/tier1-v4-statistical-replication-proposal.md."
     }
   ],
   "tier1_v3_requalification_archives": [
