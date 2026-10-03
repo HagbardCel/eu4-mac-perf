@@ -2,43 +2,52 @@
 
 **Authoritative archive:** `20261003T191305.493421Z-e86e33b3` @ `26af021`  
 **Manifest:** `observer_bias_calibration_archives` in `analysis/profiler-overhead-diagnosis-manifest.json`  
-**Policy:** `observer_bias_calibration_v1` (mesh, scales 1/2/4, 5 paired reps)
+**Policy:** `observer_bias_calibration_v1` (mesh, scales 1/2/4, 5 paired reps, all-scale OLS through origin)
 
 ## Outcome
 
 Mac capture completed after merge of PR #27. Immutable evidence SHA256 `0e872718…`.
 
-### Aggregate controls (µs/frame, mesh scale-1 fit)
+**Scientific conclusion:** the **aggregate** COUNTERS observer tax on the mesh surrogate is reproducible (~**9–10 µs/frame**). The attempted **component decomposition is not identifiable** enough for numerical bias correction in Phase C.
+
+### Aggregate controls (ns/frame, all-scale paired OLS fit)
 
 | Primitive | Slope (ns/frame) | Note |
 |-----------|------------------|------|
-| `reference_activation` | −177 | Noisy (large SE); not for subtraction |
-| `counters_incremental` | **+9247** | ~9.25 µs/frame reference→counters |
+| `reference_activation` | −177 (SE 431) | ~0 within noise; R is a valid low-intrusion baseline |
+| `counters_incremental` | **+9247** (SE 448) | **~9.25 µs/frame**; consistent with WP8–WP11 mesh band |
 
-### Base decomposition (additive layer)
+Per-scale counter medians are noisier (1× ~9.8, 2× ~6.1, 4× ~10.1 µs/frame); the fitted aggregate plus historical captures support **9–10 µs/frame** as the robust prior.
+
+### Base decomposition (not validated for subtraction)
 
 | Primitive | Slope | Interpretation |
 |-----------|-------|----------------|
-| `scope_pair_clocks` | +63 ns/scope-pair call (bundle) | Positive; high relative SE |
-| `per_frame_counter_flush` | **−1281 ns/frame** | Negative on mesh; **do not** subtract blindly in Phase C |
+| `scope_pair_clocks` | +63 ns/scope-pair call (bundle) | Unstable across scale; order-of-magnitude only |
+| `per_frame_counter_flush` | **−1281 ns/frame** (SE 375) | Sign flips by scale; **must not** subtract in Phase C |
 
-`consistency.explained_fraction` ≈ **−0.08** — scope+flush decomposition does **not** explain `counters_incremental` on this capture (flush dominates with wrong sign).
+`consistency.explained_fraction` ≈ **−0.08** — scope+flush decomposition explains **none** of the aggregate counters tax on this capture.
 
-### Forensic add-ons (detail window)
+### Forensic add-ons (not numeric correction)
 
-| Primitive | Slope |
-|-----------|-------|
-| `gpu_timestamp_call` | −2192 ns/call (noisy; treat as diagnostic bound) |
-| `timed_gl_sample` | +26 ns/timed sample |
+| Primitive | Slope | Note |
+|-----------|-------|------|
+| `gpu_timestamp_call` | −2192 ns/call (scale-dependent) | Perturbation / driver interaction, not a stable CPU coefficient |
+| `timed_gl_sample` | +26 ns/sample (SE 45) | Consistent with zero |
+
+Do **not** apply forensic slopes via `estimate_bias_ns(..., allow_forensic=True)` for this archive.
 
 ### Instrumentation reference
 
-`gl_interpose_dispatch` ≈ **2.95 ns** per synthetic enable+draw loop (stable); reference only.
+`gl_interpose_dispatch` ≈ **2.95 ns** per synthetic enable+draw loop (stable); synthetic reference only, not a live per-intercept correction.
 
 ## Phase C guidance
 
-1. Prefer **aggregate** `counters_incremental` for coarse R vs C observer effect checks.
-2. Use **decomposition** slopes only when operation counts are observed and signs are physically plausible; skip negative `per_frame_counter_flush` subtraction unless live counts justify it.
-3. Apply **forensic_slopes** only in phases with forensic detail armed.
+See [`live-diagnostic-phase-c.md`](live-diagnostic-phase-c.md).
 
-No further Phase B infrastructure unless a new capture shows a concrete gap.
+1. Measure **live R↔C** perturbation directly (primary).
+2. Use intrusive profiler for **relative ranking/shares** in C1/C2, not bias-adjusted absolute µs.
+3. Use offline **aggregate** prior ~9–10 µs/frame only as a sanity bracket.
+4. **`bias_adjust_inclusive_cpu()` defaults to no component subtraction** when reconciliation fails (authoritative archive).
+
+No further Phase B captures unless policy is deliberately reopened.

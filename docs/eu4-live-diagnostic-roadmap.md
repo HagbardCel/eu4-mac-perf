@@ -10,7 +10,7 @@ See [`live-diagnostic-measurement-contract.md`](live-diagnostic-measurement-cont
 |-------|------|------------|-------------|
 | **A** | Reframe profiler as diagnostic instrument | 0 | `preflight --intrusive-diagnostic-contract` + reserved `run --diagnostic-only` (live schedule in Phase C) |
 | **B** | Observer-bias calibration | 0 | **Done** — `e86e33b3` @ `26af021`; [`memo`](observer-bias-calibration-memo-20261003.md) |
-| **C** | One live attribution run | **1** | R–C–R–C–R + external CPU/power/swap |
+| **C** | One live attribution run | **1** | [`live-diagnostic-phase-c.md`](live-diagnostic-phase-c.md) — R–C–R–C–R; ranking only (no component bias subtract) |
 | **D** | Optimize top bottleneck(s) | 1 launch per candidate | Uninstrumented causal A/B |
 | **E** | Durable fix | as needed | Minimal binary/source patch |
 
@@ -22,14 +22,9 @@ See [`live-diagnostic-measurement-contract.md`](live-diagnostic-measurement-cont
 
 **Stopping rule:** after Phase C, pick the strongest actionable bottleneck and ship an **optimization PR**, not another profiler infrastructure PR.
 
-## Phase C sketch (not yet implemented)
+## Phase C (not yet implemented)
 
-```text
-90 s warm-up
-R1 20 s → C1 20 s → R2 20 s → C2 20 s → R3 20 s
-```
-
-External metrics throughout: EU IV CPU, swap rate, power, cadence. Compare R vs C for live observer effect; use C1/C2 for attribution and ranking stability.
+Protocol and interpretation rules: [`live-diagnostic-phase-c.md`](live-diagnostic-phase-c.md). Offline Phase B fixed aggregate COUNTERS tax ~9–10 µs/frame on mesh; **component correction unavailable** on `e86e33b3`.
 
 ## Phase D rule
 

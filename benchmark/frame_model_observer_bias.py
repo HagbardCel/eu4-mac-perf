@@ -6,6 +6,8 @@ import statistics
 from typing import Callable, Mapping, Sequence
 
 OBSERVER_BIAS_CALIBRATION_VERSION = "observer_bias_calibration_v1"
+OBSERVER_BIAS_AUTHORITATIVE_EVIDENCE_ID = "20261003T191305.493421Z-e86e33b3"
+COMPONENT_BIAS_CORRECTION_MIN_EXPLAINED_FRACTION = 0.5
 OBSERVER_BIAS_SCALE_FACTORS: tuple[int, ...] = (1, 2, 4)
 OBSERVER_BIAS_BASE_FRAMES = 4
 OBSERVER_BIAS_BASE_DRAW_LOOPS = 4000
@@ -219,12 +221,74 @@ def estimate_bias_ns(
     return estimated
 
 
+def evaluate_component_bias_correction(model: Mapping[str, object]) -> dict:
+    """Whether per-primitive subtraction is supported by offline reconciliation (Phase C gate)."""
+    reasons: list[str] = []
+    consistency = model.get("consistency") or {}
+    fraction = consistency.get("explained_fraction")
+    if fraction is None:
+        reasons.append("missing counters decomposition reconciliation")
+    elif fraction < COMPONENT_BIAS_CORRECTION_MIN_EXPLAINED_FRACTION:
+        reasons.append(
+            f"decomposition explained_fraction={fraction:.3f} "
+            f"(minimum {COMPONENT_BIAS_CORRECTION_MIN_EXPLAINED_FRACTION})",
+        )
+    for primitive_id, spec in (model.get("additive_slopes") or {}).items():
+        slope = spec.get("slope_ns_per_op")
+        if slope is not None and slope < 0:
+            reasons.append(f"negative additive slope for {primitive_id}")
+    allowed = not reasons
+    return {
+        "component_bias_correction_allowed": allowed,
+        "reasons": reasons,
+        "explained_fraction": fraction,
+    }
+
+
+def mesh_counters_incremental_prior_ns_per_frame(model: Mapping[str, object]) -> float | None:
+    """Aggregate mesh prior for live R↔C sanity checks (not a per-path correction)."""
+    spec = (model.get("aggregate_slopes") or {}).get("counters_incremental")
+    if not spec:
+        return None
+    slope = spec.get("slope_ns_per_op")
+    return float(slope) if slope is not None else None
+
+
+def phase_c_observer_interpretation(model: Mapping[str, object]) -> dict:
+    """Summary for intrusive live reports: what calibration does and does not support."""
+    evaluation = evaluate_component_bias_correction(model)
+    prior = mesh_counters_incremental_prior_ns_per_frame(model)
+    return {
+        "calibration_version": model.get("calibration_version"),
+        "mesh_counters_incremental_prior_ns_per_frame": prior,
+        "mesh_counters_incremental_prior_us_per_frame": (prior / 1000.0) if prior else None,
+        "component_bias_correction": evaluation,
+        "ranking_and_relative_shares_allowed": True,
+        "bias_adjusted_absolute_timings_allowed": evaluation["component_bias_correction_allowed"],
+        "forensic_numeric_correction_allowed": False,
+    }
+
+
 def bias_adjust_inclusive_cpu(
     inclusive_cpu_ns: int | float,
     operation_counts: Mapping[str, float],
     model: Mapping[str, object],
+    *,
+    allow_component_correction: bool = False,
 ) -> dict:
-    """Subtract only non-overlapping decomposition/instrumentation slopes (never aggregates)."""
+    """Subtract decomposition slopes only when explicitly allowed and reconciliation supports it."""
+    evaluation = evaluate_component_bias_correction(model)
+    if not allow_component_correction or not evaluation["component_bias_correction_allowed"]:
+        return {
+            "inclusive_cpu_ns": float(inclusive_cpu_ns),
+            "estimated_bias_ns": 0.0,
+            "bias_adjusted_cpu_ns": float(inclusive_cpu_ns),
+            "components_ns": {},
+            "calibration_version": model.get("calibration_version"),
+            "layer": "none",
+            "component_bias_correction_applied": False,
+            "component_bias_correction": evaluation,
+        }
     components = estimate_bias_ns(operation_counts, model, allow_aggregates=False)
     total_bias = sum(components.values())
     adjusted = float(inclusive_cpu_ns) - total_bias
@@ -235,6 +299,8 @@ def bias_adjust_inclusive_cpu(
         "components_ns": components,
         "calibration_version": model.get("calibration_version"),
         "layer": "decomposition_only",
+        "component_bias_correction_applied": True,
+        "component_bias_correction": evaluation,
     }
 
 

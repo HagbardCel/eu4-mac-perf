@@ -40,6 +40,7 @@ class ObserverBiasFitTests(unittest.TestCase):
                     "fit": {"slope_ns_per_op": 10.0},
                 },
             ],
+            consistency={"explained_fraction": 0.85, "status": "ok"},
         )
         result = observer_bias.bias_adjust_inclusive_cpu(
             1_000_000,
@@ -48,9 +49,32 @@ class ObserverBiasFitTests(unittest.TestCase):
                 "scope_pair_clocks": 50,
             },
             bias_model,
+            allow_component_correction=True,
         )
         self.assertEqual(result["estimated_bias_ns"], 500.0)
         self.assertEqual(result["bias_adjusted_cpu_ns"], 999_500.0)
+
+    def test_bias_adjust_default_skips_failed_reconciliation(self):
+        bias_model = observer_bias.build_bias_model(
+            [
+                {
+                    "primitive_id": "scope_pair_clocks",
+                    "role": observer_bias.ROLE_DECOMPOSITION,
+                    "unit": "scope_pair",
+                    "low_stage": "counters_lite",
+                    "high_stage": "counters",
+                    "fit": {"slope_ns_per_op": 10.0},
+                },
+            ],
+            consistency={"explained_fraction": -0.08, "status": "ok"},
+        )
+        result = observer_bias.bias_adjust_inclusive_cpu(
+            1_000_000,
+            {"scope_pair_clocks": 100},
+            bias_model,
+        )
+        self.assertFalse(result["component_bias_correction_applied"])
+        self.assertEqual(result["bias_adjusted_cpu_ns"], 1_000_000.0)
 
     def test_forensic_slopes_excluded_from_default_bias_adjust(self):
         bias_model = observer_bias.build_bias_model(
@@ -197,6 +221,21 @@ class ObserverBiasMetadataTests(unittest.TestCase):
         block = {"calibration_version": observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION, "status": "complete"}
         payload = model._offline_workloads_payload({"observer_bias_calibration": block})
         self.assertEqual(payload, block)
+
+
+class AuthoritativeCalibrationTests(unittest.TestCase):
+    def test_verify_authoritative_observer_bias_on_repo(self):
+        if not (Path(__file__).resolve().parents[1] / "analysis/evidence").is_dir():
+            self.skipTest("evidence tree not present")
+        record = model.verify_authoritative_observer_bias_calibration()
+        self.assertEqual(record["evidence_id"], observer_bias.OBSERVER_BIAS_AUTHORITATIVE_EVIDENCE_ID)
+        interp = record["phase_c_interpretation"]
+        self.assertFalse(interp["bias_adjusted_absolute_timings_allowed"])
+        self.assertAlmostEqual(
+            interp["mesh_counters_incremental_prior_ns_per_frame"],
+            9246.5,
+            delta=50,
+        )
 
 
 class ObserverBiasCliTests(unittest.TestCase):

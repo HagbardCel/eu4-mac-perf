@@ -57,16 +57,20 @@ Reported in `forensic_slopes`; use `estimate_bias_ns(..., allow_forensic=True)` 
 | `gpu_timestamp_call` | sampled, records off: GPU timestamps 0 → 1 | GPU timestamp insertion (`M[1]` stamp count) |
 | `timed_gl_sample` | sampled, records/GPU off: `EU4_TEST_DRAW_TIMED_SAMPLES` 0 → 1 | `F.draw_timed_samples` |
 
-## Phase C correction
+## Phase C interpretation (authoritative capture `e86e33b3`)
 
-\[
-T_i^\text{adjusted} \approx T_i^\text{measured} - \sum_{j \in \text{base}} N_{ij}\, c_j - \sum_{k \in \text{forensic}} N_{ik}\, c_k
-\]
+The authoritative Mac capture **did not validate component-level additive correction** (`explained_fraction` ≈ −8%; negative flush slope; unstable scope bundle). Phase C must:
 
-Base slopes never include aggregate controls. Forensic slopes apply only when the live phase actually executes detail windows with the corresponding operations.
+- treat **live R↔C perturbation** as the primary observer-effect measurement;
+- use profiler output for **relative shares and rank stability**, not bias-adjusted absolute timings;
+- cite the **aggregate** mesh prior **~9–10 µs/frame** (`counters_incremental`) only as a sanity bracket.
+
+`bias_adjust_inclusive_cpu()` defaults to **no subtraction** unless `allow_component_correction=True` and reconciliation passes. Do **not** apply forensic slopes numerically for this evidence set.
+
+See [`live-diagnostic-phase-c.md`](live-diagnostic-phase-c.md).
 
 ## Helpers
 
-`benchmark/frame_model_observer_bias.py` — `build_bias_model()`, `bias_adjust_inclusive_cpu()`, `reconcile_counters_decomposition()`, `bias_aware_interval()`.
+`benchmark/frame_model_observer_bias.py` — `phase_c_observer_interpretation()`, `evaluate_component_bias_correction()`, `mesh_counters_incremental_prior_ns_per_frame()`, `bias_adjust_inclusive_cpu(..., allow_component_correction=False)`.
 
 See [live diagnostic roadmap](eu4-live-diagnostic-roadmap.md) and [measurement contract](live-diagnostic-measurement-contract.md).

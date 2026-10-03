@@ -326,6 +326,7 @@ WP11_TERMINAL_TIER1_V4_EVIDENCE_ID = "20261003T173210.094480Z-33339073"
 LIVE_MEASUREMENT_QUALIFIED = "qualified_v1"
 LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC = "intrusive_diagnostic_v1"
 OBSERVER_BIAS_CALIBRATION_PURPOSE = observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION
+OBSERVER_BIAS_AUTHORITATIVE_EVIDENCE_ID = observer_bias.OBSERVER_BIAS_AUTHORITATIVE_EVIDENCE_ID
 LIVE_INTRUSIVE_DIAGNOSTIC_RUN_BLOCKED = (
     "Live intrusive diagnostic capture (Phase C: R-C-R-C-R protocol) is not implemented yet. "
     "Use `python3 benchmark/eu4_frame_model.py preflight --intrusive-diagnostic-contract` "
@@ -1098,6 +1099,52 @@ def resolve_live_preflight_outcome(
         "status": status,
         "measurement_contract": contract,
         "block_on_failed_admission": not admission_passed and not intrusive,
+    }
+
+
+def verify_authoritative_observer_bias_calibration() -> dict:
+    """Confirm registered Phase B observer-bias archive is present and intact."""
+    manifest_path = ROOT / "analysis/profiler-overhead-diagnosis-manifest.json"
+    if not manifest_path.is_file():
+        raise base.BenchmarkError("profiler-overhead-diagnosis-manifest.json is missing")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries = manifest.get("observer_bias_calibration_archives") or []
+    entry = next(
+        (item for item in entries if item.get("evidence_id") == OBSERVER_BIAS_AUTHORITATIVE_EVIDENCE_ID),
+        None,
+    )
+    if entry is None:
+        raise base.BenchmarkError(
+            f"Observer-bias evidence {OBSERVER_BIAS_AUTHORITATIVE_EVIDENCE_ID} is not registered "
+            "under observer_bias_calibration_archives",
+        )
+    rel_path = entry.get("archive_path")
+    if not rel_path:
+        raise base.BenchmarkError("Observer-bias manifest entry missing archive_path")
+    archive_path = ROOT / rel_path
+    if not archive_path.is_file():
+        raise base.BenchmarkError(f"Observer-bias archive missing on disk: {rel_path}")
+    archive = json.loads(archive_path.read_text(encoding="utf-8"))
+    body = archive_path.read_bytes()
+    sha = hashlib.sha256(body).hexdigest()
+    expected = entry.get("archive_sha256_committed")
+    if expected and sha != expected:
+        raise base.BenchmarkError(
+            f"Observer-bias archive SHA mismatch for {rel_path} (expected {expected}, got {sha})",
+        )
+    calibration = (archive.get("preflight") or {}).get("observer_bias_calibration") or {}
+    bias_model = (calibration.get("bias_model") or {})
+    interpretation = observer_bias.phase_c_observer_interpretation(bias_model)
+    if interpretation.get("bias_adjusted_absolute_timings_allowed"):
+        raise base.BenchmarkError(
+            "Authoritative observer-bias archive unexpectedly allows component bias correction",
+        )
+    return {
+        "evidence_id": OBSERVER_BIAS_AUTHORITATIVE_EVIDENCE_ID,
+        "archive_path": rel_path,
+        "archive_sha256_committed": sha,
+        "calibration_version": calibration.get("calibration_version"),
+        "phase_c_interpretation": interpretation,
     }
 
 
@@ -3648,6 +3695,7 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
             "forensic_slopes": bias_model.get("forensic_slopes") or {},
             "instrumentation_slopes": bias_model.get("instrumentation_slopes") or {},
             "consistency": bias_model.get("consistency") or {},
+            "phase_c_interpretation": observer_bias.phase_c_observer_interpretation(bias_model),
         }
         if bias_model
         else None,
