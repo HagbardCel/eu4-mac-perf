@@ -68,7 +68,23 @@
       "notes": "First bare/loaded-disabled/reference ladder (v1 contract: residual hook clocks in loaded-disabled). Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Superseded for decomposition semantics by wp6_loaded_disabled_v2; authoritative ladder is 4dc19f16. Diagnostic only."
     }
   ],
-  "tier1_v3_requalification_archives": [],
+  "tier1_v3_requalification_archives": [
+    {
+      "work_package": "WP9",
+      "purpose": "wp9_tier1_v3_requalification_v1",
+      "role": "authoritative",
+      "baseline_steady_state_diagnosis_evidence_id": "20261003T123219.715675Z-3c1e0db7",
+      "baseline_requalification_evidence_id": "20261003T115737.310357Z-ee9f5484",
+      "evidence_id": "20261003T144237.317611Z-a73ea57b",
+      "archive_path": "analysis/evidence/frame-model-offline-1f4282a-20261003T144237.317611Z-a73ea57b.json",
+      "archive_sha256_committed": "5e91bc6c25ab439348da326eaa684b4068d62c6397f3eaa0b8027508c3a2b697",
+      "git_commit": "1f4282abd7bdcc52e2e8d79bd6a43652d710f311",
+      "captured_at_utc": "20261003T144237.317611Z-a73ea57b",
+      "tier1_v3_admission": "failed",
+      "overhead_gate": "failed",
+      "notes": "Authoritative Mac Tier-1 v3 training requalification @ 1f4282a (merge PR#23). Policy tier1_causal_steady_state_hybrid_v3: overall failed — mesh counters_cpu_ns failed; text_ui completion-wall gates unavailable. Not authoritative WP1; v2 remains production binding until held-out replay. Memo: docs/wp9-tier1-v3-requalification.md."
+    }
+  ],
   "steady_state_tier1_diagnosis_archives": [
     {
       "work_package": "WP8",

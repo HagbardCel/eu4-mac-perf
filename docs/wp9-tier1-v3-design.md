@@ -91,5 +91,5 @@ See `docs/wp9-counters-fast-path-review.md`.
 ## Checklist
 
 - [x] `wp9-tier1-v3-requalification` CLI (steady-state harness + embedded v3 gates). See `docs/wp9-tier1-v3-requalification.md`.
-- [ ] Fresh Mac capture; register `tier1_v3_requalification_archives` manifest bucket.
+- [x] Fresh Mac capture; register `tier1_v3_requalification_archives` manifest bucket (`a73ea57b` @ `1f4282a`).
 - [ ] Held-out replay under **frozen** v3 (no threshold retuning on held-out).
