@@ -28,7 +28,13 @@ import frame_model_workload as workload
 import frame_model_draw_api as draw_api
 import frame_model_observer_bias as observer_bias
 import frame_model_tier1_policy as tier1
-from frame_model_gates import GateEvidence, required_gates_for_report_kind, run_budget, RUN_DEADLINE_SECONDS
+from frame_model_gates import (
+    GateEvidence,
+    intrusive_diagnostic_run_budget,
+    required_gates_for_report_kind,
+    run_budget,
+    RUN_DEADLINE_SECONDS,
+)
 from fixture_manager import FixtureManager
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -327,11 +333,21 @@ LIVE_MEASUREMENT_QUALIFIED = "qualified_v1"
 LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC = "intrusive_diagnostic_v1"
 OBSERVER_BIAS_CALIBRATION_PURPOSE = observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION
 OBSERVER_BIAS_AUTHORITATIVE_EVIDENCE_ID = observer_bias.OBSERVER_BIAS_AUTHORITATIVE_EVIDENCE_ID
-LIVE_INTRUSIVE_DIAGNOSTIC_RUN_BLOCKED = (
-    "Live intrusive diagnostic capture (Phase C: R-C-R-C-R protocol) is not implemented yet. "
-    "Use `python3 benchmark/eu4_frame_model.py preflight --intrusive-diagnostic-contract` "
-    "to validate the diagnostic measurement contract without launching EU IV. "
-    "See docs/eu4-live-diagnostic-roadmap.md."
+INTRUSIVE_DIAGNOSTIC_PHASE_C = (
+    ("R1", "reference", 20),
+    ("C1", "profile", 20),
+    ("R2", "reference", 20),
+    ("C2", "profile", 20),
+    ("R3", "reference", 20),
+)
+INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES = ("R1", "R2", "R3")
+INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES = ("C1", "C2")
+_PROFILE_ATTRIBUTION_FIELDS = (
+    ("UpdateOneFrame", "median_update_cpu_ms"),
+    ("Idle", "median_idle_cpu_ms"),
+    ("Render", "median_render_cpu_ms"),
+    ("Present", "median_present_cpu_ms"),
+    ("CGLFlush wait", "median_cglflush_cpu_ms"),
 )
 QUALIFIED_LIVE_INTRUSION_LIMIT = 0.03
 WP10_BOUNDED_REMEDIATION_PURPOSE = "wp10_bounded_remediation_v1"
@@ -1276,7 +1292,7 @@ def _preflight_intrusive_diagnostic_contract(
             "Intrusive diagnostic contract preflight only; no offline_workloads or held-out timing.",
             "No immutable qualification evidence archive is written and the rolling pointer is not updated.",
             f"Terminal Tier-1 v4 qualification: {WP11_TERMINAL_TIER1_V4_EVIDENCE_ID} ({terminal.get('tier1_v4_admission', 'failed')}).",
-            "Live intrusive capture remains deferred to Phase C (run --diagnostic-only is not implemented).",
+            "Live intrusive capture uses `run --diagnostic-only` (Phase C R–C–R–C–R schedule).",
         ],
     }
 
@@ -3666,6 +3682,128 @@ PHASE_NUMBER = {name: i+1 for i, (name, *_rest) in enumerate(PHASES)}
 PHASE_NUMBER.update({"P0": 100, "P1": 101, "P2": 102, "TAIL": 103,
                      "LPM0": 104, "LPM": 105, "LPM1": 106,
                      "LPMF0": 107, "LPMF": 108, "LPMF1": 109, "ANATIVE":110})
+PHASE_NUMBER.update({name: 111 + index for index, (name, *_rest) in enumerate(INTRUSIVE_DIAGNOSTIC_PHASE_C)})
+
+
+def intrusive_diagnostic_phase_schedule() -> list[dict]:
+    return [
+        {
+            "name": name,
+            "mode": mode,
+            "duration_s": duration,
+            "detail": False,
+            "update_period_ns": 0,
+            "render_period_ns": 0,
+        }
+        for name, mode, duration in INTRUSIVE_DIAGNOSTIC_PHASE_C
+    ]
+
+
+def compute_live_rc_observer_effect(
+    phases: list[dict],
+    profile_rows: list[dict],
+    trace_rows: list[list[str]],
+    probe: list[dict],
+    power_samples: list,
+    anchor: dict,
+    game_pid: int,
+) -> dict:
+    """Aggregate R vs C observer perturbation for Phase C (recorded, not hard-stopped)."""
+    phase_by_name = {item["name"]: item for item in phases}
+    summaries = {
+        name: phase_summary(profile_rows, name, phase_by_name[name]["duration_s"], phase_by_name[name], trace_rows)
+        for name in phase_by_name
+    }
+    for name, summary in summaries.items():
+        if summary.get("status") != "complete":
+            raise base.BenchmarkError(f"Phase {name} did not produce complete frame telemetry")
+    reference_summaries = [summaries[name] for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES]
+    profile_summaries = [summaries[name] for name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES]
+    frame_perturbation: dict[str, float] = {}
+    for field in (
+        "median_update_cpu_ms",
+        "mean_render_cpu_ms_per_executed_render",
+        "update_attempts_s",
+        "executed_renders_s",
+        "present_calls_s",
+    ):
+        ref_values = [item[field] for item in reference_summaries]
+        prof_values = [item[field] for item in profile_summaries]
+        if any(value is None or value <= 0 for value in ref_values + prof_values):
+            raise base.BenchmarkError(f"Reference/profile timing unavailable for {field}")
+        frame_perturbation[field] = statistics.mean(prof_values) / statistics.mean(ref_values) - 1
+    phase_power = diagnostic.summarize_power(power_samples, phases, anchor, game_pid)
+    ref_cpu = [
+        phase_power.get(name, {}).get("eu4_cputime_ms_per_s") for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES
+    ]
+    prof_cpu = [
+        phase_power.get(name, {}).get("eu4_cputime_ms_per_s") for name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES
+    ]
+    if any(value is None for value in ref_cpu + prof_cpu):
+        raise base.BenchmarkError("Power samples do not cover every Phase C R/C window")
+    cpu_perturbation = statistics.mean(prof_cpu) / statistics.mean(ref_cpu) - 1
+    prof_windows = [phase_by_name[name] for name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES]
+    ref_windows = [phase_by_name[name] for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES]
+    prof_swap_rates = []
+    for window in prof_windows:
+        values = [row["swaps_s"] for row in probe if window["start_ns"] <= row["monotonic_ns"] < window["end_ns"]]
+        if not values:
+            raise base.BenchmarkError("Swap probe missed a Phase C counters window")
+        prof_swap_rates.append(statistics.median(values))
+    ref_swap_rates = []
+    for window in ref_windows:
+        values = [row["swaps_s"] for row in probe if window["start_ns"] <= row["monotonic_ns"] < window["end_ns"]]
+        if not values:
+            raise base.BenchmarkError("Swap probe missed a Phase C reference window")
+        ref_swap_rates.append(statistics.median(values))
+    swap_perturbation = statistics.mean(prof_swap_rates) / statistics.mean(ref_swap_rates) - 1
+    measured_rate = statistics.mean(prof_swap_rates)
+    historical = json.loads((ROOT / "results/autonomous-reproducibility.json").read_text(encoding="utf-8"))
+    reference_rate = historical["summary"]["median_swaps_s"]["median"]
+    return {
+        "phase_summaries": summaries,
+        "frame_perturbation_fraction": frame_perturbation,
+        "cpu_perturbation_fraction": cpu_perturbation,
+        "swap_perturbation_fraction": swap_perturbation,
+        "swap_rate": measured_rate,
+        "historical_swap_rate": reference_rate,
+        "limits": {"counters_cpu_frame": QUALIFIED_LIVE_INTRUSION_LIMIT, "swap_rate": QUALIFIED_LIVE_INTRUSION_LIMIT},
+        "policy": "recorded_for_diagnostic_ranking_not_qualified_gate",
+    }
+
+
+def intrusive_diagnostic_profile_attribution(phase_summaries: dict[str, dict]) -> dict:
+    """Relative inclusive-CPU-ish shares across the two counters windows (unqualified)."""
+    windows: dict[str, dict] = {}
+    for phase_name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES:
+        summary = phase_summaries[phase_name]
+        weights = {
+            label: float(summary.get(field) or 0.0) for label, field in _PROFILE_ATTRIBUTION_FIELDS
+        }
+        total = sum(weights.values())
+        shares = {label: (value / total if total else 0.0) for label, value in weights.items()}
+        windows[phase_name] = {
+            "shares": shares,
+            "rank_order": sorted(shares, key=shares.get, reverse=True),
+        }
+    rank_stable = windows["C1"]["rank_order"] == windows["C2"]["rank_order"]
+    return {
+        "windows": windows,
+        "rank_stable": rank_stable,
+        "interpretation": "Relative shares from median per-frame CPU scopes; not bias-adjusted absolutes.",
+    }
+
+
+def _intrusive_diagnostic_cadence_gate(phase_summaries: dict[str, dict]) -> tuple[str, str]:
+    ref_rates = [
+        phase_summaries[name].get("update_attempts_s", 0) for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES
+    ]
+    if not ref_rates or min(ref_rates) <= 0:
+        return "failed", "Reference windows missing update cadence"
+    spread = max(ref_rates) / min(ref_rates) - 1
+    if spread > QUALIFIED_LIVE_INTRUSION_LIMIT:
+        return "failed", f"Reference update cadence spread {spread:+.1%} exceeds 3%"
+    return "passed", "Reference windows stable within 3% update cadence"
 
 
 def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
@@ -3675,8 +3813,14 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
         "frame_perturbation_fraction": calibration.get("frame_perturbation_fraction"),
         "cpu_perturbation_fraction": calibration.get("cpu_perturbation_fraction"),
         "swap_perturbation_fraction": calibration.get("swap_perturbation_fraction"),
+        "swap_rate": calibration.get("swap_rate"),
+        "historical_swap_rate": calibration.get("historical_swap_rate"),
         "qualified_intrusion_limit": calibration.get("limits", {}).get("counters_cpu_frame"),
+        "policy": calibration.get("policy"),
     }
+    profile_attribution = manifest.get("profile_attribution")
+    if profile_attribution is None and manifest.get("phase_summaries"):
+        profile_attribution = intrusive_diagnostic_profile_attribution(manifest["phase_summaries"])
     bias_calibration = manifest.get("observer_bias_calibration") or {}
     bias_model = bias_calibration.get("bias_model") or {}
     output = {
@@ -3687,6 +3831,7 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
         "run_dir": str(run_dir),
         "executable_sha256": manifest.get("executable_sha256"),
         "observer_effect": observer_effect,
+        "profile_attribution": profile_attribution,
         "observer_bias_calibration": {
             "calibration_version": bias_calibration.get("calibration_version"),
             "bias_table": bias_calibration.get("bias_table") or observer_bias.bias_aware_table_rows(bias_model),
@@ -4438,6 +4583,280 @@ def causal_schedule(period: int, residual_discovery: bool=False) -> list[dict]:
              int(1e9/15) if name=="E15" else 0} for name,mode,duration,detail in phases]
 
 
+def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
+    try:
+        budget = intrusive_diagnostic_run_budget()
+    except ValueError as exc:
+        raise base.BenchmarkError(str(exc)) from exc
+    bias_stamp = verify_authoritative_observer_bias_calibration()
+    archive_path = ROOT / bias_stamp["archive_path"]
+    bias_archive = json.loads(archive_path.read_text(encoding="utf-8"))
+    bias_block = (bias_archive.get("preflight") or {}).get("observer_bias_calibration") or {}
+    bias_model = bias_block.get("bias_model") or {}
+    evidence = preflight(
+        run_gl=True,
+        require_privilege=True,
+        require_power_mode=False,
+        live_measurement_mode=LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC,
+    )
+    base.running_game_pid("idle")
+    if not auto.SCENE.is_file() or not auto.SCENE_MANIFEST.is_file():
+        raise base.BenchmarkError("Register the reviewed Venice scene before this diagnostic run")
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_dir = output_root / f"{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}-intrusive-diagnostic"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    manifest_path = run_dir / "manifest.json"
+    gates = GateEvidence()
+    gates.record("format_v3", "passed", "Versioned producer and controller", version=FORMAT_VERSION)
+    causal = evidence.get("offline_causal_admission") or {}
+    forensic = evidence.get("offline_forensic_suitability") or {}
+    causal_status = causal.get("status")
+    gates.record(
+        "offline_causal_admission",
+        "passed" if causal_status == "passed" else "failed" if causal_status else "unavailable",
+        "Recorded for context; not a diagnostic release gate",
+        evidence=causal,
+    )
+    gates.record(
+        "offline_forensic_suitability",
+        "passed" if forensic.get("status") == "passed" else "failed" if forensic.get("status") else "unavailable",
+        "Forensic suitability (non-blocking for intrusive diagnostic)",
+        evidence=forensic,
+    )
+    contract = finalize_measurement_contract(
+        evidence.get("measurement_contract") or live_measurement_contract(LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC),
+        admission_passed=causal_status == "passed",
+    )
+    gates.record(
+        "diagnostic_authorization",
+        "passed",
+        "Explicit intrusive_diagnostic_v1 capture (--diagnostic-only)",
+        measurement_contract=contract,
+    )
+    manifest = {
+        "gates": gates.entries,
+        "worst_case_budget_s": budget,
+        "format_version": FORMAT_VERSION,
+        "report_kind": "intrusive_diagnostic",
+        "measurement_contract": contract,
+        "status": "starting",
+        "executable_sha256": evidence["build"]["executable_sha256"],
+        "evidence": evidence,
+        "observer_bias_calibration": {
+            **bias_stamp,
+            "calibration_version": bias_block.get("calibration_version"),
+            "bias_model": bias_model,
+        },
+        "limitations": list(evidence.get("limitations") or [])
+        + [
+            "Phase C records live R↔C observer effect for ranking; it does not qualify causal claims.",
+            "Component-level bias subtraction is disabled for the authoritative observer-bias archive.",
+        ],
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    events = run_dir / "events.jsonl"
+    anchor = auto.mark(events, "clock_anchor")
+    manifest["clock_anchor"] = anchor
+    manifest["power_window_policy"] = (
+        "Power samples use the same controller phase start/end timestamps as frame/event analysis"
+    )
+    control_path = run_dir / "control.bin"
+    control_path.write_bytes(bytes(CONTROL_SIZE))
+    game = None
+    control = None
+    installed = False
+    pm = None
+    power_tail = None
+    try:
+        with FixtureManager(
+            output_root,
+            base.USER_DATA,
+            auto.FIXTURE,
+            evidence["autonomous"]["fixture"]["save_sha256"],
+        ) as fixture:
+            try:
+                fixture.recover()
+                working = fixture.install()
+                installed = True
+                manifest["working_save"] = str(working)
+                control = SharedControl(control_path)
+                old_log = (
+                    (base.USER_DATA / "logs/game.log").read_bytes()
+                    if (base.USER_DATA / "logs/game.log").is_file()
+                    else b""
+                )
+                pm = _start_power(run_dir / "powermetrics.pliststream")
+                control.deadline = time.monotonic() + RUN_DEADLINE_SECONDS
+                libraries = str(LIBRARY)
+                env = {
+                    **os.environ,
+                    "DYLD_INSERT_LIBRARIES": libraries,
+                    "EU4_AUTO_PROBE_LOG": str(run_dir / "auto-probe.csv"),
+                    "EU4_FRAME_MODEL_LOG": str(run_dir / "telemetry.csv"),
+                    "EU4_FRAME_MODEL_CONTROL": str(control_path),
+                }
+                with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
+                    game = subprocess.Popen(
+                        ["./eu4", *evidence["autonomous"]["launcher_args"], "--continuelastsave"],
+                        cwd=base.GOG_EXE.parent,
+                        env=env,
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+                manifest["game_pid"] = game.pid
+                power_tail = auto.PowerTail(run_dir / "powermetrics.pliststream")
+                ready = auto.wait_until_ready(
+                    game,
+                    run_dir / "auto-probe.csv",
+                    power_tail,
+                    anchor,
+                    base.USER_DATA / "logs/game.log",
+                    old_log,
+                )
+                if base.running_game_pid("paused") != game.pid:
+                    raise base.BenchmarkError("The launched GOG process is not verified paused")
+                display = base.display_mode()
+                if not display.get("verified") or abs(display.get("refresh_hz", 0) - 120) > 1:
+                    raise base.BenchmarkError("EU IV is not in the verified 120 Hz display mode")
+                manifest["readiness"] = ready
+                manifest["display"] = display
+                manifest["warmup"] = auto.warm_up(game, run_dir / "auto-probe.csv", power_tail, anchor)
+                auto.capture_scene(run_dir / "ready-scene.png")
+                manifest["scene_alignment"] = auto.verify_scene(run_dir / "ready-scene.png", False)
+
+                phases: list[dict] = []
+                for config in intrusive_diagnostic_phase_schedule():
+                    phase = _wait_phase(
+                        game,
+                        config["duration_s"],
+                        control,
+                        events,
+                        config["name"],
+                        config["mode"],
+                        config["update_period_ns"],
+                        detail=config["detail"],
+                        render_period_ns=config["render_period_ns"],
+                    )
+                    phases.append(phase)
+                    observed = phase_summary(
+                        frame_rows(run_dir / "telemetry.csv"),
+                        config["name"],
+                        phase["duration_s"],
+                        phase,
+                        read_rows(run_dir / "telemetry.csv"),
+                    )
+                    if observed.get("status") != "complete":
+                        raise base.BenchmarkError(f"No frame records in {config['name']}")
+                    if observed.get("invalid_scope_frames"):
+                        raise base.BenchmarkError(f"Scope integrity failed in {config['name']}")
+                    manifest["phases"] = phases
+                    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+                profile_rows = frame_rows(run_dir / "telemetry.csv")
+                trace_rows = read_rows(run_dir / "telemetry.csv")
+                probe = auto.probe_rows(run_dir / "auto-probe.csv", anchor)
+                power_tail.poll()
+                observer_effect = compute_live_rc_observer_effect(
+                    phases,
+                    profile_rows,
+                    trace_rows,
+                    probe,
+                    power_tail.samples,
+                    anchor,
+                    game.pid,
+                )
+                manifest["calibration"] = {
+                    "phases": phases,
+                    "power": diagnostic.summarize_power(power_tail.samples, phases, anchor, game.pid),
+                    **{key: observer_effect[key] for key in observer_effect if key != "phase_summaries"},
+                }
+                manifest["phase_summaries"] = observer_effect["phase_summaries"]
+                manifest["profile_attribution"] = intrusive_diagnostic_profile_attribution(
+                    observer_effect["phase_summaries"],
+                )
+                gates.record(
+                    "live_observer_effect",
+                    "passed",
+                    "Recorded live R vs C perturbation (not a 3% qualified stop)",
+                    **{
+                        key: observer_effect[key]
+                        for key in (
+                            "frame_perturbation_fraction",
+                            "cpu_perturbation_fraction",
+                            "swap_perturbation_fraction",
+                            "swap_rate",
+                            "historical_swap_rate",
+                        )
+                    },
+                )
+                hook_failures = control.hook_failures()
+                dropped_records = control.dropped_records()
+                integrity = {
+                    "hook_failures": hook_failures,
+                    "dropped_records": dropped_records,
+                    "status": "passed" if hook_failures == 0 and dropped_records == 0 else "failed",
+                }
+                manifest["probe_integrity"] = integrity
+                gates.record(
+                    "integrity",
+                    integrity["status"],
+                    "Hook installation and record retention",
+                    **{key: value for key, value in integrity.items() if key != "status"},
+                )
+                if hook_failures or dropped_records:
+                    raise base.BenchmarkError(f"Profiler integrity failed: {integrity}")
+                auto.stop_process(pm, 5)
+                pm = None
+                power_tail.poll()
+                manifest["power_by_phase"] = diagnostic.summarize_power(
+                    power_tail.samples,
+                    phases,
+                    anchor,
+                    game.pid,
+                )
+                unknown = unassociated_origins(trace_rows, phases)
+                gates.record(
+                    "origin_integrity",
+                    "failed" if unknown else "passed",
+                    "Origin ownership checked; unknown calls block diagnostic acceptance",
+                    records=unknown,
+                )
+                cadence_status, cadence_reason = _intrusive_diagnostic_cadence_gate(observer_effect["phase_summaries"])
+                gates.record("cadence", cadence_status, cadence_reason)
+                if cadence_status != "passed":
+                    raise base.BenchmarkError(cadence_reason)
+                try:
+                    gates.require(required_gates_for_report_kind("intrusive_diagnostic"))
+                except ValueError as exc:
+                    raise base.BenchmarkError(str(exc)) from exc
+                manifest["status"] = "complete"
+                manifest["power"] = {"samples": len(power_tail.samples)}
+                (run_dir / "power.samples.json").write_text(json.dumps(power_tail.samples, default=str))
+            finally:
+                auto.stop_process(pm, 3)
+                if game is not None and game.poll() is None:
+                    auto.focus("terminate", game.pid)
+                    auto.stop_process(game, 10)
+                if control:
+                    control.close()
+                if installed:
+                    manifest["working_save_changed"] = fixture.finish(run_dir)
+                manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n")
+                if manifest.get("status") == "complete":
+                    analyze(run_dir)
+    except BaseException as exc:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+        manifest["status"] = "incomplete"
+        manifest["error"] = str(exc)
+        gates = GateEvidence(dict(manifest.get("gates", {})))
+        gates.record("run_completion", "failed", str(exc))
+        manifest["gates"] = gates.entries
+        manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n")
+        analyze(run_dir)
+        raise
+    return run_dir
+
+
 def run(
     output_root: Path,
     include_low_power: bool = True,
@@ -4447,7 +4866,7 @@ def run(
     diagnostic_only: bool = False,
 ) -> Path:
     if diagnostic_only:
-        raise base.BenchmarkError(LIVE_INTRUSIVE_DIAGNOSTIC_RUN_BLOCKED)
+        return _run_intrusive_diagnostic_phase_c(output_root)
     if residual_discovery and calibration_only:
         raise base.BenchmarkError("Choose either residual discovery or calibration-only mode")
     if residual_discovery or calibration_only:
@@ -4891,7 +5310,7 @@ def main() -> int:
     run_parser.add_argument(
         "--diagnostic-only",
         action="store_true",
-        help="reserved for Phase C live R-C-R-C-R capture (not implemented); use preflight --intrusive-diagnostic-contract",
+        help="Phase C intrusive diagnostic: 90 s warm-up then R1-C1-R2-C2-R3 (20 s each); non-blocking Tier-1 admission",
     )
     run_parser.add_argument("--fixed-cadence-lpm",action="store_true",
         help="add a separately reported fixed-throughput Low Power DVFS comparison")

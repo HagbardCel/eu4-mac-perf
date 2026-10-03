@@ -15,7 +15,7 @@ R1 20 s → C1 20 s → R2 20 s → C2 20 s → R3 20 s
 
 Preflight: `preflight --intrusive-diagnostic-contract` (WP11 terminal record + build integrity).
 
-Live capture: `run --diagnostic-only` (implementation pending).
+Live capture: `python3 benchmark/eu4_frame_model.py run --diagnostic-only <output-dir>`.
 
 ## What to measure (priority order)
 

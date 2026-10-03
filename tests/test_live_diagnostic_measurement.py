@@ -60,11 +60,122 @@ class IntrusiveDiagnosticGatePolicyTests(unittest.TestCase):
         evidence.require(gates.required_gates_for_report_kind("intrusive_diagnostic"))
 
 
+class PhaseCScheduleTests(unittest.TestCase):
+    def test_intrusive_diagnostic_phase_schedule(self):
+        names = [item["name"] for item in model.intrusive_diagnostic_phase_schedule()]
+        self.assertEqual(names, ["R1", "C1", "R2", "C2", "R3"])
+        self.assertEqual(
+            [item["mode"] for item in model.intrusive_diagnostic_phase_schedule()],
+            ["reference", "profile", "reference", "profile", "reference"],
+        )
+
+    def test_intrusive_diagnostic_run_budget_within_deadline(self):
+        self.assertLessEqual(gates.intrusive_diagnostic_run_budget(), gates.RUN_DEADLINE_SECONDS)
+
+    def test_compute_live_rc_observer_effect_synthetic(self):
+        phases = []
+        base_ns = 1_000_000_000
+        for index, name in enumerate(("R1", "C1", "R2", "C2", "R3")):
+            phases.append(
+                {
+                    "name": name,
+                    "duration_s": 20,
+                    "start_ns": base_ns + index * 30_000_000_000,
+                    "end_ns": base_ns + (index + 1) * 30_000_000_000,
+                },
+            )
+        profile_rows = []
+        for phase in phases:
+            multiplier = 1.1 if phase["name"].startswith("C") else 1.0
+            for _ in range(100):
+                profile_rows.append(
+                    {
+                        "phase": model.PHASE_NUMBER[phase["name"]],
+                        "render_executed": 1,
+                        "render_attempts": 1,
+                        "present_calls": 1,
+                        "update_wall_ns": int(8e6),
+                        "update_cpu_ns": int(4e6 * multiplier),
+                        "render_wall_ns": int(2e6),
+                        "render_cpu_ns": int(1e6 * multiplier),
+                        "idle_wall_ns": 0,
+                        "idle_cpu_ns": 0,
+                        "present_wall_ns": int(1e6),
+                        "present_cpu_ns": int(5e5),
+                        "wait_ns": 0,
+                        "wait_cpu_ns": 0,
+                        "wall_ns": int(12e6),
+                        "cpu_ns": int(6e6 * multiplier),
+                        "draws": 10,
+                        "indices": 100,
+                        "triangles": 50,
+                        "draw_wall_ns_est": 0,
+                        "draw_cpu_ns_est": 0,
+                        "buffer_calls": 0,
+                        "buffer_bytes": 0,
+                        "buffer_storage_bytes": 0,
+                        "buffer_upload_bytes": 0,
+                        "texture_calls": 0,
+                        "texture_bytes": 0,
+                        "uniform_calls": 0,
+                        "uniform_bytes": 0,
+                        "state_calls": 0,
+                        "texture_binds": 0,
+                        "buffer_binds": 0,
+                        "program_switches": 0,
+                        "bucket_calls": 0,
+                        "append_calls": 0,
+                        "forwarded_draws": 0,
+                        "suppressed_draws": 0,
+                        "present_scene_calls": 0,
+                        "flags": 0,
+                        "sleep_ns": 0,
+                    },
+                )
+        probe = []
+        for phase in phases:
+            rate = 120.0 if phase["name"].startswith("R") else 118.0
+            probe.append({"monotonic_ns": phase["start_ns"] + 5_000_000_000, "swaps_s": rate})
+        historical_path = Path(__file__).resolve().parents[1] / "results/autonomous-reproducibility.json"
+        if not historical_path.is_file():
+            self.skipTest("autonomous-reproducibility.json missing")
+
+        def fake_power(_raw, phase_list, _anchor, _pid):
+            return {
+                phase["name"]: {
+                    "eu4_cputime_ms_per_s": 400.0 if phase["name"].startswith("R") else 440.0,
+                }
+                for phase in phase_list
+            }
+
+        with mock.patch.object(model, "ROOT", historical_path.parent.parent), mock.patch.object(
+            model.diagnostic,
+            "summarize_power",
+            side_effect=fake_power,
+        ):
+            effect = model.compute_live_rc_observer_effect(
+                phases,
+                profile_rows,
+                [],
+                probe,
+                [],
+                {"monotonic_ns": 0},
+                12345,
+            )
+        self.assertGreater(effect["cpu_perturbation_fraction"], 0.05)
+        self.assertIn("median_update_cpu_ms", effect["frame_perturbation_fraction"])
+        attribution = model.intrusive_diagnostic_profile_attribution(effect["phase_summaries"])
+        self.assertIn("C1", attribution["windows"])
+        self.assertIn("rank_stable", attribution)
+
+
 class RunDiagnosticOnlyTests(unittest.TestCase):
-    def test_run_diagnostic_only_refuses_until_phase_c(self):
-        with self.assertRaises(base.BenchmarkError) as raised:
-            model.run(Path("/tmp/eu4-out"), diagnostic_only=True)
-        self.assertIn("Phase C", str(raised.exception))
+    @mock.patch.object(model, "_run_intrusive_diagnostic_phase_c")
+    def test_run_diagnostic_only_dispatches_phase_c(self, phase_c_mock):
+        out = Path("/tmp/eu4-phase-c-dispatch")
+        phase_c_mock.return_value = out
+        self.assertEqual(model.run(out, diagnostic_only=True), out)
+        phase_c_mock.assert_called_once_with(out)
 
 
 class AssertQualifiedIntrusionTests(unittest.TestCase):
