@@ -91,7 +91,19 @@ typedef struct {
     uint64_t api_counts[EU4_DRAW_API_CAPACITY],api_suppressed[EU4_DRAW_API_CAPACITY];
     Eu4ScopeSnapshot scopes;
 } Frame;
-typedef struct { Frame frame; } FrameSlot;
+enum { FRAME_SLOT_FULL = 0, FRAME_SLOT_LEAN_REFERENCE = 1 };
+typedef struct {
+    uint64_t update_id, phase, thread_id;
+    uint64_t measurement_epoch, generation;
+    uint64_t start_ns, end_ns, wall_ns, cpu_ns;
+    uint64_t update_wall_ns, update_cpu_ns;
+    uint64_t flags;
+    uint64_t publication_sequence;
+} LeanReferenceFrame;
+typedef struct {
+    uint8_t slot_kind;
+    union { Frame frame; LeanReferenceFrame lean; } payload;
+} FrameSlot;
 typedef struct { char kind; uint64_t publication_sequence,a,b,c,d,e,f,g,h,i,j,k,l,epoch,update,phase,thread,generation,window,context; } DetailSlot;
 #define FRAME_CAPACITY 128u
 #define DETAIL_CAPACITY 32768u
@@ -320,6 +332,13 @@ static bool measurement_active(void) {
     refresh_unowned_control();
     return control && frame_control.mode!=OFF && (frame_control.flags&MEASURE_ENABLED)!=0;
 }
+static bool reference_lean_measurement(void) {
+    if(!measurement_active() || frame_control.mode!=REFERENCE) return false;
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_passive_reference_hooks()) return false;
+#endif
+    return true;
+}
 static bool gl_measurement_active(void) {
     return measurement_active() && frame_control.mode!=REFERENCE;
 }
@@ -454,6 +473,20 @@ static void flush_counters(void) {
         p->counts[i]=p->wall[i]=p->cpu[i]=0;
     }
 }
+static void publish_lean_reference_frame(LeanReferenceFrame *lf) {
+    Producer *p=producer(); uint64_t h;
+    if(!p || !eu4_spsc_reserve(&p->frame_queue,FRAME_CAPACITY,&h)) {
+        lf->flags|=1; atomic_fetch_add(&control->dropped_records,1); return;
+    }
+    lf->publication_sequence=++p->publication_sequence;
+    FrameSlot *slot=&p->frames[h%FRAME_CAPACITY];
+    slot->slot_kind=FRAME_SLOT_LEAN_REFERENCE;
+    slot->payload.lean=*lf;
+    eu4_spsc_publish(&p->frame_queue,h);
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add(&test_published_frames,1);
+#endif
+}
 static void publish_frame(Frame *f) {
 #ifdef EU4_FRAME_MODEL_TEST
     if(test_minimal_reference) return;
@@ -473,7 +506,9 @@ static void publish_frame(Frame *f) {
         f->flags|=1; atomic_fetch_add(&control->dropped_records,1); return;
     }
     f->publication_sequence=++p->publication_sequence;
-    p->frames[h%FRAME_CAPACITY].frame=*f;
+    FrameSlot *slot=&p->frames[h%FRAME_CAPACITY];
+    slot->slot_kind=FRAME_SLOT_FULL;
+    slot->payload.frame=*f;
     eu4_spsc_publish(&p->frame_queue,h);
 #ifdef EU4_FRAME_MODEL_TEST
     atomic_fetch_add(&test_published_frames,1);
@@ -502,6 +537,45 @@ static void flush_output(void) {
     bool ok=eu4_writer_flush(&output_buffer,output_write,NULL,now_ns(CLOCK_UPTIME_RAW));
     if(!failed) output_failure(ok);
 }
+static Frame frame_from_lean_reference(const LeanReferenceFrame *lf) {
+    Frame f={0};
+    f.update_id=lf->update_id;
+    f.phase=lf->phase;
+    f.thread_id=lf->thread_id;
+    f.wall_ns=lf->wall_ns;
+    f.cpu_ns=lf->cpu_ns;
+    f.update_wall_ns=lf->update_wall_ns;
+    f.update_cpu_ns=lf->update_cpu_ns;
+    f.flags=lf->flags;
+    f.measurement_epoch=lf->measurement_epoch;
+    f.start_ns=lf->start_ns;
+    f.end_ns=lf->end_ns;
+    f.generation=lf->generation;
+    f.publication_sequence=lf->publication_sequence;
+    return f;
+}
+static int serialize_frame_record(const Frame *f,char *line,size_t cap) {
+    unsigned long long values[]={f->update_id,f->render_id,f->present_id,f->phase,
+        f->thread_id,f->wall_ns,f->cpu_ns,f->update_wall_ns,f->update_cpu_ns,
+        f->draws,f->indices,f->triangles,f->draw_wall_ns,f->draw_cpu_ns,f->draw_timed_samples,
+        f->buffer_calls,f->buffer_bytes,f->buffer_storage_bytes,f->buffer_upload_bytes,
+        f->texture_calls,f->texture_bytes,f->state_calls,f->texture_binds,f->buffer_binds,
+        f->program_switches,f->uniform_calls,f->uniform_bytes,f->bucket_calls,f->append_calls,
+        f->idle_wall_ns,f->idle_cpu_ns,f->render_wall_ns,f->render_cpu_ns,
+        f->map_wall_ns,f->map_cpu_ns,f->present_wall_ns,f->present_cpu_ns,
+        f->wait_ns,f->wait_cpu_ns,f->sleep_ns,f->flags,f->forwarded_draws,f->suppressed_draws,
+        f->render_attempts,f->render_executed,f->present_scene_calls,f->present_calls,
+        f->measurement_epoch,f->start_ns,f->end_ns,f->render_start_ns,f->render_end_ns,f->present_time_ns,
+        f->generation,f->sample_window,f->render_deadline_ns,f->render_lateness_ns,f->render_missed_deadlines,
+        f->render_overruns,f->raster_challenges};
+    size_t used=(size_t)snprintf(line,cap,"F");
+    for(size_t i=0;i<sizeof(values)/sizeof(values[0]) && used<cap;i++)
+        used+=(size_t)snprintf(line+used,cap-used,",%llu",values[i]);
+    if(used>=cap) return -1;
+    line[used++]='\n';
+    line[used]='\0';
+    return (int)used;
+}
 static void write_api_record(char kind,const Frame *f,uint64_t a,uint64_t b,uint64_t c,uint64_t d) {
     char line[512];int n=snprintf(line,sizeof(line),
         "%c,%llu,%llu,%llu,%llu,0,0,0,0,0,0,0,0,%llu,%llu,%llu,%llu,%llu,%llu,0\n",
@@ -526,33 +600,26 @@ static void *writer(void *unused) {
         pending|=t<h || dt<dh;
         while(t<h || dt<dh) {
             uint64_t expected=p->consumed_sequence+1;
-            bool take_frame=t<h && p->frames[t%FRAME_CAPACITY].frame.publication_sequence==expected;
+            bool take_frame=false;
+            if(t<h) {
+                FrameSlot *slot=&p->frames[t%FRAME_CAPACITY];
+                uint64_t seq=slot->slot_kind==FRAME_SLOT_LEAN_REFERENCE
+                    ? slot->payload.lean.publication_sequence
+                    : slot->payload.frame.publication_sequence;
+                take_frame=seq==expected;
+            }
             bool take_detail=dt<dh && p->details[dt%DETAIL_CAPACITY].publication_sequence==expected;
             /* A head snapshot may miss the earlier publication in the other queue. */
             if(!take_frame && !take_detail) break;
             if(take_frame) {
             FrameSlot *s=&p->frames[t%FRAME_CAPACITY];
-            Frame f=s->frame;
             char line[1536];
-            unsigned long long values[]={f.update_id,f.render_id,f.present_id,f.phase,
-                f.thread_id,f.wall_ns,f.cpu_ns,f.update_wall_ns,f.update_cpu_ns,
-                f.draws,f.indices,f.triangles,f.draw_wall_ns,f.draw_cpu_ns,f.draw_timed_samples,
-                f.buffer_calls,f.buffer_bytes,f.buffer_storage_bytes,f.buffer_upload_bytes,
-                f.texture_calls,f.texture_bytes,f.state_calls,f.texture_binds,
-                f.buffer_binds,f.program_switches,f.uniform_calls,f.uniform_bytes,
-                f.bucket_calls,f.append_calls,f.idle_wall_ns,f.idle_cpu_ns,
-                f.render_wall_ns,f.render_cpu_ns,f.map_wall_ns,f.map_cpu_ns,
-                f.present_wall_ns,f.present_cpu_ns,f.wait_ns,f.wait_cpu_ns,f.sleep_ns,f.flags,
-                f.forwarded_draws,f.suppressed_draws,f.render_attempts,f.render_executed,
-                f.present_scene_calls,f.present_calls,f.measurement_epoch,f.start_ns,f.end_ns,
-                f.render_start_ns,f.render_end_ns,f.present_time_ns,f.generation,f.sample_window,
-                f.render_deadline_ns,f.render_lateness_ns,f.render_missed_deadlines,f.render_overruns,f.raster_challenges};
-            size_t used=(size_t)snprintf(line,sizeof(line),"F");
-            for(size_t i=0;i<sizeof(values)/sizeof(values[0]) && used<sizeof(line);i++)
-                used+=(size_t)snprintf(line+used,sizeof(line)-used,",%llu",values[i]);
-            int n=(int)used;
-            if(used<sizeof(line)) { line[used++]='\n'; line[used]='\0'; n=(int)used; }
+            Frame f=s->slot_kind==FRAME_SLOT_LEAN_REFERENCE
+                ? frame_from_lean_reference(&s->payload.lean)
+                : s->payload.frame;
+            int n=serialize_frame_record(&f,line,sizeof(line));
             if(n>0 && (size_t)n<sizeof(line)) write_record(line,(size_t)n);
+            if(s->slot_kind==FRAME_SLOT_FULL) {
             if(f.flags&2048) {
                 int m=snprintf(line,sizeof(line),"L,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
                     (unsigned long long)f.update_id,(unsigned long long)f.render_id,(unsigned long long)f.phase,
@@ -570,7 +637,9 @@ static void *writer(void *unused) {
                 if(m>0 && (size_t)m<sizeof(line)) m+=snprintf(line+m-1,sizeof(line)-(size_t)m+1,",%llu,%llu,%llu\n",
                     (unsigned long long)f.thread_id,(unsigned long long)f.generation,(unsigned long long)f.sample_window)-1;
                 if(m>0 && (size_t)m<sizeof(line)) write_record(line,(size_t)m);
-            } t++;
+            }
+            }
+            t++;
             atomic_store_explicit(&p->frame_queue.tail,t,memory_order_release);
             } else {
             DetailSlot *s=&p->details[dt%DETAIL_CAPACITY];
@@ -939,6 +1008,11 @@ static void hook_update(void *self,bool force) {
             return;
         }
 #endif
+        if(reference_lean_measurement()) {
+            atomic_fetch_add(&updates,1);
+            real_update(self,force);
+            return;
+        }
         /* Recursive updates stay on the same physical frame and scope path. */
         atomic_fetch_add(&updates,1);
         int nested=scope_begin(SCOPE_UPDATE);
@@ -971,6 +1045,33 @@ static void hook_update(void *self,bool force) {
         next_deadline=0; next_render_deadline=0;
     }
     bool measuring=measurement_active();
+    if(reference_lean_measurement()) {
+        was_measurement_active=true;
+        uint64_t start=now_ns(CLOCK_UPTIME_RAW),cpu=now_ns(CLOCK_THREAD_CPUTIME_ID);
+        LeanReferenceFrame lean={
+            .update_id=id,.phase=frame_control.phase,.thread_id=tid(),
+            .measurement_epoch=frame_control.measurement_epoch,.generation=frame_control.generation,
+            .start_ns=start,
+        };
+        real_update(self,force);
+        uint64_t end=now_ns(CLOCK_UPTIME_RAW),end_cpu=now_ns(CLOCK_THREAD_CPUTIME_ID);
+        lean.end_ns=end;
+        lean.wall_ns=end-start;
+        lean.cpu_ns=end_cpu-cpu;
+        lean.update_wall_ns=lean.wall_ns;
+        lean.update_cpu_ns=lean.cpu_ns;
+        ControlSnapshot after={0};
+        if(snapshot_control(&after) && after.measurement_epoch==frame_control.measurement_epoch &&
+           after.mode==frame_control.mode && (after.flags&MEASURE_ENABLED))
+            publish_lean_reference_frame(&lean);
+        else { lean.flags|=4096; publish_lean_reference_frame(&lean); }
+        if(control && atomic_load(&control->ack_generation)!=frame_control.generation) {
+            atomic_store(&control->ack_time_ns,now_ns(CLOCK_UPTIME_RAW));
+            atomic_store_explicit(&control->ack_generation,frame_control.generation,memory_order_release);
+        }
+        inside_update=false;
+        return;
+    }
     scope_tree=(Eu4ScopeTree){0};
     if(!measuring && was_measurement_active) {
         if(gpu_timestamps_enabled()) {
@@ -1058,6 +1159,10 @@ static void hook_render(void *self) {
         return;
     }
 #endif
+    if(reference_lean_measurement()) {
+        real_render(self);
+        return;
+    }
     if(measurement_active())
         { current_frame.render_id=id; current_frame.render_attempts++; current_frame.render_start_ns=now_ns(CLOCK_UPTIME_RAW); timestamp_event(2,current_frame.render_start_ns); }
     uint32_t mode=frame_control.mode;
@@ -1176,6 +1281,10 @@ static void hook_present(void *self) {
         return;
     }
 #endif
+    if(reference_lean_measurement()) {
+        real_present(self);
+        return;
+    }
     if(!measurement_active()) { real_present(self); return; }
     if(measurement_active()) current_frame.present_scene_calls++;
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
@@ -1223,11 +1332,16 @@ static void install_one(unsigned i,void *replacement,void **original) {
 }
 
 static CGLError hooked_flush(CGLContextObj ctx) {
+    static CGLError (*real_flush)(CGLContextObj);
+    if(!real_flush) real_flush=CGLFlushDrawable;
+    if(reference_lean_measurement()) {
+        CGLError result=real_flush?real_flush(ctx):kCGLBadContext;
+        auto_probe_swap(result);
+        return result;
+    }
     uint64_t id=atomic_fetch_add(&presents,1)+1; current_frame.present_id=id;
     if(measurement_active()) { current_frame.present_calls++; current_frame.present_time_ns=now_ns(CLOCK_UPTIME_RAW); timestamp_event(4,current_frame.present_time_ns); }
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
-    static CGLError (*real_flush)(CGLContextObj);
-    if(!real_flush) real_flush=CGLFlushDrawable;
     int flush_scope=scope_begin(SCOPE_FLUSH);
     CGLError result=real_flush?real_flush(ctx):kCGLBadContext;
     scope_end(SCOPE_FLUSH,flush_scope);
@@ -2305,6 +2419,20 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_emit_records(un
         publish_frame(&current_frame);
     }
     inside_update=false;current_frame=(Frame){0};
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_emit_lean_reference_records(unsigned count) {
+    test_expect(snapshot_control(&frame_control));
+    inside_update=true;
+    for(unsigned i=0;i<count;i++) {
+        uint64_t update=atomic_fetch_add(&updates,1)+1;
+        uint64_t start=1000+i*10,end=start+500,wall=600+i,cpu=300+i;
+        LeanReferenceFrame lean={.update_id=update,.phase=frame_control.phase,.thread_id=tid(),
+            .measurement_epoch=frame_control.measurement_epoch,.generation=frame_control.generation,
+            .start_ns=start,.end_ns=end,.wall_ns=wall,.cpu_ns=cpu,
+            .update_wall_ns=wall,.update_cpu_ns=cpu};
+        publish_lean_reference_frame(&lean);
+    }
+    inside_update=false;
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_reset_published_frame_count(void) {
     atomic_store(&test_published_frames,0);

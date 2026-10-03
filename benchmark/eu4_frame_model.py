@@ -53,6 +53,7 @@ LOADED_DISABLED_HARNESS=ROOT/"benchmark/.build/frame_model_loaded_disabled_harne
 MINIMAL_REFERENCE_HARNESS=ROOT/"benchmark/.build/frame_model_minimal_reference_harness"
 REFERENCE_TRANSITION_HARNESS=ROOT/"benchmark/.build/frame_model_reference_transition_harness"
 WRITER_PRODUCTION_HARNESS=ROOT/"benchmark/.build/frame_model_writer_production_harness"
+LEAN_REFERENCE_WRITER_HARNESS=ROOT/"benchmark/.build/frame_model_lean_reference_writer_harness"
 DRAW_ALIAS_HARNESS=ROOT/"benchmark/.build/frame_model_draw_alias_harness"
 ALIAS_INTERPOSE_HARNESS=ROOT/"benchmark/.build/frame_model_alias_interpose_harness"
 CONTROL_HARNESS=ROOT/"benchmark/.build/frame_model_control_harness"
@@ -107,6 +108,7 @@ def build() -> dict:
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
     commands = (
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-pthread","-o",str(WRITER_PRODUCTION_HARNESS),str(ROOT/"tests/frame_model_writer_production_harness.c")],
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-pthread","-o",str(LEAN_REFERENCE_WRITER_HARNESS),str(ROOT/"tests/frame_model_lean_reference_writer_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(DRAW_ALIAS_HARNESS),str(ROOT/"tests/frame_model_draw_alias_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(ALIAS_INTERPOSE_HARNESS),str(ROOT/"tests/frame_model_alias_interpose_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(CONTROL_HARNESS),str(ROOT/"tests/frame_model_control_harness.c")],
@@ -312,6 +314,8 @@ WP6_LOADED_DISABLED_CONTRACT = "wp6_loaded_disabled_v2"
 WP6_LOADED_DISABLED_CONTRACT_V1 = "wp6_loaded_disabled_v1"
 WP6_MINIMAL_REFERENCE_CONTRACT = "wp6_minimal_reference_v2"
 WP6_MINIMAL_REFERENCE_RECONCILIATION_PURPOSE = "wp6_minimal_reference_reconciliation_v1"
+WP7_LEAN_REFERENCE_VALIDITY = "wp7_lean_reference_validity_v1"
+REFERENCE_FRAME_INVALID_FLAGS = 1 | 512 | 1024 | 2048 | 4096
 REFERENCE_CPU_LADDER_STAGES = ("bare", "loaded-disabled", "reference")
 MINIMAL_REFERENCE_RECONCILIATION_STAGES = ("loaded-disabled", "minimal-reference", "reference")
 MINIMAL_REFERENCE_RECONCILIATION_COMPARISONS = (
@@ -1099,6 +1103,34 @@ def _validate_loaded_disabled_trace(log_path: Path) -> None:
     _validate_unpublished_profiler_trace(log_path, stage="loaded-disabled")
 
 
+def _validate_lean_reference_trace(log_path: Path, *, frames: int) -> None:
+    """Structural validity for production lean REFERENCE (no scope-tree requirement)."""
+    rows = frame_rows(log_path)
+    trace = read_rows(log_path)
+    if len(rows) != frames:
+        raise base.BenchmarkError(f"reference published {len(rows)} frames (expected {frames})")
+    failure = next((int(r[1]) for r in trace if r and r[0] == "Z"), None)
+    dropped = next((int(r[3]) for r in trace if r and r[0] == "Z" and len(r) > 3), 0)
+    if failure != 0 or dropped:
+        raise base.BenchmarkError("reference trace reports hook failures or dropped records")
+    if any(row["flags"] & REFERENCE_FRAME_INVALID_FLAGS for row in rows):
+        raise base.BenchmarkError("reference frame has boundary or writer failure flags")
+    update_ids = [row["update_id"] for row in rows]
+    if update_ids != sorted(update_ids) or len(set(update_ids)) != len(update_ids):
+        raise base.BenchmarkError("reference update_id sequence is not strictly increasing")
+    for row in rows:
+        if row["wall_ns"] <= 0 or row["cpu_ns"] <= 0:
+            raise base.BenchmarkError("reference frame has zero wall or cpu interval")
+        if row.get("measurement_epoch", 0) <= 0:
+            raise base.BenchmarkError("reference frame missing measurement_epoch")
+        if row.get("generation", 0) <= 0:
+            raise base.BenchmarkError("reference frame missing generation")
+        if row.get("thread_id", 0) == 0:
+            raise base.BenchmarkError("reference frame missing thread_id")
+        if row.get("end_ns", 0) <= row.get("start_ns", 0):
+            raise base.BenchmarkError("reference frame end_ns must exceed start_ns")
+
+
 def _offline_workload_mode_and_flags(stage: str) -> tuple[int, int]:
     if stage == "loaded-disabled":
         return MODE["reference"], 0
@@ -1159,11 +1191,14 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
         _validate_minimal_reference_control(control_path)
         return measured, None
     rows=frame_rows(log_path);trace=read_rows(log_path)
-    tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
-    failure=next((int(r[1]) for r in trace if r[0]=="Z"),None)
-    dropped=next((int(r[3]) for r in trace if r[0]=="Z" and len(r)>3),0)
-    if len(rows)!=frames or failure!=0 or dropped or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
-        raise base.BenchmarkError("Representative workload did not exercise valid production wrappers, scopes, and writer")
+    if stage == "reference":
+        _validate_lean_reference_trace(log_path, frames=frames)
+    else:
+        tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
+        failure=next((int(r[1]) for r in trace if r[0]=="Z"),None)
+        dropped=next((int(r[3]) for r in trace if r[0]=="Z" and len(r)>3),0)
+        if len(rows)!=frames or failure!=0 or dropped or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
+            raise base.BenchmarkError("Representative workload did not exercise valid production wrappers, scopes, and writer")
     if stage!="reference" and sum(r["draws"] for r in rows)!=frames*recipe["draws"]:
         raise base.BenchmarkError("Representative producer draw counts differ from passive recipe")
     if stage!="reference":
@@ -1175,7 +1210,12 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
             raise base.BenchmarkError("Upload totals differ")
         if counts[7][1:]!=tuple(sum(f[field] for f in rows)//256 for field in ("draw_wall_ns_est","draw_cpu_ns_est")):
             raise base.BenchmarkError("Sampled draw timing totals differ")
-    measured.update(frames=len(rows),tree_reconciliation=tree["tree_reconciliation"])
+    failure = next((int(r[1]) for r in trace if r and r[0] == "Z"), None)
+    dropped = next((int(r[3]) for r in trace if r and r[0] == "Z" and len(r) > 3), 0)
+    if stage == "reference":
+        measured.update(frames=len(rows), reference_validity=WP7_LEAN_REFERENCE_VALIDITY)
+    else:
+        measured.update(frames=len(rows), tree_reconciliation=tree["tree_reconciliation"])
     if diagnostic:
         gpu_metrics=next((list(map(int,row[1:4])) for row in trace if row and row[0]=="M"),[0,0,0])
         record_total=next((int(row[1]) for row in trace if row and row[0]=="N"),0)
