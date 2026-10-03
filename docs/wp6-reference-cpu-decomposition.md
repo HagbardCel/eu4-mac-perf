@@ -161,7 +161,7 @@ Short memo (like [WP5 requalification timing memo](wp5-requalification-timing-me
 - [x] Branch: `wp6-reference-cpu-decomposition` from `main` @ post–PR #10 merge (`602ca4b`).
 - [x] Phase A inventory — [wp6-phase-a-reference-inventory.md](wp6-phase-a-reference-inventory.md).
 - [x] Phase B ladder: `loaded-disabled` contract + `reference-cpu-decomposition` capture (minimal-reference / marginal ablations still open).
-- [ ] Phase C Mac capture + manifest registration for ladder results.
+- [x] Phase C Mac capture + manifest registration — [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md) @ `82922f3`.
 - [ ] Mac capture → immutable evidence + manifest registration.
 - [ ] Phase D memo; no Tier-1 gate changes.
 

@@ -18,6 +18,19 @@
       "notes": "Post-PR#8 training-only capture; timing decomposition in docs/wp5-requalification-timing-memo-20261003.md. Not authoritative WP1."
     }
   ],
+  "reference_cpu_decomposition_archives": [
+    {
+      "work_package": "WP6",
+      "purpose": "wp6_reference_cpu_decomposition_v1",
+      "evidence_id": "20261003T083731.257302Z-e4e73118",
+      "archive_path": "analysis/evidence/frame-model-offline-82922f3-20261003T083731.257302Z-e4e73118.json",
+      "archive_sha256_committed": "8b1c560e660157ed46842a519576802b554c4e0978bd37785c1a7d0234188d90",
+      "git_commit": "82922f3915eeddb709f99f83867981a6a1f792bf",
+      "captured_at_utc": "20261003T083731.257302Z-e4e73118",
+      "loaded_disabled_contract": "wp6_loaded_disabled_v1",
+      "notes": "First bare/loaded-disabled/reference ladder on training recipes. Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Diagnostic only."
+    }
+  ],
   "diagnostic_archives": [
     {
       "evidence_id": "20261002T220742.210844Z-129e5bf5",
