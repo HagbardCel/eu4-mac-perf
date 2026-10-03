@@ -25,13 +25,20 @@ TIER1_V3_REFERENCE_ABSOLUTE_FLOOR_US = 6.0
 TIER1_V3_COUNTERS_RELATIVE_LIMIT = 0.12
 TIER1_V3_COUNTERS_ABSOLUTE_FLOOR_US = 11.0
 TIER1_V3_ABSOLUTE_CAP_US_PER_FRAME = 50.0
-TIER1_V3_COMPLETION_WALL_RELATIVE_LIMIT = 0.20
+# Report-only diagnostic band for completion wall (not an admission gate).
+TIER1_V3_COMPLETION_WALL_DIAGNOSTIC_RELATIVE_LIMIT = 0.05
+
+TIER1_V3_TRAINING_RECIPE_NAMES = ("mesh", "borders", "text_ui")
+TIER1_V3_CAUSAL_STAGES = frozenset({"bare", "reference", "counters"})
+TIER1_V3_TRIAL_COUNT = workload.TIER1_PAIR_COUNT
 
 EXPECTED_CAUSAL_GATE_NAMES_V3 = (
-    "reference_submission_plus_drain_elapsed_ns",
     "reference_cpu_ns",
-    "counters_submission_plus_drain_elapsed_ns",
     "counters_cpu_ns",
+)
+EXPECTED_V3_COMPLETION_WALL_GATE_NAMES = (
+    "reference_submission_plus_drain_elapsed_ns",
+    "counters_submission_plus_drain_elapsed_ns",
 )
 
 EXPECTED_CAUSAL_GATE_NAMES = (
@@ -216,7 +223,7 @@ class Tier1CausalPolicyV3:
     reference_absolute_floor_us: float = TIER1_V3_REFERENCE_ABSOLUTE_FLOOR_US
     counters_relative_limit: float = TIER1_V3_COUNTERS_RELATIVE_LIMIT
     counters_absolute_floor_us: float = TIER1_V3_COUNTERS_ABSOLUTE_FLOOR_US
-    completion_wall_relative_limit: float = TIER1_V3_COMPLETION_WALL_RELATIVE_LIMIT
+    completion_wall_diagnostic_relative_limit: float = TIER1_V3_COMPLETION_WALL_DIAGNOSTIC_RELATIVE_LIMIT
     absolute_cap_us_per_frame: float = TIER1_V3_ABSOLUTE_CAP_US_PER_FRAME
     bootstrap_seed: int = TIER1_BOOTSTRAP_SEED
     bootstrap_samples: int = TIER1_BOOTSTRAP_SAMPLES
@@ -255,12 +262,6 @@ class Tier1CausalPolicyV3:
         return max(median, abs(float(interval[0])), abs(float(interval[1]))) <= relative_limit
 
     def hybrid_gate_passes(self, gate: dict, *, gate_name: str, frames: int) -> bool:
-        if gate_name.endswith("_elapsed_ns"):
-            return self._relative_ci_passes(
-                gate,
-                relative_limit=self.completion_wall_relative_limit,
-                frames=frames,
-            )
         pairs = gate.get("pairs")
         valid, _ = validate_pairs(pairs)
         if not valid:
@@ -293,20 +294,6 @@ class Tier1CausalPolicyV3:
         valid, reason = validate_pairs(pairs)
         if not valid:
             return "unavailable", dict(gate), reason
-        if gate_name.endswith("_elapsed_ns"):
-            evaluated = workload.paired_summary(
-                pairs,
-                self.completion_wall_relative_limit,
-                frames,
-                bootstrap_seed=self.bootstrap_seed,
-                bootstrap_samples=self.bootstrap_samples,
-                ci_low_index=self.bootstrap_ci_low_index,
-                ci_high_index=self.bootstrap_ci_high_index,
-            )
-            evaluated["completion_wall_relative_limit"] = self.completion_wall_relative_limit
-            if self.hybrid_gate_passes(gate, gate_name=gate_name, frames=frames):
-                return "passed", evaluated, None
-            return "failed", evaluated, None
         relative_limit, floor_us = self._hybrid_limits_for_gate(gate_name)
         evaluated = workload.paired_summary(
             pairs,
@@ -335,6 +322,114 @@ class Tier1CausalPolicyV3:
 TIER1_CAUSAL_POLICY_V3 = Tier1CausalPolicyV3(TIER1_CAUSAL_POLICY_VERSION_V3)
 
 
+def _expected_stage_order_for_trial(trial: int) -> list[str]:
+    stages = ["bare", "reference", "counters"]
+    return list(reversed(stages)) if trial % 2 else stages
+
+
+def validate_wp8_steady_state_training_recipes(
+    recipes: list[dict],
+) -> str | None:
+    if len(recipes) != len(TIER1_V3_TRAINING_RECIPE_NAMES):
+        return (
+            f"expected exactly {len(TIER1_V3_TRAINING_RECIPE_NAMES)} training recipes, "
+            f"got {len(recipes)}"
+        )
+    seen: set[str] = set()
+    for entry in recipes:
+        recipe = entry.get("recipe") or {}
+        name = recipe.get("name")
+        role = recipe.get("role")
+        if role != "training":
+            return f"recipe {name!r} has role {role!r}; only training recipes allowed"
+        if name not in TIER1_V3_TRAINING_RECIPE_NAMES:
+            return f"unexpected recipe name {name!r}"
+        if name in seen:
+            return f"duplicate training recipe {name!r}"
+        seen.add(name)
+    missing = set(TIER1_V3_TRAINING_RECIPE_NAMES) - seen
+    if missing:
+        return f"missing training recipes: {', '.join(sorted(missing))}"
+    return None
+
+
+def validate_wp8_steady_state_recipe_measurement_contract(
+    recipe_entry: dict,
+    *,
+    variant: str,
+    policy: Tier1CausalPolicyV3 = TIER1_CAUSAL_POLICY_V3,
+) -> str | None:
+    variants_meta = recipe_entry.get("measurement_variants") or []
+    meta = next((item for item in variants_meta if item.get("name") == variant), None)
+    if meta is None:
+        return f"measurement_variants missing {variant}"
+    if int(meta.get("post_arm_prime_frames", -1)) != policy.post_arm_prime_frames:
+        return (
+            f"variant {variant} post_arm_prime_frames={meta.get('post_arm_prime_frames')} "
+            f"(expected {policy.post_arm_prime_frames})"
+        )
+    if int(meta.get("measured_frames", -1)) != policy.measured_frames:
+        return (
+            f"variant {variant} measured_frames={meta.get('measured_frames')} "
+            f"(expected {policy.measured_frames})"
+        )
+    trials = recipe_entry.get("trials") or []
+    if len(trials) != TIER1_V3_TRIAL_COUNT:
+        return f"expected {TIER1_V3_TRIAL_COUNT} trials, got {len(trials)}"
+    expected_published = policy.post_arm_prime_frames + policy.measured_frames
+    recipe_name = (recipe_entry.get("recipe") or {}).get("name", "?")
+    for trial in trials:
+        trial_id = trial.get("trial")
+        if trial.get("order") != _expected_stage_order_for_trial(int(trial_id or 0)):
+            return (
+                f"recipe {recipe_name} trial {trial_id} stage order "
+                f"{trial.get('order')} != expected {_expected_stage_order_for_trial(int(trial_id or 0))}"
+            )
+        block = (trial.get("variants") or {}).get(variant)
+        if block is None:
+            return f"recipe {recipe_name} trial {trial_id} missing variant {variant}"
+        measurement = block.get("measurement") or {}
+        if int(measurement.get("post_arm_prime_frames", -1)) != policy.post_arm_prime_frames:
+            return (
+                f"recipe {recipe_name} trial {trial_id} variant measurement "
+                f"post_arm_prime_frames mismatch"
+            )
+        if int(measurement.get("measured_frames", -1)) != policy.measured_frames:
+            return (
+                f"recipe {recipe_name} trial {trial_id} variant measurement "
+                f"measured_frames mismatch"
+            )
+        stages = block.get("stages") or {}
+        if set(stages) != TIER1_V3_CAUSAL_STAGES:
+            return (
+                f"recipe {recipe_name} trial {trial_id} expected stages "
+                f"{sorted(TIER1_V3_CAUSAL_STAGES)}, got {sorted(stages)}"
+            )
+        for stage_name in TIER1_V3_CAUSAL_STAGES:
+            stage = stages[stage_name]
+            if int(stage.get("post_arm_prime_frames", -1)) != policy.post_arm_prime_frames:
+                return (
+                    f"recipe {recipe_name} trial {trial_id} stage {stage_name} "
+                    f"post_arm_prime_frames={stage.get('post_arm_prime_frames')}"
+                )
+            if int(stage.get("measured_frames", -1)) != policy.measured_frames:
+                return (
+                    f"recipe {recipe_name} trial {trial_id} stage {stage_name} "
+                    f"measured_frames={stage.get('measured_frames')}"
+                )
+        reference = stages["reference"]
+        counters = stages["counters"]
+        if int(reference.get("frames", -1)) != policy.measured_frames:
+            return f"recipe {recipe_name} trial {trial_id} reference frames mismatch"
+        if int(reference.get("published_frames", -1)) != expected_published:
+            return f"recipe {recipe_name} trial {trial_id} reference published_frames mismatch"
+        if int(counters.get("frames", -1)) != policy.measured_frames:
+            return f"recipe {recipe_name} trial {trial_id} counters frames mismatch"
+        if int(counters.get("published_frames", -1)) != expected_published:
+            return f"recipe {recipe_name} trial {trial_id} counters published_frames mismatch"
+    return None
+
+
 def gates_from_wp8_steady_state_recipe(
     recipe_entry: dict,
     *,
@@ -344,10 +439,43 @@ def gates_from_wp8_steady_state_recipe(
     if variant not in comparisons:
         raise ValueError(f"variant {variant} missing from steady-state recipe")
     block = comparisons[variant]
-    missing = [name for name in EXPECTED_CAUSAL_GATE_NAMES_V3 if name not in block]
+    all_names = (*EXPECTED_CAUSAL_GATE_NAMES_V3, *EXPECTED_V3_COMPLETION_WALL_GATE_NAMES)
+    missing = [name for name in all_names if name not in block]
     if missing:
         raise ValueError(f"variant {variant} missing gates: {', '.join(missing)}")
-    return {name: block[name] for name in EXPECTED_CAUSAL_GATE_NAMES_V3}
+    return {name: block[name] for name in all_names}
+
+
+def _summarize_completion_wall_diagnostic(
+    gate: dict,
+    *,
+    policy: Tier1CausalPolicyV3,
+    frames: int,
+) -> dict:
+    pairs = gate.get("pairs")
+    valid, reason = validate_pairs(pairs)
+    if not valid:
+        return {"status": "unavailable", "reason": reason, "pairs": pairs}
+    evaluated = workload.paired_summary(
+        pairs,
+        policy.completion_wall_diagnostic_relative_limit,
+        frames,
+        bootstrap_seed=policy.bootstrap_seed,
+        bootstrap_samples=policy.bootstrap_samples,
+        ci_low_index=policy.bootstrap_ci_low_index,
+        ci_high_index=policy.bootstrap_ci_high_index,
+    )
+    evaluated.pop("limit", None)
+    evaluated["status"] = "diagnostic"
+    evaluated["acceptance_gate"] = False
+    evaluated["reference_band_fraction"] = policy.completion_wall_diagnostic_relative_limit
+    interval = evaluated["confidence_interval_95"]
+    median = abs(float(evaluated["median_fraction"]))
+    within = max(median, abs(float(interval[0])), abs(float(interval[1]))) <= (
+        policy.completion_wall_diagnostic_relative_limit
+    )
+    evaluated["within_diagnostic_band"] = within
+    return evaluated
 
 
 def evaluate_recipe_causal_v3(
@@ -356,43 +484,61 @@ def evaluate_recipe_causal_v3(
     *,
     variant: str = TIER1_V3_MEASUREMENT_VARIANT,
     measured_frames: int | None = None,
+    skip_measurement_contract: bool = False,
 ) -> dict:
+    recipe_name = (recipe_entry.get("recipe") or {}).get("name")
+    if not skip_measurement_contract:
+        contract_reason = validate_wp8_steady_state_recipe_measurement_contract(
+            recipe_entry,
+            variant=variant,
+            policy=policy,
+        )
+        if contract_reason:
+            return {
+                "recipe": recipe_name,
+                "policy_version": policy.version,
+                "measurement_variant": variant,
+                "status": "unavailable",
+                "reason": contract_reason,
+                "gates": {},
+                "completion_wall_diagnostic": {},
+                "results": {},
+            }
     try:
         gates = gates_from_wp8_steady_state_recipe(recipe_entry, variant=variant)
     except ValueError as error:
         return {
-            "recipe": (recipe_entry.get("recipe") or {}).get("name"),
+            "recipe": recipe_name,
             "policy_version": policy.version,
             "measurement_variant": variant,
             "status": "unavailable",
             "reason": str(error),
             "gates": {},
+            "completion_wall_diagnostic": {},
             "results": {},
         }
-    frames = measured_frames
-    if frames is None:
-        variant_meta = next(
-            (
-                item
-                for item in (recipe_entry.get("measurement_variants") or [])
-                if item.get("name") == variant
-            ),
-            None,
-        )
-        frames = int((variant_meta or {}).get("measured_frames") or policy.measured_frames)
+    frames = policy.measured_frames if measured_frames is None else measured_frames
     evaluated_gates: dict[str, dict] = {}
     results: dict[str, str] = {}
     for name in EXPECTED_CAUSAL_GATE_NAMES_V3:
         status, evaluated, reason = policy.summarize_gate(gates[name], gate_name=name, frames=frames)
         evaluated_gates[name] = evaluated
         results[name] = status if reason is None else "unavailable"
+    completion_wall: dict[str, dict] = {}
+    for name in EXPECTED_V3_COMPLETION_WALL_GATE_NAMES:
+        completion_wall[name] = _summarize_completion_wall_diagnostic(
+            gates[name],
+            policy=policy,
+            frames=frames,
+        )
     return {
-        "recipe": (recipe_entry.get("recipe") or {}).get("name"),
+        "recipe": recipe_name,
         "policy_version": policy.version,
         "measurement_variant": variant,
         "measured_frames": frames,
         "post_arm_prime_frames": policy.post_arm_prime_frames,
         "gates": evaluated_gates,
+        "completion_wall_diagnostic": completion_wall,
         "results": results,
         "status": _merge_status(*results.values()),
     }
@@ -406,14 +552,28 @@ def evaluate_wp8_steady_state_training_v3(
 ) -> dict:
     block = preflight.get("steady_state_tier1_diagnosis") or {}
     recipes = block.get("recipes") or []
+    recipe_set_reason = validate_wp8_steady_state_training_recipes(recipes)
+    if recipe_set_reason:
+        return {
+            "status": "unavailable",
+            "reason": recipe_set_reason,
+            "policy_version": policy.version,
+            "measurement_variant": variant,
+            "post_arm_prime_frames": policy.post_arm_prime_frames,
+            "measured_frames": policy.measured_frames,
+            "training_recipes": [],
+        }
+    by_name = {(entry.get("recipe") or {}).get("name"): entry for entry in recipes}
     evaluations = [
-        evaluate_recipe_causal_v3(entry, policy, variant=variant) for entry in recipes
+        evaluate_recipe_causal_v3(by_name[name], policy, variant=variant)
+        for name in TIER1_V3_TRAINING_RECIPE_NAMES
     ]
     return {
-        "status": _merge_status(*(item["status"] for item in evaluations)) if evaluations else "unavailable",
+        "status": _merge_status(*(item["status"] for item in evaluations)),
         "policy_version": policy.version,
         "measurement_variant": variant,
         "post_arm_prime_frames": policy.post_arm_prime_frames,
+        "measured_frames": policy.measured_frames,
         "training_recipes": evaluations,
     }
 
