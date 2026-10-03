@@ -157,7 +157,7 @@ Short memo (like [WP5 requalification timing memo](wp5-requalification-timing-me
 ## Branch / issue checklist
 
 - [x] Branch: `wp6-reference-cpu-decomposition` from `main` @ post–PR #10 merge (`602ca4b`).
-- [ ] Phase A inventory PR (docs + comments only acceptable).
+- [x] Phase A inventory — [wp6-phase-a-reference-inventory.md](wp6-phase-a-reference-inventory.md).
 - [ ] Phase B ablation hooks + unit tests (portable).
 - [ ] Phase C capture + provenance tests (mirror WP5b patterns).
 - [ ] Mac capture → immutable evidence + manifest registration.
