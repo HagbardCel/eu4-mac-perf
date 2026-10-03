@@ -537,6 +537,45 @@ static void flush_output(void) {
     bool ok=eu4_writer_flush(&output_buffer,output_write,NULL,now_ns(CLOCK_UPTIME_RAW));
     if(!failed) output_failure(ok);
 }
+static Frame frame_from_lean_reference(const LeanReferenceFrame *lf) {
+    Frame f={0};
+    f.update_id=lf->update_id;
+    f.phase=lf->phase;
+    f.thread_id=lf->thread_id;
+    f.wall_ns=lf->wall_ns;
+    f.cpu_ns=lf->cpu_ns;
+    f.update_wall_ns=lf->update_wall_ns;
+    f.update_cpu_ns=lf->update_cpu_ns;
+    f.flags=lf->flags;
+    f.measurement_epoch=lf->measurement_epoch;
+    f.start_ns=lf->start_ns;
+    f.end_ns=lf->end_ns;
+    f.generation=lf->generation;
+    f.publication_sequence=lf->publication_sequence;
+    return f;
+}
+static int serialize_frame_record(const Frame *f,char *line,size_t cap) {
+    unsigned long long values[]={f->update_id,f->render_id,f->present_id,f->phase,
+        f->thread_id,f->wall_ns,f->cpu_ns,f->update_wall_ns,f->update_cpu_ns,
+        f->draws,f->indices,f->triangles,f->draw_wall_ns,f->draw_cpu_ns,f->draw_timed_samples,
+        f->buffer_calls,f->buffer_bytes,f->buffer_storage_bytes,f->buffer_upload_bytes,
+        f->texture_calls,f->texture_bytes,f->state_calls,f->texture_binds,f->buffer_binds,
+        f->program_switches,f->uniform_calls,f->uniform_bytes,f->bucket_calls,f->append_calls,
+        f->idle_wall_ns,f->idle_cpu_ns,f->render_wall_ns,f->render_cpu_ns,
+        f->map_wall_ns,f->map_cpu_ns,f->present_wall_ns,f->present_cpu_ns,
+        f->wait_ns,f->wait_cpu_ns,f->sleep_ns,f->flags,f->forwarded_draws,f->suppressed_draws,
+        f->render_attempts,f->render_executed,f->present_scene_calls,f->present_calls,
+        f->measurement_epoch,f->start_ns,f->end_ns,f->render_start_ns,f->render_end_ns,f->present_time_ns,
+        f->generation,f->sample_window,f->render_deadline_ns,f->render_lateness_ns,f->render_missed_deadlines,
+        f->render_overruns,f->raster_challenges};
+    size_t used=(size_t)snprintf(line,cap,"F");
+    for(size_t i=0;i<sizeof(values)/sizeof(values[0]) && used<cap;i++)
+        used+=(size_t)snprintf(line+used,cap-used,",%llu",values[i]);
+    if(used>=cap) return -1;
+    line[used++]='\n';
+    line[used]='\0';
+    return (int)used;
+}
 static void write_api_record(char kind,const Frame *f,uint64_t a,uint64_t b,uint64_t c,uint64_t d) {
     char line[512];int n=snprintf(line,sizeof(line),
         "%c,%llu,%llu,%llu,%llu,0,0,0,0,0,0,0,0,%llu,%llu,%llu,%llu,%llu,%llu,0\n",
@@ -561,58 +600,26 @@ static void *writer(void *unused) {
         pending|=t<h || dt<dh;
         while(t<h || dt<dh) {
             uint64_t expected=p->consumed_sequence+1;
-            FrameSlot *slot_at_t=&p->frames[t%FRAME_CAPACITY];
-            uint64_t seq_at_t=slot_at_t->slot_kind==FRAME_SLOT_LEAN_REFERENCE
-                ? slot_at_t->payload.lean.publication_sequence
-                : slot_at_t->payload.frame.publication_sequence;
-            bool take_frame=t<h && seq_at_t==expected;
+            bool take_frame=false;
+            if(t<h) {
+                FrameSlot *slot=&p->frames[t%FRAME_CAPACITY];
+                uint64_t seq=slot->slot_kind==FRAME_SLOT_LEAN_REFERENCE
+                    ? slot->payload.lean.publication_sequence
+                    : slot->payload.frame.publication_sequence;
+                take_frame=seq==expected;
+            }
             bool take_detail=dt<dh && p->details[dt%DETAIL_CAPACITY].publication_sequence==expected;
             /* A head snapshot may miss the earlier publication in the other queue. */
             if(!take_frame && !take_detail) break;
             if(take_frame) {
             FrameSlot *s=&p->frames[t%FRAME_CAPACITY];
             char line[1536];
-            if(s->slot_kind==FRAME_SLOT_LEAN_REFERENCE) {
-                LeanReferenceFrame lf=s->payload.lean;
-                unsigned long long values[]={lf.update_id,0,0,lf.phase,
-                    lf.thread_id,lf.wall_ns,lf.cpu_ns,lf.update_wall_ns,lf.update_cpu_ns,
-                    0,0,0,0,0,0,
-                    0,0,0,0,
-                    0,0,0,0,
-                    0,0,0,0,
-                    0,0,0,0,
-                    0,0,0,0,0,0,lf.flags,
-                    0,0,0,0,
-                    0,0,lf.measurement_epoch,lf.start_ns,lf.end_ns,
-                    0,0,0,lf.generation,0,
-                    0,0,0,0,0};
-                size_t used=(size_t)snprintf(line,sizeof(line),"F");
-                for(size_t i=0;i<sizeof(values)/sizeof(values[0]) && used<sizeof(line);i++)
-                    used+=(size_t)snprintf(line+used,sizeof(line)-used,",%llu",values[i]);
-                int n=(int)used;
-                if(used<sizeof(line)) { line[used++]='\n'; line[used]='\0'; n=(int)used; }
-                if(n>0 && (size_t)n<sizeof(line)) write_record(line,(size_t)n);
-            } else {
-            Frame f=s->payload.frame;
-            unsigned long long values[]={f.update_id,f.render_id,f.present_id,f.phase,
-                f.thread_id,f.wall_ns,f.cpu_ns,f.update_wall_ns,f.update_cpu_ns,
-                f.draws,f.indices,f.triangles,f.draw_wall_ns,f.draw_cpu_ns,f.draw_timed_samples,
-                f.buffer_calls,f.buffer_bytes,f.buffer_storage_bytes,f.buffer_upload_bytes,
-                f.texture_calls,f.texture_bytes,f.state_calls,f.texture_binds,
-                f.buffer_binds,f.program_switches,f.uniform_calls,f.uniform_bytes,
-                f.bucket_calls,f.append_calls,f.idle_wall_ns,f.idle_cpu_ns,
-                f.render_wall_ns,f.render_cpu_ns,f.map_wall_ns,f.map_cpu_ns,
-                f.present_wall_ns,f.present_cpu_ns,f.wait_ns,f.wait_cpu_ns,f.sleep_ns,f.flags,
-                f.forwarded_draws,f.suppressed_draws,f.render_attempts,f.render_executed,
-                f.present_scene_calls,f.present_calls,f.measurement_epoch,f.start_ns,f.end_ns,
-                f.render_start_ns,f.render_end_ns,f.present_time_ns,f.generation,f.sample_window,
-                f.render_deadline_ns,f.render_lateness_ns,f.render_missed_deadlines,f.render_overruns,f.raster_challenges};
-            size_t used=(size_t)snprintf(line,sizeof(line),"F");
-            for(size_t i=0;i<sizeof(values)/sizeof(values[0]) && used<sizeof(line);i++)
-                used+=(size_t)snprintf(line+used,sizeof(line)-used,",%llu",values[i]);
-            int n=(int)used;
-            if(used<sizeof(line)) { line[used++]='\n'; line[used]='\0'; n=(int)used; }
+            Frame f=s->slot_kind==FRAME_SLOT_LEAN_REFERENCE
+                ? frame_from_lean_reference(&s->payload.lean)
+                : s->payload.frame;
+            int n=serialize_frame_record(&f,line,sizeof(line));
             if(n>0 && (size_t)n<sizeof(line)) write_record(line,(size_t)n);
+            if(s->slot_kind==FRAME_SLOT_FULL) {
             if(f.flags&2048) {
                 int m=snprintf(line,sizeof(line),"L,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
                     (unsigned long long)f.update_id,(unsigned long long)f.render_id,(unsigned long long)f.phase,
@@ -2412,6 +2419,20 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_emit_records(un
         publish_frame(&current_frame);
     }
     inside_update=false;current_frame=(Frame){0};
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_emit_lean_reference_records(unsigned count) {
+    test_expect(snapshot_control(&frame_control));
+    inside_update=true;
+    for(unsigned i=0;i<count;i++) {
+        uint64_t update=atomic_fetch_add(&updates,1)+1;
+        uint64_t start=1000+i*10,end=start+500,wall=600+i,cpu=300+i;
+        LeanReferenceFrame lean={.update_id=update,.phase=frame_control.phase,.thread_id=tid(),
+            .measurement_epoch=frame_control.measurement_epoch,.generation=frame_control.generation,
+            .start_ns=start,.end_ns=end,.wall_ns=wall,.cpu_ns=cpu,
+            .update_wall_ns=wall,.update_cpu_ns=cpu};
+        publish_lean_reference_frame(&lean);
+    }
+    inside_update=false;
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_reset_published_frame_count(void) {
     atomic_store(&test_published_frames,0);

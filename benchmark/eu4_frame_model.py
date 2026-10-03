@@ -53,6 +53,7 @@ LOADED_DISABLED_HARNESS=ROOT/"benchmark/.build/frame_model_loaded_disabled_harne
 MINIMAL_REFERENCE_HARNESS=ROOT/"benchmark/.build/frame_model_minimal_reference_harness"
 REFERENCE_TRANSITION_HARNESS=ROOT/"benchmark/.build/frame_model_reference_transition_harness"
 WRITER_PRODUCTION_HARNESS=ROOT/"benchmark/.build/frame_model_writer_production_harness"
+LEAN_REFERENCE_WRITER_HARNESS=ROOT/"benchmark/.build/frame_model_lean_reference_writer_harness"
 DRAW_ALIAS_HARNESS=ROOT/"benchmark/.build/frame_model_draw_alias_harness"
 ALIAS_INTERPOSE_HARNESS=ROOT/"benchmark/.build/frame_model_alias_interpose_harness"
 CONTROL_HARNESS=ROOT/"benchmark/.build/frame_model_control_harness"
@@ -107,6 +108,7 @@ def build() -> dict:
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
     commands = (
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-pthread","-o",str(WRITER_PRODUCTION_HARNESS),str(ROOT/"tests/frame_model_writer_production_harness.c")],
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-pthread","-o",str(LEAN_REFERENCE_WRITER_HARNESS),str(ROOT/"tests/frame_model_lean_reference_writer_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(DRAW_ALIAS_HARNESS),str(ROOT/"tests/frame_model_draw_alias_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(ALIAS_INTERPOSE_HARNESS),str(ROOT/"tests/frame_model_alias_interpose_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-o",str(CONTROL_HARNESS),str(ROOT/"tests/frame_model_control_harness.c")],
