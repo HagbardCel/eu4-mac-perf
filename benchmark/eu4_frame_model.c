@@ -224,8 +224,13 @@ static inline bool test_passive_reference_hooks(void) {
 }
 static uint64_t test_measured_state_queries,test_measured_gpu_initializations;
 static bool test_gpu_timestamps=true,test_forensic_records=true,test_cached_metadata=false;
+static bool test_draw_timed_samples=true;
 static bool test_counters_lite,test_counters_deferred_flush;
 static _Atomic uint64_t test_gpu_stamps,test_gpu_polls,test_gpu_results,test_detail_records;
+static inline bool draw_timed_sample_clock_active(bool measuring) {
+    if(!test_draw_timed_samples) return false;
+    return measuring && detail_active && (++draw_sample_seq&255u)==1u;
+}
 #endif
 
 static bool gpu_timestamps_enabled(void) {
@@ -1373,7 +1378,11 @@ static void gl_draw_elements(GLenum mode,GLsizei count,GLenum type,const void *i
         draw_detail(caller,1,mode,count,type,(uintptr_t)indices,0,0,1);
     }
     bool measuring=measurement_active();
+#ifdef EU4_FRAME_MODEL_TEST
+    bool timed=draw_timed_sample_clock_active(measuring);
+#else
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
+#endif
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
     if(control && frame_control.mode==DROP_DRAWS) current_frame.suppressed_draws++;
     else { if(real_fn) real_fn(mode,count,type,indices); current_frame.forwarded_draws++; }
@@ -1394,7 +1403,11 @@ static void gl_draw_base(GLenum mode,GLsizei count,GLenum type,const void *indic
         draw_detail(caller,2,mode,count,type,(uintptr_t)indices,0,base,1);
     }
     bool measuring=measurement_active();
+#ifdef EU4_FRAME_MODEL_TEST
+    bool timed=draw_timed_sample_clock_active(measuring);
+#else
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
+#endif
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
     uint32_t m=control?frame_control.mode:OFF;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
@@ -1416,7 +1429,11 @@ static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
         draw_detail(caller,3,mode,count,0,0,(uint32_t)first,0,1);
     }
     bool measuring=measurement_active();
+#ifdef EU4_FRAME_MODEL_TEST
+    bool timed=draw_timed_sample_clock_active(measuring);
+#else
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
+#endif
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
     uint32_t m=control?frame_control.mode:OFF;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
@@ -1452,7 +1469,11 @@ static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,uint
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
     if(detail_active) draw_detail(caller,4,mode,count,type,(uintptr_t)indices,0,0,instances);
     bool measuring=measurement_active();
+#ifdef EU4_FRAME_MODEL_TEST
+    bool timed=draw_timed_sample_clock_active(measuring);
+#else
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
+#endif
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
     uint32_t m=frame_control.mode;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
@@ -1484,7 +1505,11 @@ static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,uintptr_
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
     if(detail_active) draw_detail(caller,5,mode,count,0,0,(uint32_t)first,0,instances);
     bool measuring=measurement_active();
+#ifdef EU4_FRAME_MODEL_TEST
+    bool timed=draw_timed_sample_clock_active(measuring);
+#else
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
+#endif
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
     uint32_t m=frame_control.mode;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
@@ -1516,7 +1541,11 @@ static void gl_draw_elements_instanced_base_with(DrawElementsInstancedBaseFn rea
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
     if(detail_active) draw_detail(caller,6,mode,count,type,(uintptr_t)indices,0,base,instances);
     bool measuring=measurement_active();
+#ifdef EU4_FRAME_MODEL_TEST
+    bool timed=draw_timed_sample_clock_active(measuring);
+#else
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
+#endif
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
     uint32_t m=frame_control.mode;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
@@ -2562,7 +2591,8 @@ static void initialize(void) {
        !test_read_toggle("EU4_TEST_FORENSIC_RECORDS",true,&test_forensic_records) ||
        !test_read_toggle("EU4_TEST_CACHED_METADATA",false,&test_cached_metadata) ||
        !test_read_toggle("EU4_TEST_COUNTERS_LITE",false,&test_counters_lite) ||
-       !test_read_toggle("EU4_TEST_COUNTERS_DEFERRED_FLUSH",false,&test_counters_deferred_flush)) abort();
+       !test_read_toggle("EU4_TEST_COUNTERS_DEFERRED_FLUSH",false,&test_counters_deferred_flush) ||
+       !test_read_toggle("EU4_TEST_DRAW_TIMED_SAMPLES",true,&test_draw_timed_samples)) abort();
     if(test_loaded_disabled && test_minimal_reference) abort();
     if(test_counters_deferred_flush && !test_counters_lite) abort();
 #endif

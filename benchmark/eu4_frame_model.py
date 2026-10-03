@@ -26,6 +26,7 @@ import eu4_diagnostic as diagnostic
 import eu4_engine_inventory as engine
 import frame_model_workload as workload
 import frame_model_draw_api as draw_api
+import frame_model_observer_bias as observer_bias
 import frame_model_tier1_policy as tier1
 from frame_model_gates import GateEvidence, required_gates_for_report_kind, run_budget, RUN_DEADLINE_SECONDS
 from fixture_manager import FixtureManager
@@ -324,6 +325,7 @@ WP11_TIER1_V4_REQUALIFICATION_CAPTURE_KIND = "wp11_tier1_v4_requalification"
 WP11_TERMINAL_TIER1_V4_EVIDENCE_ID = "20261003T173210.094480Z-33339073"
 LIVE_MEASUREMENT_QUALIFIED = "qualified_v1"
 LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC = "intrusive_diagnostic_v1"
+OBSERVER_BIAS_CALIBRATION_PURPOSE = observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION
 LIVE_INTRUSIVE_DIAGNOSTIC_RUN_BLOCKED = (
     "Live intrusive diagnostic capture (Phase C: R-C-R-C-R protocol) is not implemented yet. "
     "Use `python3 benchmark/eu4_frame_model.py preflight --intrusive-diagnostic-contract` "
@@ -712,6 +714,9 @@ def _offline_workloads_payload(preflight_evidence: dict) -> dict:
     representative = preflight_evidence.get("representative_workloads")
     if representative:
         return representative
+    observer_bias_block = preflight_evidence.get("observer_bias_calibration") or {}
+    if observer_bias_block.get("calibration_version") == observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION:
+        return observer_bias_block
     return (
         preflight_evidence.get("completion_workloads")
         or preflight_evidence.get("reference_cpu_workloads")
@@ -731,6 +736,19 @@ def _offline_workload_source_hashes() -> dict:
 
 
 def _offline_policy_versions(workloads: dict) -> dict:
+    if workloads.get("calibration_version") == observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION:
+        return {
+            "observer_bias_calibration": observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION,
+            "recipe": (workloads.get("recipe") or {}).get("name"),
+            "scale_factors": workloads.get("scale_factors"),
+            "repetitions": workloads.get("repetitions"),
+            "estimator": "ols_through_origin_paired_differential",
+            "primitive_catalog": [item["primitive_id"] for item in workloads.get("primitive_catalog") or []],
+            "observer_bias_text": (
+                "Offline paired differential slopes for intrusive diagnostic bias correction; "
+                "aggregate controls are not additive with decomposition primitives."
+            ),
+        }
     if workloads.get("reference_cpu_decomposition"):
         return {
             "reference_cpu_decomposition": WP6_REFERENCE_CPU_DECOMPOSITION_PURPOSE,
@@ -1473,6 +1491,7 @@ def _offline_workload_private_env() -> frozenset[str]:
         "EU4_TEST_MINIMAL_REFERENCE",
         "EU4_TEST_COUNTERS_LITE",
         "EU4_TEST_COUNTERS_DEFERRED_FLUSH",
+        "EU4_TEST_DRAW_TIMED_SAMPLES",
     })
 
 
@@ -1579,6 +1598,7 @@ def _offline_workload_stage(
     post_arm_prime_frames: int = 0,
     measured_frames: int = 4,
     telemetry_suffix: str = "",
+    test_env_overrides: dict[str, str] | None = None,
 ):
     control_path=root/"control.bin"
     log_path=offline_workload_log_path(
@@ -1626,6 +1646,8 @@ def _offline_workload_stage(
         env["EU4_TEST_COMPLETION_TIMING"] = "1"
     if post_arm_prime_frames:
         env["EU4_TEST_POST_ARM_PRIME_FRAMES"] = str(post_arm_prime_frames)
+    if test_env_overrides:
+        env.update(test_env_overrides)
     if frames > 100:
         timeout_s = 300
     elif frames > 20:
@@ -2682,6 +2704,259 @@ def wp6_minimal_reference_reconciliation(run_gl: bool = True) -> dict:
     )
 
 
+def _observer_bias_workload_measure(
+    root: Path,
+    recipe: dict,
+    stage: str,
+    *,
+    scale: int,
+    primitive_id: str,
+    repetition: int,
+    side: str,
+    test_env_overrides: dict[str, str] | None = None,
+) -> tuple[int, list | None, dict]:
+    frames = observer_bias.scaled_frames(scale)
+    suffix = observer_bias.telemetry_suffix(primitive_id, scale, repetition, side)
+    measured, trace = _offline_workload_stage(
+        root,
+        recipe,
+        0,
+        stage,
+        measured_frames=frames,
+        telemetry_suffix=suffix,
+        test_env_overrides=test_env_overrides,
+    )
+    return int(measured["cpu_ns"]), trace, measured
+
+
+def _observer_bias_paired_stage_cpu(
+    root: Path,
+    recipe: dict,
+    *,
+    primitive_id: str,
+    low_stage: str,
+    high_stage: str,
+    scale: int,
+    repetition: int,
+    low_env: dict[str, str] | None = None,
+    high_env: dict[str, str] | None = None,
+) -> tuple[int, int, list | None, list | None, dict, dict]:
+    low_first = repetition % 2 == 0
+    if low_first:
+        low_cpu, low_trace, low_measured = _observer_bias_workload_measure(
+            root, recipe, low_stage, scale=scale, primitive_id=primitive_id,
+            repetition=repetition, side="low", test_env_overrides=low_env,
+        )
+        high_cpu, high_trace, high_measured = _observer_bias_workload_measure(
+            root, recipe, high_stage, scale=scale, primitive_id=primitive_id,
+            repetition=repetition, side="high", test_env_overrides=high_env,
+        )
+    else:
+        high_cpu, high_trace, high_measured = _observer_bias_workload_measure(
+            root, recipe, high_stage, scale=scale, primitive_id=primitive_id,
+            repetition=repetition, side="high", test_env_overrides=high_env,
+        )
+        low_cpu, low_trace, low_measured = _observer_bias_workload_measure(
+            root, recipe, low_stage, scale=scale, primitive_id=primitive_id,
+            repetition=repetition, side="low", test_env_overrides=low_env,
+        )
+    return low_cpu, high_cpu, low_trace, high_trace, low_measured, high_measured
+
+
+def _observer_bias_operations_for_primitive(
+    spec: dict,
+    scale: int,
+    *,
+    high_trace: list | None,
+    low_trace: list | None,
+) -> int:
+    unit = spec["unit"]
+    if unit == "intercepted_draw_loop":
+        return observer_bias.scaled_draw_loops(scale)
+    if unit == "published_frame":
+        return observer_bias.published_frame_operations(scale)
+    if unit == "scope_pair":
+        return observer_bias.count_scope_pairs_from_trace(high_trace)
+    if unit == "gpu_timestamp_call":
+        return observer_bias.count_gpu_timestamp_calls_from_trace(high_trace)
+    if unit == "timed_gl_sample":
+        return observer_bias.count_draw_timed_samples_from_trace(high_trace)
+    raise base.BenchmarkError(f"Unknown observer-bias unit {unit}")
+
+
+def _observer_bias_measure_primitive(
+    root: Path,
+    recipe: dict,
+    spec: dict,
+) -> dict:
+    observations: list[dict] = []
+    for scale in observer_bias.OBSERVER_BIAS_SCALE_FACTORS:
+        for repetition in range(observer_bias.OBSERVER_BIAS_REPETITIONS):
+            if spec["primitive_id"] == "gl_interpose_dispatch":
+                loops = observer_bias.scaled_draw_loops(scale)
+                if repetition % 2 == 0:
+                    bare = offline_harness(library=None, loops=loops)
+                    instrumented = offline_harness(library=LIBRARY, loops=loops)
+                    measurement_order = "low_high"
+                else:
+                    instrumented = offline_harness(library=LIBRARY, loops=loops)
+                    bare = offline_harness(library=None, loops=loops)
+                    measurement_order = "high_low"
+                low_cpu, high_cpu = int(bare["cpu_ns"]), int(instrumented["cpu_ns"])
+                low_trace = high_trace = None
+            else:
+                measurement_order = "low_high" if repetition % 2 == 0 else "high_low"
+                low_env = spec.get("low_env")
+                high_env = spec.get("high_env")
+                low_cpu, high_cpu, low_trace, high_trace, low_measured, high_measured = (
+                    _observer_bias_paired_stage_cpu(
+                        root,
+                        recipe,
+                        primitive_id=spec["primitive_id"],
+                        low_stage=spec["low_stage"],
+                        high_stage=spec["high_stage"],
+                        scale=scale,
+                        repetition=repetition,
+                        low_env=low_env,
+                        high_env=high_env,
+                    )
+                )
+            operations = _observer_bias_operations_for_primitive(
+                spec,
+                scale,
+                high_trace=high_trace,
+                low_trace=low_trace,
+            )
+            observations.append(
+                {
+                    "scale": scale,
+                    "repetition": repetition,
+                    "measurement_order": measurement_order,
+                    "operations": operations,
+                    "cpu_low_ns": low_cpu,
+                    "cpu_high_ns": high_cpu,
+                    "cpu_delta_ns": high_cpu - low_cpu,
+                    "telemetry_suffixes": [
+                        observer_bias.telemetry_suffix(spec["primitive_id"], scale, repetition, "low"),
+                        observer_bias.telemetry_suffix(spec["primitive_id"], scale, repetition, "high"),
+                    ],
+                },
+            )
+    return observer_bias.summarize_primitive_measurements(
+        spec["primitive_id"],
+        role=spec["role"],
+        unit=spec["unit"],
+        low_stage=spec["low_stage"],
+        high_stage=spec["high_stage"],
+        observations=observations,
+    )
+
+
+def observer_bias_calibration_workloads(
+    *,
+    executed_artifacts_start: dict | None = None,
+    recipe_name: str = observer_bias.OBSERVER_BIAS_RECIPE_NAME,
+) -> dict:
+    with tempfile.TemporaryDirectory(prefix="eu4-observer-bias-") as temporary:
+        root = Path(temporary)
+        recipe = next(
+            (item for item in workload.recipes(root, include_held_out=False) if item["name"] == recipe_name),
+            None,
+        )
+        if not recipe:
+            raise base.BenchmarkError(f"Observer-bias calibration recipe {recipe_name} not found")
+        primitives = [_observer_bias_measure_primitive(root, recipe, spec) for spec in observer_bias.PRIMITIVE_SPECS]
+
+        def _scale1_ops(primitive_id: str) -> float:
+            for entry in primitives:
+                if entry["primitive_id"] != primitive_id:
+                    continue
+                for obs in entry["observations"]:
+                    if obs["scale"] == 1 and obs["repetition"] == 0:
+                        return float(obs["operations"])
+            return 0.0
+
+        reconciliation_counts = {
+            "scope_pair_clocks": _scale1_ops("scope_pair_clocks"),
+            "per_frame_counter_flush": float(observer_bias.published_frame_operations(1)),
+        }
+        provisional = observer_bias.build_bias_model(primitives)
+        model = observer_bias.build_bias_model(
+            primitives,
+            consistency=observer_bias.reconcile_counters_decomposition(
+                provisional,
+                operation_counts=reconciliation_counts,
+                published_frames=float(observer_bias.published_frame_operations(1)),
+            ),
+        )
+        if executed_artifacts_start:
+            test_library_sha256 = executed_artifacts_start["test_library_sha256"]
+            workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
+        else:
+            test_library_sha256 = base.sha256(TEST_LIBRARY)
+            workload_harness_sha256 = base.sha256(WORKLOAD_HARNESS)
+        return {
+            "status": "complete",
+            "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+            "calibration_version": observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION,
+            "recipe": {key: value for key, value in recipe.items() if key != "path"},
+            "scale_factors": list(observer_bias.OBSERVER_BIAS_SCALE_FACTORS),
+            "repetitions": observer_bias.OBSERVER_BIAS_REPETITIONS,
+            "primitive_catalog": list(observer_bias.PRIMITIVE_CATALOG),
+            "bias_model": model,
+            "bias_table": observer_bias.bias_aware_table_rows(model),
+            "test_library_sha256": test_library_sha256,
+            "workload_harness_sha256": workload_harness_sha256,
+            **_offline_workload_source_hashes(),
+        }
+
+
+def run_observer_bias_calibration(run_gl: bool = True) -> dict:
+    """Bounded offline observer-bias slopes for intrusive diagnostic attribution (Phase B)."""
+    if not run_gl:
+        raise base.BenchmarkError("observer-bias-calibration requires GL workload execution")
+    identity_start = _offline_git_identity_snapshot()
+    if not identity_start.get("git_tree_clean"):
+        violations = _git_tree_clean_violations_for_evidence()
+        detail = ", ".join(violations[:8])
+        if len(violations) > 8:
+            detail += f", … (+{len(violations) - 8} more)"
+        raise base.BenchmarkError(
+            "Source tree dirty before observer-bias calibration"
+            + (f": {detail}" if detail else ""),
+        )
+    static = build()
+    artifact_start = _offline_executed_artifact_snapshot()
+    _require_build_executed_artifacts_match(static, artifact_start)
+    calibration = observer_bias_calibration_workloads(executed_artifacts_start=artifact_start)
+    artifact_end = _offline_executed_artifact_snapshot()
+    _require_executed_artifacts_stable(artifact_start, artifact_end)
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
+    evidence = {
+        "purpose": OBSERVER_BIAS_CALIBRATION_PURPOSE,
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "status": "diagnostic_complete",
+        "build": static,
+        "observer_bias_calibration": calibration,
+        "limitations": [
+            "Training mesh recipe only; slopes are synthetic-harness estimates.",
+            "External harness thread CPU only; not profiler self-timers.",
+            "Does not change Tier-1 admission or WP11 terminal qualification.",
+            "bias_adjust_inclusive_cpu() uses decomposition primitives only; never sum aggregate controls with decomposition.",
+        ],
+    }
+    return _publish_offline_immutable_evidence(
+        evidence,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=static,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
+        update_rolling_pointer=False,
+    )
+
+
 def offline_workloads(
     *,
     executed_artifacts_start: dict | None = None,
@@ -3355,6 +3630,8 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
         "swap_perturbation_fraction": calibration.get("swap_perturbation_fraction"),
         "qualified_intrusion_limit": calibration.get("limits", {}).get("counters_cpu_frame"),
     }
+    bias_calibration = manifest.get("observer_bias_calibration") or {}
+    bias_model = bias_calibration.get("bias_model") or {}
     output = {
         "format_version": FORMAT_VERSION,
         "report_kind": "intrusive_diagnostic",
@@ -3363,6 +3640,17 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
         "run_dir": str(run_dir),
         "executable_sha256": manifest.get("executable_sha256"),
         "observer_effect": observer_effect,
+        "observer_bias_calibration": {
+            "calibration_version": bias_calibration.get("calibration_version"),
+            "bias_table": bias_calibration.get("bias_table") or observer_bias.bias_aware_table_rows(bias_model),
+            "additive_slopes": bias_model.get("additive_slopes") or {},
+            "aggregate_slopes": bias_model.get("aggregate_slopes") or {},
+            "forensic_slopes": bias_model.get("forensic_slopes") or {},
+            "instrumentation_slopes": bias_model.get("instrumentation_slopes") or {},
+            "consistency": bias_model.get("consistency") or {},
+        }
+        if bias_model
+        else None,
         "release_gates": manifest.get("gates", {}),
         "release_blockers": GateEvidence(dict(manifest.get("gates", {}))).blockers(
             required_gates_for_report_kind("intrusive_diagnostic"),
@@ -4538,6 +4826,15 @@ def main() -> int:
         action="store_true",
         help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
     )
+    ob=sub.add_parser(
+        "observer-bias-calibration",
+        help="Phase B: offline observer-bias slopes for intrusive diagnostic attribution (mesh only)",
+    )
+    ob.add_argument(
+        "--registry-json",
+        action="store_true",
+        help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
+    )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
     run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
@@ -4621,6 +4918,12 @@ def main() -> int:
                 print(json.dumps(result,indent=2))
         elif args.command=="wp11-tier1-v4-requalification":
             result=wp11_tier1_v4_requalification()
+            if args.registry_json:
+                print(json.dumps(result.get("immutable_evidence") or {},indent=2))
+            else:
+                print(json.dumps(result,indent=2))
+        elif args.command=="observer-bias-calibration":
+            result=run_observer_bias_calibration()
             if args.registry_json:
                 print(json.dumps(result.get("immutable_evidence") or {},indent=2))
             else:
