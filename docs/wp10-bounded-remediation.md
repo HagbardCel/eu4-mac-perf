@@ -7,6 +7,10 @@ Single Mac capture to answer **two** post-`a73ea57b` questions without requalifi
 
 v3 training requalification **failed**; **held-out remains blocked**. This work package is **diagnostic only**.
 
+## Authoritative capture
+
+Registered **`d07347df`** @ `a8200ea` under `bounded_remediation_archives` (mesh counters-lite engineering target **not** met; see manifest notes).
+
 ## Mac capture
 
 On a **clean** tree:

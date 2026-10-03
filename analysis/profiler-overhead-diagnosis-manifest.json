@@ -68,7 +68,24 @@
       "notes": "First bare/loaded-disabled/reference ladder (v1 contract: residual hook clocks in loaded-disabled). Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Superseded for decomposition semantics by wp6_loaded_disabled_v2; authoritative ladder is 4dc19f16. Diagnostic only."
     }
   ],
-  "bounded_remediation_archives": [],
+  "bounded_remediation_archives": [
+    {
+      "work_package": "WP10",
+      "purpose": "wp10_bounded_remediation_v1",
+      "role": "authoritative",
+      "baseline_tier1_v3_requalification_evidence_id": "20261003T144237.317611Z-a73ea57b",
+      "evidence_id": "20261003T155416.972681Z-d07347df",
+      "archive_path": "analysis/evidence/frame-model-offline-a8200ea-20261003T155416.972681Z-d07347df.json",
+      "archive_sha256_committed": "7cdf17ea82988deaa37ccf761f474be30747295e7ffb62ac10ff16fadf303059",
+      "git_commit": "a8200ea46e67a694be2e34e723d364c94c0aaa6c",
+      "captured_at_utc": "20261003T155416.972681Z-d07347df",
+      "counters_lite_meets_engineering_target": false,
+      "mesh_counters_overhead_us_per_frame": 9.54175,
+      "mesh_counters_lite_overhead_us_per_frame": 9.603,
+      "mesh_counters_lite_deferred_flush_overhead_us_per_frame": 11.0235,
+      "notes": "Authoritative Mac WP10 diagnostic @ a8200ea. Mesh: scope-tree removal did not materially cut counters CPU (lite ~9.60 vs full ~9.54 µs/frame; deferred-flush ~11.02 µs); engineering target <=5 µs not met — do not productionize counters-lite on this evidence alone. text_ui completion-wall variants in archive (21×40f + 7×400f interleaved). Diagnostic only; not Tier-1 admission. Memo: docs/wp10-bounded-remediation.md."
+    }
+  ],
   "tier1_v3_requalification_archives": [
     {
       "work_package": "WP9",
