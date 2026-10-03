@@ -38,6 +38,9 @@ from frame_model_gates import (
 from fixture_manager import FixtureManager
 
 ROOT = Path(__file__).resolve().parents[1]
+PREFLIGHT_INTRUSIVE_CONTRACT_JSON = (
+    ROOT / "analysis/preflight-intrusive-diagnostic-contract-latest.json"
+)
 SOURCE = Path(__file__).with_suffix(".c")
 LIBRARY = ROOT / "benchmark/.build/libeu4_frame_model.dylib"
 HARNESS_SOURCE = ROOT / "tests/frame_model_harness.c"
@@ -1277,6 +1280,99 @@ def live_measurement_contract(mode: str) -> dict:
     }
 
 
+def _intrusive_diagnostic_live_prerequisites() -> dict:
+    powermetrics = auto.powermetrics_helper_status()
+    scene_registered = auto.SCENE.is_file() and auto.SCENE_MANIFEST.is_file()
+    blockers: list[str] = []
+    if powermetrics.get("status") != "ready":
+        blockers.append(powermetrics.get("message") or "powermetrics helper not ready")
+    if not scene_registered:
+        blockers.append(
+            "Register the reviewed Venice scene before run --diagnostic-only "
+            "(fixtures/venice_scene.png + venice_scene.json)",
+        )
+    return {
+        "powermetrics_helper": powermetrics,
+        "venice_scene_registered": scene_registered,
+        "run_ready": not blockers,
+        "run_blockers": blockers,
+    }
+
+
+def preflight_console_summary(result: dict, *, evidence_path: Path | None = None) -> str:
+    """Short human-readable preflight outcome for the terminal."""
+    lines = [
+        f"status: {result.get('status')}",
+        f"preflight_kind: {result.get('preflight_kind', 'qualified_offline')}",
+    ]
+    if evidence_path is not None:
+        lines.append(f"evidence_json: {evidence_path}")
+    contract = result.get("measurement_contract") or {}
+    if contract:
+        lines.append(f"measurement_contract: {contract.get('mode')}")
+        lines.append(
+            "quantitative_claims_allowed: "
+            f"{contract.get('quantitative_claims_allowed', 'n/a')}",
+        )
+    terminal = result.get("terminal_tier1_v4_evidence") or {}
+    if terminal:
+        lines.append(
+            "tier1_v4_admission: "
+            f"{terminal.get('tier1_v4_admission')} "
+            f"(overhead_gate={terminal.get('overhead_gate')})",
+        )
+    harness_keys = (
+        "detour_harness",
+        "render_gate_harness",
+        "arb_handle_harness",
+    )
+    harness_status = {
+        key.removesuffix("_harness").replace("_", " "): (result.get(key) or {}).get("status")
+        for key in harness_keys
+        if isinstance(result.get(key), dict)
+    }
+    if harness_status:
+        lines.append(
+            "harnesses: "
+            + ", ".join(f"{name}={status}" for name, status in harness_status.items()),
+        )
+    prereq = result.get("live_prerequisites") or {}
+    if prereq:
+        pm = (prereq.get("powermetrics_helper") or {}).get("status")
+        lines.append(f"powermetrics_helper: {pm}")
+        lines.append(f"venice_scene_registered: {prereq.get('venice_scene_registered')}")
+        if prereq.get("run_blockers"):
+            lines.append("run_blockers:")
+            for item in prereq["run_blockers"]:
+                lines.append(f"  - {item}")
+        if prereq.get("run_ready"):
+            lines.append(
+                "next: python3 benchmark/eu4_frame_model.py run --diagnostic-only --output results",
+            )
+    for item in result.get("limitations") or []:
+        lines.append(f"note: {item}")
+    return "\n".join(lines)
+
+
+def emit_preflight_cli_result(
+    result: dict,
+    *,
+    output_json: Path | None,
+    print_json: bool,
+    default_json: Path | None = None,
+) -> None:
+    target = output_json or default_json
+    if print_json:
+        print(json.dumps(result, indent=2))
+        return
+    if target is not None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        print(preflight_console_summary(result, evidence_path=target))
+        return
+    print(json.dumps(result, indent=2))
+
+
 def _preflight_intrusive_diagnostic_contract(
     *,
     static: dict,
@@ -1310,6 +1406,7 @@ def _preflight_intrusive_diagnostic_contract(
         "measurement_contract": contract,
         "overhead_gate": terminal.get("overhead_gate", "failed"),
         "offline_qualification_capture": "skipped",
+        "live_prerequisites": _intrusive_diagnostic_live_prerequisites(),
         "limitations": [
             "Intrusive diagnostic contract preflight only; no offline_workloads or held-out timing.",
             "No immutable qualification evidence archive is written and the rolling pointer is not updated.",
@@ -5668,6 +5765,16 @@ def main() -> int:
         action="store_true",
         help="evaluate offline preflight under intrusive_diagnostic_v1 (non-blocking failed Tier-1 admission)",
     )
+    pf.add_argument(
+        "--output-json",
+        metavar="PATH",
+        help="write full preflight evidence JSON to PATH (default for --intrusive-diagnostic-contract)",
+    )
+    pf.add_argument(
+        "--print-json",
+        action="store_true",
+        help="print full preflight JSON to stdout instead of a short summary",
+    )
     dm=sub.add_parser(
         "diagnostic-matrix",
         help="training-only offline workloads + A–F matrix; writes immutable evidence without held-out",
@@ -5790,7 +5897,16 @@ def main() -> int:
                     args.intrusive_diagnostic_contract and not args.static_only
                 ),
             )
-            print(json.dumps(result,indent=2))
+            default_json = None
+            if args.intrusive_diagnostic_contract and not args.static_only:
+                default_json = PREFLIGHT_INTRUSIVE_CONTRACT_JSON
+            output_json = Path(args.output_json) if args.output_json else None
+            emit_preflight_cli_result(
+                result,
+                output_json=output_json,
+                print_json=args.print_json,
+                default_json=default_json,
+            )
         elif args.command=="diagnostic-matrix":
             result=profiler_overhead_diagnosis()
             if args.registry_json:

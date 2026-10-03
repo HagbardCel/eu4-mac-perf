@@ -33,6 +33,7 @@ FOCUS_SOURCE = Path(__file__).with_name("mac_game_focus.m")
 FOCUS = ROOT / "benchmark/.build/mac_game_focus"
 HELPER_SOURCE = Path(__file__).with_name("powermetrics_helper")
 HELPER_INSTALLED = Path("/usr/local/libexec/eu4-powermetrics")
+POWERMETRICS_INSTALL_HINT = "sudo sh benchmark/install_powermetrics_helper.sh"
 HARNESS_SOURCE = ROOT / "tests/idle_pacer_harness.cpp"
 HARNESS = ROOT / "benchmark/.build/auto_probe_harness"
 SCENE = ROOT / "fixtures/venice_scene.png"
@@ -76,6 +77,61 @@ def build() -> None:
             raise base.BenchmarkError(f"Build failed: {result.stderr.strip()}")
     if base.command("lipo", "-archs", str(PROBE)).strip() != "x86_64":
         raise base.BenchmarkError("Readiness probe is not x86_64")
+
+
+def powermetrics_helper_status() -> dict:
+    """Non-throwing readiness probe for the reviewed root-owned powermetrics helper."""
+    source_sha = base.sha256(HELPER_SOURCE)
+    if not HELPER_INSTALLED.is_file():
+        return {
+            "status": "missing",
+            "message": f"Install the reviewed root-owned powermetrics helper first ({POWERMETRICS_INSTALL_HINT})",
+            "install_hint": POWERMETRICS_INSTALL_HINT,
+            "helper_path": str(HELPER_INSTALLED),
+            "source_sha256": source_sha,
+        }
+    stat = HELPER_INSTALLED.stat()
+    if stat.st_uid != 0 or stat.st_mode & 0o022:
+        return {
+            "status": "invalid_permissions",
+            "message": f"Powermetrics helper permissions are wrong; reinstall ({POWERMETRICS_INSTALL_HINT})",
+            "install_hint": POWERMETRICS_INSTALL_HINT,
+            "helper_path": str(HELPER_INSTALLED),
+            "source_sha256": source_sha,
+        }
+    installed_sha = base.sha256(HELPER_INSTALLED)
+    if installed_sha != source_sha:
+        return {
+            "status": "stale",
+            "message": f"Installed powermetrics helper differs from the repo copy; reinstall ({POWERMETRICS_INSTALL_HINT})",
+            "install_hint": POWERMETRICS_INSTALL_HINT,
+            "helper_path": str(HELPER_INSTALLED),
+            "installed_sha256": installed_sha,
+            "source_sha256": source_sha,
+        }
+    check = subprocess.run(
+        ["sudo", "-n", "-l", str(HELPER_INSTALLED)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if check.returncode:
+        return {
+            "status": "sudo_denied",
+            "message": (
+                "Passwordless sudo is unavailable for the exact powermetrics helper; "
+                f"run {POWERMETRICS_INSTALL_HINT} from your user session"
+            ),
+            "install_hint": POWERMETRICS_INSTALL_HINT,
+            "helper_path": str(HELPER_INSTALLED),
+            "source_sha256": source_sha,
+        }
+    return {
+        "status": "ready",
+        "helper_path": str(HELPER_INSTALLED),
+        "source_sha256": source_sha,
+        "install_hint": POWERMETRICS_INSTALL_HINT,
+    }
 
 
 def preflight(require_privilege: bool = False) -> dict:
@@ -126,14 +182,9 @@ def preflight(require_privilege: bool = False) -> dict:
             not all(isinstance(arg, str) for arg in launcher["exeArgs"])):
         raise base.BenchmarkError("Unexpected GOG launcher arguments")
     if require_privilege:
-        if (not HELPER_INSTALLED.is_file() or HELPER_INSTALLED.stat().st_uid != 0 or
-                HELPER_INSTALLED.stat().st_mode & 0o022 or
-                base.sha256(HELPER_INSTALLED) != base.sha256(HELPER_SOURCE)):
-            raise base.BenchmarkError("Install the reviewed root-owned powermetrics helper first")
-        check = subprocess.run(["sudo", "-n", "-l", str(HELPER_INSTALLED)],
-                               capture_output=True, text=True, check=False)
-        if check.returncode:
-            raise base.BenchmarkError("Passwordless sudo is unavailable for the exact powermetrics helper")
+        status = powermetrics_helper_status()
+        if status["status"] != "ready":
+            raise base.BenchmarkError(status.get("message") or "Powermetrics helper is not ready")
     return {"fixture": expected, "gog": gog, "settings": settings, "dlc_mods": mods,
             "display": display, "power": power, "launcher_args": launcher["exeArgs"],
             "probe_sha256": base.sha256(PROBE), "probe_source_sha256": base.sha256(PROBE_SOURCE),

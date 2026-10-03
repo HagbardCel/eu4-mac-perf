@@ -343,5 +343,41 @@ class AnalyzeIntrusiveDiagnosticTests(unittest.TestCase):
             self.assertEqual(report["measurement_contract"]["mode"], model.LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC)
 
 
+class PreflightCliOutputTests(unittest.TestCase):
+    def test_console_summary_lists_powermetrics_blocker(self):
+        summary = model.preflight_console_summary(
+            {
+                "status": "diagnostic_ready",
+                "preflight_kind": "intrusive_diagnostic_contract_v1",
+                "live_prerequisites": {
+                    "run_ready": False,
+                    "venice_scene_registered": True,
+                    "run_blockers": ["Install powermetrics first"],
+                    "powermetrics_helper": {"status": "missing"},
+                },
+            },
+            evidence_path=Path("/tmp/evidence.json"),
+        )
+        self.assertIn("evidence_json: /tmp/evidence.json", summary)
+        self.assertIn("powermetrics_helper: missing", summary)
+        self.assertIn("Install powermetrics first", summary)
+
+    @mock.patch.object(model.auto, "powermetrics_helper_status", return_value={"status": "ready"})
+    def test_live_prerequisites_ready_when_helper_and_scene(self, _pm_mock):
+        with tempfile.TemporaryDirectory() as temporary:
+            scene = Path(temporary) / "venice_scene.png"
+            manifest = Path(temporary) / "venice_scene.json"
+            scene.write_bytes(b"x")
+            manifest.write_text("{}", encoding="utf-8")
+            with mock.patch.object(model.auto, "SCENE", scene), mock.patch.object(
+                model.auto,
+                "SCENE_MANIFEST",
+                manifest,
+            ):
+                prereq = model._intrusive_diagnostic_live_prerequisites()
+        self.assertTrue(prereq["run_ready"])
+        self.assertEqual(prereq["run_blockers"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
