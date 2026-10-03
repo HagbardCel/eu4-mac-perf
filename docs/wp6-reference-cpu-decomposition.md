@@ -41,7 +41,7 @@ Phase C must include all of these; one-at-a-time ablations alone cannot reconcil
 | Stage | Meaning |
 |-------|---------|
 | **bare** | No profiler dylib; true uninstrumented baseline. |
-| **loaded-disabled** | Profiler dylib and interpositions present; measurement **disabled** (control off or equivalent). |
+| **loaded-disabled** | Dedicated test configuration: same dylib, interposed entry points, and synthetic hook topology as WP6 captures, but **no measured-accounting activity**, no GL shadow invalidation/seed side effects, and no intervention behavior. **Not** naïve `MODE_OFF` (see [Phase A contract](wp6-phase-a-reference-inventory.md#loaded-disabled-contract-phase-b)). |
 | **reference** | Current production REFERENCE (Tier-1 stage identity unchanged when ablation env unset). |
 | **reference ablations** | REFERENCE with **one** subsystem disabled at a time (marginal effects). |
 | **minimal-reference** | REFERENCE with **all** REFERENCE accounting paths disabled that WP6 intends to attribute (single reconciliation stage), or an explicit cumulative-disable sequence documented in the memo. |

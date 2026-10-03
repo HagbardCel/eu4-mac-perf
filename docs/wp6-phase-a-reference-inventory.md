@@ -40,14 +40,29 @@ hook_update
 |-----------|----------------------------|------------------------------------------|
 | `intervention_active()` | always **false** | **true** |
 | `gl_measurement_active()` | **false** | **true** |
-| GL draw wrappers | passthrough `real_fn` only | draw accounting, optional detail/GPU |
+| GL draw wrappers | `intervention_active()` fast path → `real_fn` | draw accounting, optional detail/GPU |
 | `hook_render` | WP5 fast path (scopes + `real_render`) | shadow seed/prepare, GPU hooks, full render wrapper |
 | `hook_idle` | passthrough to render chain | idle scopes + `event` |
 | `hook_map` / add / append | passthrough stubs | intervention scopes + events |
 | `timestamp_event` | no-op (`FORENSIC_CAPTURE` off) | no-op unless sampled forensic armed |
 | Shadow / `seed_gl_state` on render | skipped | active |
 
-The bare → REFERENCE CPU gap is therefore **not** explained by counters-stage forensic features (WP1 matrix); it is dylib presence, measurement scaffolding, REFERENCE render/update/present accounting, and **per-draw interposer dispatch** even when wrappers early-out.
+The bare → REFERENCE CPU gap is therefore **not** explained by counters-stage forensic features (WP1 matrix). Candidate costs are dylib presence, REFERENCE update/render/present accounting, and **many interposed GL entry points per recipe command** (see below). **Whether those invocations dominate measured CPU is a Phase B hypothesis**, not established by Phase A.
+
+### GL wrapper entry points (REFERENCE fast paths differ)
+
+Each harness `Command` can emit more than one interposed GL call (`tests/frame_model_workload_harness.c`). Wrappers do not share one uniform cost:
+
+| GL call (when flag set) | Gate in REFERENCE |
+|-------------------------|-------------------|
+| `glDraw*` | `intervention_active()` → passthrough |
+| `glUniform4fv` | `intervention_active()` → passthrough |
+| `glBlendFunc` (with `glEnable`) | `intervention_active()` via state hooks |
+| `glBindTexture` | `gl_measurement_active()` only (false → direct `real_fn`) |
+| `glEnable` | `gl_measurement_active()` only |
+| `glUseProgram`, `glBindBuffer`, `glVertexAttribPointer` | `shadow_tracking_active()` false in REFERENCE; still `save_gl_state()` no-op + `real_fn` on program/buffer paths |
+
+All paths pay at least **trampolined dispatch** and their guard predicate (`intervention_active`, `gl_measurement_active`, or `shadow_tracking_active` / `gl_shadow_needed`).
 
 ## Hook inventory (REFERENCE + `measurement_active()`)
 
@@ -92,7 +107,7 @@ Functions below run during the **four timed frames** unless noted.
 |------|-------------------|
 | `hook_idle` | direct `test_idle` → `hook_render` |
 | `hook_map` / `hook_add` / `hook_append` | direct test stubs — **no** `scope_*` / `event` |
-| GL exports (`gl_draw_*`, state hooks) | `if (!intervention_active()) { real_fn(); return; }` — **trampolines still run** |
+| GL exports | see table above — always interposed, not always `intervention_active()` draw path |
 
 ### Not on hot path (live / other stages)
 
@@ -104,64 +119,105 @@ Functions below run during the **four timed frames** unless noted.
 
 ## Per-measured-frame call-count model
 
-Counts are for **one timed frame** in Tier-1 `reference` (not `bare`). Let **N** = recipe commands per frame (`draws` in recipe metadata). Training fixtures (current tree):
+Counts are for **one timed frame** in Tier-1 `reference` (not `bare`). Recipe bytes use `frame_model_workload.RECORD` (`<8I`): per command, harness flags `program`, `uniform`, `texture`, `state`, `vertex` are 1 when that draw changes the corresponding trace signature (`benchmark/frame_model_workload.py` `_build_recipe_payload`).
 
-| Recipe | N (commands/frame) | 4-frame window |
-|--------|-------------------|----------------|
-| mesh | 2774 | 11 096 workload commands |
-| borders | 2285 | 9140 |
-| text_ui | 632 | 2528 |
+### Workload GL interposer invocations (scales with recipe)
 
-Symbols are **static** from code review (2026-10-03, `main` @ WP6 plan merge). Re-validate after hook changes.
+Per harness command (one draw always):
 
-### A. Frame hooks (independent of N)
-
-| Symbol | Invocations / frame | Extra `clock_gettime` pairs (uptime + thread) |
-|--------|---------------------|-----------------------------------------------|
-| `snapshot_control` | 2 (update start + publish gate) | 0 (no clocks inside) |
-| `measurement_active` → `refresh_unowned_control` | ~10–14 (scopes + hook guards) | 0 when sequence stable |
-| `scope_begin` (LOOP, UPDATE, RENDER, PRESENT) | 4 | 4 × 2 = **8** timestamps passed in |
-| `scope_end` (same four) | 4 | 4 × 2 = **8** |
-| `timestamp_event` | 3 | 0 (early return) |
-| `event` | 3 | 0 |
-| `producer` | ≤6 (events + publish) | 0 after thread-local producer exists |
-| `flush_counters` | 1 (inside `publish_frame`) | 0 |
-| `publish_frame` | 1 | 0 |
-| `eu4_scope_snapshot` | 1 | 0 |
-| `eu4_spsc_reserve` / `eu4_spsc_publish` | 1 each | 0 |
-
-Additional `now_ns` in `hook_update` for frame wall/cpu totals: **~8** calls (4 uptime + 4 thread) in the measuring block.
-
-**Order-of-magnitude (N-independent):** ~**24** `clock_gettime` calls/frame from scope machinery + frame timing, plus **~12** `measurement_active` checks, **3** `event`, **1** publication.
-
-### B. Workload loop (scales with N)
-
-Each workload command issues one or more direct GL calls. With `intervention_active() == false`, draw/state hooks execute:
-
-```c
-if (!intervention_active()) { real_fn(...); return; }
+```text
+GL_wrappers/command =
+    1                           # draw (glDrawElements / BaseVertex / Arrays)
+  + program                     # glUseProgram if flag
+  + uniform                     # glUniform4fv if flag
+  + texture                     # glBindTexture if flag
+  + 2 × state                   # glEnable + glBlendFunc if flag
+  + 3 × vertex                  # 2× glBindBuffer + glVertexAttribPointer if flag
 ```
 
-So per command expect **1 interposed dispatch + 1 indirect call** to the real GL entry (mesh/borders/text_ui mix `glDrawElements`, `glDrawElementsBaseVertex`, `glDrawArrays`, and state setup).
+Let **N** = commands/frame (`draws` in recipe metadata). Then **GL_wrappers/frame = Σ above**.
+
+**Derived from committed recipe bytes** (regenerate with the snippet in [Reproducing wrapper counts](#reproducing-wrapper-counts)):
+
+| Recipe | N | Nprogram | Nuniform | Ntexture | Nstate | Nvertex | **GL_wrappers / frame** | **× 4 frames** |
+|--------|---|----------|----------|----------|--------|---------|-------------------------|----------------|
+| mesh | 2774 | 924 | 2765 | 1180 | 1 | 2417 | **14 896** | **59 584** |
+| borders | 2285 | 1 | 739 | 4 | 1 | 1 | **3034** | **12 136** |
+| text_ui | 632 | 148 | 234 | 226 | 42 | 149 | **1771** | **7084** |
 
 | Symbol | Invocations / frame |
 |--------|---------------------|
-| GL interposer fast path | **N** (recipe-dependent) |
-| `event` / `scope_*` on GL path | **0** in REFERENCE |
+| Interposed GL entry (total) | **GL_wrappers** (table) |
+| `event` / `scope_*` on GL path | **0** in REFERENCE (measurement hooks off on GL) |
 
-Dominant term for **mesh** is therefore **O(N)** trampolines (~2.8k/frame × 4 frames ≈ 11k), not scope clocks (~24/frame).
+**Invocation-count conclusion:** the dominant **count** term is **O(GL_wrappers)** per frame (thousands–tens of thousands over four frames on mesh), while frame-hook scaffolding is **O(1)**. **CPU dominance of GL vs scopes is not proven here** — thousands of cheap checks could still lose to dozens of `clock_gettime()` calls until `bare` / `loaded-disabled` / `reference` timings exist.
 
-### C. Four-frame window totals (illustrative)
+### Frame hooks (approximately independent of N)
 
-Multiply section A by 4; multiply section B by `4 × N`.
+| Symbol | Invocations / frame |
+|--------|---------------------|
+| `snapshot_control` | 2 |
+| `measurement_active` → `refresh_unowned_control` | ~10–14 when sequence stable |
+| `scope_begin` / `scope_end` (LOOP, UPDATE, RENDER, PRESENT) | 4 / 4 |
+| `timestamp_event` | 3 (no-op body) |
+| `event` | 3 |
+| `publish_frame` (+ `flush_counters`, SPSC) | 1 |
 
-| Recipe | ~GL fast-path dispatches (4 frames) | ~scope `clock_gettime` calls (4 frames) |
-|--------|-------------------------------------|----------------------------------------|
-| mesh | ~11 096 | ~96 |
-| borders | ~9140 | ~96 |
-| text_ui | ~2528 | ~96 |
+### `clock_gettime` via `now_ns` (~35 / frame)
 
-**Hypothesis for Phase B:** a large share of **active REFERENCE tax** on mesh/borders may be **loaded interposition + passthrough GL**, separable only with a **`loaded-disabled`** stage (dylib present, measurement off, same interposers) vs **`bare`**. Marginal ablations on scopes/events target the **~96** clock calls and hook scaffolding, not the **~10⁴** GL dispatches.
+Each `now_ns` is one `clock_gettime`. Static trace of the REFERENCE synthetic path (four scopes + frame/render/present timing + ack):
+
+| Site | ~`now_ns` calls / frame |
+|------|-------------------------|
+| `hook_update` (scopes, frame interval, publish block) | **~15** |
+| `hook_render` (REFERENCE: metadata + render scope) | **~12** |
+| `hook_present` | **~8** |
+| **Total** | **~35** |
+
+Four-frame window: **~140** clock calls (plus any one-off ack outside the steady-state per-frame pattern).
+
+Re-validate after hook changes; this is a **call-count model**, not a profiler sample.
+
+### Reproducing wrapper counts
+
+```bash
+python3 -c "
+import struct, tempfile
+from pathlib import Path
+import sys; sys.path.insert(0,'benchmark')
+import frame_model_workload as w
+R=struct.Struct('<8I')
+def count(payload):
+    n=len(payload)//R.size; p=u=t=s=v=0
+    for i in range(n):
+        *_,uniform,texture,state,vertex,program=R.unpack_from(payload,i*R.size)
+        p+=program; u+=uniform; t+=texture; s+=state; v+=vertex
+    return n+p+u+t+2*s+3*v
+with tempfile.TemporaryDirectory() as d:
+    root=Path(d)
+    for r in w.recipes(root, include_held_out=False):
+        payload=(root/f\"{r['name']}.recipe\").read_bytes()
+        print(r['name'], count(payload))
+"
+```
+
+## `loaded-disabled` contract (Phase B)
+
+`loaded-disabled − bare` is only meaningful if the stage is **stable** and **comparable** to `reference`.
+
+**Do not** define `loaded-disabled` as naïve `MODE_OFF`. Example: `shadow_tracking_active()` can call `invalidate_gl_state()` when `frame_control.mode==OFF`, which REFERENCE does not do on the same GL fast paths.
+
+**Do not** assume `MODE_REFERENCE` with `MEASURE_ENABLED=0` is zero-cost: parts of `hook_update` and the REFERENCE render branch still run timing/scope machinery unless explicitly gated for this stage.
+
+**Phase B contract (test-only configuration):**
+
+1. Same dylib and interposed symbols as timed WP6 captures.
+2. Same synthetic hook topology (`eu4_frame_model_test_frame` path).
+3. **No measured-accounting activity** (no frame publication intended for Tier-1 admission semantics).
+4. **No GL shadow invalidation/seed side effects** beyond what a neutral loaded pass-through requires.
+5. **No intervention behavior** (same as REFERENCE for gameplay hooks).
+
+Exact control bits / env name are implementation details; the capture must record the contract version in evidence metadata.
 
 ## Overlap map (for non-additive ablations)
 
@@ -171,7 +227,7 @@ Multiply section A by 4; multiply section B by `4 × N`.
 | `event` | `producer()`, optional `unowned_event` (skipped when `inside_update`) |
 | `publish_frame` | `flush_counters`, `producer`, SPSC queue |
 | `measurement_active` | `refresh_unowned_control` → `snapshot_control` on sequence change |
-| GL fast path | dylib load / symbol interposition (present even when accounting off) |
+| GL interposer entry | dylib load / symbol interposition (present even when accounting off) |
 
 Disabling scopes reduces some `measurement_active` calls inside `scope_begin`; disabling `event` does not remove `publish_frame` aggregation path.
 
@@ -179,7 +235,7 @@ Disabling scopes reduces some `measurement_active` calls inside `scope_begin`; d
 
 | Stage / knob | Intended isolation | Risk |
 |--------------|-------------------|------|
-| **`loaded-disabled`** | `fixed instrumentation tax` | Must keep dylib + interposers; only `MEASURE_ENABLED`/mode semantics off |
+| **`loaded-disabled`** | `fixed instrumentation tax` per [contract](#loaded-disabled-contract-phase-b) | Must not use raw `MODE_OFF` or ambiguous MEASURE-only toggles |
 | **`minimal-reference`** | upper bound after disabling scopes + events + publish | must not collapse into `loaded-disabled` |
 | REFERENCE ablation: scopes off | marginal scope + clock cost | also skips nested `measurement_active` in `scope_begin` |
 | REFERENCE ablation: events off | `event` + counter flush side effects | `publish_frame` may still run |
@@ -190,6 +246,6 @@ Existing sampled ablations (`EU4_TEST_ABLATION=accounting|writer|preparation`) t
 
 ## Phase A conclusion
 
-1. **Inventory:** Timed REFERENCE work is concentrated in **one `hook_update` tree/frame**, with GL cost scaling as **N × interposer fast path**.
-2. **Call-count model:** Hook scaffolding is **~O(1)** per frame; mesh/borders are **~O(N)** with N in the thousands — prioritize **`bare` / `loaded-disabled` / `reference`** ladder before fine-grained REFERENCE ablations.
-3. **Next:** Phase B implements `loaded-disabled` and `minimal-reference` semantics per [WP6 plan](wp6-reference-cpu-decomposition.md), then REFERENCE-scoped ablation envs tied to the overlap map above.
+1. **Inventory:** Timed REFERENCE work is **one `hook_update` tree/frame** plus **GL_wrappers/frame** interposed calls (formula above; mesh **~15k/frame**, not **N** draws alone).
+2. **Call-count model:** Frame-hook and clock work is **O(1)** (~35 `clock_gettime`/frame); GL interposer **invocation count** is **O(GL_wrappers)** and can be **10×–50×** larger than **N** on mesh. **Whether CPU follows invocation count** is for Phase B (`bare` → `loaded-disabled` → `reference`).
+3. **Next:** Implement `loaded-disabled` / `minimal-reference` per contract, then REFERENCE-scoped ablations. **Prioritize the three-stage ladder** before many fine-grained ablations.
