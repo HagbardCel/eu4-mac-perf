@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmark"))
 import eu4_benchmark as base  # noqa: E402
@@ -17,37 +18,89 @@ class ObserverBiasFitTests(unittest.TestCase):
         self.assertEqual(fit["status"], "ok")
         self.assertAlmostEqual(fit["slope_ns_per_op"], slope, places=6)
         self.assertAlmostEqual(fit["residual_std_ns"], 0.0, places=6)
+        self.assertIsNotNone(fit["slope_se_ns_per_op"])
 
-    def test_bias_adjust_subtracts_components(self):
-        model = {
-            "calibration_version": observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION,
-            "slopes": {
-                "tls_event_accounting": {"slope_ns_per_op": 10.0, "unit": "published_frame"},
-            },
-        }
+    def test_bias_adjust_uses_decomposition_only(self):
+        bias_model = observer_bias.build_bias_model(
+            [
+                {
+                    "primitive_id": "counters_incremental",
+                    "role": observer_bias.ROLE_AGGREGATE_CONTROL,
+                    "unit": "published_frame",
+                    "low_stage": "reference",
+                    "high_stage": "counters",
+                    "fit": {"slope_ns_per_op": 1000.0},
+                },
+                {
+                    "primitive_id": "scope_pair_clocks",
+                    "role": observer_bias.ROLE_DECOMPOSITION,
+                    "unit": "scope_pair",
+                    "low_stage": "counters_lite",
+                    "high_stage": "counters",
+                    "fit": {"slope_ns_per_op": 10.0},
+                },
+            ],
+        )
         result = observer_bias.bias_adjust_inclusive_cpu(
             1_000_000,
-            {"tls_event_accounting": 50},
-            model,
+            {
+                "counters_incremental": 4,
+                "scope_pair_clocks": 50,
+            },
+            bias_model,
         )
         self.assertEqual(result["estimated_bias_ns"], 500.0)
         self.assertEqual(result["bias_adjusted_cpu_ns"], 999_500.0)
 
-
-class ObserverBiasSweepTests(unittest.TestCase):
-    def test_differential_sweep_scale_zero_has_zero_delta(self):
-        def measure(scale: int) -> tuple[int, int]:
-            return (1000, 2000 if scale > 0 else 1000)
-
-        summary = observer_bias.run_differential_sweep(
-            "demo",
-            unit="op",
-            measure_low_high=measure,
-            operations_at_scale=lambda scale: scale * 10,
+    def test_bias_aware_interval_uses_slope_se_per_op(self):
+        interval = observer_bias.bias_aware_interval(
+            1_000_000.0,
+            slope_ns_per_op=10.0,
+            slope_se_ns_per_op=1.0,
+            operation_count=50,
+            z=1.96,
         )
-        zero = summary["scale_rows"][0]
-        self.assertEqual(zero["scale"], 0)
-        self.assertEqual(zero["cpu_delta_ns"], 0)
+        self.assertEqual(interval["bias_subtracted_ns"], 500.0)
+        self.assertAlmostEqual(interval["margin_ns"], 1.96 * 1.0 * 50)
+
+
+class ObserverBiasSpecTests(unittest.TestCase):
+    def test_scope_pair_direction_counters_lite_to_counters(self):
+        spec = next(p for p in observer_bias.PRIMITIVE_SPECS if p["primitive_id"] == "scope_pair_clocks")
+        self.assertEqual(spec["low_stage"], "counters_lite")
+        self.assertEqual(spec["high_stage"], "counters")
+
+    def test_flush_direction_deferred_to_immediate(self):
+        spec = next(p for p in observer_bias.PRIMITIVE_SPECS if p["primitive_id"] == "per_frame_counter_flush")
+        self.assertEqual(spec["low_stage"], "counters_lite_deferred_flush")
+        self.assertEqual(spec["high_stage"], "counters_lite")
+
+    def test_telemetry_suffixes_are_unique_per_side(self):
+        low = observer_bias.telemetry_suffix("scope_pair_clocks", 2, 3, "low")
+        high = observer_bias.telemetry_suffix("scope_pair_clocks", 2, 3, "high")
+        self.assertNotEqual(low, high)
+        self.assertIn("obs-scope_pair_clocks-s2-r3", low)
+
+
+class ObserverBiasMetadataTests(unittest.TestCase):
+    def test_offline_policy_versions_recognize_observer_bias_payload(self):
+        workloads = {
+            "calibration_version": observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION,
+            "recipe": {"name": "mesh"},
+            "scale_factors": [1, 2, 4],
+            "repetitions": 5,
+            "primitive_catalog": [{"primitive_id": "scope_pair_clocks"}],
+        }
+        versions = model._offline_policy_versions(workloads)
+        self.assertEqual(
+            versions["observer_bias_calibration"],
+            observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION,
+        )
+
+    def test_workloads_payload_prefers_observer_bias_block(self):
+        block = {"calibration_version": observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION, "status": "complete"}
+        payload = model._offline_workloads_payload({"observer_bias_calibration": block})
+        self.assertEqual(payload, block)
 
 
 class ObserverBiasCliTests(unittest.TestCase):
@@ -64,9 +117,10 @@ class IntrusiveAnalyzeBiasTests(unittest.TestCase):
             "observer_bias_calibration": {
                 "calibration_version": observer_bias.OBSERVER_BIAS_CALIBRATION_VERSION,
                 "bias_model": {
-                    "slopes": {
-                        "reference_frame_hooks": {"slope_ns_per_op": 42.0, "unit": "published_frame"},
+                    "additive_slopes": {
+                        "scope_pair_clocks": {"slope_ns_per_op": 42.0, "unit": "scope_pair"},
                     },
+                    "aggregate_slopes": {},
                 },
                 "bias_table": [],
             },
@@ -75,9 +129,34 @@ class IntrusiveAnalyzeBiasTests(unittest.TestCase):
             output = model._analyze_intrusive_diagnostic_run(Path(directory), manifest)
         self.assertIsNotNone(output["observer_bias_calibration"])
         self.assertEqual(
-            output["observer_bias_calibration"]["slopes"]["reference_frame_hooks"]["slope_ns_per_op"],
+            output["observer_bias_calibration"]["additive_slopes"]["scope_pair_clocks"]["slope_ns_per_op"],
             42.0,
         )
+
+
+class ObserverBiasWorkloadIdentityTests(unittest.TestCase):
+    def test_paired_stage_passes_distinct_telemetry_suffixes(self):
+        root = Path("/tmp/eu4-observer-bias-test")
+        recipe = {"name": "mesh", "draws": 100, "path": "/dev/null"}
+        calls: list[str] = []
+
+        def fake_stage(*_args, **kwargs):
+            calls.append(kwargs.get("telemetry_suffix", ""))
+            return {"cpu_ns": 1000}, [["Q", "1", "1", "0", "0", "5"]]
+
+        with mock.patch.object(model, "_offline_workload_stage", side_effect=fake_stage):
+            model._observer_bias_paired_stage_cpu(
+                root,
+                recipe,
+                primitive_id="scope_pair_clocks",
+                low_stage="counters_lite",
+                high_stage="counters",
+                scale=1,
+                repetition=0,
+            )
+        self.assertEqual(len(calls), 2)
+        self.assertNotEqual(calls[0], calls[1])
+        self.assertTrue(all(call.startswith("obs-scope_pair_clocks-s1-r0-") for call in calls))
 
 
 if __name__ == "__main__":
