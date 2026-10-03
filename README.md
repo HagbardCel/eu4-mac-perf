@@ -283,6 +283,7 @@ The runner uses a narrowly scoped, root-owned `powermetrics` helper. Review
 before the **one-time** administrator setup:
 
 ```sh
+python3 -m venv .venv && . .venv/bin/activate && pip install -r benchmark/requirements.txt
 python3 benchmark/autonomous_runner.py preflight
 sudo sh benchmark/install_powermetrics_helper.sh
 ```

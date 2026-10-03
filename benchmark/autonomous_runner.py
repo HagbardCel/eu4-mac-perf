@@ -34,6 +34,22 @@ FOCUS = ROOT / "benchmark/.build/mac_game_focus"
 HELPER_SOURCE = Path(__file__).with_name("powermetrics_helper")
 HELPER_INSTALLED = Path("/usr/local/libexec/eu4-powermetrics")
 POWERMETRICS_INSTALL_HINT = "sudo sh benchmark/install_powermetrics_helper.sh"
+PILLOW_INSTALL_HINT = (
+    "python3 -m venv .venv && . .venv/bin/activate && "
+    "pip install -r benchmark/requirements.txt"
+)
+
+
+def pillow_runtime_status() -> dict:
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        return {
+            "status": "missing",
+            "message": f"Pillow is required for scene alignment ({PILLOW_INSTALL_HINT})",
+            "install_hint": PILLOW_INSTALL_HINT,
+        }
+    return {"status": "ready", "install_hint": PILLOW_INSTALL_HINT}
 HARNESS_SOURCE = ROOT / "tests/idle_pacer_harness.cpp"
 HARNESS = ROOT / "benchmark/.build/auto_probe_harness"
 SCENE = ROOT / "fixtures/venice_scene.png"
@@ -293,7 +309,12 @@ def capture_scene(path: Path) -> None:
 
 
 def scene_difference(reference: Path, observed: Path) -> dict:
-    from PIL import Image, ImageChops, ImageStat
+    try:
+        from PIL import Image, ImageChops, ImageStat
+    except ImportError as exc:
+        raise base.BenchmarkError(
+            f"Pillow is required for scene alignment ({PILLOW_INSTALL_HINT})",
+        ) from exc
     with Image.open(reference) as first, Image.open(observed) as second:
         if first.size != second.size:
             raise base.BenchmarkError("EU IV scene resolution differs from the registered fixture")

@@ -1286,10 +1286,13 @@ def live_measurement_contract(mode: str) -> dict:
 
 def _intrusive_diagnostic_live_prerequisites() -> dict:
     powermetrics = auto.powermetrics_helper_status()
+    pillow = auto.pillow_runtime_status()
     scene_registered = auto.SCENE.is_file() and auto.SCENE_MANIFEST.is_file()
     blockers: list[str] = []
     if powermetrics.get("status") != "ready":
         blockers.append(powermetrics.get("message") or "powermetrics helper not ready")
+    if pillow.get("status") != "ready":
+        blockers.append(pillow.get("message") or "Pillow not installed")
     if not scene_registered:
         blockers.append(
             "Register the reviewed Venice scene before run --diagnostic-only "
@@ -1297,6 +1300,7 @@ def _intrusive_diagnostic_live_prerequisites() -> dict:
         )
     return {
         "powermetrics_helper": powermetrics,
+        "pillow_runtime": pillow,
         "venice_scene_registered": scene_registered,
         "run_ready": not blockers,
         "run_blockers": blockers,
@@ -1344,6 +1348,8 @@ def preflight_console_summary(result: dict, *, evidence_path: Path | None = None
     if prereq:
         pm = (prereq.get("powermetrics_helper") or {}).get("status")
         lines.append(f"powermetrics_helper: {pm}")
+        pillow = (prereq.get("pillow_runtime") or {}).get("status")
+        lines.append(f"pillow_runtime: {pillow}")
         lines.append(f"venice_scene_registered: {prereq.get('venice_scene_registered')}")
         if prereq.get("run_blockers"):
             lines.append("run_blockers:")

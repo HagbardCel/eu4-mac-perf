@@ -1,0 +1,2 @@
+# Scene alignment for unattended live capture (autonomous runner / Phase C).
+Pillow==12.3.0
