@@ -50,6 +50,7 @@ TEST_LIBRARY=ROOT/"benchmark/.build/libeu4_frame_model_test.dylib"
 WORKLOAD_HARNESS=ROOT/"benchmark/.build/frame_model_workload_harness"
 WARMUP_BOUNDARY_HARNESS=ROOT/"benchmark/.build/frame_model_warmup_boundary_harness"
 LOADED_DISABLED_HARNESS=ROOT/"benchmark/.build/frame_model_loaded_disabled_harness"
+MINIMAL_REFERENCE_HARNESS=ROOT/"benchmark/.build/frame_model_minimal_reference_harness"
 REFERENCE_TRANSITION_HARNESS=ROOT/"benchmark/.build/frame_model_reference_transition_harness"
 WRITER_PRODUCTION_HARNESS=ROOT/"benchmark/.build/frame_model_writer_production_harness"
 DRAW_ALIAS_HARNESS=ROOT/"benchmark/.build/frame_model_draw_alias_harness"
@@ -117,6 +118,8 @@ def build() -> dict:
          "-o",str(WARMUP_BOUNDARY_HARNESS),str(ROOT/"tests/frame_model_warmup_boundary_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
          "-o",str(LOADED_DISABLED_HARNESS),str(ROOT/"tests/frame_model_loaded_disabled_harness.c")],
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
+         "-o",str(MINIMAL_REFERENCE_HARNESS),str(ROOT/"tests/frame_model_minimal_reference_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-pthread","-framework","OpenGL",
          "-o",str(REFERENCE_TRANSITION_HARNESS),str(ROOT/"tests/frame_model_reference_transition_harness.c")],
         ["clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -307,7 +310,10 @@ WP5B_COMPLETION_DIAGNOSIS_PURPOSE = "wp5b_completion_diagnosis_v1"
 WP6_REFERENCE_CPU_DECOMPOSITION_PURPOSE = "wp6_reference_cpu_decomposition_v1"
 WP6_LOADED_DISABLED_CONTRACT = "wp6_loaded_disabled_v2"
 WP6_LOADED_DISABLED_CONTRACT_V1 = "wp6_loaded_disabled_v1"
+WP6_MINIMAL_REFERENCE_CONTRACT = "wp6_minimal_reference_v1"
+WP6_MINIMAL_REFERENCE_RECONCILIATION_PURPOSE = "wp6_minimal_reference_reconciliation_v1"
 REFERENCE_CPU_LADDER_STAGES = ("bare", "loaded-disabled", "reference")
+MINIMAL_REFERENCE_RECONCILIATION_STAGES = ("loaded-disabled", "minimal-reference", "reference")
 REFERENCE_CPU_METRICS = ("elapsed_ns", "cpu_ns")
 COMPLETION_TIMING_METRICS = (
     "elapsed_ns",
@@ -629,6 +635,7 @@ def _offline_workloads_payload(preflight_evidence: dict) -> dict:
         preflight_evidence.get("representative_workloads")
         or preflight_evidence.get("completion_workloads")
         or preflight_evidence.get("reference_cpu_workloads")
+        or preflight_evidence.get("minimal_reference_reconciliation")
         or {}
     )
 
@@ -650,6 +657,17 @@ def _offline_policy_versions(workloads: dict) -> dict:
             "reference_band_fraction": "non_normative_0.03",
             "reference_cpu_decomposition_text": (
                 "bare / loaded-disabled / reference ladder; comparisons are diagnostic only."
+            ),
+        }
+    if workloads.get("minimal_reference_reconciliation"):
+        return {
+            "minimal_reference_reconciliation": WP6_MINIMAL_REFERENCE_RECONCILIATION_PURPOSE,
+            "loaded_disabled_contract": WP6_LOADED_DISABLED_CONTRACT,
+            "minimal_reference_contract": WP6_MINIMAL_REFERENCE_CONTRACT,
+            "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
+            "reference_band_fraction": "non_normative_0.03",
+            "minimal_reference_reconciliation_text": (
+                "loaded-disabled / minimal-reference / reference reconciliation; diagnostic only."
             ),
         }
     if workloads.get("completion_timing"):
@@ -1015,6 +1033,7 @@ def _offline_workload_private_env() -> frozenset[str]:
         "EU4_TEST_CACHED_METADATA",
         "EU4_TEST_COMPLETION_TIMING",
         "EU4_TEST_LOADED_DISABLED",
+        "EU4_TEST_MINIMAL_REFERENCE",
     })
 
 
@@ -1047,7 +1066,7 @@ def _validate_loaded_disabled_trace(log_path: Path) -> None:
 def _offline_workload_mode_and_flags(stage: str) -> tuple[int, int]:
     if stage == "loaded-disabled":
         return MODE["reference"], 0
-    if stage == "reference":
+    if stage in ("reference", "minimal-reference"):
         return MODE["reference"], 1
     return MODE["profile"], 1
 
@@ -1065,6 +1084,8 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
         env["EU4_TEST_ABLATION"]=stage.removeprefix("ablation_")
     if stage == "loaded-disabled":
         env["EU4_TEST_LOADED_DISABLED"] = "1"
+    if stage == "minimal-reference":
+        env["EU4_TEST_MINIMAL_REFERENCE"] = "1"
     if stage!="bare":
         mode, flags = _offline_workload_mode_and_flags(stage)
         fields=[FORMAT_VERSION,2,mode,1,flags,0,0,0,1,0,0,0,0,0]
@@ -1093,7 +1114,7 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
         _require_completion_timing_metrics(measured)
     if stage == "bare":
         return measured, None
-    if stage == "loaded-disabled":
+    if stage in ("loaded-disabled", "minimal-reference"):
         _validate_loaded_disabled_trace(log_path)
         return measured, None
     rows=frame_rows(log_path);trace=read_rows(log_path)
@@ -1467,6 +1488,125 @@ def wp6_reference_cpu_decomposition(run_gl: bool = True) -> dict:
             "Training recipes only; held-out not measured.",
             f"loaded-disabled contract: {WP6_LOADED_DISABLED_CONTRACT} (MODE_REFERENCE, MEASURE_ENABLED off via EU4_TEST_LOADED_DISABLED).",
             "Interpret loaded-disabled − bare as fixed instrumentation tax; reference − loaded-disabled as active REFERENCE tax.",
+        ],
+    }
+    return _publish_offline_immutable_evidence(
+        evidence,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=static,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
+        update_rolling_pointer=False,
+    )
+
+
+def _minimal_reference_reconciliation_comparisons(trials: list[dict]) -> dict:
+    comparisons: dict = {}
+    pairs = (
+        ("minimal-reference", "loaded-disabled"),
+        ("reference", "minimal-reference"),
+        ("reference", "loaded-disabled"),
+    )
+    for stage, reference in pairs:
+        for axis in REFERENCE_CPU_METRICS:
+            comparisons[f"{stage}_{axis}"] = _completion_diagnostic_paired_summary(
+                [
+                    {
+                        "instrumented": trial["stages"][stage][axis],
+                        "reference": trial["stages"][reference][axis],
+                    }
+                    for trial in trials
+                ],
+            )
+    return comparisons
+
+
+def _offline_minimal_reference_recipe_evidence(root: Path, recipe: dict) -> dict:
+    trials = []
+    for trial in range(workload.TIER1_PAIR_COUNT):
+        stages = (
+            tuple(reversed(MINIMAL_REFERENCE_RECONCILIATION_STAGES))
+            if trial % 2
+            else MINIMAL_REFERENCE_RECONCILIATION_STAGES
+        )
+        values: dict = {}
+        for stage in stages:
+            values[stage], _ = _offline_workload_stage(root, recipe, trial, stage)
+        trials.append({"trial": trial, "order": list(stages), "stages": values})
+    recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
+    return {
+        "recipe": recipe_meta,
+        "trials": trials,
+        "comparisons": _minimal_reference_reconciliation_comparisons(trials),
+    }
+
+
+def minimal_reference_reconciliation_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
+    with tempfile.TemporaryDirectory(prefix="eu4-minimal-reference-") as temporary:
+        root = Path(temporary)
+        recipe_specs = [
+            recipe for recipe in workload.recipes(root, include_held_out=False)
+            if recipe.get("role") != "held_out"
+        ]
+        recipes = [_offline_minimal_reference_recipe_evidence(root, recipe) for recipe in recipe_specs]
+        if executed_artifacts_start:
+            test_library_sha256 = executed_artifacts_start["test_library_sha256"]
+            workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
+        else:
+            test_library_sha256 = base.sha256(TEST_LIBRARY)
+            workload_harness_sha256 = base.sha256(WORKLOAD_HARNESS)
+        return {
+            "status": "complete",
+            "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+            "recipes": recipes,
+            "test_library_sha256": test_library_sha256,
+            "workload_harness_sha256": workload_harness_sha256,
+            "minimal_reference_reconciliation": True,
+            "loaded_disabled_contract": WP6_LOADED_DISABLED_CONTRACT,
+            "minimal_reference_contract": WP6_MINIMAL_REFERENCE_CONTRACT,
+            "reconciliation_stages": list(MINIMAL_REFERENCE_RECONCILIATION_STAGES),
+            **_offline_workload_source_hashes(),
+        }
+
+
+def wp6_minimal_reference_reconciliation(run_gl: bool = True) -> dict:
+    """Training-only loaded-disabled / minimal-reference / reference reconciliation (diagnostic)."""
+    if not run_gl:
+        raise base.BenchmarkError("minimal-reference-reconciliation requires GL workload execution")
+    identity_start = _offline_git_identity_snapshot()
+    if not identity_start.get("git_tree_clean"):
+        violations = _git_tree_clean_violations_for_evidence()
+        detail = ", ".join(violations[:8])
+        if len(violations) > 8:
+            detail += f", … (+{len(violations) - 8} more)"
+        raise base.BenchmarkError(
+            "Source tree dirty before minimal-reference reconciliation"
+            + (f": {detail}" if detail else ""),
+        )
+    static = build()
+    artifact_start = _offline_executed_artifact_snapshot()
+    _require_build_executed_artifacts_match(static, artifact_start)
+    reconciliation = minimal_reference_reconciliation_workloads(executed_artifacts_start=artifact_start)
+    artifact_end = _offline_executed_artifact_snapshot()
+    _require_executed_artifacts_stable(artifact_start, artifact_end)
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
+    evidence = {
+        "purpose": WP6_MINIMAL_REFERENCE_RECONCILIATION_PURPOSE,
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "status": "diagnostic_complete",
+        "build": static,
+        "minimal_reference_reconciliation": reconciliation,
+        "limitations": [
+            "Diagnostic only; does not change Tier-1 acceptance gates.",
+            "comparison.status is always diagnostic; reference_band_fraction is non-normative.",
+            "Training recipes only; held-out not measured.",
+            f"loaded-disabled contract: {WP6_LOADED_DISABLED_CONTRACT}.",
+            f"minimal-reference contract: {WP6_MINIMAL_REFERENCE_CONTRACT} "
+            "(MODE_REFERENCE + MEASURE_ENABLED; scopes, events, and publish_frame disabled).",
+            "Interpret reference − minimal-reference as residual active accounting; "
+            "minimal-reference − loaded-disabled as non-interposer REFERENCE hook overhead.",
         ],
     }
     return _publish_offline_immutable_evidence(
@@ -3160,6 +3300,15 @@ def main() -> int:
         action="store_true",
         help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
     )
+    mr=sub.add_parser(
+        "minimal-reference-reconciliation",
+        help="WP6: loaded-disabled / minimal-reference / reference reconciliation (training only)",
+    )
+    mr.add_argument(
+        "--registry-json",
+        action="store_true",
+        help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
+    )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
     run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
@@ -3190,6 +3339,12 @@ def main() -> int:
                 print(json.dumps(result,indent=2))
         elif args.command=="reference-cpu-decomposition":
             result=wp6_reference_cpu_decomposition()
+            if args.registry_json:
+                print(json.dumps(result.get("immutable_evidence") or {},indent=2))
+            else:
+                print(json.dumps(result,indent=2))
+        elif args.command=="minimal-reference-reconciliation":
+            result=wp6_minimal_reference_reconciliation()
             if args.registry_json:
                 print(json.dumps(result.get("immutable_evidence") or {},indent=2))
             else:

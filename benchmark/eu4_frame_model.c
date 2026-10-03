@@ -205,6 +205,7 @@ static uint64_t now_ns(clockid_t id);
 /* Diagnostics only: these branches are absent from the production library. */
 static unsigned test_ablation;
 static bool test_loaded_disabled;
+static bool test_minimal_reference;
 static _Atomic uint64_t test_loaded_disabled_accounting_ns_calls;
 static uint64_t test_measured_state_queries,test_measured_gpu_initializations;
 static bool test_gpu_timestamps=true,test_forensic_records=true,test_cached_metadata=false;
@@ -333,6 +334,7 @@ static int scope_begin(unsigned id) {
         atomic_fetch_add(&test_loaded_disabled_accounting_ns_calls,1);
         return 0;
     }
+    if(test_minimal_reference) return 0;
 #endif
     if(!measurement_active() || (frame_control.mode==REFERENCE && id!=SCOPE_UPDATE &&
         id!=SCOPE_LOOP && id!=SCOPE_RENDER && id!=SCOPE_PRESENT)) return 0;
@@ -427,6 +429,9 @@ static void unowned_event(void) {
     }
 }
 static void event(unsigned id,uint64_t wall,uint64_t cpu) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_minimal_reference) return;
+#endif
     Producer *p=producer(); if(!p) return;
     p->counts[id]++; p->wall[id]+=wall; p->cpu[id]+=cpu;
     unowned_event();
@@ -447,6 +452,9 @@ static void flush_counters(void) {
     }
 }
 static void publish_frame(Frame *f) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_minimal_reference) return;
+#endif
     Producer *p=producer(); uint64_t h;
     bool aggregate=true;
 #ifdef EU4_FRAME_MODEL_TEST
@@ -2409,9 +2417,11 @@ static void initialize(void) {
     test_ablation=ablation && !strcmp(ablation,"accounting")?1:ablation && !strcmp(ablation,"writer")?2:
         ablation && !strcmp(ablation,"preparation")?3:0;
     if(!test_read_toggle("EU4_TEST_LOADED_DISABLED",false,&test_loaded_disabled) ||
+       !test_read_toggle("EU4_TEST_MINIMAL_REFERENCE",false,&test_minimal_reference) ||
        !test_read_toggle("EU4_TEST_GPU_TIMESTAMPS",true,&test_gpu_timestamps) ||
        !test_read_toggle("EU4_TEST_FORENSIC_RECORDS",true,&test_forensic_records) ||
        !test_read_toggle("EU4_TEST_CACHED_METADATA",false,&test_cached_metadata)) abort();
+    if(test_loaded_disabled && test_minimal_reference) abort();
 #endif
     const char *path=getenv("EU4_FRAME_MODEL_CONTROL");
     if(path) { int fd=open(path,O_RDWR); if(fd>=0) { control=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0); close(fd); } }

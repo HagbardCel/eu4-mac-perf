@@ -118,6 +118,8 @@ Retain in the **live-path inventory** (Phase A), but do not expect these to expl
 
 **Implemented (ladder capture):** `python3 benchmark/eu4_frame_model.py reference-cpu-decomposition --registry-json` runs `bare` → `loaded-disabled` → `reference` with contract **`wp6_loaded_disabled_v2`** (`EU4_TEST_LOADED_DISABLED=1`: passive synthetic hook fast paths, no `MEASURE_ENABLED`, no hook accounting clocks). Each `loaded-disabled` stage validates the profiler trace (no `F` rows; terminal `Z` with zero hook failures/drops; shutdown `X`). Authoritative capture: [`4dc19f16`](wp6-reference-cpu-ladder-memo-20261003.md) @ `d9b77c4`; pre–stage-validation v2: [`95f3513c`](wp6-reference-cpu-ladder-memo-20261003.md); historical v1: [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md).
 
+**Implemented (reconciliation capture):** `python3 benchmark/eu4_frame_model.py minimal-reference-reconciliation --registry-json` runs `loaded-disabled` → `minimal-reference` → `reference` with contract **`wp6_minimal_reference_v1`** (`EU4_TEST_MINIMAL_REFERENCE=1`: `MODE_REFERENCE` + `MEASURE_ENABLED`, but scopes, `event()`, and `publish_frame()` are disabled). Unpublished stages validate the same passive trace contract as `loaded-disabled`.
+
 Extend offline harness pattern (same spirit as `ablation_accounting` / `ablation_writer` / `ablation_preparation` on the sampled path):
 
 - **`loaded-disabled`** stage: dylib loaded, measurement off — separates interposition tax from active REFERENCE work.
@@ -160,7 +162,8 @@ Short memo (like [WP5 requalification timing memo](wp5-requalification-timing-me
 
 - [x] Branch: `wp6-reference-cpu-decomposition` from `main` @ post–PR #10 merge (`602ca4b`).
 - [x] Phase A inventory — [wp6-phase-a-reference-inventory.md](wp6-phase-a-reference-inventory.md).
-- [x] Phase B ladder: `loaded-disabled` v2 passive hooks + `reference-cpu-decomposition` CLI (minimal-reference / marginal ablations still open).
+- [x] Phase B ladder: `loaded-disabled` v2 passive hooks + `reference-cpu-decomposition` CLI.
+- [x] Phase B `minimal-reference` contract (`wp6_minimal_reference_v1`) + `minimal-reference-reconciliation` CLI (marginal ablations still open).
 - [x] Phase C v1 Mac capture — historical [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md) @ `82922f3` (`wp6_loaded_disabled_v1`).
 - [x] Phase C v2 Mac capture (pre–stage-validation) — [`95f3513c`](wp6-reference-cpu-ladder-memo-20261003.md) @ `cb4b762` (`wp6_loaded_disabled_v2`).
 - [x] Ladder harness: `loaded-disabled` trace validation in `_offline_workload_stage`.

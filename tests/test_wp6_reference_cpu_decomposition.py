@@ -14,6 +14,12 @@ class Wp6ReferenceCpuDecompositionTests(unittest.TestCase):
         self.assertEqual(mode, model.MODE["reference"])
         self.assertEqual(flags, 0)
 
+    def test_minimal_reference_keeps_measure_enabled(self):
+        mode, flags = model._offline_workload_mode_and_flags("minimal-reference")
+        self.assertEqual(mode, model.MODE["reference"])
+        self.assertEqual(flags, 1)
+        self.assertIn("EU4_TEST_MINIMAL_REFERENCE", model._offline_workload_private_env())
+
     def test_build_metadata_uses_reference_cpu_workloads(self):
         identity = {
             "git_commit": "c" * 40,
@@ -83,6 +89,74 @@ class Wp6ReferenceCpuDecompositionTests(unittest.TestCase):
         stages_called = [call.args[3] for call in stage.call_args_list]
         self.assertEqual(set(stages_called), set(model.REFERENCE_CPU_LADDER_STAGES))
         self.assertNotIn("path", entry["recipe"])
+
+
+class Wp6MinimalReferenceReconciliationTests(unittest.TestCase):
+    def test_reconciliation_comparisons_are_diagnostic(self):
+        trials = [
+            {
+                "stages": {
+                    "loaded-disabled": {"elapsed_ns": 1100, "cpu_ns": 120},
+                    "minimal-reference": {"elapsed_ns": 1150, "cpu_ns": 130},
+                    "reference": {"elapsed_ns": 1300, "cpu_ns": 150},
+                },
+            },
+        ]
+        comparisons = model._minimal_reference_reconciliation_comparisons(trials)
+        self.assertEqual(comparisons["reference_cpu_ns"]["status"], "diagnostic")
+        self.assertFalse(comparisons["minimal-reference_cpu_ns"]["acceptance_gate"])
+
+    def test_reconciliation_metadata_policy_versions(self):
+        identity = {
+            "git_commit": "c" * 40,
+            "git_commit_short": "c" * 7,
+            "git_tree_clean": True,
+            "controller_sha256": "ctrl",
+            "key_source_hashes": {},
+        }
+        build_info = {"executable_sha256": "game", "library_sha256": "lib", "native_source_hashes": {}}
+        executed = {
+            "profiler_dylib_sha256": "lib",
+            "test_library_sha256": "test-lib",
+            "workload_harness_sha256": "harness-bin",
+            "draw_manifest_sha256": "manifest",
+        }
+        source = model._offline_workload_source_hashes()
+        preflight = {
+            "purpose": model.WP6_MINIMAL_REFERENCE_RECONCILIATION_PURPOSE,
+            "minimal_reference_reconciliation": {
+                "minimal_reference_reconciliation": True,
+                "minimal_reference_contract": model.WP6_MINIMAL_REFERENCE_CONTRACT,
+                "recipes": [
+                    {
+                        "recipe": {"name": "mesh", "sha256": "mesh-hash", "role": "training"},
+                        "trials": [],
+                    },
+                ],
+                **source,
+            },
+        }
+        metadata = model.build_offline_evidence_metadata(
+            preflight,
+            "20261003T120000.000000Z-abc12345",
+            identity_start=identity,
+            identity_end=identity,
+            build_info=build_info,
+            executed_artifact_start=executed,
+            executed_artifact_end=executed,
+        )
+        self.assertEqual(
+            metadata["policy_versions"]["minimal_reference_contract"],
+            model.WP6_MINIMAL_REFERENCE_CONTRACT,
+        )
+
+    def test_reconciliation_recipe_runs_all_stages(self):
+        recipe = {"name": "mesh", "path": "/tmp/mesh.recipe", "draws": 1}
+        measured = {"elapsed_ns": 1, "cpu_ns": 2}
+        with mock.patch.object(model, "_offline_workload_stage", return_value=(measured, None)) as stage:
+            entry = model._offline_minimal_reference_recipe_evidence(Path("/tmp"), recipe)
+        stages_called = [call.args[3] for call in stage.call_args_list]
+        self.assertEqual(set(stages_called), set(model.MINIMAL_REFERENCE_RECONCILIATION_STAGES))
 
 
 class ValidateLoadedDisabledTraceTests(unittest.TestCase):

@@ -76,6 +76,35 @@ class Wp5ReferenceFastPathTests(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stderr or run.stdout)
 
     @unittest.skipUnless(sys.platform == "darwin", "native GL harness requires macOS")
+    def test_minimal_reference_harness(self):
+        model.build()
+        with tempfile.TemporaryDirectory() as temporary:
+            control = Path(temporary) / "control.bin"
+            log = Path(temporary) / "trace.csv"
+            control.write_bytes(
+                model.CONTROL.pack(model.FORMAT_VERSION, 2, model.MODE["reference"], 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0)
+                + bytes(model.CONTROL_SIZE - model.CONTROL.size),
+            )
+            env = {
+                **os.environ,
+                "DYLD_INSERT_LIBRARIES": str(model.TEST_LIBRARY.resolve()),
+                "EU4_FRAME_MODEL_CONTROL": str(control),
+                "EU4_FRAME_MODEL_LOG": str(log),
+                "EU4_TEST_MINIMAL_REFERENCE": "1",
+            }
+            run = subprocess.run(
+                [str(model.MINIMAL_REFERENCE_HARNESS), str(model.TEST_LIBRARY.resolve())],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if run.returncode == 6:
+                self.skipTest("no accelerated GL pixel format on this host")
+            self.assertEqual(run.returncode, 0, run.stderr or run.stdout)
+
+    @unittest.skipUnless(sys.platform == "darwin", "native GL harness requires macOS")
     def test_reference_transition_harness(self):
         model.build()
         with tempfile.TemporaryDirectory() as temporary:
