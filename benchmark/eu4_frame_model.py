@@ -310,10 +310,17 @@ WP5B_COMPLETION_DIAGNOSIS_PURPOSE = "wp5b_completion_diagnosis_v1"
 WP6_REFERENCE_CPU_DECOMPOSITION_PURPOSE = "wp6_reference_cpu_decomposition_v1"
 WP6_LOADED_DISABLED_CONTRACT = "wp6_loaded_disabled_v2"
 WP6_LOADED_DISABLED_CONTRACT_V1 = "wp6_loaded_disabled_v1"
-WP6_MINIMAL_REFERENCE_CONTRACT = "wp6_minimal_reference_v1"
+WP6_MINIMAL_REFERENCE_CONTRACT = "wp6_minimal_reference_v2"
 WP6_MINIMAL_REFERENCE_RECONCILIATION_PURPOSE = "wp6_minimal_reference_reconciliation_v1"
 REFERENCE_CPU_LADDER_STAGES = ("bare", "loaded-disabled", "reference")
 MINIMAL_REFERENCE_RECONCILIATION_STAGES = ("loaded-disabled", "minimal-reference", "reference")
+MINIMAL_REFERENCE_RECONCILIATION_COMPARISONS = (
+    ("minimal_reference_vs_loaded_disabled", "minimal-reference", "loaded-disabled"),
+    ("reference_vs_minimal_reference", "reference", "minimal-reference"),
+    ("reference_vs_loaded_disabled", "reference", "loaded-disabled"),
+)
+CONTROL_MEASURE_ENABLED = 2
+CONTROL_FORENSIC_CAPTURE = 4
 REFERENCE_CPU_METRICS = ("elapsed_ns", "cpu_ns")
 COMPLETION_TIMING_METRICS = (
     "elapsed_ns",
@@ -1037,30 +1044,59 @@ def _offline_workload_private_env() -> frozenset[str]:
     })
 
 
-def _validate_loaded_disabled_trace(log_path: Path) -> None:
-    """Ensure loaded-disabled ran passive v2 (dylib loaded, no published measurement frames)."""
+def _offline_control_mode_flags(control_path: Path) -> tuple[int, int]:
+    if not control_path.is_file():
+        raise base.BenchmarkError(f"missing control file {control_path.name}")
+    fields = CONTROL.unpack(control_path.read_bytes()[:CONTROL.size])
+    return int(fields[2]), int(fields[4])
+
+
+def _validate_unpublished_profiler_trace(log_path: Path, *, stage: str) -> None:
+    """Dylib loaded with no published measurement frames (passive or minimal-reference path)."""
     if not log_path.is_file():
-        raise base.BenchmarkError(f"loaded-disabled missing profiler log {log_path.name}")
+        raise base.BenchmarkError(f"{stage} missing profiler log {log_path.name}")
     rows = frame_rows(log_path)
     if rows:
         raise base.BenchmarkError(
-            f"loaded-disabled published {len(rows)} measurement frame(s); expected passive v2 path",
+            f"{stage} published {len(rows)} measurement frame(s); expected unpublished path",
         )
     trace = read_rows(log_path)
     if not trace or trace[0][0] != "H":
-        raise base.BenchmarkError("loaded-disabled trace missing version header")
+        raise base.BenchmarkError(f"{stage} trace missing version header")
     z_rows = [row for row in trace if row and row[0] == "Z"]
     if not z_rows:
-        raise base.BenchmarkError("loaded-disabled trace missing terminal Z record")
+        raise base.BenchmarkError(f"{stage} trace missing terminal Z record")
     terminal = z_rows[-1]
     hook_failures = int(terminal[1])
     dropped = int(terminal[3]) if len(terminal) > 3 else 0
     if hook_failures != 0:
-        raise base.BenchmarkError(f"loaded-disabled hook_failures={hook_failures}")
+        raise base.BenchmarkError(f"{stage} hook_failures={hook_failures}")
     if dropped:
-        raise base.BenchmarkError(f"loaded-disabled dropped_records={dropped}")
+        raise base.BenchmarkError(f"{stage} dropped_records={dropped}")
     if not any(row and row[0] == "X" for row in trace):
-        raise base.BenchmarkError("loaded-disabled trace missing shutdown X record")
+        raise base.BenchmarkError(f"{stage} trace missing shutdown X record")
+
+
+def _validate_loaded_disabled_control(control_path: Path) -> None:
+    mode, flags = _offline_control_mode_flags(control_path)
+    if mode != MODE["reference"]:
+        raise base.BenchmarkError(f"loaded-disabled control mode={mode} (expected REFERENCE)")
+    if flags & CONTROL_MEASURE_ENABLED:
+        raise base.BenchmarkError("loaded-disabled left MEASURE_ENABLED set after capture")
+
+
+def _validate_minimal_reference_control(control_path: Path) -> None:
+    mode, flags = _offline_control_mode_flags(control_path)
+    if mode != MODE["reference"]:
+        raise base.BenchmarkError(f"minimal-reference control mode={mode} (expected REFERENCE)")
+    if not (flags & CONTROL_MEASURE_ENABLED):
+        raise base.BenchmarkError("minimal-reference cleared MEASURE_ENABLED after capture")
+    if flags & CONTROL_FORENSIC_CAPTURE:
+        raise base.BenchmarkError("minimal-reference left FORENSIC_CAPTURE set after capture")
+
+
+def _validate_loaded_disabled_trace(log_path: Path) -> None:
+    _validate_unpublished_profiler_trace(log_path, stage="loaded-disabled")
 
 
 def _offline_workload_mode_and_flags(stage: str) -> tuple[int, int]:
@@ -1114,8 +1150,13 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
         _require_completion_timing_metrics(measured)
     if stage == "bare":
         return measured, None
-    if stage in ("loaded-disabled", "minimal-reference"):
-        _validate_loaded_disabled_trace(log_path)
+    if stage == "loaded-disabled":
+        _validate_unpublished_profiler_trace(log_path, stage=stage)
+        _validate_loaded_disabled_control(control_path)
+        return measured, None
+    if stage == "minimal-reference":
+        _validate_unpublished_profiler_trace(log_path, stage=stage)
+        _validate_minimal_reference_control(control_path)
         return measured, None
     rows=frame_rows(log_path);trace=read_rows(log_path)
     tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
@@ -1503,14 +1544,9 @@ def wp6_reference_cpu_decomposition(run_gl: bool = True) -> dict:
 
 def _minimal_reference_reconciliation_comparisons(trials: list[dict]) -> dict:
     comparisons: dict = {}
-    pairs = (
-        ("minimal-reference", "loaded-disabled"),
-        ("reference", "minimal-reference"),
-        ("reference", "loaded-disabled"),
-    )
-    for stage, reference in pairs:
+    for key, stage, reference in MINIMAL_REFERENCE_RECONCILIATION_COMPARISONS:
         for axis in REFERENCE_CPU_METRICS:
-            comparisons[f"{stage}_{axis}"] = _completion_diagnostic_paired_summary(
+            comparisons[f"{key}_{axis}"] = _completion_diagnostic_paired_summary(
                 [
                     {
                         "instrumented": trial["stages"][stage][axis],
@@ -1604,9 +1640,11 @@ def wp6_minimal_reference_reconciliation(run_gl: bool = True) -> dict:
             "Training recipes only; held-out not measured.",
             f"loaded-disabled contract: {WP6_LOADED_DISABLED_CONTRACT}.",
             f"minimal-reference contract: {WP6_MINIMAL_REFERENCE_CONTRACT} "
-            "(MODE_REFERENCE + MEASURE_ENABLED; scopes, events, and publish_frame disabled).",
-            "Interpret reference − minimal-reference as residual active accounting; "
-            "minimal-reference − loaded-disabled as non-interposer REFERENCE hook overhead.",
+            "(MODE_REFERENCE + MEASURE_ENABLED; passive synthetic hook fast paths like loaded-disabled "
+            "v2; scopes, events, and publish_frame disabled).",
+            "reference − loaded-disabled = total active REFERENCE tax; "
+            "reference − minimal-reference = accounting removed by minimal-reference; "
+            "minimal-reference − loaded-disabled = residual after that ablation (measurement-armed path).",
         ],
     }
     return _publish_offline_immutable_evidence(

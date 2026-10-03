@@ -207,6 +207,9 @@ static unsigned test_ablation;
 static bool test_loaded_disabled;
 static bool test_minimal_reference;
 static _Atomic uint64_t test_loaded_disabled_accounting_ns_calls;
+static inline bool test_passive_reference_hooks(void) {
+    return test_loaded_disabled || test_minimal_reference;
+}
 static uint64_t test_measured_state_queries,test_measured_gpu_initializations;
 static bool test_gpu_timestamps=true,test_forensic_records=true,test_cached_metadata=false;
 static _Atomic uint64_t test_gpu_stamps,test_gpu_polls,test_gpu_results,test_detail_records;
@@ -930,7 +933,7 @@ static _Atomic uint64_t updates, renders, presents;
 static void hook_update(void *self,bool force) {
     if(inside_update) {
 #ifdef EU4_FRAME_MODEL_TEST
-        if(test_loaded_disabled) {
+        if(test_passive_reference_hooks()) {
             atomic_fetch_add(&updates,1);
             real_update(self,force);
             return;
@@ -943,7 +946,7 @@ static void hook_update(void *self,bool force) {
         event(HOOK_UPDATE,0,0); return;
     }
 #ifdef EU4_FRAME_MODEL_TEST
-    if(test_loaded_disabled) {
+    if(test_passive_reference_hooks()) {
         if(!snapshot_control(&frame_control)) {
             real_update(self,force);
             return;
@@ -1030,7 +1033,7 @@ static void hook_update(void *self,bool force) {
 }
 static void hook_idle(void *self,bool force) {
 #ifdef EU4_FRAME_MODEL_TEST
-    if(test_loaded_disabled) {
+    if(test_passive_reference_hooks()) {
         real_idle(self,force);
         return;
     }
@@ -1050,7 +1053,7 @@ static void hook_render(void *self) {
     uint64_t id=atomic_fetch_add(&renders,1)+1;
     if(!control) { real_render(self); return; }
 #ifdef EU4_FRAME_MODEL_TEST
-    if(test_loaded_disabled) {
+    if(test_passive_reference_hooks()) {
         real_render(self);
         return;
     }
@@ -1168,7 +1171,7 @@ static void hook_map(void *self,void *ctx,const void *camera,float alpha,bool fl
 }
 static void hook_present(void *self) {
 #ifdef EU4_FRAME_MODEL_TEST
-    if(test_loaded_disabled) {
+    if(test_passive_reference_hooks()) {
         real_present(self);
         return;
     }

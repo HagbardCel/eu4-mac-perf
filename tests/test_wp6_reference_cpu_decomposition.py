@@ -92,7 +92,7 @@ class Wp6ReferenceCpuDecompositionTests(unittest.TestCase):
 
 
 class Wp6MinimalReferenceReconciliationTests(unittest.TestCase):
-    def test_reconciliation_comparisons_are_diagnostic(self):
+    def test_reconciliation_comparisons_are_diagnostic_and_distinct(self):
         trials = [
             {
                 "stages": {
@@ -103,8 +103,29 @@ class Wp6MinimalReferenceReconciliationTests(unittest.TestCase):
             },
         ]
         comparisons = model._minimal_reference_reconciliation_comparisons(trials)
-        self.assertEqual(comparisons["reference_cpu_ns"]["status"], "diagnostic")
-        self.assertFalse(comparisons["minimal-reference_cpu_ns"]["acceptance_gate"])
+        for key in (
+            "minimal_reference_vs_loaded_disabled_cpu_ns",
+            "reference_vs_minimal_reference_cpu_ns",
+            "reference_vs_loaded_disabled_cpu_ns",
+        ):
+            self.assertEqual(comparisons[key]["status"], "diagnostic")
+            self.assertFalse(comparisons[key]["acceptance_gate"])
+        self.assertAlmostEqual(
+            comparisons["minimal_reference_vs_loaded_disabled_cpu_ns"]["median_fraction"],
+            (130 - 120) / 120,
+        )
+        self.assertAlmostEqual(
+            comparisons["reference_vs_minimal_reference_cpu_ns"]["median_fraction"],
+            (150 - 130) / 130,
+        )
+        self.assertAlmostEqual(
+            comparisons["reference_vs_loaded_disabled_cpu_ns"]["median_fraction"],
+            (150 - 120) / 120,
+        )
+        self.assertNotEqual(
+            comparisons["reference_vs_minimal_reference_cpu_ns"]["median_fraction"],
+            comparisons["reference_vs_loaded_disabled_cpu_ns"]["median_fraction"],
+        )
 
     def test_reconciliation_metadata_policy_versions(self):
         identity = {
@@ -157,6 +178,30 @@ class Wp6MinimalReferenceReconciliationTests(unittest.TestCase):
             entry = model._offline_minimal_reference_recipe_evidence(Path("/tmp"), recipe)
         stages_called = [call.args[3] for call in stage.call_args_list]
         self.assertEqual(set(stages_called), set(model.MINIMAL_REFERENCE_RECONCILIATION_STAGES))
+
+
+class OfflineControlContractTests(unittest.TestCase):
+    def _control_file(self, mode: int, flags: int) -> Path:
+        path = Path(tempfile.mkdtemp()) / "control.bin"
+        path.write_bytes(
+            model.CONTROL.pack(model.FORMAT_VERSION, 2, mode, 1, flags, 0, 0, 0, 1, 0, 0, 0, 0, 0)
+            + bytes(model.CONTROL_SIZE - model.CONTROL.size),
+        )
+        return path
+
+    def test_minimal_reference_control_requires_measure_enabled(self):
+        path = self._control_file(model.MODE["reference"], model.CONTROL_MEASURE_ENABLED)
+        model._validate_minimal_reference_control(path)
+        bad = self._control_file(model.MODE["reference"], 0)
+        with self.assertRaises(model.base.BenchmarkError):
+            model._validate_minimal_reference_control(bad)
+
+    def test_loaded_disabled_control_requires_measure_off(self):
+        path = self._control_file(model.MODE["reference"], 0)
+        model._validate_loaded_disabled_control(path)
+        bad = self._control_file(model.MODE["reference"], model.CONTROL_MEASURE_ENABLED)
+        with self.assertRaises(model.base.BenchmarkError):
+            model._validate_loaded_disabled_control(bad)
 
 
 class ValidateLoadedDisabledTraceTests(unittest.TestCase):

@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "minimal-reference loaded-disabled accounting violations=%u (expected 0)\n", violations());
         return 13;
     }
-    puts("minimal-reference v1: MEASURE_ENABLED, 0 published, REFERENCE hooks without scopes/events/publish");
+    puts("minimal-reference v2: MEASURE_ENABLED, passive hooks, 0 published");
     munmap(control, 4096);
     close(fd);
     dlclose(library);
