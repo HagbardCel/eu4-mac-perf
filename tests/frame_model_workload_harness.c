@@ -67,6 +67,10 @@ int main(int argc,char **argv) {
     glFinish();GLenum warm_error=glGetError();if(warm_error!=GL_NO_ERROR) {fprintf(stderr,"warmup GL error=%u\n",warm_error);return 11;}
     void (*arm)(unsigned)=dlsym(RTLD_DEFAULT,"eu4_frame_model_test_arm");
     if(arm) arm(getenv("EU4_TEST_SAMPLED")?frames:0);
+    unsigned prime_frames=0;
+    const char *prime_env=getenv("EU4_TEST_POST_ARM_PRIME_FRAMES");
+    if(prime_env) prime_frames=(unsigned)strtoul(prime_env,NULL,10);
+    for(unsigned i=0;i<prime_frames;i++) { if(frame) frame(workload);else workload(); }
     const char *completion_timing=getenv("EU4_TEST_COMPLETION_TIMING");
     int report_completion=completion_timing && strcmp(completion_timing,"0");
     uint64_t cpu=now(CLOCK_THREAD_CPUTIME_ID),wall=now(CLOCK_UPTIME_RAW);
@@ -85,9 +89,11 @@ int main(int argc,char **argv) {
     unsigned char pixel[4];glReadPixels(16,16,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
     GLenum error=glGetError();
     if(error!=GL_NO_ERROR || !pixel[3]) { fprintf(stderr,"validation: GL error=%u alpha=%u\n",error,pixel[3]);return 12; }
-    printf("elapsed_ns=%llu cpu_ns=%llu draws=%u valid=1 pixel_alpha=%u preparation_wall_ns=%llu preparation_cpu_ns=%llu",
+    printf("elapsed_ns=%llu cpu_ns=%llu draws=%u valid=1 pixel_alpha=%u preparation_wall_ns=%llu preparation_cpu_ns=%llu"
+           " post_arm_prime_frames=%u measured_frames=%u",
            (unsigned long long)elapsed,(unsigned long long)thread,frames*command_count,pixel[3],
-           (unsigned long long)preparation_wall,(unsigned long long)preparation_cpu);
+           (unsigned long long)preparation_wall,(unsigned long long)preparation_cpu,
+           prime_frames,frames);
     if(report_completion) {
         printf(" submission_elapsed_ns=%llu submission_cpu_ns=%llu post_window_drain_elapsed_ns=%llu"
                " post_window_drain_cpu_ns=%llu submission_plus_drain_elapsed_ns=%llu submission_plus_drain_cpu_ns=%llu",
