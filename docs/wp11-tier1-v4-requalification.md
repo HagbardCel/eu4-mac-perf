@@ -27,3 +27,8 @@ python3 benchmark/summarize_wp1_diagnosis.py --find
 - **mesh:** only failure is `counters_cpu_ns` (median ~10.43 µs/frame; bootstrap upper bound ~11.14 µs above the 11 µs hybrid floor). **borders:** all gates passed. **text_ui:** CPU passed; both completion-wall gates **`unavailable`**.
 - v3 authoritative capture **`a73ea57b`** remains the failed seven-pair result; v4 does not retroactively pass v3 evidence.
 - **v2 remains production binding.** v4 training requalification **failed** — do not run held-out under v4; stop profiler qualification iteration and return to EU IV performance work (see `docs/tier1-v4-statistical-replication-proposal.md`).
+
+### Scientific notes (non-admission)
+
+- The 21-trial WP11 `text_ui` completion-wall result did not reproduce WP10's favorable 21×40f diagnostic; therefore increased replication alone does not resolve the small-workload completion-wall instability.
+- Mesh counters CPU shows substantial within-session drift (7-trial block medians approximately 11.14 → 10.43 → 8.69 µs/frame); the frozen v4 failure is therefore an admission result, not evidence that steady-state median overhead exceeds 11 µs/frame (WP11 mesh median ~10.43 µs/frame; failure is the 95% CI upper bound ~11.14 µs vs the 11 µs hybrid allowance).
