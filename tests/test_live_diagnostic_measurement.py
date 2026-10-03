@@ -48,6 +48,19 @@ class IntrusiveDiagnosticGatePolicyTests(unittest.TestCase):
         self.assertNotIn("offline_causal_admission", required)
         self.assertNotIn("interventions", required)
 
+    def test_degraded_integrity_allowed_for_intrusive_diagnostic(self):
+        evidence = gates.GateEvidence()
+        evidence.record("format_v3", "passed", "ok")
+        evidence.record("integrity", "degraded", "drops under load", dropped_records=100)
+        evidence.record("origin_integrity", "passed", "ok")
+        evidence.record("cadence", "passed", "ok")
+        evidence.record("diagnostic_authorization", "passed", "explicit intrusive mode")
+        evidence.record("live_observer_effect", "passed", "recorded", cpu_perturbation_fraction=0.08)
+        evidence.require(
+            gates.required_gates_for_report_kind("intrusive_diagnostic"),
+            degradable=gates.INTRUSIVE_DEGRADABLE_GATES,
+        )
+
     def test_diagnostic_release_allows_failed_offline_admission(self):
         evidence = gates.GateEvidence()
         evidence.record("format_v3", "passed", "ok")

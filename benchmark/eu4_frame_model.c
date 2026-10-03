@@ -105,8 +105,8 @@ typedef struct {
     union { Frame frame; LeanReferenceFrame lean; } payload;
 } FrameSlot;
 typedef struct { char kind; uint64_t publication_sequence,a,b,c,d,e,f,g,h,i,j,k,l,epoch,update,phase,thread,generation,window,context; } DetailSlot;
-#define FRAME_CAPACITY 128u
-#define DETAIL_CAPACITY 32768u
+#define FRAME_CAPACITY 4096u
+#define DETAIL_CAPACITY 131072u
 #define PRODUCER_CAPACITY 16u
 typedef struct {
     FrameSlot frames[FRAME_CAPACITY]; DetailSlot details[DETAIL_CAPACITY];

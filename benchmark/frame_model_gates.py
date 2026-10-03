@@ -35,6 +35,9 @@ REQUIRED_INTRUSIVE_DIAGNOSTIC = (
     "live_observer_effect",
 )
 
+# Intrusive Phase C may retain hook integrity while losing detail/frame records under load.
+INTRUSIVE_DEGRADABLE_GATES = frozenset({"integrity"})
+
 REQUIRED_BY_REPORT_KIND = {
     "calibration_only": REQUIRED_CALIBRATION_ONLY,
     "residual_discovery": REQUIRED_RESIDUAL_DISCOVERY,
@@ -52,19 +55,24 @@ class GateEvidence:
     entries: dict = field(default_factory=dict)
 
     def record(self, name, status, reason, **evidence):
-        if status not in ("passed", "failed", "unavailable"):
+        if status not in ("passed", "failed", "unavailable", "degraded"):
             raise ValueError(status)
         self.entries[name] = {"status": status, "reason": reason, **evidence}
 
-    def blockers(self, required=REQUIRED):
-        return {
-            name: self.entries.get(name, {"status": "unavailable", "reason": "evidence missing"})
-            for name in required
-            if self.entries.get(name, {}).get("status") != "passed"
-        }
+    def blockers(self, required=REQUIRED, degradable=frozenset()):
+        blockers = {}
+        for name in required:
+            entry = self.entries.get(name, {"status": "unavailable", "reason": "evidence missing"})
+            status = entry.get("status")
+            if status == "passed":
+                continue
+            if status == "degraded" and name in degradable:
+                continue
+            blockers[name] = entry
+        return blockers
 
-    def require(self, required=REQUIRED):
-        blockers = self.blockers(required)
+    def require(self, required=REQUIRED, degradable=frozenset()):
+        blockers = self.blockers(required, degradable=degradable)
         if blockers:
             raise ValueError(
                 "Release gates block progression: "

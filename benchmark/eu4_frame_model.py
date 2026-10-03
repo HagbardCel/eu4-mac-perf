@@ -5349,20 +5349,41 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                 )
                 hook_failures = control.hook_failures()
                 dropped_records = control.dropped_records()
+                if hook_failures:
+                    integrity = {
+                        "hook_failures": hook_failures,
+                        "dropped_records": dropped_records,
+                        "status": "failed",
+                    }
+                    manifest["probe_integrity"] = integrity
+                    gates.record(
+                        "integrity",
+                        "failed",
+                        "Hook installation failed",
+                        **{key: value for key, value in integrity.items() if key != "status"},
+                    )
+                    raise base.BenchmarkError(f"Profiler integrity failed: {integrity}")
+                integrity_status = "passed" if dropped_records == 0 else "degraded"
+                integrity_reason = (
+                    "Hook installation and full record retention"
+                    if dropped_records == 0
+                    else (
+                        f"Hooks intact; {dropped_records} profiler records dropped under load "
+                        "(intrusive diagnostic allows degraded telemetry retention)"
+                    )
+                )
                 integrity = {
                     "hook_failures": hook_failures,
                     "dropped_records": dropped_records,
-                    "status": "passed" if hook_failures == 0 and dropped_records == 0 else "failed",
+                    "status": integrity_status,
                 }
                 manifest["probe_integrity"] = integrity
                 gates.record(
                     "integrity",
-                    integrity["status"],
-                    "Hook installation and record retention",
+                    integrity_status,
+                    integrity_reason,
                     **{key: value for key, value in integrity.items() if key != "status"},
                 )
-                if hook_failures or dropped_records:
-                    raise base.BenchmarkError(f"Profiler integrity failed: {integrity}")
                 auto.stop_process(pm, 5)
                 pm = None
                 power_tail.poll()
@@ -5388,14 +5409,20 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                 forensic_status, forensic_reason = _forensic_tail_gate_status(manifest["forensic_tail"])
                 gates.record("forensic_tail", forensic_status, forensic_reason)
                 try:
-                    gates.require(required_gates_for_report_kind("intrusive_diagnostic"))
+                    gates.require(
+                        required_gates_for_report_kind("intrusive_diagnostic"),
+                        degradable=gates.INTRUSIVE_DEGRADABLE_GATES,
+                    )
                 except ValueError as exc:
                     raise base.BenchmarkError(str(exc)) from exc
-                manifest["status"] = (
-                    "complete"
-                    if attr_status == "passed" and forensic_status == "passed"
-                    else DIAGNOSTIC_STATUS_COMPLETE_WITH_GAPS
-                )
+                gaps = attr_status != "passed" or forensic_status != "passed"
+                if integrity_status == "degraded":
+                    gaps = True
+                manifest["status"] = "complete" if not gaps else DIAGNOSTIC_STATUS_COMPLETE_WITH_GAPS
+                if integrity_status == "degraded":
+                    manifest.setdefault("limitations", []).append(
+                        f"Profiler dropped {dropped_records} records; attribution and forensic tail are partial.",
+                    )
                 manifest["power"] = {"samples": len(power_tail.samples)}
                 (run_dir / "power.samples.json").write_text(json.dumps(power_tail.samples, default=str))
             finally:
