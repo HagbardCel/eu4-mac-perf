@@ -48,3 +48,13 @@ Forensic/detail windows: emphasize **counts and structural relationships**; GPU 
 - `verify_authoritative_observer_bias_calibration()` — manifest + SHA + Phase C interpretation gate.
 - `observer_bias.phase_c_observer_interpretation(bias_model)` — embed in intrusive `report.json`.
 - `bias_adjust_inclusive_cpu(..., allow_component_correction=False)` — default refuses component subtraction unless reconciliation passes (authoritative archive does not).
+
+## Outcome and raw evidence (post-capture)
+
+See [phase-c-outcome-memo.md](phase-c-outcome-memo.md). Canonical run [`20261003T210202Z-intrusive-diagnostic`](../results/20261003T210202Z-intrusive-diagnostic/) publishes:
+
+- `telemetry.csv.gz` / `power.samples.json.gz` — verify against `raw_evidence.json` SHA-256 entries
+- `python3 benchmark/eu4_frame_model.py seal-evidence results/<run>` — regenerate gzip + `raw_evidence.json`
+- `python3 benchmark/eu4_frame_model.py intrusive-salvage results/<run>` — bounded TAIL salvage report
+
+Clone-only analysis: `read_rows` accepts `.csv.gz` when uncompressed `telemetry.csv` is absent.

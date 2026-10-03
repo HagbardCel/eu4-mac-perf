@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import gzip
 import hashlib
 import json
 import mmap
@@ -3256,9 +3257,19 @@ def offline_workloads_causal_only(
         }
 
 
+def run_dir_telemetry_path(run_dir: Path) -> Path:
+    from frame_model_evidence import resolve_telemetry_path
+
+    resolved = resolve_telemetry_path(run_dir)
+    return resolved if resolved is not None else run_dir / "telemetry.csv"
+
+
 def read_rows(path: Path) -> list[list[str]]:
     if not path.is_file():
         return []
+    if path.suffix == ".gz" or str(path).endswith(".csv.gz"):
+        with gzip.open(path, "rt", newline="", encoding="ascii", errors="replace") as source:
+            return [row for row in csv.reader(source) if row]
     with path.open(newline="") as source:
         return [row for row in csv.reader(source) if row]
 
@@ -3673,7 +3684,8 @@ def gpu_summary(trace: list[list[str]]) -> dict:
             "phases":result,"legacy_unqualified_samples":legacy,
             "missing_reasons":{"1":"null context","2":"unsupported","3":"context capacity",
                 "4":"query pool exhaustion","5":"unexpected owner","6":"destroyed",
-                "7":"uncollected at measurement stop","8":"invalid timestamps"},
+                "7":"uncollected at measurement stop","8":"invalid timestamps",
+                "9":"unprepared measured context (EU4_GPU_UNPREPARED)"},
             "query_policy":"Completed queries polled only in their owning current context; intervals are timeline elapsed time, never whole-render GPU busy time."}
 
 
@@ -4242,14 +4254,49 @@ def _render_intrusive_diagnostic_report_md(report: dict) -> str:
     brackets = effect.get("brackets") or {}
     attribution = report.get("profile_attribution") or {}
     forensic = report.get("forensic_tail") or {}
+    summaries = report.get("phase_summaries") or {}
     bias = (report.get("observer_bias_calibration") or {}).get("phase_c_interpretation") or {}
     prior_us = bias.get("mesh_counters_incremental_prior_us_per_frame")
+    probe_integrity = report.get("probe_integrity") or {}
+
+    def _phase_metric(name: str, field: str):
+        value = (summaries.get(name) or {}).get(field)
+        return f"{value:.3f}" if isinstance(value, (int, float)) else "n/a"
+
+    ref_rates = [
+        (summaries.get(n) or {}).get("update_attempts_s")
+        for n in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES
+    ]
+    ref_rates = [r for r in ref_rates if isinstance(r, (int, float))]
+    c_rates = [
+        (summaries.get(n) or {}).get("update_attempts_s")
+        for n in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES
+    ]
+    c_rates = [r for r in c_rates if isinstance(r, (int, float))]
+    throughput_change = None
+    if ref_rates and c_rates:
+        throughput_change = statistics.mean(c_rates) / statistics.mean(ref_rates) - 1
+
     lines = [
         "# Intrusive diagnostic report (Phase C)",
         "",
         "This capture is **not** eligible for causal or qualified assessment.",
         "",
-        "## Live observer effect (intrusive / unqualified)",
+        "## Primary observer metrics (intrusive / unqualified)",
+        "",
+        f"- Throughput (update attempts/s, R vs C): **{_format_percent(throughput_change)}**",
+        f"- R median update wall: **{_phase_metric('R1', 'median_update_wall_ms')} ms** "
+        f"(thread CPU {_phase_metric('R1', 'median_update_cpu_ms')} ms)",
+        f"- C median update wall: **{_phase_metric('C1', 'median_update_wall_ms')} ms** "
+        f"(thread CPU {_phase_metric('C1', 'median_update_cpu_ms')} ms)",
+        f"- Update-thread CPU Δ (live): **{aggregate.get('live_update_cpu_delta_us_per_update_intrusive', 'n/a')} µs/update**"
+        if isinstance(aggregate.get("live_update_cpu_delta_us_per_update_intrusive"), (int, float))
+        else "- Update-thread CPU Δ: see brackets",
+        "",
+        "Aggregate process CPU Δ per update mixes fixed background CPU with per-frame costs when cadence "
+        "changes (~33%); do not treat it as a pure observer tax.",
+        "",
+        "## Live observer effect brackets",
         "",
     ]
     for key, bracket in brackets.items():
@@ -4257,16 +4304,11 @@ def _render_intrusive_diagnostic_report_md(report: dict) -> str:
         delta = bracket.get("live_update_cpu_delta_us_per_update_intrusive")
         delta_label = f"{delta:.1f} µs/update" if isinstance(delta, (int, float)) else "n/a"
         lines.append(
-            f"- **{key} vs {ref}**: CPU {_format_percent(bracket.get('cpu_perturbation_fraction'))}, "
-            f"swaps {_format_percent(bracket.get('swap_perturbation_fraction'))}, "
-            f"update CPU Δ {delta_label}",
+            f"- **{key} vs {ref}**: swaps {_format_percent(bracket.get('swap_perturbation_fraction'))}, "
+            f"process CPU {_format_percent(bracket.get('cpu_perturbation_fraction'))}, "
+            f"update-thread CPU Δ {delta_label}",
         )
-    agg_delta = aggregate.get("live_update_cpu_delta_us_per_update_intrusive")
-    agg_delta_label = f"{agg_delta:.1f} µs/update" if isinstance(agg_delta, (int, float)) else "n/a"
     lines.extend([
-        f"- **Aggregate**: CPU {_format_percent(aggregate.get('cpu_perturbation_fraction'))}, "
-        f"swaps {_format_percent(aggregate.get('swap_perturbation_fraction'))}, "
-        f"update CPU Δ {agg_delta_label}",
         "",
         "## Offline mesh prior",
         "",
@@ -4304,12 +4346,19 @@ def _render_intrusive_diagnostic_report_md(report: dict) -> str:
     if prior_check.get("live_aggregate_process_cpu_delta_us_per_update_intrusive") is not None:
         lines.extend([
             "",
-            "### Process CPU / update sanity (preferred vs offline prior)",
+            "### Cadence arithmetic (secondary)",
             "",
-            f"- Aggregate process CPU Δ: **{prior_check['live_aggregate_process_cpu_delta_us_per_update_intrusive']:.1f} µs/update**",
-            f"- Offline mesh prior: **~{prior_check.get('mesh_counters_incremental_prior_us_per_frame', 'n/a')} µs/frame** (order-of-magnitude only)",
+            f"- Aggregate process CPU Δ per update: **{prior_check['live_aggregate_process_cpu_delta_us_per_update_intrusive']:.1f} µs/update**",
+            f"- Offline mesh prior: **~{prior_check.get('mesh_counters_incremental_prior_us_per_frame', 'n/a')} µs/frame**",
         ])
     lines.extend(["", "## Forensic tail", ""])
+    dropped = probe_integrity.get("dropped_records")
+    if dropped:
+        lines.append(f"- Profiler records dropped: **{dropped}** (queue saturation; detail stream biased)")
+    lines.append(
+        "- Flag **2048** marks incomplete GL shadow; `eligible_trace()` discards detail rows for those "
+        "frames (separate from queue drops).",
+    )
     lines.append(f"- Tail gate: **{forensic.get('status', 'n/a')}** ({forensic.get('gate_reason', '')})")
     lines.append(
         f"- Structural capture: **{forensic.get('structural_capture_status', 'n/a')}**; "
@@ -4359,9 +4408,10 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
         "lean_reference_fields": calibration.get("lean_reference_fields"),
     }
     profile_attribution = manifest.get("profile_attribution")
+    telemetry = run_dir_telemetry_path(run_dir)
     if profile_attribution is None and manifest.get("phase_summaries"):
-        trace_rows = read_rows(run_dir / "telemetry.csv")
-        profile_rows = frame_rows(run_dir / "telemetry.csv")
+        trace_rows = read_rows(telemetry)
+        profile_rows = frame_rows(telemetry)
         phases = list(manifest.get("phases") or [])
         profile_attribution = intrusive_diagnostic_exclusive_attribution(
             trace_rows,
@@ -4410,7 +4460,17 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
         ],
         "recommendations": [],
         "limitations": manifest.get("limitations", []),
+        "phase_summaries": manifest.get("phase_summaries"),
+        "probe_integrity": manifest.get("probe_integrity"),
     }
+    try:
+        from frame_model_salvage import run_intrusive_salvage, write_salvage_reports
+
+        salvage = run_intrusive_salvage(run_dir)
+        write_salvage_reports(run_dir, salvage)
+        output["salvage"] = {"status": salvage.get("status"), "reason": salvage.get("reason")}
+    except (ValueError, OSError) as exc:
+        output["salvage"] = {"status": "unavailable", "reason": str(exc)}
     (run_dir / "report.json").write_text(json.dumps(output, indent=2) + "\n")
     (run_dir / "report.md").write_text(_render_intrusive_diagnostic_report_md(output))
     return output
@@ -5147,6 +5207,8 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
         live_measurement_mode=LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC,
         intrusive_contract_only=True,
     )
+    identity_start = _offline_git_identity_snapshot()
+    artifact_start = _offline_executed_artifact_snapshot()
     base.running_game_pid("idle")
     if not auto.SCENE.is_file() or not auto.SCENE_MANIFEST.is_file():
         raise base.BenchmarkError("Register the reviewed Venice scene before this diagnostic run")
@@ -5192,6 +5254,10 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
             "Phase C records live R↔C observer effect for ranking; it does not qualify causal claims.",
             "Component-level bias subtraction is disabled for the authoritative observer-bias archive.",
         ],
+        "identity_at_capture": {
+            "identity_start": identity_start,
+            "artifact_start": artifact_start,
+        },
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     events = run_dir / "events.jsonl"
@@ -5426,6 +5492,16 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                     )
                 manifest["power"] = {"samples": len(power_tail.samples)}
                 (run_dir / "power.samples.json").write_text(json.dumps(power_tail.samples, default=str))
+                identity_end = _offline_git_identity_snapshot()
+                artifact_end = _offline_executed_artifact_snapshot()
+                manifest["identity_at_capture"] = {
+                    **(manifest.get("identity_at_capture") or {}),
+                    "identity_end": identity_end,
+                    "artifact_end": artifact_end,
+                }
+                from frame_model_evidence import seal_run_evidence
+
+                seal_run_evidence(run_dir, identity_at_capture=manifest.get("identity_at_capture"))
             finally:
                 auto.stop_process(pm, 3)
                 if game is not None and game.poll() is None:
@@ -5920,6 +5996,10 @@ def main() -> int:
         help="add a separately reported fixed-throughput Low Power DVFS comparison")
     report=sub.add_parser("report",help="regenerate a report from a captured run")
     report.add_argument("run_dir")
+    seal=sub.add_parser("seal-evidence",help="gzip raw telemetry/power and write raw_evidence.json")
+    seal.add_argument("run_dir", type=Path)
+    salvage_parser=sub.add_parser("intrusive-salvage",help="bounded TAIL salvage for an intrusive diagnostic run")
+    salvage_parser.add_argument("run_dir", type=Path)
     recover=sub.add_parser("recover-power",help="restore the AC power setting from a run journal")
     recover.add_argument("journal")
     args=parser.parse_args()
@@ -6010,6 +6090,17 @@ def main() -> int:
                 print(json.dumps(result,indent=2))
         elif args.command=="report":
             print(json.dumps(analyze(Path(args.run_dir).expanduser().resolve()),indent=2))
+        elif args.command=="seal-evidence":
+            from frame_model_evidence import seal_run_evidence
+
+            print(json.dumps(seal_run_evidence(Path(args.run_dir).expanduser().resolve()), indent=2))
+        elif args.command=="intrusive-salvage":
+            from frame_model_salvage import run_intrusive_salvage, write_salvage_reports
+
+            run_dir = Path(args.run_dir).expanduser().resolve()
+            salvage_report = run_intrusive_salvage(run_dir)
+            write_salvage_reports(run_dir, salvage_report)
+            print(json.dumps(salvage_report, indent=2))
         elif args.command=="recover-power":
             _power_helper_preflight()
             print(json.dumps(_restore_power_mode(Path(args.journal).expanduser().resolve()),indent=2))

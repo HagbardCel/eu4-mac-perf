@@ -481,6 +481,10 @@ capture (`run --diagnostic-only`) runs the Phase C R–C–R–C–R schedule; l
 observer effect is measured and reported, not used as a hard 3% admission gate. Do not treat profiler absolute timings as uninstrumented EU IV
 measurements in either mode.
 
+Post-capture: `seal-evidence <run-dir>` writes `raw_evidence.json` and gzip
+companions; `intrusive-salvage <run-dir>` emits TAIL-only ordinal salvage.
+Gfx submission A/B validation (auto probe only): `python3 benchmark/submission_experiment.py`.
+
 Static preflight alone cannot measure overhead. See
 [the correction verification record](analysis/frame-model-verification.md)
 for checks actually performed and current blockers.

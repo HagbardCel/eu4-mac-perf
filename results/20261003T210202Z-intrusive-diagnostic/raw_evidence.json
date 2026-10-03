@@ -1,0 +1,59 @@
+{
+  "sealed_utc": "2026-10-03T21:44:41.917513+00:00",
+  "run_dir": "results/20261003T210202Z-intrusive-diagnostic",
+  "capture_identity": {
+    "status": "reconstructed_incomplete",
+    "candidate_commit": "b0d49b44addec9ae4536060613ef0ec7bde036b3",
+    "candidate_commit_short": "b0d49b4",
+    "basis": [
+      "clean-tree preflight enforced before intrusive build (contract preflight)",
+      "repository history and run/event timestamps near 2026-10-03T21:02Z UTC",
+      "recorded C source and dylib hashes in manifest evidence.build",
+      "manifest executable and profiler dylib SHA-256"
+    ],
+    "missing": [
+      "persisted capture-time git HEAD",
+      "persisted capture-time controller SHA-256"
+    ]
+  },
+  "identity_at_capture": null,
+  "identity_at_seal": {
+    "git_commit": "94f890dd59077403d2ab7f8d448466dcaefcafc9",
+    "git_commit_short": "94f890d",
+    "git_tree_clean": false,
+    "controller_sha256": "544455f8d42a6db9b8e14cc57684d0f35461d759fed299cd4b328dd0e4a4f92d",
+    "key_source_hashes": {
+      "eu4_frame_model.c": "275dff4025b016abef59015c26a133ca254c6334c5ccc89fd6c80fb5762d8370",
+      "eu4_frame_model.py": "544455f8d42a6db9b8e14cc57684d0f35461d759fed299cd4b328dd0e4a4f92d",
+      "eu4_gpu_segments.h": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
+      "eu4_draw_observers.h": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
+      "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
+    }
+  },
+  "artifacts": {
+    "telemetry.csv": {
+      "plain_path": "telemetry.csv",
+      "gzip_path": "telemetry.csv.gz",
+      "uncompressed_bytes": 65454112,
+      "uncompressed_sha256": "40812943cb9b4448fd18bcbce1d017b9aaa89626e56b9a902d8ee0e5e78678a9",
+      "gzip_bytes": 1661930,
+      "gzip_sha256": "7ab12dbf67c15593a919339f85c3ed574701e219738a2d79993d58b75cdd73ed",
+      "compression": "gzip-9"
+    },
+    "power.samples.json": {
+      "plain_path": "power.samples.json",
+      "gzip_path": "power.samples.json.gz",
+      "uncompressed_bytes": 42781499,
+      "uncompressed_sha256": "d9e942d351cb4ba468224ddec17e59b1cb658c6fdef217370954d1f4258a87ba",
+      "gzip_bytes": 3112714,
+      "gzip_sha256": "a3693092e4b214e12e78acde74e636cf4be84397153e0bdff398e1d69ab3edec",
+      "compression": "gzip-9"
+    }
+  },
+  "probe_integrity": {
+    "hook_failures": 0,
+    "dropped_records": 191966,
+    "status": "degraded"
+  },
+  "dropped_records": 191966
+}
