@@ -316,6 +316,12 @@ WP6_MINIMAL_REFERENCE_CONTRACT = "wp6_minimal_reference_v2"
 WP6_MINIMAL_REFERENCE_RECONCILIATION_PURPOSE = "wp6_minimal_reference_reconciliation_v1"
 WP7_LEAN_REFERENCE_VALIDITY = "wp7_lean_reference_validity_v1"
 WP7_CAUSAL_TRAINING_REQUALIFICATION_POLICY = "wp7_lean_reference_training_requalification_v1"
+WP8_STEADY_STATE_TIER1_DIAGNOSIS_PURPOSE = "wp8_steady_state_tier1_diagnosis_v1"
+STEADY_STATE_MEASUREMENT_VARIANTS = (
+    ("four_frame_baseline", {"post_arm_prime_frames": 0, "measured_frames": 4}),
+    ("four_frame_post_arm_prime_1", {"post_arm_prime_frames": 1, "measured_frames": 4}),
+    ("forty_frame_post_arm_prime_1", {"post_arm_prime_frames": 1, "measured_frames": 40}),
+)
 REFERENCE_FRAME_INVALID_FLAGS = 1 | 512 | 1024 | 2048 | 4096
 REFERENCE_CPU_LADDER_STAGES = ("bare", "loaded-disabled", "reference")
 MINIMAL_REFERENCE_RECONCILIATION_STAGES = ("loaded-disabled", "minimal-reference", "reference")
@@ -648,6 +654,7 @@ def _offline_workloads_payload(preflight_evidence: dict) -> dict:
         or preflight_evidence.get("completion_workloads")
         or preflight_evidence.get("reference_cpu_workloads")
         or preflight_evidence.get("minimal_reference_reconciliation")
+        or preflight_evidence.get("steady_state_tier1_diagnosis")
         or {}
     )
 
@@ -697,6 +704,17 @@ def _offline_policy_versions(workloads: dict) -> dict:
             "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
             "reference_validity": WP7_LEAN_REFERENCE_VALIDITY,
             "seven_pair_gate": OFFLINE_SEVEN_PAIR_POLICY_VERSION,
+        }
+    if workloads.get("steady_state_tier1_diagnosis"):
+        return {
+            "steady_state_tier1_diagnosis": WP8_STEADY_STATE_TIER1_DIAGNOSIS_PURPOSE,
+            "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
+            "reference_validity": WP7_LEAN_REFERENCE_VALIDITY,
+            "measurement_variants": [name for name, _ in STEADY_STATE_MEASUREMENT_VARIANTS],
+            "steady_state_text": (
+                "Training-only causal stages with post-arm prime and completion timing; "
+                "non-acceptance diagnostic for Tier-1 steady-state methodology."
+            ),
         }
     first = (workloads.get("recipes") or [{}])[0]
     return {
@@ -1053,6 +1071,30 @@ def parse_workload_harness_metrics(stdout: str) -> dict[str, int]:
     return {key: int(value) for key, value in (part.split("=", 1) for part in stdout.split() if "=" in part)}
 
 
+def _require_harness_measurement_contract(
+    measured: dict[str, int],
+    *,
+    post_arm_prime_frames: int,
+    measured_frames: int,
+) -> None:
+    reported_prime = measured.get("post_arm_prime_frames")
+    reported_measured = measured.get("measured_frames")
+    if reported_prime != post_arm_prime_frames:
+        raise base.BenchmarkError(
+            f"harness post_arm_prime_frames={reported_prime} (expected {post_arm_prime_frames})",
+        )
+    if reported_measured != measured_frames:
+        raise base.BenchmarkError(
+            f"harness measured_frames={reported_measured} (expected {measured_frames})",
+        )
+
+
+def _steady_state_variant_order_for_trial(trial: int) -> list[tuple[str, dict]]:
+    variants = list(STEADY_STATE_MEASUREMENT_VARIANTS)
+    rotation = trial % len(variants)
+    return variants[rotation:] + variants[:rotation]
+
+
 def _require_completion_timing_metrics(measured: dict[str, int]) -> None:
     missing = [
         key
@@ -1075,8 +1117,16 @@ def _require_completion_timing_metrics(measured: dict[str, int]) -> None:
         raise base.BenchmarkError("submission_plus_drain_cpu_ns must equal submission + drain cpu")
 
 
-def offline_workload_log_path(root: Path, recipe: dict, trial: int, stage: str) -> Path:
-    return root / f"{recipe['name']}-{trial}-{stage}.csv"
+def offline_workload_log_path(
+    root: Path,
+    recipe: dict,
+    trial: int,
+    stage: str,
+    *,
+    telemetry_suffix: str = "",
+) -> Path:
+    suffix = f"-{telemetry_suffix}" if telemetry_suffix else ""
+    return root / f"{recipe['name']}-{trial}-{stage}{suffix}.csv"
 
 
 def offline_workload_telemetry_paths_for_recipe_trial(recipe_name: str, trial: int) -> list[str]:
@@ -1100,6 +1150,7 @@ def _offline_workload_private_env() -> frozenset[str]:
         "EU4_TEST_FORENSIC_RECORDS",
         "EU4_TEST_CACHED_METADATA",
         "EU4_TEST_COMPLETION_TIMING",
+        "EU4_TEST_POST_ARM_PRIME_FRAMES",
         "EU4_TEST_LOADED_DISABLED",
         "EU4_TEST_MINIMAL_REFERENCE",
     })
@@ -1160,9 +1211,11 @@ def _validate_loaded_disabled_trace(log_path: Path) -> None:
     _validate_unpublished_profiler_trace(log_path, stage="loaded-disabled")
 
 
-def _validate_lean_reference_trace(log_path: Path, *, frames: int) -> None:
+def _validate_lean_reference_trace(log_path: Path, *, frames: int, skip_leading: int = 0) -> None:
     """Structural validity for production lean REFERENCE (no scope-tree requirement)."""
     rows = frame_rows(log_path)
+    if skip_leading:
+        rows = rows[skip_leading:]
     trace = read_rows(log_path)
     if len(rows) != frames:
         raise base.BenchmarkError(f"reference published {len(rows)} frames (expected {frames})")
@@ -1196,14 +1249,30 @@ def _offline_workload_mode_and_flags(stage: str) -> tuple[int, int]:
     return MODE["profile"], 1
 
 
-def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *, completion_timing: bool = False):
+def _offline_workload_stage(
+    root: Path,
+    recipe: dict,
+    trial: int,
+    stage: str,
+    *,
+    completion_timing: bool = False,
+    post_arm_prime_frames: int = 0,
+    measured_frames: int = 4,
+    telemetry_suffix: str = "",
+):
     control_path=root/"control.bin"
-    log_path=offline_workload_log_path(root, recipe, trial, stage)
+    log_path=offline_workload_log_path(
+        root, recipe, trial, stage, telemetry_suffix=telemetry_suffix,
+    )
     if log_path.exists():
         raise base.BenchmarkError(
             f"Refusing to reuse telemetry path {log_path.name} (stale or colliding stage identity)",
         )
-    frames=4
+    frames=measured_frames
+    if frames < 4 or frames > 60:
+        raise base.BenchmarkError(f"measured_frames must be in [4, 60], got {frames}")
+    if post_arm_prime_frames < 0 or post_arm_prime_frames > 8:
+        raise base.BenchmarkError(f"post_arm_prime_frames must be in [0, 8], got {post_arm_prime_frames}")
     env={k:v for k,v in os.environ.items() if k not in _offline_workload_private_env()}
     if stage.startswith("ablation_"):
         env["EU4_TEST_ABLATION"]=stage.removeprefix("ablation_")
@@ -1230,11 +1299,19 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
             EU4_TEST_FORENSIC_RECORDS=str(features[1]),EU4_TEST_CACHED_METADATA=str(features[2]))
     if completion_timing:
         env["EU4_TEST_COMPLETION_TIMING"] = "1"
+    if post_arm_prime_frames:
+        env["EU4_TEST_POST_ARM_PRIME_FRAMES"] = str(post_arm_prime_frames)
+    timeout_s = 120 if frames > 20 else 60
     run=subprocess.run([str(WORKLOAD_HARNESS),recipe["path"],str(frames)],env=env,
-        capture_output=True,text=True,timeout=60,check=False)
+        capture_output=True,text=True,timeout=timeout_s,check=False)
     if run.returncode:
         raise base.BenchmarkError(f"Valid workload {recipe['name']} {stage} failed ({run.returncode}): {run.stderr}")
     measured=parse_workload_harness_metrics(run.stdout)
+    _require_harness_measurement_contract(
+        measured,
+        post_arm_prime_frames=post_arm_prime_frames,
+        measured_frames=frames,
+    )
     if completion_timing:
         _require_completion_timing_metrics(measured)
     if stage == "bare":
@@ -1248,15 +1325,20 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
         _validate_minimal_reference_control(control_path)
         return measured, None
     rows=frame_rows(log_path);trace=read_rows(log_path)
+    expected_published = post_arm_prime_frames + frames
     if stage == "reference":
-        _validate_lean_reference_trace(log_path, frames=frames)
+        _validate_lean_reference_trace(
+            log_path,
+            frames=frames,
+            skip_leading=post_arm_prime_frames,
+        )
     else:
         tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
         failure=next((int(r[1]) for r in trace if r[0]=="Z"),None)
         dropped=next((int(r[3]) for r in trace if r[0]=="Z" and len(r)>3),0)
-        if len(rows)!=frames or failure!=0 or dropped or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
+        if len(rows)!=expected_published or failure!=0 or dropped or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
             raise base.BenchmarkError("Representative workload did not exercise valid production wrappers, scopes, and writer")
-    if stage!="reference" and sum(r["draws"] for r in rows)!=frames*recipe["draws"]:
+    if stage!="reference" and sum(r["draws"] for r in rows)!=expected_published*recipe["draws"]:
         raise base.BenchmarkError("Representative producer draw counts differ from passive recipe")
     if stage!="reference":
         counts={int(r[1]):tuple(map(int,r[2:5])) for r in trace if r[0]=="C"}
@@ -1270,9 +1352,19 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
     failure = next((int(r[1]) for r in trace if r and r[0] == "Z"), None)
     dropped = next((int(r[3]) for r in trace if r and r[0] == "Z" and len(r) > 3), 0)
     if stage == "reference":
-        measured.update(frames=len(rows), reference_validity=WP7_LEAN_REFERENCE_VALIDITY)
+        measured.update(
+            frames=frames,
+            published_frames=len(rows),
+            post_arm_prime_frames=post_arm_prime_frames,
+            reference_validity=WP7_LEAN_REFERENCE_VALIDITY,
+        )
     else:
-        measured.update(frames=len(rows), tree_reconciliation=tree["tree_reconciliation"])
+        measured.update(
+            frames=frames,
+            published_frames=len(rows),
+            post_arm_prime_frames=post_arm_prime_frames,
+            tree_reconciliation=tree["tree_reconciliation"],
+        )
     if diagnostic:
         gpu_metrics=next((list(map(int,row[1:4])) for row in trace if row and row[0]=="M"),[0,0,0])
         record_total=next((int(row[1]) for row in trace if row and row[0]=="N"),0)
@@ -1422,7 +1514,7 @@ def _completion_diagnostic_paired_summary(pairs: list[dict], *, frames: int = 4)
     return comparison
 
 
-def _completion_stage_comparisons(trials: list[dict]) -> dict:
+def _completion_stage_comparisons(trials: list[dict], *, frames: int = 4) -> dict:
     comparisons: dict = {}
     pairs = (("reference", "bare"), ("counters", "reference"))
     for stage, reference in pairs:
@@ -1435,6 +1527,7 @@ def _completion_stage_comparisons(trials: list[dict]) -> dict:
                     }
                     for trial in trials
                 ],
+                frames=frames,
             )
     return comparisons
 
@@ -1455,6 +1548,137 @@ def _offline_completion_recipe_evidence(root: Path, recipe: dict) -> dict:
         "trials": trials,
         "comparisons": _completion_stage_comparisons(trials),
     }
+
+
+def _offline_steady_state_recipe_evidence(root: Path, recipe: dict) -> dict:
+    trials = []
+    variant_names = [name for name, _ in STEADY_STATE_MEASUREMENT_VARIANTS]
+    for trial in range(7):
+        order = list(reversed(COMPLETION_CAUSAL_STAGES)) if trial % 2 else list(COMPLETION_CAUSAL_STAGES)
+        variant_schedule = _steady_state_variant_order_for_trial(trial)
+        variants: dict = {}
+        for variant_name, spec in variant_schedule:
+            stages: dict = {}
+            for stage in order:
+                stages[stage], _ = _offline_workload_stage(
+                    root,
+                    recipe,
+                    trial,
+                    stage,
+                    completion_timing=True,
+                    post_arm_prime_frames=int(spec["post_arm_prime_frames"]),
+                    measured_frames=int(spec["measured_frames"]),
+                    telemetry_suffix=variant_name,
+                )
+            variants[variant_name] = {
+                "measurement": dict(spec),
+                "stages": stages,
+            }
+        trials.append({
+            "trial": trial,
+            "order": order,
+            "variant_order": [name for name, _ in variant_schedule],
+            "variants": variants,
+        })
+    comparisons = {}
+    for variant_name in variant_names:
+        variant_trials = [
+            {
+                "trial": entry["trial"],
+                "order": entry["order"],
+                "stages": entry["variants"][variant_name]["stages"],
+            }
+            for entry in trials
+            if variant_name in entry["variants"]
+        ]
+        measured_frames = int(
+            variant_trials[0]["stages"]["bare"].get("measured_frames", 4),
+        )
+        comparisons[variant_name] = _completion_stage_comparisons(
+            variant_trials,
+            frames=measured_frames,
+        )
+    recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
+    return {
+        "recipe": recipe_meta,
+        "trials": trials,
+        "variant_comparisons": comparisons,
+        "measurement_variants": [
+            {"name": name, **dict(spec)} for name, spec in STEADY_STATE_MEASUREMENT_VARIANTS
+        ],
+    }
+
+
+def steady_state_tier1_diagnosis_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
+    with tempfile.TemporaryDirectory(prefix="eu4-steady-state-") as temporary:
+        root = Path(temporary)
+        recipe_specs = [
+            recipe for recipe in workload.recipes(root, include_held_out=False)
+            if recipe.get("role") != "held_out"
+        ]
+        recipes = [_offline_steady_state_recipe_evidence(root, recipe) for recipe in recipe_specs]
+        if executed_artifacts_start:
+            test_library_sha256 = executed_artifacts_start["test_library_sha256"]
+            workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
+        else:
+            test_library_sha256 = base.sha256(TEST_LIBRARY)
+            workload_harness_sha256 = base.sha256(WORKLOAD_HARNESS)
+        return {
+            "status": "complete",
+            "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+            "recipes": recipes,
+            "steady_state_tier1_diagnosis": True,
+            "test_library_sha256": test_library_sha256,
+            "workload_harness_sha256": workload_harness_sha256,
+            **_offline_workload_source_hashes(),
+        }
+
+
+def wp8_steady_state_tier1_diagnosis(run_gl: bool = True) -> dict:
+    """Training-only steady-state Tier-1 methodology diagnostic (prime + completion timing)."""
+    if not run_gl:
+        raise base.BenchmarkError("wp8-steady-state-diagnosis requires GL workload execution")
+    identity_start = _offline_git_identity_snapshot()
+    if not identity_start.get("git_tree_clean"):
+        violations = _git_tree_clean_violations_for_evidence()
+        detail = ", ".join(violations[:8])
+        if len(violations) > 8:
+            detail += f", … (+{len(violations) - 8} more)"
+        raise base.BenchmarkError(
+            "Source tree dirty before steady-state Tier-1 diagnosis"
+            + (f": {detail}" if detail else ""),
+        )
+    static = build()
+    artifact_start = _offline_executed_artifact_snapshot()
+    _require_build_executed_artifacts_match(static, artifact_start)
+    diagnosis = steady_state_tier1_diagnosis_workloads(executed_artifacts_start=artifact_start)
+    artifact_end = _offline_executed_artifact_snapshot()
+    _require_executed_artifacts_stable(artifact_start, artifact_end)
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
+    evidence = {
+        "purpose": WP8_STEADY_STATE_TIER1_DIAGNOSIS_PURPOSE,
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "status": "diagnostic_complete",
+        "build": static,
+        "steady_state_tier1_diagnosis": diagnosis,
+        "baseline_requalification_evidence_id": "20261003T115737.310357Z-ee9f5484",
+        "limitations": [
+            "Training recipes only; held-out not measured.",
+            "Non-acceptance diagnostic; does not replace Tier-1 v2 gates.",
+            "Compare four_frame_baseline vs post-arm prime variants before policy revision.",
+            "Completion timing separates submission wall from post-window glFinish drain.",
+        ],
+    }
+    return _publish_offline_immutable_evidence(
+        evidence,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=static,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
+        update_rolling_pointer=False,
+    )
 
 
 def completion_diagnosis_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
@@ -3500,6 +3724,15 @@ def main() -> int:
         action="store_true",
         help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
     )
+    w8=sub.add_parser(
+        "wp8-steady-state-diagnosis",
+        help="WP8: training-only steady-state Tier-1 diagnostic (post-arm prime + completion timing)",
+    )
+    w8.add_argument(
+        "--registry-json",
+        action="store_true",
+        help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
+    )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
     run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
@@ -3542,6 +3775,12 @@ def main() -> int:
                 print(json.dumps(result,indent=2))
         elif args.command=="wp7-causal-requalification":
             result=wp7_causal_training_requalification()
+            if args.registry_json:
+                print(json.dumps(result.get("immutable_evidence") or {},indent=2))
+            else:
+                print(json.dumps(result,indent=2))
+        elif args.command=="wp8-steady-state-diagnosis":
+            result=wp8_steady_state_tier1_diagnosis()
             if args.registry_json:
                 print(json.dumps(result.get("immutable_evidence") or {},indent=2))
             else:
