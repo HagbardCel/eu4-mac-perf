@@ -1,4 +1,108 @@
-# Profiler verification — 2026-10-01
+# Profiler verification — 2026-10-02
+
+**Offline acceptance still fails; residual discovery remains blocked before launch.**
+The measurements below are from reviewed commit `f2cf2fb`. The current worktree
+adds diagnostic feature controls, a provenance-aware draw manifest, capture-free
+causal phases and a separate forensic tail, but those code changes have not been
+built or measured. The 3% offline/reference/counters gates remain unchanged; the
+offline 5% sampled result is still a hard preflight gate. No live calibration,
+ANATIVE/A0 pilot or long causal result is claimed.
+
+## Implemented and verified
+
+- `python3 -m unittest discover -s tests`: **92 tests passed**, including an
+  integrated controller/streamed-producer test with injected clocks, delayed
+  acknowledgement/command pickup, delayed serialization, six complete four-render
+  windows, boundary exclusion, full preceding/trailing neighbors, missing samples,
+  late commands, unchanged epochs and unsupported populations.
+- Portable native shadow tests cover unmeasured preparation, measured query
+  prohibition, A→B→A selection, invalidation, migration/reuse and bounded capacity.
+  GPU tests verify explicit unprepared measured segments without initialization.
+- Portable writer tests cover the 128 KiB boundary, 10 ms flushing, EINTR, short
+  writes, permanent failures and immediate shutdown. macOS/x86-64/Rosetta tests
+  additionally exercise the production serializer with four concurrent producers,
+  128 frames, independent unknown-origin markers, merged frame/detail publication
+  order, draw resolver aliases and complete shutdown draining.
+- `python3 benchmark/eu4_frame_model.py preflight --static-only`: production/test
+  libraries and detour, forwarding, scope, GPU, queue, shadow, writer and worker
+  control harnesses **passed**. The display-dependent run also passed native checks.
+- `python3 benchmark/eu4_engine_inventory.py verify`: **passed**, including
+  deterministic draw observer/manifest generation and pinned engine prologues.
+- The display-dependent harness verifies GL resources/output, original recipe draw
+  counts, frame/scope serialization, semantic timings, count aggregation and raw
+  sampled timing totals. Normal test runs assert zero measured state reconstruction
+  and GPU capability/pool initialization. Only the test library permits the explicit
+  measured-preparation ablation.
+- `git diff --check`: **passed**. Portable CI is run on the publication branch;
+  its final result is reported separately from local and display-dependent evidence.
+
+The sandbox cannot create an accelerated CGL pixel format. The authorized
+unsandboxed GL run completed on the final source and retained its source/library/
+header/harness hashes in [the offline evidence](frame-model-offline-evidence.json).
+At the measured evidence revision, the production C source SHA-256 was
+`1ae5be10c48afcd2d6cb4dd7a19154fb04c1d32d6c446d15373216795330780a`.
+Unavailable live checks are recorded as blocked, not successful or unmeasured
+passes. The root helper was not refreshed because offline acceptance failed.
+
+## Final structural measurements
+
+Each unchanged structural recipe has seven paired trials with alternating stage
+order. Draw counts and payload recipes remain pinned; no sleeps or busywork were
+added. CPU and wall are separate. Each cell shows median percentage perturbation
+and absolute diagnostic microseconds per frame against reference. Acceptance also
+requires the paired bootstrap 95% interval to fit the unchanged limits.
+
+| Recipe | Draws/frame | Counters wall | Counters CPU | Sampled wall | Sampled CPU |
+|---|---:|---:|---:|---:|---:|
+| mesh | 2774 | +8.1% / +285.25 µs | +7.9% / +6.64 µs | +466.6% / +15118.81 µs | +39.4% / +30.95 µs |
+| borders | 2285 | +8.4% / +78.81 µs | +8.2% / +1.85 µs | +360.6% / +3481.01 µs | +91.7% / +20.69 µs |
+| text_ui | 632 | +10.6% / +42.39 µs | +10.6% / +1.02 µs | +226.0% / +921.35 µs | +177.4% / +18.28 µs |
+
+**Every recipe fails acceptance.** Reference-versus-bare gates also fail, including
+borders where near-zero medians conceal intervals outside ±3%. Absolute values
+cannot override failed gates. These are generated-resource structural surrogates,
+not estimates of installed-game overhead. The prior failed source/measurements are
+preserved in [the pre-reduction evidence](frame-model-offline-evidence-before-overhead-reduction.json)
+and the historical verification below.
+
+Harness-only ablations restore per-call accounting, unbatched writes, or measured
+state/query preparation. Raw results and CPU/wall intervals are retained alongside
+preparation timing. Their noisy/occasionally negative paired deltas do not establish
+a dominant component or prove that state reconstruction explains the remaining
+sampled overhead. Thread CPU measures the workload thread; background writer cost
+can affect wall time through contention and is not included in that CPU axis.
+Ablations are diagnostic and excluded from release acceptance.
+
+## Coverage and next live action
+
+The [canonical draw manifest](frame-model-draw-api.json) includes executable imports,
+full symbol/string references, supported SDK exports/declarations, aliases and
+historical observations. It currently contains 101 candidate entrypoints and
+76 supported forwarding/suppression observers. Range, multi-draw, indirect,
+immediate-mode, display-list, evaluator, rectangle, bitmap and pixel paths are
+represented. Several static/unexported vendor/extension candidates and exports
+without a public ABI remain explicit gaps. The game imports legacy `glBegin`,
+`glEnd` and `glVertex2f`; historical six-API observations cannot rule out their use.
+No complete C coverage is claimed.
+
+The new `draw_api_coverage` gate is checked before C and recomputed for reports
+from the compiled manifest and per-frame K/A evidence. Missing observers/resolver
+paths, submissions outside the suppression set, absent markers, inconsistent
+counts, missing positive suppression or forwarded covered C draws block complete
+acceptance and strong A−C recommendations. Partial C reports are labelled explicitly.
+F/Q layouts remain compatible; older records remain readable but cannot pass the
+new gate. Global hook totals are labelled partial supporting telemetry.
+
+The current worktree adds `run --calibration-only`, which performs capture-free
+reference/counters/reference calibration and a separate forensic tail, then stops
+before ANATIVE or interventions. It remains behind the unchanged offline
+acceptance, exact helper, scene and restoration checks. Residual discovery still
+requires a later reviewed launch after calibration and draw coverage qualify. No
+threshold revision or live result is claimed here.
+
+---
+
+# Historical profiler verification — 2026-10-01
 
 The release-gate follow-up builds on local corrective commit `96a9d2d`.
 The corrective code fixes scope parent production, semantic coverage, acknowledged
@@ -46,7 +150,7 @@ inflate the baseline. Thread CPU and wall timing remain distinct.
 
 Each recipe has seven paired trials with alternating stage order. Raw timings,
 recipe/source/library hashes, median fractions and paired bootstrap 95%
-intervals are in [the offline evidence](frame-model-offline-evidence.json).
+intervals are in [the offline evidence](frame-model-offline-evidence-before-overhead-reduction.json).
 Acceptance requires the median and interval to remain inside the unchanged
 3% reference/counters and 5% sampled limits for every recipe and axis. The
 old tiny-call workload remains a diagnostic, with its raw trials retained.

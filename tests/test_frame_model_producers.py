@@ -13,7 +13,7 @@ class ProducerTests(unittest.TestCase):
         compiler=shutil.which("clang") or shutil.which("cc")
         if not compiler: self.skipTest("C compiler unavailable")
         with tempfile.TemporaryDirectory() as directory:
-            for name in ("scope","gpu","queue","render_gate"):
+            for name in ("scope","gpu","queue","render_gate","shadow","writer"):
                 executable=Path(directory)/name
                 source=model.ROOT/"tests"/f"frame_model_{name}_harness.c"
                 subprocess.run([compiler,"-pthread","-O2","-Wall","-Wextra","-Werror","-o",str(executable),str(source)],check=True,capture_output=True)
@@ -34,45 +34,16 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual({p["update_period_ns"] for p in phases},{19_000_000})
         pilot=model.causal_schedule(19_000_000,True)
         self.assertEqual([p["name"] for p in pilot],["A0"])
-        self.assertTrue(pilot[0]["detail"])
+        self.assertFalse(pilot[0]["detail"])
         self.assertEqual(model.PHASE_NUMBER["A0"],1)
         self.assertEqual(model.PHASE_NUMBER["ANATIVE"],110)
-
-    def test_acknowledgement_precedes_timed_window_and_detail_preserves_epoch(self):
-        from unittest import mock
-        with tempfile.TemporaryDirectory() as directory:
-            path=Path(directory)/"control";path.write_bytes(bytes(model.CONTROL_SIZE))
-            control=model.SharedControl(path)
-            sequence=[]; counter=[0.0]
-            def monotonic(): counter[0]+=.1; return counter[0]
-            def ack(game,c,generation,label):
-                sequence.append(("ack",label,c.measurement_epoch))
-                model.struct.pack_into("<Q",c.map,80,c.command_sent_ns)
-            def mark(path,event,**kwargs):
-                sequence.append((event,kwargs,control.measurement_epoch))
-                return {"monotonic_ns":model.time.monotonic_ns(),"wall_ns":model.time.time_ns()}
-            try:
-                with mock.patch.object(model,"_wait_ack",side_effect=ack), \
-                     mock.patch.object(model.time,"monotonic",side_effect=monotonic), \
-                     mock.patch.object(model.time,"sleep"), \
-                     mock.patch.object(model.auto,"mark",side_effect=mark), \
-                     mock.patch.object(model.auto,"focus",return_value=True):
-                    game=mock.Mock();game.poll.return_value=None
-                    window=model._wait_phase(game,3,control,Path(directory)/"events","A0","profile",19_000_000,detail=True)
-                events=[r[0] for r in sequence]
-                start_index=events.index("phase_start")
-                self.assertEqual(sequence[start_index-1][:2],("ack","A0 measurement enable"))
-                arms=[r for r in sequence if r[0]=="detail_sample_armed"]
-                self.assertEqual(len(arms),2)
-                self.assertEqual({r[2] for r in arms},{window["measurement_epoch"]})
-                self.assertEqual(window["enable_generation"],2)
-                self.assertEqual(control.measurement_epoch,1)
-            finally: control.close()
 
     def test_timestamped_event_rates_use_same_window_even_for_boundary_frames(self):
         window={"name":"A0","measurement_epoch":7,"start_ns":100,"end_ns":200}
         frame={key:0 for key in model.FRAME_FIELDS}
-        frame.update(phase=1,measurement_epoch=7,update_id=1,start_ns=110,end_ns=130)
+        frame.update(phase=1,measurement_epoch=7,update_id=1,start_ns=110,end_ns=130,
+                     render_start_ns=120,render_attempts=1,render_executed=1,
+                     present_time_ns=150,present_calls=2)
         events=[["E","7","1","1",str(kind),str(timestamp)] for kind,timestamp in
                 ((1,99),(1,110),(2,120),(3,120),(4,150),(4,190),(4,200))]
         result=model.phase_summary([frame],"A0",1,window,events)

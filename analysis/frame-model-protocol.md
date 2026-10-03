@@ -19,6 +19,11 @@ with the same epoch establishes `window_generation`, even without detailed
 sampling, so unowned producers can distinguish enable acknowledgement from the
 timed window.
 
+Control flags use bit 1 for intervention mode, bit 2 for measurement, and bit 4
+for a forensic phase. E forensic timing records are limited to armed sample
+renders. Other phases use the F record's update/render/present timestamps for
+rate calculations; an incomplete E stream never overrides those frame counts.
+
 Telemetry begins `H,3`. F retains all v1 columns, followed by epoch, update
 start/end, render start/end, and last present timestamp (v2). V3 appends generation, sample-window command
 identity, render deadline, lateness, missed deadlines, render overruns, and
@@ -125,3 +130,90 @@ release evidence gate. A balanced scope tree alone cannot enable architectural
 recommendations. Reports show passed/failed/unavailable gate reasons separately.
 The reviewed helper permits 1,200 samples; the controller deadline is 1,140
 seconds, with pre-launch budget rejection and journaled restoration.
+
+## Deterministic sampled calibration and supplementary coverage
+
+The immediate post-start provenance command always carries `detail_frames=0`
+and preserves the enable epoch. N requested arm times are `start+i*duration/(N+1)`
+for i=1…N. Forensic `TAIL` capture requires six four-render groups, after causal
+and power-mode phases. The controller incrementally reads complete telemetry lines,
+uses the same eligibility filter, waits for the preceding plain renders, then
+waits for the complete sampled group and its trailing plain renders before the
+next arm. Requested times, command generations, observed preceding identities,
+actual sampled identities and both neighbor groups are retained in phase evidence.
+Duration and unattended deadlines are unchanged. A missing group, overwritten or
+late command, incomplete neighbor group, mixed phase/epoch/thread population,
+nonconsecutive render IDs or multiple executed renders per participating frame
+makes the forensic capture unavailable. The capture has role `forensic`; its
+frames and enclosing scopes are excluded from causal phase summaries. The live
+capture-intrusion result is recorded separately and does not qualify the
+counters-only reference calibration. Stage 2 splits offline admission:
+
+- **`offline_causal_admission`** — bare/reference/counters seven-pair gates on training recipes plus hash-frozen **held-out** recipe; Tier-1 policy `tier1_causal_rel3pct_abs50us_v2` (relative 3% + absolute µs/frame cap). **Blocks** calibration and live causal work when failed.
+- **`offline_forensic_suitability`** — sampled/ablation/A–F evidence; reported independently and **does not** block `calibration-only` when causal admission passes.
+
+Legacy combined `representative_workloads.status` remains in archives for replay only.
+
+GL shadow preparation runs with measurement disabled on the owning current
+context. Bounded thread-owned caches hold 16 contexts and 64 VAOs; a serialized
+64-entry lifetime/ownership registry publishes atomic invalidation stamps.
+Prepared A→B→A switches restore their cached bindings. Shared object deletion,
+context destruction/reuse, migration and unsupported mutations invalidate
+identities. A measured cache miss never triggers reconstruction queries. Flag
+2048 and `L,update,render,phase,epoch,thread,generation,reason` identify incomplete
+structural evidence: reasons 1 missing preparation, 2 capacity, 3 invalidation,
+4 unsupported mutation/forwarded submission. Detailed records from such frames
+are excluded from structural equality claims; valid CPU scope accounting remains
+available. Context/query capability checks and query pool allocation also run
+unmeasured. GPU missing reason 9 means the measured context was not prepared.
+Core contexts enumerate extensions with `glGetStringi`; timestamp support is not
+inferred from the duration-only `EXT_timer_query` extension.
+
+F/Q wire layouts remain unchanged. Supplementary records use the existing
+12-payload-column detail layout and its epoch/update/phase/thread/generation/
+sample-window/context tail:
+
+- `K`: payload begins `1,0,0,0`; revision 1 declares per-frame draw API observers.
+- `A`: payload begins `canonical_api_id,observed,suppressed,forwarded`; one record
+  per nonzero API count in an owned frame, including unsampled frames.
+- `Y`: payload begins `canonical_api_id,1`; a supported dlsym submission pointer
+  was replaced with its observer/suppression wrapper.
+- `R`: payload begins `name_hash,reason`; 1 unsupported resolved submission path,
+  2 unresolved submission pointer. These records persist even during settling.
+
+The canonical [draw manifest](frame-model-draw-api.json) combines pinned executable
+imports, full symbol/string references, supported SDK export stubs/declarations,
+aliases and historical observations. Historical six-API traces alone never
+establish completeness. Candidate range, multi-draw, indirect, legacy immediate,
+display-list, evaluator, bitmap and pixel paths have forwarding observers where
+an exported ABI is known. Unexported/static candidates and exports without a
+public ABI remain explicit coverage gaps, including unsupported resolver paths.
+Forwarded candidates lack complete detailed D identities and invalidate structural
+claims. The six existing draw wrappers remain the suppression set.
+
+`draw_api_coverage` is checked before C and recomputed from manifest plus runtime
+evidence in reports. Complete C requires every candidate observer path, no resolver
+gaps, K evidence for every eligible participating frame, reconciled A/F counts,
+no baseline/phase submissions outside the suppression set, positive suppressed
+C counts and zero forwarded covered C draws. Missing legacy/new evidence cannot
+pass. A failed gate labels C a partial draw-suppression intervention and blocks
+strong A−C recommendations.
+
+Owned GL count-only totals are aggregated from frame counters at publication.
+Raw sampled draw CPU/wall sums remain distinct from the ×256 frame estimates;
+semantic scope timing remains unchanged. Unowned-origin detection is independent.
+Global C totals are **partial supporting telemetry**: producer flush completeness
+is not assumed and the consumer never reads another producer's mutable counters.
+
+The writer uses a bounded 128 KiB buffer, flushes on capacity or a 10 ms deadline,
+and drains/flushes at shutdown. Internal publication sequences merge each
+producer's frame and detail queues in publication order; F and its associated
+Q/K/A/L records remain a publication bundle. Producers remain independent.
+EINTR and short writes are retried, permanent failures are visible through shared
+hook-failure counters, and parsing retains incomplete lines until serialization
+finishes. Under Tier-1 policy `tier1_causal_rel3pct_abs50us_v2`, relative 3% and
+absolute 50 µs/frame are **both** mandatory admission bounds for offline causal gates;
+neither can override failure of the other. Legacy forensic sampled/ablation gates still
+use percentage limits only. Harness-only ablations restore repeated accounting, unbatched
+writing or measured preparation; they are absent from the production library and excluded
+from causal acceptance.

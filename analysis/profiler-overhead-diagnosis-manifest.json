@@ -1,0 +1,49 @@
+{
+  "purpose": "profiler_overhead_diagnosis_v1",
+  "baseline_stage2_archives": {
+    "primary_no_peeking": "analysis/evidence/frame-model-offline-00924cb-20261002T195901.482894Z-f6b27087.json",
+    "replication": "analysis/evidence/frame-model-offline-8c71c47-20261002T203853.173597Z-2fff669c.json"
+  },
+  "requalification_archives": [
+    {
+      "work_package": "WP5",
+      "purpose": "reference_fast_path_training_requalification",
+      "baseline_evidence_id": "20261002T220742.210844Z-129e5bf5",
+      "evidence_id": "20261003T064756.277190Z-37f57796",
+      "archive_path": "analysis/evidence/frame-model-offline-7a86153-20261003T064756.277190Z-37f57796.json",
+      "archive_sha256_committed": "88daf745070000ed1b713c1b93cb9b912b2da84f7b73262e74ce5f8255b21d81",
+      "git_commit": "7a861536103612989d64ccc3992babc65b04d2b2",
+      "captured_at_utc": "20261003T064756.277190Z-37f57796",
+      "tier1_causal_admission": "failed",
+      "notes": "Post-PR#8 training-only capture; timing decomposition in docs/wp5-requalification-timing-memo-20261003.md. Not authoritative WP1."
+    }
+  ],
+  "diagnostic_archives": [
+    {
+      "evidence_id": "20261002T220742.210844Z-129e5bf5",
+      "archive_path": "analysis/evidence/frame-model-offline-9a063f0-20261002T220742.210844Z-129e5bf5.json",
+      "archive_sha256_committed": "ce3198535c1944e8b3825f87f4f82b5e6a4aef02fe5a107893ae7c59bf26d6ae",
+      "source_archive_sha256_mac_capture": "a5198332167edf4198c1d349e170400b2788513b91cf8c140717278d68eb75b9",
+      "git_commit": "9a063f09a26918011ea34c98b156954d30b6c454",
+      "captured_at_utc": "20261002T220742.210844Z-129e5bf5"
+    }
+  ],
+  "diagnostic_archives_historical": [
+    {
+      "evidence_id": "20261002T213942.617917Z-27ab7b86",
+      "archive_path": "analysis/evidence/frame-model-offline-dac4da4-20261002T213942.617917Z-27ab7b86.json",
+      "archive_sha256_committed": "9e1c6689fcd23848aa38eb2fe770c1f4812bbcfe762a37edf73442c6fd1edfba",
+      "source_archive_sha256_mac_capture": "0e87924dcb56795d5a2d42accefc0e661b41c042b477a624bd9b5de23a4aa27d",
+      "git_commit": "dac4da478b7731129fe85c60311248a8d6a65999",
+      "captured_at_utc": "20261002T213942.617917Z-27ab7b86",
+      "diagnostic_matrix_policy": "diag_matrix_counters_baseline_v2",
+      "matrix_validity": {
+        "tier1_causal_block": "usable",
+        "vs_diag_A": "usable",
+        "vs_counters": "invalid_counters_telemetry_path_collision",
+        "diag_A_vs_counters_layer2": "invalid_do_not_use"
+      },
+      "notes": "Committed copy differs from Mac capture only by path sanitization ($HOME). Do not register as authoritative WP1; vs_counters and Layer-2 conclusions are invalid."
+    }
+  ]
+}

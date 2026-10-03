@@ -47,7 +47,7 @@ class ReleaseTests(unittest.TestCase):
     def test_sample_windows_compare_local_neighbors_and_require_completeness(self):
         frames=[]
         for i in range(12):
-            f={"update_id":i,"render_id":i,"sample_window":5 if 4<=i<8 else 0}
+            f={"update_id":i,"render_id":i,"sample_window":5 if 4<=i<8 else 0, "render_executed":1,"phase":1,"measurement_epoch":7,"thread_id":1}
             f.update({k:100 for k in ("update_cpu_ns","update_wall_ns","render_cpu_ns","render_wall_ns")})
             frames.append(f)
         self.assertEqual(model.sampled_perturbation(frames,1)["status"],"passed")

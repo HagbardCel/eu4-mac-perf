@@ -7,8 +7,9 @@
 #define EU4_GPU_SLOTS 8
 enum { EU4_GPU_FREE,EU4_GPU_ACTIVE,EU4_GPU_PENDING };
 enum { EU4_GPU_NULL=1,EU4_GPU_UNSUPPORTED,EU4_GPU_CAPACITY,EU4_GPU_POOL,
-       EU4_GPU_OWNERSHIP,EU4_GPU_DESTROYED,EU4_GPU_UNCOLLECTED,EU4_GPU_INVALID };
+       EU4_GPU_OWNERSHIP,EU4_GPU_DESTROYED,EU4_GPU_UNCOLLECTED,EU4_GPU_INVALID,EU4_GPU_UNPREPARED };
 typedef struct {
+    uintptr_t context;
     uint64_t phase,render,epoch,update,lifetime,pass,sequence,thread,generation,window;
 } Eu4GpuIdentity;
 typedef struct { unsigned query[2],state; Eu4GpuIdentity identity; } Eu4GpuSlot;
@@ -59,15 +60,14 @@ static inline void eu4_gpu_close(Eu4GpuManager *m,Eu4GpuApi *api) {
     } else { api->stamp(s->query[1]); s->state=EU4_GPU_PENDING; }
     ctx->active=-1;
 }
-static inline void eu4_gpu_open(Eu4GpuManager *m,Eu4GpuApi *api) {
-    if(!m->rendering) return;
-    uintptr_t current=api->current(); m->owner=NULL;
-    if(!current) { eu4_gpu_missing(m,api,EU4_GPU_NULL); return; }
+/* Preparation is explicitly called only with measurement disabled and current ownership. */
+static inline void eu4_gpu_prepare(Eu4GpuManager *m,Eu4GpuApi *api) {
+    uintptr_t current=api->current();if(!current) return;
     unsigned index=0;
     while(index<eu4_gpu_registry(m)->count && eu4_gpu_registry(m)->contexts[index].context!=current) index++;
     if(index==eu4_gpu_registry(m)->count) {
         index=0; while(index<eu4_gpu_registry(m)->count && eu4_gpu_registry(m)->contexts[index].context) index++;
-        if(index==EU4_GPU_CONTEXTS) { eu4_gpu_missing(m,api,EU4_GPU_CAPACITY); return; }
+        if(index==EU4_GPU_CONTEXTS) { return; }
         if(index==eu4_gpu_registry(m)->count) eu4_gpu_registry(m)->count++;
         Eu4GpuContext *ctx=&eu4_gpu_registry(m)->contexts[index]; memset(ctx,0,sizeof(*ctx));
         ctx->context=current; ctx->lifetime=++eu4_gpu_registry(m)->next_lifetime; ctx->active=-1;
@@ -77,6 +77,15 @@ static inline void eu4_gpu_open(Eu4GpuManager *m,Eu4GpuApi *api) {
             ctx->slots[i].query[0]=ids[i*2]; ctx->slots[i].query[1]=ids[i*2+1];
         }
     }
+}
+static inline void eu4_gpu_open(Eu4GpuManager *m,Eu4GpuApi *api) {
+    if(!m->rendering) return;
+    uintptr_t current=api->current();m->owner=NULL;
+    if(!current) {eu4_gpu_missing(m,api,EU4_GPU_NULL);return;}
+    m->identity.context=current;
+    unsigned index=0;
+    while(index<eu4_gpu_registry(m)->count && eu4_gpu_registry(m)->contexts[index].context!=current) index++;
+    if(index==eu4_gpu_registry(m)->count) {eu4_gpu_missing(m,api,EU4_GPU_UNPREPARED);return;}
     Eu4GpuContext *ctx=m->owner=&eu4_gpu_registry(m)->contexts[index];
     m->owner_lifetime=ctx->lifetime;
     if(!ctx->supported) { eu4_gpu_missing(m,api,EU4_GPU_UNSUPPORTED); return; }

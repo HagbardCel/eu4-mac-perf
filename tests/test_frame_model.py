@@ -136,6 +136,19 @@ class FrameModelTests(unittest.TestCase):
         self.assertEqual(tree["phases"]["1"]["coverage_95_percent_gate"],"not met")
         self.assertEqual(len(model.gpu_summary([["G","1","1","200","100","1"]])["legacy_unqualified_samples"]),1)
 
+    def test_eligible_frame_enforces_window_generation(self):
+        window={"name":"A0","measurement_epoch":7,"window_generation":12,
+                "start_ns":100,"end_ns":200}
+        base=frame(model.PHASE_NUMBER["A0"])
+        base.update(measurement_epoch=7,start_ns=110,end_ns=120)
+        for generation, eligible in ((11, False), (12, True), (13, True)):
+            row=dict(base)
+            row["generation"]=generation
+            self.assertEqual(model.eligible_frame(row, window), eligible)
+        rows=[dict(base, generation=11), dict(base, generation=12, update_id=2)]
+        trace=[["D","1"]+["0"]*11+["7","2","1"]]
+        self.assertEqual(len(model.eligible_trace(trace, rows, [window])),1)
+
     def test_one_eligibility_filter_excludes_boundaries_for_costs_and_details(self):
         window={"name":"A0","measurement_epoch":7,"start_ns":100,"end_ns":200}
         rows=[]

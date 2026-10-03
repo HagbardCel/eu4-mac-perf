@@ -146,7 +146,10 @@ class AutonomousRunnerTests(unittest.TestCase):
             self.assertFalse((root / "output/.autonomous-recovery.json").exists())
 
     def test_scene_guard_tolerates_animation_but_rejects_wrong_map(self):
-        from PIL import Image
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow unavailable")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             a, b, c = (root / name for name in ("a.png", "b.png", "c.png"))

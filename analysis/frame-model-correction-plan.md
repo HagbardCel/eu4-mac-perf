@@ -1,11 +1,16 @@
 # Paused-frame profiler correction plan
 
-The design below remains the acceptance contract. The status table describes
-implementation and verification on 2026-10-01; passing native tests does not
-mean the live release gates have passed. The original review was against
-`54cbcc43`; corrective work builds on `96a9d2d` and is packaged in the
-release-gate follow-up. Publication and CI evidence are recorded separately in
-[the verification record](frame-model-verification.md).
+The design below remains the active acceptance contract. The measurements and
+reviewed implementation are from 2026-10-02 at `f2cf2fb` on
+`profiler-overhead-calibration`; `main` remains at `a36f942`. The shared worktree
+contains follow-up changes whose build and measurements are pending. Passing native tests
+does not mean the live release gates have passed. The original review was against
+`54cbcc43`; corrective work builds on `96a9d2d` and the release-gate follow-up.
+Measurement and CI evidence are recorded in
+[the verification record](frame-model-verification.md). The
+[feedback review and next implementation plan](frame-model-next-iteration-plan.md)
+proposes diagnostic ablations, draw-path qualification and causal/forensic
+separation. Its proposed admission policy does not change the current gates.
 
 | Area | Status | Evidence / remaining work |
 |---|---|---|
@@ -16,23 +21,28 @@ release-gate follow-up. Publication and CI evidence are recorded separately in
 | Matched A/B/C/D/E cadence, ANATIVE | DONE | Existing phase IDs preserved; unrestricted ANATIVE ID 110 |
 | E deadline/rate acceptance | DONE | Absolute deadlines, lateness, missed deadlines, skip fraction, render overruns |
 | D forced discard | DONE / live unmeasured | Engine requests retained while discard stays forced; exact final state restored; failures invalidate D |
-| GPU allocation and segmentation | DONE / driver partial | Shared lifetime registry; context/pass segments; ownership and migration tests; sampled driver timing only |
-| Bounded per-thread publication | DONE | Shared SPSC protocol; saturation/reuse and shutdown drain tests; worker control refresh and explicit unassociated origins |
+| Sample-window scheduling and local controls | DONE | Interior arm times; six four-render windows with full four-render plain neighbors; delayed command/serialization and incomplete-stream tests |
+| GL shadow preparation | DONE / structural gaps explicit | Unmeasured context/VAO preparation; no measured reconstruction; migration/reuse/invalidation/capacity tests; flag 2048 excludes incomplete structural evidence |
+| GPU allocation and segmentation | DONE / driver partial | Query pools prepared unmeasured; shared lifetime registry; context/pass segments; unprepared measured segments explicit; timestamp insertion overhead unresolved |
+| Diagnostic GPU/detail/metadata ablations | IMPLEMENTED / unmeasured | Test-build feature switches and paired A–F matrix wired; C build and macOS workload measurements pending |
+| Owned GL accounting | DONE | Frame-local count aggregation at publication; raw sampled timing reconciles with aggregate hook totals |
+| Bounded per-thread publication and writer | DONE | Shared SPSC protocol; 128 KiB batching and producer-local frame/detail ordering; short-write/EINTR/failure tests; four-producer production shutdown drain; worker refresh and explicit unassociated origins |
 | Production detours and argument forwarding | PARTIAL | Pinned prologue lengths, native rollback; test-only library exercises seven production wrappers; installed-game ABI/live behavior still unmeasured |
-| Counters ≤3%, sampled ≤5% overhead | **BLOCKING** | Valid structural recipes fail; raw seven-pair evidence retained; no threshold relaxed |
-| Live reference calibration | OPEN | Reference/counters/reference and six four-render windows implemented; no game launched |
+| Draw API coverage / C qualification | **BLOCKING** | Worktree regenerates schema 2 with evidence provenance and curated aliases; 43 unresolved executable symbol/pointer paths; C remains blocked. Generated artifacts have not been compiled or runtime-qualified |
+| Counters ≤3%, sampled ≤5% overhead | **BLOCKING** | All three recipes fail seven-pair CPU/wall acceptance; counters wall +8.1–10.6%, sampled wall +226.0–466.6%; reference gates also fail; no threshold relaxed |
+| Live reference calibration | OPEN | Worktree separates capture-free reference/counters/reference from post-causal TAIL capture; no game launched and follow-up build is unverified |
 | Residual-discovery pilot | **BLOCKING** | Offline overhead gate failed; installed power helper also stale |
 | Semantic hook expansion | OPEN | Seven hooks; add 3–8 verified hooks per residual-driven iteration, separately reviewable |
 | Recursive static Gfx / GL evidence | PARTIAL | Bounded traversal, aliases, caller/callee addresses, unresolved indirect edges |
 | Shader and Metal mapping | PARTIAL | Static shader hashes/includes/features and concrete Gfx evidence; resource dataflow, live frequency and translation remain open |
 | Natural/fixed LPM, restoration | DONE / live unmeasured | Journaled exact restoration; bounded helper source; oversized combined schedule rejected |
-| CI | IMPLEMENTED | Portable Python 3.10/3.14 and native producer checks; remote execution status recorded separately |
+| CI | PASSED / portable only | Python 3.10/3.14 and native producer checks passed for f2cf2fb in run 36973634407; no macOS-driver or installed-game acceptance implied |
 
-**Next authorized live action:** the short residual-discovery pilot, after
-mandatory offline overhead and exact helper checks pass. Stop on any mandatory
-failure and retain a partial report. No definitive diagnosis or Metal go/no-go
-can follow from reconciliation alone. Historical border batching is superseded
-as the immediate next action.
+**Next authorized live action:** the bounded `--calibration-only` path after
+mandatory offline overhead, exact helper, scene and restoration checks pass. It
+stops before ANATIVE or interventions. Residual discovery remains behind those
+calibration gates and revised C qualification. Current prerequisites fail, so
+no live launch is authorized by this implementation.
 
 ## 1. Repair phase membership and control publication first
 

@@ -1,0 +1,1960 @@
+{
+  "status": "blocked",
+  "build": {
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "engine_inventory_sha256": "0e22dc4d18c3fc067070f6b76fd89c2e6003cbc9cc51449321bf20c01461bf1d",
+    "backend_graph_sha256": "9cda7372d0b9d7c55419a9a8dab2e21a5199ccac86fa550d52653faec298e545",
+    "engine_sites": 7,
+    "library_sha256": "8fc49af373fbea5bc268fe301e5478b80dd994dc2013641baa6d8f043dc00b15",
+    "library_source_sha256": "732dc2da3226b516d8e913a81cde92b660017f56b1e97da3484813528a8bb904",
+    "native_source_hashes": {
+      "eu4_frame_model.c": "732dc2da3226b516d8e913a81cde92b660017f56b1e97da3484813528a8bb904",
+      "eu4_scope_tree.h": "cb3e09dc6daefbf557b81dc9e16fdea24f33490d610839998eec6d45987867cf",
+      "eu4_gpu_segments.h": "11c88be56c68ba832c0adc97af3e9c1f829497ddaa8fd9f51089f63236262ff9",
+      "eu4_spsc.h": "53abd60e288d6bff7c404b2c61e7368c46bfa6d2eabfbc7882011788f5258219",
+      "eu4_raster_policy.h": "e5819350e9fed1077e57bb925c93369e0a71f0211732d8b0095247c46499685b",
+      "eu4_render_gate.h": "4541d32813cf322e4f3b3c2881a1b6570da793db983a8d29f5f18d2cfe0dcb00",
+      "eu4_detour.h": "3eaee826feda0214ae9985f75996a8aa131bf0643d03c2ceb1d97a1be8cf9832",
+      "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
+    },
+    "architecture": "x86_64"
+  },
+  "autonomous": {
+    "fixture": {
+      "save_sha256": "a04bc2e86eeda8025d7a914efb11b18b82dea423631fdcf48c50471578369607",
+      "eu4_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "render_settings_sha256": "cffdd7b53b8abdf8c3f698b32be208c659bd227fa0965efae78fe15f1474bd84",
+      "dlc_load_sha256": "83383e74e90d240c8ec8f420acf648459e0bfed1963710260a7ee8e9c090b705",
+      "country": "VEN",
+      "date": "1444.11.11",
+      "speed": 0,
+      "resolution": "3456x2234",
+      "refresh_hz": 120,
+      "power_mode": "normal"
+    },
+    "gog": {
+      "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+      "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "gog_game_id": "2057001589",
+      "gog_build_id": "59158198792514056",
+      "gog_package_version": "1",
+      "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
+      "eu4_branch": "release_1.37.5-gog-fix",
+      "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
+      "gog_user_data": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG",
+      "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
+      "linked_graphics": [
+        "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
+        "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
+      ]
+    },
+    "settings": {
+      "path": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG/settings.txt",
+      "sha256": "ef20417e1b05978cb6ed873b0597de1971967c90aa97dfdfea8371fb2ddd0499",
+      "render_settings_sha256": "cffdd7b53b8abdf8c3f698b32be208c659bd227fa0965efae78fe15f1474bd84",
+      "refreshRate": "60",
+      "fullScreen": "yes",
+      "borderless": "no",
+      "vsync": "yes",
+      "multi_sampling": "0",
+      "game_ui_scale": "1.500",
+      "autosave": "\"NEVER\"",
+      "game_resolution": "3456x2234"
+    },
+    "dlc_mods": {
+      "path": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG/dlc_load.json",
+      "sha256": "83383e74e90d240c8ec8f420acf648459e0bfed1963710260a7ee8e9c090b705",
+      "selection": {
+        "enabled_mods": [
+          "mod/976a3320-468c-11ef-8896-71de0eb2c4d7.mod"
+        ],
+        "disabled_dlcs": []
+      }
+    },
+    "display": {
+      "display_id": 1,
+      "width": 1728,
+      "height": 1117,
+      "pixel_width": 3456,
+      "pixel_height": 2234,
+      "refresh_hz": 120.0,
+      "available_refresh_hz_at_current_resolution": [
+        47.94999694824219,
+        48.0,
+        50.0,
+        59.93998718261719,
+        60.0,
+        120.0
+      ],
+      "verified": true
+    },
+    "power": {
+      "source": "AC Power",
+      "mode": "normal",
+      "all_modes": {
+        "Battery Power": "normal",
+        "AC Power": "normal"
+      }
+    },
+    "launcher_args": [
+      "-enabletelemetry",
+      "-gdpr-compliant"
+    ],
+    "probe_sha256": "a78074a7032487f3fb900236da53b78e226f9e7e728e1496d7a7f5cef6038532",
+    "probe_source_sha256": "539527655d7fe698a80e9a6d4a8a5109d4c62a6fd020e16f3941a175ed39f979",
+    "focus_source_sha256": "4e9894231186736fc14cbdb81827f8bbe0f63b42daa8854950eb4e8616e3f73e",
+    "powermetrics_helper_sha256": "084560117526df8ad72dc54e638a4bcc7ed727cfc67076202498caf22625e5da"
+  },
+  "detour_harness": {
+    "status": "passed",
+    "output": "detour trampoline, forwarding, recursion, boundary rejection, partial-install rollback, and restore passed",
+    "cases": [
+      "trampoline continuation",
+      "integer and mixed-register ABI forwarding",
+      "recursive/nested calls",
+      "instruction-boundary rejection",
+      "bad expected-byte rejection",
+      "restore"
+    ]
+  },
+  "render_gate_harness": {
+    "status": "passed",
+    "output": "render gate passed early, on-time, missed-deadline, and reset cases"
+  },
+  "arb_handle_harness": {
+    "status": "passed",
+    "output": "GLhandleARB forwarding preserved all pointer bits"
+  },
+  "producer_harnesses": {
+    "frame_model_scope_harness": {
+      "status": "passed",
+      "output": "Q,1,1,-1,8,1,120,80,20,15,1,0,0\nQ,1,1,0,0,1,100,65,30,25,1,1,0\nQ,1,1,1,2,1,50,30,30,20,1,2,0\nQ,1,1,2,5,1,20,10,20,10,1,3,0\nQ,1,1,1,4,1,20,10,20,10,1,4,0\nscope harness passed"
+    },
+    "frame_model_gpu_harness": {
+      "status": "passed",
+      "output": "GPU segment harness passed"
+    },
+    "frame_model_queue_harness": {
+      "status": "passed",
+      "output": "four independent producers, saturation, reuse, ordered publication, and raster restoration policy passed"
+    },
+    "unowned_control": {
+      "status": "passed",
+      "output": "unowned thread observes profile, draw suppression, and measurement-off commands",
+      "unknown_origin_records": [
+        [
+          "O",
+          "7",
+          "12535286",
+          "1",
+          "708620983642583",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "12535286",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "O",
+          "8",
+          "12535286",
+          "4",
+          "708620983648958",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "12535286",
+          "3",
+          "0",
+          "0"
+        ]
+      ]
+    }
+  },
+  "power_mode_helper": {
+    "status": "not checked"
+  },
+  "tiny_call_diagnostic": {
+    "bare": [
+      {
+        "elapsed_ns": 75500,
+        "cpu_ns": 1827,
+        "draws_observed": 0,
+        "trace_rows": 0,
+        "hook_failures": null
+      },
+      {
+        "elapsed_ns": 79959,
+        "cpu_ns": 1940,
+        "draws_observed": 0,
+        "trace_rows": 0,
+        "hook_failures": null
+      },
+      {
+        "elapsed_ns": 75208,
+        "cpu_ns": 1825,
+        "draws_observed": 0,
+        "trace_rows": 0,
+        "hook_failures": null
+      }
+    ],
+    "counters": [
+      {
+        "elapsed_ns": 953333,
+        "cpu_ns": 22887,
+        "draws_observed": 12000,
+        "trace_rows": 15,
+        "hook_failures": 1
+      },
+      {
+        "elapsed_ns": 930583,
+        "cpu_ns": 22341,
+        "draws_observed": 12000,
+        "trace_rows": 15,
+        "hook_failures": 1
+      },
+      {
+        "elapsed_ns": 942625,
+        "cpu_ns": 22630,
+        "draws_observed": 12000,
+        "trace_rows": 15,
+        "hook_failures": 1
+      }
+    ]
+  },
+  "representative_workloads": {
+    "status": "failed",
+    "recipes": [
+      {
+        "recipe": {
+          "name": "mesh",
+          "sha256": "496f29d0ec8a47f35d8ca60437e28ed47d0b6a28f0744ebe4f48b0fa74ff4592",
+          "draws": 2774,
+          "indices": 1361595,
+          "source_frame": [
+            1,
+            6270
+          ],
+          "source_sha256": "0ed07e0aa58c66dcd1ab60fdf08dbf8dc626932d6a106f0260fe42e1f50f028a",
+          "policy": "Observed draw counts/topology/API and adjacent state-change frequencies; generated valid resources and shaders, no sleeps or added busywork.",
+          "limits": "GL structural surrogate; original resource payloads, shaders, and unobserved between-draw commands are not reconstructed. Live perturbation remains mandatory."
+        },
+        "trials": [
+          {
+            "trial": 0,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 11077667,
+                "cpu_ns": 265709,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 11869416,
+                "cpu_ns": 284261,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 13571583,
+                "cpu_ns": 325527,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 72554292,
+                "cpu_ns": 400026,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          },
+          {
+            "trial": 1,
+            "order": [
+              "sampled",
+              "counters",
+              "reference",
+              "bare"
+            ],
+            "stages": {
+              "sampled": {
+                "elapsed_ns": 72829625,
+                "cpu_ns": 416825,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 13406417,
+                "cpu_ns": 321583,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "reference": {
+                "elapsed_ns": 11746416,
+                "cpu_ns": 281701,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "bare": {
+                "elapsed_ns": 11441292,
+                "cpu_ns": 274097,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255
+              }
+            }
+          },
+          {
+            "trial": 2,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 11291583,
+                "cpu_ns": 270817,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 11895292,
+                "cpu_ns": 285205,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 13689667,
+                "cpu_ns": 328234,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 72522666,
+                "cpu_ns": 404666,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          },
+          {
+            "trial": 3,
+            "order": [
+              "sampled",
+              "counters",
+              "reference",
+              "bare"
+            ],
+            "stages": {
+              "sampled": {
+                "elapsed_ns": 72638541,
+                "cpu_ns": 411907,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 13633042,
+                "cpu_ns": 326847,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "reference": {
+                "elapsed_ns": 11769500,
+                "cpu_ns": 282272,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "bare": {
+                "elapsed_ns": 11279917,
+                "cpu_ns": 270584,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255
+              }
+            }
+          },
+          {
+            "trial": 4,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 11300375,
+                "cpu_ns": 270983,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 11925000,
+                "cpu_ns": 286051,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 13757209,
+                "cpu_ns": 330042,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 73422250,
+                "cpu_ns": 417623,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          },
+          {
+            "trial": 5,
+            "order": [
+              "sampled",
+              "counters",
+              "reference",
+              "bare"
+            ],
+            "stages": {
+              "sampled": {
+                "elapsed_ns": 72843500,
+                "cpu_ns": 419319,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 14123167,
+                "cpu_ns": 338844,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "reference": {
+                "elapsed_ns": 11987583,
+                "cpu_ns": 287500,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "bare": {
+                "elapsed_ns": 11288959,
+                "cpu_ns": 270634,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255
+              }
+            }
+          },
+          {
+            "trial": 6,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 11225833,
+                "cpu_ns": 269100,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 11822875,
+                "cpu_ns": 283425,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 13741334,
+                "cpu_ns": 329422,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 72567042,
+                "cpu_ns": 408444,
+                "draws": 11096,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          }
+        ],
+        "gates": {
+          "reference_elapsed_ns": {
+            "median_fraction": 0.05346539984694787,
+            "confidence_interval_95": [
+              0.04340306759349377,
+              0.06188559990341003
+            ],
+            "pairs": [
+              {
+                "instrumented": 11869416,
+                "reference": 11077667
+              },
+              {
+                "instrumented": 11746416,
+                "reference": 11441292
+              },
+              {
+                "instrumented": 11895292,
+                "reference": 11291583
+              },
+              {
+                "instrumented": 11769500,
+                "reference": 11279917
+              },
+              {
+                "instrumented": 11925000,
+                "reference": 11300375
+              },
+              {
+                "instrumented": 11987583,
+                "reference": 11288959
+              },
+              {
+                "instrumented": 11822875,
+                "reference": 11225833
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "reference_cpu_ns": {
+            "median_fraction": 0.053232998885172744,
+            "confidence_interval_95": [
+              0.043195458711527746,
+              0.06232032930082698
+            ],
+            "pairs": [
+              {
+                "instrumented": 284261,
+                "reference": 265709
+              },
+              {
+                "instrumented": 281701,
+                "reference": 274097
+              },
+              {
+                "instrumented": 285205,
+                "reference": 270817
+              },
+              {
+                "instrumented": 282272,
+                "reference": 270584
+              },
+              {
+                "instrumented": 286051,
+                "reference": 270983
+              },
+              {
+                "instrumented": 287500,
+                "reference": 270634
+              },
+              {
+                "instrumented": 283425,
+                "reference": 269100
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "counters_elapsed_ns": {
+            "median_fraction": 0.15364436058700215,
+            "confidence_interval_95": [
+              0.14340781383009915,
+              0.1622667075478681
+            ],
+            "pairs": [
+              {
+                "instrumented": 13571583,
+                "reference": 11869416
+              },
+              {
+                "instrumented": 13406417,
+                "reference": 11746416
+              },
+              {
+                "instrumented": 13689667,
+                "reference": 11895292
+              },
+              {
+                "instrumented": 13633042,
+                "reference": 11769500
+              },
+              {
+                "instrumented": 13757209,
+                "reference": 11925000
+              },
+              {
+                "instrumented": 14123167,
+                "reference": 11987583
+              },
+              {
+                "instrumented": 13741334,
+                "reference": 11822875
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "counters_cpu_ns": {
+            "median_fraction": 0.15378726171207235,
+            "confidence_interval_95": [
+              0.14516940417433277,
+              0.16228984740231112
+            ],
+            "pairs": [
+              {
+                "instrumented": 325527,
+                "reference": 284261
+              },
+              {
+                "instrumented": 321583,
+                "reference": 281701
+              },
+              {
+                "instrumented": 328234,
+                "reference": 285205
+              },
+              {
+                "instrumented": 326847,
+                "reference": 282272
+              },
+              {
+                "instrumented": 330042,
+                "reference": 286051
+              },
+              {
+                "instrumented": 338844,
+                "reference": 287500
+              },
+              {
+                "instrumented": 329422,
+                "reference": 283425
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "sampled_elapsed_ns": {
+            "median_fraction": 5.137850734275715,
+            "confidence_interval_95": [
+              5.096753740891774,
+              5.1717609923955985
+            ],
+            "pairs": [
+              {
+                "instrumented": 72554292,
+                "reference": 11869416
+              },
+              {
+                "instrumented": 72829625,
+                "reference": 11746416
+              },
+              {
+                "instrumented": 72522666,
+                "reference": 11895292
+              },
+              {
+                "instrumented": 72638541,
+                "reference": 11769500
+              },
+              {
+                "instrumented": 73422250,
+                "reference": 11925000
+              },
+              {
+                "instrumented": 72843500,
+                "reference": 11987583
+              },
+              {
+                "instrumented": 72567042,
+                "reference": 11822875
+              }
+            ],
+            "limit": 0.05,
+            "status": "failed"
+          },
+          "sampled_cpu_ns": {
+            "median_fraction": 0.4585008695652173,
+            "confidence_interval_95": [
+              0.4188601181606213,
+              0.4599599372139933
+            ],
+            "pairs": [
+              {
+                "instrumented": 400026,
+                "reference": 284261
+              },
+              {
+                "instrumented": 416825,
+                "reference": 281701
+              },
+              {
+                "instrumented": 404666,
+                "reference": 285205
+              },
+              {
+                "instrumented": 411907,
+                "reference": 282272
+              },
+              {
+                "instrumented": 417623,
+                "reference": 286051
+              },
+              {
+                "instrumented": 419319,
+                "reference": 287500
+              },
+              {
+                "instrumented": 408444,
+                "reference": 283425
+              }
+            ],
+            "limit": 0.05,
+            "status": "failed"
+          }
+        }
+      },
+      {
+        "recipe": {
+          "name": "borders",
+          "sha256": "bea909b039639260614f312adffbc8869512e5baad33fffa2251cca1ef56ab9f",
+          "draws": 2285,
+          "indices": 305010,
+          "source_frame": [
+            1,
+            6270
+          ],
+          "source_sha256": "0ed07e0aa58c66dcd1ab60fdf08dbf8dc626932d6a106f0260fe42e1f50f028a",
+          "policy": "Observed draw counts/topology/API and adjacent state-change frequencies; generated valid resources and shaders, no sleeps or added busywork.",
+          "limits": "GL structural surrogate; original resource payloads, shaders, and unobserved between-draw commands are not reconstructed. Live perturbation remains mandatory."
+        },
+        "trials": [
+          {
+            "trial": 0,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 3645125,
+                "cpu_ns": 87336,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 3512625,
+                "cpu_ns": 84312,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 3998084,
+                "cpu_ns": 95962,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 17357791,
+                "cpu_ns": 164244,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          },
+          {
+            "trial": 1,
+            "order": [
+              "sampled",
+              "counters",
+              "reference",
+              "bare"
+            ],
+            "stages": {
+              "sampled": {
+                "elapsed_ns": 17347708,
+                "cpu_ns": 167266,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 4022542,
+                "cpu_ns": 96408,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "reference": {
+                "elapsed_ns": 3701875,
+                "cpu_ns": 88854,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "bare": {
+                "elapsed_ns": 3520125,
+                "cpu_ns": 84514,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255
+              }
+            }
+          },
+          {
+            "trial": 2,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 3421833,
+                "cpu_ns": 82144,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 3524375,
+                "cpu_ns": 84597,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 4197625,
+                "cpu_ns": 100597,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 18151208,
+                "cpu_ns": 177351,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          },
+          {
+            "trial": 3,
+            "order": [
+              "sampled",
+              "counters",
+              "reference",
+              "bare"
+            ],
+            "stages": {
+              "sampled": {
+                "elapsed_ns": 17820959,
+                "cpu_ns": 172221,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 4138417,
+                "cpu_ns": 99178,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "reference": {
+                "elapsed_ns": 3612542,
+                "cpu_ns": 86556,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "bare": {
+                "elapsed_ns": 3778667,
+                "cpu_ns": 90582,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255
+              }
+            }
+          },
+          {
+            "trial": 4,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 3765500,
+                "cpu_ns": 89855,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 3716292,
+                "cpu_ns": 89033,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 4162833,
+                "cpu_ns": 99561,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 17771792,
+                "cpu_ns": 171794,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          },
+          {
+            "trial": 5,
+            "order": [
+              "sampled",
+              "counters",
+              "reference",
+              "bare"
+            ],
+            "stages": {
+              "sampled": {
+                "elapsed_ns": 17681208,
+                "cpu_ns": 176175,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 4244083,
+                "cpu_ns": 101874,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "reference": {
+                "elapsed_ns": 3697083,
+                "cpu_ns": 88737,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "bare": {
+                "elapsed_ns": 3621833,
+                "cpu_ns": 86722,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255
+              }
+            }
+          },
+          {
+            "trial": 6,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 3425709,
+                "cpu_ns": 82132,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 3805250,
+                "cpu_ns": 91189,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 4069833,
+                "cpu_ns": 97686,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 17466708,
+                "cpu_ns": 168664,
+                "draws": 9140,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          }
+        ],
+        "gates": {
+          "reference_elapsed_ns": {
+            "median_fraction": 0.02077677242434972,
+            "confidence_interval_95": [
+              -0.036349919412914544,
+              0.05163168921558192
+            ],
+            "pairs": [
+              {
+                "instrumented": 3512625,
+                "reference": 3645125
+              },
+              {
+                "instrumented": 3701875,
+                "reference": 3520125
+              },
+              {
+                "instrumented": 3524375,
+                "reference": 3421833
+              },
+              {
+                "instrumented": 3612542,
+                "reference": 3778667
+              },
+              {
+                "instrumented": 3716292,
+                "reference": 3765500
+              },
+              {
+                "instrumented": 3697083,
+                "reference": 3621833
+              },
+              {
+                "instrumented": 3805250,
+                "reference": 3425709
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "reference_cpu_ns": {
+            "median_fraction": 0.023235165240653943,
+            "confidence_interval_95": [
+              -0.03462489694971149,
+              0.0513524386492179
+            ],
+            "pairs": [
+              {
+                "instrumented": 84312,
+                "reference": 87336
+              },
+              {
+                "instrumented": 88854,
+                "reference": 84514
+              },
+              {
+                "instrumented": 84597,
+                "reference": 82144
+              },
+              {
+                "instrumented": 86556,
+                "reference": 90582
+              },
+              {
+                "instrumented": 89033,
+                "reference": 89855
+              },
+              {
+                "instrumented": 88737,
+                "reference": 86722
+              },
+              {
+                "instrumented": 91189,
+                "reference": 82132
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "counters_elapsed_ns": {
+            "median_fraction": 0.1382040496779473,
+            "confidence_interval_95": [
+              0.08662286003714326,
+              0.14795448195239325
+            ],
+            "pairs": [
+              {
+                "instrumented": 3998084,
+                "reference": 3512625
+              },
+              {
+                "instrumented": 4022542,
+                "reference": 3701875
+              },
+              {
+                "instrumented": 4197625,
+                "reference": 3524375
+              },
+              {
+                "instrumented": 4138417,
+                "reference": 3612542
+              },
+              {
+                "instrumented": 4162833,
+                "reference": 3716292
+              },
+              {
+                "instrumented": 4244083,
+                "reference": 3697083
+              },
+              {
+                "instrumented": 4069833,
+                "reference": 3805250
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "counters_cpu_ns": {
+            "median_fraction": 0.13817724641806617,
+            "confidence_interval_95": [
+              0.08501586872847589,
+              0.14804422056188504
+            ],
+            "pairs": [
+              {
+                "instrumented": 95962,
+                "reference": 84312
+              },
+              {
+                "instrumented": 96408,
+                "reference": 88854
+              },
+              {
+                "instrumented": 100597,
+                "reference": 84597
+              },
+              {
+                "instrumented": 99178,
+                "reference": 86556
+              },
+              {
+                "instrumented": 99561,
+                "reference": 89033
+              },
+              {
+                "instrumented": 101874,
+                "reference": 88737
+              },
+              {
+                "instrumented": 97686,
+                "reference": 91189
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "sampled_elapsed_ns": {
+            "median_fraction": 3.7824752649588875,
+            "confidence_interval_95": [
+              3.686194968765828,
+              3.9415440019928116
+            ],
+            "pairs": [
+              {
+                "instrumented": 17357791,
+                "reference": 3512625
+              },
+              {
+                "instrumented": 17347708,
+                "reference": 3701875
+              },
+              {
+                "instrumented": 18151208,
+                "reference": 3524375
+              },
+              {
+                "instrumented": 17820959,
+                "reference": 3612542
+              },
+              {
+                "instrumented": 17771792,
+                "reference": 3716292
+              },
+              {
+                "instrumented": 17681208,
+                "reference": 3697083
+              },
+              {
+                "instrumented": 17466708,
+                "reference": 3805250
+              }
+            ],
+            "limit": 0.05,
+            "status": "failed"
+          },
+          "sampled_cpu_ns": {
+            "median_fraction": 0.9480500996299459,
+            "confidence_interval_95": [
+              0.8824813739392712,
+              0.9897060862331901
+            ],
+            "pairs": [
+              {
+                "instrumented": 164244,
+                "reference": 84312
+              },
+              {
+                "instrumented": 167266,
+                "reference": 88854
+              },
+              {
+                "instrumented": 177351,
+                "reference": 84597
+              },
+              {
+                "instrumented": 172221,
+                "reference": 86556
+              },
+              {
+                "instrumented": 171794,
+                "reference": 89033
+              },
+              {
+                "instrumented": 176175,
+                "reference": 88737
+              },
+              {
+                "instrumented": 168664,
+                "reference": 91189
+              }
+            ],
+            "limit": 0.05,
+            "status": "failed"
+          }
+        }
+      },
+      {
+        "recipe": {
+          "name": "text_ui",
+          "sha256": "d279b947d868a895dee13e31bf7efb5ea77a79c08d041b926e4a58a572aa2fbd",
+          "draws": 632,
+          "indices": 18348,
+          "source_frame": [
+            1,
+            6270
+          ],
+          "source_sha256": "0ed07e0aa58c66dcd1ab60fdf08dbf8dc626932d6a106f0260fe42e1f50f028a",
+          "policy": "Observed draw counts/topology/API and adjacent state-change frequencies; generated valid resources and shaders, no sleeps or added busywork.",
+          "limits": "GL structural surrogate; original resource payloads, shaders, and unobserved between-draw commands are not reconstructed. Live perturbation remains mandatory."
+        },
+        "trials": [
+          {
+            "trial": 0,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 1354833,
+                "cpu_ns": 32537,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 1527000,
+                "cpu_ns": 36660,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 1824709,
+                "cpu_ns": 43804,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 3806750,
+                "cpu_ns": 91161,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          },
+          {
+            "trial": 1,
+            "order": [
+              "sampled",
+              "counters",
+              "reference",
+              "bare"
+            ],
+            "stages": {
+              "sampled": {
+                "elapsed_ns": 4727250,
+                "cpu_ns": 109721,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 1884708,
+                "cpu_ns": 45242,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "reference": {
+                "elapsed_ns": 1551541,
+                "cpu_ns": 37247,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "bare": {
+                "elapsed_ns": 1393792,
+                "cpu_ns": 33475,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255
+              }
+            }
+          },
+          {
+            "trial": 2,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 1404667,
+                "cpu_ns": 33733,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 1645125,
+                "cpu_ns": 39391,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 1971000,
+                "cpu_ns": 47222,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 4801084,
+                "cpu_ns": 114932,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          },
+          {
+            "trial": 3,
+            "order": [
+              "sampled",
+              "counters",
+              "reference",
+              "bare"
+            ],
+            "stages": {
+              "sampled": {
+                "elapsed_ns": 6509541,
+                "cpu_ns": 114365,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 1919834,
+                "cpu_ns": 46088,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "reference": {
+                "elapsed_ns": 1647625,
+                "cpu_ns": 39483,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "bare": {
+                "elapsed_ns": 1484875,
+                "cpu_ns": 35511,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255
+              }
+            }
+          },
+          {
+            "trial": 4,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 1439708,
+                "cpu_ns": 34577,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 1591417,
+                "cpu_ns": 37831,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 1856542,
+                "cpu_ns": 44568,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 4079042,
+                "cpu_ns": 95924,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          },
+          {
+            "trial": 5,
+            "order": [
+              "sampled",
+              "counters",
+              "reference",
+              "bare"
+            ],
+            "stages": {
+              "sampled": {
+                "elapsed_ns": 6647250,
+                "cpu_ns": 112133,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 1913292,
+                "cpu_ns": 45927,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "reference": {
+                "elapsed_ns": 1808750,
+                "cpu_ns": 43148,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "bare": {
+                "elapsed_ns": 1531958,
+                "cpu_ns": 36381,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255
+              }
+            }
+          },
+          {
+            "trial": 6,
+            "order": [
+              "bare",
+              "reference",
+              "counters",
+              "sampled"
+            ],
+            "stages": {
+              "bare": {
+                "elapsed_ns": 1456958,
+                "cpu_ns": 34597,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255
+              },
+              "reference": {
+                "elapsed_ns": 1549875,
+                "cpu_ns": 37208,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "counters": {
+                "elapsed_ns": 2005250,
+                "cpu_ns": 48016,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              },
+              "sampled": {
+                "elapsed_ns": 4954125,
+                "cpu_ns": 117799,
+                "draws": 2528,
+                "valid": 1,
+                "pixel_alpha": 255,
+                "frames": 4,
+                "tree_reconciliation": "passed"
+              }
+            }
+          }
+        ],
+        "gates": {
+          "reference_elapsed_ns": {
+            "median_fraction": 0.11317972839562862,
+            "confidence_interval_95": [
+              0.10537483989809049,
+              0.17118505667179473
+            ],
+            "pairs": [
+              {
+                "instrumented": 1527000,
+                "reference": 1354833
+              },
+              {
+                "instrumented": 1551541,
+                "reference": 1393792
+              },
+              {
+                "instrumented": 1645125,
+                "reference": 1404667
+              },
+              {
+                "instrumented": 1647625,
+                "reference": 1484875
+              },
+              {
+                "instrumented": 1591417,
+                "reference": 1439708
+              },
+              {
+                "instrumented": 1808750,
+                "reference": 1531958
+              },
+              {
+                "instrumented": 1549875,
+                "reference": 1456958
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "reference_cpu_ns": {
+            "median_fraction": 0.11268110530246456,
+            "confidence_interval_95": [
+              0.09410880064782945,
+              0.16772893012776802
+            ],
+            "pairs": [
+              {
+                "instrumented": 36660,
+                "reference": 32537
+              },
+              {
+                "instrumented": 37247,
+                "reference": 33475
+              },
+              {
+                "instrumented": 39391,
+                "reference": 33733
+              },
+              {
+                "instrumented": 39483,
+                "reference": 35511
+              },
+              {
+                "instrumented": 37831,
+                "reference": 34577
+              },
+              {
+                "instrumented": 43148,
+                "reference": 36381
+              },
+              {
+                "instrumented": 37208,
+                "reference": 34597
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "counters_elapsed_ns": {
+            "median_fraction": 0.19496332678454475,
+            "confidence_interval_95": [
+              0.16521295804567182,
+              0.21473296548399312
+            ],
+            "pairs": [
+              {
+                "instrumented": 1824709,
+                "reference": 1527000
+              },
+              {
+                "instrumented": 1884708,
+                "reference": 1551541
+              },
+              {
+                "instrumented": 1971000,
+                "reference": 1645125
+              },
+              {
+                "instrumented": 1919834,
+                "reference": 1647625
+              },
+              {
+                "instrumented": 1856542,
+                "reference": 1591417
+              },
+              {
+                "instrumented": 1913292,
+                "reference": 1808750
+              },
+              {
+                "instrumented": 2005250,
+                "reference": 1549875
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "counters_cpu_ns": {
+            "median_fraction": 0.19487179487179485,
+            "confidence_interval_95": [
+              0.16728718689056055,
+              0.21464815958332206
+            ],
+            "pairs": [
+              {
+                "instrumented": 43804,
+                "reference": 36660
+              },
+              {
+                "instrumented": 45242,
+                "reference": 37247
+              },
+              {
+                "instrumented": 47222,
+                "reference": 39391
+              },
+              {
+                "instrumented": 46088,
+                "reference": 39483
+              },
+              {
+                "instrumented": 44568,
+                "reference": 37831
+              },
+              {
+                "instrumented": 45927,
+                "reference": 43148
+              },
+              {
+                "instrumented": 48016,
+                "reference": 37208
+              }
+            ],
+            "limit": 0.03,
+            "status": "failed"
+          },
+          "sampled_elapsed_ns": {
+            "median_fraction": 2.046809591238646,
+            "confidence_interval_95": [
+              1.5631509528929248,
+              2.675051831375259
+            ],
+            "pairs": [
+              {
+                "instrumented": 3806750,
+                "reference": 1527000
+              },
+              {
+                "instrumented": 4727250,
+                "reference": 1551541
+              },
+              {
+                "instrumented": 4801084,
+                "reference": 1645125
+              },
+              {
+                "instrumented": 6509541,
+                "reference": 1647625
+              },
+              {
+                "instrumented": 4079042,
+                "reference": 1591417
+              },
+              {
+                "instrumented": 6647250,
+                "reference": 1808750
+              },
+              {
+                "instrumented": 4954125,
+                "reference": 1549875
+              }
+            ],
+            "limit": 0.05,
+            "status": "failed"
+          },
+          "sampled_cpu_ns": {
+            "median_fraction": 1.8965630777803106,
+            "confidence_interval_95": [
+              1.5355925035024187,
+              1.945767444357935
+            ],
+            "pairs": [
+              {
+                "instrumented": 91161,
+                "reference": 36660
+              },
+              {
+                "instrumented": 109721,
+                "reference": 37247
+              },
+              {
+                "instrumented": 114932,
+                "reference": 39391
+              },
+              {
+                "instrumented": 114365,
+                "reference": 39483
+              },
+              {
+                "instrumented": 95924,
+                "reference": 37831
+              },
+              {
+                "instrumented": 112133,
+                "reference": 43148
+              },
+              {
+                "instrumented": 117799,
+                "reference": 37208
+              }
+            ],
+            "limit": 0.05,
+            "status": "failed"
+          }
+        }
+      }
+    ],
+    "test_library_sha256": "3ebf13863a5046cacdaf691778770560617e9e25720d028f758e3035b5a4eb99",
+    "harness_source_sha256": "894122d8b29cb4954bb4dbc4c563672314973a231ee9e13e1262a2a5f5149000",
+    "profiler_source_sha256": "732dc2da3226b516d8e913a81cde92b660017f56b1e97da3484813528a8bb904"
+  },
+  "overhead_gate": "failed",
+  "limitations": [
+    "Structural recipes reproduce observed draw counts and state-change frequencies with generated shaders/resources. Live calibration is independently mandatory.",
+    "GPU evidence remains segmented and may be partial."
+  ]
+}

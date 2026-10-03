@@ -29,6 +29,9 @@ extern void glUseProgramObjectARB(GLhandleARB);
 #include "eu4_spsc.h"
 #include "eu4_raster_policy.h"
 #include "eu4_gpu_segments.h"
+#include "eu4_gl_shadow.h"
+#include "eu4_writer_buffer.h"
+#include "eu4_draw_api_ids.h"
 #ifndef GL_QUAD_STRIP
 #define GL_QUAD_STRIP 0x0008
 #endif
@@ -49,7 +52,7 @@ extern void glUseProgramObjectARB(GLhandleARB);
 #endif
 
 enum { OFF, PROFILE, SKIP_RENDER, DROP_DRAWS, RASTER_SUPPRESS, CADENCE_30, CADENCE_15, REFERENCE };
-enum { INTERVENTION_ACTIVE=1u, MEASURE_ENABLED=2u };
+enum { INTERVENTION_ACTIVE=1u, MEASURE_ENABLED=2u, FORENSIC_CAPTURE=4u };
 enum { SCOPE_UPDATE, SCOPE_IDLE, SCOPE_RENDER, SCOPE_MAP,
        SCOPE_PRESENT, SCOPE_ADD_BUCKET, SCOPE_APPEND, SCOPE_FLUSH,
        SCOPE_LOOP, SCOPE_CADENCE_SLEEP, SCOPE_COUNT };
@@ -84,16 +87,19 @@ typedef struct {
     uint64_t render_attempts, render_executed, present_scene_calls, present_calls;
     uint64_t measurement_epoch,start_ns,end_ns,render_start_ns,render_end_ns,present_time_ns;
     uint64_t generation,sample_window,render_deadline_ns,render_lateness_ns,render_missed_deadlines,render_overruns,raster_challenges;
+    uint64_t publication_sequence,draw_wall_raw,draw_cpu_raw,state_missing_reason;
+    uint64_t api_counts[EU4_DRAW_API_CAPACITY],api_suppressed[EU4_DRAW_API_CAPACITY];
     Eu4ScopeSnapshot scopes;
 } Frame;
 typedef struct { Frame frame; } FrameSlot;
-typedef struct { char kind; uint64_t a,b,c,d,e,f,g,h,i,j,k,l,epoch,update,phase,thread,generation,window,context; } DetailSlot;
+typedef struct { char kind; uint64_t publication_sequence,a,b,c,d,e,f,g,h,i,j,k,l,epoch,update,phase,thread,generation,window,context; } DetailSlot;
 #define FRAME_CAPACITY 128u
 #define DETAIL_CAPACITY 32768u
 #define PRODUCER_CAPACITY 16u
 typedef struct {
     FrameSlot frames[FRAME_CAPACITY]; DetailSlot details[DETAIL_CAPACITY];
     Eu4Spsc frame_queue,detail_queue;
+    uint64_t publication_sequence,consumed_sequence,thread_id;
     uint64_t counts[HOOK_COUNT],wall[HOOK_COUNT],cpu[HOOK_COUNT],unassociated_generation;
 } Producer;
 static Producer *producers[PRODUCER_CAPACITY];
@@ -107,18 +113,48 @@ static _Thread_local Eu4ScopeTree scope_tree;
 static _Thread_local ControlSnapshot frame_control;
 static _Thread_local bool inside_update;
 static _Thread_local uint32_t observed_command_seq;
+static _Thread_local uint32_t last_shadow_mode=UINT32_MAX;
+#ifdef EU4_FRAME_MODEL_TEST
+static _Atomic unsigned test_published_frames;
+#endif
 static _Thread_local uintptr_t active_program;
 static _Thread_local GLuint bound_array_buffer, bound_element_buffer;
 static _Thread_local CGLContextObj state_context;
 static _Thread_local bool state_seeded;
 static _Thread_local bool was_measurement_active;
-typedef struct { GLuint buffer; GLint size; GLenum type; GLboolean normalized,enabled;
-                 GLsizei stride; uintptr_t pointer; GLuint divisor; } VertexAttribute;
-typedef struct { bool used; CGLContextObj context; GLuint vao,element_buffer;
-                 VertexAttribute attributes[32]; } VertexArrayState;
-static _Thread_local VertexArrayState vertex_arrays[64];
-static _Thread_local unsigned vertex_array_count;
+static _Thread_local Eu4GlShadow gl_shadow;
 static _Thread_local VertexArrayState *vertex_array_state;
+static uint64_t tid(void);
+typedef struct { uintptr_t context; uint64_t owner; _Atomic uint64_t stamp; } ShadowLifetime;
+static ShadowLifetime shadow_lifetimes[64];
+static _Thread_local _Atomic uint64_t *state_stamp_pointer;
+static uint64_t shadow_stamp;
+static pthread_mutex_t shadow_lock=PTHREAD_MUTEX_INITIALIZER;
+static uint64_t context_stamp(CGLContextObj ctx,bool destroy) {
+    if(!ctx) return 0;
+    uint64_t thread=tid(),stamp=0;
+    pthread_mutex_lock(&shadow_lock);
+    ShadowLifetime *free_slot=NULL;
+    for(unsigned i=0;i<64;i++) {
+        ShadowLifetime *l=&shadow_lifetimes[i];
+        if(l->context==(uintptr_t)ctx) {
+            if(destroy) {
+                atomic_store_explicit(&l->stamp,++shadow_stamp,memory_order_release);
+                l->context=0;l->owner=0;
+            } else {
+                if(l->owner!=thread) {l->owner=thread;atomic_store_explicit(&l->stamp,++shadow_stamp,memory_order_release);}
+                stamp=atomic_load_explicit(&l->stamp,memory_order_acquire);state_stamp_pointer=&l->stamp;
+            }
+            pthread_mutex_unlock(&shadow_lock);return stamp;
+        }
+        if(!l->context && !free_slot) free_slot=l;
+    }
+    if(!destroy && free_slot) {
+        free_slot->context=(uintptr_t)ctx;free_slot->owner=thread;stamp=++shadow_stamp;
+        atomic_store_explicit(&free_slot->stamp,stamp,memory_order_release);state_stamp_pointer=&free_slot->stamp;
+    } else if(!destroy) state_stamp_pointer=NULL;
+    pthread_mutex_unlock(&shadow_lock);return stamp;
+}
 static _Thread_local bool detail_active;
 static _Thread_local uint32_t draw_sample_seq;
 static _Thread_local uint64_t detail_generation;
@@ -135,6 +171,8 @@ static _Thread_local Eu4GpuManager gpu_manager;
 static Eu4GpuRegistry gpu_registry;
 static pthread_mutex_t gpu_lock=PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local const Eu4GpuIdentity *detail_gpu_origin;
+static _Thread_local uintptr_t detail_context_cache;
+static _Thread_local bool detail_context_valid;
 static bool extension_has(const char *extensions,const char *name) {
     if(!extensions || !name) return false;
     size_t length=strlen(name);
@@ -163,6 +201,64 @@ static pthread_t writer_thread;
 static _Atomic int writer_running;
 static bool writer_started;
 static uint64_t now_ns(clockid_t id);
+#ifdef EU4_FRAME_MODEL_TEST
+/* Diagnostics only: these branches are absent from the production library. */
+static unsigned test_ablation;
+static uint64_t test_measured_state_queries,test_measured_gpu_initializations;
+static bool test_gpu_timestamps=true,test_forensic_records=true,test_cached_metadata=false;
+static _Atomic uint64_t test_gpu_stamps,test_gpu_polls,test_gpu_results,test_detail_records;
+#endif
+
+static bool gpu_timestamps_enabled(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    return test_gpu_timestamps;
+#else
+    return true;
+#endif
+}
+static bool forensic_records_enabled(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    return test_forensic_records;
+#else
+    return true;
+#endif
+}
+static uint64_t detail_thread_id(Producer *p) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_cached_metadata && p) return p->thread_id;
+#else
+    if(p) return p->thread_id;
+#endif
+    return tid();
+}
+static void cache_current_detail_context(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_cached_metadata) {
+        detail_context_cache=(uintptr_t)CGLGetCurrentContext();
+        detail_context_valid=true;
+    }
+#else
+    detail_context_cache=(uintptr_t)CGLGetCurrentContext();
+    detail_context_valid=true;
+#endif
+}
+static uintptr_t detail_context_id(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_cached_metadata && detail_context_valid) return detail_context_cache;
+#else
+    if(detail_context_valid) return detail_context_cache;
+    return 0;
+#endif
+    return (uintptr_t)CGLGetCurrentContext();
+}
+static bool detail_kind_enabled(char kind) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(!test_forensic_records && strchr("DSUuVWBbTtPELJ",kind)) return false;
+#else
+    (void)kind;
+#endif
+    return true;
+}
 
 static bool snapshot_control(ControlSnapshot *out) {
     if(!control || control==MAP_FAILED || control->version!=3) return false;
@@ -180,12 +276,33 @@ static bool snapshot_control(ControlSnapshot *out) {
     }
     return false;
 }
+static void invalidate_shadow_cache_quiet(void) {
+    memset(&gl_shadow,0,sizeof(gl_shadow));
+    gl_shadow.reason=EU4_SHADOW_INVALIDATED;
+    state_stamp_pointer=NULL;
+    state_seeded=false;
+    vertex_array_state=NULL;
+    state_context=NULL;
+    active_program=0;
+    bound_array_buffer=0;
+    bound_element_buffer=0;
+}
+static void note_mode_transition(uint32_t mode) {
+    if(mode==last_shadow_mode) return;
+    uint32_t previous=last_shadow_mode;
+    last_shadow_mode=mode;
+    if(previous==REFERENCE || mode==REFERENCE) invalidate_shadow_cache_quiet();
+}
 static void refresh_unowned_control(void) {
     if(!control || inside_update) return;
     uint32_t sequence=atomic_load_explicit(&control->command_seq,memory_order_acquire);
     if(!(sequence&1u) && sequence!=observed_command_seq) {
         ControlSnapshot next={0};
-        if(snapshot_control(&next)) { frame_control=next; observed_command_seq=sequence; }
+        if(snapshot_control(&next)) {
+            frame_control=next;
+            observed_command_seq=sequence;
+            note_mode_transition(frame_control.mode);
+        }
     }
 }
 static bool intervention_active(void) {
@@ -199,6 +316,14 @@ static bool measurement_active(void) {
 }
 static bool gl_measurement_active(void) {
     return measurement_active() && frame_control.mode!=REFERENCE;
+}
+static bool reference_pass_through_mode(void) {
+    refresh_unowned_control();
+    return control && frame_control.mode==REFERENCE;
+}
+static bool gl_shadow_needed(void) {
+    refresh_unowned_control();
+    return control && frame_control.mode!=OFF && frame_control.mode!=REFERENCE;
 }
 static int scope_begin(unsigned id) {
     if(!measurement_active() || (frame_control.mode==REFERENCE && id!=SCOPE_UPDATE &&
@@ -273,6 +398,7 @@ static Producer *producer(void) {
     if(count<PRODUCER_CAPACITY) {
         local_producer=calloc(1,sizeof(Producer));
         if(local_producer) {
+            local_producer->thread_id=tid();
             producers[count]=local_producer;
             atomic_store_explicit(&producer_count,count+1,memory_order_release);
         }
@@ -283,14 +409,25 @@ static Producer *producer(void) {
 }
 static void detail_line12(const char *,uint64_t,uint64_t,uint64_t,uint64_t,
                           uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
-static void event(unsigned id,uint64_t wall,uint64_t cpu) {
+static void unowned_event(void) {
+    if(inside_update || !measurement_active()) return;
     Producer *p=producer(); if(!p) return;
-    p->counts[id]++; p->wall[id]+=wall; p->cpu[id]+=cpu;
     if(!inside_update && measurement_active() && p->unassociated_generation!=frame_control.generation) {
         p->unassociated_generation=frame_control.generation;
         detail_line12("O",frame_control.measurement_epoch,tid(),frame_control.phase,
             now_ns(CLOCK_UPTIME_RAW),(uintptr_t)CGLGetCurrentContext(),0,0,0,0,0,0,0);
     }
+}
+static void event(unsigned id,uint64_t wall,uint64_t cpu) {
+    Producer *p=producer(); if(!p) return;
+    p->counts[id]++; p->wall[id]+=wall; p->cpu[id]+=cpu;
+    unowned_event();
+}
+static void gl_event(unsigned id,uint64_t wall,uint64_t cpu) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_ablation==1 && inside_update && gl_measurement_active()) {event(id,wall,cpu);return;}
+#endif
+    if(!inside_update && gl_measurement_active()) event(id,wall,cpu);
 }
 static void flush_counters(void) {
     Producer *p=local_producer; if(!p) return;
@@ -303,20 +440,57 @@ static void flush_counters(void) {
 }
 static void publish_frame(Frame *f) {
     Producer *p=producer(); uint64_t h;
+    bool aggregate=true;
+#ifdef EU4_FRAME_MODEL_TEST
+    aggregate=test_ablation!=1;
+#endif
+    if(p && aggregate) {
+        p->counts[HOOK_GL_DRAW]+=f->draws; p->wall[HOOK_GL_DRAW]+=f->draw_wall_raw;p->cpu[HOOK_GL_DRAW]+=f->draw_cpu_raw;
+        p->counts[HOOK_GL_UPLOAD]+=f->buffer_calls+f->texture_calls;
+        p->counts[HOOK_GL_UNIFORM]+=f->uniform_calls;p->counts[HOOK_GL_STATE]+=f->state_calls;
+    }
     flush_counters();
     if(!p || !eu4_spsc_reserve(&p->frame_queue,FRAME_CAPACITY,&h)) {
         f->flags|=1; atomic_fetch_add(&control->dropped_records,1); return;
     }
+    f->publication_sequence=++p->publication_sequence;
     p->frames[h%FRAME_CAPACITY].frame=*f;
     eu4_spsc_publish(&p->frame_queue,h);
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add(&test_published_frames,1);
+#endif
+}
+static Eu4WriterBuffer output_buffer;
+static ssize_t output_write(void *arg,const char *line,size_t size) {
+    (void)arg;return write(log_fd,line,size);
+}
+static void output_failure(bool ok) {
+    if(!ok && control) atomic_fetch_add(&control->hook_failures,1);
 }
 static void write_record(const char *line,size_t size) {
-    while(size) {
-        ssize_t written=write(log_fd,line,size);
-        if(written<0 && errno==EINTR) continue;
-        if(written<=0) { atomic_fetch_add(&control->hook_failures,1); return; }
-        line+=written; size-=(size_t)written;
-    }
+    bool failed=output_buffer.failed;
+    uint64_t now=now_ns(CLOCK_UPTIME_RAW);
+    bool ok=eu4_writer_append(&output_buffer,output_write,NULL,line,size,now);
+    if(ok) ok=eu4_writer_tick(&output_buffer,output_write,NULL,now);
+    if(!failed) output_failure(ok);
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_ablation==2 && !output_buffer.failed)
+        output_failure(eu4_writer_flush(&output_buffer,output_write,NULL,now_ns(CLOCK_UPTIME_RAW)));
+#endif
+}
+static void flush_output(void) {
+    bool failed=output_buffer.failed;
+    bool ok=eu4_writer_flush(&output_buffer,output_write,NULL,now_ns(CLOCK_UPTIME_RAW));
+    if(!failed) output_failure(ok);
+}
+static void write_api_record(char kind,const Frame *f,uint64_t a,uint64_t b,uint64_t c,uint64_t d) {
+    char line[512];int n=snprintf(line,sizeof(line),
+        "%c,%llu,%llu,%llu,%llu,0,0,0,0,0,0,0,0,%llu,%llu,%llu,%llu,%llu,%llu,0\n",
+        kind,(unsigned long long)a,(unsigned long long)b,(unsigned long long)c,(unsigned long long)d,
+        (unsigned long long)f->measurement_epoch,(unsigned long long)f->update_id,
+        (unsigned long long)f->phase,(unsigned long long)f->thread_id,
+        (unsigned long long)f->generation,(unsigned long long)f->sample_window);
+    if(n>0 && (size_t)n<sizeof(line)) write_record(line,(size_t)n);
 }
 static void *writer(void *unused) {
     (void)unused;
@@ -328,8 +502,16 @@ static void *writer(void *unused) {
         Producer *p=producers[index];
         uint64_t t=atomic_load_explicit(&p->frame_queue.tail,memory_order_relaxed);
         uint64_t h=atomic_load_explicit(&p->frame_queue.head,memory_order_acquire);
-        pending|=t<h;
-        while(t<h) {
+        uint64_t dt=atomic_load_explicit(&p->detail_queue.tail,memory_order_relaxed);
+        uint64_t dh=atomic_load_explicit(&p->detail_queue.head,memory_order_acquire);
+        pending|=t<h || dt<dh;
+        while(t<h || dt<dh) {
+            uint64_t expected=p->consumed_sequence+1;
+            bool take_frame=t<h && p->frames[t%FRAME_CAPACITY].frame.publication_sequence==expected;
+            bool take_detail=dt<dh && p->details[dt%DETAIL_CAPACITY].publication_sequence==expected;
+            /* A head snapshot may miss the earlier publication in the other queue. */
+            if(!take_frame && !take_detail) break;
+            if(take_frame) {
             FrameSlot *s=&p->frames[t%FRAME_CAPACITY];
             Frame f=s->frame;
             char line[1536];
@@ -352,6 +534,16 @@ static void *writer(void *unused) {
             int n=(int)used;
             if(used<sizeof(line)) { line[used++]='\n'; line[used]='\0'; n=(int)used; }
             if(n>0 && (size_t)n<sizeof(line)) write_record(line,(size_t)n);
+            if(f.flags&2048) {
+                int m=snprintf(line,sizeof(line),"L,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                    (unsigned long long)f.update_id,(unsigned long long)f.render_id,(unsigned long long)f.phase,
+                    (unsigned long long)f.measurement_epoch,(unsigned long long)f.thread_id,
+                    (unsigned long long)f.generation,(unsigned long long)f.state_missing_reason);
+                if(m>0 && (size_t)m<sizeof(line)) write_record(line,(size_t)m);
+            }
+            write_api_record('K',&f,1,0,0,0);
+            for(unsigned api=1;api<EU4_DRAW_API_CAPACITY;api++) if(f.api_counts[api])
+                write_api_record('A',&f,api,f.api_counts[api],f.api_suppressed[api],f.api_counts[api]-f.api_suppressed[api]);
             Eu4ScopeTree tree={.count=f.scopes.count,.flags=f.scopes.flags};
             memcpy(tree.nodes,f.scopes.nodes,f.scopes.count*sizeof(tree.nodes[0]));
             for(unsigned node=0;node<f.scopes.count;node++) {
@@ -361,11 +553,7 @@ static void *writer(void *unused) {
                 if(m>0 && (size_t)m<sizeof(line)) write_record(line,(size_t)m);
             } t++;
             atomic_store_explicit(&p->frame_queue.tail,t,memory_order_release);
-        }
-        uint64_t dt=atomic_load_explicit(&p->detail_queue.tail,memory_order_relaxed);
-        uint64_t dh=atomic_load_explicit(&p->detail_queue.head,memory_order_acquire);
-        pending|=dt<dh;
-        while(dt<dh) {
+            } else {
             DetailSlot *s=&p->details[dt%DETAIL_CAPACITY];
             char line[512];
             int n=snprintf(line,sizeof(line),"%c,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",s->kind,
@@ -379,13 +567,19 @@ static void *writer(void *unused) {
                 (unsigned long long)s->generation,(unsigned long long)s->window,(unsigned long long)s->context);
             if(n>0 && (size_t)n<sizeof(line)) write_record(line,(size_t)n); dt++;
             atomic_store_explicit(&p->detail_queue.tail,dt,memory_order_release);
+            }
+            p->consumed_sequence=expected;
         }
         }
         /* A stop observed before this drain orders all completed publications.
            Never exit using an empty snapshot taken before observing stop. */
+        bool failed=output_buffer.failed;
+        bool ok=eu4_writer_tick(&output_buffer,output_write,NULL,now_ns(CLOCK_UPTIME_RAW));
+        if(!failed) output_failure(ok);
         if(!running && !pending) break;
         struct timespec nap={0,1000000}; (void)nanosleep(&nap,NULL);
     }
+    flush_output();
     return NULL;
 }
 static void count_line(const char *kind,uint64_t a,uint64_t b,uint64_t c) {
@@ -404,85 +598,132 @@ static void hook_line(unsigned id) {
     if(n>0 && (size_t)n<sizeof(line)) write_record(line,(size_t)n);
 }
 static void detail_line(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64_t d) {
-    if(log_fd<0 || !kind || !kind[0]) return;
+    if(log_fd<0 || !kind || !kind[0] || !detail_kind_enabled(kind[0])) return;
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_detail_records,1,memory_order_relaxed);
+#endif
     Producer *p=producer(); uint64_t h;
     if(!p || !eu4_spsc_reserve(&p->detail_queue,DETAIL_CAPACITY,&h)) { atomic_fetch_add(&control->dropped_records,1); return; }
-    DetailSlot *s=&p->details[h%DETAIL_CAPACITY]; s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;
+    DetailSlot *s=&p->details[h%DETAIL_CAPACITY];s->publication_sequence=++p->publication_sequence;s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;
     s->e=s->f=s->g=s->h=s->i=s->j=s->k=s->l=0;
-    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=tid(); s->generation=frame_control.generation;
-    s->window=current_frame.sample_window; s->context=(uintptr_t)CGLGetCurrentContext();
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=detail_thread_id(p); s->generation=frame_control.generation;
+    s->window=current_frame.sample_window; s->context=detail_context_id();
     if(detail_gpu_origin) {
         s->epoch=detail_gpu_origin->epoch; s->update=detail_gpu_origin->update; s->phase=detail_gpu_origin->phase;
         s->thread=detail_gpu_origin->thread; s->generation=detail_gpu_origin->generation; s->window=detail_gpu_origin->window;
+        s->context=detail_gpu_origin->context;
     }
     eu4_spsc_publish(&p->detail_queue,h);
 }
 static void detail_line5(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64_t d,uint64_t e) {
-    if(log_fd<0 || !kind || !kind[0]) return;
+    if(log_fd<0 || !kind || !kind[0] || !detail_kind_enabled(kind[0])) return;
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_detail_records,1,memory_order_relaxed);
+#endif
     Producer *p=producer(); uint64_t h;
     if(!p || !eu4_spsc_reserve(&p->detail_queue,DETAIL_CAPACITY,&h)) { atomic_fetch_add(&control->dropped_records,1); return; }
-    DetailSlot *s=&p->details[h%DETAIL_CAPACITY]; s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;
+    DetailSlot *s=&p->details[h%DETAIL_CAPACITY];s->publication_sequence=++p->publication_sequence;s->kind=kind[0]; s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;
     s->f=s->g=s->h=s->i=s->j=s->k=s->l=0;
-    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=tid(); s->generation=frame_control.generation;
-    s->window=current_frame.sample_window; s->context=(uintptr_t)CGLGetCurrentContext();
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=detail_thread_id(p); s->generation=frame_control.generation;
+    s->window=current_frame.sample_window; s->context=detail_context_id();
     if(detail_gpu_origin) {
         s->epoch=detail_gpu_origin->epoch; s->update=detail_gpu_origin->update; s->phase=detail_gpu_origin->phase;
         s->thread=detail_gpu_origin->thread; s->generation=detail_gpu_origin->generation; s->window=detail_gpu_origin->window;
+        s->context=detail_gpu_origin->context;
     }
     eu4_spsc_publish(&p->detail_queue,h);
 }
 static void detail_line7(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64_t d,
                          uint64_t e,uint64_t f,uint64_t g) {
-    if(log_fd<0 || !kind || !kind[0]) return;
+    if(log_fd<0 || !kind || !kind[0] || !detail_kind_enabled(kind[0])) return;
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_detail_records,1,memory_order_relaxed);
+#endif
     Producer *p=producer(); uint64_t h;
     if(!p || !eu4_spsc_reserve(&p->detail_queue,DETAIL_CAPACITY,&h)) { atomic_fetch_add(&control->dropped_records,1); return; }
-    DetailSlot *s=&p->details[h%DETAIL_CAPACITY]; s->kind=kind[0];
+    DetailSlot *s=&p->details[h%DETAIL_CAPACITY];s->publication_sequence=++p->publication_sequence;s->kind=kind[0];
     s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;s->f=f;s->g=g;
     s->h=s->i=s->j=s->k=s->l=0;
-    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=tid(); s->generation=frame_control.generation;
-    s->window=current_frame.sample_window; s->context=(uintptr_t)CGLGetCurrentContext();
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=detail_thread_id(p); s->generation=frame_control.generation;
+    s->window=current_frame.sample_window; s->context=detail_context_id();
     if(detail_gpu_origin) {
         s->epoch=detail_gpu_origin->epoch; s->update=detail_gpu_origin->update; s->phase=detail_gpu_origin->phase;
         s->thread=detail_gpu_origin->thread; s->generation=detail_gpu_origin->generation; s->window=detail_gpu_origin->window;
+        s->context=detail_gpu_origin->context;
     }
     eu4_spsc_publish(&p->detail_queue,h);
 }
 static void detail_line12(const char *kind,uint64_t a,uint64_t b,uint64_t c,uint64_t d,
                           uint64_t e,uint64_t f,uint64_t g,uint64_t h,uint64_t i,
                           uint64_t j,uint64_t k,uint64_t l) {
-    if(log_fd<0 || !kind || !kind[0]) return;
+    if(log_fd<0 || !kind || !kind[0] || !detail_kind_enabled(kind[0])) return;
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_detail_records,1,memory_order_relaxed);
+#endif
     Producer *p=producer(); uint64_t head;
     if(!p || !eu4_spsc_reserve(&p->detail_queue,DETAIL_CAPACITY,&head)) { atomic_fetch_add(&control->dropped_records,1); return; }
-    DetailSlot *s=&p->details[head%DETAIL_CAPACITY]; s->kind=kind[0];
+    DetailSlot *s=&p->details[head%DETAIL_CAPACITY];s->publication_sequence=++p->publication_sequence;s->kind=kind[0];
     s->a=a;s->b=b;s->c=c;s->d=d;s->e=e;s->f=f;s->g=g;s->h=h;
     s->i=i;s->j=j;s->k=k;s->l=l;
-    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=tid(); s->generation=frame_control.generation;
-    s->window=current_frame.sample_window; s->context=(uintptr_t)CGLGetCurrentContext();
+    s->epoch=current_frame.measurement_epoch; s->update=current_frame.update_id; s->phase=current_frame.phase; s->thread=detail_thread_id(p); s->generation=frame_control.generation;
+    s->window=current_frame.sample_window; s->context=detail_context_id();
     if(detail_gpu_origin) {
         s->epoch=detail_gpu_origin->epoch; s->update=detail_gpu_origin->update; s->phase=detail_gpu_origin->phase;
         s->thread=detail_gpu_origin->thread; s->generation=detail_gpu_origin->generation; s->window=detail_gpu_origin->window;
+        s->context=detail_gpu_origin->context;
     }
     eu4_spsc_publish(&p->detail_queue,head);
 }
 static void timestamp_event(unsigned kind,uint64_t timestamp) {
-    if(!measurement_active()) return;
+    if(!measurement_active() || !(frame_control.flags&FORENSIC_CAPTURE) || !detail_active) return;
     detail_line12("E",current_frame.measurement_epoch,current_frame.update_id,
         current_frame.phase,kind,timestamp,current_frame.render_id,current_frame.present_id,0,0,0,0,0);
 }
 static VertexArrayState *vertex_state_for(CGLContextObj ctx,GLuint vao,bool create) {
-    for(unsigned i=0;i<vertex_array_count;i++)
-        if(vertex_arrays[i].used && vertex_arrays[i].context==ctx && vertex_arrays[i].vao==vao)
-            return &vertex_arrays[i];
-    if(!create || vertex_array_count>=64) return NULL;
-    VertexArrayState *state=&vertex_arrays[vertex_array_count++];
-    memset(state,0,sizeof(*state));state->used=true;state->context=ctx;state->vao=vao;
-    return state;
+    return eu4_shadow_vao(&gl_shadow,(uintptr_t)ctx,vao,create);
+}
+static void save_gl_state(void) {
+    if(!gl_shadow.active || frame_control.mode==OFF || frame_control.mode==REFERENCE) return;
+    gl_shadow.active->program=active_program;gl_shadow.active->array_buffer=bound_array_buffer;
+    if(vertex_array_state) gl_shadow.active->vao=vertex_array_state->vao;
+}
+static void invalidate_gl_state(unsigned reason) {
+    CGLContextObj ctx=CGLGetCurrentContext();
+    eu4_shadow_invalidate(&gl_shadow,(uintptr_t)ctx);gl_shadow.reason=reason;
+    state_seeded=false;vertex_array_state=NULL;
+    if(measurement_active()) {current_frame.flags|=2048;unowned_event();}
+}
+static bool shadow_cache_fresh(void) {
+    if(!state_stamp_pointer || !gl_shadow.active) return false;
+    return atomic_load_explicit(state_stamp_pointer,memory_order_acquire)==gl_shadow.active->stamp;
 }
 static void seed_gl_state(void) {
     CGLContextObj ctx=CGLGetCurrentContext();
-    if(!ctx || (state_seeded && state_context==ctx)) return;
+    if(!ctx) {state_seeded=false;vertex_array_state=NULL;current_frame.flags|=2048;return;}
+    if(state_seeded && state_context==ctx && state_stamp_pointer && gl_shadow.active &&
+       atomic_load_explicit(state_stamp_pointer,memory_order_acquire)==gl_shadow.active->stamp) return;
+    state_seeded=false;
+    bool forbid_prepare=measurement_active();
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_ablation==3) forbid_prepare=false;
+#endif
+    if(eu4_shadow_select(&gl_shadow,(uintptr_t)ctx,context_stamp(ctx,false),forbid_prepare)) {
+        Eu4ShadowContext *cached=gl_shadow.active;
+        active_program=cached->program;bound_array_buffer=cached->array_buffer;
+        vertex_array_state=gl_shadow.vertex;bound_element_buffer=vertex_array_state->element_buffer;
+        state_context=ctx;state_seeded=true;return;
+    }
+    state_seeded=false;vertex_array_state=NULL;
+    bool measured=measurement_active();
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_ablation==3) measured=false;
+#endif
+    if(measured || !gl_shadow.active) {current_frame.flags|=2048;return;}
     void (*get_integer)(GLenum,GLint *)=dlsym(RTLD_NEXT,"glGetIntegerv");
     if(!get_integer) { current_frame.flags|=2048; return; }
+#ifdef EU4_FRAME_MODEL_TEST
+    if(measurement_active()) test_measured_state_queries++;
+#endif
     GLint value=0,vao=0;
     get_integer(0x8B8D,&value); active_program=(GLuint)value;
     get_integer(0x8894,&value); bound_array_buffer=(GLuint)value;
@@ -505,7 +746,10 @@ static void seed_gl_state(void) {
         void *pointer=NULL;get_pointer(i,0x8645,&pointer);a->pointer=(uintptr_t)pointer;
     }
     bound_element_buffer=vertex_array_state->element_buffer;
-    state_context=ctx; state_seeded=true;
+    vertex_array_state->prepared=true;
+    gl_shadow.active->program=active_program;gl_shadow.active->array_buffer=bound_array_buffer;
+    gl_shadow.active->vao=(GLuint)vao;gl_shadow.active->prepared=true;gl_shadow.vertex=vertex_array_state;
+    gl_shadow.reason=0;state_context=ctx;state_seeded=true;
 }
 static uint64_t vertex_source_signature(void) {
     if(!vertex_array_state) return 0;
@@ -524,23 +768,41 @@ static uint64_t vertex_source_signature(void) {
 }
 static void draw_detail(uintptr_t caller,uint64_t api,GLenum mode,GLsizei count,
         GLenum type,uint64_t index_offset,uint64_t first,GLint base,GLsizei instances) {
+    if(!forensic_records_enabled()) return;
     seed_gl_state();
+    if(!state_seeded || !vertex_array_state || !vertex_array_state->prepared) {
+        current_frame.flags|=2048;return;
+    }
     detail_line12("D",current_frame.render_id,
         caller>=image_base?caller-image_base:0,api,(uintptr_t)active_program,
         vertex_source_signature(),bound_element_buffer,mode,(uint32_t)count,type,
         index_offset?index_offset:first,(uint32_t)base,(uint32_t)instances);
 }
-static uintptr_t gpu_context(void) { return (uintptr_t)CGLGetCurrentContext(); }
+static uintptr_t gpu_context(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_cached_metadata && detail_context_valid) return detail_context_cache;
+#endif
+    return (uintptr_t)CGLGetCurrentContext();
+}
 static bool gpu_initialize_queries(unsigned *ids,unsigned count) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(measurement_active()) test_measured_gpu_initializations++;
+#endif
     const GLubyte *version=glGetString(GL_VERSION);
     int major=0,minor=0;
     if(version) (void)sscanf((const char *)version,"%d.%d",&major,&minor);
-    const char *extensions=NULL;
-    if(major<3 || (major==3 && minor<3))
-        extensions=(const char *)glGetString(GL_EXTENSIONS);
-    if((major<3 || (major==3 && minor<3)) &&
-       !extension_has(extensions,"GL_ARB_timer_query") &&
-       !extension_has(extensions,"GL_EXT_timer_query")) return false;
+    bool timestamps=major>3 || (major==3 && minor>=3);
+    if(!timestamps && major>=3) {
+        const GLubyte *(*get_string_i)(GLenum,GLuint)=glGetStringi;
+        GLint count=0;glGetIntegerv(GL_NUM_EXTENSIONS,&count);
+        if(get_string_i) for(GLint i=0;i<count;i++) {
+            const char *ext=(const char *)get_string_i(GL_EXTENSIONS,(GLuint)i);
+            if(ext && !strcmp(ext,"GL_ARB_timer_query")) timestamps=true;
+        }
+    } else if(!timestamps) {
+        timestamps=extension_has((const char *)glGetString(GL_EXTENSIONS),"GL_ARB_timer_query");
+    }
+    if(!timestamps) return false;
     gpu_gen_queries=dlsym(RTLD_DEFAULT,"glGenQueries");
     gpu_query_counter=dlsym(RTLD_DEFAULT,"glQueryCounter");
     gpu_get_query_iv=dlsym(RTLD_DEFAULT,"glGetQueryObjectiv");
@@ -553,11 +815,22 @@ static bool gpu_initialize_queries(unsigned *ids,unsigned count) {
     for(unsigned i=0;i<count;i++) if(!ids[i]) return false;
     return true;
 }
-static void gpu_stamp(unsigned query) { gpu_query_counter(query,GL_TIMESTAMP_MODEL); }
+static void gpu_stamp(unsigned query) {
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_gpu_stamps,1,memory_order_relaxed);
+#endif
+    gpu_query_counter(query,GL_TIMESTAMP_MODEL);
+}
 static bool gpu_available(unsigned query) {
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_gpu_polls,1,memory_order_relaxed);
+#endif
     GLint ready=0; gpu_get_query_iv(query,GL_QUERY_AVAILABLE_MODEL,&ready); return ready!=0;
 }
 static uint64_t gpu_result(unsigned query) {
+#ifdef EU4_FRAME_MODEL_TEST
+    atomic_fetch_add_explicit(&test_gpu_results,1,memory_order_relaxed);
+#endif
     GLuint64 value=0; gpu_get_query_u64(query,GL_QUERY_RESULT_MODEL,&value); return value;
 }
 static void gpu_emit(Eu4GpuIdentity id,uint64_t start,uint64_t end,unsigned missing) {
@@ -568,17 +841,21 @@ static void gpu_emit(Eu4GpuIdentity id,uint64_t start,uint64_t end,unsigned miss
 }
 static Eu4GpuApi gpu_api={gpu_context,gpu_initialize_queries,gpu_stamp,gpu_available,gpu_result,gpu_emit};
 static void gpu_begin_render(void) {
+    if(!gpu_timestamps_enabled()) return;
     pthread_mutex_lock(&gpu_lock); gpu_manager.registry=&gpu_registry;
-    eu4_gpu_begin(&gpu_manager,&gpu_api,(Eu4GpuIdentity){.phase=current_frame.phase,
-        .render=current_frame.render_id,.epoch=current_frame.measurement_epoch,.update=current_frame.update_id,.thread=tid(),.generation=frame_control.generation,.window=current_frame.sample_window});
+    Eu4GpuIdentity identity={.phase=current_frame.phase,.render=current_frame.render_id,
+        .epoch=current_frame.measurement_epoch,.update=current_frame.update_id,
+        .thread=detail_thread_id(local_producer),.generation=frame_control.generation,
+        .window=current_frame.sample_window,.context=detail_context_id()};
+    eu4_gpu_begin(&gpu_manager,&gpu_api,identity);
     pthread_mutex_unlock(&gpu_lock);
 }
 static void gpu_map_marker(unsigned marker) {
-    if(!gpu_manager.rendering) return;
+    if(!gpu_timestamps_enabled() || !gpu_manager.rendering) return;
     pthread_mutex_lock(&gpu_lock); eu4_gpu_pass(&gpu_manager,&gpu_api,marker?0:1); pthread_mutex_unlock(&gpu_lock);
 }
 static void gpu_end_render(void) {
-    if(!gpu_manager.rendering) return;
+    if(!gpu_timestamps_enabled() || !gpu_manager.rendering) return;
     pthread_mutex_lock(&gpu_lock); eu4_gpu_end(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock);
 }
 static void uniform_snapshot(uint64_t site,uintptr_t program,GLint location,
@@ -649,17 +926,17 @@ static void hook_update(void *self,bool force) {
         real_update(self,force);
         return;
     }
+    note_mode_transition(frame_control.mode);
     inside_update=true;
     if(previous_period!=frame_control.update_period_ns || previous_mode!=frame_control.mode) {
         next_deadline=0; next_render_deadline=0;
     }
     bool measuring=measurement_active();
     scope_tree=(Eu4ScopeTree){0};
-    if(measuring && !was_measurement_active) {
-        state_seeded=false;vertex_array_state=NULL;
-    }
     if(!measuring && was_measurement_active) {
-        pthread_mutex_lock(&gpu_lock); eu4_gpu_drain(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock);
+        if(gpu_timestamps_enabled()) {
+            pthread_mutex_lock(&gpu_lock); eu4_gpu_drain(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock);
+        }
     }
     was_measurement_active=measuring;
     if(!measuring) current_frame=(Frame){0};
@@ -699,6 +976,11 @@ static void hook_update(void *self,bool force) {
         current_frame.cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-cpu;
         current_frame.end_ns=now_ns(CLOCK_UPTIME_RAW);
         eu4_scope_snapshot(&current_frame.scopes,&scope_tree);
+        if(current_frame.sample_window && state_stamp_pointer && gl_shadow.active &&
+           atomic_load_explicit(state_stamp_pointer,memory_order_acquire)!=gl_shadow.active->stamp) {
+            current_frame.flags|=2048;gl_shadow.reason=EU4_SHADOW_INVALIDATED;
+        }
+        current_frame.state_missing_reason=gl_shadow.reason?gl_shadow.reason:EU4_SHADOW_MISSING;
         ControlSnapshot after={0};
         if(snapshot_control(&after) && after.measurement_epoch==frame_control.measurement_epoch && after.mode==frame_control.mode &&
            (after.flags&MEASURE_ENABLED)) publish_frame(&current_frame);
@@ -739,17 +1021,49 @@ static void hook_render(void *self) {
             detail_active=false; return;
         }
     } else next_render_deadline=0;
+    if(mode==REFERENCE) {
+        if(measurement_active()) {
+            current_frame.render_executed++;
+            current_frame.render_start_ns=now_ns(CLOCK_UPTIME_RAW);
+            timestamp_event(3,current_frame.render_start_ns);
+        }
+        uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
+        int render_scope=scope_begin(SCOPE_RENDER);
+        real_render(self);
+        scope_end(SCOPE_RENDER,render_scope);
+        if(measurement_active()) {
+            current_frame.render_end_ns=now_ns(CLOCK_UPTIME_RAW);
+            current_frame.render_wall_ns=now_ns(CLOCK_UPTIME_RAW)-w;
+            current_frame.render_cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-c;
+            event(HOOK_RENDER,current_frame.render_wall_ns,current_frame.render_cpu_ns);
+        }
+        detail_active=false;
+        return;
+    }
     if(mode==OFF || !(frame_control.flags&INTERVENTION_ACTIVE)) { real_render(self); return; }
     if(detail_generation!=frame_control.generation) {
         detail_generation=frame_control.generation;
         detail_remaining=frame_control.detail_frames;
     }
-    detail_active=detail_remaining>0;
+    detail_active=measurement_active() && detail_remaining>0;
+    if(detail_active && (forensic_records_enabled() || gpu_timestamps_enabled()))
+        cache_current_detail_context();
     if(detail_active) { detail_remaining--; current_frame.sample_window=detail_generation; }
     bool skip=mode==SKIP_RENDER;
     if(skip) { detail_active=false; return; }
     if(measurement_active()) { current_frame.render_executed++; current_frame.render_start_ns=now_ns(CLOCK_UPTIME_RAW); timestamp_event(3,current_frame.render_start_ns); }
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
+    save_gl_state();state_seeded=false;seed_gl_state();
+    if(!measurement_active()) {
+        seed_gl_state();
+        pthread_mutex_lock(&gpu_lock);gpu_manager.registry=&gpu_registry;
+        eu4_gpu_prepare(&gpu_manager,&gpu_api);pthread_mutex_unlock(&gpu_lock);
+    }
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_ablation==3 && detail_active && measurement_active()) {
+        pthread_mutex_lock(&gpu_lock);eu4_gpu_prepare(&gpu_manager,&gpu_api);pthread_mutex_unlock(&gpu_lock);
+    }
+#endif
     if(detail_active && measurement_active()) gpu_begin_render();
     CGLContextObj render_context=NULL;
     static void (*enable)(GLenum)=glEnable; static void (*disable)(GLenum)=glDisable;
@@ -867,9 +1181,11 @@ static CGLError hooked_flush(CGLContextObj ctx) {
     auto_probe_swap(result);
     return result;
 }
+static void observe_draw_api(unsigned api,bool suppressed);
 static void gl_draw_elements(GLenum mode,GLsizei count,GLenum type,const void *indices) {
     static void (*real_fn)(GLenum,GLsizei,GLenum,const void *)=glDrawElements;
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices); return; }
+    observe_draw_api(1,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0) current_frame.indices+=(uint64_t)count;
     current_frame.triangles+=estimated_triangles(mode,count,1);
     if(detail_active) {
@@ -884,11 +1200,13 @@ static void gl_draw_elements(GLenum mode,GLsizei count,GLenum type,const void *i
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256; current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
-    if(measuring) event(HOOK_GL_DRAW,dw,dc);
+    current_frame.draw_wall_raw+=dw;current_frame.draw_cpu_raw+=dc;
+    if(measuring) gl_event(HOOK_GL_DRAW,dw,dc);
 }
 static void gl_draw_base(GLenum mode,GLsizei count,GLenum type,const void *indices,GLint base) {
     static void (*real_fn)(GLenum,GLsizei,GLenum,const void *,GLint)=glDrawElementsBaseVertex;
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,base); return; }
+    observe_draw_api(2,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0) current_frame.indices+=(uint64_t)count;
     current_frame.triangles+=estimated_triangles(mode,count,1);
     if(detail_active) {
@@ -904,11 +1222,13 @@ static void gl_draw_base(GLenum mode,GLsizei count,GLenum type,const void *indic
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256; current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
-    if(measuring) event(HOOK_GL_DRAW,dw,dc);
+    current_frame.draw_wall_raw+=dw;current_frame.draw_cpu_raw+=dc;
+    if(measuring) gl_event(HOOK_GL_DRAW,dw,dc);
 }
 static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
     static void (*real_fn)(GLenum,GLint,GLsizei)=glDrawArrays;
     if(!intervention_active()) { if(real_fn) real_fn(mode,first,count); return; }
+    observe_draw_api(3,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0) current_frame.indices+=(uint64_t)count;
     current_frame.triangles+=estimated_triangles(mode,count,1);
     if(detail_active) {
@@ -924,59 +1244,97 @@ static void gl_draw_arrays(GLenum mode,GLint first,GLsizei count) {
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256; current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
-    if(measuring) event(HOOK_GL_DRAW,dw,dc);
+    current_frame.draw_wall_raw+=dw;current_frame.draw_cpu_raw+=dc;
+    if(measuring) gl_event(HOOK_GL_DRAW,dw,dc);
 }
-static void gl_draw_elements_instanced(GLenum mode,GLsizei count,GLenum type,
-        const void *indices,GLsizei instances) {
-    static void (*real_fn)(GLenum,GLsizei,GLenum,const void *,GLsizei)=glDrawElementsInstanced;
+typedef void (*DrawElementsInstancedFn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
+typedef void (*DrawArraysInstancedFn)(GLenum,GLint,GLsizei,GLsizei);
+typedef void (*DrawElementsInstancedBaseFn)(GLenum,GLsizei,GLenum,const void *,GLsizei,GLint);
+static void mark_draw_forward_probe_failure(void) {
+    if(measurement_active()) {current_frame.flags|=2048;unowned_event();}
+}
+#ifdef EU4_FRAME_MODEL_TEST
+static DrawElementsInstancedFn test_elements_instanced_forward;
+static DrawArraysInstancedFn test_arrays_instanced_forward;
+static unsigned test_forward_core_hits;
+static void test_hit_core_arrays(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
+    (void)mode;(void)first;(void)count;(void)instances; test_forward_core_hits++;
+}
+static void test_hit_core_elements(GLenum mode,GLsizei count,GLenum type,const void *indices,GLsizei instances) {
+    (void)mode;(void)count;(void)type;(void)indices;(void)instances; test_forward_core_hits++;
+}
+#endif
+static void gl_draw_elements_instanced_with(DrawElementsInstancedFn real_fn,uintptr_t caller,GLenum mode,
+        GLsizei count,GLenum type,const void *indices,GLsizei instances) {
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,instances); return; }
+    observe_draw_api(4,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
-    if(detail_active) {
-        uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        draw_detail(caller,4,mode,count,type,(uintptr_t)indices,0,0,instances);
-    }
+    if(detail_active) draw_detail(caller,4,mode,count,type,(uintptr_t)indices,0,0,instances);
     bool measuring=measurement_active();
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
     uint32_t m=frame_control.mode;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
-    else { if(real_fn) real_fn(mode,count,type,indices,instances); current_frame.forwarded_draws++; }
+    else {
+#ifdef EU4_FRAME_MODEL_TEST
+        if(test_elements_instanced_forward) {
+            test_elements_instanced_forward(mode,count,type,indices,instances);
+            current_frame.forwarded_draws++;
+        } else if(real_fn) {
+            real_fn(mode,count,type,indices,instances);
+            current_frame.forwarded_draws++;
+        } else mark_draw_forward_probe_failure();
+#else
+        if(real_fn) { real_fn(mode,count,type,indices,instances); current_frame.forwarded_draws++; }
+        else mark_draw_forward_probe_failure();
+#endif
+    }
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256;current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
-    if(measuring) event(HOOK_GL_DRAW,dw,dc);
+    current_frame.draw_wall_raw+=dw;current_frame.draw_cpu_raw+=dc;
+    if(measuring) gl_event(HOOK_GL_DRAW,dw,dc);
 }
-static void gl_draw_arrays_instanced(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
-    static void (*real_fn)(GLenum,GLint,GLsizei,GLsizei)=glDrawArraysInstanced;
+static void gl_draw_arrays_instanced_with(DrawArraysInstancedFn real_fn,uintptr_t caller,GLenum mode,
+        GLint first,GLsizei count,GLsizei instances) {
     if(!intervention_active()) { if(real_fn) real_fn(mode,first,count,instances); return; }
+    observe_draw_api(5,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
-    if(detail_active) {
-        uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        draw_detail(caller,5,mode,count,0,0,(uint32_t)first,0,instances);
-    }
+    if(detail_active) draw_detail(caller,5,mode,count,0,0,(uint32_t)first,0,instances);
     bool measuring=measurement_active();
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
     uint32_t m=frame_control.mode;
     if(m==DROP_DRAWS) current_frame.suppressed_draws++;
-    else { if(real_fn) real_fn(mode,first,count,instances); current_frame.forwarded_draws++; }
+    else {
+#ifdef EU4_FRAME_MODEL_TEST
+        if(test_arrays_instanced_forward) {
+            test_arrays_instanced_forward(mode,first,count,instances);
+            current_frame.forwarded_draws++;
+        } else if(real_fn) {
+            real_fn(mode,first,count,instances);
+            current_frame.forwarded_draws++;
+        } else mark_draw_forward_probe_failure();
+#else
+        if(real_fn) { real_fn(mode,first,count,instances); current_frame.forwarded_draws++; }
+        else mark_draw_forward_probe_failure();
+#endif
+    }
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256;current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
-    if(measuring) event(HOOK_GL_DRAW,dw,dc);
+    current_frame.draw_wall_raw+=dw;current_frame.draw_cpu_raw+=dc;
+    if(measuring) gl_event(HOOK_GL_DRAW,dw,dc);
 }
-static void gl_draw_elements_instanced_base(GLenum mode,GLsizei count,GLenum type,
-        const void *indices,GLsizei instances,GLint base) {
-    static void (*real_fn)(GLenum,GLsizei,GLenum,const void *,GLsizei,GLint)=glDrawElementsInstancedBaseVertex;
+static void gl_draw_elements_instanced_base_with(DrawElementsInstancedBaseFn real_fn,uintptr_t caller,GLenum mode,GLsizei count,
+        GLenum type,const void *indices,GLsizei instances,GLint base) {
     if(!intervention_active()) { if(real_fn) real_fn(mode,count,type,indices,instances,base); return; }
+    observe_draw_api(6,frame_control.mode==DROP_DRAWS);
     current_frame.draws++; if(count>0 && instances>0) current_frame.indices+=(uint64_t)count*(uint64_t)instances;
     current_frame.triangles+=estimated_triangles(mode,count,instances>0?(uint64_t)instances:0);
-    if(detail_active) {
-        uintptr_t caller=(uintptr_t)__builtin_return_address(0);
-        draw_detail(caller,6,mode,count,type,(uintptr_t)indices,0,base,instances);
-    }
+    if(detail_active) draw_detail(caller,6,mode,count,type,(uintptr_t)indices,0,base,instances);
     bool measuring=measurement_active();
     bool timed=measuring && detail_active && (++draw_sample_seq&255u)==1u;
     uint64_t w=timed?now_ns(CLOCK_UPTIME_RAW):0,c=timed?now_ns(CLOCK_THREAD_CPUTIME_ID):0;
@@ -986,12 +1344,30 @@ static void gl_draw_elements_instanced_base(GLenum mode,GLsizei count,GLenum typ
     uint64_t dw=timed?now_ns(CLOCK_UPTIME_RAW)-w:0,dc=timed?now_ns(CLOCK_THREAD_CPUTIME_ID)-c:0;
     current_frame.draw_wall_ns+=dw*256;current_frame.draw_cpu_ns+=dc*256;
     if(timed) current_frame.draw_timed_samples++;
-    if(measuring) event(HOOK_GL_DRAW,dw,dc);
+    current_frame.draw_wall_raw+=dw;current_frame.draw_cpu_raw+=dc;
+    if(measuring) gl_event(HOOK_GL_DRAW,dw,dc);
+}
+static void gl_draw_elements_instanced(GLenum mode,GLsizei count,GLenum type,
+        const void *indices,GLsizei instances) {
+    static DrawElementsInstancedFn real_fn=glDrawElementsInstanced;
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+    gl_draw_elements_instanced_with(real_fn,caller,mode,count,type,indices,instances);
+}
+static void gl_draw_arrays_instanced(GLenum mode,GLint first,GLsizei count,GLsizei instances) {
+    static DrawArraysInstancedFn real_fn=glDrawArraysInstanced;
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+    gl_draw_arrays_instanced_with(real_fn,caller,mode,first,count,instances);
+}
+static void gl_draw_elements_instanced_base(GLenum mode,GLsizei count,GLenum type,
+        const void *indices,GLsizei instances,GLint base) {
+    static DrawElementsInstancedBaseFn real_fn=glDrawElementsInstancedBaseVertex;
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+    gl_draw_elements_instanced_base_with(real_fn,caller,mode,count,type,indices,instances,base);
 }
 static void gl_buffer_data(GLenum target,GLsizeiptr size,const void *data,GLenum usage) {
     static void (*real_fn)(GLenum,GLsizeiptr,const void *,GLenum)=glBufferData;
     if(!intervention_active()) { if(real_fn) real_fn(target,size,data,usage); return; }
-    event(HOOK_GL_UPLOAD,0,0);
+    gl_event(HOOK_GL_UPLOAD,0,0);
     current_frame.buffer_calls++; if(size>0) {
         current_frame.buffer_bytes+=(uint64_t)size;
         current_frame.buffer_storage_bytes+=(uint64_t)size;
@@ -1005,7 +1381,7 @@ static void gl_buffer_data(GLenum target,GLsizeiptr size,const void *data,GLenum
 static void gl_buffer_subdata(GLenum target,GLintptr offset,GLsizeiptr size,const void *data) {
     static void (*real_fn)(GLenum,GLintptr,GLsizeiptr,const void *)=glBufferSubData;
     if(!intervention_active()) { if(real_fn) real_fn(target,offset,size,data); return; }
-    event(HOOK_GL_UPLOAD,0,0);
+    gl_event(HOOK_GL_UPLOAD,0,0);
     current_frame.buffer_calls++; if(size>0) {
         current_frame.buffer_bytes+=(uint64_t)size;
         current_frame.buffer_upload_bytes+=(uint64_t)size;
@@ -1018,7 +1394,7 @@ static void gl_buffer_subdata(GLenum target,GLintptr offset,GLsizeiptr size,cons
 static void uniform_record(uintptr_t site,GLint location,const void *data,size_t bytes) {
     if(!intervention_active()) return;
     if(gl_measurement_active()) {
-        event(HOOK_GL_UNIFORM,0,0);
+        gl_event(HOOK_GL_UNIFORM,0,0);
         current_frame.uniform_calls++;
         current_frame.uniform_bytes+=bytes;
     }
@@ -1121,7 +1497,7 @@ DEFINE_UNIFORM_COMPONENTS_4(glUniform4i,GLint)
 static void gl_uniform1i(GLint location,GLint value) {
     static void (*real_fn)(GLint,GLint)=glUniform1i;
     if(gl_measurement_active()) {
-        event(HOOK_GL_UNIFORM,0,0); current_frame.uniform_calls++;
+        gl_event(HOOK_GL_UNIFORM,0,0); current_frame.uniform_calls++;
         current_frame.uniform_bytes+=sizeof(value);
         if(gl_measurement_active() && detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
@@ -1137,7 +1513,7 @@ static uint64_t state_pack3(uint64_t a,uint64_t b,uint64_t c) {
 }
 static void state_record(uintptr_t caller,uint64_t operation,uint64_t value) {
     if(!measurement_active()) return;
-    event(HOOK_GL_STATE,0,0); current_frame.state_calls++;
+    gl_event(HOOK_GL_STATE,0,0); current_frame.state_calls++;
     if(detail_active) detail_line("S",current_frame.render_id,
         caller>=image_base?caller-image_base:0,operation,value);
 }
@@ -1237,11 +1613,18 @@ static void gl_glBindFramebuffer(GLenum target,GLuint framebuffer) {
     if(real_fn) real_fn(target,framebuffer);
 }
 #undef DEFINE_STATE_ONE
+static bool shadow_tracking_active(void) {
+    if(!gl_shadow_needed()) {
+        if(!control || frame_control.mode==OFF) invalidate_gl_state(EU4_SHADOW_MUTATION);
+        return false;
+    }
+    return true;
+}
 static void gl_use_program(GLuint program) {
     static void (*real_fn)(GLuint)=glUseProgram;
-    if(intervention_active()) {
+    if(shadow_tracking_active()) {
         if(gl_measurement_active()) {
-            event(HOOK_GL_STATE,0,0);
+            gl_event(HOOK_GL_STATE,0,0);
             current_frame.state_calls++;
             if(active_program!=program) current_frame.program_switches++;
         }
@@ -1251,6 +1634,7 @@ static void gl_use_program(GLuint program) {
             detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,1,program);
         }
     }
+    save_gl_state();
     if(real_fn) real_fn(program);
 }
 typedef void (*UseProgramArbFn)(GLhandleARB);
@@ -1260,10 +1644,10 @@ void eu4_frame_model_forward_arb(GLhandleARB program,UseProgramArbFn forward) {
 static void gl_use_program_arb(GLhandleARB program) {
     static UseProgramArbFn real_fn;
     if(!real_fn) real_fn=glUseProgramObjectARB;
-    if(intervention_active()) {
+    if(shadow_tracking_active()) {
         uintptr_t handle=(uintptr_t)program;
         if(gl_measurement_active()) {
-            event(HOOK_GL_STATE,0,0); current_frame.state_calls++;
+            gl_event(HOOK_GL_STATE,0,0); current_frame.state_calls++;
             if(active_program!=handle) current_frame.program_switches++;
         }
         active_program=handle;
@@ -1273,12 +1657,13 @@ static void gl_use_program_arb(GLhandleARB program) {
                         6,handle);
         }
     }
+    save_gl_state();
     eu4_frame_model_forward_arb(program,real_fn);
 }
 static void gl_bind_buffer(GLenum target,GLuint buffer) {
     static void (*real_fn)(GLenum,GLuint)=glBindBuffer;
-    if(intervention_active()) {
-        if(gl_measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;current_frame.buffer_binds++;}
+    if(shadow_tracking_active()) {
+        if(gl_measurement_active()) {gl_event(HOOK_GL_STATE,0,0);current_frame.state_calls++;current_frame.buffer_binds++;}
         if(target==GL_ARRAY_BUFFER) bound_array_buffer=buffer;
         if(target==GL_ELEMENT_ARRAY_BUFFER) {
             bound_element_buffer=buffer;
@@ -1290,18 +1675,24 @@ static void gl_bind_buffer(GLenum target,GLuint buffer) {
                         ((uint64_t)target<<32)|buffer);
         }
     }
+    save_gl_state();
     if(real_fn) real_fn(target,buffer);
 }
 static void gl_bind_vertex_array(GLuint vao) {
     static void (*real_fn)(GLuint)=glBindVertexArray;
     if(real_fn) real_fn(vao);
-    if(!intervention_active()) return;
+    if(!shadow_tracking_active()) return;
     CGLContextObj ctx=CGLGetCurrentContext();
     vertex_array_state=vertex_state_for(ctx,vao,true);
     if(!vertex_array_state) {current_frame.flags|=2048;return;}
-    bound_element_buffer=vertex_array_state->element_buffer;
+    if(gl_shadow.active) gl_shadow.active->vao=vao;
+    if(!vertex_array_state->prepared || !shadow_cache_fresh()) {
+        state_seeded=false;seed_gl_state();
+        if(!vertex_array_state || !vertex_array_state->prepared) current_frame.flags|=2048;
+    }
+    bound_element_buffer=vertex_array_state?vertex_array_state->element_buffer:0;
     if(gl_measurement_active()) {
-        event(HOOK_GL_STATE,0,0);current_frame.state_calls++;
+        gl_event(HOOK_GL_STATE,0,0);current_frame.state_calls++;
         if(detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
             detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,7,vao);
@@ -1312,39 +1703,43 @@ static void gl_vertex_attrib_pointer(GLuint index,GLint size,GLenum type,
         GLboolean normalized,GLsizei stride,const void *pointer) {
     static void (*real_fn)(GLuint,GLint,GLenum,GLboolean,GLsizei,const void *)=glVertexAttribPointer;
     if(real_fn) real_fn(index,size,type,normalized,stride,pointer);
-    if(!intervention_active()) return;
+    if(!shadow_tracking_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
+    if(index>=32) invalidate_gl_state(EU4_SHADOW_MUTATION);
     if(vertex_array_state && index<32) {
         VertexAttribute *a=&vertex_array_state->attributes[index];
         *a=(VertexAttribute){.buffer=bound_array_buffer,.size=size,.type=type,
             .normalized=normalized,.stride=stride,.pointer=(uintptr_t)pointer,
             .divisor=a->divisor,.enabled=a->enabled};
     }
-    if(gl_measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {gl_event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
 }
 static void gl_enable_vertex_attrib(GLuint index) {
     static void (*real_fn)(GLuint)=glEnableVertexAttribArray;
     if(real_fn) real_fn(index);
-    if(!intervention_active()) return;
+    if(!shadow_tracking_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
+    if(index>=32) invalidate_gl_state(EU4_SHADOW_MUTATION);
     if(vertex_array_state && index<32) vertex_array_state->attributes[index].enabled=GL_TRUE;
-    if(gl_measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {gl_event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
 }
 static void gl_disable_vertex_attrib(GLuint index) {
     static void (*real_fn)(GLuint)=glDisableVertexAttribArray;
     if(real_fn) real_fn(index);
-    if(!intervention_active()) return;
+    if(!shadow_tracking_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
+    if(index>=32) invalidate_gl_state(EU4_SHADOW_MUTATION);
     if(vertex_array_state && index<32) vertex_array_state->attributes[index].enabled=GL_FALSE;
-    if(gl_measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {gl_event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
 }
 static void gl_vertex_attrib_divisor(GLuint index,GLuint divisor) {
     static void (*real_fn)(GLuint,GLuint)=glVertexAttribDivisor;
     if(real_fn) real_fn(index,divisor);
-    if(!intervention_active()) return;
+    if(!shadow_tracking_active()) return;
     if(!vertex_array_state || !state_seeded) seed_gl_state();
+    if(index>=32) invalidate_gl_state(EU4_SHADOW_MUTATION);
     if(vertex_array_state && index<32) vertex_array_state->attributes[index].divisor=divisor;
-    if(gl_measurement_active()) {event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {gl_event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
 }
 static void gl_tex_image_2d(GLenum target,GLint level,GLint internal,GLsizei width,
         GLsizei height,GLint border,GLenum format,GLenum type,const void *pixels) {
@@ -1352,7 +1747,7 @@ static void gl_tex_image_2d(GLenum target,GLint level,GLint internal,GLsizei wid
     if(!intervention_active()) {
         if(real_fn) real_fn(target,level,internal,width,height,border,format,type,pixels); return;
     }
-    event(HOOK_GL_UPLOAD,0,0);
+    gl_event(HOOK_GL_UPLOAD,0,0);
     current_frame.texture_calls++;
     if(width>0 && height>0) {
         unsigned bpp=(format==GL_RGBA?4:format==GL_RGB?3:format==0x190A?2:format==0x1909||format==GL_ALPHA?1:0);
@@ -1375,7 +1770,7 @@ static void gl_tex_sub_image_2d(GLenum target,GLint level,GLint x,GLint y,GLsize
     if(!intervention_active()) {
         if(real_fn) real_fn(target,level,x,y,width,height,format,type,pixels); return;
     }
-    event(HOOK_GL_UPLOAD,0,0);
+    gl_event(HOOK_GL_UPLOAD,0,0);
     current_frame.texture_calls++;
     if(width>0 && height>0) {
         unsigned bpp=(format==GL_RGBA?4:format==GL_RGB?3:format==0x190A?2:format==0x1909||format==GL_ALPHA?1:0);
@@ -1395,7 +1790,7 @@ static void gl_tex_sub_image_2d(GLenum target,GLint level,GLint x,GLint y,GLsize
 static void gl_bind_texture(GLenum target,GLuint texture) {
     static void (*real_fn)(GLenum,GLuint)=glBindTexture;
     if(gl_measurement_active()) {
-        event(HOOK_GL_STATE,0,0);
+        gl_event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++; current_frame.texture_binds++;
         if(detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
@@ -1408,7 +1803,7 @@ static void gl_bind_texture(GLenum target,GLuint texture) {
 static void gl_enable(GLenum cap) {
     static void (*real_fn)(GLenum)=glEnable;
     if(gl_measurement_active()) {
-        event(HOOK_GL_STATE,0,0);
+        gl_event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
         if(detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
@@ -1430,7 +1825,7 @@ static void gl_enable(GLenum cap) {
 static void gl_disable(GLenum cap) {
     static void (*real_fn)(GLenum)=glDisable;
     if(gl_measurement_active()) {
-        event(HOOK_GL_STATE,0,0);
+        gl_event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
         if(detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
@@ -1452,7 +1847,7 @@ static void gl_disable(GLenum cap) {
 static void gl_active_texture(GLenum unit) {
     static void (*real_fn)(GLenum)=glActiveTexture;
     if(gl_measurement_active()) {
-        event(HOOK_GL_STATE,0,0);
+        gl_event(HOOK_GL_STATE,0,0);
         current_frame.state_calls++;
         if(detail_active) {
             uintptr_t caller=(uintptr_t)__builtin_return_address(0);
@@ -1468,9 +1863,28 @@ static CGLError tracked_set_context(CGLContextObj ctx) {
     bool segment=gpu_manager.rendering;
     if(segment) { pthread_mutex_lock(&gpu_lock); eu4_gpu_close(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock); }
     CGLError result=real_fn?real_fn(ctx):kCGLBadContext;
+#ifdef EU4_FRAME_MODEL_TEST
+    if(result==kCGLNoError && test_cached_metadata) {
+        detail_context_cache=(uintptr_t)ctx; detail_context_valid=true;
+    }
+#else
+    if(result==kCGLNoError) {
+        detail_context_cache=(uintptr_t)ctx; detail_context_valid=true;
+    }
+#endif
     if(segment) { pthread_mutex_lock(&gpu_lock); eu4_gpu_open(&gpu_manager,&gpu_api); pthread_mutex_unlock(&gpu_lock); }
-    if(result==kCGLNoError && ctx!=state_context) {
-        state_seeded=false;vertex_array_state=NULL;
+    if(result==kCGLNoError) {
+        if(reference_pass_through_mode()) {
+            (void)context_stamp(ctx,false);
+            state_seeded=false;
+            vertex_array_state=NULL;
+            state_context=NULL;
+        } else {
+            save_gl_state();state_seeded=false;vertex_array_state=NULL;
+            /* A fresh core context may have no valid VAO yet. Queries wait for a
+               settling Render/VAO bind; measured switches only select cached state. */
+            if(measurement_active()) seed_gl_state();
+        }
     }
     if(result==kCGLNoError && raster_active && ctx) {
         bool found=false;
@@ -1502,9 +1916,14 @@ static CGLError tracked_destroy_context(CGLContextObj ctx) {
     if(closing) eu4_gpu_close(&gpu_manager,&gpu_api);
     CGLError result=real_fn?real_fn(ctx):kCGLBadContext;
     if(result==kCGLNoError) {
+#ifdef EU4_FRAME_MODEL_TEST
+        if(test_cached_metadata && detail_context_valid && detail_context_cache==(uintptr_t)ctx)
+            detail_context_valid=false;
+#else
+        if(detail_context_valid && detail_context_cache==(uintptr_t)ctx) detail_context_valid=false;
+#endif
         eu4_gpu_destroy(&gpu_manager,&gpu_api,(uintptr_t)ctx);
-        for(unsigned i=0;i<vertex_array_count;i++)
-            if(vertex_arrays[i].context==ctx) memset(&vertex_arrays[i],0,sizeof(vertex_arrays[i]));
+        (void)context_stamp(ctx,true);eu4_shadow_invalidate(&gl_shadow,(uintptr_t)ctx);
         if(state_context==ctx) {state_context=NULL;state_seeded=false;}
     }
     if(closing && result!=kCGLNoError) eu4_gpu_open(&gpu_manager,&gpu_api);
@@ -1517,15 +1936,152 @@ static CGLError tracked_destroy_context(CGLContextObj ctx) {
     return result;
 }
 
+static void observe_draw_api(unsigned api,bool suppressed) {
+    if(!gl_measurement_active()) return;
+    unowned_event();
+    /* Forwarded candidate forms have no complete D identity; display lists and
+       legacy submission may also mutate state inside the framework. */
+    if(api>6) invalidate_gl_state(EU4_SHADOW_MUTATION);
+    if(api<EU4_DRAW_API_CAPACITY) {current_frame.api_counts[api]++;if(suppressed) current_frame.api_suppressed[api]++;}
+}
+static void resolved_draw_api(unsigned api) {
+    detail_line12("Y",api,1,0,0,0,0,0,0,0,0,0,0);
+}
+#include "eu4_draw_observers.h"
+static bool submission_name(const char *name) {
+    return name && ((!strncmp(name,"glDraw",6) && strncmp(name,"glDrawBuffer",12)) ||
+        !strncmp(name,"glMultiDraw",11) || !strcmp(name,"glBegin") || !strcmp(name,"glEnd") ||
+        !strncmp(name,"glCallList",10) || !strncmp(name,"glRect",6) || !strncmp(name,"glEval",6) ||
+        !strncmp(name,"glArrayElement",14) || !strncmp(name,"glVertex2",9) ||
+        !strncmp(name,"glVertex3",9) || !strncmp(name,"glVertex4",9));
+}
+/* Deletions may affect shared objects and cached bindings in other contexts.
+   Invalidate ownership stamps without ever reading another thread's shadow. */
+static void invalidate_shared_shadows(void) {
+    pthread_mutex_lock(&shadow_lock);
+    for(unsigned i=0;i<64;i++) if(shadow_lifetimes[i].context) atomic_store_explicit(&shadow_lifetimes[i].stamp,++shadow_stamp,memory_order_release);
+    pthread_mutex_unlock(&shadow_lock);
+    memset(&gl_shadow,0,sizeof(gl_shadow));invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glDeleteBuffers(GLsizei n,const GLuint *objects);
+static void mutation_glDeleteBuffers(GLsizei n,const GLuint *objects) {
+    glDeleteBuffers(n,objects);
+    invalidate_shared_shadows();
+}
+extern void glDeleteVertexArrays(GLsizei n,const GLuint *objects);
+static void mutation_glDeleteVertexArrays(GLsizei n,const GLuint *objects) {
+    glDeleteVertexArrays(n,objects);
+    invalidate_shared_shadows();
+}
+extern void glDeleteProgram(GLuint program);
+static void mutation_glDeleteProgram(GLuint program) {
+    glDeleteProgram(program);
+    invalidate_shared_shadows();
+}
+extern void glVertexAttribIPointer(GLuint index,GLint size,GLenum type,GLsizei stride,const void *pointer);
+static void mutation_glVertexAttribIPointer(GLuint index,GLint size,GLenum type,GLsizei stride,const void *pointer) {
+    glVertexAttribIPointer(index,size,type,stride,pointer);
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glVertexPointer(GLint size,GLenum type,GLsizei stride,const void *pointer);
+static void mutation_glVertexPointer(GLint size,GLenum type,GLsizei stride,const void *pointer) {
+    glVertexPointer(size,type,stride,pointer);
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glColorPointer(GLint size,GLenum type,GLsizei stride,const void *pointer);
+static void mutation_glColorPointer(GLint size,GLenum type,GLsizei stride,const void *pointer) {
+    glColorPointer(size,type,stride,pointer);
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glNormalPointer(GLenum type,GLsizei stride,const void *pointer);
+static void mutation_glNormalPointer(GLenum type,GLsizei stride,const void *pointer) {
+    glNormalPointer(type,stride,pointer);
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glTexCoordPointer(GLint size,GLenum type,GLsizei stride,const void *pointer);
+static void mutation_glTexCoordPointer(GLint size,GLenum type,GLsizei stride,const void *pointer) {
+    glTexCoordPointer(size,type,stride,pointer);
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glEnableClientState(GLenum array);
+static void mutation_glEnableClientState(GLenum array) {
+    glEnableClientState(array);
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glDisableClientState(GLenum array);
+static void mutation_glDisableClientState(GLenum array) {
+    glDisableClientState(array);
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glInterleavedArrays(GLenum format,GLsizei stride,const void *pointer);
+static void mutation_glInterleavedArrays(GLenum format,GLsizei stride,const void *pointer) {
+    glInterleavedArrays(format,stride,pointer);
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glPushClientAttrib(GLbitfield mask);
+static void mutation_glPushClientAttrib(GLbitfield mask) {
+    glPushClientAttrib(mask);
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glPopClientAttrib(void);
+static void mutation_glPopClientAttrib(void) {
+    glPopClientAttrib();
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glPushAttrib(GLbitfield mask);
+static void mutation_glPushAttrib(GLbitfield mask) {
+    glPushAttrib(mask);
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glPopAttrib(void);
+static void mutation_glPopAttrib(void) {
+    glPopAttrib();
+    invalidate_gl_state(EU4_SHADOW_MUTATION);
+}
+extern void glDeleteBuffersARB(GLsizei n,const GLuint *objects);
+static void mutation_glDeleteBuffersARB(GLsizei n,const GLuint *objects) {
+    glDeleteBuffersARB(n,objects);
+    invalidate_shared_shadows();
+}
+extern void glDeleteVertexArraysAPPLE(GLsizei n,const GLuint *objects);
+static void mutation_glDeleteVertexArraysAPPLE(GLsizei n,const GLuint *objects) {
+    glDeleteVertexArraysAPPLE(n,objects);
+    invalidate_shared_shadows();
+}
+extern void glDeleteObjectARB(GLhandleARB object);
+static void mutation_glDeleteObjectARB(GLhandleARB object) {
+    glDeleteObjectARB(object);
+    invalidate_shared_shadows();
+}
 static void *tracked_dlsym(void *handle,const char *name) {
     void *original=dlsym(handle,name);
-    if(!name || !original) return original;
-    if(!strcmp(name,"glDrawElementsBaseVertex") || !strcmp(name,"glDrawElementsBaseVertexARB")) return gl_draw_base;
-    if(!strcmp(name,"glDrawElements") || !strcmp(name,"glDrawElementsEXT")) return gl_draw_elements;
-    if(!strcmp(name,"glDrawArrays")) return gl_draw_arrays;
-    if(!strcmp(name,"glDrawElementsInstanced") || !strcmp(name,"glDrawElementsInstancedARB")) return gl_draw_elements_instanced;
-    if(!strcmp(name,"glDrawArraysInstanced") || !strcmp(name,"glDrawArraysInstancedARB")) return gl_draw_arrays_instanced;
-    if(!strcmp(name,"glDrawElementsInstancedBaseVertex")) return gl_draw_elements_instanced_base;
+    if(!name) return original;
+    if(!original) {
+        if(submission_name(name)) detail_line12("R",hash_bytes(name,strlen(name)),2,0,0,0,0,0,0,0,0,0,0);
+        return original;
+    }
+    void *observed=draw_observer_resolve(name);if(observed) return observed;
+    if(submission_name(name)) detail_line12("R",hash_bytes(name,strlen(name)),1,0,0,0,0,0,0,0,0,0,0);
+    if(!strcmp(name,"glDeleteBuffersARB")) return mutation_glDeleteBuffersARB;
+    if(!strcmp(name,"glDeleteVertexArraysAPPLE")) return mutation_glDeleteVertexArraysAPPLE;
+    if(!strcmp(name,"glDeleteObjectARB")) return mutation_glDeleteObjectARB;
+    if(!strcmp(name,"glDeleteBuffers")) return mutation_glDeleteBuffers;
+    if(!strcmp(name,"glDeleteVertexArrays")) return mutation_glDeleteVertexArrays;
+    if(!strcmp(name,"glDeleteProgram")) return mutation_glDeleteProgram;
+    if(!strcmp(name,"glVertexAttribIPointer")) return mutation_glVertexAttribIPointer;
+    if(!strcmp(name,"glVertexPointer")) return mutation_glVertexPointer;
+    if(!strcmp(name,"glColorPointer")) return mutation_glColorPointer;
+    if(!strcmp(name,"glNormalPointer")) return mutation_glNormalPointer;
+    if(!strcmp(name,"glTexCoordPointer")) return mutation_glTexCoordPointer;
+    if(!strcmp(name,"glEnableClientState")) return mutation_glEnableClientState;
+    if(!strcmp(name,"glDisableClientState")) return mutation_glDisableClientState;
+    if(!strcmp(name,"glInterleavedArrays")) return mutation_glInterleavedArrays;
+    if(!strcmp(name,"glPushClientAttrib")) return mutation_glPushClientAttrib;
+    if(!strcmp(name,"glPopClientAttrib")) return mutation_glPopClientAttrib;
+    if(!strcmp(name,"glPushAttrib")) return mutation_glPushAttrib;
+    if(!strcmp(name,"glPopAttrib")) return mutation_glPopAttrib;
+    if(!strcmp(name,"CGLSetCurrentContext")) return tracked_set_context;
+    if(!strcmp(name,"CGLDestroyContext")) return tracked_destroy_context;
     if(!strcmp(name,"glBufferData") || !strcmp(name,"glBufferDataARB")) return gl_buffer_data;
     if(!strcmp(name,"glBufferSubData") || !strcmp(name,"glBufferSubDataARB")) return gl_buffer_subdata;
     if(!strcmp(name,"glUniform4fv") || !strcmp(name,"glUniform4fvARB")) return gl_uniform4fv;
@@ -1608,14 +2164,170 @@ static void test_idle(void *self,bool force) {
 static void test_update(void *self,bool force) {
     test_expect(self==&test_self && force); hook_idle(self,false);
 }
+__attribute__((visibility("default"))) uint64_t eu4_frame_model_test_measured_queries(void) {
+    return test_measured_state_queries+test_measured_gpu_initializations;
+}
+__attribute__((visibility("default"))) void *eu4_frame_model_test_resolve_draw(const char *name) {
+    return draw_observer_resolve(name);
+}
+void eu4_frame_model_test_reset_draw_alias(void);
+void eu4_frame_model_test_arm_draw_alias(unsigned mode);
+void eu4_frame_model_test_invoke_draw_alias(const char *name);
+__attribute__((visibility("default"))) int eu4_frame_model_test_verify_arb_instanced_interpose(void) {
+    void *arrays_arb=draw_observer_resolve("glDrawArraysInstancedARB");
+    void *arrays_core=draw_observer_resolve("glDrawArraysInstanced");
+    void *elements_arb=draw_observer_resolve("glDrawElementsInstancedARB");
+    void *elements_core=draw_observer_resolve("glDrawElementsInstanced");
+    if(arrays_arb) {
+        fprintf(stderr,"glDrawArraysInstancedARB: unexpected profiler wrapper %p\n",arrays_arb);
+        return 1;
+    }
+    if(elements_arb) {
+        fprintf(stderr,"glDrawElementsInstancedARB: unexpected profiler wrapper %p\n",elements_arb);
+        return 2;
+    }
+    if(!arrays_core||!elements_core) {
+        fprintf(stderr,"core instanced wrappers missing: arrays=%p elements=%p\n",arrays_core,elements_core);
+        return 3;
+    }
+    return 0;
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_reset_draw_alias(void) {
+    memset(&current_frame,0,sizeof(current_frame));
+    test_forward_core_hits=0;
+    test_arrays_instanced_forward=NULL;
+    test_elements_instanced_forward=NULL;
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_arm_draw_alias(unsigned mode) {
+    frame_control.mode=mode;
+    frame_control.flags=INTERVENTION_ACTIVE|MEASURE_ENABLED;
+    frame_control.phase=4;
+    frame_control.measurement_epoch=7;
+    frame_control.generation=2;
+    if(control && control!=MAP_FAILED)
+        observed_command_seq=atomic_load_explicit(&control->command_seq,memory_order_relaxed);
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_set_draw_alias_stub(unsigned ignored) {
+    (void)ignored;
+    test_forward_core_hits=0;
+    test_arrays_instanced_forward=test_hit_core_arrays;
+    test_elements_instanced_forward=test_hit_core_elements;
+}
+__attribute__((visibility("default"))) unsigned eu4_frame_model_test_draw_alias_forward_hits(unsigned ignored) {
+    (void)ignored;
+    return test_forward_core_hits;
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_invoke_draw_alias(const char *name) {
+    void *resolved=draw_observer_resolve(name);
+    if(!resolved) return;
+    if(!strcmp(name,"glDrawElementsInstanced")) {
+        typedef void (*ElementsFn)(GLenum,GLsizei,GLenum,const void *,GLsizei);
+        ((ElementsFn)resolved)(GL_TRIANGLES,6,GL_UNSIGNED_INT,(const void *)(uintptr_t)0x10,2);
+        return;
+    }
+    typedef void (*ArraysFn)(GLenum,GLint,GLsizei,GLsizei);
+    ((ArraysFn)resolved)(GL_TRIANGLES,0,6,2);
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_read_draw_alias_stats(unsigned api_id,uint64_t *draws,
+        uint64_t *suppressed,uint64_t *forwarded,uint64_t *api_count,uint64_t *api_suppressed) {
+    *draws=current_frame.draws;
+    *suppressed=current_frame.suppressed_draws;
+    *forwarded=current_frame.forwarded_draws;
+    *api_count=current_frame.api_counts[api_id];
+    *api_suppressed=current_frame.api_suppressed[api_id];
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_emit_records(unsigned count) {
+    test_expect(snapshot_control(&frame_control));
+    event(HOOK_GL_STATE,0,0); /* Independent unknown-origin production. */
+    inside_update=true;
+    for(unsigned i=0;i<count;i++) {
+        uint64_t update=atomic_fetch_add(&updates,1)+1;
+        current_frame=(Frame){.update_id=update,.phase=frame_control.phase,.thread_id=tid(),
+            .measurement_epoch=frame_control.measurement_epoch,.generation=frame_control.generation};
+        detail_line12("J",update,i,0,0,0,0,0,0,0,0,0,0);
+        publish_frame(&current_frame);
+    }
+    inside_update=false;current_frame=(Frame){0};
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_reset_published_frame_count(void) {
+    atomic_store(&test_published_frames,0);
+}
+__attribute__((visibility("default"))) unsigned eu4_frame_model_test_published_frame_count(void) {
+    return atomic_load(&test_published_frames);
+}
+__attribute__((visibility("default"))) unsigned eu4_frame_model_test_state_seeded(void) {
+    return state_seeded?1u:0u;
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_apply_mode(unsigned mode) {
+    refresh_unowned_control();
+    frame_control.mode=mode;
+    note_mode_transition(mode);
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_simulate_seeded_shadow(void) {
+    CGLContextObj ctx=CGLGetCurrentContext();
+    for(unsigned i=0;i<EU4_SHADOW_CONTEXTS;i++) {
+        if(gl_shadow.contexts[i].context==(uintptr_t)ctx) {
+            gl_shadow.contexts[i].prepared=true;
+            gl_shadow.contexts[i].program=1;
+            gl_shadow.active=&gl_shadow.contexts[i];
+            state_seeded=true;
+            state_context=ctx;
+            return;
+        }
+        if(!gl_shadow.contexts[i].context) {
+            gl_shadow.contexts[i]=(Eu4ShadowContext){.context=(uintptr_t)ctx,.stamp=1,.prepared=true,.program=1};
+            gl_shadow.active=&gl_shadow.contexts[i];
+            state_seeded=true;
+            state_context=ctx;
+            return;
+        }
+    }
+}
+__attribute__((visibility("default"))) unsigned eu4_frame_model_test_cached_shadow_contexts(void) {
+    unsigned count=0;
+    for(unsigned i=0;i<EU4_SHADOW_CONTEXTS;i++)
+        if(gl_shadow.contexts[i].context) count++;
+    return count;
+}
+__attribute__((visibility("default"))) void eu4_frame_model_test_touch_shadow_vao(unsigned vao) {
+    refresh_unowned_control();
+    gl_bind_vertex_array(vao);
+}
+__attribute__((visibility("default"))) uint64_t eu4_frame_model_test_lifetime_stamp(uintptr_t context) {
+    uint64_t stamp=0;
+    pthread_mutex_lock(&shadow_lock);
+    for(unsigned i=0;i<64;i++) {
+        ShadowLifetime *l=&shadow_lifetimes[i];
+        if(l->context==context) {
+            stamp=atomic_load_explicit(&l->stamp,memory_order_acquire);
+            break;
+        }
+    }
+    pthread_mutex_unlock(&shadow_lock);
+    return stamp;
+}
+__attribute__((visibility("default"))) uintptr_t eu4_frame_model_test_tls_shadow_program(uintptr_t context) {
+    for(unsigned i=0;i<EU4_SHADOW_CONTEXTS;i++) {
+        Eu4ShadowContext *c=&gl_shadow.contexts[i];
+        if(c->context==context && c->prepared) return c->program;
+    }
+    return 0;
+}
 __attribute__((visibility("default"))) unsigned eu4_frame_model_test_observe_unowned(void) {
     bool active=intervention_active(),measuring=measurement_active();
-    event(HOOK_GL_STATE,0,0);
+    gl_event(HOOK_GL_STATE,0,0);
     return (active?frame_control.mode:0u)|(measuring?256u:0u);
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_arm(unsigned frames) {
+    if(test_ablation==3) {
+        invalidate_gl_state(EU4_SHADOW_MUTATION);
+        pthread_mutex_lock(&gpu_lock);memset(&gpu_registry,0,sizeof(gpu_registry));pthread_mutex_unlock(&gpu_lock);
+    }
     atomic_store_explicit(&control->command_seq,3,memory_order_release);
-    control->flags|=MEASURE_ENABLED; control->detail_frames=frames;
+    control->flags|=MEASURE_ENABLED;
+    if(frames) control->flags|=FORENSIC_CAPTURE;
+    else control->flags&=~FORENSIC_CAPTURE;
+    control->detail_frames=frames;
     control->generation=2; control->measurement_epoch=1;
     atomic_store_explicit(&control->command_seq,4,memory_order_release);
 }
@@ -1627,7 +2339,24 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_frame(void (*wo
 #endif
 
 static void initialize(void) __attribute__((constructor));
+#ifdef EU4_FRAME_MODEL_TEST
+static bool test_read_toggle(const char *name,bool fallback,bool *value) {
+    const char *raw=getenv(name);
+    if(!raw) { *value=fallback; return true; }
+    if(!strcmp(raw,"0")) { *value=false; return true; }
+    if(!strcmp(raw,"1")) { *value=true; return true; }
+    return false;
+}
+#endif
 static void initialize(void) {
+#ifdef EU4_FRAME_MODEL_TEST
+    const char *ablation=getenv("EU4_TEST_ABLATION");
+    test_ablation=ablation && !strcmp(ablation,"accounting")?1:ablation && !strcmp(ablation,"writer")?2:
+        ablation && !strcmp(ablation,"preparation")?3:0;
+    if(!test_read_toggle("EU4_TEST_GPU_TIMESTAMPS",true,&test_gpu_timestamps) ||
+       !test_read_toggle("EU4_TEST_FORENSIC_RECORDS",true,&test_forensic_records) ||
+       !test_read_toggle("EU4_TEST_CACHED_METADATA",false,&test_cached_metadata)) abort();
+#endif
     const char *path=getenv("EU4_FRAME_MODEL_CONTROL");
     if(path) { int fd=open(path,O_RDWR); if(fd>=0) { control=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0); close(fd); } }
     const char *log=getenv("EU4_FRAME_MODEL_LOG");
@@ -1664,6 +2393,7 @@ static void initialize(void) {
     install_one(6,hook_append,(void **)&real_append);
     if(atomic_load(&control->hook_failures)) { restore_detours(); return; }
     count_line("Z",atomic_load(&control->hook_failures),EU4_HOOK_COUNT,atomic_load(&control->dropped_records));
+    flush_output();
     atomic_store(&writer_running,1);
     writer_started=pthread_create(&writer_thread,NULL,writer,NULL)==0;
     if(!writer_started) { atomic_fetch_add(&control->hook_failures,1); restore_detours(); }
@@ -1678,7 +2408,13 @@ static void shutdown_probe(void) {
     restore_detours();
     for(unsigned i=0;i<HOOK_COUNT;i++) hook_line(i);
     count_line("X",atomic_load(&updates),atomic_load(&renders),atomic_load(&presents));
+#ifdef EU4_FRAME_MODEL_TEST
+    count_line("M",atomic_load(&test_gpu_stamps),atomic_load(&test_gpu_polls),atomic_load(&test_gpu_results));
+    count_line("N",atomic_load(&test_detail_records),0,0);
+#endif
     count_line("Z",atomic_load(&control->hook_failures),EU4_HOOK_COUNT,atomic_load(&control->dropped_records));
+    flush_output();
+    if(log_fd>=0) close(log_fd);
     if(auto_log_fd>=0) close(auto_log_fd);
 }
 
@@ -1686,12 +2422,25 @@ __attribute__((used,section("__DATA,__interpose")))
 static const struct { const void *replacement,*replacee; } interposes[]={
     {(const void *)tracked_dlsym,(const void *)dlsym},
     {(const void *)hooked_flush,(const void *)CGLFlushDrawable},
-    {(const void *)gl_draw_elements,(const void *)glDrawElements},
-    {(const void *)gl_draw_base,(const void *)glDrawElementsBaseVertex},
-    {(const void *)gl_draw_arrays,(const void *)glDrawArrays},
-    {(const void *)gl_draw_elements_instanced,(const void *)glDrawElementsInstanced},
-    {(const void *)gl_draw_arrays_instanced,(const void *)glDrawArraysInstanced},
-    {(const void *)gl_draw_elements_instanced_base,(const void *)glDrawElementsInstancedBaseVertex},
+    {(const void *)mutation_glDeleteBuffers,(const void *)glDeleteBuffers},
+    {(const void *)mutation_glDeleteVertexArrays,(const void *)glDeleteVertexArrays},
+    {(const void *)mutation_glDeleteProgram,(const void *)glDeleteProgram},
+    {(const void *)mutation_glVertexAttribIPointer,(const void *)glVertexAttribIPointer},
+    {(const void *)mutation_glVertexPointer,(const void *)glVertexPointer},
+    {(const void *)mutation_glColorPointer,(const void *)glColorPointer},
+    {(const void *)mutation_glNormalPointer,(const void *)glNormalPointer},
+    {(const void *)mutation_glTexCoordPointer,(const void *)glTexCoordPointer},
+    {(const void *)mutation_glEnableClientState,(const void *)glEnableClientState},
+    {(const void *)mutation_glDisableClientState,(const void *)glDisableClientState},
+    {(const void *)mutation_glInterleavedArrays,(const void *)glInterleavedArrays},
+    {(const void *)mutation_glPushClientAttrib,(const void *)glPushClientAttrib},
+    {(const void *)mutation_glPopClientAttrib,(const void *)glPopClientAttrib},
+    {(const void *)mutation_glPushAttrib,(const void *)glPushAttrib},
+    {(const void *)mutation_glPopAttrib,(const void *)glPopAttrib},
+    {(const void *)mutation_glDeleteBuffersARB,(const void *)glDeleteBuffersARB},
+    {(const void *)mutation_glDeleteVertexArraysAPPLE,(const void *)glDeleteVertexArraysAPPLE},
+    {(const void *)mutation_glDeleteObjectARB,(const void *)glDeleteObjectARB},
+    EU4_DRAW_OBSERVER_INTERPOSES
     {(const void *)gl_buffer_data,(const void *)glBufferData},
     {(const void *)gl_buffer_subdata,(const void *)glBufferSubData},
     {(const void *)gl_uniform4fv,(const void *)glUniform4fv},
