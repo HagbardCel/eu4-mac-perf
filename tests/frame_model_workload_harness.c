@@ -59,7 +59,7 @@ int main(int argc,char **argv) {
     if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE) return 10;
     glViewport(0,0,64,64);
     void (*frame)(void (*)(void))=dlsym(RTLD_DEFAULT,"eu4_frame_model_test_frame");
-    unsigned frames=(unsigned)strtoul(argv[2],NULL,10);if(frames<4 || frames>60) return 1;
+    unsigned frames=(unsigned)strtoul(argv[2],NULL,10);if(frames<4 || frames>500) return 1;
     uint64_t preparation_cpu=now(CLOCK_THREAD_CPUTIME_ID),preparation_wall=now(CLOCK_UPTIME_RAW);
     if(frame) frame(workload);else workload();
     preparation_wall=now(CLOCK_UPTIME_RAW)-preparation_wall;

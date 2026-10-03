@@ -224,6 +224,7 @@ static inline bool test_passive_reference_hooks(void) {
 }
 static uint64_t test_measured_state_queries,test_measured_gpu_initializations;
 static bool test_gpu_timestamps=true,test_forensic_records=true,test_cached_metadata=false;
+static bool test_counters_lite,test_counters_deferred_flush;
 static _Atomic uint64_t test_gpu_stamps,test_gpu_polls,test_gpu_results,test_detail_records;
 #endif
 
@@ -356,7 +357,7 @@ static int scope_begin(unsigned id) {
         atomic_fetch_add(&test_loaded_disabled_accounting_ns_calls,1);
         return 0;
     }
-    if(test_minimal_reference) return 0;
+    if(test_minimal_reference || test_counters_lite) return 0;
 #endif
     if(!measurement_active() || (frame_control.mode==REFERENCE && id!=SCOPE_UPDATE &&
         id!=SCOPE_LOOP && id!=SCOPE_RENDER && id!=SCOPE_PRESENT)) return 0;
@@ -501,7 +502,11 @@ static void publish_frame(Frame *f) {
         p->counts[HOOK_GL_UPLOAD]+=f->buffer_calls+f->texture_calls;
         p->counts[HOOK_GL_UNIFORM]+=f->uniform_calls;p->counts[HOOK_GL_STATE]+=f->state_calls;
     }
+#ifdef EU4_FRAME_MODEL_TEST
+    if(!test_counters_deferred_flush) flush_counters();
+#else
     flush_counters();
+#endif
     if(!p || !eu4_spsc_reserve(&p->frame_queue,FRAME_CAPACITY,&h)) {
         f->flags|=1; atomic_fetch_add(&control->dropped_records,1); return;
     }
@@ -1115,7 +1120,11 @@ static void hook_update(void *self,bool force) {
         current_frame.wall_ns=now_ns(CLOCK_UPTIME_RAW)-start;
         current_frame.cpu_ns=now_ns(CLOCK_THREAD_CPUTIME_ID)-cpu;
         current_frame.end_ns=now_ns(CLOCK_UPTIME_RAW);
+#ifdef EU4_FRAME_MODEL_TEST
+        if(!test_counters_lite) eu4_scope_snapshot(&current_frame.scopes,&scope_tree);
+#else
         eu4_scope_snapshot(&current_frame.scopes,&scope_tree);
+#endif
         if(current_frame.sample_window && state_stamp_pointer && gl_shadow.active &&
            atomic_load_explicit(state_stamp_pointer,memory_order_acquire)!=gl_shadow.active->stamp) {
             current_frame.flags|=2048;gl_shadow.reason=EU4_SHADOW_INVALIDATED;
@@ -2551,8 +2560,11 @@ static void initialize(void) {
        !test_read_toggle("EU4_TEST_MINIMAL_REFERENCE",false,&test_minimal_reference) ||
        !test_read_toggle("EU4_TEST_GPU_TIMESTAMPS",true,&test_gpu_timestamps) ||
        !test_read_toggle("EU4_TEST_FORENSIC_RECORDS",true,&test_forensic_records) ||
-       !test_read_toggle("EU4_TEST_CACHED_METADATA",false,&test_cached_metadata)) abort();
+       !test_read_toggle("EU4_TEST_CACHED_METADATA",false,&test_cached_metadata) ||
+       !test_read_toggle("EU4_TEST_COUNTERS_LITE",false,&test_counters_lite) ||
+       !test_read_toggle("EU4_TEST_COUNTERS_DEFERRED_FLUSH",false,&test_counters_deferred_flush)) abort();
     if(test_loaded_disabled && test_minimal_reference) abort();
+    if(test_counters_deferred_flush && !test_counters_lite) abort();
 #endif
     const char *path=getenv("EU4_FRAME_MODEL_CONTROL");
     if(path) { int fd=open(path,O_RDWR); if(fd>=0) { control=mmap(NULL,4096,PROT_READ|PROT_WRITE,MAP_SHARED,fd,0); close(fd); } }

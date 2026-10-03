@@ -105,3 +105,5 @@ v3 did not pass fresh training requalification: **mesh counters CPU failed**; **
 2. **text_ui completion-wall (measurement problem):** Do not optimize the profiler from these gates. Either design a more stable completion-wall measurement for tiny workloads or revise policy in a **new version** — do not silently reinterpret frozen v3.
 
 Do **not** repeat the same capture until one passes without a pre-specified aggregation rule (that would be qualification-by-luck). Do **not** loosen 11 → 12 µs because the independent run landed at 11.35 µs on the CI upper bound.
+
+Next bounded step: **`wp10-bounded-remediation`** — see `docs/wp10-bounded-remediation.md` (diagnostic only; one Mac capture).
