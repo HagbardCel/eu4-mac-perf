@@ -16,6 +16,18 @@
       "captured_at_utc": "20261003T064756.277190Z-37f57796",
       "tier1_causal_admission": "failed",
       "notes": "Post-PR#8 training-only capture; timing decomposition in docs/wp5-requalification-timing-memo-20261003.md. Not authoritative WP1."
+    },
+    {
+      "work_package": "WP7",
+      "purpose": "wp7_lean_reference_training_requalification_v1",
+      "baseline_evidence_id": "20261003T064756.277190Z-37f57796",
+      "evidence_id": "20261003T115737.310357Z-ee9f5484",
+      "archive_path": "analysis/evidence/frame-model-offline-038bd3c-20261003T115737.310357Z-ee9f5484.json",
+      "archive_sha256_committed": "c59366169173d7360de65b04b02e2612c35c88a0f4607de28bd904f3d27ed134",
+      "git_commit": "038bd3c51591a8ee7d03584acd404bd163268ac1",
+      "captured_at_utc": "20261003T115737.310357Z-ee9f5484",
+      "tier1_causal_admission": "failed",
+      "notes": "Post-lean-REFERENCE causal-only training requalification (bare/reference/counters). Captured @ 038bd3c (identical tree to merge 9350a2a). Valid WP7 v2-policy failure; four-frame result may include post-arm lazy producer initialization and known submission-wall placement effects. Do not interpret as steady-state overhead without follow-up. Not authoritative WP1; compare cpu_ns context to WP5 37f57796."
     }
   ],
   "reference_cpu_decomposition_archives": [
