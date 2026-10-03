@@ -1,6 +1,6 @@
 # WP9 — counters steady-state cost (bounded fast-path review)
 
-**Context:** WP8 **`3c1e0db7`** (primed steady-state) shows `counters − reference` CPU at ~**11–12%** relative and ~**0.9–8 µs/frame** absolute across training recipes, while lean REFERENCE overhead after priming is ~**0.3–3.2 µs/frame**.
+**Context:** WP8 **`3c1e0db7`** on the **v3 CPU admission variant** (`four_frame_post_arm_prime_1`) shows `counters − reference` CPU at roughly **~12–16%** relative and **~1.3–9.4 µs/frame** absolute (mesh ~13.5% / 9.4 µs; borders ~11.9% / 2.3 µs; text_ui ~16.3% / 1.3 µs). The 40-frame primed window is slightly lower (~11–12% / ~0.9–8 µs). Lean REFERENCE CPU after priming on the 4-frame variant is ~**0.4–5.3 µs/frame**.
 
 **Goal:** Identify whether an **obvious** fast-path exists before committing to v3 hybrid floors or a counters optimization sprint. This is a code-path inventory, not a new decomposition work package.
 

@@ -68,50 +68,69 @@ class Tier1V3EvidenceContractTests(unittest.TestCase):
         self.assertEqual(mesh["status"], "unavailable")
         self.assertIn("post_arm_prime_frames", mesh["reason"])
 
+    def test_non_contiguous_trial_ids_are_unavailable(self):
+        if not WP8_ARCHIVE.is_file():
+            self.skipTest("WP8 archive missing")
+        preflight = json.loads(WP8_ARCHIVE.read_text())["preflight"]
+        block = json.loads(json.dumps(preflight["steady_state_tier1_diagnosis"]))
+        for index, trial in enumerate(block["recipes"][0]["trials"]):
+            trial["trial"] = index * 2
+        replay = tier1.evaluate_wp8_steady_state_training_v3(
+            {"steady_state_tier1_diagnosis": block},
+        )
+        mesh = next(item for item in replay["training_recipes"] if item["recipe"] == "mesh")
+        self.assertEqual(mesh["status"], "unavailable")
+        self.assertIn("trial ids", mesh["reason"])
+
+    def test_derived_pairs_match_archived_variant_comparisons(self):
+        if not WP8_ARCHIVE.is_file():
+            self.skipTest("WP8 archive missing")
+        preflight = json.loads(WP8_ARCHIVE.read_text())["preflight"]
+        recipe = preflight["steady_state_tier1_diagnosis"]["recipes"][0]
+        derived = tier1.derive_wp8_steady_state_gate_pairs(
+            recipe,
+            variant=tier1.TIER1_V3_CPU_MEASUREMENT_VARIANT,
+            axes=tier1._V3_CPU_AXES,
+        )
+        archived = recipe["variant_comparisons"][tier1.TIER1_V3_CPU_MEASUREMENT_VARIANT]
+        for gate_name, gate in derived.items():
+            self.assertEqual(
+                gate["pairs"],
+                archived[gate_name]["pairs"],
+                msg=gate_name,
+            )
+
 
 class Tier1V3Wp8ReplayTests(unittest.TestCase):
-    def test_wp8_primed_variant_reference_cpu_passes_v3(self):
+    def test_wp8_mesh_and_borders_pass_all_admission_gates(self):
         if not WP8_ARCHIVE.is_file():
             self.skipTest("WP8 archive missing")
         preflight = json.loads(WP8_ARCHIVE.read_text())["preflight"]
         replay = tier1.evaluate_wp8_steady_state_training_v3(preflight)
-        self.assertEqual(replay["policy_version"], tier1.TIER1_CAUSAL_POLICY_VERSION_V3)
-        for recipe_eval in replay["training_recipes"]:
-            self.assertEqual(
-                recipe_eval["results"]["reference_cpu_ns"],
-                "passed",
-                msg=recipe_eval["recipe"],
-            )
+        for recipe_name in ("mesh", "borders"):
+            recipe_eval = next(item for item in replay["training_recipes"] if item["recipe"] == recipe_name)
+            self.assertEqual(recipe_eval["status"], "passed")
+            for gate_name, status in recipe_eval["results"].items():
+                self.assertEqual(status, "passed", msg=f"{recipe_name} {gate_name}")
 
-    def test_wp8_primed_variant_counters_cpu_passes_v3_hybrid(self):
+    def test_wp8_text_ui_reference_completion_wall_is_unavailable(self):
         if not WP8_ARCHIVE.is_file():
             self.skipTest("WP8 archive missing")
         preflight = json.loads(WP8_ARCHIVE.read_text())["preflight"]
         replay = tier1.evaluate_wp8_steady_state_training_v3(preflight)
-        for recipe_eval in replay["training_recipes"]:
-            self.assertEqual(
-                recipe_eval["results"]["counters_cpu_ns"],
-                "passed",
-                msg=recipe_eval["recipe"],
-            )
+        text_ui = next(item for item in replay["training_recipes"] if item["recipe"] == "text_ui")
+        self.assertEqual(text_ui["status"], "unavailable")
+        self.assertEqual(
+            text_ui["results"]["reference_submission_plus_drain_elapsed_ns"],
+            "unavailable",
+        )
 
-    def test_wp8_overall_training_status_passed_under_v3(self):
+    def test_wp8_overall_unavailable_due_to_text_ui_wall_variance(self):
         if not WP8_ARCHIVE.is_file():
             self.skipTest("WP8 archive missing")
         preflight = json.loads(WP8_ARCHIVE.read_text())["preflight"]
         replay = tier1.evaluate_wp8_steady_state_training_v3(preflight)
-        self.assertEqual(replay["status"], "passed")
-
-    def test_wp8_completion_wall_is_diagnostic_not_admission(self):
-        if not WP8_ARCHIVE.is_file():
-            self.skipTest("WP8 archive missing")
-        preflight = json.loads(WP8_ARCHIVE.read_text())["preflight"]
-        replay = tier1.evaluate_wp8_steady_state_training_v3(preflight)
-        mesh = next(item for item in replay["training_recipes"] if item["recipe"] == "mesh")
-        wall = mesh["completion_wall_diagnostic"]["counters_submission_plus_drain_elapsed_ns"]
-        self.assertEqual(wall["status"], "diagnostic")
-        self.assertFalse(wall["acceptance_gate"])
-        self.assertNotIn("counters_submission_plus_drain_elapsed_ns", mesh["results"])
+        self.assertEqual(replay["status"], "unavailable")
 
 
 if __name__ == "__main__":

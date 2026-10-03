@@ -4,80 +4,63 @@ Policy identity (proposed): **`tier1_causal_steady_state_hybrid_v3`**
 
 Evidence basis: WP8 steady-state capture **`3c1e0db7`** @ `f62aa28`. WP7 requalification **`ee9f5484`** remains the authoritative **v2** failure under the legacy four-frame protocol.
 
-**Status:** Design + offline replay evaluator in `frame_model_tier1_policy.py`. No new Mac capture, no held-out, no live EU IV until v3 is frozen and a `wp9-tier1-v3-requalification` command exists.
+**Status:** Design + offline replay evaluator in `frame_model_tier1_policy.py`. No dedicated v3 Mac requalification command yet. **v2 remains binding** for existing archives.
 
 ## Independence and calibration honesty
 
-CPU hybrid floors (6 µs REFERENCE, 11 µs counters) were **chosen using WP8 training outcomes** (`3c1e0db7`, primed four-frame variant). That is legitimate use of training data for policy design.
+CPU hybrid floors (6 µs REFERENCE, 11 µs counters) were **chosen using WP8 training data** for the **`four_frame_post_arm_prime_1`** variant. Completion-wall admission uses **`forty_frame_post_arm_prime_1`** with a **±5% bootstrap CI** rule because 40-frame completion data are substantially less noisy than four-frame (except text_ui reference, which remains unbounded).
 
-**Replay of the same archive under v3 is not independent confirmation that v3 is correct.** It shows the stated policy accepts the capture it was calibrated against. Held-out (or a fresh Mac requalification capture after freeze) is required before treating v3 admission as validated.
+**Replay of `3c1e0db7` under v3 is not independent validation** — it shows the stated policy accepts the capture it was calibrated against. A **fresh v3 requalification capture** and later **held-out** evaluation (without threshold tuning on held-out) are required before treating v3 as production admission.
 
-Do not tune thresholds on held-out. Freeze on training + design rationale, then test generalization once.
+## Steady-state measurement contract
 
-## What v2 got wrong (empirically)
-
-1. **Cold post-arm activation** inside the timed four-frame window inflated `reference − bare` CPU (WP8: ~7 µs/frame median drop after one prime).
-2. **Submission-wall elapsed** is not a stable proxy for completed work (WP5b; WP8 `submission + drain` medians near neutral).
-3. **Dual AND gate** (`±3%` **and** `±50 µs`) fails on tiny synthetic CPU denominators despite sub-microsecond absolute overhead.
-
-## Steady-state measurement contract (mandatory for v3 replay)
+### CPU admission (`four_frame_post_arm_prime_1`)
 
 ```text
-arm (MEASURE_ENABLED)
-→ post_arm_prime_frames profiler-active frames (default 1)
-→ glFinish()
-→ timed measured_frames window (default 4)
-→ post-window completion timing drain (WP5b fields)
+prime = 1, measured = 4, published = 5 (reference/counters telemetry)
 ```
 
-**Replay validator** (`validate_wp8_steady_state_*`) requires before any gate math:
+### Completion-wall admission (`forty_frame_post_arm_prime_1`)
 
-- Exactly **`mesh`**, **`borders`**, **`text_ui`**, each once, `role == training` (no held-out, no extras).
-- Variant **`four_frame_post_arm_prime_1`** with `post_arm_prime_frames == 1`, `measured_frames == 4`.
-- **Seven** trials per recipe; stages **`bare` / `reference` / `counters`** with alternating stage order.
-- Every stage reports harness `post_arm_prime_frames` / `measured_frames` matching the contract.
-- **REFERENCE** and **counters**: `frames == 4`, `published_frames == 5`.
+```text
+prime = 1, measured = 40, published = 41
+```
 
-Contract violations → **`unavailable`** (not `failed`).
+Harness reports `post_arm_prime_frames` / `measured_frames` on **every** stage. Replay validates:
 
-## Admission gate set (v3)
+- Recipes exactly **`mesh`**, **`borders`**, **`text_ui`** (training only).
+- Trial ids **`0…6`**, unique; stage order alternates per trial; **`variant_order`** rotates per WP8 generator.
+- Variant contracts for **both** CPU and wall variants on all trials/stages.
 
-| Gate | Pairing | Admission |
-|------|---------|-----------|
-| `reference_cpu_ns` | reference vs bare | **yes** (hybrid absolute) |
-| `counters_cpu_ns` | counters vs reference | **yes** (hybrid absolute) |
-| `reference_submission_plus_drain_elapsed_ns` | reference vs bare | **no** (diagnostic only) |
-| `counters_submission_plus_drain_elapsed_ns` | counters vs reference | **no** (diagnostic only) |
+Contract violations → **`unavailable`**.
+
+## Admission gates (v3)
+
+Pairs are **derived from `trials[].variants[…].stages`** at replay time (not from archived `variant_comparisons`).
+
+| Gate | Variant | Pairing | Rule |
+|------|---------|---------|------|
+| `reference_cpu_ns` | 4f + prime | reference vs bare | Hybrid absolute CPU |
+| `counters_cpu_ns` | 4f + prime | counters vs reference | Hybrid absolute CPU |
+| `reference_submission_plus_drain_elapsed_ns` | 40f + prime | reference vs bare | ±5% bootstrap CI on fraction |
+| `counters_submission_plus_drain_elapsed_ns` | 40f + prime | counters vs reference | ±5% bootstrap CI on fraction |
+
+If a completion-wall gate’s 95% CI exceeds ±5%, that gate is **`unavailable`** (perturbation not bounded), not `failed`.
 
 Raw submission-window elapsed gates are not used.
 
-### Completion wall (diagnostic only)
-
-WP8 shows **wide bootstrap CIs** on four-frame completion wall despite small medians (especially text_ui). A ±20% (or any) relative **admission** band fit to training would be circular and fragile.
-
-Replay therefore reports completion-wall summaries with `acceptance_gate: false` and a **±5% diagnostic reference band** (`within_diagnostic_band`). They do **not** affect `status`.
-
-## Hybrid CPU admission rule
-
-Recompute bootstrap summaries from archived `pairs` (same seed/samples/CI as v2).
+### Hybrid CPU rule
 
 ```text
-|overhead_us| ≤ allowed_us
-
-allowed_us = min(
-    50 µs/frame cap,
-    max(relative_limit × baseline_us_per_frame, absolute_floor_us),
-)
+|overhead_us| ≤ min(50 µs, max(relative_limit × baseline_us, absolute_floor_us))
 ```
 
-| Step | `relative_limit` | `absolute_floor_us` |
-|------|------------------|---------------------|
-| `reference_cpu_ns` | 3% | 6.0 µs/frame |
-| `counters_cpu_ns` | 12% | 11.0 µs/frame |
+| Gate | `relative_limit` (diagnostic) | `absolute_floor_us` |
+|------|-------------------------------|---------------------|
+| `reference_cpu_ns` | 3% | 6.0 |
+| `counters_cpu_ns` | 12% | 11.0 |
 
-Relative median/CI fractions are **diagnostic** for CPU gates under v3.
-
-Floors are training-calibrated on **`3c1e0db7`** so steady-state REFERENCE and counters bands reflect WP8 steady-state separation, not v2 cold-start failure.
+For the **CPU admission variant** (`four_frame_post_arm_prime_1`), training medians are roughly **~12–16%** and **~1.3–9.4 µs/frame** counters-over-reference (mesh ~13.5% / 9.4 µs; text_ui ~16.3% / 1.3 µs). The **11 µs floor** dominates pass/fail; the 12% relative limit is not the binding constraint on this variant.
 
 ## Replay API
 
@@ -87,23 +70,16 @@ import frame_model_tier1_policy as tier1
 replay = tier1.evaluate_wp8_steady_state_training_v3(preflight)
 ```
 
-Returns `unavailable` if recipe set or measurement contract fails.
+On archive **`3c1e0db7`**: **mesh** and **borders** pass all gates; **text_ui** is **`unavailable`** on `reference_submission_plus_drain_elapsed_ns` (wide 40-frame CI). Overall training replay → **`unavailable`** until text_ui completion-wall measurement is qualified or the gate policy is revised with held-out evidence.
 
 ## Counters qualification
 
-After priming, **counters − reference** is the dominant repeatable CPU step (~11–12% on training denominators). v3 encodes a separate hybrid band; priming alone does not satisfy v2’s 3% counters gate.
+After priming, counters — not lean REFERENCE — is the dominant repeatable CPU step. v3 encodes a separate hybrid band for counters CPU; priming alone does not satisfy v2’s 3% counters gate.
 
-See `docs/wp9-counters-fast-path-review.md` for bounded optimization options.
+See `docs/wp9-counters-fast-path-review.md`.
 
-## Out of scope
+## Checklist
 
-- Held-out admission until fixture + v3 capture command exist.
-- Mutating v2 archives or `requalification_archives`.
-- EU IV live measurement.
-
-## Implementation checklist
-
-- [ ] `wp9-tier1-v3-requalification` CLI (steady-state harness defaults + embedded v3 gates).
-- [ ] `stage2-split-v3` when archive schema for v3 captures is frozen.
-- [ ] Manifest bucket for v3 requalification after Mac capture.
-- [ ] Held-out replay under frozen v3 (no threshold tuning on held-out).
+- [ ] `wp9-tier1-v3-requalification` CLI (steady-state harness + embedded v3 gates).
+- [ ] Fresh Mac capture; register manifest bucket.
+- [ ] Held-out replay under **frozen** v3 (no threshold retuning on held-out).
