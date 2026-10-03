@@ -1,36 +1,50 @@
 # WP6 — reference CPU ladder memo
 
-## Pre–stage-validation capture (v2 contract)
+## Authoritative capture (v2 + stage validation)
 
-**Archive:** `analysis/evidence/frame-model-offline-cb4b762-20261003T084522.537575Z-95f3513c.json` (`95f3513c`)  
-**Git:** `cb4b762` (evidence committed separately on the WP6 branch)  
-**Contract:** `wp6_loaded_disabled_v2` (passive synthetic hook fast paths; no hook accounting clocks in loaded-disabled)
-
-This capture was taken **before** the ladder harness validated each `loaded-disabled` stage trace (no `F` rows, terminal `Z`, shutdown `X`). The implementation and native harness support passive v2; **one more offline ladder recapture with stage validation** should become the authoritative WP6 ladder. This archive stays immutable as the pre-validation v2 reference.
+**Archive:** `analysis/evidence/frame-model-offline-d9b77c4-20261003T093954.017662Z-4dc19f16.json` (`4dc19f16`)  
+**Git:** `d9b77c4` (post–PR #14 merge; clean tree)  
+**Contract:** `wp6_loaded_disabled_v2` — each `loaded-disabled` stage passed harness trace validation (no `F` rows; shutdown `X`; terminal `Z` with zero hook failures/drops).
 
 ### Medians (seven paired trials)
 
 | Recipe | bare cpu (µs) | loaded-disabled cpu | reference cpu | loaded−bare cpu | ref−loaded cpu |
 |--------|---------------|---------------------|---------------|-----------------|----------------|
-| mesh | 287 | 306 | 341 | **+4.1%** | **+8.1%** |
-| borders | 89 | 91 | 124 | **+2.6%** | **+22.7%** |
-| text_ui | 37 | 38 | 69 | **+4.5%** | **+79.2%** |
+| mesh | 262 | 284 | 312 | **+8.1%** | **+9.8%** |
+| borders | 82 | 86 | 113 | **−0.3%** | **+30.8%** |
+| text_ui | 33 | 36 | 63 | **+7.4%** | **+71.3%** |
 
-Wall and CPU `median_fraction` **broadly track** on all recipes (e.g. borders active step ~21.2% wall vs ~22.7% CPU).
+Wall and CPU `median_fraction` **broadly track** on all recipes in this capture.
 
 ### Active REFERENCE step — medians and 95% bootstrap CIs (`reference − loaded-disabled` CPU)
 
 | Recipe | Median | 95% CI |
 |--------|--------|--------|
-| mesh | +8.1% | +4.7% … +16.0% |
-| borders | +22.7% | −2.0% … +42.7% |
-| text_ui | +79.2% | −0.7% … +83.9% |
+| mesh | +9.8% | +7.4% … +13.1% |
+| borders | +30.8% | +3.5% … +33.0% |
+| text_ui | +71.3% | +2.0% … +90.9% |
 
-**Mesh** is robust in this capture (CI excludes zero). **Borders** and **text_ui** show **wide CIs that cross zero** and heterogeneous trial pairs (e.g. text_ui: five trials with a large REFERENCE step, two near zero). That heterogeneity may be diagnostically interesting (profiler state / timing), not noise to hide.
+**Mesh** is robust (CI excludes zero). **Borders** and **text_ui** still show **wide CIs** and heterogeneous trial pairs (including near-zero active steps in some trials). Treat medians together with earlier captures (`95f3513c`, v1) when interpreting borders/text_ui; the odd trials may be diagnostically interesting.
 
-### v2 conclusion (qualified)
+### Conclusion (qualified)
 
-With passive loaded-disabled, **`loaded-disabled − bare` is a clean fixed instrumentation / interposition tax** (roughly +2–5% CPU on these recipes). The **median** active REFERENCE step (`reference − loaded-disabled`) is **substantially larger than that fixed tax** on all three recipes. **Mesh** supports that claim in this capture; **borders** and **text_ui** rely more on medians and earlier WP5/WP5b/v1 evidence because of wide CIs and odd near-zero trials. This supports optimizing **active REFERENCE accounting** (scopes, events, publication, guards) rather than treating DYLD interposition as the irreducible bottleneck.
+With passive loaded-disabled, **`loaded-disabled − bare` is the fixed instrumentation / interposition tax** (roughly single-digit % CPU on mesh and text_ui in this capture; borders fixed tax ~0% median here). The **median** active REFERENCE step exceeds that fixed tax on all three recipes. **Mesh** is the clearest in `4dc19f16`; borders/text_ui need the CI/trial caveats above. No further broad ladder recaptures are planned — next experiment is **`minimal-reference`**.
+
+---
+
+## Pre–stage-validation capture (v2 contract)
+
+**Archive:** `analysis/evidence/frame-model-offline-cb4b762-20261003T084522.537575Z-95f3513c.json` (`95f3513c`)  
+**Git:** `cb4b762`  
+**Contract:** `wp6_loaded_disabled_v2`
+
+Captured before per-stage trace validation existed in the harness. Immutable reference; superseded for ladder authority by [`4dc19f16`](#authoritative-capture-v2--stage-validation).
+
+| Recipe | loaded−bare cpu | ref−loaded cpu |
+|--------|-----------------|----------------|
+| mesh | +4.1% | +8.1% |
+| borders | +2.6% | +22.7% |
+| text_ui | +4.5% | +79.2% |
 
 ---
 
@@ -57,8 +71,6 @@ Same harness as Tier-1 / WP5b: four `eu4_frame_model_test_frame` calls after war
 
 Comparisons use `median_fraction` with `status: diagnostic` (not Tier-1 gates).
 
-**Capture harness:** after each `loaded-disabled` stage, the ladder validates the profiler trace (header `H`, no published `F` frames, shutdown `X`, terminal `Z` with `hook_failures=0` and `dropped_records=0`).
-
 ## v1 detail (historical)
 
 | Recipe | loaded−bare cpu | ref−loaded cpu |
@@ -67,14 +79,13 @@ Comparisons use `median_fraction` with `status: diagnostic` (not Tier-1 gates).
 | borders | −1.4% | +27.4% |
 | text_ui | +3.1% | +76.2% |
 
-## Shared interpretation (v1 + v2)
+## Shared interpretation (v1 + v2 + authoritative)
 
-1. **Fixed load is small** on mesh CPU (v2 **+4.1%**); borders/text_ui fixed tax remains a few percent — not the main Tier-1 story.
-2. **Median `reference − loaded-disabled` exceeds fixed tax** on all recipes; mesh is clearest in `95f3513c`; borders/text_ui need CI/trial caveats above.
+1. **Fixed load is small** relative to active REFERENCE on mesh CPU (authoritative mesh fixed **+8.1%**, active **+9.8%**).
+2. **Median `reference − loaded-disabled` exceeds fixed tax** on all recipes; mesh is clearest; borders/text_ui need CI/trial caveats.
 3. Does **not** replace WP5b (no post-`glFinish` drain); complements it on the same `cpu_ns` metric.
 
 ## Next engineering
 
-- **One authoritative v2 ladder recapture** with loaded-disabled trace validation (then stop repeating the broad ladder).
 - **`minimal-reference`** stage to bound residual active REFERENCE accounting (see [WP6 plan](wp6-reference-cpu-decomposition.md)).
 - Marginal ablations only where `minimal-reference` leaves material residual; do not treat summed marginals as additive.

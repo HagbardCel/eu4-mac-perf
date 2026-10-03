@@ -22,6 +22,18 @@
     {
       "work_package": "WP6",
       "purpose": "wp6_reference_cpu_decomposition_v1",
+      "role": "authoritative_v2",
+      "evidence_id": "20261003T093954.017662Z-4dc19f16",
+      "archive_path": "analysis/evidence/frame-model-offline-d9b77c4-20261003T093954.017662Z-4dc19f16.json",
+      "archive_sha256_committed": "1636289a2f6a64c48a1b51fa8605b39bbbfef8da87ee81655a6f2ee7156d9ff0",
+      "git_commit": "d9b77c4e6bc3ebfa4f996df304c6056273d1165f",
+      "captured_at_utc": "20261003T093954.017662Z-4dc19f16",
+      "loaded_disabled_contract": "wp6_loaded_disabled_v2",
+      "notes": "Authoritative bare/loaded-disabled/reference ladder with per-stage loaded-disabled trace validation. Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Diagnostic only."
+    },
+    {
+      "work_package": "WP6",
+      "purpose": "wp6_reference_cpu_decomposition_v1",
       "role": "pre_stage_validation_v2",
       "evidence_id": "20261003T084522.537575Z-95f3513c",
       "archive_path": "analysis/evidence/frame-model-offline-cb4b762-20261003T084522.537575Z-95f3513c.json",
@@ -29,7 +41,7 @@
       "git_commit": "cb4b762268e1b85fd4e6aa7db88f9eb08968b24d",
       "captured_at_utc": "20261003T084522.537575Z-95f3513c",
       "loaded_disabled_contract": "wp6_loaded_disabled_v2",
-      "notes": "Valid wp6_loaded_disabled_v2 ladder @ cb4b762 captured before loaded-disabled trace validation in the harness; authoritative ladder awaits one recapture with stage validation. Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Diagnostic only."
+      "notes": "Valid wp6_loaded_disabled_v2 ladder @ cb4b762 captured before loaded-disabled trace validation in the harness. Superseded for authority by 4dc19f16. Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Diagnostic only."
     },
     {
       "work_package": "WP6",
@@ -41,7 +53,7 @@
       "git_commit": "82922f3915eeddb709f99f83867981a6a1f792bf",
       "captured_at_utc": "20261003T083731.257302Z-e4e73118",
       "loaded_disabled_contract": "wp6_loaded_disabled_v1",
-      "notes": "First bare/loaded-disabled/reference ladder (v1 contract: residual hook clocks in loaded-disabled). Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Superseded for decomposition semantics by wp6_loaded_disabled_v2 and pre-validation capture 95f3513c; authoritative ladder awaits post-validation recapture. Diagnostic only."
+      "notes": "First bare/loaded-disabled/reference ladder (v1 contract: residual hook clocks in loaded-disabled). Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Superseded for decomposition semantics by wp6_loaded_disabled_v2; authoritative ladder is 4dc19f16. Diagnostic only."
     }
   ],
   "diagnostic_archives": [
