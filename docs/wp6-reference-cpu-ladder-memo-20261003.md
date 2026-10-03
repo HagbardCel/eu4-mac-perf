@@ -97,11 +97,12 @@ Comparisons use `median_fraction` with `status: diagnostic` (not Tier-1 gates).
 
 ## Shared interpretation (v1 + v2 + authoritative)
 
-1. **Fixed load is small** relative to active REFERENCE on mesh CPU (authoritative mesh fixed **+8.1%**, active **+9.8%**).
-2. **Median `reference − loaded-disabled` exceeds fixed tax** on all recipes; mesh is clearest; borders/text_ui need CI/trial caveats.
-3. Does **not** replace WP5b (no post-`glFinish` drain); complements it on the same `cpu_ns` metric.
+1. **Mesh:** both fixed interposition and active REFERENCE accounting matter; medians are comparable (**+8.1%** vs **+9.8%** in `4dc19f16`).
+2. **Borders:** active REFERENCE is clearly the main target (fixed ~0% median; active **+30.8%**).
+3. **Text_ui:** both fixed and active costs exist; active median is much larger (**+7.4%** vs **+71.3%**).
+4. Does **not** replace WP5b (no post-`glFinish` drain); complements it on the same `cpu_ns` metric.
 
 ## Next engineering
 
-- **`minimal-reference`** stage to bound residual active REFERENCE accounting (see [WP6 plan](wp6-reference-cpu-decomposition.md)).
-- Marginal ablations only where `minimal-reference` leaves material residual; do not treat summed marginals as additive.
+- **`minimal-reference`** — disable the active REFERENCE accounting stack while keeping the loaded-disabled interposition baseline (see [WP6 plan](wp6-reference-cpu-decomposition.md)). Afterward ask: (1) did `minimal-reference` remove most of `reference − loaded-disabled`? (2) is `loaded-disabled − bare` acceptable for causal work? If (1) yes and (2) no, prefer interposer/pass-through optimization or revisiting the relative Tier-1 criterion — not more scope/event ablations.
+- Marginal ablations only where `minimal-reference` leaves material active residual; do not treat summed marginals as additive.
