@@ -36,8 +36,8 @@ Lean REFERENCE deliberately avoids the per-frame **`flush_counters()` → atomic
 
 ## Recommendation
 
-1. **Do not** block Tier-1 v3 on counters optimization — encode steady-state hybrid counters admission (see `docs/wp9-tier1-v3-design.md`).
-2. If pursuing engineering ROI, prototype **`counters-lite`** (hook `C` rows + minimal frame header without per-frame `Q` tree) behind a test harness stage and remeasure with WP8 protocol — one recipe, one Mac capture.
+1. After authoritative requalification **`a73ea57b`**, **mesh `counters_cpu_ns` is a real v3 blocker** (see `docs/wp9-tier1-v3-design.md`). Counters optimization is justified only via bounded WP10 diagnostics — not threshold relaxation.
+2. Prototype **`counters-lite`** (hook `C` rows + frame header without per-frame `Q` tree) under `EU4_TEST_COUNTERS_LITE` and remeasure on **mesh** via `wp10-bounded-remediation` — one diagnostic Mac capture, not a requalification.
 3. Skip broad WP6-style ladders unless `counters-lite` shows ≥50% reduction in the measured `counters − reference` CPU step.
 
 ## Related code

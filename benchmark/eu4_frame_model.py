@@ -319,6 +319,21 @@ WP7_CAUSAL_TRAINING_REQUALIFICATION_POLICY = "wp7_lean_reference_training_requal
 WP8_STEADY_STATE_TIER1_DIAGNOSIS_PURPOSE = "wp8_steady_state_tier1_diagnosis_v1"
 WP9_TIER1_V3_REQUALIFICATION_POLICY = "wp9_tier1_v3_requalification_v1"
 WP9_TIER1_V3_REQUALIFICATION_CAPTURE_KIND = "wp9_tier1_v3_requalification"
+WP10_BOUNDED_REMEDIATION_PURPOSE = "wp10_bounded_remediation_v1"
+WP10_MESH_CPU_STAGES = (
+    "reference",
+    "counters",
+    "counters_lite",
+    "counters_lite_deferred_flush",
+)
+WP10_COUNTERS_LITE_STAGES = frozenset({"counters_lite", "counters_lite_deferred_flush"})
+WP10_MESH_PRIME_FRAMES = 1
+WP10_MESH_MEASURED_FRAMES = 4
+WP10_COUNTERS_LITE_ENGINEERING_MAX_US_PER_FRAME = 5.0
+WP10_TEXT_WALL_VARIANTS = (
+    ("forty_frame_21_trials", {"post_arm_prime_frames": 1, "measured_frames": 40, "trial_count": 21}),
+    ("four_hundred_frame_7_trials", {"post_arm_prime_frames": 1, "measured_frames": 400, "trial_count": 7}),
+)
 STEADY_STATE_MEASUREMENT_VARIANTS = (
     ("four_frame_baseline", {"post_arm_prime_frames": 0, "measured_frames": 4}),
     ("four_frame_post_arm_prime_1", {"post_arm_prime_frames": 1, "measured_frames": 4}),
@@ -538,7 +553,16 @@ def _offline_representative_recipe_entries(representative: dict) -> list:
     if recipes:
         return recipes
     diagnosis = representative.get("steady_state_tier1_diagnosis") or {}
-    return diagnosis.get("recipes") or []
+    if diagnosis.get("recipes"):
+        return diagnosis["recipes"]
+    entries: list[dict] = []
+    mesh = representative.get("mesh_counters_cpu") or {}
+    if mesh.get("recipe"):
+        entries.append({"recipe": mesh["recipe"]})
+    text = representative.get("text_ui_completion_wall") or {}
+    if text.get("recipe"):
+        entries.append({"recipe": text["recipe"]})
+    return entries
 
 
 def _offline_artifact_hashes(
@@ -667,6 +691,7 @@ def _offline_workloads_payload(preflight_evidence: dict) -> dict:
         or preflight_evidence.get("reference_cpu_workloads")
         or preflight_evidence.get("minimal_reference_reconciliation")
         or preflight_evidence.get("steady_state_tier1_diagnosis")
+        or preflight_evidence.get("bounded_remediation")
         or {}
     )
 
@@ -725,6 +750,23 @@ def _offline_policy_versions(workloads: dict) -> dict:
             "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
             "reference_validity": WP7_LEAN_REFERENCE_VALIDITY,
             "seven_pair_gate": OFFLINE_SEVEN_PAIR_POLICY_VERSION,
+        }
+    if workloads.get("bounded_remediation"):
+        return {
+            "wp10_bounded_remediation": WP10_BOUNDED_REMEDIATION_PURPOSE,
+            "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION_V3,
+            "reference_validity": WP7_LEAN_REFERENCE_VALIDITY,
+            "mesh_cpu_protocol": {
+                "post_arm_prime_frames": WP10_MESH_PRIME_FRAMES,
+                "measured_frames": WP10_MESH_MEASURED_FRAMES,
+                "stages": list(WP10_MESH_CPU_STAGES),
+            },
+            "text_wall_variants": [name for name, _ in WP10_TEXT_WALL_VARIANTS],
+            "engineering_success_counters_lite_max_us_per_frame": WP10_COUNTERS_LITE_ENGINEERING_MAX_US_PER_FRAME,
+            "bounded_remediation_text": (
+                "Diagnostic-only counters-lite and text_ui completion-wall stability; "
+                "no Tier-1 admission authority."
+            ),
         }
     if workloads.get("steady_state_tier1_diagnosis"):
         return {
@@ -1174,6 +1216,8 @@ def _offline_workload_private_env() -> frozenset[str]:
         "EU4_TEST_POST_ARM_PRIME_FRAMES",
         "EU4_TEST_LOADED_DISABLED",
         "EU4_TEST_MINIMAL_REFERENCE",
+        "EU4_TEST_COUNTERS_LITE",
+        "EU4_TEST_COUNTERS_DEFERRED_FLUSH",
     })
 
 
@@ -1290,8 +1334,8 @@ def _offline_workload_stage(
             f"Refusing to reuse telemetry path {log_path.name} (stale or colliding stage identity)",
         )
     frames=measured_frames
-    if frames < 4 or frames > 60:
-        raise base.BenchmarkError(f"measured_frames must be in [4, 60], got {frames}")
+    if frames < 4 or frames > 500:
+        raise base.BenchmarkError(f"measured_frames must be in [4, 500], got {frames}")
     if post_arm_prime_frames < 0 or post_arm_prime_frames > 8:
         raise base.BenchmarkError(f"post_arm_prime_frames must be in [0, 8], got {post_arm_prime_frames}")
     env={k:v for k,v in os.environ.items() if k not in _offline_workload_private_env()}
@@ -1301,6 +1345,11 @@ def _offline_workload_stage(
         env["EU4_TEST_LOADED_DISABLED"] = "1"
     if stage == "minimal-reference":
         env["EU4_TEST_MINIMAL_REFERENCE"] = "1"
+    if stage == "counters_lite":
+        env["EU4_TEST_COUNTERS_LITE"] = "1"
+    elif stage == "counters_lite_deferred_flush":
+        env["EU4_TEST_COUNTERS_LITE"] = "1"
+        env["EU4_TEST_COUNTERS_DEFERRED_FLUSH"] = "1"
     if stage!="bare":
         mode, flags = _offline_workload_mode_and_flags(stage)
         fields=[FORMAT_VERSION,2,mode,1,flags,0,0,0,1,0,0,0,0,0]
@@ -1322,7 +1371,12 @@ def _offline_workload_stage(
         env["EU4_TEST_COMPLETION_TIMING"] = "1"
     if post_arm_prime_frames:
         env["EU4_TEST_POST_ARM_PRIME_FRAMES"] = str(post_arm_prime_frames)
-    timeout_s = 120 if frames > 20 else 60
+    if frames > 100:
+        timeout_s = 300
+    elif frames > 20:
+        timeout_s = 120
+    else:
+        timeout_s = 60
     run=subprocess.run([str(WORKLOAD_HARNESS),recipe["path"],str(frames)],env=env,
         capture_output=True,text=True,timeout=timeout_s,check=False)
     if run.returncode:
@@ -1354,10 +1408,14 @@ def _offline_workload_stage(
             skip_leading=post_arm_prime_frames,
         )
     else:
+        counters_lite_stage = stage in WP10_COUNTERS_LITE_STAGES
         tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
         failure=next((int(r[1]) for r in trace if r[0]=="Z"),None)
         dropped=next((int(r[3]) for r in trace if r[0]=="Z" and len(r)>3),0)
-        if len(rows)!=expected_published or failure!=0 or dropped or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
+        tree_ok = counters_lite_stage or tree["tree_reconciliation"] == "passed"
+        if counters_lite_stage and any(row and row[0] == "Q" for row in trace):
+            raise base.BenchmarkError("counters-lite stage must not emit scope-tree Q records")
+        if len(rows)!=expected_published or failure!=0 or dropped or not tree_ok or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
             raise base.BenchmarkError("Representative workload did not exercise valid production wrappers, scopes, and writer")
     if stage!="reference" and sum(r["draws"] for r in rows)!=expected_published*recipe["draws"]:
         raise base.BenchmarkError("Representative producer draw counts differ from passive recipe")
@@ -1628,6 +1686,178 @@ def _offline_steady_state_recipe_evidence(root: Path, recipe: dict) -> dict:
             {"name": name, **dict(spec)} for name, spec in STEADY_STATE_MEASUREMENT_VARIANTS
         ],
     }
+
+
+def _wp10_cpu_overhead_pairs(trials: list[dict], instrumented: str, reference: str = "reference") -> list[dict]:
+    pairs: list[dict] = []
+    for trial in trials:
+        inst_stage = trial["stages"][instrumented]
+        ref_stage = trial["stages"][reference]
+        inst_frames = inst_stage.get("frames") or WP10_MESH_MEASURED_FRAMES
+        ref_frames = ref_stage.get("frames") or WP10_MESH_MEASURED_FRAMES
+        pairs.append(
+            {
+                "instrumented": inst_stage["cpu_ns"] / inst_frames,
+                "reference": ref_stage["cpu_ns"] / ref_frames,
+            },
+        )
+    return pairs
+
+
+def _wp10_mesh_counters_recipe_evidence(root: Path, recipe: dict) -> dict:
+    trials: list[dict] = []
+    for trial in range(workload.TIER1_PAIR_COUNT):
+        order = list(reversed(WP10_MESH_CPU_STAGES)) if trial % 2 else list(WP10_MESH_CPU_STAGES)
+        stages: dict = {}
+        for stage in order:
+            stages[stage], _ = _offline_workload_stage(
+                root,
+                recipe,
+                trial,
+                stage,
+                post_arm_prime_frames=WP10_MESH_PRIME_FRAMES,
+                measured_frames=WP10_MESH_MEASURED_FRAMES,
+            )
+        trials.append({"trial": trial, "order": order, "stages": stages})
+    comparisons: dict = {}
+    for stage in WP10_MESH_CPU_STAGES:
+        if stage == "reference":
+            continue
+        pairs = _wp10_cpu_overhead_pairs(trials, stage)
+        comparisons[stage] = workload.paired_summary(pairs, 0.03, WP10_MESH_MEASURED_FRAMES)
+    counters_full = comparisons["counters"]["overhead_us_per_frame"]
+    counters_lite = comparisons["counters_lite"]["overhead_us_per_frame"]
+    engineering = {
+        "criterion": ">=50% median counters-minus-reference CPU reduction vs full counters on mesh",
+        "baseline_requalification_evidence_id": "20261003T144237.317611Z-a73ea57b",
+        "baseline_mesh_counters_overhead_us_per_frame": 9.63,
+        "target_counters_lite_max_us_per_frame": WP10_COUNTERS_LITE_ENGINEERING_MAX_US_PER_FRAME,
+        "full_counters_overhead_us_per_frame": counters_full,
+        "counters_lite_overhead_us_per_frame": counters_lite,
+        "counters_lite_meets_target": counters_lite <= WP10_COUNTERS_LITE_ENGINEERING_MAX_US_PER_FRAME,
+        "counters_lite_fraction_of_full": counters_lite / counters_full if counters_full else None,
+    }
+    recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
+    return {
+        "recipe": recipe_meta,
+        "trials": trials,
+        "stage_comparisons_vs_reference": comparisons,
+        "engineering_success": engineering,
+        "measurement": {
+            "post_arm_prime_frames": WP10_MESH_PRIME_FRAMES,
+            "measured_frames": WP10_MESH_MEASURED_FRAMES,
+            "stages": list(WP10_MESH_CPU_STAGES),
+        },
+    }
+
+
+def _wp10_text_ui_completion_evidence(root: Path, recipe: dict) -> dict:
+    variants: list[dict] = []
+    for variant_name, spec in WP10_TEXT_WALL_VARIANTS:
+        measured_frames = int(spec["measured_frames"])
+        prime = int(spec["post_arm_prime_frames"])
+        trial_count = int(spec["trial_count"])
+        trials: list[dict] = []
+        for trial in range(trial_count):
+            order = list(reversed(COMPLETION_CAUSAL_STAGES)) if trial % 2 else list(COMPLETION_CAUSAL_STAGES)
+            stages: dict = {}
+            for stage in order:
+                stages[stage], _ = _offline_workload_stage(
+                    root,
+                    recipe,
+                    trial,
+                    stage,
+                    completion_timing=True,
+                    post_arm_prime_frames=prime,
+                    measured_frames=measured_frames,
+                    telemetry_suffix=variant_name,
+                )
+            trials.append({"trial": trial, "order": order, "stages": stages})
+        comparisons = _completion_stage_comparisons(trials, frames=measured_frames)
+        variants.append(
+            {
+                "name": variant_name,
+                "measurement": dict(spec),
+                "trials": trials,
+                "completion_comparisons": comparisons,
+            },
+        )
+    recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
+    return {"recipe": recipe_meta, "variants": variants}
+
+
+def bounded_remediation_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
+    with tempfile.TemporaryDirectory(prefix="eu4-wp10-") as temporary:
+        root = Path(temporary)
+        all_recipes = workload.recipes(root, include_held_out=False)
+        mesh = next(recipe for recipe in all_recipes if recipe.get("name") == "mesh")
+        text_ui = next(recipe for recipe in all_recipes if recipe.get("name") == "text_ui")
+        mesh_block = _wp10_mesh_counters_recipe_evidence(root, mesh)
+        text_block = _wp10_text_ui_completion_evidence(root, text_ui)
+        if executed_artifacts_start:
+            test_library_sha256 = executed_artifacts_start["test_library_sha256"]
+            workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
+        else:
+            test_library_sha256 = base.sha256(TEST_LIBRARY)
+            workload_harness_sha256 = base.sha256(WORKLOAD_HARNESS)
+        return {
+            "status": "complete",
+            "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+            "bounded_remediation": True,
+            "mesh_counters_cpu": mesh_block,
+            "text_ui_completion_wall": text_block,
+            "test_library_sha256": test_library_sha256,
+            "workload_harness_sha256": workload_harness_sha256,
+            **_offline_workload_source_hashes(),
+        }
+
+
+def wp10_bounded_remediation(run_gl: bool = True) -> dict:
+    """WP10: diagnostic counters-lite + text_ui completion-wall stability (no admission authority)."""
+    if not run_gl:
+        raise base.BenchmarkError("wp10-bounded-remediation requires GL workload execution")
+    identity_start = _offline_git_identity_snapshot()
+    if not identity_start.get("git_tree_clean"):
+        violations = _git_tree_clean_violations_for_evidence()
+        detail = ", ".join(violations[:8])
+        if len(violations) > 8:
+            detail += f", … (+{len(violations) - 8} more)"
+        raise base.BenchmarkError(
+            "Source tree dirty before WP10 bounded remediation"
+            + (f": {detail}" if detail else ""),
+        )
+    static = build()
+    artifact_start = _offline_executed_artifact_snapshot()
+    _require_build_executed_artifacts_match(static, artifact_start)
+    remediation = bounded_remediation_workloads(executed_artifacts_start=artifact_start)
+    artifact_end = _offline_executed_artifact_snapshot()
+    _require_executed_artifacts_stable(artifact_start, artifact_end)
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
+    evidence = {
+        "purpose": WP10_BOUNDED_REMEDIATION_PURPOSE,
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "status": "diagnostic_complete",
+        "build": static,
+        "bounded_remediation": remediation,
+        "baseline_tier1_v3_requalification_evidence_id": "20261003T144237.317611Z-a73ea57b",
+        "limitations": [
+            "Diagnostic only — not a requalification; no Tier-1 admission authority.",
+            "Does not change v3 6/11 µs thresholds or held-out policy.",
+            "Mesh counters-lite engineering target: median overhead <= 5 µs/frame vs reference (50% reduction from ~9.6 µs).",
+            "text_ui completion variants test small-N vs long-window stability hypotheses.",
+            "Register under bounded_remediation_archives in profiler-overhead-diagnosis-manifest.json.",
+        ],
+    }
+    return _publish_offline_immutable_evidence(
+        evidence,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=static,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
+        update_rolling_pointer=False,
+    )
 
 
 def steady_state_tier1_diagnosis_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
@@ -3837,6 +4067,15 @@ def main() -> int:
         action="store_true",
         help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
     )
+    w10=sub.add_parser(
+        "wp10-bounded-remediation",
+        help="WP10: mesh counters-lite + text_ui completion-wall diagnostic (no admission)",
+    )
+    w10.add_argument(
+        "--registry-json",
+        action="store_true",
+        help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
+    )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
     run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
@@ -3891,6 +4130,12 @@ def main() -> int:
                 print(json.dumps(result,indent=2))
         elif args.command=="wp9-tier1-v3-requalification":
             result=wp9_tier1_v3_requalification()
+            if args.registry_json:
+                print(json.dumps(result.get("immutable_evidence") or {},indent=2))
+            else:
+                print(json.dumps(result,indent=2))
+        elif args.command=="wp10-bounded-remediation":
+            result=wp10_bounded_remediation()
             if args.registry_json:
                 print(json.dumps(result.get("immutable_evidence") or {},indent=2))
             else:
