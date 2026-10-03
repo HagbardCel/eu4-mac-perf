@@ -1,7 +1,9 @@
+import copy
 import json
 import sys
 import tempfile
 import unittest
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -44,6 +46,8 @@ def _wp9_archive_body_from_wp8(evidence_id: str, commit: str) -> dict | None:
         "git_commit": commit,
         "git_provenance_verified": True,
         "git_tree_clean": True,
+        "environment": wp8.get("environment")
+        or {"platform": "darwin", "arch": "arm64"},
         "identity_start": wp8["identity_start"],
         "identity_end": wp8["identity_end"],
         "executed_artifact_start": wp8["executed_artifact_start"],
@@ -107,6 +111,78 @@ class Wp9Tier1V3RequalificationTests(unittest.TestCase):
         self.assertEqual(result["capture_kind"], wp1.TIER1_V3_REQUALIFICATION_CAPTURE_KIND)
         self.assertEqual(result["offline_tier1_v3_admission"], fake_admission)
         self.assertEqual(result["steady_state_tier1_diagnosis"], fake_diagnosis)
+
+    def test_validate_rejects_tampered_trials_with_unchanged_admission(self):
+        commit = "f62aa28eb6322fd08a8b5aeb51049c2958c89d07"
+        evidence_id = "20261003T130000.000000Z-wp9tamper"
+        body = _wp9_archive_body_from_wp8(evidence_id, commit)
+        if body is None:
+            self.skipTest("WP8 archive missing")
+        body = copy.deepcopy(body)
+        diagnosis = body["preflight"]["representative_workloads"]["steady_state_tier1_diagnosis"]
+        variant = diagnosis["recipes"][0]["trials"][0]["variants"][tier1.TIER1_V3_CPU_MEASUREMENT_VARIANT]
+        variant["stages"]["counters"]["cpu_ns"] = variant["stages"]["counters"]["cpu_ns"] * 1000
+        with tempfile.TemporaryDirectory(dir=wp1.ROOT) as temporary:
+            path = Path(temporary) / "wp9-tampered.json"
+            path.write_text(json.dumps(body), encoding="utf-8")
+            with self.assertRaises(ValueError) as raised:
+                wp1.validate_tier1_v3_requalification_archive(
+                    json.loads(path.read_text(encoding="utf-8")),
+                    path,
+                )
+            self.assertIn("replay", str(raised.exception).lower())
+
+    def test_manifest_wp7_bucket_rejects_wp9_capture_kind_on_discover(self):
+        commit = "f62aa28eb6322fd08a8b5aeb51049c2958c89d07"
+        evidence_id = "20261003T150000.000000Z-wp9mism01"
+        body = _wp9_archive_body_from_wp8(evidence_id, commit)
+        if body is None:
+            self.skipTest("WP8 archive missing")
+        rel = f"analysis/evidence/frame-model-offline-{commit[:7]}-{evidence_id}.json"
+        archive_path = wp1.ROOT / rel
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        archive_path.write_text(json.dumps(body), encoding="utf-8")
+        manifest = wp1._load_manifest()
+        manifest.setdefault("requalification_archives", []).append(
+            {"work_package": "WP7", "evidence_id": evidence_id, "archive_path": rel},
+        )
+        try:
+            with mock.patch.object(wp1, "_load_manifest", return_value=manifest):
+                discoveries = wp1.discover_wp1_archives()
+            self.assertEqual([item for item in discoveries if item.evidence_id == evidence_id], [])
+        finally:
+            archive_path.unlink(missing_ok=True)
+            manifest["requalification_archives"] = [
+                item
+                for item in manifest.get("requalification_archives") or []
+                if item.get("evidence_id") != evidence_id
+            ]
+
+    def test_manifest_wp9_bucket_rejects_wp7_capture_kind(self):
+        with self.assertRaises(ValueError) as raised:
+            wp1._require_manifest_capture_kind_consistent(
+                "V3_REQUALIFICATION",
+                wp1.CAUSAL_REQUALIFICATION_CAPTURE_KIND,
+            )
+        self.assertIn("capture_kind", str(raised.exception))
+
+    def test_cli_path_validates_and_summarizes_v3_gates(self):
+        commit = "f62aa28eb6322fd08a8b5aeb51049c2958c89d07"
+        evidence_id = "20261003T160000.000000Z-wp9cli01"
+        body = _wp9_archive_body_from_wp8(evidence_id, commit)
+        if body is None:
+            self.skipTest("WP8 archive missing")
+        with tempfile.TemporaryDirectory(dir=wp1.ROOT) as temporary:
+            path = Path(temporary) / "wp9-cli.json"
+            path.write_text(json.dumps(body), encoding="utf-8")
+            with mock.patch.object(sys, "argv", ["summarize_wp1_diagnosis.py", str(path)]):
+                stdout = StringIO()
+                with mock.patch.object(sys, "stdout", stdout):
+                    exit_code = wp1.main()
+            self.assertEqual(exit_code, 0)
+            output = stdout.getvalue()
+            self.assertIn("overhead_gate", output)
+            self.assertIn("reference_cpu_ns", output)
 
     def test_validate_tier1_v3_requalification_archive_accepts_wp8_derived_fixture(self):
         commit = "f62aa28eb6322fd08a8b5aeb51049c2958c89d07"

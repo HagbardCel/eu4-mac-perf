@@ -73,9 +73,36 @@ def _recipe_entries(archive: dict) -> list[dict]:
     rw = payload.get("representative_workloads")
     if isinstance(rw, dict) and rw.get("recipes"):
         return rw["recipes"]
+    if isinstance(rw, dict):
+        diagnosis = rw.get("steady_state_tier1_diagnosis")
+        if isinstance(diagnosis, dict) and diagnosis.get("recipes"):
+            return diagnosis["recipes"]
     preflight = archive.get("preflight") or {}
     rw = preflight.get("representative_workloads") or {}
-    return rw.get("recipes") or []
+    if rw.get("recipes"):
+        return rw["recipes"]
+    diagnosis = rw.get("steady_state_tier1_diagnosis") or {}
+    return diagnosis.get("recipes") or []
+
+
+def _capture_kind_from_payload(payload: dict) -> str | None:
+    representative = payload.get("representative_workloads")
+    if isinstance(representative, dict):
+        return representative.get("capture_kind")
+    return None
+
+
+def _require_manifest_capture_kind_consistent(manifest_role: str | None, capture_kind: str | None) -> None:
+    if manifest_role == "V3_REQUALIFICATION":
+        expected = TIER1_V3_REQUALIFICATION_CAPTURE_KIND
+    elif manifest_role == "REQUALIFICATION":
+        expected = CAUSAL_REQUALIFICATION_CAPTURE_KIND
+    else:
+        return
+    if capture_kind != expected:
+        raise ValueError(
+            f"manifest bucket {manifest_role!r} requires capture_kind {expected!r}, got {capture_kind!r}",
+        )
 
 
 def _format_gate_row(recipe: str, gate_key: str, gate: dict) -> str:
@@ -155,6 +182,52 @@ def summarize_markdown(archive_path: Path) -> str:
         for stage in sorted(vs_a):
             lines.append(_format_comparison_row(name, stage, vs_a[stage]))
     return "\n".join(lines) + "\n"
+
+
+def summarize_tier1_v3_requalification_markdown(archive: dict, archive_path: Path) -> str:
+    payload = _payload(archive)
+    admission = payload.get("offline_tier1_v3_admission") or {}
+    env = archive.get("environment") or {}
+    lines = [
+        f"# Tier-1 v3 requalification summary for `{archive_path.relative_to(ROOT)}`",
+        "",
+        f"- `purpose`: {payload.get('purpose')}",
+        f"- `status`: {payload.get('status')} (capture complete; not the admission outcome)",
+        f"- `overhead_gate`: {payload.get('overhead_gate')}",
+        f"- `validation_scope`: {payload.get('validation_scope')}",
+        f"- `policy_version`: {admission.get('policy_version')}",
+        f"- `cpu_measurement_variant`: {admission.get('cpu_measurement_variant')}",
+        f"- `completion_wall_measurement_variant`: {admission.get('completion_wall_measurement_variant')}",
+        f"- `environment`: {env.get('platform')} / {env.get('arch')}",
+        "",
+        "## Per-recipe v3 gates",
+        "",
+        "| Recipe | Gate | status |",
+        "|--------|------|--------|",
+    ]
+    for recipe_eval in admission.get("training_recipes") or []:
+        name = recipe_eval.get("recipe") or "?"
+        results = recipe_eval.get("results") or {}
+        for gate_name in sorted(results):
+            lines.append(f"| {name} | `{gate_name}` | {results[gate_name]} |")
+    if not admission.get("training_recipes"):
+        lines.append("| *(none)* | | |")
+    lines.extend(
+        [
+            "",
+            f"- recipe-level admission: **{admission.get('status')}**",
+            "",
+        ],
+    )
+    return "\n".join(lines)
+
+
+def summarize_archive_markdown(archive: dict, archive_path: Path) -> str:
+    payload = _payload(archive)
+    capture_kind = _capture_kind_from_payload(payload)
+    if capture_kind == TIER1_V3_REQUALIFICATION_CAPTURE_KIND:
+        return summarize_tier1_v3_requalification_markdown(archive, archive_path)
+    return summarize_markdown(archive_path)
 
 
 def _diagnostic_policy_version(archive: dict) -> str | None:
@@ -349,10 +422,17 @@ def validate_tier1_v3_requalification_archive(archive: dict, archive_path: Path)
             f"{list(STEADY_STATE_MEASUREMENT_VARIANT_NAMES)}, got {measurement_variants!r}",
         )
 
-    recipes = diagnosis.get("recipes") or []
-    recipe_set_reason = tier1.validate_wp8_steady_state_training_recipes(recipes)
-    if recipe_set_reason:
-        raise ValueError(f"steady_state recipe contract invalid: {recipe_set_reason}")
+    env = archive.get("environment") or {}
+    platform = env.get("platform")
+    arch = env.get("arch")
+    if platform != "darwin":
+        raise ValueError(
+            f"expected environment.platform 'darwin' for Mac Tier-1 v3 requalification, got {platform!r}",
+        )
+    if arch != "arm64":
+        raise ValueError(
+            f"expected environment.arch 'arm64' for Mac Tier-1 v3 requalification, got {arch!r}",
+        )
 
     embedded_admission = representative.get("offline_tier1_v3_admission") or {}
     top_admission = payload.get("offline_tier1_v3_admission") or {}
@@ -360,15 +440,49 @@ def validate_tier1_v3_requalification_archive(archive: dict, archive_path: Path)
         raise ValueError(
             "offline_tier1_v3_admission must match between representative_workloads and preflight top-level",
         )
-    if embedded_admission.get("policy_version") != EXPECTED_TIER1_V3_CAUSAL_POLICY:
+
+    replayed = tier1.evaluate_wp8_steady_state_training_v3(
+        {"steady_state_tier1_diagnosis": diagnosis},
+    )
+    if embedded_admission != replayed:
+        raise ValueError("embedded v3 admission does not match replay from raw trials")
+    if top_admission != replayed:
+        raise ValueError("preflight v3 admission does not match replay from raw trials")
+    if representative.get("status") != replayed["status"]:
         raise ValueError(
-            f"expected offline_tier1_v3_admission.policy_version {EXPECTED_TIER1_V3_CAUSAL_POLICY}, "
-            f"got {embedded_admission.get('policy_version')!r}",
+            "representative_workloads.status must match replayed v3 admission "
+            f"(expected {replayed['status']!r}, got {representative.get('status')!r})",
         )
-    if not embedded_admission.get("training_recipes"):
-        raise ValueError("offline_tier1_v3_admission.training_recipes must be non-empty")
+    overhead_gate = payload.get("overhead_gate")
+    if overhead_gate != replayed["status"]:
+        raise ValueError(
+            f"overhead_gate must match replayed v3 admission (expected {replayed['status']!r}, got {overhead_gate!r})",
+        )
 
     return _validate_offline_archive_provenance(archive, archive_path)
+
+
+def validate_offline_archive(archive: dict, archive_path: Path) -> dict:
+    """Validate an on-disk offline evidence archive (dispatches by status and capture_kind)."""
+    payload = _payload(archive)
+    evidence_id = _evidence_id_from_archive(archive)
+    manifest_role = _manifest_evidence_roles(_load_manifest()).get(evidence_id) if evidence_id else None
+    capture_kind = _capture_kind_from_payload(payload)
+    _require_manifest_capture_kind_consistent(manifest_role, capture_kind)
+
+    status = payload.get("status")
+    if status == EXPECTED_REQUALIFICATION_STATUS:
+        if capture_kind == TIER1_V3_REQUALIFICATION_CAPTURE_KIND:
+            return validate_tier1_v3_requalification_archive(archive, archive_path)
+        if capture_kind == CAUSAL_REQUALIFICATION_CAPTURE_KIND:
+            return validate_requalification_archive(archive, archive_path)
+        raise ValueError(
+            "requalification_complete archive has unknown capture_kind; "
+            f"got {capture_kind!r}",
+        )
+    if status == EXPECTED_STATUS:
+        return validate_wp1_archive(archive, archive_path)
+    raise ValueError(f"unsupported archive status {status!r} for offline validation")
 
 
 def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
@@ -448,24 +562,10 @@ def discover_wp1_archives() -> list[Wp1Discovery]:
         manifest_role = manifest_roles.get(evidence_id)
         payload = _payload(archive)
         payload_status = payload.get("status")
-        capture_kind = (payload.get("representative_workloads") or {}).get("capture_kind")
+        capture_kind = _capture_kind_from_payload(payload)
         try:
-            if payload_status == EXPECTED_REQUALIFICATION_STATUS:
-                if manifest_role == "V3_REQUALIFICATION" or capture_kind == TIER1_V3_REQUALIFICATION_CAPTURE_KIND:
-                    entry = validate_tier1_v3_requalification_archive(archive, path)
-                elif manifest_role == "REQUALIFICATION" or capture_kind == CAUSAL_REQUALIFICATION_CAPTURE_KIND:
-                    entry = validate_requalification_archive(archive, path)
-                else:
-                    raise ValueError(
-                        "requalification_complete archive has unknown capture_kind; "
-                        f"got {capture_kind!r}",
-                    )
-            else:
-                entry = validate_wp1_archive(archive, path)
-            if manifest_role == "V3_REQUALIFICATION" or (
-                payload_status == EXPECTED_REQUALIFICATION_STATUS
-                and capture_kind == TIER1_V3_REQUALIFICATION_CAPTURE_KIND
-            ):
+            entry = validate_offline_archive(archive, path)
+            if payload_status == EXPECTED_REQUALIFICATION_STATUS and capture_kind == TIER1_V3_REQUALIFICATION_CAPTURE_KIND:
                 discoveries.append(
                     Wp1Discovery(
                         role="V3_REQUALIFICATION",
@@ -479,7 +579,10 @@ def discover_wp1_archives() -> list[Wp1Discovery]:
                     ),
                 )
                 continue
-            if manifest_role == "REQUALIFICATION":
+            if manifest_role == "REQUALIFICATION" or (
+                payload_status == EXPECTED_REQUALIFICATION_STATUS
+                and capture_kind == CAUSAL_REQUALIFICATION_CAPTURE_KIND
+            ):
                 discoveries.append(
                     Wp1Discovery(
                         role="REQUALIFICATION",
@@ -540,8 +643,8 @@ def register_manifest(archive_path: Path, *, source_archive_sha256_mac_capture: 
     archive = _load_archive(archive_path)
     if _payload(archive).get("status") == EXPECTED_REQUALIFICATION_STATUS:
         raise ValueError(
-            "requalification_complete archives must be listed under requalification_archives; "
-            "do not register via --register-latest",
+            "requalification_complete archives must be listed under requalification_archives or "
+            "tier1_v3_requalification_archives; do not register via --register-latest",
         )
     entry = validate_wp1_archive(archive, archive_path)
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -590,7 +693,7 @@ def main() -> int:
     parser.add_argument(
         "--find",
         action="store_true",
-        help="list VALID, HISTORICAL, and REQUALIFICATION archives (newest capture first); no path required",
+        help="list VALID, HISTORICAL, REQUALIFICATION, and V3_REQUALIFICATION archives (newest first)",
     )
     parser.add_argument(
         "--register",
@@ -634,11 +737,17 @@ def main() -> int:
     if not path.is_file():
         print(f"Error: {path} not found", file=sys.stderr)
         return 1
+    archive = _load_archive(path)
+    try:
+        validate_offline_archive(archive, path)
+    except ValueError as error:
+        print(f"Validation failed: {error}", file=sys.stderr)
+        return 1
     if args.register:
         entry = register_manifest(path, source_archive_sha256_mac_capture=args.source_sha256)
         print(json.dumps(entry, indent=2))
     if args.markdown or not args.register:
-        print(summarize_markdown(path))
+        print(summarize_archive_markdown(archive, path))
     return 0
 
 

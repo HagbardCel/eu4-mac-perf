@@ -12,12 +12,15 @@ python3 benchmark/eu4_frame_model.py wp9-tier1-v3-requalification --registry-jso
 
 Commit the emitted JSON under `analysis/evidence/` and append an entry to **`tier1_v3_requalification_archives`** in `analysis/profiler-overhead-diagnosis-manifest.json` (`work_package: WP9`). Do **not** use `summarize_wp1_diagnosis.py --register-latest` (requalification archives are manifest-listed only).
 
-Validate locally:
+Validate locally (replays v3 admission from raw trials; fails if embedded summaries disagree):
 
 ```bash
 python3 benchmark/summarize_wp1_diagnosis.py analysis/evidence/<archive>.json
+python3 benchmark/summarize_wp1_diagnosis.py analysis/evidence/<archive>.json --markdown
 python3 benchmark/summarize_wp1_diagnosis.py --find
 ```
+
+The default path invocation runs full archive validation before printing a v3 gate summary.
 
 ## Interpretation
 
