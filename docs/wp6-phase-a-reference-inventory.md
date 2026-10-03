@@ -157,11 +157,30 @@ Let **N** = commands/frame (`draws` in recipe metadata). Then **GL_wrappers/fram
 | Symbol | Invocations / frame |
 |--------|---------------------|
 | `snapshot_control` | 2 |
-| `measurement_active` → `refresh_unowned_control` | ~10–14 when sequence stable |
+| `measurement_active()` (hook scaffolding only) | **~14** (scopes, render/present guards, publish path; `refresh_unowned_control` runs only when `!inside_update`) |
 | `scope_begin` / `scope_end` (LOOP, UPDATE, RENDER, PRESENT) | 4 / 4 |
 | `timestamp_event` | 3 (no-op body) |
 | `event` | 3 |
 | `publish_frame` (+ `flush_counters`, SPSC) | 1 |
+
+### Workload-driven `measurement_active()` (scales with recipe)
+
+`glBindTexture` and `glEnable` call `gl_measurement_active()` → `measurement_active()` even in REFERENCE (`glBlendFunc` uses `intervention_active()` only and fast-paths). The harness sets `texture` / `state` flags per command, so steady-state:
+
+```text
+workload measurement_active/frame ≈ Ntexture + Nstate
+total measurement_active/frame    ≈ ~14 + Ntexture + Nstate
+```
+
+During `workload()`, `inside_update` is true, so `refresh_unowned_control()` returns immediately — these calls **do not** re-read the shared control sequence. They still pay function entry, branches, and mode/flag checks.
+
+| Recipe | Ntexture | Nstate | Workload `measurement_active()` / frame | **Total ≈ 14 + col** |
+|--------|---------:|-------:|----------------------------------------:|---------------------:|
+| mesh | 1180 | 1 | **1181** | **~1195** |
+| borders | 4 | 1 | **5** | **~19** |
+| text_ui | 226 | 42 | **268** | **~282** |
+
+Phase B should treat this as a second **recipe-dependent O(N) guard path**, alongside interposer trampolines.
 
 ### `clock_gettime` via `now_ns` (~35 / frame)
 
@@ -247,5 +266,5 @@ Existing sampled ablations (`EU4_TEST_ABLATION=accounting|writer|preparation`) t
 ## Phase A conclusion
 
 1. **Inventory:** Timed REFERENCE work is **one `hook_update` tree/frame** plus **GL_wrappers/frame** interposed calls (formula above; mesh **~15k/frame**, not **N** draws alone).
-2. **Call-count model:** Frame-hook and clock work is **O(1)** (~35 `clock_gettime`/frame); GL interposer **invocation count** is **O(GL_wrappers)** and can be **10×–50×** larger than **N** on mesh. **Whether CPU follows invocation count** is for Phase B (`bare` → `loaded-disabled` → `reference`).
+2. **Call-count model:** Frame-hook and clock work is **O(1)** (~35 `clock_gettime`/frame, ~14 hook-level `measurement_active`/frame). GL interposer **invocation count** is **O(GL_wrappers)** (~**5.4×** draw-command count **N** on mesh; formula cap **9× N**). Workload `measurement_active()` adds **Ntexture + Nstate** per frame (~**1195** on mesh). Those counts are orders of magnitude above individual O(1) frame-hook operations. **Whether CPU follows invocation/guard count** is for Phase B (`bare` → `loaded-disabled` → `reference`).
 3. **Next:** Implement `loaded-disabled` / `minimal-reference` per contract, then REFERENCE-scoped ablations. **Prioritize the three-stage ladder** before many fine-grained ablations.
