@@ -4,13 +4,13 @@ Policy identity (proposed): **`tier1_causal_steady_state_hybrid_v3`**
 
 Evidence basis: WP8 steady-state capture **`3c1e0db7`** @ `f62aa28`. WP7 requalification **`ee9f5484`** remains the authoritative **v2** failure under the legacy four-frame protocol.
 
-**Status:** Design + offline replay evaluator in `frame_model_tier1_policy.py`. No dedicated v3 Mac requalification command yet. **v2 remains binding** for existing archives.
+**Status:** Policy frozen in `frame_model_tier1_policy.py`; WP9 requalification CLI shipped (PR #23). Authoritative Mac training requalification **`a73ea57b`** @ `1f4282a` **failed** (`tier1_v3_admission` / `overhead_gate`: **failed**). **v2 remains binding** for production admission.
 
 ## Independence and calibration honesty
 
 CPU hybrid floors (6 µs REFERENCE, 11 µs counters) were **chosen using WP8 training data** for the **`four_frame_post_arm_prime_1`** variant. Completion-wall admission uses **`forty_frame_post_arm_prime_1`** with a **±5% bootstrap CI** rule because 40-frame completion data are substantially less noisy than four-frame (except text_ui reference, which remains unbounded).
 
-**Replay of `3c1e0db7` under v3 is not independent validation** — it shows the stated policy accepts the capture it was calibrated against. A **fresh v3 requalification capture** and later **held-out** evaluation (without threshold tuning on held-out) are required before treating v3 as production admission.
+**Replay of `3c1e0db7` under v3 is not independent validation** — it shows the stated policy accepts the capture it was calibrated against. The intended path was: freeze v3 → **fresh training requalification** → on **pass**, **held-out** validation (no threshold tuning on held-out). Fresh requalification **`a73ea57b`** did **not** pass; **held-out must not be consumed** to rescue v3.
 
 ## Steady-state measurement contract
 
@@ -80,7 +80,9 @@ import frame_model_tier1_policy as tier1
 replay = tier1.evaluate_wp8_steady_state_training_v3(preflight)
 ```
 
-On archive **`3c1e0db7`**: **mesh** and **borders** pass all gates; **text_ui** is **`unavailable`** on `reference_submission_plus_drain_elapsed_ns` (wide 40-frame CI). Overall training replay → **`unavailable`** until text_ui completion-wall measurement is qualified or the gate policy is revised with held-out evidence.
+On archive **`3c1e0db7`**: **mesh** and **borders** pass all gates; **text_ui** is **`unavailable`** on `reference_submission_plus_drain_elapsed_ns` (wide 40-frame CI). Overall training replay → **`unavailable`** (calibration replay only).
+
+On authoritative requalification **`a73ea57b`**: overall **`failed`**. **mesh** `counters_cpu_ns` **failed** (median ~9.63 µs/frame within 11 µs floor, but bootstrap upper bound ~11.35 µs/frame — policy correctly fails the whole CI). **borders** and **text_ui** CPU gates pass. **text_ui** completion-wall gates (**reference** and **counters**) are **`unavailable`** (wide CIs; 40-frame windows jump between ~19–20 ms and ~27–32 ms regimes — environmental completion variability, not credible ±30–40% profiler overhead). See manifest `tier1_v3_requalification_archives`.
 
 ## Counters qualification
 
@@ -92,4 +94,14 @@ See `docs/wp9-counters-fast-path-review.md`.
 
 - [x] `wp9-tier1-v3-requalification` CLI (steady-state harness + embedded v3 gates). See `docs/wp9-tier1-v3-requalification.md`.
 - [x] Fresh Mac capture; register `tier1_v3_requalification_archives` manifest bucket (`a73ea57b` @ `1f4282a`).
-- [ ] Held-out replay under **frozen** v3 (no threshold retuning on held-out).
+- [x] Fresh training requalification executed — **outcome: failed** (not a registration bug; replay matches stored admission).
+- [ ] **Blocked:** held-out replay under frozen v3 — **do not run** until training qualification is resolved and any replacement policy/implementation is frozen. Failed training requalification is not a license to tune on held-out.
+
+## After `a73ea57b` (bounded next work — not another methodology WP)
+
+v3 did not pass fresh training requalification: **mesh counters CPU failed**; **text_ui completion-wall qualification unavailable**. v2 remains binding.
+
+1. **Mesh counters CPU (only genuine overhead failure):** A tightly bounded **counters-lite** experiment on mesh is justified (see `docs/wp9-counters-fast-path-review.md`). Goal: materially cut ~9–10 µs/frame stack cost — not to shave ~0.35 µs off a confidence bound via repeated captures.
+2. **text_ui completion-wall (measurement problem):** Do not optimize the profiler from these gates. Either design a more stable completion-wall measurement for tiny workloads or revise policy in a **new version** — do not silently reinterpret frozen v3.
+
+Do **not** repeat the same capture until one passes without a pre-specified aggregation rule (that would be qualification-by-luck). Do **not** loosen 11 → 12 µs because the independent run landed at 11.35 µs on the CI upper bound.

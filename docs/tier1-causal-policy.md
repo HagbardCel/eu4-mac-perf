@@ -3,8 +3,9 @@
 Policy identity (current production evaluator): **`tier1_causal_rel3pct_abs50us_v2`**
 
 Proposed steady-state successor: **`tier1_causal_steady_state_hybrid_v3`** — see
-[`docs/wp9-tier1-v3-design.md`](wp9-tier1-v3-design.md). v3 is replay-only until a
-dedicated requalification capture command ships; v2 remains binding for existing archives.
+[`docs/wp9-tier1-v3-design.md`](wp9-tier1-v3-design.md). Fresh Mac training requalification
+**`a73ea57b`** **failed**; v3 is not production admission. **v2 remains binding.**
+Held-out validation under v3 is **blocked** until training qualification is resolved.
 
 Evidence schema for new immutable archives: **`stage2-split-v2`**
 

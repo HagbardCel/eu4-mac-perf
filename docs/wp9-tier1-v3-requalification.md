@@ -24,6 +24,7 @@ The default path invocation runs full archive validation before printing a v3 ga
 
 ## Interpretation
 
-- `overhead_gate` / `offline_tier1_v3_admission.status` is the binding v3 training outcome (`passed`, `failed`, or `unavailable`).
-- v2 remains production binding until v3 is accepted via this archive and follow-up held-out replay (see `docs/wp9-tier1-v3-design.md`).
-- WP8 replay on `3c1e0db7` showed **text_ui** completion-wall **`unavailable`**; a fresh capture may still land there until measurement variance improves.
+- `overhead_gate` / `offline_tier1_v3_admission.status` is the binding v3 **training** outcome (`passed`, `failed`, or `unavailable`).
+- Authoritative capture **`a73ea57b`** (@ `1f4282a`, registered on `main` **`192aff5`**): **`failed`**. Validator replay from raw trials matches embedded admission (integrity OK).
+- **v2 remains production binding.** v3 did **not** pass training requalification — **do not consume held-out evidence** until the training qualification issue is resolved and any replacement policy/implementation is frozen. Held-out is gated on **passing** training requalification first (see `docs/wp9-tier1-v3-design.md`).
+- **mesh:** only failure is `counters_cpu_ns` (narrow: median under 11 µs/frame, bootstrap upper bound slightly above the hybrid floor). **borders:** all gates passed. **text_ui:** CPU passed; both completion-wall gates **`unavailable`** (high completion-window variance on a tiny workload — tri-state is correct).
