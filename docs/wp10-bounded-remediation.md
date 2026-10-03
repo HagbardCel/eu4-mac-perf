@@ -15,7 +15,7 @@ Registered **`d07347df`** @ `a8200ea` under `bounded_remediation_archives`.
 
 - Mesh counters-lite **failed** the ≤5 µs engineering target; paired lite−full / deferred−lite contrasts are **inconclusive** (optimize scopes/flush not justified).
 - text_ui **21×40f** completion-wall CIs fall inside v3 ±5%; **7×400f** is weaker — prefer **more trials**, not longer windows.
-- Next qualification step (if any): **v4 statistical replication** ([`tier1-v4-statistical-replication-proposal.md`](tier1-v4-statistical-replication-proposal.md)), not further profiler architecture work.
+- Next qualification step: **v4 statistical replication** — frozen policy + [`wp11-tier1-v4-requalification.md`](wp11-tier1-v4-requalification.md) (see [`tier1-v4-statistical-replication-proposal.md`](tier1-v4-statistical-replication-proposal.md)); not further profiler architecture work.
 
 ## Mac capture
 

@@ -319,6 +319,8 @@ WP7_CAUSAL_TRAINING_REQUALIFICATION_POLICY = "wp7_lean_reference_training_requal
 WP8_STEADY_STATE_TIER1_DIAGNOSIS_PURPOSE = "wp8_steady_state_tier1_diagnosis_v1"
 WP9_TIER1_V3_REQUALIFICATION_POLICY = "wp9_tier1_v3_requalification_v1"
 WP9_TIER1_V3_REQUALIFICATION_CAPTURE_KIND = "wp9_tier1_v3_requalification"
+WP11_TIER1_V4_REQUALIFICATION_POLICY = "wp11_tier1_v4_requalification_v1"
+WP11_TIER1_V4_REQUALIFICATION_CAPTURE_KIND = "wp11_tier1_v4_requalification"
 WP10_BOUNDED_REMEDIATION_PURPOSE = "wp10_bounded_remediation_v1"
 WP10_MESH_CPU_STAGES = (
     "reference",
@@ -757,6 +759,17 @@ def _offline_policy_versions(workloads: dict) -> dict:
             "cpu_measurement_variant": tier1.TIER1_V3_CPU_MEASUREMENT_VARIANT,
             "completion_wall_measurement_variant": tier1.TIER1_V3_WALL_MEASUREMENT_VARIANT,
             "measurement_variants": [name for name, _ in STEADY_STATE_MEASUREMENT_VARIANTS],
+            "paired_trial_count": tier1.TIER1_V3_TRIAL_COUNT,
+        }
+    if workloads.get("capture_kind") == WP11_TIER1_V4_REQUALIFICATION_CAPTURE_KIND:
+        return {
+            "wp11_tier1_v4_requalification": WP11_TIER1_V4_REQUALIFICATION_POLICY,
+            "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION_V4,
+            "reference_validity": WP7_LEAN_REFERENCE_VALIDITY,
+            "cpu_measurement_variant": tier1.TIER1_V4_CPU_MEASUREMENT_VARIANT,
+            "completion_wall_measurement_variant": tier1.TIER1_V4_WALL_MEASUREMENT_VARIANT,
+            "measurement_variants": [name for name, _ in STEADY_STATE_MEASUREMENT_VARIANTS],
+            "paired_trial_count": tier1.TIER1_V4_TRIAL_COUNT,
         }
     if workloads.get("capture_kind") == "wp7_causal_training_requalification":
         return {
@@ -1643,10 +1656,15 @@ def _offline_completion_recipe_evidence(root: Path, recipe: dict) -> dict:
     }
 
 
-def _offline_steady_state_recipe_evidence(root: Path, recipe: dict) -> dict:
+def _offline_steady_state_recipe_evidence(
+    root: Path,
+    recipe: dict,
+    *,
+    trial_count: int = workload.TIER1_PAIR_COUNT,
+) -> dict:
     trials = []
     variant_names = [name for name, _ in STEADY_STATE_MEASUREMENT_VARIANTS]
-    for trial in range(7):
+    for trial in range(trial_count):
         order = list(reversed(COMPLETION_CAUSAL_STAGES)) if trial % 2 else list(COMPLETION_CAUSAL_STAGES)
         variant_schedule = _steady_state_variant_order_for_trial(trial)
         variants: dict = {}
@@ -1904,14 +1922,21 @@ def wp10_bounded_remediation(run_gl: bool = True) -> dict:
     )
 
 
-def steady_state_tier1_diagnosis_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
+def steady_state_tier1_diagnosis_workloads(
+    *,
+    executed_artifacts_start: dict | None = None,
+    trial_count: int = workload.TIER1_PAIR_COUNT,
+) -> dict:
     with tempfile.TemporaryDirectory(prefix="eu4-steady-state-") as temporary:
         root = Path(temporary)
         recipe_specs = [
             recipe for recipe in workload.recipes(root, include_held_out=False)
             if recipe.get("role") != "held_out"
         ]
-        recipes = [_offline_steady_state_recipe_evidence(root, recipe) for recipe in recipe_specs]
+        recipes = [
+            _offline_steady_state_recipe_evidence(root, recipe, trial_count=trial_count)
+            for recipe in recipe_specs
+        ]
         if executed_artifacts_start:
             test_library_sha256 = executed_artifacts_start["test_library_sha256"]
             workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
@@ -1923,6 +1948,7 @@ def steady_state_tier1_diagnosis_workloads(*, executed_artifacts_start: dict | N
             "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
             "recipes": recipes,
             "steady_state_tier1_diagnosis": True,
+            "paired_trial_count": trial_count,
             "test_library_sha256": test_library_sha256,
             "workload_harness_sha256": workload_harness_sha256,
             **_offline_workload_source_hashes(),
@@ -1990,6 +2016,86 @@ def wp9_tier1_v3_requalification(run_gl: bool = True) -> dict:
             f"Tier-1 admission under {tier1.TIER1_CAUSAL_POLICY_VERSION_V3}.",
             "Register archive under tier1_v3_requalification_archives with work_package: WP9.",
             f"Reference stages must satisfy {WP7_LEAN_REFERENCE_VALIDITY}.",
+        ],
+    }
+    return _publish_offline_immutable_evidence(
+        evidence,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=static,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
+        update_rolling_pointer=False,
+    )
+
+
+def tier1_v4_requalification_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
+    """Training steady-state capture for Tier-1 v4 admission (WP8 protocol, 21 paired trials)."""
+    diagnosis = steady_state_tier1_diagnosis_workloads(
+        executed_artifacts_start=executed_artifacts_start,
+        trial_count=workload.TIER1_V4_PAIR_COUNT,
+    )
+    offline_tier1_v4_admission = tier1.evaluate_wp8_steady_state_training_v4(
+        {"steady_state_tier1_diagnosis": diagnosis},
+    )
+    if executed_artifacts_start:
+        test_library_sha256 = executed_artifacts_start["test_library_sha256"]
+        workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
+    else:
+        test_library_sha256 = base.sha256(TEST_LIBRARY)
+        workload_harness_sha256 = base.sha256(WORKLOAD_HARNESS)
+    return {
+        "status": offline_tier1_v4_admission["status"],
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "capture_kind": WP11_TIER1_V4_REQUALIFICATION_CAPTURE_KIND,
+        "steady_state_tier1_diagnosis": diagnosis,
+        "offline_tier1_v4_admission": offline_tier1_v4_admission,
+        "test_library_sha256": test_library_sha256,
+        "workload_harness_sha256": workload_harness_sha256,
+        **_offline_workload_source_hashes(),
+    }
+
+
+def wp11_tier1_v4_requalification(run_gl: bool = True) -> dict:
+    """Training-only steady-state requalification under frozen Tier-1 v4 policy (21 paired trials)."""
+    if not run_gl:
+        raise base.BenchmarkError("wp11-tier1-v4-requalification requires GL workload execution")
+    identity_start = _offline_git_identity_snapshot()
+    if not identity_start.get("git_tree_clean"):
+        violations = _git_tree_clean_violations_for_evidence()
+        detail = ", ".join(violations[:8])
+        if len(violations) > 8:
+            detail += f", … (+{len(violations) - 8} more)"
+        raise base.BenchmarkError(
+            "Source tree dirty before Tier-1 v4 requalification"
+            + (f": {detail}" if detail else ""),
+        )
+    static = build()
+    artifact_start = _offline_executed_artifact_snapshot()
+    _require_build_executed_artifacts_match(static, artifact_start)
+    representative = tier1_v4_requalification_workloads(executed_artifacts_start=artifact_start)
+    artifact_end = _offline_executed_artifact_snapshot()
+    _require_executed_artifacts_stable(artifact_start, artifact_end)
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
+    v4_admission = representative["offline_tier1_v4_admission"]
+    evidence = {
+        "purpose": PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE,
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "status": "requalification_complete",
+        "build": static,
+        "representative_workloads": representative,
+        "offline_tier1_v4_admission": v4_admission,
+        "overhead_gate": v4_admission["status"],
+        "limitations": [
+            "Training recipes only; held-out not measured.",
+            "Steady-state protocol: post-arm prime, completion timing, variant rotation (WP8 harness).",
+            f"Tier-1 admission under {tier1.TIER1_CAUSAL_POLICY_VERSION_V4} with "
+            f"{tier1.TIER1_V4_TRIAL_COUNT} uniform paired trials per recipe.",
+            "Hybrid CPU floors unchanged from v3 (6 µs reference, 11 µs counters); completion wall ±5%.",
+            "Register archive under tier1_v4_requalification_archives with work_package: WP11.",
+            f"Reference stages must satisfy {WP7_LEAN_REFERENCE_VALIDITY}.",
+            "Baseline v3 failure: evidence 20261003T144237.317611Z-a73ea57b.",
         ],
     }
     return _publish_offline_immutable_evidence(
@@ -4120,6 +4226,15 @@ def main() -> int:
         action="store_true",
         help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
     )
+    w11=sub.add_parser(
+        "wp11-tier1-v4-requalification",
+        help="WP11: training-only steady-state Tier-1 v4 requalification (21 paired trials)",
+    )
+    w11.add_argument(
+        "--registry-json",
+        action="store_true",
+        help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
+    )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
     run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
@@ -4180,6 +4295,12 @@ def main() -> int:
                 print(json.dumps(result,indent=2))
         elif args.command=="wp10-bounded-remediation":
             result=wp10_bounded_remediation()
+            if args.registry_json:
+                print(json.dumps(result.get("immutable_evidence") or {},indent=2))
+            else:
+                print(json.dumps(result,indent=2))
+        elif args.command=="wp11-tier1-v4-requalification":
+            result=wp11_tier1_v4_requalification()
             if args.registry_json:
                 print(json.dumps(result.get("immutable_evidence") or {},indent=2))
             else:

@@ -109,6 +109,7 @@
       "notes": "Authoritative Mac Tier-1 v3 training requalification @ 1f4282a (merge PR#23). Policy tier1_causal_steady_state_hybrid_v3: overall failed — mesh counters_cpu_ns failed (CI upper bound above 11 µs floor); text_ui completion-wall gates unavailable. Not authoritative WP1; v2 remains production binding. Held-out under v3 blocked until training qualification is resolved (see docs/wp9-tier1-v3-design.md). Memo: docs/wp9-tier1-v3-requalification.md."
     }
   ],
+  "tier1_v4_requalification_archives": [],
   "steady_state_tier1_diagnosis_archives": [
     {
       "work_package": "WP8",
