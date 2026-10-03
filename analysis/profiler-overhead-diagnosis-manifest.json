@@ -27,7 +27,7 @@
       "git_commit": "038bd3c51591a8ee7d03584acd404bd163268ac1",
       "captured_at_utc": "20261003T115737.310357Z-ee9f5484",
       "tier1_causal_admission": "failed",
-      "notes": "Post-lean-REFERENCE causal-only training requalification (bare/reference/counters). Captured @ 038bd3c before merge 9350a2a. Not authoritative WP1; compare cpu_ns context to WP5 37f57796."
+      "notes": "Post-lean-REFERENCE causal-only training requalification (bare/reference/counters). Captured @ 038bd3c (identical tree to merge 9350a2a). Valid WP7 v2-policy failure; four-frame result may include post-arm lazy producer initialization and known submission-wall placement effects. Do not interpret as steady-state overhead without follow-up. Not authoritative WP1; compare cpu_ns context to WP5 37f57796."
     }
   ],
   "reference_cpu_decomposition_archives": [
