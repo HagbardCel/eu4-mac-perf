@@ -116,6 +116,8 @@ Retain in the **live-path inventory** (Phase A), but do not expect these to expl
 
 ### Phase B — Harness / profiler ablations
 
+**Implemented (ladder capture):** `python3 benchmark/eu4_frame_model.py reference-cpu-decomposition --registry-json` runs `bare` → `loaded-disabled` → `reference` with contract `wp6_loaded_disabled_v1` (`EU4_TEST_LOADED_DISABLED=1`, `MODE_REFERENCE`, `MEASURE_ENABLED` not armed).
+
 Extend offline harness pattern (same spirit as `ablation_accounting` / `ablation_writer` / `ablation_preparation` on the sampled path):
 
 - **`loaded-disabled`** stage: dylib loaded, measurement off — separates interposition tax from active REFERENCE work.
@@ -158,8 +160,8 @@ Short memo (like [WP5 requalification timing memo](wp5-requalification-timing-me
 
 - [x] Branch: `wp6-reference-cpu-decomposition` from `main` @ post–PR #10 merge (`602ca4b`).
 - [x] Phase A inventory — [wp6-phase-a-reference-inventory.md](wp6-phase-a-reference-inventory.md).
-- [ ] Phase B ablation hooks + unit tests (portable).
-- [ ] Phase C capture + provenance tests (mirror WP5b patterns).
+- [x] Phase B ladder: `loaded-disabled` contract + `reference-cpu-decomposition` capture (minimal-reference / marginal ablations still open).
+- [ ] Phase C Mac capture + manifest registration for ladder results.
 - [ ] Mac capture → immutable evidence + manifest registration.
 - [ ] Phase D memo; no Tier-1 gate changes.
 

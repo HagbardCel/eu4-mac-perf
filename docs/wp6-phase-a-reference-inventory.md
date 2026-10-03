@@ -267,4 +267,4 @@ Existing sampled ablations (`EU4_TEST_ABLATION=accounting|writer|preparation`) t
 
 1. **Inventory:** Timed REFERENCE work is **one `hook_update` tree/frame** plus **GL_wrappers/frame** interposed calls (formula above; mesh **~15k/frame**, not **N** draws alone).
 2. **Call-count model:** Frame-hook and clock work is **O(1)** (~35 `clock_gettime`/frame, ~14 hook-level `measurement_active`/frame). GL interposer **invocation count** is **O(GL_wrappers)** (~**5.4×** draw-command count **N** on mesh; formula cap **9× N**). Workload `measurement_active()` adds **Ntexture + Nstate** per frame (~**1195** on mesh). Those counts are orders of magnitude above individual O(1) frame-hook operations. **Whether CPU follows invocation/guard count** is for Phase B (`bare` → `loaded-disabled` → `reference`).
-3. **Next:** Implement `loaded-disabled` / `minimal-reference` per contract, then REFERENCE-scoped ablations. **Prioritize the three-stage ladder** before many fine-grained ablations.
+3. **Next:** Run `reference-cpu-decomposition` for the three-stage ladder; then `minimal-reference` and REFERENCE-scoped ablations as needed.

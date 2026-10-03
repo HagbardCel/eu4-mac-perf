@@ -204,6 +204,7 @@ static uint64_t now_ns(clockid_t id);
 #ifdef EU4_FRAME_MODEL_TEST
 /* Diagnostics only: these branches are absent from the production library. */
 static unsigned test_ablation;
+static bool test_loaded_disabled;
 static uint64_t test_measured_state_queries,test_measured_gpu_initializations;
 static bool test_gpu_timestamps=true,test_forensic_records=true,test_cached_metadata=false;
 static _Atomic uint64_t test_gpu_stamps,test_gpu_polls,test_gpu_results,test_detail_records;
@@ -2324,9 +2325,14 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_arm(unsigned fr
         pthread_mutex_lock(&gpu_lock);memset(&gpu_registry,0,sizeof(gpu_registry));pthread_mutex_unlock(&gpu_lock);
     }
     atomic_store_explicit(&control->command_seq,3,memory_order_release);
-    control->flags|=MEASURE_ENABLED;
-    if(frames) control->flags|=FORENSIC_CAPTURE;
-    else control->flags&=~FORENSIC_CAPTURE;
+    if(test_loaded_disabled) {
+        control->flags&=~(MEASURE_ENABLED|FORENSIC_CAPTURE);
+        control->mode=REFERENCE;
+    } else {
+        control->flags|=MEASURE_ENABLED;
+        if(frames) control->flags|=FORENSIC_CAPTURE;
+        else control->flags&=~FORENSIC_CAPTURE;
+    }
     control->detail_frames=frames;
     control->generation=2; control->measurement_epoch=1;
     atomic_store_explicit(&control->command_seq,4,memory_order_release);
@@ -2353,7 +2359,8 @@ static void initialize(void) {
     const char *ablation=getenv("EU4_TEST_ABLATION");
     test_ablation=ablation && !strcmp(ablation,"accounting")?1:ablation && !strcmp(ablation,"writer")?2:
         ablation && !strcmp(ablation,"preparation")?3:0;
-    if(!test_read_toggle("EU4_TEST_GPU_TIMESTAMPS",true,&test_gpu_timestamps) ||
+    if(!test_read_toggle("EU4_TEST_LOADED_DISABLED",false,&test_loaded_disabled) ||
+       !test_read_toggle("EU4_TEST_GPU_TIMESTAMPS",true,&test_gpu_timestamps) ||
        !test_read_toggle("EU4_TEST_FORENSIC_RECORDS",true,&test_forensic_records) ||
        !test_read_toggle("EU4_TEST_CACHED_METADATA",false,&test_cached_metadata)) abort();
 #endif

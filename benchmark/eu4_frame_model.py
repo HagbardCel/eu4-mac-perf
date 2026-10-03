@@ -49,6 +49,7 @@ WRITER_HARNESS = ROOT / "benchmark/.build/frame_model_writer_harness"
 TEST_LIBRARY=ROOT/"benchmark/.build/libeu4_frame_model_test.dylib"
 WORKLOAD_HARNESS=ROOT/"benchmark/.build/frame_model_workload_harness"
 WARMUP_BOUNDARY_HARNESS=ROOT/"benchmark/.build/frame_model_warmup_boundary_harness"
+LOADED_DISABLED_HARNESS=ROOT/"benchmark/.build/frame_model_loaded_disabled_harness"
 REFERENCE_TRANSITION_HARNESS=ROOT/"benchmark/.build/frame_model_reference_transition_harness"
 WRITER_PRODUCTION_HARNESS=ROOT/"benchmark/.build/frame_model_writer_production_harness"
 DRAW_ALIAS_HARNESS=ROOT/"benchmark/.build/frame_model_draw_alias_harness"
@@ -114,6 +115,8 @@ def build() -> dict:
          "-o",str(WORKLOAD_HARNESS),str(ROOT/"tests/frame_model_workload_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
          "-o",str(WARMUP_BOUNDARY_HARNESS),str(ROOT/"tests/frame_model_warmup_boundary_harness.c")],
+        ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-framework","OpenGL",
+         "-o",str(LOADED_DISABLED_HARNESS),str(ROOT/"tests/frame_model_loaded_disabled_harness.c")],
         ["clang","-arch","x86_64","-O2","-Wall","-Wextra","-Werror","-pthread","-framework","OpenGL",
          "-o",str(REFERENCE_TRANSITION_HARNESS),str(ROOT/"tests/frame_model_reference_transition_harness.c")],
         ["clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-Werror",
@@ -301,6 +304,10 @@ TRAINING_ONLY_VALIDATION_SCOPE = "training_only"
 FORENSIC_DETAIL_RECORD_KINDS = ("D", "S", "U", "V", "W", "B", "b", "T", "t")
 PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE = "profiler_overhead_diagnosis_v1"
 WP5B_COMPLETION_DIAGNOSIS_PURPOSE = "wp5b_completion_diagnosis_v1"
+WP6_REFERENCE_CPU_DECOMPOSITION_PURPOSE = "wp6_reference_cpu_decomposition_v1"
+WP6_LOADED_DISABLED_CONTRACT = "wp6_loaded_disabled_v1"
+REFERENCE_CPU_LADDER_STAGES = ("bare", "loaded-disabled", "reference")
+REFERENCE_CPU_METRICS = ("elapsed_ns", "cpu_ns")
 COMPLETION_TIMING_METRICS = (
     "elapsed_ns",
     "cpu_ns",
@@ -620,6 +627,7 @@ def _offline_workloads_payload(preflight_evidence: dict) -> dict:
     return (
         preflight_evidence.get("representative_workloads")
         or preflight_evidence.get("completion_workloads")
+        or preflight_evidence.get("reference_cpu_workloads")
         or {}
     )
 
@@ -633,6 +641,16 @@ def _offline_workload_source_hashes() -> dict:
 
 
 def _offline_policy_versions(workloads: dict) -> dict:
+    if workloads.get("reference_cpu_decomposition"):
+        return {
+            "reference_cpu_decomposition": WP6_REFERENCE_CPU_DECOMPOSITION_PURPOSE,
+            "loaded_disabled_contract": WP6_LOADED_DISABLED_CONTRACT,
+            "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
+            "reference_band_fraction": "non_normative_0.03",
+            "reference_cpu_decomposition_text": (
+                "bare / loaded-disabled / reference ladder; comparisons are diagnostic only."
+            ),
+        }
     if workloads.get("completion_timing"):
         return {
             "completion_diagnosis": WP5B_COMPLETION_DIAGNOSIS_PURPOSE,
@@ -984,6 +1002,29 @@ def offline_workload_telemetry_paths_for_recipe_trial(recipe_name: str, trial: i
     return paths
 
 
+def _offline_workload_private_env() -> frozenset[str]:
+    return frozenset({
+        "DYLD_INSERT_LIBRARIES",
+        "EU4_FRAME_MODEL_CONTROL",
+        "EU4_FRAME_MODEL_LOG",
+        "EU4_TEST_ABLATION",
+        "EU4_TEST_SAMPLED",
+        "EU4_TEST_GPU_TIMESTAMPS",
+        "EU4_TEST_FORENSIC_RECORDS",
+        "EU4_TEST_CACHED_METADATA",
+        "EU4_TEST_COMPLETION_TIMING",
+        "EU4_TEST_LOADED_DISABLED",
+    })
+
+
+def _offline_workload_mode_and_flags(stage: str) -> tuple[int, int]:
+    if stage == "loaded-disabled":
+        return MODE["reference"], 0
+    if stage == "reference":
+        return MODE["reference"], 1
+    return MODE["profile"], 1
+
+
 def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *, completion_timing: bool = False):
     control_path=root/"control.bin"
     log_path=offline_workload_log_path(root, recipe, trial, stage)
@@ -992,15 +1033,15 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
             f"Refusing to reuse telemetry path {log_path.name} (stale or colliding stage identity)",
         )
     frames=4
-    mode=MODE["reference"] if stage=="reference" else MODE["profile"]
-    fields=[FORMAT_VERSION,2,mode,1,1,0,0,0,1,0,0,0,0,0]
-    control_path.write_bytes(CONTROL.pack(*fields)+bytes(CONTROL_SIZE-CONTROL.size))
-    private=("DYLD_INSERT_LIBRARIES","EU4_FRAME_MODEL_CONTROL","EU4_FRAME_MODEL_LOG",
-        "EU4_TEST_ABLATION","EU4_TEST_SAMPLED","EU4_TEST_GPU_TIMESTAMPS",
-        "EU4_TEST_FORENSIC_RECORDS","EU4_TEST_CACHED_METADATA","EU4_TEST_COMPLETION_TIMING")
-    env={k:v for k,v in os.environ.items() if k not in private}
+    env={k:v for k,v in os.environ.items() if k not in _offline_workload_private_env()}
     if stage.startswith("ablation_"):
         env["EU4_TEST_ABLATION"]=stage.removeprefix("ablation_")
+    if stage == "loaded-disabled":
+        env["EU4_TEST_LOADED_DISABLED"] = "1"
+    if stage!="bare":
+        mode, flags = _offline_workload_mode_and_flags(stage)
+        fields=[FORMAT_VERSION,2,mode,1,flags,0,0,0,1,0,0,0,0,0]
+        control_path.write_bytes(CONTROL.pack(*fields)+bytes(CONTROL_SIZE-CONTROL.size))
     if stage!="bare":
         env.update(DYLD_INSERT_LIBRARIES=str(TEST_LIBRARY),
             EU4_FRAME_MODEL_CONTROL=str(control_path),EU4_FRAME_MODEL_LOG=str(log_path))
@@ -1023,7 +1064,8 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
     measured=parse_workload_harness_metrics(run.stdout)
     if completion_timing:
         _require_completion_timing_metrics(measured)
-    if stage=="bare": return measured,None
+    if stage in ("bare", "loaded-disabled"):
+        return measured, None
     rows=frame_rows(log_path);trace=read_rows(log_path)
     tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
     failure=next((int(r[1]) for r in trace if r[0]=="Z"),None)
@@ -1284,6 +1326,117 @@ def wp5b_completion_diagnosis(run_gl: bool = True) -> dict:
             "comparison.status is always diagnostic; reference_band_fraction is non-normative.",
             "Training recipes only; held-out not measured.",
             "Compare submission window vs submission+post-window glFinish drain.",
+        ],
+    }
+    return _publish_offline_immutable_evidence(
+        evidence,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=static,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
+        update_rolling_pointer=False,
+    )
+
+
+def _reference_cpu_stage_comparisons(trials: list[dict]) -> dict:
+    comparisons: dict = {}
+    pairs = (("loaded-disabled", "bare"), ("reference", "loaded-disabled"))
+    for stage, reference in pairs:
+        for axis in REFERENCE_CPU_METRICS:
+            comparisons[f"{stage}_{axis}"] = _completion_diagnostic_paired_summary(
+                [
+                    {
+                        "instrumented": trial["stages"][stage][axis],
+                        "reference": trial["stages"][reference][axis],
+                    }
+                    for trial in trials
+                ],
+            )
+    return comparisons
+
+
+def _offline_reference_cpu_recipe_evidence(root: Path, recipe: dict) -> dict:
+    trials = []
+    for trial in range(workload.TIER1_PAIR_COUNT):
+        stages = (
+            tuple(reversed(REFERENCE_CPU_LADDER_STAGES))
+            if trial % 2
+            else REFERENCE_CPU_LADDER_STAGES
+        )
+        values: dict = {}
+        for stage in stages:
+            values[stage], _ = _offline_workload_stage(root, recipe, trial, stage)
+        trials.append({"trial": trial, "order": list(stages), "stages": values})
+    recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
+    return {
+        "recipe": recipe_meta,
+        "trials": trials,
+        "comparisons": _reference_cpu_stage_comparisons(trials),
+    }
+
+
+def reference_cpu_decomposition_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
+    with tempfile.TemporaryDirectory(prefix="eu4-reference-cpu-") as temporary:
+        root = Path(temporary)
+        recipe_specs = [
+            recipe for recipe in workload.recipes(root, include_held_out=False)
+            if recipe.get("role") != "held_out"
+        ]
+        recipes = [_offline_reference_cpu_recipe_evidence(root, recipe) for recipe in recipe_specs]
+        if executed_artifacts_start:
+            test_library_sha256 = executed_artifacts_start["test_library_sha256"]
+            workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
+        else:
+            test_library_sha256 = base.sha256(TEST_LIBRARY)
+            workload_harness_sha256 = base.sha256(WORKLOAD_HARNESS)
+        return {
+            "status": "complete",
+            "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+            "recipes": recipes,
+            "test_library_sha256": test_library_sha256,
+            "workload_harness_sha256": workload_harness_sha256,
+            "reference_cpu_decomposition": True,
+            "loaded_disabled_contract": WP6_LOADED_DISABLED_CONTRACT,
+            "ladder_stages": list(REFERENCE_CPU_LADDER_STAGES),
+            **_offline_workload_source_hashes(),
+        }
+
+
+def wp6_reference_cpu_decomposition(run_gl: bool = True) -> dict:
+    """Training-only bare / loaded-disabled / reference ladder (diagnostic, non-acceptance)."""
+    if not run_gl:
+        raise base.BenchmarkError("reference-cpu-decomposition requires GL workload execution")
+    identity_start = _offline_git_identity_snapshot()
+    if not identity_start.get("git_tree_clean"):
+        violations = _git_tree_clean_violations_for_evidence()
+        detail = ", ".join(violations[:8])
+        if len(violations) > 8:
+            detail += f", … (+{len(violations) - 8} more)"
+        raise base.BenchmarkError(
+            "Source tree dirty before reference CPU decomposition"
+            + (f": {detail}" if detail else ""),
+        )
+    static = build()
+    artifact_start = _offline_executed_artifact_snapshot()
+    _require_build_executed_artifacts_match(static, artifact_start)
+    reference_cpu = reference_cpu_decomposition_workloads(executed_artifacts_start=artifact_start)
+    artifact_end = _offline_executed_artifact_snapshot()
+    _require_executed_artifacts_stable(artifact_start, artifact_end)
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
+    evidence = {
+        "purpose": WP6_REFERENCE_CPU_DECOMPOSITION_PURPOSE,
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "status": "diagnostic_complete",
+        "build": static,
+        "reference_cpu_workloads": reference_cpu,
+        "limitations": [
+            "Diagnostic only; does not change Tier-1 acceptance gates.",
+            "comparison.status is always diagnostic; reference_band_fraction is non-normative.",
+            "Training recipes only; held-out not measured.",
+            f"loaded-disabled contract: {WP6_LOADED_DISABLED_CONTRACT} (MODE_REFERENCE, MEASURE_ENABLED off via EU4_TEST_LOADED_DISABLED).",
+            "Interpret loaded-disabled − bare as fixed instrumentation tax; reference − loaded-disabled as active REFERENCE tax.",
         ],
     }
     return _publish_offline_immutable_evidence(
@@ -2968,6 +3121,15 @@ def main() -> int:
         action="store_true",
         help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
     )
+    rc=sub.add_parser(
+        "reference-cpu-decomposition",
+        help="WP6: bare / loaded-disabled / reference CPU ladder (training only)",
+    )
+    rc.add_argument(
+        "--registry-json",
+        action="store_true",
+        help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
+    )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
     run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
@@ -2992,6 +3154,12 @@ def main() -> int:
                 print(json.dumps(result,indent=2))
         elif args.command=="completion-diagnosis":
             result=wp5b_completion_diagnosis()
+            if args.registry_json:
+                print(json.dumps(result.get("immutable_evidence") or {},indent=2))
+            else:
+                print(json.dumps(result,indent=2))
+        elif args.command=="reference-cpu-decomposition":
+            result=wp6_reference_cpu_decomposition()
             if args.registry_json:
                 print(json.dumps(result.get("immutable_evidence") or {},indent=2))
             else:
