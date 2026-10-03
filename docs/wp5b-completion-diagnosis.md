@@ -24,7 +24,13 @@ Training recipes only (`mesh`, `borders`, `text_ui`), seven paired trials, stage
 
 ## Archives
 
-`frame-model-offline-6e5d53c-20261003T072406.749030Z-f7cbf346.json` (`f7cbf346`) was captured before comparison summaries used the diagnostic schema. Its `comparisons.*.status` / `limit` fields **must not** be read as Tier-1 acceptance; raw per-stage timings remain valid.
+`frame-model-offline-6e5d53c-20261003T072406.749030Z-f7cbf346.json` (`f7cbf346`) is the **pre-metadata-fix** immutable capture (`6e5d53c`). Treat it as historical:
+
+- `comparisons.*.status` / `limit` are legacy diagnostic labels, not Tier-1 acceptance.
+- Top-level `artifact_hashes.recipe_sha256` and source hashes were empty because metadata only read `representative_workloads`; recipe SHA-256 values inside each `completion_workloads.recipes[].recipe` remain valid, as do executed binary hashes.
+- Persisted `recipe.path` values were ephemeral temp-dir paths and are non-semantic.
+
+Later captures after the provenance fix should populate standard `artifact_hashes` and omit `path`.
 
 ## Interpretation
 

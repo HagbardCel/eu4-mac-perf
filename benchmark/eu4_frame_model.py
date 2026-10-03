@@ -616,8 +616,33 @@ def _offline_environment_metadata() -> dict:
     return meta
 
 
-def _offline_policy_versions(representative: dict) -> dict:
-    first = (representative.get("recipes") or [{}])[0]
+def _offline_workloads_payload(preflight_evidence: dict) -> dict:
+    return (
+        preflight_evidence.get("representative_workloads")
+        or preflight_evidence.get("completion_workloads")
+        or {}
+    )
+
+
+def _offline_workload_source_hashes() -> dict:
+    return {
+        "harness_source_sha256": base.sha256(ROOT / "tests/frame_model_workload_harness.c"),
+        "profiler_source_sha256": base.sha256(SOURCE),
+        "gpu_segments_source_sha256": base.sha256(ROOT / "benchmark/eu4_gpu_segments.h"),
+    }
+
+
+def _offline_policy_versions(workloads: dict) -> dict:
+    if workloads.get("completion_timing"):
+        return {
+            "completion_diagnosis": WP5B_COMPLETION_DIAGNOSIS_PURPOSE,
+            "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
+            "reference_band_fraction": "non_normative_0.03",
+            "completion_diagnosis_text": (
+                "Submission-window and post-glFinish drain timing; comparisons are diagnostic only."
+            ),
+        }
+    first = (workloads.get("recipes") or [{}])[0]
     return {
         "seven_pair_gate": OFFLINE_SEVEN_PAIR_POLICY_VERSION,
         "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
@@ -639,7 +664,7 @@ def build_offline_evidence_metadata(
     executed_artifact_end: dict,
 ) -> dict:
     """Shared top-level metadata for the immutable archive and rolling pointer."""
-    representative = preflight_evidence.get("representative_workloads") or {}
+    workloads = _offline_workloads_payload(preflight_evidence)
     return {
         "evidence_id": evidence_id,
         "schema_version": OFFLINE_EVIDENCE_SCHEMA_VERSION,
@@ -648,9 +673,9 @@ def build_offline_evidence_metadata(
         "executed_artifact_start": executed_artifact_start,
         "executed_artifact_end": executed_artifact_end,
         "environment": _offline_environment_metadata(),
-        "policy_versions": _offline_policy_versions(representative),
+        "policy_versions": _offline_policy_versions(workloads),
         "artifact_hashes": _offline_artifact_hashes(
-            representative,
+            workloads,
             build_info,
             identity_end=identity_end,
             executed_artifacts=executed_artifact_start,
@@ -1193,8 +1218,9 @@ def _offline_completion_recipe_evidence(root: Path, recipe: dict) -> dict:
                 root, recipe, trial, stage, completion_timing=True,
             )
         trials.append({"trial": trial, "order": list(stages), "stages": values})
+    recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
     return {
-        "recipe": recipe,
+        "recipe": recipe_meta,
         "trials": trials,
         "comparisons": _completion_stage_comparisons(trials),
     }
@@ -1221,6 +1247,7 @@ def completion_diagnosis_workloads(*, executed_artifacts_start: dict | None = No
             "test_library_sha256": test_library_sha256,
             "workload_harness_sha256": workload_harness_sha256,
             "completion_timing": True,
+            **_offline_workload_source_hashes(),
         }
 
 
@@ -1319,9 +1346,7 @@ def offline_workloads(
             "recipes": evidence,
             "test_library_sha256": test_library_sha256,
             "workload_harness_sha256": workload_harness_sha256,
-            "harness_source_sha256": base.sha256(ROOT / "tests/frame_model_workload_harness.c"),
-            "profiler_source_sha256": base.sha256(SOURCE),
-            "gpu_segments_source_sha256": base.sha256(ROOT / "benchmark/eu4_gpu_segments.h"),
+            **_offline_workload_source_hashes(),
         }
         if not include_held_out:
             payload["validation_scope"] = TRAINING_ONLY_VALIDATION_SCOPE
