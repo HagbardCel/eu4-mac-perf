@@ -71,9 +71,9 @@ Wall and CPU ratios track together; REFERENCE CPU is **higher** than counters.
 
 Borders inversion is stable across forward/reverse order (7/7). text_ui trial 1 (reverse) is an outlier; note in WP5b diagnostics.
 
-## Next step (WP5b — proposed)
+## Next step (WP5b — implemented on branch)
 
-Extend the harness to time submission and a post-window `glFinish()` drain separately, recording **wall and thread CPU** for each:
+Extend the harness to time submission and a post-window `glFinish()` drain separately, recording **wall and thread CPU** for each (see `docs/wp5b-completion-diagnosis.md`):
 
 - `submission_elapsed_ns` / `submission_cpu_ns`
 - `post_window_drain_elapsed_ns` / `post_window_drain_cpu_ns`

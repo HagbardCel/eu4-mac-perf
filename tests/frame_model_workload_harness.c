@@ -67,15 +67,36 @@ int main(int argc,char **argv) {
     glFinish();GLenum warm_error=glGetError();if(warm_error!=GL_NO_ERROR) {fprintf(stderr,"warmup GL error=%u\n",warm_error);return 11;}
     void (*arm)(unsigned)=dlsym(RTLD_DEFAULT,"eu4_frame_model_test_arm");
     if(arm) arm(getenv("EU4_TEST_SAMPLED")?frames:0);
+    const char *completion_timing=getenv("EU4_TEST_COMPLETION_TIMING");
+    int report_completion=completion_timing && strcmp(completion_timing,"0");
     uint64_t cpu=now(CLOCK_THREAD_CPUTIME_ID),wall=now(CLOCK_UPTIME_RAW);
     for(unsigned i=0;i<frames;i++) { if(frame) frame(workload);else workload(); }
-    uint64_t elapsed=now(CLOCK_UPTIME_RAW)-wall,thread=now(CLOCK_THREAD_CPUTIME_ID)-cpu;
+    uint64_t submission_elapsed=now(CLOCK_UPTIME_RAW)-wall,submission_cpu=now(CLOCK_THREAD_CPUTIME_ID)-cpu;
+    uint64_t drain_elapsed=0,drain_cpu=0;
+    if(report_completion) {
+        uint64_t drain_wall=now(CLOCK_UPTIME_RAW),drain_thread=now(CLOCK_THREAD_CPUTIME_ID);
+        glFinish();
+        drain_elapsed=now(CLOCK_UPTIME_RAW)-drain_wall;
+        drain_cpu=now(CLOCK_THREAD_CPUTIME_ID)-drain_thread;
+    }
+    uint64_t elapsed=submission_elapsed,thread=submission_cpu;
     uint64_t (*measured_queries)(void)=dlsym(RTLD_DEFAULT,"eu4_frame_model_test_measured_queries");
     if(measured_queries && (!getenv("EU4_TEST_ABLATION") || strcmp(getenv("EU4_TEST_ABLATION"),"preparation")) && measured_queries()) return 13;
     unsigned char pixel[4];glReadPixels(16,16,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
     GLenum error=glGetError();
     if(error!=GL_NO_ERROR || !pixel[3]) { fprintf(stderr,"validation: GL error=%u alpha=%u\n",error,pixel[3]);return 12; }
-    printf("elapsed_ns=%llu cpu_ns=%llu draws=%u valid=1 pixel_alpha=%u preparation_wall_ns=%llu preparation_cpu_ns=%llu\n",(unsigned long long)elapsed,(unsigned long long)thread,frames*command_count,pixel[3],(unsigned long long)preparation_wall,(unsigned long long)preparation_cpu);
+    printf("elapsed_ns=%llu cpu_ns=%llu draws=%u valid=1 pixel_alpha=%u preparation_wall_ns=%llu preparation_cpu_ns=%llu",
+           (unsigned long long)elapsed,(unsigned long long)thread,frames*command_count,pixel[3],
+           (unsigned long long)preparation_wall,(unsigned long long)preparation_cpu);
+    if(report_completion) {
+        printf(" submission_elapsed_ns=%llu submission_cpu_ns=%llu post_window_drain_elapsed_ns=%llu"
+               " post_window_drain_cpu_ns=%llu submission_plus_drain_elapsed_ns=%llu submission_plus_drain_cpu_ns=%llu",
+               (unsigned long long)submission_elapsed,(unsigned long long)submission_cpu,
+               (unsigned long long)drain_elapsed,(unsigned long long)drain_cpu,
+               (unsigned long long)(submission_elapsed+drain_elapsed),
+               (unsigned long long)(submission_cpu+drain_cpu));
+    }
+    printf("\n");
     CGLSetCurrentContext(NULL);CGLDestroyContext(ctx);CGLDestroyPixelFormat(pf);
     free(vertices);free(indices);free(commands);return 0;
 }
