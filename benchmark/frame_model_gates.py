@@ -77,6 +77,35 @@ HELPER_SECONDS = 1200
 RUN_DEADLINE_SECONDS = 1140
 
 
+def intrusive_diagnostic_run_budget(
+    phase_count: int = 5,
+    phase_duration_s: int = 20,
+    *,
+    readiness_s: int = 180,
+    warmup_s: int = 150,
+    forensic_tail_s: int = 20,
+    cleanup_s: int = 40,
+) -> int:
+    """Worst-case controller budget for Phase C R–C–R–C–R plus isolated forensic tail."""
+    per_phase_overhead = 17
+    settle_s = 5
+    durations = [phase_duration_s] * phase_count
+    if forensic_tail_s:
+        durations.append(forensic_tail_s)
+    budget = (
+        readiness_s
+        + warmup_s
+        + sum(durations)
+        + len(durations) * (settle_s + per_phase_overhead)
+        + cleanup_s
+    )
+    if budget > RUN_DEADLINE_SECONDS:
+        raise ValueError(
+            f"Intrusive diagnostic run budget {budget}s exceeds controller deadline {RUN_DEADLINE_SECONDS}s",
+        )
+    return budget
+
+
 def run_budget(phases, low_power=False, fixed=False, discovery=False):
     # Readiness 180, warmup 90 + bounded 60 extension; every phase has 5-second
     # settling and three 4-second acknowledgement allowances. Cleanup reserves 40.

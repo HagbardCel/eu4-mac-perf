@@ -7,6 +7,7 @@ Phase B authoritative capture: [`e86e33b3`](observer-bias-calibration-memo-20261
 ```text
 90 s warm-up (paused, fixture-stable)
 R1 20 s → C1 20 s → R2 20 s → C2 20 s → R3 20 s
+TAIL 20 s (isolated forensic detail; excluded from R/C observer brackets)
 ```
 
 - **R** = lean REFERENCE (low intrusion baseline).
@@ -15,11 +16,11 @@ R1 20 s → C1 20 s → R2 20 s → C2 20 s → R3 20 s
 
 Preflight: `preflight --intrusive-diagnostic-contract` (WP11 terminal record + build integrity).
 
-Live capture: `run --diagnostic-only` (implementation pending).
+Live capture: `python3 benchmark/eu4_frame_model.py run --diagnostic-only <output-dir>`.
 
 ## What to measure (priority order)
 
-1. **Live R↔C observer effect** — frame cadence, process CPU, swap rate between R and C phases. This dominates the offline ~9–10 µs/frame mesh prior.
+1. **Live R↔C observer effect** — bracketed **C1 vs (R1,R2)** and **C2 vs (R2,R3)** plus aggregate; lean REFERENCE-compatible frame fields (update/loop CPU, cadence), external EU IV CPU, swap rate, and system power. Compare aggregate update-CPU Δ to the offline ~9–10 µs/frame mesh prior.
 2. **Relative attribution in C1/C2** — category/path **shares** and **rank stability** across the two counters windows. Report raw profiler-inclusive timings with explicit unqualified labeling.
 3. **Offline mesh prior** — `counters_incremental` ≈ **9.25 µs/frame** (9247 ns/frame, SE ~448 ns) on the training mesh surrogate; use as a sanity bracket for live perturbation, not as a per-path correction.
 
@@ -32,9 +33,12 @@ Live COUNTERS perturbation (R vs C):     +X% CPU, +Y% swaps  (measured)
 Offline mesh prior (aggregate only):     ~9–10 µs/frame
 Component-level bias correction:         unavailable (non-identifiable decomposition)
 
-Category/path          share (C1)   share (C2)   rank stable?
------------------------------------------------------------
-…                      …%           …%           yes/no
+Category/path (exclusive scope path)   share (C1)   share (C2)   rank stable?
+---------------------------------------------------------------------------
+…                                      …%           …%           yes/no
+
+Envelope residuals and semantic/update + semantic/render coverage are reported alongside shares.
+Run `status` may be `complete_with_attribution_gap` when R/C succeeded but attribution or forensic tail evidence is incomplete.
 ```
 
 Forensic/detail windows: emphasize **counts and structural relationships**; GPU timestamp and sparse draw-clock instrumentation may perturb execution (see Phase B forensic slopes).

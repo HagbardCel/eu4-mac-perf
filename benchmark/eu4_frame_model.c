@@ -1921,7 +1921,16 @@ static void gl_vertex_attrib_pointer(GLuint index,GLint size,GLenum type,
             .normalized=normalized,.stride=stride,.pointer=(uintptr_t)pointer,
             .divisor=a->divisor,.enabled=a->enabled};
     }
-    if(gl_measurement_active()) {gl_event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {
+        gl_event(HOOK_GL_STATE,0,0);
+        current_frame.state_calls++;
+        if(detail_active) {
+            uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+            uint64_t packed=((uint64_t)(index&0x3f)<<56)|((uint64_t)(size&0xff)<<48)|
+                ((uint64_t)type<<32)|((uint64_t)(stride&0xffff)<<16)|((uintptr_t)pointer&0xffff);
+            detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,8,packed);
+        }
+    }
 }
 static void gl_enable_vertex_attrib(GLuint index) {
     static void (*real_fn)(GLuint)=glEnableVertexAttribArray;
@@ -1930,7 +1939,14 @@ static void gl_enable_vertex_attrib(GLuint index) {
     if(!vertex_array_state || !state_seeded) seed_gl_state();
     if(index>=32) invalidate_gl_state(EU4_SHADOW_MUTATION);
     if(vertex_array_state && index<32) vertex_array_state->attributes[index].enabled=GL_TRUE;
-    if(gl_measurement_active()) {gl_event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {
+        gl_event(HOOK_GL_STATE,0,0);
+        current_frame.state_calls++;
+        if(detail_active) {
+            uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+            detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,9,(uint64_t)index);
+        }
+    }
 }
 static void gl_disable_vertex_attrib(GLuint index) {
     static void (*real_fn)(GLuint)=glDisableVertexAttribArray;
@@ -1939,7 +1955,14 @@ static void gl_disable_vertex_attrib(GLuint index) {
     if(!vertex_array_state || !state_seeded) seed_gl_state();
     if(index>=32) invalidate_gl_state(EU4_SHADOW_MUTATION);
     if(vertex_array_state && index<32) vertex_array_state->attributes[index].enabled=GL_FALSE;
-    if(gl_measurement_active()) {gl_event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {
+        gl_event(HOOK_GL_STATE,0,0);
+        current_frame.state_calls++;
+        if(detail_active) {
+            uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+            detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,10,(uint64_t)index);
+        }
+    }
 }
 static void gl_vertex_attrib_divisor(GLuint index,GLuint divisor) {
     static void (*real_fn)(GLuint,GLuint)=glVertexAttribDivisor;
@@ -1948,7 +1971,15 @@ static void gl_vertex_attrib_divisor(GLuint index,GLuint divisor) {
     if(!vertex_array_state || !state_seeded) seed_gl_state();
     if(index>=32) invalidate_gl_state(EU4_SHADOW_MUTATION);
     if(vertex_array_state && index<32) vertex_array_state->attributes[index].divisor=divisor;
-    if(gl_measurement_active()) {gl_event(HOOK_GL_STATE,0,0);current_frame.state_calls++;}
+    if(gl_measurement_active()) {
+        gl_event(HOOK_GL_STATE,0,0);
+        current_frame.state_calls++;
+        if(detail_active) {
+            uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+            detail_line("S",current_frame.render_id,caller>=image_base?caller-image_base:0,11,
+                        ((uint64_t)(index&0xffffffff)<<32)|(uint64_t)divisor);
+        }
+    }
 }
 static void gl_tex_image_2d(GLenum target,GLint level,GLint internal,GLsizei width,
         GLsizei height,GLint border,GLenum format,GLenum type,const void *pixels) {

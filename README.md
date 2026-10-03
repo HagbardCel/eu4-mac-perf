@@ -9,12 +9,12 @@ and pass. Sample windows now require complete plain neighbors, state/query
 preparation runs unmeasured, GL accounting is aggregated per frame, and writer
 output is batched. Draw API coverage fails closed for unknown submission paths.
 **Tier-1 qualification ended with WP11** (`33339073`, failed v4 admission). Absolute
-timings are **not** quantitatively qualified for production claims. The **intrusive
-diagnostic contract** is available via preflight; the bounded live capture schedule
-(Phase C) is not implemented yet:
+timings are **not** quantitatively qualified for production claims. The **intrusive diagnostic contract** is available via preflight; **Phase C** live
+capture uses `run --diagnostic-only` (R–C–R–C–R after warm-up):
 
 ```sh
 python3 benchmark/eu4_frame_model.py preflight --intrusive-diagnostic-contract
+python3 benchmark/eu4_frame_model.py run --diagnostic-only results/
 ```
 
 See [live diagnostic measurement contract](docs/live-diagnostic-measurement-contract.md),
@@ -476,9 +476,8 @@ forensic capture.
 
 **Intrusive diagnostic contract** (`preflight --intrusive-diagnostic-contract`):
 records failed Tier-1 admission but does not block preflight. Live intrusive
-capture (`run --diagnostic-only`) is deferred to Phase C (R–C–R–C–R); when
-implemented, observer effect will be measured and reported, not used as a hard
-admission gate. Do not treat profiler absolute timings as uninstrumented EU IV
+capture (`run --diagnostic-only`) runs the Phase C R–C–R–C–R schedule; live
+observer effect is measured and reported, not used as a hard 3% admission gate. Do not treat profiler absolute timings as uninstrumented EU IV
 measurements in either mode.
 
 Static preflight alone cannot measure overhead. See

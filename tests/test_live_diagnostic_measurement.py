@@ -60,11 +60,181 @@ class IntrusiveDiagnosticGatePolicyTests(unittest.TestCase):
         evidence.require(gates.required_gates_for_report_kind("intrusive_diagnostic"))
 
 
+def _phase_c_synthetic_frame(phase_name: str, *, counters: bool) -> dict:
+    """Counters windows are fully instrumented; reference matches lean REFERENCE semantics."""
+    multiplier = 1.1 if counters else 1.0
+    return {
+        "phase": model.PHASE_NUMBER[phase_name],
+        "update_id": 1,
+        "render_id": 1,
+        "measurement_epoch": 1,
+        "render_executed": 1 if counters else 0,
+        "render_attempts": 1 if counters else 0,
+        "present_calls": 1 if counters else 0,
+        "present_scene_calls": 0,
+        "update_wall_ns": int(8e6),
+        "update_cpu_ns": int(4e6 * multiplier),
+        "render_wall_ns": int(2e6) if counters else 0,
+        "render_cpu_ns": int(1e6 * multiplier) if counters else 0,
+        "idle_wall_ns": 0,
+        "idle_cpu_ns": 0,
+        "present_wall_ns": int(1e6) if counters else 0,
+        "present_cpu_ns": int(5e5) if counters else 0,
+        "wait_ns": 0,
+        "wait_cpu_ns": 0,
+        "wall_ns": int(12e6),
+        "cpu_ns": int(6e6 * multiplier),
+        "draws": 10 if counters else 0,
+        "indices": 100,
+        "triangles": 50,
+        "draw_wall_ns_est": 0,
+        "draw_cpu_ns_est": 0,
+        "draw_timed_samples": 2 if counters else 0,
+        "buffer_calls": 3 if counters else 0,
+        "buffer_bytes": 0,
+        "buffer_storage_bytes": 0,
+        "buffer_upload_bytes": 0,
+        "texture_calls": 0,
+        "texture_bytes": 0,
+        "uniform_calls": 4 if counters else 0,
+        "uniform_bytes": 0,
+        "state_calls": 5 if counters else 0,
+        "texture_binds": 0,
+        "buffer_binds": 0,
+        "program_switches": 0,
+        "bucket_calls": 0,
+        "append_calls": 0,
+        "forwarded_draws": 0,
+        "suppressed_draws": 0,
+        "flags": 0,
+        "sleep_ns": 0,
+    }
+
+
+class PhaseCScheduleTests(unittest.TestCase):
+    def test_intrusive_diagnostic_phase_schedule(self):
+        names = [item["name"] for item in model.intrusive_diagnostic_phase_schedule()]
+        self.assertEqual(names, ["R1", "C1", "R2", "C2", "R3"])
+        self.assertEqual(
+            [item["mode"] for item in model.intrusive_diagnostic_phase_schedule()],
+            ["reference", "profile", "reference", "profile", "reference"],
+        )
+
+    def test_intrusive_diagnostic_run_budget_within_deadline(self):
+        self.assertLessEqual(gates.intrusive_diagnostic_run_budget(), gates.RUN_DEADLINE_SECONDS)
+
+    def test_compute_live_rc_observer_effect_lean_reference_semantics(self):
+        phases = []
+        base_ns = 1_000_000_000
+        for index, name in enumerate(("R1", "C1", "R2", "C2", "R3")):
+            phases.append(
+                {
+                    "name": name,
+                    "duration_s": 20,
+                    "start_ns": base_ns + index * 30_000_000_000,
+                    "end_ns": base_ns + (index + 1) * 30_000_000_000,
+                },
+            )
+        profile_rows = []
+        for phase in phases:
+            counters = phase["name"].startswith("C")
+            for _ in range(100):
+                profile_rows.append(_phase_c_synthetic_frame(phase["name"], counters=counters))
+        probe = []
+        for phase in phases:
+            rate = 120.0 if phase["name"].startswith("R") else 118.0
+            probe.append({"monotonic_ns": phase["start_ns"] + 5_000_000_000, "swaps_s": rate})
+        historical_path = Path(__file__).resolve().parents[1] / "results/autonomous-reproducibility.json"
+        if not historical_path.is_file():
+            self.skipTest("autonomous-reproducibility.json missing")
+
+        def fake_power(_raw, phase_list, _anchor, _pid):
+            return {
+                phase["name"]: {
+                    "eu4_cputime_ms_per_s": 400.0 if phase["name"].startswith("R") else 440.0,
+                }
+                for phase in phase_list
+            }
+
+        with mock.patch.object(model, "ROOT", historical_path.parent.parent), mock.patch.object(
+            model.diagnostic,
+            "summarize_power",
+            side_effect=fake_power,
+        ):
+            effect = model.compute_live_rc_observer_effect(
+                phases,
+                profile_rows,
+                [],
+                probe,
+                [],
+                {"monotonic_ns": 0},
+                12345,
+            )
+        self.assertGreater(effect["aggregate"]["cpu_perturbation_fraction"], 0.05)
+        self.assertIn("median_update_cpu_ms", effect["frame_perturbation_fraction"])
+        self.assertIn("C1", effect["brackets"])
+        self.assertIn("live_update_cpu_delta_us_per_update_intrusive", effect["brackets"]["C1"])
+        self.assertAlmostEqual(
+            effect["brackets"]["C1"]["reference_phases"],
+            ["R1", "R2"],
+        )
+        attribution = model.intrusive_diagnostic_exclusive_attribution(
+            [],
+            phases,
+            profile_rows,
+            effect["phase_summaries"],
+        )
+        self.assertIn("C1", attribution["exclusive_scope_windows"])
+        self.assertIn("exclusive_rank_stable", attribution)
+
+    def test_disabled_forensic_record_check_includes_lowercase_uniform(self):
+        counts = {kind: 0 for kind in ("D", "S", "U", "u", "V", "W", "B", "b", "T", "t", "G")}
+        self.assertFalse(any(counts.get(kind, 0) for kind in model.FORENSIC_DETAIL_RECORD_KINDS))
+
+    def test_summarize_frame_model_forensic_trace_state_operations(self):
+        row = ["S", "1", "4096", "8", "0"] + ["0"] * 8 + ["1", "1", "103", "0", "0", "0", "0"]
+        self.assertEqual(len(row), 20)
+        parsed = model.summarize_frame_model_forensic_trace([row])
+        self.assertEqual(parsed["state_operation_counts"].get("vertex_attrib_pointer"), 1)
+        self.assertEqual(parsed["record_counts"].get("S"), 1)
+
+    def test_intrusive_diagnostic_forensic_tail_summary_uses_frame_model_schema(self):
+        tail_phase = {
+            "name": "TAIL",
+            "duration_s": 20,
+            "measurement_epoch": 1,
+            "start_ns": 0,
+            "end_ns": 20_000_000_000,
+            "window_generation": 0,
+            "clock_offset_ns": 0,
+            "alignment_uncertainty_ns": 0,
+            "sampled_window_evidence": {"status": "passed", "windows": []},
+        }
+        frame = _phase_c_synthetic_frame("TAIL", counters=True)
+        frame["phase"] = model.PHASE_NUMBER["TAIL"]
+        frame["measurement_epoch"] = 1
+        frame["render_id"] = 1
+        trace = [["S", "1", "8192", "9", "2"] + ["0"] * 8 + ["1", "1", str(model.PHASE_NUMBER["TAIL"]), "0", "0", "0", "0"]]
+        self.assertEqual(len(trace[0]), 20)
+        summary = model.intrusive_diagnostic_forensic_tail_summary(
+            trace,
+            tail_phase,
+            {"monotonic_ns": 0, "wall_ns": 0},
+            [frame],
+        )
+        self.assertEqual(summary["state_operation_counts"].get("enable_vertex_attrib_array"), 1)
+        self.assertEqual(summary.get("structural_capture_status"), "passed")
+        self.assertIn("temporal_differences", summary)
+        self.assertNotEqual(summary.get("status"), "unavailable")
+
+
 class RunDiagnosticOnlyTests(unittest.TestCase):
-    def test_run_diagnostic_only_refuses_until_phase_c(self):
-        with self.assertRaises(base.BenchmarkError) as raised:
-            model.run(Path("/tmp/eu4-out"), diagnostic_only=True)
-        self.assertIn("Phase C", str(raised.exception))
+    @mock.patch.object(model, "_run_intrusive_diagnostic_phase_c")
+    def test_run_diagnostic_only_dispatches_phase_c(self, phase_c_mock):
+        out = Path("/tmp/eu4-phase-c-dispatch")
+        phase_c_mock.return_value = out
+        self.assertEqual(model.run(out, diagnostic_only=True), out)
+        phase_c_mock.assert_called_once_with(out)
 
 
 class AssertQualifiedIntrusionTests(unittest.TestCase):
@@ -129,6 +299,25 @@ class IntrusiveContractPreflightTests(unittest.TestCase):
 
 
 class AnalyzeIntrusiveDiagnosticTests(unittest.TestCase):
+    def test_analyze_runs_for_complete_with_attribution_gap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            manifest = {
+                "report_kind": "intrusive_diagnostic",
+                "format_version": model.FORMAT_VERSION,
+                "status": model.DIAGNOSTIC_STATUS_COMPLETE_WITH_GAPS,
+                "measurement_contract": model.live_measurement_contract(
+                    model.LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC,
+                ),
+                "gates": {},
+                "calibration": {"aggregate": {}},
+            }
+            (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            (run_dir / "telemetry.csv").write_text("H,3\n", encoding="utf-8")
+            output = model.analyze(run_dir)
+            self.assertTrue((run_dir / "report.json").is_file())
+            self.assertTrue(output.get("attribution_gap"))
+
     def test_analyze_intrusive_report_is_not_causal_eligible(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
