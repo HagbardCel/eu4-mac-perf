@@ -18,7 +18,7 @@ WP11 (`33339073`) is the **terminal Tier-1 qualification** outcome: v4 training 
 - Output is **intrusive / quantitatively unqualified**:
   - no held-out qualification claims;
   - no interpretation of absolute profiler microseconds as uninstrumented EU IV truth;
-  - relative attribution is allowed only with explicit observer-effect estimates (see roadmap).
+  - relative attribution is allowed only with explicit observer-effect estimates (see [observer-bias calibration](observer-bias-calibration.md) and the roadmap).
 - Residual/semantic attribution machinery may run.
 
 ## Terminal qualification record
