@@ -375,7 +375,7 @@ def main() -> int:
     parser.add_argument(
         "--find",
         action="store_true",
-        help="list VALID and HISTORICAL WP1 archives (newest capture first); no path required",
+        help="list VALID, HISTORICAL, and REQUALIFICATION archives (newest capture first); no path required",
     )
     parser.add_argument(
         "--register",

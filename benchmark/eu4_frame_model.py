@@ -1217,7 +1217,10 @@ def eligible_frame(row: dict, window: dict | None) -> bool:
         return not (row.get("flags",0)&(1|512|1024))
     offset=window.get("clock_offset_ns",0)
     uncertainty=window.get("alignment_uncertainty_ns",0)
-    return (row.get("measurement_epoch")==window["measurement_epoch"] and
+    generation_ok=("window_generation" not in window or
+                   row.get("generation",0)>=window["window_generation"])
+    return (generation_ok and
+            row.get("measurement_epoch")==window["measurement_epoch"] and
             row["phase"]==PHASE_NUMBER[window["name"]] and
             not row.get("flags",0)&(1|512|1024|4096) and
             row.get("start_ns",0)+offset>=window["start_ns"]+uncertainty and
@@ -2376,8 +2379,9 @@ def _wait_phase(game: subprocess.Popen, duration: int, control: SharedControl,
     measurement_started=start["monotonic_ns"]/1e9
     end_by=measurement_started+duration
     reader=TelemetryReader(events.parent/"telemetry.csv")
-    window={"name":name,"measurement_epoch":epoch,"start_ns":start["monotonic_ns"],
-            "end_ns":int(end_by*1e9),"clock_offset_ns":clock_offset,"alignment_uncertainty_ns":uncertainty}
+    window={"name":name,"measurement_epoch":epoch,"window_generation":window_generation,
+            "start_ns":start["monotonic_ns"],"end_ns":int(end_by*1e9),
+            "clock_offset_ns":clock_offset,"alignment_uncertainty_ns":uncertainty}
     observed=[]; arms=[]; completed=0
     requested=[measurement_started+duration*i/(detail_windows+1) for i in range(1,detail_windows+1)] if detail else []
     last_focus=measurement_started-1

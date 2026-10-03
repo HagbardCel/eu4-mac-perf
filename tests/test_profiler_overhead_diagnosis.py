@@ -150,8 +150,8 @@ class ProfilerOverheadDiagnosisTests(unittest.TestCase):
             "HISTORICAL",
         )
         wp5_name = "frame-model-offline-7a86153-20261003T064756.277190Z-37f57796.json"
-        if wp5_name in roles:
-            self.assertEqual(roles[wp5_name], "REQUALIFICATION")
+        self.assertIn(wp5_name, roles)
+        self.assertEqual(roles[wp5_name], "REQUALIFICATION")
         valid = [item for item in discoveries if item.role == "VALID"]
         self.assertTrue(
             any("129e5bf5" in item.evidence_id for item in valid),
