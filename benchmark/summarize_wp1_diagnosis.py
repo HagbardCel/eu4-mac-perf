@@ -10,6 +10,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import frame_model_tier1_policy as tier1
+
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE_DIR = ROOT / "analysis/evidence"
 MANIFEST = ROOT / "analysis/profiler-overhead-diagnosis-manifest.json"
@@ -30,13 +32,21 @@ CAUSAL_REQUALIFICATION_GATE_KEYS = (
 EXPECTED_WP7_CAUSAL_REQUALIFICATION_POLICY = "wp7_lean_reference_training_requalification_v1"
 EXPECTED_WP7_REFERENCE_VALIDITY = "wp7_lean_reference_validity_v1"
 EXPECTED_TIER1_CAUSAL_POLICY = "tier1_causal_rel3pct_abs50us_v2"
+EXPECTED_WP9_TIER1_V3_REQUALIFICATION_POLICY = "wp9_tier1_v3_requalification_v1"
+TIER1_V3_REQUALIFICATION_CAPTURE_KIND = "wp9_tier1_v3_requalification"
+EXPECTED_TIER1_V3_CAUSAL_POLICY = tier1.TIER1_CAUSAL_POLICY_VERSION_V3
+STEADY_STATE_MEASUREMENT_VARIANT_NAMES = (
+    "four_frame_baseline",
+    "four_frame_post_arm_prime_1",
+    "forty_frame_post_arm_prime_1",
+)
 CAUSAL_REQUALIFICATION_TRIAL_COUNT = 7
 CAUSAL_REQUALIFICATION_STAGES = frozenset({"bare", "reference", "counters"})
 
 
 @dataclass(frozen=True)
 class Wp1Discovery:
-    role: str  # VALID | HISTORICAL | REQUALIFICATION
+    role: str  # VALID | HISTORICAL | REQUALIFICATION | V3_REQUALIFICATION
     path: Path
     evidence_id: str
     captured_at_utc: str
@@ -295,6 +305,72 @@ def validate_requalification_archive(archive: dict, archive_path: Path) -> dict:
     return _validate_offline_archive_provenance(archive, archive_path)
 
 
+def validate_tier1_v3_requalification_archive(archive: dict, archive_path: Path) -> dict:
+    payload = _payload(archive)
+    purpose = payload.get("purpose")
+    if purpose != EXPECTED_PURPOSE:
+        raise ValueError(f"expected purpose {EXPECTED_PURPOSE}, got {purpose!r}")
+    if payload.get("status") != EXPECTED_REQUALIFICATION_STATUS:
+        raise ValueError(
+            f"expected status {EXPECTED_REQUALIFICATION_STATUS}, got {payload.get('status')!r}",
+        )
+    scope = payload.get("validation_scope")
+    if scope != EXPECTED_SCOPE:
+        raise ValueError(f"expected validation_scope {EXPECTED_SCOPE}, got {scope!r}")
+
+    representative = payload.get("representative_workloads") or {}
+    if representative.get("capture_kind") != TIER1_V3_REQUALIFICATION_CAPTURE_KIND:
+        raise ValueError(
+            f"expected capture_kind {TIER1_V3_REQUALIFICATION_CAPTURE_KIND}, "
+            f"got {representative.get('capture_kind')!r}",
+        )
+
+    diagnosis = representative.get("steady_state_tier1_diagnosis")
+    if not isinstance(diagnosis, dict):
+        raise ValueError("representative_workloads.steady_state_tier1_diagnosis must be present")
+    if not diagnosis.get("steady_state_tier1_diagnosis"):
+        raise ValueError("steady_state_tier1_diagnosis block must set steady_state_tier1_diagnosis flag")
+
+    policies = archive.get("policy_versions") or {}
+    for key, expected in (
+        ("wp9_tier1_v3_requalification", EXPECTED_WP9_TIER1_V3_REQUALIFICATION_POLICY),
+        ("tier1_causal_gate", EXPECTED_TIER1_V3_CAUSAL_POLICY),
+        ("reference_validity", EXPECTED_WP7_REFERENCE_VALIDITY),
+        ("cpu_measurement_variant", tier1.TIER1_V3_CPU_MEASUREMENT_VARIANT),
+        ("completion_wall_measurement_variant", tier1.TIER1_V3_WALL_MEASUREMENT_VARIANT),
+    ):
+        actual = policies.get(key)
+        if actual != expected:
+            raise ValueError(f"expected policy_versions[{key!r}] == {expected!r}, got {actual!r}")
+    measurement_variants = policies.get("measurement_variants") or []
+    if list(measurement_variants) != list(STEADY_STATE_MEASUREMENT_VARIANT_NAMES):
+        raise ValueError(
+            "expected policy_versions.measurement_variants "
+            f"{list(STEADY_STATE_MEASUREMENT_VARIANT_NAMES)}, got {measurement_variants!r}",
+        )
+
+    recipes = diagnosis.get("recipes") or []
+    recipe_set_reason = tier1.validate_wp8_steady_state_training_recipes(recipes)
+    if recipe_set_reason:
+        raise ValueError(f"steady_state recipe contract invalid: {recipe_set_reason}")
+
+    embedded_admission = representative.get("offline_tier1_v3_admission") or {}
+    top_admission = payload.get("offline_tier1_v3_admission") or {}
+    if embedded_admission != top_admission:
+        raise ValueError(
+            "offline_tier1_v3_admission must match between representative_workloads and preflight top-level",
+        )
+    if embedded_admission.get("policy_version") != EXPECTED_TIER1_V3_CAUSAL_POLICY:
+        raise ValueError(
+            f"expected offline_tier1_v3_admission.policy_version {EXPECTED_TIER1_V3_CAUSAL_POLICY}, "
+            f"got {embedded_admission.get('policy_version')!r}",
+        )
+    if not embedded_admission.get("training_recipes"):
+        raise ValueError("offline_tier1_v3_admission.training_recipes must be non-empty")
+
+    return _validate_offline_archive_provenance(archive, archive_path)
+
+
 def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
     payload = _payload(archive)
     purpose = payload.get("purpose")
@@ -340,6 +416,10 @@ def _manifest_evidence_roles(manifest: dict) -> dict[str, str]:
         evidence_id = item.get("evidence_id")
         if evidence_id:
             roles[evidence_id] = "REQUALIFICATION"
+    for item in manifest.get("tier1_v3_requalification_archives") or []:
+        evidence_id = item.get("evidence_id")
+        if evidence_id:
+            roles[evidence_id] = "V3_REQUALIFICATION"
     for item in manifest.get("diagnostic_archives_historical") or []:
         evidence_id = item.get("evidence_id")
         if evidence_id:
@@ -366,12 +446,39 @@ def discover_wp1_archives() -> list[Wp1Discovery]:
         evidence_id = _evidence_id_from_archive(archive) or path.name
         captured_at = _captured_at_utc(archive, evidence_id)
         manifest_role = manifest_roles.get(evidence_id)
-        payload_status = _payload(archive).get("status")
+        payload = _payload(archive)
+        payload_status = payload.get("status")
+        capture_kind = (payload.get("representative_workloads") or {}).get("capture_kind")
         try:
-            if manifest_role == "REQUALIFICATION" and payload_status == EXPECTED_REQUALIFICATION_STATUS:
-                entry = validate_requalification_archive(archive, path)
+            if payload_status == EXPECTED_REQUALIFICATION_STATUS:
+                if manifest_role == "V3_REQUALIFICATION" or capture_kind == TIER1_V3_REQUALIFICATION_CAPTURE_KIND:
+                    entry = validate_tier1_v3_requalification_archive(archive, path)
+                elif manifest_role == "REQUALIFICATION" or capture_kind == CAUSAL_REQUALIFICATION_CAPTURE_KIND:
+                    entry = validate_requalification_archive(archive, path)
+                else:
+                    raise ValueError(
+                        "requalification_complete archive has unknown capture_kind; "
+                        f"got {capture_kind!r}",
+                    )
             else:
                 entry = validate_wp1_archive(archive, path)
+            if manifest_role == "V3_REQUALIFICATION" or (
+                payload_status == EXPECTED_REQUALIFICATION_STATUS
+                and capture_kind == TIER1_V3_REQUALIFICATION_CAPTURE_KIND
+            ):
+                discoveries.append(
+                    Wp1Discovery(
+                        role="V3_REQUALIFICATION",
+                        path=path,
+                        evidence_id=entry["evidence_id"],
+                        captured_at_utc=entry["captured_at_utc"],
+                        detail="manifest tier1_v3_requalification_archives"
+                        if manifest_role == "V3_REQUALIFICATION"
+                        else "wp9 tier1 v3 requalification capture",
+                        entry=entry,
+                    ),
+                )
+                continue
             if manifest_role == "REQUALIFICATION":
                 discoveries.append(
                     Wp1Discovery(
@@ -438,7 +545,8 @@ def register_manifest(archive_path: Path, *, source_archive_sha256_mac_capture: 
         )
     entry = validate_wp1_archive(archive, archive_path)
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    if _manifest_evidence_roles(manifest).get(entry["evidence_id"]) == "REQUALIFICATION":
+    manifest_roles = _manifest_evidence_roles(manifest)
+    if manifest_roles.get(entry["evidence_id"]) in {"REQUALIFICATION", "V3_REQUALIFICATION"}:
         raise ValueError(
             f"evidence_id {entry['evidence_id']} is registered as requalification; "
             "do not append to diagnostic_archives via --register",
@@ -447,6 +555,11 @@ def register_manifest(archive_path: Path, *, source_archive_sha256_mac_capture: 
         if item.get("archive_path") == entry["archive_path"]:
             raise ValueError(
                 f"archive_path {entry['archive_path']} is listed under requalification_archives",
+            )
+    for item in manifest.get("tier1_v3_requalification_archives") or []:
+        if item.get("archive_path") == entry["archive_path"]:
+            raise ValueError(
+                f"archive_path {entry['archive_path']} is listed under tier1_v3_requalification_archives",
             )
     if source_archive_sha256_mac_capture:
         entry["source_archive_sha256_mac_capture"] = source_archive_sha256_mac_capture

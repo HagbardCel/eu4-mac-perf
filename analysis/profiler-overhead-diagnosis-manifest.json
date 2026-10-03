@@ -68,6 +68,7 @@
       "notes": "First bare/loaded-disabled/reference ladder (v1 contract: residual hook clocks in loaded-disabled). Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Superseded for decomposition semantics by wp6_loaded_disabled_v2; authoritative ladder is 4dc19f16. Diagnostic only."
     }
   ],
+  "tier1_v3_requalification_archives": [],
   "steady_state_tier1_diagnosis_archives": [
     {
       "work_package": "WP8",
