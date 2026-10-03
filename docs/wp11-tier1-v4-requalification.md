@@ -23,6 +23,7 @@ python3 benchmark/summarize_wp1_diagnosis.py --find
 ## Interpretation
 
 - `overhead_gate` / `offline_tier1_v4_admission.status` is the binding v4 **training** outcome.
-- v3 authoritative capture **`a73ea57b`** remains the failed seven-pair result; v4 does not replay v3 archives as passes.
-- **v2 remains production binding** until v4 training requalification passes.
-- On pass: one held-out evaluation under frozen v4, then stop qualification iteration or return to EU IV work. On fail: stop qualification work (see `docs/tier1-v4-statistical-replication-proposal.md`).
+- Authoritative capture **`33339073`** (@ `7b7fc77`, registered on `main`): **`failed`**. Validator replay from raw trials matches embedded admission.
+- **mesh:** only failure is `counters_cpu_ns` (median ~10.43 µs/frame; bootstrap upper bound ~11.14 µs above the 11 µs hybrid floor). **borders:** all gates passed. **text_ui:** CPU passed; both completion-wall gates **`unavailable`**.
+- v3 authoritative capture **`a73ea57b`** remains the failed seven-pair result; v4 does not retroactively pass v3 evidence.
+- **v2 remains production binding.** v4 training requalification **failed** — do not run held-out under v4; stop profiler qualification iteration and return to EU IV performance work (see `docs/tier1-v4-statistical-replication-proposal.md`).

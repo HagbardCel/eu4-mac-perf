@@ -1,6 +1,6 @@
 # Tier-1 v4 — statistical replication (frozen)
 
-**Status:** Frozen by WP11 once merged; no further policy tuning before capture. Informed by authoritative WP10 **`d07347df`** and failed v3 requalification **`a73ea57b`**. Capture: `docs/wp11-tier1-v4-requalification.md`.
+**Status:** Frozen by WP11 (merged PR#25). Authoritative v4 training capture **`33339073`** @ `7b7fc77` **failed** (mesh `counters_cpu_ns`); qualification iteration stops here. Informed by authoritative WP10 **`d07347df`** and failed v3 requalification **`a73ea57b`**. Capture: `docs/wp11-tier1-v4-requalification.md`.
 
 ## Motivation
 

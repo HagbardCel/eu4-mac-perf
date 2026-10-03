@@ -109,7 +109,22 @@
       "notes": "Authoritative Mac Tier-1 v3 training requalification @ 1f4282a (merge PR#23). Policy tier1_causal_steady_state_hybrid_v3: overall failed — mesh counters_cpu_ns failed (CI upper bound above 11 µs floor); text_ui completion-wall gates unavailable. Not authoritative WP1; v2 remains production binding. Held-out under v3 blocked until training qualification is resolved (see docs/wp9-tier1-v3-design.md). Memo: docs/wp9-tier1-v3-requalification.md."
     }
   ],
-  "tier1_v4_requalification_archives": [],
+  "tier1_v4_requalification_archives": [
+    {
+      "work_package": "WP11",
+      "purpose": "wp11_tier1_v4_requalification_v1",
+      "role": "authoritative",
+      "baseline_tier1_v3_requalification_evidence_id": "20261003T144237.317611Z-a73ea57b",
+      "evidence_id": "20261003T173210.094480Z-33339073",
+      "archive_path": "analysis/evidence/frame-model-offline-7b7fc77-20261003T173210.094480Z-33339073.json",
+      "archive_sha256_committed": "1557a23865de6f3c274199402468e08ee58f958740320d5621eae6d8d4053da6",
+      "git_commit": "7b7fc775a67b5423a821d30481a47a11b1266993",
+      "captured_at_utc": "20261003T173210.094480Z-33339073",
+      "tier1_v4_admission": "failed",
+      "overhead_gate": "failed",
+      "notes": "Authoritative Mac Tier-1 v4 training requalification @ 7b7fc77 (merge PR#25). Policy tier1_causal_steady_state_hybrid_v4, 21 paired trials: overall failed — mesh counters_cpu_ns failed (median ~10.43 µs/frame, 95% CI upper ~11.14 µs vs 11 µs hybrid floor); borders passed; text_ui CPU passed, completion-wall gates unavailable. Not authoritative WP1; v2 remains production binding. Per WP11 plan: stop qualification expansion; return to EU IV investigation. Memo: docs/wp11-tier1-v4-requalification.md."
+    }
+  ],
   "steady_state_tier1_diagnosis_archives": [
     {
       "work_package": "WP8",
