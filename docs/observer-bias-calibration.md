@@ -18,6 +18,8 @@ Requirements:
 
 Immutable evidence is written under `analysis/evidence/` (rolling pointer is **not** updated). Metadata identifies `observer_bias_calibration_v1`.
 
+**Authoritative Mac capture:** `20261003T191305.493421Z-e86e33b3` @ `26af021` — registered under `observer_bias_calibration_archives` in `analysis/profiler-overhead-diagnosis-manifest.json`. Interpretation: [`observer-bias-calibration-memo-20261003.md`](observer-bias-calibration-memo-20261003.md).
+
 ## Model layers
 
 ### Aggregate controls (not additive)

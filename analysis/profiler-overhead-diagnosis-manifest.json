@@ -68,6 +68,25 @@
       "notes": "First bare/loaded-disabled/reference ladder (v1 contract: residual hook clocks in loaded-disabled). Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Superseded for decomposition semantics by wp6_loaded_disabled_v2; authoritative ladder is 4dc19f16. Diagnostic only."
     }
   ],
+  "observer_bias_calibration_archives": [
+    {
+      "work_package": "live-diagnostic-phase-b",
+      "purpose": "observer_bias_calibration_v1",
+      "role": "authoritative",
+      "terminal_tier1_v4_evidence_id": "20261003T173210.094480Z-33339073",
+      "evidence_id": "20261003T191305.493421Z-e86e33b3",
+      "archive_path": "analysis/evidence/frame-model-offline-26af021-20261003T191305.493421Z-e86e33b3.json",
+      "archive_sha256_committed": "0e8727180d36b6a96e9ffed7a1512329f2d9d17165ada7eb3537d2bcbe826deb",
+      "git_commit": "26af0213352f429d4767a473a5bc92b0e1beb55b",
+      "captured_at_utc": "20261003T191305.493421Z-e86e33b3",
+      "recipe": "mesh",
+      "scale_factors": [1, 2, 4],
+      "repetitions": 5,
+      "counters_incremental_ns_per_frame": 9246.5,
+      "counters_decomposition_explained_fraction": -0.084,
+      "notes": "Authoritative Mac Phase B observer-bias calibration @ 26af021 (merge PR#27). Mesh-only paired differential slopes; external harness thread CPU. counters_incremental ~9.25 µs/frame; scope_pair_clocks + per_frame_counter_flush reconciliation does not explain aggregate (negative explained_fraction; per_frame_counter_flush slope negative on mesh). Use additive_slopes cautiously for Phase C; forensic_slopes isolated. Not Tier-1 admission. Memo: docs/observer-bias-calibration-memo-20261003.md."
+    }
+  ],
   "bounded_remediation_archives": [
     {
       "work_package": "WP10",

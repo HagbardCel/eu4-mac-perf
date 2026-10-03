@@ -9,7 +9,7 @@ See [`live-diagnostic-measurement-contract.md`](live-diagnostic-measurement-cont
 | Phase | Goal | EU IV runs | Deliverable |
 |-------|------|------------|-------------|
 | **A** | Reframe profiler as diagnostic instrument | 0 | `preflight --intrusive-diagnostic-contract` + reserved `run --diagnostic-only` (live schedule in Phase C) |
-| **B** | Observer-bias calibration | 0 | `observer-bias-calibration` CLI + [`observer-bias-calibration.md`](observer-bias-calibration.md) |
+| **B** | Observer-bias calibration | 0 | **Done** — `e86e33b3` @ `26af021`; [`memo`](observer-bias-calibration-memo-20261003.md) |
 | **C** | One live attribution run | **1** | R–C–R–C–R + external CPU/power/swap |
 | **D** | Optimize top bottleneck(s) | 1 launch per candidate | Uninstrumented causal A/B |
 | **E** | Durable fix | as needed | Minimal binary/source patch |
