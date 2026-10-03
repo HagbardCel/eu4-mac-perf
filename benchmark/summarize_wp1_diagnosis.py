@@ -30,6 +30,8 @@ CAUSAL_REQUALIFICATION_GATE_KEYS = (
 EXPECTED_WP7_CAUSAL_REQUALIFICATION_POLICY = "wp7_lean_reference_training_requalification_v1"
 EXPECTED_WP7_REFERENCE_VALIDITY = "wp7_lean_reference_validity_v1"
 EXPECTED_TIER1_CAUSAL_POLICY = "tier1_causal_rel3pct_abs50us_v2"
+CAUSAL_REQUALIFICATION_TRIAL_COUNT = 7
+CAUSAL_REQUALIFICATION_STAGES = frozenset({"bare", "reference", "counters"})
 
 
 @dataclass(frozen=True)
@@ -248,19 +250,23 @@ def validate_requalification_archive(archive: dict, archive_path: Path) -> dict:
         if actual != expected:
             raise ValueError(f"expected policy_versions[{key!r}] == {expected!r}, got {actual!r}")
 
-    recipe_names = {
-        entry.get("recipe", {}).get("name")
-        for entry in _recipe_entries(archive)
-        if entry.get("recipe", {}).get("role") != "held_out"
-    }
-    missing = set(TRAINING_RECIPES) - recipe_names
-    if missing:
-        raise ValueError(f"missing training recipes: {sorted(missing)}")
+    entries = _recipe_entries(archive)
+    if len(entries) != len(TRAINING_RECIPES):
+        raise ValueError(
+            f"expected exactly {len(TRAINING_RECIPES)} recipe entries, got {len(entries)}",
+        )
 
-    for entry in _recipe_entries(archive):
-        name = entry.get("recipe", {}).get("name")
+    recipe_names: set[str] = set()
+    for entry in entries:
+        recipe = entry.get("recipe") or {}
+        name = recipe.get("name")
+        role = recipe.get("role")
+        if role != "training":
+            raise ValueError(f"recipe {name!r} has role {role!r}; only training recipes allowed")
         if name not in TRAINING_RECIPES:
-            continue
+            raise ValueError(f"unexpected recipe name {name!r}")
+        recipe_names.add(name)
+
         gates = entry.get("gates") or {}
         missing_gates = [key for key in CAUSAL_REQUALIFICATION_GATE_KEYS if key not in gates]
         if missing_gates:
@@ -269,6 +275,22 @@ def validate_requalification_archive(archive: dict, archive_path: Path) -> dict:
             raise ValueError(f"recipe {name} must not include diagnostic_matrix")
         if entry.get("ablations"):
             raise ValueError(f"recipe {name} must not include ablations")
+
+        trials = entry.get("trials") or []
+        if len(trials) != CAUSAL_REQUALIFICATION_TRIAL_COUNT:
+            raise ValueError(
+                f"recipe {name} expected {CAUSAL_REQUALIFICATION_TRIAL_COUNT} trials, got {len(trials)}",
+            )
+        for trial in trials:
+            stage_names = set((trial.get("stages") or {}).keys())
+            if stage_names != CAUSAL_REQUALIFICATION_STAGES:
+                raise ValueError(
+                    f"recipe {name} trial {trial.get('trial')} expected stages "
+                    f"{sorted(CAUSAL_REQUALIFICATION_STAGES)}, got {sorted(stage_names)}",
+                )
+
+    if recipe_names != set(TRAINING_RECIPES):
+        raise ValueError(f"missing training recipes: {sorted(set(TRAINING_RECIPES) - recipe_names)}")
 
     return _validate_offline_archive_provenance(archive, archive_path)
 

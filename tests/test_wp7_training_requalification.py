@@ -15,12 +15,27 @@ _FROZEN_ARTIFACTS = {
 }
 
 
+def _causal_trial(trial: int) -> dict:
+    return {
+        "trial": trial,
+        "order": ["bare", "reference", "counters"],
+        "stages": {
+            stage: {"elapsed_ns": 1, "cpu_ns": 1}
+            for stage in wp1.CAUSAL_REQUALIFICATION_STAGES
+        },
+    }
+
+
 def _training_recipe(name: str) -> dict:
     return {
         "recipe": {"name": name, "role": "training"},
         "gates": {key: {"status": "passed"} for key in wp1.CAUSAL_REQUALIFICATION_GATE_KEYS},
-        "trials": [],
+        "trials": [_causal_trial(trial) for trial in range(wp1.CAUSAL_REQUALIFICATION_TRIAL_COUNT)],
     }
+
+
+def _validate_fixture(path: Path) -> None:
+    wp1.validate_requalification_archive(json.loads(path.read_text(encoding="utf-8")), path)
 
 
 def _requalification_archive_body(evidence_id: str, commit: str) -> dict:
@@ -115,6 +130,43 @@ class Wp7TrainingRequalificationTests(unittest.TestCase):
             path.write_text(json.dumps(body), encoding="utf-8")
             with self.assertRaises(ValueError):
                 wp1.validate_requalification_archive(json.loads(path.read_text()), path)
+
+    def _reject_fixture(self, body: dict, filename: str) -> None:
+        with tempfile.TemporaryDirectory(dir=wp1.ROOT) as temporary:
+            path = Path(temporary) / filename
+            path.write_text(json.dumps(body), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                _validate_fixture(path)
+
+    def test_validate_requalification_archive_rejects_held_out_recipe(self):
+        body = _requalification_archive_body("20261003T120000.000000Z-deadbeef", "cafebabe" * 5)
+        body["preflight"]["representative_workloads"]["recipes"].append(
+            {"recipe": {"name": "held_out", "role": "held_out"}, "gates": {}, "trials": []},
+        )
+        self._reject_fixture(body, "wp7-held-out.json")
+
+    def test_validate_requalification_archive_rejects_extra_recipe(self):
+        body = _requalification_archive_body("20261003T120000.000000Z-deadbeef", "cafebabe" * 5)
+        body["preflight"]["representative_workloads"]["recipes"].append(_training_recipe("mesh"))
+        self._reject_fixture(body, "wp7-extra-recipe.json")
+
+    def test_validate_requalification_archive_rejects_wrong_role(self):
+        body = _requalification_archive_body("20261003T120000.000000Z-deadbeef", "cafebabe" * 5)
+        body["preflight"]["representative_workloads"]["recipes"][0]["recipe"]["role"] = "held_out"
+        self._reject_fixture(body, "wp7-wrong-role.json")
+
+    def test_validate_requalification_archive_rejects_wrong_trial_count(self):
+        body = _requalification_archive_body("20261003T120000.000000Z-deadbeef", "cafebabe" * 5)
+        body["preflight"]["representative_workloads"]["recipes"][0]["trials"] = [_causal_trial(0)]
+        self._reject_fixture(body, "wp7-wrong-trial-count.json")
+
+    def test_validate_requalification_archive_rejects_extra_trial_stage(self):
+        body = _requalification_archive_body("20261003T120000.000000Z-deadbeef", "cafebabe" * 5)
+        body["preflight"]["representative_workloads"]["recipes"][0]["trials"][0]["stages"]["sampled"] = {
+            "elapsed_ns": 1,
+            "cpu_ns": 1,
+        }
+        self._reject_fixture(body, "wp7-extra-stage.json")
 
     def test_validate_requalification_archive_rejects_diagnostic_matrix(self):
         commit = "cafebabe" * 5
