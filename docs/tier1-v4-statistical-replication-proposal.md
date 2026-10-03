@@ -1,6 +1,6 @@
-# Tier-1 v4 proposal — statistical replication (draft)
+# Tier-1 v4 — statistical replication (frozen)
 
-**Status:** Proposal only — **not frozen** in code. Informed by authoritative WP10 **`d07347df`** and failed v3 requalification **`a73ea57b`**.
+**Status:** Frozen in code on `main` (WP11). Informed by authoritative WP10 **`d07347df`** and failed v3 requalification **`a73ea57b`**. Capture: `docs/wp11-tier1-v4-requalification.md`.
 
 ## Motivation
 
@@ -12,13 +12,13 @@ WP10 rejected counters-lite/deferred-flush CPU optimizations and showed:
 
 v4 should increase **replication**, not change hybrid floors or implementation.
 
-## Proposed frozen contract (v4)
+## Frozen contract (v4)
 
 Unchanged from v3 unless noted:
 
 | Element | v3 | v4 (proposed) |
 |---------|----|----------------|
-| Policy identity | `tier1_causal_steady_state_hybrid_v3` | **`tier1_causal_steady_state_hybrid_v4`** (new version string) |
+| Policy identity | `tier1_causal_steady_state_hybrid_v3` | **`tier1_causal_steady_state_hybrid_v4`** |
 | REFERENCE hybrid floor | 6 µs / 3% cap | **same** |
 | Counters hybrid floor | 11 µs / 12% cap | **same** |
 | Completion wall band | ±5% bootstrap CI | **same** |
@@ -31,12 +31,12 @@ Unchanged from v3 unless noted:
 
 Drop WP10-style 400-frame completion experiments from qualification; WP10 found no advantage over 21×40f.
 
-## Process (if adopted)
+## Process
 
 ```text
-freeze v4 evaluator + harness trial count in code
+frozen v4 evaluator + 21-trial harness (WP11 CLI)
     ↓
-ONE clean-tree training requalification (wp9-class command, v4 policy)
+ONE clean-tree training requalification (`wp11-tier1-v4-requalification`)
     ↓
 pass? → held-out under frozen v4
 fail? → stop qualification work; profiler remains diagnostic; return to EU IV

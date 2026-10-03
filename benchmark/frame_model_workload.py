@@ -31,6 +31,7 @@ HELD_OUT_FIXTURE = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.recipe
 HELD_OUT_FIXTURE_META = HELD_OUT_DIR / "frame-model-held-out-terrain-surrogate.json"
 HELD_OUT_FIXTURE_PATH = HELD_OUT_FIXTURE.relative_to(ROOT).as_posix()
 TIER1_PAIR_COUNT = 7
+TIER1_V4_PAIR_COUNT = 21
 # Minimum structural draw records for terrain_odd selection (not the seven benchmark trial pairs).
 HELD_OUT_MIN_DRAW_RECORDS = 7
 HELD_OUT_SELECTION_RULE_ID = "terrain_odd_ordinal_within_frame_v1"

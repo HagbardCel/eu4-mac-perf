@@ -12,6 +12,7 @@ LEGACY_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
 TIER1_CAUSAL_POLICY_VERSION_V1 = "tier1_causal_rel3pct_abs50us_v1"
 TIER1_CAUSAL_POLICY_VERSION = "tier1_causal_rel3pct_abs50us_v2"
 TIER1_CAUSAL_POLICY_VERSION_V3 = "tier1_causal_steady_state_hybrid_v3"
+TIER1_CAUSAL_POLICY_VERSION_V4 = "tier1_causal_steady_state_hybrid_v4"
 
 # Steady-state measurement contract (WP8); required for captures evaluated under v3.
 TIER1_V3_POST_ARM_PRIME_FRAMES = 1
@@ -36,6 +37,14 @@ TIER1_V3_TRAINING_RECIPE_NAMES = ("mesh", "borders", "text_ui")
 TIER1_V3_CAUSAL_STAGES = frozenset({"bare", "reference", "counters"})
 TIER1_V3_TRIAL_COUNT = workload.TIER1_PAIR_COUNT
 TIER1_V3_TRIAL_IDS = tuple(range(TIER1_V3_TRIAL_COUNT))
+TIER1_V4_TRAINING_RECIPE_NAMES = TIER1_V3_TRAINING_RECIPE_NAMES
+TIER1_V4_TRIAL_COUNT = workload.TIER1_V4_PAIR_COUNT
+TIER1_V4_TRIAL_IDS = tuple(range(TIER1_V4_TRIAL_COUNT))
+TIER1_V4_POST_ARM_PRIME_FRAMES = TIER1_V3_POST_ARM_PRIME_FRAMES
+TIER1_V4_CPU_MEASURED_FRAMES = TIER1_V3_CPU_MEASURED_FRAMES
+TIER1_V4_CPU_MEASUREMENT_VARIANT = TIER1_V3_CPU_MEASUREMENT_VARIANT
+TIER1_V4_WALL_MEASURED_FRAMES = TIER1_V3_WALL_MEASURED_FRAMES
+TIER1_V4_WALL_MEASUREMENT_VARIANT = TIER1_V3_WALL_MEASUREMENT_VARIANT
 STEADY_STATE_VARIANT_NAMES = (
     "four_frame_baseline",
     "four_frame_post_arm_prime_1",
@@ -401,6 +410,7 @@ class Tier1CausalPolicyV3:
 
 
 TIER1_CAUSAL_POLICY_V3 = Tier1CausalPolicyV3(TIER1_CAUSAL_POLICY_VERSION_V3)
+TIER1_CAUSAL_POLICY_V4 = Tier1CausalPolicyV3(TIER1_CAUSAL_POLICY_VERSION_V4)
 
 
 def _expected_stage_order_for_trial(trial: int) -> list[str]:
@@ -428,20 +438,25 @@ def _parse_trial_id(trial: dict, *, recipe_name: str) -> int | None:
     return _require_strict_int(trial.get("trial"), field="trial")
 
 
-def validate_wp8_steady_state_recipe_experiment_layout(recipe_entry: dict) -> str | None:
+def validate_wp8_steady_state_recipe_experiment_layout(
+    recipe_entry: dict,
+    *,
+    trial_count: int = TIER1_V3_TRIAL_COUNT,
+) -> str | None:
     recipe_name = (recipe_entry.get("recipe") or {}).get("name", "?")
     trials = recipe_entry.get("trials") or []
-    if len(trials) != TIER1_V3_TRIAL_COUNT:
-        return f"expected {TIER1_V3_TRIAL_COUNT} trials, got {len(trials)}"
+    expected_trial_ids = list(range(trial_count))
+    if len(trials) != trial_count:
+        return f"expected {trial_count} trials, got {len(trials)}"
     trial_ids: list[int] = []
     for trial in trials:
         trial_id = _parse_trial_id(trial, recipe_name=recipe_name)
         if trial_id is None:
             return f"recipe {recipe_name} invalid or missing trial id"
         trial_ids.append(trial_id)
-    if sorted(trial_ids) != list(TIER1_V3_TRIAL_IDS):
-        return f"recipe {recipe_name} trial ids must be {list(TIER1_V3_TRIAL_IDS)}, got {trial_ids}"
-    if len(set(trial_ids)) != TIER1_V3_TRIAL_COUNT:
+    if sorted(trial_ids) != expected_trial_ids:
+        return f"recipe {recipe_name} trial ids must be {expected_trial_ids}, got {trial_ids}"
+    if len(set(trial_ids)) != trial_count:
         return f"recipe {recipe_name} duplicate trial ids"
     for trial in trials:
         trial_id = _parse_trial_id(trial, recipe_name=recipe_name)
@@ -492,8 +507,12 @@ def validate_wp8_steady_state_recipe_measurement_contract(
     variant: str,
     post_arm_prime_frames: int,
     measured_frames: int,
+    trial_count: int = TIER1_V3_TRIAL_COUNT,
 ) -> str | None:
-    layout_reason = validate_wp8_steady_state_recipe_experiment_layout(recipe_entry)
+    layout_reason = validate_wp8_steady_state_recipe_experiment_layout(
+        recipe_entry,
+        trial_count=trial_count,
+    )
     if layout_reason:
         return layout_reason
     variants_meta = recipe_entry.get("measurement_variants") or []
@@ -623,7 +642,12 @@ def evaluate_recipe_causal_v3(
 ) -> dict:
     recipe_name = (recipe_entry.get("recipe") or {}).get("name")
     try:
-        return _evaluate_recipe_causal_v3_impl(recipe_entry, policy, recipe_name)
+        return _evaluate_recipe_causal_v3_impl(
+            recipe_entry,
+            policy,
+            recipe_name,
+            trial_count=TIER1_V3_TRIAL_COUNT,
+        )
     except (KeyError, TypeError, ValueError) as error:
         return _recipe_v3_unavailable(
             recipe_name,
@@ -632,16 +656,35 @@ def evaluate_recipe_causal_v3(
         )
 
 
+def evaluate_recipe_causal_v4(
+    recipe_entry: dict,
+    policy: Tier1CausalPolicyV3 = TIER1_CAUSAL_POLICY_V4,
+) -> dict:
+    recipe_name = (recipe_entry.get("recipe") or {}).get("name")
+    try:
+        return _evaluate_recipe_causal_v3_impl(
+            recipe_entry,
+            policy,
+            recipe_name,
+            trial_count=TIER1_V4_TRIAL_COUNT,
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        return _recipe_v3_unavailable(recipe_name, policy, f"malformed steady-state evidence: {error}")
+
+
 def _evaluate_recipe_causal_v3_impl(
     recipe_entry: dict,
     policy: Tier1CausalPolicyV3,
     recipe_name: str | None,
+    *,
+    trial_count: int,
 ) -> dict:
     cpu_contract = validate_wp8_steady_state_recipe_measurement_contract(
         recipe_entry,
         variant=TIER1_V3_CPU_MEASUREMENT_VARIANT,
         post_arm_prime_frames=policy.post_arm_prime_frames,
         measured_frames=policy.cpu_measured_frames,
+        trial_count=trial_count,
     )
     if cpu_contract:
         return _recipe_v3_unavailable(recipe_name, policy, cpu_contract)
@@ -650,6 +693,7 @@ def _evaluate_recipe_causal_v3_impl(
         variant=TIER1_V3_WALL_MEASUREMENT_VARIANT,
         post_arm_prime_frames=policy.post_arm_prime_frames,
         measured_frames=policy.wall_measured_frames,
+        trial_count=trial_count,
     )
     if wall_contract:
         return _recipe_v3_unavailable(recipe_name, policy, wall_contract)
@@ -722,11 +766,41 @@ def evaluate_wp8_steady_state_training_v3(
     preflight: dict,
     policy: Tier1CausalPolicyV3 = TIER1_CAUSAL_POLICY_V3,
 ) -> dict:
+    return _evaluate_wp8_steady_state_training(
+        preflight,
+        policy=policy,
+        training_recipe_names=TIER1_V3_TRAINING_RECIPE_NAMES,
+        evaluate_recipe=evaluate_recipe_causal_v3,
+        paired_trial_count=TIER1_V3_TRIAL_COUNT,
+    )
+
+
+def evaluate_wp8_steady_state_training_v4(
+    preflight: dict,
+    policy: Tier1CausalPolicyV3 = TIER1_CAUSAL_POLICY_V4,
+) -> dict:
+    return _evaluate_wp8_steady_state_training(
+        preflight,
+        policy=policy,
+        training_recipe_names=TIER1_V4_TRAINING_RECIPE_NAMES,
+        evaluate_recipe=evaluate_recipe_causal_v4,
+        paired_trial_count=TIER1_V4_TRIAL_COUNT,
+    )
+
+
+def _evaluate_wp8_steady_state_training(
+    preflight: dict,
+    *,
+    policy: Tier1CausalPolicyV3,
+    training_recipe_names: tuple[str, ...],
+    evaluate_recipe,
+    paired_trial_count: int,
+) -> dict:
     block = preflight.get("steady_state_tier1_diagnosis") or {}
     recipes = block.get("recipes") or []
     recipe_set_reason = validate_wp8_steady_state_training_recipes(recipes)
     if recipe_set_reason:
-        return {
+        unavailable = {
             "status": "unavailable",
             "reason": recipe_set_reason,
             "policy_version": policy.version,
@@ -737,9 +811,12 @@ def evaluate_wp8_steady_state_training_v3(
             "completion_wall_measured_frames": policy.wall_measured_frames,
             "training_recipes": [],
         }
+        if paired_trial_count != TIER1_V3_TRIAL_COUNT:
+            unavailable["paired_trial_count"] = paired_trial_count
+        return unavailable
     by_name = {(entry.get("recipe") or {}).get("name"): entry for entry in recipes}
-    evaluations = [evaluate_recipe_causal_v3(by_name[name], policy) for name in TIER1_V3_TRAINING_RECIPE_NAMES]
-    return {
+    evaluations = [evaluate_recipe(by_name[name], policy) for name in training_recipe_names]
+    result = {
         "status": _merge_status(*(item["status"] for item in evaluations)),
         "policy_version": policy.version,
         "cpu_measurement_variant": TIER1_V3_CPU_MEASUREMENT_VARIANT,
@@ -749,6 +826,9 @@ def evaluate_wp8_steady_state_training_v3(
         "completion_wall_measured_frames": policy.wall_measured_frames,
         "training_recipes": evaluations,
     }
+    if paired_trial_count != TIER1_V3_TRIAL_COUNT:
+        result["paired_trial_count"] = paired_trial_count
+    return result
 
 
 def _merge_status(*statuses: str) -> str:
