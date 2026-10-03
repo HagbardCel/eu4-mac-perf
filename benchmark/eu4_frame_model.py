@@ -312,6 +312,7 @@ OFFLINE_EVIDENCE_DIR = ROOT / "analysis/evidence"
 OFFLINE_EVIDENCE_POINTER = ROOT / "analysis/frame-model-offline-evidence.json"
 OFFLINE_EVIDENCE_POINTER_REL = "analysis/frame-model-offline-evidence.json"
 OFFLINE_EVIDENCE_GENERATED_PREFIX = "analysis/evidence/"
+LOCAL_RUN_OUTPUT_PREFIX = "results/"
 OFFLINE_EVIDENCE_SCHEMA_VERSION = "stage2-split-v2"
 OFFLINE_EVIDENCE_SCHEMA_VERSION_V1 = "stage2-split-v1"
 OFFLINE_SEVEN_PAIR_POLICY_VERSION = "reference_counters_3pct_sampled_5pct_v1"
@@ -505,6 +506,8 @@ def _git_tree_clean_violations_for_evidence() -> list[str]:
                 continue
             violations.append(path)
             continue
+        if path.startswith(LOCAL_RUN_OUTPUT_PREFIX) and status == "??":
+            continue
         if path in (OFFLINE_EVIDENCE_POINTER_REL, PREFLIGHT_INTRUSIVE_CONTRACT_JSON_REL):
             continue
         violations.append(path)
@@ -514,11 +517,11 @@ def _git_tree_clean_violations_for_evidence() -> list[str]:
 def _git_tree_clean_for_evidence() -> bool:
     """Return whether the worktree is clean for canonical offline evidence.
 
-    Untracked files under ``analysis/evidence/`` and updates to the rolling
-    pointers ``analysis/frame-model-offline-evidence.json`` and
-    ``analysis/preflight-intrusive-diagnostic-contract-latest.json`` are
-    generated outputs and are ignored. Modifications or deletions of tracked
-    evidence archives under ``analysis/evidence/`` still fail closed.
+    Untracked files under ``analysis/evidence/`` and ``results/``, plus updates
+    to the rolling pointers ``analysis/frame-model-offline-evidence.json`` and
+    ``analysis/preflight-intrusive-diagnostic-contract-latest.json``, are local
+    outputs and are ignored. Modifications to tracked files under
+    ``analysis/evidence/`` or ``results/`` still fail closed.
     """
     return not _git_tree_clean_violations_for_evidence()
 

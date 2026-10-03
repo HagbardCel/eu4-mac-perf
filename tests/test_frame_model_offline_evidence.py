@@ -221,6 +221,27 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
             self.assertEqual(violations, ["unexpected-scratch/notes.md"])
             self.assertFalse(model._git_tree_clean_for_evidence())
 
+    def test_git_tree_clean_excludes_untracked_results_run_outputs(self):
+        porcelain = "\n".join([
+            "?? results/20261003T204020Z-intrusive-diagnostic/manifest.json",
+            "?? results/20261003T204020Z-intrusive-diagnostic/auto-probe.csv",
+        ])
+        with mock.patch.object(
+            model.subprocess,
+            "run",
+            return_value=mock.Mock(stdout=porcelain, returncode=0),
+        ):
+            self.assertTrue(model._git_tree_clean_for_evidence())
+
+    def test_git_tree_clean_flags_tracked_results_edits(self):
+        porcelain = " M results/20260928T064432Z-autonomous/manifest.json"
+        with mock.patch.object(
+            model.subprocess,
+            "run",
+            return_value=mock.Mock(stdout=porcelain, returncode=0),
+        ):
+            self.assertFalse(model._git_tree_clean_for_evidence())
+
     def test_git_tree_clean_flags_tracked_evidence_archive_edits(self):
         porcelain = (
             " M analysis/evidence/frame-model-offline-legacy-373f3ff-20261001T204509Z.json"
