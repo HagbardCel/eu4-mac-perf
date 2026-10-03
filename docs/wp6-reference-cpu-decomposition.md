@@ -162,7 +162,7 @@ Short memo (like [WP5 requalification timing memo](wp5-requalification-timing-me
 - [x] Phase A inventory — [wp6-phase-a-reference-inventory.md](wp6-phase-a-reference-inventory.md).
 - [x] Phase B ladder: `loaded-disabled` v2 passive hooks + `reference-cpu-decomposition` CLI (minimal-reference / marginal ablations still open).
 - [x] Phase C v1 Mac capture — historical [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md) @ `82922f3` (`wp6_loaded_disabled_v1`).
-- [ ] Phase C v2 Mac capture on clean tree (`wp6_loaded_disabled_v2`).
+- [x] Phase C v2 Mac capture — [`95f3513c`](wp6-reference-cpu-ladder-memo-20261003.md) @ `cb4b762` (`wp6_loaded_disabled_v2`).
 - [ ] Phase D memo after v2 capture; no Tier-1 gate changes.
 
 ## Related artifacts

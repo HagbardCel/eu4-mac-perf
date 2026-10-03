@@ -1,11 +1,36 @@
-# WP6 — reference CPU ladder memo (first capture)
+# WP6 — reference CPU ladder memo
+
+## Authoritative capture (v2)
+
+**Archive:** `analysis/evidence/frame-model-offline-cb4b762-20261003T084522.537575Z-95f3513c.json` (`95f3513c`)  
+**Git:** `cb4b762`  
+**Contract:** `wp6_loaded_disabled_v2` (passive synthetic hook fast paths; no hook accounting clocks in loaded-disabled)
+
+### Medians (seven paired trials)
+
+| Recipe | bare cpu (µs) | loaded-disabled cpu | reference cpu | loaded−bare cpu | ref−loaded cpu |
+|--------|---------------|---------------------|---------------|-----------------|----------------|
+| mesh | 287 | 306 | 341 | **+4.1%** | **+8.1%** |
+| borders | 89 | 91 | 124 | **+2.6%** | **+22.7%** |
+| text_ui | 37 | 38 | 69 | **+4.5%** | **+79.2%** |
+
+Wall `median_fraction` tracks CPU within ~0.1 pp on all recipes in this capture.
+
+### v2 conclusion
+
+With passive loaded-disabled, **`loaded-disabled − bare` is a clean fixed instrumentation / interposition tax** (single-digit % CPU on mesh; small on borders/text_ui). **`reference − loaded-disabled` remains the dominant term**, especially borders and text_ui. This supports optimizing **active REFERENCE accounting** (scopes, events, publication, guards) rather than treating DYLD interposition as the irreducible bottleneck.
+
+---
+
+## Historical capture (v1)
 
 **Archive:** `analysis/evidence/frame-model-offline-82922f3-20261003T083731.257302Z-e4e73118.json` (`e4e73118`)  
-**Git:** `82922f3` (WP6 Phase B ladder on `wp6-phase-b-reference-cpu-ladder`)  
-**Contract:** `wp6_loaded_disabled_v1` (`EU4_TEST_LOADED_DISABLED`, `MODE_REFERENCE`, no `MEASURE_ENABLED` after arm)  
-**Related:** [WP5b completion capture](wp5b-completion-diagnosis.md) (`f7cbf346`), [Phase A inventory](wp6-phase-a-reference-inventory.md)
+**Git:** `82922f3`  
+**Contract:** `wp6_loaded_disabled_v1`
 
-> **Historical contract note:** v1 left unconditional `clock_gettime` calls in `hook_update` / `hook_render` while measurement was disabled (~7/frame). The quantity `loaded-disabled − bare` in this archive is therefore a **disabled-REFERENCE baseline** (interposition + residual hook timestamping), not a pure dylib/interposer tax. **Do not discard this archive.** Code after PR #14 uses **`wp6_loaded_disabled_v2`** (passive synthetic hook fast paths); rerun the ladder once on a clean tree for v2 decomposition.
+> v1 left unconditional `clock_gettime` in `hook_update` / `hook_render` while measurement was disabled (~7/frame). Its `loaded-disabled − bare` is a **disabled-REFERENCE baseline** (interposition + residual hook clocks), not a pure interposer tax. **Do not discard** — qualitative conclusion matched v2 (active REFERENCE dominates).
+
+**Related:** [WP5b](wp5b-completion-diagnosis.md) (`f7cbf346`), [Phase A inventory](wp6-phase-a-reference-inventory.md)
 
 ## Timing boundary
 
@@ -15,37 +40,24 @@ Same harness as Tier-1 / WP5b: four `eu4_frame_model_test_frame` calls after war
 
 | Quantity | Definition |
 |----------|------------|
-| Disabled-REFERENCE baseline (v1) | `loaded-disabled` − `bare` (includes ~7 hook `clock_gettime`/frame in v1) |
+| Fixed instrumentation tax (v2) | `loaded-disabled` − `bare` with `wp6_loaded_disabled_v2` |
 | Active REFERENCE tax | `reference` − `loaded-disabled` |
 
 Comparisons use `median_fraction` with `status: diagnostic` (not Tier-1 gates).
 
-## Medians (seven paired trials)
+## v1 detail (historical)
 
-Thread CPU (µs) and submission-window wall (ms):
+| Recipe | loaded−bare cpu | ref−loaded cpu |
+|--------|-----------------|----------------|
+| mesh | +3.4% | +9.8% |
+| borders | −1.4% | +27.4% |
+| text_ui | +3.1% | +76.2% |
 
-| Recipe | bare cpu | loaded-disabled cpu | reference cpu | bare wall | loaded-disabled wall | reference wall |
-|--------|----------|---------------------|---------------|-----------|----------------------|----------------|
-| mesh | 264 | 273 | 302 | 11.00 | 11.41 | 12.57 |
-| borders | 80 | 79 | 106 | 3.36 | 3.31 | 4.42 |
-| text_ui | 36 | 36 | 64 | 1.48 | 1.49 | 2.68 |
+## Shared interpretation (v1 + v2)
 
-## Paired `median_fraction` (vs baseline stage in each comparison)
-
-| Recipe | loaded-disabled − bare (cpu) | reference − loaded-disabled (cpu) | loaded-disabled − bare (wall) | reference − loaded-disabled (wall) |
-|--------|------------------------------|-----------------------------------|-------------------------------|-------------------------------------|
-| mesh | **+3.4%** | **+9.8%** | +3.4% | +9.8% |
-| borders | −1.4% | **+27.4%** | −1.3% | +27.8% |
-| text_ui | +3.1% | **+76.2%** | +3.1% | +76.2% |
-
-Wall and CPU fractions track together in this capture (no evidence that the ladder effect is wall-only).
-
-## Interpretation
-
-1. Under **v1**, **`loaded-disabled − bare` on CPU is small** on mesh (~3%) and negligible on borders even though the stage still paid ~7 hook `clock_gettime`/frame. That makes this an **upper-bound-ish** disabled-REFERENCE baseline: dylib + interposition + residual hook clocks still do **not** explain most of the bare→REFERENCE gap; **active REFERENCE** (`reference − loaded-disabled`) is the larger term.
-2. **`reference − loaded-disabled` is the larger slice** on all training recipes, especially borders and text_ui. That points at **active REFERENCE measurement scaffolding** (scopes, events, `publish_frame`, and workload `gl_measurement_active()` guards on texture/state), not merely “profiler loaded.”
-3. **text_ui** remains noisy in absolute wall time but shows a clear **active REFERENCE CPU** step-up (+76% vs loaded-disabled on CPU in this capture).
-4. This capture **does not** replace WP5b: it does not measure post-`glFinish` drain. It **complements** WP5b by separating fixed load from active REFERENCE on the same `cpu_ns` metric.
+1. **Fixed load is small** on mesh CPU (v2 **+4.1%**); borders/text_ui fixed tax remains a few percent — not the main Tier-1 story.
+2. **`reference − loaded-disabled` dominates** on borders and text_ui; target **active REFERENCE accounting** next (`minimal-reference`, then selective ablations).
+3. Does **not** replace WP5b (no post-`glFinish` drain); complements it on the same `cpu_ns` metric.
 
 ## Next engineering
 
