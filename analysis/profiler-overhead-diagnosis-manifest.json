@@ -6,6 +6,13 @@
   },
   "diagnostic_archives": [
     {
+      "evidence_id": "20261003T064756.277190Z-37f57796",
+      "archive_path": "analysis/evidence/frame-model-offline-7a86153-20261003T064756.277190Z-37f57796.json",
+      "archive_sha256_committed": "88daf745070000ed1b713c1b93cb9b912b2da84f7b73262e74ce5f8255b21d81",
+      "git_commit": "7a861536103612989d64ccc3992babc65b04d2b2",
+      "captured_at_utc": "20261003T064756.277190Z-37f57796"
+    },
+    {
       "evidence_id": "20261002T220742.210844Z-129e5bf5",
       "archive_path": "analysis/evidence/frame-model-offline-9a063f0-20261002T220742.210844Z-129e5bf5.json",
       "archive_sha256_committed": "ce3198535c1944e8b3825f87f4f82b5e6a4aef02fe5a107893ae7c59bf26d6ae",
