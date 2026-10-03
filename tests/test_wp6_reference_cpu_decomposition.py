@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -74,7 +75,7 @@ class Wp6ReferenceCpuDecompositionTests(unittest.TestCase):
         self.assertFalse(comparisons["reference_cpu_ns"]["acceptance_gate"])
         self.assertNotIn("limit", comparisons["reference_cpu_ns"])
 
-    def test_offline_stage_skips_telemetry_validation_for_loaded_disabled(self):
+    def test_reference_cpu_recipe_runs_all_ladder_stages(self):
         recipe = {"name": "mesh", "path": "/tmp/mesh.recipe", "draws": 1}
         measured = {"elapsed_ns": 1, "cpu_ns": 2}
         with mock.patch.object(model, "_offline_workload_stage", return_value=(measured, None)) as stage:
@@ -82,3 +83,34 @@ class Wp6ReferenceCpuDecompositionTests(unittest.TestCase):
         stages_called = [call.args[3] for call in stage.call_args_list]
         self.assertEqual(set(stages_called), set(model.REFERENCE_CPU_LADDER_STAGES))
         self.assertNotIn("path", entry["recipe"])
+
+
+class ValidateLoadedDisabledTraceTests(unittest.TestCase):
+    def _write_trace(self, path: Path, body: str) -> None:
+        path.write_text(body)
+
+    def test_accepts_passive_shutdown_trace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "log.csv"
+            self._write_trace(log, "H,3\nX,1,2,3\nZ,0,7,0\n")
+            model._validate_loaded_disabled_trace(log)
+
+    def test_rejects_published_measurement_frames(self):
+        frame_line = "F," + ",".join("0" * len(model.V2_FRAME_FIELDS))
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "log.csv"
+            self._write_trace(log, f"H,3\n{frame_line}\nX,1,2,3\nZ,0,7,0\n")
+            with self.assertRaises(model.base.BenchmarkError) as ctx:
+                model._validate_loaded_disabled_trace(log)
+            self.assertIn("published", str(ctx.exception))
+
+    def test_rejects_hook_failures_and_missing_shutdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "log.csv"
+            self._write_trace(log, "H,3\nZ,1,7,0\n")
+            with self.assertRaises(model.base.BenchmarkError):
+                model._validate_loaded_disabled_trace(log)
+            self._write_trace(log, "H,3\nZ,0,7,0\n")
+            with self.assertRaises(model.base.BenchmarkError) as ctx:
+                model._validate_loaded_disabled_trace(log)
+            self.assertIn("shutdown X", str(ctx.exception))

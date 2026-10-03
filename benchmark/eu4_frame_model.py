@@ -1018,6 +1018,32 @@ def _offline_workload_private_env() -> frozenset[str]:
     })
 
 
+def _validate_loaded_disabled_trace(log_path: Path) -> None:
+    """Ensure loaded-disabled ran passive v2 (dylib loaded, no published measurement frames)."""
+    if not log_path.is_file():
+        raise base.BenchmarkError(f"loaded-disabled missing profiler log {log_path.name}")
+    rows = frame_rows(log_path)
+    if rows:
+        raise base.BenchmarkError(
+            f"loaded-disabled published {len(rows)} measurement frame(s); expected passive v2 path",
+        )
+    trace = read_rows(log_path)
+    if not trace or trace[0][0] != "H":
+        raise base.BenchmarkError("loaded-disabled trace missing version header")
+    z_rows = [row for row in trace if row and row[0] == "Z"]
+    if not z_rows:
+        raise base.BenchmarkError("loaded-disabled trace missing terminal Z record")
+    terminal = z_rows[-1]
+    hook_failures = int(terminal[1])
+    dropped = int(terminal[3]) if len(terminal) > 3 else 0
+    if hook_failures != 0:
+        raise base.BenchmarkError(f"loaded-disabled hook_failures={hook_failures}")
+    if dropped:
+        raise base.BenchmarkError(f"loaded-disabled dropped_records={dropped}")
+    if not any(row and row[0] == "X" for row in trace):
+        raise base.BenchmarkError("loaded-disabled trace missing shutdown X record")
+
+
 def _offline_workload_mode_and_flags(stage: str) -> tuple[int, int]:
     if stage == "loaded-disabled":
         return MODE["reference"], 0
@@ -1065,7 +1091,10 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *,
     measured=parse_workload_harness_metrics(run.stdout)
     if completion_timing:
         _require_completion_timing_metrics(measured)
-    if stage in ("bare", "loaded-disabled"):
+    if stage == "bare":
+        return measured, None
+    if stage == "loaded-disabled":
+        _validate_loaded_disabled_trace(log_path)
         return measured, None
     rows=frame_rows(log_path);trace=read_rows(log_path)
     tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
