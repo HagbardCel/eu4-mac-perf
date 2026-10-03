@@ -300,6 +300,18 @@ OFFLINE_DIAGNOSTIC_POLICY_VERSION_INVALID_V2 = "diag_matrix_counters_baseline_v2
 TRAINING_ONLY_VALIDATION_SCOPE = "training_only"
 FORENSIC_DETAIL_RECORD_KINDS = ("D", "S", "U", "V", "W", "B", "b", "T", "t")
 PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE = "profiler_overhead_diagnosis_v1"
+WP5B_COMPLETION_DIAGNOSIS_PURPOSE = "wp5b_completion_diagnosis_v1"
+COMPLETION_TIMING_METRICS = (
+    "elapsed_ns",
+    "cpu_ns",
+    "submission_elapsed_ns",
+    "submission_cpu_ns",
+    "post_window_drain_elapsed_ns",
+    "post_window_drain_cpu_ns",
+    "submission_plus_drain_elapsed_ns",
+    "submission_plus_drain_cpu_ns",
+)
+COMPLETION_CAUSAL_STAGES = ("bare", "reference", "counters")
 DIAGNOSTIC_MATRIX_COUNTERS_STAGE = "diag_counters"
 DIAGNOSTIC_MATRIX_BASELINE = "diag_A"
 DIAGNOSTIC_MATRIX_STAGES = (
@@ -604,8 +616,33 @@ def _offline_environment_metadata() -> dict:
     return meta
 
 
-def _offline_policy_versions(representative: dict) -> dict:
-    first = (representative.get("recipes") or [{}])[0]
+def _offline_workloads_payload(preflight_evidence: dict) -> dict:
+    return (
+        preflight_evidence.get("representative_workloads")
+        or preflight_evidence.get("completion_workloads")
+        or {}
+    )
+
+
+def _offline_workload_source_hashes() -> dict:
+    return {
+        "harness_source_sha256": base.sha256(ROOT / "tests/frame_model_workload_harness.c"),
+        "profiler_source_sha256": base.sha256(SOURCE),
+        "gpu_segments_source_sha256": base.sha256(ROOT / "benchmark/eu4_gpu_segments.h"),
+    }
+
+
+def _offline_policy_versions(workloads: dict) -> dict:
+    if workloads.get("completion_timing"):
+        return {
+            "completion_diagnosis": WP5B_COMPLETION_DIAGNOSIS_PURPOSE,
+            "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
+            "reference_band_fraction": "non_normative_0.03",
+            "completion_diagnosis_text": (
+                "Submission-window and post-glFinish drain timing; comparisons are diagnostic only."
+            ),
+        }
+    first = (workloads.get("recipes") or [{}])[0]
     return {
         "seven_pair_gate": OFFLINE_SEVEN_PAIR_POLICY_VERSION,
         "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
@@ -627,7 +664,7 @@ def build_offline_evidence_metadata(
     executed_artifact_end: dict,
 ) -> dict:
     """Shared top-level metadata for the immutable archive and rolling pointer."""
-    representative = preflight_evidence.get("representative_workloads") or {}
+    workloads = _offline_workloads_payload(preflight_evidence)
     return {
         "evidence_id": evidence_id,
         "schema_version": OFFLINE_EVIDENCE_SCHEMA_VERSION,
@@ -636,9 +673,9 @@ def build_offline_evidence_metadata(
         "executed_artifact_start": executed_artifact_start,
         "executed_artifact_end": executed_artifact_end,
         "environment": _offline_environment_metadata(),
-        "policy_versions": _offline_policy_versions(representative),
+        "policy_versions": _offline_policy_versions(workloads),
         "artifact_hashes": _offline_artifact_hashes(
-            representative,
+            workloads,
             build_info,
             identity_end=identity_end,
             executed_artifacts=executed_artifact_start,
@@ -907,6 +944,32 @@ def _validate_diagnostic_stage_features(
             )
 
 
+def parse_workload_harness_metrics(stdout: str) -> dict[str, int]:
+    return {key: int(value) for key, value in (part.split("=", 1) for part in stdout.split() if "=" in part)}
+
+
+def _require_completion_timing_metrics(measured: dict[str, int]) -> None:
+    missing = [
+        key
+        for key in COMPLETION_TIMING_METRICS
+        if key not in {"elapsed_ns", "cpu_ns"} and key not in measured
+    ]
+    if missing:
+        raise base.BenchmarkError(f"completion timing harness missing metrics: {missing}")
+    if measured.get("submission_elapsed_ns") != measured.get("elapsed_ns"):
+        raise base.BenchmarkError("submission_elapsed_ns must match elapsed_ns (Tier-1 submission window)")
+    if measured.get("submission_cpu_ns") != measured.get("cpu_ns"):
+        raise base.BenchmarkError("submission_cpu_ns must match cpu_ns")
+    submission_elapsed = measured["submission_elapsed_ns"]
+    submission_cpu = measured["submission_cpu_ns"]
+    drain_elapsed = measured["post_window_drain_elapsed_ns"]
+    drain_cpu = measured["post_window_drain_cpu_ns"]
+    if measured["submission_plus_drain_elapsed_ns"] != submission_elapsed + drain_elapsed:
+        raise base.BenchmarkError("submission_plus_drain_elapsed_ns must equal submission + drain elapsed")
+    if measured["submission_plus_drain_cpu_ns"] != submission_cpu + drain_cpu:
+        raise base.BenchmarkError("submission_plus_drain_cpu_ns must equal submission + drain cpu")
+
+
 def offline_workload_log_path(root: Path, recipe: dict, trial: int, stage: str) -> Path:
     return root / f"{recipe['name']}-{trial}-{stage}.csv"
 
@@ -921,7 +984,7 @@ def offline_workload_telemetry_paths_for_recipe_trial(recipe_name: str, trial: i
     return paths
 
 
-def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
+def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str, *, completion_timing: bool = False):
     control_path=root/"control.bin"
     log_path=offline_workload_log_path(root, recipe, trial, stage)
     if log_path.exists():
@@ -934,7 +997,7 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
     control_path.write_bytes(CONTROL.pack(*fields)+bytes(CONTROL_SIZE-CONTROL.size))
     private=("DYLD_INSERT_LIBRARIES","EU4_FRAME_MODEL_CONTROL","EU4_FRAME_MODEL_LOG",
         "EU4_TEST_ABLATION","EU4_TEST_SAMPLED","EU4_TEST_GPU_TIMESTAMPS",
-        "EU4_TEST_FORENSIC_RECORDS","EU4_TEST_CACHED_METADATA")
+        "EU4_TEST_FORENSIC_RECORDS","EU4_TEST_CACHED_METADATA","EU4_TEST_COMPLETION_TIMING")
     env={k:v for k,v in os.environ.items() if k not in private}
     if stage.startswith("ablation_"):
         env["EU4_TEST_ABLATION"]=stage.removeprefix("ablation_")
@@ -951,11 +1014,15 @@ def _offline_workload_stage(root: Path, recipe: dict, trial: int, stage: str):
         features = DIAGNOSTIC_MATRIX_FEATURES[stage]
         env.update(EU4_TEST_GPU_TIMESTAMPS=str(features[0]),
             EU4_TEST_FORENSIC_RECORDS=str(features[1]),EU4_TEST_CACHED_METADATA=str(features[2]))
+    if completion_timing:
+        env["EU4_TEST_COMPLETION_TIMING"] = "1"
     run=subprocess.run([str(WORKLOAD_HARNESS),recipe["path"],str(frames)],env=env,
         capture_output=True,text=True,timeout=60,check=False)
     if run.returncode:
         raise base.BenchmarkError(f"Valid workload {recipe['name']} {stage} failed ({run.returncode}): {run.stderr}")
-    measured={k:int(v) for k,v in (p.split("=",1) for p in run.stdout.split() if "=" in p)}
+    measured=parse_workload_harness_metrics(run.stdout)
+    if completion_timing:
+        _require_completion_timing_metrics(measured)
     if stage=="bare": return measured,None
     rows=frame_rows(log_path);trace=read_rows(log_path)
     tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
@@ -1114,6 +1181,122 @@ def _offline_recipe_evidence(root: Path, recipe: dict, *, frames: int = 4, inclu
     return entry
 
 
+def _completion_diagnostic_paired_summary(pairs: list[dict], *, frames: int = 4) -> dict:
+    comparison = workload.paired_summary(pairs, 0.03, frames)
+    comparison.pop("limit", None)
+    comparison.pop("absolute_metric_policy", None)
+    comparison["status"] = "diagnostic"
+    comparison["acceptance_gate"] = False
+    comparison["reference_band_fraction"] = 0.03
+    return comparison
+
+
+def _completion_stage_comparisons(trials: list[dict]) -> dict:
+    comparisons: dict = {}
+    pairs = (("reference", "bare"), ("counters", "reference"))
+    for stage, reference in pairs:
+        for axis in COMPLETION_TIMING_METRICS:
+            comparisons[f"{stage}_{axis}"] = _completion_diagnostic_paired_summary(
+                [
+                    {
+                        "instrumented": trial["stages"][stage][axis],
+                        "reference": trial["stages"][reference][axis],
+                    }
+                    for trial in trials
+                ],
+            )
+    return comparisons
+
+
+def _offline_completion_recipe_evidence(root: Path, recipe: dict) -> dict:
+    trials = []
+    for trial in range(7):
+        stages = tuple(reversed(COMPLETION_CAUSAL_STAGES)) if trial % 2 else COMPLETION_CAUSAL_STAGES
+        values: dict = {}
+        for stage in stages:
+            values[stage], _ = _offline_workload_stage(
+                root, recipe, trial, stage, completion_timing=True,
+            )
+        trials.append({"trial": trial, "order": list(stages), "stages": values})
+    recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
+    return {
+        "recipe": recipe_meta,
+        "trials": trials,
+        "comparisons": _completion_stage_comparisons(trials),
+    }
+
+
+def completion_diagnosis_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
+    with tempfile.TemporaryDirectory(prefix="eu4-completion-") as temporary:
+        root = Path(temporary)
+        recipe_specs = [
+            recipe for recipe in workload.recipes(root, include_held_out=False)
+            if recipe.get("role") != "held_out"
+        ]
+        recipes = [_offline_completion_recipe_evidence(root, recipe) for recipe in recipe_specs]
+        if executed_artifacts_start:
+            test_library_sha256 = executed_artifacts_start["test_library_sha256"]
+            workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
+        else:
+            test_library_sha256 = base.sha256(TEST_LIBRARY)
+            workload_harness_sha256 = base.sha256(WORKLOAD_HARNESS)
+        return {
+            "status": "complete",
+            "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+            "recipes": recipes,
+            "test_library_sha256": test_library_sha256,
+            "workload_harness_sha256": workload_harness_sha256,
+            "completion_timing": True,
+            **_offline_workload_source_hashes(),
+        }
+
+
+def wp5b_completion_diagnosis(run_gl: bool = True) -> dict:
+    """Training-only bare/reference/counters with post-window glFinish timing (diagnostic, non-acceptance)."""
+    if not run_gl:
+        raise base.BenchmarkError("completion-diagnosis requires GL workload execution")
+    identity_start = _offline_git_identity_snapshot()
+    if not identity_start.get("git_tree_clean"):
+        violations = _git_tree_clean_violations_for_evidence()
+        detail = ", ".join(violations[:8])
+        if len(violations) > 8:
+            detail += f", … (+{len(violations) - 8} more)"
+        raise base.BenchmarkError(
+            "Source tree dirty before completion diagnosis (excluding generated evidence outputs)"
+            + (f": {detail}" if detail else ""),
+        )
+    static = build()
+    artifact_start = _offline_executed_artifact_snapshot()
+    _require_build_executed_artifacts_match(static, artifact_start)
+    completion = completion_diagnosis_workloads(executed_artifacts_start=artifact_start)
+    artifact_end = _offline_executed_artifact_snapshot()
+    _require_executed_artifacts_stable(artifact_start, artifact_end)
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
+    evidence = {
+        "purpose": WP5B_COMPLETION_DIAGNOSIS_PURPOSE,
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "status": "diagnostic_complete",
+        "build": static,
+        "completion_workloads": completion,
+        "limitations": [
+            "Diagnostic only; does not change Tier-1 acceptance gates.",
+            "comparison.status is always diagnostic; reference_band_fraction is non-normative.",
+            "Training recipes only; held-out not measured.",
+            "Compare submission window vs submission+post-window glFinish drain.",
+        ],
+    }
+    return _publish_offline_immutable_evidence(
+        evidence,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=static,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
+        update_rolling_pointer=False,
+    )
+
+
 def offline_workloads(
     *,
     executed_artifacts_start: dict | None = None,
@@ -1163,9 +1346,7 @@ def offline_workloads(
             "recipes": evidence,
             "test_library_sha256": test_library_sha256,
             "workload_harness_sha256": workload_harness_sha256,
-            "harness_source_sha256": base.sha256(ROOT / "tests/frame_model_workload_harness.c"),
-            "profiler_source_sha256": base.sha256(SOURCE),
-            "gpu_segments_source_sha256": base.sha256(ROOT / "benchmark/eu4_gpu_segments.h"),
+            **_offline_workload_source_hashes(),
         }
         if not include_held_out:
             payload["validation_scope"] = TRAINING_ONLY_VALIDATION_SCOPE
@@ -2778,6 +2959,15 @@ def main() -> int:
         action="store_true",
         help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
     )
+    cd=sub.add_parser(
+        "completion-diagnosis",
+        help="WP5b: bare/reference/counters with submission + glFinish drain timing (training only)",
+    )
+    cd.add_argument(
+        "--registry-json",
+        action="store_true",
+        help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
+    )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
     run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
@@ -2796,6 +2986,12 @@ def main() -> int:
             print(json.dumps(result,indent=2))
         elif args.command=="diagnostic-matrix":
             result=profiler_overhead_diagnosis()
+            if args.registry_json:
+                print(json.dumps(result.get("immutable_evidence") or {},indent=2))
+            else:
+                print(json.dumps(result,indent=2))
+        elif args.command=="completion-diagnosis":
+            result=wp5b_completion_diagnosis()
             if args.registry_json:
                 print(json.dumps(result.get("immutable_evidence") or {},indent=2))
             else:
