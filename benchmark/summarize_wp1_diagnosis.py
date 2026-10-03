@@ -16,9 +16,17 @@ MANIFEST = ROOT / "analysis/profiler-overhead-diagnosis-manifest.json"
 TRAINING_RECIPES = ("mesh", "borders", "text_ui")
 EXPECTED_PURPOSE = "profiler_overhead_diagnosis_v1"
 EXPECTED_STATUS = "diagnostic_complete"
+EXPECTED_REQUALIFICATION_STATUS = "requalification_complete"
 EXPECTED_SCOPE = "training_only"
 EXPECTED_DIAGNOSTIC_POLICY = "diag_matrix_diag_counters_baseline_v3"
 INVALID_DIAGNOSTIC_POLICY_V2 = "diag_matrix_counters_baseline_v2"
+CAUSAL_REQUALIFICATION_CAPTURE_KIND = "wp7_causal_training_requalification"
+CAUSAL_REQUALIFICATION_GATE_KEYS = (
+    "reference_elapsed_ns",
+    "reference_cpu_ns",
+    "counters_elapsed_ns",
+    "counters_cpu_ns",
+)
 
 
 @dataclass(frozen=True)
@@ -156,17 +164,7 @@ def _captured_at_utc(archive: dict, evidence_id: str) -> str:
     return archive.get("recorded_at_utc") or evidence_id
 
 
-def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
-    payload = _payload(archive)
-    purpose = payload.get("purpose")
-    if purpose != EXPECTED_PURPOSE:
-        raise ValueError(f"expected purpose {EXPECTED_PURPOSE}, got {purpose!r}")
-    if payload.get("status") != EXPECTED_STATUS:
-        raise ValueError(f"expected status {EXPECTED_STATUS}, got {payload.get('status')!r}")
-    scope = payload.get("validation_scope")
-    if scope != EXPECTED_SCOPE:
-        raise ValueError(f"expected validation_scope {EXPECTED_SCOPE}, got {scope!r}")
-
+def _validate_offline_archive_provenance(archive: dict, archive_path: Path) -> dict:
     if archive.get("git_provenance_verified") is not True:
         raise ValueError("git_provenance_verified must be true")
     if archive.get("git_tree_clean") is not True:
@@ -184,28 +182,11 @@ def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
     if artifact_start != artifact_end:
         raise ValueError("executed_artifact_start and executed_artifact_end must match")
 
-    policy = _diagnostic_policy_version(archive)
-    if policy == INVALID_DIAGNOSTIC_POLICY_V2:
-        raise ValueError(
-            "diagnostic_matrix policy v2 has invalid vs_counters (Tier-1 counters log path collision); "
-            "remap to diagnostic_archives_historical or recapture with v3",
-        )
-    if policy != EXPECTED_DIAGNOSTIC_POLICY:
-        raise ValueError(f"expected diagnostic_matrix policy {EXPECTED_DIAGNOSTIC_POLICY}, got {policy!r}")
-
-    recipe_names = {
-        entry.get("recipe", {}).get("name")
-        for entry in _recipe_entries(archive)
-        if entry.get("recipe", {}).get("role") != "held_out"
-    }
-    missing = set(TRAINING_RECIPES) - recipe_names
-    if missing:
-        raise ValueError(f"missing training recipes: {sorted(missing)}")
-
     rel_path = archive_path.relative_to(ROOT).as_posix()
     body = archive_path.read_bytes()
     archive_sha256_committed = hashlib.sha256(body).hexdigest()
 
+    payload = _payload(archive)
     immutable = payload.get("immutable_evidence") or archive.get("immutable_evidence") or {}
     evidence_id = immutable.get("evidence_id") or archive.get("evidence_id")
     if not evidence_id:
@@ -232,6 +213,83 @@ def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
         "git_commit": git_commit,
         "captured_at_utc": captured_at,
     }
+
+
+def validate_requalification_archive(archive: dict, archive_path: Path) -> dict:
+    payload = _payload(archive)
+    purpose = payload.get("purpose")
+    if purpose != EXPECTED_PURPOSE:
+        raise ValueError(f"expected purpose {EXPECTED_PURPOSE}, got {purpose!r}")
+    if payload.get("status") != EXPECTED_REQUALIFICATION_STATUS:
+        raise ValueError(
+            f"expected status {EXPECTED_REQUALIFICATION_STATUS}, got {payload.get('status')!r}",
+        )
+    scope = payload.get("validation_scope")
+    if scope != EXPECTED_SCOPE:
+        raise ValueError(f"expected validation_scope {EXPECTED_SCOPE}, got {scope!r}")
+
+    representative = payload.get("representative_workloads") or {}
+    if representative.get("capture_kind") != CAUSAL_REQUALIFICATION_CAPTURE_KIND:
+        raise ValueError(
+            f"expected capture_kind {CAUSAL_REQUALIFICATION_CAPTURE_KIND}, "
+            f"got {representative.get('capture_kind')!r}",
+        )
+
+    recipe_names = {
+        entry.get("recipe", {}).get("name")
+        for entry in _recipe_entries(archive)
+        if entry.get("recipe", {}).get("role") != "held_out"
+    }
+    missing = set(TRAINING_RECIPES) - recipe_names
+    if missing:
+        raise ValueError(f"missing training recipes: {sorted(missing)}")
+
+    for entry in _recipe_entries(archive):
+        name = entry.get("recipe", {}).get("name")
+        if name not in TRAINING_RECIPES:
+            continue
+        gates = entry.get("gates") or {}
+        missing_gates = [key for key in CAUSAL_REQUALIFICATION_GATE_KEYS if key not in gates]
+        if missing_gates:
+            raise ValueError(f"recipe {name} missing causal gates: {missing_gates}")
+        if entry.get("diagnostic_matrix"):
+            raise ValueError(f"recipe {name} must not include diagnostic_matrix")
+        if entry.get("ablations"):
+            raise ValueError(f"recipe {name} must not include ablations")
+
+    return _validate_offline_archive_provenance(archive, archive_path)
+
+
+def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
+    payload = _payload(archive)
+    purpose = payload.get("purpose")
+    if purpose != EXPECTED_PURPOSE:
+        raise ValueError(f"expected purpose {EXPECTED_PURPOSE}, got {purpose!r}")
+    if payload.get("status") != EXPECTED_STATUS:
+        raise ValueError(f"expected status {EXPECTED_STATUS}, got {payload.get('status')!r}")
+    scope = payload.get("validation_scope")
+    if scope != EXPECTED_SCOPE:
+        raise ValueError(f"expected validation_scope {EXPECTED_SCOPE}, got {scope!r}")
+
+    policy = _diagnostic_policy_version(archive)
+    if policy == INVALID_DIAGNOSTIC_POLICY_V2:
+        raise ValueError(
+            "diagnostic_matrix policy v2 has invalid vs_counters (Tier-1 counters log path collision); "
+            "remap to diagnostic_archives_historical or recapture with v3",
+        )
+    if policy != EXPECTED_DIAGNOSTIC_POLICY:
+        raise ValueError(f"expected diagnostic_matrix policy {EXPECTED_DIAGNOSTIC_POLICY}, got {policy!r}")
+
+    recipe_names = {
+        entry.get("recipe", {}).get("name")
+        for entry in _recipe_entries(archive)
+        if entry.get("recipe", {}).get("role") != "held_out"
+    }
+    missing = set(TRAINING_RECIPES) - recipe_names
+    if missing:
+        raise ValueError(f"missing training recipes: {sorted(missing)}")
+
+    return _validate_offline_archive_provenance(archive, archive_path)
 
 
 def _load_manifest() -> dict:
@@ -273,8 +331,12 @@ def discover_wp1_archives() -> list[Wp1Discovery]:
         evidence_id = _evidence_id_from_archive(archive) or path.name
         captured_at = _captured_at_utc(archive, evidence_id)
         manifest_role = manifest_roles.get(evidence_id)
+        payload_status = _payload(archive).get("status")
         try:
-            entry = validate_wp1_archive(archive, path)
+            if manifest_role == "REQUALIFICATION" and payload_status == EXPECTED_REQUALIFICATION_STATUS:
+                entry = validate_requalification_archive(archive, path)
+            else:
+                entry = validate_wp1_archive(archive, path)
             if manifest_role == "REQUALIFICATION":
                 discoveries.append(
                     Wp1Discovery(
@@ -334,6 +396,11 @@ def _newest_valid_discovery(discoveries: list[Wp1Discovery]) -> Wp1Discovery | N
 
 def register_manifest(archive_path: Path, *, source_archive_sha256_mac_capture: str | None = None) -> dict:
     archive = _load_archive(archive_path)
+    if _payload(archive).get("status") == EXPECTED_REQUALIFICATION_STATUS:
+        raise ValueError(
+            "requalification_complete archives must be listed under requalification_archives; "
+            "do not register via --register-latest",
+        )
     entry = validate_wp1_archive(archive, archive_path)
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     if _manifest_evidence_roles(manifest).get(entry["evidence_id"]) == "REQUALIFICATION":
