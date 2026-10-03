@@ -59,6 +59,15 @@ class Tier1AdmissionGateTests(unittest.TestCase):
             evidence.record(name, "passed", "ok")
         evidence.require(gates.required_gates_for_report_kind("residual_discovery"))
 
+    def test_intrusive_diagnostic_does_not_require_offline_admission(self):
+        evidence = gates.GateEvidence()
+        for name in gates.required_gates_for_report_kind("intrusive_diagnostic"):
+            if name == "offline_causal_admission":
+                continue
+            evidence.record(name, "passed", f"{name} ok")
+        evidence.record("offline_causal_admission", "failed", "non-blocking for diagnostic")
+        evidence.require(gates.required_gates_for_report_kind("intrusive_diagnostic"))
+
 
 class Tier1FailClosedTests(unittest.TestCase):
     def test_exploratory_fixture_sha_is_rejected(self):

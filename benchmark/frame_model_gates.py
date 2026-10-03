@@ -26,10 +26,20 @@ REQUIRED_RESIDUAL_DISCOVERY = REQUIRED_CALIBRATION_ONLY + (
     "cadence",
 )
 
+REQUIRED_INTRUSIVE_DIAGNOSTIC = (
+    "format_v3",
+    "integrity",
+    "origin_integrity",
+    "cadence",
+    "diagnostic_authorization",
+    "live_observer_effect",
+)
+
 REQUIRED_BY_REPORT_KIND = {
     "calibration_only": REQUIRED_CALIBRATION_ONLY,
     "residual_discovery": REQUIRED_RESIDUAL_DISCOVERY,
     "causal": REQUIRED,
+    "intrusive_diagnostic": REQUIRED_INTRUSIVE_DIAGNOSTIC,
 }
 
 

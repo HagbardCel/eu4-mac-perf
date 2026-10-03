@@ -324,6 +324,13 @@ WP11_TIER1_V4_REQUALIFICATION_CAPTURE_KIND = "wp11_tier1_v4_requalification"
 WP11_TERMINAL_TIER1_V4_EVIDENCE_ID = "20261003T173210.094480Z-33339073"
 LIVE_MEASUREMENT_QUALIFIED = "qualified_v1"
 LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC = "intrusive_diagnostic_v1"
+LIVE_INTRUSIVE_DIAGNOSTIC_RUN_BLOCKED = (
+    "Live intrusive diagnostic capture (Phase C: R-C-R-C-R protocol) is not implemented yet. "
+    "Use `python3 benchmark/eu4_frame_model.py preflight --intrusive-diagnostic-contract` "
+    "to validate the diagnostic measurement contract without launching EU IV. "
+    "See docs/eu4-live-diagnostic-roadmap.md."
+)
+QUALIFIED_LIVE_INTRUSION_LIMIT = 0.03
 WP10_BOUNDED_REMEDIATION_PURPOSE = "wp10_bounded_remediation_v1"
 WP10_MESH_CPU_STAGES = (
     "reference",
@@ -1042,6 +1049,51 @@ def wp7_causal_training_requalification(run_gl: bool = True) -> dict:
     )
 
 
+def resolve_live_preflight_outcome(
+    causal_admission_status: str,
+    live_measurement_mode: str,
+) -> dict:
+    """Pure policy: map offline admission + measurement mode to preflight run status."""
+    contract = live_measurement_contract(live_measurement_mode)
+    intrusive = contract["intrusive"]
+    admission_passed = causal_admission_status == "passed"
+    if admission_passed:
+        status = "ready"
+    elif intrusive:
+        status = "diagnostic_ready"
+    else:
+        status = "blocked"
+    return {
+        "status": status,
+        "measurement_contract": contract,
+        "block_on_failed_admission": not admission_passed and not intrusive,
+    }
+
+
+def assert_qualified_live_intrusion_within_limit(
+    *,
+    frame_perturbation: dict[str, float],
+    cpu_perturbation: float,
+    swap_perturbation: float,
+    measured_swap_rate: float,
+    historical_swap_rate: float,
+    limit: float = QUALIFIED_LIVE_INTRUSION_LIMIT,
+) -> None:
+    """Hard-stop qualified/default live runs when profiler observer effect exceeds limit."""
+    if any(abs(value) > limit for value in frame_perturbation.values()):
+        raise base.BenchmarkError(f"Frame-normalized counters perturbation failed: {frame_perturbation}")
+    if abs(cpu_perturbation) > limit:
+        raise base.BenchmarkError(
+            f"Counters-only profiler CPU perturbation is {cpu_perturbation:+.1%}; stop before causal phases",
+        )
+    if abs(swap_perturbation) > limit:
+        raise base.BenchmarkError(
+            f"Counters-only profiler swap-rate perturbation is {swap_perturbation:+.1%}; stop before causal phases",
+        )
+    if abs(measured_swap_rate / historical_swap_rate - 1) > limit:
+        raise base.BenchmarkError("Profiler cadence differs from the established native swap rate by over 3%")
+
+
 def live_measurement_contract(mode: str) -> dict:
     """Frozen contract stamped on live run manifests and preflight evidence."""
     if mode not in {LIVE_MEASUREMENT_QUALIFIED, LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC}:
@@ -1124,15 +1176,10 @@ def preflight(
     causal_admission = representative["offline_causal_admission"]
     forensic_suitability = representative["offline_forensic_suitability"]
     measurement_mode = live_measurement_mode or LIVE_MEASUREMENT_QUALIFIED
-    contract = live_measurement_contract(measurement_mode)
+    outcome = resolve_live_preflight_outcome(causal_admission["status"], measurement_mode)
+    contract = outcome["measurement_contract"]
     intrusive_diagnostic = contract["intrusive"]
-    admission_passed = causal_admission["status"] == "passed"
-    if admission_passed:
-        run_status = "ready"
-    elif intrusive_diagnostic:
-        run_status = "diagnostic_ready"
-    else:
-        run_status = "blocked"
+    run_status = outcome["status"]
     limitations = [
         "Structural recipes reproduce observed draw counts and state-change frequencies with generated shaders/resources. Live calibration is independently mandatory.",
         "GPU evidence remains segmented and may be partial.",
@@ -1171,7 +1218,7 @@ def preflight(
         artifact_start=artifact_start,
         artifact_end=artifact_end,
     )
-    if not admission_passed and not intrusive_diagnostic:
+    if outcome["block_on_failed_admission"]:
         immutable = evidence.get("immutable_evidence") or {}
         archive_path = immutable.get("archive_path", "<unknown>")
         raise base.BenchmarkError(
@@ -3188,11 +3235,55 @@ PHASE_NUMBER.update({"P0": 100, "P1": 101, "P2": 102, "TAIL": 103,
                      "LPMF0": 107, "LPMF": 108, "LPMF1": 109, "ANATIVE":110})
 
 
+def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
+    contract = manifest.get("measurement_contract") or {}
+    calibration = manifest.get("calibration") or {}
+    observer_effect = {
+        "frame_perturbation_fraction": calibration.get("frame_perturbation_fraction"),
+        "cpu_perturbation_fraction": calibration.get("cpu_perturbation_fraction"),
+        "swap_perturbation_fraction": calibration.get("swap_perturbation_fraction"),
+        "qualified_intrusion_limit": calibration.get("limits", {}).get("counters_cpu_frame"),
+    }
+    output = {
+        "format_version": FORMAT_VERSION,
+        "report_kind": "intrusive_diagnostic",
+        "measurement_contract": contract,
+        "status": manifest.get("status"),
+        "run_dir": str(run_dir),
+        "executable_sha256": manifest.get("executable_sha256"),
+        "observer_effect": observer_effect,
+        "release_gates": manifest.get("gates", {}),
+        "release_blockers": GateEvidence(dict(manifest.get("gates", {}))).blockers(
+            required_gates_for_report_kind("intrusive_diagnostic"),
+        ),
+        "diagnosis_status": (
+            "intrusive diagnostic capture; not eligible for causal or qualified assessment"
+        ),
+        "causal_contrasts": {},
+        "conclusions": [
+            "Profiler timings in this report are quantitatively unqualified.",
+            "Do not treat inclusive CPU microseconds as uninstrumented EU IV measurements.",
+            "Tier-1 offline admission failure is recorded but is not a diagnostic release gate.",
+        ],
+        "recommendations": [],
+        "limitations": manifest.get("limitations", []),
+    }
+    (run_dir / "report.json").write_text(json.dumps(output, indent=2) + "\n")
+    (run_dir / "report.md").write_text(
+        "# Intrusive diagnostic report\n\n"
+        "This capture is **not** eligible for causal or qualified assessment. "
+        "See `measurement_contract` in `report.json`.\n",
+    )
+    return output
+
+
 def analyze(run_dir: Path) -> dict:
     manifest_path = run_dir / "manifest.json"
     if not manifest_path.is_file():
         raise base.BenchmarkError(f"Missing profiler manifest: {run_dir}")
     manifest = json.loads(manifest_path.read_text())
+    if manifest.get("report_kind") == "intrusive_diagnostic":
+        return _analyze_intrusive_diagnostic_run(run_dir, manifest)
     frames = frame_rows(run_dir / "telemetry.csv")
     trace = read_rows(run_dir / "telemetry.csv")
     phases = list(manifest.get("calibration",{}).get("phases",[])) + list(manifest.get("phases",[]))
@@ -3321,6 +3412,7 @@ def analyze(run_dir: Path) -> dict:
     elif output["diagnosis_status"]=="partial attribution":
         output["conclusions"]=["The captured evidence does not meet the full causal diagnosis gates."]
         output["recommendations"]=[]
+    output["measurement_contract"] = manifest.get("measurement_contract")
     if draw_coverage["status"]!="passed":
         for key in ("C","C_minus_B"):
             if key in output["causal_contrasts"]:
@@ -3907,23 +3999,20 @@ def run(
     calibration_only: bool = False,
     diagnostic_only: bool = False,
 ) -> Path:
+    if diagnostic_only:
+        raise base.BenchmarkError(LIVE_INTRUSIVE_DIAGNOSTIC_RUN_BLOCKED)
     if residual_discovery and calibration_only:
         raise base.BenchmarkError("Choose either residual discovery or calibration-only mode")
-    if diagnostic_only and (residual_discovery or calibration_only):
-        raise base.BenchmarkError(
-            "--diagnostic-only cannot be combined with --residual-discovery or --calibration-only",
-        )
     if residual_discovery or calibration_only:
         include_low_power=False; include_fixed_cadence_lpm=False
     try: budget=run_budget([] if calibration_only else causal_schedule(1,residual_discovery),
         include_low_power,include_fixed_cadence_lpm,residual_discovery or calibration_only)
     except ValueError as exc: raise base.BenchmarkError(str(exc)) from exc
-    live_mode = LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC if diagnostic_only else LIVE_MEASUREMENT_QUALIFIED
     evidence = preflight(
         run_gl=True,
         require_privilege=True,
         require_power_mode=include_low_power,
-        live_measurement_mode=live_mode,
+        live_measurement_mode=LIVE_MEASUREMENT_QUALIFIED,
     )
     base.running_game_pid("idle")
     if not auto.SCENE.is_file() or not auto.SCENE_MANIFEST.is_file():
@@ -3938,21 +4027,13 @@ def run(
     forensic=evidence.get("offline_forensic_suitability") or {}
     causal_status=causal.get("status")
     forensic_status=forensic.get("status")
-    measurement_contract = evidence.get("measurement_contract") or live_measurement_contract(live_mode)
-    if diagnostic_only and causal_status != "passed":
-        admission_gate_status = "diagnostic_nonblocking"
-        admission_detail = (
-            "Tier-1 offline causal admission failed; live run proceeds under intrusive_diagnostic_v1 only"
-        )
-    else:
-        admission_gate_status = (
-            "passed" if causal_status == "passed" else "failed" if causal_status else "unavailable"
-        )
-        admission_detail = "Tier-1 offline causal admission (reference + counters + held-out)"
+    admission_gate_status = (
+        "passed" if causal_status == "passed" else "failed" if causal_status else "unavailable"
+    )
     gates.record(
         "offline_causal_admission",
         admission_gate_status,
-        admission_detail,
+        "Tier-1 offline causal admission (reference + counters + held-out)",
         evidence=causal,
     )
     gates.record(
@@ -3968,13 +4049,14 @@ def run(
         evidence=causal_status,
     )
     report_kind = (
-        "intrusive_diagnostic"
-        if diagnostic_only
-        else "calibration_only"
+        "calibration_only"
         if calibration_only
         else "residual_discovery"
         if residual_discovery
         else "causal"
+    )
+    measurement_contract = evidence.get("measurement_contract") or live_measurement_contract(
+        LIVE_MEASUREMENT_QUALIFIED,
     )
     manifest={"gates":gates.entries,"worst_case_budget_s":budget,"format_version":FORMAT_VERSION,
               "report_kind":report_kind,
@@ -3989,9 +4071,7 @@ def run(
                   "Thread CPU is measured on the UpdateOneFrame thread; worker-thread totals are outside the per-frame tree.",
                   "Scene membership, visibility decisions, LOD, sorting, and allocation counts are not instrumented.",
                   "Exact uniform4fv element changes cover sampled consecutive payloads up to 256 bytes; buffer payloads remain hash-level.",
-                  "The backend graph maps Gfx sites to candidate GL calls; resource/state dependencies need runtime or implementation analysis."]
-              + (["Intrusive diagnostic run: profiler timings are not quantitatively qualified; see measurement_contract."]
-                 if diagnostic_only else [])}
+                  "The backend graph maps Gfx sites to candidate GL calls; resource/state dependencies need runtime or implementation analysis."]}
     manifest_path.write_text(json.dumps(manifest,indent=2)+"\n")
     events=run_dir/"events.jsonl"
     anchor=auto.mark(events,"clock_anchor")
@@ -4054,8 +4134,6 @@ def run(
                     if len(values)!=2 or any(v is None or v<=0 for v in values):
                         raise base.BenchmarkError(f"Reference timing unavailable for {field}")
                     frame_perturbation[field]=p1[field]/statistics.mean(values)-1
-                if any(abs(v)>.03 for v in frame_perturbation.values()):
-                    raise base.BenchmarkError(f"Frame-normalized counters perturbation failed: {frame_perturbation}")
                 probe=auto.probe_rows(run_dir/"auto-probe.csv",anchor)
                 power_tail.poll()
                 calibration_power=diagnostic.summarize_power(power_tail.samples,calibration_phases,anchor,game.pid)
@@ -4063,8 +4141,6 @@ def run(
                 if any(value is None for value in cpu_rates):
                     raise base.BenchmarkError("Power samples do not cover the three profiler calibration phases")
                 cpu_perturbation=cpu_rates[1]/statistics.mean((cpu_rates[0],cpu_rates[2]))-1
-                if abs(cpu_perturbation)>.03:
-                    raise base.BenchmarkError(f"Counters-only profiler CPU perturbation is {cpu_perturbation:+.1%}; stop before causal phases")
                 measured_rate=statistics.median(row["swaps_s"] for row in probe
                     if calibration_phases[1]["start_ns"]<=row["monotonic_ns"]<calibration_phases[1]["end_ns"])
                 controls=[]
@@ -4073,12 +4149,16 @@ def run(
                     if values: controls.append(statistics.median(values))
                 if len(controls)!=2: raise base.BenchmarkError("Swap probe missed a profiler control phase")
                 swap_perturbation=measured_rate/statistics.mean(controls)-1
-                if abs(swap_perturbation)>.03:
-                    raise base.BenchmarkError(f"Counters-only profiler swap-rate perturbation is {swap_perturbation:+.1%}; stop before causal phases")
                 historical=json.loads((ROOT/"results/autonomous-reproducibility.json").read_text())
                 reference_rate=historical["summary"]["median_swaps_s"]["median"]
-                if abs(measured_rate/reference_rate-1)>.03:
-                    raise base.BenchmarkError("Profiler cadence differs from the established native swap rate by over 3%")
+                assert_qualified_live_intrusion_within_limit(
+                    frame_perturbation=frame_perturbation,
+                    cpu_perturbation=cpu_perturbation,
+                    swap_perturbation=swap_perturbation,
+                    measured_swap_rate=measured_rate,
+                    historical_swap_rate=reference_rate,
+                    limit=QUALIFIED_LIVE_INTRUSION_LIMIT,
+                )
                 gates.record("live_counters","passed","Calibrated process CPU and present cadence",cpu=cpu_perturbation,swaps=swap_perturbation)
                 baseline_period=int(1e9/max(p1["update_attempts_s"],1))
                 manifest["calibration"]={"phases":calibration_phases,"profile":p1,"power":calibration_power,
@@ -4261,6 +4341,11 @@ def main() -> int:
     pf=sub.add_parser("preflight",help="pin/build the profiler and validate offline probes")
     pf.add_argument("--static-only",action="store_true")
     pf.add_argument("--require-power-helper",action="store_true")
+    pf.add_argument(
+        "--intrusive-diagnostic-contract",
+        action="store_true",
+        help="evaluate offline preflight under intrusive_diagnostic_v1 (non-blocking failed Tier-1 admission)",
+    )
     dm=sub.add_parser(
         "diagnostic-matrix",
         help="training-only offline workloads + A–F matrix; writes immutable evidence without held-out",
@@ -4350,7 +4435,7 @@ def main() -> int:
     run_parser.add_argument(
         "--diagnostic-only",
         action="store_true",
-        help="live intrusive diagnostic mode (WP11 terminal qual failed): same hooks, non-blocking admission, unqualified timings",
+        help="reserved for Phase C live R-C-R-C-R capture (not implemented); use preflight --intrusive-diagnostic-contract",
     )
     run_parser.add_argument("--fixed-cadence-lpm",action="store_true",
         help="add a separately reported fixed-throughput Low Power DVFS comparison")
@@ -4361,7 +4446,16 @@ def main() -> int:
     args=parser.parse_args()
     try:
         if args.command=="preflight":
-            result=preflight(not args.static_only,args.require_power_helper)
+            live_mode = (
+                LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC
+                if args.intrusive_diagnostic_contract and not args.static_only
+                else LIVE_MEASUREMENT_QUALIFIED
+            )
+            result = preflight(
+                not args.static_only,
+                args.require_power_helper,
+                live_measurement_mode=live_mode if not args.static_only else None,
+            )
             print(json.dumps(result,indent=2))
         elif args.command=="diagnostic-matrix":
             result=profiler_overhead_diagnosis()
