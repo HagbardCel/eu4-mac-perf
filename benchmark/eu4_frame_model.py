@@ -315,6 +315,7 @@ WP6_LOADED_DISABLED_CONTRACT_V1 = "wp6_loaded_disabled_v1"
 WP6_MINIMAL_REFERENCE_CONTRACT = "wp6_minimal_reference_v2"
 WP6_MINIMAL_REFERENCE_RECONCILIATION_PURPOSE = "wp6_minimal_reference_reconciliation_v1"
 WP7_LEAN_REFERENCE_VALIDITY = "wp7_lean_reference_validity_v1"
+WP7_CAUSAL_TRAINING_REQUALIFICATION_POLICY = "wp7_lean_reference_training_requalification_v1"
 REFERENCE_FRAME_INVALID_FLAGS = 1 | 512 | 1024 | 2048 | 4096
 REFERENCE_CPU_LADDER_STAGES = ("bare", "loaded-disabled", "reference")
 MINIMAL_REFERENCE_RECONCILIATION_STAGES = ("loaded-disabled", "minimal-reference", "reference")
@@ -690,6 +691,13 @@ def _offline_policy_versions(workloads: dict) -> dict:
                 "Submission-window and post-glFinish drain timing; comparisons are diagnostic only."
             ),
         }
+    if workloads.get("capture_kind") == "wp7_causal_training_requalification":
+        return {
+            "wp7_causal_training_requalification": WP7_CAUSAL_TRAINING_REQUALIFICATION_POLICY,
+            "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION,
+            "reference_validity": WP7_LEAN_REFERENCE_VALIDITY,
+            "seven_pair_gate": OFFLINE_SEVEN_PAIR_POLICY_VERSION,
+        }
     first = (workloads.get("recipes") or [{}])[0]
     return {
         "seven_pair_gate": OFFLINE_SEVEN_PAIR_POLICY_VERSION,
@@ -861,6 +869,55 @@ def profiler_overhead_diagnosis(run_gl: bool = True) -> dict:
             "Training recipes only; held-out not measured.",
             "Diagnostic matrix comparisons are non-acceptance; causal gates may still fail.",
             "Register archive path in analysis/profiler-overhead-diagnosis-manifest.json.",
+        ],
+    }
+    return _publish_offline_immutable_evidence(
+        evidence,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=static,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
+        update_rolling_pointer=False,
+    )
+
+
+def wp7_causal_training_requalification(run_gl: bool = True) -> dict:
+    """WP7: training-only bare/reference/counters requalification after lean REFERENCE."""
+    if not run_gl:
+        raise base.BenchmarkError("wp7-causal-requalification requires GL workload execution")
+    identity_start = _offline_git_identity_snapshot()
+    if not identity_start.get("git_tree_clean"):
+        violations = _git_tree_clean_violations_for_evidence()
+        detail = ", ".join(violations[:8])
+        if len(violations) > 8:
+            detail += f", … (+{len(violations) - 8} more)"
+        raise base.BenchmarkError(
+            "Source tree dirty before WP7 causal training requalification"
+            + (f": {detail}" if detail else ""),
+        )
+    static = build()
+    artifact_start = _offline_executed_artifact_snapshot()
+    _require_build_executed_artifacts_match(static, artifact_start)
+    representative = offline_workloads_causal_only(executed_artifacts_start=artifact_start)
+    artifact_end = _offline_executed_artifact_snapshot()
+    _require_executed_artifacts_stable(artifact_start, artifact_end)
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
+    causal_admission = representative["offline_causal_admission"]
+    evidence = {
+        "purpose": PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE,
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "status": "requalification_complete",
+        "build": static,
+        "representative_workloads": representative,
+        "offline_causal_admission": causal_admission,
+        "overhead_gate": causal_admission["status"],
+        "limitations": [
+            "Training recipes only; held-out not measured.",
+            "Causal stages only (bare, reference, counters); no WP1 A–F forensic matrix.",
+            "Register archive under requalification_archives with work_package: WP7.",
+            f"Reference stages must satisfy {WP7_LEAN_REFERENCE_VALIDITY}.",
         ],
     }
     return _publish_offline_immutable_evidence(
@@ -1752,6 +1809,53 @@ def offline_workloads(
         if not include_held_out:
             payload["validation_scope"] = TRAINING_ONLY_VALIDATION_SCOPE
         return payload
+
+
+def offline_workloads_causal_only(
+    *,
+    executed_artifacts_start: dict | None = None,
+) -> dict:
+    """Training recipes only: bare → reference → counters (no forensic or A–F matrix)."""
+    with tempfile.TemporaryDirectory(prefix="eu4-wp7-causal-") as temporary:
+        root = Path(temporary)
+        recipe_specs = [
+            recipe
+            for recipe in workload.recipes(root, include_held_out=False)
+            if recipe.get("role") != "held_out"
+        ]
+        evidence = [
+            _offline_recipe_evidence(root, recipe, include_forensic=False)
+            for recipe in recipe_specs
+        ]
+        offline_causal_admission = tier1.summarize_admission(
+            evidence,
+            None,
+            require_held_out=False,
+        )
+        offline_causal_admission = {
+            **offline_causal_admission,
+            "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        }
+        if executed_artifacts_start:
+            test_library_sha256 = executed_artifacts_start["test_library_sha256"]
+            workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
+        else:
+            test_library_sha256 = base.sha256(TEST_LIBRARY)
+            workload_harness_sha256 = base.sha256(WORKLOAD_HARNESS)
+        legacy_combined = (
+            "passed"
+            if all(gate["status"] == "passed" for entry in evidence for gate in entry["gates"].values())
+            else "failed"
+        )
+        return {
+            "status": legacy_combined,
+            "offline_causal_admission": offline_causal_admission,
+            "recipes": evidence,
+            "capture_kind": "wp7_causal_training_requalification",
+            "test_library_sha256": test_library_sha256,
+            "workload_harness_sha256": workload_harness_sha256,
+            **_offline_workload_source_hashes(),
+        }
 
 
 def read_rows(path: Path) -> list[list[str]]:
@@ -3387,6 +3491,15 @@ def main() -> int:
         action="store_true",
         help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
     )
+    w7=sub.add_parser(
+        "wp7-causal-requalification",
+        help="WP7: training-only bare/reference/counters after lean REFERENCE (no A–F matrix)",
+    )
+    w7.add_argument(
+        "--registry-json",
+        action="store_true",
+        help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
+    )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
     run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
@@ -3423,6 +3536,12 @@ def main() -> int:
                 print(json.dumps(result,indent=2))
         elif args.command=="minimal-reference-reconciliation":
             result=wp6_minimal_reference_reconciliation()
+            if args.registry_json:
+                print(json.dumps(result.get("immutable_evidence") or {},indent=2))
+            else:
+                print(json.dumps(result,indent=2))
+        elif args.command=="wp7-causal-requalification":
+            result=wp7_causal_training_requalification()
             if args.registry_json:
                 print(json.dumps(result.get("immutable_evidence") or {},indent=2))
             else:

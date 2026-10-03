@@ -5,7 +5,7 @@
 | PR | Branch | Content |
 |----|--------|---------|
 | **A** | `wp7-lean-reference` | Lean `MODE_REFERENCE` hot path, `wp7_lean_reference_validity_v1`, native/portable regressions |
-| **B** | `wp7-training-requalification` | One Tier-1 training requalification after A merges (no new decomposition ladder) |
+| **B** | `wp7-training-requalification` ([PR #19](https://github.com/HagbardCel/eu4-mac-perf/pull/19) stacked on A) | Manifest slot + capture checklist; run after A merges |
 
 **WP6 is closed.** Reconciliation [`a1dfde61`](wp6-reference-cpu-ladder-memo-20261003.md) showed active REFERENCE tax is largely the removable accounting stack; marginal ablations are not planned.
 
