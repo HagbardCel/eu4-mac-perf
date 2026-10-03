@@ -313,7 +313,7 @@ OFFLINE_ABLATION_POLICY_VERSION = "harness_ablation_vs_sampled_5pct_v1"
 OFFLINE_DIAGNOSTIC_POLICY_VERSION = "diag_matrix_diag_counters_baseline_v3"
 OFFLINE_DIAGNOSTIC_POLICY_VERSION_INVALID_V2 = "diag_matrix_counters_baseline_v2"
 TRAINING_ONLY_VALIDATION_SCOPE = "training_only"
-FORENSIC_DETAIL_RECORD_KINDS = ("D", "S", "U", "V", "W", "B", "b", "T", "t")
+FORENSIC_DETAIL_RECORD_KINDS = ("D", "S", "U", "u", "V", "W", "B", "b", "T", "t")
 PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE = "profiler_overhead_diagnosis_v1"
 WP5B_COMPLETION_DIAGNOSIS_PURPOSE = "wp5b_completion_diagnosis_v1"
 WP6_REFERENCE_CPU_DECOMPOSITION_PURPOSE = "wp6_reference_cpu_decomposition_v1"
@@ -4011,14 +4011,18 @@ def summarize_frame_model_forensic_trace(trace_rows: list[list[str]]) -> dict:
     state_ops: Counter[tuple[str, int]] = Counter()
     state_by_operation: Counter[str] = Counter()
     draw_records = 0
-    submitted_vertices = 0
+    draw_submission_count_sum = 0
     for row in trace_rows:
         if not row:
             continue
         if row[0] == "D" and len(row) >= 13:
             draw_records += 1
             try:
-                submitted_vertices += int(row[8])
+                api = int(row[3])
+                count = int(row[8])
+                instances = int(row[12]) if len(row) > 12 else 1
+                multiplier = instances if api in (4, 5) else 1
+                draw_submission_count_sum += count * multiplier
             except ValueError:
                 continue
         elif row[0] == "S" and len(row) >= 5:
@@ -4037,7 +4041,7 @@ def summarize_frame_model_forensic_trace(trace_rows: list[list[str]]) -> dict:
     return {
         "record_counts": dict(record_counts),
         "draw_records": draw_records,
-        "submitted_vertices": submitted_vertices,
+        "draw_submission_count_sum": draw_submission_count_sum,
         "state_operation_counts": dict(state_by_operation),
         "top_state_callers": top_state,
     }
@@ -4056,13 +4060,31 @@ def _diagnostic_attribution_gate_status(attribution: dict) -> tuple[str, str]:
 
 def _forensic_tail_gate_status(forensic: dict) -> tuple[str, str]:
     sampled = forensic.get("sampled_window_evidence") or {}
-    if sampled.get("status") not in {"passed", "failed"}:
-        return "unavailable", "Forensic sample-window calibration missing"
+    sample_status = sampled.get("status")
+    if sample_status not in {"passed", "failed"}:
+        sample_status = "unavailable"
     records = forensic.get("record_counts") or {}
     detail_rows = sum(records.get(kind, 0) for kind in FORENSIC_DETAIL_RECORD_KINDS)
-    if detail_rows == 0:
+    structural = "passed" if detail_rows else "failed"
+    forensic["structural_capture_status"] = structural
+    forensic["sample_perturbation_status"] = sample_status
+    forensic["timing_interpretation"] = (
+        "highly_intrusive_sample_windows_failed_calibration"
+        if sample_status == "failed"
+        else "intrusive/unqualified"
+        if sample_status == "passed"
+        else "unavailable"
+    )
+    if structural == "failed":
         return "failed", "Forensic tail produced no D/S/U/B/T detail records"
-    return "passed", "Forensic tail detail records captured"
+    if sample_status == "failed":
+        return (
+            "passed",
+            "Structural detail captured; sample-window perturbation calibration failed (>5%)",
+        )
+    if sample_status == "unavailable":
+        return "failed", "Forensic sample-window calibration missing"
+    return "passed", "Forensic tail structural capture and sample-window calibration recorded"
 
 
 def intrusive_diagnostic_forensic_tail_summary(
@@ -4084,7 +4106,7 @@ def intrusive_diagnostic_forensic_tail_summary(
         "sampled_window_evidence": sampled,
         "record_counts": parsed["record_counts"],
         "draw_records": parsed["draw_records"],
-        "submitted_vertices": parsed["submitted_vertices"],
+        "draw_submission_count_sum": parsed["draw_submission_count_sum"],
         "state_operation_counts": parsed["state_operation_counts"],
         "top_state_callers": parsed["top_state_callers"],
         "temporal_differences": temporal,
@@ -4178,6 +4200,11 @@ def _render_intrusive_diagnostic_report_md(report: dict) -> str:
         ])
     lines.extend(["", "## Forensic tail", ""])
     lines.append(f"- Tail gate: **{forensic.get('status', 'n/a')}** ({forensic.get('gate_reason', '')})")
+    lines.append(
+        f"- Structural capture: **{forensic.get('structural_capture_status', 'n/a')}**; "
+        f"sample perturbation: **{forensic.get('sample_perturbation_status', 'n/a')}**; "
+        f"timing: **{forensic.get('timing_interpretation', 'n/a')}**",
+    )
     lines.append(f"- Draw timed samples: **{forensic.get('draw_timed_samples', 0)}**")
     evidence = forensic.get("sampled_window_evidence") or {}
     lines.append(f"- Sample-window calibration: **{evidence.get('status', 'n/a')}**")
@@ -5271,7 +5298,7 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                 if installed:
                     manifest["working_save_changed"] = fixture.finish(run_dir)
                 manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n")
-                if manifest.get("status") == "complete":
+                if manifest.get("status") in {"complete", DIAGNOSTIC_STATUS_COMPLETE_WITH_GAPS}:
                     analyze(run_dir)
     except BaseException as exc:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}

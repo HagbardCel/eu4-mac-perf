@@ -188,8 +188,8 @@ class PhaseCScheduleTests(unittest.TestCase):
         self.assertIn("exclusive_rank_stable", attribution)
 
     def test_summarize_frame_model_forensic_trace_state_operations(self):
-        row = ["S", "1", "4096", "8", "0"] + ["0"] * 16
-        self.assertEqual(len(row), 21)
+        row = ["S", "1", "4096", "8", "0"] + ["0"] * 8 + ["1", "1", "103", "0", "0", "0", "0"]
+        self.assertEqual(len(row), 20)
         parsed = model.summarize_frame_model_forensic_trace([row])
         self.assertEqual(parsed["state_operation_counts"].get("vertex_attrib_pointer"), 1)
         self.assertEqual(parsed["record_counts"].get("S"), 1)
@@ -210,7 +210,8 @@ class PhaseCScheduleTests(unittest.TestCase):
         frame["phase"] = model.PHASE_NUMBER["TAIL"]
         frame["measurement_epoch"] = 1
         frame["render_id"] = 1
-        trace = [["S", "1", "8192", "9", "2", "0", "0", "0", "0", "0", "0", "0", "0", "0", "1", "1", "103", "0", "0", "0", "0"]]
+        trace = [["S", "1", "8192", "9", "2"] + ["0"] * 8 + ["1", "1", str(model.PHASE_NUMBER["TAIL"]), "0", "0", "0", "0"]]
+        self.assertEqual(len(trace[0]), 20)
         summary = model.intrusive_diagnostic_forensic_tail_summary(
             trace,
             tail_phase,
@@ -218,6 +219,7 @@ class PhaseCScheduleTests(unittest.TestCase):
             [frame],
         )
         self.assertEqual(summary["state_operation_counts"].get("enable_vertex_attrib_array"), 1)
+        self.assertEqual(summary.get("structural_capture_status"), "passed")
         self.assertIn("temporal_differences", summary)
         self.assertNotEqual(summary.get("status"), "unavailable")
 
@@ -293,6 +295,25 @@ class IntrusiveContractPreflightTests(unittest.TestCase):
 
 
 class AnalyzeIntrusiveDiagnosticTests(unittest.TestCase):
+    def test_analyze_runs_for_complete_with_attribution_gap(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            manifest = {
+                "report_kind": "intrusive_diagnostic",
+                "format_version": model.FORMAT_VERSION,
+                "status": model.DIAGNOSTIC_STATUS_COMPLETE_WITH_GAPS,
+                "measurement_contract": model.live_measurement_contract(
+                    model.LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC,
+                ),
+                "gates": {},
+                "calibration": {"aggregate": {}},
+            }
+            (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            (run_dir / "telemetry.csv").write_text("H,3\n", encoding="utf-8")
+            output = model.analyze(run_dir)
+            self.assertTrue((run_dir / "report.json").is_file())
+            self.assertTrue(output.get("attribution_gap"))
+
     def test_analyze_intrusive_report_is_not_causal_eligible(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)
