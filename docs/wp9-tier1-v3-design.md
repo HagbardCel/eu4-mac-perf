@@ -45,7 +45,15 @@ Pairs are **derived from `trials[].variants[…].stages`** at replay time (not f
 | `reference_submission_plus_drain_elapsed_ns` | 40f + prime | reference vs bare | ±5% bootstrap CI on fraction |
 | `counters_submission_plus_drain_elapsed_ns` | 40f + prime | counters vs reference | ±5% bootstrap CI on fraction |
 
-If a completion-wall gate’s 95% CI exceeds ±5%, that gate is **`unavailable`** (perturbation not bounded), not `failed`.
+Completion-wall tri-state (95% bootstrap CI on signed fraction vs **[-5%, +5%]**):
+
+| CI vs band | Status |
+|------------|--------|
+| Wholly inside `[-5%, +5%]` | **passed** |
+| Wholly above `+5%` or wholly below `-5%` | **failed** |
+| Overlaps band but extends outside | **unavailable** |
+
+Example: text_ui reference 40f CI ~`[-24%, +4%]` → **unavailable**; a tight CI ~`[+7%, +11%]` → **failed**.
 
 Raw submission-window elapsed gates are not used.
 

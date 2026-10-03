@@ -13,6 +13,44 @@ WP8_ARCHIVE = (
 )
 
 
+class Tier1V3CompletionWallTriStateTests(unittest.TestCase):
+    def test_tight_in_band_ci_passes(self):
+        status, reason = tier1.classify_completion_wall_equivalence_ci(
+            0.01,
+            0.02,
+            limit=0.05,
+        )
+        self.assertEqual(status, "passed")
+        self.assertIsNone(reason)
+
+    def test_tight_positive_out_of_band_ci_fails(self):
+        status, reason = tier1.classify_completion_wall_equivalence_ci(
+            0.07,
+            0.11,
+            limit=0.05,
+        )
+        self.assertEqual(status, "failed")
+        self.assertIsNotNone(reason)
+
+    def test_wide_overlapping_ci_is_unavailable(self):
+        status, reason = tier1.classify_completion_wall_equivalence_ci(
+            -0.20,
+            0.03,
+            limit=0.05,
+        )
+        self.assertEqual(status, "unavailable")
+        self.assertIsNotNone(reason)
+
+    def test_tight_positive_overhead_gate_fails_not_unavailable(self):
+        reference = 1_000_000
+        instrumented = 1_100_000
+        pairs = [{"reference": reference, "instrumented": instrumented}] * 7
+        policy = tier1.TIER1_CAUSAL_POLICY_V3
+        status, _, reason = policy.summarize_completion_wall_gate({"pairs": pairs}, frames=40)
+        self.assertEqual(status, "failed")
+        self.assertIsNotNone(reason)
+
+
 class Tier1V3HybridGateTests(unittest.TestCase):
     def test_tiny_denominator_passes_with_floor_not_v2_relative(self):
         pairs = [{"reference": 400_000, "instrumented": 416_000}] * 7
@@ -67,6 +105,20 @@ class Tier1V3EvidenceContractTests(unittest.TestCase):
         mesh = next(item for item in replay["training_recipes"] if item["recipe"] == "mesh")
         self.assertEqual(mesh["status"], "unavailable")
         self.assertIn("post_arm_prime_frames", mesh["reason"])
+
+    def test_missing_stage_metric_is_unavailable(self):
+        if not WP8_ARCHIVE.is_file():
+            self.skipTest("WP8 archive missing")
+        preflight = json.loads(WP8_ARCHIVE.read_text())["preflight"]
+        block = json.loads(json.dumps(preflight["steady_state_tier1_diagnosis"]))
+        trial0 = block["recipes"][0]["trials"][0]
+        del trial0["variants"]["four_frame_post_arm_prime_1"]["stages"]["bare"]["cpu_ns"]
+        replay = tier1.evaluate_wp8_steady_state_training_v3(
+            {"steady_state_tier1_diagnosis": block},
+        )
+        mesh = next(item for item in replay["training_recipes"] if item["recipe"] == "mesh")
+        self.assertEqual(mesh["status"], "unavailable")
+        self.assertIn("missing metric", mesh["reason"])
 
     def test_non_contiguous_trial_ids_are_unavailable(self):
         if not WP8_ARCHIVE.is_file():

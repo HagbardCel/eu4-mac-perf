@@ -61,6 +61,27 @@ _V3_GATE_PAIRINGS = (
 )
 _V3_CPU_AXES = ("cpu_ns",)
 _V3_WALL_AXES = ("submission_plus_drain_elapsed_ns",)
+def classify_completion_wall_equivalence_ci(
+    ci_low: float,
+    ci_high: float,
+    *,
+    limit: float,
+) -> tuple[str, str | None]:
+    """Tri-state admission for a signed fraction CI against [-limit, +limit]."""
+    low, high = float(ci_low), float(ci_high)
+    if low > high:
+        low, high = high, low
+    band_low, band_high = -limit, limit
+    if low >= band_low and high <= band_high:
+        return "passed", None
+    if low > band_high:
+        return "failed", "completion-wall 95% CI wholly above admission relative band"
+    if high < band_low:
+        return "failed", "completion-wall 95% CI wholly below admission relative band"
+    return (
+        "unavailable",
+        "completion-wall 95% CI overlaps admission band but cannot establish equivalence",
+    )
 
 EXPECTED_CAUSAL_GATE_NAMES = (
     "reference_elapsed_ns",
@@ -286,16 +307,12 @@ class Tier1CausalPolicyV3:
         )
         evaluated["measurement_variant"] = TIER1_V3_WALL_MEASUREMENT_VARIANT
         interval = evaluated["confidence_interval_95"]
-        median = abs(float(evaluated["median_fraction"]))
-        if max(median, abs(float(interval[0])), abs(float(interval[1]))) > (
-            self.completion_wall_admission_relative_limit
-        ):
-            return (
-                "unavailable",
-                evaluated,
-                "completion-wall 95% CI exceeds admission relative band",
-            )
-        return "passed", evaluated, None
+        status, reason = classify_completion_wall_equivalence_ci(
+            interval[0],
+            interval[1],
+            limit=self.completion_wall_admission_relative_limit,
+        )
+        return status, evaluated, reason
 
     def _hybrid_limits_for_gate(self, gate_name: str) -> tuple[float, float]:
         if gate_name.startswith("reference_"):
@@ -398,18 +415,35 @@ def _sorted_wp8_trials(recipe_entry: dict) -> list[dict]:
     return sorted(trials, key=lambda item: int(item["trial"]))
 
 
+def _parse_trial_id(trial: dict, *, recipe_name: str) -> int | None:
+    raw = trial.get("trial")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def validate_wp8_steady_state_recipe_experiment_layout(recipe_entry: dict) -> str | None:
     recipe_name = (recipe_entry.get("recipe") or {}).get("name", "?")
     trials = recipe_entry.get("trials") or []
     if len(trials) != TIER1_V3_TRIAL_COUNT:
         return f"expected {TIER1_V3_TRIAL_COUNT} trials, got {len(trials)}"
-    trial_ids = [trial.get("trial") for trial in trials]
+    trial_ids: list[int] = []
+    for trial in trials:
+        trial_id = _parse_trial_id(trial, recipe_name=recipe_name)
+        if trial_id is None:
+            return f"recipe {recipe_name} invalid or missing trial id"
+        trial_ids.append(trial_id)
     if sorted(trial_ids) != list(TIER1_V3_TRIAL_IDS):
         return f"recipe {recipe_name} trial ids must be {list(TIER1_V3_TRIAL_IDS)}, got {trial_ids}"
     if len(set(trial_ids)) != TIER1_V3_TRIAL_COUNT:
         return f"recipe {recipe_name} duplicate trial ids"
     for trial in trials:
-        trial_id = int(trial["trial"])
+        trial_id = _parse_trial_id(trial, recipe_name=recipe_name)
+        if trial_id is None:
+            return f"recipe {recipe_name} invalid or missing trial id"
         if trial.get("order") != _expected_stage_order_for_trial(trial_id):
             return (
                 f"recipe {recipe_name} trial {trial_id} stage order "
@@ -463,12 +497,17 @@ def validate_wp8_steady_state_recipe_measurement_contract(
     meta = next((item for item in variants_meta if item.get("name") == variant), None)
     if meta is None:
         return f"measurement_variants missing {variant}"
-    if int(meta.get("post_arm_prime_frames", -1)) != post_arm_prime_frames:
+    try:
+        meta_prime = int(meta.get("post_arm_prime_frames", -1))
+        meta_measured = int(meta.get("measured_frames", -1))
+    except (TypeError, ValueError):
+        return f"variant {variant} invalid measurement_variants metadata"
+    if meta_prime != post_arm_prime_frames:
         return (
             f"variant {variant} post_arm_prime_frames={meta.get('post_arm_prime_frames')} "
             f"(expected {post_arm_prime_frames})"
         )
-    if int(meta.get("measured_frames", -1)) != measured_frames:
+    if meta_measured != measured_frames:
         return (
             f"variant {variant} measured_frames={meta.get('measured_frames')} "
             f"(expected {measured_frames})"
@@ -481,12 +520,17 @@ def validate_wp8_steady_state_recipe_measurement_contract(
         if block is None:
             return f"recipe {recipe_name} trial {trial_id} missing variant {variant}"
         measurement = block.get("measurement") or {}
-        if int(measurement.get("post_arm_prime_frames", -1)) != post_arm_prime_frames:
+        try:
+            meas_prime = int(measurement.get("post_arm_prime_frames", -1))
+            meas_frames = int(measurement.get("measured_frames", -1))
+        except (TypeError, ValueError):
+            return f"recipe {recipe_name} trial {trial_id} invalid variant measurement metadata"
+        if meas_prime != post_arm_prime_frames:
             return (
                 f"recipe {recipe_name} trial {trial_id} variant measurement "
                 f"post_arm_prime_frames mismatch"
             )
-        if int(measurement.get("measured_frames", -1)) != measured_frames:
+        if meas_frames != measured_frames:
             return (
                 f"recipe {recipe_name} trial {trial_id} variant measurement "
                 f"measured_frames mismatch"
@@ -497,27 +541,48 @@ def validate_wp8_steady_state_recipe_measurement_contract(
                 f"recipe {recipe_name} trial {trial_id} expected stages "
                 f"{sorted(TIER1_V3_CAUSAL_STAGES)}, got {sorted(stages)}"
             )
+        required_metrics = (
+            _V3_CPU_AXES if variant != TIER1_V3_WALL_MEASUREMENT_VARIANT else _V3_WALL_AXES
+        )
         for stage_name in TIER1_V3_CAUSAL_STAGES:
             stage = stages[stage_name]
-            if int(stage.get("post_arm_prime_frames", -1)) != post_arm_prime_frames:
+            for metric in required_metrics:
+                if metric not in stage:
+                    return (
+                        f"recipe {recipe_name} trial {trial_id} stage {stage_name} "
+                        f"missing metric {metric}"
+                    )
+            try:
+                prime_reported = int(stage.get("post_arm_prime_frames", -1))
+                measured_reported = int(stage.get("measured_frames", -1))
+            except (TypeError, ValueError):
+                return f"recipe {recipe_name} trial {trial_id} stage {stage_name} invalid harness counts"
+            if prime_reported != post_arm_prime_frames:
                 return (
                     f"recipe {recipe_name} trial {trial_id} stage {stage_name} "
                     f"post_arm_prime_frames={stage.get('post_arm_prime_frames')}"
                 )
-            if int(stage.get("measured_frames", -1)) != measured_frames:
+            if measured_reported != measured_frames:
                 return (
                     f"recipe {recipe_name} trial {trial_id} stage {stage_name} "
                     f"measured_frames={stage.get('measured_frames')}"
                 )
         reference = stages["reference"]
         counters = stages["counters"]
-        if int(reference.get("frames", -1)) != measured_frames:
+        try:
+            ref_frames = int(reference.get("frames", -1))
+            ref_published = int(reference.get("published_frames", -1))
+            ctr_frames = int(counters.get("frames", -1))
+            ctr_published = int(counters.get("published_frames", -1))
+        except (TypeError, ValueError):
+            return f"recipe {recipe_name} trial {trial_id} invalid frame metadata"
+        if ref_frames != measured_frames:
             return f"recipe {recipe_name} trial {trial_id} reference frames mismatch"
-        if int(reference.get("published_frames", -1)) != expected_published:
+        if ref_published != expected_published:
             return f"recipe {recipe_name} trial {trial_id} reference published_frames mismatch"
-        if int(counters.get("frames", -1)) != measured_frames:
+        if ctr_frames != measured_frames:
             return f"recipe {recipe_name} trial {trial_id} counters frames mismatch"
-        if int(counters.get("published_frames", -1)) != expected_published:
+        if ctr_published != expected_published:
             return f"recipe {recipe_name} trial {trial_id} counters published_frames mismatch"
     return None
 
@@ -550,6 +615,21 @@ def evaluate_recipe_causal_v3(
     policy: Tier1CausalPolicyV3 = TIER1_CAUSAL_POLICY_V3,
 ) -> dict:
     recipe_name = (recipe_entry.get("recipe") or {}).get("name")
+    try:
+        return _evaluate_recipe_causal_v3_impl(recipe_entry, policy, recipe_name)
+    except (KeyError, TypeError, ValueError) as error:
+        return _recipe_v3_unavailable(
+            recipe_name,
+            policy,
+            f"malformed steady-state evidence: {error}",
+        )
+
+
+def _evaluate_recipe_causal_v3_impl(
+    recipe_entry: dict,
+    policy: Tier1CausalPolicyV3,
+    recipe_name: str | None,
+) -> dict:
     cpu_contract = validate_wp8_steady_state_recipe_measurement_contract(
         recipe_entry,
         variant=TIER1_V3_CPU_MEASUREMENT_VARIANT,
