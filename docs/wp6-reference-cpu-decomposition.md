@@ -116,7 +116,7 @@ Retain in the **live-path inventory** (Phase A), but do not expect these to expl
 
 ### Phase B — Harness / profiler ablations
 
-**Implemented (ladder capture):** `python3 benchmark/eu4_frame_model.py reference-cpu-decomposition --registry-json` runs `bare` → `loaded-disabled` → `reference` with contract **`wp6_loaded_disabled_v2`** (`EU4_TEST_LOADED_DISABLED=1`: passive synthetic hook fast paths, no `MEASURE_ENABLED`, no hook accounting clocks). Each `loaded-disabled` stage validates the profiler trace (no `F` rows; terminal `Z` with zero hook failures/drops; shutdown `X`). Pre–stage-validation v2 capture: [`95f3513c`](wp6-reference-cpu-ladder-memo-20261003.md); historical v1: [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md).
+**Implemented (ladder capture):** `python3 benchmark/eu4_frame_model.py reference-cpu-decomposition --registry-json` runs `bare` → `loaded-disabled` → `reference` with contract **`wp6_loaded_disabled_v2`** (`EU4_TEST_LOADED_DISABLED=1`: passive synthetic hook fast paths, no `MEASURE_ENABLED`, no hook accounting clocks). Each `loaded-disabled` stage validates the profiler trace (no `F` rows; terminal `Z` with zero hook failures/drops; shutdown `X`). Authoritative capture: [`4dc19f16`](wp6-reference-cpu-ladder-memo-20261003.md) @ `d9b77c4`; pre–stage-validation v2: [`95f3513c`](wp6-reference-cpu-ladder-memo-20261003.md); historical v1: [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md).
 
 Extend offline harness pattern (same spirit as `ablation_accounting` / `ablation_writer` / `ablation_preparation` on the sampled path):
 
@@ -164,7 +164,8 @@ Short memo (like [WP5 requalification timing memo](wp5-requalification-timing-me
 - [x] Phase C v1 Mac capture — historical [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md) @ `82922f3` (`wp6_loaded_disabled_v1`).
 - [x] Phase C v2 Mac capture (pre–stage-validation) — [`95f3513c`](wp6-reference-cpu-ladder-memo-20261003.md) @ `cb4b762` (`wp6_loaded_disabled_v2`).
 - [x] Ladder harness: `loaded-disabled` trace validation in `_offline_workload_stage`.
-- [ ] One authoritative v2 ladder recapture with stage validation; then Phase D memo finalization (no Tier-1 gate changes).
+- [x] Authoritative v2 ladder — [`4dc19f16`](wp6-reference-cpu-ladder-memo-20261003.md) @ `d9b77c4` (stage validation at capture).
+- [x] Phase D ladder memo — [wp6-reference-cpu-ladder-memo-20261003.md](wp6-reference-cpu-ladder-memo-20261003.md) (no Tier-1 gate changes).
 
 ## Related artifacts
 
