@@ -9,6 +9,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmark"))
 import eu4_frame_model as model  # noqa: E402
 import summarize_wp1_diagnosis as wp1  # noqa: E402
 
+_FROZEN_ARTIFACTS = {
+    "test_library_sha256": "frozen-test-library",
+    "workload_harness_sha256": "frozen-workload-harness",
+}
+
 
 def _training_recipe(name: str) -> dict:
     return {
@@ -30,8 +35,10 @@ def _requalification_archive_body(evidence_id: str, commit: str) -> dict:
         "executed_artifact_start": {"test_library_sha256": "a"},
         "executed_artifact_end": {"test_library_sha256": "a"},
         "policy_versions": {
-            "wp7_causal_training_requalification": model.WP7_CAUSAL_TRAINING_REQUALIFICATION_POLICY,
-            "tier1_causal_gate": "tier1_causal_rel3pct_abs50us_v2",
+            "wp7_causal_training_requalification": wp1.EXPECTED_WP7_CAUSAL_REQUALIFICATION_POLICY,
+            "tier1_causal_gate": wp1.EXPECTED_TIER1_CAUSAL_POLICY,
+            "reference_validity": wp1.EXPECTED_WP7_REFERENCE_VALIDITY,
+            "seven_pair_gate": model.OFFLINE_SEVEN_PAIR_POLICY_VERSION,
         },
         "preflight": {
             "purpose": wp1.EXPECTED_PURPOSE,
@@ -66,7 +73,9 @@ class Wp7TrainingRequalificationTests(unittest.TestCase):
             "summarize_admission",
             return_value={"status": "passed", "validation_scope": model.TRAINING_ONLY_VALIDATION_SCOPE},
         ):
-            result = model.offline_workloads_causal_only()
+            result = model.offline_workloads_causal_only(
+                executed_artifacts_start=_FROZEN_ARTIFACTS,
+            )
         self.assertEqual(set(stages), {"bare", "reference", "counters"})
         self.assertEqual(len(stages), 7 * 3 * len(wp1.TRAINING_RECIPES))
         self.assertEqual(result["capture_kind"], wp1.CAUSAL_REQUALIFICATION_CAPTURE_KIND)
@@ -95,6 +104,17 @@ class Wp7TrainingRequalificationTests(unittest.TestCase):
             path.write_text(json.dumps(_requalification_archive_body(evidence_id, commit)), encoding="utf-8")
             entry = wp1.validate_requalification_archive(json.loads(path.read_text()), path)
             self.assertEqual(entry["evidence_id"], evidence_id)
+
+    def test_validate_requalification_archive_rejects_wrong_policy_versions(self):
+        commit = "cafebabe" * 5
+        evidence_id = "20261003T120000.000000Z-deadbeef"
+        body = _requalification_archive_body(evidence_id, commit)
+        body["policy_versions"]["tier1_causal_gate"] = "wrong_policy"
+        with tempfile.TemporaryDirectory(dir=wp1.ROOT) as temporary:
+            path = Path(temporary) / "wp7-bad-policy.json"
+            path.write_text(json.dumps(body), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                wp1.validate_requalification_archive(json.loads(path.read_text()), path)
 
     def test_validate_requalification_archive_rejects_diagnostic_matrix(self):
         commit = "cafebabe" * 5

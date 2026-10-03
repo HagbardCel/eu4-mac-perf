@@ -27,6 +27,9 @@ CAUSAL_REQUALIFICATION_GATE_KEYS = (
     "counters_elapsed_ns",
     "counters_cpu_ns",
 )
+EXPECTED_WP7_CAUSAL_REQUALIFICATION_POLICY = "wp7_lean_reference_training_requalification_v1"
+EXPECTED_WP7_REFERENCE_VALIDITY = "wp7_lean_reference_validity_v1"
+EXPECTED_TIER1_CAUSAL_POLICY = "tier1_causal_rel3pct_abs50us_v2"
 
 
 @dataclass(frozen=True)
@@ -234,6 +237,16 @@ def validate_requalification_archive(archive: dict, archive_path: Path) -> dict:
             f"expected capture_kind {CAUSAL_REQUALIFICATION_CAPTURE_KIND}, "
             f"got {representative.get('capture_kind')!r}",
         )
+
+    policies = archive.get("policy_versions") or {}
+    for key, expected in (
+        ("wp7_causal_training_requalification", EXPECTED_WP7_CAUSAL_REQUALIFICATION_POLICY),
+        ("tier1_causal_gate", EXPECTED_TIER1_CAUSAL_POLICY),
+        ("reference_validity", EXPECTED_WP7_REFERENCE_VALIDITY),
+    ):
+        actual = policies.get(key)
+        if actual != expected:
+            raise ValueError(f"expected policy_versions[{key!r}] == {expected!r}, got {actual!r}")
 
     recipe_names = {
         entry.get("recipe", {}).get("name")
