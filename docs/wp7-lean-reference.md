@@ -32,13 +32,15 @@ snapshot control / epoch identity
 one start wall + CPU clock
 real_update()  →  render/present pass-through (no REFERENCE scopes/events)
 one end wall + CPU clock
-publish one minimal Frame record
+publish via `publish_lean_reference_frame()` (`LeanReferenceFrame` → writer expands to CSV `F` with zeros for unused fields)
 ```
+
+The measured thread does **not** zero/copy the full ~8 KiB legacy `Frame`. `hooked_flush()` pass-throughs in lean REFERENCE before present accounting clocks.
 
 ### Removed from REFERENCE (not from PROFILE)
 
 - Nested LOOP / UPDATE / RENDER / PRESENT scopes and scope clocks
-- `event()` aggregation and producer counter flush for REFERENCE frames
+- `publish_frame()` counter aggregation and `flush_counters()` on lean REFERENCE frames
 - `timestamp_event` / forensic guards on REFERENCE
 - `eu4_scope_snapshot()` on publish
 - REFERENCE render/present timing and scope wrappers
@@ -65,6 +67,7 @@ Required:
 - Strictly increasing `update_id`
 - `measurement_epoch` and `generation` present on each row
 - Non-zero `wall_ns` and `cpu_ns`
+- Non-zero `thread_id`; `end_ns > start_ns`
 - No boundary/writer failure flags (`1|512|1024|2048|4096`)
 - Terminal `Z`: `hook_failures == 0`, `dropped_records == 0`
 

@@ -313,7 +313,6 @@ WP6_LOADED_DISABLED_CONTRACT_V1 = "wp6_loaded_disabled_v1"
 WP6_MINIMAL_REFERENCE_CONTRACT = "wp6_minimal_reference_v2"
 WP6_MINIMAL_REFERENCE_RECONCILIATION_PURPOSE = "wp6_minimal_reference_reconciliation_v1"
 WP7_LEAN_REFERENCE_VALIDITY = "wp7_lean_reference_validity_v1"
-WP7_TRAINING_REQUALIFICATION_PURPOSE = "wp7_lean_reference_training_requalification_v1"
 REFERENCE_FRAME_INVALID_FLAGS = 1 | 512 | 1024 | 2048 | 4096
 REFERENCE_CPU_LADDER_STAGES = ("bare", "loaded-disabled", "reference")
 MINIMAL_REFERENCE_RECONCILIATION_STAGES = ("loaded-disabled", "minimal-reference", "reference")
@@ -1124,6 +1123,10 @@ def _validate_lean_reference_trace(log_path: Path, *, frames: int) -> None:
             raise base.BenchmarkError("reference frame missing measurement_epoch")
         if row.get("generation", 0) <= 0:
             raise base.BenchmarkError("reference frame missing generation")
+        if row.get("thread_id", 0) == 0:
+            raise base.BenchmarkError("reference frame missing thread_id")
+        if row.get("end_ns", 0) <= row.get("start_ns", 0):
+            raise base.BenchmarkError("reference frame end_ns must exceed start_ns")
 
 
 def _offline_workload_mode_and_flags(stage: str) -> tuple[int, int]:

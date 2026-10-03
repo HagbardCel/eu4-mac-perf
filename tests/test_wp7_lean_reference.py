@@ -19,6 +19,9 @@ class LeanReferenceValidityTests(unittest.TestCase):
         parts[1 + fields.index("cpu_ns")] = "500"
         parts[1 + fields.index("measurement_epoch")] = "1"
         parts[1 + fields.index("generation")] = "2"
+        parts[1 + fields.index("thread_id")] = "42"
+        parts[1 + fields.index("start_ns")] = "100"
+        parts[1 + fields.index("end_ns")] = "900"
         f1 = ",".join(parts)
         parts[1] = "2"
         f2 = ",".join(parts)
@@ -26,6 +29,39 @@ class LeanReferenceValidityTests(unittest.TestCase):
             log = Path(tmp) / "log.csv"
             self._write(log, f"H,3\n{f1}\n{f2}\nX,1,2,3\nZ,0,7,0\n")
             model._validate_lean_reference_trace(log, frames=2)
+
+    def test_rejects_missing_thread_id(self):
+        fields = list(model.FRAME_FIELDS)
+        parts = ["F"] + ["0"] * len(fields)
+        parts[1 + fields.index("update_id")] = "1"
+        parts[1 + fields.index("wall_ns")] = "1000"
+        parts[1 + fields.index("cpu_ns")] = "500"
+        parts[1 + fields.index("measurement_epoch")] = "1"
+        parts[1 + fields.index("generation")] = "2"
+        parts[1 + fields.index("start_ns")] = "100"
+        parts[1 + fields.index("end_ns")] = "900"
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "log.csv"
+            self._write(log, f"H,3\n{','.join(parts)}\nZ,0,7,0\n")
+            with self.assertRaises(model.base.BenchmarkError):
+                model._validate_lean_reference_trace(log, frames=1)
+
+    def test_rejects_end_not_after_start(self):
+        fields = list(model.FRAME_FIELDS)
+        parts = ["F"] + ["0"] * len(fields)
+        parts[1 + fields.index("update_id")] = "1"
+        parts[1 + fields.index("wall_ns")] = "1000"
+        parts[1 + fields.index("cpu_ns")] = "500"
+        parts[1 + fields.index("measurement_epoch")] = "1"
+        parts[1 + fields.index("generation")] = "2"
+        parts[1 + fields.index("thread_id")] = "1"
+        parts[1 + fields.index("start_ns")] = "900"
+        parts[1 + fields.index("end_ns")] = "100"
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "log.csv"
+            self._write(log, f"H,3\n{','.join(parts)}\nZ,0,7,0\n")
+            with self.assertRaises(model.base.BenchmarkError):
+                model._validate_lean_reference_trace(log, frames=1)
 
     def test_rejects_zero_cpu(self):
         fields = list(model.FRAME_FIELDS)
