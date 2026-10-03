@@ -1307,12 +1307,11 @@ def _offline_workload_stage(
     if run.returncode:
         raise base.BenchmarkError(f"Valid workload {recipe['name']} {stage} failed ({run.returncode}): {run.stderr}")
     measured=parse_workload_harness_metrics(run.stdout)
-    if stage != "bare":
-        _require_harness_measurement_contract(
-            measured,
-            post_arm_prime_frames=post_arm_prime_frames,
-            measured_frames=frames,
-        )
+    _require_harness_measurement_contract(
+        measured,
+        post_arm_prime_frames=post_arm_prime_frames,
+        measured_frames=frames,
+    )
     if completion_timing:
         _require_completion_timing_metrics(measured)
     if stage == "bare":
@@ -1360,7 +1359,12 @@ def _offline_workload_stage(
             reference_validity=WP7_LEAN_REFERENCE_VALIDITY,
         )
     else:
-        measured.update(frames=len(rows), tree_reconciliation=tree["tree_reconciliation"])
+        measured.update(
+            frames=frames,
+            published_frames=len(rows),
+            post_arm_prime_frames=post_arm_prime_frames,
+            tree_reconciliation=tree["tree_reconciliation"],
+        )
     if diagnostic:
         gpu_metrics=next((list(map(int,row[1:4])) for row in trace if row and row[0]=="M"),[0,0,0])
         record_total=next((int(row[1]) for row in trace if row and row[0]=="N"),0)

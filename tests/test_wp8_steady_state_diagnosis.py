@@ -45,6 +45,84 @@ class Wp8SteadyStateDiagnosisTests(unittest.TestCase):
                 measured_frames=4,
             )
 
+    def test_bare_stage_enforces_harness_measurement_contract(self):
+        def capture_run(cmd, env, **kwargs):
+            stdout = (
+                "elapsed_ns=100 cpu_ns=50 draws=4 valid=1 pixel_alpha=255 "
+                "post_arm_prime_frames=0 measured_frames=3\n"
+            )
+            return mock.Mock(returncode=0, stdout=stdout, stderr="")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recipe = {"name": "mesh", "path": str(root / "recipe.bin"), "draws": 1}
+            (root / "recipe.bin").write_bytes(b"\x00")
+            with mock.patch.object(model.subprocess, "run", side_effect=capture_run):
+                with self.assertRaises(model.base.BenchmarkError):
+                    model._offline_workload_stage(
+                        root,
+                        recipe,
+                        0,
+                        "bare",
+                        measured_frames=4,
+                        post_arm_prime_frames=0,
+                    )
+
+    def test_counters_stage_records_timed_and_published_frame_counts(self):
+        published = 5
+        measured_window = 4
+        prime = 1
+        row = {
+            "draws": 1,
+            "uniform_calls": 0,
+            "state_calls": 0,
+            "buffer_calls": 0,
+            "texture_calls": 0,
+            "draw_wall_ns_est": 0,
+            "draw_cpu_ns_est": 0,
+            "flags": 0,
+        }
+        rows = [dict(row) for _ in range(published)]
+        trace = [
+            ["Q", "1", "1", "-1", "8", "1", "110", "100", "10", "10", "1", "0", "0"],
+            ["Q", "1", "1", "0", "0", "1", "100", "90", "10", "10", "1", "1", "0"],
+            ["Q", "1", "1", "1", "2", "1", "90", "80", "89", "79", "1", "2", "0"],
+            ["Q", "1", "1", "2", "5", "1", "1", "1", "1", "1", "1", "3", "0"],
+            ["C", "7", str(published), "0", "0"],
+            ["C", "8", "0", "0", "0"],
+            ["C", "9", "0", "0", "0"],
+            ["C", "11", "0", "0", "0"],
+            ["Z", "0", "7", "0"],
+        ]
+
+        def capture_run(cmd, env, **kwargs):
+            stdout = (
+                "elapsed_ns=100 cpu_ns=50 draws=4 valid=1 pixel_alpha=255 "
+                f"post_arm_prime_frames={prime} measured_frames={measured_window}\n"
+            )
+            return mock.Mock(returncode=0, stdout=stdout, stderr="")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recipe = {"name": "mesh", "path": str(root / "recipe.bin"), "draws": 1}
+            (root / "recipe.bin").write_bytes(b"\x00")
+            with mock.patch.object(model.subprocess, "run", side_effect=capture_run), mock.patch.object(
+                model,
+                "frame_rows",
+                return_value=rows,
+            ), mock.patch.object(model, "read_rows", return_value=trace):
+                measured, _ = model._offline_workload_stage(
+                    root,
+                    recipe,
+                    0,
+                    "counters",
+                    post_arm_prime_frames=prime,
+                    measured_frames=measured_window,
+                )
+        self.assertEqual(measured["frames"], measured_window)
+        self.assertEqual(measured["published_frames"], published)
+        self.assertEqual(measured["post_arm_prime_frames"], prime)
+
     def test_policy_versions_for_steady_state_diagnosis(self):
         versions = model._offline_policy_versions({"steady_state_tier1_diagnosis": True})
         self.assertEqual(
@@ -80,7 +158,7 @@ class Wp8SteadyStateDiagnosisTests(unittest.TestCase):
             "read_rows",
             return_value=[["H", "3"], ["Z", "0", "7", "0"]],
         ):
-                model._offline_workload_stage(
+                measured, _ = model._offline_workload_stage(
                     root,
                     recipe,
                     0,
@@ -90,6 +168,9 @@ class Wp8SteadyStateDiagnosisTests(unittest.TestCase):
                     measured_frames=4,
                     telemetry_suffix="four_frame_post_arm_prime_1",
                 )
+            self.assertEqual(measured["frames"], 4)
+            self.assertEqual(measured["published_frames"], 5)
+            self.assertEqual(measured["post_arm_prime_frames"], 1)
             self.assertEqual(calls[0]["EU4_TEST_POST_ARM_PRIME_FRAMES"], "1")
             self.assertEqual(calls[0]["EU4_TEST_COMPLETION_TIMING"], "1")
 
