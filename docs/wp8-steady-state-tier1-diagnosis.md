@@ -25,7 +25,9 @@ Each variant records:
 - Tier-1 submission `elapsed_ns` / `cpu_ns`
 - WP5b completion fields (`submission_*`, `post_window_drain_*`, `submission_plus_drain_*`)
 
-Harness: after `MEASURE_ENABLED` arm, optional profiler-active prime frames run **outside** the timed window (`EU4_TEST_POST_ARM_PRIME_FRAMES`).
+Harness: after `MEASURE_ENABLED` arm, optional profiler-active prime frames run **outside** the timed window (`EU4_TEST_POST_ARM_PRIME_FRAMES`), then `glFinish()` drains GPU work before the timed window starts.
+
+Variant order rotates per trial (`baseline → prime4 → prime40`, then cyclic permutations) independently of stage order alternation.
 
 ## Command
 

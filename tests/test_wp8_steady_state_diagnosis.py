@@ -14,6 +14,37 @@ _FROZEN_ARTIFACTS = {
 
 
 class Wp8SteadyStateDiagnosisTests(unittest.TestCase):
+    def test_completion_absolute_overhead_scales_with_measured_frames(self):
+        pairs = [{"instrumented": 5000, "reference": 1000}]
+        four = model._completion_diagnostic_paired_summary(pairs, frames=4)
+        forty = model._completion_diagnostic_paired_summary(pairs, frames=40)
+        self.assertAlmostEqual(four["overhead_us_per_frame"], 1.0)
+        self.assertAlmostEqual(forty["overhead_us_per_frame"], 0.1)
+        self.assertAlmostEqual(four["overhead_us_per_frame"] / forty["overhead_us_per_frame"], 10.0)
+
+    def test_steady_state_variant_order_rotates(self):
+        names = [name for name, _ in model.STEADY_STATE_MEASUREMENT_VARIANTS]
+        self.assertEqual(
+            [name for name, _ in model._steady_state_variant_order_for_trial(0)],
+            names,
+        )
+        self.assertEqual(
+            [name for name, _ in model._steady_state_variant_order_for_trial(1)],
+            names[1:] + names[:1],
+        )
+        self.assertEqual(
+            [name for name, _ in model._steady_state_variant_order_for_trial(2)],
+            names[2:] + names[:2],
+        )
+
+    def test_require_harness_measurement_contract_rejects_mismatch(self):
+        with self.assertRaises(model.base.BenchmarkError):
+            model._require_harness_measurement_contract(
+                {"post_arm_prime_frames": 0, "measured_frames": 4},
+                post_arm_prime_frames=1,
+                measured_frames=4,
+            )
+
     def test_policy_versions_for_steady_state_diagnosis(self):
         versions = model._offline_policy_versions({"steady_state_tier1_diagnosis": True})
         self.assertEqual(
@@ -76,6 +107,8 @@ class Wp8SteadyStateDiagnosisTests(unittest.TestCase):
                 "post_window_drain_cpu_ns": 50,
                 "submission_plus_drain_elapsed_ns": 1100,
                 "submission_plus_drain_cpu_ns": 550,
+                "post_arm_prime_frames": kwargs.get("post_arm_prime_frames", 0),
+                "measured_frames": kwargs.get("measured_frames", 4),
             }
             return metrics, None
 
@@ -101,6 +134,9 @@ class Wp8SteadyStateDiagnosisTests(unittest.TestCase):
         self.assertTrue(result["steady_state_tier1_diagnosis"])
         self.assertEqual(len(result["recipes"]), 3)
         self.assertIn("variant_comparisons", result["recipes"][0])
+        trial0 = result["recipes"][0]["trials"][0]
+        self.assertIn("variant_order", trial0)
+        self.assertEqual(len(trial0["variant_order"]), len(model.STEADY_STATE_MEASUREMENT_VARIANTS))
 
 
 if __name__ == "__main__":

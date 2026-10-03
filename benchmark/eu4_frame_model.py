@@ -1071,6 +1071,30 @@ def parse_workload_harness_metrics(stdout: str) -> dict[str, int]:
     return {key: int(value) for key, value in (part.split("=", 1) for part in stdout.split() if "=" in part)}
 
 
+def _require_harness_measurement_contract(
+    measured: dict[str, int],
+    *,
+    post_arm_prime_frames: int,
+    measured_frames: int,
+) -> None:
+    reported_prime = measured.get("post_arm_prime_frames")
+    reported_measured = measured.get("measured_frames")
+    if reported_prime != post_arm_prime_frames:
+        raise base.BenchmarkError(
+            f"harness post_arm_prime_frames={reported_prime} (expected {post_arm_prime_frames})",
+        )
+    if reported_measured != measured_frames:
+        raise base.BenchmarkError(
+            f"harness measured_frames={reported_measured} (expected {measured_frames})",
+        )
+
+
+def _steady_state_variant_order_for_trial(trial: int) -> list[tuple[str, dict]]:
+    variants = list(STEADY_STATE_MEASUREMENT_VARIANTS)
+    rotation = trial % len(variants)
+    return variants[rotation:] + variants[:rotation]
+
+
 def _require_completion_timing_metrics(measured: dict[str, int]) -> None:
     missing = [
         key
@@ -1283,6 +1307,12 @@ def _offline_workload_stage(
     if run.returncode:
         raise base.BenchmarkError(f"Valid workload {recipe['name']} {stage} failed ({run.returncode}): {run.stderr}")
     measured=parse_workload_harness_metrics(run.stdout)
+    if stage != "bare":
+        _require_harness_measurement_contract(
+            measured,
+            post_arm_prime_frames=post_arm_prime_frames,
+            measured_frames=frames,
+        )
     if completion_timing:
         _require_completion_timing_metrics(measured)
     if stage == "bare":
@@ -1296,6 +1326,7 @@ def _offline_workload_stage(
         _validate_minimal_reference_control(control_path)
         return measured, None
     rows=frame_rows(log_path);trace=read_rows(log_path)
+    expected_published = post_arm_prime_frames + frames
     if stage == "reference":
         _validate_lean_reference_trace(
             log_path,
@@ -1306,9 +1337,9 @@ def _offline_workload_stage(
         tree=scope_tree_summary(trace,[{"name":"A0"}])["phases"]["1"]
         failure=next((int(r[1]) for r in trace if r[0]=="Z"),None)
         dropped=next((int(r[3]) for r in trace if r[0]=="Z" and len(r)>3),0)
-        if len(rows)!=frames or failure!=0 or dropped or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
+        if len(rows)!=expected_published or failure!=0 or dropped or tree["tree_reconciliation"]!="passed" or any(r["flags"]&(1|512|1024|2048|4096) for r in rows):
             raise base.BenchmarkError("Representative workload did not exercise valid production wrappers, scopes, and writer")
-    if stage!="reference" and sum(r["draws"] for r in rows)!=frames*recipe["draws"]:
+    if stage!="reference" and sum(r["draws"] for r in rows)!=expected_published*recipe["draws"]:
         raise base.BenchmarkError("Representative producer draw counts differ from passive recipe")
     if stage!="reference":
         counts={int(r[1]):tuple(map(int,r[2:5])) for r in trace if r[0]=="C"}
@@ -1479,7 +1510,7 @@ def _completion_diagnostic_paired_summary(pairs: list[dict], *, frames: int = 4)
     return comparison
 
 
-def _completion_stage_comparisons(trials: list[dict]) -> dict:
+def _completion_stage_comparisons(trials: list[dict], *, frames: int = 4) -> dict:
     comparisons: dict = {}
     pairs = (("reference", "bare"), ("counters", "reference"))
     for stage, reference in pairs:
@@ -1492,6 +1523,7 @@ def _completion_stage_comparisons(trials: list[dict]) -> dict:
                     }
                     for trial in trials
                 ],
+                frames=frames,
             )
     return comparisons
 
@@ -1519,8 +1551,9 @@ def _offline_steady_state_recipe_evidence(root: Path, recipe: dict) -> dict:
     variant_names = [name for name, _ in STEADY_STATE_MEASUREMENT_VARIANTS]
     for trial in range(7):
         order = list(reversed(COMPLETION_CAUSAL_STAGES)) if trial % 2 else list(COMPLETION_CAUSAL_STAGES)
+        variant_schedule = _steady_state_variant_order_for_trial(trial)
         variants: dict = {}
-        for variant_name, spec in STEADY_STATE_MEASUREMENT_VARIANTS:
+        for variant_name, spec in variant_schedule:
             stages: dict = {}
             for stage in order:
                 stages[stage], _ = _offline_workload_stage(
@@ -1537,7 +1570,12 @@ def _offline_steady_state_recipe_evidence(root: Path, recipe: dict) -> dict:
                 "measurement": dict(spec),
                 "stages": stages,
             }
-        trials.append({"trial": trial, "order": order, "variants": variants})
+        trials.append({
+            "trial": trial,
+            "order": order,
+            "variant_order": [name for name, _ in variant_schedule],
+            "variants": variants,
+        })
     comparisons = {}
     for variant_name in variant_names:
         variant_trials = [
@@ -1547,8 +1585,15 @@ def _offline_steady_state_recipe_evidence(root: Path, recipe: dict) -> dict:
                 "stages": entry["variants"][variant_name]["stages"],
             }
             for entry in trials
+            if variant_name in entry["variants"]
         ]
-        comparisons[variant_name] = _completion_stage_comparisons(variant_trials)
+        measured_frames = int(
+            variant_trials[0]["stages"]["bare"].get("measured_frames", 4),
+        )
+        comparisons[variant_name] = _completion_stage_comparisons(
+            variant_trials,
+            frames=measured_frames,
+        )
     recipe_meta = {key: value for key, value in recipe.items() if key != "path"}
     return {
         "recipe": recipe_meta,

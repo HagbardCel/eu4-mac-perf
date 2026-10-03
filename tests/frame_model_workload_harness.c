@@ -71,6 +71,11 @@ int main(int argc,char **argv) {
     const char *prime_env=getenv("EU4_TEST_POST_ARM_PRIME_FRAMES");
     if(prime_env) prime_frames=(unsigned)strtoul(prime_env,NULL,10);
     for(unsigned i=0;i<prime_frames;i++) { if(frame) frame(workload);else workload(); }
+    if(prime_frames) {
+        glFinish();
+        GLenum prime_finish_error=glGetError();
+        if(prime_finish_error!=GL_NO_ERROR) {fprintf(stderr,"prime glFinish error=%u\n",prime_finish_error);return 11;}
+    }
     const char *completion_timing=getenv("EU4_TEST_COMPLETION_TIMING");
     int report_completion=completion_timing && strcmp(completion_timing,"0");
     uint64_t cpu=now(CLOCK_THREAD_CPUTIME_ID),wall=now(CLOCK_UPTIME_RAW);
