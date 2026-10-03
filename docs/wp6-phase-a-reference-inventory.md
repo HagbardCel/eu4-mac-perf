@@ -226,9 +226,9 @@ with tempfile.TemporaryDirectory() as d:
 
 **Do not** define `loaded-disabled` as naïve `MODE_OFF`. Example: `shadow_tracking_active()` can call `invalidate_gl_state()` when `frame_control.mode==OFF`, which REFERENCE does not do on the same GL fast paths.
 
-**Do not** assume `MODE_REFERENCE` with `MEASURE_ENABLED=0` is zero-cost: parts of `hook_update` and the REFERENCE render branch still run timing/scope machinery unless explicitly gated for this stage.
+**Do not** assume `MODE_REFERENCE` with `MEASURE_ENABLED=0` is zero-cost without an explicit fast path: v1 left unconditional hook clocks (~7/frame); **v2** (`wp6_loaded_disabled_v2`) uses passive `hook_update` / `hook_idle` / `hook_render` / `hook_present` entry points (no scope/event/clock accounting).
 
-**Phase B contract (test-only configuration):**
+**Phase B contract (test-only configuration, v2):**
 
 1. Same dylib and interposed symbols as timed WP6 captures.
 2. Same synthetic hook topology (`eu4_frame_model_test_frame` path).
@@ -267,4 +267,4 @@ Existing sampled ablations (`EU4_TEST_ABLATION=accounting|writer|preparation`) t
 
 1. **Inventory:** Timed REFERENCE work is **one `hook_update` tree/frame** plus **GL_wrappers/frame** interposed calls (formula above; mesh **~15k/frame**, not **N** draws alone).
 2. **Call-count model:** Frame-hook and clock work is **O(1)** (~35 `clock_gettime`/frame, ~14 hook-level `measurement_active`/frame). GL interposer **invocation count** is **O(GL_wrappers)** (~**5.4×** draw-command count **N** on mesh; formula cap **9× N**). Workload `measurement_active()` adds **Ntexture + Nstate** per frame (~**1195** on mesh). Those counts are orders of magnitude above individual O(1) frame-hook operations. **Whether CPU follows invocation/guard count** is for Phase B (`bare` → `loaded-disabled` → `reference`).
-3. **Next:** Implement `loaded-disabled` / `minimal-reference` per contract, then REFERENCE-scoped ablations. **Prioritize the three-stage ladder** before many fine-grained ablations.
+3. **Next:** Run `reference-cpu-decomposition` for the three-stage ladder; then `minimal-reference` and REFERENCE-scoped ablations as needed.

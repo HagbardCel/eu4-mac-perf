@@ -18,6 +18,32 @@
       "notes": "Post-PR#8 training-only capture; timing decomposition in docs/wp5-requalification-timing-memo-20261003.md. Not authoritative WP1."
     }
   ],
+  "reference_cpu_decomposition_archives": [
+    {
+      "work_package": "WP6",
+      "purpose": "wp6_reference_cpu_decomposition_v1",
+      "role": "pre_stage_validation_v2",
+      "evidence_id": "20261003T084522.537575Z-95f3513c",
+      "archive_path": "analysis/evidence/frame-model-offline-cb4b762-20261003T084522.537575Z-95f3513c.json",
+      "archive_sha256_committed": "27afa3198d4b3968d504b8891ede10298e91fd11004a31cf308e8fdb67c9e77b",
+      "git_commit": "cb4b762268e1b85fd4e6aa7db88f9eb08968b24d",
+      "captured_at_utc": "20261003T084522.537575Z-95f3513c",
+      "loaded_disabled_contract": "wp6_loaded_disabled_v2",
+      "notes": "Valid wp6_loaded_disabled_v2 ladder @ cb4b762 captured before loaded-disabled trace validation in the harness; authoritative ladder awaits one recapture with stage validation. Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Diagnostic only."
+    },
+    {
+      "work_package": "WP6",
+      "purpose": "wp6_reference_cpu_decomposition_v1",
+      "role": "historical_v1",
+      "evidence_id": "20261003T083731.257302Z-e4e73118",
+      "archive_path": "analysis/evidence/frame-model-offline-82922f3-20261003T083731.257302Z-e4e73118.json",
+      "archive_sha256_committed": "8b1c560e660157ed46842a519576802b554c4e0978bd37785c1a7d0234188d90",
+      "git_commit": "82922f3915eeddb709f99f83867981a6a1f792bf",
+      "captured_at_utc": "20261003T083731.257302Z-e4e73118",
+      "loaded_disabled_contract": "wp6_loaded_disabled_v1",
+      "notes": "First bare/loaded-disabled/reference ladder (v1 contract: residual hook clocks in loaded-disabled). Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Superseded for decomposition semantics by wp6_loaded_disabled_v2 and pre-validation capture 95f3513c; authoritative ladder awaits post-validation recapture. Diagnostic only."
+    }
+  ],
   "diagnostic_archives": [
     {
       "evidence_id": "20261002T220742.210844Z-129e5bf5",

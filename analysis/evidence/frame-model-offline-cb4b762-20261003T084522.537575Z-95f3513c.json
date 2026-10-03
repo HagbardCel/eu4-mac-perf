@@ -1,0 +1,3509 @@
+{
+  "evidence_id": "20261003T084522.537575Z-95f3513c",
+  "schema_version": "stage2-split-v2",
+  "recorded_at_utc": "20261003T084522.537575Z-95f3513c",
+  "identity_start": {
+    "git_commit": "cb4b762268e1b85fd4e6aa7db88f9eb08968b24d",
+    "git_commit_short": "cb4b762",
+    "git_tree_clean": true,
+    "controller_sha256": "52bf165e2bc8a4f90a8998d3e42132f5cb232f67ad864be57f8be1fbe58dbec9",
+    "key_source_hashes": {
+      "eu4_frame_model.c": "e611f3cb3d979937f3c43819fad1c8faee78fb3ad43962e2622020afbc51a499",
+      "eu4_frame_model.py": "52bf165e2bc8a4f90a8998d3e42132f5cb232f67ad864be57f8be1fbe58dbec9",
+      "eu4_gpu_segments.h": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
+      "eu4_draw_observers.h": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
+      "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
+    }
+  },
+  "identity_end": {
+    "git_commit": "cb4b762268e1b85fd4e6aa7db88f9eb08968b24d",
+    "git_commit_short": "cb4b762",
+    "git_tree_clean": true,
+    "controller_sha256": "52bf165e2bc8a4f90a8998d3e42132f5cb232f67ad864be57f8be1fbe58dbec9",
+    "key_source_hashes": {
+      "eu4_frame_model.c": "e611f3cb3d979937f3c43819fad1c8faee78fb3ad43962e2622020afbc51a499",
+      "eu4_frame_model.py": "52bf165e2bc8a4f90a8998d3e42132f5cb232f67ad864be57f8be1fbe58dbec9",
+      "eu4_gpu_segments.h": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
+      "eu4_draw_observers.h": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
+      "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
+    }
+  },
+  "git_tree_clean": true,
+  "git_provenance_verified": true,
+  "git_commit": "cb4b762268e1b85fd4e6aa7db88f9eb08968b24d",
+  "git_commit_short": "cb4b762",
+  "executed_artifact_start": {
+    "profiler_dylib_sha256": "7b1c8487364f396bc281903cb738e6accc404718531da0c9ce80b4dbc44aac8d",
+    "test_library_sha256": "2f0388849d90dc03f911439cc9a9456b62971cca732ee641babe5e39b9ca565b",
+    "workload_harness_sha256": "89871bd811db5012b379a767b040e799d859f94a0e90aa0cc53862421bb24512",
+    "draw_manifest_sha256": "9c508d76da2ec56697416ad3788655a1b5a638fa150c5f3c30b4756e1db6a2c0"
+  },
+  "executed_artifact_end": {
+    "profiler_dylib_sha256": "7b1c8487364f396bc281903cb738e6accc404718531da0c9ce80b4dbc44aac8d",
+    "test_library_sha256": "2f0388849d90dc03f911439cc9a9456b62971cca732ee641babe5e39b9ca565b",
+    "workload_harness_sha256": "89871bd811db5012b379a767b040e799d859f94a0e90aa0cc53862421bb24512",
+    "draw_manifest_sha256": "9c508d76da2ec56697416ad3788655a1b5a638fa150c5f3c30b4756e1db6a2c0"
+  },
+  "environment": {
+    "platform": "darwin",
+    "python_version": "3.9.6",
+    "arch": "arm64",
+    "gog_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "macos_version": "27.0.1",
+    "macos_build": "26A434",
+    "chip_model": "Apple M5 Max",
+    "clang_version": "Apple clang version 21.0.0 (clang-2100.3.34.2)"
+  },
+  "policy_versions": {
+    "reference_cpu_decomposition": "wp6_reference_cpu_decomposition_v1",
+    "loaded_disabled_contract": "wp6_loaded_disabled_v2",
+    "tier1_causal_gate": "tier1_causal_rel3pct_abs50us_v2",
+    "reference_band_fraction": "non_normative_0.03",
+    "reference_cpu_decomposition_text": "bare / loaded-disabled / reference ladder; comparisons are diagnostic only."
+  },
+  "artifact_hashes": {
+    "profiler_dylib_sha256": "7b1c8487364f396bc281903cb738e6accc404718531da0c9ce80b4dbc44aac8d",
+    "test_library_sha256": "2f0388849d90dc03f911439cc9a9456b62971cca732ee641babe5e39b9ca565b",
+    "workload_harness_sha256": "89871bd811db5012b379a767b040e799d859f94a0e90aa0cc53862421bb24512",
+    "harness_source_sha256": "2c27ef99f8693ce480006334be4462f7ca9e4aea1d7889391dee1724d668d809",
+    "profiler_source_sha256": "e611f3cb3d979937f3c43819fad1c8faee78fb3ad43962e2622020afbc51a499",
+    "gpu_segments_source_sha256": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
+    "draw_observers_sha256": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
+    "draw_manifest_sha256": "9c508d76da2ec56697416ad3788655a1b5a638fa150c5f3c30b4756e1db6a2c0",
+    "site_header_sha256": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6",
+    "controller_sha256": "52bf165e2bc8a4f90a8998d3e42132f5cb232f67ad864be57f8be1fbe58dbec9",
+    "game_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "recipe_sha256": {
+      "mesh": "496f29d0ec8a47f35d8ca60437e28ed47d0b6a28f0744ebe4f48b0fa74ff4592",
+      "borders": "bea909b039639260614f312adffbc8869512e5baad33fffa2251cca1ef56ab9f",
+      "text_ui": "d279b947d868a895dee13e31bf7efb5ea77a79c08d041b926e4a58a572aa2fbd"
+    }
+  },
+  "preflight": {
+    "purpose": "wp6_reference_cpu_decomposition_v1",
+    "validation_scope": "training_only",
+    "status": "diagnostic_complete",
+    "build": {
+      "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "engine_inventory_sha256": "0e22dc4d18c3fc067070f6b76fd89c2e6003cbc9cc51449321bf20c01461bf1d",
+      "backend_graph_sha256": "9cda7372d0b9d7c55419a9a8dab2e21a5199ccac86fa550d52653faec298e545",
+      "engine_sites": 7,
+      "library_sha256": "7b1c8487364f396bc281903cb738e6accc404718531da0c9ce80b4dbc44aac8d",
+      "library_source_sha256": "e611f3cb3d979937f3c43819fad1c8faee78fb3ad43962e2622020afbc51a499",
+      "native_source_hashes": {
+        "eu4_frame_model.c": "e611f3cb3d979937f3c43819fad1c8faee78fb3ad43962e2622020afbc51a499",
+        "eu4_scope_tree.h": "cb3e09dc6daefbf557b81dc9e16fdea24f33490d610839998eec6d45987867cf",
+        "eu4_gpu_segments.h": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
+        "eu4_spsc.h": "53abd60e288d6bff7c404b2c61e7368c46bfa6d2eabfbc7882011788f5258219",
+        "eu4_raster_policy.h": "e5819350e9fed1077e57bb925c93369e0a71f0211732d8b0095247c46499685b",
+        "eu4_render_gate.h": "4541d32813cf322e4f3b3c2881a1b6570da793db983a8d29f5f18d2cfe0dcb00",
+        "eu4_detour.h": "3eaee826feda0214ae9985f75996a8aa131bf0643d03c2ceb1d97a1be8cf9832",
+        "eu4_gl_shadow.h": "a0cdfdd207623a59afe55931e833abb4e4be524ca4d979d39ca719bcdfc30ec0",
+        "eu4_writer_buffer.h": "a1f7c146762548ee693b1d66285813fade15f58115641d0b3f272b1d6decf522",
+        "eu4_draw_observers.h": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
+        "eu4_draw_api_ids.h": "6a354de630b5e12899bb314ba733fd58e89384231670619cc54abc428df14677",
+        "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
+      },
+      "draw_api_manifest": {
+        "schema": 2,
+        "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+        "observer_header_sha256": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
+        "export_stub_sha256": "869633f04031fbfb30f2b6c053280538a9d2cc674eaf6e583cd7303d0a1b77a2",
+        "candidate_policy": "draw/range/multi/indirect plus immediate-mode, display-list, evaluator, rect, bitmap and pixel paths; buffer selectors excluded",
+        "apis": [
+          {
+            "name": "glArrayElement",
+            "canonical": "glArrayElement",
+            "id": 7,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLint i"
+          },
+          {
+            "name": "glArrayElementEXT",
+            "canonical": "glArrayElement",
+            "id": 7,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": "GLint"
+          },
+          {
+            "name": "glBegin",
+            "canonical": "glBegin",
+            "id": 8,
+            "exported": true,
+            "imported": true,
+            "evidence_provenance": [
+              "macho_import",
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "reachable",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode"
+          },
+          {
+            "name": "glBitmap",
+            "canonical": "glBitmap",
+            "id": 9,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLsizei width, GLsizei height, GLfloat xorig, GLfloat yorig, GLfloat xmove, GLfloat ymove, const GLubyte *bitmap"
+          },
+          {
+            "name": "glCallList",
+            "canonical": "glCallList",
+            "id": 10,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLuint list"
+          },
+          {
+            "name": "glCallLists",
+            "canonical": "glCallLists",
+            "id": 11,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLsizei n, GLenum type, const void *lists"
+          },
+          {
+            "name": "glCopyPixels",
+            "canonical": "glCopyPixels",
+            "id": 12,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLint x, GLint y, GLsizei width, GLsizei height, GLenum type"
+          },
+          {
+            "name": "glDrawArrays",
+            "canonical": "glDrawArrays",
+            "id": 3,
+            "exported": true,
+            "imported": true,
+            "evidence_provenance": [
+              "macho_import",
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "reachable",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": true,
+            "abi": "GLenum mode, GLint first, GLsizei count"
+          },
+          {
+            "name": "glDrawArraysEXT",
+            "canonical": "glDrawArrays",
+            "id": 3,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": "GLenum, GLint, GLsizei"
+          },
+          {
+            "name": "glDrawArraysIndirect",
+            "canonical": "glDrawArraysIndirect",
+            "id": 13,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, const void *indirect"
+          },
+          {
+            "name": "glDrawArraysInstanced",
+            "canonical": "glDrawArraysInstanced",
+            "id": 5,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": true,
+            "abi": "GLenum mode, GLint first, GLsizei count, GLsizei instancecount"
+          },
+          {
+            "name": "glDrawArraysInstancedARB",
+            "canonical": "glDrawArraysInstanced",
+            "id": 5,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": "GLenum mode, GLint first, GLsizei count, GLsizei primcount"
+          },
+          {
+            "name": "glDrawArraysInstancedBaseInstance",
+            "canonical": "glDrawArraysInstancedBaseInstance",
+            "id": 14,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glDrawArraysInstancedEXT",
+            "canonical": "glDrawArraysInstancedEXT",
+            "id": 15,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glDrawBufferRegion",
+            "canonical": "glDrawBufferRegion",
+            "id": 16,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glDrawElementArrayAPPLE",
+            "canonical": "glDrawElementArrayAPPLE",
+            "id": 17,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLint first, GLsizei count"
+          },
+          {
+            "name": "glDrawElementArrayATI",
+            "canonical": "glDrawElementArrayATI",
+            "id": 18,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glDrawElements",
+            "canonical": "glDrawElements",
+            "id": 1,
+            "exported": true,
+            "imported": true,
+            "evidence_provenance": [
+              "macho_import",
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "reachable",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": true,
+            "abi": "GLenum mode, GLsizei count, GLenum type, const void *indices"
+          },
+          {
+            "name": "glDrawElementsBaseVertex",
+            "canonical": "glDrawElementsBaseVertex",
+            "id": 2,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "glew_pointer_slot",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": true,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": true,
+            "abi": "GLenum mode, GLsizei count, GLenum type, const void *indices, GLint basevertex"
+          },
+          {
+            "name": "glDrawElementsIndirect",
+            "canonical": "glDrawElementsIndirect",
+            "id": 19,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLenum type, const void *indirect"
+          },
+          {
+            "name": "glDrawElementsInstanced",
+            "canonical": "glDrawElementsInstanced",
+            "id": 4,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": true,
+            "abi": "GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei instancecount"
+          },
+          {
+            "name": "glDrawElementsInstancedARB",
+            "canonical": "glDrawElementsInstanced",
+            "id": 4,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "glew_pointer_slot",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": true,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": "GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei primcount"
+          },
+          {
+            "name": "glDrawElementsInstancedBaseInstance",
+            "canonical": "glDrawElementsInstancedBaseInstance",
+            "id": 20,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glDrawElementsInstancedBaseVertex",
+            "canonical": "glDrawElementsInstancedBaseVertex",
+            "id": 6,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": true,
+            "abi": "GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei instancecount, GLint basevertex"
+          },
+          {
+            "name": "glDrawElementsInstancedBaseVertexBaseInstance",
+            "canonical": "glDrawElementsInstancedBaseVertexBaseInstance",
+            "id": 21,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glDrawElementsInstancedEXT",
+            "canonical": "glDrawElementsInstancedEXT",
+            "id": 22,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glDrawPixels",
+            "canonical": "glDrawPixels",
+            "id": 23,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "embedded_string"
+            ],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLsizei width, GLsizei height, GLenum format, GLenum type, const void *pixels"
+          },
+          {
+            "name": "glDrawRangeElementArrayAPPLE",
+            "canonical": "glDrawRangeElementArrayAPPLE",
+            "id": 24,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLuint start, GLuint end, GLint first, GLsizei count"
+          },
+          {
+            "name": "glDrawRangeElementArrayATI",
+            "canonical": "glDrawRangeElementArrayATI",
+            "id": 25,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glDrawRangeElements",
+            "canonical": "glDrawRangeElements",
+            "id": 26,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices"
+          },
+          {
+            "name": "glDrawRangeElementsBaseVertex",
+            "canonical": "glDrawRangeElementsBaseVertex",
+            "id": 27,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices, GLint basevertex"
+          },
+          {
+            "name": "glDrawRangeElementsEXT",
+            "canonical": "glDrawRangeElements",
+            "id": 26,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices"
+          },
+          {
+            "name": "glDrawTransformFeedback",
+            "canonical": "glDrawTransformFeedback",
+            "id": 28,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLuint id"
+          },
+          {
+            "name": "glDrawTransformFeedbackInstanced",
+            "canonical": "glDrawTransformFeedbackInstanced",
+            "id": 29,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glDrawTransformFeedbackNV",
+            "canonical": "glDrawTransformFeedbackNV",
+            "id": 30,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glDrawTransformFeedbackStream",
+            "canonical": "glDrawTransformFeedbackStream",
+            "id": 31,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLuint id, GLuint stream"
+          },
+          {
+            "name": "glDrawTransformFeedbackStreamInstanced",
+            "canonical": "glDrawTransformFeedbackStreamInstanced",
+            "id": 32,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glEnd",
+            "canonical": "glEnd",
+            "id": 33,
+            "exported": true,
+            "imported": true,
+            "evidence_provenance": [
+              "macho_import",
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "reachable",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "void"
+          },
+          {
+            "name": "glEvalCoord1d",
+            "canonical": "glEvalCoord1d",
+            "id": 34,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLdouble u"
+          },
+          {
+            "name": "glEvalCoord1dv",
+            "canonical": "glEvalCoord1dv",
+            "id": 35,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLdouble *u"
+          },
+          {
+            "name": "glEvalCoord1f",
+            "canonical": "glEvalCoord1f",
+            "id": 36,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLfloat u"
+          },
+          {
+            "name": "glEvalCoord1fv",
+            "canonical": "glEvalCoord1fv",
+            "id": 37,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLfloat *u"
+          },
+          {
+            "name": "glEvalCoord2d",
+            "canonical": "glEvalCoord2d",
+            "id": 38,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLdouble u, GLdouble v"
+          },
+          {
+            "name": "glEvalCoord2dv",
+            "canonical": "glEvalCoord2dv",
+            "id": 39,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLdouble *u"
+          },
+          {
+            "name": "glEvalCoord2f",
+            "canonical": "glEvalCoord2f",
+            "id": 40,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLfloat u, GLfloat v"
+          },
+          {
+            "name": "glEvalCoord2fv",
+            "canonical": "glEvalCoord2fv",
+            "id": 41,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLfloat *u"
+          },
+          {
+            "name": "glEvalMesh1",
+            "canonical": "glEvalMesh1",
+            "id": 42,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLint i1, GLint i2"
+          },
+          {
+            "name": "glEvalMesh2",
+            "canonical": "glEvalMesh2",
+            "id": 43,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLint i1, GLint i2, GLint j1, GLint j2"
+          },
+          {
+            "name": "glEvalPoint1",
+            "canonical": "glEvalPoint1",
+            "id": 44,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLint i"
+          },
+          {
+            "name": "glEvalPoint2",
+            "canonical": "glEvalPoint2",
+            "id": 45,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLint i, GLint j"
+          },
+          {
+            "name": "glMultiDrawArrays",
+            "canonical": "glMultiDrawArrays",
+            "id": 46,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, const GLint *first, const GLsizei *count, GLsizei drawcount"
+          },
+          {
+            "name": "glMultiDrawArraysEXT",
+            "canonical": "glMultiDrawArrays",
+            "id": 46,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, const GLint *first, const GLsizei *count, GLsizei primcount"
+          },
+          {
+            "name": "glMultiDrawArraysIndirect",
+            "canonical": "glMultiDrawArraysIndirect",
+            "id": 47,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glMultiDrawArraysIndirectAMD",
+            "canonical": "glMultiDrawArraysIndirectAMD",
+            "id": 48,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glMultiDrawElementArrayAPPLE",
+            "canonical": "glMultiDrawElementArrayAPPLE",
+            "id": 49,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, const GLint *first, const GLsizei *count, GLsizei primcount"
+          },
+          {
+            "name": "glMultiDrawElements",
+            "canonical": "glMultiDrawElements",
+            "id": 50,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, const GLsizei *count, GLenum type, const void* const *indices, GLsizei drawcount"
+          },
+          {
+            "name": "glMultiDrawElementsBaseVertex",
+            "canonical": "glMultiDrawElementsBaseVertex",
+            "id": 51,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, const GLsizei *count, GLenum type, const void* const *indices, GLsizei drawcount, const GLint *basevertex"
+          },
+          {
+            "name": "glMultiDrawElementsEXT",
+            "canonical": "glMultiDrawElements",
+            "id": 50,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, const GLsizei *count, GLenum type, const void* const *indices, GLsizei primcount"
+          },
+          {
+            "name": "glMultiDrawElementsIndirect",
+            "canonical": "glMultiDrawElementsIndirect",
+            "id": 52,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glMultiDrawElementsIndirectAMD",
+            "canonical": "glMultiDrawElementsIndirectAMD",
+            "id": 53,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glMultiDrawElementsIndirectAPPLE",
+            "canonical": "glMultiDrawElementsIndirectAPPLE",
+            "id": 54,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glMultiDrawElementsIndirectBaseInstanceAPPLE",
+            "canonical": "glMultiDrawElementsIndirectBaseInstanceAPPLE",
+            "id": 55,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glMultiDrawRangeElementArrayAPPLE",
+            "canonical": "glMultiDrawRangeElementArrayAPPLE",
+            "id": 56,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLenum mode, GLuint start, GLuint end, const GLint *first, const GLsizei *count, GLsizei primcount"
+          },
+          {
+            "name": "glRectd",
+            "canonical": "glRectd",
+            "id": 57,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLdouble x1, GLdouble y1, GLdouble x2, GLdouble y2"
+          },
+          {
+            "name": "glRectdv",
+            "canonical": "glRectdv",
+            "id": 58,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLdouble *v1, const GLdouble *v2"
+          },
+          {
+            "name": "glRectf",
+            "canonical": "glRectf",
+            "id": 59,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "embedded_string"
+            ],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2"
+          },
+          {
+            "name": "glRectfv",
+            "canonical": "glRectfv",
+            "id": 60,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLfloat *v1, const GLfloat *v2"
+          },
+          {
+            "name": "glRecti",
+            "canonical": "glRecti",
+            "id": 61,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLint x1, GLint y1, GLint x2, GLint y2"
+          },
+          {
+            "name": "glRectiv",
+            "canonical": "glRectiv",
+            "id": 62,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLint *v1, const GLint *v2"
+          },
+          {
+            "name": "glRects",
+            "canonical": "glRects",
+            "id": 63,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLshort x1, GLshort y1, GLshort x2, GLshort y2"
+          },
+          {
+            "name": "glRectsv",
+            "canonical": "glRectsv",
+            "id": 64,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLshort *v1, const GLshort *v2"
+          },
+          {
+            "name": "glVertex2d",
+            "canonical": "glVertex2d",
+            "id": 65,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLdouble x, GLdouble y"
+          },
+          {
+            "name": "glVertex2dv",
+            "canonical": "glVertex2dv",
+            "id": 66,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLdouble *v"
+          },
+          {
+            "name": "glVertex2f",
+            "canonical": "glVertex2f",
+            "id": 67,
+            "exported": true,
+            "imported": true,
+            "evidence_provenance": [
+              "macho_import",
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "reachable",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLfloat x, GLfloat y"
+          },
+          {
+            "name": "glVertex2fv",
+            "canonical": "glVertex2fv",
+            "id": 68,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLfloat *v"
+          },
+          {
+            "name": "glVertex2hNV",
+            "canonical": "glVertex2hNV",
+            "id": 69,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glVertex2hvNV",
+            "canonical": "glVertex2hvNV",
+            "id": 70,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glVertex2i",
+            "canonical": "glVertex2i",
+            "id": 71,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLint x, GLint y"
+          },
+          {
+            "name": "glVertex2iv",
+            "canonical": "glVertex2iv",
+            "id": 72,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLint *v"
+          },
+          {
+            "name": "glVertex2s",
+            "canonical": "glVertex2s",
+            "id": 73,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLshort x, GLshort y"
+          },
+          {
+            "name": "glVertex2sv",
+            "canonical": "glVertex2sv",
+            "id": 74,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLshort *v"
+          },
+          {
+            "name": "glVertex3d",
+            "canonical": "glVertex3d",
+            "id": 75,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLdouble x, GLdouble y, GLdouble z"
+          },
+          {
+            "name": "glVertex3dv",
+            "canonical": "glVertex3dv",
+            "id": 76,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLdouble *v"
+          },
+          {
+            "name": "glVertex3f",
+            "canonical": "glVertex3f",
+            "id": 77,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLfloat x, GLfloat y, GLfloat z"
+          },
+          {
+            "name": "glVertex3fv",
+            "canonical": "glVertex3fv",
+            "id": 78,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [
+              "embedded_string"
+            ],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLfloat *v"
+          },
+          {
+            "name": "glVertex3hNV",
+            "canonical": "glVertex3hNV",
+            "id": 79,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glVertex3hvNV",
+            "canonical": "glVertex3hvNV",
+            "id": 80,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glVertex3i",
+            "canonical": "glVertex3i",
+            "id": 81,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLint x, GLint y, GLint z"
+          },
+          {
+            "name": "glVertex3iv",
+            "canonical": "glVertex3iv",
+            "id": 82,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLint *v"
+          },
+          {
+            "name": "glVertex3s",
+            "canonical": "glVertex3s",
+            "id": 83,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLshort x, GLshort y, GLshort z"
+          },
+          {
+            "name": "glVertex3sv",
+            "canonical": "glVertex3sv",
+            "id": 84,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLshort *v"
+          },
+          {
+            "name": "glVertex4d",
+            "canonical": "glVertex4d",
+            "id": 85,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLdouble x, GLdouble y, GLdouble z, GLdouble w"
+          },
+          {
+            "name": "glVertex4dv",
+            "canonical": "glVertex4dv",
+            "id": 86,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLdouble *v"
+          },
+          {
+            "name": "glVertex4f",
+            "canonical": "glVertex4f",
+            "id": 87,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLfloat x, GLfloat y, GLfloat z, GLfloat w"
+          },
+          {
+            "name": "glVertex4fv",
+            "canonical": "glVertex4fv",
+            "id": 88,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLfloat *v"
+          },
+          {
+            "name": "glVertex4hNV",
+            "canonical": "glVertex4hNV",
+            "id": 89,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glVertex4hvNV",
+            "canonical": "glVertex4hvNV",
+            "id": 90,
+            "exported": false,
+            "imported": false,
+            "evidence_provenance": [
+              "executable_symbol_reference",
+              "embedded_string"
+            ],
+            "reachability": "unresolved",
+            "glew_pointer_reference": false,
+            "observer": "uncovered",
+            "observer_paths": [],
+            "suppression": false,
+            "abi": null
+          },
+          {
+            "name": "glVertex4i",
+            "canonical": "glVertex4i",
+            "id": 91,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLint x, GLint y, GLint z, GLint w"
+          },
+          {
+            "name": "glVertex4iv",
+            "canonical": "glVertex4iv",
+            "id": 92,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLint *v"
+          },
+          {
+            "name": "glVertex4s",
+            "canonical": "glVertex4s",
+            "id": 93,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "GLshort x, GLshort y, GLshort z, GLshort w"
+          },
+          {
+            "name": "glVertex4sv",
+            "canonical": "glVertex4sv",
+            "id": 94,
+            "exported": true,
+            "imported": false,
+            "evidence_provenance": [],
+            "reachability": "candidate",
+            "glew_pointer_reference": false,
+            "observer": "import and dlsym",
+            "observer_paths": [
+              "macho_interpose",
+              "dlsym"
+            ],
+            "suppression": false,
+            "abi": "const GLshort *v"
+          }
+        ],
+        "resolver_gaps": [],
+        "unresolved_executable_paths": [
+          "glArrayElementEXT",
+          "glDrawArraysEXT",
+          "glDrawArraysIndirect",
+          "glDrawArraysInstanced",
+          "glDrawArraysInstancedARB",
+          "glDrawArraysInstancedBaseInstance",
+          "glDrawArraysInstancedEXT",
+          "glDrawBufferRegion",
+          "glDrawElementArrayAPPLE",
+          "glDrawElementArrayATI",
+          "glDrawElementsBaseVertex",
+          "glDrawElementsIndirect",
+          "glDrawElementsInstanced",
+          "glDrawElementsInstancedARB",
+          "glDrawElementsInstancedBaseInstance",
+          "glDrawElementsInstancedBaseVertex",
+          "glDrawElementsInstancedBaseVertexBaseInstance",
+          "glDrawElementsInstancedEXT",
+          "glDrawRangeElementArrayAPPLE",
+          "glDrawRangeElementArrayATI",
+          "glDrawRangeElements",
+          "glDrawRangeElementsBaseVertex",
+          "glDrawRangeElementsEXT",
+          "glDrawTransformFeedback",
+          "glDrawTransformFeedbackInstanced",
+          "glDrawTransformFeedbackNV",
+          "glDrawTransformFeedbackStream",
+          "glDrawTransformFeedbackStreamInstanced",
+          "glMultiDrawArrays",
+          "glMultiDrawArraysEXT",
+          "glMultiDrawArraysIndirectAMD",
+          "glMultiDrawElementArrayAPPLE",
+          "glMultiDrawElements",
+          "glMultiDrawElementsBaseVertex",
+          "glMultiDrawElementsEXT",
+          "glMultiDrawElementsIndirectAMD",
+          "glMultiDrawRangeElementArrayAPPLE",
+          "glVertex2hNV",
+          "glVertex2hvNV",
+          "glVertex3hNV",
+          "glVertex3hvNV",
+          "glVertex4hNV",
+          "glVertex4hvNV"
+        ],
+        "reachable_observer_gaps": [],
+        "aliases": {
+          "glArrayElementEXT": "glArrayElement",
+          "glDrawArraysEXT": "glDrawArrays",
+          "glDrawArraysInstancedARB": "glDrawArraysInstanced",
+          "glDrawElementsInstancedARB": "glDrawElementsInstanced",
+          "glDrawRangeElementsEXT": "glDrawRangeElements",
+          "glMultiDrawArraysEXT": "glMultiDrawArrays",
+          "glMultiDrawElementsEXT": "glMultiDrawElements"
+        },
+        "deferred_unsafe_observers": [
+          "glDrawArraysInstancedARB",
+          "glDrawElementsInstancedARB"
+        ],
+        "historical_observed_ids": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "historical_policy": "historical observations never establish completeness",
+        "status": "coverage gaps"
+      },
+      "draw_manifest_sha256": "9c508d76da2ec56697416ad3788655a1b5a638fa150c5f3c30b4756e1db6a2c0",
+      "architecture": "x86_64"
+    },
+    "reference_cpu_workloads": {
+      "status": "complete",
+      "validation_scope": "training_only",
+      "recipes": [
+        {
+          "recipe": {
+            "name": "mesh",
+            "role": "training",
+            "sha256": "496f29d0ec8a47f35d8ca60437e28ed47d0b6a28f0744ebe4f48b0fa74ff4592",
+            "draws": 2774,
+            "indices": 1361595,
+            "source_frame": [
+              1,
+              6270
+            ],
+            "source_sha256": "0ed07e0aa58c66dcd1ab60fdf08dbf8dc626932d6a106f0260fe42e1f50f028a",
+            "categories": [
+              "mesh_object"
+            ],
+            "policy": "Observed draw counts/topology/API and adjacent state-change frequencies; generated valid resources and shaders, no sleeps or added busywork.",
+            "limits": "GL structural surrogate; original resource payloads, shaders, and unobserved between-draw commands are not reconstructed. Live perturbation remains mandatory."
+          },
+          "trials": [
+            {
+              "trial": 0,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 11682833,
+                  "cpu_ns": 280256,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 13832083,
+                  "preparation_cpu_ns": 286197
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 12767708,
+                  "cpu_ns": 305952,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10700000,
+                  "preparation_cpu_ns": 254766
+                },
+                "reference": {
+                  "elapsed_ns": 13845458,
+                  "cpu_ns": 330748,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10154250,
+                  "preparation_cpu_ns": 241962,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            },
+            {
+              "trial": 1,
+              "order": [
+                "reference",
+                "loaded-disabled",
+                "bare"
+              ],
+              "stages": {
+                "reference": {
+                  "elapsed_ns": 14818083,
+                  "cpu_ns": 351402,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 11449875,
+                  "preparation_cpu_ns": 266827,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 15859541,
+                  "cpu_ns": 369578,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10490625,
+                  "preparation_cpu_ns": 250136
+                },
+                "bare": {
+                  "elapsed_ns": 12718167,
+                  "cpu_ns": 302870,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10061458,
+                  "preparation_cpu_ns": 239676
+                }
+              }
+            },
+            {
+              "trial": 2,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 11650792,
+                  "cpu_ns": 279646,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10886417,
+                  "preparation_cpu_ns": 256692
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 13372125,
+                  "cpu_ns": 317448,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10570959,
+                  "preparation_cpu_ns": 249694
+                },
+                "reference": {
+                  "elapsed_ns": 14236167,
+                  "cpu_ns": 339822,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10306042,
+                  "preparation_cpu_ns": 245181,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            },
+            {
+              "trial": 3,
+              "order": [
+                "reference",
+                "loaded-disabled",
+                "bare"
+              ],
+              "stages": {
+                "reference": {
+                  "elapsed_ns": 13605958,
+                  "cpu_ns": 326469,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10953000,
+                  "preparation_cpu_ns": 260712,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 13004291,
+                  "cpu_ns": 311837,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10932250,
+                  "preparation_cpu_ns": 260305
+                },
+                "bare": {
+                  "elapsed_ns": 12537750,
+                  "cpu_ns": 300298,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 11050791,
+                  "preparation_cpu_ns": 262500
+                }
+              }
+            },
+            {
+              "trial": 4,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 11945834,
+                  "cpu_ns": 286585,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10043292,
+                  "preparation_cpu_ns": 239007
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 12232959,
+                  "cpu_ns": 293607,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10168334,
+                  "preparation_cpu_ns": 242038
+                },
+                "reference": {
+                  "elapsed_ns": 14458750,
+                  "cpu_ns": 340525,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10488666,
+                  "preparation_cpu_ns": 249259,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            },
+            {
+              "trial": 5,
+              "order": [
+                "reference",
+                "loaded-disabled",
+                "bare"
+              ],
+              "stages": {
+                "reference": {
+                  "elapsed_ns": 14257084,
+                  "cpu_ns": 341343,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10214417,
+                  "preparation_cpu_ns": 243632,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 12241209,
+                  "cpu_ns": 293653,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 11202708,
+                  "preparation_cpu_ns": 266073
+                },
+                "bare": {
+                  "elapsed_ns": 11971125,
+                  "cpu_ns": 287163,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10153875,
+                  "preparation_cpu_ns": 241792
+                }
+              }
+            },
+            {
+              "trial": 6,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 11989416,
+                  "cpu_ns": 287055,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10097875,
+                  "preparation_cpu_ns": 240207
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 12455958,
+                  "cpu_ns": 298905,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10472166,
+                  "preparation_cpu_ns": 249311
+                },
+                "reference": {
+                  "elapsed_ns": 14542834,
+                  "cpu_ns": 345405,
+                  "draws": 11096,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 10427042,
+                  "preparation_cpu_ns": 248032,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            }
+          ],
+          "comparisons": {
+            "loaded-disabled_elapsed_ns": {
+              "median_fraction": 0.03891282110821748,
+              "confidence_interval_95": [
+                0.02403557591709382,
+                0.14774386153319008
+              ],
+              "pairs": [
+                {
+                  "instrumented": 12767708,
+                  "reference": 11682833
+                },
+                {
+                  "instrumented": 15859541,
+                  "reference": 12718167
+                },
+                {
+                  "instrumented": 13372125,
+                  "reference": 11650792
+                },
+                {
+                  "instrumented": 13004291,
+                  "reference": 12537750
+                },
+                {
+                  "instrumented": 12232959,
+                  "reference": 11945834
+                },
+                {
+                  "instrumented": 12241209,
+                  "reference": 11971125
+                },
+                {
+                  "instrumented": 12455958,
+                  "reference": 11989416
+                }
+              ],
+              "overhead_us_per_frame": 116.6355,
+              "overhead_us_per_frame_ci95": [
+                71.78125,
+                430.33325
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            },
+            "loaded-disabled_cpu_ns": {
+              "median_fraction": 0.04128128755813343,
+              "confidence_interval_95": [
+                0.02450232915190953,
+                0.1351780465302561
+              ],
+              "pairs": [
+                {
+                  "instrumented": 305952,
+                  "reference": 280256
+                },
+                {
+                  "instrumented": 369578,
+                  "reference": 302870
+                },
+                {
+                  "instrumented": 317448,
+                  "reference": 279646
+                },
+                {
+                  "instrumented": 311837,
+                  "reference": 300298
+                },
+                {
+                  "instrumented": 293607,
+                  "reference": 286585
+                },
+                {
+                  "instrumented": 293653,
+                  "reference": 287163
+                },
+                {
+                  "instrumented": 298905,
+                  "reference": 287055
+                }
+              ],
+              "overhead_us_per_frame": 2.9625,
+              "overhead_us_per_frame_ci95": [
+                1.7555,
+                9.4505
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            },
+            "reference_elapsed_ns": {
+              "median_fraction": 0.0844121748398381,
+              "confidence_interval_95": [
+                0.04626680531833682,
+                0.16754038509121494
+              ],
+              "pairs": [
+                {
+                  "instrumented": 13845458,
+                  "reference": 12767708
+                },
+                {
+                  "instrumented": 14818083,
+                  "reference": 15859541
+                },
+                {
+                  "instrumented": 14236167,
+                  "reference": 13372125
+                },
+                {
+                  "instrumented": 13605958,
+                  "reference": 13004291
+                },
+                {
+                  "instrumented": 14458750,
+                  "reference": 12232959
+                },
+                {
+                  "instrumented": 14257084,
+                  "reference": 12241209
+                },
+                {
+                  "instrumented": 14542834,
+                  "reference": 12455958
+                }
+              ],
+              "overhead_us_per_frame": 269.4375,
+              "overhead_us_per_frame_ci95": [
+                150.41675,
+                521.719
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            },
+            "reference_cpu_ns": {
+              "median_fraction": 0.08104539274134503,
+              "confidence_interval_95": [
+                0.04692194960828888,
+                0.15979864240294006
+              ],
+              "pairs": [
+                {
+                  "instrumented": 330748,
+                  "reference": 305952
+                },
+                {
+                  "instrumented": 351402,
+                  "reference": 369578
+                },
+                {
+                  "instrumented": 339822,
+                  "reference": 317448
+                },
+                {
+                  "instrumented": 326469,
+                  "reference": 311837
+                },
+                {
+                  "instrumented": 340525,
+                  "reference": 293607
+                },
+                {
+                  "instrumented": 341343,
+                  "reference": 293653
+                },
+                {
+                  "instrumented": 345405,
+                  "reference": 298905
+                }
+              ],
+              "overhead_us_per_frame": 6.199,
+              "overhead_us_per_frame_ci95": [
+                3.658,
+                11.7295
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            }
+          }
+        },
+        {
+          "recipe": {
+            "name": "borders",
+            "role": "training",
+            "sha256": "bea909b039639260614f312adffbc8869512e5baad33fffa2251cca1ef56ab9f",
+            "draws": 2285,
+            "indices": 305010,
+            "source_frame": [
+              1,
+              6270
+            ],
+            "source_sha256": "0ed07e0aa58c66dcd1ab60fdf08dbf8dc626932d6a106f0260fe42e1f50f028a",
+            "categories": [
+              "borders"
+            ],
+            "policy": "Observed draw counts/topology/API and adjacent state-change frequencies; generated valid resources and shaders, no sleeps or added busywork.",
+            "limits": "GL structural surrogate; original resource payloads, shaders, and unobserved between-draw commands are not reconstructed. Live perturbation remains mandatory."
+          },
+          "trials": [
+            {
+              "trial": 0,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 4506417,
+                  "cpu_ns": 107153,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 11542500,
+                  "preparation_cpu_ns": 274211
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 4031208,
+                  "cpu_ns": 96558,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 9051917,
+                  "preparation_cpu_ns": 215002
+                },
+                "reference": {
+                  "elapsed_ns": 3870584,
+                  "cpu_ns": 92900,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8463750,
+                  "preparation_cpu_ns": 201129,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            },
+            {
+              "trial": 1,
+              "order": [
+                "reference",
+                "loaded-disabled",
+                "bare"
+              ],
+              "stages": {
+                "reference": {
+                  "elapsed_ns": 5176292,
+                  "cpu_ns": 124238,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8242458,
+                  "preparation_cpu_ns": 196350,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 3749125,
+                  "cpu_ns": 89996,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8324791,
+                  "preparation_cpu_ns": 197413
+                },
+                "bare": {
+                  "elapsed_ns": 3670583,
+                  "cpu_ns": 88109,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8133083,
+                  "preparation_cpu_ns": 193247
+                }
+              }
+            },
+            {
+              "trial": 2,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 3691042,
+                  "cpu_ns": 88604,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8482250,
+                  "preparation_cpu_ns": 201311
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 3811750,
+                  "cpu_ns": 90900,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8239458,
+                  "preparation_cpu_ns": 195950
+                },
+                "reference": {
+                  "elapsed_ns": 5440125,
+                  "cpu_ns": 129740,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8208875,
+                  "preparation_cpu_ns": 195031,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            },
+            {
+              "trial": 3,
+              "order": [
+                "reference",
+                "loaded-disabled",
+                "bare"
+              ],
+              "stages": {
+                "reference": {
+                  "elapsed_ns": 5278125,
+                  "cpu_ns": 126681,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8448750,
+                  "preparation_cpu_ns": 200386,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 3676750,
+                  "cpu_ns": 88253,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8247458,
+                  "preparation_cpu_ns": 196027
+                },
+                "bare": {
+                  "elapsed_ns": 3672667,
+                  "cpu_ns": 88164,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8212334,
+                  "preparation_cpu_ns": 195068
+                }
+              }
+            },
+            {
+              "trial": 4,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 3735208,
+                  "cpu_ns": 89662,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8095125,
+                  "preparation_cpu_ns": 191984
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 3891334,
+                  "cpu_ns": 92788,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8114292,
+                  "preparation_cpu_ns": 192774
+                },
+                "reference": {
+                  "elapsed_ns": 3788958,
+                  "cpu_ns": 90941,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8388250,
+                  "preparation_cpu_ns": 199096,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            },
+            {
+              "trial": 5,
+              "order": [
+                "reference",
+                "loaded-disabled",
+                "bare"
+              ],
+              "stages": {
+                "reference": {
+                  "elapsed_ns": 5555792,
+                  "cpu_ns": 132942,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 11010333,
+                  "preparation_cpu_ns": 246266,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 4583167,
+                  "cpu_ns": 108334,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 9027000,
+                  "preparation_cpu_ns": 210775
+                },
+                "bare": {
+                  "elapsed_ns": 3736708,
+                  "cpu_ns": 89697,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8608709,
+                  "preparation_cpu_ns": 204220
+                }
+              }
+            },
+            {
+              "trial": 6,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 3634458,
+                  "cpu_ns": 87242,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8029292,
+                  "preparation_cpu_ns": 191042
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 3767791,
+                  "cpu_ns": 90441,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8247292,
+                  "preparation_cpu_ns": 195937
+                },
+                "reference": {
+                  "elapsed_ns": 3910583,
+                  "cpu_ns": 93860,
+                  "draws": 9140,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 8370083,
+                  "preparation_cpu_ns": 197835,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            }
+          ],
+          "comparisons": {
+            "loaded-disabled_elapsed_ns": {
+              "median_fraction": 0.03270296030226705,
+              "confidence_interval_95": [
+                0.0011117261652091592,
+                0.041798475479812636
+              ],
+              "pairs": [
+                {
+                  "instrumented": 4031208,
+                  "reference": 4506417
+                },
+                {
+                  "instrumented": 3749125,
+                  "reference": 3670583
+                },
+                {
+                  "instrumented": 3811750,
+                  "reference": 3691042
+                },
+                {
+                  "instrumented": 3676750,
+                  "reference": 3672667
+                },
+                {
+                  "instrumented": 3891334,
+                  "reference": 3735208
+                },
+                {
+                  "instrumented": 4583167,
+                  "reference": 3736708
+                },
+                {
+                  "instrumented": 3767791,
+                  "reference": 3634458
+                }
+              ],
+              "overhead_us_per_frame": 30.177,
+              "overhead_us_per_frame_ci95": [
+                1.02075,
+                39.0315
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            },
+            "loaded-disabled_cpu_ns": {
+              "median_fraction": 0.02591305132951116,
+              "confidence_interval_95": [
+                0.001009482328387934,
+                0.036668118566745456
+              ],
+              "pairs": [
+                {
+                  "instrumented": 96558,
+                  "reference": 107153
+                },
+                {
+                  "instrumented": 89996,
+                  "reference": 88109
+                },
+                {
+                  "instrumented": 90900,
+                  "reference": 88604
+                },
+                {
+                  "instrumented": 88253,
+                  "reference": 88164
+                },
+                {
+                  "instrumented": 92788,
+                  "reference": 89662
+                },
+                {
+                  "instrumented": 108334,
+                  "reference": 89697
+                },
+                {
+                  "instrumented": 90441,
+                  "reference": 87242
+                }
+              ],
+              "overhead_us_per_frame": 0.574,
+              "overhead_us_per_frame_ci95": [
+                0.02225,
+                0.79975
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            },
+            "reference_elapsed_ns": {
+              "median_fraction": 0.21221679244941316,
+              "confidence_interval_95": [
+                -0.026308715725763987,
+                0.4271987932052208
+              ],
+              "pairs": [
+                {
+                  "instrumented": 3870584,
+                  "reference": 4031208
+                },
+                {
+                  "instrumented": 5176292,
+                  "reference": 3749125
+                },
+                {
+                  "instrumented": 5440125,
+                  "reference": 3811750
+                },
+                {
+                  "instrumented": 5278125,
+                  "reference": 3676750
+                },
+                {
+                  "instrumented": 3788958,
+                  "reference": 3891334
+                },
+                {
+                  "instrumented": 5555792,
+                  "reference": 4583167
+                },
+                {
+                  "instrumented": 3910583,
+                  "reference": 3767791
+                }
+              ],
+              "overhead_us_per_frame": 243.15625,
+              "overhead_us_per_frame_ci95": [
+                -25.594,
+                400.34375
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            },
+            "reference_cpu_ns": {
+              "median_fraction": 0.2271493713884838,
+              "confidence_interval_95": [
+                -0.0199055912402466,
+                0.4272827282728273
+              ],
+              "pairs": [
+                {
+                  "instrumented": 92900,
+                  "reference": 96558
+                },
+                {
+                  "instrumented": 124238,
+                  "reference": 89996
+                },
+                {
+                  "instrumented": 129740,
+                  "reference": 90900
+                },
+                {
+                  "instrumented": 126681,
+                  "reference": 88253
+                },
+                {
+                  "instrumented": 90941,
+                  "reference": 92788
+                },
+                {
+                  "instrumented": 132942,
+                  "reference": 108334
+                },
+                {
+                  "instrumented": 93860,
+                  "reference": 90441
+                }
+              ],
+              "overhead_us_per_frame": 6.152,
+              "overhead_us_per_frame_ci95": [
+                -0.46175,
+                9.607
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            }
+          }
+        },
+        {
+          "recipe": {
+            "name": "text_ui",
+            "role": "training",
+            "sha256": "d279b947d868a895dee13e31bf7efb5ea77a79c08d041b926e4a58a572aa2fbd",
+            "draws": 632,
+            "indices": 18348,
+            "source_frame": [
+              1,
+              6270
+            ],
+            "source_sha256": "0ed07e0aa58c66dcd1ab60fdf08dbf8dc626932d6a106f0260fe42e1f50f028a",
+            "categories": [
+              "map_text",
+              "ui_or_text"
+            ],
+            "policy": "Observed draw counts/topology/API and adjacent state-change frequencies; generated valid resources and shaders, no sleeps or added busywork.",
+            "limits": "GL structural surrogate; original resource payloads, shaders, and unobserved between-draw commands are not reconstructed. Live perturbation remains mandatory."
+          },
+          "trials": [
+            {
+              "trial": 0,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 1545916,
+                  "cpu_ns": 37124,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3198542,
+                  "preparation_cpu_ns": 74839
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 1579333,
+                  "cpu_ns": 37915,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3075542,
+                  "preparation_cpu_ns": 71757
+                },
+                "reference": {
+                  "elapsed_ns": 2904167,
+                  "cpu_ns": 69707,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3131625,
+                  "preparation_cpu_ns": 73219,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            },
+            {
+              "trial": 1,
+              "order": [
+                "reference",
+                "loaded-disabled",
+                "bare"
+              ],
+              "stages": {
+                "reference": {
+                  "elapsed_ns": 3153375,
+                  "cpu_ns": 75687,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3129416,
+                  "preparation_cpu_ns": 73474,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 1595333,
+                  "cpu_ns": 38300,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3036250,
+                  "preparation_cpu_ns": 71009
+                },
+                "bare": {
+                  "elapsed_ns": 1474667,
+                  "cpu_ns": 35407,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3206541,
+                  "preparation_cpu_ns": 75136
+                }
+              }
+            },
+            {
+              "trial": 2,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 1525166,
+                  "cpu_ns": 36621,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 2982916,
+                  "preparation_cpu_ns": 69987
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 1599375,
+                  "cpu_ns": 38396,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3095834,
+                  "preparation_cpu_ns": 72307
+                },
+                "reference": {
+                  "elapsed_ns": 2885875,
+                  "cpu_ns": 69267,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3237500,
+                  "preparation_cpu_ns": 75743,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            },
+            {
+              "trial": 3,
+              "order": [
+                "reference",
+                "loaded-disabled",
+                "bare"
+              ],
+              "stages": {
+                "reference": {
+                  "elapsed_ns": 2801667,
+                  "cpu_ns": 67246,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3084750,
+                  "preparation_cpu_ns": 72103,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 1586666,
+                  "cpu_ns": 38090,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3069125,
+                  "preparation_cpu_ns": 71676
+                },
+                "bare": {
+                  "elapsed_ns": 1518792,
+                  "cpu_ns": 36464,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3048917,
+                  "preparation_cpu_ns": 71255
+                }
+              }
+            },
+            {
+              "trial": 4,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 1556417,
+                  "cpu_ns": 37370,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3138083,
+                  "preparation_cpu_ns": 73338
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 1591709,
+                  "cpu_ns": 38212,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 2966000,
+                  "preparation_cpu_ns": 69560
+                },
+                "reference": {
+                  "elapsed_ns": 1580250,
+                  "cpu_ns": 37931,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3051375,
+                  "preparation_cpu_ns": 71357,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            },
+            {
+              "trial": 5,
+              "order": [
+                "reference",
+                "loaded-disabled",
+                "bare"
+              ],
+              "stages": {
+                "reference": {
+                  "elapsed_ns": 2857292,
+                  "cpu_ns": 68582,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3071083,
+                  "preparation_cpu_ns": 71571,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 1594375,
+                  "cpu_ns": 38275,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3107000,
+                  "preparation_cpu_ns": 72867
+                },
+                "bare": {
+                  "elapsed_ns": 1623500,
+                  "cpu_ns": 38982,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 4001084,
+                  "preparation_cpu_ns": 89505
+                }
+              }
+            },
+            {
+              "trial": 6,
+              "order": [
+                "bare",
+                "loaded-disabled",
+                "reference"
+              ],
+              "stages": {
+                "bare": {
+                  "elapsed_ns": 1606542,
+                  "cpu_ns": 38502,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3120917,
+                  "preparation_cpu_ns": 72770
+                },
+                "loaded-disabled": {
+                  "elapsed_ns": 1685375,
+                  "cpu_ns": 40460,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3287291,
+                  "preparation_cpu_ns": 77066
+                },
+                "reference": {
+                  "elapsed_ns": 1671500,
+                  "cpu_ns": 40123,
+                  "draws": 2528,
+                  "valid": 1,
+                  "pixel_alpha": 255,
+                  "preparation_wall_ns": 3101500,
+                  "preparation_cpu_ns": 72494,
+                  "frames": 4,
+                  "tree_reconciliation": "passed"
+                }
+              }
+            }
+          ],
+          "comparisons": {
+            "loaded-disabled_elapsed_ns": {
+              "median_fraction": 0.04468946373170257,
+              "confidence_interval_95": [
+                0.02161631032992739,
+                0.049069990078068226
+              ],
+              "pairs": [
+                {
+                  "instrumented": 1579333,
+                  "reference": 1545916
+                },
+                {
+                  "instrumented": 1595333,
+                  "reference": 1474667
+                },
+                {
+                  "instrumented": 1599375,
+                  "reference": 1525166
+                },
+                {
+                  "instrumented": 1586666,
+                  "reference": 1518792
+                },
+                {
+                  "instrumented": 1591709,
+                  "reference": 1556417
+                },
+                {
+                  "instrumented": 1594375,
+                  "reference": 1623500
+                },
+                {
+                  "instrumented": 1685375,
+                  "reference": 1606542
+                }
+              ],
+              "overhead_us_per_frame": 16.9685,
+              "overhead_us_per_frame_ci95": [
+                8.35425,
+                19.70825
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            },
+            "loaded-disabled_cpu_ns": {
+              "median_fraction": 0.04459192628345776,
+              "confidence_interval_95": [
+                0.021306971231548344,
+                0.050854501064879765
+              ],
+              "pairs": [
+                {
+                  "instrumented": 37915,
+                  "reference": 37124
+                },
+                {
+                  "instrumented": 38300,
+                  "reference": 35407
+                },
+                {
+                  "instrumented": 38396,
+                  "reference": 36621
+                },
+                {
+                  "instrumented": 38090,
+                  "reference": 36464
+                },
+                {
+                  "instrumented": 38212,
+                  "reference": 37370
+                },
+                {
+                  "instrumented": 38275,
+                  "reference": 38982
+                },
+                {
+                  "instrumented": 40460,
+                  "reference": 38502
+                }
+              ],
+              "overhead_us_per_frame": 0.4065,
+              "overhead_us_per_frame_ci95": [
+                0.19775,
+                0.4895
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            },
+            "reference_elapsed_ns": {
+              "median_fraction": 0.792107879263034,
+              "confidence_interval_95": [
+                -0.007199180252169257,
+                0.838856656575909
+              ],
+              "pairs": [
+                {
+                  "instrumented": 2904167,
+                  "reference": 1579333
+                },
+                {
+                  "instrumented": 3153375,
+                  "reference": 1595333
+                },
+                {
+                  "instrumented": 2885875,
+                  "reference": 1599375
+                },
+                {
+                  "instrumented": 2801667,
+                  "reference": 1586666
+                },
+                {
+                  "instrumented": 1580250,
+                  "reference": 1591709
+                },
+                {
+                  "instrumented": 2857292,
+                  "reference": 1594375
+                },
+                {
+                  "instrumented": 1671500,
+                  "reference": 1685375
+                }
+              ],
+              "overhead_us_per_frame": 315.72925,
+              "overhead_us_per_frame_ci95": [
+                -2.86475,
+                331.2085
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            },
+            "reference_cpu_ns": {
+              "median_fraction": 0.7918223383409537,
+              "confidence_interval_95": [
+                -0.007353710876164543,
+                0.8385071871291045
+              ],
+              "pairs": [
+                {
+                  "instrumented": 69707,
+                  "reference": 37915
+                },
+                {
+                  "instrumented": 75687,
+                  "reference": 38300
+                },
+                {
+                  "instrumented": 69267,
+                  "reference": 38396
+                },
+                {
+                  "instrumented": 67246,
+                  "reference": 38090
+                },
+                {
+                  "instrumented": 37931,
+                  "reference": 38212
+                },
+                {
+                  "instrumented": 68582,
+                  "reference": 38275
+                },
+                {
+                  "instrumented": 40123,
+                  "reference": 40460
+                }
+              ],
+              "overhead_us_per_frame": 7.57675,
+              "overhead_us_per_frame_ci95": [
+                -0.07025,
+                7.948
+              ],
+              "bootstrap_seed": 1729,
+              "bootstrap_samples": 2000,
+              "bootstrap_ci_indices": [
+                50,
+                1950
+              ],
+              "status": "diagnostic",
+              "acceptance_gate": false,
+              "reference_band_fraction": 0.03
+            }
+          }
+        }
+      ],
+      "test_library_sha256": "2f0388849d90dc03f911439cc9a9456b62971cca732ee641babe5e39b9ca565b",
+      "workload_harness_sha256": "89871bd811db5012b379a767b040e799d859f94a0e90aa0cc53862421bb24512",
+      "reference_cpu_decomposition": true,
+      "loaded_disabled_contract": "wp6_loaded_disabled_v2",
+      "ladder_stages": [
+        "bare",
+        "loaded-disabled",
+        "reference"
+      ],
+      "harness_source_sha256": "2c27ef99f8693ce480006334be4462f7ca9e4aea1d7889391dee1724d668d809",
+      "profiler_source_sha256": "e611f3cb3d979937f3c43819fad1c8faee78fb3ad43962e2622020afbc51a499",
+      "gpu_segments_source_sha256": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3"
+    },
+    "limitations": [
+      "Diagnostic only; does not change Tier-1 acceptance gates.",
+      "comparison.status is always diagnostic; reference_band_fraction is non-normative.",
+      "Training recipes only; held-out not measured.",
+      "loaded-disabled contract: wp6_loaded_disabled_v2 (MODE_REFERENCE, MEASURE_ENABLED off via EU4_TEST_LOADED_DISABLED).",
+      "Interpret loaded-disabled \u2212 bare as fixed instrumentation tax; reference \u2212 loaded-disabled as active REFERENCE tax."
+    ]
+  }
+}

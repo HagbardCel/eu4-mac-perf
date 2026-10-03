@@ -204,6 +204,8 @@ static uint64_t now_ns(clockid_t id);
 #ifdef EU4_FRAME_MODEL_TEST
 /* Diagnostics only: these branches are absent from the production library. */
 static unsigned test_ablation;
+static bool test_loaded_disabled;
+static _Atomic uint64_t test_loaded_disabled_accounting_ns_calls;
 static uint64_t test_measured_state_queries,test_measured_gpu_initializations;
 static bool test_gpu_timestamps=true,test_forensic_records=true,test_cached_metadata=false;
 static _Atomic uint64_t test_gpu_stamps,test_gpu_polls,test_gpu_results,test_detail_records;
@@ -326,6 +328,12 @@ static bool gl_shadow_needed(void) {
     return control && frame_control.mode!=OFF && frame_control.mode!=REFERENCE;
 }
 static int scope_begin(unsigned id) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_loaded_disabled) {
+        atomic_fetch_add(&test_loaded_disabled_accounting_ns_calls,1);
+        return 0;
+    }
+#endif
     if(!measurement_active() || (frame_control.mode==REFERENCE && id!=SCOPE_UPDATE &&
         id!=SCOPE_LOOP && id!=SCOPE_RENDER && id!=SCOPE_PRESENT)) return 0;
     return eu4_scope_begin(&scope_tree,id,true,now_ns(CLOCK_UPTIME_RAW),
@@ -913,12 +921,32 @@ static _Atomic uint64_t updates, renders, presents;
 
 static void hook_update(void *self,bool force) {
     if(inside_update) {
+#ifdef EU4_FRAME_MODEL_TEST
+        if(test_loaded_disabled) {
+            atomic_fetch_add(&updates,1);
+            real_update(self,force);
+            return;
+        }
+#endif
         /* Recursive updates stay on the same physical frame and scope path. */
         atomic_fetch_add(&updates,1);
         int nested=scope_begin(SCOPE_UPDATE);
         real_update(self,force); scope_end(SCOPE_UPDATE,nested);
         event(HOOK_UPDATE,0,0); return;
     }
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_loaded_disabled) {
+        if(!snapshot_control(&frame_control)) {
+            real_update(self,force);
+            return;
+        }
+        note_mode_transition(frame_control.mode);
+        inside_update=true;
+        real_update(self,force);
+        inside_update=false;
+        return;
+    }
+#endif
     uint64_t previous_period=frame_control.update_period_ns;
     uint32_t previous_mode=frame_control.mode;
     uint64_t id=atomic_fetch_add(&updates,1)+1;
@@ -993,6 +1021,12 @@ static void hook_update(void *self,bool force) {
     inside_update=false; current_frame=(Frame){0};
 }
 static void hook_idle(void *self,bool force) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_loaded_disabled) {
+        real_idle(self,force);
+        return;
+    }
+#endif
     if(!gl_measurement_active()) {
         real_idle(self,force); return;
     }
@@ -1007,6 +1041,12 @@ static void hook_idle(void *self,bool force) {
 static void hook_render(void *self) {
     uint64_t id=atomic_fetch_add(&renders,1)+1;
     if(!control) { real_render(self); return; }
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_loaded_disabled) {
+        real_render(self);
+        return;
+    }
+#endif
     if(measurement_active())
         { current_frame.render_id=id; current_frame.render_attempts++; current_frame.render_start_ns=now_ns(CLOCK_UPTIME_RAW); timestamp_event(2,current_frame.render_start_ns); }
     uint32_t mode=frame_control.mode;
@@ -1119,6 +1159,12 @@ static void hook_map(void *self,void *ctx,const void *camera,float alpha,bool fl
     event(HOOK_MAP,current_frame.map_wall_ns,current_frame.map_cpu_ns);
 }
 static void hook_present(void *self) {
+#ifdef EU4_FRAME_MODEL_TEST
+    if(test_loaded_disabled) {
+        real_present(self);
+        return;
+    }
+#endif
     if(!measurement_active()) { real_present(self); return; }
     if(measurement_active()) current_frame.present_scene_calls++;
     uint64_t w=now_ns(CLOCK_UPTIME_RAW),c=now_ns(CLOCK_THREAD_CPUTIME_ID);
@@ -2251,9 +2297,13 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_emit_records(un
 }
 __attribute__((visibility("default"))) void eu4_frame_model_test_reset_published_frame_count(void) {
     atomic_store(&test_published_frames,0);
+    atomic_store(&test_loaded_disabled_accounting_ns_calls,0);
 }
 __attribute__((visibility("default"))) unsigned eu4_frame_model_test_published_frame_count(void) {
     return atomic_load(&test_published_frames);
+}
+__attribute__((visibility("default"))) unsigned eu4_frame_model_test_loaded_disabled_accounting_violations(void) {
+    return (unsigned)atomic_load(&test_loaded_disabled_accounting_ns_calls);
 }
 __attribute__((visibility("default"))) unsigned eu4_frame_model_test_state_seeded(void) {
     return state_seeded?1u:0u;
@@ -2324,9 +2374,14 @@ __attribute__((visibility("default"))) void eu4_frame_model_test_arm(unsigned fr
         pthread_mutex_lock(&gpu_lock);memset(&gpu_registry,0,sizeof(gpu_registry));pthread_mutex_unlock(&gpu_lock);
     }
     atomic_store_explicit(&control->command_seq,3,memory_order_release);
-    control->flags|=MEASURE_ENABLED;
-    if(frames) control->flags|=FORENSIC_CAPTURE;
-    else control->flags&=~FORENSIC_CAPTURE;
+    if(test_loaded_disabled) {
+        control->flags&=~(MEASURE_ENABLED|FORENSIC_CAPTURE);
+        control->mode=REFERENCE;
+    } else {
+        control->flags|=MEASURE_ENABLED;
+        if(frames) control->flags|=FORENSIC_CAPTURE;
+        else control->flags&=~FORENSIC_CAPTURE;
+    }
     control->detail_frames=frames;
     control->generation=2; control->measurement_epoch=1;
     atomic_store_explicit(&control->command_seq,4,memory_order_release);
@@ -2353,7 +2408,8 @@ static void initialize(void) {
     const char *ablation=getenv("EU4_TEST_ABLATION");
     test_ablation=ablation && !strcmp(ablation,"accounting")?1:ablation && !strcmp(ablation,"writer")?2:
         ablation && !strcmp(ablation,"preparation")?3:0;
-    if(!test_read_toggle("EU4_TEST_GPU_TIMESTAMPS",true,&test_gpu_timestamps) ||
+    if(!test_read_toggle("EU4_TEST_LOADED_DISABLED",false,&test_loaded_disabled) ||
+       !test_read_toggle("EU4_TEST_GPU_TIMESTAMPS",true,&test_gpu_timestamps) ||
        !test_read_toggle("EU4_TEST_FORENSIC_RECORDS",true,&test_forensic_records) ||
        !test_read_toggle("EU4_TEST_CACHED_METADATA",false,&test_cached_metadata)) abort();
 #endif
