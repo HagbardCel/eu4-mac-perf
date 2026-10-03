@@ -23,10 +23,12 @@ int main(int argc, char **argv) {
     void *library = dlopen(argv[1], RTLD_NOW);
     if (!library) return 2;
     unsigned (*published)(void) = dlsym(library, "eu4_frame_model_test_published_frame_count");
+    unsigned (*violations)(void) = dlsym(library, "eu4_frame_model_test_loaded_disabled_accounting_violations");
+    uint64_t (*measured_queries)(void) = dlsym(library, "eu4_frame_model_test_measured_queries");
     void (*reset)(void) = dlsym(library, "eu4_frame_model_test_reset_published_frame_count");
     void (*arm)(unsigned) = dlsym(library, "eu4_frame_model_test_arm");
     void (*frame)(void (*)(void)) = dlsym(library, "eu4_frame_model_test_frame");
-    if (!published || !reset || !arm || !frame) return 3;
+    if (!published || !violations || !measured_queries || !reset || !arm || !frame) return 3;
 
     int fd = open(getenv("EU4_FRAME_MODEL_CONTROL"), O_RDWR);
     if (fd < 0) return 4;
@@ -59,7 +61,16 @@ int main(int argc, char **argv) {
         fprintf(stderr, "loaded-disabled left MEASURE_ENABLED set (flags=%u)\n", control[4]);
         return 12;
     }
-    puts("loaded-disabled: 0 published frames, MEASURE_ENABLED clear");
+    if (violations() != 0) {
+        fprintf(stderr, "loaded-disabled accounting clock violations=%u (expected 0)\n", violations());
+        return 13;
+    }
+    if (measured_queries() != 0) {
+        fprintf(stderr, "loaded-disabled measured state queries=%llu (expected 0)\n",
+                (unsigned long long)measured_queries());
+        return 14;
+    }
+    puts("loaded-disabled v2: passive hooks, 0 published, 0 accounting violations");
     munmap(control, 4096);
     close(fd);
     dlclose(library);

@@ -5,6 +5,8 @@
 **Contract:** `wp6_loaded_disabled_v1` (`EU4_TEST_LOADED_DISABLED`, `MODE_REFERENCE`, no `MEASURE_ENABLED` after arm)  
 **Related:** [WP5b completion capture](wp5b-completion-diagnosis.md) (`f7cbf346`), [Phase A inventory](wp6-phase-a-reference-inventory.md)
 
+> **Historical contract note:** v1 left unconditional `clock_gettime` calls in `hook_update` / `hook_render` while measurement was disabled (~7/frame). The quantity `loaded-disabled − bare` in this archive is therefore a **disabled-REFERENCE baseline** (interposition + residual hook timestamping), not a pure dylib/interposer tax. **Do not discard this archive.** Code after PR #14 uses **`wp6_loaded_disabled_v2`** (passive synthetic hook fast paths); rerun the ladder once on a clean tree for v2 decomposition.
+
 ## Timing boundary
 
 Same harness as Tier-1 / WP5b: four `eu4_frame_model_test_frame` calls after warm-up, `glFinish()`, and `arm()`; `cpu_ns` is main-thread `CLOCK_THREAD_CPUTIME_ID` only.
@@ -13,7 +15,7 @@ Same harness as Tier-1 / WP5b: four `eu4_frame_model_test_frame` calls after war
 
 | Quantity | Definition |
 |----------|------------|
-| Fixed instrumentation tax | `loaded-disabled` − `bare` |
+| Disabled-REFERENCE baseline (v1) | `loaded-disabled` − `bare` (includes ~7 hook `clock_gettime`/frame in v1) |
 | Active REFERENCE tax | `reference` − `loaded-disabled` |
 
 Comparisons use `median_fraction` with `status: diagnostic` (not Tier-1 gates).
@@ -40,7 +42,7 @@ Wall and CPU fractions track together in this capture (no evidence that the ladd
 
 ## Interpretation
 
-1. **`loaded-disabled − bare` on CPU is small** on mesh (~3%) and negligible on borders. Dylib presence + interposed GL fast paths alone do **not** explain most of the historical bare→REFERENCE CPU gap on mesh; they are not zero, but they are not the dominant term in this run.
+1. Under **v1**, **`loaded-disabled − bare` on CPU is small** on mesh (~3%) and negligible on borders even though the stage still paid ~7 hook `clock_gettime`/frame. That makes this an **upper-bound-ish** disabled-REFERENCE baseline: dylib + interposition + residual hook clocks still do **not** explain most of the bare→REFERENCE gap; **active REFERENCE** (`reference − loaded-disabled`) is the larger term.
 2. **`reference − loaded-disabled` is the larger slice** on all training recipes, especially borders and text_ui. That points at **active REFERENCE measurement scaffolding** (scopes, events, `publish_frame`, and workload `gl_measurement_active()` guards on texture/state), not merely “profiler loaded.”
 3. **text_ui** remains noisy in absolute wall time but shows a clear **active REFERENCE CPU** step-up (+76% vs loaded-disabled on CPU in this capture).
 4. This capture **does not** replace WP5b: it does not measure post-`glFinish` drain. It **complements** WP5b by separating fixed load from active REFERENCE on the same `cpu_ns` metric.

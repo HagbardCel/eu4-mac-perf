@@ -226,9 +226,9 @@ with tempfile.TemporaryDirectory() as d:
 
 **Do not** define `loaded-disabled` as naïve `MODE_OFF`. Example: `shadow_tracking_active()` can call `invalidate_gl_state()` when `frame_control.mode==OFF`, which REFERENCE does not do on the same GL fast paths.
 
-**Do not** assume `MODE_REFERENCE` with `MEASURE_ENABLED=0` is zero-cost: parts of `hook_update` and the REFERENCE render branch still run timing/scope machinery unless explicitly gated for this stage.
+**Do not** assume `MODE_REFERENCE` with `MEASURE_ENABLED=0` is zero-cost without an explicit fast path: v1 left unconditional hook clocks (~7/frame); **v2** (`wp6_loaded_disabled_v2`) uses passive `hook_update` / `hook_idle` / `hook_render` / `hook_present` entry points (no scope/event/clock accounting).
 
-**Phase B contract (test-only configuration):**
+**Phase B contract (test-only configuration, v2):**
 
 1. Same dylib and interposed symbols as timed WP6 captures.
 2. Same synthetic hook topology (`eu4_frame_model_test_frame` path).

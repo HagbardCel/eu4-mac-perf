@@ -116,7 +116,7 @@ Retain in the **live-path inventory** (Phase A), but do not expect these to expl
 
 ### Phase B — Harness / profiler ablations
 
-**Implemented (ladder capture):** `python3 benchmark/eu4_frame_model.py reference-cpu-decomposition --registry-json` runs `bare` → `loaded-disabled` → `reference` with contract `wp6_loaded_disabled_v1` (`EU4_TEST_LOADED_DISABLED=1`, `MODE_REFERENCE`, `MEASURE_ENABLED` not armed).
+**Implemented (ladder capture):** `python3 benchmark/eu4_frame_model.py reference-cpu-decomposition --registry-json` runs `bare` → `loaded-disabled` → `reference` with contract **`wp6_loaded_disabled_v2`** (`EU4_TEST_LOADED_DISABLED=1`: passive synthetic hook fast paths, no `MEASURE_ENABLED`, no hook accounting clocks). Historical v1 capture: [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md).
 
 Extend offline harness pattern (same spirit as `ablation_accounting` / `ablation_writer` / `ablation_preparation` on the sampled path):
 
@@ -160,10 +160,10 @@ Short memo (like [WP5 requalification timing memo](wp5-requalification-timing-me
 
 - [x] Branch: `wp6-reference-cpu-decomposition` from `main` @ post–PR #10 merge (`602ca4b`).
 - [x] Phase A inventory — [wp6-phase-a-reference-inventory.md](wp6-phase-a-reference-inventory.md).
-- [x] Phase B ladder: `loaded-disabled` contract + `reference-cpu-decomposition` capture (minimal-reference / marginal ablations still open).
-- [x] Phase C Mac capture + manifest registration — [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md) @ `82922f3`.
-- [ ] Mac capture → immutable evidence + manifest registration.
-- [ ] Phase D memo; no Tier-1 gate changes.
+- [x] Phase B ladder: `loaded-disabled` v2 passive hooks + `reference-cpu-decomposition` CLI (minimal-reference / marginal ablations still open).
+- [x] Phase C v1 Mac capture — historical [`e4e73118`](wp6-reference-cpu-ladder-memo-20261003.md) @ `82922f3` (`wp6_loaded_disabled_v1`).
+- [ ] Phase C v2 Mac capture on clean tree (`wp6_loaded_disabled_v2`).
+- [ ] Phase D memo after v2 capture; no Tier-1 gate changes.
 
 ## Related artifacts
 
