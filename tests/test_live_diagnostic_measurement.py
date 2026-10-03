@@ -187,6 +187,10 @@ class PhaseCScheduleTests(unittest.TestCase):
         self.assertIn("C1", attribution["exclusive_scope_windows"])
         self.assertIn("exclusive_rank_stable", attribution)
 
+    def test_disabled_forensic_record_check_includes_lowercase_uniform(self):
+        counts = {kind: 0 for kind in ("D", "S", "U", "u", "V", "W", "B", "b", "T", "t", "G")}
+        self.assertFalse(any(counts.get(kind, 0) for kind in model.FORENSIC_DETAIL_RECORD_KINDS))
+
     def test_summarize_frame_model_forensic_trace_state_operations(self):
         row = ["S", "1", "4096", "8", "0"] + ["0"] * 8 + ["1", "1", "103", "0", "0", "0", "0"]
         self.assertEqual(len(row), 20)

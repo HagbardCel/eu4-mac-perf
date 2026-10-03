@@ -1815,10 +1815,10 @@ def _offline_workload_stage(
             "gpu_results_read":gpu_metrics[2],"detail_records":record_total,
             "hook_failures":failure,"dropped_records":dropped}
         measured["record_counts"]={kind:sum(1 for row in trace if row and row[0]==kind)
-            for kind in ("D","S","U","V","W","B","b","T","t","G")}
+            for kind in ("D","S","U","u","V","W","B","b","T","t","G")}
         if not features[0] and any(gpu_metrics):
             raise base.BenchmarkError(f"{stage} issued GPU timestamp/poll/result calls while disabled")
-        if not features[1] and any(measured["record_counts"][kind]
+        if not features[1] and any(measured["record_counts"].get(kind, 0)
             for kind in FORENSIC_DETAIL_RECORD_KINDS):
             raise base.BenchmarkError(f"{stage} emitted disabled forensic record families")
         _validate_diagnostic_stage_features(
@@ -4021,7 +4021,7 @@ def summarize_frame_model_forensic_trace(trace_rows: list[list[str]]) -> dict:
                 api = int(row[3])
                 count = int(row[8])
                 instances = int(row[12]) if len(row) > 12 else 1
-                multiplier = instances if api in (4, 5) else 1
+                multiplier = instances if api in (4, 5, 6) else 1
                 draw_submission_count_sum += count * multiplier
             except ValueError:
                 continue
