@@ -533,6 +533,14 @@ def _offline_evidence_id(now: dt.datetime | None = None) -> str:
     return f"{moment.strftime('%Y%m%dT%H%M%S')}.{moment.microsecond:06d}Z-{suffix}"
 
 
+def _offline_representative_recipe_entries(representative: dict) -> list:
+    recipes = representative.get("recipes")
+    if recipes:
+        return recipes
+    diagnosis = representative.get("steady_state_tier1_diagnosis") or {}
+    return diagnosis.get("recipes") or []
+
+
 def _offline_artifact_hashes(
     representative: dict,
     build_info: dict | None = None,
@@ -557,8 +565,8 @@ def _offline_artifact_hashes(
         "game_executable_sha256": build_info.get("executable_sha256"),
         "recipe_sha256": {
             entry["recipe"]["name"]: entry["recipe"]["sha256"]
-            for entry in (representative.get("recipes") or [])
-            if "recipe" in entry
+            for entry in _offline_representative_recipe_entries(representative)
+            if "recipe" in entry and entry["recipe"].get("name") and entry["recipe"].get("sha256")
         },
     }
     return artifacts

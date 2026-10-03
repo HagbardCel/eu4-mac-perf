@@ -94,15 +94,19 @@ def _capture_kind_from_payload(payload: dict) -> str | None:
 
 def _require_manifest_capture_kind_consistent(manifest_role: str | None, capture_kind: str | None) -> None:
     if manifest_role == "V3_REQUALIFICATION":
-        expected = TIER1_V3_REQUALIFICATION_CAPTURE_KIND
-    elif manifest_role == "REQUALIFICATION":
-        expected = CAUSAL_REQUALIFICATION_CAPTURE_KIND
-    else:
+        if capture_kind != TIER1_V3_REQUALIFICATION_CAPTURE_KIND:
+            raise ValueError(
+                "manifest bucket 'V3_REQUALIFICATION' requires capture_kind "
+                f"{TIER1_V3_REQUALIFICATION_CAPTURE_KIND!r}, got {capture_kind!r}",
+            )
         return
-    if capture_kind != expected:
-        raise ValueError(
-            f"manifest bucket {manifest_role!r} requires capture_kind {expected!r}, got {capture_kind!r}",
-        )
+    if manifest_role == "REQUALIFICATION":
+        # Legacy WP5 requalification archives predate capture_kind.
+        if capture_kind is not None and capture_kind != CAUSAL_REQUALIFICATION_CAPTURE_KIND:
+            raise ValueError(
+                "manifest bucket 'REQUALIFICATION' requires capture_kind "
+                f"{CAUSAL_REQUALIFICATION_CAPTURE_KIND!r} or omitted (legacy), got {capture_kind!r}",
+            )
 
 
 def _format_gate_row(recipe: str, gate_key: str, gate: dict) -> str:

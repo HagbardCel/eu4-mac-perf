@@ -166,6 +166,37 @@ class Wp9Tier1V3RequalificationTests(unittest.TestCase):
             )
         self.assertIn("capture_kind", str(raised.exception))
 
+    def test_manifest_wp7_bucket_allows_legacy_missing_capture_kind(self):
+        wp1._require_manifest_capture_kind_consistent("REQUALIFICATION", None)
+
+    def test_manifest_wp7_bucket_rejects_explicit_wp9_capture_kind(self):
+        with self.assertRaises(ValueError):
+            wp1._require_manifest_capture_kind_consistent(
+                "REQUALIFICATION",
+                wp1.TIER1_V3_REQUALIFICATION_CAPTURE_KIND,
+            )
+
+    def test_offline_artifact_hashes_include_nested_steady_state_recipes(self):
+        representative = {
+            "capture_kind": wp1.TIER1_V3_REQUALIFICATION_CAPTURE_KIND,
+            "steady_state_tier1_diagnosis": {
+                "recipes": [
+                    {"recipe": {"name": "mesh", "sha256": "mesh-hash"}},
+                    {"recipe": {"name": "borders", "sha256": "borders-hash"}},
+                    {"recipe": {"name": "text_ui", "sha256": "text-ui-hash"}},
+                ],
+            },
+        }
+        hashes = model._offline_artifact_hashes(representative)
+        self.assertEqual(
+            hashes["recipe_sha256"],
+            {
+                "mesh": "mesh-hash",
+                "borders": "borders-hash",
+                "text_ui": "text-ui-hash",
+            },
+        )
+
     def test_cli_path_validates_and_summarizes_v3_gates(self):
         commit = "f62aa28eb6322fd08a8b5aeb51049c2958c89d07"
         evidence_id = "20261003T160000.000000Z-wp9cli01"
