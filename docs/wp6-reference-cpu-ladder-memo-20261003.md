@@ -102,7 +102,24 @@ Comparisons use `median_fraction` with `status: diagnostic` (not Tier-1 gates).
 3. **Text_ui:** both fixed and active costs exist; active median is much larger (**+7.4%** vs **+71.3%**).
 4. Does **not** replace WP5b (no post-`glFinish` drain); complements it on the same `cpu_ns` metric.
 
+## Minimal-reference reconciliation (`a1dfde61`)
+
+**Archive:** `analysis/evidence/frame-model-offline-529e58a-20261003T102333.910821Z-a1dfde61.json` (`a1dfde61`)  
+**Git:** `529e58a`  
+**Contract:** `wp6_minimal_reference_v2` (passive hooks + `MEASURE_ENABLED`; stage-validated control flags)
+
+CPU `median_fraction` (seven paired trials):
+
+| Recipe | minimal − loaded | reference − minimal | reference − loaded |
+|--------|------------------|---------------------|-------------------|
+| mesh | +4.0% | +8.0% | +4.2% |
+| borders | +0.8% | +33.5% | +33.4% |
+| text_ui | +5.1% | +77.5% | +79.0% |
+
+**Borders** and **text_ui:** `reference − minimal-reference` ≈ `reference − loaded-disabled` — the removed accounting stack explains almost all of the active REFERENCE tax; `minimal − loaded` is small (measurement-armed guard path). **Mesh:** `reference − loaded` is smaller than `reference − minimal` in this capture (median pairs are not additive); still shows a modest `minimal − loaded` step (~4%) on top of near-zero total active tax vs loaded-disabled in this run.
+
 ## Next engineering
 
-- **`minimal-reference`** — disable the active REFERENCE accounting stack while keeping the loaded-disabled interposition baseline (see [WP6 plan](wp6-reference-cpu-decomposition.md)). Afterward ask: (1) did `minimal-reference` remove most of `reference − loaded-disabled`? (2) is `loaded-disabled − bare` acceptable for causal work? If (1) yes and (2) no, prefer interposer/pass-through optimization or revisiting the relative Tier-1 criterion — not more scope/event ablations.
-- Marginal ablations only where `minimal-reference` leaves material active residual; do not treat summed marginals as additive.
+- Prefer **implementing/removing the attributed accounting stack** (scopes, events, publication, hook clocks) over further broad ladder reruns.
+- Marginal ablations only if a recipe shows material `reference − minimal-reference` residual after this reconciliation; do not treat summed marginals as additive.
+- If `loaded-disabled − bare` remains above Tier-1 relative bands on small denominators, revisit interposer/pass-through optimization or absolute-cost acceptance criteria separately from accounting work.

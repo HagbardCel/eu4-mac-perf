@@ -56,6 +56,21 @@
       "notes": "First bare/loaded-disabled/reference ladder (v1 contract: residual hook clocks in loaded-disabled). Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Superseded for decomposition semantics by wp6_loaded_disabled_v2; authoritative ladder is 4dc19f16. Diagnostic only."
     }
   ],
+  "minimal_reference_reconciliation_archives": [
+    {
+      "work_package": "WP6",
+      "purpose": "wp6_minimal_reference_reconciliation_v1",
+      "role": "authoritative_v2",
+      "evidence_id": "20261003T102333.910821Z-a1dfde61",
+      "archive_path": "analysis/evidence/frame-model-offline-529e58a-20261003T102333.910821Z-a1dfde61.json",
+      "archive_sha256_committed": "9a2caf8d2ae639e4317cada93aeab9113aaa19f2cdadafdd8fde0080b53c72c9",
+      "git_commit": "529e58a21cc40d30dd54624015b9470d9afcfc45",
+      "captured_at_utc": "20261003T102333.910821Z-a1dfde61",
+      "loaded_disabled_contract": "wp6_loaded_disabled_v2",
+      "minimal_reference_contract": "wp6_minimal_reference_v2",
+      "notes": "Authoritative loaded-disabled / minimal-reference / reference reconciliation with stage trace + control validation. Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Diagnostic only."
+    }
+  ],
   "diagnostic_archives": [
     {
       "evidence_id": "20261002T220742.210844Z-129e5bf5",
