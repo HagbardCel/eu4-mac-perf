@@ -65,6 +65,9 @@ def _phase_c_synthetic_frame(phase_name: str, *, counters: bool) -> dict:
     multiplier = 1.1 if counters else 1.0
     return {
         "phase": model.PHASE_NUMBER[phase_name],
+        "update_id": 1,
+        "render_id": 1,
+        "measurement_epoch": 1,
         "render_executed": 1 if counters else 0,
         "render_attempts": 1 if counters else 0,
         "present_calls": 1 if counters else 0,
@@ -183,6 +186,41 @@ class PhaseCScheduleTests(unittest.TestCase):
         )
         self.assertIn("C1", attribution["exclusive_scope_windows"])
         self.assertIn("exclusive_rank_stable", attribution)
+
+    def test_summarize_frame_model_forensic_trace_state_operations(self):
+        row = ["S", "1", "4096", "8", "0"] + ["0"] * 16
+        self.assertEqual(len(row), 21)
+        parsed = model.summarize_frame_model_forensic_trace([row])
+        self.assertEqual(parsed["state_operation_counts"].get("vertex_attrib_pointer"), 1)
+        self.assertEqual(parsed["record_counts"].get("S"), 1)
+
+    def test_intrusive_diagnostic_forensic_tail_summary_uses_frame_model_schema(self):
+        tail_phase = {
+            "name": "TAIL",
+            "duration_s": 20,
+            "measurement_epoch": 1,
+            "start_ns": 0,
+            "end_ns": 20_000_000_000,
+            "window_generation": 0,
+            "clock_offset_ns": 0,
+            "alignment_uncertainty_ns": 0,
+            "sampled_window_evidence": {"status": "passed", "windows": []},
+        }
+        frame = _phase_c_synthetic_frame("TAIL", counters=True)
+        frame["phase"] = model.PHASE_NUMBER["TAIL"]
+        frame["measurement_epoch"] = 1
+        frame["render_id"] = 1
+        trace = [["S", "1", "8192", "9", "2", "0", "0", "0", "0", "0", "0", "0", "0", "0", "1", "1", "103", "0", "0", "0", "0"]]
+        summary = model.intrusive_diagnostic_forensic_tail_summary(
+            trace,
+            tail_phase,
+            {"monotonic_ns": 0, "wall_ns": 0},
+            [frame],
+        )
+        self.assertEqual(summary["state_operation_counts"].get("enable_vertex_attrib_array"), 1)
+        self.assertIn("temporal_differences", summary)
+        self.assertNotEqual(summary.get("status"), "unavailable")
+
 
 class RunDiagnosticOnlyTests(unittest.TestCase):
     @mock.patch.object(model, "_run_intrusive_diagnostic_phase_c")

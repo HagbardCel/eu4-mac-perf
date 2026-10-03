@@ -357,6 +357,20 @@ INTRUSIVE_DIAGNOSTIC_POWER_RC_FIELDS = (
     "gpu_w",
     "combined_w",
 )
+DIAGNOSTIC_STATUS_COMPLETE_WITH_GAPS = "complete_with_attribution_gap"
+FRAME_MODEL_STATE_OPERATION_NAMES = {
+    1: "use_program",
+    2: "bind_buffer",
+    3: "bind_texture",
+    4: "enable_disable",
+    5: "active_texture",
+    6: "use_program_arb",
+    7: "bind_vertex_array",
+    8: "vertex_attrib_pointer",
+    9: "enable_vertex_attrib_array",
+    10: "disable_vertex_attrib_array",
+    11: "vertex_attrib_divisor",
+}
 QUALIFIED_LIVE_INTRUSION_LIMIT = 0.03
 WP10_BOUNDED_REMEDIATION_PURPOSE = "wp10_bounded_remediation_v1"
 WP10_MESH_CPU_STAGES = (
@@ -3724,6 +3738,23 @@ def _power_metric(power_by_phase: dict, phase_name: str, field: str) -> float | 
     return (power_by_phase.get(phase_name) or {}).get(field)
 
 
+def _process_cpu_us_per_update(
+    power_by_phase: dict,
+    phase_name: str,
+    summary: dict,
+) -> float | None:
+    cpu_ms_per_s = _power_metric(power_by_phase, phase_name, "eu4_cputime_ms_per_s")
+    updates_per_s = summary.get("update_attempts_s")
+    if cpu_ms_per_s is None or not updates_per_s:
+        return None
+    return (cpu_ms_per_s / updates_per_s) * 1000.0
+
+
+def _scope_path_label(node: dict) -> str:
+    path = node.get("scope_path") or [node.get("name", "unknown")]
+    return " → ".join(path)
+
+
 def _rc_bracket_effect(
     *,
     counters_name: str,
@@ -3760,6 +3791,11 @@ def _rc_bracket_effect(
         raise base.BenchmarkError(f"{counters_name} bracket missing external EU IV CPU samples")
     ref_swap = statistics.mean([_median_probe_swap(probe, phase_by_name[name]) for name in reference_names])
     prof_swap = _median_probe_swap(probe, phase_by_name[counters_name])
+    ref_process = statistics.mean(
+        [_process_cpu_us_per_update(power_by_phase, name, summaries[name]) for name in reference_names],
+    )
+    prof_process = _process_cpu_us_per_update(power_by_phase, counters_name, counters)
+    process_delta = (prof_process - ref_process) if ref_process is not None and prof_process is not None else None
     return {
         "reference_phases": list(reference_names),
         "frame_perturbation_fraction": frame,
@@ -3768,6 +3804,7 @@ def _rc_bracket_effect(
         "swap_perturbation_fraction": _rc_perturbation_ratio(prof_swap, ref_swap),
         "swap_rate": prof_swap,
         "live_update_cpu_delta_us_per_update_intrusive": (prof_update_ms - ref_update_ms) * 1000.0,
+        "live_process_cpu_delta_us_per_update_intrusive": process_delta,
         "label": "intrusive/unqualified",
     }
 
@@ -3843,14 +3880,25 @@ def compute_live_rc_observer_effect(
     bracket_deltas = [brackets[key]["live_update_cpu_delta_us_per_update_intrusive"] for key in ("C1", "C2")]
     historical = json.loads((ROOT / "results/autonomous-reproducibility.json").read_text(encoding="utf-8"))
     reference_rate = historical["summary"]["median_swaps_s"]["median"]
+    ref_process = statistics.mean(
+        [_process_cpu_us_per_update(power_by_phase, name, summaries[name]) for name in INTRUSIVE_DIAGNOSTIC_REFERENCE_PHASES],
+    )
+    prof_process = statistics.mean(
+        [_process_cpu_us_per_update(power_by_phase, name, summaries[name]) for name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES],
+    )
+    aggregate_process_delta = (prof_process - ref_process) if ref_process is not None and prof_process is not None else None
     prior_check = None
     if mesh_prior_ns_per_frame:
-        aggregate_delta_ns = (prof_update_ms - ref_update_ms) * 1e6
         prior_check = {
             "mesh_counters_incremental_prior_ns_per_frame": mesh_prior_ns_per_frame,
-            "live_aggregate_update_cpu_delta_ns_per_update_intrusive": aggregate_delta_ns,
-            "ratio_to_offline_prior": aggregate_delta_ns / mesh_prior_ns_per_frame,
+            "mesh_counters_incremental_prior_us_per_frame": mesh_prior_ns_per_frame / 1000.0,
+            "live_aggregate_update_cpu_delta_us_per_update_intrusive": (prof_update_ms - ref_update_ms) * 1000.0,
+            "live_aggregate_process_cpu_delta_us_per_update_intrusive": aggregate_process_delta,
             "bracket_delta_spread_us": max(bracket_deltas) - min(bracket_deltas),
+            "interpretation": (
+                "Offline prior is whole-workload invocation tax; live process CPU/update is the preferred "
+                "order-of-magnitude sanity bracket (not a calibrated equality test)."
+            ),
         }
     return {
         "phase_summaries": summaries,
@@ -3866,6 +3914,7 @@ def compute_live_rc_observer_effect(
             "swap_perturbation_fraction": _rc_perturbation_ratio(prof_swap, ref_swap),
             "swap_rate": prof_swap,
             "live_update_cpu_delta_us_per_update_intrusive": (prof_update_ms - ref_update_ms) * 1000.0,
+            "live_process_cpu_delta_us_per_update_intrusive": aggregate_process_delta,
         },
         "frame_perturbation_fraction": frame_perturbation,
         "cpu_perturbation_fraction": power_aggregate["eu4_cputime_ms_per_s"],
@@ -3898,13 +3947,36 @@ def intrusive_diagnostic_exclusive_attribution(
         semantic = [node for node in phase_data.get("nodes", []) if node.get("classification") == "semantic"]
         total_exclusive = sum(node.get("exclusive_cpu_ms", 0.0) for node in semantic)
         shares = {
-            node["name"]: (node.get("exclusive_cpu_ms", 0.0) / total_exclusive if total_exclusive else 0.0)
+            _scope_path_label(node): (node.get("exclusive_cpu_ms", 0.0) / total_exclusive if total_exclusive else 0.0)
             for node in semantic
         }
+        envelope = phase_data.get("envelope_coverage") or {}
+        phase_num = PHASE_NUMBER[phase_name]
+        ranked = [
+            entry
+            for entry in tree.get("ranked_residuals", [])
+            if entry.get("phase") == phase_num
+        ]
+        envelope_nodes = [
+            {
+                "path": _scope_path_label(node),
+                "residual_cpu_ms": node.get("residual_cpu_ms", 0.0),
+            }
+            for node in phase_data.get("nodes", [])
+            if node.get("classification") == "envelope"
+        ]
+        coverage_gate = phase_data.get("coverage_95_percent_gate")
         windows[phase_name] = {
             "exclusive_cpu_shares": shares,
             "rank_order": sorted(shares, key=shares.get, reverse=True),
-            "scope_tree_gate": phase_data.get("coverage_95_percent_gate"),
+            "scope_tree_gate": coverage_gate,
+            "semantic_coverage_adequate": coverage_gate == "passed",
+            "envelope_coverage": {
+                "update_cpu_fraction": (envelope.get("UpdateOneFrame") or {}).get("cpu_fraction"),
+                "render_cpu_fraction": (envelope.get("CInGameIdler::Render") or {}).get("cpu_fraction"),
+            },
+            "envelope_residuals": sorted(envelope_nodes, key=lambda item: item["residual_cpu_ms"], reverse=True)[:8],
+            "ranked_residuals": ranked[:8],
         }
     gl_frame_fields = ("draws", "buffer_calls", "uniform_calls", "state_calls", "draw_timed_samples")
     gl_counts: dict[str, dict] = {}
@@ -3925,8 +3997,72 @@ def intrusive_diagnostic_exclusive_attribution(
         "gl_work_counts": gl_counts,
         "gl_work_rank_order": gl_rank,
         "gl_work_rank_stable": gl_rank["C1"] == gl_rank["C2"],
-        "interpretation": "Exclusive semantic CPU shares partition scope-tree costs; GL rows are per-frame medians (counts/samples).",
+        "interpretation": (
+            "Exclusive semantic shares partition identified semantic CPU only; envelope residuals and coverage "
+            "show unattributed Update/Render/Map CPU. GL rows are per-frame medians (counts/samples)."
+        ),
     }
+
+
+def summarize_frame_model_forensic_trace(trace_rows: list[list[str]]) -> dict:
+    from collections import Counter
+
+    record_counts = Counter(row[0] for row in trace_rows if row)
+    state_ops: Counter[tuple[str, int]] = Counter()
+    state_by_operation: Counter[str] = Counter()
+    draw_records = 0
+    submitted_vertices = 0
+    for row in trace_rows:
+        if not row:
+            continue
+        if row[0] == "D" and len(row) >= 13:
+            draw_records += 1
+            try:
+                submitted_vertices += int(row[8])
+            except ValueError:
+                continue
+        elif row[0] == "S" and len(row) >= 5:
+            try:
+                operation = int(row[3])
+                callsite = int(row[2])
+            except ValueError:
+                continue
+            label = FRAME_MODEL_STATE_OPERATION_NAMES.get(operation, f"operation_{operation}")
+            state_by_operation[label] += 1
+            state_ops[(label, callsite)] += 1
+    top_state = [
+        {"operation": op, "callsite_offset": site, "records": count}
+        for (op, site), count in state_ops.most_common(16)
+    ]
+    return {
+        "record_counts": dict(record_counts),
+        "draw_records": draw_records,
+        "submitted_vertices": submitted_vertices,
+        "state_operation_counts": dict(state_by_operation),
+        "top_state_callers": top_state,
+    }
+
+
+def _diagnostic_attribution_gate_status(attribution: dict) -> tuple[str, str]:
+    windows = attribution.get("exclusive_scope_windows") or {}
+    if not windows.get("C1") or not windows.get("C2"):
+        return "unavailable", "C1/C2 exclusive scope windows missing"
+    if not windows["C1"].get("exclusive_cpu_shares") and not windows["C2"].get("exclusive_cpu_shares"):
+        return "unavailable", "Exclusive semantic scope shares are empty"
+    if windows["C1"].get("scope_tree_gate") != "passed" or windows["C2"].get("scope_tree_gate") != "passed":
+        return "failed", "Scope-tree 95% semantic coverage gate not met for a counters window"
+    return "passed", "C1/C2 exclusive attribution and scope coverage recorded"
+
+
+def _forensic_tail_gate_status(forensic: dict) -> tuple[str, str]:
+    sampled = forensic.get("sampled_window_evidence") or {}
+    if sampled.get("status") not in {"passed", "failed"}:
+        return "unavailable", "Forensic sample-window calibration missing"
+    records = forensic.get("record_counts") or {}
+    detail_rows = sum(records.get(kind, 0) for kind in FORENSIC_DETAIL_RECORD_KINDS)
+    if detail_rows == 0:
+        return "failed", "Forensic tail produced no D/S/U/B/T detail records"
+    return "passed", "Forensic tail detail records captured"
 
 
 def intrusive_diagnostic_forensic_tail_summary(
@@ -3936,27 +4072,29 @@ def intrusive_diagnostic_forensic_tail_summary(
     profile_rows: list[dict],
 ) -> dict:
     tail_frames = [row for row in profile_rows if eligible_frame(row, tail_phase)]
-    sampled = sampled_perturbation(tail_frames)
-    telemetry: dict = {}
-    try:
-        telemetry = diagnostic.summarize_telemetry(trace_rows, [tail_phase], anchor)
-    except base.BenchmarkError:
-        telemetry = {}
-    tail_bucket = telemetry.get(tail_phase["name"], {})
-    calls = tail_bucket.get("calls")
-    top_callers = []
-    if calls:
-        top_callers = [{"function": name, "calls": count} for name, count in calls.most_common(12)]
-    return {
+    tail_trace = eligible_trace(trace_rows, tail_frames, [tail_phase])
+    sampled = tail_phase.get("sampled_window_evidence") or sampled_perturbation(tail_frames)
+    parsed = summarize_frame_model_forensic_trace(tail_trace)
+    temporal = temporal_differences(tail_trace)
+    gpu = gpu_summary(tail_trace)
+    output = {
         "phase": tail_phase["name"],
         "role": tail_phase.get("role", "forensic"),
         "draw_timed_samples": sum(row.get("draw_timed_samples", 0) for row in tail_frames),
-        "sampled_window_evidence": tail_phase.get("sampled_window_evidence") or sampled,
-        "top_gl_call_counts": top_callers,
-        "draw_records": tail_bucket.get("draws", 0),
-        "submitted_vertices": tail_bucket.get("submitted_vertices", 0),
+        "sampled_window_evidence": sampled,
+        "record_counts": parsed["record_counts"],
+        "draw_records": parsed["draw_records"],
+        "submitted_vertices": parsed["submitted_vertices"],
+        "state_operation_counts": parsed["state_operation_counts"],
+        "top_state_callers": parsed["top_state_callers"],
+        "temporal_differences": temporal,
+        "gpu_segments": gpu,
         "caveat": "Forensic tail is isolated from R/C observer-effect brackets; timings are intrusive and unqualified.",
     }
+    gate_status, gate_reason = _forensic_tail_gate_status(output)
+    output["status"] = gate_status
+    output["gate_reason"] = gate_reason
+    return output
 
 
 def _format_percent(value: float | None) -> str:
@@ -4008,16 +4146,45 @@ def _render_intrusive_diagnostic_report_md(report: dict) -> str:
     for phase_name in INTRUSIVE_DIAGNOSTIC_PROFILE_PHASES:
         window = (attribution.get("exclusive_scope_windows") or {}).get(phase_name, {})
         order = window.get("rank_order") or []
+        coverage = window.get("envelope_coverage") or {}
         if order:
-            lines.append(f"- **{phase_name} exclusive semantic rank**: {', '.join(order[:5])}")
+            qualifier = "adequate coverage" if window.get("semantic_coverage_adequate") else "identified subset only"
+            lines.append(f"- **{phase_name} semantic exclusive rank** ({qualifier}): {', '.join(order[:5])}")
+        if coverage:
+            lines.append(
+                f"- **{phase_name} coverage**: semantic/Update CPU "
+                f"{_format_percent(coverage.get('update_cpu_fraction'))}, "
+                f"semantic/Render CPU {_format_percent(coverage.get('render_cpu_fraction'))}",
+            )
+        residuals = window.get("envelope_residuals") or []
+        if residuals:
+            top = residuals[0]
+            lines.append(
+                f"- **{phase_name} top envelope residual**: {top.get('path')} "
+                f"({top.get('residual_cpu_ms', 0):.3f} ms exclusive CPU)",
+            )
     lines.append(
         f"- Exclusive rank stable across C1/C2: **{attribution.get('exclusive_rank_stable')}**; "
         f"GL work-count rank stable: **{attribution.get('gl_work_rank_stable')}**",
     )
+    prior_check = effect.get("offline_prior_check") or {}
+    if prior_check.get("live_aggregate_process_cpu_delta_us_per_update_intrusive") is not None:
+        lines.extend([
+            "",
+            "### Process CPU / update sanity (preferred vs offline prior)",
+            "",
+            f"- Aggregate process CPU Δ: **{prior_check['live_aggregate_process_cpu_delta_us_per_update_intrusive']:.1f} µs/update**",
+            f"- Offline mesh prior: **~{prior_check.get('mesh_counters_incremental_prior_us_per_frame', 'n/a')} µs/frame** (order-of-magnitude only)",
+        ])
     lines.extend(["", "## Forensic tail", ""])
+    lines.append(f"- Tail gate: **{forensic.get('status', 'n/a')}** ({forensic.get('gate_reason', '')})")
     lines.append(f"- Draw timed samples: **{forensic.get('draw_timed_samples', 0)}**")
     evidence = forensic.get("sampled_window_evidence") or {}
     lines.append(f"- Sample-window calibration: **{evidence.get('status', 'n/a')}**")
+    state_ops = forensic.get("state_operation_counts") or {}
+    if state_ops:
+        ordered = sorted(state_ops, key=state_ops.get, reverse=True)
+        lines.append(f"- State operations (detail): {', '.join(f'{name}={state_ops[name]}' for name in ordered[:6])}")
     lines.append(f"- {forensic.get('caveat', '')}")
     lines.append("")
     return "\n".join(lines) + "\n"
@@ -4077,6 +4244,7 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
         "observer_effect": observer_effect,
         "profile_attribution": profile_attribution,
         "forensic_tail": forensic_tail,
+        "attribution_gap": manifest.get("status") == DIAGNOSTIC_STATUS_COMPLETE_WITH_GAPS,
         "observer_bias_calibration": {
             "calibration_version": bias_calibration.get("calibration_version"),
             "bias_table": bias_calibration.get("bias_table") or observer_bias.bias_aware_table_rows(bias_model),
@@ -5078,11 +5246,19 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                 gates.record("cadence", cadence_status, cadence_reason)
                 if cadence_status != "passed":
                     raise base.BenchmarkError(cadence_reason)
+                attr_status, attr_reason = _diagnostic_attribution_gate_status(manifest["profile_attribution"])
+                gates.record("diagnostic_attribution", attr_status, attr_reason)
+                forensic_status, forensic_reason = _forensic_tail_gate_status(manifest["forensic_tail"])
+                gates.record("forensic_tail", forensic_status, forensic_reason)
                 try:
                     gates.require(required_gates_for_report_kind("intrusive_diagnostic"))
                 except ValueError as exc:
                     raise base.BenchmarkError(str(exc)) from exc
-                manifest["status"] = "complete"
+                manifest["status"] = (
+                    "complete"
+                    if attr_status == "passed" and forensic_status == "passed"
+                    else DIAGNOSTIC_STATUS_COMPLETE_WITH_GAPS
+                )
                 manifest["power"] = {"samples": len(power_tail.samples)}
                 (run_dir / "power.samples.json").write_text(json.dumps(power_tail.samples, default=str))
             finally:

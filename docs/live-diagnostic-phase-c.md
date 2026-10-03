@@ -33,9 +33,12 @@ Live COUNTERS perturbation (R vs C):     +X% CPU, +Y% swaps  (measured)
 Offline mesh prior (aggregate only):     ~9–10 µs/frame
 Component-level bias correction:         unavailable (non-identifiable decomposition)
 
-Category/path          share (C1)   share (C2)   rank stable?
------------------------------------------------------------
-…                      …%           …%           yes/no
+Category/path (exclusive scope path)   share (C1)   share (C2)   rank stable?
+---------------------------------------------------------------------------
+…                                      …%           …%           yes/no
+
+Envelope residuals and semantic/update + semantic/render coverage are reported alongside shares.
+Run `status` may be `complete_with_attribution_gap` when R/C succeeded but attribution or forensic tail evidence is incomplete.
 ```
 
 Forensic/detail windows: emphasize **counts and structural relationships**; GPU timestamp and sparse draw-clock instrumentation may perturb execution (see Phase B forensic slopes).
