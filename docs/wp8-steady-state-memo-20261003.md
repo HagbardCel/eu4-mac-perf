@@ -39,7 +39,7 @@ Median **relative** fractions on the same axis drop sharply after one post-arm p
 
 ## Next steps (not executed here)
 
-- Design **Tier-1 v3** before held-out or live EU IV. WP8 supports at least: (1) explicit steady-state protocol (`arm → profiler-active prime → glFinish → timed window`); (2) demote or replace raw submission-wall gates with completed-wall semantics; (3) hybrid admission using an absolute noise floor on tiny CPU denominators, not bare ±3% alone.
+- **Tier-1 v3 design** (replay evaluator + policy): `docs/wp9-tier1-v3-design.md` — replays this archive under `tier1_causal_steady_state_hybrid_v3` (primed four-frame variant).
 - **Counters qualification** must be an explicit v3 decision: further counters fast-path work vs accepting ~1–8 µs/frame under a hybrid policy. Priming alone will not make the existing ±3% counters-vs-reference gate pass.
 - Inspect counters cost with existing profiling before another broad decomposition program.
 - Do **not** treat this archive as requalification pass/fail; compare qualitatively to `ee9f5484` only for methodology.

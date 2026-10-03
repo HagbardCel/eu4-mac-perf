@@ -1,6 +1,10 @@
 # Tier-1 offline causal admission policy
 
-Policy identity (current): **`tier1_causal_rel3pct_abs50us_v2`**
+Policy identity (current production evaluator): **`tier1_causal_rel3pct_abs50us_v2`**
+
+Proposed steady-state successor: **`tier1_causal_steady_state_hybrid_v3`** — see
+[`docs/wp9-tier1-v3-design.md`](wp9-tier1-v3-design.md). v3 is replay-only until a
+dedicated requalification capture command ships; v2 remains binding for existing archives.
 
 Evidence schema for new immutable archives: **`stage2-split-v2`**
 
