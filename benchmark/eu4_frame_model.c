@@ -169,12 +169,6 @@ static uint64_t context_stamp(CGLContextObj ctx,bool destroy) {
 }
 static _Thread_local bool detail_active;
 static _Thread_local uint32_t draw_sample_seq;
-#ifdef EU4_FRAME_MODEL_TEST
-static inline bool draw_timed_sample_clock_active(bool measuring) {
-    if(!test_draw_timed_samples) return false;
-    return measuring && detail_active && (++draw_sample_seq&255u)==1u;
-}
-#endif
 static _Thread_local uint64_t detail_generation;
 static _Thread_local uint32_t detail_remaining;
 typedef struct { bool used; uint64_t site,render_id,program,epoch,window; GLint location;
@@ -233,6 +227,10 @@ static bool test_gpu_timestamps=true,test_forensic_records=true,test_cached_meta
 static bool test_draw_timed_samples=true;
 static bool test_counters_lite,test_counters_deferred_flush;
 static _Atomic uint64_t test_gpu_stamps,test_gpu_polls,test_gpu_results,test_detail_records;
+static inline bool draw_timed_sample_clock_active(bool measuring) {
+    if(!test_draw_timed_samples) return false;
+    return measuring && detail_active && (++draw_sample_seq&255u)==1u;
+}
 #endif
 
 static bool gpu_timestamps_enabled(void) {

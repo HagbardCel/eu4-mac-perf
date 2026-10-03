@@ -63,7 +63,7 @@ def count_scope_pairs_from_trace(trace: Sequence[Sequence[str]] | None) -> int:
     return total
 
 
-def count_gpu_timestamp_segments_from_trace(trace: Sequence[Sequence[str]] | None) -> int:
+def count_gpu_timestamp_calls_from_trace(trace: Sequence[Sequence[str]] | None) -> int:
     if not trace:
         return 0
     for row in trace:
@@ -159,6 +159,7 @@ def build_bias_model(
     additive: dict[str, dict] = {}
     aggregates: dict[str, dict] = {}
     forensic: dict[str, dict] = {}
+    instrumentation: dict[str, dict] = {}
     for entry in primitives:
         fit = entry.get("fit") or {}
         slope = fit.get("slope_ns_per_op")
@@ -177,7 +178,9 @@ def build_bias_model(
             aggregates[entry["primitive_id"]] = payload
         elif role == ROLE_FORENSIC_ADDON:
             forensic[entry["primitive_id"]] = payload
-        elif role in {ROLE_DECOMPOSITION, ROLE_INSTRUMENTATION}:
+        elif role == ROLE_INSTRUMENTATION:
+            instrumentation[entry["primitive_id"]] = payload
+        elif role == ROLE_DECOMPOSITION:
             additive[entry["primitive_id"]] = payload
     return {
         "calibration_version": OBSERVER_BIAS_CALIBRATION_VERSION,
@@ -187,6 +190,7 @@ def build_bias_model(
         "additive_slopes": additive,
         "aggregate_slopes": aggregates,
         "forensic_slopes": forensic,
+        "instrumentation_slopes": instrumentation,
         "consistency": dict(consistency or {}),
     }
 
@@ -315,7 +319,10 @@ PRIMITIVE_SPECS: tuple[dict, ...] = (
         "low_stage": "bare_harness",
         "high_stage": "instrumented_harness",
         "label": "GL draw interposer dispatch",
-        "description": "Bare synthetic GL loop vs the same loop with dylib interposition.",
+        "description": (
+            "Synthetic enable+draw loop bare vs dylib-interposed; aggregate instrumentation "
+            "reference only (not subtracted by bias_adjust_inclusive_cpu)."
+        ),
     },
     {
         "primitive_id": "reference_activation",
@@ -357,15 +364,16 @@ PRIMITIVE_SPECS: tuple[dict, ...] = (
         "description": "Deferred flush → immediate flush on counters-lite path (positive flush cost).",
     },
     {
-        "primitive_id": "gpu_timestamp_segment",
+        "primitive_id": "gpu_timestamp_call",
         "role": ROLE_FORENSIC_ADDON,
-        "unit": "gpu_timestamp_segment",
+        "unit": "gpu_timestamp_call",
         "low_stage": "sampled",
         "high_stage": "sampled",
-        "label": "GPU timestamp segment",
+        "label": "GPU timestamp insertion",
         "description": (
             "Sampled detail window, forensic records off: GPU timestamps 0 → 1. "
-            "Not part of counters_incremental reconciliation."
+            "Operations are test_gpu_stamps (each glQueryCounter stamp); includes bundled "
+            "query lifecycle overhead. Not part of counters_incremental reconciliation."
         ),
         "low_env": {**SAMPLED_FORENSIC_BASE_ENV, "EU4_TEST_GPU_TIMESTAMPS": "0"},
         "high_env": {**SAMPLED_FORENSIC_BASE_ENV, "EU4_TEST_GPU_TIMESTAMPS": "1"},

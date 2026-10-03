@@ -38,11 +38,13 @@ Use with **observed operation counts** from live capture. `bias_adjust_inclusive
 
 `consistency.explained_fraction` reconciles **only** the two rows above against `counters_incremental` (not forensic add-ons).
 
-### Instrumentation
+### Instrumentation reference (not auto-subtracted)
 
 | ID | Pair | Unit |
 |----|------|------|
 | `gl_interpose_dispatch` | bare harness ↔ dylib interposed (order alternates) | intercepted draw loop |
+
+Stored in `instrumentation_slopes`; not used by `bias_adjust_inclusive_cpu()`.
 
 ### Forensic add-ons (detail/sample window only)
 
@@ -50,7 +52,7 @@ Reported in `forensic_slopes`; use `estimate_bias_ns(..., allow_forensic=True)` 
 
 | ID | Pair | Unit |
 |----|------|------|
-| `gpu_timestamp_segment` | sampled, records off: GPU timestamps 0 → 1 | GPU timestamp segment (`M` line) |
+| `gpu_timestamp_call` | sampled, records off: GPU timestamps 0 → 1 | GPU timestamp insertion (`M[1]` stamp count) |
 | `timed_gl_sample` | sampled, records/GPU off: `EU4_TEST_DRAW_TIMED_SAMPLES` 0 → 1 | `F.draw_timed_samples` |
 
 ## Phase C correction

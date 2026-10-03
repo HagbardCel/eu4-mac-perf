@@ -2777,8 +2777,8 @@ def _observer_bias_operations_for_primitive(
         return observer_bias.published_frame_operations(scale)
     if unit == "scope_pair":
         return observer_bias.count_scope_pairs_from_trace(high_trace)
-    if unit == "gpu_timestamp_segment":
-        return observer_bias.count_gpu_timestamp_segments_from_trace(high_trace)
+    if unit == "gpu_timestamp_call":
+        return observer_bias.count_gpu_timestamp_calls_from_trace(high_trace)
     if unit == "timed_gl_sample":
         return observer_bias.count_draw_timed_samples_from_trace(high_trace)
     raise base.BenchmarkError(f"Unknown observer-bias unit {unit}")
@@ -3646,6 +3646,7 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
             "additive_slopes": bias_model.get("additive_slopes") or {},
             "aggregate_slopes": bias_model.get("aggregate_slopes") or {},
             "forensic_slopes": bias_model.get("forensic_slopes") or {},
+            "instrumentation_slopes": bias_model.get("instrumentation_slopes") or {},
             "consistency": bias_model.get("consistency") or {},
         }
         if bias_model

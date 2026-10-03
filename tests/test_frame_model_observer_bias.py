@@ -88,9 +88,9 @@ class ObserverBiasFitTests(unittest.TestCase):
                     "fit": {"slope_ns_per_op": 10.0},
                 },
                 {
-                    "primitive_id": "gpu_timestamp_segment",
+                    "primitive_id": "gpu_timestamp_call",
                     "role": observer_bias.ROLE_FORENSIC_ADDON,
-                    "unit": "gpu_timestamp_segment",
+                    "unit": "gpu_timestamp_call",
                     "low_stage": "sampled",
                     "high_stage": "sampled",
                     "fit": {"slope_ns_per_op": 500.0},
@@ -101,7 +101,7 @@ class ObserverBiasFitTests(unittest.TestCase):
             bias_model,
             operation_counts={
                 "scope_pair_clocks": 10.0,
-                "gpu_timestamp_segment": 100.0,
+                "gpu_timestamp_call": 100.0,
             },
             published_frames=4.0,
         )
@@ -137,8 +137,30 @@ class ObserverBiasSpecTests(unittest.TestCase):
         self.assertEqual(spec["low_stage"], "counters_lite_deferred_flush")
         self.assertEqual(spec["high_stage"], "counters_lite")
 
+    def test_gl_interpose_not_in_additive_slopes(self):
+        bias_model = observer_bias.build_bias_model(
+            [
+                {
+                    "primitive_id": "gl_interpose_dispatch",
+                    "role": observer_bias.ROLE_INSTRUMENTATION,
+                    "unit": "intercepted_draw_loop",
+                    "low_stage": "bare_harness",
+                    "high_stage": "instrumented_harness",
+                    "fit": {"slope_ns_per_op": 50.0},
+                },
+            ],
+        )
+        self.assertIn("gl_interpose_dispatch", bias_model["instrumentation_slopes"])
+        self.assertNotIn("gl_interpose_dispatch", bias_model["additive_slopes"])
+        result = observer_bias.bias_adjust_inclusive_cpu(
+            1_000_000,
+            {"gl_interpose_dispatch": 100},
+            bias_model,
+        )
+        self.assertEqual(result["estimated_bias_ns"], 0.0)
+
     def test_gpu_timestamp_uses_sampled_window_with_records_off(self):
-        spec = next(p for p in observer_bias.PRIMITIVE_SPECS if p["primitive_id"] == "gpu_timestamp_segment")
+        spec = next(p for p in observer_bias.PRIMITIVE_SPECS if p["primitive_id"] == "gpu_timestamp_call")
         self.assertEqual(spec["low_stage"], "sampled")
         self.assertEqual(spec["high_stage"], "sampled")
         self.assertEqual(spec["role"], observer_bias.ROLE_FORENSIC_ADDON)
