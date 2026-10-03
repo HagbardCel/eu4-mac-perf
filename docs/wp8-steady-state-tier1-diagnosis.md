@@ -37,7 +37,7 @@ Clean tree on `main`:
 python3 benchmark/eu4_frame_model.py wp8-steady-state-diagnosis --registry-json
 ```
 
-Archive `purpose`: `wp8_steady_state_tier1_diagnosis_v1`. Register under a new manifest bucket or memo when capture exists; **not** authoritative WP1 or `requalification_archives` unless explicitly decided later.
+Archive `purpose`: `wp8_steady_state_tier1_diagnosis_v1`. Authoritative Mac capture: `3c1e0db7` @ `f62aa28` — see `docs/wp8-steady-state-memo-20261003.md` and `steady_state_tier1_diagnosis_archives` in `analysis/profiler-overhead-diagnosis-manifest.json`. **Not** authoritative WP1 or `requalification_archives`.
 
 ## How to read results
 
@@ -48,5 +48,6 @@ Archive `purpose`: `wp8_steady_state_tier1_diagnosis_v1`. Register under a new m
 
 ## Related evidence
 
+- WP8 steady-state diagnostic: `3c1e0db7` (`steady_state_tier1_diagnosis_archives`, `work_package: WP8`)
 - WP7 requalification: `ee9f5484` (`requalification_archives`, `work_package: WP7`)
 - WP5b completion diagnosis: `f7cbf346`

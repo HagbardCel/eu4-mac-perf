@@ -68,6 +68,20 @@
       "notes": "First bare/loaded-disabled/reference ladder (v1 contract: residual hook clocks in loaded-disabled). Memo: docs/wp6-reference-cpu-ladder-memo-20261003.md. Superseded for decomposition semantics by wp6_loaded_disabled_v2; authoritative ladder is 4dc19f16. Diagnostic only."
     }
   ],
+  "steady_state_tier1_diagnosis_archives": [
+    {
+      "work_package": "WP8",
+      "purpose": "wp8_steady_state_tier1_diagnosis_v1",
+      "role": "authoritative",
+      "evidence_id": "20261003T123219.715675Z-3c1e0db7",
+      "archive_path": "analysis/evidence/frame-model-offline-f62aa28-20261003T123219.715675Z-3c1e0db7.json",
+      "archive_sha256_committed": "c9e94a3934d715181c7c70a5e843c23ec4e46469c1353330891cf6ccd0d1ef3b",
+      "git_commit": "f62aa28eb6322fd08a8b5aeb51049c2958c89d07",
+      "captured_at_utc": "20261003T123219.715675Z-3c1e0db7",
+      "baseline_requalification_evidence_id": "20261003T115737.310357Z-ee9f5484",
+      "notes": "Training-only steady-state methodology diagnostic (baseline vs post-arm prime vs 40-frame window; completion timing on every stage). Non-acceptance; not authoritative WP1 or requalification_archives. Memo: docs/wp8-steady-state-memo-20261003.md."
+    }
+  ],
   "minimal_reference_reconciliation_archives": [
     {
       "work_package": "WP6",
