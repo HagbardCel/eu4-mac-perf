@@ -1388,40 +1388,46 @@ Responsibilities:
 The practical order should now be:
 
 ### P0
-**Autonomous runner**
+**Phase-C evidence closure + bounded TAIL salvage**
 
-This changes the economics of every later experiment.
+Integrity-sealed gzip telemetry on git; ordinal salvage with retention gates; outcome memo.
+
+### P0
+**RenderBuckets / submission-transaction static RE**
+
+`_FlushData`, `_TransparentFlushData`, and 0xe8 subrecord construction (see `analysis/flush-data-re.md`).
 
 ### P1
-**Sampler-uniform validation**
+**One narrow Map::Render / Gfx-layer optimization**
 
-Small unresolved hypothesis; potentially elegant direct patch.
+Pre-registered in `analysis/map-render-optimization-hypothesis.md`.
 
 ### P1
-**Static analysis of `RenderBuckets` / draw architecture**
+**Profiler-off autonomous A/B validation**
 
-Main root-cause research path.
-
-### P2
-**Adaptive render-loop patch**
-
-Likely largest practical gain for the paused/static use case.
+`benchmark/submission_experiment.py` + `submission_validation.py` (auto probe only; no frame-model profiler).
 
 ### P2
-**Conservative draw batching**
+**Adaptive render policy (paused idle)**
 
-Potentially reduces the actual OpenGL→Metal submission bottleneck.
+Separate success criteria from submission optimization.
 
 ### P3
 **Permanent EU IV binary patch**
 
-Only after causal validation.
+Only after a validated win.
+
+### Completed / closed
+
+- Autonomous runner (WP1).
+- Sampler-uniform experiment (negative; see `analysis/sampler-uniform-validation.md`).
 
 ### Deprioritized
 
 - texture-state caching,
 - vertex-state caching,
 - generic GL setter optimization,
+- profiler Tier-1 requalification loops,
 - timer tuning,
 - framebuffer/map caching,
 - ARM64 binary translation,

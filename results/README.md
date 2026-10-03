@@ -9,12 +9,13 @@ This directory holds timestamped benchmark captures. Git tracks **derived eviden
 - `*.csv` except `telemetry.csv`
 - `events.jsonl`, small `*.bin` control files, `cpu-sample.txt`, `sample.stderr`
 - `autonomous-reproducibility.json`
+- Phase C canonical raw gzip: `telemetry.csv.gz`, `power.samples.json.gz`, `raw_evidence.json`, `salvage-report.json`, `salvage-report.md`
 
 ## Local only (gitignored)
 
 - `**/*.pliststream`, `**/powermetrics.stderr` — raw `powermetrics` streams
 - `**/*.png` — scene screenshots and diagnostic images
-- `**/telemetry.csv` — high-volume diagnostic series (summaries remain tracked)
+- `**/telemetry.csv`, `**/power.samples.json` — uncompressed captures (gzip companions may be tracked)
 - `**/trace.bin` — high-volume draw records (derived `draw-screening.*` remains tracked)
 - `_save_backups/` — save-file recovery copies
 
