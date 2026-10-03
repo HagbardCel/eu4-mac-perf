@@ -14,7 +14,7 @@ capture uses `run --diagnostic-only` (R–C–R–C–R after warm-up):
 
 ```sh
 python3 benchmark/eu4_frame_model.py preflight --intrusive-diagnostic-contract
-python3 benchmark/eu4_frame_model.py run --diagnostic-only results/
+python3 benchmark/eu4_frame_model.py run --diagnostic-only --output results
 ```
 
 See [live diagnostic measurement contract](docs/live-diagnostic-measurement-contract.md),

@@ -16,7 +16,7 @@ TAIL 20 s (isolated forensic detail; excluded from R/C observer brackets)
 
 Preflight: `preflight --intrusive-diagnostic-contract` (WP11 terminal record + build integrity).
 
-Live capture: `python3 benchmark/eu4_frame_model.py run --diagnostic-only <output-dir>`.
+Live capture: `python3 benchmark/eu4_frame_model.py run --diagnostic-only --output results` (default output is `results/`).
 
 ## What to measure (priority order)
 
