@@ -1,6 +1,6 @@
 # Tier-1 v4 — statistical replication (frozen)
 
-**Status:** Frozen in code on `main` (WP11). Informed by authoritative WP10 **`d07347df`** and failed v3 requalification **`a73ea57b`**. Capture: `docs/wp11-tier1-v4-requalification.md`.
+**Status:** Frozen by WP11 once merged; no further policy tuning before capture. Informed by authoritative WP10 **`d07347df`** and failed v3 requalification **`a73ea57b`**. Capture: `docs/wp11-tier1-v4-requalification.md`.
 
 ## Motivation
 

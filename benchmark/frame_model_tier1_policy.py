@@ -162,11 +162,15 @@ def held_out_disqualification_reason(entry: dict) -> str:
     return HELD_OUT_UNQUALIFIED_REASON
 
 
-def validate_pairs(pairs) -> tuple[bool, str | None]:
+def validate_pairs(
+    pairs,
+    *,
+    expected_count: int = TIER1_PAIR_COUNT,
+) -> tuple[bool, str | None]:
     if not isinstance(pairs, list):
         return False, "pairs missing"
-    if len(pairs) != TIER1_PAIR_COUNT:
-        return False, f"expected {TIER1_PAIR_COUNT} valid pairs, found {len(pairs)}"
+    if len(pairs) != expected_count:
+        return False, f"expected {expected_count} valid pairs, found {len(pairs)}"
     for index, pair in enumerate(pairs):
         if not isinstance(pair, dict):
             return False, f"pair {index} invalid"
@@ -268,6 +272,7 @@ def hybrid_allowed_us_per_frame(
 @dataclass(frozen=True)
 class Tier1CausalPolicyV3:
     version: str
+    pair_count: int = TIER1_V3_TRIAL_COUNT
     post_arm_prime_frames: int = TIER1_V3_POST_ARM_PRIME_FRAMES
     reference_relative_limit: float = TIER1_V3_REFERENCE_RELATIVE_LIMIT
     reference_absolute_floor_us: float = TIER1_V3_REFERENCE_ABSOLUTE_FLOOR_US
@@ -287,6 +292,8 @@ class Tier1CausalPolicyV3:
         return self.cpu_measured_frames
 
     def __post_init__(self) -> None:
+        if self.pair_count <= 0:
+            raise ValueError("pair_count must be positive")
         if self.post_arm_prime_frames < 0 or self.cpu_measured_frames <= 0 or self.wall_measured_frames <= 0:
             raise ValueError("invalid steady-state measurement contract")
         if self.absolute_cap_us_per_frame < 0:
@@ -299,7 +306,7 @@ class Tier1CausalPolicyV3:
         frames: int,
     ) -> tuple[str, dict, str | None]:
         pairs = gate.get("pairs")
-        valid, reason = validate_pairs(pairs)
+        valid, reason = validate_pairs(pairs, expected_count=self.pair_count)
         if not valid:
             return "unavailable", dict(gate), reason
         evaluated = workload.paired_summary(
@@ -334,7 +341,7 @@ class Tier1CausalPolicyV3:
 
     def _relative_ci_passes(self, gate: dict, *, relative_limit: float, frames: int) -> bool:
         pairs = gate.get("pairs")
-        valid, _ = validate_pairs(pairs)
+        valid, _ = validate_pairs(pairs, expected_count=self.pair_count)
         if not valid:
             return False
         evaluated = workload.paired_summary(
@@ -352,7 +359,7 @@ class Tier1CausalPolicyV3:
 
     def hybrid_gate_passes(self, gate: dict, *, gate_name: str, frames: int) -> bool:
         pairs = gate.get("pairs")
-        valid, _ = validate_pairs(pairs)
+        valid, _ = validate_pairs(pairs, expected_count=self.pair_count)
         if not valid:
             return False
         relative_limit, floor_us = self._hybrid_limits_for_gate(gate_name)
@@ -380,7 +387,7 @@ class Tier1CausalPolicyV3:
 
     def summarize_gate(self, gate: dict, *, gate_name: str, frames: int) -> tuple[str, dict, str | None]:
         pairs = gate.get("pairs")
-        valid, reason = validate_pairs(pairs)
+        valid, reason = validate_pairs(pairs, expected_count=self.pair_count)
         if not valid:
             return "unavailable", dict(gate), reason
         relative_limit, floor_us = self._hybrid_limits_for_gate(gate_name)
@@ -409,8 +416,14 @@ class Tier1CausalPolicyV3:
         return final_status, evaluated, None
 
 
-TIER1_CAUSAL_POLICY_V3 = Tier1CausalPolicyV3(TIER1_CAUSAL_POLICY_VERSION_V3)
-TIER1_CAUSAL_POLICY_V4 = Tier1CausalPolicyV3(TIER1_CAUSAL_POLICY_VERSION_V4)
+TIER1_CAUSAL_POLICY_V3 = Tier1CausalPolicyV3(
+    TIER1_CAUSAL_POLICY_VERSION_V3,
+    pair_count=TIER1_V3_TRIAL_COUNT,
+)
+TIER1_CAUSAL_POLICY_V4 = Tier1CausalPolicyV3(
+    TIER1_CAUSAL_POLICY_VERSION_V4,
+    pair_count=TIER1_V4_TRIAL_COUNT,
+)
 
 
 def _expected_stage_order_for_trial(trial: int) -> list[str]:

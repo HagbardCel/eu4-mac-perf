@@ -150,6 +150,15 @@ class Wp11Tier1V4RequalificationTests(unittest.TestCase):
         body = _wp11_archive_body_from_wp8(evidence_id, commit)
         if body is None:
             self.skipTest("WP8 archive missing")
+        admission = body["preflight"]["offline_tier1_v4_admission"]
+        mesh = next(
+            item for item in admission["training_recipes"] if item.get("recipe") == "mesh"
+        )
+        self.assertNotEqual(
+            mesh["results"].get("counters_cpu_ns"),
+            "unavailable",
+            msg="v4 mesh counters gate must be evaluated (not rejected for pair count)",
+        )
         with tempfile.TemporaryDirectory(dir=wp1.ROOT) as temporary:
             path = Path(temporary) / "wp11-requal.json"
             path.write_text(json.dumps(body), encoding="utf-8")
