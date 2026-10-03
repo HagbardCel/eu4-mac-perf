@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmark"))
 import eu4_benchmark as base  # noqa: E402
@@ -14,11 +15,18 @@ class LiveMeasurementContractTests(unittest.TestCase):
     def test_intrusive_contract_records_wp11_terminal_qual(self):
         contract = model.live_measurement_contract(model.LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC)
         self.assertTrue(contract["intrusive"])
-        self.assertFalse(contract["quantitatively_qualified"])
+        self.assertNotIn("quantitatively_qualified", contract)
+        finalized = model.finalize_measurement_contract(contract, admission_passed=False)
+        self.assertFalse(finalized["quantitative_claims_allowed"])
         self.assertEqual(
             contract["tier1_qualification_terminal"]["evidence_id"],
             model.WP11_TERMINAL_TIER1_V4_EVIDENCE_ID,
         )
+
+    def test_qualified_contract_allows_claims_only_when_admission_passed(self):
+        base = model.live_measurement_contract(model.LIVE_MEASUREMENT_QUALIFIED)
+        self.assertTrue(model.finalize_measurement_contract(base, admission_passed=True)["quantitative_claims_allowed"])
+        self.assertFalse(model.finalize_measurement_contract(base, admission_passed=False)["quantitative_claims_allowed"])
 
 
 class ResolveLivePreflightOutcomeTests(unittest.TestCase):
@@ -69,6 +77,55 @@ class AssertQualifiedIntrusionTests(unittest.TestCase):
                 measured_swap_rate=120.0,
                 historical_swap_rate=120.0,
             )
+
+
+class IntrusiveContractPreflightTests(unittest.TestCase):
+    @mock.patch.object(model, "_publish_offline_immutable_evidence")
+    @mock.patch.object(model, "offline_workloads")
+    @mock.patch.object(model, "offline_harness")
+    @mock.patch.object(model, "verify_wp11_terminal_tier1_v4_evidence")
+    @mock.patch.object(model, "auto")
+    @mock.patch.object(model, "build")
+    @mock.patch.object(model.base, "sha256", return_value=model.EXPECTED)
+    def test_intrusive_contract_preflight_skips_qualification_capture(
+        self,
+        _sha,
+        build_mock,
+        auto_mock,
+        verify_mock,
+        harness_mock,
+        workloads_mock,
+        publish_mock,
+    ):
+        build_mock.return_value = {"executable_sha256": "exe"}
+        auto_mock.preflight.return_value = {"fixture": {"save_sha256": "x"}}
+        verify_mock.return_value = {
+            "evidence_id": model.WP11_TERMINAL_TIER1_V4_EVIDENCE_ID,
+            "overhead_gate": "failed",
+            "tier1_v4_admission": "failed",
+        }
+        with mock.patch.object(model, "offline_detour_harness", return_value={}), \
+             mock.patch.object(model, "offline_render_gate_harness", return_value={}), \
+             mock.patch.object(model, "offline_arb_harness", return_value={}), \
+             mock.patch.object(model, "offline_producer_harnesses", return_value={}), \
+             mock.patch.object(model, "offline_control_harness", return_value={}), \
+             mock.patch.object(model, "offline_writer_production_harness", return_value={}), \
+             mock.patch.object(model, "offline_draw_alias_harness", return_value={}), \
+             mock.patch.object(model, "offline_alias_interpose_harness", return_value={}), \
+             mock.patch.object(model, "_offline_git_identity_snapshot", return_value={"git_tree_clean": True}), \
+             mock.patch.object(model, "_offline_executed_artifact_snapshot", return_value={"test_library_sha256": "a", "workload_harness_sha256": "b"}), \
+             mock.patch.object(model, "_require_build_executed_artifacts_match"):
+            result = model.preflight(
+                run_gl=True,
+                live_measurement_mode=model.LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC,
+                intrusive_contract_only=True,
+            )
+        workloads_mock.assert_not_called()
+        harness_mock.assert_not_called()
+        publish_mock.assert_not_called()
+        self.assertEqual(result["status"], "diagnostic_ready")
+        self.assertEqual(result["offline_qualification_capture"], "skipped")
+        self.assertFalse(result["measurement_contract"]["quantitative_claims_allowed"])
 
 
 class AnalyzeIntrusiveDiagnosticTests(unittest.TestCase):

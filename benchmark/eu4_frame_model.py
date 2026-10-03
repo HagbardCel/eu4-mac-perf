@@ -1049,14 +1049,27 @@ def wp7_causal_training_requalification(run_gl: bool = True) -> dict:
     )
 
 
+def finalize_measurement_contract(contract: dict, *, admission_passed: bool) -> dict:
+    """Attach claim semantics after admission (or terminal evidence) is known."""
+    intrusive = contract["intrusive"]
+    finalized = {
+        **contract,
+        "mode_requires_qualification_pass": not intrusive,
+        "quantitative_claims_allowed": (not intrusive) and admission_passed,
+    }
+    finalized.pop("quantitatively_qualified", None)
+    return finalized
+
+
 def resolve_live_preflight_outcome(
     causal_admission_status: str,
     live_measurement_mode: str,
 ) -> dict:
     """Pure policy: map offline admission + measurement mode to preflight run status."""
-    contract = live_measurement_contract(live_measurement_mode)
-    intrusive = contract["intrusive"]
+    base_contract = live_measurement_contract(live_measurement_mode)
+    intrusive = base_contract["intrusive"]
     admission_passed = causal_admission_status == "passed"
+    contract = finalize_measurement_contract(base_contract, admission_passed=admission_passed)
     if admission_passed:
         status = "ready"
     elif intrusive:
@@ -1067,6 +1080,46 @@ def resolve_live_preflight_outcome(
         "status": status,
         "measurement_contract": contract,
         "block_on_failed_admission": not admission_passed and not intrusive,
+    }
+
+
+def verify_wp11_terminal_tier1_v4_evidence() -> dict:
+    """Confirm registered WP11 terminal qualification archive is present and intact."""
+    manifest_path = ROOT / "analysis/profiler-overhead-diagnosis-manifest.json"
+    if not manifest_path.is_file():
+        raise base.BenchmarkError("profiler-overhead-diagnosis-manifest.json is missing")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries = manifest.get("tier1_v4_requalification_archives") or []
+    entry = next(
+        (item for item in entries if item.get("evidence_id") == WP11_TERMINAL_TIER1_V4_EVIDENCE_ID),
+        None,
+    )
+    if entry is None:
+        raise base.BenchmarkError(
+            f"WP11 terminal evidence {WP11_TERMINAL_TIER1_V4_EVIDENCE_ID} is not registered "
+            "under tier1_v4_requalification_archives",
+        )
+    rel_path = entry.get("archive_path")
+    if not rel_path:
+        raise base.BenchmarkError("WP11 terminal manifest entry missing archive_path")
+    archive_path = ROOT / rel_path
+    if not archive_path.is_file():
+        raise base.BenchmarkError(f"WP11 terminal archive missing on disk: {rel_path}")
+    body = archive_path.read_bytes()
+    sha = hashlib.sha256(body).hexdigest()
+    expected = entry.get("archive_sha256_committed")
+    if expected and sha != expected:
+        raise base.BenchmarkError(
+            f"WP11 terminal archive SHA mismatch for {rel_path} "
+            f"(expected {expected}, got {sha})",
+        )
+    return {
+        "evidence_id": WP11_TERMINAL_TIER1_V4_EVIDENCE_ID,
+        "archive_path": rel_path,
+        "archive_sha256_committed": sha,
+        "tier1_v4_admission": entry.get("tier1_v4_admission"),
+        "overhead_gate": entry.get("overhead_gate", "failed"),
+        "policy_version": tier1.TIER1_CAUSAL_POLICY_VERSION_V4,
     }
 
 
@@ -1102,7 +1155,6 @@ def live_measurement_contract(mode: str) -> dict:
     return {
         "mode": mode,
         "intrusive": intrusive,
-        "quantitatively_qualified": not intrusive,
         "tier1_qualification_terminal": {
             "evidence_id": WP11_TERMINAL_TIER1_V4_EVIDENCE_ID,
             "policy_version": tier1.TIER1_CAUSAL_POLICY_VERSION_V4,
@@ -1122,12 +1174,55 @@ def live_measurement_contract(mode: str) -> dict:
     }
 
 
+def _preflight_intrusive_diagnostic_contract(
+    *,
+    static: dict,
+    auto_evidence: dict,
+    detour: dict,
+    render_gate: dict,
+    arb: dict,
+    producers: dict,
+    power_helper: dict,
+    identity_start: dict,
+    artifact_start: dict,
+) -> dict:
+    """Integrity + terminal WP11 evidence check only; no qualification workloads or archives."""
+    terminal = verify_wp11_terminal_tier1_v4_evidence()
+    contract = finalize_measurement_contract(
+        live_measurement_contract(LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC),
+        admission_passed=False,
+    )
+    return {
+        "status": "diagnostic_ready",
+        "preflight_kind": "intrusive_diagnostic_contract_v1",
+        "build": static,
+        "autonomous": auto_evidence,
+        "detour_harness": detour,
+        "render_gate_harness": render_gate,
+        "arb_handle_harness": arb,
+        "producer_harnesses": producers,
+        "power_mode_helper": power_helper,
+        "executed_artifact_start": artifact_start,
+        "terminal_tier1_v4_evidence": terminal,
+        "measurement_contract": contract,
+        "overhead_gate": terminal.get("overhead_gate", "failed"),
+        "offline_qualification_capture": "skipped",
+        "limitations": [
+            "Intrusive diagnostic contract preflight only; no offline_workloads or held-out timing.",
+            "No immutable qualification evidence archive is written and the rolling pointer is not updated.",
+            f"Terminal Tier-1 v4 qualification: {WP11_TERMINAL_TIER1_V4_EVIDENCE_ID} ({terminal.get('tier1_v4_admission', 'failed')}).",
+            "Live intrusive capture remains deferred to Phase C (run --diagnostic-only is not implemented).",
+        ],
+    }
+
+
 def preflight(
     run_gl: bool = True,
     require_privilege: bool = False,
     require_power_mode: bool = True,
     *,
     live_measurement_mode: str | None = None,
+    intrusive_contract_only: bool = False,
 ) -> dict:
     if base.sha256(base.GOG_EXE) != EXPECTED:
         raise base.BenchmarkError("Installed GOG executable differs from the pinned v1.37.5 build")
@@ -1158,6 +1253,23 @@ def preflight(
     producers["alias_interpose"]=offline_alias_interpose_harness()
     auto_evidence = auto.preflight(require_privilege=require_privilege)
     power_helper = _power_helper_preflight() if require_privilege and require_power_mode else {"status":"not checked"}
+    measurement_mode = live_measurement_mode or LIVE_MEASUREMENT_QUALIFIED
+    if run_gl and intrusive_contract_only:
+        if measurement_mode != LIVE_MEASUREMENT_INTRUSIVE_DIAGNOSTIC:
+            raise base.BenchmarkError(
+                "intrusive_contract_only requires live_measurement_mode intrusive_diagnostic_v1",
+            )
+        return _preflight_intrusive_diagnostic_contract(
+            static=static,
+            auto_evidence=auto_evidence,
+            detour=detour,
+            render_gate=render_gate,
+            arb=arb,
+            producers=producers,
+            power_helper=power_helper,
+            identity_start=identity_start,
+            artifact_start=artifact_start,
+        )
     if not run_gl:
         return {"status": "static_ready", "build": static, "autonomous": auto_evidence,
                 "detour_harness":detour,
@@ -1175,7 +1287,6 @@ def preflight(
     _require_git_identity_stable(identity_start, identity_end)
     causal_admission = representative["offline_causal_admission"]
     forensic_suitability = representative["offline_forensic_suitability"]
-    measurement_mode = live_measurement_mode or LIVE_MEASUREMENT_QUALIFIED
     outcome = resolve_live_preflight_outcome(causal_admission["status"], measurement_mode)
     contract = outcome["measurement_contract"]
     intrusive_diagnostic = contract["intrusive"]
@@ -4455,6 +4566,9 @@ def main() -> int:
                 not args.static_only,
                 args.require_power_helper,
                 live_measurement_mode=live_mode if not args.static_only else None,
+                intrusive_contract_only=(
+                    args.intrusive_diagnostic_contract and not args.static_only
+                ),
             )
             print(json.dumps(result,indent=2))
         elif args.command=="diagnostic-matrix":

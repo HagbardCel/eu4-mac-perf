@@ -8,7 +8,7 @@ See [`live-diagnostic-measurement-contract.md`](live-diagnostic-measurement-cont
 
 | Phase | Goal | EU IV runs | Deliverable |
 |-------|------|------------|-------------|
-| **A** | Reframe profiler as diagnostic instrument | 0 | `preflight --intrusive-diagnostic-contract` + gate policy (no live launch yet) |
+| **A** | Reframe profiler as diagnostic instrument | 0 | `preflight --intrusive-diagnostic-contract` + reserved `run --diagnostic-only` (live schedule in Phase C) |
 | **B** | Observer-bias calibration | 0 | Per-primitive overhead slopes (offline) |
 | **C** | One live attribution run | **1** | R–C–R–C–R + external CPU/power/swap |
 | **D** | Optimize top bottleneck(s) | 1 launch per candidate | Uninstrumented causal A/B |
