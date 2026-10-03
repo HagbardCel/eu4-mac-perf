@@ -16,6 +16,16 @@
 
 Wall and CPU `median_fraction` **broadly track** on all recipes in this capture.
 
+### Fixed tax — medians and 95% bootstrap CIs (`loaded-disabled − bare` CPU)
+
+| Recipe | Median | 95% CI |
+|--------|--------|--------|
+| mesh | +8.1% | +5.6% … +9.0% |
+| borders | −0.3% | −3.9% … +4.0% |
+| text_ui | +7.4% | +3.4% … +11.8% |
+
+Mesh fixed tax is ~**5.4 µs/frame** absolute on this metric (small in absolute terms, but a large share of the mesh CPU denominator).
+
 ### Active REFERENCE step — medians and 95% bootstrap CIs (`reference − loaded-disabled` CPU)
 
 | Recipe | Median | 95% CI |
@@ -24,11 +34,17 @@ Wall and CPU `median_fraction` **broadly track** on all recipes in this capture.
 | borders | +30.8% | +3.5% … +33.0% |
 | text_ui | +71.3% | +2.0% … +90.9% |
 
-**Mesh** is robust (CI excludes zero). **Borders** and **text_ui** still show **wide CIs** and heterogeneous trial pairs (including near-zero active steps in some trials). Treat medians together with earlier captures (`95f3513c`, v1) when interpreting borders/text_ui; the odd trials may be diagnostically interesting.
+All three **95% CIs exclude zero** in this capture (stronger than `95f3513c`). Individual trial pairs are still heterogeneous on borders/text_ui; near-zero active steps in some trials may be diagnostically interesting.
 
 ### Conclusion (qualified)
 
-With passive loaded-disabled, **`loaded-disabled − bare` is the fixed instrumentation / interposition tax** (roughly single-digit % CPU on mesh and text_ui in this capture; borders fixed tax ~0% median here). The **median** active REFERENCE step exceeds that fixed tax on all three recipes. **Mesh** is the clearest in `4dc19f16`; borders/text_ui need the CI/trial caveats above. No further broad ladder recaptures are planned — next experiment is **`minimal-reference`**.
+Ladder shape: `bare` → (+ fixed interposition/pass-through) → `loaded-disabled` → (+ active REFERENCE accounting) → `reference`.
+
+**Fixed instrumentation/interposition cost is material for mesh and text_ui, but active REFERENCE accounting adds a comparable or substantially larger median cost.** On mesh, fixed **+8.1%** and active **+9.8%** are **similar magnitude** (fixed is ~83% of the active step in relative terms); both CIs are clear. **Borders** fixed tax is consistent with ~0% here; **active** dominates. **Text_ui** has nontrivial fixed tax (**+7.4%**, CI +3.4% … +11.8%) and a much larger active median.
+
+Even perfect `minimal-reference` would not remove `loaded-disabled − bare`; mesh may remain above a ±3% relative Tier-1 band on this small CPU denominator — a separate question from shrinking active accounting.
+
+No further broad ladder recaptures are planned — next experiment is **`minimal-reference`** (collapse the second arrow, not the first).
 
 ---
 
