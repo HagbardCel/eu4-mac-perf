@@ -19,6 +19,15 @@ class Wp5bCompletionDiagnosisTests(unittest.TestCase):
         self.assertEqual(metrics["submission_plus_drain_elapsed_ns"], 1200)
         model._require_completion_timing_metrics(metrics)
 
+    def test_require_completion_timing_checks_drain_sums(self):
+        metrics = model.parse_workload_harness_metrics(
+            "elapsed_ns=10 cpu_ns=4 submission_elapsed_ns=10 submission_cpu_ns=4 "
+            "post_window_drain_elapsed_ns=3 post_window_drain_cpu_ns=1 "
+            "submission_plus_drain_elapsed_ns=12 submission_plus_drain_cpu_ns=4",
+        )
+        with self.assertRaises(model.base.BenchmarkError):
+            model._require_completion_timing_metrics(metrics)
+
     def test_require_completion_timing_rejects_mismatched_submission(self):
         metrics = model.parse_workload_harness_metrics(
             "elapsed_ns=1 cpu_ns=1 submission_elapsed_ns=2 submission_cpu_ns=1 "
@@ -42,6 +51,11 @@ class Wp5bCompletionDiagnosisTests(unittest.TestCase):
         comparisons = model._completion_stage_comparisons(trials)
         self.assertIn("reference_submission_plus_drain_elapsed_ns", comparisons)
         self.assertIn("counters_post_window_drain_cpu_ns", comparisons)
+        sample = comparisons["reference_elapsed_ns"]
+        self.assertEqual(sample["status"], "diagnostic")
+        self.assertFalse(sample["acceptance_gate"])
+        self.assertNotIn("limit", sample)
+        self.assertEqual(sample["reference_band_fraction"], 0.03)
 
 
 if __name__ == "__main__":

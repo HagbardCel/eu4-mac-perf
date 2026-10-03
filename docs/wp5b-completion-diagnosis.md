@@ -22,6 +22,10 @@ python3 benchmark/eu4_frame_model.py completion-diagnosis --registry-json
 
 Training recipes only (`mesh`, `borders`, `text_ui`), seven paired trials, stages `bare` / `reference` / `counters`. No A–F matrix, no held-out. Writes immutable evidence under `analysis/evidence/` with `purpose=wp5b_completion_diagnosis_v1`.
 
+## Archives
+
+`frame-model-offline-6e5d53c-20261003T072406.749030Z-f7cbf346.json` (`f7cbf346`) was captured before comparison summaries used the diagnostic schema. Its `comparisons.*.status` / `limit` fields **must not** be read as Tier-1 acceptance; raw per-stage timings remain valid.
+
 ## Interpretation
 
 Compare `reference_*` and `counters_*` on:

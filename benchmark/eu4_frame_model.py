@@ -935,6 +935,14 @@ def _require_completion_timing_metrics(measured: dict[str, int]) -> None:
         raise base.BenchmarkError("submission_elapsed_ns must match elapsed_ns (Tier-1 submission window)")
     if measured.get("submission_cpu_ns") != measured.get("cpu_ns"):
         raise base.BenchmarkError("submission_cpu_ns must match cpu_ns")
+    submission_elapsed = measured["submission_elapsed_ns"]
+    submission_cpu = measured["submission_cpu_ns"]
+    drain_elapsed = measured["post_window_drain_elapsed_ns"]
+    drain_cpu = measured["post_window_drain_cpu_ns"]
+    if measured["submission_plus_drain_elapsed_ns"] != submission_elapsed + drain_elapsed:
+        raise base.BenchmarkError("submission_plus_drain_elapsed_ns must equal submission + drain elapsed")
+    if measured["submission_plus_drain_cpu_ns"] != submission_cpu + drain_cpu:
+        raise base.BenchmarkError("submission_plus_drain_cpu_ns must equal submission + drain cpu")
 
 
 def offline_workload_log_path(root: Path, recipe: dict, trial: int, stage: str) -> Path:
@@ -1148,12 +1156,22 @@ def _offline_recipe_evidence(root: Path, recipe: dict, *, frames: int = 4, inclu
     return entry
 
 
+def _completion_diagnostic_paired_summary(pairs: list[dict], *, frames: int = 4) -> dict:
+    comparison = workload.paired_summary(pairs, 0.03, frames)
+    comparison.pop("limit", None)
+    comparison.pop("absolute_metric_policy", None)
+    comparison["status"] = "diagnostic"
+    comparison["acceptance_gate"] = False
+    comparison["reference_band_fraction"] = 0.03
+    return comparison
+
+
 def _completion_stage_comparisons(trials: list[dict]) -> dict:
     comparisons: dict = {}
     pairs = (("reference", "bare"), ("counters", "reference"))
     for stage, reference in pairs:
         for axis in COMPLETION_TIMING_METRICS:
-            comparisons[f"{stage}_{axis}"] = workload.paired_summary(
+            comparisons[f"{stage}_{axis}"] = _completion_diagnostic_paired_summary(
                 [
                     {
                         "instrumented": trial["stages"][stage][axis],
@@ -1161,8 +1179,6 @@ def _completion_stage_comparisons(trials: list[dict]) -> dict:
                     }
                     for trial in trials
                 ],
-                0.03,
-                4,
             )
     return comparisons
 
@@ -1238,6 +1254,7 @@ def wp5b_completion_diagnosis(run_gl: bool = True) -> dict:
         "completion_workloads": completion,
         "limitations": [
             "Diagnostic only; does not change Tier-1 acceptance gates.",
+            "comparison.status is always diagnostic; reference_band_fraction is non-normative.",
             "Training recipes only; held-out not measured.",
             "Compare submission window vs submission+post-window glFinish drain.",
         ],
