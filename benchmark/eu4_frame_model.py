@@ -41,6 +41,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PREFLIGHT_INTRUSIVE_CONTRACT_JSON = (
     ROOT / "analysis/preflight-intrusive-diagnostic-contract-latest.json"
 )
+PREFLIGHT_INTRUSIVE_CONTRACT_JSON_REL = (
+    "analysis/preflight-intrusive-diagnostic-contract-latest.json"
+)
 SOURCE = Path(__file__).with_suffix(".c")
 LIBRARY = ROOT / "benchmark/.build/libeu4_frame_model.dylib"
 HARNESS_SOURCE = ROOT / "tests/frame_model_harness.c"
@@ -502,7 +505,7 @@ def _git_tree_clean_violations_for_evidence() -> list[str]:
                 continue
             violations.append(path)
             continue
-        if path == OFFLINE_EVIDENCE_POINTER_REL:
+        if path in (OFFLINE_EVIDENCE_POINTER_REL, PREFLIGHT_INTRUSIVE_CONTRACT_JSON_REL):
             continue
         violations.append(path)
     return violations
@@ -512,9 +515,10 @@ def _git_tree_clean_for_evidence() -> bool:
     """Return whether the worktree is clean for canonical offline evidence.
 
     Untracked files under ``analysis/evidence/`` and updates to the rolling
-    pointer ``analysis/frame-model-offline-evidence.json`` are generated outputs
-    and are ignored. Modifications or deletions of tracked evidence archives
-    under ``analysis/evidence/`` still fail closed.
+    pointers ``analysis/frame-model-offline-evidence.json`` and
+    ``analysis/preflight-intrusive-diagnostic-contract-latest.json`` are
+    generated outputs and are ignored. Modifications or deletions of tracked
+    evidence archives under ``analysis/evidence/`` still fail closed.
     """
     return not _git_tree_clean_violations_for_evidence()
 

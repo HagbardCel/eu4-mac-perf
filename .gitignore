@@ -8,6 +8,9 @@ fixtures/
 # Cursor/agent scratch at repo root (not part of the benchmark tree)
 /internal/
 
+# Rolling CLI preflight output (regenerated locally)
+analysis/preflight-intrusive-diagnostic-contract-latest.json
+
 # Tier B: heavy or local-only run artifacts
 results/**/*.pliststream
 results/**/powermetrics.stderr

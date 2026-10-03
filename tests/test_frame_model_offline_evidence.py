@@ -201,6 +201,7 @@ class OfflineEvidenceArchiveTests(unittest.TestCase):
         clean_outputs = "\n".join([
             "?? analysis/evidence/frame-model-offline-deadbeef-20261002T120000.000000Z-abcd1234.json",
             " M analysis/frame-model-offline-evidence.json",
+            "?? analysis/preflight-intrusive-diagnostic-contract-latest.json",
         ])
         with mock.patch.object(
             model.subprocess,
