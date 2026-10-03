@@ -317,6 +317,8 @@ WP6_MINIMAL_REFERENCE_RECONCILIATION_PURPOSE = "wp6_minimal_reference_reconcilia
 WP7_LEAN_REFERENCE_VALIDITY = "wp7_lean_reference_validity_v1"
 WP7_CAUSAL_TRAINING_REQUALIFICATION_POLICY = "wp7_lean_reference_training_requalification_v1"
 WP8_STEADY_STATE_TIER1_DIAGNOSIS_PURPOSE = "wp8_steady_state_tier1_diagnosis_v1"
+WP9_TIER1_V3_REQUALIFICATION_POLICY = "wp9_tier1_v3_requalification_v1"
+WP9_TIER1_V3_REQUALIFICATION_CAPTURE_KIND = "wp9_tier1_v3_requalification"
 STEADY_STATE_MEASUREMENT_VARIANTS = (
     ("four_frame_baseline", {"post_arm_prime_frames": 0, "measured_frames": 4}),
     ("four_frame_post_arm_prime_1", {"post_arm_prime_frames": 1, "measured_frames": 4}),
@@ -531,6 +533,14 @@ def _offline_evidence_id(now: dt.datetime | None = None) -> str:
     return f"{moment.strftime('%Y%m%dT%H%M%S')}.{moment.microsecond:06d}Z-{suffix}"
 
 
+def _offline_representative_recipe_entries(representative: dict) -> list:
+    recipes = representative.get("recipes")
+    if recipes:
+        return recipes
+    diagnosis = representative.get("steady_state_tier1_diagnosis") or {}
+    return diagnosis.get("recipes") or []
+
+
 def _offline_artifact_hashes(
     representative: dict,
     build_info: dict | None = None,
@@ -555,8 +565,8 @@ def _offline_artifact_hashes(
         "game_executable_sha256": build_info.get("executable_sha256"),
         "recipe_sha256": {
             entry["recipe"]["name"]: entry["recipe"]["sha256"]
-            for entry in (representative.get("recipes") or [])
-            if "recipe" in entry
+            for entry in _offline_representative_recipe_entries(representative)
+            if "recipe" in entry and entry["recipe"].get("name") and entry["recipe"].get("sha256")
         },
     }
     return artifacts
@@ -649,9 +659,11 @@ def _offline_environment_metadata() -> dict:
 
 
 def _offline_workloads_payload(preflight_evidence: dict) -> dict:
+    representative = preflight_evidence.get("representative_workloads")
+    if representative:
+        return representative
     return (
-        preflight_evidence.get("representative_workloads")
-        or preflight_evidence.get("completion_workloads")
+        preflight_evidence.get("completion_workloads")
         or preflight_evidence.get("reference_cpu_workloads")
         or preflight_evidence.get("minimal_reference_reconciliation")
         or preflight_evidence.get("steady_state_tier1_diagnosis")
@@ -697,6 +709,15 @@ def _offline_policy_versions(workloads: dict) -> dict:
             "completion_diagnosis_text": (
                 "Submission-window and post-glFinish drain timing; comparisons are diagnostic only."
             ),
+        }
+    if workloads.get("capture_kind") == WP9_TIER1_V3_REQUALIFICATION_CAPTURE_KIND:
+        return {
+            "wp9_tier1_v3_requalification": WP9_TIER1_V3_REQUALIFICATION_POLICY,
+            "tier1_causal_gate": tier1.TIER1_CAUSAL_POLICY_VERSION_V3,
+            "reference_validity": WP7_LEAN_REFERENCE_VALIDITY,
+            "cpu_measurement_variant": tier1.TIER1_V3_CPU_MEASUREMENT_VARIANT,
+            "completion_wall_measurement_variant": tier1.TIER1_V3_WALL_MEASUREMENT_VARIANT,
+            "measurement_variants": [name for name, _ in STEADY_STATE_MEASUREMENT_VARIANTS],
         }
     if workloads.get("capture_kind") == "wp7_causal_training_requalification":
         return {
@@ -1632,6 +1653,80 @@ def steady_state_tier1_diagnosis_workloads(*, executed_artifacts_start: dict | N
             "workload_harness_sha256": workload_harness_sha256,
             **_offline_workload_source_hashes(),
         }
+
+
+def tier1_v3_requalification_workloads(*, executed_artifacts_start: dict | None = None) -> dict:
+    """Training steady-state capture for Tier-1 v3 admission (WP8 protocol + v3 replay)."""
+    diagnosis = steady_state_tier1_diagnosis_workloads(executed_artifacts_start=executed_artifacts_start)
+    offline_tier1_v3_admission = tier1.evaluate_wp8_steady_state_training_v3(
+        {"steady_state_tier1_diagnosis": diagnosis},
+    )
+    if executed_artifacts_start:
+        test_library_sha256 = executed_artifacts_start["test_library_sha256"]
+        workload_harness_sha256 = executed_artifacts_start["workload_harness_sha256"]
+    else:
+        test_library_sha256 = base.sha256(TEST_LIBRARY)
+        workload_harness_sha256 = base.sha256(WORKLOAD_HARNESS)
+    return {
+        "status": offline_tier1_v3_admission["status"],
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "capture_kind": WP9_TIER1_V3_REQUALIFICATION_CAPTURE_KIND,
+        "steady_state_tier1_diagnosis": diagnosis,
+        "offline_tier1_v3_admission": offline_tier1_v3_admission,
+        "test_library_sha256": test_library_sha256,
+        "workload_harness_sha256": workload_harness_sha256,
+        **_offline_workload_source_hashes(),
+    }
+
+
+def wp9_tier1_v3_requalification(run_gl: bool = True) -> dict:
+    """Training-only steady-state requalification under frozen Tier-1 v3 policy."""
+    if not run_gl:
+        raise base.BenchmarkError("wp9-tier1-v3-requalification requires GL workload execution")
+    identity_start = _offline_git_identity_snapshot()
+    if not identity_start.get("git_tree_clean"):
+        violations = _git_tree_clean_violations_for_evidence()
+        detail = ", ".join(violations[:8])
+        if len(violations) > 8:
+            detail += f", … (+{len(violations) - 8} more)"
+        raise base.BenchmarkError(
+            "Source tree dirty before Tier-1 v3 requalification"
+            + (f": {detail}" if detail else ""),
+        )
+    static = build()
+    artifact_start = _offline_executed_artifact_snapshot()
+    _require_build_executed_artifacts_match(static, artifact_start)
+    representative = tier1_v3_requalification_workloads(executed_artifacts_start=artifact_start)
+    artifact_end = _offline_executed_artifact_snapshot()
+    _require_executed_artifacts_stable(artifact_start, artifact_end)
+    identity_end = _offline_git_identity_snapshot()
+    _require_git_identity_stable(identity_start, identity_end)
+    v3_admission = representative["offline_tier1_v3_admission"]
+    evidence = {
+        "purpose": PROFILER_OVERHEAD_DIAGNOSIS_PURPOSE,
+        "validation_scope": TRAINING_ONLY_VALIDATION_SCOPE,
+        "status": "requalification_complete",
+        "build": static,
+        "representative_workloads": representative,
+        "offline_tier1_v3_admission": v3_admission,
+        "overhead_gate": v3_admission["status"],
+        "limitations": [
+            "Training recipes only; held-out not measured.",
+            "Steady-state protocol: post-arm prime, completion timing, variant rotation (WP8 harness).",
+            f"Tier-1 admission under {tier1.TIER1_CAUSAL_POLICY_VERSION_V3}.",
+            "Register archive under tier1_v3_requalification_archives with work_package: WP9.",
+            f"Reference stages must satisfy {WP7_LEAN_REFERENCE_VALIDITY}.",
+        ],
+    }
+    return _publish_offline_immutable_evidence(
+        evidence,
+        identity_start=identity_start,
+        identity_end=identity_end,
+        build_info=static,
+        artifact_start=artifact_start,
+        artifact_end=artifact_end,
+        update_rolling_pointer=False,
+    )
 
 
 def wp8_steady_state_tier1_diagnosis(run_gl: bool = True) -> dict:
@@ -3733,6 +3828,15 @@ def main() -> int:
         action="store_true",
         help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
     )
+    w9=sub.add_parser(
+        "wp9-tier1-v3-requalification",
+        help="WP9: training-only steady-state Tier-1 v3 requalification (WP8 protocol)",
+    )
+    w9.add_argument(
+        "--registry-json",
+        action="store_true",
+        help="print only immutable_evidence (manifest fields) instead of the full capture JSON",
+    )
     run_parser=sub.add_parser("run",help="run the unattended paused causal experiment")
     run_parser.add_argument("--output",default=str(ROOT/"results"))
     run_parser.add_argument("--residual-discovery",action="store_true",help="ANATIVE plus one paced A measurement; omit interventions and power-mode transitions")
@@ -3781,6 +3885,12 @@ def main() -> int:
                 print(json.dumps(result,indent=2))
         elif args.command=="wp8-steady-state-diagnosis":
             result=wp8_steady_state_tier1_diagnosis()
+            if args.registry_json:
+                print(json.dumps(result.get("immutable_evidence") or {},indent=2))
+            else:
+                print(json.dumps(result,indent=2))
+        elif args.command=="wp9-tier1-v3-requalification":
+            result=wp9_tier1_v3_requalification()
             if args.registry_json:
                 print(json.dumps(result.get("immutable_evidence") or {},indent=2))
             else:
