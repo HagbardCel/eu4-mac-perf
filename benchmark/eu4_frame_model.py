@@ -30,6 +30,7 @@ import frame_model_observer_bias as observer_bias
 import frame_model_tier1_policy as tier1
 from frame_model_gates import (
     GateEvidence,
+    INTRUSIVE_DEGRADABLE_GATES,
     intrusive_diagnostic_run_budget,
     required_gates_for_report_kind,
     run_budget,
@@ -5411,7 +5412,7 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                 try:
                     gates.require(
                         required_gates_for_report_kind("intrusive_diagnostic"),
-                        degradable=gates.INTRUSIVE_DEGRADABLE_GATES,
+                        degradable=INTRUSIVE_DEGRADABLE_GATES,
                     )
                 except ValueError as exc:
                     raise base.BenchmarkError(str(exc)) from exc
