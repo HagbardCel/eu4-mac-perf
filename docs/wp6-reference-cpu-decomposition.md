@@ -14,15 +14,17 @@ After WP5 (reference fast path) and WP5b (submission vs `glFinish` drain):
 
 Tier-1 still fails on `reference_cpu_ns` and the counters↔REFERENCE pairing on borders/text_ui. WP5b ruled out “REFERENCE is only slow because GL work finishes after the submission window” as the **sole** explanation for mesh/borders. The next question is **which profiler operations still run in REFERENCE** and how much of the bare → REFERENCE CPU delta they explain.
 
+WP5b `cpu_ns` is **measured-thread** CPU (`CLOCK_THREAD_CPUTIME_ID` on the harness main thread around four frames). Decomposition must stay consistent with that metric.
+
 ## Goal
 
-Decompose **REFERENCE-mode thread CPU** on training recipes (`mesh`, `borders`, `text_ui`) into attributable components, **without** changing Tier-1 acceptance gates, held-out fixture, or live EU IV calibration.
+Decompose **REFERENCE-mode measured-thread CPU** on training recipes (`mesh`, `borders`, `text_ui`) into well-defined layers, **without** changing Tier-1 acceptance gates, held-out fixture, or live EU IV calibration.
 
 **Success criteria (diagnostic, not admission):**
 
-1. A capture documents per-component CPU deltas (REFERENCE vs a declared baseline stage) with the same seven-pair / recipe provenance as other offline evidence.
-2. At least one component accounts for a **material** share of the WP5b `reference_cpu_ns` gap vs bare on mesh or borders.
-3. Results yield a **ranked** list of REFERENCE-only hooks to optimize in a follow-up implementation WP (not part of WP6).
+1. A capture documents the stage ladder below (including `loaded-disabled` and a **minimal-REFERENCE** reconciliation stage) with seven-pair / recipe provenance matching other offline evidence.
+2. Report **fixed instrumentation tax**, **active REFERENCE tax**, **marginal** per-component effects, and **unexplained residual** (see [Interpretation](#interpretation)) for mesh or borders.
+3. Results yield a **ranked** list of REFERENCE-only hooks to optimize in a follow-up implementation WP (not part of WP6). Ranking uses marginal effects; reconciliation uses minimal-REFERENCE vs `loaded-disabled`.
 
 ## Non-goals
 
@@ -30,35 +32,95 @@ Decompose **REFERENCE-mode thread CPU** on training recipes (`mesh`, `borders`, 
 - `run --calibration-only` / live Tier 2.
 - Rewriting historical archives (`f7cbf346`, WP1 `9a063f0`, post-WP5 requalification `37f57796`).
 - Another completion-timing (`glFinish`) sweep unless decomposition implicates async boundaries.
+- Attributing **writer-thread** CSV formatting CPU to WP5b `cpu_ns` (out of scope for the current harness metric).
 
-## Hypothesis space (initial)
+## Capture stages (four concepts)
 
-REFERENCE already skips GL shadow, forensic GPU prep, and the heavy render wrapper ([WP5](wp5-reference-fast-path.md)). Residual CPU likely includes:
+Phase C must include all of these; one-at-a-time ablations alone cannot reconcile bare → REFERENCE.
+
+| Stage | Meaning |
+|-------|---------|
+| **bare** | No profiler dylib; true uninstrumented baseline. |
+| **loaded-disabled** | Profiler dylib and interpositions present; measurement **disabled** (control off or equivalent). |
+| **reference** | Current production REFERENCE (Tier-1 stage identity unchanged when ablation env unset). |
+| **reference ablations** | REFERENCE with **one** subsystem disabled at a time (marginal effects). |
+| **minimal-reference** | REFERENCE with **all** REFERENCE accounting paths disabled that WP6 intends to attribute (single reconciliation stage), or an explicit cumulative-disable sequence documented in the memo. |
+
+Implementation names for `loaded-disabled` and `minimal-reference` are TBD in Phase B; they are first-class capture stages, not informal comparisons.
+
+### Interpretation
+
+Define medians on `cpu_ns` (and optionally `elapsed_ns` for context):
+
+```text
+fixed instrumentation tax     = loaded-disabled − bare
+active REFERENCE tax            = reference − loaded-disabled
+marginal component effect       = reference − reference_without_<component>
+unexplained residual            = minimal-reference − loaded-disabled
+```
+
+**Marginal ablation effects are not assumed additive.** Paths overlap (e.g. `scope_begin()` calls `measurement_active()`, which may refresh control). Summing marginal deltas may exceed or under-shoot the active REFERENCE tax. Use **minimal-reference** (or cumulative disables) to bound what REFERENCE accounting still costs above dylib presence alone.
+
+The WP5b gap **bare → reference** decomposes as:
+
+```text
+(reference − bare) = (loaded-disabled − bare) + (reference − loaded-disabled)
+```
+
+Component ablations explain **slices of** `(reference − loaded-disabled)`; minimal-reference explains **how much of that slice remains** after disabling the attributed stack together.
+
+## Hypothesis space (measured-thread, initial)
+
+REFERENCE already skips GL shadow, forensic GPU prep, and the heavy render wrapper ([WP5](wp5-reference-fast-path.md)). Residual **measured-thread** CPU in the synthetic harness likely includes:
 
 | Area | Where to look |
 |------|----------------|
-| Scope / frame accounting | `scope_begin` / `scope_end` on UPDATE, LOOP, RENDER, PRESENT; `measurement_active()` bookkeeping |
-| Event / timestamp path | `timestamp_event`, `event()`, CSV writer on hot hooks |
-| Control refresh | `refresh_unowned_control`, mode transitions, `invalidate_shadow_cache_quiet` on REFERENCE entry/exit |
-| Context hooks | REFERENCE `CGLSetCurrentContext` path (`context_stamp` without shadow save/seed) |
-| Detour baseline | Dylib present with `MODE_REFERENCE` vs true bare (dylib absent) — quantify “REFERENCE instrumentation tax” |
+| Scope / frame accounting | `scope_begin` / `scope_end` on UPDATE, LOOP, RENDER, PRESENT; nested `measurement_active()` |
+| Hot-thread event path | `event()`, producer lookup, counter aggregation, `flush_counters()`, SPSC reservation/publication, frame copying |
+| Timestamp guards | `timestamp_event()` — mostly no-op when forensic detail is inactive, but still pays checks and another `measurement_active()` |
+| Control refresh | `refresh_unowned_control`, `snapshot_control`, mode transitions; `invalidate_shadow_cache_quiet` on REFERENCE entry/exit (mostly outside the four-frame window unless transitions occur there) |
+| Clock calls | `clock_gettime(CLOCK_UPTIME_RAW)` and `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` inside scopes and hooks |
 
 WP1 A–F matrix isolated **counters-stage** forensic features; WP6 targets **REFERENCE-specific** paths that remain after WP5.
+
+### Not active in current Tier-1 synthetic measurement
+
+Retain in the **live-path inventory** (Phase A), but do not expect these to explain WP5b `cpu_ns` on mesh/borders/text_ui unless the harness or metric changes:
+
+| Item | Why |
+|------|-----|
+| **`CGLSetCurrentContext` / `context_stamp()`** | Harness sets context before warm-up/`glFinish`, starts the CPU timer, runs four frames, then clears context. No context switch **inside** the measured window. |
+| **CSV writer formatting / I/O** | Runs on the profiler writer thread; not included in harness `CLOCK_THREAD_CPUTIME_ID` on the main thread. Main thread still pays queueing/publication toward the writer. |
 
 ## Proposed approach
 
 ### Phase A — Inventory (code, no new capture)
 
-1. Enumerate every hook/callback that runs when `frame_control.mode == REFERENCE` and `measurement_active()`.
-2. Map each to an existing test knob (`EU4_TEST_*`, `test_ablation`, sampled stages) or flag a **new** ablation bit.
-3. Document expected vs measured attribution gaps (e.g. shared `event()` path used by multiple hooks).
+1. Enumerate every hook/callback that runs when `frame_control.mode == REFERENCE` and `measurement_active()` during the **four measured frames**.
+2. Map each to an existing test knob (`EU4_TEST_*`, `test_ablation`, sampled stages) or flag a **new** ablation bit; design **`loaded-disabled`** and **`minimal-reference`** stage semantics.
+3. Document overlap between ablation targets (shared `event()`, nested `measurement_active()`).
+4. Build a **per-measured-frame call-count model** (static or from lightweight tracing) for at least:
+
+   ```text
+   measurement_active()
+   refresh_unowned_control()
+   clock_gettime(CLOCK_UPTIME_RAW)
+   clock_gettime(CLOCK_THREAD_CPUTIME_ID)
+   scope_begin / scope_end
+   event()
+   publish_frame()   (or equivalent frame publication)
+   snapshot_control()
+   ```
+
+   This may identify dominant cost before any ablation lands.
 
 ### Phase B — Harness / profiler ablations
 
-Extend offline harness pattern (same as `ablation_accounting` / `ablation_writer` / `ablation_preparation` on sampled path):
+Extend offline harness pattern (same spirit as `ablation_accounting` / `ablation_writer` / `ablation_preparation` on the sampled path):
 
-- Add **REFERENCE-scoped** ablation env values (names TBD) that disable one subsystem at a time while keeping Tier-1 stage identity `reference`.
-- Optional: lightweight per-scope CPU counters in harness stdout for REFERENCE trials (diagnostic only).
+- **`loaded-disabled`** stage: dylib loaded, measurement off — separates interposition tax from active REFERENCE work.
+- **REFERENCE-scoped** ablation env values: disable one subsystem at a time while keeping Tier-1 `reference` identity when env unset.
+- **`minimal-reference`** stage: disable the full attributed REFERENCE accounting stack for reconciliation.
 
 **Constraints:**
 
@@ -77,7 +139,7 @@ python3 benchmark/eu4_frame_model.py reference-cpu-decomposition --registry-json
 |-------|--------|
 | Recipes | `mesh`, `borders`, `text_ui` (training only) |
 | Trials | Seven paired (match Tier-1) |
-| Stages | `bare`, `reference` (baseline), plus one stage per ablation variant **or** matrix interleave per trial |
+| Stages | `bare`, `loaded-disabled`, `reference`, `minimal-reference`, plus one stage per marginal ablation variant (matrix interleave per trial if needed) |
 | Purpose string | `wp6_reference_cpu_decomposition_v1` (constant in `eu4_frame_model.py`) |
 | Acceptance | **None** — comparisons `status: diagnostic`, `acceptance_gate: false` |
 
@@ -87,13 +149,14 @@ Reuse `_offline_workloads_payload` / `build_offline_evidence_metadata` with a ne
 
 Short memo (like [WP5 requalification timing memo](wp5-requalification-timing-memo-20261003.md)):
 
-- Table: component → median CPU delta (REFERENCE vs ablated REFERENCE) per recipe.
-- Explicit link to WP5b: components that **do not** explain submission-window wall time but **do** explain CPU.
+- Table: fixed tax, active REFERENCE tax, marginal component deltas, minimal-reference residual — per recipe.
+- Explicit note: marginals are not summed as a reconciliation; residual line uses minimal-reference.
+- Link to WP5b: components that **do not** explain submission-window wall time but **do** explain measured-thread CPU.
 - Recommended WP7 implementation target(s).
 
 ## Branch / issue checklist
 
-- [ ] Branch: `wp6-reference-cpu-decomposition` from `main` @ post–PR #10 merge (`602ca4b`).
+- [x] Branch: `wp6-reference-cpu-decomposition` from `main` @ post–PR #10 merge (`602ca4b`).
 - [ ] Phase A inventory PR (docs + comments only acceptable).
 - [ ] Phase B ablation hooks + unit tests (portable).
 - [ ] Phase C capture + provenance tests (mirror WP5b patterns).
