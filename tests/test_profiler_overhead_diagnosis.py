@@ -149,17 +149,18 @@ class ProfilerOverheadDiagnosisTests(unittest.TestCase):
             roles["frame-model-offline-dac4da4-20261002T213942.617917Z-27ab7b86.json"],
             "HISTORICAL",
         )
+        wp5_name = "frame-model-offline-7a86153-20261003T064756.277190Z-37f57796.json"
+        if wp5_name in roles:
+            self.assertEqual(roles[wp5_name], "REQUALIFICATION")
         valid = [item for item in discoveries if item.role == "VALID"]
         self.assertTrue(
             any("129e5bf5" in item.evidence_id for item in valid),
             "expected v3 authoritative capture among VALID discoveries",
         )
-        if len(valid) >= 2:
-            ordered = sorted(valid, key=lambda item: item.captured_at_utc, reverse=True)
-            self.assertEqual(
-                wp1._newest_valid_discovery(discoveries).evidence_id,
-                ordered[0].evidence_id,
-            )
+        newest = wp1._newest_valid_discovery(discoveries)
+        self.assertIsNotNone(newest)
+        self.assertIn("129e5bf5", newest.evidence_id, "WP5 requalification must not win --register-latest")
+        self.assertNotIn("37f57796", newest.evidence_id)
 
     def test_summarize_wp1_reads_preflight_payload_on_disk(self):
         import summarize_wp1_diagnosis as wp1

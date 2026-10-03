@@ -23,7 +23,7 @@ INVALID_DIAGNOSTIC_POLICY_V2 = "diag_matrix_counters_baseline_v2"
 
 @dataclass(frozen=True)
 class Wp1Discovery:
-    role: str  # VALID | HISTORICAL
+    role: str  # VALID | HISTORICAL | REQUALIFICATION
     path: Path
     evidence_id: str
     captured_at_utc: str
@@ -234,9 +234,34 @@ def validate_wp1_archive(archive: dict, archive_path: Path) -> dict:
     }
 
 
+def _load_manifest() -> dict:
+    if not MANIFEST.is_file():
+        return {}
+    return json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+
+def _manifest_evidence_roles(manifest: dict) -> dict[str, str]:
+    """Map evidence_id to discovery role from explicit manifest membership."""
+    roles: dict[str, str] = {}
+    for item in manifest.get("requalification_archives") or []:
+        evidence_id = item.get("evidence_id")
+        if evidence_id:
+            roles[evidence_id] = "REQUALIFICATION"
+    for item in manifest.get("diagnostic_archives_historical") or []:
+        evidence_id = item.get("evidence_id")
+        if evidence_id:
+            roles[evidence_id] = "HISTORICAL"
+    for item in manifest.get("diagnostic_archives") or []:
+        evidence_id = item.get("evidence_id")
+        if evidence_id and evidence_id not in roles:
+            roles[evidence_id] = "VALID"
+    return roles
+
+
 def discover_wp1_archives() -> list[Wp1Discovery]:
     if not EVIDENCE_DIR.is_dir():
         return []
+    manifest_roles = _manifest_evidence_roles(_load_manifest())
     discoveries: list[Wp1Discovery] = []
     for path in sorted(EVIDENCE_DIR.glob("frame-model-offline-*.json")):
         try:
@@ -247,11 +272,36 @@ def discover_wp1_archives() -> list[Wp1Discovery]:
             continue
         evidence_id = _evidence_id_from_archive(archive) or path.name
         captured_at = _captured_at_utc(archive, evidence_id)
+        manifest_role = manifest_roles.get(evidence_id)
         try:
             entry = validate_wp1_archive(archive, path)
+            if manifest_role == "REQUALIFICATION":
+                discoveries.append(
+                    Wp1Discovery(
+                        role="REQUALIFICATION",
+                        path=path,
+                        evidence_id=entry["evidence_id"],
+                        captured_at_utc=entry["captured_at_utc"],
+                        detail="manifest requalification_archives",
+                        entry=entry,
+                    ),
+                )
+                continue
+            if manifest_role == "HISTORICAL":
+                discoveries.append(
+                    Wp1Discovery(
+                        role="HISTORICAL",
+                        path=path,
+                        evidence_id=entry["evidence_id"],
+                        captured_at_utc=entry["captured_at_utc"],
+                        detail="manifest diagnostic_archives_historical",
+                        entry=entry,
+                    ),
+                )
+                continue
             discoveries.append(
                 Wp1Discovery(
-                    role="VALID",
+                    role=manifest_role or "VALID",
                     path=path,
                     evidence_id=entry["evidence_id"],
                     captured_at_utc=entry["captured_at_utc"],
@@ -285,9 +335,19 @@ def _newest_valid_discovery(discoveries: list[Wp1Discovery]) -> Wp1Discovery | N
 def register_manifest(archive_path: Path, *, source_archive_sha256_mac_capture: str | None = None) -> dict:
     archive = _load_archive(archive_path)
     entry = validate_wp1_archive(archive, archive_path)
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    if _manifest_evidence_roles(manifest).get(entry["evidence_id"]) == "REQUALIFICATION":
+        raise ValueError(
+            f"evidence_id {entry['evidence_id']} is registered as requalification; "
+            "do not append to diagnostic_archives via --register",
+        )
+    for item in manifest.get("requalification_archives") or []:
+        if item.get("archive_path") == entry["archive_path"]:
+            raise ValueError(
+                f"archive_path {entry['archive_path']} is listed under requalification_archives",
+            )
     if source_archive_sha256_mac_capture:
         entry["source_archive_sha256_mac_capture"] = source_archive_sha256_mac_capture
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     archives = manifest.setdefault("diagnostic_archives", [])
     committed = entry["archive_sha256_committed"]
     for item in archives:
