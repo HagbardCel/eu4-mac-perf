@@ -6,11 +6,7 @@
   "repository_commit": "e593044",
   "run_dir": "results/20261004T131931Z-submission-experiment",
   "command": "python3 benchmark/submission_experiment.py --output results --multi-hypothesis-smoke",
-  "outcome_summary": "v3 multi-hypothesis A–B–A complete; multi_hypothesis_gate and observer_scene_gate passed; same-parent buffer signature 0 hits on 55836 same-parent pairs; cross_parent_pairs=0 inconclusive under v3.0 segmentation.",
-  "verdicts": {
-    "v3_infrastructure": "VALID",
-    "v3_0_pair_segmentation": "INVALID"
-  },
+  "outcome_summary": "v3 multi-hypothesis A–B–A complete; multi_hypothesis_gate and observer_scene_gate passed; same-parent buffer signature 0 hits on 55836 same-parent pairs; no cross-parent pairs on B1.",
   "gates": {
     "multi_hypothesis_gate": "passed",
     "observer_scene_gate": "passed",
@@ -50,7 +46,7 @@
     "swap_rate": 56.1,
     "cpu_ms_s": 1055.71
   },
-  "interpretation": "Protocol v3 observer validated on Venice. v3.0 comparator segmented adjacency on suspect mid-loop layer/flush — cross_parent_pairs=0 is not evidence of absence. Narrow: 0/55836 same-parent buffer-signature hits among surviving same-parent pairs. ~2421 mesh site entries per swap (~41% of ~5863 total draws, approximate separate captures).",
+  "interpretation": "Protocol v3 observer validated on Venice; structural recurrence absent for same-parent buffer signatures; cross-parent denominators zero on this run.",
   "posthoc_interpretation": {
     "harness": "complete",
     "hook": "entry_and_site_engaged",
@@ -59,6 +55,25 @@
     "hypothesis_roi": "same_parent_negative_cross_parent_not_exercised",
     "stage2": "not_recommended"
   },
+  "posthoc_amendments": [
+    {
+      "recorded_at_utc": "2026-10-04T14:45:00Z",
+      "introduced_by_pr": 34,
+      "scope": "pair_segmentation_semantics",
+      "v3_infrastructure": "VALID",
+      "v3_0_pair_segmentation": "INVALID",
+      "same_parent_buffer_signature": "0/55836 among comparator-surviving same-parent pairs",
+      "cross_parent_pairs": "inconclusive under v3.0 segmentation",
+      "mesh_site_entries_per_swap_approx": 2421,
+      "draw_mix_note": "approximate separate captures",
+      "diagnostic_counters": {
+        "candidate_nonempty_invocations_v3_0": 1309608,
+        "renderbuckets_invocations_health_delta_b1": 1129,
+        "candidate_site_entries_b1_frozen": 1365444,
+        "candidate_swaps_b1": 564
+      }
+    }
+  ],
   "artifacts": {
     "manifest": "results/20261004T131931Z-submission-experiment/manifest.json",
     "validation": "results/20261004T131931Z-submission-experiment/validation.json",

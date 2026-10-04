@@ -1,4 +1,5 @@
 #include "eu4_submission_mesh_chain.h"
+#include "subrecord_equivalence.h"
 #include "submission_counter_schema.h"
 
 void eu4_submission_counter_add(eu4_submission_counter_slot_t slot, uint64_t delta);
@@ -10,13 +11,13 @@ void eu4_submission_counter_add(eu4_submission_counter_slot_t slot, uint64_t del
 void reset_test_counters(void);
 extern uint64_t g_test_counter_values[EU4_SUBMISSION_COUNTER_COUNT];
 
-static uint8_t parent_a[16];
-static uint8_t parent_b[16];
-static uint8_t parent_c[16];
-static uint8_t sub_1[16];
-static uint8_t sub_2[16];
-static uint8_t sub_3[16];
-static uint8_t sub_4[16];
+static uint8_t parent_a[EU4_SFLUSHDATA_SIZE];
+static uint8_t parent_b[EU4_SFLUSHDATA_SIZE];
+static uint8_t parent_c[EU4_SFLUSHDATA_SIZE];
+static uint8_t sub_1[EU4_MESH_DRAW_SUBRECORD_SIZE];
+static uint8_t sub_2[EU4_MESH_DRAW_SUBRECORD_SIZE];
+static uint8_t sub_3[EU4_MESH_DRAW_SUBRECORD_SIZE];
+static uint8_t sub_4[EU4_MESH_DRAW_SUBRECORD_SIZE];
 
 static eu4_buffer_bind_signature_t zero_sig;
 

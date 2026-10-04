@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "owner_symbol": "_ZN14CPdxMeshObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraibb",
   "preferred_address": "0x1014c81e6",
@@ -39,23 +39,26 @@
     "note": "Offsets from %rbp: -0x128 parent 80-byte SFlushData, -0xb8 current 0xe8 subrecord"
   },
   "context_at_insertion": {
+    "v3_1_authoritative_context": "RenderBuckets entry TLS (layer, arg_r8_bool, arg_r9_bool as flush_array_kind); see renderbuckets-entry-abi-v31.md",
     "layer_index": {
       "source": "register",
       "register": "r12d",
-      "evidence": "RenderBuckets entry 0x14c7dc6: movl %ecx, %r12d (layer argument)"
+      "evidence": "RenderBuckets entry 0x14c7dc6: movl %ecx, %r12d (layer argument)",
+      "v3_1_note": "Physical mid-loop observation; not authoritative comparator context in v3.1"
     },
     "flush_array_kind": {
       "source": "stack_slot",
       "rbp_offset": -172,
       "size_bytes": 1,
       "encoding": "low_byte_of_r9_at_entry",
-      "evidence": "0x14c7db8 movl %r9d, -0xac(%rbp); 0x14c8181 cmpb -0xac(%rbp), %cl for opaque/transparent flush selection"
+      "evidence": "0x14c7db8 movl %r9d, -0xac(%rbp); 0x14c8181 cmpb -0xac(%rbp), %cl for opaque/transparent flush selection",
+      "v3_1_note": "Physical mid-loop observation; not authoritative comparator context in v3.1"
     }
   },
   "live_in_registers": {
     "rax": "cmovneq left-hand value at 0x14c81e6",
     "rcx": "cmovneq right-hand / effect-id pointer",
-    "r12d": "layer index (see context_at_insertion)",
+    "r12d": "layer index copy in r12d (from entry ecx at 0x14c7dc6); not v3.1 comparator authority — use entry TLS",
     "rbx": "byte offset imul 0xe8 within parent subrecord array",
     "r14": "subrecord loop index",
     "r15": "CPdxMeshObject*",
@@ -76,15 +79,24 @@
     "safe_because": "No vector register use between hook replay and draw; gateway does not save XMM (lean observer)."
   },
   "stack_alignment": 16,
-  "parent_subrecord_loop_scope": "inner_0xe8_iteration_within_single_SFlushData_parent_and_layer",
+  "physical_site_scope": "Current 0xe8 mesh-draw subrecord iteration within one SFlushData parent (frame -0x128 / -0xb8); layer/flush for the invocation are fixed at RenderBuckets entry",
+  "pair_chain_scope": "Consecutive observed mesh site entries within one RenderBuckets TLS epoch; adjacency may cross SFlushData parent boundaries",
   "thread_assumption": "render_thread_only",
   "failure_behavior": "fail_closed_forward_original_path",
-  "previous_record_definition": "immediate_prior_loop_iteration_same_parent_layer_flush_array",
+  "previous_record_definition": "Immediate previous observed mesh site entry within the same RenderBuckets TLS epoch; may cross SFlushData parent boundary",
+  "pair_classification_events": [
+    "parent_SFlushData_pointer_change_within_epoch → cross_parent_pair",
+    "same_parent_SFlushData_pointer → same_parent_pair"
+  ],
   "chain_reset_events": [
-    "parent_SFlushData_boundary",
-    "layer_change",
-    "flush_array_opaque_vs_transparent_change",
-    "barrier_subrecord",
-    "mode_change_reference_vs_candidate"
-  ]
+    "RenderBuckets_epoch_entry",
+    "observation_ARM_reset",
+    "acknowledged_transition_to_reference"
+  ],
+  "chain_reset_notes": "RenderBuckets_epoch_entry resets pair chain only. observation_ARM_reset and acknowledged_transition_to_reference reset invocation accounting and pair chain. Parent change is classification, not reset.",
+  "chain_reset_implementation": {
+    "RenderBuckets_epoch_entry": "eu4_submission_mesh_on_renderbuckets_entry → reset_pair_chain",
+    "observation_ARM_reset": "handle_observation_command OBS_ARM → eu4_submission_observation_arm_reset",
+    "acknowledged_transition_to_reference": "poll_command_ack mode ack REFERENCE → eu4_submission_observation_arm_reset"
+  }
 }

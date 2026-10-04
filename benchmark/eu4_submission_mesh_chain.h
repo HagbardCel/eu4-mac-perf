@@ -7,8 +7,6 @@
 #include "subrecord_equivalence.h"
 
 typedef struct {
-    bool have_counted_epoch;
-    uint64_t counted_nonempty_epoch;
     bool have_prev_site_in_epoch;
     uint64_t prev_parent_id;
     uintptr_t prev_sub_pointer;
