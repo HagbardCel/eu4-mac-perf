@@ -219,6 +219,7 @@
       "detail_rows": 355273,
       "per_frame_retention": [
         {
+          "measurement_epoch": 6,
           "update_id": 11531,
           "generation": 24,
           "sample_window": 24,
@@ -231,6 +232,7 @@
           "retention_u": 1.0
         },
         {
+          "measurement_epoch": 6,
           "update_id": 11532,
           "generation": 24,
           "sample_window": 24,
@@ -243,6 +245,7 @@
           "retention_u": 1.0
         },
         {
+          "measurement_epoch": 6,
           "update_id": 11533,
           "generation": 24,
           "sample_window": 24,
@@ -255,6 +258,7 @@
           "retention_u": 0.4753603501622519
         },
         {
+          "measurement_epoch": 6,
           "update_id": 11534,
           "generation": 24,
           "sample_window": 24,
@@ -269,7 +273,7 @@
       ],
       "median_retention_s": 0.8225095640646984,
       "median_retention_u": 0.7376801750811259,
-      "top_ranks": [
+      "top_ranks_all_frames": [
         {
           "key": [
             "u",
@@ -491,6 +495,286 @@
             "eu4": "eu4+0x15ecdd4"
           }
         }
+      ],
+      "top_ranks_count_complete": [
+        {
+          "key": [
+            "S",
+            10,
+            22986657
+          ],
+          "count": 25736,
+          "symbol": {
+            "offset": 22986657,
+            "symbol": "_GfxSetVertexBuffers",
+            "demangled": "_GfxSetVertexBuffers",
+            "eu4": "eu4+0x15ebfa1"
+          }
+        },
+        {
+          "key": [
+            "S",
+            8,
+            22981159
+          ],
+          "count": 25732,
+          "symbol": {
+            "offset": 22981159,
+            "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+            "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+            "eu4": "eu4+0x15eaa27"
+          }
+        },
+        {
+          "key": [
+            "S",
+            11,
+            22981178
+          ],
+          "count": 25732,
+          "symbol": {
+            "offset": 22981178,
+            "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+            "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+            "eu4": "eu4+0x15eaa3a"
+          }
+        },
+        {
+          "key": [
+            "S",
+            9,
+            22981191
+          ],
+          "count": 25732,
+          "symbol": {
+            "offset": 22981191,
+            "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+            "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+            "eu4": "eu4+0x15eaa47"
+          }
+        },
+        {
+          "key": [
+            "S",
+            5,
+            22990088
+          ],
+          "count": 15618,
+          "symbol": {
+            "offset": 22990088,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecd08"
+          }
+        },
+        {
+          "key": [
+            "S",
+            3,
+            22990117
+          ],
+          "count": 15618,
+          "symbol": {
+            "offset": 22990117,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecd25"
+          }
+        },
+        {
+          "key": [
+            "S",
+            10,
+            22985734
+          ],
+          "count": 10964,
+          "symbol": {
+            "offset": 22985734,
+            "symbol": "_GfxSetShader",
+            "demangled": "_GfxSetShader",
+            "eu4": "eu4+0x15ebc06"
+          }
+        },
+        {
+          "key": [
+            "S",
+            2,
+            22981050
+          ],
+          "count": 7242,
+          "symbol": {
+            "offset": 22981050,
+            "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+            "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+            "eu4": "eu4+0x15ea9ba"
+          }
+        },
+        {
+          "key": [
+            "S",
+            2,
+            22987441
+          ],
+          "count": 4840,
+          "symbol": {
+            "offset": 22987441,
+            "symbol": "_GfxSetIndexBuffer",
+            "demangled": "_GfxSetIndexBuffer",
+            "eu4": "eu4+0x15ec2b1"
+          }
+        },
+        {
+          "key": [
+            "S",
+            6,
+            22985829
+          ],
+          "count": 2166,
+          "symbol": {
+            "offset": 22985829,
+            "symbol": "__ZN13SShaderOpenGL6SetAllEv",
+            "demangled": "SShaderOpenGL::SetAll()",
+            "eu4": "eu4+0x15ebc65"
+          }
+        },
+        {
+          "key": [
+            "S",
+            33,
+            22990258
+          ],
+          "count": 1460,
+          "symbol": {
+            "offset": 22990258,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecdb2"
+          }
+        },
+        {
+          "key": [
+            "S",
+            33,
+            22990275
+          ],
+          "count": 1460,
+          "symbol": {
+            "offset": 22990275,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecdc3"
+          }
+        },
+        {
+          "key": [
+            "S",
+            33,
+            22990292
+          ],
+          "count": 1460,
+          "symbol": {
+            "offset": 22990292,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecdd4"
+          }
+        },
+        {
+          "key": [
+            "S",
+            33,
+            22990309
+          ],
+          "count": 1460,
+          "symbol": {
+            "offset": 22990309,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecde5"
+          }
+        },
+        {
+          "key": [
+            "S",
+            34,
+            22990333
+          ],
+          "count": 1460,
+          "symbol": {
+            "offset": 22990333,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecdfd"
+          }
+        },
+        {
+          "key": [
+            "S",
+            33,
+            22990202
+          ],
+          "count": 1350,
+          "symbol": {
+            "offset": 22990202,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecd7a"
+          }
+        }
+      ],
+      "top_uniform_ranks_count_complete": [
+        {
+          "key": [
+            "u",
+            22985850
+          ],
+          "count": 34656,
+          "symbol": {
+            "offset": 22985850,
+            "symbol": "__ZN13SShaderOpenGL6SetAllEv",
+            "demangled": "SShaderOpenGL::SetAll()",
+            "eu4": "eu4+0x15ebc7a"
+          }
+        },
+        {
+          "key": [
+            "U",
+            22981368
+          ],
+          "count": 15542,
+          "symbol": {
+            "offset": 22981368,
+            "symbol": "_GfxDrawIndexed",
+            "demangled": "_GfxDrawIndexed",
+            "eu4": "eu4+0x15eaaf8"
+          }
+        },
+        {
+          "key": [
+            "u",
+            22985755
+          ],
+          "count": 2166,
+          "symbol": {
+            "offset": 22985755,
+            "symbol": "_GfxSetShader",
+            "demangled": "_GfxSetShader",
+            "eu4": "eu4+0x15ebc1b"
+          }
+        },
+        {
+          "key": [
+            "U",
+            22980618
+          ],
+          "count": 640,
+          "symbol": {
+            "offset": 22980618,
+            "symbol": "_GfxDraw",
+            "demangled": "_GfxDraw",
+            "eu4": "eu4+0x15ea80a"
+          }
+        }
       ]
     },
     "25": {
@@ -515,6 +799,7 @@
       "detail_rows": 354098,
       "per_frame_retention": [
         {
+          "measurement_epoch": 6,
           "update_id": 11768,
           "generation": 25,
           "sample_window": 25,
@@ -527,6 +812,7 @@
           "retention_u": 1.0
         },
         {
+          "measurement_epoch": 6,
           "update_id": 11769,
           "generation": 25,
           "sample_window": 25,
@@ -539,6 +825,7 @@
           "retention_u": 1.0
         },
         {
+          "measurement_epoch": 6,
           "update_id": 11770,
           "generation": 25,
           "sample_window": 25,
@@ -551,6 +838,7 @@
           "retention_u": 0.4549467964681911
         },
         {
+          "measurement_epoch": 6,
           "update_id": 11771,
           "generation": 25,
           "sample_window": 25,
@@ -565,7 +853,7 @@
       ],
       "median_retention_s": 0.8040093489459179,
       "median_retention_u": 0.7332654139310241,
-      "top_ranks": [
+      "top_ranks_all_frames": [
         {
           "key": [
             "u",
@@ -787,6 +1075,286 @@
             "eu4": "eu4+0x15ecdd4"
           }
         }
+      ],
+      "top_ranks_count_complete": [
+        {
+          "key": [
+            "S",
+            10,
+            22986657
+          ],
+          "count": 25736,
+          "symbol": {
+            "offset": 22986657,
+            "symbol": "_GfxSetVertexBuffers",
+            "demangled": "_GfxSetVertexBuffers",
+            "eu4": "eu4+0x15ebfa1"
+          }
+        },
+        {
+          "key": [
+            "S",
+            8,
+            22981159
+          ],
+          "count": 25732,
+          "symbol": {
+            "offset": 22981159,
+            "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+            "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+            "eu4": "eu4+0x15eaa27"
+          }
+        },
+        {
+          "key": [
+            "S",
+            11,
+            22981178
+          ],
+          "count": 25732,
+          "symbol": {
+            "offset": 22981178,
+            "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+            "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+            "eu4": "eu4+0x15eaa3a"
+          }
+        },
+        {
+          "key": [
+            "S",
+            9,
+            22981191
+          ],
+          "count": 25732,
+          "symbol": {
+            "offset": 22981191,
+            "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+            "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+            "eu4": "eu4+0x15eaa47"
+          }
+        },
+        {
+          "key": [
+            "S",
+            5,
+            22990088
+          ],
+          "count": 15618,
+          "symbol": {
+            "offset": 22990088,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecd08"
+          }
+        },
+        {
+          "key": [
+            "S",
+            3,
+            22990117
+          ],
+          "count": 15618,
+          "symbol": {
+            "offset": 22990117,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecd25"
+          }
+        },
+        {
+          "key": [
+            "S",
+            10,
+            22985734
+          ],
+          "count": 10964,
+          "symbol": {
+            "offset": 22985734,
+            "symbol": "_GfxSetShader",
+            "demangled": "_GfxSetShader",
+            "eu4": "eu4+0x15ebc06"
+          }
+        },
+        {
+          "key": [
+            "S",
+            2,
+            22981050
+          ],
+          "count": 7242,
+          "symbol": {
+            "offset": 22981050,
+            "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+            "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+            "eu4": "eu4+0x15ea9ba"
+          }
+        },
+        {
+          "key": [
+            "S",
+            2,
+            22987441
+          ],
+          "count": 4840,
+          "symbol": {
+            "offset": 22987441,
+            "symbol": "_GfxSetIndexBuffer",
+            "demangled": "_GfxSetIndexBuffer",
+            "eu4": "eu4+0x15ec2b1"
+          }
+        },
+        {
+          "key": [
+            "S",
+            6,
+            22985829
+          ],
+          "count": 2166,
+          "symbol": {
+            "offset": 22985829,
+            "symbol": "__ZN13SShaderOpenGL6SetAllEv",
+            "demangled": "SShaderOpenGL::SetAll()",
+            "eu4": "eu4+0x15ebc65"
+          }
+        },
+        {
+          "key": [
+            "S",
+            33,
+            22990258
+          ],
+          "count": 1460,
+          "symbol": {
+            "offset": 22990258,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecdb2"
+          }
+        },
+        {
+          "key": [
+            "S",
+            33,
+            22990275
+          ],
+          "count": 1460,
+          "symbol": {
+            "offset": 22990275,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecdc3"
+          }
+        },
+        {
+          "key": [
+            "S",
+            33,
+            22990292
+          ],
+          "count": 1460,
+          "symbol": {
+            "offset": 22990292,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecdd4"
+          }
+        },
+        {
+          "key": [
+            "S",
+            33,
+            22990309
+          ],
+          "count": 1460,
+          "symbol": {
+            "offset": 22990309,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecde5"
+          }
+        },
+        {
+          "key": [
+            "S",
+            34,
+            22990333
+          ],
+          "count": 1460,
+          "symbol": {
+            "offset": 22990333,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecdfd"
+          }
+        },
+        {
+          "key": [
+            "S",
+            33,
+            22990202
+          ],
+          "count": 1350,
+          "symbol": {
+            "offset": 22990202,
+            "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+            "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+            "eu4": "eu4+0x15ecd7a"
+          }
+        }
+      ],
+      "top_uniform_ranks_count_complete": [
+        {
+          "key": [
+            "u",
+            22985850
+          ],
+          "count": 34656,
+          "symbol": {
+            "offset": 22985850,
+            "symbol": "__ZN13SShaderOpenGL6SetAllEv",
+            "demangled": "SShaderOpenGL::SetAll()",
+            "eu4": "eu4+0x15ebc7a"
+          }
+        },
+        {
+          "key": [
+            "U",
+            22981368
+          ],
+          "count": 15542,
+          "symbol": {
+            "offset": 22981368,
+            "symbol": "_GfxDrawIndexed",
+            "demangled": "_GfxDrawIndexed",
+            "eu4": "eu4+0x15eaaf8"
+          }
+        },
+        {
+          "key": [
+            "u",
+            22985755
+          ],
+          "count": 2166,
+          "symbol": {
+            "offset": 22985755,
+            "symbol": "_GfxSetShader",
+            "demangled": "_GfxSetShader",
+            "eu4": "eu4+0x15ebc1b"
+          }
+        },
+        {
+          "key": [
+            "U",
+            22980618
+          ],
+          "count": 640,
+          "symbol": {
+            "offset": 22980618,
+            "symbol": "_GfxDraw",
+            "demangled": "_GfxDraw",
+            "eu4": "eu4+0x15ea80a"
+          }
+        }
       ]
     }
   },
@@ -796,6 +1364,11 @@
       25
     ],
     "top_n_overlap_fraction": 1.0,
+    "count_complete_s_overlap_fraction": 1.0,
+    "spearman_rho_all_frames": 1.0,
+    "kendall_tau_all_frames": 1.0,
+    "spearman_rho_count_complete_s": 1.0,
+    "kendall_tau_count_complete_s": 1.0,
     "window_a_top": [
       [
         [
@@ -1049,7 +1622,275 @@
         ],
         1994
       ]
-    ]
+    ],
+    "window_a_top_count_complete_s": [
+      [
+        [
+          "S",
+          10,
+          22986657
+        ],
+        25736
+      ],
+      [
+        [
+          "S",
+          8,
+          22981159
+        ],
+        25732
+      ],
+      [
+        [
+          "S",
+          11,
+          22981178
+        ],
+        25732
+      ],
+      [
+        [
+          "S",
+          9,
+          22981191
+        ],
+        25732
+      ],
+      [
+        [
+          "S",
+          5,
+          22990088
+        ],
+        15618
+      ],
+      [
+        [
+          "S",
+          3,
+          22990117
+        ],
+        15618
+      ],
+      [
+        [
+          "S",
+          10,
+          22985734
+        ],
+        10964
+      ],
+      [
+        [
+          "S",
+          2,
+          22981050
+        ],
+        7242
+      ],
+      [
+        [
+          "S",
+          2,
+          22987441
+        ],
+        4840
+      ],
+      [
+        [
+          "S",
+          6,
+          22985829
+        ],
+        2166
+      ],
+      [
+        [
+          "S",
+          33,
+          22990258
+        ],
+        1460
+      ],
+      [
+        [
+          "S",
+          33,
+          22990275
+        ],
+        1460
+      ],
+      [
+        [
+          "S",
+          33,
+          22990292
+        ],
+        1460
+      ],
+      [
+        [
+          "S",
+          33,
+          22990309
+        ],
+        1460
+      ],
+      [
+        [
+          "S",
+          34,
+          22990333
+        ],
+        1460
+      ],
+      [
+        [
+          "S",
+          33,
+          22990202
+        ],
+        1350
+      ]
+    ],
+    "window_b_top_count_complete_s": [
+      [
+        [
+          "S",
+          10,
+          22986657
+        ],
+        25736
+      ],
+      [
+        [
+          "S",
+          8,
+          22981159
+        ],
+        25732
+      ],
+      [
+        [
+          "S",
+          11,
+          22981178
+        ],
+        25732
+      ],
+      [
+        [
+          "S",
+          9,
+          22981191
+        ],
+        25732
+      ],
+      [
+        [
+          "S",
+          5,
+          22990088
+        ],
+        15618
+      ],
+      [
+        [
+          "S",
+          3,
+          22990117
+        ],
+        15618
+      ],
+      [
+        [
+          "S",
+          10,
+          22985734
+        ],
+        10964
+      ],
+      [
+        [
+          "S",
+          2,
+          22981050
+        ],
+        7242
+      ],
+      [
+        [
+          "S",
+          2,
+          22987441
+        ],
+        4840
+      ],
+      [
+        [
+          "S",
+          6,
+          22985829
+        ],
+        2166
+      ],
+      [
+        [
+          "S",
+          33,
+          22990258
+        ],
+        1460
+      ],
+      [
+        [
+          "S",
+          33,
+          22990275
+        ],
+        1460
+      ],
+      [
+        [
+          "S",
+          33,
+          22990292
+        ],
+        1460
+      ],
+      [
+        [
+          "S",
+          33,
+          22990309
+        ],
+        1460
+      ],
+      [
+        [
+          "S",
+          34,
+          22990333
+        ],
+        1460
+      ],
+      [
+        [
+          "S",
+          33,
+          22990202
+        ],
+        1350
+      ]
+    ],
+    "per_frame_normalized_drift": {
+      "draws": 0.00017056114617090227,
+      "state_calls": 0.0011401977894124492,
+      "uniform_calls": 0.0013973337361682843,
+      "texture_binds": 0.0007685410529012425,
+      "buffer_binds": 0.0009696186166774402,
+      "program_switches": 0.0018450184501845018
+    }
   },
   "interpretation": "Ordinal callsite ranks from TAIL windows only; C1/C2 provide aggregate F-counter stability. U/u program/location fields are not trusted under flag 2048."
 }

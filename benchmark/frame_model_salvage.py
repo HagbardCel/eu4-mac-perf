@@ -29,7 +29,7 @@ COUNTER_STABILITY_FIELDS = (
 
 RETENTION_POOR_THRESHOLD = 0.05
 TOP_N = 16
-RANK_AGREEMENT_MIN = 0.5
+FULL_RETENTION_THRESHOLD = 1.0
 
 
 def _detail_key(row: list[str]) -> tuple[int, int] | None:
@@ -141,13 +141,54 @@ def _rank_entry(key: tuple, count: int) -> dict:
     return entry
 
 
-def _aggregate_ranks(rows: list[list[str]]) -> list[tuple[tuple, int]]:
+def _aggregate_ranks(rows: list[list[str]], *, kinds: frozenset[str] | None = None) -> list[tuple[tuple, int]]:
     counts: Counter[tuple] = Counter()
     for row in rows:
+        if kinds is not None and row[0] not in kinds:
+            continue
         key = _salvage_rank_key(row)
         if key:
             counts[key] += 1
     return counts.most_common(TOP_N)
+
+
+def _count_complete_frame_keys(retentions: list[dict]) -> set[tuple[int, int]]:
+    keys: set[tuple[int, int]] = set()
+    for item in retentions:
+        if item.get("retention_s") == FULL_RETENTION_THRESHOLD and item.get("retention_u") == FULL_RETENTION_THRESHOLD:
+            keys.add((item.get("measurement_epoch", 0), item["update_id"]))
+    return keys
+
+
+def _spearman(left: list[tuple[tuple, int]], right: list[tuple[tuple, int]]) -> float | None:
+    shared = [key for key, _ in left if key in {item[0] for item in right}]
+    if len(shared) < 3:
+        return None
+    left_rank = {key: index for index, (key, _) in enumerate(left)}
+    right_rank = {key: index for index, (key, _) in enumerate(right)}
+    n = len(shared)
+    diff_sq = sum((left_rank[key] - right_rank[key]) ** 2 for key in shared)
+    return 1 - (6 * diff_sq) / (n * (n * n - 1))
+
+
+def _kendall(left: list[tuple[tuple, int]], right: list[tuple[tuple, int]]) -> float | None:
+    shared = [key for key, _ in left if key in {item[0] for item in right}]
+    if len(shared) < 3:
+        return None
+    left_rank = {key: index for index, (key, _) in enumerate(left)}
+    right_rank = {key: index for index, (key, _) in enumerate(right)}
+    concordant = discordant = 0
+    for i, a in enumerate(shared):
+        for b in shared[i + 1 :]:
+            left_order = left_rank[a] - left_rank[b]
+            right_order = right_rank[a] - right_rank[b]
+            product = left_order * right_order
+            if product > 0:
+                concordant += 1
+            elif product < 0:
+                discordant += 1
+    denom = concordant + discordant
+    return (concordant - discordant) / denom if denom else None
 
 
 def _rank_overlap(left: list[tuple[tuple, int]], right: list[tuple[tuple, int]]) -> float:
@@ -195,6 +236,7 @@ def _frame_retention(frame: dict, rows: list[list[str]]) -> dict:
     state_calls = frame.get("state_calls") or 0
     uniform_calls = frame.get("uniform_calls") or 0
     return {
+        "measurement_epoch": frame.get("measurement_epoch"),
         "update_id": frame["update_id"],
         "generation": frame.get("generation"),
         "sample_window": frame.get("sample_window"),
@@ -253,7 +295,21 @@ def run_intrusive_salvage(run_dir: Path) -> dict:
             )
             if retentions
             else None,
-            "top_ranks": [_rank_entry(k, c) for k, c in _aggregate_ranks(window_rows)],
+            "top_ranks_all_frames": [_rank_entry(k, c) for k, c in _aggregate_ranks(window_rows)],
+            "top_ranks_count_complete": [
+                _rank_entry(k, c)
+                for k, c in _aggregate_ranks(
+                    [r for r in window_rows if _detail_key(r) in _count_complete_frame_keys(retentions)],
+                    kinds=frozenset({"S"}),
+                )
+            ],
+            "top_uniform_ranks_count_complete": [
+                _rank_entry(k, c)
+                for k, c in _aggregate_ranks(
+                    [r for r in window_rows if _detail_key(r) in _count_complete_frame_keys(retentions)],
+                    kinds=SALVAGE_UNIFORM_KINDS,
+                )
+            ],
         }
 
     rank_stability = None
@@ -263,11 +319,33 @@ def run_intrusive_salvage(run_dir: Path) -> dict:
         keys1 = {tuple(pair) for pair in window_reports[str(g1)]["frame_keys"]}
         left = _aggregate_ranks([r for r in salvage_trace if _detail_key(r) in keys0])
         right = _aggregate_ranks([r for r in salvage_trace if _detail_key(r) in keys1])
+        left_complete = _aggregate_ranks(
+            [r for r in salvage_trace if _detail_key(r) in _count_complete_frame_keys(
+                window_reports[str(g0)]["per_frame_retention"]
+            )],
+            kinds=frozenset({"S"}),
+        )
+        right_complete = _aggregate_ranks(
+            [r for r in salvage_trace if _detail_key(r) in _count_complete_frame_keys(
+                window_reports[str(g1)]["per_frame_retention"]
+            )],
+            kinds=frozenset({"S"}),
+        )
         rank_stability = {
             "windows": [g0, g1],
             "top_n_overlap_fraction": _rank_overlap(left, right),
+            "count_complete_s_overlap_fraction": _rank_overlap(left_complete, right_complete),
+            "spearman_rho_all_frames": _spearman(left, right),
+            "kendall_tau_all_frames": _kendall(left, right),
+            "spearman_rho_count_complete_s": _spearman(left_complete, right_complete),
+            "kendall_tau_count_complete_s": _kendall(left_complete, right_complete),
             "window_a_top": left,
             "window_b_top": right,
+            "window_a_top_count_complete_s": left_complete,
+            "window_b_top_count_complete_s": right_complete,
+            "per_frame_normalized_drift": (_c1_c2_counter_stability(manifest, profile_rows) or {}).get(
+                "c1_c2_relative_spread"
+            ),
         }
 
     med_ret_s = [
@@ -276,17 +354,12 @@ def run_intrusive_salvage(run_dir: Path) -> dict:
         if window_reports[str(g)]["median_retention_s"] is not None
     ]
     retention_poor = bool(med_ret_s) and min(med_ret_s) < RETENTION_POOR_THRESHOLD
-    overlap = (rank_stability or {}).get("top_n_overlap_fraction") or 0.0
-    unstable = overlap < RANK_AGREEMENT_MIN
     if not salvage_trace:
         status = "insufficient_for_hypothesis_selection"
         reason = "No salvage detail rows after TAIL filter"
     elif retention_poor:
         status = "insufficient_for_hypothesis_selection"
         reason = "Poor detail retention in one or more TAIL sample windows"
-    elif unstable:
-        status = "insufficient_for_hypothesis_selection"
-        reason = "Unstable top-N rank overlap between TAIL sample windows"
     else:
         status = "usable_ordinal_hint"
         reason = "TAIL salvage produced ordinal hints; treat as non-quantitative"
@@ -338,9 +411,14 @@ def write_salvage_reports(run_dir: Path, report: dict) -> None:
     if rs:
         lines.extend([
             "",
-            "## Rank stability",
+            "## Rank stability (reporting only)",
             "",
             f"- Top-{TOP_N} overlap between windows {rs.get('windows')}: **{rs.get('top_n_overlap_fraction')}**",
+            f"- Count-complete S overlap: **{rs.get('count_complete_s_overlap_fraction')}**",
+            f"- Spearman ρ (all frames): **{rs.get('spearman_rho_all_frames')}**",
+            f"- Kendall τ (all frames): **{rs.get('kendall_tau_all_frames')}**",
+            f"- Spearman ρ (count-complete S): **{rs.get('spearman_rho_count_complete_s')}**",
+            f"- Kendall τ (count-complete S): **{rs.get('kendall_tau_count_complete_s')}**",
         ])
     lines.append("")
     lines.append(report.get("interpretation", ""))

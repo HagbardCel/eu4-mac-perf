@@ -238,14 +238,8 @@ class PowerTail:
         self.path, self.offset, self.partial = path, 0, b""
         self.samples: list[dict] = []
 
-    def poll(self) -> list[dict]:
-        if not self.path.exists():
-            return self.samples
-        with self.path.open("rb") as source:
-            source.seek(self.offset)
-            new = source.read()
-            self.offset += len(new)
-        parts = (self.partial+new).split(b"\0")
+    def _ingest(self, data: bytes) -> None:
+        parts = (self.partial + data).split(b"\0")
         self.partial = parts.pop()
         for part in parts:
             if part.strip():
@@ -255,7 +249,62 @@ class PowerTail:
                     raise base.BenchmarkError(f"Malformed powermetrics sample: {exc}") from exc
                 if isinstance(item, dict):
                     self.samples.append(item)
+
+    def poll(self) -> list[dict]:
+        if not self.path.exists():
+            return self.samples
+        with self.path.open("rb") as source:
+            source.seek(self.offset)
+            new = source.read()
+            self.offset += len(new)
+        self._ingest(new)
         return self.samples
+
+    def finish(self) -> dict[str, object]:
+        """Drain trailing pliststream bytes after the powermetrics producer exits."""
+        status = "clean"
+        trailing_note = None
+        if self.path.is_file():
+            with self.path.open("rb") as source:
+                source.seek(self.offset)
+                new = source.read()
+                self.offset += len(new)
+            if new:
+                before = len(self.samples)
+                try:
+                    self._ingest(new)
+                except base.BenchmarkError:
+                    raise
+                if len(self.samples) > before and not self.partial.strip():
+                    status = "appended"
+                elif self.partial.strip():
+                    try:
+                        item = plistlib.loads(self.partial.strip())
+                    except (ValueError, TypeError, plistlib.InvalidFileException):
+                        status = "incomplete"
+                        trailing_note = f"{len(self.partial)} trailing bytes not a complete plist"
+                    else:
+                        if isinstance(item, dict):
+                            self.samples.append(item)
+                        self.partial = b""
+                        status = "appended"
+            elif self.partial.strip():
+                try:
+                    item = plistlib.loads(self.partial.strip())
+                except (ValueError, TypeError, plistlib.InvalidFileException):
+                    status = "incomplete"
+                    trailing_note = f"{len(self.partial)} trailing bytes not a complete plist"
+                else:
+                    if isinstance(item, dict):
+                        self.samples.append(item)
+                    self.partial = b""
+                    status = "appended"
+        return {
+            "status": status,
+            "trailing_partial_bytes": len(self.partial),
+            "trailing_note": trailing_note,
+            "sample_count": len(self.samples),
+        }
 
 
 def cpu_samples(raw: list[dict], pid: int, anchor: dict, start_ns: int = 0) -> list[tuple[int, float]]:
@@ -453,7 +502,10 @@ def summarize(run_dir: Path, phases: list[dict], anchor: dict, pid: int,
               "combined_w": power["combined_w"], "power_samples": power["samples"],
               "eu4_cpu_ms_per_swap": round(power["eu4_cputime_ms_per_s"]/swaps, 3),
               "joules_per_swap": round(power["combined_w"]/swaps, 4)}
-    (run_dir / "summary.json").write_text(json.dumps(result, indent=2)+"\n")
+    phase_name = phase.get("name") or "phase"
+    summary_path = run_dir / f"summary-{phase_name}.json"
+    summary_path.write_text(json.dumps(result, indent=2) + "\n")
+    (run_dir / "summary.json").write_text(json.dumps(result, indent=2) + "\n")
     (run_dir / "summary.md").write_text(
         "# Unattended paused Venice baseline\n\n"
         "| EU IV CPU ms/s | CPU W | GPU W | Combined W | Swaps/s | CPU ms/swap | J/swap |\n"

@@ -4471,9 +4471,60 @@ def _analyze_intrusive_diagnostic_run(run_dir: Path, manifest: dict) -> dict:
         output["salvage"] = {"status": salvage.get("status"), "reason": salvage.get("reason")}
     except (ValueError, OSError) as exc:
         output["salvage"] = {"status": "unavailable", "reason": str(exc)}
-    (run_dir / "report.json").write_text(json.dumps(output, indent=2) + "\n")
-    (run_dir / "report.md").write_text(_render_intrusive_diagnostic_report_md(output))
+    report_json = run_dir / "report.json"
+    report_md = run_dir / "report.md"
+    tmp_json = report_json.with_suffix(".json.tmp")
+    tmp_md = report_md.with_suffix(".md.tmp")
+    tmp_json.write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
+    tmp_md.write_text(_render_intrusive_diagnostic_report_md(output), encoding="utf-8")
+    tmp_json.replace(report_json)
+    tmp_md.replace(report_md)
     return output
+
+
+def _intrusive_derived_analysis(run_dir: Path, manifest: dict) -> str:
+    try:
+        _analyze_intrusive_diagnostic_run(run_dir, manifest)
+        return "complete"
+    except (ValueError, OSError, base.BenchmarkError) as exc:
+        for name in ("report.json", "report.md", "salvage-report.json", "salvage-report.md"):
+            path = run_dir / name
+            if path.is_file():
+                path.unlink()
+        manifest["derived_analysis_error"] = str(exc)
+        return "failed"
+
+
+def _intrusive_post_capture(
+    run_dir: Path,
+    manifest: dict,
+    manifest_path: Path,
+    power_tail: auto.PowerTail | None,
+    *,
+    identity_at_capture: dict | None,
+    update_manifest: bool = True,
+) -> None:
+    if power_tail is not None:
+        drain = power_tail.finish()
+        manifest["power_tail_finish"] = drain
+        (run_dir / "power.samples.json").write_text(json.dumps(power_tail.samples, default=str))
+    manifest["capture_status"] = manifest.get("capture_status") or "complete"
+    derived_status = _intrusive_derived_analysis(run_dir, manifest)
+    manifest["derived_analysis_status"] = derived_status
+    if update_manifest:
+        manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
+    from frame_model_evidence import infer_capsule_profile, seal_run_evidence
+
+    profile = (
+        "intrusive_complete_v1"
+        if derived_status == "complete"
+        else "intrusive_capture_only_v1"
+    )
+    seal_run_evidence(
+        run_dir,
+        identity_at_capture=identity_at_capture,
+        capsule_profile=profile,
+    )
 
 
 def analyze(run_dir: Path) -> dict:
@@ -5460,7 +5511,8 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                 )
                 auto.stop_process(pm, 5)
                 pm = None
-                power_tail.poll()
+                if power_tail is not None:
+                    power_tail.finish()
                 manifest["power_by_phase"] = diagnostic.summarize_power(
                     power_tail.samples,
                     phases,
@@ -5498,7 +5550,6 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                         f"Profiler dropped {dropped_records} records; attribution and forensic tail are partial.",
                     )
                 manifest["power"] = {"samples": len(power_tail.samples)}
-                (run_dir / "power.samples.json").write_text(json.dumps(power_tail.samples, default=str))
                 identity_end = _offline_git_identity_snapshot()
                 artifact_end = _offline_executed_artifact_snapshot()
                 manifest["identity_at_capture"] = {
@@ -5506,9 +5557,7 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                     "identity_end": identity_end,
                     "artifact_end": artifact_end,
                 }
-                from frame_model_evidence import seal_run_evidence
-
-                seal_run_evidence(run_dir, identity_at_capture=manifest.get("identity_at_capture"))
+                manifest["capture_status"] = "complete"
             finally:
                 auto.stop_process(pm, 3)
                 if game is not None and game.poll() is None:
@@ -5518,9 +5567,17 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                     control.close()
                 if installed:
                     manifest["working_save_changed"] = fixture.finish(run_dir)
-                manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n")
                 if manifest.get("status") in {"complete", DIAGNOSTIC_STATUS_COMPLETE_WITH_GAPS}:
-                    analyze(run_dir)
+                    _intrusive_post_capture(
+                        run_dir,
+                        manifest,
+                        manifest_path,
+                        power_tail,
+                        identity_at_capture=manifest.get("identity_at_capture"),
+                        update_manifest=True,
+                    )
+                else:
+                    manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n")
     except BaseException as exc:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
         manifest["status"] = "incomplete"
@@ -5529,7 +5586,17 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
         gates.record("run_completion", "failed", str(exc))
         manifest["gates"] = gates.entries
         manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n")
-        analyze(run_dir)
+        if manifest.get("report_kind") == "intrusive_diagnostic":
+            _intrusive_post_capture(
+                run_dir,
+                manifest,
+                manifest_path,
+                power_tail,
+                identity_at_capture=manifest.get("identity_at_capture"),
+                update_manifest=True,
+            )
+        else:
+            analyze(run_dir)
         raise
     return run_dir
 
@@ -6009,6 +6076,15 @@ def main() -> int:
     report.add_argument("run_dir")
     seal=sub.add_parser("seal-evidence",help="gzip raw telemetry/power and write raw_evidence.json")
     seal.add_argument("run_dir", type=Path)
+    seal.add_argument("--profile", choices=("intrusive_complete_v1", "intrusive_capture_only_v1"))
+    seal.add_argument(
+        "--no-manifest-write",
+        action="store_true",
+        help="do not modify manifest.json (required for historical Phase-C reseal)",
+    )
+    verify=sub.add_parser("verify-evidence", help="hermetic verification of a sealed evidence capsule")
+    verify.add_argument("run_dir", type=Path)
+    verify.add_argument("--profile", choices=("intrusive_complete_v1", "intrusive_capture_only_v1"))
     salvage_parser=sub.add_parser("intrusive-salvage",help="bounded TAIL salvage for an intrusive diagnostic run")
     salvage_parser.add_argument("run_dir", type=Path)
     recover=sub.add_parser("recover-power",help="restore the AC power setting from a run journal")
@@ -6104,7 +6180,26 @@ def main() -> int:
         elif args.command=="seal-evidence":
             from frame_model_evidence import seal_run_evidence
 
-            print(json.dumps(seal_run_evidence(Path(args.run_dir).expanduser().resolve()), indent=2))
+            run_dir = Path(args.run_dir).expanduser().resolve()
+            manifest_path = run_dir / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
+            identity = manifest.get("identity_at_capture")
+            if not args.no_manifest_write:
+                manifest.setdefault("capture_status", "complete")
+            print(
+                json.dumps(
+                    seal_run_evidence(
+                        run_dir,
+                        identity_at_capture=identity,
+                        capsule_profile=args.profile,
+                    ),
+                    indent=2,
+                )
+            )
+        elif args.command=="verify-evidence":
+            from frame_model_evidence import verify_run_evidence
+
+            print(json.dumps(verify_run_evidence(Path(args.run_dir).expanduser().resolve(), profile=args.profile), indent=2))
         elif args.command=="intrusive-salvage":
             from frame_model_salvage import run_intrusive_salvage, write_salvage_reports
 

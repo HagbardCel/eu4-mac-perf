@@ -1,8 +1,10 @@
 {
-  "sealed_utc": "2026-10-04T05:56:06.340450+00:00",
+  "sealed_utc": "2026-10-04T07:13:36.091946+00:00",
+  "capsule_profile": "intrusive_complete_v1",
   "run_dir": "results/20261003T210202Z-intrusive-diagnostic",
   "capture_identity": {
     "status": "reconstructed_incomplete",
+    "policy": "historical_reconstructed",
     "candidate_commit": "b0d49b44addec9ae4536060613ef0ec7bde036b3",
     "candidate_commit_short": "b0d49b4",
     "basis": [
@@ -18,13 +20,13 @@
   },
   "identity_at_capture": null,
   "identity_at_seal": {
-    "git_commit": "5c65cf01b269d4c03a9dc1935cbeec88f687841a",
-    "git_commit_short": "5c65cf0",
+    "git_commit": "db830e3fd1bbff54111e8a26160fa08f55645b86",
+    "git_commit_short": "db830e3",
     "git_tree_clean": false,
-    "controller_sha256": "b533b51164d74ebee71d2ce766f1742959b046b15660085e690779e879c4747b",
+    "controller_sha256": "511b8d78f77a1351b71df14b537f01330f63e34e3691e7ced9bdb2014e91ff17",
     "key_source_hashes": {
       "eu4_frame_model.c": "275dff4025b016abef59015c26a133ca254c6334c5ccc89fd6c80fb5762d8370",
-      "eu4_frame_model.py": "b533b51164d74ebee71d2ce766f1742959b046b15660085e690779e879c4747b",
+      "eu4_frame_model.py": "511b8d78f77a1351b71df14b537f01330f63e34e3691e7ced9bdb2014e91ff17",
       "eu4_gpu_segments.h": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
       "eu4_draw_observers.h": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
       "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
@@ -109,12 +111,12 @@
       "sha256": "79055c83a87827a857f8e39da1cd42b52092fe9332a88159210c6d99bd8f3f29"
     },
     "salvage-report.json": {
-      "bytes": 27002,
-      "sha256": "51f6824ff3c00545efad74d839c3f915faacf8dab4327c2a56a8dc01976d8171"
+      "bytes": 47395,
+      "sha256": "66ae1483810ecc1a13f0f9a387e435c8e95a08c9a5643489eb253c51d33786ee"
     },
     "salvage-report.md": {
-      "bytes": 921,
-      "sha256": "1379c9b9b6824c48d37d8ee62e814b3965703f40974fa0e679d7e59b6ae1b39f"
+      "bytes": 1128,
+      "sha256": "cf889bee2dec3619d2cc85628e43b065ea0fa02f0ceb1c454b19daf0b9286d32"
     }
   },
   "capture_inventory_note": "All committed capsule files except raw_evidence.json",
@@ -125,7 +127,14 @@
     "reference_manifest_sha256": "75b550e13a7d7e26a9087e763689872510c88e007c47e2696a55bf181fed5c7d",
     "reference_image_sha256": "1e884027dd0348a9cb8cad00e0a2249ed6acbb3a296519d2384a44e2344b17ed",
     "reference_source_run": "$HOME/Projects/MiniProjects/eu4-mac-perf/results/20260928T064432Z-autonomous",
-    "comparison": {
+    "repository_validation_reference": {
+      "manifest": "benchmark/submission_scene_reference.json",
+      "image": "results/20261003T210202Z-intrusive-diagnostic/ready-scene.png",
+      "sha256": "4141c0d8bbc4f997473174955b8e2fdf8b1a83c998a6e0bebc853dfb177db8d3",
+      "image_present": true,
+      "image_sha256": "4141c0d8bbc4f997473174955b8e2fdf8b1a83c998a6e0bebc853dfb177db8d3"
+    },
+    "capture_time_comparison": {
       "mean_rgb_delta": 1.3,
       "shift_x_px": 0,
       "shift_y_px": 0
@@ -156,5 +165,10 @@
     "dropped_records": 191966,
     "status": "degraded"
   },
-  "dropped_records": 191966
+  "dropped_records": 191966,
+  "powermetrics_stderr": {
+    "bytes": 312,
+    "empty": false,
+    "sha256": "3544f13c500c2f6cf1214f2274ed44cbcb749cadc71e2a7305ed4f240c626ca7"
+  }
 }

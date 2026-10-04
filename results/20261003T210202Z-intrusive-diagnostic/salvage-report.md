@@ -19,8 +19,13 @@
 - Window **24**: median r_S=0.8225095640646984, r_U=0.7376801750811259, detail_rows=355273
 - Window **25**: median r_S=0.8040093489459179, r_U=0.7332654139310241, detail_rows=354098
 
-## Rank stability
+## Rank stability (reporting only)
 
 - Top-16 overlap between windows [24, 25]: **1.0**
+- Count-complete S overlap: **1.0**
+- Spearman ρ (all frames): **1.0**
+- Kendall τ (all frames): **1.0**
+- Spearman ρ (count-complete S): **1.0**
+- Kendall τ (count-complete S): **1.0**
 
 Ordinal callsite ranks from TAIL windows only; C1/C2 provide aggregate F-counter stability. U/u program/location fields are not trusted under flag 2048.

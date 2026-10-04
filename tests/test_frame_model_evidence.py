@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 import eu4_frame_model as model
-from frame_model_evidence import seal_artifact_pair, seal_run_evidence
+from frame_model_evidence import seal_artifact_pair, seal_run_evidence, verify_run_evidence
 
 
 class FrameModelEvidenceTests(unittest.TestCase):
@@ -45,3 +45,12 @@ class FrameModelEvidenceTests(unittest.TestCase):
             self.assertIsNotNone(second)
             self.assertEqual(first["uncompressed_bytes"], second["uncompressed_bytes"])
             self.assertEqual(first["uncompressed_sha256"], second["uncompressed_sha256"])
+
+    def test_verify_profile_assertion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            (run_dir / "manifest.json").write_text('{"report_kind":"intrusive_diagnostic"}', encoding="ascii")
+            evidence = seal_run_evidence(run_dir, write_game_log=False, capsule_profile="intrusive_capture_only_v1")
+            self.assertEqual(evidence["capsule_profile"], "intrusive_capture_only_v1")
+            with self.assertRaises(ValueError):
+                verify_run_evidence(run_dir, profile="intrusive_complete_v1")

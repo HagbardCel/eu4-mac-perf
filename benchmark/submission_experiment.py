@@ -13,21 +13,64 @@ from pathlib import Path
 
 import autonomous_runner as auto
 import eu4_benchmark as base
+import submission_control as control
 import submission_validation as validation
 from autonomous_runner import capture_scene, focus, mark, stop_process, summarize, warm_up
 from fixture_manager import FixtureManager
+from submission_control import MODE_CANDIDATE, MODE_REFERENCE
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PHASE_SCHEDULE = (
-    ("a1", "reference", 0),
-    ("b1", "candidate", 1),
-    ("a2", "reference", 0),
-    ("b2", "candidate", 1),
-    ("a3", "reference", 0),
+    ("a1", "reference", MODE_REFERENCE),
+    ("b1", "candidate", MODE_CANDIDATE),
+    ("a2", "reference", MODE_REFERENCE),
+    ("b2", "candidate", MODE_CANDIDATE),
+    ("a3", "reference", MODE_REFERENCE),
 )
 PHASE_SECONDS = 30
 SETTLE_SECONDS = 5
+EXPECTED_CANDIDATE_CAPABILITY_ID = 0
+
+
+def _validate_control_deltas(
+    role: str,
+    start: dict[str, int],
+    end: dict[str, int],
+    *,
+    expected_capability_id: int,
+) -> dict:
+    hook_delta = end["candidate_hook_attempts"] - start["candidate_hook_attempts"]
+    action_delta = end["candidate_effective_actions"] - start["candidate_effective_actions"]
+    if end["candidate_capability_id"] != expected_capability_id:
+        return {
+            "status": "failed",
+            "reason": "candidate_capability_id mismatch",
+            "start": start,
+            "end": end,
+        }
+    if role == "candidate" and expected_capability_id == 0:
+        return {
+            "status": "unsupported_candidate",
+            "hook_attempts_delta": hook_delta,
+            "effective_actions_delta": action_delta,
+            "start": start,
+            "end": end,
+        }
+    if role == "candidate":
+        ok = end["ack_mode"] == MODE_CANDIDATE and hook_delta > 0 and action_delta > 0
+        reason = None if ok else "candidate phase requires hook and effective action deltas"
+    else:
+        ok = end["ack_mode"] == MODE_REFERENCE and hook_delta > 0 and action_delta == 0
+        reason = None if ok else "reference phase requires hook delta without effective actions"
+    return {
+        "status": "passed" if ok else "failed",
+        "reason": reason,
+        "hook_attempts_delta": hook_delta,
+        "effective_actions_delta": action_delta,
+        "start": start,
+        "end": end,
+    }
 
 
 def _run_phase(
@@ -36,52 +79,77 @@ def _run_phase(
     events: Path,
     tail,
     anchor: dict,
+    submission: control.SubmissionControl,
     name: str,
     role: str,
     mode: int,
     duration: float,
+    *,
+    expected_capability_id: int,
 ) -> dict:
-    start = mark(events, "phase_start", phase=name, mode=mode)
-    deadline = time.monotonic() + duration
-    screenshot = run_dir / f"measure-scene-{name}.png"
-    captured = False
-    while time.monotonic() < deadline:
+    generation = submission.request_mode(mode)
+    ack = submission.wait_ack(generation)
+    if ack["ack_mode"] != mode:
+        raise base.BenchmarkError(f"{name}: ack mode {ack['ack_mode']} != requested {mode}")
+    settle_deadline = time.monotonic() + SETTLE_SECONDS
+    while time.monotonic() < settle_deadline:
         if game.poll() is not None:
-            raise base.BenchmarkError(f"EU IV exited during {name}")
+            raise base.BenchmarkError(f"EU IV exited during {name} settle")
         if not focus("interior", game.pid):
-            raise base.BenchmarkError(f"EU IV lost focus during {name}")
-        if not captured and time.monotonic() >= start["monotonic_ns"] / 1e9 + SETTLE_SECONDS:
-            capture_scene(screenshot)
-            captured = True
-        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
-    if not captured:
-        capture_scene(screenshot)
-    end = mark(events, "phase_end", phase=name, mode=mode)
+            raise base.BenchmarkError(f"EU IV lost focus during {name} settle")
+        time.sleep(0.25)
+    screenshot = run_dir / f"measure-scene-{name}.png"
+    capture_scene(screenshot)
+    if not focus("interior", game.pid):
+        raise base.BenchmarkError(f"EU IV lost focus after {name} screenshot")
+    counter_start = submission.snapshot()
+    measurement_start = mark(events, "measurement_start", phase=name, mode=mode)
+    measurement_deadline = time.monotonic() + duration
+    while time.monotonic() < measurement_deadline:
+        if game.poll() is not None:
+            raise base.BenchmarkError(f"EU IV exited during {name} measurement")
+        if not focus("interior", game.pid):
+            raise base.BenchmarkError(f"EU IV lost focus during {name} measurement")
+        time.sleep(min(1.0, max(0.0, measurement_deadline - time.monotonic())))
+    measurement_end = mark(events, "measurement_end", phase=name, mode=mode)
+    counter_end = submission.snapshot()
+    tail.poll()
     phase = {
         "name": name,
         "role": role,
         "mode": mode,
-        "start_ns": start["monotonic_ns"],
-        "end_ns": end["monotonic_ns"],
-        "screenshot": str(screenshot.name),
+        "run_dir": str(run_dir),
+        "start_ns": measurement_start["monotonic_ns"],
+        "end_ns": measurement_end["monotonic_ns"],
+        "screenshot": str(screenshot),
+        "control_validation": _validate_control_deltas(
+            role,
+            counter_start,
+            counter_end,
+            expected_capability_id=expected_capability_id,
+        ),
     }
-    tail.poll()
     phase["summary"] = summarize(run_dir, [phase], anchor, game.pid, tail.samples)
     return phase
 
 
 def run_experiment(output_root: Path) -> Path:
+    auto.build()
+    control.build()
     evidence = auto.preflight()
     base.running_game_pid("idle")
     output_root.mkdir(parents=True, exist_ok=True)
     run_dir = output_root / f"{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}-submission-experiment"
     run_dir.mkdir(parents=True, exist_ok=False)
+    expected_capability = EXPECTED_CANDIDATE_CAPABILITY_ID
     manifest: dict = {
         "experiment": "submission_optimization_ababa_v1",
         "status": "starting",
-        "instrumentation": "libeu4_auto_probe.dylib only; no frame-model profiler",
+        "instrumentation": "libeu4_auto_probe.dylib + libeu4_submission_experiment.dylib",
+        "expected_candidate_capability_id": expected_capability,
         "phase_schedule": [{"name": n, "role": r, "mode": m} for n, r, m in PHASE_SCHEDULE],
         "phase_seconds": PHASE_SECONDS,
+        "repository_scene_reference": str(validation.SCENE_REFERENCE_MANIFEST.relative_to(ROOT)),
     }
     manifest_path = run_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -91,12 +159,15 @@ def run_experiment(output_root: Path) -> Path:
     old_log = game_log.read_bytes() if game_log.is_file() else b""
     game = pm = None
     installed = False
+    control_path = run_dir / "submission_control.bin"
+    control_path.write_bytes(bytes(control.CONTROL_SIZE))
     with FixtureManager(output_root, base.USER_DATA, auto.FIXTURE, evidence["fixture"]["save_sha256"]) as fixture:
         fixture.recover()
         working = fixture.install()
         installed = True
         manifest["working_save"] = str(working)
         pm_path = run_dir / "powermetrics.pliststream"
+        submission = control.SubmissionControl(control_path, candidate_capability_id=expected_capability)
         try:
             with pm_path.open("wb") as raw, (run_dir / "powermetrics.stderr").open("wb") as errors:
                 pm = subprocess.Popen(
@@ -107,12 +178,12 @@ def run_experiment(output_root: Path) -> Path:
                 time.sleep(2)
                 if pm.poll() is not None:
                     raise base.BenchmarkError("Powermetrics helper exited before EU IV launch")
-                env = {
-                    **__import__("os").environ,
-                    "DYLD_INSERT_LIBRARIES": str(auto.PROBE),
-                    "EU4_AUTO_PROBE_LOG": str(run_dir / "auto-probe.csv"),
-                    "EU4_SUBMISSION_EXPERIMENT_MODE": "0",
-                }
+                env = control.dylib_env(
+                    control_path,
+                    auto.PROBE,
+                    active_capability_id=expected_capability,
+                )
+                env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
                     game = subprocess.Popen(
                         ["./eu4", *evidence["launcher_args"], "--continuelastsave"],
@@ -128,16 +199,32 @@ def run_experiment(output_root: Path) -> Path:
                 capture_scene(run_dir / "ready-scene.png")
                 phases = []
                 for name, role, mode in PHASE_SCHEDULE:
-                    env["EU4_SUBMISSION_EXPERIMENT_MODE"] = str(mode)
                     phases.append(
-                        _run_phase(game, run_dir, events, tail, anchor, name, role, mode, PHASE_SECONDS),
+                        _run_phase(
+                            game,
+                            run_dir,
+                            events,
+                            tail,
+                            anchor,
+                            submission,
+                            name,
+                            role,
+                            mode,
+                            PHASE_SECONDS,
+                            expected_capability_id=expected_capability,
+                        ),
                     )
                 manifest["phases"] = phases
-                manifest["pareto_gate"] = validation.bracket_median_effect(phases)
+                manifest["pareto_gate"] = validation.bracket_normalized_ababa_gate(
+                    phases,
+                    expected_candidate_capability_id=expected_capability,
+                )
                 manifest["status"] = "complete"
                 stop_process(pm, 5)
                 pm = None
+                tail.finish()
         finally:
+            submission.close()
             stop_process(pm, 3)
             if game is not None and game.poll() is None and focus("terminate", game.pid):
                 try:
