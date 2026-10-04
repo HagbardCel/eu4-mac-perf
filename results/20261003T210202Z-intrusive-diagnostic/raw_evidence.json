@@ -1,5 +1,5 @@
 {
-  "sealed_utc": "2026-10-04T08:03:46.174666+00:00",
+  "sealed_utc": "2026-10-04T08:50:37.155568+00:00",
   "capsule_profile": "intrusive_complete_v1",
   "run_dir": "results/20261003T210202Z-intrusive-diagnostic",
   "capture_identity": {
@@ -20,13 +20,13 @@
   },
   "identity_at_capture": null,
   "identity_at_seal": {
-    "git_commit": "62853dc0d78ad0a7af80dc4c47db4caf445241bf",
-    "git_commit_short": "62853dc",
+    "git_commit": "11ff2c17dbd9d458069fedd5063b16e3829f08aa",
+    "git_commit_short": "11ff2c1",
     "git_tree_clean": false,
-    "controller_sha256": "e90d86986a98b5065af6ee12c413115095335929475ee10e6d2435fb90542c6a",
+    "controller_sha256": "aa3a107ac69ea54c6970ad6e05855fa445574040c089a48a37e74ae2d9f9cee8",
     "key_source_hashes": {
       "eu4_frame_model.c": "275dff4025b016abef59015c26a133ca254c6334c5ccc89fd6c80fb5762d8370",
-      "eu4_frame_model.py": "e90d86986a98b5065af6ee12c413115095335929475ee10e6d2435fb90542c6a",
+      "eu4_frame_model.py": "aa3a107ac69ea54c6970ad6e05855fa445574040c089a48a37e74ae2d9f9cee8",
       "eu4_gpu_segments.h": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
       "eu4_draw_observers.h": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
       "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
@@ -146,12 +146,16 @@
     "bytes": 8455,
     "sha256": "c7e07593213638a363609c6d51bb04b1be176384658c5b9e9c722f32785f8569",
     "origin": {
-      "status": "reconstructed_posthoc_anchored",
-      "extraction_method": "heuristic_marker_block",
+      "status": "reconstructed_posthoc_anchored_with_timezone_assumption",
+      "extraction_method": "committed_capture_time_log_with_manifest_window",
       "phase_c_wall_window_utc": {
         "start": "2026-10-03T21:02:02.037563+00:00",
         "end": "2026-10-03T23:02:02.037563+00:00"
-      }
+      },
+      "timezone_assumption": "UTC+2",
+      "eu4_log_utc_offset_seconds": 7200,
+      "basis": "EU4 Time: treated as local wall clock; offset inferred from alignment with capture clock_anchor UTC",
+      "eu4_log_time_naive": "2026-10-03 23:02:00"
     },
     "file": {
       "committed_filename": "game-ready.log",

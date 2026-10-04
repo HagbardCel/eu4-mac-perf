@@ -1,5 +1,7 @@
 import csv
+import datetime as dt
 import gzip
+import hashlib
 import json
 import plistlib
 import tempfile
@@ -9,6 +11,7 @@ from unittest.mock import patch
 
 import eu4_frame_model as model
 from frame_model_evidence import (
+    _evaluate_readiness_temporal_anchor,
     _finalize_readiness_log,
     _identity_capture_consistent,
     persist_capture_time_readiness_log,
@@ -226,3 +229,50 @@ class FrameModelEvidenceTests(unittest.TestCase):
                 (run_dir / plain).write_bytes(payload)
             seal_run_evidence(run_dir, write_game_log=False, capsule_profile="intrusive_capture_only_v1")
             verify_run_evidence(run_dir, profile="intrusive_capture_only_v1")
+
+    def test_historical_readiness_uses_timezone_assumption_not_false_utc_anchor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            wall_ns = int(dt.datetime(2026, 10, 3, 21, 2, 2, tzinfo=dt.timezone.utc).timestamp() * 1e9)
+            manifest = {"clock_anchor": {"wall_ns": wall_ns}}
+            block = "Time:2026-10-03 23:02\nLaunching SINGLEPLAYER-game\n"
+            temporal = _evaluate_readiness_temporal_anchor(block, manifest, run_dir)
+            self.assertEqual(
+                temporal["temporal_status"],
+                "reconstructed_posthoc_anchored_with_timezone_assumption",
+            )
+            self.assertEqual(temporal["eu4_log_utc_offset_seconds"], 7200)
+
+    def test_gzip_physical_bytes_unchanged_when_plain_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            plain = run_dir / "telemetry.csv"
+            payload = b"stable-payload\n"
+            plain.write_bytes(payload)
+            first = seal_artifact_pair(run_dir, "telemetry.csv", "telemetry.csv.gz")
+            gzip_path = run_dir / "telemetry.csv.gz"
+            before = gzip_path.read_bytes()
+            before_sha = hashlib.sha256(before).hexdigest()
+            second = seal_artifact_pair(run_dir, "telemetry.csv", "telemetry.csv.gz")
+            after_sha = hashlib.sha256(gzip_path.read_bytes()).hexdigest()
+            self.assertEqual(before_sha, after_sha)
+            self.assertEqual(first["gzip_sha256"], second["gzip_sha256"])
+
+    def test_intrusive_post_capture_skips_seal_when_capture_failed(self):
+        import eu4_frame_model as frame_model
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            manifest_path = run_dir / "manifest.json"
+            manifest = {"status": "incomplete", "report_kind": "intrusive_diagnostic"}
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            frame_model._intrusive_post_capture(
+                run_dir,
+                manifest,
+                manifest_path,
+                None,
+                identity_at_capture=None,
+                capture_succeeded=False,
+            )
+            self.assertEqual(manifest["capture_status"], "incomplete")
+            self.assertFalse((run_dir / "raw_evidence.json").is_file())

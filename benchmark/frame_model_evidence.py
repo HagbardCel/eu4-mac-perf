@@ -237,20 +237,160 @@ def _normalize_readiness_origin(origin: Any) -> dict | None:
     return None
 
 
-def _anchored_readiness_origin_from_manifest(manifest: dict, run_dir: Path) -> dict | None:
-    window_start, window_end = _phase_c_wall_window(manifest, run_dir)
-    if window_start is None or window_end is None:
+_READINESS_ORIGIN_EXTRA_FIELDS = (
+    "timezone_assumption",
+    "eu4_log_utc_offset_seconds",
+    "basis",
+    "note",
+    "eu4_log_time_naive",
+)
+
+
+def _capture_eu4_log_utc_offset_seconds() -> int:
+    return int(dt.datetime.now().astimezone().utcoffset().total_seconds())
+
+
+def _eu4_log_utc_offset_from_manifest(manifest: dict) -> dt.timedelta | None:
+    anchor = manifest.get("clock_anchor") or {}
+    seconds = anchor.get("eu4_log_utc_offset_seconds")
+    if seconds is None:
+        origin = (manifest.get("readiness_log") or {}).get("origin")
+        normalized = _normalize_readiness_origin(origin)
+        if normalized:
+            seconds = normalized.get("eu4_log_utc_offset_seconds")
+    if seconds is None:
         return None
-    manifest_origin = _normalize_readiness_origin((manifest.get("readiness_log") or {}).get("origin")) or {}
-    status = manifest_origin.get("status") or "reconstructed_posthoc_anchored"
-    return {
-        "status": status,
-        "extraction_method": "committed_capture_time_log_with_manifest_window",
-        "phase_c_wall_window_utc": {
-            "start": window_start.isoformat(),
-            "end": window_end.isoformat(),
-        },
+    return dt.timedelta(seconds=int(seconds))
+
+
+def _parse_eu4_session_start_naive(text: str) -> dt.datetime | None:
+    match = _EU4_SESSION_TIME_RE.search(text)
+    if not match:
+        return None
+    try:
+        return dt.datetime.strptime(match.group(1), "%Y-%m-%d %H:%M")
+    except ValueError:
+        return None
+
+
+def _session_time_matches_capture_window(
+    session_utc: dt.datetime,
+    window_start: dt.datetime,
+    window_end: dt.datetime,
+) -> bool:
+    tolerance = dt.timedelta(seconds=120)
+    return (window_start - tolerance) <= session_utc <= window_end
+
+
+def _infer_timezone_assumption_for_historical(
+    naive: dt.datetime,
+    window_start: dt.datetime,
+) -> dt.timedelta | None:
+    window_naive = window_start.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    for hours in range(-12, 15):
+        offset = dt.timedelta(hours=hours)
+        candidate_utc = naive - offset
+        if abs((candidate_utc - window_naive).total_seconds()) <= 120:
+            return offset
+    return None
+
+
+def _evaluate_readiness_temporal_anchor(
+    block: str,
+    manifest: dict,
+    run_dir: Path,
+) -> dict[str, Any]:
+    window_start, window_end = _phase_c_wall_window(manifest, run_dir)
+    meta: dict[str, Any] = {}
+    if window_start is None or window_end is None:
+        return {"temporal_status": "reconstructed_posthoc_unanchored", **meta}
+    naive = _parse_eu4_session_start_naive(block)
+    offset = _eu4_log_utc_offset_from_manifest(manifest)
+    session_utc: dt.datetime | None = None
+    if naive is not None and offset is not None:
+        session_utc = (naive - offset).replace(tzinfo=dt.timezone.utc)
+        meta["eu4_log_utc_offset_seconds"] = int(offset.total_seconds())
+        meta["eu4_log_time_naive"] = naive.isoformat(sep=" ")
+    if (
+        session_utc is not None
+        and _session_time_matches_capture_window(session_utc, window_start, window_end)
+    ):
+        return {"temporal_status": "reconstructed_posthoc_anchored", **meta}
+    if naive is not None and offset is None:
+        meta["eu4_log_time_naive"] = naive.isoformat(sep=" ")
+        assumed = _infer_timezone_assumption_for_historical(naive, window_start)
+        if assumed is not None:
+            session_utc = (naive - assumed).replace(tzinfo=dt.timezone.utc)
+            if _session_time_matches_capture_window(session_utc, window_start, window_end):
+                hours = assumed.total_seconds() / 3600
+                sign = "+" if hours >= 0 else ""
+                return {
+                    "temporal_status": "reconstructed_posthoc_anchored_with_timezone_assumption",
+                    "timezone_assumption": f"UTC{sign}{hours:g}",
+                    "eu4_log_utc_offset_seconds": int(assumed.total_seconds()),
+                    "basis": (
+                        "EU4 Time: treated as local wall clock; offset inferred from "
+                        "alignment with capture clock_anchor UTC"
+                    ),
+                    **meta,
+                }
+        return {
+            "temporal_status": "reconstructed_posthoc_time_consistent",
+            "note": (
+                "Readiness markers satisfied; session Time: line is not UTC-anchored "
+                "without a persisted or inferable timezone offset"
+            ),
+            **meta,
+        }
+    if _save_marker_in_block(block, manifest):
+        return {"temporal_status": "reconstructed_posthoc_save_marker"}
+    return {"temporal_status": "reconstructed_posthoc_unanchored", **meta}
+
+
+def _origin_from_temporal_evaluation(
+    temporal: dict[str, Any],
+    *,
+    extraction_method: str,
+    window_start: dt.datetime | None,
+    window_end: dt.datetime | None,
+) -> dict[str, Any]:
+    origin: dict[str, Any] = {
+        "status": temporal["temporal_status"],
+        "extraction_method": extraction_method,
+        "phase_c_wall_window_utc": (
+            {
+                "start": window_start.isoformat(),
+                "end": window_end.isoformat(),
+            }
+            if window_start is not None and window_end is not None
+            else None
+        ),
     }
+    for key in _READINESS_ORIGIN_EXTRA_FIELDS:
+        if temporal.get(key) is not None:
+            origin[key] = temporal[key]
+    return origin
+
+
+def _readiness_origin_from_committed_log(
+    run_dir: Path,
+    manifest: dict,
+    committed_filename: str,
+    *,
+    extraction_method: str,
+) -> dict[str, Any] | None:
+    window_start, window_end = _phase_c_wall_window(manifest, run_dir)
+    path = run_dir / committed_filename
+    if not path.is_file():
+        return None
+    block = path.read_text(encoding="utf-8", errors="replace")
+    temporal = _evaluate_readiness_temporal_anchor(block, manifest, run_dir)
+    return _origin_from_temporal_evaluation(
+        temporal,
+        extraction_method=extraction_method,
+        window_start=window_start,
+        window_end=window_end,
+    )
 
 
 def _readiness_origin_complete(origin: Any) -> bool:
@@ -259,6 +399,21 @@ def _readiness_origin_complete(origin: Any) -> bool:
         return False
     if normalized.get("status") == "captured_at_readiness":
         return True
+    if normalized.get("status") == "reconstructed_posthoc_anchored":
+        return bool(
+            normalized.get("extraction_method")
+            and normalized.get("phase_c_wall_window_utc") is not None
+            and normalized.get("eu4_log_utc_offset_seconds") is not None
+        )
+    if normalized.get("status") in {
+        "reconstructed_posthoc_anchored_with_timezone_assumption",
+        "reconstructed_posthoc_time_consistent",
+        "reconstructed_posthoc_save_marker",
+    }:
+        return bool(
+            normalized.get("extraction_method")
+            and normalized.get("phase_c_wall_window_utc") is not None
+        )
     return bool(
         normalized.get("extraction_method")
         and normalized.get("phase_c_wall_window_utc") is not None
@@ -288,10 +443,20 @@ def _finalize_readiness_log(
     manifest_origin = _normalize_readiness_origin((manifest.get("readiness_log") or {}).get("origin"))
     if (
         manifest_origin
+        and manifest_origin.get("status") == "captured_at_readiness"
         and manifest.get("readiness_log", {}).get("committed_filename") == committed
         and _readiness_origin_complete(manifest_origin)
     ):
         return {**readiness_log, "origin": manifest_origin, "file": file_block}
+    if readiness_log.get("status") == "present_on_disk":
+        origin = _readiness_origin_from_committed_log(
+            run_dir,
+            manifest,
+            committed,
+            extraction_method="committed_capture_time_log_with_manifest_window",
+        )
+        if origin:
+            return {**readiness_log, "origin": origin, "file": file_block}
     if prior_readiness and prior_readiness.get("file", {}).get("sha256") == file_block["sha256"]:
         origin = _normalize_readiness_origin(prior_readiness.get("origin"))
         if _readiness_origin_complete(origin):
@@ -301,13 +466,26 @@ def _finalize_readiness_log(
     with tempfile.TemporaryDirectory() as temporary:
         extracted = extract_game_ready_log(Path(temporary), manifest=manifest)
     if extracted.get("sha256") == file_block["sha256"]:
-        origin = {
-            "status": extracted.get("status", "reconstructed_posthoc_anchored"),
-            "extraction_method": extracted.get("extraction_method"),
-            "phase_c_wall_window_utc": extracted.get("phase_c_wall_window_utc"),
+        temporal = {
+            "temporal_status": extracted.get("status", "reconstructed_posthoc_unanchored"),
         }
+        for key in _READINESS_ORIGIN_EXTRA_FIELDS:
+            if extracted.get(key) is not None:
+                temporal[key] = extracted[key]
+        window_start, window_end = _phase_c_wall_window(manifest, run_dir)
+        origin = _origin_from_temporal_evaluation(
+            temporal,
+            extraction_method=extracted.get("extraction_method", "heuristic_marker_block"),
+            window_start=window_start,
+            window_end=window_end,
+        )
     elif readiness_log.get("status") == "present_on_disk":
-        origin = _anchored_readiness_origin_from_manifest(manifest, run_dir)
+        origin = _readiness_origin_from_committed_log(
+            run_dir,
+            manifest,
+            committed,
+            extraction_method="committed_capture_time_log_with_manifest_window",
+        )
         if origin is None:
             origin = {
                 "status": "historical_materialized_unknown",
@@ -384,7 +562,6 @@ def seal_artifact_pair(
         gzip_logical_bytes, gzip_logical_sha = _logical_hash_gzip(gzip_path)
         plain_sha = _sha256_file(plain)
         if plain_sha == gzip_logical_sha and plain.stat().st_size == gzip_logical_bytes:
-            _gzip_compress(plain, gzip_path)
             logical_bytes = gzip_logical_bytes
             logical_sha256 = gzip_logical_sha
         elif preserve_existing_gzip:
@@ -462,18 +639,6 @@ def _parse_log_line_timestamp(line: str) -> dt.datetime | None:
         return None
 
 
-def _parse_eu4_session_start(text: str) -> dt.datetime | None:
-    match = _EU4_SESSION_TIME_RE.search(text)
-    if not match:
-        return None
-    try:
-        return dt.datetime.strptime(match.group(1), "%Y-%m-%d %H:%M").replace(
-            tzinfo=dt.timezone.utc
-        )
-    except ValueError:
-        return None
-
-
 def _readiness_markers() -> tuple[str, ...]:
     return (
         "Human Player set as primary local",
@@ -490,15 +655,13 @@ def _block_satisfies_markers(block: str) -> bool:
     return game_log_ready(block)
 
 
-def _block_anchored_to_window(block: str, start: dt.datetime, end: dt.datetime) -> bool:
-    session_start = _parse_eu4_session_start(block)
-    if session_start is not None:
-        return start <= session_start <= end
-    timestamps = [_parse_log_line_timestamp(line) for line in block.splitlines()]
-    timestamps = [value for value in timestamps if value is not None]
-    if not timestamps:
-        return False
-    return any(start <= value <= end for value in timestamps)
+def _block_temporally_anchored(block: str, manifest: dict, run_dir: Path) -> bool:
+    temporal = _evaluate_readiness_temporal_anchor(block, manifest, run_dir)
+    return temporal["temporal_status"] in {
+        "reconstructed_posthoc_anchored",
+        "reconstructed_posthoc_anchored_with_timezone_assumption",
+        "reconstructed_posthoc_save_marker",
+    }
 
 
 def _save_marker_in_block(block: str, manifest: dict) -> bool:
@@ -522,6 +685,7 @@ def persist_capture_time_readiness_log(run_dir: Path, game_log: Path, old_log: b
         "origin": {
             "status": "captured_at_readiness",
             "extraction_method": "fresh_game_log_delta",
+            "eu4_log_utc_offset_seconds": _capture_eu4_log_utc_offset_seconds(),
         },
         "status": "captured_at_readiness",
         "old_log_bytes": len(old_log),
@@ -565,12 +729,7 @@ def extract_game_ready_log(
 
     text = game_log_path.read_text(encoding="utf-8", errors="replace")
     if _block_satisfies_markers(text):
-        session_start = _parse_eu4_session_start(text)
-        anchored = False
-        if window_start and window_end and session_start is not None:
-            anchored = window_start <= session_start <= window_end
-        if not anchored:
-            anchored = _save_marker_in_block(text, manifest)
+        anchored = _block_temporally_anchored(text, manifest, run_dir)
         candidates = [(0, text, anchored)]
     else:
         candidates = []
@@ -587,11 +746,7 @@ def extract_game_ready_log(
             block = text[position : end_line if end_line >= 0 else len(text)]
             if not _block_satisfies_markers(block):
                 continue
-            anchored = False
-            if window_start and window_end:
-                anchored = _block_anchored_to_window(block, window_start, window_end)
-            if not anchored:
-                anchored = _save_marker_in_block(block, manifest)
+            anchored = _block_temporally_anchored(block, manifest, run_dir)
             candidates.append((position, block, anchored))
 
     if not candidates:
@@ -600,9 +755,11 @@ def extract_game_ready_log(
         return provenance
 
     position, block, anchored = max(candidates, key=lambda item: item[0])
-    provenance["status"] = (
-        "reconstructed_posthoc_anchored" if anchored else "reconstructed_posthoc_unanchored"
-    )
+    temporal = _evaluate_readiness_temporal_anchor(block, manifest, run_dir)
+    provenance["status"] = temporal["temporal_status"]
+    for key in _READINESS_ORIGIN_EXTRA_FIELDS:
+        if temporal.get(key) is not None:
+            provenance[key] = temporal[key]
     filename = "game-ready.log" if anchored else "game-ready.reconstructed.log"
     out_path = run_dir / filename
     out_path.write_text(block.rstrip() + "\n", encoding="utf-8")

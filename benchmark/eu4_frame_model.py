@@ -4503,21 +4503,31 @@ def _intrusive_post_capture(
     *,
     identity_at_capture: dict | None,
     update_manifest: bool = True,
+    capture_succeeded: bool = True,
 ) -> None:
     power_incomplete = False
     if power_tail is not None:
         drain = power_tail.finish()
         manifest["power_tail_finish"] = drain
-        (run_dir / "power.samples.json").write_text(json.dumps(power_tail.samples, default=str))
+        if capture_succeeded:
+            (run_dir / "power.samples.json").write_text(json.dumps(power_tail.samples, default=str))
         power_incomplete = drain.get("status") == "incomplete"
+    if not capture_succeeded:
+        manifest["capture_status"] = manifest.get("capture_status") or "incomplete"
+        manifest.setdefault("derived_analysis_status", "skipped")
+        if update_manifest:
+            manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
+        return
     if power_incomplete:
         manifest["capture_status"] = "incomplete_power_tail"
-    else:
-        manifest["capture_status"] = manifest.get("capture_status") or "complete"
+    elif manifest.get("capture_status") != "complete":
+        manifest["capture_status"] = "incomplete"
     derived_status = _intrusive_derived_analysis(run_dir, manifest)
     manifest["derived_analysis_status"] = derived_status
     if update_manifest:
         manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
+    if manifest.get("capture_status") != "complete":
+        return
     from frame_model_evidence import seal_run_evidence
 
     if power_incomplete or derived_status != "complete":
@@ -5317,6 +5327,7 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     events = run_dir / "events.jsonl"
     anchor = auto.mark(events, "clock_anchor")
+    anchor["eu4_log_utc_offset_seconds"] = int(dt.datetime.now().astimezone().utcoffset().total_seconds())
     manifest["clock_anchor"] = anchor
     manifest["power_window_policy"] = (
         "Power samples use the same controller phase start/end timestamps as frame/event analysis"
@@ -5598,6 +5609,7 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                 power_tail,
                 identity_at_capture=manifest.get("identity_at_capture"),
                 update_manifest=True,
+                capture_succeeded=False,
             )
         else:
             analyze(run_dir)
