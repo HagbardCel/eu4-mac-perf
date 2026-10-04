@@ -65,7 +65,7 @@ Closure commands (order matters — seal after salvage):
 ```sh
 python3 benchmark/eu4_frame_model.py intrusive-salvage results/20261003T210202Z-intrusive-diagnostic
 python3 benchmark/eu4_frame_model.py seal-evidence results/20261003T210202Z-intrusive-diagnostic \
-  --profile intrusive_complete_v1 --no-manifest-write
+  --profile intrusive_complete_v1
 python3 benchmark/eu4_frame_model.py verify-evidence results/20261003T210202Z-intrusive-diagnostic
 ```
 

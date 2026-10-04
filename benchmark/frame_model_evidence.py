@@ -24,6 +24,8 @@ SEAL_ARTIFACTS = (
     ("powermetrics.pliststream", "powermetrics.pliststream.gz"),
 )
 
+SEAL_ARTIFACT_BY_PLAIN = {plain: gzip for plain, gzip in SEAL_ARTIFACTS}
+
 CAPSULE_INVENTORY_FILES = (
     "manifest.json",
     "events.jsonl",
@@ -220,11 +222,26 @@ def _summarize_powermetrics_stderr(path: Path) -> dict[str, Any]:
     }
 
 
+def _normalize_readiness_origin(origin: Any) -> dict | None:
+    if origin is None:
+        return None
+    if isinstance(origin, str):
+        if origin == "captured_at_readiness":
+            return {
+                "status": "captured_at_readiness",
+                "extraction_method": "fresh_game_log_delta",
+            }
+        return {"status": origin}
+    if isinstance(origin, dict):
+        return origin
+    return None
+
+
 def _anchored_readiness_origin_from_manifest(manifest: dict, run_dir: Path) -> dict | None:
     window_start, window_end = _phase_c_wall_window(manifest, run_dir)
     if window_start is None or window_end is None:
         return None
-    manifest_origin = (manifest.get("readiness_log") or {}).get("origin") or {}
+    manifest_origin = _normalize_readiness_origin((manifest.get("readiness_log") or {}).get("origin")) or {}
     status = manifest_origin.get("status") or "reconstructed_posthoc_anchored"
     return {
         "status": status,
@@ -236,12 +253,16 @@ def _anchored_readiness_origin_from_manifest(manifest: dict, run_dir: Path) -> d
     }
 
 
-def _readiness_origin_complete(origin: dict | None) -> bool:
-    if not origin:
+def _readiness_origin_complete(origin: Any) -> bool:
+    normalized = _normalize_readiness_origin(origin)
+    if not normalized:
         return False
-    if origin.get("status") == "captured_at_readiness":
+    if normalized.get("status") == "captured_at_readiness":
         return True
-    return bool(origin.get("extraction_method") and origin.get("phase_c_wall_window_utc") is not None)
+    return bool(
+        normalized.get("extraction_method")
+        and normalized.get("phase_c_wall_window_utc") is not None
+    )
 
 
 def _finalize_readiness_log(
@@ -264,7 +285,7 @@ def _finalize_readiness_log(
         "bytes": path.stat().st_size,
         "sha256": _sha256_file(path),
     }
-    manifest_origin = (manifest.get("readiness_log") or {}).get("origin")
+    manifest_origin = _normalize_readiness_origin((manifest.get("readiness_log") or {}).get("origin"))
     if (
         manifest_origin
         and manifest.get("readiness_log", {}).get("committed_filename") == committed
@@ -272,7 +293,7 @@ def _finalize_readiness_log(
     ):
         return {**readiness_log, "origin": manifest_origin, "file": file_block}
     if prior_readiness and prior_readiness.get("file", {}).get("sha256") == file_block["sha256"]:
-        origin = prior_readiness.get("origin")
+        origin = _normalize_readiness_origin(prior_readiness.get("origin"))
         if _readiness_origin_complete(origin):
             return {**readiness_log, "origin": origin, "file": file_block}
     import tempfile
@@ -306,13 +327,13 @@ def describe_powermetrics_pliststream(run_dir: Path, manifest: dict | None = Non
     if manifest is None:
         manifest_path = run_dir / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
-    plain = run_dir / "powermetrics.pliststream"
     gzip_path = run_dir / "powermetrics.pliststream.gz"
-    if plain.is_file():
-        raw = plain.read_bytes()
-    elif gzip_path.is_file():
+    plain = run_dir / "powermetrics.pliststream"
+    if gzip_path.is_file():
         with gzip.open(gzip_path, "rb") as handle:
             raw = handle.read()
+    elif plain.is_file():
+        raw = plain.read_bytes()
     else:
         return None
     parts = raw.split(b"\0")
@@ -350,7 +371,13 @@ def describe_powermetrics_pliststream(run_dir: Path, manifest: dict | None = Non
     }
 
 
-def seal_artifact_pair(run_dir: Path, plain_name: str, gzip_name: str) -> dict[str, Any] | None:
+def seal_artifact_pair(
+    run_dir: Path,
+    plain_name: str,
+    gzip_name: str,
+    *,
+    preserve_existing_gzip: bool = False,
+) -> dict[str, Any] | None:
     plain = run_dir / plain_name
     gzip_path = run_dir / gzip_name
     if plain.is_file() and gzip_path.is_file():
@@ -360,8 +387,13 @@ def seal_artifact_pair(run_dir: Path, plain_name: str, gzip_name: str) -> dict[s
             _gzip_compress(plain, gzip_path)
             logical_bytes = gzip_logical_bytes
             logical_sha256 = gzip_logical_sha
-        else:
+        elif preserve_existing_gzip:
             logical_bytes, logical_sha256 = gzip_logical_bytes, gzip_logical_sha
+        else:
+            raise ValueError(
+                f"{plain_name} disagrees with committed {gzip_name}; "
+                "remove the stale plain file or pass preserve_existing_gzip for historical migration"
+            )
     elif plain.is_file():
         _gzip_compress(plain, gzip_path)
         logical_bytes = plain.stat().st_size
@@ -487,7 +519,10 @@ def persist_capture_time_readiness_log(run_dir: Path, game_log: Path, old_log: b
         filename = "game-ready.log"
         (run_dir / filename).write_text(text, encoding="utf-8")
     return {
-        "origin": "captured_at_readiness",
+        "origin": {
+            "status": "captured_at_readiness",
+            "extraction_method": "fresh_game_log_delta",
+        },
         "status": "captured_at_readiness",
         "old_log_bytes": len(old_log),
         "old_log_sha256": hashlib.sha256(old_log).hexdigest(),
@@ -678,6 +713,7 @@ def seal_run_evidence(
     write_game_log: bool = True,
     capsule_profile: str | None = None,
     preserve_readiness_origin: bool = True,
+    preserve_existing_gzip: bool = False,
 ) -> dict:
     """Write raw_evidence.json and optional gzip companions."""
     run_dir = Path(run_dir)
@@ -705,12 +741,17 @@ def seal_run_evidence(
             readiness_log = extract_game_ready_log(run_dir, manifest=manifest)
 
     identity_at_seal = identity_snapshot_fn()
-    plist_interpretation = describe_powermetrics_pliststream(run_dir, manifest)
     artifacts: dict[str, Any] = {}
     for plain_name, gzip_name in SEAL_ARTIFACTS:
-        entry = seal_artifact_pair(run_dir, plain_name, gzip_name)
+        entry = seal_artifact_pair(
+            run_dir,
+            plain_name,
+            gzip_name,
+            preserve_existing_gzip=preserve_existing_gzip,
+        )
         if entry:
             artifacts[plain_name] = entry
+    plist_interpretation = describe_powermetrics_pliststream(run_dir, manifest)
 
     dropped = (manifest.get("probe_integrity") or {}).get("dropped_records")
     profile = capsule_profile or infer_capsule_profile(run_dir, manifest)
@@ -763,7 +804,6 @@ PROFILE_REQUIRED_FILES = {
         "powermetrics.pliststream.gz",
         "powermetrics.stderr",
         "ready-scene.png",
-        "game-ready.log",
         "report.json",
         "report.md",
         "salvage-report.json",
@@ -779,8 +819,12 @@ PROFILE_REQUIRED_FILES = {
         "powermetrics.pliststream.gz",
         "powermetrics.stderr",
         "ready-scene.png",
-        "game-ready.log",
     ),
+}
+
+PROFILE_READINESS_ONE_OF = {
+    "intrusive_complete_v1": ("game-ready.log", "game-ready.reconstructed.log"),
+    "intrusive_capture_only_v1": ("game-ready.log", "game-ready.reconstructed.log"),
 }
 
 PROFILE_REQUIRED_ARTIFACTS = {
@@ -851,15 +895,23 @@ def verify_run_evidence(
     ]
     if missing_required:
         raise ValueError(f"profile {expected_profile} missing required inventory entries: {missing_required}")
+    readiness_options = PROFILE_READINESS_ONE_OF.get(expected_profile)
+    if readiness_options and not any(name in inventory for name in readiness_options):
+        raise ValueError(
+            f"profile {expected_profile} missing readiness log (one of {readiness_options})"
+        )
     artifacts = sealed.get("artifacts") or {}
     for plain_name in PROFILE_REQUIRED_ARTIFACTS.get(expected_profile, ()):
         entry = artifacts.get(plain_name)
         if not entry:
             raise ValueError(f"missing sealed artifact metadata for {plain_name}")
+        expected_gzip = SEAL_ARTIFACT_BY_PLAIN[plain_name]
+        if entry.get("plain_path") != plain_name:
+            raise ValueError(f"artifact metadata plain_path mismatch for {plain_name}")
         gzip_name = entry.get("gzip_path")
-        if not gzip_name:
-            raise ValueError(f"artifact metadata for {plain_name} missing gzip_path")
-        _verify_gzip_artifact(run_dir, entry, gzip_name)
+        if gzip_name != expected_gzip:
+            raise ValueError(f"artifact metadata gzip_path mismatch for {plain_name}")
+        _verify_gzip_artifact(run_dir, entry, expected_gzip)
     power_entry = (sealed.get("artifacts") or {}).get("power.samples.json")
     plist_entry = (sealed.get("artifacts") or {}).get("powermetrics.pliststream")
     semantic = {"status": "skipped"}

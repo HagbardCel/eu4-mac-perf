@@ -6082,9 +6082,9 @@ def main() -> int:
     seal.add_argument("run_dir", type=Path)
     seal.add_argument("--profile", choices=("intrusive_complete_v1", "intrusive_capture_only_v1"))
     seal.add_argument(
-        "--no-manifest-write",
+        "--preserve-existing-gzip",
         action="store_true",
-        help="do not modify manifest.json (required for historical Phase-C reseal)",
+        help="keep committed gzip logical hashes when plain files disagree (historical migration only)",
     )
     verify=sub.add_parser("verify-evidence", help="hermetic verification of a sealed evidence capsule")
     verify.add_argument("run_dir", type=Path)
@@ -6188,14 +6188,13 @@ def main() -> int:
             manifest_path = run_dir / "manifest.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
             identity = manifest.get("identity_at_capture")
-            if not args.no_manifest_write:
-                manifest.setdefault("capture_status", "complete")
             print(
                 json.dumps(
                     seal_run_evidence(
                         run_dir,
                         identity_at_capture=identity,
                         capsule_profile=args.profile,
+                        preserve_existing_gzip=args.preserve_existing_gzip,
                     ),
                     indent=2,
                 )
