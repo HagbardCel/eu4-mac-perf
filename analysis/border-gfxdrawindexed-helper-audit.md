@@ -19,7 +19,20 @@ Proving loop setup removable is **insufficient** — must audit the helper itsel
 | Uses `GL_UNSIGNED_SHORT`, index offset 0 on border path | [mesh-render-path.md](mesh-render-path.md) |
 | Tail-jump to `glDrawElementsBaseVertex` when base vertex ≠ 0 | same |
 | Reads draw count from context when caller passes `esi==0` | `GfxDrawIndexed` @ `0x1015eaa98` (`movl 0x68(%r12), %r15d`) — border passes non-zero `esi` from `3*tri` @ `0x1010cc2d9` |
-| Uploads vertex attribs from deferred context before GL dispatch | `0x1015eaacc` loop over attrib slots |
+| Uploads vertex attribs from deferred context before GL dispatch | `0x1015eaacc` loop over attrib slots (`rbx` 0..0x18`, `callq *(%r13)`) |
+| Clears deferred upload flag on context | `movb $0, 0x128(%r12)` @ `0x1015eab07` after attrib loop |
+
+## Entry structure (GOG 1.37.5 otool)
+
+```text
+1015eaa77  GfxDrawIndexed:
+  rdi = GfxDeferredContextGFX*; r12 = *rdi
+  r14d = 4th arg (ecx); r15d = index count (esi) or context+0x68 if esi<=0
+  1015eaaa7  if context+0x128: attrib upload loop 1015eaad3..1015eab05
+  ... early-out / error paths at 1015eab1e+
+```
+
+Border mode-0 always passes **esi = 3×triangle_count** and **ecx = 0** (`0x1010cc2e6`–`0x1010cc2e8`), so the `esi<=0` context fallback is not used on this path.
 
 ## Audit checklist (open / partial)
 

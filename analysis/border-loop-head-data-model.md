@@ -50,7 +50,7 @@ record_index_at_minus_2      # movzwl -0x2(%rcx), %ecx  (@ 0x1010cbe63)
 color_byte_at_cursor         # movb (%rax), %cl when rax = cursor (@ 0x1010cc1d3)
 ```
 
-**Forward-scan requirement:** when classifying record `i>0`, prove how `%rcx` is obtained from `-0x70` and the `+4` stride applied at `0x1010cc3c5` (tail), matching `0x1010cc3cd` end compare.
+**Forward-scan requirement:** when classifying record `i>0`, derive `%rcx` from the saved index cursor `-0x70(%rbp)` using the same arithmetic as loop tail `0x1010cc3bd`–`0x1010cc3da` (`addq $4, %rcx` per consumed entry; end compare via `leaq -0x2(%rcx), %rax` vs `-0x198(%rbp)`). Prefix simulation must mirror this cursor advance, not assume contiguous `SBorderDraw` memory alone.
 
 ### RecordView (`SBorderDraw`, 28-byte stride)
 

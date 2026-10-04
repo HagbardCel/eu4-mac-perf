@@ -49,6 +49,21 @@ Static **GO** requires all of:
 
 **`GO` (unconditional) is not an expected outcome of this offline PR** while Gate 0 remains PENDING in the active gameplay context.
 
+## Static GO checklist (this PR)
+
+| # | Criterion | Status |
+|---|-----------|--------|
+| 1 | Classifier inputs + `%r13b` / `%rcx` paths | Documented in data model |
+| 2 | Prefix length ≥2 structurally possible | Yes (classifier + synthetic tests) |
+| 3 | `entry_state_matches_batch_key` + v1 fall-through | Classifier + docs |
+| 4 | Skip / unsupported fail closed | v1 policy |
+| 5 | GfxDrawIndexed audit | **Open** — [helper audit](border-gfxdrawindexed-helper-audit.md) |
+| 6 | CPU continuation (RFLAGS/XMM) | **Open** — [Gate 3b](border-loop-head-gate3b-state.md) |
+| 7 | Engine/GL post-batch invariants | Documented; proof partial |
+| 8 | Non-recursive continuation | Design requirement; address TBD |
+| 9 | Detour feasible @ `0x1010cbe55` | Plausible (5-byte `testb`) |
+| 10 | Uncertainty → original loop | Patch plan fail-closed |
+
 ## Verdict dimensions (orthogonal)
 
 | Dimension | This PR |

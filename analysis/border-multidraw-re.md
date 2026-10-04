@@ -33,4 +33,4 @@ Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — s
 
 ## Status
 
-PR B/C/D merged on `main`. **Mutation: NO** for GL interpose. **Active track:** [border-loop-head-feasibility.md](border-loop-head-feasibility.md) @ `0x1010cbe55`.
+PR B/C/D merged on `main`. **Mutation: NO** for GL interpose. **Active track:** [border-loop-head-feasibility.md](border-loop-head-feasibility.md) @ `0x1010cbe55` (PR #39 offline RE).
