@@ -65,7 +65,7 @@ static _Atomic uint64_t *map_counters(void) {
 }
 
 static void reset_candidate_bank_counters(void) {
-    for (uint32_t slot = EU4_COUNTER_CANDIDATE_SITE_ENTRIES; slot < EU4_SUBMISSION_COUNTER_COUNT; slot++) {
+    for (uint32_t slot = EU4_COUNTER_CANDIDATE_SITE_ENTRIES; slot < EU4_COUNTER_BORDER_CANDIDATE_RUNS; slot++) {
         atomic_store_explicit(&map_counters()[slot], 0, memory_order_relaxed);
     }
 }

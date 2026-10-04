@@ -76,7 +76,9 @@
     {"slot": 28, "name": "border_fallback_mutate_disabled", "bank": "border", "modes": ["reference", "candidate"]},
     {"slot": 29, "name": "border_site_0_draws_covered", "bank": "border", "modes": ["reference", "candidate"]},
     {"slot": 30, "name": "border_site_1_draws_covered", "bank": "border", "modes": ["reference", "candidate"]},
-    {"slot": 31, "name": "border_site_2_draws_covered", "bank": "border", "modes": ["reference", "candidate"]}
+    {"slot": 31, "name": "border_site_2_draws_covered", "bank": "border", "modes": ["reference", "candidate"]},
+    {"slot": 32, "name": "border_runtime_context_checked", "bank": "border", "modes": ["reference", "candidate"], "note": "Gate 0: gameplay GL context probed once (not dlsym-only)"},
+    {"slot": 33, "name": "border_runtime_context_multidraw_supported", "bank": "border", "modes": ["reference", "candidate"], "note": "Gate 0: 1 if core GL >= 3.2 (or equivalent) when checked"}
   ],
   "v2_compat": {
     "eligible_pair_hits_slot": 16,

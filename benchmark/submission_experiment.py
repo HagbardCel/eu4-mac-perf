@@ -189,11 +189,13 @@ def _run_phase(
     capture_scene(screenshot)
     if not focus("interior", game.pid):
         raise base.BenchmarkError(f"EU IV lost focus after {name} screenshot")
-    counter_start = submission.snapshot()
     obs_arm_gen: int | None = None
     if mode == MODE_CANDIDATE:
         obs_arm_gen = submission.request_observation_arm()
         submission.wait_observation_ack(obs_arm_gen, expected_state=control.OBS_ACK_ARMED)
+        counter_start = submission.snapshot()
+    else:
+        counter_start = submission.snapshot()
     measurement_start = mark(events, "measurement_start", phase=name, mode=mode)
     measurement_deadline = time.monotonic() + duration
     while time.monotonic() < measurement_deadline:
@@ -305,9 +307,11 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
         ],
         "phase_seconds": BORDER_PHASE_SECONDS,
         "repository_scene_reference": str(validation.SCENE_REFERENCE_MANIFEST.relative_to(ROOT)),
-        "border_api_runtime_assert": True,
+        "border_api_runtime_assert": "recorded_in_counters",
         "pr_b_mutation_go": "NO-GO_interpose",
         "mutation_enabled": False,
+        "venice_run_authorized": False,
+        "note": "Harness retained for CI/dylib tests; manual Venice ABABA not authorized after PR B NO-GO.",
     }
     manifest_path = run_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -378,6 +382,8 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                 pm = None
                 _attach_phase_summaries(phases, run_dir, anchor, game.pid, tail)
                 manifest["phases"] = phases
+                gate0 = border_validation.border_gate0_from_snapshot(submission.snapshot())
+                manifest["border_gate0"] = gate0
                 manifest["border_engagement_gate"] = border_validation.border_experiment_gate(phases)
                 if manifest["border_engagement_gate"]["status"] != "passed":
                     raise base.BenchmarkError(

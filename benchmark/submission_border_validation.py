@@ -58,6 +58,17 @@ def border_phase_validation(
     }
 
 
+def border_gate0_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    checked = int(snapshot.get("border_runtime_context_checked", 0))
+    supported = int(snapshot.get("border_runtime_context_multidraw_supported", 0))
+    return {
+        "context_checked": checked > 0,
+        "multidraw_supported": supported > 0,
+        "border_runtime_context_checked": checked,
+        "border_runtime_context_multidraw_supported": supported,
+    }
+
+
 def border_experiment_gate(phases: list[dict[str, Any]]) -> dict[str, Any]:
     measured = [p for p in phases if p.get("name", "").startswith(("a", "b"))]
     failures: list[str] = []

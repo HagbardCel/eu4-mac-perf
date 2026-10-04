@@ -35,10 +35,10 @@ static void interposed_glDrawElementsBaseVertex(
     GLenum type,
     const void *indices,
     GLint basevertex) {
+    eu4_border_init_gl_apis();
     const uint32_t site = border_site_from_return_address(__builtin_return_address(0));
     if (site == UINT32_MAX) {
         eu4_border_flush_pending();
-        eu4_border_init_gl_apis();
         typedef void (*fn)(GLenum, GLsizei, GLenum, const void *, GLint);
         fn real = (fn)dlsym(RTLD_NEXT, "glDrawElementsBaseVertex");
         if (real) {

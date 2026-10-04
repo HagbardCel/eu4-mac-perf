@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 COUNTER_SCHEMA_VERSION = 3
-COUNTER_COUNT = 32
+COUNTER_COUNT = 34
 SUPPORTED_HYPOTHESIS_MASK_DEFAULT = 0xb
 SAFETY_HYPOTHESIS_MASK_DEFAULT = 0x0
 
@@ -40,6 +40,8 @@ COUNTER_SLOTS = {
     "border_site_0_draws_covered": 29,
     "border_site_1_draws_covered": 30,
     "border_site_2_draws_covered": 31,
+    "border_runtime_context_checked": 32,
+    "border_runtime_context_multidraw_supported": 33,
 }
 
 HYPOTHESES = [

@@ -16,6 +16,6 @@
   "dylib": "benchmark/.build/libeu4_submission_border_multidraw.dylib",
   "counter_schema_version": 3,
   "launch_command": "python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa",
-  "venice_run": "observer_only_pending_loop_head_mutation",
-  "notes": "Do not run Venice expecting batching ROI until loop-head patch ships. ABABA validates border_candidate_draws engagement and border_engagement_gate."
+  "venice_run": "not_authorized",
+  "notes": "Harness for CI/dylib build tests only. Next live border work: loop-head @ 0x1010cbe55 RE + mutation; Gate 0 recorded via border_runtime_context_* counters when/if run locally."
 }
