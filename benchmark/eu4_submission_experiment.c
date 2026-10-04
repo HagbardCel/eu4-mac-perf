@@ -245,13 +245,21 @@ static void poll_command_ack(void) {
     }
     pthread_mutex_unlock(&header_lock);
     eu4_submission_counter_add(EU4_COUNTER_CONTROL_TICKS, 1);
-    if (observation_bank_writable(words)) {
-        eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_SWAPS, 1);
-    }
 }
 
 static CGLError submission_flush(CGLContextObj context) {
+    pthread_once(&setup_once, setup);
+    bool was_observing = false;
+    if (control_map != MAP_FAILED) {
+        uint32_t *words = (uint32_t *)control_map;
+        if (protocol_ok(words)) {
+            was_observing = observation_bank_writable(words);
+        }
+    }
     CGLError result = CGLFlushDrawable(context);
+    if (was_observing) {
+        eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_SWAPS, 1);
+    }
     poll_command_ack();
     return result;
 }

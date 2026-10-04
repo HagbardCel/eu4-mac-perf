@@ -33,7 +33,16 @@ Same **A–B–A** schedule as engagement smoke. B1 uses explicit ARM/FREEZE (FR
 python3 benchmark/submission_experiment.py --output results --multi-hypothesis-smoke
 ```
 
-**Pass criteria:** reference health phases (`control_validation.status == passed`, no effective actions); B1 `multi_hypothesis.harness_ok`; **no** requirement for v1 `eligible_pair_hits > 0`. Stage-2 recommendation uses `safety_qualified_hypothesis_mask` and materiality only.
+**Pass criteria:** A1/A2/B1 absolute scene gates (`observer_scene_gate`); reference health (site + renderbuckets invocations, no effective actions); B1 `control_validation.status == passed` **and** `multi_hypothesis.harness_ok` (includes `effective_actions_delta == 0`); **no** v1 pair-hit requirement. Stage-2 uses `safety_qualified_hypothesis_mask` and materiality only.
+
+**Pre-Venice local (Rosetta):**
+
+```bash
+PYTHONPATH=benchmark python3 -m unittest \
+  tests.test_mesh_observer_gateway \
+  tests.test_renderbuckets_entry_gateway \
+  tests.test_submission_control -q
+```
 
 Static RE matrix: [`analysis/gfx-subrecord-hypothesis-matrix.md`](../analysis/gfx-subrecord-hypothesis-matrix.md). Cross-parent continuity: [`analysis/cross-parent-buffer-bind-re.md`](../analysis/cross-parent-buffer-bind-re.md).
 

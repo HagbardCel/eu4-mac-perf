@@ -90,15 +90,17 @@ void eu4_submission_mesh_site_from_frame(void *rbp, uint32_t layer_index, uint32
             eu4_submission_record_eligible_pair_hit();
         }
 
-        if (eu4_buffer_bind_signatures_equal(&chain.prev_buffer, &curr_buffer)) {
-            if (chain.prev_parent_id == parent_id) {
-                eu4_submission_counter_add(EU4_COUNTER_SAME_PARENT_BUFFER_SIGNATURE, 1);
-            } else if (eu4_cross_parent_buffer_contexts_comparable(&prev_ctx, &curr_ctx, &reason)) {
-                eu4_submission_counter_add(EU4_COUNTER_CROSS_PARENT_BUFFER_SIGNATURE, 1);
-                if (chain.prev_sub_pointer == (uintptr_t)sub) {
-                    eu4_submission_counter_add(EU4_COUNTER_SAME_SUBRECORD_POINTER_CROSS_PARENT, 1);
-                }
+        if (chain.prev_parent_id != parent_id
+            && eu4_cross_parent_buffer_contexts_comparable(&prev_ctx, &curr_ctx, &reason)) {
+            if (chain.prev_sub_pointer == (uintptr_t)sub) {
+                eu4_submission_counter_add(EU4_COUNTER_SAME_SUBRECORD_POINTER_CROSS_PARENT, 1);
             }
+            if (eu4_buffer_bind_signatures_equal(&chain.prev_buffer, &curr_buffer)) {
+                eu4_submission_counter_add(EU4_COUNTER_CROSS_PARENT_BUFFER_SIGNATURE, 1);
+            }
+        } else if (chain.prev_parent_id == parent_id
+                   && eu4_buffer_bind_signatures_equal(&chain.prev_buffer, &curr_buffer)) {
+            eu4_submission_counter_add(EU4_COUNTER_SAME_PARENT_BUFFER_SIGNATURE, 1);
         }
     }
 

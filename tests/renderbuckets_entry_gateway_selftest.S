@@ -44,6 +44,25 @@ _eu4_renderbuckets_entry_gateway_transparency_selftest:
     movl _g_bad_stack_alignment(%rip), %eax
     cmpl $0, %eax
     jne _fail
+    movq _g_saved_rdi(%rip), %rax
+    leaq _arg_rdi_marker(%rip), %rdx
+    cmpq %rdx, %rax
+    jne _fail
+    movq _g_saved_rsi(%rip), %rax
+    cmpq $0x42, %rax
+    jne _fail
+    movq _g_saved_rdx(%rip), %rax
+    cmpq $0x43, %rax
+    jne _fail
+    movq _g_saved_rcx(%rip), %rax
+    cmpq $0x44, %rax
+    jne _fail
+    movq _g_saved_r8(%rip), %rax
+    cmpq $0x45, %rax
+    jne _fail
+    movq _g_saved_r9(%rip), %rax
+    cmpq $0x46, %rax
+    jne _fail
     movl $0, %eax
     ret
 _fail:

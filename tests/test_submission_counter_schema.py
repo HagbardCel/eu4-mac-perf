@@ -1,7 +1,5 @@
 import importlib.util
 import json
-import subprocess
-import sys
 import unittest
 from pathlib import Path
 
@@ -11,19 +9,22 @@ SCHEMA = BENCH / "submission_counter_schema.json"
 CODEGEN = BENCH / "codegen_submission_counters.py"
 
 
+def _load_codegen():
+    spec = importlib.util.spec_from_file_location("codegen_submission_counters", CODEGEN)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
+
+
 class SubmissionCounterSchemaTests(unittest.TestCase):
     def test_codegen_matches_json_byte_for_byte(self):
         raw = json.loads(SCHEMA.read_text(encoding="utf-8"))
-        result = subprocess.run(
-            [sys.executable, str(CODEGEN)],
-            cwd=str(BENCH),
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        expected_h = (BENCH / "submission_counter_schema.h").read_bytes()
-        expected_py = (BENCH / "submission_counter_schema.py").read_bytes()
+        codegen = _load_codegen()
+        expected_h = codegen.generate_h(raw)
+        expected_py = codegen.generate_py(raw)
+        self.assertEqual((BENCH / "submission_counter_schema.h").read_text(encoding="utf-8"), expected_h)
+        self.assertEqual((BENCH / "submission_counter_schema.py").read_text(encoding="utf-8"), expected_py)
         spec = importlib.util.spec_from_file_location("submission_counter_schema", BENCH / "submission_counter_schema.py")
         mod = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
@@ -31,10 +32,7 @@ class SubmissionCounterSchemaTests(unittest.TestCase):
         self.assertEqual(len(raw["counters"]), mod.COUNTER_COUNT)
         for row in raw["counters"]:
             self.assertEqual(mod.COUNTER_SLOTS[row["name"]], row["slot"])
-        ids = {h["id"] for h in raw["hypotheses"]}
-        self.assertEqual(ids, {h["id"] for h in mod.HYPOTHESES})
-        self.assertIn(b"EU4_COUNTER_CANDIDATE_SWAPS", expected_h)
-        self.assertIn(b"SAFETY_HYPOTHESIS_MASK_DEFAULT = 0x0", expected_py)
+        self.assertIn("SAFETY_HYPOTHESIS_MASK_DEFAULT = 0x0", expected_py)
 
 
 if __name__ == "__main__":

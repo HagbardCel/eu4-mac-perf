@@ -135,6 +135,32 @@ def pairwise_scene_delta(left: Path, right: Path) -> float:
     return float(scene_difference(left, right)["mean_rgb_delta"])
 
 
+def observer_scene_gate(phases: list[dict]) -> dict[str, Any]:
+    """Absolute screenshot gate for each phase (independent of v1 engagement control)."""
+    reference = resolve_repository_scene_reference()
+    phase_reports: dict[str, Any] = {}
+    all_ok = True
+    for phase in phases:
+        name = phase.get("name", "?")
+        scene_result = None
+        screenshot = phase.get("screenshot")
+        if screenshot:
+            shot_path = Path(screenshot)
+            if not shot_path.is_file():
+                shot_path = Path(phase.get("run_dir", ".")) / screenshot
+            if shot_path.is_file():
+                scene_result = scene_gate(reference, shot_path)
+        scene_ok = bool(scene_result and scene_result["passed"])
+        if not scene_ok:
+            all_ok = False
+        phase_reports[name] = {
+            "role": phase.get("role"),
+            "scene": scene_result,
+            "phase_ok": scene_ok,
+        }
+    return {"status": "passed" if all_ok else "failed", "phases": phase_reports}
+
+
 def observer_engagement_gate(
     phases: list[dict],
     *,

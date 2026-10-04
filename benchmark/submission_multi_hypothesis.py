@@ -105,6 +105,7 @@ def evaluate_b_phase(
     *,
     measurement_paused_swaps: int,
     measurement_wall_seconds: float,
+    effective_actions_delta: int = 0,
     material_threshold_calls_per_swap: float = 0.02,
 ) -> dict[str, Any]:
     supported_mask = int(end.get("supported_hypothesis_mask", 0))
@@ -117,7 +118,10 @@ def evaluate_b_phase(
     meta_errors = check_frozen_snapshot_meta(end)
     invariant_errors = check_candidate_invariants(delta)
     exposure_errors = check_observer_exposure(delta, health_delta)
-    all_errors = meta_errors + invariant_errors + exposure_errors
+    mutation_errors: list[str] = []
+    if effective_actions_delta != 0:
+        mutation_errors.append(f"effective_actions_delta={effective_actions_delta}")
+    all_errors = meta_errors + invariant_errors + exposure_errors + mutation_errors
     support = hypothesis_support(supported_mask, safety_mask)
     candidate_swaps = max(1, int(delta.get("candidate_swaps", 0)))
     hypotheses: dict[str, Any] = {}
@@ -144,6 +148,8 @@ def evaluate_b_phase(
         "meta_errors": meta_errors,
         "invariant_errors": invariant_errors,
         "exposure_errors": exposure_errors,
+        "mutation_errors": mutation_errors,
+        "effective_actions_delta": effective_actions_delta,
         "harness_ok": len(all_errors) == 0,
         "measurement_paused_swaps": measurement_paused_swaps,
         "candidate_swaps": int(delta.get("candidate_swaps", 0)),
@@ -166,6 +172,7 @@ def v3_reference_health_gate(phases: list[dict]) -> dict[str, Any]:
             cv.get("status") == "passed"
             and int(cv.get("effective_actions_delta", 0)) == 0
             and int(cv.get("candidate_site_entries_delta", 0)) > 0
+            and int(cv.get("renderbuckets_invocations_delta", 0)) > 0
         )
         if not ok:
             all_ok = False
@@ -173,17 +180,23 @@ def v3_reference_health_gate(phases: list[dict]) -> dict[str, Any]:
     return {"status": "passed" if all_ok else "failed", "phases": reports}
 
 
-def multi_hypothesis_smoke_gate(phases: list[dict]) -> dict[str, Any]:
-    """v3 health + B1 frozen-bank invariants and positive observer exposure."""
+def multi_hypothesis_smoke_gate(phases: list[dict], *, scene_gate: dict[str, Any]) -> dict[str, Any]:
+    """v3 health, B1 control+harness, and absolute scene gates."""
     health = v3_reference_health_gate(phases)
     b1 = next((p for p in phases if p.get("name") == "b1"), None)
     mh = (b1 or {}).get("multi_hypothesis") or {}
-    b_ok = bool(mh.get("harness_ok"))
+    cv = (b1 or {}).get("control_validation") or {}
+    b1_control_ok = cv.get("status") == "passed"
+    b1_harness_ok = bool(mh.get("harness_ok"))
+    b1_phase_ok = bool(mh.get("phase_ok"))
+    scene_ok = scene_gate.get("status") == "passed"
     stage2 = any(row.get("stage2_recommended") for row in (mh.get("hypotheses") or {}).values())
-    passed = health["status"] == "passed" and b_ok
+    passed = health["status"] == "passed" and scene_ok and b1_control_ok and b1_harness_ok and b1_phase_ok
     return {
         "status": "passed" if passed else "failed",
         "reference_health": health,
+        "observer_scene_gate": scene_gate,
+        "b1_control_ok": b1_control_ok,
         "b1_multi_hypothesis": mh,
         "stage2_recommended": stage2,
     }

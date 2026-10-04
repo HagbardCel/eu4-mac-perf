@@ -39,7 +39,7 @@ class RenderBucketsEntryGatewayTests(unittest.TestCase):
                 str(out),
                 str(BENCH / "eu4_submission_renderbuckets_entry_thunk.S"),
                 str(TESTS / "renderbuckets_entry_gateway_selftest.S"),
-                str(TESTS / "renderbuckets_entry_gateway_stubs.c"),
+                str(TESTS / "renderbuckets_entry_gateway_observer.S"),
                 str(TESTS / "renderbuckets_entry_gateway_selftest.c"),
             ],
             check=True,
