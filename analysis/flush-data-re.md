@@ -1,22 +1,33 @@
-# `_FlushData` / `_TransparentFlushData` static RE (in progress)
+# `_FlushData` / mesh draw subrecord static RE
 
-Extends [render-buckets.md](render-buckets.md). Goal: explain how 80-byte layer records and 0xe8-byte subrecords are populated before `CPdxMeshObject::RenderBuckets` issues one `GfxDrawIndexed` per subrecord.
+Extends [render-buckets.md](render-buckets.md). Pinned GOG v1.37.5 x86-64.
 
-## Known from `RenderBuckets` disassembly
+## Structures (do not conflate)
 
-- Layer table: 24-byte entries; boolean selects opaque `_FlushData` vs `_TransparentFlushData`.
-- Inner loop: 80-byte records → nested 0xe8-byte subrecords.
-- Per subrecord: effect pointer cache, `GfxSetTextures`, buffer binds, six-slot texture loop, object constants, then `GfxDrawIndexed` at `eu4+0x14c8404`.
+```text
+SFlushData (0x50) — CPdxMeshObject::AddToBucket / CArray<SFlushData>::Append
+        ↓
+mesh-type descriptor (24-byte layer entry selects opaque vs transparent flush array)
+        ↓
+mesh draw subrecord (0xe8) — nested in mesh-type data, not appended via SFlushData::Append
+        ↓
+GfxDrawIndexed per subrecord (landmark 0x14c8404)
+```
 
-## Open questions (offline)
+Layouts: [sflushdata-0x50-layout.json](sflushdata-0x50-layout.json), [mesh-draw-subrecord-0xe8-layout.json](mesh-draw-subrecord-0xe8-layout.json).
 
-1. Which functions append to `_FlushData` / `_TransparentFlushData` for the paused Venice political map?
-2. Which 0xe8 fields encode geometry range, material identity, and batch boundaries?
-3. Can adjacent subrecords share effect/textures/buffers such that **one** submission could replace two without visual change?
+## Reachability (static)
 
-## Method
+Map render path reaches `CPdxMeshObject::RenderBuckets` via `CGraphics::RenderBuckets` ([mesh-draw-dependency-map.md](mesh-draw-dependency-map.md)). Static RE does not prove every constructor ran in a particular Venice frame.
 
-- `llvm-objdump --disassemble-symbols` on symbols referencing flush data containers.
-- Cross-reference call graph in [frame-model-static.json](frame-model-static.json) for `CPdxMeshObject` and map render paths.
+## Open follow-ups
 
-No new EU IV capture required for this document phase.
+1. Mesh-type **writers** for 0xe8 records (loaders/constructors off hot path).
+2. Prove texture/object-constant dependency fields in 0xe8 layout (required before `texture_setup_elision_eligible` / `object_constants_elision_eligible`).
+3. Dynamic trace only if static ROI gate fails and field proof requires runtime samples.
+
+Hook ABI (13-byte patch @ `0x14c81e6`, frame offsets, resume addresses): [mesh-subrecord-hook-site.json](mesh-subrecord-hook-site.json).
+
+## PR1 decision
+
+See [gfx-subrecord-pr1-gonogo.md](gfx-subrecord-pr1-gonogo.md): **buffer-bind predicate only**; full setup elision and draw batch not established.
