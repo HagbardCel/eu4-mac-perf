@@ -1,0 +1,56 @@
+{
+  "evidence_id": "gfx-subrecord-observer-smoke-20261004T112503Z",
+  "kind": "submission_observer_smoke_v1",
+  "status": "complete",
+  "recorded_at_utc": "2026-10-04T11:25:03Z",
+  "repository_commit": "45b44fc",
+  "run_dir": "results/20261004T112503Z-submission-experiment",
+  "command": "python3 benchmark/submission_experiment.py --output results --engagement-smoke",
+  "outcome_summary": "Harness complete; observer and engagement gates failed because B1 recorded zero eligible_pair_hits despite heavy site traffic.",
+  "gates": {
+    "observer_gate": "failed",
+    "engagement_gate": "failed",
+    "pareto_gate": "skipped"
+  },
+  "phase_control_deltas": {
+    "a1": {
+      "role": "reference",
+      "candidate_site_entries_delta": 1391003,
+      "eligible_pair_hits_delta": 0,
+      "effective_actions_delta": 0,
+      "control_status": "passed",
+      "scene_passed": true
+    },
+    "b1": {
+      "role": "candidate",
+      "candidate_site_entries_delta": 1355860,
+      "eligible_pair_hits_delta": 0,
+      "effective_actions_delta": 0,
+      "control_status": "failed",
+      "scene_passed": true
+    },
+    "a2": {
+      "role": "reference",
+      "candidate_site_entries_delta": 1355280,
+      "eligible_pair_hits_delta": 0,
+      "effective_actions_delta": 0,
+      "control_status": "passed",
+      "scene_passed": true
+    }
+  },
+  "readiness": {
+    "swap_rate": 55.59,
+    "cpu_ms_s": 1137.95
+  },
+  "interpretation": "Mesh observer hook engaged; buffer-bind equivalence predicate produced no hits on paused Venice. Do not proceed to mutating capability 2 for buffer-bind-only on this scene without a different workload or broader predicates.",
+  "artifacts": {
+    "manifest": "results/20261004T112503Z-submission-experiment/manifest.json",
+    "validation": "results/20261004T112503Z-submission-experiment/validation.json",
+    "validation_md": "results/20261004T112503Z-submission-experiment/validation.md",
+    "summaries": [
+      "results/20261004T112503Z-submission-experiment/summary-a1.json",
+      "results/20261004T112503Z-submission-experiment/summary-b1.json",
+      "results/20261004T112503Z-submission-experiment/summary-a2.json"
+    ]
+  }
+}

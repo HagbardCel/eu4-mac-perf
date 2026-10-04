@@ -38,3 +38,18 @@ First Venice run after PR #31 merge (`2211e08`): [`results/20261004T111812Z-subm
 | Gates | `observer_gate` / scene checks **not computed** — re-run after harness fix. |
 
 Registered evidence: [`analysis/evidence/gfx-subrecord-observer-smoke-20261004T111812Z.json`](evidence/gfx-subrecord-observer-smoke-20261004T111812Z.json).
+
+## PR2 observer smoke (2026-10-04, complete — engagement failed)
+
+Second run after summarize fix (`45b44fc`): [`results/20261004T112503Z-submission-experiment`](../results/20261004T112503Z-submission-experiment/validation.md).
+
+| Result | Detail |
+|--------|--------|
+| Harness | **Complete** — gates computed; all scenes passed. |
+| Hook traffic | Per-phase `candidate_site_entries_delta` ≈ 1.35–1.39M. |
+| Predicate ROI | **`eligible_pair_hits_delta` = 0 on b1** (and all phases). |
+| Gates | `observer_gate` / `engagement_gate` **failed**; Pareto skipped. |
+
+**Conclusion for this scene:** buffer-bind observer is live but finds **no** eligible pairs on paused Venice; do not invest in capability-2 buffer-bind mutation without new predicates or a different workload.
+
+Registered evidence: [`analysis/evidence/gfx-subrecord-observer-smoke-20261004T112503Z.json`](evidence/gfx-subrecord-observer-smoke-20261004T112503Z.json).

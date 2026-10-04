@@ -1,0 +1,528 @@
+{
+  "experiment": "submission_observer_smoke_v1",
+  "status": "complete",
+  "instrumentation": "libeu4_auto_probe.dylib + libeu4_submission_experiment.dylib",
+  "expected_candidate_capability_id": 1,
+  "phase_schedule": [
+    {
+      "name": "a1",
+      "role": "reference",
+      "mode": 0
+    },
+    {
+      "name": "b1",
+      "role": "candidate",
+      "mode": 1
+    },
+    {
+      "name": "a2",
+      "role": "reference",
+      "mode": 0
+    }
+  ],
+  "phase_seconds": 10,
+  "repository_scene_reference": "benchmark/submission_scene_reference.json",
+  "working_save": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG/save games/EU4Benchmark_a04bc2e86eeda802.eu4",
+  "readiness": {
+    "ready_ns": 80430953370541,
+    "swap_rate": 55.59,
+    "cpu_ms_s": 1137.95
+  },
+  "power_tail_finish": {
+    "status": "appended",
+    "trailing_partial_bytes": 0,
+    "trailing_note": null,
+    "sample_count": 173
+  },
+  "phases": [
+    {
+      "name": "a1",
+      "role": "reference",
+      "mode": 0,
+      "run_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261004T112503Z-submission-experiment",
+      "start_ns": 80525347075375,
+      "end_ns": 80535352432708,
+      "screenshot": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261004T112503Z-submission-experiment/measure-scene-a1.png",
+      "control_validation": {
+        "status": "passed",
+        "reason": null,
+        "control_ticks_delta": 575,
+        "candidate_site_entries_delta": 1391003,
+        "eligible_pair_hits_delta": 0,
+        "effective_actions_delta": 0,
+        "hook_attempts_delta": 575,
+        "start": {
+          "magic": 1396856133,
+          "protocol_version": 2,
+          "command_generation": 1,
+          "requested_mode": 0,
+          "ack_generation": 1,
+          "ack_mode": 0,
+          "requested_capability_id": 1,
+          "advertised_capability_id": 1,
+          "control_ticks": 6036,
+          "candidate_site_entries": 14353464,
+          "eligible_pair_hits": 0,
+          "candidate_effective_actions": 0,
+          "candidate_hook_attempts": 6036
+        },
+        "end": {
+          "magic": 1396856133,
+          "protocol_version": 2,
+          "command_generation": 1,
+          "requested_mode": 0,
+          "ack_generation": 1,
+          "ack_mode": 0,
+          "requested_capability_id": 1,
+          "advertised_capability_id": 1,
+          "control_ticks": 6611,
+          "candidate_site_entries": 15744467,
+          "eligible_pair_hits": 0,
+          "candidate_effective_actions": 0,
+          "candidate_hook_attempts": 6611
+        }
+      },
+      "summary": {
+        "swap_samples": 10,
+        "median_swaps_s": 57.733,
+        "eu4_cpu_ms_per_s": 1180.45,
+        "cpu_w": 8.079,
+        "gpu_w": 2.084,
+        "combined_w": 10.175,
+        "power_samples": 9,
+        "eu4_cpu_ms_per_swap": 20.447,
+        "joules_per_swap": 0.1762
+      }
+    },
+    {
+      "name": "b1",
+      "role": "candidate",
+      "mode": 1,
+      "run_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261004T112503Z-submission-experiment",
+      "start_ns": 80538906843958,
+      "end_ns": 80548912135041,
+      "screenshot": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261004T112503Z-submission-experiment/measure-scene-b1.png",
+      "control_validation": {
+        "status": "failed",
+        "reason": "observer candidate requires mesh site entries and pair hits without mutation",
+        "control_ticks_delta": 561,
+        "candidate_site_entries_delta": 1355860,
+        "eligible_pair_hits_delta": 0,
+        "effective_actions_delta": 0,
+        "hook_attempts_delta": 561,
+        "start": {
+          "magic": 1396856133,
+          "protocol_version": 2,
+          "command_generation": 2,
+          "requested_mode": 1,
+          "ack_generation": 2,
+          "ack_mode": 1,
+          "requested_capability_id": 1,
+          "advertised_capability_id": 1,
+          "control_ticks": 6810,
+          "candidate_site_entries": 16224222,
+          "eligible_pair_hits": 0,
+          "candidate_effective_actions": 0,
+          "candidate_hook_attempts": 6810
+        },
+        "end": {
+          "magic": 1396856133,
+          "protocol_version": 2,
+          "command_generation": 2,
+          "requested_mode": 1,
+          "ack_generation": 2,
+          "ack_mode": 1,
+          "requested_capability_id": 1,
+          "advertised_capability_id": 1,
+          "control_ticks": 7371,
+          "candidate_site_entries": 17580082,
+          "eligible_pair_hits": 0,
+          "candidate_effective_actions": 0,
+          "candidate_hook_attempts": 7371
+        }
+      },
+      "summary": {
+        "swap_samples": 10,
+        "median_swaps_s": 55.72,
+        "eu4_cpu_ms_per_s": 1140.07,
+        "cpu_w": 7.657,
+        "gpu_w": 2.02,
+        "combined_w": 9.643,
+        "power_samples": 10,
+        "eu4_cpu_ms_per_swap": 20.461,
+        "joules_per_swap": 0.1731
+      }
+    },
+    {
+      "name": "a2",
+      "role": "reference",
+      "mode": 0,
+      "run_dir": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261004T112503Z-submission-experiment",
+      "start_ns": 80552463985041,
+      "end_ns": 80562464607791,
+      "screenshot": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261004T112503Z-submission-experiment/measure-scene-a2.png",
+      "control_validation": {
+        "status": "passed",
+        "reason": null,
+        "control_ticks_delta": 560,
+        "candidate_site_entries_delta": 1355280,
+        "eligible_pair_hits_delta": 0,
+        "effective_actions_delta": 0,
+        "hook_attempts_delta": 560,
+        "start": {
+          "magic": 1396856133,
+          "protocol_version": 2,
+          "command_generation": 3,
+          "requested_mode": 0,
+          "ack_generation": 3,
+          "ack_mode": 0,
+          "requested_capability_id": 1,
+          "advertised_capability_id": 1,
+          "control_ticks": 7569,
+          "candidate_site_entries": 18058450,
+          "eligible_pair_hits": 0,
+          "candidate_effective_actions": 0,
+          "candidate_hook_attempts": 7569
+        },
+        "end": {
+          "magic": 1396856133,
+          "protocol_version": 2,
+          "command_generation": 3,
+          "requested_mode": 0,
+          "ack_generation": 3,
+          "ack_mode": 0,
+          "requested_capability_id": 1,
+          "advertised_capability_id": 1,
+          "control_ticks": 8129,
+          "candidate_site_entries": 19413730,
+          "eligible_pair_hits": 0,
+          "candidate_effective_actions": 0,
+          "candidate_hook_attempts": 8129
+        }
+      },
+      "summary": {
+        "swap_samples": 10,
+        "median_swaps_s": 55.549,
+        "eu4_cpu_ms_per_s": 1141.95,
+        "cpu_w": 7.726,
+        "gpu_w": 2.029,
+        "combined_w": 9.797,
+        "power_samples": 9,
+        "eu4_cpu_ms_per_swap": 20.558,
+        "joules_per_swap": 0.1764
+      }
+    }
+  ],
+  "observer_gate": {
+    "status": "failed",
+    "expected_candidate_capability_id": 1,
+    "pareto_eligible": false,
+    "phases": {
+      "a1": {
+        "role": "reference",
+        "control_validation": {
+          "status": "passed",
+          "reason": null,
+          "control_ticks_delta": 575,
+          "candidate_site_entries_delta": 1391003,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 575,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 1,
+            "requested_mode": 0,
+            "ack_generation": 1,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6036,
+            "candidate_site_entries": 14353464,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6036
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 1,
+            "requested_mode": 0,
+            "ack_generation": 1,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6611,
+            "candidate_site_entries": 15744467,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6611
+          }
+        },
+        "control_ok": true,
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 6.17,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": true
+      },
+      "b1": {
+        "role": "candidate",
+        "control_validation": {
+          "status": "failed",
+          "reason": "observer candidate requires mesh site entries and pair hits without mutation",
+          "control_ticks_delta": 561,
+          "candidate_site_entries_delta": 1355860,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 561,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 2,
+            "requested_mode": 1,
+            "ack_generation": 2,
+            "ack_mode": 1,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6810,
+            "candidate_site_entries": 16224222,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6810
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 2,
+            "requested_mode": 1,
+            "ack_generation": 2,
+            "ack_mode": 1,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 7371,
+            "candidate_site_entries": 17580082,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 7371
+          }
+        },
+        "control_ok": false,
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 4.16,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": false
+      },
+      "a2": {
+        "role": "reference",
+        "control_validation": {
+          "status": "passed",
+          "reason": null,
+          "control_ticks_delta": 560,
+          "candidate_site_entries_delta": 1355280,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 560,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 3,
+            "requested_mode": 0,
+            "ack_generation": 3,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 7569,
+            "candidate_site_entries": 18058450,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 7569
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 3,
+            "requested_mode": 0,
+            "ack_generation": 3,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 8129,
+            "candidate_site_entries": 19413730,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 8129
+          }
+        },
+        "control_ok": true,
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 9.15,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": true
+      }
+    }
+  },
+  "engagement_gate": {
+    "status": "failed",
+    "expected_candidate_capability_id": 1,
+    "phases": [
+      {
+        "name": "a1",
+        "role": "reference",
+        "control_validation": {
+          "status": "passed",
+          "reason": null,
+          "control_ticks_delta": 575,
+          "candidate_site_entries_delta": 1391003,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 575,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 1,
+            "requested_mode": 0,
+            "ack_generation": 1,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6036,
+            "candidate_site_entries": 14353464,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6036
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 1,
+            "requested_mode": 0,
+            "ack_generation": 1,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6611,
+            "candidate_site_entries": 15744467,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6611
+          }
+        },
+        "phase_ok": true
+      },
+      {
+        "name": "b1",
+        "role": "candidate",
+        "control_validation": {
+          "status": "failed",
+          "reason": "observer candidate requires mesh site entries and pair hits without mutation",
+          "control_ticks_delta": 561,
+          "candidate_site_entries_delta": 1355860,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 561,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 2,
+            "requested_mode": 1,
+            "ack_generation": 2,
+            "ack_mode": 1,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6810,
+            "candidate_site_entries": 16224222,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6810
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 2,
+            "requested_mode": 1,
+            "ack_generation": 2,
+            "ack_mode": 1,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 7371,
+            "candidate_site_entries": 17580082,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 7371
+          }
+        },
+        "phase_ok": false
+      },
+      {
+        "name": "a2",
+        "role": "reference",
+        "control_validation": {
+          "status": "passed",
+          "reason": null,
+          "control_ticks_delta": 560,
+          "candidate_site_entries_delta": 1355280,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 560,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 3,
+            "requested_mode": 0,
+            "ack_generation": 3,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 7569,
+            "candidate_site_entries": 18058450,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 7569
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 3,
+            "requested_mode": 0,
+            "ack_generation": 3,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 8129,
+            "candidate_site_entries": 19413730,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 8129
+          }
+        },
+        "phase_ok": true
+      }
+    ],
+    "pareto_eligible": false
+  },
+  "pareto_gate": {
+    "status": "skipped",
+    "reason": "observer capability; Pareto not applicable"
+  },
+  "validation_artifact": "validation.json",
+  "registered_evidence": "analysis/evidence/gfx-subrecord-observer-smoke-20261004T112503Z.json",
+  "working_save_changed": false
+}

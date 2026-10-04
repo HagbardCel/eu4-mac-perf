@@ -3,7 +3,7 @@
 ## Status
 
 - **PR #30 merged** (Gfx PR1 static RE) and **PR #31 merged** (protocol v2 mesh observer harness) on `main` (`2211e08`).
-- **Observer smoke:** first Venice attempt `20261004T111812Z` incomplete (10 s phases vs `summarize()` sample floor); see [validation.md](results/20261004T111812Z-submission-experiment/validation.md). Re-run `--engagement-smoke` after harness fix.
+- **Observer smoke:** `20261004T112503Z` harness **complete**, engagement **failed** (0 `eligible_pair_hits` on Venice); see [validation.md](results/20261004T112503Z-submission-experiment/validation.md). Prior incomplete run: [20261004T111812Z](results/20261004T111812Z-submission-experiment/validation.md).
 
 ## PR1 (complete)
 
@@ -14,9 +14,9 @@ Offline — see [analysis/gfx-subrecord-pr1-gonogo.md](analysis/gfx-subrecord-pr
 - `submission_state_equivalent` / `setup_elision_eligible` / `draw_batch_eligible` in C
 - Hook-site contract JSON (insertion before `0x14c81f3`, draw @ `0x14c8404` landmark)
 
-## PR2 (runtime observer landed; ROI gate pending)
+## PR2 (observer validated; buffer-bind ROI negative on Venice)
 
-Mesh hook + capability 1 dylib on `main`. Pending: successful `--engagement-smoke` with per-phase `eligible_pair_hits > 0` on B before mutating candidate work; full ABABA remains capability 2 only.
+Mesh hook + capability 1 dylib exercised on `main`. Paused Venice smoke: hook traffic confirmed, **no** buffer-bind predicate hits — mutating candidate not justified for this scene. Full ABABA remains capability 2 only if a future predicate/workload shows ROI.
 
 ## Canonical Phase-C (frozen)
 

@@ -1,0 +1,312 @@
+{
+  "pareto_gate": {
+    "status": "skipped",
+    "reason": "observer capability; Pareto not applicable"
+  },
+  "engagement_gate": {
+    "status": "failed",
+    "expected_candidate_capability_id": 1,
+    "phases": [
+      {
+        "name": "a1",
+        "role": "reference",
+        "control_validation": {
+          "status": "passed",
+          "reason": null,
+          "control_ticks_delta": 575,
+          "candidate_site_entries_delta": 1391003,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 575,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 1,
+            "requested_mode": 0,
+            "ack_generation": 1,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6036,
+            "candidate_site_entries": 14353464,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6036
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 1,
+            "requested_mode": 0,
+            "ack_generation": 1,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6611,
+            "candidate_site_entries": 15744467,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6611
+          }
+        },
+        "phase_ok": true
+      },
+      {
+        "name": "b1",
+        "role": "candidate",
+        "control_validation": {
+          "status": "failed",
+          "reason": "observer candidate requires mesh site entries and pair hits without mutation",
+          "control_ticks_delta": 561,
+          "candidate_site_entries_delta": 1355860,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 561,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 2,
+            "requested_mode": 1,
+            "ack_generation": 2,
+            "ack_mode": 1,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6810,
+            "candidate_site_entries": 16224222,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6810
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 2,
+            "requested_mode": 1,
+            "ack_generation": 2,
+            "ack_mode": 1,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 7371,
+            "candidate_site_entries": 17580082,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 7371
+          }
+        },
+        "phase_ok": false
+      },
+      {
+        "name": "a2",
+        "role": "reference",
+        "control_validation": {
+          "status": "passed",
+          "reason": null,
+          "control_ticks_delta": 560,
+          "candidate_site_entries_delta": 1355280,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 560,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 3,
+            "requested_mode": 0,
+            "ack_generation": 3,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 7569,
+            "candidate_site_entries": 18058450,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 7569
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 3,
+            "requested_mode": 0,
+            "ack_generation": 3,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 8129,
+            "candidate_site_entries": 19413730,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 8129
+          }
+        },
+        "phase_ok": true
+      }
+    ],
+    "pareto_eligible": false
+  },
+  "observer_gate": {
+    "status": "failed",
+    "expected_candidate_capability_id": 1,
+    "pareto_eligible": false,
+    "phases": {
+      "a1": {
+        "role": "reference",
+        "control_validation": {
+          "status": "passed",
+          "reason": null,
+          "control_ticks_delta": 575,
+          "candidate_site_entries_delta": 1391003,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 575,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 1,
+            "requested_mode": 0,
+            "ack_generation": 1,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6036,
+            "candidate_site_entries": 14353464,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6036
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 1,
+            "requested_mode": 0,
+            "ack_generation": 1,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6611,
+            "candidate_site_entries": 15744467,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6611
+          }
+        },
+        "control_ok": true,
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 6.17,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": true
+      },
+      "b1": {
+        "role": "candidate",
+        "control_validation": {
+          "status": "failed",
+          "reason": "observer candidate requires mesh site entries and pair hits without mutation",
+          "control_ticks_delta": 561,
+          "candidate_site_entries_delta": 1355860,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 561,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 2,
+            "requested_mode": 1,
+            "ack_generation": 2,
+            "ack_mode": 1,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 6810,
+            "candidate_site_entries": 16224222,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 6810
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 2,
+            "requested_mode": 1,
+            "ack_generation": 2,
+            "ack_mode": 1,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 7371,
+            "candidate_site_entries": 17580082,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 7371
+          }
+        },
+        "control_ok": false,
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 4.16,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": false
+      },
+      "a2": {
+        "role": "reference",
+        "control_validation": {
+          "status": "passed",
+          "reason": null,
+          "control_ticks_delta": 560,
+          "candidate_site_entries_delta": 1355280,
+          "eligible_pair_hits_delta": 0,
+          "effective_actions_delta": 0,
+          "hook_attempts_delta": 560,
+          "start": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 3,
+            "requested_mode": 0,
+            "ack_generation": 3,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 7569,
+            "candidate_site_entries": 18058450,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 7569
+          },
+          "end": {
+            "magic": 1396856133,
+            "protocol_version": 2,
+            "command_generation": 3,
+            "requested_mode": 0,
+            "ack_generation": 3,
+            "ack_mode": 0,
+            "requested_capability_id": 1,
+            "advertised_capability_id": 1,
+            "control_ticks": 8129,
+            "candidate_site_entries": 19413730,
+            "eligible_pair_hits": 0,
+            "candidate_effective_actions": 0,
+            "candidate_hook_attempts": 8129
+          }
+        },
+        "control_ok": true,
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 9.15,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": true
+      }
+    }
+  },
+  "expected_candidate_capability_id": 1
+}
