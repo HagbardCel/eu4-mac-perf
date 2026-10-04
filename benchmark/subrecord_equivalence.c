@@ -13,6 +13,40 @@ static const eu4_layout_range_t eu4_mesh_buffer_bind_sub_ranges[] = {
 static const size_t eu4_mesh_buffer_bind_sub_range_count =
     sizeof(eu4_mesh_buffer_bind_sub_ranges) / sizeof(eu4_mesh_buffer_bind_sub_ranges[0]);
 
+bool eu4_layout_has_barrier_ranges(const eu4_layout_range_t *ranges, size_t range_count) {
+    for (size_t index = 0; index < range_count; index++) {
+        if (ranges[index].policy == EU4_CMP_BARRIER) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool eu4_records_barrier_bytes_match(
+    const uint8_t *left,
+    const uint8_t *right,
+    size_t record_size,
+    const eu4_layout_range_t *ranges,
+    size_t range_count
+) {
+    if (!left || !right) {
+        return false;
+    }
+    for (size_t index = 0; index < range_count; index++) {
+        const eu4_layout_range_t *range = &ranges[index];
+        if (range->policy != EU4_CMP_BARRIER) {
+            continue;
+        }
+        if (range->offset + range->size > record_size) {
+            return false;
+        }
+        if (memcmp(left + range->offset, right + range->offset, range->size) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool eu4_records_equal_fields_only(
     const uint8_t *left,
     const uint8_t *right,
@@ -141,6 +175,35 @@ bool eu4_submission_state_equivalent(
             eu4_mesh_draw_range_count)) {
         if (reason) {
             *reason = EU4_PRED_RECORD_MISMATCH;
+        }
+        return false;
+    }
+    if (!eu4_records_barrier_bytes_match(
+            prev_parent,
+            curr_parent,
+            EU4_SFLUSHDATA_SIZE,
+            eu4_sflushdata_ranges,
+            eu4_sflushdata_range_count)) {
+        if (reason) {
+            *reason = EU4_PRED_CHAIN_BROKEN;
+        }
+        return false;
+    }
+    if (!eu4_records_barrier_bytes_match(
+            prev_sub,
+            curr_sub,
+            EU4_MESH_DRAW_SUBRECORD_SIZE,
+            eu4_mesh_draw_ranges,
+            eu4_mesh_draw_range_count)) {
+        if (reason) {
+            *reason = EU4_PRED_CHAIN_BROKEN;
+        }
+        return false;
+    }
+    if (eu4_layout_has_barrier_ranges(eu4_sflushdata_ranges, eu4_sflushdata_range_count)
+        || eu4_layout_has_barrier_ranges(eu4_mesh_draw_ranges, eu4_mesh_draw_range_count)) {
+        if (reason) {
+            *reason = EU4_PRED_BARRIER_UNRESOLVED;
         }
         return false;
     }

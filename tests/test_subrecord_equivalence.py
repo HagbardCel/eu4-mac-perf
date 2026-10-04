@@ -74,8 +74,13 @@ class SubrecordEquivalenceTests(unittest.TestCase):
         ctx_b = self._ctx()
         ctx_c = self._ctx(broken=True)
         ctx_d = self._ctx(has_prev=False)
-        self.assertTrue(
+        self.assertFalse(
             self.lib.eu4_submission_state_equivalent(
+                parent, parent, sub_a, sub_b, ctypes.byref(ctx_a), ctypes.byref(ctx_b), ctypes.byref(reason)
+            )
+        )
+        self.assertTrue(
+            self.lib.eu4_buffer_bind_elision_eligible(
                 parent, parent, sub_a, sub_b, ctypes.byref(ctx_a), ctypes.byref(ctx_b), ctypes.byref(reason)
             )
         )

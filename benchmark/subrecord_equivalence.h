@@ -45,6 +45,16 @@ extern const size_t eu4_sflushdata_range_count;
 extern const eu4_layout_range_t eu4_mesh_draw_ranges[];
 extern const size_t eu4_mesh_draw_range_count;
 
+bool eu4_layout_has_barrier_ranges(const eu4_layout_range_t *ranges, size_t range_count);
+
+bool eu4_records_barrier_bytes_match(
+    const uint8_t *left,
+    const uint8_t *right,
+    size_t record_size,
+    const eu4_layout_range_t *ranges,
+    size_t range_count
+);
+
 bool eu4_records_equal_fields_only(
     const uint8_t *left,
     const uint8_t *right,
