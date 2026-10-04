@@ -1,0 +1,41 @@
+{
+  "experiment": "submission_observer_smoke_v1",
+  "status": "incomplete",
+  "instrumentation": "libeu4_auto_probe.dylib + libeu4_submission_experiment.dylib",
+  "expected_candidate_capability_id": 1,
+  "phase_schedule": [
+    {
+      "name": "a1",
+      "role": "reference",
+      "mode": 0
+    },
+    {
+      "name": "b1",
+      "role": "candidate",
+      "mode": 1
+    },
+    {
+      "name": "a2",
+      "role": "reference",
+      "mode": 0
+    }
+  ],
+  "phase_seconds": 10,
+  "repository_scene_reference": "benchmark/submission_scene_reference.json",
+  "working_save": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG/save games/EU4Benchmark_a04bc2e86eeda802.eu4",
+  "readiness": {
+    "ready_ns": 80021916366708,
+    "swap_rate": 55.3,
+    "cpu_ms_s": 1113.9
+  },
+  "power_tail_finish": {
+    "status": "appended",
+    "trailing_partial_bytes": 0,
+    "trailing_note": null,
+    "sample_count": 174
+  },
+  "error": "Insufficient fully paused swap samples in the 30-second phase",
+  "validation_artifact": "validation.json",
+  "registered_evidence": "analysis/evidence/gfx-subrecord-observer-smoke-20261004T111812Z.json",
+  "working_save_changed": false
+}

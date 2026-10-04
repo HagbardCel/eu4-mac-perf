@@ -22,6 +22,8 @@ Invoking without `--engagement-smoke` exits with an error (no mutating candidate
 
 Check `validation.json` → `observer_gate` and `engagement_gate` (both per-phase). **Not** a Pareto optimization pass.
 
+Observer phases are 10 s; per-phase metrics use phase-scaled sample floors in `summarize()` (not the 30 s autonomous baseline defaults). A failed run with “Insufficient fully paused swap samples in the 30-second phase” on smoke is the pre-fix harness bug — see `results/20261004T111812Z-submission-experiment/validation.md`.
+
 ## Full ABABA (capability 2)
 
 Not available in the current tree. Running `submission_experiment.py` without `--engagement-smoke` exits with an error. A future mutating dylib revision must advertise capability 2 intrinsically before full ABABA.

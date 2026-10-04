@@ -1,0 +1,28 @@
+{
+  "experiment": "submission_observer_smoke_v1",
+  "run_dir": "results/20261004T111812Z-submission-experiment",
+  "recorded_at_utc": "2026-10-04T11:18:12Z",
+  "git_merge": "2211e08",
+  "status": "incomplete",
+  "error": "Insufficient fully paused swap samples in the 30-second phase",
+  "failure_stage": "summarize_after_phases",
+  "harness_root_cause": "10s observer phases vs summarize() min 25 samples (30s baseline assumption)",
+  "harness_fix": "phase-scaled min_swap_samples/min_power_samples in submission_experiment",
+  "phases_scheduled": ["a1", "b1", "a2"],
+  "phase_seconds": 10,
+  "probe_samples_per_phase": { "a1": 10, "b1": 9, "a2": 10 },
+  "readiness": {
+    "swap_rate": 55.3,
+    "cpu_ms_s": 1113.9
+  },
+  "final_control_mmap": {
+    "control_ticks": 8050,
+    "candidate_site_entries": 19202193,
+    "eligible_pair_hits": 0,
+    "candidate_effective_actions": 0
+  },
+  "gates_evaluated": false,
+  "observer_gate": null,
+  "engagement_gate": null,
+  "pareto_gate": "not_reached"
+}

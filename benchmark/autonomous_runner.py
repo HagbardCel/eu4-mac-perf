@@ -488,6 +488,8 @@ def summarize(
     raw_power: list[dict],
     *,
     swap_warmup_ns: int = 1_000_000_000,
+    min_swap_samples: int = 25,
+    min_power_samples: int = 25,
     write_shared_summary: bool = True,
 ) -> dict:
     rows = probe_rows(run_dir / "auto-probe.csv", anchor)
@@ -497,9 +499,13 @@ def summarize(
         for r in rows
         if phase["start_ns"] + swap_warmup_ns <= r["monotonic_ns"] < phase["end_ns"]
     ]
-    if len(selected) < 25 or any(r["swaps_s"] < 20 or
-                                  r["paused_swaps"] < .95*r["swaps"] for r in selected):
-        raise base.BenchmarkError("Insufficient fully paused swap samples in the 30-second phase")
+    if len(selected) < min_swap_samples or any(
+        r["swaps_s"] < 20 or r["paused_swaps"] < .95 * r["swaps"] for r in selected
+    ):
+        raise base.BenchmarkError(
+            f"Insufficient fully paused swap samples in phase "
+            f"(need {min_swap_samples}, got {len(selected)})"
+        )
     phase_name = phase.get("name") or "measure"
     power_by_phase = diagnostic.summarize_power(raw_power, phases, anchor, pid)
     power = power_by_phase.get(phase_name) or power_by_phase.get("measure")
@@ -512,9 +518,15 @@ def summarize(
             if when < phase["end_ns"]
         ]
     )
-    if (power.get("samples", 0) < 25 or cpu_count < 25 or
-            power.get("eu4_cputime_ms_per_s") is None):
-        raise base.BenchmarkError("Insufficient aligned EU IV CPU and power samples")
+    if (
+        power.get("samples", 0) < min_power_samples
+        or cpu_count < min_power_samples
+        or power.get("eu4_cputime_ms_per_s") is None
+    ):
+        raise base.BenchmarkError(
+            f"Insufficient aligned EU IV CPU and power samples "
+            f"(need {min_power_samples}, power={power.get('samples', 0)}, cpu={cpu_count})"
+        )
     swaps = statistics.median(r["swaps_s"] for r in selected)
     result = {"swap_samples": len(selected), "median_swaps_s": round(swaps, 3),
               "eu4_cpu_ms_per_s": power["eu4_cputime_ms_per_s"],

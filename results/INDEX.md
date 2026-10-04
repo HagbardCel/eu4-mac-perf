@@ -12,5 +12,6 @@
 | `20260928T112439Z-draw-trace` | Draw tracer baseline gate stopped before capture | `manifest.json` |
 | `20260928T113359Z-draw-trace` | One paused draw window; screening only | [draw-screening.md](20260928T113359Z-draw-trace/draw-screening.md) |
 | `20261003T210202Z-intrusive-diagnostic` | Phase C forensic capsule (R–C–R–C–R, Venice paused); gzip telemetry/power/plist + scene + [salvage-report.md](20261003T210202Z-intrusive-diagnostic/salvage-report.md) | [report.md](20261003T210202Z-intrusive-diagnostic/report.md), [raw_evidence.json](20261003T210202Z-intrusive-diagnostic/raw_evidence.json), `ready-scene.png`, `game-ready.log` |
+| `20261004T111812Z-submission-experiment` | Gfx PR2 capability-1 observer smoke (A–B–A); incomplete — summarize threshold vs 10 s phases | [validation.md](20261004T111812Z-submission-experiment/validation.md), [analysis/evidence/gfx-subrecord-observer-smoke-20261004T111812Z.json](../analysis/evidence/gfx-subrecord-observer-smoke-20261004T111812Z.json) |
 
 For frame-rate and multithreaded GL work, see [analysis/frame-rate.md](../analysis/frame-rate.md).

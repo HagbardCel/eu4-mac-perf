@@ -1,0 +1,25 @@
+{
+  "evidence_id": "gfx-subrecord-observer-smoke-20261004T111812Z",
+  "kind": "submission_observer_smoke_v1",
+  "status": "incomplete",
+  "recorded_at_utc": "2026-10-04T11:18:12Z",
+  "repository_commit": "2211e08",
+  "run_dir": "results/20261004T111812Z-submission-experiment",
+  "command": "python3 benchmark/submission_experiment.py --output results --engagement-smoke",
+  "outcome_summary": "Venice observer smoke reached all three 10s phases then failed metric summarization; engagement/scene gates not computed.",
+  "error": "Insufficient fully paused swap samples in the 30-second phase",
+  "root_cause": "Observer phase length (10s) incompatible with autonomous_runner.summarize() default 25-sample threshold for 30s baselines.",
+  "harness_remediation": "submission_experiment passes phase-scaled min_swap_samples and min_power_samples to summarize().",
+  "forensic_final_counters": {
+    "candidate_site_entries": 19202193,
+    "eligible_pair_hits": 0,
+    "candidate_effective_actions": 0,
+    "control_ticks": 8050
+  },
+  "interpretation": "Hook site traffic occurred; buffer-bind predicate recorded zero eligible pairs in this session. Re-run after harness fix for per-phase gates and scene validation.",
+  "artifacts": {
+    "manifest": "results/20261004T111812Z-submission-experiment/manifest.json",
+    "validation": "results/20261004T111812Z-submission-experiment/validation.json",
+    "validation_md": "results/20261004T111812Z-submission-experiment/validation.md"
+  }
+}

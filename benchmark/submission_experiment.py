@@ -185,6 +185,12 @@ def _run_phase(
     }
 
 
+def _min_metric_samples_for_phase(phase: dict) -> int:
+    duration_s = max(1.0, (phase["end_ns"] - phase["start_ns"]) / 1_000_000_000)
+    # Auto-probe rows are ~1 Hz during measurement; require most of the window.
+    return max(5, int(duration_s * 0.75))
+
+
 def _attach_phase_summaries(
     phases: list[dict],
     run_dir: Path,
@@ -193,6 +199,7 @@ def _attach_phase_summaries(
     tail: auto.PowerTail,
 ) -> None:
     for phase in phases:
+        min_samples = _min_metric_samples_for_phase(phase)
         phase["summary"] = summarize(
             run_dir,
             [phase],
@@ -200,6 +207,8 @@ def _attach_phase_summaries(
             pid,
             tail.samples,
             swap_warmup_ns=0,
+            min_swap_samples=min_samples,
+            min_power_samples=min_samples,
             write_shared_summary=False,
         )
 

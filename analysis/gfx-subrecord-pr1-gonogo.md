@@ -25,3 +25,16 @@
 1. Install mesh observer at `0x14c81e6` per hook-site JSON; **do not** count CGL flush as `candidate_site_entries`.
 2. Run capability 1 observer smoke with per-phase gates and scene validation; require `eligible_pair_hits > 0` on **each** B phase.
 3. Compare hit rate to removed-work inventory — buffer-bind hits alone are unlikely to justify Stage 2 until texture/object-constant predicates are proven.
+
+## PR2 observer smoke (2026-10-04, incomplete)
+
+First Venice run after PR #31 merge (`2211e08`): [`results/20261004T111812Z-submission-experiment`](../results/20261004T111812Z-submission-experiment/validation.md).
+
+| Result | Detail |
+|--------|--------|
+| Harness | **Incomplete** — `summarize()` required 25 swap samples while observer phases are 10 s (~10 samples); fixed on `main` after this run. |
+| Hook traffic | Final mmap `candidate_site_entries` ≫ 0 (site hook firing). |
+| Predicate ROI | Final `eligible_pair_hits` = 0 (no buffer-bind equivalence pairs this session; engagement gate not sealed). |
+| Gates | `observer_gate` / scene checks **not computed** — re-run after harness fix. |
+
+Registered evidence: [`analysis/evidence/gfx-subrecord-observer-smoke-20261004T111812Z.json`](evidence/gfx-subrecord-observer-smoke-20261004T111812Z.json).

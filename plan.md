@@ -2,21 +2,21 @@
 
 ## Status
 
-- **PR #29 merged** to `main` (`0034def`): Phase-C evidence capsule, hermetic `verify-evidence` in CI, profiler-off ABABA scaffold.
-- **Current focus:** Gfx subrecord static RE + predicates (PR1 branch `gfx-flushdata-re-predicate`), then conditional runtime candidate (PR2).
+- **PR #30 merged** (Gfx PR1 static RE) and **PR #31 merged** (protocol v2 mesh observer harness) on `main` (`2211e08`).
+- **Observer smoke:** first Venice attempt `20261004T111812Z` incomplete (10 s phases vs `summarize()` sample floor); see [validation.md](results/20261004T111812Z-submission-experiment/validation.md). Re-run `--engagement-smoke` after harness fix.
 
-## PR1 (in progress)
+## PR1 (complete)
 
-Offline only — see [analysis/gfx-subrecord-pr1-gonogo.md](analysis/gfx-subrecord-pr1-gonogo.md):
+Offline — see [analysis/gfx-subrecord-pr1-gonogo.md](analysis/gfx-subrecord-pr1-gonogo.md):
 
 - Classified `SFlushData` (0x50) and mesh draw subrecord (0xe8) layout JSON with CI enforcement
 - Draw dependency map + engine elision inventory
 - `submission_state_equivalent` / `setup_elision_eligible` / `draw_batch_eligible` in C
 - Hook-site contract JSON (insertion before `0x14c81f3`, draw @ `0x14c8404` landmark)
 
-## PR2 (conditional)
+## PR2 (runtime observer landed; ROI gate pending)
 
-After PR1 **GO A** with observer ROI gate — protocol v2, `candidate_site_entries`, mutating candidate only if removed-work inventory justifies it; full ABABA for capability 2 mutation only.
+Mesh hook + capability 1 dylib on `main`. Pending: successful `--engagement-smoke` with per-phase `eligible_pair_hits > 0` on B before mutating candidate work; full ABABA remains capability 2 only.
 
 ## Canonical Phase-C (frozen)
 
