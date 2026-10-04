@@ -1,47 +1,47 @@
 # Border multidraw mutation topology
 
-## Architecture choice: **run-head / draw-tail interpose** (PR C)
+## Architecture verdict (PR B)
 
-| Option | Verdict |
-|--------|---------|
-| Loop-head binary patch @ `0x1010cbe55` | **Preferred long-term** — inspect `r15` run length and `-0x198(%rbp)` end before first draw |
-| Run-head gather + skip loop | Requires synthetic post-loop state (3b) — feasible but deferred to loop-head patch v2 |
-| Leaf `GfxDrawIndexed` patch (3 sites) | Fragile instruction sizing |
-| **PR C implementation** | **`glDrawElementsBaseVertex` interpose** — return addresses `0x10cc2ed`, `0x10cc357`, `0x10cc3bd` identify border draws; fail-closed batch flush on signature change |
+| Option | Mutation verdict |
+|--------|------------------|
+| **Loop-head / run-head** @ `0x1010cbe55` | **Candidate** — inspect full record run and barriers **before** per-record `GfxSetVertexBuffers` / constant-buffer / draw setup |
+| Run-head gather + skip loop | Requires Gate **3b** synthetic post-loop state |
+| Leaf `GfxDrawIndexed` patch (3 sites) | Fragile; still downstream of per-record setup |
+| **`glDrawElementsBaseVertex` interpose (deferred flush)** | **NO-GO for mutation** — see below |
 
-Gate 2 (realizability): **PASS** for interpose path — complete batch known at flush boundary when next draw would change tracked signature.
+### Why GL-tail interpose fails Gates 2 and 3a
+
+By the time draw \(N+1\) reaches `glDrawElementsBaseVertex`, the engine has already executed record \(N+1\) setup (VBO table index, IBO bind, color/constant-buffer path, etc.). A deferred flush of draw \(N\) at that point executes under **draw \(N+1\)'s GL/engine state**.
+
+Additional discontinuity: `GfxDrawIndexed` tail-jumps to `glDrawElementsBaseVertex` only when base vertex ≠ 0; **base vertex 0** may use `glDrawElements`, bypassing the interpose while a deferred queue exists.
+
+The interpose may still serve as a **pass-through observer** (immediate `real_draw`, TLS aggregation, phase-boundary counter publish). It is **not** an authorized mutation topology.
 
 ## Gate 3a — temporal equivalence
 
-**PASS (mode-0 fast-path subset):** Batching only when consecutive interposed draws share site id 0 signature `(return RA bucket, index count scaling, IBO bind generation)`. Color/VBO slow paths force flush via fallback counters.
+**FAIL** for deferred interpose mutation.
 
-**FAIL (unconditional whole-function):** Cannot replace entire `DrawBorders` without reproducing color/setup branches — not attempted.
+**PASS (conditional)** only for loop-head batches that exclude:
+
+- slow color / `GfxUpdateConstantBuffer` per-record paths,
+- VBO table index transitions,
+- mode ≠ 0 branches,
+- site 2 `+0x10` helper semantics.
 
 ## Gate 3b — post-loop state equivalence
 
-**N/A for PR C interpose** (no loop skip). Loop-head patch must restore `%rcx` walk pointer, `-0x70(%rbp)`, `-0xe4(%rbp)`, and `ebx` at `0x1010cc3bd` / `0x1010cc3e0`.
+**Required** for loop-head/run-head skip. Documented synthetic exit at `0x1010cc3bd` (see prior revision). **N/A** for observer interpose.
 
-Documented synthetic exit for future loop-head:
-
-```text
-; after multidraw covering N records from current index:
-addq $N, %r15
-lea  28*N(%r14), %r14   ; if needed
-mov  updated, -0x80(%rbp)
-jmp  0x1010cc3bd
-```
-
-## Argument marshalling
+## Argument marshalling (loop-head target)
 
 | Question | Answer |
 |----------|--------|
-| Pre-built arrays? | **No** — gather from interposed draw parameters |
-| Scratch | TLS `GLsizei counts[EU4_BORDER_MAX_BATCH]` (1024), `GLint basevertex[]`, `const void *indices[]` all **NULL offset** |
-| Heap in loop | **Forbidden** |
-| Max batch | 1024 subdraws (clamp; longest observed ~943) |
-| `indices[i]` | Constant **0** |
-| Gather cost | O(N) per batch, one multidraw — **negligible** vs N driver calls |
+| Pre-built arrays? | **No** — linear gather from 28-byte stride before first mutating setup |
+| Scratch | TLS/stack; **no heap** in render loop |
+| `indices[i]` | **0** (border path) |
 
 ## Hard realizability verdict
 
-**GO for PR C prototype** on interpose + mode-0 batching with fail-closed fallback. Loop-head patch remains follow-up for net deployable win without per-draw interpose overhead.
+**NO-GO** for Venice mutation via GL interpose.
+
+**Next implementation:** loop-head interception proof + patch (preferred address `0x1010cbe55`); PR C harness remains **observer-only** until that lands.

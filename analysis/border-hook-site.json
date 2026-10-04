@@ -2,7 +2,8 @@
   "schema_version": 1,
   "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "owner_symbol": "_ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
-  "pr_c_implementation": "glDrawElementsBaseVertex_interpose_return_address_filter",
+  "pr_c_implementation": "observer_only_glDrawElementsBaseVertex_interpose_immediate_pass_through",
+  "mutation_target": "future_loop_head_at_0x1010cbe55",
   "future_loop_head": {
     "preferred_address": "0x1010cbe55",
     "image_offset": "0x10cbe55",

@@ -20,6 +20,11 @@ Imports alone do **not** prove the active gameplay context exposes base-vertex m
 - **DISPROVEN:** No evidence the game forbids the call; macOS OpenGL 4.1 stack lists the entry point in frame-model inventories.
 - **RUNTIME-ASSERT:** Static RE + inventories make the call **plausible**; PR C must `dlsym` / probe before enabling mutation (Gate 6).
 
-## PR C requirement
+## PR C requirement (Gate 6)
 
-Capability-2 dylib resolves `glMultiDrawElementsBaseVertex` at install time. If resolution fails, mutation remains disabled (pass-through only); manifest records `border_api_runtime_assert: failed`.
+`dlsym` alone is **insufficient**. With the **gameplay GL context current**, verify:
+
+1. `glDrawElementsBaseVertex` / `glMultiDrawElementsBaseVertex` resolve.
+2. `glGetString(GL_VERSION)` returns a supported profile string.
+
+Mutation remains **disabled** until loop-head ships; observer phases record `runtime_context_verified` via first border interpose. Manifest must fail closed if **zero** `border_candidate_draws` across A phases (interpose did not engage).
