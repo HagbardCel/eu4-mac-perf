@@ -15,6 +15,7 @@ import autonomous_runner as auto
 import eu4_benchmark as base
 import submission_control as control
 import submission_multi_hypothesis as multi
+import submission_border_validation as border_validation
 import submission_validation as validation
 from autonomous_runner import capture_scene, focus, mark, probe_rows, stop_process, summarize, warm_up
 from fixture_manager import FixtureManager
@@ -170,6 +171,7 @@ def _run_phase(
     multi_hypothesis: bool = False,
     border_minimal: bool = False,
     border_mutate: bool = False,
+    border_experiment: bool = False,
 ) -> dict:
     submission.set_border_flags(minimal=border_minimal, mutate=border_mutate)
     generation = submission.request_mode(mode)
@@ -215,13 +217,30 @@ def _run_phase(
         "end_ns": measurement_end["monotonic_ns"],
         "screenshot": str(screenshot),
     }
-    phase_payload["control_validation"] = _validate_control_deltas(
-        role,
-        counter_start,
-        counter_end,
-        expected_capability_id=expected_capability_id,
-        require_v1_pair_hits=not multi_hypothesis and expected_capability_id != MUTATING_CAPABILITY_ID,
-    )
+    if border_experiment and expected_capability_id == MUTATING_CAPABILITY_ID:
+        phase_payload["control_validation"] = {
+            "status": "skipped",
+            "reason": "border experiment uses border_validation, not mesh pair counters",
+            "start": counter_start,
+            "end": counter_end,
+        }
+        phase_payload["border_validation"] = border_validation.border_phase_validation(
+            role,
+            counter_start,
+            counter_end,
+            border_mutate=border_mutate,
+            border_minimal=border_minimal,
+        )
+        phase_payload["border_minimal"] = border_minimal
+        phase_payload["border_mutate"] = border_mutate
+    else:
+        phase_payload["control_validation"] = _validate_control_deltas(
+            role,
+            counter_start,
+            counter_end,
+            expected_capability_id=expected_capability_id,
+            require_v1_pair_hits=not multi_hypothesis and expected_capability_id != MUTATING_CAPABILITY_ID,
+        )
     if multi_hypothesis and role == "candidate":
         wall_s = max(1e-6, (measurement_end["monotonic_ns"] - measurement_start["monotonic_ns"]) / 1e9)
         swaps = _count_paused_swaps(run_dir, anchor, measurement_start["monotonic_ns"], measurement_end["monotonic_ns"])
@@ -287,7 +306,8 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
         "phase_seconds": BORDER_PHASE_SECONDS,
         "repository_scene_reference": str(validation.SCENE_REFERENCE_MANIFEST.relative_to(ROOT)),
         "border_api_runtime_assert": True,
-        "pr_b_go": "GO-B",
+        "pr_b_mutation_go": "NO-GO_interpose",
+        "mutation_enabled": False,
     }
     manifest_path = run_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -351,12 +371,19 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                             settle_seconds=BORDER_SETTLE_SECONDS,
                             border_minimal=border_minimal,
                             border_mutate=border_mutate,
+                            border_experiment=True,
                         ),
                     )
                 stop_process(pm, 5)
                 pm = None
-                _write_phase_summaries(run_dir, phases, anchor, game.pid, tail)
+                _attach_phase_summaries(phases, run_dir, anchor, game.pid, tail)
                 manifest["phases"] = phases
+                manifest["border_engagement_gate"] = border_validation.border_experiment_gate(phases)
+                if manifest["border_engagement_gate"]["status"] != "passed":
+                    raise base.BenchmarkError(
+                        "border_engagement_gate failed: "
+                        + str(manifest["border_engagement_gate"].get("reason"))
+                    )
                 manifest["status"] = "complete"
         except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:
             error = str(exc)

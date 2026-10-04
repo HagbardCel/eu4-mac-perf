@@ -1,6 +1,9 @@
+#define GL_SILENCE_DEPRECATION 1
 #include "eu4_submission_border.h"
 
 #include "submission_counter_schema.h"
+
+#include <OpenGL/gl.h>
 
 #include <dlfcn.h>
 #include <stdbool.h>
@@ -25,20 +28,23 @@ typedef void (*glMultiDrawElementsBaseVertex_fn)(
     GLsizei drawcount);
 
 static glDrawElementsBaseVertex_fn real_draw = NULL;
-static glMultiDrawElementsBaseVertex_fn real_multidraw = NULL;
-static bool api_ready = false;
+static glMultiDrawElementsBaseVertex_fn real_multidraw __attribute__((unused)) = NULL;
+static bool symbols_resolved = false;
+static bool runtime_context_verified = false;
 
-static _Thread_local GLsizei tls_counts[EU4_BORDER_MAX_BATCH];
-static _Thread_local GLint tls_basevertex[EU4_BORDER_MAX_BATCH];
-static _Thread_local const void *tls_indices[EU4_BORDER_MAX_BATCH];
-static _Thread_local uint32_t tls_batch_len = 0;
-static _Thread_local uint32_t tls_batch_max = 0;
-static _Thread_local uint32_t tls_batch_site = UINT32_MAX;
-static _Thread_local GLenum tls_batch_mode = 0;
-static _Thread_local GLenum tls_batch_type = 0;
+static _Thread_local uint64_t tls_unpublished_draws = 0;
+static _Thread_local uint32_t tls_unpublished_site0 = 0;
 
 bool eu4_border_gl_api_ready(void) {
-    return api_ready;
+    return symbols_resolved && runtime_context_verified;
+}
+
+static bool verify_active_gl_context_supports_multidraw(void) {
+    const char *version = (const char *)glGetString(GL_VERSION);
+    if (version == NULL) {
+        return false;
+    }
+    return strstr(version, "2.") != NULL || strstr(version, "3.") != NULL || strstr(version, "4.") != NULL;
 }
 
 void eu4_border_init_gl_apis(void) {
@@ -48,7 +54,7 @@ void eu4_border_init_gl_apis(void) {
     real_draw = (glDrawElementsBaseVertex_fn)dlsym(RTLD_NEXT, "glDrawElementsBaseVertex");
     real_multidraw =
         (glMultiDrawElementsBaseVertex_fn)dlsym(RTLD_NEXT, "glMultiDrawElementsBaseVertex");
-    api_ready = real_draw != NULL && real_multidraw != NULL;
+    symbols_resolved = real_draw != NULL && real_multidraw != NULL;
 }
 
 extern uint32_t g_eu4_border_control_flags;
@@ -58,76 +64,37 @@ bool eu4_border_minimal_hook(void) {
 }
 
 bool eu4_border_mutate_enabled(void) {
-    if (!api_ready) {
-        return false;
+    /* Mutation requires loop-head/run-head patch (PR B NO-GO for GL-tail defer). */
+    (void)g_eu4_border_control_flags;
+    return false;
+}
+
+void eu4_border_publish_tls_counters(void) {
+    if (tls_unpublished_draws > 0) {
+        eu4_submission_counter_add(EU4_COUNTER_BORDER_CANDIDATE_DRAWS, tls_unpublished_draws);
+        tls_unpublished_draws = 0;
     }
-    return (g_eu4_border_control_flags & 2u) != 0;
+    if (tls_unpublished_site0 > 0) {
+        eu4_submission_counter_add(EU4_COUNTER_BORDER_SITE_0_DRAWS_COVERED, tls_unpublished_site0);
+        tls_unpublished_site0 = 0;
+    }
 }
 
 void eu4_border_reset_batch(void) {
-    tls_batch_len = 0;
-    tls_batch_site = UINT32_MAX;
-    tls_batch_max = 0;
+    eu4_border_publish_tls_counters();
 }
 
 void eu4_submission_observation_arm_reset(void) {
-    eu4_border_flush_pending();
-    eu4_border_reset_batch();
+    eu4_border_publish_tls_counters();
 }
 
-static void record_batch(uint32_t site_id, uint32_t n) {
-    if (n == 0) {
-        return;
-    }
-    eu4_submission_counter_add(EU4_COUNTER_BORDER_MULTIDRAW_CALLS, 1);
-    eu4_submission_counter_add(EU4_COUNTER_BORDER_DRAWS_COVERED_BY_MULTIDRAW, n);
-    if (n > 1) {
-        eu4_submission_counter_add(EU4_COUNTER_BORDER_DRAW_CALLS_ELIMINATED, n - 1);
-    }
-    eu4_submission_counter_add(EU4_COUNTER_BORDER_BATCH_SIZE_SUM, n);
-    if (n > tls_batch_max) {
-        tls_batch_max = n;
-        eu4_submission_counter_add(EU4_COUNTER_BORDER_BATCH_SIZE_MAX, n);
-    }
+static void note_border_draw(uint32_t site_id) {
+    tls_unpublished_draws++;
     if (site_id == 0) {
-        eu4_submission_counter_add(EU4_COUNTER_BORDER_SITE_0_DRAWS_COVERED, n);
-    } else if (site_id == 1) {
-        eu4_submission_counter_add(EU4_COUNTER_BORDER_SITE_1_DRAWS_COVERED, n);
-    } else if (site_id == 2) {
-        eu4_submission_counter_add(EU4_COUNTER_BORDER_SITE_2_DRAWS_COVERED, n);
+        tls_unpublished_site0++;
     }
-}
-
-static void flush_batch(void) {
-    if (tls_batch_len == 0 || real_draw == NULL) {
-        eu4_border_reset_batch();
-        return;
-    }
-    if (tls_batch_len == 1) {
-        real_draw(tls_batch_mode, tls_counts[0], tls_batch_type, tls_indices[0], tls_basevertex[0]);
-        record_batch(tls_batch_site, 1);
-    } else {
-        real_multidraw(
-            tls_batch_mode,
-            tls_counts,
-            tls_batch_type,
-            tls_indices,
-            tls_basevertex,
-            (GLsizei)tls_batch_len);
-        record_batch(tls_batch_site, tls_batch_len);
-    }
-    eu4_border_reset_batch();
-}
-
-static void fallback_single(
-    GLenum mode,
-    GLsizei count,
-    GLenum type,
-    const void *indices,
-    GLint basevertex) {
-    eu4_submission_counter_add(EU4_COUNTER_BORDER_ORIGINAL_DRAWS_FALLBACK, 1);
-    if (real_draw != NULL) {
-        real_draw(mode, count, type, indices, basevertex);
+    if ((g_eu4_border_control_flags & 2u) != 0) {
+        eu4_submission_counter_add(EU4_COUNTER_BORDER_FALLBACK_MUTATE_DISABLED, 1);
     }
 }
 
@@ -141,58 +108,24 @@ void eu4_border_on_draw_elements_base_vertex(
     if (real_draw == NULL) {
         return;
     }
+    if (!runtime_context_verified) {
+        runtime_context_verified = verify_active_gl_context_supports_multidraw();
+    }
     if (eu4_border_minimal_hook()) {
         real_draw(mode, count, type, indices, basevertex);
         return;
     }
 
-    eu4_submission_counter_add(EU4_COUNTER_BORDER_CANDIDATE_DRAWS, 1);
-
     if (site_id > 2) {
-        fallback_single(mode, count, type, indices, basevertex);
-        return;
-    }
-
-    const bool compatible = tls_batch_len > 0 && tls_batch_site == site_id && tls_batch_mode == mode &&
-                            tls_batch_type == type;
-    if (tls_batch_len > 0 && !compatible) {
-        eu4_submission_counter_add(EU4_COUNTER_BORDER_FALLBACK_SITE_CHANGE, 1);
-        eu4_border_reset_batch();
-    }
-    if (tls_batch_len == 0) {
-        tls_batch_site = site_id;
-        tls_batch_mode = mode;
-        tls_batch_type = type;
-        eu4_submission_counter_add(EU4_COUNTER_BORDER_CANDIDATE_RUNS, 1);
-    }
-    if (tls_batch_len < EU4_BORDER_MAX_BATCH) {
-        const uint32_t i = tls_batch_len++;
-        tls_counts[i] = count;
-        tls_basevertex[i] = basevertex;
-        tls_indices[i] = indices;
-    } else {
-        eu4_submission_counter_add(EU4_COUNTER_BORDER_FALLBACK_BATCH_FULL, 1);
-    }
-
-    if (!eu4_border_mutate_enabled()) {
         real_draw(mode, count, type, indices, basevertex);
-        eu4_border_reset_batch();
         return;
     }
 
-    if (tls_batch_len >= 2) {
-        real_multidraw(
-            tls_batch_mode,
-            tls_counts,
-            tls_batch_type,
-            tls_indices,
-            tls_basevertex,
-            (GLsizei)tls_batch_len);
-        record_batch(tls_batch_site, tls_batch_len);
-        eu4_border_reset_batch();
-    }
+    /* Observer only: always issue the original draw immediately (no deferred batching). */
+    note_border_draw(site_id);
+    real_draw(mode, count, type, indices, basevertex);
 }
 
 void eu4_border_flush_pending(void) {
-    flush_batch();
+    eu4_border_publish_tls_counters();
 }

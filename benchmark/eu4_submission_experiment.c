@@ -265,10 +265,10 @@ static CGLError submission_flush(CGLContextObj context) {
         }
     }
 #endif
-    CGLError result = CGLFlushDrawable(context);
 #if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
     eu4_border_flush_pending();
 #endif
+    CGLError result = CGLFlushDrawable(context);
 #if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
     if (control_map != MAP_FAILED) {
         uint32_t *words = (uint32_t *)control_map;

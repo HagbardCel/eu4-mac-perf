@@ -1,18 +1,21 @@
 {
   "evidence_id": "border-multidraw-harness-20261004",
   "kind": "submission_border_multidraw_v1",
-  "status": "harness_ready",
+  "status": "harness_ready_observer_only",
   "recorded_at_utc": "2026-10-04T18:00:00Z",
-  "pr_b_verdict": "GO-B",
+  "pr_b_verdict": "NO-GO_mutation_interpose",
+  "pr_b_structural_ceiling_per_frame": 1562,
+  "pr_b_implementable_ceiling": "unresolved_pending_loop_head",
   "pr_b_artifacts": [
     "analysis/border-multidraw-go-nogo.md",
     "analysis/border-multidraw-mutation-topology.md",
     "analysis/border-draw-record-layout.json"
   ],
   "gate_0": "RUNTIME-ASSERT",
+  "mutation_enabled": false,
   "dylib": "benchmark/.build/libeu4_submission_border_multidraw.dylib",
   "counter_schema_version": 3,
   "launch_command": "python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa",
-  "venice_run": "pending_operator_launch",
-  "notes": "PR C infrastructure and PR B static RE landed; Venice ABABA not executed in CI (requires game + sudo powermetrics)."
+  "venice_run": "observer_only_pending_loop_head_mutation",
+  "notes": "Do not run Venice expecting batching ROI until loop-head patch ships. ABABA validates border_candidate_draws engagement and border_engagement_gate."
 }

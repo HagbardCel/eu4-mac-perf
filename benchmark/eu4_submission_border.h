@@ -5,9 +5,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define EU4_BORDER_MAX_BATCH 1024u
-
 void eu4_border_init_gl_apis(void);
+void eu4_border_publish_tls_counters(void);
 void eu4_border_reset_batch(void);
 void eu4_border_flush_pending(void);
 bool eu4_border_gl_api_ready(void);

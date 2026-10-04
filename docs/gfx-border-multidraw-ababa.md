@@ -1,6 +1,6 @@
 # Border multidraw ABABA (capability 2)
 
-Profiler-off experiment for `glMultiDrawElementsBaseVertex` batching on border draws. Static gate chain: [border-multidraw-go-nogo.md](../analysis/border-multidraw-go-nogo.md).
+Profiler-off harness for border draw observation and (future) loop-head multidraw mutation. Static gates: [border-multidraw-go-nogo.md](../analysis/border-multidraw-go-nogo.md) — **mutation NO-GO** for GL interpose; **observer ABABA only**.
 
 ## Build
 
@@ -15,23 +15,22 @@ PYTHONPATH=benchmark python3 -c "import submission_control as c; c.build_border_
 python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa
 ```
 
-Schedule: **N–A–B–A–B–A–N** (10 s phases, 3 s settle).
+Schedule: **N–A–B–A–B–A–N** (10 s phases). B phases set the mutate flag but the dylib **does not multidraw** until loop-head patch lands (`border_fallback_mutate_disabled` may increment).
 
-| Phase | Mode | Border flags |
-|-------|------|----------------|
-| N | reference | minimal hook |
-| A | candidate | pass-through + telemetry |
-| B | candidate | mutate (multidraw) |
+## Engagement gate (required)
 
-Flags live in mmap offset **56** (`set_border_flags`); dylib reads them each `CGLFlushDrawable` poll.
+Per phase `border_validation`:
 
-## Endpoints
+- **N (minimal):** `border_multidraw_calls == 0`
+- **A:** `border_candidate_draws > 0`, no multidraw counters
+- **B:** same as A until mutation ships (no `draw_calls_eliminated`)
 
-- **Primary mechanistic:** **B − A** on CPU-ms/s when swap cadence within ±2%; else joint CPU-ms/frame.
-- **Net deployable:** **B − N** when N bookends used.
-- **Visual:** A↔A envelope on `measure-scene-a*.png`; A↔B must not exceed on border ROIs (manual / validation tooling).
-- **Counters:** schema v3 slots `border_*` (per-batch updates, no hot-loop atomics).
+Experiment fails if no A-phase draws or any phase fails validation.
 
 ## Gate 6
 
-If PR B = RUNTIME-ASSERT, manifest sets `border_api_runtime_assert: true`; mutation disabled when `glMultiDrawElementsBaseVertex` fails to resolve at load.
+First border interpose with gameplay context current checks `glGetString(GL_VERSION)`; `dlsym` alone is insufficient for mutation authorization.
+
+## Endpoints (when mutation exists)
+
+Until then, use observer run to prove interpose engagement only. Do **not** interpret B−A CPU as batching benefit.
