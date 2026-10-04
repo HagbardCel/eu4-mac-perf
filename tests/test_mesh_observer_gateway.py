@@ -39,7 +39,7 @@ class MeshObserverGatewayTests(unittest.TestCase):
                 str(out),
                 str(BENCH / "eu4_submission_mesh_thunk.S"),
                 str(TESTS / "mesh_observer_gateway_selftest.S"),
-                str(TESTS / "mesh_observer_gateway_stubs.c"),
+                str(TESTS / "mesh_observer_gateway_stubs.S"),
                 str(TESTS / "mesh_observer_gateway_selftest.c"),
             ],
             check=True,

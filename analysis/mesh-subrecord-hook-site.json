@@ -24,8 +24,14 @@
   "optimized_resume_note": "No mutating skip/resume path established in PR1; buffer-bind observation only.",
   "hook_design": "call_trampoline_island_with_asm_thunk",
   "detour_scratch_register": "r11",
-  "detour_scratch_register_live_at_insertion": false,
-  "detour_scratch_register_evidence": "llvm-objdump scan of inner loop 0x14c8100–0x14c8450 shows no %r11 use before insertion",
+  "detour_scratch_register_live_across_detour": false,
+  "detour_scratch_register_liveness_proof": {
+    "scope": "per-subrecord path 0x14c818d (eligible subrecord) through GfxDrawIndexed 0x14c8404",
+    "binary": "GOG EU IV 1.37.5 x86-64",
+    "method": "llvm-objdump def/use: no %r11 read or write in scope; detour/trampoline may clobber incoming r11 with no observable effect before any later r11 definition in this path",
+    "first_r11_after_insertion": null,
+    "notes": "Incoming r11 is dead across 0x14c81e6→0x14c8404 on the pinned mesh draw path."
+  },
   "frame_pointers_at_insertion": {
     "parent_sflushdata_rbp_offset": -296,
     "current_subrecord_rbp_offset": -184,
@@ -61,8 +67,14 @@
     "rbx": "GfxEffect* after GetGfxEffect at resume 0x14c81f3"
   },
   "flags_live": "RFLAGS required by cmovneq at 0x14c81e6 (opaque/transparent gate at 0x14c8181)",
-  "xmm_live_at_insertion": false,
-  "xmm_liveness_evidence": "llvm-objdump scan of 0x14c8100–0x14c8450 (pinned GOG 1.37.5) shows no XMM/YMM mnemonics between loop entry and 0x14c81f3; observer gateway does not preserve vector state.",
+  "xmm_live_across_observer_call": false,
+  "xmm_liveness_proof": {
+    "scope": "0x14c81e6 (insertion) through 0x14c8404 (GfxDrawIndexed) on eligible subrecord path",
+    "binary": "GOG EU IV 1.37.5 x86-64",
+    "method": "llvm-objdump: zero XMM/YMM instructions in scope; no caller-saved vector register is read after the hook before being redefined in this span",
+    "observer_preserves_xmm": false,
+    "safe_because": "No vector register use between hook replay and draw; gateway does not save XMM (lean observer)."
+  },
   "stack_alignment": 16,
   "parent_subrecord_loop_scope": "inner_0xe8_iteration_within_single_SFlushData_parent_and_layer",
   "thread_assumption": "render_thread_only",
