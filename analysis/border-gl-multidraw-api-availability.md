@@ -27,4 +27,4 @@ Imports alone do **not** prove the active gameplay context exposes base-vertex m
 1. `glDrawElementsBaseVertex` / `glMultiDrawElementsBaseVertex` resolve.
 2. `glGetString(GL_VERSION)` returns a supported profile string.
 
-Mutation remains **disabled** until loop-head ships; observer phases record `runtime_context_verified` via first border interpose. Manifest must fail closed if **zero** `border_candidate_draws` across A phases (interpose did not engage).
+Mutation remains **disabled** until loop-head ships. `border_runtime_context_multidraw_supported` means **API eligibility inferred** from active-context `GL_VERSION` ≥ 3.2 plus symbol resolution (not a harmless multidraw probe). Candidate-mode entry requires only the pass-through interpose (`eu4_border_interpose_ready`), not Gate 0.
