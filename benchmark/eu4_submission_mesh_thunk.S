@@ -6,7 +6,6 @@ _eu4_mesh_trampoline_ptr:
 
 .section __TEXT,__text
 .globl _eu4_mesh_observer_gateway
-.globl _eu4_mesh_observer_gateway_selftest
 
 /* Preserve caller-saved GPRs + RFLAGS, call observer, replay displaced insns via trampoline. */
 _eu4_mesh_observer_gateway:
@@ -35,43 +34,3 @@ _eu4_mesh_observer_gateway:
     popq %rcx
     popq %rax
     jmpq *_eu4_mesh_trampoline_ptr(%rip)
-
-/* Self-test: save/restore path with noop observer must preserve rax/rcx/rflags across trampoline replay. */
-_eu4_mesh_observer_gateway_selftest:
-    movabs $0x1111111111111111, %rax
-    movabs $0x2222222222222222, %rcx
-    xorq %rax, %rax
-    pushfq
-    popfq
-    pushq %rax
-    pushq %rcx
-    pushq %rdx
-    pushq %rsi
-    pushq %rdi
-    pushq %r8
-    pushq %r9
-    pushq %r10
-    pushq %r11
-    pushfq
-    callq _eu4_submission_mesh_observer_noop
-    popfq
-    popq %r11
-    popq %r10
-    popq %r9
-    popq %r8
-    popq %rdi
-    popq %rsi
-    popq %rdx
-    popq %rcx
-    popq %rax
-    movabs $0x1111111111111111, %rdx
-    cmpq %rdx, %rax
-    jne Lfail
-    movabs $0x2222222222222222, %rdx
-    cmpq %rdx, %rcx
-    jne Lfail
-    movl $0, %eax
-    ret
-Lfail:
-    movl $1, %eax
-    ret

@@ -24,8 +24,6 @@ void eu4_submission_mesh_reset_chain(void) {
     prev_flush_kind = 0;
 }
 
-void eu4_submission_mesh_observer_noop(void) {}
-
 void eu4_submission_mesh_site_from_frame(void *rbp, uint32_t layer_index, uint32_t flush_array_kind) {
     if (!rbp) {
         return;

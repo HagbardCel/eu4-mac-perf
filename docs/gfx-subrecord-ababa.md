@@ -18,6 +18,8 @@ Short **A–B–A** schedule (10 s phases, 3 s settle). Requires real mesh hook 
 python3 benchmark/submission_experiment.py --output results --engagement-smoke
 ```
 
+Invoking without `--engagement-smoke` exits with an error (no mutating candidate).
+
 Check `validation.json` → `observer_gate` and `engagement_gate` (both per-phase). **Not** a Pareto optimization pass.
 
 ## Full ABABA (capability 2)

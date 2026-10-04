@@ -362,11 +362,17 @@ def main() -> int:
         help="capability 1 observer run (no Pareto); short validation semantics",
     )
     args = parser.parse_args()
+    if not args.engagement_smoke:
+        print(
+            "Error: only --engagement-smoke is supported until a mutating capability 2 dylib exists.",
+            file=sys.stderr,
+        )
+        return 1
     try:
         run_dir = run_experiment(
             Path(args.output).expanduser().resolve(),
             expected_capability_id=OBSERVER_CAPABILITY_ID,
-            engagement_smoke=args.engagement_smoke,
+            engagement_smoke=True,
         )
         print(run_dir)
     except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:

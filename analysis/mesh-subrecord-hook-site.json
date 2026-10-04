@@ -61,6 +61,8 @@
     "rbx": "GfxEffect* after GetGfxEffect at resume 0x14c81f3"
   },
   "flags_live": "RFLAGS required by cmovneq at 0x14c81e6 (opaque/transparent gate at 0x14c8181)",
+  "xmm_live_at_insertion": false,
+  "xmm_liveness_evidence": "llvm-objdump scan of 0x14c8100–0x14c8450 (pinned GOG 1.37.5) shows no XMM/YMM mnemonics between loop entry and 0x14c81f3; observer gateway does not preserve vector state.",
   "stack_alignment": 16,
   "parent_subrecord_loop_scope": "inner_0xe8_iteration_within_single_SFlushData_parent_and_layer",
   "thread_assumption": "render_thread_only",
