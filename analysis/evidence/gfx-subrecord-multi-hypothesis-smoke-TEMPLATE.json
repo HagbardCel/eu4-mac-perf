@@ -1,0 +1,14 @@
+{
+  "kind": "gfx_subrecord_multi_hypothesis_smoke",
+  "status": "pending_local_venice_run",
+  "command": "python3 benchmark/submission_experiment.py --output results --multi-hypothesis-smoke",
+  "run_dir": "results/<UTC_TIMESTAMP>-submission-experiment",
+  "immutable_validation_note": "Copy metrics from validation.json; add posthoc_interpretation here only.",
+  "posthoc_interpretation": {
+    "harness": "pending",
+    "hook": "pending",
+    "scene": "pending",
+    "invariants": "pending",
+    "hypothesis_roi": "pending"
+  }
+}

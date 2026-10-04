@@ -42,7 +42,16 @@
     "swap_rate": 55.59,
     "cpu_ms_s": 1137.95
   },
-  "interpretation": "Mesh observer hook engaged; buffer-bind equivalence predicate produced no hits on paused Venice. Do not proceed to mutating capability 2 for buffer-bind-only on this scene without a different workload or broader predicates.",
+  "interpretation": "Mesh observer hook engaged; same-parent adjacent buffer-bind equivalence produced no hits on paused Venice.",
+  "posthoc_interpretation": {
+    "recorded_at_utc": "2026-10-04T12:00:00Z",
+    "harness": "complete",
+    "hook": "engaged",
+    "scene": "passed",
+    "predicate": "no_opportunities",
+    "scope": "same_parent_adjacent_buffer_bind",
+    "roi_status": "negative_for_same_parent_predicate"
+  },
   "artifacts": {
     "manifest": "results/20261004T112503Z-submission-experiment/manifest.json",
     "validation": "results/20261004T112503Z-submission-experiment/validation.json",
