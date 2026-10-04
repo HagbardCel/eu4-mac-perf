@@ -38,8 +38,16 @@ static _Thread_local uint64_t tls_unpublished_draws = 0;
 static _Thread_local uint32_t tls_unpublished_site0 = 0;
 static _Thread_local uint64_t tls_unpublished_mutate_disabled = 0;
 
-bool eu4_border_gl_api_ready(void) {
+bool eu4_border_interpose_ready(void) {
+    return real_draw != NULL;
+}
+
+bool eu4_border_multidraw_api_ready(void) {
     return symbols_resolved && runtime_context_verified;
+}
+
+bool eu4_border_gl_api_ready(void) {
+    return eu4_border_multidraw_api_ready();
 }
 
 static bool gl_version_supports_multidraw_base_vertex(const char *version) {
