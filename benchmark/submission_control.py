@@ -13,8 +13,15 @@ from pathlib import Path
 import eu4_benchmark as base
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "benchmark/eu4_submission_experiment.c"
-LIBRARY = ROOT / "benchmark/.build/libeu4_submission_experiment.dylib"
+BENCH = ROOT / "benchmark"
+SUBMISSION_DYLIB_SOURCES = (
+    BENCH / "eu4_submission_experiment.c",
+    BENCH / "eu4_submission_mesh_site.c",
+    BENCH / "eu4_submission_mesh_install.c",
+    BENCH / "eu4_submission_mesh_thunk.S",
+    BENCH / "subrecord_equivalence.c",
+)
+LIBRARY = BENCH / ".build/libeu4_submission_experiment.dylib"
 HARNESS = ROOT / "benchmark/.build/submission_dual_dylib_harness"
 HARNESS_SOURCE = ROOT / "tests/submission_dual_dylib_harness.c"
 
@@ -30,24 +37,28 @@ _COUNTER = struct.Struct("<QQQQ")
 _COUNTER_BYTES = _COUNTER.size
 
 
-def build() -> None:
+def build(*, compiled_capability: int = 1) -> None:
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
+    dylib_command = [
+        "clang",
+        "-arch",
+        "x86_64",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-dynamiclib",
+        "-framework",
+        "OpenGL",
+        "-I",
+        str(BENCH),
+        f"-DEU4_SUBMISSION_COMPILED_CAPABILITY={int(compiled_capability)}",
+        "-o",
+        str(LIBRARY),
+        *[str(path) for path in SUBMISSION_DYLIB_SOURCES],
+    ]
     commands = (
-        [
-            "clang",
-            "-arch",
-            "x86_64",
-            "-O2",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-dynamiclib",
-            "-framework",
-            "OpenGL",
-            "-o",
-            str(LIBRARY),
-            str(SOURCE),
-        ],
+        dylib_command,
         [
             "clang",
             "-arch",
@@ -188,33 +199,44 @@ class SubmissionControl:
         self.file.close()
 
 
-def dylib_env(control_path: Path, probe_path: Path, *, active_capability_id: int) -> dict[str, str]:
+def dylib_env(control_path: Path, probe_path: Path) -> dict[str, str]:
     return {
         **os.environ,
         "DYLD_INSERT_LIBRARIES": f"{probe_path}:{LIBRARY}",
         "EU4_SUBMISSION_CONTROL": str(control_path),
-        "EU4_SUBMISSION_COMPILED_CAPABILITY": str(int(active_capability_id)),
-        "EU4_SUBMISSION_STUB_CANDIDATE_HOOK": "1",
-        "EU4_SUBMISSION_STUB_CANDIDATE_SITE": "1",
     }
 
 
 def engagement_smoke_gate(phases: list[dict], *, expected_capability_id: int) -> dict:
-    """Capability 1 observer: site entries without effective actions; never Pareto passed."""
-    candidate_phases = [p for p in phases if p.get("role") == "candidate"]
-    site = sum((p.get("control_validation") or {}).get("candidate_site_entries_delta", 0) for p in candidate_phases)
-    hits = sum((p.get("control_validation") or {}).get("eligible_pair_hits_delta", 0) for p in candidate_phases)
-    actions = sum(
-        (p.get("control_validation") or {}).get("effective_actions_delta", 0) for p in candidate_phases
-    )
-    ok = site > 0 and actions == 0
-    if expected_capability_id == 1:
-        ok = ok and hits >= 0
+    """Per-phase capability 1 observer gates (no Pareto)."""
+    phase_reports: list[dict] = []
+    all_ok = True
+    for phase in phases:
+        cv = phase.get("control_validation") or {}
+        role = phase.get("role")
+        site = int(cv.get("candidate_site_entries_delta", 0))
+        hits = int(cv.get("eligible_pair_hits_delta", 0))
+        actions = int(cv.get("effective_actions_delta", 0))
+        status = cv.get("status")
+        if role == "reference":
+            phase_ok = status == "passed" and hits == 0 and actions == 0
+        elif role == "candidate":
+            phase_ok = status == "engagement_only" and site > 0 and hits > 0 and actions == 0
+        else:
+            phase_ok = False
+        if not phase_ok:
+            all_ok = False
+        phase_reports.append(
+            {
+                "name": phase.get("name"),
+                "role": role,
+                "control_validation": cv,
+                "phase_ok": phase_ok,
+            }
+        )
     return {
-        "status": "engagement_only" if ok else "failed",
+        "status": "engagement_only" if all_ok else "failed",
         "expected_candidate_capability_id": expected_capability_id,
-        "candidate_site_entries_delta": site,
-        "eligible_pair_hits_delta": hits,
-        "effective_actions_delta": actions,
+        "phases": phase_reports,
         "pareto_eligible": False,
     }

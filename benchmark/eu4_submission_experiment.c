@@ -3,6 +3,7 @@
 #include <OpenGL/OpenGL.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -30,24 +31,31 @@ enum {
 };
 
 static pthread_once_t setup_once = PTHREAD_ONCE_INIT;
-static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t header_lock = PTHREAD_MUTEX_INITIALIZER;
 static void *control_map = MAP_FAILED;
 static bool candidate_hook_installed = false;
 
+bool eu4_submission_try_install_mesh_hook(void);
+bool eu4_submission_mesh_hook_is_installed(void);
+
 static uint32_t compiled_capability(void) {
-    const char *env = getenv("EU4_SUBMISSION_COMPILED_CAPABILITY");
-    if (!env || !*env) {
-        return EU4_SUBMISSION_COMPILED_CAPABILITY;
-    }
-    return (uint32_t)strtoul(env, NULL, 10);
+    return (uint32_t)EU4_SUBMISSION_COMPILED_CAPABILITY;
+}
+
+static _Atomic uint64_t *map_counters(void) {
+    return (_Atomic uint64_t *)(control_map + 32);
 }
 
 static void try_install_candidate_hook(void) {
     if (candidate_hook_installed) {
         return;
     }
-    const char *stub = getenv("EU4_SUBMISSION_STUB_CANDIDATE_HOOK");
-    if (stub && stub[0] == '1') {
+    if (eu4_submission_try_install_mesh_hook()) {
+        candidate_hook_installed = true;
+        return;
+    }
+    const char *test_stub = getenv("EU4_SUBMISSION_TEST_STUB_HOOK");
+    if (test_stub && test_stub[0] == '1') {
         candidate_hook_installed = true;
     }
 }
@@ -65,15 +73,11 @@ static void setup(void) {
     close(fd);
     try_install_candidate_hook();
     if (control_map != MAP_FAILED) {
-        pthread_mutex_lock(&lock);
+        pthread_mutex_lock(&header_lock);
         uint32_t *words = (uint32_t *)control_map;
         words[7] = compiled_capability();
-        pthread_mutex_unlock(&lock);
+        pthread_mutex_unlock(&header_lock);
     }
-}
-
-static uint64_t *counters(void) {
-    return (uint64_t *)(control_map + 32);
 }
 
 void eu4_submission_record_candidate_site_entry(void) {
@@ -81,9 +85,7 @@ void eu4_submission_record_candidate_site_entry(void) {
     if (control_map == MAP_FAILED) {
         return;
     }
-    pthread_mutex_lock(&lock);
-    counters()[COUNTER_CANDIDATE_SITE_ENTRIES]++;
-    pthread_mutex_unlock(&lock);
+    atomic_fetch_add_explicit(&map_counters()[COUNTER_CANDIDATE_SITE_ENTRIES], 1, memory_order_relaxed);
 }
 
 void eu4_submission_record_eligible_pair_hit(void) {
@@ -91,9 +93,7 @@ void eu4_submission_record_eligible_pair_hit(void) {
     if (control_map == MAP_FAILED) {
         return;
     }
-    pthread_mutex_lock(&lock);
-    counters()[COUNTER_ELIGIBLE_PAIR_HITS]++;
-    pthread_mutex_unlock(&lock);
+    atomic_fetch_add_explicit(&map_counters()[COUNTER_ELIGIBLE_PAIR_HITS], 1, memory_order_relaxed);
 }
 
 void eu4_submission_record_effective_action(void) {
@@ -101,9 +101,19 @@ void eu4_submission_record_effective_action(void) {
     if (control_map == MAP_FAILED) {
         return;
     }
-    pthread_mutex_lock(&lock);
-    counters()[COUNTER_EFFECTIVE_ACTIONS]++;
-    pthread_mutex_unlock(&lock);
+    atomic_fetch_add_explicit(&map_counters()[COUNTER_EFFECTIVE_ACTIONS], 1, memory_order_relaxed);
+}
+
+bool eu4_submission_candidate_predicate_active(void) {
+    pthread_once(&setup_once, setup);
+    if (control_map == MAP_FAILED) {
+        return false;
+    }
+    uint32_t *words = (uint32_t *)control_map;
+    if (words[0] != MAGIC || words[1] != PROTOCOL_VERSION) {
+        return false;
+    }
+    return words[5] == MODE_CANDIDATE && words[7] == compiled_capability();
 }
 
 static void poll_command_ack(void) {
@@ -111,10 +121,10 @@ static void poll_command_ack(void) {
     if (control_map == MAP_FAILED) {
         return;
     }
-    pthread_mutex_lock(&lock);
+    pthread_mutex_lock(&header_lock);
     uint32_t *words = (uint32_t *)control_map;
     if (words[0] != MAGIC || words[1] != PROTOCOL_VERSION) {
-        pthread_mutex_unlock(&lock);
+        pthread_mutex_unlock(&header_lock);
         return;
     }
     uint32_t command_generation = words[2];
@@ -139,11 +149,8 @@ static void poll_command_ack(void) {
         words[4] = ack_generation;
         words[5] = ack_mode;
     }
-    counters()[COUNTER_CONTROL_TICKS]++;
-    if (getenv("EU4_SUBMISSION_STUB_CANDIDATE_SITE") && getenv("EU4_SUBMISSION_STUB_CANDIDATE_SITE")[0] == '1') {
-        counters()[COUNTER_CANDIDATE_SITE_ENTRIES]++;
-    }
-    pthread_mutex_unlock(&lock);
+    pthread_mutex_unlock(&header_lock);
+    atomic_fetch_add_explicit(&map_counters()[COUNTER_CONTROL_TICKS], 1, memory_order_relaxed);
 }
 
 static CGLError submission_flush(CGLContextObj context) {

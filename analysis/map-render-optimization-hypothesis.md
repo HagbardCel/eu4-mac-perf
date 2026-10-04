@@ -18,8 +18,9 @@ Split predicates in [`subrecord_equivalence.c`](../benchmark/subrecord_equivalen
 [`mesh-draw-subrecord-0xe8-layout.json`](mesh-draw-subrecord-0xe8-layout.json)):
 
 - `submission_state_equivalent` — EQUAL fields per layout JSON; BARRIER bytes break the chain.
-- `setup_elision_eligible` — state equivalent **and** barrier bytes identical (skip repeated setup; both draws retained).
-- `draw_batch_eligible` — currently always false until batching barriers are proven ([`gfx-subrecord-pr1-gonogo.md`](gfx-subrecord-pr1-gonogo.md) **GO A**).
+- `buffer_bind_elision_eligible` — proven VBO/IBO/gate fields only (observer hit signal).
+- `setup_elision_eligible` — requires texture + object-constant predicates; **false** until barrier fields are resolved.
+- `draw_batch_eligible` — false until geometry merge is proven ([`gfx-subrecord-pr1-gonogo.md`](gfx-subrecord-pr1-gonogo.md)).
 
 Hook insertion contract: [`mesh-subrecord-hook-site.json`](mesh-subrecord-hook-site.json) (before setup; draw landmark documentation only).
 

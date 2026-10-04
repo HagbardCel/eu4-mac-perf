@@ -135,6 +135,56 @@ def pairwise_scene_delta(left: Path, right: Path) -> float:
     return float(scene_difference(left, right)["mean_rgb_delta"])
 
 
+def observer_engagement_gate(
+    phases: list[dict],
+    *,
+    expected_capability_id: int = 1,
+) -> dict[str, Any]:
+    """Observer smoke: per-phase control + absolute scene gates; never Pareto-eligible."""
+    reference = resolve_repository_scene_reference()
+    phase_reports: dict[str, Any] = {}
+    all_ok = True
+    for phase in phases:
+        name = phase.get("name", "?")
+        role = phase.get("role")
+        control = phase.get("control_validation") or {}
+        control_status = control.get("status")
+        hits = int(control.get("eligible_pair_hits_delta", 0))
+        actions = int(control.get("effective_actions_delta", 0))
+        site = int(control.get("candidate_site_entries_delta", 0))
+        if role == "reference":
+            control_ok = control_status == "passed" and hits == 0 and actions == 0
+        elif role == "candidate":
+            control_ok = control_status == "engagement_only" and site > 0 and hits > 0 and actions == 0
+        else:
+            control_ok = False
+        scene_result = None
+        screenshot = phase.get("screenshot")
+        if screenshot:
+            shot_path = Path(screenshot)
+            if not shot_path.is_file():
+                shot_path = Path(phase.get("run_dir", ".")) / screenshot
+            if shot_path.is_file():
+                scene_result = scene_gate(reference, shot_path)
+        scene_ok = bool(scene_result and scene_result["passed"])
+        phase_ok = control_ok and scene_ok
+        if not phase_ok:
+            all_ok = False
+        phase_reports[name] = {
+            "role": role,
+            "control_validation": control,
+            "control_ok": control_ok,
+            "scene": scene_result,
+            "phase_ok": phase_ok,
+        }
+    return {
+        "status": "engagement_only" if all_ok else "failed",
+        "expected_candidate_capability_id": expected_capability_id,
+        "pareto_eligible": False,
+        "phases": phase_reports,
+    }
+
+
 def bracket_relative_scene_gate(shot_paths: dict[str, Path]) -> dict[str, Any]:
     natural_a1_a2 = pairwise_scene_delta(shot_paths["a1"], shot_paths["a2"])
     natural_a2_a3 = pairwise_scene_delta(shot_paths["a2"], shot_paths["a3"])

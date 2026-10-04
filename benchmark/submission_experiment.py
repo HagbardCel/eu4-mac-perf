@@ -30,6 +30,13 @@ PHASE_SCHEDULE = (
 )
 PHASE_SECONDS = 30
 SETTLE_SECONDS = 5
+OBSERVER_PHASE_SCHEDULE = (
+    ("a1", "reference", MODE_REFERENCE),
+    ("b1", "candidate", MODE_CANDIDATE),
+    ("a2", "reference", MODE_REFERENCE),
+)
+OBSERVER_PHASE_SECONDS = 10
+OBSERVER_SETTLE_SECONDS = 3
 EXPECTED_CANDIDATE_CAPABILITY_ID = 0
 OBSERVER_CAPABILITY_ID = 1
 MUTATING_CAPABILITY_ID = 2
@@ -70,15 +77,25 @@ def _validate_control_deltas(
             "start": start,
             "end": end,
         }
-    if role == "candidate" and expected_capability_id == OBSERVER_CAPABILITY_ID:
+    if role == "reference" and expected_capability_id == OBSERVER_CAPABILITY_ID:
+        ok = (
+            end["ack_mode"] == MODE_REFERENCE
+            and tick_delta > 0
+            and hits_delta == 0
+            and action_delta == 0
+        )
+        status = "passed" if ok else "failed"
+        reason = None if ok else "observer reference requires no pair hits or effective actions"
+    elif role == "candidate" and expected_capability_id == OBSERVER_CAPABILITY_ID:
         ok = (
             end["ack_mode"] == MODE_CANDIDATE
             and tick_delta > 0
             and site_delta > 0
+            and hits_delta > 0
             and action_delta == 0
         )
         status = "engagement_only" if ok else "failed"
-        reason = None if ok else "observer candidate requires site entries without effective actions"
+        reason = None if ok else "observer candidate requires mesh site entries and pair hits without mutation"
     elif role == "candidate":
         ok = (
             end["ack_mode"] == MODE_CANDIDATE
@@ -117,12 +134,13 @@ def _run_phase(
     duration: float,
     *,
     expected_capability_id: int,
+    settle_seconds: float = SETTLE_SECONDS,
 ) -> dict:
     generation = submission.request_mode(mode)
     ack = submission.wait_ack(generation)
     if ack["ack_mode"] != mode:
         raise base.BenchmarkError(f"{name}: ack mode {ack['ack_mode']} != requested {mode}")
-    settle_deadline = time.monotonic() + SETTLE_SECONDS
+    settle_deadline = time.monotonic() + settle_seconds
     while time.monotonic() < settle_deadline:
         if game.poll() is not None:
             raise base.BenchmarkError(f"EU IV exited during {name} settle")
@@ -185,22 +203,28 @@ def run_experiment(
     output_root: Path,
     *,
     expected_capability_id: int = EXPECTED_CANDIDATE_CAPABILITY_ID,
+    engagement_smoke: bool = False,
 ) -> Path:
+    expected_capability = int(expected_capability_id)
+    observer_run = engagement_smoke or expected_capability == OBSERVER_CAPABILITY_ID
     auto.build()
-    control.build()
+    build_capability = expected_capability if expected_capability > 0 else 1
+    control.build(compiled_capability=build_capability)
     evidence = auto.preflight()
     base.running_game_pid("idle")
     output_root.mkdir(parents=True, exist_ok=True)
     run_dir = output_root / f"{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}-submission-experiment"
     run_dir.mkdir(parents=True, exist_ok=False)
-    expected_capability = int(expected_capability_id)
+    phase_schedule = OBSERVER_PHASE_SCHEDULE if observer_run else PHASE_SCHEDULE
+    phase_seconds = OBSERVER_PHASE_SECONDS if observer_run else PHASE_SECONDS
+    settle_seconds = OBSERVER_SETTLE_SECONDS if observer_run else SETTLE_SECONDS
     manifest: dict = {
-        "experiment": "submission_optimization_ababa_v1",
+        "experiment": "submission_observer_smoke_v1" if observer_run else "submission_optimization_ababa_v1",
         "status": "starting",
         "instrumentation": "libeu4_auto_probe.dylib + libeu4_submission_experiment.dylib",
         "expected_candidate_capability_id": expected_capability,
-        "phase_schedule": [{"name": n, "role": r, "mode": m} for n, r, m in PHASE_SCHEDULE],
-        "phase_seconds": PHASE_SECONDS,
+        "phase_schedule": [{"name": n, "role": r, "mode": m} for n, r, m in phase_schedule],
+        "phase_seconds": phase_seconds,
         "repository_scene_reference": str(validation.SCENE_REFERENCE_MANIFEST.relative_to(ROOT)),
     }
     manifest_path = run_dir / "manifest.json"
@@ -232,11 +256,7 @@ def run_experiment(
                 time.sleep(2)
                 if pm.poll() is not None:
                     raise base.BenchmarkError("Powermetrics helper exited before EU IV launch")
-                env = control.dylib_env(
-                    control_path,
-                    auto.PROBE,
-                    active_capability_id=expected_capability,
-                )
+                env = control.dylib_env(control_path, auto.PROBE)
                 env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
                     game = subprocess.Popen(
@@ -252,7 +272,7 @@ def run_experiment(
                 warm_up(game, run_dir / "auto-probe.csv", tail, anchor)
                 capture_scene(run_dir / "ready-scene.png")
                 phases = []
-                for name, role, mode in PHASE_SCHEDULE:
+                for name, role, mode in phase_schedule:
                     phases.append(
                         _run_phase(
                             game,
@@ -263,8 +283,9 @@ def run_experiment(
                             name,
                             role,
                             mode,
-                            PHASE_SECONDS,
+                            phase_seconds,
                             expected_capability_id=expected_capability,
+                            settle_seconds=settle_seconds,
                         ),
                     )
                 stop_process(pm, 5)
@@ -275,7 +296,10 @@ def run_experiment(
                     raise base.BenchmarkError(f"Powermetrics tail incomplete: {drain}")
                 _attach_phase_summaries(phases, run_dir, anchor, game.pid, tail)
                 manifest["phases"] = phases
-                if expected_capability == OBSERVER_CAPABILITY_ID:
+                if observer_run:
+                    manifest["observer_gate"] = validation.observer_engagement_gate(
+                        phases, expected_capability_id=expected_capability
+                    )
                     manifest["engagement_gate"] = control.engagement_smoke_gate(
                         phases, expected_capability_id=expected_capability
                     )
@@ -294,6 +318,7 @@ def run_experiment(
                         {
                             "pareto_gate": manifest.get("pareto_gate"),
                             "engagement_gate": manifest.get("engagement_gate"),
+                            "observer_gate": manifest.get("observer_gate"),
                             "expected_candidate_capability_id": expected_capability,
                         },
                         indent=2,
@@ -336,6 +361,7 @@ def main() -> int:
         run_dir = run_experiment(
             Path(args.output).expanduser().resolve(),
             expected_capability_id=capability,
+            engagement_smoke=args.engagement_smoke,
         )
         print(run_dir)
     except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:

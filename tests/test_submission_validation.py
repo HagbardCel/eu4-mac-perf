@@ -9,6 +9,7 @@ from submission_validation import (
     evaluate_submission_pareto_gate,
     higher_is_non_inferior,
     lower_is_non_inferior,
+    observer_engagement_gate,
     summarize_phase_metrics,
 )
 
@@ -68,9 +69,27 @@ class SubmissionValidationTests(unittest.TestCase):
         with mock.patch("submission_validation.scene_gate", return_value=scene_ok), mock.patch(
             "submission_validation.bracket_relative_scene_gate", return_value=bracket_ok
         ):
-            result = bracket_normalized_ababa_gate(phases, expected_candidate_capability_id=1)
-        self.assertEqual(result["status"], "engagement_only")
-        self.assertFalse(result.get("pareto_eligible", True))
+            result = bracket_normalized_ababa_gate(phases, expected_candidate_capability_id=2)
+        self.assertEqual(result["status"], "failed")
+
+    def test_capability_one_observer_gate_is_not_pareto(self):
+        phases = [
+            _phase(
+                "b1",
+                "candidate",
+                {"median_swaps_s": 50.0, "eu4_cpu_ms_per_s": 1000.0, "combined_w": 8.0},
+                control_validation={
+                    "status": "engagement_only",
+                    "candidate_site_entries_delta": 2,
+                    "eligible_pair_hits_delta": 1,
+                    "effective_actions_delta": 0,
+                },
+            )
+        ]
+        with mock.patch("submission_validation.scene_gate", return_value={"passed": True}):
+            gate = observer_engagement_gate(phases, expected_capability_id=1)
+        self.assertEqual(gate["status"], "engagement_only")
+        self.assertFalse(gate["pareto_eligible"])
 
     def test_bracket_scene_gate_fails_when_candidate_diverges(self):
         with mock.patch("submission_validation.pairwise_scene_delta", side_effect=[1.0, 1.0, 20.0, 1.0, 1.0, 1.0]):
@@ -94,9 +113,19 @@ class SubmissionValidationTests(unittest.TestCase):
         metrics = summarize_phase_metrics({"median_swaps_s": 50.0, "eu4_cpu_ms_per_s": 1000.0, "combined_w": 8.0})
         self.assertEqual(metrics["eu4_cpu_ms_per_swap"], 20.0)
 
-    def test_engagement_smoke_gate_requires_site_without_effective_actions(self):
+    def test_engagement_smoke_gate_requires_each_phase(self):
         phases = [
             {
+                "name": "a1",
+                "role": "reference",
+                "control_validation": {
+                    "status": "passed",
+                    "eligible_pair_hits_delta": 0,
+                    "effective_actions_delta": 0,
+                },
+            },
+            {
+                "name": "b1",
                 "role": "candidate",
                 "control_validation": {
                     "status": "engagement_only",
@@ -104,8 +133,17 @@ class SubmissionValidationTests(unittest.TestCase):
                     "eligible_pair_hits_delta": 1,
                     "effective_actions_delta": 0,
                 },
-            }
+            },
+            {
+                "name": "b2",
+                "role": "candidate",
+                "control_validation": {
+                    "status": "engagement_only",
+                    "candidate_site_entries_delta": 0,
+                    "eligible_pair_hits_delta": 0,
+                    "effective_actions_delta": 0,
+                },
+            },
         ]
         gate = control.engagement_smoke_gate(phases, expected_capability_id=1)
-        self.assertEqual(gate["status"], "engagement_only")
-        self.assertFalse(gate["pareto_eligible"])
+        self.assertEqual(gate["status"], "failed")
