@@ -8,7 +8,18 @@
     "preferred_address": "0x1010cbe55",
     "image_offset": "0x10cbe55",
     "instruction": "testb %r13b, 0x1(%rcx)",
-    "note": "Preferred loop-head patch when binary detour lands"
+    "patch_span_bytes": null,
+    "proven_resume_address": null,
+    "continuation_candidates": [
+      {
+        "address": "0x1010cc3bd",
+        "role": "one_record_loop_tail",
+        "double_advance_risk": true,
+        "notes": "Not assumed as resume after k records without induction proof"
+      }
+    ],
+    "non_recursive_trampoline": "displaced_testb_then_original_path_required",
+    "feasibility_doc": "analysis/border-loop-head-patch-plan.md"
   },
   "draw_sites": [
     {"preferred_address": "0x1010cc2e8", "image_offset": "0x10cc2e8", "return_offset": "0x10cc2ed", "mode": 0},

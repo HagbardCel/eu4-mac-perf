@@ -48,6 +48,6 @@ verdict: stop mutation — proceed static RE + observer; rework implementable RO
 | GO-A (≥85k/s implementable) | **NO** — implementable rate unknown; interpose NO-GO |
 | GO-B (40–85k/s) | **NO** |
 | Venice **mutation** ABABA | **Do not run** until loop-head patch + engagement gate |
-| Venice **observer** ABABA | **Allowed** — verify interpose engages (`border_candidate_draws > 0`) |
+| Venice **observer** ABABA | **Not warranted / not authorized** — no decision-critical evidence before loop-head feasibility; see [border-loop-head-feasibility.md](border-loop-head-feasibility.md) |
 
 Net ≥5% CPU is **PR C only** after a valid mutation topology ships.

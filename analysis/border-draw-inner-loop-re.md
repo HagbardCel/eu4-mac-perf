@@ -1,5 +1,7 @@
 # `CPdxMapBorderLayer::DrawBorders` inner loop RE
 
+**Superseded in part by:** [border-loop-head-data-model.md](border-loop-head-data-model.md) (control-flow-scoped glossary, `%rcx` / `%r13b`).
+
 **Binary:** GOG EU IV 1.37.5 x86-64 (`b3d38876…`)
 
 ## Draw sites

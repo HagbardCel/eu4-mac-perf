@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "api": "classify_batchable_prefix",
+  "barrier_mask_bits": {
+    "SKIP": 1,
+    "UNSUPPORTED_MODE": 2,
+    "COLOR_TRANSITION": 4,
+    "VBO_TRANSITION": 8,
+    "IBO_TRANSITION": 16,
+    "OTHER_SIDE_EFFECT": 32
+  },
+  "entry_state_matches_batch_key": {
+    "color_matches": "match|mismatch|unknown",
+    "vbo_matches": "match|mismatch|unknown",
+    "ibo_matches": "match|mismatch|unknown"
+  },
+  "batch_eligible_formula": "prefix_homogeneous AND all_entry_components_match AND no_blocking_barriers",
+  "v1_policies": {
+    "skip_record": "batch_boundary_no_prefix_leap",
+    "entry_unknown_or_mismatch": "fall_through_one_original_record",
+    "do_not_assume_first_record_setup_in_trampoline": true
+  },
+  "telemetry_phase_a": [
+    "eligible_runs",
+    "eligible_draws",
+    "eligible_draw_calls_eliminable",
+    "barrier_skip",
+    "barrier_mode",
+    "barrier_color",
+    "barrier_vbo",
+    "barrier_ibo",
+    "barrier_other",
+    "run_length_histogram",
+    "max_run_length"
+  ],
+  "telemetry_phase_b_additional": [
+    "actual_multidraw_calls",
+    "actual_draw_calls_eliminated"
+  ],
+  "invariant_b_phase_local": "actual_draw_calls_eliminated <= eligible_draw_calls_eliminable",
+  "barrier_counter_semantics": "count_set_bits_per_event_not_mutually_exclusive"
+}

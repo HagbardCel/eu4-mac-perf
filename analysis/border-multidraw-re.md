@@ -33,4 +33,4 @@ Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — s
 
 ## Status
 
-PR B artifacts live in stacked PR **#36** (not on `main` until merged). **Mutation go/no-go: NO** for GL interpose; observer ABABA may validate hook engagement only.
+PR B/C/D merged on `main`. **Mutation: NO** for GL interpose. **Active track:** [border-loop-head-feasibility.md](border-loop-head-feasibility.md) @ `0x1010cbe55`.
