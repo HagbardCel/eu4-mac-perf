@@ -7,7 +7,7 @@
 Paused intrusive draw trace ([draw-screening.md](../results/20260928T113359Z-draw-trace/draw-screening.md)):
 
 - **11,744** same-state adjacent pairs over 31 frames → **~379/frame**
-- Category: `map_text` via [draw-callers.json](draw-callers.json) (`CCountryNameCollection::RenderNames` @ `0x1010e0e87`)
+- Category: `map_text` via [draw-callers.json](draw-callers.json) — `GfxDrawIndexed` callsite image offset `0xe0e887` (preferred `0x100e0e887`), return `0x100e0e88c` (`CCountryNameCollection::RenderNames`)
 
 ## Open RE tasks
 
