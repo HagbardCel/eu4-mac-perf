@@ -20,17 +20,17 @@ Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — s
 | 4 Argument reconstruction | [border-draw-record-layout.json](border-draw-record-layout.json) |
 | 5 Gross prototype screen | [border-multidraw-go-nogo.md](border-multidraw-go-nogo.md) |
 
-**Terminology:** `draw_calls_eliminated = draws_covered_by_multidraw - multidraw_calls`. GO thresholds use **draw_calls_eliminated/s** (gross avoided submission scenario ~0.65 µs/call); **net CPU is PR C only**.
+**Terminology:** `draw_calls_eliminated = draws_covered_by_multidraw - multidraw_calls`. GO thresholds use **draw_calls_eliminated/s** (gross scenario); **net CPU is PR C only**.
 
 ## PR sequence
 
 | PR | Scope |
 |----|--------|
 | A | Mesh screened-negative closure |
-| B | Offline RE artifacts above |
-| C | Capability-2 dylib + one Venice ABABA (if GO) |
+| B | Offline RE artifacts (stacked PR #36) |
+| C | Capability-2 **observer** harness; mutation blocked pending loop-head |
 | D | Map-text RE fallback |
 
 ## Status
 
-PR B artifacts landed on `main` after static RE pass (see go/no-go). Hook site JSON emitted only when topology selects a patch point.
+PR B artifacts live in stacked PR **#36** (not on `main` until merged). **Mutation go/no-go: NO** for GL interpose; observer ABABA may validate hook engagement only.
