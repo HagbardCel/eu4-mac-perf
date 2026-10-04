@@ -57,7 +57,6 @@
   },
   "posthoc_amendments": [
     {
-      "recorded_at_utc": "2026-10-04T14:45:00Z",
       "introduced_by_pr": 34,
       "scope": "pair_segmentation_semantics",
       "v3_infrastructure": "VALID",
