@@ -48,3 +48,25 @@ Forensic/detail windows: emphasize **counts and structural relationships**; GPU 
 - `verify_authoritative_observer_bias_calibration()` — manifest + SHA + Phase C interpretation gate.
 - `observer_bias.phase_c_observer_interpretation(bias_model)` — embed in intrusive `report.json`.
 - `bias_adjust_inclusive_cpu(..., allow_component_correction=False)` — default refuses component subtraction unless reconciliation passes (authoritative archive does not).
+
+## Outcome and raw evidence (forensically closed)
+
+See [phase-c-outcome-memo.md](phase-c-outcome-memo.md). **No further live intrusive profiler captures are required for the archive.** Further EU IV runs belong only to profiler-off A/B tests of concrete renderer changes.
+
+Canonical run [`20261003T210202Z-intrusive-diagnostic`](../results/20261003T210202Z-intrusive-diagnostic/) git capsule:
+
+- Streams: `telemetry.csv.gz`, `power.samples.json.gz`, `powermetrics.pliststream.gz`
+- Scene: `ready-scene.png`; readiness: `game-ready.log` when post-hoc extraction is time-anchored (else `game-ready.reconstructed.log` or metadata-only)
+- Sidecar: `powermetrics.stderr` (helper warnings)
+- Derived: `report.*`, `salvage-report.*`, `raw_evidence.json` (`capture_inventory` + logical gzip hashes)
+
+Closure commands (order matters — seal after salvage):
+
+```sh
+python3 benchmark/eu4_frame_model.py intrusive-salvage results/20261003T210202Z-intrusive-diagnostic
+python3 benchmark/eu4_frame_model.py seal-evidence results/20261003T210202Z-intrusive-diagnostic \
+  --profile intrusive_complete_v1
+python3 benchmark/eu4_frame_model.py verify-evidence results/20261003T210202Z-intrusive-diagnostic
+```
+
+Clone-only analysis: `read_rows` accepts `.csv.gz` when uncompressed `telemetry.csv` is absent; `seal-evidence` preserves logical content SHA-256 after plain files are deleted.

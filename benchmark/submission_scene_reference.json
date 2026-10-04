@@ -1,0 +1,6 @@
+{
+  "description": "Hermetic repository scene gate for submission A-B-A-B-A experiments",
+  "reference_image": "results/20261003T210202Z-intrusive-diagnostic/ready-scene.png",
+  "source_run": "results/20261003T210202Z-intrusive-diagnostic",
+  "sha256": "4141c0d8bbc4f997473174955b8e2fdf8b1a83c998a6e0bebc853dfb177db8d3"
+}

@@ -1,0 +1,208 @@
+{
+  "sealed_utc": "2026-10-04T08:50:37.155568+00:00",
+  "capsule_profile": "intrusive_complete_v1",
+  "run_dir": "results/20261003T210202Z-intrusive-diagnostic",
+  "capture_identity": {
+    "status": "reconstructed_incomplete",
+    "policy": "historical_reconstructed",
+    "candidate_commit": "b0d49b44addec9ae4536060613ef0ec7bde036b3",
+    "candidate_commit_short": "b0d49b4",
+    "basis": [
+      "clean-tree preflight enforced before intrusive build (contract preflight)",
+      "repository history and run/event timestamps near 2026-10-03T21:02Z UTC",
+      "recorded C source and dylib hashes in manifest evidence.build",
+      "manifest executable and profiler dylib SHA-256"
+    ],
+    "missing": [
+      "persisted capture-time git HEAD",
+      "persisted capture-time controller SHA-256"
+    ]
+  },
+  "identity_at_capture": null,
+  "identity_at_seal": {
+    "git_commit": "11ff2c17dbd9d458069fedd5063b16e3829f08aa",
+    "git_commit_short": "11ff2c1",
+    "git_tree_clean": false,
+    "controller_sha256": "aa3a107ac69ea54c6970ad6e05855fa445574040c089a48a37e74ae2d9f9cee8",
+    "key_source_hashes": {
+      "eu4_frame_model.c": "275dff4025b016abef59015c26a133ca254c6334c5ccc89fd6c80fb5762d8370",
+      "eu4_frame_model.py": "aa3a107ac69ea54c6970ad6e05855fa445574040c089a48a37e74ae2d9f9cee8",
+      "eu4_gpu_segments.h": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
+      "eu4_draw_observers.h": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
+      "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
+    }
+  },
+  "artifacts": {
+    "telemetry.csv": {
+      "plain_path": "telemetry.csv",
+      "gzip_path": "telemetry.csv.gz",
+      "uncompressed_bytes": 65454112,
+      "uncompressed_sha256": "40812943cb9b4448fd18bcbce1d017b9aaa89626e56b9a902d8ee0e5e78678a9",
+      "gzip_bytes": 1661930,
+      "gzip_sha256": "43aa6f8808afb2290af188dbc1a67fee692ede3bf9ce8beabe0f815ac42c4f54",
+      "compression": "gzip-9"
+    },
+    "power.samples.json": {
+      "plain_path": "power.samples.json",
+      "gzip_path": "power.samples.json.gz",
+      "uncompressed_bytes": 42781499,
+      "uncompressed_sha256": "d9e942d351cb4ba468224ddec17e59b1cb658c6fdef217370954d1f4258a87ba",
+      "gzip_bytes": 3112714,
+      "gzip_sha256": "3c13df908070cf0b9943ef946471ba3b12a9c3dc1c93e840581521c2e4e1c7dc",
+      "compression": "gzip-9"
+    },
+    "powermetrics.pliststream": {
+      "plain_path": "powermetrics.pliststream",
+      "gzip_path": "powermetrics.pliststream.gz",
+      "uncompressed_bytes": 84092806,
+      "uncompressed_sha256": "fccdff4ec726697eb8eba71ce7ccd0905c15e4f7ae116101153083295c2b8d6e",
+      "gzip_bytes": 3625464,
+      "gzip_sha256": "3ffbc1dd583efa1a9dea27ac908dce68b96e385adef210fae5daaadab0b1a449",
+      "compression": "gzip-9"
+    }
+  },
+  "capture_inventory": {
+    "manifest.json": {
+      "bytes": 201991,
+      "sha256": "4e3e791771a9bfaa16905a56ee6af9488ad46dd1f02932a4e7f84bf520462d06"
+    },
+    "events.jsonl": {
+      "bytes": 5291,
+      "sha256": "e5635a76578e7f18df696a5ba17d65f5bd251c805826d567a655db0122d3fc85"
+    },
+    "auto-probe.csv": {
+      "bytes": 14237,
+      "sha256": "06a0fabd7a47a5ee0be3d9230066aa351122551fc08c6084186d6e0afba48a5c"
+    },
+    "control.bin": {
+      "bytes": 4096,
+      "sha256": "280e846f872cefc14b05302dca5810e5018a05c6f93736083579072b5c43e676"
+    },
+    "telemetry.csv.gz": {
+      "bytes": 1661930,
+      "sha256": "43aa6f8808afb2290af188dbc1a67fee692ede3bf9ce8beabe0f815ac42c4f54"
+    },
+    "power.samples.json.gz": {
+      "bytes": 3112714,
+      "sha256": "3c13df908070cf0b9943ef946471ba3b12a9c3dc1c93e840581521c2e4e1c7dc"
+    },
+    "powermetrics.pliststream.gz": {
+      "bytes": 3625464,
+      "sha256": "3ffbc1dd583efa1a9dea27ac908dce68b96e385adef210fae5daaadab0b1a449"
+    },
+    "powermetrics.stderr": {
+      "bytes": 312,
+      "sha256": "3544f13c500c2f6cf1214f2274ed44cbcb749cadc71e2a7305ed4f240c626ca7"
+    },
+    "ready-scene.png": {
+      "bytes": 11728397,
+      "sha256": "4141c0d8bbc4f997473174955b8e2fdf8b1a83c998a6e0bebc853dfb177db8d3"
+    },
+    "game-ready.log": {
+      "bytes": 8455,
+      "sha256": "c7e07593213638a363609c6d51bb04b1be176384658c5b9e9c722f32785f8569"
+    },
+    "report.json": {
+      "bytes": 60740,
+      "sha256": "5f9f9c605b28c5805525100c1caf9d6d0c360a6af9e003510f844e198c73b9e2"
+    },
+    "report.md": {
+      "bytes": 3308,
+      "sha256": "79055c83a87827a857f8e39da1cd42b52092fe9332a88159210c6d99bd8f3f29"
+    },
+    "salvage-report.json": {
+      "bytes": 55509,
+      "sha256": "4d185aae7cbb7c9e82ea04786aca1fc1d689458d8e290637bacb91b6de51e280"
+    },
+    "salvage-report.md": {
+      "bytes": 5411,
+      "sha256": "494a674629686af606a9efae519012d3a70a07299656f05a60ab8a9d4b9ec74e"
+    }
+  },
+  "capture_inventory_note": "All committed capsule files except raw_evidence.json",
+  "scene_capture": {
+    "capture_sha256": "4141c0d8bbc4f997473174955b8e2fdf8b1a83c998a6e0bebc853dfb177db8d3",
+    "width": 3456,
+    "height": 2234,
+    "reference_manifest_sha256": "75b550e13a7d7e26a9087e763689872510c88e007c47e2696a55bf181fed5c7d",
+    "reference_image_sha256": "1e884027dd0348a9cb8cad00e0a2249ed6acbb3a296519d2384a44e2344b17ed",
+    "reference_source_run": "$HOME/Projects/MiniProjects/eu4-mac-perf/results/20260928T064432Z-autonomous",
+    "repository_validation_reference": {
+      "manifest": "benchmark/submission_scene_reference.json",
+      "image": "results/20261003T210202Z-intrusive-diagnostic/ready-scene.png",
+      "sha256": "4141c0d8bbc4f997473174955b8e2fdf8b1a83c998a6e0bebc853dfb177db8d3",
+      "image_present": true,
+      "image_sha256": "4141c0d8bbc4f997473174955b8e2fdf8b1a83c998a6e0bebc853dfb177db8d3"
+    },
+    "capture_time_comparison": {
+      "mean_rgb_delta": 1.3,
+      "shift_x_px": 0,
+      "shift_y_px": 0
+    }
+  },
+  "readiness_log": {
+    "status": "present_on_disk",
+    "committed_filename": "game-ready.log",
+    "bytes": 8455,
+    "sha256": "c7e07593213638a363609c6d51bb04b1be176384658c5b9e9c722f32785f8569",
+    "origin": {
+      "status": "reconstructed_posthoc_anchored_with_timezone_assumption",
+      "extraction_method": "committed_capture_time_log_with_manifest_window",
+      "phase_c_wall_window_utc": {
+        "start": "2026-10-03T21:02:02.037563+00:00",
+        "end": "2026-10-03T23:02:02.037563+00:00"
+      },
+      "timezone_assumption": "UTC+2",
+      "eu4_log_utc_offset_seconds": 7200,
+      "basis": "EU4 Time: treated as local wall clock; offset inferred from alignment with capture clock_anchor UTC",
+      "eu4_log_time_naive": "2026-10-03 23:02:00"
+    },
+    "file": {
+      "committed_filename": "game-ready.log",
+      "bytes": 8455,
+      "sha256": "c7e07593213638a363609c6d51bb04b1be176384658c5b9e9c722f32785f8569"
+    }
+  },
+  "local_sidecars": {
+    "game.stdout": {
+      "present": true,
+      "bytes": 0,
+      "empty": true,
+      "sha256": null
+    },
+    "game.stderr": {
+      "present": true,
+      "bytes": 0,
+      "empty": true,
+      "sha256": null
+    }
+  },
+  "probe_integrity": {
+    "hook_failures": 0,
+    "dropped_records": 191966,
+    "status": "degraded"
+  },
+  "dropped_records": 191966,
+  "powermetrics_stderr": {
+    "bytes": 312,
+    "empty": false,
+    "sha256": "3544f13c500c2f6cf1214f2274ed44cbcb749cadc71e2a7305ed4f240c626ca7",
+    "line_count": 12,
+    "unique_lines": {
+      "Second underflow occured.": 12
+    },
+    "interpretation": "observed_warning_not_used_as_invalidation"
+  },
+  "powermetrics_plist_interpretation": {
+    "raw_logical_bytes": 84092806,
+    "null_terminated_plist_records": 269,
+    "trailing_partial_bytes": 275189,
+    "terminal_additional_parseable_plist": 1,
+    "terminal_invalid_trailing_bytes": 0,
+    "total_parseable_raw_records": 270,
+    "capture_time_parsed_power_samples": 269,
+    "power_samples_json_count": 269,
+    "terminal_record_in_power_samples_json": false,
+    "raw_bytes_modified_at_seal": false
+  }
+}
