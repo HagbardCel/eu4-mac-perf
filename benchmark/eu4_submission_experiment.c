@@ -34,9 +34,11 @@ static pthread_once_t setup_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t header_lock = PTHREAD_MUTEX_INITIALIZER;
 static void *control_map = MAP_FAILED;
 static bool candidate_hook_installed = false;
+static uint32_t last_observed_ack_mode = MODE_REFERENCE;
 
 bool eu4_submission_try_install_mesh_hook(void);
 bool eu4_submission_mesh_hook_is_installed(void);
+void eu4_submission_mesh_reset_chain(void);
 
 static uint32_t compiled_capability(void) {
     return (uint32_t)EU4_SUBMISSION_COMPILED_CAPABILITY;
@@ -148,6 +150,12 @@ static void poll_command_ack(void) {
         ack_generation = command_generation;
         words[4] = ack_generation;
         words[5] = ack_mode;
+    }
+    if (words[5] != last_observed_ack_mode) {
+        if (words[5] == MODE_REFERENCE) {
+            eu4_submission_mesh_reset_chain();
+        }
+        last_observed_ack_mode = words[5];
     }
     pthread_mutex_unlock(&header_lock);
     atomic_fetch_add_explicit(&map_counters()[COUNTER_CONTROL_TICKS], 1, memory_order_relaxed);

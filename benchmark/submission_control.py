@@ -37,8 +37,19 @@ _COUNTER = struct.Struct("<QQQQ")
 _COUNTER_BYTES = _COUNTER.size
 
 
-def build(*, compiled_capability: int = 1) -> None:
-    LIBRARY.parent.mkdir(parents=True, exist_ok=True)
+def build() -> None:
+    """Build observer dylib (compiled capability 1 only)."""
+    _build_dylib(LIBRARY, compiled_capability=1)
+    _build_harness()
+
+
+def build_test_dylib(output: Path, *, compiled_capability: int) -> None:
+    """Test-only dylib with explicit capability (harness / regression)."""
+    _build_dylib(output, compiled_capability=int(compiled_capability))
+
+
+def _build_dylib(output: Path, *, compiled_capability: int) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
     dylib_command = [
         "clang",
         "-arch",
@@ -54,11 +65,16 @@ def build(*, compiled_capability: int = 1) -> None:
         str(BENCH),
         f"-DEU4_SUBMISSION_COMPILED_CAPABILITY={int(compiled_capability)}",
         "-o",
-        str(LIBRARY),
+        str(output),
         *[str(path) for path in SUBMISSION_DYLIB_SOURCES],
     ]
+    result = subprocess.run(dylib_command, capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise base.BenchmarkError(f"Submission experiment build failed: {result.stderr.strip()}")
+
+
+def _build_harness() -> None:
     commands = (
-        dylib_command,
         [
             "clang",
             "-arch",

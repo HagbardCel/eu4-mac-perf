@@ -17,7 +17,7 @@ Split predicates in [`subrecord_equivalence.c`](../benchmark/subrecord_equivalen
 [`sflushdata-0x50-layout.json`](sflushdata-0x50-layout.json),
 [`mesh-draw-subrecord-0xe8-layout.json`](mesh-draw-subrecord-0xe8-layout.json)):
 
-- `submission_state_equivalent` — EQUAL fields per layout JSON; BARRIER bytes break the chain.
+- `submission_state_equivalent` — known EQUAL fields and identical BARRIER bytes required, but returns false while any unresolved BARRIER regions remain in the layout (honest fail-closed today).
 - `buffer_bind_elision_eligible` — proven VBO/IBO/gate fields only (observer hit signal).
 - `setup_elision_eligible` — requires texture + object-constant predicates; **false** until barrier fields are resolved.
 - `draw_batch_eligible` — false until geometry merge is proven ([`gfx-subrecord-pr1-gonogo.md`](gfx-subrecord-pr1-gonogo.md)).

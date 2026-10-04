@@ -5,10 +5,10 @@ Profiler-off harness for mesh subrecord optimization candidates. Static RE and g
 ## Build
 
 ```bash
-python3 -c "import submission_control as c; c.build(compiled_capability=1)"
+python3 -c "import submission_control as c; c.build()"
 ```
 
-Capability is fixed at **dylib compile time** (`EU4_SUBMISSION_COMPILED_CAPABILITY`); Python only sets `requested_capability_id` in the mmap header and must match the built dylib.
+The production dylib is always **capability 1** at compile time. Python sets `requested_capability_id` in the mmap header and must match the built dylib.
 
 ## Observer smoke (capability 1)
 
@@ -20,9 +20,9 @@ python3 benchmark/submission_experiment.py --output results --engagement-smoke
 
 Check `validation.json` → `observer_gate` and `engagement_gate` (both per-phase). **Not** a Pareto optimization pass.
 
-## Full ABABA (capability 2 mutating only)
+## Full ABABA (capability 2)
 
-Build `c.build(compiled_capability=2)` and extend the experiment CLI when a mutating implementation exists. Full Pareto gate applies only after ROI from observer smoke.
+Not available in the current tree. Running `submission_experiment.py` without `--engagement-smoke` exits with an error. A future mutating dylib revision must advertise capability 2 intrinsically before full ABABA.
 
 ## PR1 reference
 

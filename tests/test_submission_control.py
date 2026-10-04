@@ -12,13 +12,18 @@ import submission_control as control
 class SubmissionControlHarnessTests(unittest.TestCase):
     def test_dual_dylib_ack_and_counters(self):
         auto.build()
-        control.build(compiled_capability=2)
+        control.build()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            test_dylib = root / "libeu4_submission_cap2.dylib"
+            control.build_test_dylib(test_dylib, compiled_capability=2)
             control_path = root / "submission_control.bin"
             control_path.write_bytes(bytes(control.CONTROL_SIZE))
             probe_log = root / "probe.csv"
-            env = control.dylib_env(control_path, auto.PROBE)
+            env = {
+                **control.dylib_env(control_path, auto.PROBE),
+                "DYLD_INSERT_LIBRARIES": f"{auto.PROBE}:{test_dylib}",
+            }
             env["EU4_SUBMISSION_TEST_STUB_HOOK"] = "1"
             env["EU4_AUTO_PROBE_LOG"] = str(probe_log)
             result = subprocess.run(

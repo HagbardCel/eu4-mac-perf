@@ -207,9 +207,15 @@ def run_experiment(
 ) -> Path:
     expected_capability = int(expected_capability_id)
     observer_run = engagement_smoke or expected_capability == OBSERVER_CAPABILITY_ID
+    if not observer_run:
+        raise base.BenchmarkError(
+            "No mutating submission candidate is compiled; use --engagement-smoke for capability 1 observer."
+        )
+    if expected_capability not in (0, OBSERVER_CAPABILITY_ID):
+        raise base.BenchmarkError("Only capability 1 observer runs are supported by the current dylib build.")
+    expected_capability = OBSERVER_CAPABILITY_ID
     auto.build()
-    build_capability = expected_capability if expected_capability > 0 else 1
-    control.build(compiled_capability=build_capability)
+    control.build()
     evidence = auto.preflight()
     base.running_game_pid("idle")
     output_root.mkdir(parents=True, exist_ok=True)
@@ -357,10 +363,9 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        capability = OBSERVER_CAPABILITY_ID if args.engagement_smoke else EXPECTED_CANDIDATE_CAPABILITY_ID
         run_dir = run_experiment(
             Path(args.output).expanduser().resolve(),
-            expected_capability_id=capability,
+            expected_capability_id=OBSERVER_CAPABILITY_ID,
             engagement_smoke=args.engagement_smoke,
         )
         print(run_dir)
