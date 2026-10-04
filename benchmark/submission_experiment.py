@@ -174,12 +174,10 @@ def _run_phase(
     if not focus("interior", game.pid):
         raise base.BenchmarkError(f"EU IV lost focus after {name} screenshot")
     counter_start = submission.snapshot()
-    counter_armed_start: dict[str, int] | None = None
     obs_arm_gen: int | None = None
     if mode == MODE_CANDIDATE:
         obs_arm_gen = submission.request_observation_arm()
         submission.wait_observation_ack(obs_arm_gen, expected_state=control.OBS_ACK_ARMED)
-        counter_armed_start = submission.snapshot()
     measurement_start = mark(events, "measurement_start", phase=name, mode=mode)
     measurement_deadline = time.monotonic() + duration
     while time.monotonic() < measurement_deadline:
@@ -213,14 +211,13 @@ def _run_phase(
     if multi_hypothesis and role == "candidate":
         wall_s = max(1e-6, (measurement_end["monotonic_ns"] - measurement_start["monotonic_ns"]) / 1e9)
         swaps = _count_paused_swaps(run_dir, anchor, measurement_start["monotonic_ns"], measurement_end["monotonic_ns"])
-        armed_start = counter_armed_start if counter_armed_start is not None else counter_start
         cv = phase_payload["control_validation"]
         phase_payload["multi_hypothesis"] = multi.evaluate_b_phase(
-            armed_start,
             counter_end,
+            health_start=counter_start,
+            health_end=counter_end,
             measurement_paused_swaps=swaps,
             measurement_wall_seconds=wall_s,
-            effective_actions_delta=int(cv.get("effective_actions_delta", 0)),
         )
         control_ok = cv.get("status") == "passed"
         mh_ok = phase_payload["multi_hypothesis"]["harness_ok"]
