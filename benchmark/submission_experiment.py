@@ -30,7 +30,16 @@ PHASE_SCHEDULE = (
 )
 PHASE_SECONDS = 30
 SETTLE_SECONDS = 5
+OBSERVER_PHASE_SCHEDULE = (
+    ("a1", "reference", MODE_REFERENCE),
+    ("b1", "candidate", MODE_CANDIDATE),
+    ("a2", "reference", MODE_REFERENCE),
+)
+OBSERVER_PHASE_SECONDS = 10
+OBSERVER_SETTLE_SECONDS = 3
 EXPECTED_CANDIDATE_CAPABILITY_ID = 0
+OBSERVER_CAPABILITY_ID = 1
+MUTATING_CAPABILITY_ID = 2
 
 
 def _validate_control_deltas(
@@ -40,34 +49,79 @@ def _validate_control_deltas(
     *,
     expected_capability_id: int,
 ) -> dict:
-    hook_delta = end["candidate_hook_attempts"] - start["candidate_hook_attempts"]
+    tick_delta = end["control_ticks"] - start["control_ticks"]
+    site_delta = end["candidate_site_entries"] - start["candidate_site_entries"]
+    hits_delta = end["eligible_pair_hits"] - start["eligible_pair_hits"]
     action_delta = end["candidate_effective_actions"] - start["candidate_effective_actions"]
-    if end["candidate_capability_id"] != expected_capability_id:
+    if end["requested_capability_id"] != expected_capability_id:
         return {
             "status": "failed",
-            "reason": "candidate_capability_id mismatch",
+            "reason": "requested_capability_id mismatch",
+            "start": start,
+            "end": end,
+        }
+    if end["advertised_capability_id"] != expected_capability_id:
+        return {
+            "status": "failed",
+            "reason": "advertised_capability_id mismatch",
             "start": start,
             "end": end,
         }
     if role == "candidate" and expected_capability_id == 0:
         return {
             "status": "unsupported_candidate",
-            "hook_attempts_delta": hook_delta,
+            "control_ticks_delta": tick_delta,
+            "candidate_site_entries_delta": site_delta,
+            "eligible_pair_hits_delta": hits_delta,
             "effective_actions_delta": action_delta,
             "start": start,
             "end": end,
         }
-    if role == "candidate":
-        ok = end["ack_mode"] == MODE_CANDIDATE and hook_delta > 0 and action_delta > 0
-        reason = None if ok else "candidate phase requires hook and effective action deltas"
+    if role == "reference" and expected_capability_id == OBSERVER_CAPABILITY_ID:
+        ok = (
+            end["ack_mode"] == MODE_REFERENCE
+            and tick_delta > 0
+            and site_delta > 0
+            and hits_delta == 0
+            and action_delta == 0
+        )
+        status = "passed" if ok else "failed"
+        reason = (
+            None
+            if ok
+            else "observer reference requires mesh site traffic without pair hits or effective actions"
+        )
+    elif role == "candidate" and expected_capability_id == OBSERVER_CAPABILITY_ID:
+        ok = (
+            end["ack_mode"] == MODE_CANDIDATE
+            and tick_delta > 0
+            and site_delta > 0
+            and hits_delta > 0
+            and action_delta == 0
+        )
+        status = "engagement_only" if ok else "failed"
+        reason = None if ok else "observer candidate requires mesh site entries and pair hits without mutation"
+    elif role == "candidate":
+        ok = (
+            end["ack_mode"] == MODE_CANDIDATE
+            and site_delta > 0
+            and hits_delta > 0
+            and action_delta > 0
+        )
+        status = "passed" if ok else "failed"
+        reason = None if ok else "mutating candidate requires site entries, pair hits, and effective actions"
     else:
-        ok = end["ack_mode"] == MODE_REFERENCE and hook_delta > 0 and action_delta == 0
-        reason = None if ok else "reference phase requires hook delta without effective actions"
+        ok = end["ack_mode"] == MODE_REFERENCE and tick_delta > 0 and action_delta == 0
+        status = "passed" if ok else "failed"
+        reason = None if ok else "reference phase requires control ticks without effective actions"
     return {
-        "status": "passed" if ok else "failed",
+        "status": status,
         "reason": reason,
-        "hook_attempts_delta": hook_delta,
+        "control_ticks_delta": tick_delta,
+        "candidate_site_entries_delta": site_delta,
+        "eligible_pair_hits_delta": hits_delta,
         "effective_actions_delta": action_delta,
+        "hook_attempts_delta": tick_delta,
         "start": start,
         "end": end,
     }
@@ -85,12 +139,13 @@ def _run_phase(
     duration: float,
     *,
     expected_capability_id: int,
+    settle_seconds: float = SETTLE_SECONDS,
 ) -> dict:
     generation = submission.request_mode(mode)
     ack = submission.wait_ack(generation)
     if ack["ack_mode"] != mode:
         raise base.BenchmarkError(f"{name}: ack mode {ack['ack_mode']} != requested {mode}")
-    settle_deadline = time.monotonic() + SETTLE_SECONDS
+    settle_deadline = time.monotonic() + settle_seconds
     while time.monotonic() < settle_deadline:
         if game.poll() is not None:
             raise base.BenchmarkError(f"EU IV exited during {name} settle")
@@ -149,7 +204,21 @@ def _attach_phase_summaries(
         )
 
 
-def run_experiment(output_root: Path) -> Path:
+def run_experiment(
+    output_root: Path,
+    *,
+    expected_capability_id: int = EXPECTED_CANDIDATE_CAPABILITY_ID,
+    engagement_smoke: bool = False,
+) -> Path:
+    expected_capability = int(expected_capability_id)
+    observer_run = engagement_smoke or expected_capability == OBSERVER_CAPABILITY_ID
+    if not observer_run:
+        raise base.BenchmarkError(
+            "No mutating submission candidate is compiled; use --engagement-smoke for capability 1 observer."
+        )
+    if expected_capability not in (0, OBSERVER_CAPABILITY_ID):
+        raise base.BenchmarkError("Only capability 1 observer runs are supported by the current dylib build.")
+    expected_capability = OBSERVER_CAPABILITY_ID
     auto.build()
     control.build()
     evidence = auto.preflight()
@@ -157,14 +226,16 @@ def run_experiment(output_root: Path) -> Path:
     output_root.mkdir(parents=True, exist_ok=True)
     run_dir = output_root / f"{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}-submission-experiment"
     run_dir.mkdir(parents=True, exist_ok=False)
-    expected_capability = EXPECTED_CANDIDATE_CAPABILITY_ID
+    phase_schedule = OBSERVER_PHASE_SCHEDULE if observer_run else PHASE_SCHEDULE
+    phase_seconds = OBSERVER_PHASE_SECONDS if observer_run else PHASE_SECONDS
+    settle_seconds = OBSERVER_SETTLE_SECONDS if observer_run else SETTLE_SECONDS
     manifest: dict = {
-        "experiment": "submission_optimization_ababa_v1",
+        "experiment": "submission_observer_smoke_v1" if observer_run else "submission_optimization_ababa_v1",
         "status": "starting",
         "instrumentation": "libeu4_auto_probe.dylib + libeu4_submission_experiment.dylib",
         "expected_candidate_capability_id": expected_capability,
-        "phase_schedule": [{"name": n, "role": r, "mode": m} for n, r, m in PHASE_SCHEDULE],
-        "phase_seconds": PHASE_SECONDS,
+        "phase_schedule": [{"name": n, "role": r, "mode": m} for n, r, m in phase_schedule],
+        "phase_seconds": phase_seconds,
         "repository_scene_reference": str(validation.SCENE_REFERENCE_MANIFEST.relative_to(ROOT)),
     }
     manifest_path = run_dir / "manifest.json"
@@ -196,11 +267,7 @@ def run_experiment(output_root: Path) -> Path:
                 time.sleep(2)
                 if pm.poll() is not None:
                     raise base.BenchmarkError("Powermetrics helper exited before EU IV launch")
-                env = control.dylib_env(
-                    control_path,
-                    auto.PROBE,
-                    active_capability_id=expected_capability,
-                )
+                env = control.dylib_env(control_path, auto.PROBE)
                 env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
                     game = subprocess.Popen(
@@ -216,7 +283,7 @@ def run_experiment(output_root: Path) -> Path:
                 warm_up(game, run_dir / "auto-probe.csv", tail, anchor)
                 capture_scene(run_dir / "ready-scene.png")
                 phases = []
-                for name, role, mode in PHASE_SCHEDULE:
+                for name, role, mode in phase_schedule:
                     phases.append(
                         _run_phase(
                             game,
@@ -227,8 +294,9 @@ def run_experiment(output_root: Path) -> Path:
                             name,
                             role,
                             mode,
-                            PHASE_SECONDS,
+                            phase_seconds,
                             expected_capability_id=expected_capability,
+                            settle_seconds=settle_seconds,
                         ),
                     )
                 stop_process(pm, 5)
@@ -239,9 +307,35 @@ def run_experiment(output_root: Path) -> Path:
                     raise base.BenchmarkError(f"Powermetrics tail incomplete: {drain}")
                 _attach_phase_summaries(phases, run_dir, anchor, game.pid, tail)
                 manifest["phases"] = phases
-                manifest["pareto_gate"] = validation.bracket_normalized_ababa_gate(
-                    phases,
-                    expected_candidate_capability_id=expected_capability,
+                if observer_run:
+                    manifest["observer_gate"] = validation.observer_engagement_gate(
+                        phases, expected_capability_id=expected_capability
+                    )
+                    manifest["engagement_gate"] = control.engagement_smoke_gate(
+                        phases, expected_capability_id=expected_capability
+                    )
+                    manifest["pareto_gate"] = {
+                        "status": "skipped",
+                        "reason": "observer capability; Pareto not applicable",
+                    }
+                else:
+                    manifest["pareto_gate"] = validation.bracket_normalized_ababa_gate(
+                        phases,
+                        expected_candidate_capability_id=expected_capability,
+                    )
+                validation_path = run_dir / "validation.json"
+                validation_path.write_text(
+                    json.dumps(
+                        {
+                            "pareto_gate": manifest.get("pareto_gate"),
+                            "engagement_gate": manifest.get("engagement_gate"),
+                            "observer_gate": manifest.get("observer_gate"),
+                            "expected_candidate_capability_id": expected_capability,
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
                 )
                 manifest["status"] = "complete"
         except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:
@@ -267,9 +361,24 @@ def run_experiment(output_root: Path) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default=str(ROOT / "results"))
+    parser.add_argument(
+        "--engagement-smoke",
+        action="store_true",
+        help="capability 1 observer run (no Pareto); short validation semantics",
+    )
     args = parser.parse_args()
+    if not args.engagement_smoke:
+        print(
+            "Error: only --engagement-smoke is supported until a mutating capability 2 dylib exists.",
+            file=sys.stderr,
+        )
+        return 1
     try:
-        run_dir = run_experiment(Path(args.output).expanduser().resolve())
+        run_dir = run_experiment(
+            Path(args.output).expanduser().resolve(),
+            expected_capability_id=OBSERVER_CAPABILITY_ID,
+            engagement_smoke=True,
+        )
         print(run_dir)
     except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

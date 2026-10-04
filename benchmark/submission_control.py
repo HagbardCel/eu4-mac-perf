@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mmap control plane for profiler-off Gfx submission A-B-A-B-A experiments."""
+"""Mmap control plane for profiler-off Gfx submission A-B-A-B-A experiments (protocol v2)."""
 
 from __future__ import annotations
 
@@ -13,40 +13,68 @@ from pathlib import Path
 import eu4_benchmark as base
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "benchmark/eu4_submission_experiment.c"
-LIBRARY = ROOT / "benchmark/.build/libeu4_submission_experiment.dylib"
+BENCH = ROOT / "benchmark"
+SUBMISSION_DYLIB_SOURCES = (
+    BENCH / "eu4_submission_experiment.c",
+    BENCH / "eu4_submission_mesh_site.c",
+    BENCH / "eu4_submission_mesh_install.c",
+    BENCH / "eu4_submission_mesh_thunk.S",
+    BENCH / "subrecord_equivalence.c",
+)
+LIBRARY = BENCH / ".build/libeu4_submission_experiment.dylib"
 HARNESS = ROOT / "benchmark/.build/submission_dual_dylib_harness"
 HARNESS_SOURCE = ROOT / "tests/submission_dual_dylib_harness.c"
 
 MAGIC = 0x53425545  # 'EUBS'
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 CONTROL_SIZE = 4096
 
 MODE_REFERENCE = 0
 MODE_CANDIDATE = 1
 
 _HEADER = struct.Struct("<IIIIIIII")
-_TAIL = struct.Struct("<QQ")
+_COUNTER = struct.Struct("<QQQQ")
+_COUNTER_BYTES = _COUNTER.size
 
 
 def build() -> None:
-    LIBRARY.parent.mkdir(parents=True, exist_ok=True)
+    """Build observer dylib (compiled capability 1 only)."""
+    _build_dylib(LIBRARY, compiled_capability=1)
+    _build_harness()
+
+
+def build_test_dylib(output: Path, *, compiled_capability: int) -> None:
+    """Test-only dylib with explicit capability (harness / regression)."""
+    _build_dylib(output, compiled_capability=int(compiled_capability))
+
+
+def _build_dylib(output: Path, *, compiled_capability: int) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    dylib_command = [
+        "clang",
+        "-arch",
+        "x86_64",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-dynamiclib",
+        "-framework",
+        "OpenGL",
+        "-I",
+        str(BENCH),
+        f"-DEU4_SUBMISSION_COMPILED_CAPABILITY={int(compiled_capability)}",
+        "-o",
+        str(output),
+        *[str(path) for path in SUBMISSION_DYLIB_SOURCES],
+    ]
+    result = subprocess.run(dylib_command, capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise base.BenchmarkError(f"Submission experiment build failed: {result.stderr.strip()}")
+
+
+def _build_harness() -> None:
     commands = (
-        [
-            "clang",
-            "-arch",
-            "x86_64",
-            "-O2",
-            "-Wall",
-            "-Wextra",
-            "-Werror",
-            "-dynamiclib",
-            "-framework",
-            "OpenGL",
-            "-o",
-            str(LIBRARY),
-            str(SOURCE),
-        ],
         [
             "clang",
             "-arch",
@@ -69,11 +97,13 @@ def build() -> None:
 
 
 def read_snapshot(path: Path) -> dict[str, int]:
-    data = Path(path).read_bytes()[: _HEADER.size + _TAIL.size]
-    magic, version, cmd_gen, req_mode, ack_gen, ack_mode, cap_id, _pad = _HEADER.unpack(
+    data = Path(path).read_bytes()[: _HEADER.size + _COUNTER_BYTES]
+    magic, version, cmd_gen, req_mode, ack_gen, ack_mode, req_cap, adv_cap = _HEADER.unpack(
         data[: _HEADER.size]
     )
-    hook_attempts, effective_actions = _TAIL.unpack(data[_HEADER.size : _HEADER.size + _TAIL.size])
+    ticks, site_entries, pair_hits, effective = _COUNTER.unpack(
+        data[_HEADER.size : _HEADER.size + _COUNTER_BYTES]
+    )
     return {
         "magic": magic,
         "protocol_version": version,
@@ -81,9 +111,13 @@ def read_snapshot(path: Path) -> dict[str, int]:
         "requested_mode": req_mode,
         "ack_generation": ack_gen,
         "ack_mode": ack_mode,
-        "candidate_capability_id": cap_id,
-        "candidate_hook_attempts": hook_attempts,
-        "candidate_effective_actions": effective_actions,
+        "requested_capability_id": req_cap,
+        "advertised_capability_id": adv_cap,
+        "control_ticks": ticks,
+        "candidate_site_entries": site_entries,
+        "eligible_pair_hits": pair_hits,
+        "candidate_effective_actions": effective,
+        "candidate_hook_attempts": ticks,
     }
 
 
@@ -99,9 +133,10 @@ class SubmissionControl:
             requested_mode=MODE_REFERENCE,
             ack_generation=0,
             ack_mode=MODE_REFERENCE,
-            capability_id=self.candidate_capability_id,
+            requested_capability_id=self.candidate_capability_id,
+            advertised_capability_id=0,
         )
-        self.map[_HEADER.size : _HEADER.size + _TAIL.size] = _TAIL.pack(0, 0)
+        self.map[_HEADER.size : _HEADER.size + _COUNTER_BYTES] = _COUNTER.pack(0, 0, 0, 0)
 
     def _write_header(
         self,
@@ -110,8 +145,12 @@ class SubmissionControl:
         requested_mode: int,
         ack_generation: int,
         ack_mode: int,
-        capability_id: int,
+        requested_capability_id: int,
+        advertised_capability_id: int | None = None,
     ) -> None:
+        if advertised_capability_id is None:
+            snap = self.snapshot()
+            advertised_capability_id = snap.get("advertised_capability_id", 0)
         self.map[: _HEADER.size] = _HEADER.pack(
             MAGIC,
             PROTOCOL_VERSION,
@@ -119,15 +158,17 @@ class SubmissionControl:
             requested_mode,
             ack_generation,
             ack_mode,
-            capability_id,
-            0,
+            requested_capability_id,
+            advertised_capability_id,
         )
 
     def snapshot(self) -> dict[str, int]:
-        magic, version, cmd_gen, req_mode, ack_gen, ack_mode, cap_id, _pad = _HEADER.unpack(
+        magic, version, cmd_gen, req_mode, ack_gen, ack_mode, req_cap, adv_cap = _HEADER.unpack(
             self.map[: _HEADER.size]
         )
-        hook_attempts, effective_actions = _TAIL.unpack(self.map[_HEADER.size : _HEADER.size + _TAIL.size])
+        ticks, site_entries, pair_hits, effective = _COUNTER.unpack(
+            self.map[_HEADER.size : _HEADER.size + _COUNTER_BYTES]
+        )
         return {
             "magic": magic,
             "protocol_version": version,
@@ -135,9 +176,13 @@ class SubmissionControl:
             "requested_mode": req_mode,
             "ack_generation": ack_gen,
             "ack_mode": ack_mode,
-            "candidate_capability_id": cap_id,
-            "candidate_hook_attempts": hook_attempts,
-            "candidate_effective_actions": effective_actions,
+            "requested_capability_id": req_cap,
+            "advertised_capability_id": adv_cap,
+            "control_ticks": ticks,
+            "candidate_site_entries": site_entries,
+            "eligible_pair_hits": pair_hits,
+            "candidate_effective_actions": effective,
+            "candidate_hook_attempts": ticks,
         }
 
     def request_mode(self, mode: int) -> int:
@@ -150,7 +195,8 @@ class SubmissionControl:
             requested_mode=mode,
             ack_generation=snap["ack_generation"],
             ack_mode=snap["ack_mode"],
-            capability_id=self.candidate_capability_id,
+            requested_capability_id=self.candidate_capability_id,
+            advertised_capability_id=snap["advertised_capability_id"],
         )
         self.map.flush()
         return self.command_generation
@@ -169,10 +215,44 @@ class SubmissionControl:
         self.file.close()
 
 
-def dylib_env(control_path: Path, probe_path: Path, *, active_capability_id: int) -> dict[str, str]:
+def dylib_env(control_path: Path, probe_path: Path) -> dict[str, str]:
     return {
         **os.environ,
         "DYLD_INSERT_LIBRARIES": f"{probe_path}:{LIBRARY}",
         "EU4_SUBMISSION_CONTROL": str(control_path),
-        "EU4_SUBMISSION_ACTIVE_CAPABILITY": str(int(active_capability_id)),
+    }
+
+
+def engagement_smoke_gate(phases: list[dict], *, expected_capability_id: int) -> dict:
+    """Per-phase capability 1 observer gates (no Pareto)."""
+    phase_reports: list[dict] = []
+    all_ok = True
+    for phase in phases:
+        cv = phase.get("control_validation") or {}
+        role = phase.get("role")
+        site = int(cv.get("candidate_site_entries_delta", 0))
+        hits = int(cv.get("eligible_pair_hits_delta", 0))
+        actions = int(cv.get("effective_actions_delta", 0))
+        status = cv.get("status")
+        if role == "reference":
+            phase_ok = status == "passed" and site > 0 and hits == 0 and actions == 0
+        elif role == "candidate":
+            phase_ok = status == "engagement_only" and site > 0 and hits > 0 and actions == 0
+        else:
+            phase_ok = False
+        if not phase_ok:
+            all_ok = False
+        phase_reports.append(
+            {
+                "name": phase.get("name"),
+                "role": role,
+                "control_validation": cv,
+                "phase_ok": phase_ok,
+            }
+        )
+    return {
+        "status": "engagement_only" if all_ok else "failed",
+        "expected_candidate_capability_id": expected_capability_id,
+        "phases": phase_reports,
+        "pareto_eligible": False,
     }

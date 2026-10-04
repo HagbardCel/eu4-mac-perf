@@ -10,7 +10,16 @@
 #include <unistd.h>
 
 #define MAGIC 0x53425545u
+#define PROTOCOL_VERSION 2u
 #define CONTROL_SIZE 4096u
+
+static uint32_t compiled_capability(void) {
+    const char *env = getenv("EU4_SUBMISSION_COMPILED_CAPABILITY");
+    if (!env || !*env) {
+        return 2u;
+    }
+    return (uint32_t)strtoul(env, NULL, 10);
+}
 
 int main(void) {
     const char *control_path = getenv("EU4_SUBMISSION_CONTROL");
@@ -28,13 +37,15 @@ int main(void) {
         return 4;
     }
     uint32_t *words = (uint32_t *)map;
+    uint32_t compiled = compiled_capability();
     words[0] = MAGIC;
-    words[1] = 1;
+    words[1] = PROTOCOL_VERSION;
     words[2] = 0;
-    words[3] = 1;
+    words[3] = 0;
     words[4] = 0;
     words[5] = 0;
-    words[6] = 42;
+    words[6] = compiled;
+    words[7] = 0;
 
     CGLPixelFormatAttribute attributes[] = {kCGLPFAAccelerated, 0};
     CGLPixelFormatObj format = NULL;
@@ -48,20 +59,39 @@ int main(void) {
     }
     CGLSetCurrentContext(context);
     void (*record_effective)(void) = dlsym(RTLD_DEFAULT, "eu4_submission_record_effective_action");
+    void (*record_site)(void) = dlsym(RTLD_DEFAULT, "eu4_submission_record_candidate_site_entry");
+    void (*record_hit)(void) = dlsym(RTLD_DEFAULT, "eu4_submission_record_eligible_pair_hit");
     for (int i = 0; i < 140; i++) {
         if (i == 0 || i == 70) {
             words[2]++;
             words[3] = (i < 70) ? 0u : 1u;
+            words[6] = compiled;
         }
         CGLFlushDrawable(context);
-        if (record_effective && i >= 70) {
-            record_effective();
+        if (i >= 70) {
+            if (record_site) {
+                record_site();
+            }
+            if (record_hit) {
+                record_hit();
+            }
+            if (record_effective && compiled >= 2u) {
+                record_effective();
+            }
         }
         usleep(10000);
     }
     uint64_t *counters = (uint64_t *)((char *)map + 32);
-    printf("hook_attempts=%llu effective_actions=%llu ack_generation=%u ack_mode=%u\n",
-           (unsigned long long)counters[0], (unsigned long long)counters[1], words[4], words[5]);
+    printf(
+        "control_ticks=%llu site_entries=%llu pair_hits=%llu effective_actions=%llu "
+        "ack_generation=%u ack_mode=%u advertised_cap=%u\n",
+        (unsigned long long)counters[0],
+        (unsigned long long)counters[1],
+        (unsigned long long)counters[2],
+        (unsigned long long)counters[3],
+        words[4],
+        words[5],
+        words[7]);
     CGLSetCurrentContext(NULL);
     CGLDestroyContext(context);
     CGLDestroyPixelFormat(format);
