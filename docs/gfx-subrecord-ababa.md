@@ -54,7 +54,7 @@ Observer phases are 10 s; per-phase metrics use phase-scaled sample floors in `s
 
 ## Full ABABA (capability 2)
 
-Not available in the current tree. Running `submission_experiment.py` without `--engagement-smoke` exits with an error. A future mutating dylib revision must advertise capability 2 intrinsically before full ABABA.
+Not available in the current tree. `submission_experiment.py` requires **`--engagement-smoke`** or **`--multi-hypothesis-smoke`** (mutually exclusive). A future mutating dylib revision must advertise capability 2 intrinsically before full ABABA.
 
 ## PR1 reference
 

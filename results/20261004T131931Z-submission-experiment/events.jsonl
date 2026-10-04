@@ -1,0 +1,7 @@
+{"event": "clock_anchor", "monotonic_ns": 87251518007041, "wall_ns": 1791119971457991000}
+{"event": "measurement_start", "mode": 0, "monotonic_ns": 87394731166708, "phase": "a1", "wall_ns": 1791120114671636000}
+{"event": "measurement_end", "mode": 0, "monotonic_ns": 87404736413833, "phase": "a1", "wall_ns": 1791120124676918000}
+{"event": "measurement_start", "mode": 1, "monotonic_ns": 87408317056958, "phase": "b1", "wall_ns": 1791120128257573000}
+{"event": "measurement_end", "mode": 1, "monotonic_ns": 87418335438708, "phase": "b1", "wall_ns": 1791120138275989000}
+{"event": "measurement_start", "mode": 0, "monotonic_ns": 87421905625791, "phase": "a2", "wall_ns": 1791120141846188000}
+{"event": "measurement_end", "mode": 0, "monotonic_ns": 87431910873083, "phase": "a2", "wall_ns": 1791120151851470000}

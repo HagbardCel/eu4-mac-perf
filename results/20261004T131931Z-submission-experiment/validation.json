@@ -1,0 +1,363 @@
+{
+  "pareto_gate": null,
+  "engagement_gate": {
+    "status": "passed",
+    "pareto_eligible": false,
+    "multi_hypothesis": true
+  },
+  "observer_gate": {
+    "status": "skipped",
+    "reason": "v3 uses multi_hypothesis_gate + observer_scene_gate"
+  },
+  "multi_hypothesis_gate": {
+    "status": "passed",
+    "reference_health": {
+      "status": "passed",
+      "phases": [
+        {
+          "name": "a1",
+          "phase_ok": true,
+          "control_validation": {
+            "status": "passed",
+            "reason": null,
+            "control_ticks_delta": 564,
+            "candidate_site_entries_delta": 1366684,
+            "armed_candidate_site_entries_delta": 0,
+            "renderbuckets_invocations_delta": 1129,
+            "eligible_pair_hits_delta": 0,
+            "effective_actions_delta": 0,
+            "hook_attempts_delta": 564,
+            "start": {
+              "magic": 1396856133,
+              "protocol_version": 3,
+              "command_generation": 1,
+              "requested_mode": 0,
+              "ack_generation": 1,
+              "ack_mode": 0,
+              "requested_capability_id": 1,
+              "advertised_capability_id": 1,
+              "counter_schema_version": 1,
+              "counter_count": 17,
+              "supported_hypothesis_mask": 11,
+              "safety_qualified_hypothesis_mask": 0,
+              "observation_generation": 0,
+              "observation_requested_state": 0,
+              "observation_ack_generation": 0,
+              "observation_ack_state": 0,
+              "control_ticks": 6033,
+              "renderbuckets_invocations": 11923,
+              "site_entries": 14362262,
+              "effective_actions": 0,
+              "candidate_site_entries": 0,
+              "candidate_nonempty_invocations": 0,
+              "adjacent_draw_pairs_total": 0,
+              "same_parent_pairs": 0,
+              "cross_parent_pairs": 0,
+              "same_parent_buffer_signature": 0,
+              "cross_parent_buffer_signature": 0,
+              "cross_parent_buffer_elision_eligible": 0,
+              "same_subrecord_pointer_cross_parent": 0,
+              "same_texture_input_signature": 0,
+              "texture_setup_elision_eligible": 0,
+              "legacy_eligible_pair_hits": 0,
+              "candidate_swaps": 0,
+              "candidate_hook_attempts": 6033,
+              "eligible_pair_hits": 0,
+              "candidate_effective_actions": 0
+            },
+            "end": {
+              "magic": 1396856133,
+              "protocol_version": 3,
+              "command_generation": 1,
+              "requested_mode": 0,
+              "ack_generation": 1,
+              "ack_mode": 0,
+              "requested_capability_id": 1,
+              "advertised_capability_id": 1,
+              "counter_schema_version": 1,
+              "counter_count": 17,
+              "supported_hypothesis_mask": 11,
+              "safety_qualified_hypothesis_mask": 0,
+              "observation_generation": 0,
+              "observation_requested_state": 0,
+              "observation_ack_generation": 0,
+              "observation_ack_state": 0,
+              "control_ticks": 6597,
+              "renderbuckets_invocations": 13052,
+              "site_entries": 15728946,
+              "effective_actions": 0,
+              "candidate_site_entries": 0,
+              "candidate_nonempty_invocations": 0,
+              "adjacent_draw_pairs_total": 0,
+              "same_parent_pairs": 0,
+              "cross_parent_pairs": 0,
+              "same_parent_buffer_signature": 0,
+              "cross_parent_buffer_signature": 0,
+              "cross_parent_buffer_elision_eligible": 0,
+              "same_subrecord_pointer_cross_parent": 0,
+              "same_texture_input_signature": 0,
+              "texture_setup_elision_eligible": 0,
+              "legacy_eligible_pair_hits": 0,
+              "candidate_swaps": 0,
+              "candidate_hook_attempts": 6597,
+              "eligible_pair_hits": 0,
+              "candidate_effective_actions": 0
+            }
+          }
+        },
+        {
+          "name": "a2",
+          "phase_ok": true,
+          "control_validation": {
+            "status": "passed",
+            "reason": null,
+            "control_ticks_delta": 566,
+            "candidate_site_entries_delta": 1370217,
+            "armed_candidate_site_entries_delta": 0,
+            "renderbuckets_invocations_delta": 1132,
+            "eligible_pair_hits_delta": 0,
+            "effective_actions_delta": 0,
+            "hook_attempts_delta": 566,
+            "start": {
+              "magic": 1396856133,
+              "protocol_version": 3,
+              "command_generation": 3,
+              "requested_mode": 0,
+              "ack_generation": 3,
+              "ack_mode": 0,
+              "requested_capability_id": 1,
+              "advertised_capability_id": 1,
+              "counter_schema_version": 1,
+              "counter_count": 17,
+              "supported_hypothesis_mask": 11,
+              "safety_qualified_hypothesis_mask": 0,
+              "observation_generation": 2,
+              "observation_requested_state": 2,
+              "observation_ack_generation": 2,
+              "observation_ack_state": 2,
+              "control_ticks": 7560,
+              "renderbuckets_invocations": 14977,
+              "site_entries": 18059017,
+              "effective_actions": 0,
+              "candidate_site_entries": 1365444,
+              "candidate_nonempty_invocations": 1309608,
+              "adjacent_draw_pairs_total": 55836,
+              "same_parent_pairs": 55836,
+              "cross_parent_pairs": 0,
+              "same_parent_buffer_signature": 0,
+              "cross_parent_buffer_signature": 0,
+              "cross_parent_buffer_elision_eligible": 0,
+              "same_subrecord_pointer_cross_parent": 0,
+              "same_texture_input_signature": 0,
+              "texture_setup_elision_eligible": 0,
+              "legacy_eligible_pair_hits": 0,
+              "candidate_swaps": 564,
+              "candidate_hook_attempts": 7560,
+              "eligible_pair_hits": 0,
+              "candidate_effective_actions": 0
+            },
+            "end": {
+              "magic": 1396856133,
+              "protocol_version": 3,
+              "command_generation": 3,
+              "requested_mode": 0,
+              "ack_generation": 3,
+              "ack_mode": 0,
+              "requested_capability_id": 1,
+              "advertised_capability_id": 1,
+              "counter_schema_version": 1,
+              "counter_count": 17,
+              "supported_hypothesis_mask": 11,
+              "safety_qualified_hypothesis_mask": 0,
+              "observation_generation": 2,
+              "observation_requested_state": 2,
+              "observation_ack_generation": 2,
+              "observation_ack_state": 2,
+              "control_ticks": 8126,
+              "renderbuckets_invocations": 16109,
+              "site_entries": 19429234,
+              "effective_actions": 0,
+              "candidate_site_entries": 1365444,
+              "candidate_nonempty_invocations": 1309608,
+              "adjacent_draw_pairs_total": 55836,
+              "same_parent_pairs": 55836,
+              "cross_parent_pairs": 0,
+              "same_parent_buffer_signature": 0,
+              "cross_parent_buffer_signature": 0,
+              "cross_parent_buffer_elision_eligible": 0,
+              "same_subrecord_pointer_cross_parent": 0,
+              "same_texture_input_signature": 0,
+              "texture_setup_elision_eligible": 0,
+              "legacy_eligible_pair_hits": 0,
+              "candidate_swaps": 564,
+              "candidate_hook_attempts": 8126,
+              "eligible_pair_hits": 0,
+              "candidate_effective_actions": 0
+            }
+          }
+        }
+      ]
+    },
+    "observer_scene_gate": {
+      "status": "passed",
+      "phases": {
+        "a1": {
+          "role": "reference",
+          "scene": {
+            "passed": true,
+            "alignment": {
+              "mean_rgb_delta": 4.83,
+              "shift_x_px": 0,
+              "shift_y_px": 0
+            },
+            "absolute_scene_gate": true
+          },
+          "phase_ok": true
+        },
+        "b1": {
+          "role": "candidate",
+          "scene": {
+            "passed": true,
+            "alignment": {
+              "mean_rgb_delta": 5.33,
+              "shift_x_px": 0,
+              "shift_y_px": 0
+            },
+            "absolute_scene_gate": true
+          },
+          "phase_ok": true
+        },
+        "a2": {
+          "role": "reference",
+          "scene": {
+            "passed": true,
+            "alignment": {
+              "mean_rgb_delta": 9.32,
+              "shift_x_px": 0,
+              "shift_y_px": 0
+            },
+            "absolute_scene_gate": true
+          },
+          "phase_ok": true
+        }
+      }
+    },
+    "b1_control_ok": true,
+    "b1_multi_hypothesis": {
+      "candidate_interpretation": "absolute_arm_to_freeze",
+      "meta_errors": [],
+      "invariant_errors": [],
+      "exposure_errors": [],
+      "mutation_errors": [],
+      "effective_actions_delta": 0,
+      "harness_ok": true,
+      "measurement_paused_swaps": 567,
+      "candidate_swaps": 564,
+      "measurement_wall_seconds": 10.01838175,
+      "advertised_supported_hypothesis_mask": 11,
+      "advertised_safety_qualified_hypothesis_mask": 0,
+      "hypotheses": {
+        "same_parent_buffer_signature": {
+          "status": "evaluated_no_recurrence",
+          "evaluated": 55836,
+          "hits": 0,
+          "rate": 0.0,
+          "hits_per_swap": 0.0,
+          "safety_qualified": false,
+          "stage2_recommended": false
+        },
+        "cross_parent_buffer_signature": {
+          "status": "not_exercised",
+          "evaluated": 0,
+          "hits": 0,
+          "stage2_recommended": false
+        },
+        "cross_parent_buffer_elision": {
+          "status": "unsupported",
+          "evaluated": 0,
+          "hits": 0,
+          "stage2_recommended": false
+        },
+        "same_subrecord_pointer_cross_parent": {
+          "status": "not_exercised",
+          "evaluated": 0,
+          "hits": 0,
+          "stage2_recommended": false
+        },
+        "same_texture_input_signature": {
+          "status": "unsupported",
+          "evaluated": 0,
+          "hits": 0,
+          "stage2_recommended": false
+        }
+      },
+      "candidate_totals": {
+        "candidate_site_entries": 1365444,
+        "candidate_nonempty_invocations": 1309608,
+        "adjacent_draw_pairs_total": 55836,
+        "same_parent_pairs": 55836,
+        "cross_parent_pairs": 0,
+        "same_parent_buffer_signature": 0,
+        "cross_parent_buffer_signature": 0,
+        "cross_parent_buffer_elision_eligible": 0,
+        "same_subrecord_pointer_cross_parent": 0,
+        "same_texture_input_signature": 0,
+        "texture_setup_elision_eligible": 0,
+        "legacy_eligible_pair_hits": 0,
+        "candidate_swaps": 564
+      },
+      "health_delta": {
+        "renderbuckets_invocations": 1129,
+        "site_entries": 1366828,
+        "effective_actions": 0
+      },
+      "phase_ok": true
+    },
+    "stage2_recommended": false
+  },
+  "observer_scene_gate": {
+    "status": "passed",
+    "phases": {
+      "a1": {
+        "role": "reference",
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 4.83,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": true
+      },
+      "b1": {
+        "role": "candidate",
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 5.33,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": true
+      },
+      "a2": {
+        "role": "reference",
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 9.32,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": true
+      }
+    }
+  },
+  "expected_candidate_capability_id": 1
+}

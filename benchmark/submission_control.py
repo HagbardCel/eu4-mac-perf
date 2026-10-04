@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mmap control plane for profiler-off Gfx submission A-B-A-B-A experiments (protocol v2)."""
+"""Mmap control plane for profiler-off Gfx submission experiments (protocol v3)."""
 
 from __future__ import annotations
 

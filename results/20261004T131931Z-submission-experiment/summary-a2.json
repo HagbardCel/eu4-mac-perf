@@ -1,0 +1,11 @@
+{
+  "swap_samples": 10,
+  "median_swaps_s": 56.429,
+  "eu4_cpu_ms_per_s": 1066.98,
+  "cpu_w": 7.621,
+  "gpu_w": 2.119,
+  "combined_w": 9.704,
+  "power_samples": 9,
+  "eu4_cpu_ms_per_swap": 18.908,
+  "joules_per_swap": 0.172
+}

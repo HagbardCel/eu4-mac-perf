@@ -11,6 +11,13 @@ CANDIDATE_BANK_COUNTER_NAMES = tuple(
     name for name, slot in COUNTER_SLOTS.items() if slot >= COUNTER_SLOTS["candidate_site_entries"]
 )
 
+# Estimated removable engine helper calls per hypothesis hit (materiality only when safety-qualified).
+REMOVABLE_HELPER_CALLS_PER_HIT: dict[str, float] = {
+    "same_parent_buffer_signature": 2.0,
+    "cross_parent_buffer_signature": 2.0,
+    "cross_parent_buffer_elision": 2.0,
+}
+
 
 def _counter_delta(start: dict[str, int], end: dict[str, int], name: str) -> int:
     return int(end.get(name, 0)) - int(start.get(name, 0))
@@ -76,6 +83,7 @@ def hypothesis_support(advertised_supported: int, advertised_safety: int) -> dic
 
 def classify_hypothesis(
     *,
+    hypothesis_id: str,
     supported: bool,
     safety_qualified: bool,
     evaluated: int,
@@ -98,7 +106,8 @@ def classify_hypothesis(
         "stage2_recommended": False,
     }
     if hits > 0 and safety_qualified and hits_per_swap is not None and material_threshold_calls_per_swap is not None:
-        removable = 2.0 * hits_per_swap
+        k = REMOVABLE_HELPER_CALLS_PER_HIT.get(hypothesis_id, 0.0)
+        removable = k * hits_per_swap
         out["estimated_removable_helper_calls_per_swap"] = removable
         if removable >= material_threshold_calls_per_swap:
             out["status"] = "material"
@@ -150,6 +159,7 @@ def evaluate_b_phase(
         evaluated = int(candidate_totals.get(denom_name, 0))
         hps = hits / candidate_swaps
         hypotheses[hyp_id] = classify_hypothesis(
+            hypothesis_id=hyp_id,
             supported=support[hyp_id]["supported"],
             safety_qualified=support[hyp_id]["safety_qualified"],
             evaluated=evaluated,
