@@ -120,6 +120,7 @@ class SubmissionValidationTests(unittest.TestCase):
                 "role": "reference",
                 "control_validation": {
                     "status": "passed",
+                    "candidate_site_entries_delta": 1,
                     "eligible_pair_hits_delta": 0,
                     "effective_actions_delta": 0,
                 },

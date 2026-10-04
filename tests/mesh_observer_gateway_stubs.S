@@ -11,9 +11,5 @@ _eu4_submission_mesh_site_from_frame:
     movabs $0x1212343456567878, %r9
     movabs $0x9abcdef09abcdef0, %r10
     movabs $0x0123456789abcdef, %r11
-    pushfq
-    popq %rax
-    orq $0x400, %rax
-    pushq %rax
-    popfq
+    xor %eax, %eax
     ret

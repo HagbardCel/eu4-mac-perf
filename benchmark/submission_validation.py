@@ -153,7 +153,7 @@ def observer_engagement_gate(
         actions = int(control.get("effective_actions_delta", 0))
         site = int(control.get("candidate_site_entries_delta", 0))
         if role == "reference":
-            control_ok = control_status == "passed" and hits == 0 and actions == 0
+            control_ok = control_status == "passed" and site > 0 and hits == 0 and actions == 0
         elif role == "candidate":
             control_ok = control_status == "engagement_only" and site > 0 and hits > 0 and actions == 0
         else:

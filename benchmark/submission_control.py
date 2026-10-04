@@ -235,7 +235,7 @@ def engagement_smoke_gate(phases: list[dict], *, expected_capability_id: int) ->
         actions = int(cv.get("effective_actions_delta", 0))
         status = cv.get("status")
         if role == "reference":
-            phase_ok = status == "passed" and hits == 0 and actions == 0
+            phase_ok = status == "passed" and site > 0 and hits == 0 and actions == 0
         elif role == "candidate":
             phase_ok = status == "engagement_only" and site > 0 and hits > 0 and actions == 0
         else:

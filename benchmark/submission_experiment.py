@@ -81,11 +81,16 @@ def _validate_control_deltas(
         ok = (
             end["ack_mode"] == MODE_REFERENCE
             and tick_delta > 0
+            and site_delta > 0
             and hits_delta == 0
             and action_delta == 0
         )
         status = "passed" if ok else "failed"
-        reason = None if ok else "observer reference requires no pair hits or effective actions"
+        reason = (
+            None
+            if ok
+            else "observer reference requires mesh site traffic without pair hits or effective actions"
+        )
     elif role == "candidate" and expected_capability_id == OBSERVER_CAPABILITY_ID:
         ok = (
             end["ack_mode"] == MODE_CANDIDATE
