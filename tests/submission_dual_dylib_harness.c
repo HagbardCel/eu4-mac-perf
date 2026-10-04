@@ -10,8 +10,11 @@
 #include <unistd.h>
 
 #define MAGIC 0x53425545u
-#define PROTOCOL_VERSION 2u
+#define PROTOCOL_VERSION 3u
 #define CONTROL_SIZE 4096u
+#define COUNTER_REGION_OFFSET 64u
+#define OBS_ARM 1u
+#define OBS_ACK_ARMED 1u
 
 static uint32_t compiled_capability(void) {
     const char *env = getenv("EU4_SUBMISSION_COMPILED_CAPABILITY");
@@ -46,6 +49,14 @@ int main(void) {
     words[5] = 0;
     words[6] = compiled;
     words[7] = 0;
+    words[8] = 1;
+    words[9] = 17;
+    words[10] = 0x1fu;
+    words[11] = 0x01u;
+    words[12] = 0;
+    words[13] = 0;
+    words[14] = 0;
+    words[15] = 0;
 
     CGLPixelFormatAttribute attributes[] = {kCGLPFAAccelerated, 0};
     CGLPixelFormatObj format = NULL;
@@ -66,6 +77,10 @@ int main(void) {
             words[2]++;
             words[3] = (i < 70) ? 0u : 1u;
             words[6] = compiled;
+            if (i == 70) {
+                words[12]++;
+                words[13] = OBS_ARM;
+            }
         }
         CGLFlushDrawable(context);
         if (i >= 70) {
@@ -81,17 +96,18 @@ int main(void) {
         }
         usleep(10000);
     }
-    uint64_t *counters = (uint64_t *)((char *)map + 32);
+    uint64_t *counters = (uint64_t *)((char *)map + COUNTER_REGION_OFFSET);
     printf(
         "control_ticks=%llu site_entries=%llu pair_hits=%llu effective_actions=%llu "
-        "ack_generation=%u ack_mode=%u advertised_cap=%u\n",
+        "ack_generation=%u ack_mode=%u advertised_cap=%u obs_ack=%u\n",
         (unsigned long long)counters[0],
-        (unsigned long long)counters[1],
         (unsigned long long)counters[2],
+        (unsigned long long)counters[15],
         (unsigned long long)counters[3],
         words[4],
         words[5],
-        words[7]);
+        words[7],
+        words[15]);
     CGLSetCurrentContext(NULL);
     CGLDestroyContext(context);
     CGLDestroyPixelFormat(format);

@@ -121,6 +121,32 @@ bool eu4_setup_elision_eligible(
     eu4_predicate_reason_t *reason
 );
 
+typedef struct {
+    uintptr_t vbo0;
+    uintptr_t ibo;
+    uintptr_t vbo1;
+} eu4_buffer_bind_signature_t;
+
+void eu4_buffer_bind_signature_read(const uint8_t *sub, eu4_buffer_bind_signature_t *out);
+bool eu4_buffer_bind_signatures_equal(
+    const eu4_buffer_bind_signature_t *left,
+    const eu4_buffer_bind_signature_t *right
+);
+
+bool eu4_cross_parent_buffer_contexts_comparable(
+    const eu4_subrecord_context_t *prev_ctx,
+    const eu4_subrecord_context_t *curr_ctx,
+    eu4_predicate_reason_t *reason
+);
+
+bool eu4_cross_parent_buffer_elision_eligible(
+    const eu4_buffer_bind_signature_t *prev,
+    const eu4_buffer_bind_signature_t *curr,
+    const eu4_subrecord_context_t *prev_ctx,
+    const eu4_subrecord_context_t *curr_ctx,
+    eu4_predicate_reason_t *reason
+);
+
 bool eu4_draw_batch_eligible(
     const uint8_t *prev_parent,
     const uint8_t *curr_parent,

@@ -135,10 +135,37 @@ def pairwise_scene_delta(left: Path, right: Path) -> float:
     return float(scene_difference(left, right)["mean_rgb_delta"])
 
 
+def observer_scene_gate(phases: list[dict]) -> dict[str, Any]:
+    """Absolute screenshot gate for each phase (independent of v1 engagement control)."""
+    reference = resolve_repository_scene_reference()
+    phase_reports: dict[str, Any] = {}
+    all_ok = True
+    for phase in phases:
+        name = phase.get("name", "?")
+        scene_result = None
+        screenshot = phase.get("screenshot")
+        if screenshot:
+            shot_path = Path(screenshot)
+            if not shot_path.is_file():
+                shot_path = Path(phase.get("run_dir", ".")) / screenshot
+            if shot_path.is_file():
+                scene_result = scene_gate(reference, shot_path)
+        scene_ok = bool(scene_result and scene_result["passed"])
+        if not scene_ok:
+            all_ok = False
+        phase_reports[name] = {
+            "role": phase.get("role"),
+            "scene": scene_result,
+            "phase_ok": scene_ok,
+        }
+    return {"status": "passed" if all_ok else "failed", "phases": phase_reports}
+
+
 def observer_engagement_gate(
     phases: list[dict],
     *,
     expected_capability_id: int = 1,
+    require_pair_hits: bool = True,
 ) -> dict[str, Any]:
     """Observer smoke: per-phase control + absolute scene gates; never Pareto-eligible."""
     reference = resolve_repository_scene_reference()
@@ -152,10 +179,13 @@ def observer_engagement_gate(
         hits = int(control.get("eligible_pair_hits_delta", 0))
         actions = int(control.get("effective_actions_delta", 0))
         site = int(control.get("candidate_site_entries_delta", 0))
+        armed_site = int(control.get("armed_candidate_site_entries_delta", site))
         if role == "reference":
             control_ok = control_status == "passed" and site > 0 and hits == 0 and actions == 0
         elif role == "candidate":
-            control_ok = control_status == "engagement_only" and site > 0 and hits > 0 and actions == 0
+            hits_ok = hits > 0 if require_pair_hits else True
+            status_ok = control_status in ("engagement_only", "passed")
+            control_ok = status_ok and armed_site > 0 and hits_ok and actions == 0
         else:
             control_ok = False
         scene_result = None

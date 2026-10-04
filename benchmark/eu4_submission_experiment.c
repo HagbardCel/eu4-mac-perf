@@ -1,4 +1,4 @@
-// Profiler-off submission experiment — protocol v2 control plane (GOG EU IV 1.37.5).
+// Profiler-off submission experiment — protocol v3 control plane (GOG EU IV 1.37.5).
 #define GL_SILENCE_DEPRECATION 1
 #include <OpenGL/OpenGL.h>
 #include <fcntl.h>
@@ -6,38 +6,45 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "submission_counter_schema.h"
+#include "eu4_submission_observation.h"
+
 #define MAGIC 0x53425545u
-#define PROTOCOL_VERSION 2u
+#define PROTOCOL_VERSION 3u
 #define CONTROL_SIZE 4096u
 #define MODE_REFERENCE 0u
 #define MODE_CANDIDATE 1u
+
+#define HEADER_WORDS 8u
+#define META_WORDS 4u
+#define OBS_WORDS 4u
+#define COUNTER_REGION_OFFSET 64u
+
+#define OBS_DISARMED 0u
+#define OBS_ARM 1u
+#define OBS_FREEZE 2u
+#define OBS_ACK_DISARMED 0u
+#define OBS_ACK_ARMED 1u
+#define OBS_ACK_FROZEN 2u
 
 #ifndef EU4_SUBMISSION_COMPILED_CAPABILITY
 #define EU4_SUBMISSION_COMPILED_CAPABILITY 1u
 #endif
 
-enum {
-    COUNTER_CONTROL_TICKS = 0,
-    COUNTER_CANDIDATE_SITE_ENTRIES = 1,
-    COUNTER_ELIGIBLE_PAIR_HITS = 2,
-    COUNTER_EFFECTIVE_ACTIONS = 3,
-    COUNTER_COUNT = 4,
-};
-
 static pthread_once_t setup_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t header_lock = PTHREAD_MUTEX_INITIALIZER;
 static void *control_map = MAP_FAILED;
-static bool candidate_hook_installed = false;
+static bool hooks_installed = false;
 static uint32_t last_observed_ack_mode = MODE_REFERENCE;
+static bool observation_frozen = false;
 
-bool eu4_submission_try_install_mesh_hook(void);
-bool eu4_submission_mesh_hook_is_installed(void);
+bool eu4_submission_try_install_all_hooks(void);
+bool eu4_submission_hooks_are_installed(void);
 void eu4_submission_mesh_reset_chain(void);
 
 static uint32_t compiled_capability(void) {
@@ -45,20 +52,26 @@ static uint32_t compiled_capability(void) {
 }
 
 static _Atomic uint64_t *map_counters(void) {
-    return (_Atomic uint64_t *)(control_map + 32);
+    return (_Atomic uint64_t *)(control_map + COUNTER_REGION_OFFSET);
 }
 
-static void try_install_candidate_hook(void) {
-    if (candidate_hook_installed) {
+static void reset_candidate_bank_counters(void) {
+    for (uint32_t slot = EU4_COUNTER_CANDIDATE_SITE_ENTRIES; slot < EU4_SUBMISSION_COUNTER_COUNT; slot++) {
+        atomic_store_explicit(&map_counters()[slot], 0, memory_order_relaxed);
+    }
+}
+
+static void try_install_hooks(void) {
+    if (hooks_installed) {
         return;
     }
-    if (eu4_submission_try_install_mesh_hook()) {
-        candidate_hook_installed = true;
+    if (eu4_submission_try_install_all_hooks()) {
+        hooks_installed = true;
         return;
     }
     const char *test_stub = getenv("EU4_SUBMISSION_TEST_STUB_HOOK");
     if (test_stub && test_stub[0] == '1') {
-        candidate_hook_installed = true;
+        hooks_installed = true;
     }
 }
 
@@ -73,37 +86,76 @@ static void setup(void) {
     }
     control_map = mmap(NULL, CONTROL_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
-    try_install_candidate_hook();
+    try_install_hooks(); /* installs entry + site when binary prefix matches */
     if (control_map != MAP_FAILED) {
         pthread_mutex_lock(&header_lock);
         uint32_t *words = (uint32_t *)control_map;
         words[7] = compiled_capability();
+        words[8] = EU4_SUBMISSION_COUNTER_SCHEMA_VERSION;
+        words[9] = EU4_SUBMISSION_COUNTER_COUNT;
+        words[10] = EU4_SUBMISSION_SUPPORTED_HYPOTHESIS_MASK_DEFAULT;
+        words[11] = EU4_SUBMISSION_SAFETY_HYPOTHESIS_MASK_DEFAULT;
         pthread_mutex_unlock(&header_lock);
     }
 }
 
-void eu4_submission_record_candidate_site_entry(void) {
+static bool protocol_ok(const uint32_t *words) {
+    return words[0] == MAGIC && words[1] == PROTOCOL_VERSION;
+}
+
+static bool candidate_mode_active(const uint32_t *words) {
+    return words[5] == MODE_CANDIDATE && words[7] == compiled_capability();
+}
+
+static bool observation_bank_writable(const uint32_t *words) {
+    if (!candidate_mode_active(words)) {
+        return false;
+    }
+    if (observation_frozen) {
+        return false;
+    }
+    if (words[15] != OBS_ACK_ARMED) {
+        return false;
+    }
+    return true;
+}
+
+void eu4_submission_counter_add(eu4_submission_counter_slot_t slot, uint64_t delta) {
     pthread_once(&setup_once, setup);
-    if (control_map == MAP_FAILED) {
+    if (control_map == MAP_FAILED || slot >= EU4_SUBMISSION_COUNTER_COUNT) {
         return;
     }
-    atomic_fetch_add_explicit(&map_counters()[COUNTER_CANDIDATE_SITE_ENTRIES], 1, memory_order_relaxed);
+    uint32_t *words = (uint32_t *)control_map;
+    if (!protocol_ok(words)) {
+        return;
+    }
+    if (slot >= EU4_COUNTER_CANDIDATE_SITE_ENTRIES) {
+        if (!observation_bank_writable(words)) {
+            return;
+        }
+    }
+    atomic_fetch_add_explicit(&map_counters()[slot], delta, memory_order_relaxed);
+}
+
+void eu4_submission_record_candidate_site_entry(void) {
+    eu4_submission_counter_add(EU4_COUNTER_SITE_ENTRIES, 1);
+    eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_SITE_ENTRIES, 1);
+}
+
+void eu4_submission_record_renderbuckets_invocation(void) {
+    eu4_submission_counter_add(EU4_COUNTER_RENDERBUCKETS_INVOCATIONS, 1);
+}
+
+void eu4_submission_record_nonempty_invocation(void) {
+    eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_NONEMPTY_INVOCATIONS, 1);
 }
 
 void eu4_submission_record_eligible_pair_hit(void) {
-    pthread_once(&setup_once, setup);
-    if (control_map == MAP_FAILED) {
-        return;
-    }
-    atomic_fetch_add_explicit(&map_counters()[COUNTER_ELIGIBLE_PAIR_HITS], 1, memory_order_relaxed);
+    eu4_submission_counter_add(EU4_COUNTER_LEGACY_ELIGIBLE_PAIR_HITS, 1);
 }
 
 void eu4_submission_record_effective_action(void) {
-    pthread_once(&setup_once, setup);
-    if (control_map == MAP_FAILED) {
-        return;
-    }
-    atomic_fetch_add_explicit(&map_counters()[COUNTER_EFFECTIVE_ACTIONS], 1, memory_order_relaxed);
+    eu4_submission_counter_add(EU4_COUNTER_EFFECTIVE_ACTIONS, 1);
 }
 
 bool eu4_submission_candidate_predicate_active(void) {
@@ -112,10 +164,43 @@ bool eu4_submission_candidate_predicate_active(void) {
         return false;
     }
     uint32_t *words = (uint32_t *)control_map;
-    if (words[0] != MAGIC || words[1] != PROTOCOL_VERSION) {
+    if (!protocol_ok(words)) {
         return false;
     }
-    return words[5] == MODE_CANDIDATE && words[7] == compiled_capability();
+    return candidate_mode_active(words) && observation_bank_writable(words);
+}
+
+bool eu4_submission_observation_bank_active(void) {
+    pthread_once(&setup_once, setup);
+    if (control_map == MAP_FAILED) {
+        return false;
+    }
+    uint32_t *words = (uint32_t *)control_map;
+    return protocol_ok(words) && observation_bank_writable(words);
+}
+
+static void handle_observation_command(uint32_t *words) {
+    uint32_t obs_gen = words[12];
+    uint32_t obs_req = words[13];
+    uint32_t obs_ack_gen = words[14];
+    if (obs_gen <= obs_ack_gen) {
+        return;
+    }
+    if (obs_req == OBS_ARM) {
+        reset_candidate_bank_counters();
+        eu4_submission_observation_arm_reset_chain();
+        observation_frozen = false;
+        words[14] = obs_gen;
+        words[15] = OBS_ACK_ARMED;
+    } else if (obs_req == OBS_FREEZE) {
+        observation_frozen = true;
+        words[14] = obs_gen;
+        words[15] = OBS_ACK_FROZEN;
+    } else if (obs_req == OBS_DISARMED) {
+        observation_frozen = true;
+        words[14] = obs_gen;
+        words[15] = OBS_ACK_DISARMED;
+    }
 }
 
 static void poll_command_ack(void) {
@@ -125,7 +210,7 @@ static void poll_command_ack(void) {
     }
     pthread_mutex_lock(&header_lock);
     uint32_t *words = (uint32_t *)control_map;
-    if (words[0] != MAGIC || words[1] != PROTOCOL_VERSION) {
+    if (!protocol_ok(words)) {
         pthread_mutex_unlock(&header_lock);
         return;
     }
@@ -143,7 +228,7 @@ static void poll_command_ack(void) {
     if (command_generation > ack_generation) {
         ack_mode = requested_mode;
         if (requested_mode == MODE_CANDIDATE) {
-            if (requested_capability != compiled || advertised_capability != compiled || !candidate_hook_installed) {
+            if (requested_capability != compiled || advertised_capability != compiled || !hooks_installed) {
                 ack_mode = MODE_REFERENCE;
             }
         }
@@ -151,6 +236,7 @@ static void poll_command_ack(void) {
         words[4] = ack_generation;
         words[5] = ack_mode;
     }
+    handle_observation_command(words);
     if (words[5] != last_observed_ack_mode) {
         if (words[5] == MODE_REFERENCE) {
             eu4_submission_mesh_reset_chain();
@@ -158,11 +244,22 @@ static void poll_command_ack(void) {
         last_observed_ack_mode = words[5];
     }
     pthread_mutex_unlock(&header_lock);
-    atomic_fetch_add_explicit(&map_counters()[COUNTER_CONTROL_TICKS], 1, memory_order_relaxed);
+    eu4_submission_counter_add(EU4_COUNTER_CONTROL_TICKS, 1);
 }
 
 static CGLError submission_flush(CGLContextObj context) {
+    pthread_once(&setup_once, setup);
+    bool was_observing = false;
+    if (control_map != MAP_FAILED) {
+        uint32_t *words = (uint32_t *)control_map;
+        if (protocol_ok(words)) {
+            was_observing = observation_bank_writable(words);
+        }
+    }
     CGLError result = CGLFlushDrawable(context);
+    if (was_observing) {
+        eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_SWAPS, 1);
+    }
     poll_command_ack();
     return result;
 }

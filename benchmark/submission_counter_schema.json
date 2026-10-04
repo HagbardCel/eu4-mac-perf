@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "hypotheses": [
+    {
+      "bit": 0,
+      "id": "same_parent_buffer_signature",
+      "supported_default": true,
+      "safety_qualified_default": false
+    },
+    {
+      "bit": 1,
+      "id": "cross_parent_buffer_signature",
+      "supported_default": true,
+      "safety_qualified_default": false
+    },
+    {
+      "bit": 2,
+      "id": "cross_parent_buffer_elision",
+      "supported_default": false,
+      "safety_qualified_default": false
+    },
+    {
+      "bit": 3,
+      "id": "same_subrecord_pointer_cross_parent",
+      "supported_default": true,
+      "safety_qualified_default": false
+    },
+    {
+      "bit": 4,
+      "id": "same_texture_input_signature",
+      "supported_default": false,
+      "safety_qualified_default": false
+    },
+    {
+      "bit": 5,
+      "id": "texture_setup_elision",
+      "supported_default": false,
+      "safety_qualified_default": false
+    },
+    {
+      "bit": 6,
+      "id": "object_constants_elision",
+      "supported_default": false,
+      "safety_qualified_default": false
+    }
+  ],
+  "counters": [
+    {"slot": 0, "name": "control_ticks", "bank": "health", "modes": ["reference", "candidate"]},
+    {"slot": 1, "name": "renderbuckets_invocations", "bank": "health", "modes": ["reference", "candidate"]},
+    {"slot": 2, "name": "site_entries", "bank": "health", "modes": ["reference", "candidate"]},
+    {"slot": 3, "name": "effective_actions", "bank": "health", "modes": ["reference", "candidate"]},
+    {"slot": 4, "name": "candidate_site_entries", "bank": "candidate", "modes": ["candidate"], "requires_armed": true},
+    {"slot": 5, "name": "candidate_nonempty_invocations", "bank": "candidate", "modes": ["candidate"], "requires_armed": true},
+    {"slot": 6, "name": "adjacent_draw_pairs_total", "bank": "candidate", "modes": ["candidate"], "requires_armed": true},
+    {"slot": 7, "name": "same_parent_pairs", "bank": "candidate", "modes": ["candidate"], "requires_armed": true},
+    {"slot": 8, "name": "cross_parent_pairs", "bank": "candidate", "modes": ["candidate"], "requires_armed": true},
+    {"slot": 9, "name": "same_parent_buffer_signature", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "hypothesis_bit": 0},
+    {"slot": 10, "name": "cross_parent_buffer_signature", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "hypothesis_bit": 1},
+    {"slot": 11, "name": "cross_parent_buffer_elision_eligible", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "hypothesis_bit": 2},
+    {"slot": 12, "name": "same_subrecord_pointer_cross_parent", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "hypothesis_bit": 3},
+    {"slot": 13, "name": "same_texture_input_signature", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "hypothesis_bit": 4},
+    {"slot": 14, "name": "texture_setup_elision_eligible", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "hypothesis_bit": 5},
+    {"slot": 15, "name": "legacy_eligible_pair_hits", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "note": "v1 engagement gate alias; does not increment same_parent_buffer_signature"},
+    {"slot": 16, "name": "candidate_swaps", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "note": "CGLFlushDrawable polls while observation bank armed; coherent denominator for hits_per_swap with frozen candidate counters"}
+  ],
+  "v2_compat": {
+    "eligible_pair_hits_slot": 15,
+    "candidate_site_entries_v2_slot": 4
+  }
+}

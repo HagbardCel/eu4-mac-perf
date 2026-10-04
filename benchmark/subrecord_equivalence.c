@@ -322,6 +322,88 @@ bool eu4_setup_elision_eligible(
     return true;
 }
 
+void eu4_buffer_bind_signature_read(const uint8_t *sub, eu4_buffer_bind_signature_t *out) {
+    if (!sub || !out) {
+        return;
+    }
+    out->vbo0 = (uintptr_t) * (const uint64_t *)(sub + 0x30);
+    out->ibo = (uintptr_t) * (const uint64_t *)(sub + 0x38);
+    out->vbo1 = (uintptr_t) * (const uint64_t *)(sub + 0x40);
+}
+
+bool eu4_buffer_bind_signatures_equal(
+    const eu4_buffer_bind_signature_t *left,
+    const eu4_buffer_bind_signature_t *right
+) {
+    if (!left || !right) {
+        return false;
+    }
+    return left->vbo0 == right->vbo0 && left->ibo == right->ibo && left->vbo1 == right->vbo1;
+}
+
+bool eu4_cross_parent_buffer_contexts_comparable(
+    const eu4_subrecord_context_t *prev_ctx,
+    const eu4_subrecord_context_t *curr_ctx,
+    eu4_predicate_reason_t *reason
+) {
+    if (!prev_ctx || !curr_ctx) {
+        if (reason) {
+            *reason = EU4_PRED_RECORD_MISMATCH;
+        }
+        return false;
+    }
+    if (prev_ctx->chain_broken || curr_ctx->chain_broken || !curr_ctx->has_immediate_predecessor) {
+        if (reason) {
+            *reason = EU4_PRED_CHAIN_BROKEN;
+        }
+        return false;
+    }
+    if (prev_ctx->parent_sflushdata_id == curr_ctx->parent_sflushdata_id) {
+        if (reason) {
+            *reason = EU4_PRED_PARENT_BOUNDARY;
+        }
+        return false;
+    }
+    if (prev_ctx->layer_index != curr_ctx->layer_index) {
+        if (reason) {
+            *reason = EU4_PRED_LAYER_MISMATCH;
+        }
+        return false;
+    }
+    if (prev_ctx->flush_array_kind != curr_ctx->flush_array_kind) {
+        if (reason) {
+            *reason = EU4_PRED_FLUSH_ARRAY_MISMATCH;
+        }
+        return false;
+    }
+    if (reason) {
+        *reason = EU4_PRED_OK;
+    }
+    return true;
+}
+
+bool eu4_cross_parent_buffer_elision_eligible(
+    const eu4_buffer_bind_signature_t *prev,
+    const eu4_buffer_bind_signature_t *curr,
+    const eu4_subrecord_context_t *prev_ctx,
+    const eu4_subrecord_context_t *curr_ctx,
+    eu4_predicate_reason_t *reason
+) {
+    if (!eu4_cross_parent_buffer_contexts_comparable(prev_ctx, curr_ctx, reason)) {
+        return false;
+    }
+    if (!prev || !curr || !eu4_buffer_bind_signatures_equal(prev, curr)) {
+        if (reason) {
+            *reason = EU4_PRED_RECORD_MISMATCH;
+        }
+        return false;
+    }
+    if (reason) {
+        *reason = EU4_PRED_BARRIER_UNRESOLVED;
+    }
+    return false;
+}
+
 bool eu4_draw_batch_eligible(
     const uint8_t *prev_parent,
     const uint8_t *curr_parent,

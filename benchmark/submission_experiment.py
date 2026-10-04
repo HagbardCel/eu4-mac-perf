@@ -14,8 +14,9 @@ from pathlib import Path
 import autonomous_runner as auto
 import eu4_benchmark as base
 import submission_control as control
+import submission_multi_hypothesis as multi
 import submission_validation as validation
-from autonomous_runner import capture_scene, focus, mark, stop_process, summarize, warm_up
+from autonomous_runner import capture_scene, focus, mark, probe_rows, stop_process, summarize, warm_up
 from fixture_manager import FixtureManager
 from submission_control import MODE_CANDIDATE, MODE_REFERENCE
 
@@ -48,9 +49,13 @@ def _validate_control_deltas(
     end: dict[str, int],
     *,
     expected_capability_id: int,
+    require_v1_pair_hits: bool = True,
 ) -> dict:
     tick_delta = end["control_ticks"] - start["control_ticks"]
-    site_delta = end["candidate_site_entries"] - start["candidate_site_entries"]
+    site_delta = end.get("site_entries", end["candidate_site_entries"]) - start.get(
+        "site_entries", start["candidate_site_entries"]
+    )
+    candidate_site_delta = end["candidate_site_entries"] - start["candidate_site_entries"]
     hits_delta = end["eligible_pair_hits"] - start["eligible_pair_hits"]
     action_delta = end["candidate_effective_actions"] - start["candidate_effective_actions"]
     if end["requested_capability_id"] != expected_capability_id:
@@ -72,6 +77,7 @@ def _validate_control_deltas(
             "status": "unsupported_candidate",
             "control_ticks_delta": tick_delta,
             "candidate_site_entries_delta": site_delta,
+            "armed_candidate_site_entries_delta": candidate_site_delta,
             "eligible_pair_hits_delta": hits_delta,
             "effective_actions_delta": action_delta,
             "start": start,
@@ -92,15 +98,16 @@ def _validate_control_deltas(
             else "observer reference requires mesh site traffic without pair hits or effective actions"
         )
     elif role == "candidate" and expected_capability_id == OBSERVER_CAPABILITY_ID:
+        hits_ok = hits_delta > 0 if require_v1_pair_hits else True
         ok = (
             end["ack_mode"] == MODE_CANDIDATE
             and tick_delta > 0
-            and site_delta > 0
-            and hits_delta > 0
+            and candidate_site_delta > 0
+            and hits_ok
             and action_delta == 0
         )
-        status = "engagement_only" if ok else "failed"
-        reason = None if ok else "observer candidate requires mesh site entries and pair hits without mutation"
+        status = "engagement_only" if ok and require_v1_pair_hits else ("passed" if ok else "failed")
+        reason = None if ok else "observer candidate requires mesh site traffic without mutation"
     elif role == "candidate":
         ok = (
             end["ack_mode"] == MODE_CANDIDATE
@@ -114,17 +121,25 @@ def _validate_control_deltas(
         ok = end["ack_mode"] == MODE_REFERENCE and tick_delta > 0 and action_delta == 0
         status = "passed" if ok else "failed"
         reason = None if ok else "reference phase requires control ticks without effective actions"
+    renderbuckets_delta = end.get("renderbuckets_invocations", 0) - start.get("renderbuckets_invocations", 0)
     return {
         "status": status,
         "reason": reason,
         "control_ticks_delta": tick_delta,
         "candidate_site_entries_delta": site_delta,
+        "armed_candidate_site_entries_delta": candidate_site_delta,
+        "renderbuckets_invocations_delta": renderbuckets_delta,
         "eligible_pair_hits_delta": hits_delta,
         "effective_actions_delta": action_delta,
         "hook_attempts_delta": tick_delta,
         "start": start,
         "end": end,
     }
+
+
+def _count_paused_swaps(run_dir: Path, anchor: dict, start_ns: int, end_ns: int) -> int:
+    rows = [r for r in probe_rows(run_dir / "auto-probe.csv", anchor) if start_ns <= r["monotonic_ns"] < end_ns]
+    return sum(int(r.get("paused_swaps", 0)) for r in rows)
 
 
 def _run_phase(
@@ -137,9 +152,11 @@ def _run_phase(
     role: str,
     mode: int,
     duration: float,
+    anchor: dict,
     *,
     expected_capability_id: int,
     settle_seconds: float = SETTLE_SECONDS,
+    multi_hypothesis: bool = False,
 ) -> dict:
     generation = submission.request_mode(mode)
     ack = submission.wait_ack(generation)
@@ -157,6 +174,10 @@ def _run_phase(
     if not focus("interior", game.pid):
         raise base.BenchmarkError(f"EU IV lost focus after {name} screenshot")
     counter_start = submission.snapshot()
+    obs_arm_gen: int | None = None
+    if mode == MODE_CANDIDATE:
+        obs_arm_gen = submission.request_observation_arm()
+        submission.wait_observation_ack(obs_arm_gen, expected_state=control.OBS_ACK_ARMED)
     measurement_start = mark(events, "measurement_start", phase=name, mode=mode)
     measurement_deadline = time.monotonic() + duration
     while time.monotonic() < measurement_deadline:
@@ -166,9 +187,12 @@ def _run_phase(
             raise base.BenchmarkError(f"EU IV lost focus during {name} measurement")
         tail.poll()
         time.sleep(min(1.0, max(0.0, measurement_deadline - time.monotonic())))
+    if mode == MODE_CANDIDATE and obs_arm_gen is not None:
+        freeze_gen = submission.request_observation_freeze()
+        submission.wait_observation_ack(freeze_gen, expected_state=control.OBS_ACK_FROZEN)
     measurement_end = mark(events, "measurement_end", phase=name, mode=mode)
-    counter_end = submission.snapshot()
-    return {
+    counter_end = submission.snapshot_frozen_candidate_bank() if mode == MODE_CANDIDATE else submission.snapshot()
+    phase_payload = {
         "name": name,
         "role": role,
         "mode": mode,
@@ -176,13 +200,29 @@ def _run_phase(
         "start_ns": measurement_start["monotonic_ns"],
         "end_ns": measurement_end["monotonic_ns"],
         "screenshot": str(screenshot),
-        "control_validation": _validate_control_deltas(
-            role,
-            counter_start,
-            counter_end,
-            expected_capability_id=expected_capability_id,
-        ),
     }
+    phase_payload["control_validation"] = _validate_control_deltas(
+        role,
+        counter_start,
+        counter_end,
+        expected_capability_id=expected_capability_id,
+        require_v1_pair_hits=not multi_hypothesis,
+    )
+    if multi_hypothesis and role == "candidate":
+        wall_s = max(1e-6, (measurement_end["monotonic_ns"] - measurement_start["monotonic_ns"]) / 1e9)
+        swaps = _count_paused_swaps(run_dir, anchor, measurement_start["monotonic_ns"], measurement_end["monotonic_ns"])
+        cv = phase_payload["control_validation"]
+        phase_payload["multi_hypothesis"] = multi.evaluate_b_phase(
+            counter_end,
+            health_start=counter_start,
+            health_end=counter_end,
+            measurement_paused_swaps=swaps,
+            measurement_wall_seconds=wall_s,
+        )
+        control_ok = cv.get("status") == "passed"
+        mh_ok = phase_payload["multi_hypothesis"]["harness_ok"]
+        phase_payload["multi_hypothesis"]["phase_ok"] = control_ok and mh_ok
+    return phase_payload
 
 
 def _min_metric_samples_for_phase(phase: dict) -> int:
@@ -218,9 +258,10 @@ def run_experiment(
     *,
     expected_capability_id: int = EXPECTED_CANDIDATE_CAPABILITY_ID,
     engagement_smoke: bool = False,
+    multi_hypothesis_smoke: bool = False,
 ) -> Path:
     expected_capability = int(expected_capability_id)
-    observer_run = engagement_smoke or expected_capability == OBSERVER_CAPABILITY_ID
+    observer_run = engagement_smoke or multi_hypothesis_smoke or expected_capability == OBSERVER_CAPABILITY_ID
     if not observer_run:
         raise base.BenchmarkError(
             "No mutating submission candidate is compiled; use --engagement-smoke for capability 1 observer."
@@ -238,8 +279,13 @@ def run_experiment(
     phase_schedule = OBSERVER_PHASE_SCHEDULE if observer_run else PHASE_SCHEDULE
     phase_seconds = OBSERVER_PHASE_SECONDS if observer_run else PHASE_SECONDS
     settle_seconds = OBSERVER_SETTLE_SECONDS if observer_run else SETTLE_SECONDS
+    experiment_kind = "submission_optimization_ababa_v1"
+    if multi_hypothesis_smoke:
+        experiment_kind = "submission_observer_multi_hypothesis_v1"
+    elif observer_run:
+        experiment_kind = "submission_observer_smoke_v1"
     manifest: dict = {
-        "experiment": "submission_observer_smoke_v1" if observer_run else "submission_optimization_ababa_v1",
+        "experiment": experiment_kind,
         "status": "starting",
         "instrumentation": "libeu4_auto_probe.dylib + libeu4_submission_experiment.dylib",
         "expected_candidate_capability_id": expected_capability,
@@ -304,8 +350,10 @@ def run_experiment(
                             role,
                             mode,
                             phase_seconds,
+                            anchor,
                             expected_capability_id=expected_capability,
                             settle_seconds=settle_seconds,
+                            multi_hypothesis=multi_hypothesis_smoke,
                         ),
                     )
                 stop_process(pm, 5)
@@ -316,7 +364,22 @@ def run_experiment(
                     raise base.BenchmarkError(f"Powermetrics tail incomplete: {drain}")
                 _attach_phase_summaries(phases, run_dir, anchor, game.pid, tail)
                 manifest["phases"] = phases
-                if observer_run:
+                if multi_hypothesis_smoke:
+                    manifest["observer_scene_gate"] = validation.observer_scene_gate(phases)
+                    manifest["multi_hypothesis_gate"] = multi.multi_hypothesis_smoke_gate(
+                        phases, scene_gate=manifest["observer_scene_gate"]
+                    )
+                    manifest["v3_reference_health_gate"] = manifest["multi_hypothesis_gate"]["reference_health"]
+                    manifest["engagement_gate"] = {
+                        "status": manifest["multi_hypothesis_gate"]["status"],
+                        "pareto_eligible": False,
+                        "multi_hypothesis": True,
+                    }
+                    manifest["observer_gate"] = {
+                        "status": "skipped",
+                        "reason": "v3 uses multi_hypothesis_gate + observer_scene_gate",
+                    }
+                elif observer_run:
                     manifest["observer_gate"] = validation.observer_engagement_gate(
                         phases, expected_capability_id=expected_capability
                     )
@@ -339,6 +402,8 @@ def run_experiment(
                             "pareto_gate": manifest.get("pareto_gate"),
                             "engagement_gate": manifest.get("engagement_gate"),
                             "observer_gate": manifest.get("observer_gate"),
+                            "multi_hypothesis_gate": manifest.get("multi_hypothesis_gate"),
+                            "observer_scene_gate": manifest.get("observer_scene_gate"),
                             "expected_candidate_capability_id": expected_capability,
                         },
                         indent=2,
@@ -375,18 +440,27 @@ def main() -> int:
         action="store_true",
         help="capability 1 observer run (no Pareto); short validation semantics",
     )
+    parser.add_argument(
+        "--multi-hypothesis-smoke",
+        action="store_true",
+        help="protocol v3 multi-hypothesis observer A-B-A (ARM/FREEZE on B1)",
+    )
     args = parser.parse_args()
-    if not args.engagement_smoke:
+    if not args.engagement_smoke and not args.multi_hypothesis_smoke:
         print(
-            "Error: only --engagement-smoke is supported until a mutating capability 2 dylib exists.",
+            "Error: pass --engagement-smoke or --multi-hypothesis-smoke.",
             file=sys.stderr,
         )
+        return 1
+    if args.engagement_smoke and args.multi_hypothesis_smoke:
+        print("Error: --engagement-smoke and --multi-hypothesis-smoke are mutually exclusive.", file=sys.stderr)
         return 1
     try:
         run_dir = run_experiment(
             Path(args.output).expanduser().resolve(),
             expected_capability_id=OBSERVER_CAPABILITY_ID,
-            engagement_smoke=True,
+            engagement_smoke=args.engagement_smoke,
+            multi_hypothesis_smoke=args.multi_hypothesis_smoke,
         )
         print(run_dir)
     except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:
