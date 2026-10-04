@@ -129,6 +129,14 @@ def _identity_capture_consistent(identity_at_capture: dict | None) -> str:
         return "historical"
     if not start or not end:
         return "partial"
+    required = (
+        start.get("git_commit"),
+        end.get("git_commit"),
+        start.get("controller_sha256"),
+        end.get("controller_sha256"),
+    )
+    if not all(required):
+        return "partial"
     if start.get("git_commit") != end.get("git_commit"):
         return "partial"
     if not start.get("git_tree_clean") or not end.get("git_tree_clean"):
@@ -137,9 +145,10 @@ def _identity_capture_consistent(identity_at_capture: dict | None) -> str:
         return "partial"
     artifact_start = identity_at_capture.get("artifact_start") or {}
     artifact_end = identity_at_capture.get("artifact_end") or {}
-    for key, digest in artifact_start.items():
-        if artifact_end.get(key) != digest:
-            return "partial"
+    if not artifact_start or not artifact_end:
+        return "partial"
+    if artifact_start != artifact_end:
+        return "partial"
     return "direct"
 
 
@@ -211,6 +220,30 @@ def _summarize_powermetrics_stderr(path: Path) -> dict[str, Any]:
     }
 
 
+def _anchored_readiness_origin_from_manifest(manifest: dict, run_dir: Path) -> dict | None:
+    window_start, window_end = _phase_c_wall_window(manifest, run_dir)
+    if window_start is None or window_end is None:
+        return None
+    manifest_origin = (manifest.get("readiness_log") or {}).get("origin") or {}
+    status = manifest_origin.get("status") or "reconstructed_posthoc_anchored"
+    return {
+        "status": status,
+        "extraction_method": "committed_capture_time_log_with_manifest_window",
+        "phase_c_wall_window_utc": {
+            "start": window_start.isoformat(),
+            "end": window_end.isoformat(),
+        },
+    }
+
+
+def _readiness_origin_complete(origin: dict | None) -> bool:
+    if not origin:
+        return False
+    if origin.get("status") == "captured_at_readiness":
+        return True
+    return bool(origin.get("extraction_method") and origin.get("phase_c_wall_window_utc") is not None)
+
+
 def _finalize_readiness_log(
     run_dir: Path,
     readiness_log: dict | None,
@@ -232,28 +265,33 @@ def _finalize_readiness_log(
         "sha256": _sha256_file(path),
     }
     manifest_origin = (manifest.get("readiness_log") or {}).get("origin")
-    if manifest_origin and manifest.get("readiness_log", {}).get("committed_filename") == committed:
+    if (
+        manifest_origin
+        and manifest.get("readiness_log", {}).get("committed_filename") == committed
+        and _readiness_origin_complete(manifest_origin)
+    ):
         return {**readiness_log, "origin": manifest_origin, "file": file_block}
     if prior_readiness and prior_readiness.get("file", {}).get("sha256") == file_block["sha256"]:
         origin = prior_readiness.get("origin")
-        if origin:
+        if _readiness_origin_complete(origin):
             return {**readiness_log, "origin": origin, "file": file_block}
     import tempfile
 
     with tempfile.TemporaryDirectory() as temporary:
         extracted = extract_game_ready_log(Path(temporary), manifest=manifest)
     if extracted.get("sha256") == file_block["sha256"]:
-        provenance = extracted.get("provenance") or {}
         origin = {
             "status": extracted.get("status", "reconstructed_posthoc_anchored"),
-            "extraction_method": extracted.get("extraction_method") or provenance.get("extraction_method"),
-            "phase_c_wall_window_utc": provenance.get("phase_c_wall_window_utc"),
+            "extraction_method": extracted.get("extraction_method"),
+            "phase_c_wall_window_utc": extracted.get("phase_c_wall_window_utc"),
         }
     elif readiness_log.get("status") == "present_on_disk":
-        origin = {
-            "status": "historical_materialized_unknown",
-            "note": "committed readiness log not reproduced by local heuristic re-extraction",
-        }
+        origin = _anchored_readiness_origin_from_manifest(manifest, run_dir)
+        if origin is None:
+            origin = {
+                "status": "historical_materialized_unknown",
+                "note": "committed readiness log not reproduced by local heuristic re-extraction",
+            }
     else:
         origin = {"status": readiness_log.get("status", "unknown")}
     merged = {**readiness_log, "origin": origin, "file": file_block}
@@ -303,7 +341,11 @@ def describe_powermetrics_pliststream(run_dir: Path, manifest: dict | None = Non
         "total_parseable_raw_records": null_terminated_records + terminal_parseable,
         "capture_time_parsed_power_samples": capture_time if capture_time is not None else power_count,
         "power_samples_json_count": power_count,
-        "terminal_record_used_in_reports": False,
+        "terminal_record_in_power_samples_json": bool(
+            terminal_parseable
+            and power_count is not None
+            and power_count == null_terminated_records + terminal_parseable
+        ),
         "raw_bytes_modified_at_seal": False,
     }
 
@@ -741,6 +783,19 @@ PROFILE_REQUIRED_FILES = {
     ),
 }
 
+PROFILE_REQUIRED_ARTIFACTS = {
+    "intrusive_complete_v1": (
+        "telemetry.csv",
+        "power.samples.json",
+        "powermetrics.pliststream",
+    ),
+    "intrusive_capture_only_v1": (
+        "telemetry.csv",
+        "power.samples.json",
+        "powermetrics.pliststream",
+    ),
+}
+
 
 def _verify_gzip_artifact(run_dir: Path, entry: dict[str, Any], gzip_name: str) -> None:
     gzip_path = run_dir / gzip_name
@@ -796,10 +851,15 @@ def verify_run_evidence(
     ]
     if missing_required:
         raise ValueError(f"profile {expected_profile} missing required inventory entries: {missing_required}")
-    for plain_name, entry in (sealed.get("artifacts") or {}).items():
+    artifacts = sealed.get("artifacts") or {}
+    for plain_name in PROFILE_REQUIRED_ARTIFACTS.get(expected_profile, ()):
+        entry = artifacts.get(plain_name)
+        if not entry:
+            raise ValueError(f"missing sealed artifact metadata for {plain_name}")
         gzip_name = entry.get("gzip_path")
-        if gzip_name:
-            _verify_gzip_artifact(run_dir, entry, gzip_name)
+        if not gzip_name:
+            raise ValueError(f"artifact metadata for {plain_name} missing gzip_path")
+        _verify_gzip_artifact(run_dir, entry, gzip_name)
     power_entry = (sealed.get("artifacts") or {}).get("power.samples.json")
     plist_entry = (sealed.get("artifacts") or {}).get("powermetrics.pliststream")
     semantic = {"status": "skipped"}

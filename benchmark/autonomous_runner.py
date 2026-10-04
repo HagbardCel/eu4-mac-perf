@@ -500,7 +500,11 @@ def summarize(
     if len(selected) < 25 or any(r["swaps_s"] < 20 or
                                   r["paused_swaps"] < .95*r["swaps"] for r in selected):
         raise base.BenchmarkError("Insufficient fully paused swap samples in the 30-second phase")
-    power = diagnostic.summarize_power(raw_power, phases, anchor, pid)["measure"]
+    phase_name = phase.get("name") or "measure"
+    power_by_phase = diagnostic.summarize_power(raw_power, phases, anchor, pid)
+    power = power_by_phase.get(phase_name) or power_by_phase.get("measure")
+    if power is None:
+        raise base.BenchmarkError(f"No power summary for phase {phase_name}")
     cpu_count = len(
         [
             value
@@ -518,7 +522,6 @@ def summarize(
               "combined_w": power["combined_w"], "power_samples": power["samples"],
               "eu4_cpu_ms_per_swap": round(power["eu4_cputime_ms_per_s"]/swaps, 3),
               "joules_per_swap": round(power["combined_w"]/swaps, 4)}
-    phase_name = phase.get("name") or "phase"
     summary_path = run_dir / f"summary-{phase_name}.json"
     summary_path.write_text(json.dumps(result, indent=2) + "\n")
     if write_shared_summary:

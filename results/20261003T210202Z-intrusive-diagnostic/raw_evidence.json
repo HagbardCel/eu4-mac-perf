@@ -1,5 +1,5 @@
 {
-  "sealed_utc": "2026-10-04T07:54:04.977224+00:00",
+  "sealed_utc": "2026-10-04T08:03:46.174666+00:00",
   "capsule_profile": "intrusive_complete_v1",
   "run_dir": "results/20261003T210202Z-intrusive-diagnostic",
   "capture_identity": {
@@ -20,8 +20,8 @@
   },
   "identity_at_capture": null,
   "identity_at_seal": {
-    "git_commit": "f6a56f1ed4ac263df8edfeca3058ad11475fc2b2",
-    "git_commit_short": "f6a56f1",
+    "git_commit": "62853dc0d78ad0a7af80dc4c47db4caf445241bf",
+    "git_commit_short": "62853dc",
     "git_tree_clean": false,
     "controller_sha256": "e90d86986a98b5065af6ee12c413115095335929475ee10e6d2435fb90542c6a",
     "key_source_hashes": {
@@ -147,8 +147,11 @@
     "sha256": "c7e07593213638a363609c6d51bb04b1be176384658c5b9e9c722f32785f8569",
     "origin": {
       "status": "reconstructed_posthoc_anchored",
-      "extraction_method": null,
-      "phase_c_wall_window_utc": null
+      "extraction_method": "heuristic_marker_block",
+      "phase_c_wall_window_utc": {
+        "start": "2026-10-03T21:02:02.037563+00:00",
+        "end": "2026-10-03T23:02:02.037563+00:00"
+      }
     },
     "file": {
       "committed_filename": "game-ready.log",
@@ -195,7 +198,7 @@
     "total_parseable_raw_records": 270,
     "capture_time_parsed_power_samples": 269,
     "power_samples_json_count": 269,
-    "terminal_record_used_in_reports": false,
+    "terminal_record_in_power_samples_json": false,
     "raw_bytes_modified_at_seal": false
   }
 }

@@ -239,6 +239,38 @@ class AutonomousRunnerTests(unittest.TestCase):
             self.assertEqual(result["combined_w"], 10)
             self.assertEqual(result["eu4_cpu_ms_per_swap"], 16.667)
 
+    def test_summarize_uses_ababa_phase_name_for_power(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            start = dt.datetime(2026, 9, 28, tzinfo=dt.timezone.utc)
+            wall_ns = int(start.timestamp() * 1e9)
+            anchor = {"monotonic_ns": 0, "wall_ns": wall_ns}
+            lines = [
+                f"S,{second * 1_000_000_000},{wall_ns + second * 1_000_000_000},"
+                f"1000000000,60,60"
+                for second in range(1, 31)
+            ]
+            (root / "auto-probe.csv").write_text("\n".join(lines) + "\n")
+            raw = [
+                {
+                    "timestamp": start + dt.timedelta(seconds=second),
+                    "processor": {
+                        "cpu_power": 8000,
+                        "gpu_power": 2000,
+                        "combined_power": 10000,
+                    },
+                    "gpu": {"idle_ratio": 0.2},
+                    "tasks": [{"pid": 42, "cputime_ms_per_s": 1000}],
+                }
+                for second in range(1, 31)
+            ]
+            phase = {"name": "a1", "start_ns": 0, "end_ns": 31_000_000_000}
+            result = runner.summarize(
+                root, [phase], anchor, 42, raw, swap_warmup_ns=0, write_shared_summary=False
+            )
+            self.assertEqual(result["eu4_cpu_ms_per_s"], 1000)
+            self.assertTrue((root / "summary-a1.json").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
