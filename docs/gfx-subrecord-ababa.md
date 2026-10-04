@@ -70,9 +70,9 @@ After a corrected v3.1 run:
 
 Observer phases are 10 s; per-phase metrics use phase-scaled sample floors in `summarize()` (not the 30 s autonomous baseline defaults).
 
-## Full ABABA (capability 2)
+## Border multidraw ABABA (capability 2)
 
-Not available in the current tree. `submission_experiment.py` requires **`--engagement-smoke`** or **`--multi-hypothesis-smoke`** (mutually exclusive). A future mutating dylib revision must advertise capability 2 intrinsically before full ABABA.
+See [gfx-border-multidraw-ababa.md](gfx-border-multidraw-ababa.md). Observer smokes remain **`--engagement-smoke`** or **`--multi-hypothesis-smoke`** (mutually exclusive with **`--border-multidraw-ababa`**).
 
 ## PR1 reference
 

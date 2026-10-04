@@ -14,7 +14,7 @@ import eu4_benchmark as base
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
-SUBMISSION_DYLIB_SOURCES = (
+SUBMISSION_DYLIB_SOURCES_OBSERVER = (
     BENCH / "eu4_submission_experiment.c",
     BENCH / "eu4_submission_observation.c",
     BENCH / "eu4_submission_mesh_site.c",
@@ -24,7 +24,14 @@ SUBMISSION_DYLIB_SOURCES = (
     BENCH / "eu4_submission_renderbuckets_entry_thunk.S",
     BENCH / "subrecord_equivalence.c",
 )
+SUBMISSION_DYLIB_SOURCES_BORDER = (
+    BENCH / "eu4_submission_experiment.c",
+    BENCH / "eu4_submission_border_batch.c",
+    BENCH / "eu4_submission_border_gl_interpose.c",
+    BENCH / "eu4_submission_border_install.c",
+)
 LIBRARY = BENCH / ".build/libeu4_submission_experiment.dylib"
+LIBRARY_BORDER = BENCH / ".build/libeu4_submission_border_multidraw.dylib"
 HARNESS = ROOT / "benchmark/.build/submission_dual_dylib_harness"
 HARNESS_SOURCE = ROOT / "tests/submission_dual_dylib_harness.c"
 
@@ -45,6 +52,7 @@ OBS_ACK_FROZEN = 2
 _HEADER = struct.Struct("<IIIIIIII")
 _META = struct.Struct("<IIII")
 _OBS = struct.Struct("<IIII")
+_BORDER_FLAGS_OFFSET = 56
 _COUNTER_REGION_OFFSET = 64
 
 from submission_counter_schema import COUNTER_COUNT, COUNTER_SLOTS  # noqa: E402
@@ -52,16 +60,22 @@ from submission_counter_schema import COUNTER_COUNT, COUNTER_SLOTS  # noqa: E402
 
 def build() -> None:
     """Build observer dylib (compiled capability 1 only)."""
-    _build_dylib(LIBRARY, compiled_capability=1)
+    _build_dylib(LIBRARY, compiled_capability=1, sources=SUBMISSION_DYLIB_SOURCES_OBSERVER)
     _build_harness()
+
+
+def build_border_multidraw() -> None:
+    """Build border multidraw dylib (capability 2)."""
+    _build_dylib(LIBRARY_BORDER, compiled_capability=2, sources=SUBMISSION_DYLIB_SOURCES_BORDER)
 
 
 def build_test_dylib(output: Path, *, compiled_capability: int) -> None:
     """Test-only dylib with explicit capability (harness / regression)."""
-    _build_dylib(output, compiled_capability=int(compiled_capability))
+    sources = SUBMISSION_DYLIB_SOURCES_BORDER if int(compiled_capability) == 2 else SUBMISSION_DYLIB_SOURCES_OBSERVER
+    _build_dylib(output, compiled_capability=int(compiled_capability), sources=sources)
 
 
-def _build_dylib(output: Path, *, compiled_capability: int) -> None:
+def _build_dylib(output: Path, *, compiled_capability: int, sources: tuple[Path, ...]) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     dylib_command = [
         "clang",
@@ -79,7 +93,7 @@ def _build_dylib(output: Path, *, compiled_capability: int) -> None:
         f"-DEU4_SUBMISSION_COMPILED_CAPABILITY={int(compiled_capability)}",
         "-o",
         str(output),
-        *[str(path) for path in SUBMISSION_DYLIB_SOURCES],
+        *[str(path) for path in sources],
     ]
     result = subprocess.run(dylib_command, capture_output=True, text=True, check=False)
     if result.returncode:
@@ -254,6 +268,11 @@ class SubmissionControl:
     def snapshot_frozen_candidate_bank(self) -> dict[str, int]:
         return self.snapshot()
 
+    def set_border_flags(self, *, minimal: bool = False, mutate: bool = False) -> None:
+        flags = (1 if minimal else 0) | (2 if mutate else 0)
+        self.map[_BORDER_FLAGS_OFFSET : _BORDER_FLAGS_OFFSET + 4] = struct.pack("<I", flags)
+        self.map.flush()
+
     def request_mode(self, mode: int) -> int:
         if mode not in (MODE_REFERENCE, MODE_CANDIDATE):
             raise ValueError(mode)
@@ -284,10 +303,11 @@ class SubmissionControl:
         self.file.close()
 
 
-def dylib_env(control_path: Path, probe_path: Path) -> dict[str, str]:
+def dylib_env(control_path: Path, probe_path: Path, *, submission_dylib: Path | None = None) -> dict[str, str]:
+    lib = submission_dylib or LIBRARY
     return {
         **os.environ,
-        "DYLD_INSERT_LIBRARIES": f"{probe_path}:{LIBRARY}",
+        "DYLD_INSERT_LIBRARIES": f"{probe_path}:{lib}",
         "EU4_SUBMISSION_CONTROL": str(control_path),
     }
 

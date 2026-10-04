@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-COUNTER_SCHEMA_VERSION = 2
-COUNTER_COUNT = 18
+COUNTER_SCHEMA_VERSION = 3
+COUNTER_COUNT = 32
 SUPPORTED_HYPOTHESIS_MASK_DEFAULT = 0xb
 SAFETY_HYPOTHESIS_MASK_DEFAULT = 0x0
 
@@ -26,6 +26,20 @@ COUNTER_SLOTS = {
     "texture_setup_elision_eligible": 15,
     "legacy_eligible_pair_hits": 16,
     "candidate_swaps": 17,
+    "border_candidate_runs": 18,
+    "border_candidate_draws": 19,
+    "border_draws_covered_by_multidraw": 20,
+    "border_multidraw_calls": 21,
+    "border_draw_calls_eliminated": 22,
+    "border_original_draws_fallback": 23,
+    "border_batch_size_sum": 24,
+    "border_batch_size_max": 25,
+    "border_fallback_site_change": 26,
+    "border_fallback_batch_full": 27,
+    "border_fallback_mutate_disabled": 28,
+    "border_site_0_draws_covered": 29,
+    "border_site_1_draws_covered": 30,
+    "border_site_2_draws_covered": 31,
 }
 
 HYPOTHESES = [

@@ -1,0 +1,18 @@
+{
+  "evidence_id": "border-multidraw-harness-20261004",
+  "kind": "submission_border_multidraw_v1",
+  "status": "harness_ready",
+  "recorded_at_utc": "2026-10-04T18:00:00Z",
+  "pr_b_verdict": "GO-B",
+  "pr_b_artifacts": [
+    "analysis/border-multidraw-go-nogo.md",
+    "analysis/border-multidraw-mutation-topology.md",
+    "analysis/border-draw-record-layout.json"
+  ],
+  "gate_0": "RUNTIME-ASSERT",
+  "dylib": "benchmark/.build/libeu4_submission_border_multidraw.dylib",
+  "counter_schema_version": 3,
+  "launch_command": "python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa",
+  "venice_run": "pending_operator_launch",
+  "notes": "PR C infrastructure and PR B static RE landed; Venice ABABA not executed in CI (requires game + sudo powermetrics)."
+}
