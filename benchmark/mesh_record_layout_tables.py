@@ -1,24 +1,19 @@
-"""C range tables for mesh records; must match subrecord_equivalence.c and layout JSON."""
+"""Range tuples derived from layout JSON (same source as codegen_subrecord_ranges.py)."""
 
 from __future__ import annotations
 
-# (offset, size, policy) where policy is equal|barrier|ignore
-SFLUSHDATA_C_RANGES: tuple[tuple[int, int, str], ...] = (
-    (0x00, 4, "equal"),
-    (0x04, 4, "barrier"),
-    (0x08, 8, "equal"),
-    (0x10, 64, "equal"),
-)
+from mesh_record_layout import export_tables
 
-MESH_DRAW_C_RANGES: tuple[tuple[int, int, str], ...] = (
-    (0x00, 48, "barrier"),
-    (0x30, 8, "equal"),
-    (0x38, 8, "equal"),
-    (0x40, 8, "equal"),
-    (0x48, 53, "barrier"),
-    (0x7d, 1, "equal"),
-    (0x7e, 106, "barrier"),
-)
+
+def _ranges(name: str) -> tuple[tuple[int, int, str], ...]:
+    return tuple(
+        (item["offset"], item["size"], item["comparison_policy"])
+        for item in export_tables()[name]["ranges"]
+    )
+
+
+SFLUSHDATA_C_RANGES = _ranges("sflushdata_0x50")
+MESH_DRAW_C_RANGES = _ranges("mesh_draw_subrecord_0xe8")
 
 C_TABLES = {
     "sflushdata_0x50": SFLUSHDATA_C_RANGES,

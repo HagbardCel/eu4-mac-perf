@@ -37,6 +37,7 @@ typedef enum {
     EU4_PRED_FLUSH_ARRAY_MISMATCH = 4,
     EU4_PRED_RECORD_MISMATCH = 5,
     EU4_PRED_GEOMETRY_UNPROVEN = 6,
+    EU4_PRED_BARRIER_UNRESOLVED = 7,
 } eu4_predicate_reason_t;
 
 extern const eu4_layout_range_t eu4_sflushdata_ranges[];
@@ -44,16 +45,53 @@ extern const size_t eu4_sflushdata_range_count;
 extern const eu4_layout_range_t eu4_mesh_draw_ranges[];
 extern const size_t eu4_mesh_draw_range_count;
 
-bool eu4_records_policy_equal(
+bool eu4_records_equal_fields_only(
     const uint8_t *left,
     const uint8_t *right,
     size_t record_size,
     const eu4_layout_range_t *ranges,
-    size_t range_count,
-    bool require_barrier_bytes_identical
+    size_t range_count
+);
+
+bool eu4_records_equal_on_ranges(
+    const uint8_t *left,
+    const uint8_t *right,
+    size_t record_size,
+    const eu4_layout_range_t *ranges,
+    size_t range_count
 );
 
 bool eu4_submission_state_equivalent(
+    const uint8_t *prev_parent,
+    const uint8_t *curr_parent,
+    const uint8_t *prev_sub,
+    const uint8_t *curr_sub,
+    const eu4_subrecord_context_t *prev_ctx,
+    const eu4_subrecord_context_t *curr_ctx,
+    eu4_predicate_reason_t *reason
+);
+
+bool eu4_buffer_bind_elision_eligible(
+    const uint8_t *prev_parent,
+    const uint8_t *curr_parent,
+    const uint8_t *prev_sub,
+    const uint8_t *curr_sub,
+    const eu4_subrecord_context_t *prev_ctx,
+    const eu4_subrecord_context_t *curr_ctx,
+    eu4_predicate_reason_t *reason
+);
+
+bool eu4_texture_setup_elision_eligible(
+    const uint8_t *prev_parent,
+    const uint8_t *curr_parent,
+    const uint8_t *prev_sub,
+    const uint8_t *curr_sub,
+    const eu4_subrecord_context_t *prev_ctx,
+    const eu4_subrecord_context_t *curr_ctx,
+    eu4_predicate_reason_t *reason
+);
+
+bool eu4_object_constants_elision_eligible(
     const uint8_t *prev_parent,
     const uint8_t *curr_parent,
     const uint8_t *prev_sub,

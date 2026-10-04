@@ -2,33 +2,23 @@
 
 #include <string.h>
 
-/* Ranges must match analysis layout JSON (validated in tests/test_mesh_record_layout.py). */
-const eu4_layout_range_t eu4_sflushdata_ranges[] = {
-    {0x00, 4, EU4_CMP_EQUAL},
-    {0x04, 4, EU4_CMP_BARRIER},
-    {0x08, 8, EU4_CMP_EQUAL},
-    {0x10, 64, EU4_CMP_EQUAL},
-};
-const size_t eu4_sflushdata_range_count = sizeof(eu4_sflushdata_ranges) / sizeof(eu4_sflushdata_ranges[0]);
+#include "subrecord_equivalence_ranges.inc"
 
-const eu4_layout_range_t eu4_mesh_draw_ranges[] = {
-    {0x00, 48, EU4_CMP_BARRIER},
+static const eu4_layout_range_t eu4_mesh_buffer_bind_sub_ranges[] = {
     {0x30, 8, EU4_CMP_EQUAL},
     {0x38, 8, EU4_CMP_EQUAL},
     {0x40, 8, EU4_CMP_EQUAL},
-    {0x48, 53, EU4_CMP_BARRIER},
     {0x7d, 1, EU4_CMP_EQUAL},
-    {0x7e, 106, EU4_CMP_BARRIER},
 };
-const size_t eu4_mesh_draw_range_count = sizeof(eu4_mesh_draw_ranges) / sizeof(eu4_mesh_draw_ranges[0]);
+static const size_t eu4_mesh_buffer_bind_sub_range_count =
+    sizeof(eu4_mesh_buffer_bind_sub_ranges) / sizeof(eu4_mesh_buffer_bind_sub_ranges[0]);
 
-bool eu4_records_policy_equal(
+bool eu4_records_equal_fields_only(
     const uint8_t *left,
     const uint8_t *right,
     size_t record_size,
     const eu4_layout_range_t *ranges,
-    size_t range_count,
-    bool require_barrier_bytes_identical
+    size_t range_count
 ) {
     if (!left || !right) {
         return false;
@@ -38,17 +28,30 @@ bool eu4_records_policy_equal(
         if (range->offset + range->size > record_size) {
             return false;
         }
-        if (range->policy == EU4_CMP_IGNORE) {
+        if (range->policy != EU4_CMP_EQUAL) {
             continue;
         }
-        if (range->policy == EU4_CMP_BARRIER) {
-            if (!require_barrier_bytes_identical) {
-                continue;
-            }
-            if (memcmp(left + range->offset, right + range->offset, range->size) != 0) {
-                return false;
-            }
-            continue;
+        if (memcmp(left + range->offset, right + range->offset, range->size) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool eu4_records_equal_on_ranges(
+    const uint8_t *left,
+    const uint8_t *right,
+    size_t record_size,
+    const eu4_layout_range_t *ranges,
+    size_t range_count
+) {
+    if (!left || !right) {
+        return false;
+    }
+    for (size_t index = 0; index < range_count; index++) {
+        const eu4_layout_range_t *range = &ranges[index];
+        if (range->offset + range->size > record_size) {
+            return false;
         }
         if (memcmp(left + range->offset, right + range->offset, range->size) != 0) {
             return false;
@@ -119,25 +122,23 @@ bool eu4_submission_state_equivalent(
     if (!contexts_comparable(prev_ctx, curr_ctx, reason)) {
         return false;
     }
-    if (!eu4_records_policy_equal(
+    if (!eu4_records_equal_fields_only(
             prev_parent,
             curr_parent,
             EU4_SFLUSHDATA_SIZE,
             eu4_sflushdata_ranges,
-            eu4_sflushdata_range_count,
-            false)) {
+            eu4_sflushdata_range_count)) {
         if (reason) {
             *reason = EU4_PRED_RECORD_MISMATCH;
         }
         return false;
     }
-    if (!eu4_records_policy_equal(
+    if (!eu4_records_equal_fields_only(
             prev_sub,
             curr_sub,
             EU4_MESH_DRAW_SUBRECORD_SIZE,
             eu4_mesh_draw_ranges,
-            eu4_mesh_draw_range_count,
-            false)) {
+            eu4_mesh_draw_range_count)) {
         if (reason) {
             *reason = EU4_PRED_RECORD_MISMATCH;
         }
@@ -149,7 +150,7 @@ bool eu4_submission_state_equivalent(
     return true;
 }
 
-bool eu4_setup_elision_eligible(
+bool eu4_buffer_bind_elision_eligible(
     const uint8_t *prev_parent,
     const uint8_t *curr_parent,
     const uint8_t *prev_sub,
@@ -161,28 +162,95 @@ bool eu4_setup_elision_eligible(
     if (!contexts_comparable(prev_ctx, curr_ctx, reason)) {
         return false;
     }
-    if (!eu4_records_policy_equal(
+    if (!eu4_records_equal_fields_only(
             prev_parent,
             curr_parent,
             EU4_SFLUSHDATA_SIZE,
             eu4_sflushdata_ranges,
-            eu4_sflushdata_range_count,
-            true)) {
+            eu4_sflushdata_range_count)) {
         if (reason) {
             *reason = EU4_PRED_RECORD_MISMATCH;
         }
         return false;
     }
-    if (!eu4_records_policy_equal(
+    if (!eu4_records_equal_on_ranges(
             prev_sub,
             curr_sub,
             EU4_MESH_DRAW_SUBRECORD_SIZE,
-            eu4_mesh_draw_ranges,
-            eu4_mesh_draw_range_count,
-            true)) {
+            eu4_mesh_buffer_bind_sub_ranges,
+            eu4_mesh_buffer_bind_sub_range_count)) {
         if (reason) {
             *reason = EU4_PRED_RECORD_MISMATCH;
         }
+        return false;
+    }
+    if (reason) {
+        *reason = EU4_PRED_OK;
+    }
+    return true;
+}
+
+bool eu4_texture_setup_elision_eligible(
+    const uint8_t *prev_parent,
+    const uint8_t *curr_parent,
+    const uint8_t *prev_sub,
+    const uint8_t *curr_sub,
+    const eu4_subrecord_context_t *prev_ctx,
+    const eu4_subrecord_context_t *curr_ctx,
+    eu4_predicate_reason_t *reason
+) {
+    (void)prev_parent;
+    (void)curr_parent;
+    (void)prev_sub;
+    (void)curr_sub;
+    (void)prev_ctx;
+    (void)curr_ctx;
+    if (reason) {
+        *reason = EU4_PRED_BARRIER_UNRESOLVED;
+    }
+    return false;
+}
+
+bool eu4_object_constants_elision_eligible(
+    const uint8_t *prev_parent,
+    const uint8_t *curr_parent,
+    const uint8_t *prev_sub,
+    const uint8_t *curr_sub,
+    const eu4_subrecord_context_t *prev_ctx,
+    const eu4_subrecord_context_t *curr_ctx,
+    eu4_predicate_reason_t *reason
+) {
+    (void)prev_parent;
+    (void)curr_parent;
+    (void)prev_sub;
+    (void)curr_sub;
+    (void)prev_ctx;
+    (void)curr_ctx;
+    if (reason) {
+        *reason = EU4_PRED_BARRIER_UNRESOLVED;
+    }
+    return false;
+}
+
+bool eu4_setup_elision_eligible(
+    const uint8_t *prev_parent,
+    const uint8_t *curr_parent,
+    const uint8_t *prev_sub,
+    const uint8_t *curr_sub,
+    const eu4_subrecord_context_t *prev_ctx,
+    const eu4_subrecord_context_t *curr_ctx,
+    eu4_predicate_reason_t *reason
+) {
+    if (!eu4_buffer_bind_elision_eligible(
+            prev_parent, curr_parent, prev_sub, curr_sub, prev_ctx, curr_ctx, reason)) {
+        return false;
+    }
+    if (!eu4_texture_setup_elision_eligible(
+            prev_parent, curr_parent, prev_sub, curr_sub, prev_ctx, curr_ctx, reason)) {
+        return false;
+    }
+    if (!eu4_object_constants_elision_eligible(
+            prev_parent, curr_parent, prev_sub, curr_sub, prev_ctx, curr_ctx, reason)) {
         return false;
     }
     if (reason) {

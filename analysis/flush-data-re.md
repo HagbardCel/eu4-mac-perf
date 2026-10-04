@@ -23,9 +23,11 @@ Map render path reaches `CPdxMeshObject::RenderBuckets` via `CGraphics::RenderBu
 ## Open follow-ups
 
 1. Mesh-type **writers** for 0xe8 records (loaders/constructors off hot path).
-2. Disassembly-backed register map for [mesh-subrecord-hook-site.json](mesh-subrecord-hook-site.json) `live_in_registers`.
+2. Prove texture/object-constant dependency fields in 0xe8 layout (required before `texture_setup_elision_eligible` / `object_constants_elision_eligible`).
 3. Dynamic trace only if static ROI gate fails and field proof requires runtime samples.
+
+Hook ABI (13-byte patch @ `0x14c81e6`, frame offsets, resume addresses): [mesh-subrecord-hook-site.json](mesh-subrecord-hook-site.json).
 
 ## PR1 decision
 
-See [gfx-subrecord-pr1-gonogo.md](gfx-subrecord-pr1-gonogo.md): **GO A** with ROI gate; **draw batch not proven**.
+See [gfx-subrecord-pr1-gonogo.md](gfx-subrecord-pr1-gonogo.md): **buffer-bind predicate only**; full setup elision and draw batch not established.

@@ -1,25 +1,47 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-  "owner_symbol": "CPdxMeshObject::RenderBuckets",
-  "preferred_address": "0x1014c81f3",
-  "image_offset": "0x14c81f3",
-  "candidate_insertion_offset": "0x14c81f3",
+  "owner_symbol": "_ZN14CPdxMeshObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraibb",
+  "preferred_address": "0x1014c81e6",
+  "image_offset": "0x14c81e6",
+  "candidate_insertion_offset": "0x14c81e6",
   "landmark_draw_call": {
     "call_offset": "0x14c8404",
     "return_offset": "0x14c8409",
-    "note": "Setup through draw already executed; insertion must be at or before candidate_insertion_offset"
+    "note": "Documentation only; hook runs before GetGfxEffect setup block"
   },
-  "patch_length": null,
-  "displaced_instructions": null,
-  "original_resume_offset": null,
-  "optimized_resume_offset": null,
+  "patch_length": 13,
+  "prefix_hex": "480f45c88b31488bbd20ffffff",
+  "displaced_instructions": [
+    {"image_offset": "0x14c81e6", "length": 4, "mnemonic": "cmovneq %rax, %rcx"},
+    {"image_offset": "0x14c81ea", "length": 2, "mnemonic": "movl (%rcx), %esi"},
+    {"image_offset": "0x14c81ec", "length": 7, "mnemonic": "movq -0xe0(%rbp), %rdi"}
+  ],
+  "instruction_lengths": [4, 2, 7],
+  "instruction_count": 3,
+  "original_resume_offset": "0x14c81f3",
+  "optimized_resume_offset": "0x14c8251",
   "hook_design": "call_trampoline_island_with_asm_thunk",
-  "live_in_registers": {
-    "note": "To be filled from disassembly at insertion; not a C ABI entry"
+  "frame_pointers_at_insertion": {
+    "parent_sflushdata_rbp_offset": -296,
+    "current_subrecord_rbp_offset": -184,
+    "cached_effect_pointer_rbp_offset": -192,
+    "note": "Offsets from %rbp at insertion: -0x128 parent 80-byte record base, -0xb8 current 0xe8 subrecord"
   },
-  "live_out_registers": {},
-  "flags_live": "unknown_pending_disassembly",
+  "live_in_registers": {
+    "rcx": "effect-id source pointer (into current subrecord)",
+    "rsi": "effect id loaded for GetGfxEffect",
+    "rdi": "CEffectHandler* from -0xe0(%rbp)",
+    "rbx": "byte offset imul 0xe8 within parent subrecord array",
+    "r14": "subrecord loop index",
+    "r15": "CPdxMeshObject*",
+    "rbp": "stack frameBase"
+  },
+  "live_out_registers": {
+    "rbx": "GfxEffect* after original call at resume 0x14c81f3",
+    "rax": "clobbered by GetGfxEffect"
+  },
+  "flags_live": "condition codes from opaque/transparent gate at 0x14c8181; hook must not disturb before resume",
   "stack_alignment": 16,
   "parent_subrecord_loop_scope": "inner_0xe8_iteration_within_single_SFlushData_parent_and_layer",
   "thread_assumption": "render_thread_only",

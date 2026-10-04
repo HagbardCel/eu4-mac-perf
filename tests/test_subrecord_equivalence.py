@@ -1,6 +1,5 @@
 import ctypes
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +21,8 @@ class SubrecordEquivalenceTests(unittest.TestCase):
                 "-Werror",
                 "-shared",
                 "-fPIC",
+                "-I",
+                str(BENCH),
                 "-o",
                 str(cls.lib_path),
                 str(BENCH / "subrecord_equivalence.c"),
@@ -41,7 +42,7 @@ class SubrecordEquivalenceTests(unittest.TestCase):
             ]
 
         cls.Context = Context
-        cls.lib.eu4_submission_state_equivalent.argtypes = [
+        pred_args = [
             ctypes.POINTER(ctypes.c_uint8),
             ctypes.POINTER(ctypes.c_uint8),
             ctypes.POINTER(ctypes.c_uint8),
@@ -50,11 +51,15 @@ class SubrecordEquivalenceTests(unittest.TestCase):
             ctypes.POINTER(Context),
             ctypes.POINTER(ctypes.c_int),
         ]
-        cls.lib.eu4_submission_state_equivalent.restype = ctypes.c_bool
-        cls.lib.eu4_setup_elision_eligible.argtypes = cls.lib.eu4_submission_state_equivalent.argtypes
-        cls.lib.eu4_setup_elision_eligible.restype = ctypes.c_bool
-        cls.lib.eu4_draw_batch_eligible.argtypes = cls.lib.eu4_submission_state_equivalent.argtypes
-        cls.lib.eu4_draw_batch_eligible.restype = ctypes.c_bool
+        for name in (
+            "eu4_submission_state_equivalent",
+            "eu4_setup_elision_eligible",
+            "eu4_buffer_bind_elision_eligible",
+            "eu4_draw_batch_eligible",
+        ):
+            fn = getattr(cls.lib, name)
+            fn.argtypes = pred_args
+            fn.restype = ctypes.c_bool
 
     def _ctx(self, parent_id=1, layer=0, flush=0, same_parent=True, broken=False, has_prev=True):
         return self.Context(parent_id, layer, flush, same_parent, broken, has_prev)
@@ -94,6 +99,42 @@ class SubrecordEquivalenceTests(unittest.TestCase):
         ctx_b = self._ctx(parent_id=2, same_parent=True)
         self.assertFalse(
             self.lib.eu4_submission_state_equivalent(
+                parent, parent, sub_a, sub_b, ctypes.byref(ctx_a), ctypes.byref(ctx_b), ctypes.byref(reason)
+            )
+        )
+
+    def test_unknown_barrier_bytes_identical_still_fail_setup_elision(self):
+        parent = (ctypes.c_uint8 * 80)(*([0] * 80))
+        sub_a = (ctypes.c_uint8 * 232)(*([0] * 232))
+        sub_b = (ctypes.c_uint8 * 232)(*([0] * 232))
+        sub_a[0] = 1
+        sub_b[0] = 2
+        reason = ctypes.c_int()
+        ctx_a = self._ctx()
+        ctx_b = self._ctx()
+        self.assertFalse(
+            self.lib.eu4_setup_elision_eligible(
+                parent, parent, sub_a, sub_b, ctypes.byref(ctx_a), ctypes.byref(ctx_b), ctypes.byref(reason)
+            )
+        )
+        sub_b[0] = 1
+        self.assertFalse(
+            self.lib.eu4_setup_elision_eligible(
+                parent, parent, sub_a, sub_b, ctypes.byref(ctx_a), ctypes.byref(ctx_b), ctypes.byref(reason)
+            )
+        )
+
+    def test_buffer_bind_elision_uses_only_proven_fields(self):
+        parent = (ctypes.c_uint8 * 80)(*([0] * 80))
+        sub_a = (ctypes.c_uint8 * 232)(*([0] * 232))
+        sub_b = (ctypes.c_uint8 * 232)(*([0] * 232))
+        sub_a[0] = 9
+        sub_b[0] = 3
+        reason = ctypes.c_int()
+        ctx_a = self._ctx()
+        ctx_b = self._ctx()
+        self.assertTrue(
+            self.lib.eu4_buffer_bind_elision_eligible(
                 parent, parent, sub_a, sub_b, ctypes.byref(ctx_a), ctypes.byref(ctx_b), ctypes.byref(reason)
             )
         )

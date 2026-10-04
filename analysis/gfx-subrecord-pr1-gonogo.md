@@ -1,26 +1,27 @@
 # PR1 go/no-go: mesh subrecord static RE
 
-**Date:** 2026-10-04  
+**Date:** 2026-10-04 (revised after review)  
 **Binary:** GOG EU IV 1.37.5 (`b3d38876…`)
 
-## Deliverables completed
+## Deliverables
 
-- [`sflushdata-0x50-layout.json`](sflushdata-0x50-layout.json) — full-byte classified layout
-- [`mesh-draw-subrecord-0xe8-layout.json`](mesh-draw-subrecord-0xe8-layout.json) — full-byte classified layout
-- [`mesh-draw-dependency-map.md`](mesh-draw-dependency-map.md) — per-draw inputs + engine elision inventory
-- [`mesh-subrecord-hook-site.json`](mesh-subrecord-hook-site.json) — insertion before setup block; draw call landmark only
-- [`benchmark/subrecord_equivalence.c`](../benchmark/subrecord_equivalence.c) — split predicates; CI parity via [`mesh_record_layout_tables.py`](../benchmark/mesh_record_layout_tables.py)
+- Layout JSON with full-byte classification and generated C ranges (`codegen_subrecord_ranges.py` → `subrecord_equivalence_ranges.inc`)
+- Split predicates with **strict barrier semantics** (unknown regions never enable generic `setup_elision_eligible`)
+- Operation-specific elision: `buffer_bind_elision_eligible` on proven VBO/IBO/gate fields only
+- [`mesh-subrecord-hook-site.json`](mesh-subrecord-hook-site.json) — 13-byte patch boundary, displaced insns, frame pointer map, resume offsets
+- [`mesh-draw-dependency-map.md`](mesh-draw-dependency-map.md)
 
-## Conclusion: **A (setup elision) with ROI gate; not B**
+## Conclusion: **GO A (buffer-bind predicate only); not full setup elision; not B**
 
 | Outcome | Status |
 |---------|--------|
-| **A — setup elision** | `setup_elision_eligible()` defined; pairs require identical barrier bytes + established equal fields + same parent/layer/flush context. Engine already skips effect-state replay on repeated effect pointers; remaining ROI targets object-constant/texture/buffer work ([`mesh-draw-dependency-map.md`](mesh-draw-dependency-map.md)). |
-| **B — draw batch / physical submission reduction** | **`draw_batch_eligible()` returns false** (`EU4_PRED_GEOMETRY_UNPROVEN`). GfxDrawIndexed uses IBO-stored count with zero passed count; contiguous merge not established. |
-| **C — full stop** | Not selected: structures and hook contract are understood enough for observer prototype, but batching branch is closed until geometry semantics are proven. |
+| **Full setup elision (`setup_elision_eligible`)** | **Not established.** Requires `texture_setup_elision_eligible` and `object_constants_elision_eligible`, both blocked on unresolved barrier fields (`EU4_PRED_BARRIER_UNRESOLVED`). |
+| **Buffer-bind elision predicate** | `buffer_bind_elision_eligible()` compares only parent equal-fields + subrecord `0x30`/`0x38`/`0x40`/`0x7d`. Safe to observe hit rate; does not imply skipping GetGfxEffect/object-constant work. |
+| **B — draw batch** | `draw_batch_eligible()` remains false (`EU4_PRED_GEOMETRY_UNPROVEN`). |
+| **C — stop coalescing branch** | Not selected for the whole Gfx path: hook ABI and dependency map are sufficient for **observer** work on buffer-bind hits only. |
 
 ## PR2 recommendation
 
-1. Implement protocol v2 + `candidate_site_entries` at documented insertion site (assembly thunk).
-2. Run **capability 1 observer smoke** (not full ABABA) measuring hit rate vs removed-work inventory.
-3. Proceed to mutating Stage 2 only if hits are frequent **and** map to non-trivial remaining work (object constants / texture+buffer path), not effect-pointer caching alone.
+1. Install mesh observer at `0x14c81e6` per hook-site JSON; **do not** count CGL flush as `candidate_site_entries`.
+2. Run capability 1 observer smoke with per-phase gates and scene validation; require `eligible_pair_hits > 0` on **each** B phase.
+3. Compare hit rate to removed-work inventory — buffer-bind hits alone are unlikely to justify Stage 2 until texture/object-constant predicates are proven.
