@@ -1,0 +1,380 @@
+{
+  "pareto_gate": null,
+  "engagement_gate": {
+    "status": "passed",
+    "pareto_eligible": false,
+    "multi_hypothesis": true
+  },
+  "observer_gate": {
+    "status": "skipped",
+    "reason": "v3 uses multi_hypothesis_gate + observer_scene_gate"
+  },
+  "multi_hypothesis_gate": {
+    "status": "passed",
+    "reference_health": {
+      "status": "passed",
+      "phases": [
+        {
+          "name": "a1",
+          "phase_ok": true,
+          "control_validation": {
+            "status": "passed",
+            "reason": null,
+            "control_ticks_delta": 558,
+            "candidate_site_entries_delta": 1353344,
+            "armed_candidate_site_entries_delta": 0,
+            "renderbuckets_invocations_delta": 1116,
+            "eligible_pair_hits_delta": 0,
+            "effective_actions_delta": 0,
+            "hook_attempts_delta": 558,
+            "start": {
+              "magic": 1396856133,
+              "protocol_version": 3,
+              "command_generation": 1,
+              "requested_mode": 0,
+              "ack_generation": 1,
+              "ack_mode": 0,
+              "requested_capability_id": 1,
+              "advertised_capability_id": 1,
+              "counter_schema_version": 2,
+              "counter_count": 18,
+              "supported_hypothesis_mask": 11,
+              "safety_qualified_hypothesis_mask": 0,
+              "observation_generation": 0,
+              "observation_requested_state": 0,
+              "observation_ack_generation": 0,
+              "observation_ack_state": 0,
+              "control_ticks": 5949,
+              "renderbuckets_invocations": 11754,
+              "site_entries": 14188506,
+              "effective_actions": 0,
+              "candidate_site_entries": 0,
+              "candidate_renderbuckets_invocations": 0,
+              "candidate_nonempty_renderbuckets": 0,
+              "adjacent_within_invocation": 0,
+              "same_parent_pairs": 0,
+              "cross_parent_pairs": 0,
+              "same_parent_buffer_signature": 0,
+              "cross_parent_buffer_signature": 0,
+              "cross_parent_buffer_elision_eligible": 0,
+              "same_subrecord_pointer_cross_parent": 0,
+              "same_texture_input_signature": 0,
+              "texture_setup_elision_eligible": 0,
+              "legacy_eligible_pair_hits": 0,
+              "candidate_swaps": 0,
+              "candidate_hook_attempts": 5949,
+              "eligible_pair_hits": 0,
+              "candidate_effective_actions": 0
+            },
+            "end": {
+              "magic": 1396856133,
+              "protocol_version": 3,
+              "command_generation": 1,
+              "requested_mode": 0,
+              "ack_generation": 1,
+              "ack_mode": 0,
+              "requested_capability_id": 1,
+              "advertised_capability_id": 1,
+              "counter_schema_version": 2,
+              "counter_count": 18,
+              "supported_hypothesis_mask": 11,
+              "safety_qualified_hypothesis_mask": 0,
+              "observation_generation": 0,
+              "observation_requested_state": 0,
+              "observation_ack_generation": 0,
+              "observation_ack_state": 0,
+              "control_ticks": 6507,
+              "renderbuckets_invocations": 12870,
+              "site_entries": 15541850,
+              "effective_actions": 0,
+              "candidate_site_entries": 0,
+              "candidate_renderbuckets_invocations": 0,
+              "candidate_nonempty_renderbuckets": 0,
+              "adjacent_within_invocation": 0,
+              "same_parent_pairs": 0,
+              "cross_parent_pairs": 0,
+              "same_parent_buffer_signature": 0,
+              "cross_parent_buffer_signature": 0,
+              "cross_parent_buffer_elision_eligible": 0,
+              "same_subrecord_pointer_cross_parent": 0,
+              "same_texture_input_signature": 0,
+              "texture_setup_elision_eligible": 0,
+              "legacy_eligible_pair_hits": 0,
+              "candidate_swaps": 0,
+              "candidate_hook_attempts": 6507,
+              "eligible_pair_hits": 0,
+              "candidate_effective_actions": 0
+            }
+          }
+        },
+        {
+          "name": "a2",
+          "phase_ok": true,
+          "control_validation": {
+            "status": "passed",
+            "reason": null,
+            "control_ticks_delta": 559,
+            "candidate_site_entries_delta": 1355575,
+            "armed_candidate_site_entries_delta": 0,
+            "renderbuckets_invocations_delta": 1118,
+            "eligible_pair_hits_delta": 0,
+            "effective_actions_delta": 0,
+            "hook_attempts_delta": 559,
+            "start": {
+              "magic": 1396856133,
+              "protocol_version": 3,
+              "command_generation": 3,
+              "requested_mode": 0,
+              "ack_generation": 3,
+              "ack_mode": 0,
+              "requested_capability_id": 1,
+              "advertised_capability_id": 1,
+              "counter_schema_version": 2,
+              "counter_count": 18,
+              "supported_hypothesis_mask": 11,
+              "safety_qualified_hypothesis_mask": 0,
+              "observation_generation": 2,
+              "observation_requested_state": 2,
+              "observation_ack_generation": 2,
+              "observation_ack_state": 2,
+              "control_ticks": 7457,
+              "renderbuckets_invocations": 14770,
+              "site_entries": 17845888,
+              "effective_actions": 0,
+              "candidate_site_entries": 1345965,
+              "candidate_renderbuckets_invocations": 1110,
+              "candidate_nonempty_renderbuckets": 555,
+              "adjacent_within_invocation": 1345410,
+              "same_parent_pairs": 54945,
+              "cross_parent_pairs": 1290465,
+              "same_parent_buffer_signature": 0,
+              "cross_parent_buffer_signature": 0,
+              "cross_parent_buffer_elision_eligible": 0,
+              "same_subrecord_pointer_cross_parent": 0,
+              "same_texture_input_signature": 0,
+              "texture_setup_elision_eligible": 0,
+              "legacy_eligible_pair_hits": 0,
+              "candidate_swaps": 555,
+              "candidate_hook_attempts": 7457,
+              "eligible_pair_hits": 0,
+              "candidate_effective_actions": 0
+            },
+            "end": {
+              "magic": 1396856133,
+              "protocol_version": 3,
+              "command_generation": 3,
+              "requested_mode": 0,
+              "ack_generation": 3,
+              "ack_mode": 0,
+              "requested_capability_id": 1,
+              "advertised_capability_id": 1,
+              "counter_schema_version": 2,
+              "counter_count": 18,
+              "supported_hypothesis_mask": 11,
+              "safety_qualified_hypothesis_mask": 0,
+              "observation_generation": 2,
+              "observation_requested_state": 2,
+              "observation_ack_generation": 2,
+              "observation_ack_state": 2,
+              "control_ticks": 8016,
+              "renderbuckets_invocations": 15888,
+              "site_entries": 19201463,
+              "effective_actions": 0,
+              "candidate_site_entries": 1345965,
+              "candidate_renderbuckets_invocations": 1110,
+              "candidate_nonempty_renderbuckets": 555,
+              "adjacent_within_invocation": 1345410,
+              "same_parent_pairs": 54945,
+              "cross_parent_pairs": 1290465,
+              "same_parent_buffer_signature": 0,
+              "cross_parent_buffer_signature": 0,
+              "cross_parent_buffer_elision_eligible": 0,
+              "same_subrecord_pointer_cross_parent": 0,
+              "same_texture_input_signature": 0,
+              "texture_setup_elision_eligible": 0,
+              "legacy_eligible_pair_hits": 0,
+              "candidate_swaps": 555,
+              "candidate_hook_attempts": 8016,
+              "eligible_pair_hits": 0,
+              "candidate_effective_actions": 0
+            }
+          }
+        }
+      ]
+    },
+    "observer_scene_gate": {
+      "status": "passed",
+      "phases": {
+        "a1": {
+          "role": "reference",
+          "scene": {
+            "passed": true,
+            "alignment": {
+              "mean_rgb_delta": 4.69,
+              "shift_x_px": 0,
+              "shift_y_px": 0
+            },
+            "absolute_scene_gate": true
+          },
+          "phase_ok": true
+        },
+        "b1": {
+          "role": "candidate",
+          "scene": {
+            "passed": true,
+            "alignment": {
+              "mean_rgb_delta": 5.57,
+              "shift_x_px": 0,
+              "shift_y_px": 0
+            },
+            "absolute_scene_gate": true
+          },
+          "phase_ok": true
+        },
+        "a2": {
+          "role": "reference",
+          "scene": {
+            "passed": true,
+            "alignment": {
+              "mean_rgb_delta": 9.27,
+              "shift_x_px": 0,
+              "shift_y_px": 0
+            },
+            "absolute_scene_gate": true
+          },
+          "phase_ok": true
+        }
+      }
+    },
+    "b1_control_ok": true,
+    "b1_multi_hypothesis": {
+      "candidate_interpretation": "absolute_arm_to_freeze",
+      "meta_errors": [],
+      "invariant_errors": [],
+      "exposure_errors": [],
+      "mutation_errors": [],
+      "effective_actions_delta": 0,
+      "harness_ok": true,
+      "measurement_paused_swaps": 560,
+      "candidate_swaps": 555,
+      "measurement_wall_seconds": 10.01812775,
+      "advertised_supported_hypothesis_mask": 11,
+      "advertised_safety_qualified_hypothesis_mask": 0,
+      "hypotheses": {
+        "same_parent_buffer_signature": {
+          "status": "evaluated_no_recurrence",
+          "evaluated": 54945,
+          "hits": 0,
+          "rate": 0.0,
+          "hits_per_swap": 0.0,
+          "safety_qualified": false,
+          "stage2_recommended": false
+        },
+        "cross_parent_buffer_signature": {
+          "status": "evaluated_no_recurrence",
+          "evaluated": 1290465,
+          "hits": 0,
+          "rate": 0.0,
+          "hits_per_swap": 0.0,
+          "safety_qualified": false,
+          "stage2_recommended": false
+        },
+        "cross_parent_buffer_elision": {
+          "status": "unsupported",
+          "evaluated": 0,
+          "hits": 0,
+          "stage2_recommended": false
+        },
+        "same_subrecord_pointer_cross_parent": {
+          "status": "evaluated_no_recurrence",
+          "evaluated": 1290465,
+          "hits": 0,
+          "rate": 0.0,
+          "hits_per_swap": 0.0,
+          "safety_qualified": false,
+          "stage2_recommended": false
+        },
+        "same_texture_input_signature": {
+          "status": "unsupported",
+          "evaluated": 0,
+          "hits": 0,
+          "stage2_recommended": false
+        }
+      },
+      "candidate_totals": {
+        "candidate_site_entries": 1345965,
+        "candidate_renderbuckets_invocations": 1110,
+        "candidate_nonempty_renderbuckets": 555,
+        "adjacent_within_invocation": 1345410,
+        "same_parent_pairs": 54945,
+        "cross_parent_pairs": 1290465,
+        "same_parent_buffer_signature": 0,
+        "cross_parent_buffer_signature": 0,
+        "cross_parent_buffer_elision_eligible": 0,
+        "same_subrecord_pointer_cross_parent": 0,
+        "same_texture_input_signature": 0,
+        "texture_setup_elision_eligible": 0,
+        "legacy_eligible_pair_hits": 0,
+        "candidate_swaps": 555
+      },
+      "health_delta": {
+        "renderbuckets_invocations": 1111,
+        "site_entries": 1347250,
+        "effective_actions": 0
+      },
+      "derived_metrics": {
+        "nonempty_fraction": 0.5,
+        "sites_per_nonempty_renderbuckets": 2425.162162162162,
+        "candidate_site_entries_per_swap": 2425.162162162162,
+        "candidate_renderbuckets_invocations_per_swap": 2.0
+      },
+      "phase_ok": true
+    },
+    "stage2_recommended": false
+  },
+  "observer_scene_gate": {
+    "status": "passed",
+    "phases": {
+      "a1": {
+        "role": "reference",
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 4.69,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": true
+      },
+      "b1": {
+        "role": "candidate",
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 5.57,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": true
+      },
+      "a2": {
+        "role": "reference",
+        "scene": {
+          "passed": true,
+          "alignment": {
+            "mean_rgb_delta": 9.27,
+            "shift_x_px": 0,
+            "shift_y_px": 0
+          },
+          "absolute_scene_gate": true
+        },
+        "phase_ok": true
+      }
+    }
+  },
+  "expected_candidate_capability_id": 1
+}

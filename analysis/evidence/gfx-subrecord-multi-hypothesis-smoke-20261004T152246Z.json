@@ -1,0 +1,85 @@
+{
+  "evidence_id": "gfx-subrecord-multi-hypothesis-smoke-20261004T152246Z",
+  "kind": "submission_observer_multi_hypothesis_v2",
+  "status": "complete",
+  "recorded_at_utc": "2026-10-04T15:22:46Z",
+  "repository_commit": "3b49bf5",
+  "run_dir": "results/20261004T152246Z-submission-experiment",
+  "command": "python3 benchmark/submission_experiment.py --output results --multi-hypothesis-smoke",
+  "outcome_summary": "v3.1 multi-hypothesis A–B–A complete; gates passed; frozen-bank invariants exact; 1,290,465 cross-parent pairs evaluated with 0 buffer-signature hits; 54,945 same-parent pairs with 0 hits.",
+  "verdicts": {
+    "v3_1_infrastructure": "VALID",
+    "v3_1_pair_segmentation": "VALID"
+  },
+  "gates": {
+    "multi_hypothesis_gate": "passed",
+    "observer_scene_gate": "passed",
+    "engagement_gate": "passed",
+    "stage2_recommended": false
+  },
+  "b1_candidate_totals": {
+    "candidate_swaps": 555,
+    "candidate_renderbuckets_invocations": 1110,
+    "candidate_nonempty_renderbuckets": 555,
+    "candidate_site_entries": 1345965,
+    "adjacent_within_invocation": 1345410,
+    "same_parent_pairs": 54945,
+    "cross_parent_pairs": 1290465,
+    "same_parent_buffer_signature": 0,
+    "cross_parent_buffer_signature": 0,
+    "same_subrecord_pointer_cross_parent": 0,
+    "legacy_eligible_pair_hits": 0,
+    "effective_actions_delta": 0
+  },
+  "b1_derived_metrics": {
+    "nonempty_fraction": 0.5,
+    "sites_per_nonempty_renderbuckets": 2425.16,
+    "candidate_site_entries_per_swap": 2425.16,
+    "candidate_renderbuckets_invocations_per_swap": 2.0,
+    "cross_parent_pairs_per_swap": 2325.16,
+    "same_parent_pairs_per_swap": 99.0
+  },
+  "b1_hypotheses": {
+    "same_parent_buffer_signature": {
+      "status": "evaluated_no_recurrence",
+      "evaluated": 54945,
+      "hits": 0,
+      "hits_per_swap": 0.0
+    },
+    "cross_parent_buffer_signature": {
+      "status": "evaluated_no_recurrence",
+      "evaluated": 1290465,
+      "hits": 0,
+      "hits_per_swap": 0.0
+    },
+    "same_subrecord_pointer_cross_parent": {
+      "status": "evaluated_no_recurrence",
+      "evaluated": 1290465,
+      "hits": 0,
+      "hits_per_swap": 0.0
+    }
+  },
+  "readiness": {
+    "swap_rate": 55.1,
+    "cpu_ms_s": 1114.76
+  },
+  "interpretation": "First corrected v3.1 Venice smoke: independent invocation/nonempty invariants hold (nonempty_fraction 0.5, sites_per_nonempty ~2425). Cross-parent adjacency is now measured at scale; buffer-bind and same-subrecord-pointer recurrence remain zero on this scene.",
+  "posthoc_interpretation": {
+    "harness": "complete",
+    "hook": "entry_and_site_engaged",
+    "scene": "passed_all_phases",
+    "invariants": "exact_frozen_bank_v2",
+    "hypothesis_roi": "same_and_cross_parent_negative_buffer_signature",
+    "stage2": "not_recommended"
+  },
+  "artifacts": {
+    "manifest": "results/20261004T152246Z-submission-experiment/manifest.json",
+    "validation": "results/20261004T152246Z-submission-experiment/validation.json",
+    "validation_md": "results/20261004T152246Z-submission-experiment/validation.md",
+    "summaries": [
+      "results/20261004T152246Z-submission-experiment/summary-a1.json",
+      "results/20261004T152246Z-submission-experiment/summary-b1.json",
+      "results/20261004T152246Z-submission-experiment/summary-a2.json"
+    ]
+  }
+}

@@ -2,14 +2,10 @@
 
 ## Status
 
-- **Gfx v3 merged** (#32 static RE, #33 protocol v3 multi-hypothesis observer) on `main` (`ee31bab`).
-- **Venice v3 smoke:** `20261004T131931Z` — infrastructure **valid**; v3.0 **pair segmentation invalid** (see [mesh-observer-chain-semantics-20261004.md](analysis/mesh-observer-chain-semantics-20261004.md)). Immutable [validation.md](results/20261004T131931Z-submission-experiment/validation.md); amended interpretation in evidence JSON only.
-- **Next:** Observer **v3.1** (entry TLS context, epoch-only pair chain, schema + experiment kind v2) → one corrected `--multi-hypothesis-smoke` on Venice (`submission_observer_multi_hypothesis_v2`).
-- **Parallel:** border multidraw RE ([border-multidraw-re.md](analysis/border-multidraw-re.md)); texture-ID mapping optional before next live run.
-
-## PR1 (complete)
-
-Offline mesh subrecord RE — [gfx-subrecord-pr1-gonogo.md](analysis/gfx-subrecord-pr1-gonogo.md).
+- **PR #34 merged** — mesh observer **v3.1** on `main` (`3b49bf5`): entry TLS context, schema v2, epoch-based pair chain.
+- **Venice v3.1 smoke:** `20261004T152246Z` — gates **passed**; cross-parent denominator **1,290,465** pairs; **0** buffer-signature hits (same- and cross-parent). See [validation.md](results/20261004T152246Z-submission-experiment/validation.md) and [evidence JSON](analysis/evidence/gfx-subrecord-multi-hypothesis-smoke-20261004T152246Z.json).
+- **Prior v3.0 run** `20261004T131931Z` — pair segmentation invalid; see [mesh-observer-chain-semantics-20261004.md](analysis/mesh-observer-chain-semantics-20261004.md).
+- **Next:** Interpret recurrence negatives; border multidraw RE ([border-multidraw-re.md](analysis/border-multidraw-re.md)); no mutating dylib until a positive structural ROI.
 
 ## Observer trajectory
 
@@ -27,4 +23,4 @@ python3 benchmark/eu4_frame_model.py verify-evidence \
 
 ## Out of scope
 
-Mutation dylib until v3.1 Venice; Stage-2 on safety mask zero. Long roadmap: [historical-roadmap.md](analysis/historical-roadmap.md).
+Stage-2 on safety mask zero without safety-qualified hypotheses. Long roadmap: [historical-roadmap.md](analysis/historical-roadmap.md).
