@@ -64,7 +64,7 @@ Static **GO** requires all of:
 |-------|------|
 | **N** | Minimal loop-head detour / pass-through (infrastructure) |
 | **A** | Full classifier, mutation off → `eligible_*` opportunity |
-| **B** | Same classifier + mutation → `actual_*` |
+| **B** | Same classifier + mutation → `eligible_*` (same accounting as A) plus `actual_multidraw_calls` / `actual_draw_calls_eliminated` |
 
 **Hard invariant (phase-local):** \(E^{B}_{actual} \le E^{B}_{eligible}\). Do **not** compare raw B eliminations to paired A counts (cadence differs).
 
