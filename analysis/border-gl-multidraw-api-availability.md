@@ -1,4 +1,10 @@
-# Gate 0 — `glMultiDrawElementsBaseVertex` API viability
+# Gate 0 — multidraw API viability (loop-head)
+
+**Loop-head choice (PR #39 static):** [`glMultiDrawElements`](border-mode0-basevertex-evidence-addendum.md) for mode-0 border (effective path is N×`glDrawElements`). Runtime Gate 0 should resolve **`glMultiDrawElements`** in the active context first; MDEBV is not required for border loop-head.
+
+---
+
+# Historical note — `glMultiDrawElementsBaseVertex` screening
 
 **Binary:** GOG EU IV 1.37.5 x86-64 (`b3d38876…`)  
 **Verdict:** **RUNTIME-ASSERT** (proceed to PR C fail-closed verification)
@@ -8,7 +14,7 @@
 | Source | Finding |
 |--------|---------|
 | [frame-model-draw-api.json](frame-model-draw-api.json) | Symbol catalog includes `glMultiDrawElementsBaseVertex` in macOS OpenGL framework inventory used by offline frame model |
-| [mesh-render-path.md](mesh-render-path.md) | Border path tail-jumps from `GfxDrawIndexed` to `glDrawElementsBaseVertex` when base vertex ≠ 0 |
+| [mesh-render-path.md](mesh-render-path.md) | Mode-0 border uses `glDrawElements` (`%ecx=0`); see [addendum](border-mode0-basevertex-evidence-addendum.md) |
 | Executable `nm -u` | No direct link of GL entry points (runtime `dlsym` / framework dispatch expected) |
 | [frame-model-backend.json](frame-model-backend.json) | `NSOpenGLContext` / `NSOpenGLPixelFormat` used; **compatibility profile not statically proven** |
 

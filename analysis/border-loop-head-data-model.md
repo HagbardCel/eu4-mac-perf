@@ -35,6 +35,7 @@ Disassembly source: local `otool -tv` on GOG `eu4` (image base `0x100000000`).
 | `record_table` rows | `%r14` from `0x78(%r12)` @ `0x1010cbe67`; index from `movzwl -0x2(%rcx)` after hook |
 | `ibo_table` slot | `movq 0x60(%r12), %rax`; `movq (%rax,%r15,8), %rsi` @ `0x1010cc2c6` → `BatchKey.ibo_argument` |
 | `deferred_attrib_upload_pending` | `movq -0x60(%rbp), %rdi` (GfxDeferredContextGFX*); in hook dylib: `movq (%rdi), %rX`; `cmpb $0, 0x128(%rX)` (same predicate as `GfxDrawIndexed` @ `0x1015eaaa7`) |
+| `secondary_upload_pending` | Same `rdi` chain; `cmpb $0, 0x170(%rX)` (same predicate as `GfxDrawIndexed` @ `0x1015eabe5`) — option D fall-through |
 | `bound_ibo_identity` | ZERO_BIND only; ONE_BIND ignores entry bind state |
 | `index_table_cursor` | `-0x70(%rbp)` / live `%rcx` at hook |
 | `index_table_end` | `-0x198(%rbp)` |
@@ -55,7 +56,7 @@ color_byte_at_cursor         # movb (%rax), %cl when rax = cursor (@ 0x1010cc1d3
 
 ### RecordView (`SBorderDraw`, 28-byte stride)
 
-See [border-draw-record-layout.json](border-draw-record-layout.json): `+0x04` basevertex, `+0x06` triangle count, `+0x18` VBO table index.
+See [border-draw-record-layout.json](border-draw-record-layout.json): `+0x04` → dead `%edx` arg (not GL basevertex on mode-0), `+0x06` triangle count, `+0x18` VBO table index. Evidence: [border-mode0-basevertex-evidence-addendum.md](border-mode0-basevertex-evidence-addendum.md).
 
 ## Pseudocode (inner walk)
 
@@ -79,7 +80,7 @@ loop_head:
     if record.vbo_index != cached_vbo: GfxSetVertexBuffers; update cached_vbo
     ibo = array[0x60(r12)][record_index]
     GfxSetIndexBuffer(ibo)
-    GfxDrawIndexed(tri*3, basevertex, helper_arg=0)  # 0x1010cc2e8
+    GfxDrawIndexed(tri*3, arg3_u16_at_plus_04_in_edx, helper_arg=0)  # ecx=0 @ 0x1010cc2e8 → glDrawElements
     goto loop_tail_one_step
 
 loop_tail_one_step:  # 0x1010cc3bd — advances ONE logical index step

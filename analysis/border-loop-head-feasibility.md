@@ -42,7 +42,7 @@ Tests: `tests/test_border_loop_evidence.py`, `tests/test_border_loop_classifier.
 | `4_fail_closed_paths` | SKIP-before-deref, OOB, unsupported mode |
 | `5_helper_side_effect_equivalence` | GfxDrawIndexed + GfxSetIndexBuffer audit |
 | `6_cpu_continuation` | Interior + terminal live-state |
-| `7_engine_gl_equivalence` | ONE_BIND + MDEBV / basevertex |
+| `7_engine_gl_equivalence` | ONE_BIND + `glMultiDrawElements` (mode-0 ≡ N×`glDrawElements`) |
 | `8_continuation_mechanics` | Non-recursive trampoline + WALK_END |
 | `9_detour_relocation` | 14-byte RIP-indirect jmp (static encoding) |
 | `10_uncertainty_falls_through` | Classifier + patch fail-closed |

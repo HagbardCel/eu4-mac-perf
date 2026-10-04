@@ -24,18 +24,29 @@
 
 ### Terminal exact state (k drawable steps consumed)
 
-Let `cursor_k` = index-table pointer for entry k (first **non-drawn** step). After original tail for entries `0..k-1`:
+Let `last_cursor` = index-table pointer for entry `k-1` (last **drawn** step). After original tail for entries `0..k-1`:
 
 ```text
-%rcx          = cursor_k          (value tail would load before compare)
-%rax          = cursor_k + 2      (equals -0x198 end bound when WALK_END)
--0x70(%rbp)   = cursor_{k-1}      (last stored at loop head before final tail)
+%rcx          = last_cursor + 4
+%rax          = last_cursor + 2
+```
+
+At `WALK_END` (walk exhausted, `last_cursor + 2 == end_bound`):
+
+```text
+%rax          = end_bound
+%rcx          = end_bound + 2
+-0x70(%rbp)   = last_cursor (last stored at loop head before final tail)
 -0x198(%rbp)  = end bound (unchanged)
 %ebx          = reloaded from -0xe4(%rbp) @ 0x1010cc3d4
 -0x51, -0x64  = prefix batch color/VBO caches
 RFLAGS        = DEAD @ 0x1010cc3e0 (no flag consumer before incl)
 -0x80(%rbp)   = DEAD at interior trampoline entry (loaded @ 0x1010cbe63 only on draw path)
 ```
+
+### `%rax` / `%rcx` at `0x1010cc3e0` (preferred)
+
+After `jne` not taken, execution reaches `incl %ebx` with **no intervening use** of `%rax` or `%rcx`. Mutation **need not synthesize** `%rax`/`%rcx` for terminal resume — only restore live `%ebx` path and stack locals the outer step expects.
 
 ### Interior trampoline
 
@@ -56,19 +67,18 @@ Mutation path is **non-leaf** (calls engine helpers + GL). Trampoline must prese
 
 Do not rely on leaf red-zone for scratch across calls.
 
-### Caller-saved after ONE_BIND batch sequence
+### macOS x86-64 SysV — caller-saved after inserted calls
 
-Document liveness **after** `GfxSetIndexBuffer` + `glMultiDrawElementsBaseVertex` return, before interior/terminal resume:
+**XMM0–XMM15** and **`%rax`** are **caller-saved**. `GfxSetIndexBuffer` and `glMultiDrawElements` may clobber all XMM registers and `%rax`.
 
-| GPR | Interior resume | Terminal resume |
-|-----|-----------------|-----------------|
-| `%rdi,%rsi,%rdx,%rcx,%r8,%r9,%r10,%r11` | May be clobbered by calls — reload resume state from stack/TLS | Same |
-| `%r12` (`%r12` = SBorderDrawInfoSet) | LIVE (unchanged by batch if preserved in trampoline) | LIVE |
-| `%r14` record base | LIVE if still in original loop scope | LIVE |
+| Register class | At interior resume after batch | At terminal `0x1010cc3e0` |
+|----------------|-------------------------------|---------------------------|
+| `%rdi`–`%r11`, `%r10`, `%rax` | Reload resume state from stack; do not assume preserved | Same |
+| `%r12` (`SBorderDrawInfoSet`) | LIVE if trampoline preserves callee-saved set | LIVE |
+| `%r14` record base | LIVE in loop scope | LIVE |
+| XMM0–15 | **DEAD** on fast-color path from `0x1010cc22d`–`0x1010cbe55` (no XMM traffic); calls clobber — treat as DEAD unless proven live and saved | Same |
 
-### XMM (fast-color path @ `0x1010cc22d` join)
-
-Slow-color XMM traffic @ `0x1010cc1ef`–`0x1010cc222` is skipped on fast-color prefix. At hook `0x1010cbe55`, **no XMM reload is required before skip test** — XMM **DEAD** for skip-only interior trampoline. After MDEBV/GfxSetIndexBuffer calls, XMM0–7 may be clobbered per SysV; XMM8–15 callee-saved must be preserved by trampoline if still live in `DrawBorders` frame (audit: no XMM use between `0x1010cc22d` and `0x1010cbe55` on fast path).
+Slow-color XMM traffic @ `0x1010cc1ef`–`0x1010cc222` is skipped on fast-color prefix. At hook `0x1010cbe55`, XMM **DEAD** for skip-only interior trampoline.
 
 ## GfxSetIndexBuffer @ `0x1010cc2ce` (macOS SysV)
 
@@ -79,22 +89,23 @@ rsi = movq (%rax,%r15,8), %rsi @ 0x1010cc2c6  (= batch_key.ibo_argument)
 
 No stack arguments. Null `rsi` → helper returns without bind (`testq %rsi` @ `0x1015ec28e`).
 
-## glMultiDrawElementsBaseVertex (mutation TLS arrays)
+## glMultiDrawElements (mutation TLS arrays)
 
 ```text
 rdi  = GL_TRIANGLES (0x0004)
 rsi  = &count[i]      (3 * triangle_count per record)
 rdx  = GL_UNSIGNED_SHORT (0x1403)
-rcx  = &indices[i]    (zero offsets — border path)
+rcx  = &indices[i]    (zero offsets — border mode-0)
 r8   = drawcount      (prefix run_length)
-r9   = &basevertex[i]
 ```
 
-16-byte stack alignment before `callq`. Engine import via `_glew*` tail same as `GfxDrawIndexed` base-vertex path.
+Five-register SysV call (no `r9` basevertex array). 16-byte stack alignment before `callq`. Resolve via engine `_glew*` / GL dispatch same as existing indexed draw path.
+
+`glMultiDrawElementsBaseVertex` with all `basevertex[i]=0` is rendering-equivalent but **not** chosen — see [border-mode0-basevertex-evidence-addendum.md](border-mode0-basevertex-evidence-addendum.md).
 
 ## Engine / GL (`ONE_BIND`)
 
-One `GfxSetIndexBuffer(batch_key.ibo_argument)` then MDEBV replaces N×(bind+GfxDrawIndexed) for homogeneous mode-0 prefix subject to classifier exclusions (null IBO, zero tri, pending `+0x128`, etc.).
+One `GfxSetIndexBuffer(batch_key.ibo_argument)` then **`glMultiDrawElements`** replaces N×(bind+GfxDrawIndexed) for homogeneous mode-0 prefix subject to classifier exclusions (null IBO, zero tri, pending `+0x128` / `+0x170`, etc.).
 
 ## Non-recursive re-entry
 

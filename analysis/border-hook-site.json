@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "owner_symbol": "_ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
   "pr_c_implementation": "observer_only_glDrawElementsBaseVertex_interpose_immediate_pass_through",
@@ -13,10 +13,12 @@
     "detour_encoding": "RIP_INDIRECT_ABSOLUTE_JMP",
     "detour_target_requirement": "8-byte absolute target in trampoline; no rel32 reachability limit",
     "near_island_required": false,
-    "patch_span_mid_addresses_exclusive": true,
+    "direct_incoming_edges_to_mid_span": [],
+    "indirect_target_risk": "assessed_not_indicated",
     "incoming_control_flow_audit": {
       "method": "otool -tv full __TEXT scan; rg for 0x1010cbe55|59|5d branch/call targets",
-      "limits": "Indirect jump tables not exhaustively proven; mid-span addresses are fall-through interiors of a single 14-byte basic block from 0x1010cbe55",
+      "limits": "Indirect jump tables not exhaustively ruled out; mid-span addresses are fall-through interiors of a single 14-byte basic block from 0x1010cbe55",
+      "audit_method": "otool -tv + branch-target scan; indirect tables not exhaustively ruled out",
       "0x1010cbe55": {
         "incoming_edges": ["0x1010cc3da jne → 0x1010cbe55"],
         "notes": "Loop back-edge only in scanned disassembly"

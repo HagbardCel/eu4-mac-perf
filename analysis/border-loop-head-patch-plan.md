@@ -13,12 +13,13 @@ patched_loop_head (14-byte jmp → trampoline):
 
 classifier_trampoline:
     if N or A (mutation off): run displaced testb/movq/je; continue original
+    if deferred_attrib_upload_pending or secondary_upload_pending: fall through one draw
     prefix = classify_batchable_prefix(...)
     if not prefix.batch_eligible: fall through one record (displaced path)
     GfxSetIndexBuffer(prefix.batch_key.ibo_argument)   # once; rdi = -0x60(%rbp) deferred ctx
-    glMultiDrawElementsBaseVertex(...)
+    glMultiDrawElements(GL_TRIANGLES, counts, GL_UNSIGNED_SHORT, indices[], drawcount)
     if prefix.termination_kind == WALK_END:
-        jmp terminal_prefix_resume @ 0x1010cc3e0
+        jmp terminal_prefix_resume @ 0x1010cc3e0   # %rax/%rcx DEAD; do not synthesize
     else:
         set rcx = first-unconsumed entry; displaced testb+movq; je path
         jmp non_recursive entry (not patched 0x1010cbe55)
@@ -30,4 +31,8 @@ Unknown inputs, `INVALID`, `max_scan_steps` without policy, Gate 0 fail, helper 
 
 ## Scratch
 
-TLS arrays for MDEBV; `max_scan_steps` cap separate from barrier telemetry (`SCAN_CAP`).
+TLS arrays for `count[]` and `indices[]` (pointer-sized zero offsets); **no** basevertex array. `max_scan_steps` cap separate from barrier telemetry (`SCAN_CAP`).
+
+## Runtime Gate 0
+
+Mutation PR must assert **`glMultiDrawElements`** (or resolved `_glewMultiDrawElements`) in the **active** gameplay GL context — not MDEBV-only. See evidence `runtime_preconditions` in [border-loop-head-feasibility-20261004.json](evidence/border-loop-head-feasibility-20261004.json).

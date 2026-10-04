@@ -14,7 +14,7 @@ From paused Venice intrusive screen + static path audit:
 | Uniforms | ~500 uniform signatures **across** border pass; **unchanged within same-state runs** |
 | Blend / depth / raster | Stable within screened adjacencies |
 | Index offset `indices[i]` | **0** (byte offset into bound IBO) |
-| Varying per subdraw | `basevertex[i]`, `count[i]` (3× uint16 at +0x06) |
+| Varying per subdraw | `count[i]` (3× uint16 at +0x06); `indices[i]=0`. Record `+0x04` is **not** GL basevertex on mode-0 ([addendum](border-mode0-basevertex-evidence-addendum.md)) |
 
 ## Inter-draw side effects (temporal — Gate 3a)
 

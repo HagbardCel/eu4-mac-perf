@@ -60,6 +60,7 @@ class LoopContext:
     color_known: bool = True
     vbo_known: bool = True
     deferred_attrib_upload_pending: bool = False
+    secondary_upload_pending: bool = False
 
 
 @dataclass
@@ -71,7 +72,9 @@ class IndexTableEntry:
 
 @dataclass
 class RecordView:
-    basevertex: int
+    """Per-record SBorderDraw view for classifier homogeneity (not GL gather)."""
+
+    arg3_u16_at_plus_04: int
     triangle_count: int
     vbo_table_index: int
 
@@ -200,7 +203,7 @@ def classify_batchable_prefix(
             termination_kind=kind,
         )
 
-    if ctx.deferred_attrib_upload_pending:
+    if ctx.deferred_attrib_upload_pending or ctx.secondary_upload_pending:
         return result(0, BarrierMask.OTHER_SIDE_EFFECT, BarrierMask(0), None, EntryStateMatch(), TerminationKind.BARRIER)
 
     if not side_entries:

@@ -29,6 +29,17 @@ batch_eligible =
 
 Boundary at step k **does not** invalidate prefix `0..k-1`.
 
+## Hook pending flags (fall through one draw)
+
+| Field | Predicate |
+|-------|-----------|
+| `deferred_attrib_upload_pending` | `+0x128` on deferred context inner object |
+| `secondary_upload_pending` | `+0x170` on same object (GfxDrawIndexed secondary upload) |
+
+## Record `+0x04`
+
+`RecordView.arg3_u16_at_plus_04` mirrors the uint16 loaded into `%edx` at the callsite. **Not** used for batch homogeneity and **not** passed to `glMultiDrawElements` as basevertex (dead in GfxDrawIndexed on mode-0).
+
 ## Skip (`%r13b`)
 
 ```text

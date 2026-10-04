@@ -213,6 +213,24 @@ class BorderLoopClassifierTests(unittest.TestCase):
         out = classify_batchable_prefix(ctx, records, ibos, entries)
         self.assertEqual(out.run_length, 0)
 
+    def test_secondary_upload_at_hook(self) -> None:
+        ctx = self._ctx(secondary_upload_pending=True)
+        records, ibos = self._tables(3)
+        entries = self._entries([0, 1])
+        out = classify_batchable_prefix(ctx, records, ibos, entries)
+        self.assertEqual(out.run_length, 0)
+        self.assertIn(BarrierMask.OTHER_SIDE_EFFECT, out.stop_reason_mask)
+
+    def test_varying_arg3_u16_still_homogeneous(self) -> None:
+        ctx = self._ctx()
+        records = [RecordView(10 + i, 4, 1) for i in range(4)]
+        records[2] = RecordView(9999, 4, 1)
+        ibos = [100] * 4
+        entries = self._entries([0, 1, 2, 3])
+        out = classify_batchable_prefix(ctx, records, ibos, entries)
+        self.assertEqual(out.run_length, 4)
+        self.assertTrue(out.batch_eligible)
+
     def test_unsupported_mode(self) -> None:
         ctx = self._ctx(mode=1)
         records, ibos = self._tables(3)
