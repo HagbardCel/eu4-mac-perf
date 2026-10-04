@@ -34,3 +34,5 @@ class SubmissionControlHarnessTests(unittest.TestCase):
             self.assertGreater(snap["candidate_hook_attempts"], 0)
             self.assertGreater(snap["candidate_effective_actions"], 0)
             self.assertGreaterEqual(snap["ack_generation"], 1)
+            probe_text = probe_log.read_text(encoding="utf-8", errors="replace")
+            self.assertIn("S,", probe_text)

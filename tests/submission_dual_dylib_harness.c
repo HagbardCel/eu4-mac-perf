@@ -48,16 +48,16 @@ int main(void) {
     }
     CGLSetCurrentContext(context);
     void (*record_effective)(void) = dlsym(RTLD_DEFAULT, "eu4_submission_record_effective_action");
-    for (int i = 0; i < 40; i++) {
-        if (i == 0 || i == 20) {
+    for (int i = 0; i < 140; i++) {
+        if (i == 0 || i == 70) {
             words[2]++;
-            words[3] = (i < 20) ? 0u : 1u;
+            words[3] = (i < 70) ? 0u : 1u;
         }
         CGLFlushDrawable(context);
-        if (record_effective && i >= 20) {
+        if (record_effective && i >= 70) {
             record_effective();
         }
-        usleep(5000);
+        usleep(10000);
     }
     uint64_t *counters = (uint64_t *)((char *)map + 32);
     printf("hook_attempts=%llu effective_actions=%llu ack_generation=%u ack_mode=%u\n",

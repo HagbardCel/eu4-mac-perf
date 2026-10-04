@@ -3,6 +3,7 @@ import unittest
 import eu4_frame_model as model
 from frame_model_salvage import (
     _frame_retention,
+    _retention_poor,
     _window_frame_keys,
     eligible_intrusive_salvage_trace,
 )
@@ -72,3 +73,30 @@ class FrameModelSalvageTests(unittest.TestCase):
         self.assertEqual(retention["surviving_s"], 2)
         self.assertEqual(retention["surviving_u"], 1)
         self.assertAlmostEqual(retention["retention_s"], 0.5)
+
+    def test_retention_poor_fallback_requires_higher_threshold(self):
+        windows = {
+            "24": {
+                "per_frame_retention": [],
+                "median_retention_s": 0.10,
+                "median_retention_u": 0.10,
+            }
+        }
+        self.assertTrue(_retention_poor(windows))
+
+    def test_count_complete_frames_block_poor_fallback(self):
+        windows = {
+            "24": {
+                "per_frame_retention": [
+                    {
+                        "measurement_epoch": 1,
+                        "update_id": 1,
+                        "retention_s": 1.0,
+                        "retention_u": 1.0,
+                    }
+                ],
+                "median_retention_s": 0.10,
+                "median_retention_u": 0.10,
+            }
+        }
+        self.assertFalse(_retention_poor(windows))

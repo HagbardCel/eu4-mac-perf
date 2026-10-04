@@ -1,5 +1,5 @@
 {
-  "sealed_utc": "2026-10-04T07:37:28.775739+00:00",
+  "sealed_utc": "2026-10-04T07:54:04.977224+00:00",
   "capsule_profile": "intrusive_complete_v1",
   "run_dir": "results/20261003T210202Z-intrusive-diagnostic",
   "capture_identity": {
@@ -20,8 +20,8 @@
   },
   "identity_at_capture": null,
   "identity_at_seal": {
-    "git_commit": "e05131e60b58ec9f69ebc338f671c723b44070bc",
-    "git_commit_short": "e05131e",
+    "git_commit": "f6a56f1ed4ac263df8edfeca3058ad11475fc2b2",
+    "git_commit_short": "f6a56f1",
     "git_tree_clean": false,
     "controller_sha256": "e90d86986a98b5065af6ee12c413115095335929475ee10e6d2435fb90542c6a",
     "key_source_hashes": {
@@ -45,19 +45,19 @@
     "power.samples.json": {
       "plain_path": "power.samples.json",
       "gzip_path": "power.samples.json.gz",
-      "uncompressed_bytes": 42921031,
-      "uncompressed_sha256": "c93fd3006db830e005e5ddd80a1cf3e8fff3e89491d403c8319a4b3d739870ea",
-      "gzip_bytes": 3122784,
-      "gzip_sha256": "dd3cc5f8b18a08f1ebc7ef66bfc1d9d721c011554c6179cc6836cffb988d80c5",
+      "uncompressed_bytes": 42781499,
+      "uncompressed_sha256": "d9e942d351cb4ba468224ddec17e59b1cb658c6fdef217370954d1f4258a87ba",
+      "gzip_bytes": 3112714,
+      "gzip_sha256": "3c13df908070cf0b9943ef946471ba3b12a9c3dc1c93e840581521c2e4e1c7dc",
       "compression": "gzip-9"
     },
     "powermetrics.pliststream": {
       "plain_path": "powermetrics.pliststream",
       "gzip_path": "powermetrics.pliststream.gz",
-      "uncompressed_bytes": 84092807,
-      "uncompressed_sha256": "4caaf9048efe38a55d2904c23f74262f31cdfbc74439586fad3c5b9539193dba",
-      "gzip_bytes": 3625466,
-      "gzip_sha256": "9e881578283841c50235f81a4864587405387a48baa0d48d6bf7369c28b8d7e3",
+      "uncompressed_bytes": 84092806,
+      "uncompressed_sha256": "fccdff4ec726697eb8eba71ce7ccd0905c15e4f7ae116101153083295c2b8d6e",
+      "gzip_bytes": 3625464,
+      "gzip_sha256": "3ffbc1dd583efa1a9dea27ac908dce68b96e385adef210fae5daaadab0b1a449",
       "compression": "gzip-9"
     }
   },
@@ -83,12 +83,12 @@
       "sha256": "43aa6f8808afb2290af188dbc1a67fee692ede3bf9ce8beabe0f815ac42c4f54"
     },
     "power.samples.json.gz": {
-      "bytes": 3122784,
-      "sha256": "dd3cc5f8b18a08f1ebc7ef66bfc1d9d721c011554c6179cc6836cffb988d80c5"
+      "bytes": 3112714,
+      "sha256": "3c13df908070cf0b9943ef946471ba3b12a9c3dc1c93e840581521c2e4e1c7dc"
     },
     "powermetrics.pliststream.gz": {
-      "bytes": 3625466,
-      "sha256": "9e881578283841c50235f81a4864587405387a48baa0d48d6bf7369c28b8d7e3"
+      "bytes": 3625464,
+      "sha256": "3ffbc1dd583efa1a9dea27ac908dce68b96e385adef210fae5daaadab0b1a449"
     },
     "powermetrics.stderr": {
       "bytes": 312,
@@ -186,8 +186,16 @@
     },
     "interpretation": "observed_warning_not_used_as_invalidation"
   },
-  "powermetrics_plist_normalization": {
-    "dropped_trailing_bytes": 0,
-    "record_count": 270
+  "powermetrics_plist_interpretation": {
+    "raw_logical_bytes": 84092806,
+    "null_terminated_plist_records": 269,
+    "trailing_partial_bytes": 275189,
+    "terminal_additional_parseable_plist": 1,
+    "terminal_invalid_trailing_bytes": 0,
+    "total_parseable_raw_records": 270,
+    "capture_time_parsed_power_samples": 269,
+    "power_samples_json_count": 269,
+    "terminal_record_used_in_reports": false,
+    "raw_bytes_modified_at_seal": false
   }
 }

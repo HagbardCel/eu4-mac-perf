@@ -148,6 +148,30 @@ def reconstructed_capture_identity(
     *,
     identity_at_capture: dict | None = None,
 ) -> dict:
+    persisted = identity_at_capture or (manifest.get("identity_at_capture") if manifest else None)
+    consistency = _identity_capture_consistent(persisted)
+    if consistency == "direct" and persisted:
+        start = persisted.get("identity_start") or {}
+        end = persisted.get("identity_end") or {}
+        return {
+            "policy": "recorded_direct",
+            "status": "recorded_at_capture",
+            "git_commit": start.get("git_commit"),
+            "git_commit_short": start.get("git_commit_short"),
+            "controller_sha256": start.get("controller_sha256"),
+            "identity_start": start,
+            "identity_end": end,
+            "artifact_start": persisted.get("artifact_start"),
+            "artifact_end": persisted.get("artifact_end"),
+        }
+    if consistency == "partial" and persisted:
+        return {
+            "policy": "recorded_partial",
+            "status": "recorded_partial",
+            "identity_start": persisted.get("identity_start"),
+            "identity_end": persisted.get("identity_end"),
+            "missing": ["incomplete or inconsistent identity_at_capture start/end"],
+        }
     commit = _candidate_capture_commit()
     basis = [
         "clean-tree preflight enforced before intrusive build (contract preflight)",
@@ -158,7 +182,7 @@ def reconstructed_capture_identity(
         build = (manifest.get("evidence") or {}).get("build") or manifest.get("build") or {}
         if build.get("library_sha256") or build.get("executable_sha256"):
             basis.append("manifest executable and profiler dylib SHA-256")
-    identity = {
+    return {
         "status": "reconstructed_incomplete",
         "policy": "historical_reconstructed",
         "candidate_commit": commit,
@@ -169,17 +193,6 @@ def reconstructed_capture_identity(
             "persisted capture-time controller SHA-256",
         ],
     }
-    persisted = identity_at_capture or (manifest.get("identity_at_capture") if manifest else None)
-    consistency = _identity_capture_consistent(persisted)
-    if consistency == "direct":
-        identity["policy"] = "recorded_direct"
-        identity["status"] = "recorded_at_capture"
-        identity.pop("missing", None)
-    elif consistency == "partial":
-        identity["policy"] = "recorded_partial"
-        identity["status"] = "recorded_partial"
-        identity["missing"] = ["incomplete or inconsistent identity_at_capture start/end"]
-    return identity
 
 
 def _summarize_powermetrics_stderr(path: Path) -> dict[str, Any]:
@@ -198,7 +211,13 @@ def _summarize_powermetrics_stderr(path: Path) -> dict[str, Any]:
     }
 
 
-def _finalize_readiness_log(run_dir: Path, readiness_log: dict | None, manifest: dict) -> dict | None:
+def _finalize_readiness_log(
+    run_dir: Path,
+    readiness_log: dict | None,
+    manifest: dict,
+    *,
+    prior_readiness: dict | None = None,
+) -> dict | None:
     if not readiness_log:
         return readiness_log
     committed = readiness_log.get("committed_filename")
@@ -212,15 +231,23 @@ def _finalize_readiness_log(run_dir: Path, readiness_log: dict | None, manifest:
         "bytes": path.stat().st_size,
         "sha256": _sha256_file(path),
     }
+    manifest_origin = (manifest.get("readiness_log") or {}).get("origin")
+    if manifest_origin and manifest.get("readiness_log", {}).get("committed_filename") == committed:
+        return {**readiness_log, "origin": manifest_origin, "file": file_block}
+    if prior_readiness and prior_readiness.get("file", {}).get("sha256") == file_block["sha256"]:
+        origin = prior_readiness.get("origin")
+        if origin:
+            return {**readiness_log, "origin": origin, "file": file_block}
     import tempfile
 
     with tempfile.TemporaryDirectory() as temporary:
         extracted = extract_game_ready_log(Path(temporary), manifest=manifest)
     if extracted.get("sha256") == file_block["sha256"]:
+        provenance = extracted.get("provenance") or {}
         origin = {
             "status": extracted.get("status", "reconstructed_posthoc_anchored"),
-            "extraction_method": (extracted.get("provenance") or {}).get("extraction_method"),
-            "phase_c_wall_window_utc": (extracted.get("provenance") or {}).get("phase_c_wall_window_utc"),
+            "extraction_method": extracted.get("extraction_method") or provenance.get("extraction_method"),
+            "phase_c_wall_window_utc": provenance.get("phase_c_wall_window_utc"),
         }
     elif readiness_log.get("status") == "present_on_disk":
         origin = {
@@ -233,59 +260,14 @@ def _finalize_readiness_log(run_dir: Path, readiness_log: dict | None, manifest:
     return merged
 
 
-def _plist_records(raw: bytes) -> tuple[list[dict], bytes, int]:
+def describe_powermetrics_pliststream(run_dir: Path, manifest: dict | None = None) -> dict[str, Any] | None:
+    """Interpret the committed plist byte stream without modifying captured bytes."""
     import plistlib
 
-    parts = raw.split(b"\0")
-    partial = parts.pop()
-    records: list[dict] = []
-    for part in parts:
-        if not part.strip():
-            continue
-        item = plistlib.loads(part.strip())
-        if isinstance(item, dict):
-            records.append(item)
-    normalized = raw
-    dropped = 0
-    if partial.strip():
-        try:
-            item = plistlib.loads(partial.strip())
-            if isinstance(item, dict):
-                records.append(item)
-                if not raw.endswith(b"\0"):
-                    normalized = raw + b"\0"
-        except (ValueError, TypeError, plistlib.InvalidFileException):
-            dropped = len(partial)
-            normalized = b"\0".join(parts)
-            if parts:
-                normalized += b"\0"
-    return records, normalized, dropped
-
-
-def _sync_power_samples_json(run_dir: Path, plist_records: list[dict]) -> bool:
-    power_gz = run_dir / "power.samples.json.gz"
-    power_plain = run_dir / "power.samples.json"
-    if power_plain.is_file():
-        samples = json.loads(power_plain.read_text(encoding="utf-8"))
-    elif power_gz.is_file():
-        samples = json.loads(gzip.open(power_gz, "rt", encoding="utf-8").read())
-    else:
-        return False
-    if len(samples) == len(plist_records):
-        return False
-    if len(samples) > len(plist_records):
-        samples = samples[: len(plist_records)]
-    else:
-        samples.extend(plist_records[len(samples) :])
-    payload = json.dumps(samples, default=str) + "\n"
-    power_plain.write_text(payload, encoding="utf-8")
-    _gzip_compress(power_plain, power_gz)
-    return True
-
-
-def normalize_powermetrics_pliststream(run_dir: Path) -> dict[str, Any] | None:
-    """Drop an incomplete terminal plist fragment before sealing or verification."""
     run_dir = Path(run_dir)
+    if manifest is None:
+        manifest_path = run_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
     plain = run_dir / "powermetrics.pliststream"
     gzip_path = run_dir / "powermetrics.pliststream.gz"
     if plain.is_file():
@@ -295,19 +277,50 @@ def normalize_powermetrics_pliststream(run_dir: Path) -> dict[str, Any] | None:
             raw = handle.read()
     else:
         return None
-    records, normalized, dropped = _plist_records(raw)
-    meta = {"dropped_trailing_bytes": dropped, "record_count": len(records)}
-    if normalized != raw:
-        plain.write_bytes(normalized)
-        _gzip_compress(plain, gzip_path)
-    _sync_power_samples_json(run_dir, records)
-    return meta
+    parts = raw.split(b"\0")
+    partial = parts.pop()
+    null_terminated_records = sum(1 for part in parts if part.strip())
+    terminal_parseable = 0
+    terminal_invalid_bytes = 0
+    if partial.strip():
+        try:
+            item = plistlib.loads(partial.strip())
+            if isinstance(item, dict):
+                terminal_parseable = 1
+        except (ValueError, TypeError, plistlib.InvalidFileException):
+            terminal_invalid_bytes = len(partial)
+    power_gz = run_dir / "power.samples.json.gz"
+    power_count = None
+    if power_gz.is_file():
+        power_count = len(json.loads(gzip.open(power_gz, "rt", encoding="utf-8").read()))
+    capture_time = (manifest.get("power") or {}).get("samples")
+    return {
+        "raw_logical_bytes": len(raw),
+        "null_terminated_plist_records": null_terminated_records,
+        "trailing_partial_bytes": len(partial),
+        "terminal_additional_parseable_plist": terminal_parseable,
+        "terminal_invalid_trailing_bytes": terminal_invalid_bytes,
+        "total_parseable_raw_records": null_terminated_records + terminal_parseable,
+        "capture_time_parsed_power_samples": capture_time if capture_time is not None else power_count,
+        "power_samples_json_count": power_count,
+        "terminal_record_used_in_reports": False,
+        "raw_bytes_modified_at_seal": False,
+    }
 
 
 def seal_artifact_pair(run_dir: Path, plain_name: str, gzip_name: str) -> dict[str, Any] | None:
     plain = run_dir / plain_name
     gzip_path = run_dir / gzip_name
-    if plain.is_file():
+    if plain.is_file() and gzip_path.is_file():
+        gzip_logical_bytes, gzip_logical_sha = _logical_hash_gzip(gzip_path)
+        plain_sha = _sha256_file(plain)
+        if plain_sha == gzip_logical_sha and plain.stat().st_size == gzip_logical_bytes:
+            _gzip_compress(plain, gzip_path)
+            logical_bytes = gzip_logical_bytes
+            logical_sha256 = gzip_logical_sha
+        else:
+            logical_bytes, logical_sha256 = gzip_logical_bytes, gzip_logical_sha
+    elif plain.is_file():
         _gzip_compress(plain, gzip_path)
         logical_bytes = plain.stat().st_size
         logical_sha256 = _sha256_file(plain)
@@ -650,7 +663,7 @@ def seal_run_evidence(
             readiness_log = extract_game_ready_log(run_dir, manifest=manifest)
 
     identity_at_seal = identity_snapshot_fn()
-    plist_normalization = normalize_powermetrics_pliststream(run_dir)
+    plist_interpretation = describe_powermetrics_pliststream(run_dir, manifest)
     artifacts: dict[str, Any] = {}
     for plain_name, gzip_name in SEAL_ARTIFACTS:
         entry = seal_artifact_pair(run_dir, plain_name, gzip_name)
@@ -666,13 +679,12 @@ def seal_run_evidence(
             prior_readiness = json.loads(prior_path.read_text(encoding="utf-8")).get("readiness_log")
         except (OSError, json.JSONDecodeError):
             prior_readiness = None
-    if prior_readiness and prior_readiness.get("origin"):
-        merged = dict(prior_readiness)
-        if readiness_log:
-            merged.update(readiness_log)
-        merged["origin"] = prior_readiness["origin"]
-        readiness_log = merged
-    readiness_log = _finalize_readiness_log(run_dir, readiness_log, manifest)
+    readiness_log = _finalize_readiness_log(
+        run_dir,
+        readiness_log,
+        manifest,
+        prior_readiness=prior_readiness,
+    )
     stderr_path = run_dir / "powermetrics.stderr"
     powermetrics_stderr = _summarize_powermetrics_stderr(stderr_path) if stderr_path.is_file() else None
     evidence = {
@@ -691,7 +703,7 @@ def seal_run_evidence(
         "probe_integrity": manifest.get("probe_integrity"),
         "dropped_records": dropped,
         "powermetrics_stderr": powermetrics_stderr,
-        "powermetrics_plist_normalization": plist_normalization,
+        "powermetrics_plist_interpretation": plist_interpretation,
     }
     out = run_dir / "raw_evidence.json"
     out.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
@@ -701,20 +713,31 @@ def seal_run_evidence(
 PROFILE_REQUIRED_FILES = {
     "intrusive_complete_v1": (
         "manifest.json",
+        "events.jsonl",
+        "auto-probe.csv",
+        "control.bin",
         "telemetry.csv.gz",
         "power.samples.json.gz",
         "powermetrics.pliststream.gz",
+        "powermetrics.stderr",
         "ready-scene.png",
         "game-ready.log",
         "report.json",
+        "report.md",
         "salvage-report.json",
+        "salvage-report.md",
     ),
     "intrusive_capture_only_v1": (
         "manifest.json",
+        "events.jsonl",
+        "auto-probe.csv",
+        "control.bin",
         "telemetry.csv.gz",
         "power.samples.json.gz",
         "powermetrics.pliststream.gz",
+        "powermetrics.stderr",
         "ready-scene.png",
+        "game-ready.log",
     ),
 }
 
@@ -805,13 +828,22 @@ def verify_run_evidence(
                 pass
         if trailing.strip():
             raise ValueError(f"powermetrics pliststream has {len(trailing)} unexplained trailing bytes")
+        interpretation = sealed.get("powermetrics_plist_interpretation") or {}
+        capture_time = interpretation.get("capture_time_parsed_power_samples")
+        power_count = len(power_payload)
         semantic = {
-            "status": "passed" if len(power_payload) == plist_count else "failed",
-            "power_sample_count": len(power_payload),
-            "plist_record_count": plist_count,
+            "power_sample_count": power_count,
+            "null_terminated_plist_records": plist_count - (1 if interpretation.get("terminal_additional_parseable_plist") else 0),
+            "total_parseable_raw_records": plist_count,
+            "capture_time_parsed_power_samples": capture_time,
         }
-        if semantic["status"] != "passed":
-            raise ValueError("semantic plist↔power sample count mismatch")
+        if capture_time is not None and power_count != capture_time:
+            raise ValueError(
+                f"power.samples.json count {power_count} != capture-time parsed samples {capture_time}"
+            )
+        if interpretation.get("total_parseable_raw_records") not in (None, plist_count):
+            raise ValueError("powermetrics interpretation does not match parsed plist record count")
+        semantic["status"] = "passed"
     return {
         "status": "passed",
         "capsule_profile": expected_profile,

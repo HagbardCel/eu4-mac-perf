@@ -78,7 +78,6 @@ def _run_phase(
     run_dir: Path,
     events: Path,
     tail,
-    anchor: dict,
     submission: control.SubmissionControl,
     name: str,
     role: str,
@@ -110,11 +109,11 @@ def _run_phase(
             raise base.BenchmarkError(f"EU IV exited during {name} measurement")
         if not focus("interior", game.pid):
             raise base.BenchmarkError(f"EU IV lost focus during {name} measurement")
+        tail.poll()
         time.sleep(min(1.0, max(0.0, measurement_deadline - time.monotonic())))
     measurement_end = mark(events, "measurement_end", phase=name, mode=mode)
     counter_end = submission.snapshot()
-    tail.poll()
-    phase = {
+    return {
         "name": name,
         "role": role,
         "mode": mode,
@@ -129,8 +128,25 @@ def _run_phase(
             expected_capability_id=expected_capability_id,
         ),
     }
-    phase["summary"] = summarize(run_dir, [phase], anchor, game.pid, tail.samples)
-    return phase
+
+
+def _attach_phase_summaries(
+    phases: list[dict],
+    run_dir: Path,
+    anchor: dict,
+    pid: int,
+    tail: auto.PowerTail,
+) -> None:
+    for phase in phases:
+        phase["summary"] = summarize(
+            run_dir,
+            [phase],
+            anchor,
+            pid,
+            tail.samples,
+            swap_warmup_ns=0,
+            write_shared_summary=False,
+        )
 
 
 def run_experiment(output_root: Path) -> Path:
@@ -159,8 +175,10 @@ def run_experiment(output_root: Path) -> Path:
     old_log = game_log.read_bytes() if game_log.is_file() else b""
     game = pm = None
     installed = False
+    tail = None
     control_path = run_dir / "submission_control.bin"
     control_path.write_bytes(bytes(control.CONTROL_SIZE))
+    error: str | None = None
     with FixtureManager(output_root, base.USER_DATA, auto.FIXTURE, evidence["fixture"]["save_sha256"]) as fixture:
         fixture.recover()
         working = fixture.install()
@@ -205,7 +223,6 @@ def run_experiment(output_root: Path) -> Path:
                             run_dir,
                             events,
                             tail,
-                            anchor,
                             submission,
                             name,
                             role,
@@ -214,17 +231,24 @@ def run_experiment(output_root: Path) -> Path:
                             expected_capability_id=expected_capability,
                         ),
                     )
+                stop_process(pm, 5)
+                pm = None
+                drain = tail.finish()
+                manifest["power_tail_finish"] = drain
+                if drain.get("status") == "incomplete":
+                    raise base.BenchmarkError(f"Powermetrics tail incomplete: {drain}")
+                _attach_phase_summaries(phases, run_dir, anchor, game.pid, tail)
                 manifest["phases"] = phases
                 manifest["pareto_gate"] = validation.bracket_normalized_ababa_gate(
                     phases,
                     expected_candidate_capability_id=expected_capability,
                 )
                 manifest["status"] = "complete"
-                stop_process(pm, 5)
-                pm = None
-                drain = tail.finish()
-                if drain.get("status") == "incomplete":
-                    raise base.BenchmarkError(f"Powermetrics tail incomplete: {drain}")
+        except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:
+            error = str(exc)
+            manifest["status"] = "incomplete"
+            manifest["error"] = error
+            raise
         finally:
             submission.close()
             stop_process(pm, 3)

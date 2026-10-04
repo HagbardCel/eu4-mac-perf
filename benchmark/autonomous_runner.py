@@ -480,18 +480,34 @@ def warm_up(game: subprocess.Popen, probe: Path, raw: PowerTail, anchor: dict) -
     raise base.BenchmarkError("Paused EU IV did not stabilize after 150 seconds of warm-up")
 
 
-def summarize(run_dir: Path, phases: list[dict], anchor: dict, pid: int,
-              raw_power: list[dict]) -> dict:
+def summarize(
+    run_dir: Path,
+    phases: list[dict],
+    anchor: dict,
+    pid: int,
+    raw_power: list[dict],
+    *,
+    swap_warmup_ns: int = 1_000_000_000,
+    write_shared_summary: bool = True,
+) -> dict:
     rows = probe_rows(run_dir / "auto-probe.csv", anchor)
     phase = phases[0]
-    selected = [r for r in rows if phase["start_ns"]+1_000_000_000 <=
-                r["monotonic_ns"] < phase["end_ns"]]
+    selected = [
+        r
+        for r in rows
+        if phase["start_ns"] + swap_warmup_ns <= r["monotonic_ns"] < phase["end_ns"]
+    ]
     if len(selected) < 25 or any(r["swaps_s"] < 20 or
                                   r["paused_swaps"] < .95*r["swaps"] for r in selected):
         raise base.BenchmarkError("Insufficient fully paused swap samples in the 30-second phase")
     power = diagnostic.summarize_power(raw_power, phases, anchor, pid)["measure"]
-    cpu_count = len([value for when, value in cpu_samples(raw_power, pid, anchor,
-                    phase["start_ns"]+1_000_000_000) if when < phase["end_ns"]])
+    cpu_count = len(
+        [
+            value
+            for when, value in cpu_samples(raw_power, pid, anchor, phase["start_ns"] + swap_warmup_ns)
+            if when < phase["end_ns"]
+        ]
+    )
     if (power.get("samples", 0) < 25 or cpu_count < 25 or
             power.get("eu4_cputime_ms_per_s") is None):
         raise base.BenchmarkError("Insufficient aligned EU IV CPU and power samples")
@@ -505,8 +521,9 @@ def summarize(run_dir: Path, phases: list[dict], anchor: dict, pid: int,
     phase_name = phase.get("name") or "phase"
     summary_path = run_dir / f"summary-{phase_name}.json"
     summary_path.write_text(json.dumps(result, indent=2) + "\n")
-    (run_dir / "summary.json").write_text(json.dumps(result, indent=2) + "\n")
-    (run_dir / "summary.md").write_text(
+    if write_shared_summary:
+        (run_dir / "summary.json").write_text(json.dumps(result, indent=2) + "\n")
+        (run_dir / "summary.md").write_text(
         "# Unattended paused Venice baseline\n\n"
         "| EU IV CPU ms/s | CPU W | GPU W | Combined W | Swaps/s | CPU ms/swap | J/swap |\n"
         "|---:|---:|---:|---:|---:|---:|---:|\n"
