@@ -12,7 +12,12 @@
 #include <unistd.h>
 
 #include "submission_counter_schema.h"
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+#include "eu4_submission_border.h"
+void eu4_submission_observation_arm_reset(void);
+#else
 #include "eu4_submission_observation.h"
+#endif
 
 #define MAGIC 0x53425545u
 #define PROTOCOL_VERSION 3u
@@ -23,7 +28,12 @@
 #define HEADER_WORDS 8u
 #define META_WORDS 4u
 #define OBS_WORDS 4u
+#define BORDER_FLAGS_OFFSET 56u
 #define COUNTER_REGION_OFFSET 64u
+
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+uint32_t g_eu4_border_control_flags = 0;
+#endif
 
 #define OBS_DISARMED 0u
 #define OBS_ARM 1u
@@ -55,7 +65,7 @@ static _Atomic uint64_t *map_counters(void) {
 }
 
 static void reset_candidate_bank_counters(void) {
-    for (uint32_t slot = EU4_COUNTER_CANDIDATE_SITE_ENTRIES; slot < EU4_SUBMISSION_COUNTER_COUNT; slot++) {
+    for (uint32_t slot = EU4_COUNTER_CANDIDATE_SITE_ENTRIES; slot < EU4_COUNTER_BORDER_CANDIDATE_RUNS; slot++) {
         atomic_store_explicit(&map_counters()[slot], 0, memory_order_relaxed);
     }
 }
@@ -128,7 +138,7 @@ void eu4_submission_counter_add(eu4_submission_counter_slot_t slot, uint64_t del
     if (!protocol_ok(words)) {
         return;
     }
-    if (slot >= EU4_COUNTER_CANDIDATE_SITE_ENTRIES) {
+    if (slot >= EU4_COUNTER_CANDIDATE_SITE_ENTRIES && slot < EU4_COUNTER_BORDER_CANDIDATE_RUNS) {
         if (!observation_bank_writable(words)) {
             return;
         }
@@ -231,6 +241,9 @@ static void poll_command_ack(void) {
         words[5] = ack_mode;
     }
     handle_observation_command(words);
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+    g_eu4_border_control_flags = *(uint32_t *)(control_map + BORDER_FLAGS_OFFSET);
+#endif
     if (words[5] != last_observed_ack_mode) {
         if (words[5] == MODE_REFERENCE) {
             eu4_submission_observation_arm_reset();
@@ -243,6 +256,7 @@ static void poll_command_ack(void) {
 
 static CGLError submission_flush(CGLContextObj context) {
     pthread_once(&setup_once, setup);
+#if EU4_SUBMISSION_COMPILED_CAPABILITY != 2
     bool was_observing = false;
     if (control_map != MAP_FAILED) {
         uint32_t *words = (uint32_t *)control_map;
@@ -250,10 +264,23 @@ static CGLError submission_flush(CGLContextObj context) {
             was_observing = observation_bank_writable(words);
         }
     }
+#endif
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+    eu4_border_flush_pending();
+#endif
     CGLError result = CGLFlushDrawable(context);
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+    if (control_map != MAP_FAILED) {
+        uint32_t *words = (uint32_t *)control_map;
+        if (protocol_ok(words) && candidate_mode_active(words)) {
+            eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_SWAPS, 1);
+        }
+    }
+#else
     if (was_observing) {
         eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_SWAPS, 1);
     }
+#endif
     poll_command_ack();
     return result;
 }

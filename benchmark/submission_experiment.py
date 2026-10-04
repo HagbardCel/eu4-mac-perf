@@ -15,6 +15,7 @@ import autonomous_runner as auto
 import eu4_benchmark as base
 import submission_control as control
 import submission_multi_hypothesis as multi
+import submission_border_validation as border_validation
 import submission_validation as validation
 from autonomous_runner import capture_scene, focus, mark, probe_rows, stop_process, summarize, warm_up
 from fixture_manager import FixtureManager
@@ -38,6 +39,17 @@ OBSERVER_PHASE_SCHEDULE = (
 )
 OBSERVER_PHASE_SECONDS = 10
 OBSERVER_SETTLE_SECONDS = 3
+BORDER_PHASE_SCHEDULE = (
+    ("n1", "neutral", MODE_REFERENCE, True, False),
+    ("a1", "reference", MODE_CANDIDATE, False, False),
+    ("b1", "candidate", MODE_CANDIDATE, False, True),
+    ("a2", "reference", MODE_CANDIDATE, False, False),
+    ("b2", "candidate", MODE_CANDIDATE, False, True),
+    ("a3", "reference", MODE_CANDIDATE, False, False),
+    ("n2", "neutral", MODE_REFERENCE, True, False),
+)
+BORDER_PHASE_SECONDS = 10
+BORDER_SETTLE_SECONDS = 3
 EXPECTED_CANDIDATE_CAPABILITY_ID = 0
 OBSERVER_CAPABILITY_ID = 1
 MUTATING_CAPABILITY_ID = 2
@@ -157,7 +169,11 @@ def _run_phase(
     expected_capability_id: int,
     settle_seconds: float = SETTLE_SECONDS,
     multi_hypothesis: bool = False,
+    border_minimal: bool = False,
+    border_mutate: bool = False,
+    border_experiment: bool = False,
 ) -> dict:
+    submission.set_border_flags(minimal=border_minimal, mutate=border_mutate)
     generation = submission.request_mode(mode)
     ack = submission.wait_ack(generation)
     if ack["ack_mode"] != mode:
@@ -173,11 +189,13 @@ def _run_phase(
     capture_scene(screenshot)
     if not focus("interior", game.pid):
         raise base.BenchmarkError(f"EU IV lost focus after {name} screenshot")
-    counter_start = submission.snapshot()
     obs_arm_gen: int | None = None
     if mode == MODE_CANDIDATE:
         obs_arm_gen = submission.request_observation_arm()
         submission.wait_observation_ack(obs_arm_gen, expected_state=control.OBS_ACK_ARMED)
+        counter_start = submission.snapshot()
+    else:
+        counter_start = submission.snapshot()
     measurement_start = mark(events, "measurement_start", phase=name, mode=mode)
     measurement_deadline = time.monotonic() + duration
     while time.monotonic() < measurement_deadline:
@@ -201,13 +219,30 @@ def _run_phase(
         "end_ns": measurement_end["monotonic_ns"],
         "screenshot": str(screenshot),
     }
-    phase_payload["control_validation"] = _validate_control_deltas(
-        role,
-        counter_start,
-        counter_end,
-        expected_capability_id=expected_capability_id,
-        require_v1_pair_hits=not multi_hypothesis,
-    )
+    if border_experiment and expected_capability_id == MUTATING_CAPABILITY_ID:
+        phase_payload["control_validation"] = {
+            "status": "skipped",
+            "reason": "border experiment uses border_validation, not mesh pair counters",
+            "start": counter_start,
+            "end": counter_end,
+        }
+        phase_payload["border_validation"] = border_validation.border_phase_validation(
+            role,
+            counter_start,
+            counter_end,
+            border_mutate=border_mutate,
+            border_minimal=border_minimal,
+        )
+        phase_payload["border_minimal"] = border_minimal
+        phase_payload["border_mutate"] = border_mutate
+    else:
+        phase_payload["control_validation"] = _validate_control_deltas(
+            role,
+            counter_start,
+            counter_end,
+            expected_capability_id=expected_capability_id,
+            require_v1_pair_hits=not multi_hypothesis and expected_capability_id != MUTATING_CAPABILITY_ID,
+        )
     if multi_hypothesis and role == "candidate":
         wall_s = max(1e-6, (measurement_end["monotonic_ns"] - measurement_start["monotonic_ns"]) / 1e9)
         swaps = _count_paused_swaps(run_dir, anchor, measurement_start["monotonic_ns"], measurement_end["monotonic_ns"])
@@ -251,6 +286,129 @@ def _attach_phase_summaries(
             min_power_samples=min_samples,
             write_shared_summary=False,
         )
+
+
+def run_border_multidraw_experiment(output_root: Path) -> Path:
+    control.build_border_multidraw()
+    auto.build()
+    evidence = auto.preflight()
+    base.running_game_pid("idle")
+    output_root.mkdir(parents=True, exist_ok=True)
+    run_dir = output_root / f"{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}-submission-experiment"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    manifest: dict = {
+        "experiment": "submission_border_multidraw_v1",
+        "status": "starting",
+        "instrumentation": "libeu4_auto_probe.dylib + libeu4_submission_border_multidraw.dylib",
+        "expected_candidate_capability_id": MUTATING_CAPABILITY_ID,
+        "phase_schedule": [
+            {"name": n, "role": r, "mode": m, "border_minimal": mn, "border_mutate": mu}
+            for n, r, m, mn, mu in BORDER_PHASE_SCHEDULE
+        ],
+        "phase_seconds": BORDER_PHASE_SECONDS,
+        "repository_scene_reference": str(validation.SCENE_REFERENCE_MANIFEST.relative_to(ROOT)),
+        "border_api_runtime_assert": "recorded_in_counters",
+        "pr_b_mutation_go": "NO-GO_interpose",
+        "mutation_enabled": False,
+        "venice_run_authorized": False,
+        "note": "Harness retained for CI/dylib tests; manual Venice ABABA not authorized after PR B NO-GO.",
+    }
+    manifest_path = run_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    events = run_dir / "events.jsonl"
+    anchor = mark(events, "clock_anchor")
+    game_log = base.USER_DATA / "logs/game.log"
+    old_log = game_log.read_bytes() if game_log.is_file() else b""
+    game = pm = None
+    installed = False
+    tail = None
+    control_path = run_dir / "submission_control.bin"
+    control_path.write_bytes(bytes(control.CONTROL_SIZE))
+    error: str | None = None
+    with FixtureManager(output_root, base.USER_DATA, auto.FIXTURE, evidence["fixture"]["save_sha256"]) as fixture:
+        fixture.recover()
+        working = fixture.install()
+        installed = True
+        manifest["working_save"] = str(working)
+        pm_path = run_dir / "powermetrics.pliststream"
+        submission = control.SubmissionControl(control_path, candidate_capability_id=MUTATING_CAPABILITY_ID)
+        try:
+            with pm_path.open("wb") as raw, (run_dir / "powermetrics.stderr").open("wb") as errors:
+                pm = subprocess.Popen(
+                    ["sudo", "-n", str(auto.HELPER_INSTALLED)],
+                    stdout=raw,
+                    stderr=errors,
+                )
+                time.sleep(2)
+                if pm.poll() is not None:
+                    raise base.BenchmarkError("Powermetrics helper exited before EU IV launch")
+                env = control.dylib_env(control_path, auto.PROBE, submission_dylib=control.LIBRARY_BORDER)
+                env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
+                with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
+                    game = subprocess.Popen(
+                        ["./eu4", *evidence["launcher_args"], "--continuelastsave"],
+                        cwd=base.GOG_EXE.parent,
+                        env=env,
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+                tail = auto.PowerTail(pm_path)
+                ready = auto.wait_until_ready(game, run_dir / "auto-probe.csv", tail, anchor, game_log, old_log)
+                manifest["readiness"] = ready
+                warm_up(game, run_dir / "auto-probe.csv", tail, anchor)
+                capture_scene(run_dir / "ready-scene.png")
+                phases = []
+                for name, role, mode, border_minimal, border_mutate in BORDER_PHASE_SCHEDULE:
+                    phases.append(
+                        _run_phase(
+                            game,
+                            run_dir,
+                            events,
+                            tail,
+                            submission,
+                            name,
+                            role,
+                            mode,
+                            BORDER_PHASE_SECONDS,
+                            anchor,
+                            expected_capability_id=MUTATING_CAPABILITY_ID,
+                            settle_seconds=BORDER_SETTLE_SECONDS,
+                            border_minimal=border_minimal,
+                            border_mutate=border_mutate,
+                            border_experiment=True,
+                        ),
+                    )
+                stop_process(pm, 5)
+                pm = None
+                _attach_phase_summaries(phases, run_dir, anchor, game.pid, tail)
+                manifest["phases"] = phases
+                gate0 = border_validation.border_gate0_from_snapshot(submission.snapshot())
+                manifest["border_gate0"] = gate0
+                manifest["border_engagement_gate"] = border_validation.border_experiment_gate(phases)
+                if manifest["border_engagement_gate"]["status"] != "passed":
+                    raise base.BenchmarkError(
+                        "border_engagement_gate failed: "
+                        + str(manifest["border_engagement_gate"].get("reason"))
+                    )
+                manifest["status"] = "complete"
+        except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:
+            error = str(exc)
+            manifest["status"] = "incomplete"
+            manifest["error"] = error
+            raise
+        finally:
+            submission.close()
+            stop_process(pm, 3)
+            if game is not None and game.poll() is None and focus("terminate", game.pid):
+                try:
+                    game.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            stop_process(game, 10)
+            if installed:
+                manifest["working_save_changed"] = fixture.finish(run_dir)
+            manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
+    return run_dir
 
 
 def run_experiment(
@@ -445,23 +603,31 @@ def main() -> int:
         action="store_true",
         help="protocol v3 multi-hypothesis observer A-B-A (ARM/FREEZE on B1)",
     )
+    parser.add_argument(
+        "--border-multidraw-ababa",
+        action="store_true",
+        help="capability 2 border multidraw N-A-B-A-B-A-N (profiler-off)",
+    )
     args = parser.parse_args()
-    if not args.engagement_smoke and not args.multi_hypothesis_smoke:
+    mode_count = sum(
+        1 for flag in (args.engagement_smoke, args.multi_hypothesis_smoke, args.border_multidraw_ababa) if flag
+    )
+    if mode_count != 1:
         print(
-            "Error: pass --engagement-smoke or --multi-hypothesis-smoke.",
+            "Error: pass exactly one of --engagement-smoke, --multi-hypothesis-smoke, --border-multidraw-ababa.",
             file=sys.stderr,
         )
         return 1
-    if args.engagement_smoke and args.multi_hypothesis_smoke:
-        print("Error: --engagement-smoke and --multi-hypothesis-smoke are mutually exclusive.", file=sys.stderr)
-        return 1
     try:
-        run_dir = run_experiment(
-            Path(args.output).expanduser().resolve(),
-            expected_capability_id=OBSERVER_CAPABILITY_ID,
-            engagement_smoke=args.engagement_smoke,
-            multi_hypothesis_smoke=args.multi_hypothesis_smoke,
-        )
+        if args.border_multidraw_ababa:
+            run_dir = run_border_multidraw_experiment(Path(args.output).expanduser().resolve())
+        else:
+            run_dir = run_experiment(
+                Path(args.output).expanduser().resolve(),
+                expected_capability_id=OBSERVER_CAPABILITY_ID,
+                engagement_smoke=args.engagement_smoke,
+                multi_hypothesis_smoke=args.multi_hypothesis_smoke,
+            )
         print(run_dir)
     except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

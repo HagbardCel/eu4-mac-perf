@@ -1,0 +1,21 @@
+{
+  "evidence_id": "border-multidraw-harness-20261004",
+  "kind": "submission_border_multidraw_v1",
+  "status": "harness_ready_observer_only",
+  "recorded_at_utc": "2026-10-04T18:00:00Z",
+  "pr_b_verdict": "NO-GO_mutation_interpose",
+  "pr_b_structural_ceiling_per_frame": 1562,
+  "pr_b_implementable_ceiling": "unresolved_pending_loop_head",
+  "pr_b_artifacts": [
+    "analysis/border-multidraw-go-nogo.md",
+    "analysis/border-multidraw-mutation-topology.md",
+    "analysis/border-draw-record-layout.json"
+  ],
+  "gate_0": "RUNTIME-ASSERT",
+  "mutation_enabled": false,
+  "dylib": "benchmark/.build/libeu4_submission_border_multidraw.dylib",
+  "counter_schema_version": 3,
+  "launch_command": "python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa",
+  "venice_run": "not_authorized",
+  "notes": "Harness for CI/dylib build tests only. Next live border work: loop-head @ 0x1010cbe55 RE + mutation; Gate 0 recorded via border_runtime_context_* counters when/if run locally."
+}
