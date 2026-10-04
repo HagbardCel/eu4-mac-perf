@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "owner_symbol": "CPdxMeshObject::RenderBuckets",
+  "preferred_address": "0x1014c81f3",
+  "image_offset": "0x14c81f3",
+  "candidate_insertion_offset": "0x14c81f3",
+  "landmark_draw_call": {
+    "call_offset": "0x14c8404",
+    "return_offset": "0x14c8409",
+    "note": "Setup through draw already executed; insertion must be at or before candidate_insertion_offset"
+  },
+  "patch_length": null,
+  "displaced_instructions": null,
+  "original_resume_offset": null,
+  "optimized_resume_offset": null,
+  "hook_design": "call_trampoline_island_with_asm_thunk",
+  "live_in_registers": {
+    "note": "To be filled from disassembly at insertion; not a C ABI entry"
+  },
+  "live_out_registers": {},
+  "flags_live": "unknown_pending_disassembly",
+  "stack_alignment": 16,
+  "parent_subrecord_loop_scope": "inner_0xe8_iteration_within_single_SFlushData_parent_and_layer",
+  "thread_assumption": "render_thread_only",
+  "failure_behavior": "fail_closed_forward_original_path",
+  "previous_record_definition": "immediate_prior_loop_iteration_same_parent_layer_flush_array",
+  "chain_reset_events": [
+    "parent_SFlushData_boundary",
+    "layer_change",
+    "flush_array_opaque_vs_transparent_change",
+    "barrier_subrecord",
+    "mode_change_reference_vs_candidate"
+  ]
+}

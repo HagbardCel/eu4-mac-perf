@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "record_name": "mesh_draw_subrecord",
+  "record_size_bytes": 232,
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "evidence": [
+    "analysis/mesh-render-path.md",
+    "analysis/render-buckets.md",
+    "CPdxMeshObject::RenderBuckets inner loop stride 0xe8"
+  ],
+  "fields": [
+    {
+      "offset": "0x00",
+      "size": 48,
+      "role": "effect_and_material_header",
+      "access": "unknown_read_or_indirect",
+      "confidence": "partial",
+      "comparison_policy": "barrier",
+      "evidence": ["Effect pointer and texture IDs referenced from record; full layout unestablished"]
+    },
+    {
+      "offset": "0x30",
+      "size": 8,
+      "role": "vertex_buffer_0",
+      "access": "known_read",
+      "confidence": "established",
+      "comparison_policy": "equal",
+      "evidence": ["RenderBuckets +0x14c832a region; mesh-render-path +0x30"]
+    },
+    {
+      "offset": "0x38",
+      "size": 8,
+      "role": "index_buffer",
+      "access": "known_read",
+      "confidence": "established",
+      "comparison_policy": "equal",
+      "evidence": ["RenderBuckets +0x14c833b; mesh-render-path +0x38"]
+    },
+    {
+      "offset": "0x40",
+      "size": 8,
+      "role": "vertex_buffer_1",
+      "access": "known_read",
+      "confidence": "established",
+      "comparison_policy": "equal",
+      "evidence": ["mesh-render-path +0x40 optional second VBO"]
+    },
+    {
+      "offset": "0x48",
+      "size": 53,
+      "role": "intermediate_subrecord_payload",
+      "access": "unknown_read_or_indirect",
+      "confidence": "unestablished",
+      "comparison_policy": "barrier",
+      "evidence": ["Includes animation/bone paths and per-record conditionals not fully mapped"]
+    },
+    {
+      "offset": "0x7d",
+      "size": 1,
+      "role": "opaque_transparent_gate",
+      "access": "known_read",
+      "confidence": "established",
+      "comparison_policy": "equal",
+      "evidence": ["mesh-render-path +0x7d participates in opaque/transparent test"]
+    },
+    {
+      "offset": "0x7e",
+      "size": 106,
+      "role": "trailing_subrecord_payload",
+      "access": "unknown_read_or_indirect",
+      "confidence": "unestablished",
+      "comparison_policy": "barrier",
+      "evidence": ["Remaining 0xe8 bytes not established for batching"]
+    }
+  ]
+}

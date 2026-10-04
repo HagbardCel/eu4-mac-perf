@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "record_name": "SFlushData",
+  "record_size_bytes": 80,
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "evidence": [
+    "analysis/mesh-render-path.md",
+    "CPdxMeshObject::AddToBucket @ 0x1014c7168",
+    "CArray<SFlushData>::Append @ 0x1014c72b0 copies 0x50 bytes"
+  ],
+  "fields": [
+    {
+      "offset": "0x00",
+      "size": 4,
+      "role": "lod_index",
+      "access": "known_read",
+      "confidence": "established",
+      "comparison_policy": "equal",
+      "evidence": ["RenderBuckets selects mesh-type descriptor by stored LOD"]
+    },
+    {
+      "offset": "0x04",
+      "size": 4,
+      "role": "lod_reserved",
+      "access": "unknown_read_or_indirect",
+      "confidence": "unestablished",
+      "comparison_policy": "barrier",
+      "evidence": ["Not documented in Append copy; treat as barrier until proven unused"]
+    },
+    {
+      "offset": "0x08",
+      "size": 8,
+      "role": "mesh_object_pointer",
+      "access": "known_read",
+      "confidence": "established",
+      "comparison_policy": "equal",
+      "evidence": ["mesh-render-path +0x08 CPdxMeshObject*"]
+    },
+    {
+      "offset": "0x10",
+      "size": 64,
+      "role": "object_transform",
+      "access": "known_read",
+      "confidence": "established",
+      "comparison_policy": "equal",
+      "evidence": ["mesh-render-path +0x10..+0x4f transform; feeds _ObjectConstants"]
+    }
+  ]
+}

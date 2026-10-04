@@ -1,27 +1,32 @@
-# EU IV macOS performance — active plan (PR #29)
+# EU IV macOS performance — active plan
 
-## Current focus
+## Status
 
-Close measurement and evidence infrastructure on PR #29 without a new live intrusive capture. Historical Phase-C `results/20261003T210202Z-intrusive-diagnostic/manifest.json` stays byte-for-byte unchanged during canonical reseal.
+- **PR #29 merged** to `main` (`0034def`): Phase-C evidence capsule, hermetic `verify-evidence` in CI, profiler-off ABABA scaffold.
+- **Current focus:** Gfx subrecord static RE + predicates (PR1 branch `gfx-flushdata-re-predicate`), then conditional runtime candidate (PR2).
 
-## Done in this remediation
+## PR1 (in progress)
 
-- **Power lifecycle:** `PowerTail.finish()` drains pliststream after powermetrics exits; intrusive post-capture seals after derived analysis.
-- **Submission ABABA:** mmap `submission_control.bin` + `libeu4_submission_experiment.dylib`; per-phase counter deltas; screenshot after settle, before measurement window; bracket-normalized validation and hermetic scene reference (`benchmark/submission_scene_reference.json`).
-- **Evidence:** `capsule_profile` on seal; `verify-evidence` CLI; `powermetrics_stderr` in `raw_evidence.json`; salvage reports Spearman/Kendall and count-complete S/U ranks (reporting only).
-- **Docs:** Long-form roadmap moved to [`analysis/historical-roadmap.md`](analysis/historical-roadmap.md).
+Offline only — see [analysis/gfx-subrecord-pr1-gonogo.md](analysis/gfx-subrecord-pr1-gonogo.md):
 
-## Canonical Phase-C closure
+- Classified `SFlushData` (0x50) and mesh draw subrecord (0xe8) layout JSON with CI enforcement
+- Draw dependency map + engine elision inventory
+- `submission_state_equivalent` / `setup_elision_eligible` / `draw_batch_eligible` in C
+- Hook-site contract JSON (insertion before `0x14c81f3`, draw @ `0x14c8404` landmark)
+
+## PR2 (conditional)
+
+After PR1 **GO A** with observer ROI gate — protocol v2, `candidate_site_entries`, mutating candidate only if removed-work inventory justifies it; full ABABA for capability 2 mutation only.
+
+## Canonical Phase-C (frozen)
 
 ```text
-python3 benchmark/eu4_frame_model.py intrusive-salvage results/20261003T210202Z-intrusive-diagnostic
-python3 benchmark/eu4_frame_model.py seal-evidence results/20261003T210202Z-intrusive-diagnostic \
-  --profile intrusive_complete_v1
-python3 benchmark/eu4_frame_model.py verify-evidence results/20261003T210202Z-intrusive-diagnostic --profile intrusive_complete_v1
+python3 benchmark/eu4_frame_model.py verify-evidence \
+  results/20261003T210202Z-intrusive-diagnostic --profile intrusive_complete_v1
 ```
 
-CI runs the same hermetic verify on every push/PR (see `.github/workflows/profiler.yml`).
+Historical `manifest.json` blob remains immutable for that run.
 
-## Next PR (out of scope)
+## Out of scope
 
-Static `_FlushData` / `_TransparentFlushData` / `0xe8` RE → one conservative candidate → offline validation → one profiler-off ABABA.
+New Phase-C capture, profiler/evidence expansion, generic GL setter caches. Long roadmap: [analysis/historical-roadmap.md](analysis/historical-roadmap.md).
