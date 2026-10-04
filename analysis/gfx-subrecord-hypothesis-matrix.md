@@ -6,10 +6,10 @@ Protocol v3 uses **one bit index per hypothesis** in both `supported_hypothesis_
 
 | Bit | `hypothesis_id` | Structural counter(s) | Safety-qualified counter | Supported (PR B) | Safety-qualified (PR B) | Venice outcome → next action |
 |-----|-----------------|----------------------|---------------------------|------------------|---------------------------|------------------------------|
-| 0 | `same_parent_buffer_signature` | `same_parent_buffer_signature` | (v1 `eligible_pair_hits` alias) | yes | **no** — safe to **observe** v1 predicate only; same post-helper→effect/texture continuity gap as cross-parent | **Closed** — Venice v1 showed ~0% on paused fixture |
-| 1 | `cross_parent_buffer_signature` | `cross_parent_buffer_signature` | — | yes | no | High rate → deepen GfxDrawIndexed continuity RE; low → deprioritize cross-parent buffers |
-| 2 | `cross_parent_buffer_elision` | — | `cross_parent_buffer_elision_eligible` | **no** (predicate always false; PR A NO-GO) | **no** | Do not report `evaluated_no_recurrence`; unsupported until continuity GO |
-| 3 | `same_subrecord_pointer_cross_parent` | `same_subrecord_pointer_cross_parent` | — | yes | no | High → static RE on shared mesh assets; never Stage-2 alone |
+| 0 | `same_parent_buffer_signature` | `same_parent_buffer_signature` | (v1 `eligible_pair_hits` alias) | yes | **no** | **Screened negative** — paused Venice v3.1 (`20261004T152246Z`): 0/54,945 hits |
+| 1 | `cross_parent_buffer_signature` | `cross_parent_buffer_signature` | — | yes | no | **Screened negative** — v3.1: 0/1,290,465 hits; deprioritize cross-parent buffer mutation |
+| 2 | `cross_parent_buffer_elision` | — | `cross_parent_buffer_elision_eligible` | **no** | **no** | Unsupported; safety continuity NO-GO |
+| 3 | `same_subrecord_pointer_cross_parent` | `same_subrecord_pointer_cross_parent` | — | yes | no | **Screened negative** — v3.1: 0/1,290,465; static RE only if new fixture warrants |
 | 4 | `same_texture_input_signature` | `same_texture_input_signature` | — | **no** — subrecord texture ID offsets not disassembly-proven | no | Prove `+0x18/+0x1c/+0x20` (or correct offsets) before enabling live counter |
 | 5 | `texture_setup_elision` | — | `texture_setup_elision_eligible` | no | no | Unsupported until layout barriers resolved |
 | 6 | `object_constants_elision` | — | `object_constants_elision_eligible` | no | no | Unsupported; cross-parent unlikely |

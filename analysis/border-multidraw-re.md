@@ -1,22 +1,36 @@
-# Border path multidraw RE (parallel track)
+# Border path multidraw RE charter
 
-**Priority:** after v3.1 mesh observer fix; **do not** block corrected Venice on this work.
+**Binary:** GOG EU IV 1.37.5 x86-64 (`b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d`)  
+**Owner:** `CPdxMapBorderLayer::DrawBorders` — three `GfxDrawIndexed` sites @ `0x1010cc2e8`, `0x1010cc352`, `0x1010cc3b8`.
 
-## Motivation (Venice draw-mix, approximate)
+## Motivation
 
-| Path | ~draws/frame (paused Venice) | Structure |
-|------|------------------------------|-----------|
-| Mesh subrecord (`0x14c81e6`) | ~2,421 site entries/swap | Per-subrecord loop; corrected v3.1 adjacency TBD |
-| Border | ~2,285 | Single IBO, varying base vertex, one program, few texture signatures |
+Paused Venice: ~2,285 border draws/frame (single IBO, distinct base vertices). Intrusive screening: ~1,562 same-state border adjacencies/frame; recurring **943-draw** runs (`943×31` frames). `glMultiDrawElementsBaseVertex` matches varying `basevertex` with shared mode/type/IBO.
 
-Border batching may offer larger structural leverage if mesh cross-parent recurrence remains sparse after v3.1.
+Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — see [gfx-subrecord-post-v31-decision.md](gfx-subrecord-post-v31-decision.md).
 
-## Open items
+## Gate chain (PR B → PR C)
 
-1. Pin border draw site(s) and hook safety (prefix + displaced insns).
-2. Confirm single-IBO multidraw pattern and uniform signature cardinality (~500) from draw-trace screening.
-3. Texture-ID mapping (lower priority than multidraw geometry).
+| Gate | Deliverable |
+|------|-------------|
+| 0 API viability | [border-gl-multidraw-api-availability.md](border-gl-multidraw-api-availability.md) |
+| 1 Semantic mergeability | [border-multidraw-barriers.md](border-multidraw-barriers.md) |
+| 2 Realizability | [border-multidraw-mutation-topology.md](border-multidraw-mutation-topology.md) |
+| 3a Temporal / 3b Post-loop | topology + barriers |
+| 4 Argument reconstruction | [border-draw-record-layout.json](border-draw-record-layout.json) |
+| 5 Gross prototype screen | [border-multidraw-go-nogo.md](border-multidraw-go-nogo.md) |
+
+**Terminology:** `draw_calls_eliminated = draws_covered_by_multidraw - multidraw_calls`. GO thresholds use **draw_calls_eliminated/s** (gross scenario); **net CPU is PR C only**.
+
+## PR sequence
+
+| PR | Scope |
+|----|--------|
+| A | Mesh screened-negative closure |
+| B | Offline RE artifacts (stacked PR #36) |
+| C | Capability-2 **observer** harness; mutation blocked pending loop-head |
+| D | Map-text RE fallback |
 
 ## Status
 
-Placeholder for PR2 parallel RE; update with pinned offsets when static work lands.
+PR B artifacts live in stacked PR **#36** (not on `main` until merged). **Mutation go/no-go: NO** for GL interpose; observer ABABA may validate hook engagement only.
