@@ -18,7 +18,7 @@ class SubmissionControlHarnessTests(unittest.TestCase):
             control_path = root / "submission_control.bin"
             control_path.write_bytes(bytes(control.CONTROL_SIZE))
             probe_log = root / "probe.csv"
-            env = control.dylib_env(control_path, auto.PROBE, active_capability_id=42)
+            env = control.dylib_env(control_path, auto.PROBE, active_capability_id=2)
             env["EU4_AUTO_PROBE_LOG"] = str(probe_log)
             result = subprocess.run(
                 [str(control.HARNESS)],
@@ -29,10 +29,14 @@ class SubmissionControlHarnessTests(unittest.TestCase):
                 timeout=30,
             )
             self.assertEqual(result.returncode, 0, msg=result.stderr)
-            self.assertIn("hook_attempts=", result.stdout)
+            self.assertIn("control_ticks=", result.stdout)
             snap = control.read_snapshot(control_path)
-            self.assertGreater(snap["candidate_hook_attempts"], 0)
+            self.assertEqual(snap["protocol_version"], control.PROTOCOL_VERSION)
+            self.assertEqual(snap["advertised_capability_id"], 2)
+            self.assertGreater(snap["control_ticks"], 0)
+            self.assertGreater(snap["candidate_site_entries"], 0)
             self.assertGreater(snap["candidate_effective_actions"], 0)
             self.assertGreaterEqual(snap["ack_generation"], 1)
+            self.assertEqual(snap["ack_mode"], control.MODE_CANDIDATE)
             probe_text = probe_log.read_text(encoding="utf-8", errors="replace")
             self.assertIn("S,", probe_text)

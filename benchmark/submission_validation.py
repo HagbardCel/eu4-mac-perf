@@ -226,6 +226,8 @@ def bracket_normalized_ababa_gate(
         control_ok = control.get("status") == "passed"
         if phase.get("role") == "candidate" and expected_candidate_capability_id == 0:
             control_ok = control.get("status") in {"passed", "unsupported_candidate"}
+        if phase.get("role") == "candidate" and expected_candidate_capability_id == 1:
+            control_ok = control.get("status") in {"passed", "engagement_only"}
         phase_ok = finite_ok and scene_ok and control_ok
         if not phase_ok:
             all_valid = False
@@ -308,6 +310,15 @@ def bracket_normalized_ababa_gate(
     passed = bool(paths) and b1_non_inferior and b2_non_inferior
     if expected_candidate_capability_id == 0:
         passed = False
+    if expected_candidate_capability_id == 1:
+        return {
+            "status": "engagement_only",
+            "reason": "observer capability; Pareto optimization not applicable",
+            "pareto_eligible": False,
+            "phases": phase_reports,
+            "bracket_scene_gate": bracket_scene,
+            "expected_candidate_capability_id": expected_candidate_capability_id,
+        }
 
     return {
         "status": "passed" if passed else "failed",

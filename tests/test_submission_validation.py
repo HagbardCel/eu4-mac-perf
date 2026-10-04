@@ -2,6 +2,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import submission_control as control
 from submission_validation import (
     bracket_normalized_ababa_gate,
     bracket_relative_scene_gate,
@@ -68,7 +69,8 @@ class SubmissionValidationTests(unittest.TestCase):
             "submission_validation.bracket_relative_scene_gate", return_value=bracket_ok
         ):
             result = bracket_normalized_ababa_gate(phases, expected_candidate_capability_id=1)
-        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["status"], "engagement_only")
+        self.assertFalse(result.get("pareto_eligible", True))
 
     def test_bracket_scene_gate_fails_when_candidate_diverges(self):
         with mock.patch("submission_validation.pairwise_scene_delta", side_effect=[1.0, 1.0, 20.0, 1.0, 1.0, 1.0]):
@@ -91,3 +93,19 @@ class SubmissionValidationTests(unittest.TestCase):
     def test_summarize_phase_metrics_cpu_ms_per_swap(self):
         metrics = summarize_phase_metrics({"median_swaps_s": 50.0, "eu4_cpu_ms_per_s": 1000.0, "combined_w": 8.0})
         self.assertEqual(metrics["eu4_cpu_ms_per_swap"], 20.0)
+
+    def test_engagement_smoke_gate_requires_site_without_effective_actions(self):
+        phases = [
+            {
+                "role": "candidate",
+                "control_validation": {
+                    "status": "engagement_only",
+                    "candidate_site_entries_delta": 3,
+                    "eligible_pair_hits_delta": 1,
+                    "effective_actions_delta": 0,
+                },
+            }
+        ]
+        gate = control.engagement_smoke_gate(phases, expected_capability_id=1)
+        self.assertEqual(gate["status"], "engagement_only")
+        self.assertFalse(gate["pareto_eligible"])

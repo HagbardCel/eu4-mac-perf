@@ -31,6 +31,8 @@ PHASE_SCHEDULE = (
 PHASE_SECONDS = 30
 SETTLE_SECONDS = 5
 EXPECTED_CANDIDATE_CAPABILITY_ID = 0
+OBSERVER_CAPABILITY_ID = 1
+MUTATING_CAPABILITY_ID = 2
 
 
 def _validate_control_deltas(
@@ -40,34 +42,64 @@ def _validate_control_deltas(
     *,
     expected_capability_id: int,
 ) -> dict:
-    hook_delta = end["candidate_hook_attempts"] - start["candidate_hook_attempts"]
+    tick_delta = end["control_ticks"] - start["control_ticks"]
+    site_delta = end["candidate_site_entries"] - start["candidate_site_entries"]
+    hits_delta = end["eligible_pair_hits"] - start["eligible_pair_hits"]
     action_delta = end["candidate_effective_actions"] - start["candidate_effective_actions"]
-    if end["candidate_capability_id"] != expected_capability_id:
+    if end["requested_capability_id"] != expected_capability_id:
         return {
             "status": "failed",
-            "reason": "candidate_capability_id mismatch",
+            "reason": "requested_capability_id mismatch",
+            "start": start,
+            "end": end,
+        }
+    if end["advertised_capability_id"] != expected_capability_id:
+        return {
+            "status": "failed",
+            "reason": "advertised_capability_id mismatch",
             "start": start,
             "end": end,
         }
     if role == "candidate" and expected_capability_id == 0:
         return {
             "status": "unsupported_candidate",
-            "hook_attempts_delta": hook_delta,
+            "control_ticks_delta": tick_delta,
+            "candidate_site_entries_delta": site_delta,
+            "eligible_pair_hits_delta": hits_delta,
             "effective_actions_delta": action_delta,
             "start": start,
             "end": end,
         }
-    if role == "candidate":
-        ok = end["ack_mode"] == MODE_CANDIDATE and hook_delta > 0 and action_delta > 0
-        reason = None if ok else "candidate phase requires hook and effective action deltas"
+    if role == "candidate" and expected_capability_id == OBSERVER_CAPABILITY_ID:
+        ok = (
+            end["ack_mode"] == MODE_CANDIDATE
+            and tick_delta > 0
+            and site_delta > 0
+            and action_delta == 0
+        )
+        status = "engagement_only" if ok else "failed"
+        reason = None if ok else "observer candidate requires site entries without effective actions"
+    elif role == "candidate":
+        ok = (
+            end["ack_mode"] == MODE_CANDIDATE
+            and site_delta > 0
+            and hits_delta > 0
+            and action_delta > 0
+        )
+        status = "passed" if ok else "failed"
+        reason = None if ok else "mutating candidate requires site entries, pair hits, and effective actions"
     else:
-        ok = end["ack_mode"] == MODE_REFERENCE and hook_delta > 0 and action_delta == 0
-        reason = None if ok else "reference phase requires hook delta without effective actions"
+        ok = end["ack_mode"] == MODE_REFERENCE and tick_delta > 0 and action_delta == 0
+        status = "passed" if ok else "failed"
+        reason = None if ok else "reference phase requires control ticks without effective actions"
     return {
-        "status": "passed" if ok else "failed",
+        "status": status,
         "reason": reason,
-        "hook_attempts_delta": hook_delta,
+        "control_ticks_delta": tick_delta,
+        "candidate_site_entries_delta": site_delta,
+        "eligible_pair_hits_delta": hits_delta,
         "effective_actions_delta": action_delta,
+        "hook_attempts_delta": tick_delta,
         "start": start,
         "end": end,
     }
@@ -149,7 +181,11 @@ def _attach_phase_summaries(
         )
 
 
-def run_experiment(output_root: Path) -> Path:
+def run_experiment(
+    output_root: Path,
+    *,
+    expected_capability_id: int = EXPECTED_CANDIDATE_CAPABILITY_ID,
+) -> Path:
     auto.build()
     control.build()
     evidence = auto.preflight()
@@ -157,7 +193,7 @@ def run_experiment(output_root: Path) -> Path:
     output_root.mkdir(parents=True, exist_ok=True)
     run_dir = output_root / f"{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}-submission-experiment"
     run_dir.mkdir(parents=True, exist_ok=False)
-    expected_capability = EXPECTED_CANDIDATE_CAPABILITY_ID
+    expected_capability = int(expected_capability_id)
     manifest: dict = {
         "experiment": "submission_optimization_ababa_v1",
         "status": "starting",
@@ -239,9 +275,31 @@ def run_experiment(output_root: Path) -> Path:
                     raise base.BenchmarkError(f"Powermetrics tail incomplete: {drain}")
                 _attach_phase_summaries(phases, run_dir, anchor, game.pid, tail)
                 manifest["phases"] = phases
-                manifest["pareto_gate"] = validation.bracket_normalized_ababa_gate(
-                    phases,
-                    expected_candidate_capability_id=expected_capability,
+                if expected_capability == OBSERVER_CAPABILITY_ID:
+                    manifest["engagement_gate"] = control.engagement_smoke_gate(
+                        phases, expected_capability_id=expected_capability
+                    )
+                    manifest["pareto_gate"] = {
+                        "status": "skipped",
+                        "reason": "observer capability; Pareto not applicable",
+                    }
+                else:
+                    manifest["pareto_gate"] = validation.bracket_normalized_ababa_gate(
+                        phases,
+                        expected_candidate_capability_id=expected_capability,
+                    )
+                validation_path = run_dir / "validation.json"
+                validation_path.write_text(
+                    json.dumps(
+                        {
+                            "pareto_gate": manifest.get("pareto_gate"),
+                            "engagement_gate": manifest.get("engagement_gate"),
+                            "expected_candidate_capability_id": expected_capability,
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
                 )
                 manifest["status"] = "complete"
         except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:
@@ -267,9 +325,18 @@ def run_experiment(output_root: Path) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", default=str(ROOT / "results"))
+    parser.add_argument(
+        "--engagement-smoke",
+        action="store_true",
+        help="capability 1 observer run (no Pareto); short validation semantics",
+    )
     args = parser.parse_args()
     try:
-        run_dir = run_experiment(Path(args.output).expanduser().resolve())
+        capability = OBSERVER_CAPABILITY_ID if args.engagement_smoke else EXPECTED_CANDIDATE_CAPABILITY_ID
+        run_dir = run_experiment(
+            Path(args.output).expanduser().resolve(),
+            expected_capability_id=capability,
+        )
         print(run_dir)
     except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)

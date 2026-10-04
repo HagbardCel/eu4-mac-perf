@@ -11,9 +11,19 @@ FlushData / TransparentFlushData
       → GfxDrawIndexed
 ```
 
-## Mechanism (to refine after RE + optional TAIL salvage)
+## Mechanism (PR1 static RE — `gfx-flushdata-re-predicate`)
 
-Consolidate or skip redundant **submission transactions** when consecutive subrecords share compatible effect, buffers, textures, and object-constant state (conservative; fail-open).
+Split predicates in [`subrecord_equivalence.c`](../benchmark/subrecord_equivalence.c) (layouts in
+[`sflushdata-0x50-layout.json`](sflushdata-0x50-layout.json),
+[`mesh-draw-subrecord-0xe8-layout.json`](mesh-draw-subrecord-0xe8-layout.json)):
+
+- `submission_state_equivalent` — EQUAL fields per layout JSON; BARRIER bytes break the chain.
+- `setup_elision_eligible` — state equivalent **and** barrier bytes identical (skip repeated setup; both draws retained).
+- `draw_batch_eligible` — currently always false until batching barriers are proven ([`gfx-subrecord-pr1-gonogo.md`](gfx-subrecord-pr1-gonogo.md) **GO A**).
+
+Hook insertion contract: [`mesh-subrecord-hook-site.json`](mesh-subrecord-hook-site.json) (before setup; draw landmark documentation only).
+
+Runtime validation uses protocol v2 ([`submission_control.py`](../benchmark/submission_control.py)): capability **1** observer (`candidate_site_entries`, optional `eligible_pair_hits`, `effective_actions == 0`, engagement-only); capability **2** mutating (`effective_actions > 0`) with full ABABA Pareto gate only after ROI.
 
 ## Safety
 
