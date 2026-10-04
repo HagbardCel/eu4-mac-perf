@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "owner_symbol": "_ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
   "pr_c_implementation": "observer_only_glDrawElementsBaseVertex_interpose_immediate_pass_through",
@@ -13,15 +13,31 @@
     "detour_encoding": "RIP_INDIRECT_ABSOLUTE_JMP",
     "detour_target_requirement": "8-byte absolute target in trampoline; no rel32 reachability limit",
     "near_island_required": false,
+    "patch_span_mid_addresses_exclusive": true,
+    "incoming_control_flow_audit": {
+      "method": "otool -tv full __TEXT scan; rg for 0x1010cbe55|59|5d branch/call targets",
+      "limits": "Indirect jump tables not exhaustively proven; mid-span addresses are fall-through interiors of a single 14-byte basic block from 0x1010cbe55",
+      "0x1010cbe55": {
+        "incoming_edges": ["0x1010cc3da jne → 0x1010cbe55"],
+        "notes": "Loop back-edge only in scanned disassembly"
+      },
+      "0x1010cbe59": {
+        "independent_incoming_edges": [],
+        "notes": "No branch/call targets found outside sequential fall-through from 0x1010cbe55"
+      },
+      "0x1010cbe5d": {
+        "independent_incoming_edges": [],
+        "notes": "No branch/call targets found outside sequential fall-through from 0x1010cbe59"
+      }
+    },
     "displaced_instructions": [
       {"address": "0x1010cbe55", "bytes": "44 84 69 01", "mnemonic": "testb %r13b, 0x1(%rcx)"},
       {"address": "0x1010cbe59", "bytes": "48 89 4d 90", "mnemonic": "movq %rcx, -0x70(%rbp)"},
       {"address": "0x1010cbe5d", "bytes": "0f 84 5a 05 00 00", "mnemonic": "je 0x1010cc3bd"}
     ],
     "detour_return_after_displaced_span": "0x1010cbe63",
-    "first_unconsumed_trampoline_entry": "displaced_testb_movq_then_je_at_0x1010cbe5d_semantics",
+    "first_unconsumed_trampoline_entry": "displaced_testb_movq_then_je_semantics",
     "terminal_prefix_resume": "0x1010cc3e0",
-    "continuation_notes": "Interior: rcx=first-unconsumed entry, execute displaced testb+movq, branch via je logic. Terminal (WALK_END): enter outer-step path at 0x1010cc3e0 after synthesizing tail state.",
     "feasibility_doc": "analysis/border-loop-head-patch-plan.md"
   },
   "draw_sites": [

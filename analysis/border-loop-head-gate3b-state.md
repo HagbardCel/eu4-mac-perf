@@ -1,56 +1,101 @@
 # Gate 3b — continuation state (prefix-batch model)
 
-## Do not assume `0x1010cc3bd` as resume after k drawable records
-
-`0x1010cc3bd` is the **one-record loop tail** (advances live `%rcx`, compares to `-0x198(%rbp)`):
+## Loop tail (reference)
 
 ```asm
-1010cc3bd  movq -0x70(%rbp), %rcx
+1010cc3bd  movq -0x70(%rbp), %rcx      ; cursor from stack
 1010cc3c1  leaq -0x2(%rcx), %rax
-1010cc3c5  addq $4, %rcx
+1010cc3c5  addq $4, %rcx               ; advance live rcx
 1010cc3c9  addq $4, %rax
 1010cc3cd  cmpq -0x198(%rbp), %rax
+1010cc3d4  movl -0xe4(%rbp), %ebx
 1010cc3da  jne 0x1010cbe55
-1010cc3e0  incl outer ebx …
+1010cc3e0  incl %ebx                   ; terminal outer-step entry
 ```
 
-`-0x70(%rbp)` is **written at the next loop head** (`0x1010cbe59`), not incremented in the tail. The tail mutates **live `%rcx`** then stores on re-entry.
+`-0x70(%rbp)` is written at `0x1010cbe59` on each loop-head entry, not updated in the tail.
 
 ## Continuation classes
 
-| Class | When | Action |
-|-------|------|--------|
-| **Interior** | `termination_kind == BARRIER` or `SCAN_CAP` | `%rcx` = first-unconsumed index entry; displaced `testb` + `movq`; branch via original `je` semantics @ `0x1010cbe5d`; must not re-enter classifier detour |
-| **Terminal** | `termination_kind == WALK_END` | No phantom record test; synthesize state after last consumed step; resume **outer-step** @ `0x1010cc3e0` |
+| Class | `termination_kind` | Resume |
+|-------|-------------------|--------|
+| Interior | `BARRIER`, `SCAN_CAP` | Displaced `testb`+`movq` + `je` semantics; `%rcx` = first-unconsumed entry |
+| Terminal | `WALK_END` | `@ 0x1010cc3e0` after k tail-equivalent steps |
 
-Classifier sets `WALK_END` only when `walk_exhausted=True` (induction reached `-0x198` bound), **not** when `len(side_entries)` equals scan cap.
+### Terminal exact state (k drawable steps consumed)
 
-## CPU live state (interior trampoline)
+Let `cursor_k` = index-table pointer for entry k (first **non-drawn** step). After original tail for entries `0..k-1`:
 
-| State | Requirement |
-|-------|-------------|
-| `%rcx` | Points at first-unconsumed associated entry |
-| `-0x70(%rbp)` | Updated by displaced `movq %rcx, -0x70` |
-| RFLAGS | From displaced `testb` before `je` |
-| `-0x80(%rbp)` record index | Not loaded until fall-through past `0x1010cbe63` — **dead** at trampoline entry |
-| XMM | Prove dead at fast-color join or spill in mutation PR |
+```text
+%rcx          = cursor_k          (value tail would load before compare)
+%rax          = cursor_k + 2      (equals -0x198 end bound when WALK_END)
+-0x70(%rbp)   = cursor_{k-1}      (last stored at loop head before final tail)
+-0x198(%rbp)  = end bound (unchanged)
+%ebx          = reloaded from -0xe4(%rbp) @ 0x1010cc3d4
+-0x51, -0x64  = prefix batch color/VBO caches
+RFLAGS        = DEAD @ 0x1010cc3e0 (no flag consumer before incl)
+-0x80(%rbp)   = DEAD at interior trampoline entry (loaded @ 0x1010cbe63 only on draw path)
+```
 
-## CPU live state (terminal @ `0x1010cc3e0`)
+### Interior trampoline
 
-| State | After homogeneous mode-0 prefix |
-|-------|----------------------------------|
-| `%rcx` / `%rax` | As if tail completed for all consumed index steps (cursor at end bound) |
-| `-0x70(%rbp)` | Final cursor value for last consumed entry |
-| `-0xe4(%rbp)` / `%ebx` | Outer batch index — reloaded @ `0x1010cc3d4` before `0x1010cc3e0` in original flow |
-| `-0x51`, `-0x64` | Cached color/VBO match prefix batch key |
-| IBO shadow (`ONE_BIND`) | Established by batch `GfxSetIndexBuffer` before MDEBV |
+```text
+%rcx          = first-unconsumed entry pointer (LIVE)
+-0x70(%rbp)   = set by displaced movq (LIVE through je)
+RFLAGS        = LIVE (testb + je)
+```
 
-RFLAGS at `0x1010cc3e0`: **dead** (no flag consumer before outer `incl`).
+## Trampoline / callee-saved discipline
+
+Mutation path is **non-leaf** (calls engine helpers + GL). Trampoline must preserve:
+
+```text
+%rbp, %rbx, %r12-%r15     callee-saved — must not clobber
+%rsp                      16-byte aligned before each call
+```
+
+Do not rely on leaf red-zone for scratch across calls.
+
+### Caller-saved after ONE_BIND batch sequence
+
+Document liveness **after** `GfxSetIndexBuffer` + `glMultiDrawElementsBaseVertex` return, before interior/terminal resume:
+
+| GPR | Interior resume | Terminal resume |
+|-----|-----------------|-----------------|
+| `%rdi,%rsi,%rdx,%rcx,%r8,%r9,%r10,%r11` | May be clobbered by calls — reload resume state from stack/TLS | Same |
+| `%r12` (`%r12` = SBorderDrawInfoSet) | LIVE (unchanged by batch if preserved in trampoline) | LIVE |
+| `%r14` record base | LIVE if still in original loop scope | LIVE |
+
+### XMM (fast-color path @ `0x1010cc22d` join)
+
+Slow-color XMM traffic @ `0x1010cc1ef`–`0x1010cc222` is skipped on fast-color prefix. At hook `0x1010cbe55`, **no XMM reload is required before skip test** — XMM **DEAD** for skip-only interior trampoline. After MDEBV/GfxSetIndexBuffer calls, XMM0–7 may be clobbered per SysV; XMM8–15 callee-saved must be preserved by trampoline if still live in `DrawBorders` frame (audit: no XMM use between `0x1010cc22d` and `0x1010cbe55` on fast path).
+
+## GfxSetIndexBuffer @ `0x1010cc2ce` (macOS SysV)
+
+```text
+rdi = movq -0x60(%rbp), %rdi   @ 0x1010cc2ca  (GfxDeferredContextGFX*)
+rsi = movq (%rax,%r15,8), %rsi @ 0x1010cc2c6  (= batch_key.ibo_argument)
+```
+
+No stack arguments. Null `rsi` → helper returns without bind (`testq %rsi` @ `0x1015ec28e`).
+
+## glMultiDrawElementsBaseVertex (mutation TLS arrays)
+
+```text
+rdi  = GL_TRIANGLES (0x0004)
+rsi  = &count[i]      (3 * triangle_count per record)
+rdx  = GL_UNSIGNED_SHORT (0x1403)
+rcx  = &indices[i]    (zero offsets — border path)
+r8   = drawcount      (prefix run_length)
+r9   = &basevertex[i]
+```
+
+16-byte stack alignment before `callq`. Engine import via `_glew*` tail same as `GfxDrawIndexed` base-vertex path.
 
 ## Engine / GL (`ONE_BIND`)
 
-Homogeneous prefix: one `GfxSetIndexBuffer(prefix ibo_argument)`, MDEBV, VBO/color caches unchanged across batch.
+One `GfxSetIndexBuffer(batch_key.ibo_argument)` then MDEBV replaces N×(bind+GfxDrawIndexed) for homogeneous mode-0 prefix subject to classifier exclusions (null IBO, zero tri, pending `+0x128`, etc.).
 
 ## Non-recursive re-entry
 
-Patch @ `0x1010cbe55` uses 14-byte `RIP_INDIRECT_ABSOLUTE_JMP` to trampoline. Resume into original code uses displaced-instruction stub or TLS one-shot — see [border-hook-site.json](border-hook-site.json).
+14-byte patch @ `0x1010cbe55`; see [border-hook-site.json](border-hook-site.json) incoming-CF audit.

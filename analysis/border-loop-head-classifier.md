@@ -39,8 +39,9 @@ Evaluate before `record_index` / `RecordView` / IBO dereference.
 
 ## IBO (`ONE_BIND` default)
 
-- `required_ibo_identity` / `required_ibo_argument` from `ibo_table[record_index]` (same value per RE).
-- Entry IBO match not required; mutation calls `GfxSetIndexBuffer(argument)` once.
+- `BatchKey.ibo_identity` / `BatchKey.ibo_argument` from `ibo_table[record_index]` (same pointer per GOG 1.37.5 RE).
+- `ibo_argument == 0` → not batch eligible (GfxSetIndexBuffer no-op).
+- Mutation: `GfxSetIndexBuffer(prefix.batch_key.ibo_argument)`.
 
 ## `termination_kind`
 

@@ -15,7 +15,7 @@ classifier_trampoline:
     if N or A (mutation off): run displaced testb/movq/je; continue original
     prefix = classify_batchable_prefix(...)
     if not prefix.batch_eligible: fall through one record (displaced path)
-    GfxSetIndexBuffer(prefix.required_ibo_argument)   # once
+    GfxSetIndexBuffer(prefix.batch_key.ibo_argument)   # once; rdi = -0x60(%rbp) deferred ctx
     glMultiDrawElementsBaseVertex(...)
     if prefix.termination_kind == WALK_END:
         jmp terminal_prefix_resume @ 0x1010cc3e0

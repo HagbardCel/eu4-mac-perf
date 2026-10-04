@@ -41,5 +41,5 @@
     "analysis/tools/border_loop_classifier.py",
     "analysis/tools/border_loop_evidence.py"
   ],
-  "note": "Static criteria 1-10 PASS offline; runtime Gate 0 and ROI remain pending. Unconditional GO is not issued in this artifact."
+  "note": "static_feasibility derived mechanically from static_criteria. Runtime Gate 0 and ROI pending."
 }

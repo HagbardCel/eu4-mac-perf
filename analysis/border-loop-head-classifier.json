@@ -11,7 +11,9 @@
     "OTHER_SIDE_EFFECT": 32
   },
   "termination_kind": ["BARRIER", "WALK_END", "SCAN_CAP", "INVALID"],
-  "batch_eligible_formula": "run_length>=2 AND entry_match AND homogeneous_included_prefix",
+  "batch_key_fields": ["mode", "color_state", "vbo_table_index", "ibo_identity", "ibo_argument"],
+  "batch_eligible_formula": "run_length>=2 AND entry_match AND homogeneous_included_prefix AND termination_kind!=INVALID",
+  "null_ibo_argument_policy": "OTHER_SIDE_EFFECT",
   "v1_policies": {
     "skip_record": "visibility_test_before_deref",
     "triangle_count_zero": "boundary_OTHER_SIDE_EFFECT",

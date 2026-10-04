@@ -24,22 +24,22 @@ Disassembly source: local `otool -tv` on GOG `eu4` (image base `0x100000000`).
 
 ## Structured types
 
-### LoopContext (outer + hook-visible)
+### LoopContext (hook @ `0x1010cbe55` — proven sources)
 
-```text
-mode                         # 0x24(%r12)
-cached_color                 # -0x51(%rbp)
-cached_vbo_index             # -0x64(%rbp)
-bound_ibo_identity           # ZERO_BIND shadow only; ONE_BIND uses pre-multidraw GfxSetIndexBuffer
-required_ibo_argument        # movq (%rax,%r15,8), %rsi @ 0x1010cc2c6 — pointer passed to GfxSetIndexBuffer
-skip_or_visibility_mask      # %r13b (exact semantics: bit tested at 0x1(%rcx))
-index_table_cursor           # -0x70(%rbp)
-index_table_end              # -0x198(%rbp)
-record_array_base            # %r14 after 0x1010cbe67
-record_index                 # -0x80(%rbp) / %r15 at mode-0 draw
-gfx_deferred_context         # -0x60(%rbp)
-sborder_draw_info            # %r12
-```
+| Classifier / mutation field | Hook-time derivation |
+|-----------------------------|----------------------|
+| `mode` | `movl 0x24(%r12), %eax` @ `0x1010cc26b` ( `%r12` = SBorderDrawInfoSet, live in frame) |
+| `cached_color` | `movb -0x51(%rbp), %cl` slow-path @ `0x1010cc1d3`; value from `-0x51` stack local |
+| `cached_vbo_index` | `cmpl %edx, -0x64(%rbp)` @ `0x1010cc292` |
+| `skip_or_visibility_mask` | `%r13b` @ `0x1010cbe55` |
+| `record_table` rows | `%r14` from `0x78(%r12)` @ `0x1010cbe67`; index from `movzwl -0x2(%rcx)` after hook |
+| `ibo_table` slot | `movq 0x60(%r12), %rax`; `movq (%rax,%r15,8), %rsi` @ `0x1010cc2c6` → `BatchKey.ibo_argument` |
+| `deferred_attrib_upload_pending` | `movq -0x60(%rbp), %rdi` (GfxDeferredContextGFX*); in hook dylib: `movq (%rdi), %rX`; `cmpb $0, 0x128(%rX)` (same predicate as `GfxDrawIndexed` @ `0x1015eaaa7`) |
+| `bound_ibo_identity` | ZERO_BIND only; ONE_BIND ignores entry bind state |
+| `index_table_cursor` | `-0x70(%rbp)` / live `%rcx` at hook |
+| `index_table_end` | `-0x198(%rbp)` |
+
+Per-record `ibo_identity` / `ibo_argument` live on `BatchKey` after resolving `record_index` (same pointer on GOG 1.37.5).
 
 ### IndexTableEntry (associated data at cursor — **not** `SBorderDraw`)
 

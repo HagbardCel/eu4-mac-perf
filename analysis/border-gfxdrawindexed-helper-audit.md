@@ -1,65 +1,44 @@
 # Gate 3a — border helper-side-effect audit (`GfxDrawIndexed` + `GfxSetIndexBuffer`)
 
-**Binary:** GOG EU IV 1.37.5 x86-64  
-**GfxDrawIndexed:** `0x1015eaa77`  
-**GfxSetIndexBuffer:** `0x1015ec28e`  
-**Mode-0 border path:** `0x1010cc2c1`–`0x1010cc2e8`
+**Binary:** GOG EU IV 1.37.5 (`b3d38876…`)  
+**Topology:** `ONE_BIND` — one `GfxSetIndexBuffer(batch_key.ibo_argument)` then MDEBV per eligible prefix.
 
-## Production topology (this PR)
+## GfxSetIndexBuffer (`0x1015ec28e`)
 
-```text
-ibo_bind_topology: ONE_BIND
-```
+| Check | Finding |
+|-------|---------|
+| Null `rsi` | `testq %rsi; je ret` @ `0x1015ec291` — **no GL bind, no `0x68` write** |
+| GL dispatch | Indirect call with `edi=0x8893`, index from `0x4(%rsi)` |
+| Deferred cache write | `movl (%rbx), %eax` → `0x68(%r14)` where `r14 = *(rdi)` |
+| Draw/stat counter in helper body | **Not found** in `0x1015ec28e`–`0x1015ec2bb` (25 insn window) |
+| Profiler | **Not found** in same window |
 
-Mutation batch path: **one** `GfxSetIndexBuffer(required_ibo_argument)` using the same `rsi` pointer loaded at `0x1010cc2c6` (`movq (%rax,%r15,8), %rsi`), then `glMultiDrawElementsBaseVertex` for the prefix.
+**Classifier:** `ibo_argument == 0` → `OTHER_SIDE_EFFECT` (ONE_BIND cannot establish IBO).
 
-`ZERO_BIND` (elide all N binds while relying on entry IBO shadow) was rejected for static closure: hook runs **before** per-iteration `GfxSetIndexBuffer`, so shadow observability at re-entry is not proven without a second hook.
+## GfxDrawIndexed (`0x1015eaa77`)
 
-## IBO table → helper argument
+| Offset / behavior | R/W | Border relevance |
+|-------------------|-----|------------------|
+| `esi<=0` → `0x68(%r12)` count | R | Zero `triangle_count` → boundary |
+| `+0x128` byte | R/C | Attrib upload loop `0x1015eaad3`–`0x1015eab05`; cleared after |
+| `+0x170` byte | R/C | Conditional block `0x1015eabe5`–`0x1015eac0d` (secondary upload path) |
+| `+0x70` deferred attrib table | R | Upload loop |
+| `r14d==0` vs `!=0` | — | `glDrawElements` @ `0x1015eac4a` vs `glDrawElementsBaseVertex` tail @ `0x1015eac48` |
 
-```asm
-1010cc2c1  movq 0x60(%r12), %rax
-1010cc2c6  movq (%rax,%r15,8), %rsi    # record_index in %r15
-1010cc2ce  callq GfxSetIndexBuffer
-```
+### Audit categories (scoped search)
 
-`required_ibo_identity` and `required_ibo_argument` are the **same pointer value** in `rsi` (classifier models as `int` handle id). Homogeneity compares identity; ONE_BIND passes that pointer once.
+| Category | Scope | Result |
+|----------|-------|--------|
+| Draw/stat counters | Full `GfxDrawIndexed` through both GL tails (`0x1015eaa77`–`0x1015eac6a`) | **No** `inc`/`add` to global stats in this function body |
+| Profiler markers | Same | **Not found** |
+| Debug/error | `0x1015eab1e` path when attrib parent null | **Irrelevant** on border mode-0 hot path (attrib parent live when `+0x128` set) |
+| Cached state beyond GL | `+0x68`, `+0x128`, `+0x170` as above | Documented; MDEBV must not skip required attrib flush when `+0x128` set at hook |
 
-### GfxSetIndexBuffer side effects (`0x1015ec28e`)
+### Base vertex == 0
 
-| Effect | Evidence |
-|--------|----------|
-| Early out if `rsi==0` | `testq %rsi` @ `0x1015ec28e` |
-| GL bind via indirect call | `movl 0x4(%rsi), %esi` + `callq *(%rax)` |
-| Deferred context cache | `movl (%rbx), %eax` → `0x68(%r14)` |
+Border may use `ecx=0` @ `0x1010cc2e6` → `glDrawElements` in helper. MDEBV with `basevertex[i]==0` is **equivalent** for rendering (Khronos); no extra classifier barrier.
 
-**Equivalence adopted:** \(N \times GfxSetIndexBuffer(I) \equiv 1 \times GfxSetIndexBuffer(I)\) before multidraw when prefix IBO is homogeneous (same `rsi`). Skipped intermediate binds must not be required for stats/profiler beyond what the single bind establishes — no additional engine reads of bind counters were found on the border hot path in this audit pass.
+## Required conclusion (ONE_BIND eligible subset)
 
-## GfxDrawIndexed
-
-| Behavior | Evidence |
-|----------|----------|
-| `esi<=0` uses context `+0x68` count | `0x1015eaa94`–`0x1015eaa98` |
-| Deferred attrib upload | `cmpb $0, 0x128(%r12)` → loop `0x1015eaad3`–`0x1015eab05`, clear `0x128` |
-| Base vertex dispatch | `testl %r14d` @ `0x1015eac16`: **0** → `jmp 0x1018c2606` (`glDrawElements`); **≠0** → indirect `glDrawElementsBaseVertex` |
-| Border mode-0 args | `ecx=0` @ `0x1010cc2e6`, `esi=3*triangle_count` @ `0x1010cc2d9`–`0x1010cc2e8` |
-
-### Classifier fall-through (conservative)
-
-| Condition | Policy |
-|-----------|--------|
-| `triangle_count == 0` | Boundary `OTHER_SIDE_EFFECT` — `esi` may be 0 → context-count fallback in helper |
-| `deferred_attrib_upload_pending` (`+0x128`) | Fall through one original `GfxDrawIndexed` at hook |
-
-### Base vertex == 0 vs multidraw
-
-Original per-record: `basevertex==0` → `glDrawElements`; `!=0` → `glDrawElementsBaseVertex`. Replacement uses `glMultiDrawElementsBaseVertex` with per-draw `basevertex[i]`. **Conclusion:** Khronos semantics treat `basevertex=0` as valid for MDEBV; no extra classifier barrier for zero basevertex members (border records commonly use small positive basevertex; zero remains supported).
-
-### Draw-call count
-
-Internal draw/stat increments inside helpers are **diagnostic-only** for mutation GO (same rule as GL-tail interpose charter) unless future RE shows game logic consumption.
-
-## Required conclusion (met for ONE_BIND subset)
-
-1. \(N \times GfxDrawIndexed \equiv 1 \times MDEBV\) for eligible mode-0 prefix **excluding** zero-count and pending-attrib hook states, with **one** upfront `GfxSetIndexBuffer` replacing N binds.  
-2. Side effects not reproduced: attrib upload when `+0x128` set (classifier fall-through); zero triangle count (boundary).
+1. \(N \times (GfxSetIndexBuffer + GfxDrawIndexed) \equiv 1 \times GfxSetIndexBuffer + 1 \times MDEBV\) for mode-0 homogeneous prefixes **excluding**: null `ibo_argument`, `triangle_count==0`, `deferred_attrib_upload_pending` at hook, unsupported mode, `INVALID` classifier termination.
+2. Side effects not reproduced without fall-through: `+0x128` attrib upload when pending at hook.

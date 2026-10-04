@@ -32,6 +32,7 @@ class BatchKey:
     color_state: int
     vbo_table_index: int
     ibo_identity: int
+    ibo_argument: int
     index_type: str = "GL_UNSIGNED_SHORT"
 
 
@@ -118,6 +119,10 @@ def _is_drawable(ctx: LoopContext, entry: IndexTableEntry) -> bool:
     return (ctx.skip_or_visibility_mask & entry.visibility_byte) != 0
 
 
+def _null_ibo_argument(arg: int) -> bool:
+    return arg == 0
+
+
 def _entry_matches_key(
     ctx: LoopContext,
     key: BatchKey,
@@ -129,7 +134,7 @@ def _entry_matches_key(
         return "match" if current == required else "mismatch"
 
     if topology == "ONE_BIND":
-        ibo: TriState = "match"
+        ibo = "mismatch" if _null_ibo_argument(key.ibo_argument) else "match"
     else:
         ibo = cmp(ctx.ibo_known, ctx.bound_ibo_identity, key.ibo_identity)
 
@@ -150,6 +155,8 @@ def _homogeneity_mask(resolved: ResolvedIteration, key: BatchKey) -> BarrierMask
         boundary |= BarrierMask.VBO_TRANSITION
     if resolved.required_ibo_identity != key.ibo_identity:
         boundary |= BarrierMask.IBO_TRANSITION
+    if _null_ibo_argument(resolved.required_ibo_argument):
+        boundary |= BarrierMask.OTHER_SIDE_EFFECT
     if rec.triangle_count == 0:
         boundary |= BarrierMask.OTHER_SIDE_EFFECT
     return boundary
@@ -174,7 +181,12 @@ def classify_batchable_prefix(
         kind: TerminationKind,
     ) -> PrefixResult:
         elim = max(0, run_len - 1)
-        eligible = run_len >= 2 and entry_match.all_match()
+        eligible = (
+            run_len >= 2
+            and entry_match.all_match()
+            and kind is not TerminationKind.INVALID
+        )
+        fall_through = run_len < 2 or kind is TerminationKind.INVALID
         return PrefixResult(
             run_length=run_len,
             stop_reason_mask=stop,
@@ -184,7 +196,7 @@ def classify_batchable_prefix(
             draws_covered=run_len,
             eligible_draw_calls_eliminable=elim,
             batch_eligible=eligible,
-            v1_fall_through_recommended=run_len < 2,
+            v1_fall_through_recommended=fall_through,
             termination_kind=kind,
         )
 
@@ -211,6 +223,7 @@ def classify_batchable_prefix(
         color_state=first.color_byte,
         vbo_table_index=resolved0.record.vbo_table_index,
         ibo_identity=resolved0.required_ibo_identity,
+        ibo_argument=resolved0.required_ibo_argument,
     )
     entry_match = _entry_matches_key(ctx, key, ibo_bind_topology)
     if entry_match.any_unknown() or not entry_match.all_match():
