@@ -120,7 +120,34 @@ def _candidate_capture_commit() -> str | None:
     return None
 
 
-def reconstructed_capture_identity(manifest: dict | None = None) -> dict:
+def _identity_capture_consistent(identity_at_capture: dict | None) -> str:
+    if not identity_at_capture:
+        return "historical"
+    start = identity_at_capture.get("identity_start") or {}
+    end = identity_at_capture.get("identity_end") or {}
+    if not start and not end:
+        return "historical"
+    if not start or not end:
+        return "partial"
+    if start.get("git_commit") != end.get("git_commit"):
+        return "partial"
+    if not start.get("git_tree_clean") or not end.get("git_tree_clean"):
+        return "partial"
+    if start.get("controller_sha256") != end.get("controller_sha256"):
+        return "partial"
+    artifact_start = identity_at_capture.get("artifact_start") or {}
+    artifact_end = identity_at_capture.get("artifact_end") or {}
+    for key, digest in artifact_start.items():
+        if artifact_end.get(key) != digest:
+            return "partial"
+    return "direct"
+
+
+def reconstructed_capture_identity(
+    manifest: dict | None = None,
+    *,
+    identity_at_capture: dict | None = None,
+) -> dict:
     commit = _candidate_capture_commit()
     basis = [
         "clean-tree preflight enforced before intrusive build (contract preflight)",
@@ -142,11 +169,139 @@ def reconstructed_capture_identity(manifest: dict | None = None) -> dict:
             "persisted capture-time controller SHA-256",
         ],
     }
-    if manifest and (manifest.get("identity_at_capture") or {}).get("identity_start"):
+    persisted = identity_at_capture or (manifest.get("identity_at_capture") if manifest else None)
+    consistency = _identity_capture_consistent(persisted)
+    if consistency == "direct":
         identity["policy"] = "recorded_direct"
         identity["status"] = "recorded_at_capture"
         identity.pop("missing", None)
+    elif consistency == "partial":
+        identity["policy"] = "recorded_partial"
+        identity["status"] = "recorded_partial"
+        identity["missing"] = ["incomplete or inconsistent identity_at_capture start/end"]
     return identity
+
+
+def _summarize_powermetrics_stderr(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = [line for line in text.splitlines() if line.strip()]
+    from collections import Counter
+
+    counts = Counter(lines)
+    return {
+        "bytes": path.stat().st_size,
+        "empty": not lines,
+        "sha256": _sha256_file(path),
+        "line_count": len(lines),
+        "unique_lines": dict(counts),
+        "interpretation": "observed_warning_not_used_as_invalidation",
+    }
+
+
+def _finalize_readiness_log(run_dir: Path, readiness_log: dict | None, manifest: dict) -> dict | None:
+    if not readiness_log:
+        return readiness_log
+    committed = readiness_log.get("committed_filename")
+    if not committed:
+        return readiness_log
+    path = run_dir / committed
+    if not path.is_file():
+        return readiness_log
+    file_block = {
+        "committed_filename": committed,
+        "bytes": path.stat().st_size,
+        "sha256": _sha256_file(path),
+    }
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as temporary:
+        extracted = extract_game_ready_log(Path(temporary), manifest=manifest)
+    if extracted.get("sha256") == file_block["sha256"]:
+        origin = {
+            "status": extracted.get("status", "reconstructed_posthoc_anchored"),
+            "extraction_method": (extracted.get("provenance") or {}).get("extraction_method"),
+            "phase_c_wall_window_utc": (extracted.get("provenance") or {}).get("phase_c_wall_window_utc"),
+        }
+    elif readiness_log.get("status") == "present_on_disk":
+        origin = {
+            "status": "historical_materialized_unknown",
+            "note": "committed readiness log not reproduced by local heuristic re-extraction",
+        }
+    else:
+        origin = {"status": readiness_log.get("status", "unknown")}
+    merged = {**readiness_log, "origin": origin, "file": file_block}
+    return merged
+
+
+def _plist_records(raw: bytes) -> tuple[list[dict], bytes, int]:
+    import plistlib
+
+    parts = raw.split(b"\0")
+    partial = parts.pop()
+    records: list[dict] = []
+    for part in parts:
+        if not part.strip():
+            continue
+        item = plistlib.loads(part.strip())
+        if isinstance(item, dict):
+            records.append(item)
+    normalized = raw
+    dropped = 0
+    if partial.strip():
+        try:
+            item = plistlib.loads(partial.strip())
+            if isinstance(item, dict):
+                records.append(item)
+                if not raw.endswith(b"\0"):
+                    normalized = raw + b"\0"
+        except (ValueError, TypeError, plistlib.InvalidFileException):
+            dropped = len(partial)
+            normalized = b"\0".join(parts)
+            if parts:
+                normalized += b"\0"
+    return records, normalized, dropped
+
+
+def _sync_power_samples_json(run_dir: Path, plist_records: list[dict]) -> bool:
+    power_gz = run_dir / "power.samples.json.gz"
+    power_plain = run_dir / "power.samples.json"
+    if power_plain.is_file():
+        samples = json.loads(power_plain.read_text(encoding="utf-8"))
+    elif power_gz.is_file():
+        samples = json.loads(gzip.open(power_gz, "rt", encoding="utf-8").read())
+    else:
+        return False
+    if len(samples) == len(plist_records):
+        return False
+    if len(samples) > len(plist_records):
+        samples = samples[: len(plist_records)]
+    else:
+        samples.extend(plist_records[len(samples) :])
+    payload = json.dumps(samples, default=str) + "\n"
+    power_plain.write_text(payload, encoding="utf-8")
+    _gzip_compress(power_plain, power_gz)
+    return True
+
+
+def normalize_powermetrics_pliststream(run_dir: Path) -> dict[str, Any] | None:
+    """Drop an incomplete terminal plist fragment before sealing or verification."""
+    run_dir = Path(run_dir)
+    plain = run_dir / "powermetrics.pliststream"
+    gzip_path = run_dir / "powermetrics.pliststream.gz"
+    if plain.is_file():
+        raw = plain.read_bytes()
+    elif gzip_path.is_file():
+        with gzip.open(gzip_path, "rb") as handle:
+            raw = handle.read()
+    else:
+        return None
+    records, normalized, dropped = _plist_records(raw)
+    meta = {"dropped_trailing_bytes": dropped, "record_count": len(records)}
+    if normalized != raw:
+        plain.write_bytes(normalized)
+        _gzip_compress(plain, gzip_path)
+    _sync_power_samples_json(run_dir, records)
+    return meta
 
 
 def seal_artifact_pair(run_dir: Path, plain_name: str, gzip_name: str) -> dict[str, Any] | None:
@@ -495,6 +650,7 @@ def seal_run_evidence(
             readiness_log = extract_game_ready_log(run_dir, manifest=manifest)
 
     identity_at_seal = identity_snapshot_fn()
+    plist_normalization = normalize_powermetrics_pliststream(run_dir)
     artifacts: dict[str, Any] = {}
     for plain_name, gzip_name in SEAL_ARTIFACTS:
         entry = seal_artifact_pair(run_dir, plain_name, gzip_name)
@@ -516,20 +672,14 @@ def seal_run_evidence(
             merged.update(readiness_log)
         merged["origin"] = prior_readiness["origin"]
         readiness_log = merged
+    readiness_log = _finalize_readiness_log(run_dir, readiness_log, manifest)
     stderr_path = run_dir / "powermetrics.stderr"
-    powermetrics_stderr = None
-    if stderr_path.is_file():
-        size = stderr_path.stat().st_size
-        powermetrics_stderr = {
-            "bytes": size,
-            "empty": size == 0,
-            "sha256": _sha256_file(stderr_path) if size else None,
-        }
+    powermetrics_stderr = _summarize_powermetrics_stderr(stderr_path) if stderr_path.is_file() else None
     evidence = {
         "sealed_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "capsule_profile": profile,
         "run_dir": str(run_dir.relative_to(ROOT)) if run_dir.is_relative_to(ROOT) else str(run_dir),
-        "capture_identity": reconstructed_capture_identity(manifest),
+        "capture_identity": reconstructed_capture_identity(manifest, identity_at_capture=identity_at_capture),
         "identity_at_capture": identity_at_capture,
         "identity_at_seal": identity_at_seal,
         "artifacts": artifacts,
@@ -541,6 +691,7 @@ def seal_run_evidence(
         "probe_integrity": manifest.get("probe_integrity"),
         "dropped_records": dropped,
         "powermetrics_stderr": powermetrics_stderr,
+        "powermetrics_plist_normalization": plist_normalization,
     }
     out = run_dir / "raw_evidence.json"
     out.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
@@ -568,12 +719,31 @@ PROFILE_REQUIRED_FILES = {
 }
 
 
+def _verify_gzip_artifact(run_dir: Path, entry: dict[str, Any], gzip_name: str) -> None:
+    gzip_path = run_dir / gzip_name
+    if not gzip_path.is_file():
+        raise ValueError(f"missing gzip artifact {gzip_name}")
+    physical_bytes = gzip_path.stat().st_size
+    physical_sha = _sha256_file(gzip_path)
+    if entry.get("gzip_bytes") != physical_bytes:
+        raise ValueError(f"{gzip_name} byte length mismatch")
+    if entry.get("gzip_sha256") != physical_sha:
+        raise ValueError(f"{gzip_name} sha256 mismatch")
+    logical_bytes, logical_sha = _logical_hash_gzip(gzip_path)
+    if entry.get("uncompressed_bytes") != logical_bytes:
+        raise ValueError(f"{gzip_name} logical byte count mismatch")
+    if entry.get("uncompressed_sha256") != logical_sha:
+        raise ValueError(f"{gzip_name} logical sha256 mismatch")
+
+
 def verify_run_evidence(
     run_dir: Path,
     *,
     profile: str | None = None,
 ) -> dict[str, Any]:
     """Hermetic capsule verification using committed run-dir bytes only."""
+    import plistlib
+
     run_dir = Path(run_dir)
     raw_path = run_dir / "raw_evidence.json"
     if not raw_path.is_file():
@@ -582,54 +752,70 @@ def verify_run_evidence(
     expected_profile = profile or sealed.get("capsule_profile")
     if not expected_profile:
         raise ValueError("capsule_profile missing from raw_evidence.json")
+    if expected_profile not in PROFILE_REQUIRED_FILES:
+        raise ValueError(f"unknown capsule profile: {expected_profile}")
     if profile and sealed.get("capsule_profile") != profile:
         raise ValueError(
             f"sealed profile {sealed.get('capsule_profile')} != asserted profile {profile}"
         )
     inventory = sealed.get("capture_inventory") or {}
-    missing = []
-    for name in PROFILE_REQUIRED_FILES.get(expected_profile, ()):
-        if name not in inventory:
-            missing.append(name)
-        elif not (run_dir / name).is_file():
-            missing.append(name)
-        else:
-            on_disk = _sha256_file(run_dir / name)
-            if inventory[name].get("sha256") != on_disk:
-                raise ValueError(f"inventory hash mismatch for {name}")
+    for name, meta in inventory.items():
+        path = run_dir / name
+        if not path.is_file():
+            raise ValueError(f"inventory file missing on disk: {name}")
+        size = path.stat().st_size
+        if meta.get("bytes") != size:
+            raise ValueError(f"inventory byte count mismatch for {name}")
+        if meta.get("sha256") != _sha256_file(path):
+            raise ValueError(f"inventory hash mismatch for {name}")
+    missing_required = [
+        name for name in PROFILE_REQUIRED_FILES[expected_profile] if name not in inventory
+    ]
+    if missing_required:
+        raise ValueError(f"profile {expected_profile} missing required inventory entries: {missing_required}")
+    for plain_name, entry in (sealed.get("artifacts") or {}).items():
+        gzip_name = entry.get("gzip_path")
+        if gzip_name:
+            _verify_gzip_artifact(run_dir, entry, gzip_name)
     power_entry = (sealed.get("artifacts") or {}).get("power.samples.json")
     plist_entry = (sealed.get("artifacts") or {}).get("powermetrics.pliststream")
     semantic = {"status": "skipped"}
     if power_entry and plist_entry:
         power_gz = run_dir / "power.samples.json.gz"
         plist_gz = run_dir / "powermetrics.pliststream.gz"
-        if power_gz.is_file() and plist_gz.is_file():
-            power_payload = json.loads(gzip.open(power_gz, "rt", encoding="utf-8").read())
-            plist_count = 0
-            with gzip.open(plist_gz, "rb") as handle:
-                partial = b""
-                import plistlib
-
-                for chunk in iter(lambda: handle.read(1 << 20), b""):
-                    parts = (partial + chunk).split(b"\0")
-                    partial = parts.pop()
-                    for part in parts:
-                        if part.strip():
-                            plistlib.loads(part.strip())
-                            plist_count += 1
-            semantic = {
-                "status": "passed" if len(power_payload) == plist_count else "failed",
-                "power_sample_count": len(power_payload),
-                "plist_record_count": plist_count,
-            }
-            if semantic["status"] != "passed":
-                raise ValueError("semantic plist↔power sample count mismatch")
-    if missing:
-        raise ValueError(f"missing required capsule files: {', '.join(missing)}")
+        power_payload = json.loads(gzip.open(power_gz, "rt", encoding="utf-8").read())
+        plist_count = 0
+        trailing = b""
+        with gzip.open(plist_gz, "rb") as handle:
+            partial = b""
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                parts = (partial + chunk).split(b"\0")
+                partial = parts.pop()
+                for part in parts:
+                    if part.strip():
+                        plistlib.loads(part.strip())
+                        plist_count += 1
+            trailing = partial
+        if trailing.strip():
+            try:
+                plistlib.loads(trailing.strip())
+                plist_count += 1
+                trailing = b""
+            except (ValueError, TypeError, plistlib.InvalidFileException):
+                pass
+        if trailing.strip():
+            raise ValueError(f"powermetrics pliststream has {len(trailing)} unexplained trailing bytes")
+        semantic = {
+            "status": "passed" if len(power_payload) == plist_count else "failed",
+            "power_sample_count": len(power_payload),
+            "plist_record_count": plist_count,
+        }
+        if semantic["status"] != "passed":
+            raise ValueError("semantic plist↔power sample count mismatch")
     return {
         "status": "passed",
         "capsule_profile": expected_profile,
-        "missing_files": missing,
+        "missing_files": missing_required,
         "semantic_plist_power": semantic,
         "inventory_files": len(inventory),
     }

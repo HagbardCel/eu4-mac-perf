@@ -1,8 +1,10 @@
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from submission_validation import (
     bracket_normalized_ababa_gate,
+    bracket_relative_scene_gate,
     evaluate_submission_pareto_gate,
     higher_is_non_inferior,
     lower_is_non_inferior,
@@ -60,10 +62,26 @@ class SubmissionValidationTests(unittest.TestCase):
         merged_cand = {key: statistics.median([m[key] for m in cands]) for key in cands[0]}
         global_gate = evaluate_submission_pareto_gate(merged_ref, merged_cand)
         self.assertTrue(global_gate["passed"])
-        with mock.patch("submission_validation.scene_gate", return_value={"passed": True}):
+        scene_ok = {"passed": True}
+        bracket_ok = {"passed": True, "b1_passed": True, "b2_passed": True}
+        with mock.patch("submission_validation.scene_gate", return_value=scene_ok), mock.patch(
+            "submission_validation.bracket_relative_scene_gate", return_value=bracket_ok
+        ):
             result = bracket_normalized_ababa_gate(phases, expected_candidate_capability_id=1)
-        self.assertFalse(result["bracket_gates"]["b2"]["passed"])
-        self.assertTrue(result["bracket_gates"]["b1"]["passed"])
+        self.assertEqual(result["status"], "failed")
+
+    def test_bracket_scene_gate_fails_when_candidate_diverges(self):
+        with mock.patch("submission_validation.pairwise_scene_delta", side_effect=[1.0, 1.0, 20.0, 1.0, 1.0, 1.0]):
+            result = bracket_relative_scene_gate(
+                {
+                    "a1": Path("a1.png"),
+                    "a2": Path("a2.png"),
+                    "a3": Path("a3.png"),
+                    "b1": Path("b1.png"),
+                    "b2": Path("b2.png"),
+                }
+            )
+        self.assertFalse(result["passed"])
 
     def test_non_inferior_helpers(self):
         self.assertTrue(higher_is_non_inferior(100.0, 99.0))

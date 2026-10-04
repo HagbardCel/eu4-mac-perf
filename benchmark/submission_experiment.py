@@ -222,7 +222,9 @@ def run_experiment(output_root: Path) -> Path:
                 manifest["status"] = "complete"
                 stop_process(pm, 5)
                 pm = None
-                tail.finish()
+                drain = tail.finish()
+                if drain.get("status") == "incomplete":
+                    raise base.BenchmarkError(f"Powermetrics tail incomplete: {drain}")
         finally:
             submission.close()
             stop_process(pm, 3)

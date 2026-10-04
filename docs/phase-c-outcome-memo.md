@@ -6,7 +6,7 @@ Phase C ([`20261003T210202Z-intrusive-diagnostic`](../results/20261003T210202Z-i
 
 - **REFERENCE (R)** is a credible low-intrusion baseline (process CPU, power, swaps within a few percent of uninstrumented autonomous reference).
 - **COUNTERS (C)** cut throughput ~33% and move the system into a different regime; C absolute timings are not uninstrumented truth.
-- The paused **update thread waits** (~98% of update wall is not thread CPU); Map::Render is the dominant envelope residual.
+- Only ~2% of update-wall time is update-thread CPU execution; the remaining ~98% is outside measured update-thread execution and may reflect blocking, scheduling, synchronization, driver pacing, or other causes. Map::Render is the dominant envelope residual.
 - GL workload is **submission/state heavy** (~86k state calls, ~5.9k draws per rendered frame in C).
 - Exhaustive per-call forensic logging is **not viable** (hundreds of thousands of detail records per frame; ~192k dropped).
 

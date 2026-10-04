@@ -13,6 +13,8 @@ import eu4_benchmark as base
 
 NON_INFERIOR_FRACTION = 0.02
 PRIMARY_IMPROVEMENT_FRACTION = 0.05
+BRACKET_SCENE_MARGIN = 3.0
+IMPROVEMENT_RATIO = 1.0 + PRIMARY_IMPROVEMENT_FRACTION
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENE_REFERENCE_MANIFEST = ROOT / "benchmark/submission_scene_reference.json"
@@ -127,6 +129,38 @@ def resolve_repository_scene_reference() -> Path:
     return image
 
 
+def pairwise_scene_delta(left: Path, right: Path) -> float:
+    from autonomous_runner import scene_difference
+
+    return float(scene_difference(left, right)["mean_rgb_delta"])
+
+
+def bracket_relative_scene_gate(shot_paths: dict[str, Path]) -> dict[str, Any]:
+    natural_a1_a2 = pairwise_scene_delta(shot_paths["a1"], shot_paths["a2"])
+    natural_a2_a3 = pairwise_scene_delta(shot_paths["a2"], shot_paths["a3"])
+    b1_a1 = pairwise_scene_delta(shot_paths["a1"], shot_paths["b1"])
+    b1_a2 = pairwise_scene_delta(shot_paths["a2"], shot_paths["b1"])
+    b2_a2 = pairwise_scene_delta(shot_paths["a2"], shot_paths["b2"])
+    b2_a3 = pairwise_scene_delta(shot_paths["a3"], shot_paths["b2"])
+    budget_b1 = natural_a1_a2 + BRACKET_SCENE_MARGIN
+    budget_b2 = natural_a2_a3 + BRACKET_SCENE_MARGIN
+    b1_passed = b1_a1 <= budget_b1 and b1_a2 <= budget_b1
+    b2_passed = b2_a2 <= budget_b2 and b2_a3 <= budget_b2
+    return {
+        "passed": b1_passed and b2_passed,
+        "natural_a1_a2_delta": natural_a1_a2,
+        "natural_a2_a3_delta": natural_a2_a3,
+        "b1_vs_a1_delta": b1_a1,
+        "b1_vs_a2_delta": b1_a2,
+        "b2_vs_a2_delta": b2_a2,
+        "b2_vs_a3_delta": b2_a3,
+        "budget_b1": budget_b1,
+        "budget_b2": budget_b2,
+        "b1_passed": b1_passed,
+        "b2_passed": b2_passed,
+    }
+
+
 def scene_gate(reference: Path, observed: Path) -> dict[str, Any]:
     from autonomous_runner import scene_difference
     from PIL import Image
@@ -139,7 +173,15 @@ def scene_gate(reference: Path, observed: Path) -> dict[str, Any]:
         and abs(alignment["shift_x_px"]) <= 0.04 * width
         and abs(alignment["shift_y_px"]) <= 0.09 * height
     )
-    return {"passed": passed, "alignment": alignment}
+    return {"passed": passed, "alignment": alignment, "absolute_scene_gate": passed}
+
+
+def _protected_non_inferior(baseline: dict[str, float], candidate: dict[str, float]) -> bool:
+    return (
+        lower_is_non_inferior(baseline["eu4_cpu_ms_per_s"], candidate["eu4_cpu_ms_per_s"])
+        and lower_is_non_inferior(baseline["combined_w"], candidate["combined_w"])
+        and higher_is_non_inferior(baseline["swaps_per_s"], candidate["swaps_per_s"])
+    )
 
 
 def _bracket_ratio(b_value: float, baseline: float, *, higher_is_better: bool) -> float | None:
@@ -163,6 +205,7 @@ def bracket_normalized_ababa_gate(
         return {"status": "incomplete", "reason": "missing phases"}
 
     reference = resolve_repository_scene_reference()
+    shot_paths: dict[str, Path] = {}
     phase_reports: dict[str, Any] = {}
     all_valid = True
     for name in required:
@@ -176,6 +219,7 @@ def bracket_normalized_ababa_gate(
             if not shot_path.is_file():
                 shot_path = Path(phase.get("run_dir", ".")) / screenshot
             if shot_path.is_file():
+                shot_paths[name] = shot_path
                 scene_result = scene_gate(reference, shot_path)
         scene_ok = bool(scene_result and scene_result["passed"])
         control = phase.get("control_validation") or {}
@@ -193,22 +237,27 @@ def bracket_normalized_ababa_gate(
             "phase_valid": phase_ok,
         }
 
+    bracket_scene = None
+    if len(shot_paths) == len(required):
+        bracket_scene = bracket_relative_scene_gate(shot_paths)
+        if not bracket_scene["passed"]:
+            all_valid = False
+
     if not all_valid:
         return {
             "status": "failed",
             "reason": "one or more phases failed metric, scene, or control gates",
             "phases": phase_reports,
+            "bracket_scene_gate": bracket_scene,
         }
 
     m = {name: phase_reports[name]["metrics"] for name in required}
-    b1_gate = evaluate_submission_pareto_gate(
-        {k: statistics.median([m["a1"][k], m["a2"][k]]) for k in m["a1"]},
-        m["b1"],
-    )
-    b2_gate = evaluate_submission_pareto_gate(
-        {k: statistics.median([m["a2"][k], m["a3"][k]]) for k in m["a2"]},
-        m["b2"],
-    )
+    b1_baseline = {k: statistics.median([m["a1"][k], m["a2"][k]]) for k in m["a1"]}
+    b2_baseline = {k: statistics.median([m["a2"][k], m["a3"][k]]) for k in m["a2"]}
+    b1_gate = evaluate_submission_pareto_gate(b1_baseline, m["b1"])
+    b2_gate = evaluate_submission_pareto_gate(b2_baseline, m["b2"])
+    b1_non_inferior = _protected_non_inferior(b1_baseline, m["b1"])
+    b2_non_inferior = _protected_non_inferior(b2_baseline, m["b2"])
 
     cpu_effects = [
         _bracket_ratio(m["b1"]["eu4_cpu_ms_per_s"], statistics.median([m["a1"]["eu4_cpu_ms_per_s"], m["a2"]["eu4_cpu_ms_per_s"]]), higher_is_better=False),
@@ -233,13 +282,39 @@ def bracket_normalized_ababa_gate(
         "swap_improvement_ratio": _aggregate(swap_effects),
     }
 
-    passed = b1_gate["passed"] or b2_gate["passed"]
+    paths: list[str] = []
+    if b1_non_inferior and b2_non_inferior:
+        power_agg = aggregate["power_improvement_ratio"]
+        cpu_agg = aggregate["cpu_improvement_ratio"]
+        swap_agg = aggregate["swap_improvement_ratio"]
+        if power_agg is not None and power_agg >= IMPROVEMENT_RATIO:
+            if higher_is_non_inferior(b1_baseline["swaps_per_s"], m["b1"]["swaps_per_s"]) and higher_is_non_inferior(
+                b2_baseline["swaps_per_s"], m["b2"]["swaps_per_s"]
+            ):
+                paths.append("A_combined_power")
+        if cpu_agg is not None and cpu_agg >= IMPROVEMENT_RATIO:
+            if higher_is_non_inferior(b1_baseline["swaps_per_s"], m["b1"]["swaps_per_s"]) and higher_is_non_inferior(
+                b2_baseline["swaps_per_s"], m["b2"]["swaps_per_s"]
+            ):
+                paths.append("B_eu4_cpu")
+        if swap_agg is not None and swap_agg >= IMPROVEMENT_RATIO:
+            if lower_is_non_inferior(b1_baseline["eu4_cpu_ms_per_s"], m["b1"]["eu4_cpu_ms_per_s"]) and lower_is_non_inferior(
+                b2_baseline["eu4_cpu_ms_per_s"], m["b2"]["eu4_cpu_ms_per_s"]
+            ) and lower_is_non_inferior(b1_baseline["combined_w"], m["b1"]["combined_w"]) and lower_is_non_inferior(
+                b2_baseline["combined_w"], m["b2"]["combined_w"]
+            ):
+                paths.append("C_swaps")
+
+    passed = bool(paths) and b1_non_inferior and b2_non_inferior
     if expected_candidate_capability_id == 0:
         passed = False
 
     return {
         "status": "passed" if passed else "failed",
+        "paths": paths,
+        "bracket_non_inferior": {"b1": b1_non_inferior, "b2": b2_non_inferior},
         "bracket_gates": {"b1": b1_gate, "b2": b2_gate},
+        "bracket_scene_gate": bracket_scene,
         "normalized_effects": {
             "cpu": cpu_effects,
             "power": power_effects,

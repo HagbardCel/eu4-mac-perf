@@ -86,6 +86,28 @@ class AutonomousRunnerTests(unittest.TestCase):
             self.assertEqual(len(tail.poll()), 1)
             self.assertEqual(len(tail.poll()), 1)
 
+    def test_powertail_finish_appends_terminal_plist(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "power.pliststream"
+            item = {"timestamp": dt.datetime(2026, 9, 28, tzinfo=dt.timezone.utc),
+                    "tasks": [{"pid": 42, "cputime_ms_per_s": 1000}]}
+            data = plistlib.dumps(item)
+            path.write_bytes(data)
+            tail = runner.PowerTail(path)
+            tail.poll()
+            drain = tail.finish()
+            self.assertEqual(drain["status"], "appended")
+            self.assertEqual(len(tail.samples), 1)
+
+    def test_powertail_finish_marks_incomplete_trailer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "power.pliststream"
+            path.write_bytes(b"not-a-plist")
+            tail = runner.PowerTail(path)
+            drain = tail.finish()
+            self.assertEqual(drain["status"], "incomplete")
+            self.assertGreater(drain["trailing_partial_bytes"], 0)
+
     def test_fresh_game_log_and_readiness_markers(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "game.log"

@@ -16,9 +16,9 @@ This directory holds timestamped benchmark captures. Git tracks **derived eviden
 ### Phase C closure order (no new live capture)
 
 ```text
-intrusive-salvage → materialize capsule files → seal-evidence → verify inventory
-→ delete uncompressed telemetry/power/pliststream locally
-→ intrusive-salvage → seal-evidence → verify again → git add
+intrusive-salvage → seal-evidence --profile intrusive_complete_v1 --no-manifest-write → verify-evidence
+→ delete uncompressed telemetry/power/pliststream locally (optional)
+→ git add updated capsule files (historical manifest.json must stay byte-identical)
 ```
 
 ## Local only (gitignored)

@@ -160,23 +160,36 @@ def _count_complete_frame_keys(retentions: list[dict]) -> set[tuple[int, int]]:
     return keys
 
 
-def _spearman(left: list[tuple[tuple, int]], right: list[tuple[tuple, int]]) -> float | None:
-    shared = [key for key, _ in left if key in {item[0] for item in right}]
+def _shared_rank_maps(
+    left: list[tuple[tuple, int]], right: list[tuple[tuple, int]]
+) -> tuple[list[tuple], dict[tuple, int], dict[tuple, int]] | None:
+    right_keys = {item[0] for item in right}
+    shared = [key for key, _ in left if key in right_keys]
     if len(shared) < 3:
         return None
-    left_rank = {key: index for index, (key, _) in enumerate(left)}
-    right_rank = {key: index for index, (key, _) in enumerate(right)}
+    left_order = {key: index for index, (key, _) in enumerate(left)}
+    right_order = {key: index for index, (key, _) in enumerate(right)}
+    shared_sorted = sorted(shared, key=lambda key: (left_order[key], right_order[key]))
+    left_rank = {key: index for index, key in enumerate(sorted(shared, key=lambda k: left_order[k]))}
+    right_rank = {key: index for index, key in enumerate(sorted(shared, key=lambda k: right_order[k]))}
+    return shared_sorted, left_rank, right_rank
+
+
+def _spearman(left: list[tuple[tuple, int]], right: list[tuple[tuple, int]]) -> float | None:
+    mapped = _shared_rank_maps(left, right)
+    if mapped is None:
+        return None
+    shared, left_rank, right_rank = mapped
     n = len(shared)
     diff_sq = sum((left_rank[key] - right_rank[key]) ** 2 for key in shared)
     return 1 - (6 * diff_sq) / (n * (n * n - 1))
 
 
 def _kendall(left: list[tuple[tuple, int]], right: list[tuple[tuple, int]]) -> float | None:
-    shared = [key for key, _ in left if key in {item[0] for item in right}]
-    if len(shared) < 3:
+    mapped = _shared_rank_maps(left, right)
+    if mapped is None:
         return None
-    left_rank = {key: index for index, (key, _) in enumerate(left)}
-    right_rank = {key: index for index, (key, _) in enumerate(right)}
+    shared, left_rank, right_rank = mapped
     concordant = discordant = 0
     for i, a in enumerate(shared):
         for b in shared[i + 1 :]:
@@ -198,6 +211,81 @@ def _rank_overlap(left: list[tuple[tuple, int]], right: list[tuple[tuple, int]])
         return 0.0
     overlap = len(set(left_keys) & set(right_keys))
     return overlap / min(len(left_keys), len(right_keys), TOP_N)
+
+
+def _count_rates(rows: list[list[str]], frame_count: int) -> Counter[tuple]:
+    counts: Counter[tuple] = Counter()
+    for row in rows:
+        key = _salvage_rank_key(row)
+        if key:
+            counts[key] += 1
+    if frame_count <= 0:
+        return counts
+    return Counter({key: value / frame_count for key, value in counts.items()})
+
+
+def _callsite_drift_table(
+    left_rows: list[list[str]],
+    right_rows: list[list[str]],
+    left_frames: int,
+    right_frames: int,
+) -> list[dict[str, Any]]:
+    left_rates = _count_rates(left_rows, left_frames)
+    right_rates = _count_rates(right_rows, right_frames)
+    keys = sorted(set(left_rates) | set(right_rates), key=lambda item: (-max(left_rates.get(item, 0), right_rates.get(item, 0)), item))
+    table: list[dict[str, Any]] = []
+    for rank, key in enumerate(keys[:TOP_N], start=1):
+        left_rate = left_rates.get(key, 0.0)
+        right_rate = right_rates.get(key, 0.0)
+        denom = max(left_rate, right_rate, 1e-9)
+        entry: dict[str, Any] = {
+            "rank": rank,
+            "key": list(key),
+            "window_a_count_per_frame": round(left_rate, 4),
+            "window_b_count_per_frame": round(right_rate, 4),
+            "relative_drift": round(abs(left_rate - right_rate) / denom, 4),
+        }
+        if key[0] == "S" and len(key) >= 3:
+            entry["symbol"] = symbolize.eu4_symbolize_offset(int(key[2]))
+        elif len(key) >= 2 and isinstance(key[1], int):
+            entry["symbol"] = symbolize.eu4_symbolize_offset(int(key[1]))
+        table.append(entry)
+    return table
+
+
+def _retention_poor(window_reports: dict[str, Any]) -> bool:
+    fallback_s: list[float] = []
+    fallback_u: list[float] = []
+    for window in window_reports.values():
+        retentions = window.get("per_frame_retention") or []
+        cc_keys = _count_complete_frame_keys(retentions)
+        if cc_keys:
+            cc_s = [
+                item["retention_s"]
+                for item in retentions
+                if (item.get("measurement_epoch", 0), item["update_id"]) in cc_keys
+                and item.get("retention_s") is not None
+            ]
+            cc_u = [
+                item["retention_u"]
+                for item in retentions
+                if (item.get("measurement_epoch", 0), item["update_id"]) in cc_keys
+                and item.get("retention_u") is not None
+            ]
+            if cc_s and min(cc_s) < FULL_RETENTION_THRESHOLD:
+                return True
+            if cc_u and min(cc_u) < FULL_RETENTION_THRESHOLD:
+                return True
+            continue
+        if window.get("median_retention_s") is not None:
+            fallback_s.append(window["median_retention_s"])
+        if window.get("median_retention_u") is not None:
+            fallback_u.append(window["median_retention_u"])
+    if fallback_s and min(fallback_s) < RETENTION_POOR_THRESHOLD:
+        return True
+    if fallback_u and min(fallback_u) < RETENTION_POOR_THRESHOLD:
+        return True
+    return False
 
 
 def _c1_c2_counter_stability(manifest: dict, profile_rows: list[dict]) -> dict:
@@ -331,6 +419,30 @@ def run_intrusive_salvage(run_dir: Path) -> dict:
             )],
             kinds=frozenset({"S"}),
         )
+        left_uniform = _aggregate_ranks(
+            [r for r in salvage_trace if _detail_key(r) in _count_complete_frame_keys(
+                window_reports[str(g0)]["per_frame_retention"]
+            )],
+            kinds=SALVAGE_UNIFORM_KINDS,
+        )
+        right_uniform = _aggregate_ranks(
+            [r for r in salvage_trace if _detail_key(r) in _count_complete_frame_keys(
+                window_reports[str(g1)]["per_frame_retention"]
+            )],
+            kinds=SALVAGE_UNIFORM_KINDS,
+        )
+        left_cc_rows = [
+            r
+            for r in salvage_trace
+            if _detail_key(r) in _count_complete_frame_keys(window_reports[str(g0)]["per_frame_retention"])
+            and r[0] == "S"
+        ]
+        right_cc_rows = [
+            r
+            for r in salvage_trace
+            if _detail_key(r) in _count_complete_frame_keys(window_reports[str(g1)]["per_frame_retention"])
+            and r[0] == "S"
+        ]
         rank_stability = {
             "windows": [g0, g1],
             "top_n_overlap_fraction": _rank_overlap(left, right),
@@ -339,21 +451,22 @@ def run_intrusive_salvage(run_dir: Path) -> dict:
             "kendall_tau_all_frames": _kendall(left, right),
             "spearman_rho_count_complete_s": _spearman(left_complete, right_complete),
             "kendall_tau_count_complete_s": _kendall(left_complete, right_complete),
+            "count_complete_u_overlap_fraction": _rank_overlap(left_uniform, right_uniform),
+            "spearman_rho_count_complete_u": _spearman(left_uniform, right_uniform),
+            "kendall_tau_count_complete_u": _kendall(left_uniform, right_uniform),
             "window_a_top": left,
             "window_b_top": right,
             "window_a_top_count_complete_s": left_complete,
             "window_b_top_count_complete_s": right_complete,
-            "per_frame_normalized_drift": (_c1_c2_counter_stability(manifest, profile_rows) or {}).get(
-                "c1_c2_relative_spread"
+            "per_callsite_drift_count_complete_s": _callsite_drift_table(
+                left_cc_rows,
+                right_cc_rows,
+                len(_count_complete_frame_keys(window_reports[str(g0)]["per_frame_retention"])),
+                len(_count_complete_frame_keys(window_reports[str(g1)]["per_frame_retention"])),
             ),
         }
 
-    med_ret_s = [
-        window_reports[str(g)]["median_retention_s"]
-        for g in window_gens
-        if window_reports[str(g)]["median_retention_s"] is not None
-    ]
-    retention_poor = bool(med_ret_s) and min(med_ret_s) < RETENTION_POOR_THRESHOLD
+    retention_poor = _retention_poor(window_reports)
     if not salvage_trace:
         status = "insufficient_for_hypothesis_selection"
         reason = "No salvage detail rows after TAIL filter"
@@ -419,7 +532,19 @@ def write_salvage_reports(run_dir: Path, report: dict) -> None:
             f"- Kendall τ (all frames): **{rs.get('kendall_tau_all_frames')}**",
             f"- Spearman ρ (count-complete S): **{rs.get('spearman_rho_count_complete_s')}**",
             f"- Kendall τ (count-complete S): **{rs.get('kendall_tau_count_complete_s')}**",
+            f"- Count-complete U overlap: **{rs.get('count_complete_u_overlap_fraction')}**",
+            f"- Spearman ρ (count-complete U/u): **{rs.get('spearman_rho_count_complete_u')}**",
+            f"- Kendall τ (count-complete U/u): **{rs.get('kendall_tau_count_complete_u')}**",
         ])
+        drift_rows = rs.get("per_callsite_drift_count_complete_s") or []
+        if drift_rows:
+            lines.extend(["", "## Count-complete S callsite drift (TAIL windows)", ""])
+            for row in drift_rows[:TOP_N]:
+                symbol = row.get("symbol") or row.get("key")
+                lines.append(
+                    f"- #{row['rank']} {symbol}: W{rs['windows'][0]}={row['window_a_count_per_frame']}, "
+                    f"W{rs['windows'][1]}={row['window_b_count_per_frame']}, drift={row['relative_drift']}"
+                )
     lines.append("")
     lines.append(report.get("interpretation", ""))
     (run_dir / "salvage-report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

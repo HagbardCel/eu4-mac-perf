@@ -1369,6 +1369,9 @@
     "kendall_tau_all_frames": 1.0,
     "spearman_rho_count_complete_s": 1.0,
     "kendall_tau_count_complete_s": 1.0,
+    "count_complete_u_overlap_fraction": 1.0,
+    "spearman_rho_count_complete_u": 1.0,
+    "kendall_tau_count_complete_u": 1.0,
     "window_a_top": [
       [
         [
@@ -1883,14 +1886,280 @@
         1350
       ]
     ],
-    "per_frame_normalized_drift": {
-      "draws": 0.00017056114617090227,
-      "state_calls": 0.0011401977894124492,
-      "uniform_calls": 0.0013973337361682843,
-      "texture_binds": 0.0007685410529012425,
-      "buffer_binds": 0.0009696186166774402,
-      "program_switches": 0.0018450184501845018
-    }
+    "per_callsite_drift_count_complete_s": [
+      {
+        "rank": 1,
+        "key": [
+          "S",
+          10,
+          22986657
+        ],
+        "window_a_count_per_frame": 12868.0,
+        "window_b_count_per_frame": 12868.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22986657,
+          "symbol": "_GfxSetVertexBuffers",
+          "demangled": "_GfxSetVertexBuffers",
+          "eu4": "eu4+0x15ebfa1"
+        }
+      },
+      {
+        "rank": 2,
+        "key": [
+          "S",
+          8,
+          22981159
+        ],
+        "window_a_count_per_frame": 12866.0,
+        "window_b_count_per_frame": 12866.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22981159,
+          "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+          "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+          "eu4": "eu4+0x15eaa27"
+        }
+      },
+      {
+        "rank": 3,
+        "key": [
+          "S",
+          9,
+          22981191
+        ],
+        "window_a_count_per_frame": 12866.0,
+        "window_b_count_per_frame": 12866.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22981191,
+          "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+          "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+          "eu4": "eu4+0x15eaa47"
+        }
+      },
+      {
+        "rank": 4,
+        "key": [
+          "S",
+          11,
+          22981178
+        ],
+        "window_a_count_per_frame": 12866.0,
+        "window_b_count_per_frame": 12866.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22981178,
+          "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+          "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+          "eu4": "eu4+0x15eaa3a"
+        }
+      },
+      {
+        "rank": 5,
+        "key": [
+          "S",
+          3,
+          22990117
+        ],
+        "window_a_count_per_frame": 7809.0,
+        "window_b_count_per_frame": 7809.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22990117,
+          "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+          "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+          "eu4": "eu4+0x15ecd25"
+        }
+      },
+      {
+        "rank": 6,
+        "key": [
+          "S",
+          5,
+          22990088
+        ],
+        "window_a_count_per_frame": 7809.0,
+        "window_b_count_per_frame": 7809.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22990088,
+          "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+          "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+          "eu4": "eu4+0x15ecd08"
+        }
+      },
+      {
+        "rank": 7,
+        "key": [
+          "S",
+          10,
+          22985734
+        ],
+        "window_a_count_per_frame": 5482.0,
+        "window_b_count_per_frame": 5482.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22985734,
+          "symbol": "_GfxSetShader",
+          "demangled": "_GfxSetShader",
+          "eu4": "eu4+0x15ebc06"
+        }
+      },
+      {
+        "rank": 8,
+        "key": [
+          "S",
+          2,
+          22981050
+        ],
+        "window_a_count_per_frame": 3621.0,
+        "window_b_count_per_frame": 3621.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22981050,
+          "symbol": "__ZN13SShaderOpenGL24EnableVertexAttribArraysEPP19SVertexBufferOpenGLPjS3_",
+          "demangled": "SShaderOpenGL::EnableVertexAttribArrays(SVertexBufferOpenGL**, unsigned int*, unsigned int*)",
+          "eu4": "eu4+0x15ea9ba"
+        }
+      },
+      {
+        "rank": 9,
+        "key": [
+          "S",
+          2,
+          22987441
+        ],
+        "window_a_count_per_frame": 2420.0,
+        "window_b_count_per_frame": 2420.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22987441,
+          "symbol": "_GfxSetIndexBuffer",
+          "demangled": "_GfxSetIndexBuffer",
+          "eu4": "eu4+0x15ec2b1"
+        }
+      },
+      {
+        "rank": 10,
+        "key": [
+          "S",
+          6,
+          22985829
+        ],
+        "window_a_count_per_frame": 1083.0,
+        "window_b_count_per_frame": 1083.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22985829,
+          "symbol": "__ZN13SShaderOpenGL6SetAllEv",
+          "demangled": "SShaderOpenGL::SetAll()",
+          "eu4": "eu4+0x15ebc65"
+        }
+      },
+      {
+        "rank": 11,
+        "key": [
+          "S",
+          33,
+          22990258
+        ],
+        "window_a_count_per_frame": 730.0,
+        "window_b_count_per_frame": 730.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22990258,
+          "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+          "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+          "eu4": "eu4+0x15ecdb2"
+        }
+      },
+      {
+        "rank": 12,
+        "key": [
+          "S",
+          33,
+          22990275
+        ],
+        "window_a_count_per_frame": 730.0,
+        "window_b_count_per_frame": 730.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22990275,
+          "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+          "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+          "eu4": "eu4+0x15ecdc3"
+        }
+      },
+      {
+        "rank": 13,
+        "key": [
+          "S",
+          33,
+          22990292
+        ],
+        "window_a_count_per_frame": 730.0,
+        "window_b_count_per_frame": 730.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22990292,
+          "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+          "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+          "eu4": "eu4+0x15ecdd4"
+        }
+      },
+      {
+        "rank": 14,
+        "key": [
+          "S",
+          33,
+          22990309
+        ],
+        "window_a_count_per_frame": 730.0,
+        "window_b_count_per_frame": 730.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22990309,
+          "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+          "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+          "eu4": "eu4+0x15ecde5"
+        }
+      },
+      {
+        "rank": 15,
+        "key": [
+          "S",
+          34,
+          22990333
+        ],
+        "window_a_count_per_frame": 730.0,
+        "window_b_count_per_frame": 730.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22990333,
+          "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+          "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+          "eu4": "eu4+0x15ecdfd"
+        }
+      },
+      {
+        "rank": 16,
+        "key": [
+          "S",
+          33,
+          22990202
+        ],
+        "window_a_count_per_frame": 675.0,
+        "window_b_count_per_frame": 675.0,
+        "relative_drift": 0.0,
+        "symbol": {
+          "offset": 22990202,
+          "symbol": "__ZL33InternalSetTextureAndSamplerStatejP14STextureOpenGLPK19SSamplerStateOpenGLb",
+          "demangled": "InternalSetTextureAndSamplerState(unsigned int, STextureOpenGL*, SSamplerStateOpenGL const*, bool)",
+          "eu4": "eu4+0x15ecd7a"
+        }
+      }
+    ]
   },
   "interpretation": "Ordinal callsite ranks from TAIL windows only; C1/C2 provide aggregate F-counter stability. U/u program/location fields are not trusted under flag 2048."
 }

@@ -1,5 +1,5 @@
 {
-  "sealed_utc": "2026-10-04T07:13:36.091946+00:00",
+  "sealed_utc": "2026-10-04T07:37:28.775739+00:00",
   "capsule_profile": "intrusive_complete_v1",
   "run_dir": "results/20261003T210202Z-intrusive-diagnostic",
   "capture_identity": {
@@ -20,13 +20,13 @@
   },
   "identity_at_capture": null,
   "identity_at_seal": {
-    "git_commit": "db830e3fd1bbff54111e8a26160fa08f55645b86",
-    "git_commit_short": "db830e3",
+    "git_commit": "e05131e60b58ec9f69ebc338f671c723b44070bc",
+    "git_commit_short": "e05131e",
     "git_tree_clean": false,
-    "controller_sha256": "511b8d78f77a1351b71df14b537f01330f63e34e3691e7ced9bdb2014e91ff17",
+    "controller_sha256": "e90d86986a98b5065af6ee12c413115095335929475ee10e6d2435fb90542c6a",
     "key_source_hashes": {
       "eu4_frame_model.c": "275dff4025b016abef59015c26a133ca254c6334c5ccc89fd6c80fb5762d8370",
-      "eu4_frame_model.py": "511b8d78f77a1351b71df14b537f01330f63e34e3691e7ced9bdb2014e91ff17",
+      "eu4_frame_model.py": "e90d86986a98b5065af6ee12c413115095335929475ee10e6d2435fb90542c6a",
       "eu4_gpu_segments.h": "aa1f809b62582a269b7d0e6a5550c5bff960d91038e4376a779d147a88aa73f3",
       "eu4_draw_observers.h": "2d958422d7b5d7b81e10d0be196cd904e565ad3273863d7dfeabff1d449cf978",
       "eu4_frame_model_sites.h": "ea9d0b909993bfee810bd66596b835e1a780d210e68b89a482ee611199ad4bc6"
@@ -45,19 +45,19 @@
     "power.samples.json": {
       "plain_path": "power.samples.json",
       "gzip_path": "power.samples.json.gz",
-      "uncompressed_bytes": 42781499,
-      "uncompressed_sha256": "d9e942d351cb4ba468224ddec17e59b1cb658c6fdef217370954d1f4258a87ba",
-      "gzip_bytes": 3112714,
-      "gzip_sha256": "3c13df908070cf0b9943ef946471ba3b12a9c3dc1c93e840581521c2e4e1c7dc",
+      "uncompressed_bytes": 42921031,
+      "uncompressed_sha256": "c93fd3006db830e005e5ddd80a1cf3e8fff3e89491d403c8319a4b3d739870ea",
+      "gzip_bytes": 3122784,
+      "gzip_sha256": "dd3cc5f8b18a08f1ebc7ef66bfc1d9d721c011554c6179cc6836cffb988d80c5",
       "compression": "gzip-9"
     },
     "powermetrics.pliststream": {
       "plain_path": "powermetrics.pliststream",
       "gzip_path": "powermetrics.pliststream.gz",
-      "uncompressed_bytes": 84092806,
-      "uncompressed_sha256": "fccdff4ec726697eb8eba71ce7ccd0905c15e4f7ae116101153083295c2b8d6e",
-      "gzip_bytes": 3625464,
-      "gzip_sha256": "3ffbc1dd583efa1a9dea27ac908dce68b96e385adef210fae5daaadab0b1a449",
+      "uncompressed_bytes": 84092807,
+      "uncompressed_sha256": "4caaf9048efe38a55d2904c23f74262f31cdfbc74439586fad3c5b9539193dba",
+      "gzip_bytes": 3625466,
+      "gzip_sha256": "9e881578283841c50235f81a4864587405387a48baa0d48d6bf7369c28b8d7e3",
       "compression": "gzip-9"
     }
   },
@@ -83,12 +83,12 @@
       "sha256": "43aa6f8808afb2290af188dbc1a67fee692ede3bf9ce8beabe0f815ac42c4f54"
     },
     "power.samples.json.gz": {
-      "bytes": 3112714,
-      "sha256": "3c13df908070cf0b9943ef946471ba3b12a9c3dc1c93e840581521c2e4e1c7dc"
+      "bytes": 3122784,
+      "sha256": "dd3cc5f8b18a08f1ebc7ef66bfc1d9d721c011554c6179cc6836cffb988d80c5"
     },
     "powermetrics.pliststream.gz": {
-      "bytes": 3625464,
-      "sha256": "3ffbc1dd583efa1a9dea27ac908dce68b96e385adef210fae5daaadab0b1a449"
+      "bytes": 3625466,
+      "sha256": "9e881578283841c50235f81a4864587405387a48baa0d48d6bf7369c28b8d7e3"
     },
     "powermetrics.stderr": {
       "bytes": 312,
@@ -111,12 +111,12 @@
       "sha256": "79055c83a87827a857f8e39da1cd42b52092fe9332a88159210c6d99bd8f3f29"
     },
     "salvage-report.json": {
-      "bytes": 47395,
-      "sha256": "66ae1483810ecc1a13f0f9a387e435c8e95a08c9a5643489eb253c51d33786ee"
+      "bytes": 55509,
+      "sha256": "4d185aae7cbb7c9e82ea04786aca1fc1d689458d8e290637bacb91b6de51e280"
     },
     "salvage-report.md": {
-      "bytes": 1128,
-      "sha256": "cf889bee2dec3619d2cc85628e43b065ea0fa02f0ceb1c454b19daf0b9286d32"
+      "bytes": 5411,
+      "sha256": "494a674629686af606a9efae519012d3a70a07299656f05a60ab8a9d4b9ec74e"
     }
   },
   "capture_inventory_note": "All committed capsule files except raw_evidence.json",
@@ -144,7 +144,17 @@
     "status": "present_on_disk",
     "committed_filename": "game-ready.log",
     "bytes": 8455,
-    "sha256": "c7e07593213638a363609c6d51bb04b1be176384658c5b9e9c722f32785f8569"
+    "sha256": "c7e07593213638a363609c6d51bb04b1be176384658c5b9e9c722f32785f8569",
+    "origin": {
+      "status": "reconstructed_posthoc_anchored",
+      "extraction_method": null,
+      "phase_c_wall_window_utc": null
+    },
+    "file": {
+      "committed_filename": "game-ready.log",
+      "bytes": 8455,
+      "sha256": "c7e07593213638a363609c6d51bb04b1be176384658c5b9e9c722f32785f8569"
+    }
   },
   "local_sidecars": {
     "game.stdout": {
@@ -169,6 +179,15 @@
   "powermetrics_stderr": {
     "bytes": 312,
     "empty": false,
-    "sha256": "3544f13c500c2f6cf1214f2274ed44cbcb749cadc71e2a7305ed4f240c626ca7"
+    "sha256": "3544f13c500c2f6cf1214f2274ed44cbcb749cadc71e2a7305ed4f240c626ca7",
+    "line_count": 12,
+    "unique_lines": {
+      "Second underflow occured.": 12
+    },
+    "interpretation": "observed_warning_not_used_as_invalidation"
+  },
+  "powermetrics_plist_normalization": {
+    "dropped_trailing_bytes": 0,
+    "record_count": 270
   }
 }

@@ -15,6 +15,8 @@ import eu4_benchmark as base
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "benchmark/eu4_submission_experiment.c"
 LIBRARY = ROOT / "benchmark/.build/libeu4_submission_experiment.dylib"
+HARNESS = ROOT / "benchmark/.build/submission_dual_dylib_harness"
+HARNESS_SOURCE = ROOT / "tests/submission_dual_dylib_harness.c"
 
 MAGIC = 0x53425545  # 'EUBS'
 PROTOCOL_VERSION = 1
@@ -29,24 +31,60 @@ _TAIL = struct.Struct("<QQ")
 
 def build() -> None:
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
-    command = [
-        "clang",
-        "-arch",
-        "x86_64",
-        "-O2",
-        "-Wall",
-        "-Wextra",
-        "-Werror",
-        "-dynamiclib",
-        "-framework",
-        "OpenGL",
-        "-o",
-        str(LIBRARY),
-        str(SOURCE),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode:
-        raise base.BenchmarkError(f"Submission experiment dylib build failed: {result.stderr.strip()}")
+    commands = (
+        [
+            "clang",
+            "-arch",
+            "x86_64",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-dynamiclib",
+            "-framework",
+            "OpenGL",
+            "-o",
+            str(LIBRARY),
+            str(SOURCE),
+        ],
+        [
+            "clang",
+            "-arch",
+            "x86_64",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-framework",
+            "OpenGL",
+            "-o",
+            str(HARNESS),
+            str(HARNESS_SOURCE),
+        ],
+    )
+    for command in commands:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.returncode:
+            raise base.BenchmarkError(f"Submission experiment build failed: {result.stderr.strip()}")
+
+
+def read_snapshot(path: Path) -> dict[str, int]:
+    data = Path(path).read_bytes()[: _HEADER.size + _TAIL.size]
+    magic, version, cmd_gen, req_mode, ack_gen, ack_mode, cap_id, _pad = _HEADER.unpack(
+        data[: _HEADER.size]
+    )
+    hook_attempts, effective_actions = _TAIL.unpack(data[_HEADER.size : _HEADER.size + _TAIL.size])
+    return {
+        "magic": magic,
+        "protocol_version": version,
+        "command_generation": cmd_gen,
+        "requested_mode": req_mode,
+        "ack_generation": ack_gen,
+        "ack_mode": ack_mode,
+        "candidate_capability_id": cap_id,
+        "candidate_hook_attempts": hook_attempts,
+        "candidate_effective_actions": effective_actions,
+    }
 
 
 class SubmissionControl:
@@ -63,7 +101,7 @@ class SubmissionControl:
             ack_mode=MODE_REFERENCE,
             capability_id=self.candidate_capability_id,
         )
-        struct.pack_into("<Q", self.map, _HEADER.size, 0, 0)
+        self.map[_HEADER.size : _HEADER.size + _TAIL.size] = _TAIL.pack(0, 0)
 
     def _write_header(
         self,

@@ -64,7 +64,9 @@ Closure commands (order matters — seal after salvage):
 
 ```sh
 python3 benchmark/eu4_frame_model.py intrusive-salvage results/20261003T210202Z-intrusive-diagnostic
-python3 benchmark/eu4_frame_model.py seal-evidence results/20261003T210202Z-intrusive-diagnostic
+python3 benchmark/eu4_frame_model.py seal-evidence results/20261003T210202Z-intrusive-diagnostic \
+  --profile intrusive_complete_v1 --no-manifest-write
+python3 benchmark/eu4_frame_model.py verify-evidence results/20261003T210202Z-intrusive-diagnostic
 ```
 
 Clone-only analysis: `read_rows` accepts `.csv.gz` when uncompressed `telemetry.csv` is absent; `seal-evidence` preserves logical content SHA-256 after plain files are deleted.

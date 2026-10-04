@@ -4504,22 +4504,26 @@ def _intrusive_post_capture(
     identity_at_capture: dict | None,
     update_manifest: bool = True,
 ) -> None:
+    power_incomplete = False
     if power_tail is not None:
         drain = power_tail.finish()
         manifest["power_tail_finish"] = drain
         (run_dir / "power.samples.json").write_text(json.dumps(power_tail.samples, default=str))
-    manifest["capture_status"] = manifest.get("capture_status") or "complete"
+        power_incomplete = drain.get("status") == "incomplete"
+    if power_incomplete:
+        manifest["capture_status"] = "incomplete_power_tail"
+    else:
+        manifest["capture_status"] = manifest.get("capture_status") or "complete"
     derived_status = _intrusive_derived_analysis(run_dir, manifest)
     manifest["derived_analysis_status"] = derived_status
     if update_manifest:
         manifest_path.write_text(json.dumps(manifest, indent=2, default=str) + "\n", encoding="utf-8")
-    from frame_model_evidence import infer_capsule_profile, seal_run_evidence
+    from frame_model_evidence import seal_run_evidence
 
-    profile = (
-        "intrusive_complete_v1"
-        if derived_status == "complete"
-        else "intrusive_capture_only_v1"
-    )
+    if power_incomplete or derived_status != "complete":
+        profile = "intrusive_capture_only_v1"
+    else:
+        profile = "intrusive_complete_v1"
     seal_run_evidence(
         run_dir,
         identity_at_capture=identity_at_capture,
