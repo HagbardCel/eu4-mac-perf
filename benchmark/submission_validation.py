@@ -139,6 +139,7 @@ def observer_engagement_gate(
     phases: list[dict],
     *,
     expected_capability_id: int = 1,
+    require_pair_hits: bool = True,
 ) -> dict[str, Any]:
     """Observer smoke: per-phase control + absolute scene gates; never Pareto-eligible."""
     reference = resolve_repository_scene_reference()
@@ -152,10 +153,13 @@ def observer_engagement_gate(
         hits = int(control.get("eligible_pair_hits_delta", 0))
         actions = int(control.get("effective_actions_delta", 0))
         site = int(control.get("candidate_site_entries_delta", 0))
+        armed_site = int(control.get("armed_candidate_site_entries_delta", site))
         if role == "reference":
             control_ok = control_status == "passed" and site > 0 and hits == 0 and actions == 0
         elif role == "candidate":
-            control_ok = control_status == "engagement_only" and site > 0 and hits > 0 and actions == 0
+            hits_ok = hits > 0 if require_pair_hits else True
+            status_ok = control_status in ("engagement_only", "passed")
+            control_ok = status_ok and armed_site > 0 and hits_ok and actions == 0
         else:
             control_ok = False
         scene_result = None

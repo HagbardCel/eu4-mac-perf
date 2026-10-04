@@ -16,9 +16,11 @@ ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
 SUBMISSION_DYLIB_SOURCES = (
     BENCH / "eu4_submission_experiment.c",
+    BENCH / "eu4_submission_observation.c",
     BENCH / "eu4_submission_mesh_site.c",
     BENCH / "eu4_submission_mesh_install.c",
     BENCH / "eu4_submission_mesh_thunk.S",
+    BENCH / "eu4_submission_renderbuckets_entry_thunk.S",
     BENCH / "subrecord_equivalence.c",
 )
 LIBRARY = BENCH / ".build/libeu4_submission_experiment.dylib"
@@ -26,15 +28,25 @@ HARNESS = ROOT / "benchmark/.build/submission_dual_dylib_harness"
 HARNESS_SOURCE = ROOT / "tests/submission_dual_dylib_harness.c"
 
 MAGIC = 0x53425545  # 'EUBS'
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
+PROTOCOL_VERSION_V2 = 2
 CONTROL_SIZE = 4096
 
 MODE_REFERENCE = 0
 MODE_CANDIDATE = 1
 
+OBS_DISARMED = 0
+OBS_ARM = 1
+OBS_FREEZE = 2
+OBS_ACK_ARMED = 1
+OBS_ACK_FROZEN = 2
+
 _HEADER = struct.Struct("<IIIIIIII")
-_COUNTER = struct.Struct("<QQQQ")
-_COUNTER_BYTES = _COUNTER.size
+_META = struct.Struct("<IIII")
+_OBS = struct.Struct("<IIII")
+_COUNTER_REGION_OFFSET = 64
+
+from submission_counter_schema import COUNTER_COUNT, COUNTER_SLOTS  # noqa: E402
 
 
 def build() -> None:
@@ -96,15 +108,18 @@ def _build_harness() -> None:
             raise base.BenchmarkError(f"Submission experiment build failed: {result.stderr.strip()}")
 
 
+def _read_counters_blob(map_view: mmap.mmap | memoryview) -> list[int]:
+    start = _COUNTER_REGION_OFFSET
+    end = start + COUNTER_COUNT * 8
+    return list(struct.unpack(f"<{COUNTER_COUNT}Q", map_view[start:end]))
+
+
 def read_snapshot(path: Path) -> dict[str, int]:
-    data = Path(path).read_bytes()[: _HEADER.size + _COUNTER_BYTES]
+    data = path.read_bytes()
     magic, version, cmd_gen, req_mode, ack_gen, ack_mode, req_cap, adv_cap = _HEADER.unpack(
         data[: _HEADER.size]
     )
-    ticks, site_entries, pair_hits, effective = _COUNTER.unpack(
-        data[_HEADER.size : _HEADER.size + _COUNTER_BYTES]
-    )
-    return {
+    snap: dict[str, int] = {
         "magic": magic,
         "protocol_version": version,
         "command_generation": cmd_gen,
@@ -113,12 +128,31 @@ def read_snapshot(path: Path) -> dict[str, int]:
         "ack_mode": ack_mode,
         "requested_capability_id": req_cap,
         "advertised_capability_id": adv_cap,
-        "control_ticks": ticks,
-        "candidate_site_entries": site_entries,
-        "eligible_pair_hits": pair_hits,
-        "candidate_effective_actions": effective,
-        "candidate_hook_attempts": ticks,
     }
+    if version >= PROTOCOL_VERSION:
+        snap.update(dict(zip(("counter_schema_version", "counter_count", "supported_hypothesis_mask", "safety_qualified_hypothesis_mask"), _META.unpack(data[_HEADER.size : _HEADER.size + _META.size]))))
+        obs = _OBS.unpack(data[_HEADER.size + _META.size : _HEADER.size + _META.size + _OBS.size])
+        snap["observation_generation"] = obs[0]
+        snap["observation_requested_state"] = obs[1]
+        snap["observation_ack_generation"] = obs[2]
+        snap["observation_ack_state"] = obs[3]
+        counters = list(struct.unpack(f"<{COUNTER_COUNT}Q", data[_COUNTER_REGION_OFFSET : _COUNTER_REGION_OFFSET + COUNTER_COUNT * 8]))
+        for name, slot in COUNTER_SLOTS.items():
+            snap[name] = counters[slot]
+    else:
+        ticks, site_entries, pair_hits, effective = struct.unpack("<QQQQ", data[_HEADER.size : _HEADER.size + 32])
+        snap["control_ticks"] = ticks
+        snap["candidate_site_entries"] = site_entries
+        snap["eligible_pair_hits"] = pair_hits
+        snap["candidate_effective_actions"] = effective
+    snap["candidate_hook_attempts"] = snap.get("control_ticks", 0)
+    if "eligible_pair_hits" not in snap:
+        snap["eligible_pair_hits"] = snap.get("legacy_eligible_pair_hits", 0)
+    if "candidate_site_entries" not in snap:
+        snap["candidate_site_entries"] = snap.get("site_entries", 0)
+    if "candidate_effective_actions" not in snap:
+        snap["candidate_effective_actions"] = snap.get("effective_actions", 0)
+    return snap
 
 
 class SubmissionControl:
@@ -128,6 +162,7 @@ class SubmissionControl:
         self.file = path.open("r+b")
         self.map = mmap.mmap(self.file.fileno(), CONTROL_SIZE)
         self.command_generation = 0
+        self.observation_generation = 0
         self._write_header(
             command_generation=0,
             requested_mode=MODE_REFERENCE,
@@ -136,7 +171,9 @@ class SubmissionControl:
             requested_capability_id=self.candidate_capability_id,
             advertised_capability_id=0,
         )
-        self.map[_HEADER.size : _HEADER.size + _COUNTER_BYTES] = _COUNTER.pack(0, 0, 0, 0)
+        self._write_meta()
+        self._write_observation(0, OBS_DISARMED, 0, OBS_DISARMED)
+        self._zero_counters()
 
     def _write_header(
         self,
@@ -162,28 +199,59 @@ class SubmissionControl:
             advertised_capability_id,
         )
 
+    def _write_meta(self) -> None:
+        from submission_counter_schema import (
+            COUNTER_SCHEMA_VERSION,
+            COUNTER_COUNT,
+            SAFETY_HYPOTHESIS_MASK_DEFAULT,
+            SUPPORTED_HYPOTHESIS_MASK_DEFAULT,
+        )
+
+        offset = _HEADER.size
+        self.map[offset : offset + _META.size] = _META.pack(
+            COUNTER_SCHEMA_VERSION,
+            COUNTER_COUNT,
+            SUPPORTED_HYPOTHESIS_MASK_DEFAULT,
+            SAFETY_HYPOTHESIS_MASK_DEFAULT,
+        )
+
+    def _write_observation(self, generation: int, requested: int, ack_gen: int, ack_state: int) -> None:
+        offset = _HEADER.size + _META.size
+        self.map[offset : offset + _OBS.size] = _OBS.pack(generation, requested, ack_gen, ack_state)
+
+    def _zero_counters(self) -> None:
+        self.map[_COUNTER_REGION_OFFSET : _COUNTER_REGION_OFFSET + COUNTER_COUNT * 8] = bytes(COUNTER_COUNT * 8)
+
     def snapshot(self) -> dict[str, int]:
-        magic, version, cmd_gen, req_mode, ack_gen, ack_mode, req_cap, adv_cap = _HEADER.unpack(
-            self.map[: _HEADER.size]
+        return read_snapshot(self.path)
+
+    def request_observation_arm(self) -> int:
+        self.observation_generation += 1
+        snap = self.snapshot()
+        self._write_observation(self.observation_generation, OBS_ARM, snap.get("observation_ack_generation", 0), snap.get("observation_ack_state", 0))
+        self.map.flush()
+        return self.observation_generation
+
+    def request_observation_freeze(self) -> int:
+        self.observation_generation += 1
+        snap = self.snapshot()
+        self._write_observation(
+            self.observation_generation, OBS_FREEZE, snap.get("observation_ack_generation", 0), snap.get("observation_ack_state", 0)
         )
-        ticks, site_entries, pair_hits, effective = _COUNTER.unpack(
-            self.map[_HEADER.size : _HEADER.size + _COUNTER_BYTES]
-        )
-        return {
-            "magic": magic,
-            "protocol_version": version,
-            "command_generation": cmd_gen,
-            "requested_mode": req_mode,
-            "ack_generation": ack_gen,
-            "ack_mode": ack_mode,
-            "requested_capability_id": req_cap,
-            "advertised_capability_id": adv_cap,
-            "control_ticks": ticks,
-            "candidate_site_entries": site_entries,
-            "eligible_pair_hits": pair_hits,
-            "candidate_effective_actions": effective,
-            "candidate_hook_attempts": ticks,
-        }
+        self.map.flush()
+        return self.observation_generation
+
+    def wait_observation_ack(self, generation: int, *, expected_state: int, timeout_s: float = 8.0) -> dict[str, int]:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            snap = self.snapshot()
+            if snap.get("observation_ack_generation", 0) >= generation and snap.get("observation_ack_state") == expected_state:
+                return snap
+            time.sleep(0.01)
+        raise base.BenchmarkError(f"Observation ack {expected_state} not received for generation {generation}")
+
+    def snapshot_frozen_candidate_bank(self) -> dict[str, int]:
+        return self.snapshot()
 
     def request_mode(self, mode: int) -> int:
         if mode not in (MODE_REFERENCE, MODE_CANDIDATE):
