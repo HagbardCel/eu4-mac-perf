@@ -27,7 +27,7 @@ Check `validation.json` → `observer_gate` and `engagement_gate` (both per-phas
 
 ## Multi-hypothesis observer smoke (protocol v3)
 
-Same **A–B–A** schedule as engagement smoke. B1 uses explicit ARM/FREEZE; interpretation is in `phases[].multi_hypothesis` and `multi_hypothesis_gate` (invariants on frozen bank, per-hypothesis status, `hits_per_swap` from **measured paused swaps** in the ARM window — not `median_swaps_s × nominal_phase_seconds`).
+Same **A–B–A** schedule as engagement smoke. B1 uses explicit ARM/FREEZE (FREEZE ack before `measurement_end`); interpretation is in `phases[].multi_hypothesis` and `multi_hypothesis_gate`. `hits_per_swap` uses the **`candidate_swaps`** counter (same ARM/FREEZE transaction as hypothesis hits). Auto-probe paused swaps are auxiliary scene-health evidence only.
 
 ```bash
 python3 benchmark/submission_experiment.py --output results --multi-hypothesis-smoke

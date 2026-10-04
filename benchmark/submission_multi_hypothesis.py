@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from submission_counter_schema import HYPOTHESES, SAFETY_HYPOTHESIS_MASK_DEFAULT, SUPPORTED_HYPOTHESIS_MASK_DEFAULT
+import submission_control as control
+from submission_counter_schema import COUNTER_COUNT, COUNTER_SCHEMA_VERSION, HYPOTHESES
 
 
 def _counter_delta(start: dict[str, int], end: dict[str, int], name: str) -> int:
@@ -22,6 +23,34 @@ def check_candidate_invariants(delta: dict[str, int]) -> list[str]:
     nonempty = delta.get("candidate_nonempty_invocations", 0)
     if site - nonempty != adjacent:
         errors.append(f"nonempty identity mismatch: {site}-{nonempty}!={adjacent}")
+    return errors
+
+
+def check_frozen_snapshot_meta(end: dict[str, int]) -> list[str]:
+    errors: list[str] = []
+    if end.get("protocol_version") != control.PROTOCOL_VERSION:
+        errors.append(f"protocol_version {end.get('protocol_version')} != {control.PROTOCOL_VERSION}")
+    if end.get("counter_schema_version") != COUNTER_SCHEMA_VERSION:
+        errors.append("counter_schema_version mismatch")
+    if end.get("counter_count") != COUNTER_COUNT:
+        errors.append("counter_count mismatch")
+    if end.get("observation_ack_state") != control.OBS_ACK_FROZEN:
+        errors.append("candidate bank not ACK_FROZEN")
+    return errors
+
+
+def check_observer_exposure(delta: dict[str, int], health_delta: dict[str, int]) -> list[str]:
+    errors: list[str] = []
+    if delta.get("candidate_site_entries", 0) <= 0:
+        errors.append("candidate_site_entries delta is zero")
+    if delta.get("candidate_nonempty_invocations", 0) <= 0:
+        errors.append("candidate_nonempty_invocations delta is zero")
+    if health_delta.get("renderbuckets_invocations", 0) <= 0:
+        errors.append("renderbuckets_invocations health delta is zero")
+    if health_delta.get("site_entries", 0) <= 0:
+        errors.append("site_entries health delta is zero")
+    if delta.get("candidate_swaps", 0) <= 0:
+        errors.append("candidate_swaps delta is zero")
     return errors
 
 
@@ -76,14 +105,21 @@ def evaluate_b_phase(
     *,
     measurement_paused_swaps: int,
     measurement_wall_seconds: float,
-    supported_mask: int = SUPPORTED_HYPOTHESIS_MASK_DEFAULT,
-    safety_mask: int = SAFETY_HYPOTHESIS_MASK_DEFAULT,
     material_threshold_calls_per_swap: float = 0.02,
 ) -> dict[str, Any]:
+    supported_mask = int(end.get("supported_hypothesis_mask", 0))
+    safety_mask = int(end.get("safety_qualified_hypothesis_mask", 0))
     delta = {name: _counter_delta(start, end, name) for name in end if isinstance(end[name], int)}
+    health_delta = {
+        "renderbuckets_invocations": _counter_delta(start, end, "renderbuckets_invocations"),
+        "site_entries": _counter_delta(start, end, "site_entries"),
+    }
+    meta_errors = check_frozen_snapshot_meta(end)
     invariant_errors = check_candidate_invariants(delta)
+    exposure_errors = check_observer_exposure(delta, health_delta)
+    all_errors = meta_errors + invariant_errors + exposure_errors
     support = hypothesis_support(supported_mask, safety_mask)
-    swaps = max(1, int(measurement_paused_swaps))
+    candidate_swaps = max(1, int(delta.get("candidate_swaps", 0)))
     hypotheses: dict[str, Any] = {}
     mapping = {
         "same_parent_buffer_signature": ("same_parent_buffer_signature", "same_parent_pairs"),
@@ -95,7 +131,7 @@ def evaluate_b_phase(
     for hyp_id, (counter, denom_name) in mapping.items():
         hits = int(delta.get(counter, 0))
         evaluated = int(delta.get(denom_name, 0))
-        hps = hits / swaps
+        hps = hits / candidate_swaps
         hypotheses[hyp_id] = classify_hypothesis(
             supported=support[hyp_id]["supported"],
             safety_qualified=support[hyp_id]["safety_qualified"],
@@ -105,34 +141,49 @@ def evaluate_b_phase(
             material_threshold_calls_per_swap=material_threshold_calls_per_swap,
         )
     return {
+        "meta_errors": meta_errors,
         "invariant_errors": invariant_errors,
-        "harness_ok": len(invariant_errors) == 0,
+        "exposure_errors": exposure_errors,
+        "harness_ok": len(all_errors) == 0,
         "measurement_paused_swaps": measurement_paused_swaps,
+        "candidate_swaps": int(delta.get("candidate_swaps", 0)),
         "measurement_wall_seconds": measurement_wall_seconds,
+        "advertised_supported_hypothesis_mask": supported_mask,
+        "advertised_safety_qualified_hypothesis_mask": safety_mask,
         "hypotheses": hypotheses,
         "counter_delta": delta,
     }
 
 
-def multi_hypothesis_smoke_gate(phases: list[dict]) -> dict[str, Any]:
-    """Health phases + B1 frozen-bank invariants (no v1 pair-hit pass requirement)."""
-    health_ok = True
-    health_reports: list[dict[str, Any]] = []
+def v3_reference_health_gate(phases: list[dict]) -> dict[str, Any]:
+    reports: list[dict[str, Any]] = []
+    all_ok = True
     for phase in phases:
         if phase.get("role") != "reference":
             continue
         cv = phase.get("control_validation") or {}
-        ok = cv.get("status") == "passed" and int(cv.get("effective_actions_delta", 0)) == 0
-        health_ok = health_ok and ok
-        health_reports.append({"name": phase.get("name"), "phase_ok": ok, "control_validation": cv})
+        ok = (
+            cv.get("status") == "passed"
+            and int(cv.get("effective_actions_delta", 0)) == 0
+            and int(cv.get("candidate_site_entries_delta", 0)) > 0
+        )
+        if not ok:
+            all_ok = False
+        reports.append({"name": phase.get("name"), "phase_ok": ok, "control_validation": cv})
+    return {"status": "passed" if all_ok else "failed", "phases": reports}
+
+
+def multi_hypothesis_smoke_gate(phases: list[dict]) -> dict[str, Any]:
+    """v3 health + B1 frozen-bank invariants and positive observer exposure."""
+    health = v3_reference_health_gate(phases)
     b1 = next((p for p in phases if p.get("name") == "b1"), None)
     mh = (b1 or {}).get("multi_hypothesis") or {}
     b_ok = bool(mh.get("harness_ok"))
     stage2 = any(row.get("stage2_recommended") for row in (mh.get("hypotheses") or {}).values())
-    passed = health_ok and b_ok
+    passed = health["status"] == "passed" and b_ok
     return {
         "status": "passed" if passed else "failed",
-        "health_phases": health_reports,
+        "reference_health": health,
         "b1_multi_hypothesis": mh,
         "stage2_recommended": stage2,
     }

@@ -38,6 +38,19 @@ class SubmissionMultiHypothesisTests(unittest.TestCase):
                 "same_parent_buffer_signature": 0,
             }
         )
+        end.update(
+            {
+                "protocol_version": 3,
+                "counter_schema_version": 1,
+                "counter_count": 17,
+                "observation_ack_state": 2,
+                "supported_hypothesis_mask": 0x0b,
+                "safety_qualified_hypothesis_mask": 0,
+                "candidate_swaps": 10,
+                "renderbuckets_invocations": 2,
+                "site_entries": 2,
+            }
+        )
         report = mh.evaluate_b_phase(start, end, measurement_paused_swaps=10, measurement_wall_seconds=5.0)
         self.assertTrue(report["harness_ok"])
         self.assertEqual(report["hypotheses"]["same_parent_buffer_signature"]["status"], "evaluated_no_recurrence")

@@ -100,7 +100,7 @@ static void setup(void) {
 }
 
 static bool protocol_ok(const uint32_t *words) {
-    return words[0] == MAGIC && (words[1] == PROTOCOL_VERSION || words[1] == 2u);
+    return words[0] == MAGIC && words[1] == PROTOCOL_VERSION;
 }
 
 static bool candidate_mode_active(const uint32_t *words) {
@@ -152,7 +152,6 @@ void eu4_submission_record_nonempty_invocation(void) {
 
 void eu4_submission_record_eligible_pair_hit(void) {
     eu4_submission_counter_add(EU4_COUNTER_LEGACY_ELIGIBLE_PAIR_HITS, 1);
-    eu4_submission_counter_add(EU4_COUNTER_SAME_PARENT_BUFFER_SIGNATURE, 1);
 }
 
 void eu4_submission_record_effective_action(void) {
@@ -246,6 +245,9 @@ static void poll_command_ack(void) {
     }
     pthread_mutex_unlock(&header_lock);
     eu4_submission_counter_add(EU4_COUNTER_CONTROL_TICKS, 1);
+    if (observation_bank_writable(words)) {
+        eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_SWAPS, 1);
+    }
 }
 
 static CGLError submission_flush(CGLContextObj context) {

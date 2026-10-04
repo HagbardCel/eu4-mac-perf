@@ -49,6 +49,7 @@ def _validate_control_deltas(
     end: dict[str, int],
     *,
     expected_capability_id: int,
+    require_v1_pair_hits: bool = True,
 ) -> dict:
     tick_delta = end["control_ticks"] - start["control_ticks"]
     site_delta = end.get("site_entries", end["candidate_site_entries"]) - start.get(
@@ -97,15 +98,16 @@ def _validate_control_deltas(
             else "observer reference requires mesh site traffic without pair hits or effective actions"
         )
     elif role == "candidate" and expected_capability_id == OBSERVER_CAPABILITY_ID:
+        hits_ok = hits_delta > 0 if require_v1_pair_hits else True
         ok = (
             end["ack_mode"] == MODE_CANDIDATE
             and tick_delta > 0
             and candidate_site_delta > 0
-            and hits_delta > 0
+            and hits_ok
             and action_delta == 0
         )
-        status = "engagement_only" if ok else "failed"
-        reason = None if ok else "observer candidate requires mesh site entries and pair hits without mutation"
+        status = "engagement_only" if ok and require_v1_pair_hits else ("passed" if ok else "failed")
+        reason = None if ok else "observer candidate requires mesh site traffic without mutation"
     elif role == "candidate":
         ok = (
             end["ack_mode"] == MODE_CANDIDATE
@@ -183,10 +185,10 @@ def _run_phase(
             raise base.BenchmarkError(f"EU IV lost focus during {name} measurement")
         tail.poll()
         time.sleep(min(1.0, max(0.0, measurement_deadline - time.monotonic())))
-    measurement_end = mark(events, "measurement_end", phase=name, mode=mode)
     if mode == MODE_CANDIDATE and obs_arm_gen is not None:
         freeze_gen = submission.request_observation_freeze()
         submission.wait_observation_ack(freeze_gen, expected_state=control.OBS_ACK_FROZEN)
+    measurement_end = mark(events, "measurement_end", phase=name, mode=mode)
     counter_end = submission.snapshot_frozen_candidate_bank() if mode == MODE_CANDIDATE else submission.snapshot()
     phase_payload = {
         "name": name,
@@ -197,6 +199,13 @@ def _run_phase(
         "end_ns": measurement_end["monotonic_ns"],
         "screenshot": str(screenshot),
     }
+    phase_payload["control_validation"] = _validate_control_deltas(
+        role,
+        counter_start,
+        counter_end,
+        expected_capability_id=expected_capability_id,
+        require_v1_pair_hits=not multi_hypothesis,
+    )
     if multi_hypothesis and role == "candidate":
         wall_s = max(1e-6, (measurement_end["monotonic_ns"] - measurement_start["monotonic_ns"]) / 1e9)
         swaps = _count_paused_swaps(run_dir, anchor, measurement_start["monotonic_ns"], measurement_end["monotonic_ns"])
@@ -206,17 +215,8 @@ def _run_phase(
             measurement_paused_swaps=swaps,
             measurement_wall_seconds=wall_s,
         )
-        phase_payload["control_validation"] = {
-            "status": "passed" if phase_payload["multi_hypothesis"]["harness_ok"] else "failed",
-            "effective_actions_delta": int(counter_end.get("effective_actions", 0)) - int(counter_start.get("effective_actions", 0)),
-        }
-    else:
-        phase_payload["control_validation"] = _validate_control_deltas(
-            role,
-            counter_start,
-            counter_end,
-            expected_capability_id=expected_capability_id,
-        )
+        mh_ok = phase_payload["multi_hypothesis"]["harness_ok"]
+        phase_payload["control_validation"]["status"] = "passed" if mh_ok else "failed"
     return phase_payload
 
 
@@ -361,15 +361,15 @@ def run_experiment(
                 manifest["phases"] = phases
                 if multi_hypothesis_smoke:
                     manifest["multi_hypothesis_gate"] = multi.multi_hypothesis_smoke_gate(phases)
-                    manifest["observer_gate"] = validation.observer_engagement_gate(
-                        phases,
-                        expected_capability_id=expected_capability,
-                        require_pair_hits=False,
-                    )
+                    manifest["v3_reference_health_gate"] = manifest["multi_hypothesis_gate"]["reference_health"]
                     manifest["engagement_gate"] = {
                         "status": manifest["multi_hypothesis_gate"]["status"],
                         "pareto_eligible": False,
                         "multi_hypothesis": True,
+                    }
+                    manifest["observer_gate"] = {
+                        "status": "skipped",
+                        "reason": "v3 multi-hypothesis uses multi_hypothesis_gate only",
                     }
                 elif observer_run:
                     manifest["observer_gate"] = validation.observer_engagement_gate(

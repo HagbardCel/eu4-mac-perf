@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 COUNTER_SCHEMA_VERSION = 1
-COUNTER_COUNT = 16
-SUPPORTED_HYPOTHESIS_MASK_DEFAULT = 0x1f
-SAFETY_HYPOTHESIS_MASK_DEFAULT = 0x1
+COUNTER_COUNT = 17
+SUPPORTED_HYPOTHESIS_MASK_DEFAULT = 0xb
+SAFETY_HYPOTHESIS_MASK_DEFAULT = 0x0
 
 COUNTER_SLOTS = {
     "control_ticks": 0,
@@ -24,14 +24,15 @@ COUNTER_SLOTS = {
     "same_texture_input_signature": 13,
     "texture_setup_elision_eligible": 14,
     "legacy_eligible_pair_hits": 15,
+    "candidate_swaps": 16,
 }
 
 HYPOTHESES = [
-    {'bit': 0, 'id': 'same_parent_buffer_signature', 'supported_default': True, 'safety_qualified_default': True},
+    {'bit': 0, 'id': 'same_parent_buffer_signature', 'supported_default': True, 'safety_qualified_default': False},
     {'bit': 1, 'id': 'cross_parent_buffer_signature', 'supported_default': True, 'safety_qualified_default': False},
-    {'bit': 2, 'id': 'cross_parent_buffer_elision', 'supported_default': True, 'safety_qualified_default': False},
+    {'bit': 2, 'id': 'cross_parent_buffer_elision', 'supported_default': False, 'safety_qualified_default': False},
     {'bit': 3, 'id': 'same_subrecord_pointer_cross_parent', 'supported_default': True, 'safety_qualified_default': False},
-    {'bit': 4, 'id': 'same_texture_input_signature', 'supported_default': True, 'safety_qualified_default': False},
+    {'bit': 4, 'id': 'same_texture_input_signature', 'supported_default': False, 'safety_qualified_default': False},
     {'bit': 5, 'id': 'texture_setup_elision', 'supported_default': False, 'safety_qualified_default': False},
     {'bit': 6, 'id': 'object_constants_elision', 'supported_default': False, 'safety_qualified_default': False},
 ]

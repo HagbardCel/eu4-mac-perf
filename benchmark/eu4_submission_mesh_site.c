@@ -20,9 +20,6 @@ typedef struct {
     uint32_t prev_flush_kind;
     uint64_t prev_epoch;
     eu4_buffer_bind_signature_t prev_buffer;
-    uint32_t prev_texture_a;
-    uint32_t prev_texture_b;
-    uint32_t prev_texture_c;
     bool epoch_nonempty_recorded;
 } eu4_mesh_chain_state_t;
 
@@ -30,16 +27,6 @@ static _Thread_local eu4_mesh_chain_state_t chain;
 
 void eu4_submission_mesh_reset_chain(void) {
     memset(&chain, 0, sizeof(chain));
-}
-
-static void read_texture_triple(const uint8_t *sub, uint32_t *a, uint32_t *b, uint32_t *c) {
-    *a = *(const uint32_t *)(sub + 0x18);
-    *b = *(const uint32_t *)(sub + 0x1c);
-    *c = *(const uint32_t *)(sub + 0x20);
-}
-
-static bool texture_triple_equal(uint32_t a0, uint32_t b0, uint32_t c0, uint32_t a1, uint32_t b1, uint32_t c1) {
-    return a0 == a1 && b0 == b1 && c0 == c1;
 }
 
 void eu4_submission_mesh_site_from_frame(void *rbp, uint32_t layer_index, uint32_t flush_array_kind) {
@@ -69,11 +56,6 @@ void eu4_submission_mesh_site_from_frame(void *rbp, uint32_t layer_index, uint32
     const uint64_t parent_id = (uint64_t)(uintptr_t)parent;
     eu4_buffer_bind_signature_t curr_buffer;
     eu4_buffer_bind_signature_read(sub, &curr_buffer);
-    uint32_t tex_a = 0;
-    uint32_t tex_b = 0;
-    uint32_t tex_c = 0;
-    read_texture_triple(sub, &tex_a, &tex_b, &tex_c);
-
     const bool predicate_active = eu4_submission_candidate_predicate_active();
 
     if (chain.have_prev && predicate_active) {
@@ -116,14 +98,7 @@ void eu4_submission_mesh_site_from_frame(void *rbp, uint32_t layer_index, uint32
                 if (chain.prev_sub_pointer == (uintptr_t)sub) {
                     eu4_submission_counter_add(EU4_COUNTER_SAME_SUBRECORD_POINTER_CROSS_PARENT, 1);
                 }
-                if (eu4_cross_parent_buffer_elision_eligible(
-                        &chain.prev_buffer, &curr_buffer, &prev_ctx, &curr_ctx, &reason)) {
-                    eu4_submission_counter_add(EU4_COUNTER_CROSS_PARENT_BUFFER_ELISION_ELIGIBLE, 1);
-                }
             }
-        }
-        if (texture_triple_equal(chain.prev_texture_a, chain.prev_texture_b, chain.prev_texture_c, tex_a, tex_b, tex_c)) {
-            eu4_submission_counter_add(EU4_COUNTER_SAME_TEXTURE_INPUT_SIGNATURE, 1);
         }
     }
 
@@ -134,9 +109,6 @@ void eu4_submission_mesh_site_from_frame(void *rbp, uint32_t layer_index, uint32
     chain.prev_flush_kind = flush_array_kind;
     chain.prev_epoch = epoch;
     chain.prev_buffer = curr_buffer;
-    chain.prev_texture_a = tex_a;
-    chain.prev_texture_b = tex_b;
-    chain.prev_texture_c = tex_c;
 
     if (!predicate_active) {
         eu4_submission_mesh_reset_chain();

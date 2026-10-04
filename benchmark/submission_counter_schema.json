@@ -5,7 +5,7 @@
       "bit": 0,
       "id": "same_parent_buffer_signature",
       "supported_default": true,
-      "safety_qualified_default": true
+      "safety_qualified_default": false
     },
     {
       "bit": 1,
@@ -16,7 +16,7 @@
     {
       "bit": 2,
       "id": "cross_parent_buffer_elision",
-      "supported_default": true,
+      "supported_default": false,
       "safety_qualified_default": false
     },
     {
@@ -28,7 +28,7 @@
     {
       "bit": 4,
       "id": "same_texture_input_signature",
-      "supported_default": true,
+      "supported_default": false,
       "safety_qualified_default": false
     },
     {
@@ -60,7 +60,8 @@
     {"slot": 12, "name": "same_subrecord_pointer_cross_parent", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "hypothesis_bit": 3},
     {"slot": 13, "name": "same_texture_input_signature", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "hypothesis_bit": 4},
     {"slot": 14, "name": "texture_setup_elision_eligible", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "hypothesis_bit": 5},
-    {"slot": 15, "name": "legacy_eligible_pair_hits", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "note": "v1 engagement gate alias for same_parent_buffer_signature hits"}
+    {"slot": 15, "name": "legacy_eligible_pair_hits", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "note": "v1 engagement gate alias; does not increment same_parent_buffer_signature"},
+    {"slot": 16, "name": "candidate_swaps", "bank": "candidate", "modes": ["candidate"], "requires_armed": true, "note": "CGLFlushDrawable polls while observation bank armed; coherent denominator for hits_per_swap with frozen candidate counters"}
   ],
   "v2_compat": {
     "eligible_pair_hits_slot": 15,

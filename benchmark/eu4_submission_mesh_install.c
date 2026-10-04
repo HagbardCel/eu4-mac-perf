@@ -15,23 +15,31 @@ static EU4Detour entry_detour;
 static bool mesh_hook_installed = false;
 static bool entry_hook_installed = false;
 
-static void rollback_entry(void) {
-    if (entry_hook_installed) {
-        (void)eu4_detour_restore(&entry_detour);
-        entry_hook_installed = false;
+static bool rollback_entry(void) {
+    if (!entry_hook_installed) {
+        return true;
     }
+    if (!eu4_detour_restore(&entry_detour)) {
+        return false;
+    }
+    entry_hook_installed = false;
+    return true;
 }
 
-static void rollback_mesh(void) {
-    if (mesh_hook_installed) {
-        (void)eu4_detour_restore(&mesh_detour);
-        mesh_hook_installed = false;
+static bool rollback_mesh(void) {
+    if (!mesh_hook_installed) {
+        return true;
     }
+    if (!eu4_detour_restore(&mesh_detour)) {
+        return false;
+    }
+    mesh_hook_installed = false;
+    return true;
 }
 
-static void rollback_all(void) {
-    rollback_mesh();
-    rollback_entry();
+static void rollback_partial_install(void) {
+    (void)rollback_mesh();
+    (void)rollback_entry();
 }
 
 bool eu4_submission_try_install_mesh_hook(void) {
@@ -87,7 +95,7 @@ bool eu4_submission_try_install_all_hooks(void) {
                 (void *)eu4_mesh_observer_gateway,
                 lengths,
                 3)) {
-            rollback_all();
+            rollback_partial_install();
             return false;
         }
         eu4_mesh_trampoline_ptr = (uint64_t)(uintptr_t)mesh_detour.trampoline;
