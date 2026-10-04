@@ -5,6 +5,9 @@ _eu4_submission_on_renderbuckets_entry:
     andq $15, %rax
     cmpq $8, %rax
     jne _observer_bad_align
+    movl %edi, _g_saved_layer(%rip)
+    movl %esi, _g_saved_arg_r8(%rip)
+    movl %edx, _g_saved_arg_r9(%rip)
     movq %rdi, _g_saved_rdi(%rip)
     movq %rsi, _g_saved_rsi(%rip)
     movq %rdx, _g_saved_rdx(%rip)
@@ -42,6 +45,15 @@ _g_observer_calls:
     .long 0
 .globl _g_bad_stack_alignment
 _g_bad_stack_alignment:
+    .long 0
+.globl _g_saved_layer
+_g_saved_layer:
+    .long 0
+.globl _g_saved_arg_r8
+_g_saved_arg_r8:
+    .long 0
+.globl _g_saved_arg_r9
+_g_saved_arg_r9:
     .long 0
 .globl _g_saved_rdi
 _g_saved_rdi:

@@ -1,14 +1,16 @@
-"""Multi-hypothesis observer interpretation (protocol v3)."""
+"""Multi-hypothesis observer interpretation (protocol v3, counter schema v2)."""
 
 from __future__ import annotations
 
 from typing import Any
 
 import submission_control as control
-from submission_counter_schema import COUNTER_COUNT, COUNTER_SCHEMA_VERSION, COUNTER_SLOTS, HYPOTHESES
-
-CANDIDATE_BANK_COUNTER_NAMES = tuple(
-    name for name, slot in COUNTER_SLOTS.items() if slot >= COUNTER_SLOTS["candidate_site_entries"]
+from submission_counter_schema import (
+    CANDIDATE_COUNTER_NAMES,
+    COUNTER_COUNT,
+    COUNTER_SCHEMA_VERSION,
+    COUNTER_SLOTS,
+    HYPOTHESES,
 )
 
 # Estimated removable engine helper calls per hypothesis hit (materiality only when safety-qualified).
@@ -24,7 +26,7 @@ def _counter_delta(start: dict[str, int], end: dict[str, int], name: str) -> int
 
 
 def _candidate_totals(frozen: dict[str, int]) -> dict[str, int]:
-    return {name: int(frozen.get(name, 0)) for name in CANDIDATE_BANK_COUNTER_NAMES}
+    return {name: int(frozen.get(name, 0)) for name in CANDIDATE_COUNTER_NAMES}
 
 
 def check_candidate_invariants(totals: dict[str, int]) -> list[str]:
@@ -32,14 +34,31 @@ def check_candidate_invariants(totals: dict[str, int]) -> list[str]:
     errors: list[str] = []
     same = totals.get("same_parent_pairs", 0)
     cross = totals.get("cross_parent_pairs", 0)
-    adjacent = totals.get("adjacent_draw_pairs_total", 0)
+    adjacent = totals.get("adjacent_within_invocation", 0)
     if same + cross != adjacent:
         errors.append(f"pair partition mismatch: {same}+{cross}!={adjacent}")
     site = totals.get("candidate_site_entries", 0)
-    nonempty = totals.get("candidate_nonempty_invocations", 0)
+    nonempty = totals.get("candidate_nonempty_renderbuckets", 0)
     if site - nonempty != adjacent:
         errors.append(f"nonempty identity mismatch: {site}-{nonempty}!={adjacent}")
+    invocations = totals.get("candidate_renderbuckets_invocations", 0)
+    if nonempty > invocations:
+        errors.append(f"nonempty exceeds invocations: {nonempty}>{invocations}")
     return errors
+
+
+def derived_candidate_metrics(totals: dict[str, int]) -> dict[str, float | None]:
+    invocations = int(totals.get("candidate_renderbuckets_invocations", 0))
+    nonempty = int(totals.get("candidate_nonempty_renderbuckets", 0))
+    sites = int(totals.get("candidate_site_entries", 0))
+    swaps = int(totals.get("candidate_swaps", 0))
+    out: dict[str, float | None] = {
+        "nonempty_fraction": (nonempty / invocations) if invocations else None,
+        "sites_per_nonempty_renderbuckets": (sites / nonempty) if nonempty else None,
+        "candidate_site_entries_per_swap": (sites / swaps) if swaps else None,
+        "candidate_renderbuckets_invocations_per_swap": (invocations / swaps) if swaps else None,
+    }
+    return out
 
 
 def check_frozen_snapshot_meta(frozen: dict[str, int]) -> list[str]:
@@ -59,8 +78,10 @@ def check_observer_exposure(candidate_totals: dict[str, int], health_delta: dict
     errors: list[str] = []
     if candidate_totals.get("candidate_site_entries", 0) <= 0:
         errors.append("candidate_site_entries is zero")
-    if candidate_totals.get("candidate_nonempty_invocations", 0) <= 0:
-        errors.append("candidate_nonempty_invocations is zero")
+    if candidate_totals.get("candidate_nonempty_renderbuckets", 0) <= 0:
+        errors.append("candidate_nonempty_renderbuckets is zero")
+    if candidate_totals.get("candidate_renderbuckets_invocations", 0) <= 0:
+        errors.append("candidate_renderbuckets_invocations is zero")
     if health_delta.get("renderbuckets_invocations", 0) <= 0:
         errors.append("renderbuckets_invocations health delta is zero")
     if health_delta.get("site_entries", 0) <= 0:
@@ -152,7 +173,7 @@ def evaluate_b_phase(
         "cross_parent_buffer_signature": ("cross_parent_buffer_signature", "cross_parent_pairs"),
         "cross_parent_buffer_elision": ("cross_parent_buffer_elision_eligible", "cross_parent_pairs"),
         "same_subrecord_pointer_cross_parent": ("same_subrecord_pointer_cross_parent", "cross_parent_pairs"),
-        "same_texture_input_signature": ("same_texture_input_signature", "adjacent_draw_pairs_total"),
+        "same_texture_input_signature": ("same_texture_input_signature", "adjacent_within_invocation"),
     }
     for hyp_id, (counter, denom_name) in mapping.items():
         hits = int(candidate_totals.get(counter, 0))
@@ -183,6 +204,7 @@ def evaluate_b_phase(
         "hypotheses": hypotheses,
         "candidate_totals": candidate_totals,
         "health_delta": health_delta,
+        "derived_metrics": derived_candidate_metrics(candidate_totals),
     }
 
 

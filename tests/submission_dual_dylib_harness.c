@@ -49,8 +49,8 @@ int main(void) {
     words[5] = 0;
     words[6] = compiled;
     words[7] = 0;
-    words[8] = 1;
-    words[9] = 17;
+    words[8] = 2;
+    words[9] = 18;
     words[10] = 0x1fu;
     words[11] = 0x01u;
     words[12] = 0;

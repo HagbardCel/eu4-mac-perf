@@ -97,6 +97,8 @@ Static map shows buffer binds occur **inside** the per-subrecord setup block, no
 
 Do **not** use `%rbp` as invocation identity (stack frame reuse across calls). Use **RenderBuckets entry hook** + TLS epoch ([`renderbuckets-entry-hook-site.json`](renderbuckets-entry-hook-site.json)): increment once per function entry before any path reaches `0x14c81e6`.
 
+**v3.1 authoritative context:** layer and flush-array selector come from entry arguments (`rcx`, `r9b`) captured at `0x14c7da4` — see [`renderbuckets-entry-abi-v31.md`](renderbuckets-entry-abi-v31.md). Do not use `%r12d` or `-0xac(%rbp)` at `0x14c81e6` for comparator semantics.
+
 **Recursion:** none observed on mesh `RenderBuckets` path; shadow pass uses distinct symbol.
 
 ## Texture structural inputs (PR A)

@@ -20,8 +20,6 @@ _eu4_mesh_observer_gateway:
     pushq %r11
     pushfq
     movq %rbp, %rdi
-    movl %r12d, %esi
-    movzbl -0xac(%rbp), %edx
     callq _eu4_submission_mesh_site_from_frame
     popfq
     popq %r11

@@ -17,9 +17,12 @@ _eu4_renderbuckets_entry_gateway:
     pushq %r10
     pushq %r11
     pushfq
-    subq $8, %rsp
-    callq _eu4_submission_on_renderbuckets_entry
-    addq $8, %rsp
+    subq    $8, %rsp
+    movl    %ecx, %edi
+    movzbl  %r8b, %esi
+    movzbl  %r9b, %edx
+    callq   _eu4_submission_on_renderbuckets_entry
+    addq    $8, %rsp
     popfq
     popq %r11
     popq %r10

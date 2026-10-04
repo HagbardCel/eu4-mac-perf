@@ -76,6 +76,11 @@ def generate_py(schema: dict) -> str:
     for h in hypotheses:
         lines.append(f"    {repr(h)},")
     lines.append("]")
+    lines.append("")
+    health = tuple(c["name"] for c in counters if c.get("bank") == "health")
+    candidate = tuple(c["name"] for c in counters if c.get("bank") == "candidate")
+    lines.append(f"HEALTH_COUNTER_NAMES = {health!r}")
+    lines.append(f"CANDIDATE_COUNTER_NAMES = {candidate!r}")
     return "\n".join(lines) + "\n"
 
 

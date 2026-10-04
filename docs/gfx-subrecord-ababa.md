@@ -25,32 +25,50 @@ Candidate phases use protocol **v3** observation **ARM → measure → FREEZE** 
 
 Check `validation.json` → `observer_gate` and `engagement_gate` (both per-phase). **Not** a Pareto optimization pass.
 
-## Multi-hypothesis observer smoke (protocol v3)
+## Multi-hypothesis observer smoke (protocol v3, schema v2)
 
-Same **A–B–A** schedule as engagement smoke. B1 uses explicit ARM/FREEZE (FREEZE ack before `measurement_end`); interpretation is in `phases[].multi_hypothesis` and `multi_hypothesis_gate`. `hits_per_swap` uses the **`candidate_swaps`** counter (same ARM/FREEZE transaction as hypothesis hits). Auto-probe paused swaps are auxiliary scene-health evidence only.
+Same **A–B–A** schedule as engagement smoke. B1 uses explicit ARM/FREEZE (FREEZE ack before `measurement_end`); interpretation is in `phases[].multi_hypothesis` and `multi_hypothesis_gate`. Manifest experiment kind: **`submission_observer_multi_hypothesis_v2`**.
 
 ```bash
 python3 benchmark/submission_experiment.py --output results --multi-hypothesis-smoke
 ```
 
-**Pass criteria:** A1/A2/B1 absolute scene gates (`observer_scene_gate`); reference health (site + renderbuckets invocations, no effective actions); B1 `control_validation.status == passed` **and** `multi_hypothesis.harness_ok` (includes `effective_actions_delta == 0`); **no** v1 pair-hit requirement. Stage-2 uses `safety_qualified_hypothesis_mask` and materiality only.
+**Pass criteria (v3.1):** A1/A2/B1 absolute scene gates (`observer_scene_gate`); reference health (health `site_entries` + `renderbuckets_invocations`, no effective actions); B1 `control_validation.status == passed` **and** `multi_hypothesis.harness_ok` (includes frozen-bank invariants below). **Do not** require `cross_parent_pairs > 0`.
 
-**Pre-Venice local (Rosetta):**
+**Frozen candidate bank identities (exact):**
+
+```text
+candidate_nonempty_renderbuckets <= candidate_renderbuckets_invocations
+candidate_site_entries - candidate_nonempty_renderbuckets == adjacent_within_invocation
+same_parent_pairs + cross_parent_pairs == adjacent_within_invocation
+```
+
+**Continuity reports (not pass/fail):** `derived_metrics` in B1 multi_hypothesis (`sites_per_nonempty_renderbuckets`, `candidate_site_entries_per_swap`, etc.).
+
+Historical **v3.0** run `20261004T131931Z` used kind **v1** and invalid pair segmentation — see [`analysis/mesh-observer-chain-semantics-20261004.md`](../analysis/mesh-observer-chain-semantics-20261004.md).
+
+**Pre-Venice local:**
 
 ```bash
 PYTHONPATH=benchmark python3 -m unittest \
+  tests.test_mesh_observer_chain_fsm \
   tests.test_mesh_observer_gateway \
   tests.test_renderbuckets_entry_gateway \
-  tests.test_submission_control -q
+  tests.test_submission_control \
+  tests.test_submission_multi_hypothesis -q
 ```
 
-Static RE matrix: [`analysis/gfx-subrecord-hypothesis-matrix.md`](../analysis/gfx-subrecord-hypothesis-matrix.md). Cross-parent continuity: [`analysis/cross-parent-buffer-bind-re.md`](../analysis/cross-parent-buffer-bind-re.md).
+Static RE: [`analysis/gfx-subrecord-hypothesis-matrix.md`](../analysis/gfx-subrecord-hypothesis-matrix.md), [`analysis/renderbuckets-entry-abi-v31.md`](../analysis/renderbuckets-entry-abi-v31.md), [`analysis/cross-parent-buffer-bind-re.md`](../analysis/cross-parent-buffer-bind-re.md).
 
 ### Venice registration (manual)
 
-After a local run, register under `results/<timestamp>-submission-experiment/` and add evidence JSON under `analysis/evidence/` with `posthoc_interpretation` (do not rewrite immutable `validation.md` from prior runs).
+After a corrected v3.1 run:
 
-Observer phases are 10 s; per-phase metrics use phase-scaled sample floors in `summarize()` (not the 30 s autonomous baseline defaults). A failed run with “Insufficient fully paused swap samples in the 30-second phase” on smoke is the pre-fix harness bug — see `results/20261004T111812Z-submission-experiment/validation.md`.
+1. Register under `results/<timestamp>-submission-experiment/` (manifest `experiment` = `submission_observer_multi_hypothesis_v2`).
+2. Add `analysis/evidence/gfx-subrecord-multi-hypothesis-smoke-<timestamp>.json` using [`analysis/evidence/gfx-subrecord-multi-hypothesis-smoke-TEMPLATE.json`](../analysis/evidence/gfx-subrecord-multi-hypothesis-smoke-TEMPLATE.json).
+3. Do **not** rewrite immutable `validation.md` from prior runs (e.g. `131931Z`).
+
+Observer phases are 10 s; per-phase metrics use phase-scaled sample floors in `summarize()` (not the 30 s autonomous baseline defaults).
 
 ## Full ABABA (capability 2)
 
