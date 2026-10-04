@@ -101,4 +101,4 @@ Do **not** use `%rbp` as invocation identity (stack frame reuse across calls). U
 
 ## Texture structural inputs (PR A)
 
-Three texture IDs resolved before `GfxSetTextures` (~`0x14c8274`). Structural hypothesis **`same_texture_input_signature`**: compare resolved ID tuple (and slot loop inputs if mapped) — **GO for observer counter** in PR B; safety-qualified texture elision remains **unsupported** until barrier fields resolved in layout JSON.
+Texture IDs are resolved before `GfxSetTextures` (~`0x14c8274`), but the **subrecord dword triple** consumed on this path is **not** yet mapped to pinned disassembly (layout JSON still classifies `0x00–0x2f` as unresolved material/effect payload). **`same_texture_input_signature` is unsupported** for the first v3 Venice run — do not count recurrence at guessed offsets (`+0x18/+0x1c/+0x20`) until each field is tied to the three IDs this path reads.

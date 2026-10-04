@@ -6,8 +6,8 @@
   "candidate_insertion_offset": "0x14c7da4",
   "insertion_rationale": "First instruction of RenderBuckets; runs once per invocation before any branch reaches mesh site hook 0x14c81e6. Alternative post-prologue sites (e.g. 0x14c7dc6) are valid only if they still run exactly once per invocation before site hook.",
   "patch_length": 13,
-  "prefix_hex": "554889e54157415641554154",
-  "prefix_note": "Typical prologue: push %rbp; mov %rsp,%rbp; push %r15-%r12; push %rbx — verify with llvm-objdump on pinned binary before install",
+  "prefix_hex": "554889e5415741564155415453",
+  "prefix_note": "Verified pinned-binary bytes (GOG EU IV 1.37.5, sha256 in this file): push %rbp; mov %rsp,%rbp; push %r15-%r12; push %rbx (13 bytes total).",
   "displaced_instructions": [
     {"image_offset": "0x14c7da4", "length": 1, "mnemonic": "pushq %rbp"},
     {"image_offset": "0x14c7da5", "length": 3, "mnemonic": "movq %rsp, %rbp"},
