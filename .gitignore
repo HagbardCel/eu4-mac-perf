@@ -20,5 +20,7 @@ results/_save_backups/
 results/**/telemetry.csv
 results/**/power.samples.json
 results/**/trace.bin
+!results/20261003T210202Z-intrusive-diagnostic/ready-scene.png
+!results/20261003T210202Z-intrusive-diagnostic/powermetrics.stderr
 results/.autonomous.lock
 results/.autonomous-recovery.json

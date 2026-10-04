@@ -1,7 +1,11 @@
 import unittest
 
 import eu4_frame_model as model
-from frame_model_salvage import eligible_intrusive_salvage_trace
+from frame_model_salvage import (
+    _frame_retention,
+    _window_frame_keys,
+    eligible_intrusive_salvage_trace,
+)
 
 
 class FrameModelSalvageTests(unittest.TestCase):
@@ -30,3 +34,41 @@ class FrameModelSalvageTests(unittest.TestCase):
         kinds = [row[0] for row in trace]
         self.assertIn("S", kinds)
         self.assertNotIn("D", kinds)
+
+    def test_window_keys_prefer_observed_over_generation_match(self):
+        tail_frames = [
+            {
+                "measurement_epoch": 6,
+                "update_id": 11531,
+                "generation": 24,
+                "state_calls": 100,
+                "uniform_calls": 10,
+            },
+            {
+                "measurement_epoch": 6,
+                "update_id": 99999,
+                "generation": 24,
+                "state_calls": 100,
+                "uniform_calls": 10,
+            },
+        ]
+        observed = [{"measurement_epoch": 6, "update_id": 11531}]
+        keys = _window_frame_keys(tail_frames, 24, observed)
+        self.assertEqual(keys, {(6, 11531)})
+
+    def test_frame_retention_matches_detail_rows_for_observed_key(self):
+        frame = {
+            "measurement_epoch": 6,
+            "update_id": 11531,
+            "state_calls": 4,
+            "uniform_calls": 2,
+        }
+        rows = [
+            ["S", "1", "1", "1", "0"] + ["0"] * 8 + ["6", "11531", "103", "0", "0", "0", "0"],
+            ["S", "1", "2", "1", "0"] + ["0"] * 8 + ["6", "11531", "103", "0", "0", "0", "0"],
+            ["U", "1", "3", "0"] + ["0"] * 9 + ["6", "11531", "103"],
+        ]
+        retention = _frame_retention(frame, rows)
+        self.assertEqual(retention["surviving_s"], 2)
+        self.assertEqual(retention["surviving_u"], 1)
+        self.assertAlmostEqual(retention["retention_s"], 0.5)

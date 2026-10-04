@@ -89,9 +89,25 @@ def _tail_sample_windows(manifest: dict) -> dict[int, list[dict]]:
     sampled = (tail.get("sampled_window_evidence") or {}).get("windows") or []
     for window in sampled:
         generation = int(window.get("sample_window", window.get("generation", 0)))
-        if generation and generation not in windows:
+        if generation:
             windows[generation] = list(window.get("sampled") or [])
     return windows
+
+
+def _window_frame_keys(
+    tail_frames: list[dict],
+    generation: int,
+    observed: list[dict],
+) -> set[tuple[int, int]]:
+    keys: set[tuple[int, int]] = set()
+    for obs in observed:
+        try:
+            keys.add((int(obs["measurement_epoch"]), int(obs["update_id"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if keys:
+        return keys
+    return _frame_keys_for_generation(tail_frames, generation)
 
 
 def _frame_keys_for_generation(frames: list[dict], generation: int) -> set[tuple[int, int]]:
@@ -219,10 +235,7 @@ def run_intrusive_salvage(run_dir: Path) -> dict:
     window_gens = sorted(windows.keys())
     window_reports: dict[str, Any] = {}
     for gen in window_gens:
-        keys = _frame_keys_for_generation(tail_frames, gen)
-        if not keys:
-            for obs in windows[gen]:
-                keys.add((obs["measurement_epoch"], obs["update_id"]))
+        keys = _window_frame_keys(tail_frames, gen, windows.get(gen) or [])
         window_rows = [r for r in salvage_trace if _detail_key(r) in keys]
         window_frames = [f for f in tail_frames if (f["measurement_epoch"], f["update_id"]) in keys]
         retentions = [_frame_retention(f, salvage_trace) for f in window_frames]
@@ -246,17 +259,10 @@ def run_intrusive_salvage(run_dir: Path) -> dict:
     rank_stability = None
     if len(window_gens) >= 2:
         g0, g1 = window_gens[0], window_gens[1]
-        left = _aggregate_ranks(
-            [r for r in salvage_trace if _detail_key(r) in _frame_keys_for_generation(tail_frames, g0) or ()]
-        )
-        right = _aggregate_ranks(
-            [r for r in salvage_trace if _detail_key(r) in _frame_keys_for_generation(tail_frames, g1) or ()]
-        )
-        # rebuild window row sets properly
-        keys0 = window_reports[str(g0)]["frame_keys"]
-        keys1 = window_reports[str(g1)]["frame_keys"]
-        left = _aggregate_ranks([r for r in salvage_trace if _detail_key(r) in set(map(tuple, keys0))])
-        right = _aggregate_ranks([r for r in salvage_trace if _detail_key(r) in set(map(tuple, keys1))])
+        keys0 = {tuple(pair) for pair in window_reports[str(g0)]["frame_keys"]}
+        keys1 = {tuple(pair) for pair in window_reports[str(g1)]["frame_keys"]}
+        left = _aggregate_ranks([r for r in salvage_trace if _detail_key(r) in keys0])
+        right = _aggregate_ranks([r for r in salvage_trace if _detail_key(r) in keys1])
         rank_stability = {
             "windows": [g0, g1],
             "top_n_overlap_fraction": _rank_overlap(left, right),
@@ -272,12 +278,15 @@ def run_intrusive_salvage(run_dir: Path) -> dict:
     retention_poor = bool(med_ret_s) and min(med_ret_s) < RETENTION_POOR_THRESHOLD
     overlap = (rank_stability or {}).get("top_n_overlap_fraction") or 0.0
     unstable = overlap < RANK_AGREEMENT_MIN
-    if retention_poor and unstable:
-        status = "insufficient_for_hypothesis_selection"
-        reason = "Poor detail retention and unstable top-N rank overlap between TAIL sample windows"
-    elif not salvage_trace:
+    if not salvage_trace:
         status = "insufficient_for_hypothesis_selection"
         reason = "No salvage detail rows after TAIL filter"
+    elif retention_poor:
+        status = "insufficient_for_hypothesis_selection"
+        reason = "Poor detail retention in one or more TAIL sample windows"
+    elif unstable:
+        status = "insufficient_for_hypothesis_selection"
+        reason = "Unstable top-N rank overlap between TAIL sample windows"
     else:
         status = "usable_ordinal_hint"
         reason = "TAIL salvage produced ordinal hints; treat as non-quantitative"

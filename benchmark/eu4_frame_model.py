@@ -5325,6 +5325,13 @@ def _run_intrusive_diagnostic_phase_c(output_root: Path) -> Path:
                 if not display.get("verified") or abs(display.get("refresh_hz", 0) - 120) > 1:
                     raise base.BenchmarkError("EU IV is not in the verified 120 Hz display mode")
                 manifest["readiness"] = ready
+                from frame_model_evidence import persist_capture_time_readiness_log
+
+                manifest["readiness_log"] = persist_capture_time_readiness_log(
+                    run_dir,
+                    base.USER_DATA / "logs/game.log",
+                    old_log,
+                )
                 manifest["display"] = display
                 manifest["warmup"] = auto.warm_up(game, run_dir / "auto-probe.csv", power_tail, anchor)
                 auto.capture_scene(run_dir / "ready-scene.png")
@@ -5647,6 +5654,10 @@ def run(
                 if not display.get("verified") or abs(display.get("refresh_hz",0)-120)>1:
                     raise base.BenchmarkError("EU IV is not in the verified 120 Hz display mode")
                 manifest["readiness"]=ready; manifest["display"]=display
+                from frame_model_evidence import persist_capture_time_readiness_log
+
+                manifest["readiness_log"]=persist_capture_time_readiness_log(
+                    run_dir, base.USER_DATA/"logs/game.log", old_log)
                 manifest["warmup"]=auto.warm_up(game,run_dir/"auto-probe.csv",power_tail,anchor)
                 auto.capture_scene(run_dir/"ready-scene.png")
                 manifest["scene_alignment"]=auto.verify_scene(run_dir/"ready-scene.png",False)

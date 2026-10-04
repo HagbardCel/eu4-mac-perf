@@ -49,12 +49,22 @@ Forensic/detail windows: emphasize **counts and structural relationships**; GPU 
 - `observer_bias.phase_c_observer_interpretation(bias_model)` — embed in intrusive `report.json`.
 - `bias_adjust_inclusive_cpu(..., allow_component_correction=False)` — default refuses component subtraction unless reconciliation passes (authoritative archive does not).
 
-## Outcome and raw evidence (post-capture)
+## Outcome and raw evidence (forensically closed)
 
-See [phase-c-outcome-memo.md](phase-c-outcome-memo.md). Canonical run [`20261003T210202Z-intrusive-diagnostic`](../results/20261003T210202Z-intrusive-diagnostic/) publishes:
+See [phase-c-outcome-memo.md](phase-c-outcome-memo.md). **No further live intrusive profiler captures are required for the archive.** Further EU IV runs belong only to profiler-off A/B tests of concrete renderer changes.
 
-- `telemetry.csv.gz` / `power.samples.json.gz` — verify against `raw_evidence.json` SHA-256 entries
-- `python3 benchmark/eu4_frame_model.py seal-evidence results/<run>` — regenerate gzip + `raw_evidence.json`
-- `python3 benchmark/eu4_frame_model.py intrusive-salvage results/<run>` — bounded TAIL salvage report
+Canonical run [`20261003T210202Z-intrusive-diagnostic`](../results/20261003T210202Z-intrusive-diagnostic/) git capsule:
 
-Clone-only analysis: `read_rows` accepts `.csv.gz` when uncompressed `telemetry.csv` is absent.
+- Streams: `telemetry.csv.gz`, `power.samples.json.gz`, `powermetrics.pliststream.gz`
+- Scene: `ready-scene.png`; readiness: `game-ready.log` when post-hoc extraction is time-anchored (else `game-ready.reconstructed.log` or metadata-only)
+- Sidecar: `powermetrics.stderr` (helper warnings)
+- Derived: `report.*`, `salvage-report.*`, `raw_evidence.json` (`capture_inventory` + logical gzip hashes)
+
+Closure commands (order matters — seal after salvage):
+
+```sh
+python3 benchmark/eu4_frame_model.py intrusive-salvage results/20261003T210202Z-intrusive-diagnostic
+python3 benchmark/eu4_frame_model.py seal-evidence results/20261003T210202Z-intrusive-diagnostic
+```
+
+Clone-only analysis: `read_rows` accepts `.csv.gz` when uncompressed `telemetry.csv` is absent; `seal-evidence` preserves logical content SHA-256 after plain files are deleted.
