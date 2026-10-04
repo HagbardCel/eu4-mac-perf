@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-COUNTER_SCHEMA_VERSION = 1
-COUNTER_COUNT = 17
+COUNTER_SCHEMA_VERSION = 2
+COUNTER_COUNT = 18
 SUPPORTED_HYPOTHESIS_MASK_DEFAULT = 0xb
 SAFETY_HYPOTHESIS_MASK_DEFAULT = 0x0
 
@@ -13,18 +13,19 @@ COUNTER_SLOTS = {
     "site_entries": 2,
     "effective_actions": 3,
     "candidate_site_entries": 4,
-    "candidate_nonempty_invocations": 5,
-    "adjacent_draw_pairs_total": 6,
-    "same_parent_pairs": 7,
-    "cross_parent_pairs": 8,
-    "same_parent_buffer_signature": 9,
-    "cross_parent_buffer_signature": 10,
-    "cross_parent_buffer_elision_eligible": 11,
-    "same_subrecord_pointer_cross_parent": 12,
-    "same_texture_input_signature": 13,
-    "texture_setup_elision_eligible": 14,
-    "legacy_eligible_pair_hits": 15,
-    "candidate_swaps": 16,
+    "candidate_renderbuckets_invocations": 5,
+    "candidate_nonempty_renderbuckets": 6,
+    "adjacent_within_invocation": 7,
+    "same_parent_pairs": 8,
+    "cross_parent_pairs": 9,
+    "same_parent_buffer_signature": 10,
+    "cross_parent_buffer_signature": 11,
+    "cross_parent_buffer_elision_eligible": 12,
+    "same_subrecord_pointer_cross_parent": 13,
+    "same_texture_input_signature": 14,
+    "texture_setup_elision_eligible": 15,
+    "legacy_eligible_pair_hits": 16,
+    "candidate_swaps": 17,
 }
 
 HYPOTHESES = [
@@ -36,3 +37,6 @@ HYPOTHESES = [
     {'bit': 5, 'id': 'texture_setup_elision', 'supported_default': False, 'safety_qualified_default': False},
     {'bit': 6, 'id': 'object_constants_elision', 'supported_default': False, 'safety_qualified_default': False},
 ]
+
+HEALTH_COUNTER_NAMES = ('control_ticks', 'renderbuckets_invocations', 'site_entries', 'effective_actions')
+CANDIDATE_COUNTER_NAMES = ('candidate_site_entries', 'candidate_renderbuckets_invocations', 'candidate_nonempty_renderbuckets', 'adjacent_within_invocation', 'same_parent_pairs', 'cross_parent_pairs', 'same_parent_buffer_signature', 'cross_parent_buffer_signature', 'cross_parent_buffer_elision_eligible', 'same_subrecord_pointer_cross_parent', 'same_texture_input_signature', 'texture_setup_elision_eligible', 'legacy_eligible_pair_hits', 'candidate_swaps')

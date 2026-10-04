@@ -22,8 +22,8 @@ _eu4_renderbuckets_entry_gateway_transparency_selftest:
     movq $0x42, %rsi
     movq $0x43, %rdx
     movq $0x44, %rcx
-    movq $0x45, %r8
-    movq $0x46, %r9
+    movq $1, %r8
+    movq $0, %r9
     callq _run_entry_gateway_once
     cmpq $0x42, %rsi
     jne _fail
@@ -31,9 +31,9 @@ _eu4_renderbuckets_entry_gateway_transparency_selftest:
     jne _fail
     cmpq $0x44, %rcx
     jne _fail
-    cmpq $0x45, %r8
+    cmpq $1, %r8
     jne _fail
-    cmpq $0x46, %r9
+    cmpq $0, %r9
     jne _fail
     leaq _arg_rdi_marker(%rip), %rax
     cmpq %rax, %rdi
@@ -44,24 +44,32 @@ _eu4_renderbuckets_entry_gateway_transparency_selftest:
     movl _g_bad_stack_alignment(%rip), %eax
     cmpl $0, %eax
     jne _fail
-    movq _g_saved_rdi(%rip), %rax
-    leaq _arg_rdi_marker(%rip), %rdx
-    cmpq %rdx, %rax
+    movl _g_saved_layer(%rip), %eax
+    cmpl $0x44, %eax
     jne _fail
-    movq _g_saved_rsi(%rip), %rax
-    cmpq $0x42, %rax
+    movl _g_saved_arg_r8(%rip), %eax
+    cmpl $1, %eax
     jne _fail
-    movq _g_saved_rdx(%rip), %rax
-    cmpq $0x43, %rax
+    movl _g_saved_arg_r9(%rip), %eax
+    cmpl $0, %eax
     jne _fail
-    movq _g_saved_rcx(%rip), %rax
-    cmpq $0x44, %rax
+    /* Polluted high bits in r8/r9 must not affect captured booleans. */
+    leaq _arg_rdi_marker(%rip), %rdi
+    movq $0xff00000000000001, %r8
+    movq $0xff00000000000000, %r9
+    movl $0x55, %ecx
+    callq _run_entry_gateway_once
+    movl _g_saved_layer(%rip), %eax
+    cmpl $0x55, %eax
     jne _fail
-    movq _g_saved_r8(%rip), %rax
-    cmpq $0x45, %rax
+    movl _g_saved_arg_r8(%rip), %eax
+    cmpl $1, %eax
     jne _fail
-    movq _g_saved_r9(%rip), %rax
-    cmpq $0x46, %rax
+    movl _g_saved_arg_r9(%rip), %eax
+    cmpl $0, %eax
+    jne _fail
+    movl _g_observer_calls(%rip), %eax
+    cmpl $2, %eax
     jne _fail
     movl $0, %eax
     ret

@@ -45,7 +45,6 @@ static bool observation_frozen = false;
 
 bool eu4_submission_try_install_all_hooks(void);
 bool eu4_submission_hooks_are_installed(void);
-void eu4_submission_mesh_reset_chain(void);
 
 static uint32_t compiled_capability(void) {
     return (uint32_t)EU4_SUBMISSION_COMPILED_CAPABILITY;
@@ -138,16 +137,11 @@ void eu4_submission_counter_add(eu4_submission_counter_slot_t slot, uint64_t del
 }
 
 void eu4_submission_record_candidate_site_entry(void) {
-    eu4_submission_counter_add(EU4_COUNTER_SITE_ENTRIES, 1);
     eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_SITE_ENTRIES, 1);
 }
 
 void eu4_submission_record_renderbuckets_invocation(void) {
     eu4_submission_counter_add(EU4_COUNTER_RENDERBUCKETS_INVOCATIONS, 1);
-}
-
-void eu4_submission_record_nonempty_invocation(void) {
-    eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_NONEMPTY_INVOCATIONS, 1);
 }
 
 void eu4_submission_record_eligible_pair_hit(void) {
@@ -188,7 +182,7 @@ static void handle_observation_command(uint32_t *words) {
     }
     if (obs_req == OBS_ARM) {
         reset_candidate_bank_counters();
-        eu4_submission_observation_arm_reset_chain();
+        eu4_submission_observation_arm_reset();
         observation_frozen = false;
         words[14] = obs_gen;
         words[15] = OBS_ACK_ARMED;
@@ -239,7 +233,7 @@ static void poll_command_ack(void) {
     handle_observation_command(words);
     if (words[5] != last_observed_ack_mode) {
         if (words[5] == MODE_REFERENCE) {
-            eu4_submission_mesh_reset_chain();
+            eu4_submission_observation_arm_reset();
         }
         last_observed_ack_mode = words[5];
     }

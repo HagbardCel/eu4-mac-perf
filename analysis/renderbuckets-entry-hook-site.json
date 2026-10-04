@@ -1,10 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "owner_symbol": "_ZN14CPdxMeshObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraibb",
   "function_entry_offset": "0x14c7da4",
   "candidate_insertion_offset": "0x14c7da4",
-  "insertion_rationale": "First instruction of RenderBuckets; runs once per invocation before any branch reaches mesh site hook 0x14c81e6. Alternative post-prologue sites (e.g. 0x14c7dc6) are valid only if they still run exactly once per invocation before site hook.",
+  "insertion_rationale": "Detour at first instruction of RenderBuckets (0x14c7da4) before the 13-byte prologue runs; gateway captures argument registers; trampoline replays prologue and resumes at 0x14c7db1. Runs once per invocation before any path reaches mesh site hook 0x14c81e6.",
   "patch_length": 13,
   "prefix_hex": "554889e5415741564155415453",
   "prefix_note": "Verified pinned-binary bytes (GOG EU IV 1.37.5, sha256 in this file): push %rbp; mov %rsp,%rbp; push %r15-%r12; push %rbx (13 bytes total).",
@@ -30,8 +30,8 @@
     "r8: bool",
     "r9: bool"
   ],
-  "gateway_behavior": "Preserve caller-saved GPRs + RFLAGS; call eu4_submission_renderbuckets_entry_observer(); jmp trampoline",
-  "observer_side_effects": "TLS current_renderbuckets_epoch++; atomic renderbuckets_invocations++",
+  "gateway_behavior": "Preserve caller-saved GPRs + RFLAGS; movl %ecx,%edi; movzbl %r8b,%esi; movzbl %r9b,%edx; call eu4_submission_on_renderbuckets_entry(layer, arg_r8_bool, arg_r9_bool); jmp trampoline",
+  "observer_side_effects": "TLS RenderBuckets epoch++; store authoritative entry_layer and entry_arg_r8_bool / entry_arg_r9_bool; health renderbuckets_invocations++; when observation bank armed candidate_renderbuckets_invocations++; reset_pair_chain on each entry",
   "recursion_observed": false,
   "thread_assumption": "render_thread_primary",
   "pairs_with_site_hook": "both required for protocol v3 candidate mode"

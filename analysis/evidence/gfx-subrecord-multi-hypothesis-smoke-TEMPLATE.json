@@ -1,0 +1,29 @@
+{
+  "evidence_id": "gfx-subrecord-multi-hypothesis-smoke-YYYYMMDDTHHMMSSZ",
+  "kind": "submission_observer_multi_hypothesis_v2",
+  "status": "complete",
+  "recorded_at_utc": "",
+  "repository_commit": "",
+  "run_dir": "results/YYYYMMDDTHHMMSSZ-submission-experiment",
+  "command": "python3 benchmark/submission_experiment.py --output results --multi-hypothesis-smoke",
+  "outcome_summary": "",
+  "verdicts": {
+    "v3_1_infrastructure": "VALID",
+    "v3_1_pair_segmentation": "PENDING_REVIEW"
+  },
+  "gates": {
+    "multi_hypothesis_gate": "",
+    "observer_scene_gate": "",
+    "engagement_gate": "",
+    "stage2_recommended": false
+  },
+  "b1_candidate_totals": {},
+  "b1_derived_metrics": {},
+  "interpretation": "",
+  "artifacts": {
+    "manifest": "",
+    "validation": "",
+    "validation_md": "",
+    "summaries": []
+  }
+}

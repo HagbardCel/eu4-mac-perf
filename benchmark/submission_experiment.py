@@ -281,7 +281,7 @@ def run_experiment(
     settle_seconds = OBSERVER_SETTLE_SECONDS if observer_run else SETTLE_SECONDS
     experiment_kind = "submission_optimization_ababa_v1"
     if multi_hypothesis_smoke:
-        experiment_kind = "submission_observer_multi_hypothesis_v1"
+        experiment_kind = "submission_observer_multi_hypothesis_v2"
     elif observer_run:
         experiment_kind = "submission_observer_smoke_v1"
     manifest: dict = {

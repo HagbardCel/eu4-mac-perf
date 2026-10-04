@@ -18,6 +18,7 @@ SUBMISSION_DYLIB_SOURCES = (
     BENCH / "eu4_submission_experiment.c",
     BENCH / "eu4_submission_observation.c",
     BENCH / "eu4_submission_mesh_site.c",
+    BENCH / "eu4_submission_mesh_chain.c",
     BENCH / "eu4_submission_mesh_install.c",
     BENCH / "eu4_submission_mesh_thunk.S",
     BENCH / "eu4_submission_renderbuckets_entry_thunk.S",

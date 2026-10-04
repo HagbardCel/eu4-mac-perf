@@ -1,13 +1,14 @@
 import unittest
 
 import submission_multi_hypothesis as mh
+from submission_counter_schema import COUNTER_COUNT, COUNTER_SCHEMA_VERSION
 
 
 def _frozen_meta(**extra: int) -> dict[str, int]:
     base = {
         "protocol_version": 3,
-        "counter_schema_version": 1,
-        "counter_count": 17,
+        "counter_schema_version": COUNTER_SCHEMA_VERSION,
+        "counter_count": COUNTER_COUNT,
         "observation_ack_state": 2,
         "supported_hypothesis_mask": 0x0b,
         "safety_qualified_hypothesis_mask": 0,
@@ -21,9 +22,10 @@ class SubmissionMultiHypothesisTests(unittest.TestCase):
         totals = {
             "same_parent_pairs": 3,
             "cross_parent_pairs": 7,
-            "adjacent_draw_pairs_total": 10,
+            "adjacent_within_invocation": 10,
             "candidate_site_entries": 25,
-            "candidate_nonempty_invocations": 15,
+            "candidate_nonempty_renderbuckets": 15,
+            "candidate_renderbuckets_invocations": 20,
         }
         self.assertEqual(mh.check_candidate_invariants(totals), [])
 
@@ -31,21 +33,35 @@ class SubmissionMultiHypothesisTests(unittest.TestCase):
         totals = {
             "same_parent_pairs": 1,
             "cross_parent_pairs": 2,
-            "adjacent_draw_pairs_total": 10,
+            "adjacent_within_invocation": 10,
             "candidate_site_entries": 20,
-            "candidate_nonempty_invocations": 10,
+            "candidate_nonempty_renderbuckets": 10,
+            "candidate_renderbuckets_invocations": 12,
         }
         errors = mh.check_candidate_invariants(totals)
         self.assertTrue(any("partition" in e for e in errors))
+
+    def test_invariants_nonempty_exceeds_invocations(self):
+        totals = {
+            "same_parent_pairs": 0,
+            "cross_parent_pairs": 0,
+            "adjacent_within_invocation": 0,
+            "candidate_site_entries": 5,
+            "candidate_nonempty_renderbuckets": 3,
+            "candidate_renderbuckets_invocations": 2,
+        }
+        errors = mh.check_candidate_invariants(totals)
+        self.assertTrue(any("nonempty exceeds" in e for e in errors))
 
     def test_frozen_bank_absolute_self_contained(self):
         """ARM→FREEZE totals are read once; no live post-ARM baseline subtraction."""
         frozen = _frozen_meta(
             same_parent_pairs=1,
             cross_parent_pairs=0,
-            adjacent_draw_pairs_total=1,
+            adjacent_within_invocation=1,
             candidate_site_entries=2,
-            candidate_nonempty_invocations=1,
+            candidate_nonempty_renderbuckets=1,
+            candidate_renderbuckets_invocations=2,
             same_parent_buffer_signature=0,
             candidate_swaps=10,
         )
@@ -61,15 +77,17 @@ class SubmissionMultiHypothesisTests(unittest.TestCase):
         self.assertEqual(report["candidate_interpretation"], "absolute_arm_to_freeze")
         self.assertTrue(report["harness_ok"])
         self.assertEqual(report["hypotheses"]["same_parent_buffer_signature"]["status"], "evaluated_no_recurrence")
+        self.assertIsNotNone(report["derived_metrics"]["sites_per_nonempty_renderbuckets"])
 
     def test_torn_delta_baseline_would_fail_but_absolute_passes(self):
         """A coherent frozen bank must not be evaluated via inconsistent candidate deltas."""
         frozen = _frozen_meta(
             same_parent_pairs=2,
             cross_parent_pairs=3,
-            adjacent_draw_pairs_total=5,
+            adjacent_within_invocation=5,
             candidate_site_entries=10,
-            candidate_nonempty_invocations=5,
+            candidate_nonempty_renderbuckets=5,
+            candidate_renderbuckets_invocations=6,
             candidate_swaps=4,
         )
         self.assertEqual(mh.check_candidate_invariants(mh._candidate_totals(frozen)), [])

@@ -2,21 +2,21 @@
 
 ## Status
 
-- **PR #30 merged** (Gfx PR1 static RE) and **PR #31 merged** (protocol v2 mesh observer harness) on `main` (`2211e08`).
-- **Observer smoke:** `20261004T112503Z` harness **complete**, engagement **failed** (0 `eligible_pair_hits` on Venice); see [validation.md](results/20261004T112503Z-submission-experiment/validation.md). Prior incomplete run: [20261004T111812Z](results/20261004T111812Z-submission-experiment/validation.md).
+- **Gfx v3 merged** (#32 static RE, #33 protocol v3 multi-hypothesis observer) on `main` (`ee31bab`).
+- **Venice v3 smoke:** `20261004T131931Z` — infrastructure **valid**; v3.0 **pair segmentation invalid** (see [mesh-observer-chain-semantics-20261004.md](analysis/mesh-observer-chain-semantics-20261004.md)). Immutable [validation.md](results/20261004T131931Z-submission-experiment/validation.md); amended interpretation in evidence JSON only.
+- **Next:** Observer **v3.1** (entry TLS context, epoch-only pair chain, schema + experiment kind v2) → one corrected `--multi-hypothesis-smoke` on Venice (`submission_observer_multi_hypothesis_v2`).
+- **Parallel:** border multidraw RE ([border-multidraw-re.md](analysis/border-multidraw-re.md)); texture-ID mapping optional before next live run.
 
 ## PR1 (complete)
 
-Offline — see [analysis/gfx-subrecord-pr1-gonogo.md](analysis/gfx-subrecord-pr1-gonogo.md):
+Offline mesh subrecord RE — [gfx-subrecord-pr1-gonogo.md](analysis/gfx-subrecord-pr1-gonogo.md).
 
-- Classified `SFlushData` (0x50) and mesh draw subrecord (0xe8) layout JSON with CI enforcement
-- Draw dependency map + engine elision inventory
-- `submission_state_equivalent` / `setup_elision_eligible` / `draw_batch_eligible` in C
-- Hook-site contract JSON (insertion before `0x14c81f3`, draw @ `0x14c8404` landmark)
+## Observer trajectory
 
-## PR2 (observer validated; buffer-bind ROI negative on Venice)
-
-Mesh hook + capability 1 dylib exercised on `main`. Paused Venice smoke: hook traffic confirmed, **no** buffer-bind predicate hits — mutating candidate not justified for this scene. Full ABABA remains capability 2 only if a future predicate/workload shows ROI.
+| Version | Experiment kind | Adjacency semantics |
+|---------|-----------------|---------------------|
+| v3.0 | `submission_observer_multi_hypothesis_v1` | Reset on mid-loop layer/flush (invalid) |
+| v3.1 | `submission_observer_multi_hypothesis_v2` | Consecutive sites within TLS RenderBuckets epoch |
 
 ## Canonical Phase-C (frozen)
 
@@ -25,8 +25,6 @@ python3 benchmark/eu4_frame_model.py verify-evidence \
   results/20261003T210202Z-intrusive-diagnostic --profile intrusive_complete_v1
 ```
 
-Historical `manifest.json` blob remains immutable for that run.
-
 ## Out of scope
 
-New Phase-C capture, profiler/evidence expansion, generic GL setter caches. Long roadmap: [analysis/historical-roadmap.md](analysis/historical-roadmap.md).
+Mutation dylib until v3.1 Venice; Stage-2 on safety mask zero. Long roadmap: [historical-roadmap.md](analysis/historical-roadmap.md).
