@@ -14,6 +14,7 @@ class MeshObserverChainFsmTests(unittest.TestCase):
         cmd = ["clang"]
         if platform.system() == "Darwin":
             cmd += ["-arch", "x86_64"]
+        out.parent.mkdir(parents=True, exist_ok=True)
         cmd += [
             "-O2",
             "-Wall",
