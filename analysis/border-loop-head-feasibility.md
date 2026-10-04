@@ -7,16 +7,18 @@
 
 Close static Gates 2/3a/3b design for **prefix-batch** loop-head mutation before any Venice launch. This PR does **not** authorize mutation (`mutation_authorized: false`).
 
-## Related artifacts
+## Evidence (mechanical)
 
-| Doc | Role |
-|-----|------|
-| [border-loop-head-data-model.md](border-loop-head-data-model.md) | LoopContext / RecordView / index-table entries |
-| [border-loop-head-classifier.md](border-loop-head-classifier.md) | Prefix classifier + barrier masks |
-| [border-gfxdrawindexed-helper-audit.md](border-gfxdrawindexed-helper-audit.md) | Gate 3a helper equivalence |
-| [border-loop-head-gate3b-state.md](border-loop-head-gate3b-state.md) | Continuation + CPU/GL state |
-| [border-loop-head-patch-plan.md](border-loop-head-patch-plan.md) | Detour / non-recursive trampoline |
-| [evidence/border-loop-head-feasibility-20261004.json](evidence/border-loop-head-feasibility-20261004.json) | Static verdict |
+Verdict derived from [tools/border_loop_evidence.py](tools/border_loop_evidence.py):
+
+```text
+any static_criteria == FAIL  → NO_GO
+all static_criteria == PASS  → GO_CONDITIONAL_RUNTIME_GATES
+otherwise                    → PENDING_STATIC_RE
+```
+
+Authoritative payload: [evidence/border-loop-head-feasibility-20261004.json](evidence/border-loop-head-feasibility-20261004.json).  
+Tests: `tests/test_border_loop_evidence.py`, `tests/test_border_loop_classifier.py`.
 
 ## Numeric contract (no invented histogram)
 
@@ -24,75 +26,40 @@ Close static Gates 2/3a/3b design for **prefix-batch** loop-head mutation before
 |----------|--------|
 | `structural_upper_bound_eliminations_per_frame` | ~1562 |
 | `structural_upper_bound_eliminations_per_s_at_55Hz_scenario` | ~85910 |
-| `semantic_eliminations_per_frame` | **null / unresolved** |
-| `implementable_eliminations_per_frame` | **null / unresolved** |
-| `eligible_run_length_histogram` | **null / unavailable** |
+| `semantic_eliminations_per_frame` | **null** |
+| `implementable_eliminations_per_frame` | **null** |
+| `eligible_run_length_histogram` | **null** |
 
-**~943:** descriptive structural run shape only ([border-draw-inner-loop-re.md](border-draw-inner-loop-re.md)); not an implementable batch length.
+**Criterion 2:** control-flow/data-layout **permits** eligible prefix length ≥2; frequency → `roi_gate` only.
 
-Derivation (when record stream exists): repeated `classify_batchable_prefix` at each hook; \(E = \sum \max(0, n_i - 1)\) over prefixes with \(n_i \ge 2\).
+## Static criteria map
 
-## Static GO criteria (ex ante)
+| Key | Topic |
+|-----|--------|
+| `1_classifier_inputs` | `%r13b`, walk order, IBO identity/argument |
+| `2_control_flow_prefix_realizability` | Structural prefix ≥2 possible |
+| `3_entry_state` | ONE_BIND entry model |
+| `4_fail_closed_paths` | SKIP-before-deref, OOB, unsupported mode |
+| `5_helper_side_effect_equivalence` | GfxDrawIndexed + GfxSetIndexBuffer audit |
+| `6_cpu_continuation` | Interior + terminal live-state |
+| `7_engine_gl_equivalence` | ONE_BIND + MDEBV / basevertex |
+| `8_continuation_mechanics` | Non-recursive trampoline + WALK_END |
+| `9_detour_relocation` | 14-byte RIP-indirect jmp (static encoding) |
+| `10_uncertainty_falls_through` | Classifier + patch fail-closed |
 
-Static **GO** requires all of:
+`GO_CONDITIONAL_RUNTIME_GATES` means criteria **1–10 PASS**; `runtime_gate_0` and ROI remain pending. Unconditional `GO` is not issued in this artifact.
 
-1. Classifier inputs (incl. `%r13b`, per-index `%rcx`) have proven storage/access paths.
-2. Semantically realizable prefix length \(\ge 2\) exists structurally (frequency unknown).
-3. Prefix homogeneity **and** `entry_state_matches_batch_key` for record 0, or v1 fall-through one original record.
-4. Skip / unsupported paths fail closed (execute normally).
-5. `GfxDrawIndexed` audit: \(N \times\) helper \(\equiv\) 1× multidraw GL path or reproduce side effects.
-6. CPU continuation specified (GPRs, stack, RFLAGS, XMM, callee-saved).
-7. Engine/GL continuation equivalent for batchable subset.
-8. Non-recursive continuation into first-unconsumed record path.
-9. Detour mechanically feasible.
-10. Uncertainty → original loop.
+## Related artifacts
 
-**`GO` (unconditional) is not an expected outcome of this offline PR** while Gate 0 remains PENDING in the active gameplay context.
+| Doc | Role |
+|-----|------|
+| [border-loop-head-data-model.md](border-loop-head-data-model.md) | LoopContext / walk |
+| [border-loop-head-classifier.md](border-loop-head-classifier.md) | Prefix classifier |
+| [border-gfxdrawindexed-helper-audit.md](border-gfxdrawindexed-helper-audit.md) | Gate 3a |
+| [border-loop-head-gate3b-state.md](border-loop-head-gate3b-state.md) | Gate 3b |
+| [border-loop-head-patch-plan.md](border-loop-head-patch-plan.md) | Detour design |
+| [border-hook-site.json](border-hook-site.json) | Bytes + continuation addresses |
 
-## Static GO checklist (this PR)
+## Future launch: N–A–B–A–B–A–N
 
-| # | Criterion | Status |
-|---|-----------|--------|
-| 1 | Classifier inputs + `%r13b` / `%rcx` paths | Documented in data model |
-| 2 | Prefix length ≥2 structurally possible | Yes (classifier + synthetic tests) |
-| 3 | `entry_state_matches_batch_key` + v1 fall-through | Classifier + docs |
-| 4 | Skip / unsupported fail closed | v1 policy |
-| 5 | GfxDrawIndexed audit | **Open** — [helper audit](border-gfxdrawindexed-helper-audit.md) |
-| 6 | CPU continuation (RFLAGS/XMM) | **Open** — [Gate 3b](border-loop-head-gate3b-state.md) |
-| 7 | Engine/GL post-batch invariants | Documented; proof partial |
-| 8 | Non-recursive continuation | Design requirement; address TBD |
-| 9 | Detour feasible @ `0x1010cbe55` | Plausible (5-byte `testb`) |
-| 10 | Uncertainty → original loop | Patch plan fail-closed |
-
-## Verdict dimensions (orthogonal)
-
-| Dimension | This PR |
-|-----------|---------|
-| Static feasibility | `GO_CONDITIONAL_RUNTIME_GATES` \| `NO-GO` |
-| Runtime Gate 0 | `PENDING` |
-| ROI | `PENDING_NUMERIC_EVIDENCE` |
-| Mutation authorized | `NO` |
-
-## Future single launch: N–A–B–A–B–A–N
-
-| Phase | Role |
-|-------|------|
-| **N** | Minimal loop-head detour / pass-through (infrastructure) |
-| **A** | Full classifier, mutation off → `eligible_*` opportunity |
-| **B** | Same classifier + mutation → `eligible_*` (same accounting as A) plus `actual_multidraw_calls` / `actual_draw_calls_eliminated` |
-
-**Hard invariant (phase-local):** \(E^{B}_{actual} \le E^{B}_{eligible}\). Do **not** compare raw B eliminations to paired A counts (cadence differs).
-
-**Rates (consistency):** \(E_A / frames_A\) vs \(E^{B}_{eligible} / frames_B\).
-
-**Interpretation:**
-
-- `A-N` = incremental classifier cost over minimal detour
-- `B-A` = mutation effect conditional on classifier
-- `B-N` = net candidate vs minimal-detour control (**not** untouched binary)
-
-Live ROI thresholds (85k / 40k) use **measured phase seconds**, not the static 55 Hz scenario.
-
-## Classifier implementation
-
-Required: [tools/border_loop_classifier.py](tools/border_loop_classifier.py) + `tests/test_border_loop_classifier.py` (synthetic only; no length 943 in fixtures).
+See prior charter: phase-local `eligible_*` vs `actual_*` invariant; rates not raw cross-phase counts; live ROI uses measured seconds.

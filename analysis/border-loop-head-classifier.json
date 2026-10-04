@@ -1,6 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "api": "classify_batchable_prefix",
+  "ibo_bind_topology_default": "ONE_BIND",
   "barrier_mask_bits": {
     "SKIP": 1,
     "UNSUPPORTED_MODE": 2,
@@ -9,16 +10,13 @@
     "IBO_TRANSITION": 16,
     "OTHER_SIDE_EFFECT": 32
   },
-  "entry_state_matches_batch_key": {
-    "color_matches": "match|mismatch|unknown",
-    "vbo_matches": "match|mismatch|unknown",
-    "ibo_matches": "match|mismatch|unknown"
-  },
-  "batch_eligible_formula": "prefix_homogeneous AND all_entry_components_match AND no_blocking_barriers",
+  "termination_kind": ["BARRIER", "WALK_END", "SCAN_CAP", "INVALID"],
+  "batch_eligible_formula": "run_length>=2 AND entry_match AND homogeneous_included_prefix",
   "v1_policies": {
-    "skip_record": "batch_boundary_no_prefix_leap",
-    "entry_unknown_or_mismatch": "fall_through_one_original_record",
-    "do_not_assume_first_record_setup_in_trampoline": true
+    "skip_record": "visibility_test_before_deref",
+    "triangle_count_zero": "boundary_OTHER_SIDE_EFFECT",
+    "deferred_attrib_upload_pending": "fall_through_at_hook",
+    "scan_cap": "not_barrier_telemetry"
   },
   "telemetry_phase_a": [
     "eligible_runs",

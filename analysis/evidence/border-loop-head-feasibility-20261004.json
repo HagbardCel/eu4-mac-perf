@@ -6,17 +6,30 @@
   "record_stream_available": false,
   "classifier_test_evidence": "synthetic_only",
   "static_feasibility": "GO_CONDITIONAL_RUNTIME_GATES",
+  "static_criteria": {
+    "1_classifier_inputs": "PASS",
+    "2_control_flow_prefix_realizability": "PASS",
+    "3_entry_state": "PASS",
+    "4_fail_closed_paths": "PASS",
+    "5_helper_side_effect_equivalence": "PASS",
+    "6_cpu_continuation": "PASS",
+    "7_engine_gl_equivalence": "PASS",
+    "8_continuation_mechanics": "PASS",
+    "9_detour_relocation": "PASS",
+    "10_uncertainty_falls_through": "PASS"
+  },
+  "open_static_items": [],
+  "failed_static_items": [],
+  "ibo_bind_topology": "ONE_BIND",
+  "detour_encoding": "RIP_INDIRECT_ABSOLUTE_JMP",
+  "patch_span_bytes": 14,
+  "runtime_gate_0": "PENDING",
   "runtime_preconditions": ["GATE0_MULTIDRAW_CONTEXT_SUPPORT"],
   "mutation_authorized": false,
   "roi_gate": "PENDING_NUMERIC_EVIDENCE",
   "semantic_eliminations_per_frame": null,
   "implementable_eliminations_per_frame": null,
   "eligible_run_length_histogram": null,
-  "open_static_items": [
-    "GfxDrawIndexed helper audit incomplete",
-    "first-unconsumed continuation address proof",
-    "non-recursive trampoline bytes"
-  ],
   "artifacts": [
     "analysis/border-loop-head-feasibility.md",
     "analysis/border-loop-head-data-model.md",
@@ -24,7 +37,9 @@
     "analysis/border-gfxdrawindexed-helper-audit.md",
     "analysis/border-loop-head-gate3b-state.md",
     "analysis/border-loop-head-patch-plan.md",
-    "analysis/tools/border_loop_classifier.py"
+    "analysis/border-hook-site.json",
+    "analysis/tools/border_loop_classifier.py",
+    "analysis/tools/border_loop_evidence.py"
   ],
-  "note": "Unconditional static GO is not expected while Gate 0 remains PENDING."
+  "note": "Static criteria 1-10 PASS offline; runtime Gate 0 and ROI remain pending. Unconditional GO is not issued in this artifact."
 }

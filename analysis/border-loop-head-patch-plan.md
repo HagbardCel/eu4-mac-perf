@@ -1,46 +1,33 @@
 # Loop-head patch plan (design only)
 
-**Detour:** `0x1010cbe55` (`testb %r13b, 0x1(%rcx)` — 5 bytes typical)
+**Detour site:** `0x1010cbe55`  
+**Patch span:** 14 bytes (`testb` + `movq` + `je rel32`)  
+**Encoding:** `RIP_INDIRECT_ABSOLUTE_JMP` (statically realizable; no rel32 island required)
 
-## Flow
+Runtime code-page modification / icache flush — **mutation PR only** (out of scope here).
+
+## Flow (`ibo_bind_topology: ONE_BIND`)
 
 ```text
-patched_loop_head:
-    jmp classifier_trampoline
+patched_loop_head (14-byte jmp → trampoline):
 
 classifier_trampoline:
-    if minimal_hook(N) or mutate_disabled(A): execute displaced testb; jmp original_continue
+    if N or A (mutation off): run displaced testb/movq/je; continue original
     prefix = classify_batchable_prefix(...)
-    if prefix.run_length < 2 or not prefix.batch_eligible:
-        execute displaced testb; jmp original_continue   # fall through one record
-    gather arrays from RecordView[0:prefix.run_length]
-    if Gate0 and mutate_enabled(B): glMultiDrawElementsBaseVertex(...)
-    synthesize_state_after_k_draws(prefix.run_length)
-    jmp non_recursive_resume_before_record_k   # NOT patched 0x1010cbe55
-
-original_continue:
-    [displaced bytes from 0x1010cbe55]
-    ... original engine path ...
+    if not prefix.batch_eligible: fall through one record (displaced path)
+    GfxSetIndexBuffer(prefix.required_ibo_argument)   # once
+    glMultiDrawElementsBaseVertex(...)
+    if prefix.termination_kind == WALK_END:
+        jmp terminal_prefix_resume @ 0x1010cc3e0
+    else:
+        set rcx = first-unconsumed entry; displaced testb+movq; je path
+        jmp non_recursive entry (not patched 0x1010cbe55)
 ```
-
-## Non-recursive re-entry (Static GO #8)
-
-Resume target **must not** be the patched entry that jumps to classifier. Use:
-
-- **Displaced-instruction stub** executing original `testb` + fallthrough, or  
-- TLS one-shot “already classified this iteration” (less preferred)
-
-Document chosen mechanism in [border-hook-site.json](border-hook-site.json) when proven.
 
 ## Fail-closed
 
-- Unknown classifier input → original loop head  
-- `prefix.run_length` > TLS max → original loop  
-- Gate 0 fail in B → original per-record draws  
-- GfxDrawIndexed audit gaps → no mutation until closed
+Unknown inputs, `INVALID`, `max_scan_steps` without policy, Gate 0 fail, helper preconditions → original loop.
 
 ## Scratch
 
-TLS/stack: `count[]`, `basevertex[]`, `indices[]` (zeros), max run cap TBD from stack budget.
-
-**No dylib changes in feasibility PR.**
+TLS arrays for MDEBV; `max_scan_steps` cap separate from barrier telemetry (`SCAN_CAP`).

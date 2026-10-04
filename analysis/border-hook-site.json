@@ -1,24 +1,27 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "owner_symbol": "_ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
   "pr_c_implementation": "observer_only_glDrawElementsBaseVertex_interpose_immediate_pass_through",
   "mutation_target": "future_loop_head_at_0x1010cbe55",
   "future_loop_head": {
-    "preferred_address": "0x1010cbe55",
+    "detour_site": "0x1010cbe55",
     "image_offset": "0x10cbe55",
     "instruction": "testb %r13b, 0x1(%rcx)",
-    "patch_span_bytes": null,
-    "proven_resume_address": null,
-    "continuation_candidates": [
-      {
-        "address": "0x1010cc3bd",
-        "role": "one_record_loop_tail",
-        "double_advance_risk": true,
-        "notes": "Not assumed as resume after k records without induction proof"
-      }
+    "instruction_bytes": "44 84 69 01 48 89 4d 90 0f 84 5a 05 00 00",
+    "patch_span_bytes": 14,
+    "detour_encoding": "RIP_INDIRECT_ABSOLUTE_JMP",
+    "detour_target_requirement": "8-byte absolute target in trampoline; no rel32 reachability limit",
+    "near_island_required": false,
+    "displaced_instructions": [
+      {"address": "0x1010cbe55", "bytes": "44 84 69 01", "mnemonic": "testb %r13b, 0x1(%rcx)"},
+      {"address": "0x1010cbe59", "bytes": "48 89 4d 90", "mnemonic": "movq %rcx, -0x70(%rbp)"},
+      {"address": "0x1010cbe5d", "bytes": "0f 84 5a 05 00 00", "mnemonic": "je 0x1010cc3bd"}
     ],
-    "non_recursive_trampoline": "displaced_testb_then_original_path_required",
+    "detour_return_after_displaced_span": "0x1010cbe63",
+    "first_unconsumed_trampoline_entry": "displaced_testb_movq_then_je_at_0x1010cbe5d_semantics",
+    "terminal_prefix_resume": "0x1010cc3e0",
+    "continuation_notes": "Interior: rcx=first-unconsumed entry, execute displaced testb+movq, branch via je logic. Terminal (WALK_END): enter outer-step path at 0x1010cc3e0 after synthesizing tail state.",
     "feasibility_doc": "analysis/border-loop-head-patch-plan.md"
   },
   "draw_sites": [

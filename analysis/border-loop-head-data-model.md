@@ -30,7 +30,8 @@ Disassembly source: local `otool -tv` on GOG `eu4` (image base `0x100000000`).
 mode                         # 0x24(%r12)
 cached_color                 # -0x51(%rbp)
 cached_vbo_index             # -0x64(%rbp)
-current_ibo_key              # selector from 0x60(%r12) array slot at record index
+bound_ibo_identity           # ZERO_BIND shadow only; ONE_BIND uses pre-multidraw GfxSetIndexBuffer
+required_ibo_argument        # movq (%rax,%r15,8), %rsi @ 0x1010cc2c6 — pointer passed to GfxSetIndexBuffer
 skip_or_visibility_mask      # %r13b (exact semantics: bit tested at 0x1(%rcx))
 index_table_cursor           # -0x70(%rbp)
 index_table_end              # -0x198(%rbp)
@@ -89,4 +90,8 @@ loop_tail_one_step:  # 0x1010cc3bd — advances ONE logical index step
 
 ## Hook placement
 
-Preferred detour: **`0x1010cbe55`** (5-byte `testb` typical). Classifier runs **before** `0x1010cbe63` record-index load and all mode-0 setup.
+Preferred detour: **`0x1010cbe55`** — bytes `44 84 69 01 48 89 4d 90 0f 84 5a 05 00 00` (14-byte patch, RIP-indirect jmp). Classifier runs **before** `0x1010cbe63` record-index load and mode-0 setup.
+
+**IBO shadow (`ZERO_BIND` only):** `ibo_known` becomes true after a proven successful `GfxSetIndexBuffer` transition on the prior drawable iteration — not after `GfxDrawIndexed`. Production topology in this PR is **`ONE_BIND`** (see helper audit).
+
+**Walk end:** `walk_exhausted` mirrors tail compare to `-0x198(%rbp)`; distinct from scan-cap truncation.
