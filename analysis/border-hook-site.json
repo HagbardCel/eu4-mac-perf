@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "owner_symbol": "_ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
+  "pr_c_implementation": "glDrawElementsBaseVertex_interpose_return_address_filter",
+  "future_loop_head": {
+    "preferred_address": "0x1010cbe55",
+    "image_offset": "0x10cbe55",
+    "instruction": "testb %r13b, 0x1(%rcx)",
+    "note": "Preferred loop-head patch when binary detour lands"
+  },
+  "draw_sites": [
+    {"preferred_address": "0x1010cc2e8", "image_offset": "0x10cc2e8", "return_offset": "0x10cc2ed", "mode": 0},
+    {"preferred_address": "0x1010cc352", "image_offset": "0x10cc352", "return_offset": "0x10cc357", "mode": 1},
+    {"preferred_address": "0x1010cc3b8", "image_offset": "0x10cc3b8", "return_offset": "0x10cc3bd", "mode": "other"}
+  ],
+  "interpose_filter_return_offsets": ["0x10cc2ed", "0x10cc357", "0x10cc3bd"]
+}

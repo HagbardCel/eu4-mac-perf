@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "record_name": "SBorderDraw",
+  "stride_bytes": 28,
+  "stride_proof": {
+    "preferred_address": "0x1010cc281",
+    "instructions": [
+      "leaq (%r15,%r15,8), %rax  ; index*9",
+      "leaq (%rax,%rax,2), %rbx  ; index*27",
+      "addq %r15, %rbx           ; index*28 byte offset into %r14"
+    ]
+  },
+  "multidraw_arguments": [
+    {
+      "api_parameter": "basevertex[i]",
+      "record_offset": 4,
+      "storage_width_bits": 16,
+      "signedness": "unsigned",
+      "load_instruction": "movzwl 0x4(%r14,%rbx), %edx",
+      "preferred_address": "0x1010cc2dc",
+      "extension_to_api_width": "zero_extend_16_to_32",
+      "target_c_type": "GLint",
+      "unit": "base vertex for glDrawElementsBaseVertex",
+      "range_observed_or_static": "0..65535; Venice capture used distinct base vertices per draw"
+    },
+    {
+      "api_parameter": "count[i] (via GfxDrawIndexed index count)",
+      "record_offset": 6,
+      "storage_width_bits": 16,
+      "signedness": "unsigned",
+      "load_instruction": "movzwl 0x6(%r14,%rbx), %eax; leal (%rax,%rax,2), %esi",
+      "preferred_address": "0x1010cc2d3",
+      "extension_to_api_width": "zero_extend_16_to_32 then multiply by 3 for index count",
+      "target_c_type": "GLsizei",
+      "unit": "stored field is triangle count; GL index count = 3 * field",
+      "range_observed_or_static": "engine passes esi=3*uint16 to GfxDrawIndexed"
+    },
+    {
+      "api_parameter": "indices[i]",
+      "record_offset": null,
+      "storage_width_bits": null,
+      "signedness": null,
+      "load_instruction": "GfxDrawIndexed uses index offset 0 with bound element array",
+      "preferred_address": "0x1010cc2e6",
+      "extension_to_api_width": "pointer-sized client offset 0",
+      "target_c_type": "const void *",
+      "unit": "byte offset into bound GL_ELEMENT_ARRAY_BUFFER",
+      "range_observed_or_static": "constant zero for border path (complete-frame capture)"
+    },
+    {
+      "api_parameter": "GfxDrawIndexed fourth argument (helper path)",
+      "record_offset": 16,
+      "storage_width_bits": 32,
+      "signedness": "signed",
+      "load_instruction": "movl 0x10(%r14,%rbx), %ecx",
+      "preferred_address": "0x1010cc3af",
+      "extension_to_api_width": "none",
+      "target_c_type": "int32",
+      "unit": "passed as %ecx to GfxDrawIndexed on draw_mode!=0,1 branch only",
+      "range_observed_or_static": "site-specific; not part of mode-0 bulk multidraw gather"
+    },
+    {
+      "api_parameter": "vertex buffer table index",
+      "record_offset": 24,
+      "storage_width_bits": 16,
+      "signedness": "unsigned",
+      "load_instruction": "movzwl 0x18(%r14,%rbx), %edx",
+      "preferred_address": "0x1010cc28c",
+      "extension_to_api_width": "zero_extend_16_to_32",
+      "target_c_type": "table index",
+      "unit": "selects GfxSetVertexBuffers source; cached in -0x64(%rbp) when unchanged",
+      "range_observed_or_static": "per-record VBO selection on mode-0 path"
+    }
+  ],
+  "mode": "GL_TRIANGLES",
+  "index_type": "GL_UNSIGNED_SHORT"
+}
