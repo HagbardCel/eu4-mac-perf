@@ -49,12 +49,28 @@ class EntryStateMatch:
         return "unknown" in (self.color, self.vbo, self.ibo)
 
 
+def hook_outer_batch_index_uint32(outer_batch_index: int) -> int | None:
+    """Canonical hook value from uint32(-0xe4(%rbp)); reject non-representable inputs."""
+    if outer_batch_index < 0 or outer_batch_index > 0xFFFFFFFF:
+        return None
+    return outer_batch_index & 0xFFFFFFFF
+
+
+def special_precolor_outer_batch(outer_batch_index: int) -> bool:
+    """True when DrawBorders takes 0x1010cbe87 special precolor block (mask 0xB0, ebx<=7)."""
+    idx = hook_outer_batch_index_uint32(outer_batch_index)
+    if idx is None:
+        return True
+    return idx <= 7 and ((0xB0 >> idx) & 1) != 0
+
+
 @dataclass
 class LoopContext:
     mode: int
     cached_color: int
     cached_vbo_index: int
     skip_or_visibility_mask: int
+    outer_batch_index: int = 0
     bound_ibo_identity: int = 0
     ibo_known: bool = False
     color_known: bool = True
@@ -204,6 +220,9 @@ def classify_batchable_prefix(
         )
 
     if ctx.deferred_attrib_upload_pending or ctx.secondary_upload_pending:
+        return result(0, BarrierMask.OTHER_SIDE_EFFECT, BarrierMask(0), None, EntryStateMatch(), TerminationKind.BARRIER)
+
+    if special_precolor_outer_batch(ctx.outer_batch_index):
         return result(0, BarrierMask.OTHER_SIDE_EFFECT, BarrierMask(0), None, EntryStateMatch(), TerminationKind.BARRIER)
 
     if not side_entries:

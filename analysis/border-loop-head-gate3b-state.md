@@ -1,6 +1,6 @@
 # Gate 3b — continuation state (prefix-batch model)
 
-**Criterion 6 proof:** CFG forward-use audit on pinned GOG 1.37.5 disassembly — [drawborders-inner-walk-disasm.txt](evidence/drawborders-inner-walk-disasm.txt) (`otool -tv`, sha256 `b3d38876…`). Machine conclusions: [border-hook-site.json](border-hook-site.json) `continuation_liveness_proof`.
+**Criterion 6 proof:** CFG forward-use audit on pinned GOG 1.37.5 **full `DrawBorders`** disassembly — [drawborders-drawborders-fn-disasm.txt](evidence/drawborders-drawborders-fn-disasm.txt) (`border_draw_inner_disasm.sh`, sha256 `b3d38876…`). Machine conclusions: [border-hook-site.json](border-hook-site.json) `continuation_liveness_proof`.
 
 **Criterion 8:** resume topology only (interior vs `0x1010cc3e0`, non-recursive re-entry). Register/stack contract is criterion **6**.
 
@@ -13,7 +13,12 @@ Post-state equivalence on **all reachable successor paths** from each resume IP:
 | **A** | Caller-saved GPR, XMM0–15, **RFLAGS** after `GfxSetIndexBuffer` + `glMultiDrawElements` |
 | **B** | Callee-saved `%rbp`, `%rbx`, `%r12`–`%r15` + stack locals skipped by batching |
 
-Calls are **uses** of ABI argument registers. Caller-saved registers not live-in to a call are killed by the call. Width-sensitive defs (`movl`/`movw`/`movb`, XMM scalars). **No YMM/AVX** in this address range (`drawborders-inner-walk-disasm.txt` — `movss`/`movaps` only).
+Calls are **uses** of ABI argument registers. Caller-saved registers not live-in to a call are killed by the call. Width-sensitive defs (`movl`/`movw`/`movb`, XMM scalars). **No YMM/AVX** in `DrawBorders` (`movss`/`movaps` only).
+
+## v1 interior scope (classifier-aligned)
+
+- **Hook gate:** `uint32(-0xe4(%rbp))` not in special precolor set `{4,5,7}` (mask `0xB0`).
+- **Per-record draw path:** non-special outer batch → color compare @ `0x1010cc1cf` → on match `je 0x1010cc26b` @ `0x1010cc1d5` → mode-0 @ `0x1010cc2e8`. **Exclude** `0x1010cc1cd → 0x1010cc22d` (helpers @ `0x1010cc242`, `0x1010cc266`).
 
 ## Loop tail
 
@@ -27,6 +32,8 @@ Calls are **uses** of ABI argument registers. Caller-saved registers not live-in
 1010cc3da  jne 0x1010cbe55
 1010cc3e0  incl %ebx
 1010cc3e2  cmpl 0x10(%rbp), %ebx
+1010cc3e5  jne 0x1010cbc7f
+1010cc3eb  movq 0x8(%r12), %rax   ; profile tail (outer loop done)
 ```
 
 ## Terminal trampoline (mandatory)
@@ -38,6 +45,15 @@ movl -0xe4(%rbp), %ebx
 jmp  0x1010cc3e0
 ```
 
+### Terminal CFG successors (audited on full function)
+
+| Branch @ `0x1010cc3e5` | Target | `-0x70(%rbp)` | Notes |
+|------------------------|--------|---------------|--------|
+| taken (`ebx != limit`) | `0x1010cbc7f` | **Define** `movq %rax, -0x70` @ `0x1010cbca1` before next **read** @ `0x1010cbe38` | outer-batch setup; trampoline need not preserve stale `-0x70` |
+| not taken | `0x1010cc3eb` | **No read** through `0x1010cc3fb` | profile `callq`; frame unwinds |
+
+**`-0x70` fallback (if ever required):** at `WALK_END`, `last_cursor + 2 == end_bound` with `end_bound = -0x198(%rbp)` → `last_cursor = -0x198(%rbp) - 2`. Current CFG: **omit** trampoline write (both successors redefine or ignore before read). See [border-loop-head-patch-plan.md](border-loop-head-patch-plan.md).
+
 ## Interior — displaced hook (`0x1010cbe55`)
 
 | State | Status | Evidence |
@@ -46,9 +62,7 @@ jmp  0x1010cc3e0
 | `-0x70` | LIVE — displaced `movq %rcx,-0x70` @ `0x1010cbe59` | |
 | RFLAGS | LIVE — `testb` + `je` @ `0x1010cbe5d` | trampoline reproduces |
 
-## Interior — draw (`0x1010cbe63` → mode-0 @ `0x1010cc2e8`, fast-color via `0x1010cc1cd`→`0x1010cc22d`)
-
-**Scope:** eligible homogeneous prefix (classifier); not slow-color `0x1010cc1cf` XMM block.
+## Interior — draw (`0x1010cbe63` → mode-0 @ `0x1010cc2e8`, eligible `je 0x1010cc26b` path)
 
 ### A — caller-saved (incoming post-MDE value)
 
@@ -59,9 +73,9 @@ jmp  0x1010cc3e0
 | `%rdi` | DEAD | define `movq -0x60(%rbp),%rdi` @ `0x1010cc2ca` / `0x1010cc2e2` | call-use to helpers |
 | `%rsi` | DEAD | define `movq (%rax,%r15,8),%rsi` @ `0x1010cc2c6` | then GfxSetIndexBuffer **use** |
 | `%rdx` | DEAD | define `movzwl 0x18(%r14,%rbx)` @ `0x1010cc28c` (cmp only) / `movzwl +0x04` @ `0x1010cc2dc` for GfxDrawIndexed | |
-| `%r8`–`%r11` | DEAD | no read `0x1010cbe63`…`0x1010cc2e8` on mode-0 fast join | |
-| XMM0–15 | DEAD | no XMM **read** on `0x1010cc22d`…`0x1010cc2e8` (slow XMM @ `0x1010cc200`+ bypassed) | batch calls may clobber |
-| RFLAGS | DEAD | flag consumers on fast path use fresh `cmp`/`test` | |
+| `%r8`–`%r11` | DEAD | no read `0x1010cbe63`…`0x1010cc2e8` on mode-0 eligible join | |
+| XMM0–15 | DEAD | no XMM **read** on eligible path before `0x1010cc2e8` | batch calls may clobber |
+| RFLAGS | DEAD | flag consumers on path use fresh `cmp`/`test` | |
 
 GfxDrawIndexed @ `0x1010cc2e8`: `%rdi`,`%rsi`,`%edx`,`%ecx` are **call arguments** (defined immediately before) — resume-era values not read.
 
@@ -69,13 +83,14 @@ GfxDrawIndexed @ `0x1010cc2e8`: `%rdi`,`%rsi`,`%edx`,`%ecx` are **call arguments
 
 | State | Status | Evidence |
 |-------|--------|----------|
-| `%r12` | preserve hook-time | `SBorderDrawInfoSet*`; callees preserve; batch does not change expected value |
+| `%rbp` | **PRESERVE_FRAME_POINTER** | standard frame; no redefine on eligible interior path before return to tail |
+| `%r13` | **PRESERVE_FULL** | hook `testb %r13b,0x1(%rcx)`; special-path `movb` @ `0x1010cc1c0` bypassed on eligible path; mode-1/site paths redefine `%r13` later — not in v1 batch interior |
+| `%r12` | preserve hook-time | `SBorderDrawInfoSet*`; callees preserve |
 | `%r14` | redefine before use | `movq 0x78(%r12),%r14` @ `0x1010cbe67` |
 | `%r15` | redefine | `movq -0x80(%rbp),%r15` @ `0x1010cc27d` |
 | `%rbx` | redefine | `leaq` chain @ `0x1010cc281`–`0x1010cc289` |
 | `-0x80` | read then refresh | set @ `0x1010cbe6f`; consumed @ `0x1010cc27d` |
 | `-0x51`, `-0x64` | unchanged | homogeneous batch; no terminal fixup on interior |
-| `%ebp` frame | preserve | standard frame |
 
 ## Interior — skip tail (`0x1010cc3bd`)
 
@@ -86,18 +101,19 @@ GfxDrawIndexed @ `0x1010cc2e8`: `%rdi`,`%rsi`,`%edx`,`%ecx` are **call arguments
 | Other caller-saved / XMM | DEAD | no read before `jne 0x1010cbe55` @ `0x1010cc3da` or merge |
 | RFLAGS | LIVE through `cmp`/`jne` | then dead at loop head if `testb` redefines |
 
-## Terminal (`0x1010cc3e0` successors)
+## Terminal (`0x1010cc3e0` and successors)
 
 Trampoline supplies `%ebx` from `-0xe4` before `incl`.
 
-| State | Status | Forward successors `0x1010cc3e0`…`0x1010cc3fb` |
-|-------|--------|--------------------------------------------------|
+| State | Status | Evidence |
+|-------|--------|----------|
 | `%ebx` | LIVE — **synthesize** from `-0xe4(%rbp)` | `incl %ebx` @ `0x1010cc3e0` |
-| `%rax`,`%rcx` | DEAD | no read before `0x1010cc3eb` |
-| `%rdi`,`%rsi` | DEAD until define @ `0x1010cc3f7`/`0x1010cc3eb` | profile tail |
-| `-0x70(%rbp)` | DEAD | no read in terminal span; next read @ `0x1010cbe38` only on **future** inner walk |
-| `-0x198` | unchanged | not read on terminal span |
-| XMM / RFLAGS | DEAD before `incl` | `cmp`/`jne` not taken; no flag consumer before `incl` |
+| `%rax`,`%rcx` | DEAD | no read before profile tail or outer-loop re-entry defs |
+| `%rdi`,`%rsi` | DEAD until define @ `0x1010cc3f7`/`0x1010cc3eb` | profile tail only on `0x1010cc3eb` |
+| `-0x70(%rbp)` | DEAD for trampoline obligation | see terminal successor table |
+| `%rbp` | PRESERVE_FRAME_POINTER | |
+| `%r13` | PRESERVE_FULL through `0x1010cc3e5` branches | no read on terminal span before outer-loop redefine |
+| XMM / RFLAGS | DEAD before `incl` | `cmp`/`jne` at `0x1010cc3e2`–`0x1010cc3e5` |
 
 ## glMultiDrawElements (mutation)
 

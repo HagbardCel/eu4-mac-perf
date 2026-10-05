@@ -32,9 +32,11 @@ Loop advance (`0x1010cc3bd`):
 - Termination: inner end pointer (`-0x198(%rbp)`) reached; outer loop exits when batch index `ebx` reaches `0x10(%rbp)`.
 - **Start/end knowable before inner walk:** at `0x1010cbe38` when `r15>0`, end pointer stored to `-0x198(%rbp)` before entering `0x1010cbe55`.
 
-## Per-iteration fast path (color)
+## Per-iteration color paths (v1 batching scope)
 
-When border color byte at `(%rcx)` matches cached `-0x51(%rbp)`, control jumps `0x1010cc1cd → 0x1010cc22d`, skipping `CColor` fetches and `GfxUpdateConstantBuffer` for that record.
+**Special outer batch** (`uint32(-0xe4(%rbp))` in `{4,5,7}` per mask `0xB0` @ `0x1010cbe6c`–`0x1010cbe81`): enters precolor block @ `0x1010cbe87` with per-record helpers — **excluded** from v1 multidraw (classifier hook gate).
+
+**Eligible simple path** (non-special outer batch only): slow color compare @ `0x1010cc1cf`; on match, `je 0x1010cc26b` @ `0x1010cc1d5` → mode-0 draw setup. **Not** equivalent to `0x1010cc1cd → 0x1010cc22d`, which still runs helper calls @ `0x1010cc242` / `0x1010cc266` before the mode check.
 
 ## Three sites vs one pass
 

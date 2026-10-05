@@ -1,0 +1,492 @@
+# DrawBorders 0x1010cbb00..0x1010cc456 (exclusive end)
+# binary_sha256=b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d
+00000001010cbb00	pushq	%rbp
+00000001010cbb01	movq	%rsp, %rbp
+00000001010cbb04	pushq	%r15
+00000001010cbb06	pushq	%r14
+00000001010cbb08	pushq	%r13
+00000001010cbb0a	pushq	%r12
+00000001010cbb0c	pushq	%rbx
+00000001010cbb0d	subq	$0x188, %rsp                    ## imm = 0x188
+00000001010cbb14	movq	%r8, -0x180(%rbp)
+00000001010cbb1b	movq	%rcx, -0x178(%rbp)
+00000001010cbb22	movq	0xb81757(%rip), %rax
+00000001010cbb29	movq	(%rax), %rax
+00000001010cbb2c	movq	%rax, -0x30(%rbp)
+00000001010cbb30	cmpb	$0x0, 0x20(%rdi)
+00000001010cbb34	je	0x1010cc405
+00000001010cbb3a	movl	%r9d, %ebx
+00000001010cbb3d	movq	%rsi, %r14
+00000001010cbb40	movq	%rdi, %r12
+00000001010cbb43	movq	0x1179a6e(%rip), %rdi
+00000001010cbb4a	callq	0x1013fa0ea
+00000001010cbb4f	movq	0x38(%r12), %rsi
+00000001010cbb54	movq	%r14, %rdi
+00000001010cbb57	callq	0x1015ea35a
+00000001010cbb5c	movq	0x30(%r12), %rsi
+00000001010cbb61	movq	%r14, %rdi
+00000001010cbb64	callq	0x1015ea261
+00000001010cbb69	movq	%r14, %rdi
+00000001010cbb6c	movl	$0x3, %esi
+00000001010cbb71	callq	0x1015ea76f
+00000001010cbb76	movl	0x24(%r12), %eax
+00000001010cbb7b	decl	%eax
+00000001010cbb7d	cmpl	$0x1, %eax
+00000001010cbb80	ja	0x1010cbb92
+00000001010cbb82	movq	0x60(%r12), %rax
+00000001010cbb87	movq	(%rax), %rsi
+00000001010cbb8a	movq	%r14, %rdi
+00000001010cbb8d	callq	0x1015ec28e
+00000001010cbb92	callq	0x100a32bce
+00000001010cbb97	movq	%rax, %rdi
+00000001010cbb9a	callq	0x100a32bb6
+00000001010cbb9f	testq	%rax, %rax
+00000001010cbba2	je	0x1010cbbc0
+00000001010cbba4	callq	0x100a32bce
+00000001010cbba9	movq	%rax, %rdi
+00000001010cbbac	callq	0x100a32bb6
+00000001010cbbb1	movq	(%rax), %rcx
+00000001010cbbb4	movq	%rax, %rdi
+00000001010cbbb7	callq	*0x30(%rcx)
+00000001010cbbba	movapd	%xmm0, %xmm1
+00000001010cbbbe	jmp	0x1010cbbc4
+00000001010cbbc0	xorpd	%xmm1, %xmm1
+00000001010cbbc4	movsd	%xmm1, -0x70(%rbp)
+00000001010cbbc9	movq	%r14, -0x60(%rbp)
+00000001010cbbcd	movsd	0x98994b(%rip), %xmm0
+00000001010cbbd5	mulsd	%xmm1, %xmm0
+00000001010cbbd9	callq	0x1018c2960
+00000001010cbbde	movsd	-0x70(%rbp), %xmm2
+00000001010cbbe3	movsd	0x110(%r12), %xmm1
+00000001010cbbed	ucomisd	%xmm2, %xmm1
+00000001010cbbf1	jbe	0x1010cbc0d
+00000001010cbbf3	movabsq	$-0x3fa7000000000000, %rax      ## imm = 0xC059000000000000
+00000001010cbbfd	movq	%rax, 0x110(%r12)
+00000001010cbc05	movsd	0x98992b(%rip), %xmm1
+00000001010cbc0d	cmpl	0x10(%rbp), %ebx
+00000001010cbc10	jge	0x1010cc3eb
+00000001010cbc16	mulsd	0x98990a(%rip), %xmm0
+00000001010cbc1e	addsd	0x98990a(%rip), %xmm0
+00000001010cbc26	movb	0x20(%rbp), %r13b
+00000001010cbc2a	cvtsd2ss	%xmm0, %xmm0
+00000001010cbc2e	movss	%xmm0, -0x84(%rbp)
+00000001010cbc36	subsd	%xmm2, %xmm1
+00000001010cbc3a	addsd	0x970dee(%rip), %xmm1
+00000001010cbc42	xorps	%xmm2, %xmm2
+00000001010cbc45	cvtsd2ss	%xmm1, %xmm2
+00000001010cbc49	movss	0x95343f(%rip), %xmm0
+00000001010cbc51	minss	%xmm2, %xmm0
+00000001010cbc55	xorpd	%xmm1, %xmm1
+00000001010cbc59	cmpltss	%xmm1, %xmm2
+00000001010cbc5e	andnps	%xmm0, %xmm2
+00000001010cbc61	movaps	%xmm2, -0x1b0(%rbp)
+00000001010cbc68	movl	$0xffffffff, -0x64(%rbp)        ## imm = 0xFFFFFFFF
+00000001010cbc6f	xorl	%eax, %eax
+00000001010cbc71	movq	%rax, -0xf0(%rbp)
+00000001010cbc78	movq	%r12, -0x188(%rbp)
+00000001010cbc7f	movl	%ebx, %eax
+00000001010cbc81	movq	-0x180(%rbp), %rcx
+00000001010cbc88	movq	(%rcx), %rcx
+00000001010cbc8b	movslq	(%rcx,%rax,4), %r15
+00000001010cbc8f	movq	-0x178(%rbp), %rcx
+00000001010cbc96	movq	(%rcx), %rcx
+00000001010cbc99	leaq	(%rax,%rax,2), %rax
+00000001010cbc9d	movq	(%rcx,%rax,8), %rax
+00000001010cbca1	movq	%rax, -0x70(%rbp)
+00000001010cbca5	movq	0x8(%r12), %rdi
+00000001010cbcaa	movl	$0x518, %eax                    ## imm = 0x518
+00000001010cbcaf	addq	%rax, %rdi
+00000001010cbcb2	xorl	%eax, %eax
+00000001010cbcb4	cmpl	$0x8, %ebx
+00000001010cbcb7	sete	%al
+00000001010cbcba	movl	0x28(%r12,%rax,4), %esi
+00000001010cbcbf	callq	0x1015cdbfa
+00000001010cbcc4	movq	%rax, %r14
+00000001010cbcc7	cmpq	-0xf0(%rbp), %rax
+00000001010cbcce	je	0x1010cbd42
+00000001010cbcd0	movq	0x18(%r12), %rax
+00000001010cbcd5	movq	0x208(%rax), %rcx
+00000001010cbcdc	movq	%rcx, -0x50(%rbp)
+00000001010cbce0	movq	0x1a0(%rax), %rax
+00000001010cbce7	movq	%rax, -0x48(%rbp)
+00000001010cbceb	movq	0x18(%rbp), %rax
+00000001010cbcef	movq	0x1d0(%rax), %rax
+00000001010cbcf6	movq	%rax, -0x40(%rbp)
+00000001010cbcfa	movq	0x20(%r14), %r9
+00000001010cbcfe	addq	$0x30, %r9
+00000001010cbd02	movq	-0x60(%rbp), %rdi
+00000001010cbd06	movl	$0x3, %esi
+00000001010cbd0b	leaq	-0x50(%rbp), %rdx
+00000001010cbd0f	movl	$0x1, %ecx
+00000001010cbd14	movl	$0x6, %r8d
+00000001010cbd1a	callq	0x1015ecbf2
+00000001010cbd1f	movq	0x8(%r14), %rsi
+00000001010cbd23	movq	-0x60(%rbp), %rdi
+00000001010cbd27	callq	0x1015ea0bf
+00000001010cbd2c	movq	(%r14), %rsi
+00000001010cbd2f	movq	-0x60(%rbp), %rdi
+00000001010cbd33	callq	0x1015ebbb0
+00000001010cbd38	movq	%r14, %rax
+00000001010cbd3b	movq	%r14, -0xf0(%rbp)
+00000001010cbd42	movq	0x18(%r12), %rdx
+00000001010cbd47	cmpl	$0x8, %ebx
+00000001010cbd4a	jne	0x1010cbdca
+00000001010cbd4c	addq	$0x1d0, %rdx                    ## imm = 0x1D0
+00000001010cbd53	movq	0x20(%r14), %r9
+00000001010cbd57	addq	$0x20, %r9
+00000001010cbd5b	movq	-0x60(%rbp), %rdi
+00000001010cbd5f	movl	$0x1, %esi
+00000001010cbd64	movl	$0x1, %ecx
+00000001010cbd69	movl	$0x4, %r8d
+00000001010cbd6f	callq	0x1015ecbf2
+00000001010cbd74	movaps	0x989875(%rip), %xmm0
+00000001010cbd7b	movaps	%xmm0, -0x120(%rbp)
+00000001010cbd82	movaps	0x989857(%rip), %xmm0
+00000001010cbd89	movaps	%xmm0, -0x130(%rbp)
+00000001010cbd90	movaps	0x989839(%rip), %xmm0
+00000001010cbd97	movaps	%xmm0, -0x140(%rbp)
+00000001010cbd9e	movaps	0x98981b(%rip), %xmm0
+00000001010cbda5	movaps	%xmm0, -0x150(%rbp)
+00000001010cbdac	movaps	0x9897fd(%rip), %xmm0
+00000001010cbdb3	movaps	%xmm0, -0x160(%rbp)
+00000001010cbdba	movaps	0x9897df(%rip), %xmm0
+00000001010cbdc1	movaps	%xmm0, -0x170(%rbp)
+00000001010cbdc8	jmp	0x1010cbe2f
+00000001010cbdca	movslq	%ebx, %rax
+00000001010cbdcd	movq	0x68(%rdx,%rax,8), %rcx
+00000001010cbdd2	movq	%rcx, -0x50(%rbp)
+00000001010cbdd6	movq	0xa8(%rdx,%rax,8), %rcx
+00000001010cbdde	movq	%rcx, -0x48(%rbp)
+00000001010cbde2	movq	0xe8(%rdx,%rax,8), %rcx
+00000001010cbdea	movq	%rcx, -0x40(%rbp)
+00000001010cbdee	movq	0x128(%rdx,%rax,8), %rax
+00000001010cbdf6	movq	%rax, -0x38(%rbp)
+00000001010cbdfa	movq	0x20(%r14), %r9
+00000001010cbdfe	movq	-0x60(%rbp), %rdi
+00000001010cbe02	movl	$0x4, %esi
+00000001010cbe07	leaq	-0x50(%rbp), %rdx
+00000001010cbe0b	movl	$0x1, %ecx
+00000001010cbe10	xorl	%r8d, %r8d
+00000001010cbe13	callq	0x1015ecbf2
+00000001010cbe18	cmpl	$0x7, %ebx
+00000001010cbe1b	ja	0x1010cbd74
+00000001010cbe21	movl	$0xb0, %eax
+00000001010cbe26	btl	%ebx, %eax
+00000001010cbe29	jae	0x1010cbd74
+00000001010cbe2f	testl	%r15d, %r15d
+00000001010cbe32	je	0x1010cc3e0
+00000001010cbe38	movq	-0x70(%rbp), %rcx
+00000001010cbe3c	leaq	(%rcx,%r15,4), %rax
+00000001010cbe40	movq	%rax, -0x198(%rbp)
+00000001010cbe47	addq	$0x2, %rcx
+00000001010cbe4b	movb	$-0x1, -0x51(%rbp)
+00000001010cbe4f	movl	%ebx, -0xe4(%rbp)
+00000001010cbe55	testb	%r13b, 0x1(%rcx)
+00000001010cbe59	movq	%rcx, -0x70(%rbp)
+00000001010cbe5d	je	0x1010cc3bd
+00000001010cbe63	movzwl	-0x2(%rcx), %ecx
+00000001010cbe67	movq	0x78(%r12), %r14
+00000001010cbe6c	cmpl	$0x7, %ebx
+00000001010cbe6f	movq	%rcx, -0x80(%rbp)
+00000001010cbe73	ja	0x1010cc1cf
+00000001010cbe79	movl	$0xb0, %eax
+00000001010cbe7e	btl	%ebx, %eax
+00000001010cbe81	jae	0x1010cc1cf
+00000001010cbe87	movq	%r14, -0x190(%rbp)
+00000001010cbe8e	movq	0xc0(%r12), %rax
+00000001010cbe96	imulq	$0x38, %rcx, %rcx
+00000001010cbe9a	movq	0x8(%rax,%rcx), %r15
+00000001010cbe9f	movq	0x10(%rax,%rcx), %rbx
+00000001010cbea4	movq	0x18(%rax,%rcx), %r13
+00000001010cbea9	movq	0x20(%rax,%rcx), %r14
+00000001010cbeae	movq	0x28(%rax,%rcx), %r12
+00000001010cbeb3	movq	0x30(%rax,%rcx), %rax
+00000001010cbeb8	movq	%rax, -0x78(%rbp)
+00000001010cbebc	movq	%r15, %rdi
+00000001010cbebf	callq	0x1013ea94a
+00000001010cbec4	movss	%xmm0, -0xe0(%rbp)
+00000001010cbecc	movq	%r15, %rdi
+00000001010cbecf	callq	0x1013ea956
+00000001010cbed4	movss	%xmm0, -0xdc(%rbp)
+00000001010cbedc	movq	%r15, %rdi
+00000001010cbedf	callq	0x1013ea962
+00000001010cbee4	movss	%xmm0, -0xd8(%rbp)
+00000001010cbeec	movq	%r15, %rdi
+00000001010cbeef	callq	0x1013ea96e
+00000001010cbef4	movss	%xmm0, -0xd4(%rbp)
+00000001010cbefc	movq	%rbx, %rdi
+00000001010cbeff	callq	0x1013ea94a
+00000001010cbf04	movss	%xmm0, -0xd0(%rbp)
+00000001010cbf0c	movq	%rbx, %rdi
+00000001010cbf0f	callq	0x1013ea956
+00000001010cbf14	movss	%xmm0, -0xcc(%rbp)
+00000001010cbf1c	movq	%rbx, %rdi
+00000001010cbf1f	callq	0x1013ea962
+00000001010cbf24	movss	%xmm0, -0xc8(%rbp)
+00000001010cbf2c	movq	%rbx, %rdi
+00000001010cbf2f	callq	0x1013ea96e
+00000001010cbf34	movss	%xmm0, -0xc4(%rbp)
+00000001010cbf3c	movq	%r13, %rdi
+00000001010cbf3f	callq	0x1013ea94a
+00000001010cbf44	movss	%xmm0, -0xc0(%rbp)
+00000001010cbf4c	movq	%r13, %rdi
+00000001010cbf4f	callq	0x1013ea956
+00000001010cbf54	movss	%xmm0, -0xbc(%rbp)
+00000001010cbf5c	movq	%r13, %rdi
+00000001010cbf5f	callq	0x1013ea962
+00000001010cbf64	movss	%xmm0, -0xb8(%rbp)
+00000001010cbf6c	movq	%r13, %rdi
+00000001010cbf6f	callq	0x1013ea96e
+00000001010cbf74	movss	%xmm0, -0xb4(%rbp)
+00000001010cbf7c	movq	%r14, %rdi
+00000001010cbf7f	callq	0x1013ea94a
+00000001010cbf84	movss	%xmm0, -0xb0(%rbp)
+00000001010cbf8c	movq	%r14, %rdi
+00000001010cbf8f	callq	0x1013ea956
+00000001010cbf94	movss	%xmm0, -0xac(%rbp)
+00000001010cbf9c	movq	%r14, %rdi
+00000001010cbf9f	callq	0x1013ea962
+00000001010cbfa4	movss	%xmm0, -0xa8(%rbp)
+00000001010cbfac	movq	%r14, %rdi
+00000001010cbfaf	callq	0x1013ea96e
+00000001010cbfb4	movss	%xmm0, -0xa4(%rbp)
+00000001010cbfbc	movq	%r12, %rdi
+00000001010cbfbf	callq	0x1013ea94a
+00000001010cbfc4	movss	%xmm0, -0xa0(%rbp)
+00000001010cbfcc	movq	%r12, %rdi
+00000001010cbfcf	callq	0x1013ea956
+00000001010cbfd4	movss	%xmm0, -0x9c(%rbp)
+00000001010cbfdc	movq	%r12, %rdi
+00000001010cbfdf	callq	0x1013ea962
+00000001010cbfe4	movss	%xmm0, -0x98(%rbp)
+00000001010cbfec	movq	%r12, %rdi
+00000001010cbfef	callq	0x1013ea96e
+00000001010cbff4	movss	%xmm0, -0x94(%rbp)
+00000001010cbffc	movq	-0x78(%rbp), %rdi
+00000001010cc000	callq	0x1013ea94a
+00000001010cc005	movss	%xmm0, -0x90(%rbp)
+00000001010cc00d	movq	-0x78(%rbp), %rdi
+00000001010cc011	callq	0x1013ea956
+00000001010cc016	movss	%xmm0, -0x8c(%rbp)
+00000001010cc01e	movq	-0x78(%rbp), %rdi
+00000001010cc022	callq	0x1013ea962
+00000001010cc027	movss	%xmm0, -0x88(%rbp)
+00000001010cc02f	movq	-0x78(%rbp), %rdi
+00000001010cc033	callq	0x1013ea96e
+00000001010cc038	movss	-0xe0(%rbp), %xmm1
+00000001010cc040	movss	%xmm1, -0x170(%rbp)
+00000001010cc048	movss	-0xdc(%rbp), %xmm1
+00000001010cc050	movss	%xmm1, -0x16c(%rbp)
+00000001010cc058	movss	-0xd8(%rbp), %xmm1
+00000001010cc060	movss	%xmm1, -0x168(%rbp)
+00000001010cc068	movss	-0xd4(%rbp), %xmm1
+00000001010cc070	movss	%xmm1, -0x164(%rbp)
+00000001010cc078	movss	-0xd0(%rbp), %xmm1
+00000001010cc080	movss	%xmm1, -0x160(%rbp)
+00000001010cc088	movss	-0xcc(%rbp), %xmm1
+00000001010cc090	movss	%xmm1, -0x15c(%rbp)
+00000001010cc098	movss	-0xc8(%rbp), %xmm1
+00000001010cc0a0	movss	%xmm1, -0x158(%rbp)
+00000001010cc0a8	movss	-0xc4(%rbp), %xmm1
+00000001010cc0b0	movss	%xmm1, -0x154(%rbp)
+00000001010cc0b8	movss	-0xc0(%rbp), %xmm1
+00000001010cc0c0	movss	%xmm1, -0x150(%rbp)
+00000001010cc0c8	movss	-0xbc(%rbp), %xmm1
+00000001010cc0d0	movss	%xmm1, -0x14c(%rbp)
+00000001010cc0d8	movss	-0xb8(%rbp), %xmm1
+00000001010cc0e0	movss	%xmm1, -0x148(%rbp)
+00000001010cc0e8	movss	-0xb4(%rbp), %xmm1
+00000001010cc0f0	movss	%xmm1, -0x144(%rbp)
+00000001010cc0f8	movss	-0xb0(%rbp), %xmm1
+00000001010cc100	movss	%xmm1, -0x140(%rbp)
+00000001010cc108	movss	-0xac(%rbp), %xmm1
+00000001010cc110	movss	%xmm1, -0x13c(%rbp)
+00000001010cc118	movss	-0xa8(%rbp), %xmm1
+00000001010cc120	movss	%xmm1, -0x138(%rbp)
+00000001010cc128	movss	-0xa4(%rbp), %xmm1
+00000001010cc130	movss	%xmm1, -0x134(%rbp)
+00000001010cc138	movss	-0xa0(%rbp), %xmm1
+00000001010cc140	movss	%xmm1, -0x130(%rbp)
+00000001010cc148	movss	-0x9c(%rbp), %xmm1
+00000001010cc150	movss	%xmm1, -0x12c(%rbp)
+00000001010cc158	movss	-0x98(%rbp), %xmm1
+00000001010cc160	movss	%xmm1, -0x128(%rbp)
+00000001010cc168	movss	-0x94(%rbp), %xmm1
+00000001010cc170	movss	%xmm1, -0x124(%rbp)
+00000001010cc178	movss	-0x90(%rbp), %xmm1
+00000001010cc180	movss	%xmm1, -0x120(%rbp)
+00000001010cc188	movss	-0x8c(%rbp), %xmm1
+00000001010cc190	movss	%xmm1, -0x11c(%rbp)
+00000001010cc198	movss	-0x88(%rbp), %xmm1
+00000001010cc1a0	movss	%xmm1, -0x118(%rbp)
+00000001010cc1a8	movss	%xmm0, -0x114(%rbp)
+00000001010cc1b0	movq	-0x70(%rbp), %rax
+00000001010cc1b4	movb	(%rax), %cl
+00000001010cc1b6	cmpb	%cl, -0x51(%rbp)
+00000001010cc1b9	movq	-0x188(%rbp), %r12
+00000001010cc1c0	movb	0x20(%rbp), %r13b
+00000001010cc1c4	movq	-0x190(%rbp), %r14
+00000001010cc1cb	jne	0x1010cc1de
+00000001010cc1cd	jmp	0x1010cc22d
+00000001010cc1cf	movq	-0x70(%rbp), %rax
+00000001010cc1d3	movb	(%rax), %cl
+00000001010cc1d5	cmpb	%cl, -0x51(%rbp)
+00000001010cc1d8	je	0x1010cc26b
+00000001010cc1de	movzbl	%cl, %eax
+00000001010cc1e1	movq	%rax, %rdx
+00000001010cc1e4	shlq	$0x4, %rdx
+00000001010cc1e8	leaq	0xd24191(%rip), %rsi
+00000001010cc1ef	movaps	(%rdx,%rsi), %xmm0
+00000001010cc1f3	movaps	%xmm0, -0x110(%rbp)
+00000001010cc1fa	addb	$-0x8, %al
+00000001010cc1fc	cmpb	$0x3, %al
+00000001010cc1fe	jae	0x1010cc209
+00000001010cc200	movaps	-0x1b0(%rbp), %xmm0
+00000001010cc207	jmp	0x1010cc222
+00000001010cc209	cmpb	$0xb, %cl
+00000001010cc20c	jne	0x1010cc21a
+00000001010cc20e	movb	$0xb, %cl
+00000001010cc210	movss	0x9539d8(%rip), %xmm0
+00000001010cc218	jmp	0x1010cc222
+00000001010cc21a	movss	-0x84(%rbp), %xmm0
+00000001010cc222	movss	%xmm0, -0x100(%rbp)
+00000001010cc22a	movb	%cl, -0x51(%rbp)
+00000001010cc22d	movq	0x40(%r12), %rsi
+00000001010cc232	movq	-0x60(%rbp), %rdi
+00000001010cc236	leaq	-0x170(%rbp), %rdx
+00000001010cc23d	movl	$0xffffffff, %ecx               ## imm = 0xFFFFFFFF
+00000001010cc242	callq	0x1015ec3b5
+00000001010cc247	movq	0x40(%r12), %rsi
+00000001010cc24c	movq	-0x60(%rbp), %rdi
+00000001010cc250	movl	$0x1, %edx
+00000001010cc255	movl	$0x2, %ecx
+00000001010cc25a	movl	$0x30, %r8d
+00000001010cc260	movl	$0xffffffff, %r9d               ## imm = 0xFFFFFFFF
+00000001010cc266	callq	0x1015ec36a
+00000001010cc26b	movl	0x24(%r12), %eax
+00000001010cc270	cmpl	$0x1, %eax
+00000001010cc273	je	0x1010cc2f2
+00000001010cc275	testl	%eax, %eax
+00000001010cc277	jne	0x1010cc35c
+00000001010cc27d	movq	-0x80(%rbp), %r15
+00000001010cc281	leaq	(%r15,%r15,8), %rax
+00000001010cc285	leaq	(%rax,%rax,2), %rbx
+00000001010cc289	addq	%r15, %rbx
+00000001010cc28c	movzwl	0x18(%r14,%rbx), %edx
+00000001010cc292	cmpl	%edx, -0x64(%rbp)
+00000001010cc295	je	0x1010cc2c1
+00000001010cc297	shlq	$0x3, %rdx
+00000001010cc29b	addq	0x48(%r12), %rdx
+00000001010cc2a0	movq	-0x60(%rbp), %rdi
+00000001010cc2a4	movl	$0x1, %esi
+00000001010cc2a9	xorl	%ecx, %ecx
+00000001010cc2ab	xorl	%r8d, %r8d
+00000001010cc2ae	xorl	%r9d, %r9d
+00000001010cc2b1	callq	0x1015ebf41
+00000001010cc2b6	leaq	0x18(%r14,%rbx), %rax
+00000001010cc2bb	movzwl	(%rax), %eax
+00000001010cc2be	movl	%eax, -0x64(%rbp)
+00000001010cc2c1	movq	0x60(%r12), %rax
+00000001010cc2c6	movq	(%rax,%r15,8), %rsi
+00000001010cc2ca	movq	-0x60(%rbp), %rdi
+00000001010cc2ce	callq	0x1015ec28e
+00000001010cc2d3	movzwl	0x6(%r14,%rbx), %eax
+00000001010cc2d9	leal	(%rax,%rax,2), %esi
+00000001010cc2dc	movzwl	0x4(%r14,%rbx), %edx
+00000001010cc2e2	movq	-0x60(%rbp), %rdi
+00000001010cc2e6	xorl	%ecx, %ecx
+00000001010cc2e8	callq	0x1015eaa77
+00000001010cc2ed	jmp	0x1010cc3bd
+00000001010cc2f2	movl	%r13d, %r15d
+00000001010cc2f5	movq	-0x80(%rbp), %rdx
+00000001010cc2f9	leaq	(%rdx,%rdx,8), %rax
+00000001010cc2fd	leaq	(%rax,%rax,2), %rbx
+00000001010cc301	addq	%rdx, %rbx
+00000001010cc304	movl	0x10(%r14,%rbx), %eax
+00000001010cc309	shll	$0x4, %eax
+00000001010cc30c	movl	%eax, -0xe8(%rbp)
+00000001010cc312	movzwl	0x18(%r14,%rbx), %edx
+00000001010cc318	shlq	$0x3, %rdx
+00000001010cc31c	addq	0x48(%r12), %rdx
+00000001010cc321	movq	-0x60(%rbp), %r13
+00000001010cc325	movq	%r13, %rdi
+00000001010cc328	movl	$0x1, %esi
+00000001010cc32d	xorl	%ecx, %ecx
+00000001010cc32f	leaq	-0xe8(%rbp), %r8
+00000001010cc336	xorl	%r9d, %r9d
+00000001010cc339	callq	0x1015ebf41
+00000001010cc33e	movzwl	0x6(%r14,%rbx), %eax
+00000001010cc344	leal	(%rax,%rax,2), %esi
+00000001010cc347	movzwl	0x4(%r14,%rbx), %edx
+00000001010cc34d	movq	%r13, %rdi
+00000001010cc350	xorl	%ecx, %ecx
+00000001010cc352	callq	0x1015eaa77
+00000001010cc357	movl	%r15d, %r13d
+00000001010cc35a	jmp	0x1010cc3bd
+00000001010cc35c	movq	-0x80(%rbp), %rcx
+00000001010cc360	leaq	(%rcx,%rcx,8), %rax
+00000001010cc364	leaq	(%rax,%rax,2), %rbx
+00000001010cc368	addq	%rcx, %rbx
+00000001010cc36b	movzwl	0x18(%r14,%rbx), %edx
+00000001010cc371	cmpl	%edx, -0x64(%rbp)
+00000001010cc374	je	0x1010cc3a0
+00000001010cc376	shlq	$0x3, %rdx
+00000001010cc37a	addq	0x48(%r12), %rdx
+00000001010cc37f	movq	-0x60(%rbp), %rdi
+00000001010cc383	movl	$0x1, %esi
+00000001010cc388	xorl	%ecx, %ecx
+00000001010cc38a	xorl	%r8d, %r8d
+00000001010cc38d	xorl	%r9d, %r9d
+00000001010cc390	callq	0x1015ebf41
+00000001010cc395	leaq	0x18(%r14,%rbx), %rax
+00000001010cc39a	movzwl	(%rax), %eax
+00000001010cc39d	movl	%eax, -0x64(%rbp)
+00000001010cc3a0	movzwl	0x6(%r14,%rbx), %eax
+00000001010cc3a6	leal	(%rax,%rax,2), %esi
+00000001010cc3a9	movzwl	0x4(%r14,%rbx), %edx
+00000001010cc3af	movl	0x10(%r14,%rbx), %ecx
+00000001010cc3b4	movq	-0x60(%rbp), %rdi
+00000001010cc3b8	callq	0x1015eaa77
+00000001010cc3bd	movq	-0x70(%rbp), %rcx
+00000001010cc3c1	leaq	-0x2(%rcx), %rax
+00000001010cc3c5	addq	$0x4, %rcx
+00000001010cc3c9	addq	$0x4, %rax
+00000001010cc3cd	cmpq	-0x198(%rbp), %rax
+00000001010cc3d4	movl	-0xe4(%rbp), %ebx
+00000001010cc3da	jne	0x1010cbe55
+00000001010cc3e0	incl	%ebx
+00000001010cc3e2	cmpl	0x10(%rbp), %ebx
+00000001010cc3e5	jne	0x1010cbc7f
+00000001010cc3eb	movq	0x8(%r12), %rax
+00000001010cc3f0	movq	0x90(%rax), %rsi
+00000001010cc3f7	movq	-0x60(%rbp), %rdi
+00000001010cc3fb	callq	0x1015ea261
+00000001010cc400	callq	0x1013fa0f0
+00000001010cc405	movq	0xb80e74(%rip), %rax
+00000001010cc40c	movq	(%rax), %rax
+00000001010cc40f	cmpq	-0x30(%rbp), %rax
+00000001010cc413	jne	0x1010cc427
+00000001010cc415	addq	$0x188, %rsp                    ## imm = 0x188
+00000001010cc41c	popq	%rbx
+00000001010cc41d	popq	%r12
+00000001010cc41f	popq	%r13
+00000001010cc421	popq	%r14
+00000001010cc423	popq	%r15
+00000001010cc425	popq	%rbp
+00000001010cc426	retq
+00000001010cc427	callq	0x1018c2342
+00000001010cc42c	jmp	0x1010cc442
+00000001010cc42e	movq	%rax, %rdi
+00000001010cc431	callq	0x10000c0a0
+00000001010cc436	jmp	0x1010cc442
+00000001010cc438	jmp	0x1010cc442
+00000001010cc43a	jmp	0x1010cc442
+00000001010cc43c	jmp	0x1010cc442
+00000001010cc43e	jmp	0x1010cc442
+00000001010cc440	jmp	0x1010cc442
+00000001010cc442	movq	%rax, %rbx
+00000001010cc445	callq	0x1013fa0f0
+00000001010cc44a	movq	%rbx, %rdi
+00000001010cc44d	callq	0x1018c1e86
+00000001010cc452	ud2
+00000001010cc454	jmp	0x1010cc42e

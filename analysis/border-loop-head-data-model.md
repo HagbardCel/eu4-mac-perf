@@ -32,6 +32,7 @@ Disassembly source: local `otool -tv` on GOG `eu4` (image base `0x100000000`).
 | `cached_color` | `movb -0x51(%rbp), %cl` slow-path @ `0x1010cc1d3`; value from `-0x51` stack local |
 | `cached_vbo_index` | `cmpl %edx, -0x64(%rbp)` @ `0x1010cc292` |
 | `skip_or_visibility_mask` | `%r13b` @ `0x1010cbe55` |
+| `outer_batch_index` | `uint32(memory32[-0xe4(%rbp)])` — stored @ `0x1010cbe4f` on first inner entry; reloaded from same slot @ `0x1010cc3d4` on later hook entries (invariant for one inner walk) |
 | `record_table` rows | `%r14` from `0x78(%r12)` @ `0x1010cbe67`; index from `movzwl -0x2(%rcx)` after hook |
 | `ibo_table` slot | `movq 0x60(%r12), %rax`; `movq (%rax,%r15,8), %rsi` @ `0x1010cc2c6` → `BatchKey.ibo_argument` |
 | `deferred_attrib_upload_pending` | `movq -0x60(%rbp), %rdi` (GfxDeferredContextGFX*); in hook dylib: `movq (%rdi), %rX`; `cmpb $0, 0x128(%rX)` (same predicate as `GfxDrawIndexed` @ `0x1015eaaa7`) |

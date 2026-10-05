@@ -5,27 +5,20 @@
   "live_game_run": false,
   "record_stream_available": false,
   "classifier_test_evidence": "synthetic_only",
-  "static_feasibility": "PENDING_STATIC_RE",
+  "static_feasibility": "GO_CONDITIONAL_RUNTIME_GATES",
   "static_criteria": {
-    "1_classifier_inputs": "PENDING",
+    "1_classifier_inputs": "PASS",
     "2_control_flow_prefix_realizability": "PASS",
     "3_entry_state": "PASS",
-    "4_fail_closed_paths": "PENDING",
-    "5_helper_side_effect_equivalence": "PENDING",
-    "6_cpu_continuation": "PENDING",
-    "7_engine_gl_equivalence": "PENDING",
+    "4_fail_closed_paths": "PASS",
+    "5_helper_side_effect_equivalence": "PASS",
+    "6_cpu_continuation": "PASS",
+    "7_engine_gl_equivalence": "PASS",
     "8_continuation_mechanics": "PASS",
     "9_detour_relocation": "PASS",
-    "10_uncertainty_falls_through": "PENDING"
+    "10_uncertainty_falls_through": "PASS"
   },
-  "open_static_items": [
-    "1_classifier_inputs",
-    "4_fail_closed_paths",
-    "5_helper_side_effect_equivalence",
-    "6_cpu_continuation",
-    "7_engine_gl_equivalence",
-    "10_uncertainty_falls_through"
-  ],
+  "open_static_items": [],
   "failed_static_items": [],
   "ibo_bind_topology": "ONE_BIND",
   "multidraw_api": "glMultiDrawElements",
@@ -52,10 +45,10 @@
     "analysis/border-hook-site.json",
     "analysis/border-mode0-basevertex-evidence-addendum.md",
     "analysis/border-draw-record-layout.json",
-    "analysis/evidence/drawborders-inner-walk-disasm.txt",
+    "analysis/evidence/drawborders-drawborders-fn-disasm.txt",
     "analysis/tools/border_draw_inner_disasm.sh",
     "analysis/tools/border_loop_classifier.py",
     "analysis/tools/border_loop_evidence.py"
   ],
-  "note": "Interim rollback post-0df4311: outer-batch {4,5,7} classifier gap + terminal CFG 0x1010cbc7f closure in progress. Runtime gates pending."
+  "note": "Outer-batch {4,5,7} hook gate + full DrawBorders CFG (terminal 0x1010cbc7f/0x1010cc3eb). Criterion 6 PASS. Runtime gates pending."
 }

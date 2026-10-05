@@ -14,12 +14,15 @@ patched_loop_head (14-byte jmp → trampoline):
 classifier_trampoline:
     if N or A (mutation off): run displaced testb/movq/je; continue original
     if deferred_attrib_upload_pending or secondary_upload_pending: fall through one draw
+    if special_precolor_outer_batch(uint32(-0xe4(%rbp))): fall through (hook gate; same telemetry as pending flags)
     prefix = classify_batchable_prefix(...)
     if not prefix.batch_eligible: fall through one record (displaced path)
     GfxSetIndexBuffer(prefix.batch_key.ibo_argument)   # once; rdi = -0x60(%rbp) deferred ctx
     glMultiDrawElements(GL_TRIANGLES, counts, GL_UNSIGNED_SHORT, indices[], drawcount)
     if prefix.termination_kind == WALK_END:
         movl -0xe4(%rbp), %ebx    # skipped @ 0x1010cc3d4 on direct jmp
+        # -0x70: CFG shows both terminal successors redefine or ignore before next read;
+        # optional static fallback if audit ever required: last_cursor = -0x198(%rbp) - 2
         jmp terminal_prefix_resume @ 0x1010cc3e0
     else:
         set rcx = first-unconsumed entry; displaced testb+movq; je path

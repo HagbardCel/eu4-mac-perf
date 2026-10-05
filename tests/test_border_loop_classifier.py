@@ -13,6 +13,7 @@ from border_loop_classifier import (  # noqa: E402
     RecordView,
     TerminationKind,
     classify_batchable_prefix,
+    special_precolor_outer_batch,
 )
 
 MAX_TEST_PREFIX_LEN = 32
@@ -219,6 +220,42 @@ class BorderLoopClassifierTests(unittest.TestCase):
         entries = self._entries([0, 1])
         out = classify_batchable_prefix(ctx, records, ibos, entries)
         self.assertEqual(out.run_length, 0)
+        self.assertIn(BarrierMask.OTHER_SIDE_EFFECT, out.stop_reason_mask)
+
+    def test_special_precolor_outer_batch_mask(self) -> None:
+        for idx in (4, 5, 7):
+            self.assertTrue(special_precolor_outer_batch(idx))
+        for idx in (0, 1, 2, 3, 6, 8):
+            self.assertFalse(special_precolor_outer_batch(idx))
+
+    def test_special_outer_batch_indices_rejected_at_hook(self) -> None:
+        records, ibos = self._tables(8)
+        entries = self._entries([0, 1, 2, 3, 4])
+        for outer in (4, 5, 7):
+            ctx = self._ctx(outer_batch_index=outer)
+            out = classify_batchable_prefix(ctx, records, ibos, entries)
+            self.assertEqual(out.run_length, 0)
+            self.assertFalse(out.batch_eligible)
+            self.assertEqual(out.stop_reason_mask, BarrierMask.OTHER_SIDE_EFFECT)
+            self.assertEqual(out.boundary_reason_mask, BarrierMask(0))
+            self.assertEqual(out.termination_kind, TerminationKind.BARRIER)
+
+    def test_non_special_outer_batch_still_eligible(self) -> None:
+        for outer in (0, 1, 2, 3, 6, 8):
+            ctx = self._ctx(outer_batch_index=outer)
+            records, ibos = self._tables(8)
+            entries = self._entries([0, 1, 2, 3, 4])
+            out = classify_batchable_prefix(ctx, records, ibos, entries)
+            self.assertEqual(out.run_length, 5)
+            self.assertTrue(out.batch_eligible)
+
+    def test_negative_outer_batch_index_fail_closed(self) -> None:
+        ctx = self._ctx(outer_batch_index=-1)
+        records, ibos = self._tables(4)
+        entries = self._entries([0, 1, 2, 3])
+        out = classify_batchable_prefix(ctx, records, ibos, entries)
+        self.assertEqual(out.run_length, 0)
+        self.assertFalse(out.batch_eligible)
         self.assertIn(BarrierMask.OTHER_SIDE_EFFECT, out.stop_reason_mask)
 
     def test_varying_arg3_u16_still_homogeneous(self) -> None:

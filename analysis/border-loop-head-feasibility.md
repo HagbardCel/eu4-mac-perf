@@ -41,7 +41,7 @@ Tests: `tests/test_border_loop_evidence.py`, `tests/test_border_loop_classifier.
 | `3_entry_state` | ONE_BIND entry model |
 | `4_fail_closed_paths` | SKIP-before-deref, OOB, unsupported mode |
 | `5_helper_side_effect_equivalence` | GfxDrawIndexed + GfxSetIndexBuffer audit |
-| `6_cpu_continuation` | CFG post-state equivalence (A/B, RFLAGS, stack) — [gate3b](border-loop-head-gate3b-state.md), [disasm](evidence/drawborders-inner-walk-disasm.txt), [hook-site JSON](border-hook-site.json) |
+| `6_cpu_continuation` | CFG post-state equivalence (A/B, RFLAGS, stack) — [gate3b](border-loop-head-gate3b-state.md), [disasm](evidence/drawborders-drawborders-fn-disasm.txt), [hook-site JSON](border-hook-site.json) |
 | `7_engine_gl_equivalence` | ONE_BIND + `glMultiDrawElements` (mode-0 ≡ N×`glDrawElements`) |
 | `8_continuation_mechanics` | Non-recursive trampoline + WALK_END |
 | `9_detour_relocation` | 14-byte RIP-indirect jmp (static encoding) |

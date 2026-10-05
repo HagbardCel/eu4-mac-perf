@@ -55,6 +55,6 @@ See [border-mode0-basevertex-evidence-addendum.md](border-mode0-basevertex-evide
 
 ## Required conclusion (ONE_BIND eligible subset)
 
-1. \(N \times (GfxSetIndexBuffer + GfxDrawIndexed) \equiv 1 \times GfxSetIndexBuffer + 1 \times glMultiDrawElements\) for mode-0 homogeneous prefixes **excluding**: null `ibo_argument`, `triangle_count==0`, `deferred_attrib_upload_pending` or `secondary_upload_pending` at hook, unsupported mode, `INVALID` classifier termination.
+1. \(N \times (GfxSetIndexBuffer + GfxDrawIndexed) \equiv 1 \times GfxSetIndexBuffer + 1 \times glMultiDrawElements\) for mode-0 homogeneous prefixes **excluding**: null `ibo_argument`, `triangle_count==0`, `deferred_attrib_upload_pending` or `secondary_upload_pending` at hook, **special precolor outer batch** indices `{4,5,7}` (`uint32(-0xe4(%rbp))`), unsupported mode, `INVALID` classifier termination.
 2. Side effects not reproduced without fall-through: `+0x128` attrib upload and `+0x170` secondary upload when pending at hook.
 3. GL gather uses `count[i]=3*triangle_count`, `indices[i]=0`; **no** basevertex array.

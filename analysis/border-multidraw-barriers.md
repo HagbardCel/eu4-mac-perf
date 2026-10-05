@@ -22,7 +22,8 @@ From paused Venice intrusive screen + static path audit:
 |---------|------|------------|
 | `GfxSetVertexBuffers` | VBO bind | Mode-0 path: only when `+0x18` table index changes (`cmp` at `0x1010cc292`) |
 | `GfxSetIndexBuffer` | IBO bind | Every mode-0 iteration; same handle array slot when IBO unchanged — **idempotent** |
-| Color / `GfxUpdateConstantBuffer` | Uniform block | Skipped on fast path when border color byte unchanged |
+| Color / `GfxUpdateConstantBuffer` | Uniform block | Skipped on **eligible** path: non-special outer batch, color match via `je 0x1010cc26b` @ `0x1010cc1d5` (not `jmp 0x1010cc22d` helper prelude) |
+| Outer batch precolor `{4,5,7}` | Per-record helpers | Mask `0xB0` @ `0x1010cbe79` — classifier `OTHER_SIDE_EFFECT` at hook |
 | `+0x10` helper arg | Site 2 only | `movl 0x10(%r14,%rbx), %ecx` before draw @ site 2 — **not** on mode-0 bulk path |
 | `GfxProfileEnd` | CPU bookkeeping | After outer loop only (`0x1010cc400`) — not per inner draw |
 

@@ -43,9 +43,11 @@
     "feasibility_doc": "analysis/border-loop-head-patch-plan.md",
     "continuation_liveness_proof": {
       "method": "cfg_forward_use_all_successor_paths",
-      "disassembly_artifact": "analysis/evidence/drawborders-inner-walk-disasm.txt",
+      "disassembly_artifact": "analysis/evidence/drawborders-drawborders-fn-disasm.txt",
+      "cfg_evidence_complete_function": true,
+      "terminal_successors": ["0x1010cbc7f", "0x1010cc3eb"],
       "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-      "proof_complete": false,
+      "proof_complete": true,
       "ymm_avx_in_inner_walk": "none_observed",
       "interior_hook": {
         "rcx": "SYNTHESIZED_FIRST_UNCONSUMED",
@@ -60,10 +62,13 @@
         "rdx": "DEAD_BEFORE_READ",
         "r8_r11": "DEAD_BEFORE_READ",
         "xmm0_15": "DEAD_BEFORE_READ",
+        "rbp": "PRESERVE_FRAME_POINTER",
+        "r13": "PRESERVE_FULL",
         "r12": "PRESERVE_HOOK_VALUE",
         "r14": "REDEFINE_AT_0x1010cbe67",
         "r15": "REDEFINE_AT_0x1010cc27d",
-        "rbx": "REDEFINE_MODE0_STRIDE"
+        "rbx": "REDEFINE_MODE0_STRIDE",
+        "eligible_path": "non_special_outer_batch_je_0x1010cc26b_at_0x1010cc1d5"
       },
       "interior_skip": {
         "rcx": "DEFINE_FROM_STACK_-0x70",
@@ -75,7 +80,10 @@
         "ebx": "SYNTHESIZE_FROM_STACK_-0xe4_BEFORE_0x1010cc3e0",
         "rax": "DEAD_BEFORE_READ",
         "rcx": "DEAD_BEFORE_READ",
-        "stack_-0x70": "DEAD_ON_SUCCESSOR_SPAN_TO_0x1010cc3fb",
+        "rbp": "PRESERVE_FRAME_POINTER",
+        "r13": "PRESERVE_FULL",
+        "stack_-0x70": "DEAD_TRAMPOLINE_OBLIGATION_BOTH_SUCCESSORS",
+        "stack_-0x70_fallback_if_needed": "movq_minus_0x198_sub_2_to_minus_0x70",
         "xmm0_15": "DEAD_BEFORE_READ",
         "rflags": "DEAD_BEFORE_INCL"
       }

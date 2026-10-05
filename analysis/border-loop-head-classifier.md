@@ -35,6 +35,7 @@ Boundary at step k **does not** invalidate prefix `0..k-1`.
 |-------|-----------|
 | `deferred_attrib_upload_pending` | `+0x128` on deferred context inner object |
 | `secondary_upload_pending` | `+0x170` on same object (GfxDrawIndexed secondary upload) |
+| `outer_batch_index` | `uint32(memory32[-0xe4(%rbp)])`; `special_precolor_outer_batch` when mask `0xB0` bit set and index ≤ 7 (bits **4, 5, 7**) |
 
 ## Record `+0x04`
 

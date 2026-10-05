@@ -19,6 +19,10 @@
     "triangle_count_zero": "boundary_OTHER_SIDE_EFFECT",
     "deferred_attrib_upload_pending": "fall_through_at_hook",
     "secondary_upload_pending": "fall_through_at_hook",
+    "special_precolor_outer_batch": "OTHER_SIDE_EFFECT_when_0xb0_mask_bit_set",
+    "special_precolor_outer_batch_mask": "0xB0_bits_4_5_7",
+    "special_precolor_outer_batch_disasm": "0x1010cbe6c_cmpl_7_ja_0x1010cc1cf;0x1010cbe79_btl_0xb0_jae_0x1010cc1cf",
+    "outer_batch_index_hook_source": "uint32_memory32_at_minus_0xe4_rbp",
     "scan_cap": "not_barrier_telemetry"
   },
   "telemetry_phase_a": [
