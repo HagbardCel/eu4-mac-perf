@@ -50,5 +50,5 @@
     "analysis/tools/border_loop_classifier.py",
     "analysis/tools/border_loop_evidence.py"
   ],
-  "note": "Outer-batch {4,5,7} hook gate + full DrawBorders CFG (terminal 0x1010cbc7f/0x1010cc3eb). Criterion 6 PASS. Runtime gates pending."
+  "note": "Criterion 6: full terminal callee-saved + stack-local table (gate3b + hook-site). Runtime gates pending."
 }

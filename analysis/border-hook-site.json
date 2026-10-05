@@ -77,15 +77,32 @@
         "xmm0_15": "DEAD_BEFORE_READ"
       },
       "terminal": {
-        "ebx": "SYNTHESIZE_FROM_STACK_-0xe4_BEFORE_0x1010cc3e0",
-        "rax": "DEAD_BEFORE_READ",
-        "rcx": "DEAD_BEFORE_READ",
-        "rbp": "PRESERVE_FRAME_POINTER",
-        "r13": "PRESERVE_FULL",
-        "stack_-0x70": "DEAD_TRAMPOLINE_OBLIGATION_BOTH_SUCCESSORS",
-        "stack_-0x70_fallback_if_needed": "movq_minus_0x198_sub_2_to_minus_0x70",
-        "xmm0_15": "DEAD_BEFORE_READ",
-        "rflags": "DEAD_BEFORE_INCL"
+        "caller_saved": {
+          "rax": "DEAD_BEFORE_READ_BOTH_SUCCESSORS",
+          "rcx": "DEAD_BEFORE_READ_BOTH_SUCCESSORS",
+          "rdi": "DEAD_UNTIL_DEFINE_SUCCESSOR",
+          "rsi": "DEAD_UNTIL_DEFINE_SUCCESSOR",
+          "xmm0_15": "DEAD_BEFORE_INCL",
+          "rflags": "DEAD_BEFORE_INCL"
+        },
+        "callee_saved": {
+          "rbp": "PRESERVE_FRAME_POINTER",
+          "rbx_stride": "PRESERVE_CALLEE_SAVED_UNTIL_0x1010cc285",
+          "r12": "PRESERVE_HOOK_VALUE_LIVE_0x8_r12_at_0x1010cbca5_and_0x1010cc3eb",
+          "r13": "PRESERVE_FULL",
+          "r14": "DEAD_REDEFINE_0x1010cbcc4_TAKEN",
+          "r15": "DEAD_REDEFINE_0x1010cbc8b_TAKEN",
+          "ebx_outer": "SYNTHESIZE_FROM_STACK_-0xe4_BEFORE_0x1010cc3e0"
+        },
+        "stack_locals": {
+          "stack_-0x70": "DEAD_REDEFINE_0x1010cbca1_BEFORE_READ",
+          "stack_-0x198": "DEAD_REDEFINE_0x1010cbe40_BEFORE_TAIL_CMP",
+          "stack_-0xe4": "LIVE_SYNTHESIS_SOURCE_FOR_EBX",
+          "stack_-0x51": "PRESERVED_EQUIVALENT_HOMOGENEOUS_COLOR",
+          "stack_-0x64": "PRESERVED_EQUIVALENT_HOMOGENEOUS_VBO_PERSISTS_OUTER",
+          "stack_-0x80": "DEAD_REDEFINE_0x1010cbe6f_BEFORE_MODE0_USE"
+        },
+        "stack_-0x70_fallback_if_needed": "movq_minus_0x198_sub_2_to_minus_0x70"
       }
     }
   },

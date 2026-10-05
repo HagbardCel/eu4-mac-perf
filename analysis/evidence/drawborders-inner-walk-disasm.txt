@@ -1,2 +1,3 @@
-# Superseded by drawborders-drawborders-fn-disasm.txt (full DrawBorders 0x1010cbb00..0x1010cc456).
-# Regenerate: ./analysis/tools/border_draw_inner_disasm.sh
+# SUPERSEDED — do not use for criterion 6.
+# Authoritative artifact: drawborders-drawborders-fn-disasm.txt
+# Regenerate: EU4_PATH=... ./analysis/tools/border_draw_inner_disasm.sh

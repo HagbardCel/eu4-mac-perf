@@ -103,17 +103,42 @@ GfxDrawIndexed @ `0x1010cc2e8`: `%rdi`,`%rsi`,`%edx`,`%ecx` are **call arguments
 
 ## Terminal (`0x1010cc3e0` and successors)
 
-Trampoline supplies `%ebx` from `-0xe4` before `incl`.
+Trampoline supplies **outer** `%ebx` from `-0xe4(%rbp)` before `incl` @ `0x1010cc3e0`. Audit spans `0x1010cc3e0` through both successors of `jne` @ `0x1010cc3e5` until the next relevant read/redefine on each path ([drawborders-drawborders-fn-disasm.txt](evidence/drawborders-drawborders-fn-disasm.txt)).
+
+### Caller-saved (terminal span)
 
 | State | Status | Evidence |
 |-------|--------|----------|
-| `%ebx` | LIVE — **synthesize** from `-0xe4(%rbp)` | `incl %ebx` @ `0x1010cc3e0` |
-| `%rax`,`%rcx` | DEAD | no read before profile tail or outer-loop re-entry defs |
-| `%rdi`,`%rsi` | DEAD until define @ `0x1010cc3f7`/`0x1010cc3eb` | profile tail only on `0x1010cc3eb` |
-| `-0x70(%rbp)` | DEAD for trampoline obligation | see terminal successor table |
-| `%rbp` | PRESERVE_FRAME_POINTER | |
-| `%r13` | PRESERVE_FULL through `0x1010cc3e5` branches | no read on terminal span before outer-loop redefine |
-| XMM / RFLAGS | DEAD before `incl` | `cmp`/`jne` at `0x1010cc3e2`–`0x1010cc3e5` |
+| `%eax` / `%rax` | DEAD | redefined on taken path @ `0x1010cbc7f`; defined before use on exit @ `0x1010cc3eb` |
+| `%ecx` / `%rcx` | DEAD | same |
+| `%edi` / `%rdi`, `%esi` / `%rsi` | DEAD until define | exit: `0x1010cc3eb` / `0x1010cc3f7`; taken: outer-loop defs before calls |
+| XMM0–15 | DEAD before `incl` | no XMM read on `0x1010cc3e0`…`0x1010cc3e5` |
+| RFLAGS | DEAD before `incl` | `cmp`/`jne` @ `0x1010cc3e2`–`0x1010cc3e5`; no flag consumer before `incl` |
+
+### Callee-saved (both terminal successors)
+
+| State | Taken `0x1010cbc7f` | Not taken `0x1010cc3eb` |
+|-------|---------------------|-------------------------|
+| `%rbp` | PRESERVE_FRAME_POINTER | PRESERVE_FRAME_POINTER |
+| `%r12` | LIVE — **PRESERVE_HOOK_VALUE**; first read `movq 0x8(%r12),%rdi` @ `0x1010cbca5` | LIVE — **PRESERVE_HOOK_VALUE**; first read `movq 0x8(%r12),%rax` @ `0x1010cc3eb` |
+| `%r13` | PRESERVE_FULL into later inner walk / next hook | PRESERVE_FULL through profile tail (callees preserve) |
+| `%r14` | DEAD — redefine `movq %rax,%r14` @ `0x1010cbcc4` before use | DEAD — not read before function epilogue / outer exit |
+| `%r15` | DEAD — redefine `movslq (%rcx,%rax,4),%r15` @ `0x1010cbc8b` before mode-0 use | DEAD — not read on exit span before redefine on other paths |
+| `%rbx` (stride) | PRESERVE_CALLEE_SAVED until redefine @ `0x1010cc285` on next eligible inner draw (no read on `0x1010cc3e0`…`0x1010cbe54`) | PRESERVE_CALLEE_SAVED through outer-loop exit |
+| `%ebx` (outer index) | LIVE — **synthesize** `-0xe4` then `incl` @ `0x1010cc3e0`; used @ `0x1010cbc7f` | same synthesis before `cmp` @ `0x1010cc3e2` |
+
+Batch + trampoline must preserve callee-saved registers per SysV; inserted GL helpers are call sites that preserve `%rbp`, `%rbx`, `%r12`–`%r15`.
+
+### Stack locals (terminal accounting)
+
+| Slot | Status | Evidence |
+|------|--------|----------|
+| `-0x70(%rbp)` | DEAD (no trampoline write) | taken: redefine `movq %rax,-0x70` @ `0x1010cbca1` before read @ `0x1010cbe38`; exit: never read |
+| `-0x198(%rbp)` | DEAD after terminal | taken: redefine `movq %rax,-0x198` @ `0x1010cbe40` before tail `cmp` @ `0x1010cc3cd`; exit: not read |
+| `-0xe4(%rbp)` | LIVE — synthesis source for `%ebx` | read for trampoline `movl -0xe4,%ebx`; next inner walk overwrites @ `0x1010cbe4f` |
+| `-0x51(%rbp)` | PRESERVED / equivalent | homogeneous eligible batch: color unchanged vs original per-record path; next inner walk resets `movb $-1,-0x51` @ `0x1010cbe4b` |
+| `-0x64(%rbp)` | PRESERVED / equivalent | homogeneous eligible batch: matching VBO ⇒ original also leaves cache unchanged; **persists across outer batches** (not reset @ `0x1010cbc7f`) |
+| `-0x80(%rbp)` | DEAD after terminal | next inner walk writes `movq %rcx,-0x80` @ `0x1010cbe6f` before mode-0 read @ `0x1010cc27d` |
 
 ## glMultiDrawElements (mutation)
 
