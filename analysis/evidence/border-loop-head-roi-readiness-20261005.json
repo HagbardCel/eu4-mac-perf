@@ -1,7 +1,7 @@
 {
   "evidence_kind": "roi_instrumentation_readiness",
   "evidence_id": "border-loop-head-roi-readiness-20261005",
-  "counter_schema_version": 4,
+  "counter_schema_version": 5,
   "semantic_policy": "proven_v1_semantics_unbounded_walk_scan",
   "implementable_policy": "v1_with_scan_cap",
   "observer_timing_usable": false,
@@ -14,8 +14,8 @@
   "classifier_counter_instrumentation_ready": true,
   "live_loop_head_telemetry_observed": false,
   "mutation_authorized": false,
-  "runtime_gate_0": "PENDING",
-  "runtime_detour_installation": "PENDING",
+  "runtime_gate_0": "READY_OFFLINE",
+  "runtime_detour_installation": "READY_OFFLINE",
   "structural_reference_per_frame": 1562,
   "structural_reference_source": "historical_intrusive_draw_trace_not_validator",
   "ready_for_single_venice_observer_run": true,
@@ -26,7 +26,10 @@
     "counter_schema": "PASS",
     "dual_suppression_replay": "PASS",
     "border_detour_harness": "PASS",
-    "observation_epoch_gating": "PASS"
+    "observation_epoch_gating": "PASS",
+    "decode_failures": "PASS",
+    "thread_affinity": "PASS",
+    "freeze_state_capture": "PASS"
   },
-  "note": "Instrumentation READY_OFFLINE; numeric ROI awaits single observer-only Venice run."
+  "note": "Live loop-head decode/classify path wired; Venice numerics remain null until manual observer run."
 }

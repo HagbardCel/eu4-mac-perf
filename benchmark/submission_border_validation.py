@@ -72,8 +72,8 @@ def border_gate0_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
 def border_roi_engagement_validation(snapshot: dict[str, Any]) -> dict[str, Any]:
     """Observer-only Venice ROI ladder (no GL mutation)."""
     loop_head = int(snapshot.get("border_loop_head_entries", 0))
-    semantic = int(snapshot.get("border_semantic_decisions", 0))
-    implementable = int(snapshot.get("border_implementable_decisions", 0))
+    semantic = int(snapshot.get("border_semantic_evaluations", 0))
+    implementable = int(snapshot.get("border_implementable_evaluations", 0))
     swaps = int(snapshot.get("candidate_swaps", 0))
     multidraw = int(snapshot.get("border_multidraw_calls", 0))
     eliminated = int(snapshot.get("border_draw_calls_eliminated", 0))
@@ -89,8 +89,8 @@ def border_roi_engagement_validation(snapshot: dict[str, Any]) -> dict[str, Any]
     return {
         "status": "passed" if ok else "failed",
         "border_loop_head_entries": loop_head,
-        "border_semantic_decisions": semantic,
-        "border_implementable_decisions": implementable,
+        "border_semantic_evaluations": semantic,
+        "border_implementable_evaluations": implementable,
         "candidate_swaps": swaps,
         "border_multidraw_calls": multidraw,
         "border_draw_calls_eliminated": eliminated,

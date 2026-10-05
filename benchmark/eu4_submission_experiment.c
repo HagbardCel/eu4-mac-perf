@@ -14,6 +14,7 @@
 #include "submission_counter_schema.h"
 #if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
 #include "eu4_submission_border.h"
+#include "eu4_submission_border_loop_head.h"
 void eu4_submission_observation_arm_reset(void);
 #else
 #include "eu4_submission_observation.h"
@@ -199,6 +200,11 @@ static void handle_observation_command(uint32_t *words) {
         words[14] = obs_gen;
         words[15] = OBS_ACK_ARMED;
     } else if (obs_req == OBS_FREEZE) {
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+        if (observation_bank_writable(words)) {
+            eu4_border_loop_head_capture_freeze_state();
+        }
+#endif
         observation_frozen = true;
         words[14] = obs_gen;
         words[15] = OBS_ACK_FROZEN;

@@ -43,6 +43,16 @@ class BorderLoopHeadDetourTests(unittest.TestCase):
         text = (BENCH / "eu4_submission_border_loop_head_gateway.S").read_text()
         self.assertIn("pushq %r11", text)
         self.assertIn("popq %r11", text)
+        self.assertIn("jne", text)
+        self.assertIn("_border_loop_skip_target", text)
+        self.assertIn("_border_loop_draw_target", text)
+        self.assertIn("fxsave64", text)
+
+    def test_install_uses_ff25_rip_indirect_jmp(self) -> None:
+        text = (BENCH / "eu4_submission_border_loop_head_install.c").read_text()
+        self.assertIn("p[0] = 0xff", text)
+        self.assertIn("p[1] = 0x25", text)
+        self.assertNotIn("trampoline_ptr", text)
 
 
 if __name__ == "__main__":

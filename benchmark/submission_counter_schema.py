@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-COUNTER_SCHEMA_VERSION = 4
-COUNTER_COUNT = 43
+COUNTER_SCHEMA_VERSION = 5
+COUNTER_COUNT = 71
 SUPPORTED_HYPOTHESIS_MASK_DEFAULT = 0xb
 SAFETY_HYPOTHESIS_MASK_DEFAULT = 0x0
 
@@ -51,6 +51,34 @@ COUNTER_SLOTS = {
     "border_structural_eliminations": 40,
     "border_structural_walks": 41,
     "border_roi_nonzero_suppression_at_frame_boundary": 42,
+    "border_semantic_evaluations": 43,
+    "border_implementable_evaluations": 44,
+    "border_semantic_run_len_2": 45,
+    "border_semantic_run_len_3_4": 46,
+    "border_semantic_run_len_5_8": 47,
+    "border_semantic_run_len_9_16": 48,
+    "border_semantic_run_len_17_32": 49,
+    "border_semantic_run_len_33_64": 50,
+    "border_semantic_run_len_65_128": 51,
+    "border_semantic_run_len_129_plus": 52,
+    "border_implementable_run_len_2": 53,
+    "border_implementable_run_len_3_4": 54,
+    "border_implementable_run_len_5_8": 55,
+    "border_implementable_run_len_9_16": 56,
+    "border_implementable_run_len_17_32": 57,
+    "border_implementable_run_len_33_64": 58,
+    "border_implementable_run_len_65_128": 59,
+    "border_implementable_run_len_129_plus": 60,
+    "border_loop_decode_failures": 61,
+    "border_loop_geometry_failures": 62,
+    "border_loop_resolution_failures": 63,
+    "border_roi_epoch_invalid": 64,
+    "border_thread_checks": 65,
+    "border_thread_mismatch_count": 66,
+    "border_roi_freeze_partial_walk": 67,
+    "border_roi_freeze_semantic_suppress": 68,
+    "border_roi_freeze_implementable_suppress": 69,
+    "border_roi_partial_walk_at_frame_boundary": 70,
 }
 
 HYPOTHESES = [
@@ -65,4 +93,4 @@ HYPOTHESES = [
 
 HEALTH_COUNTER_NAMES = ('control_ticks', 'renderbuckets_invocations', 'site_entries', 'effective_actions')
 CANDIDATE_COUNTER_NAMES = ('candidate_site_entries', 'candidate_renderbuckets_invocations', 'candidate_nonempty_renderbuckets', 'adjacent_within_invocation', 'same_parent_pairs', 'cross_parent_pairs', 'same_parent_buffer_signature', 'cross_parent_buffer_signature', 'cross_parent_buffer_elision_eligible', 'same_subrecord_pointer_cross_parent', 'same_texture_input_signature', 'texture_setup_elision_eligible', 'legacy_eligible_pair_hits', 'candidate_swaps')
-ARMED_COUNTER_NAMES = ('candidate_site_entries', 'candidate_renderbuckets_invocations', 'candidate_nonempty_renderbuckets', 'adjacent_within_invocation', 'same_parent_pairs', 'cross_parent_pairs', 'same_parent_buffer_signature', 'cross_parent_buffer_signature', 'cross_parent_buffer_elision_eligible', 'same_subrecord_pointer_cross_parent', 'same_texture_input_signature', 'texture_setup_elision_eligible', 'legacy_eligible_pair_hits', 'candidate_swaps', 'border_candidate_runs', 'border_candidate_draws', 'border_draws_covered_by_multidraw', 'border_multidraw_calls', 'border_draw_calls_eliminated', 'border_original_draws_fallback', 'border_batch_size_sum', 'border_batch_size_max', 'border_fallback_site_change', 'border_fallback_batch_full', 'border_fallback_mutate_disabled', 'border_site_0_draws_covered', 'border_site_1_draws_covered', 'border_site_2_draws_covered', 'border_runtime_context_checked', 'border_runtime_context_multidraw_supported', 'border_loop_head_entries', 'border_semantic_decisions', 'border_semantic_eliminations', 'border_implementable_decisions', 'border_implementable_eliminations', 'border_structural_draws', 'border_structural_eliminations', 'border_structural_walks', 'border_roi_nonzero_suppression_at_frame_boundary')
+ARMED_COUNTER_NAMES = ('candidate_site_entries', 'candidate_renderbuckets_invocations', 'candidate_nonempty_renderbuckets', 'adjacent_within_invocation', 'same_parent_pairs', 'cross_parent_pairs', 'same_parent_buffer_signature', 'cross_parent_buffer_signature', 'cross_parent_buffer_elision_eligible', 'same_subrecord_pointer_cross_parent', 'same_texture_input_signature', 'texture_setup_elision_eligible', 'legacy_eligible_pair_hits', 'candidate_swaps', 'border_candidate_runs', 'border_candidate_draws', 'border_draws_covered_by_multidraw', 'border_multidraw_calls', 'border_draw_calls_eliminated', 'border_original_draws_fallback', 'border_batch_size_sum', 'border_batch_size_max', 'border_fallback_site_change', 'border_fallback_batch_full', 'border_fallback_mutate_disabled', 'border_site_0_draws_covered', 'border_site_1_draws_covered', 'border_site_2_draws_covered', 'border_runtime_context_checked', 'border_runtime_context_multidraw_supported', 'border_loop_head_entries', 'border_semantic_decisions', 'border_semantic_eliminations', 'border_implementable_decisions', 'border_implementable_eliminations', 'border_structural_draws', 'border_structural_eliminations', 'border_structural_walks', 'border_roi_nonzero_suppression_at_frame_boundary', 'border_semantic_evaluations', 'border_implementable_evaluations', 'border_semantic_run_len_2', 'border_semantic_run_len_3_4', 'border_semantic_run_len_5_8', 'border_semantic_run_len_9_16', 'border_semantic_run_len_17_32', 'border_semantic_run_len_33_64', 'border_semantic_run_len_65_128', 'border_semantic_run_len_129_plus', 'border_implementable_run_len_2', 'border_implementable_run_len_3_4', 'border_implementable_run_len_5_8', 'border_implementable_run_len_9_16', 'border_implementable_run_len_17_32', 'border_implementable_run_len_33_64', 'border_implementable_run_len_65_128', 'border_implementable_run_len_129_plus', 'border_loop_decode_failures', 'border_loop_geometry_failures', 'border_loop_resolution_failures', 'border_roi_epoch_invalid', 'border_thread_checks', 'border_thread_mismatch_count', 'border_roi_freeze_partial_walk', 'border_roi_freeze_semantic_suppress', 'border_roi_freeze_implementable_suppress', 'border_roi_partial_walk_at_frame_boundary')

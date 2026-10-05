@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "hypotheses": [
     {
       "bit": 0,
@@ -87,7 +87,35 @@
     {"slot": 39, "name": "border_structural_draws", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
     {"slot": 40, "name": "border_structural_eliminations", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
     {"slot": 41, "name": "border_structural_walks", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
-    {"slot": 42, "name": "border_roi_nonzero_suppression_at_frame_boundary", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "diagnostic: expect 0 at flush when walk boundaries align"}
+    {"slot": 42, "name": "border_roi_nonzero_suppression_at_frame_boundary", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "diagnostic: cumulative mid-frame nonzero suppression at flush"},
+    {"slot": 43, "name": "border_semantic_evaluations", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 44, "name": "border_implementable_evaluations", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 45, "name": "border_semantic_run_len_2", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 46, "name": "border_semantic_run_len_3_4", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 47, "name": "border_semantic_run_len_5_8", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 48, "name": "border_semantic_run_len_9_16", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 49, "name": "border_semantic_run_len_17_32", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 50, "name": "border_semantic_run_len_33_64", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 51, "name": "border_semantic_run_len_65_128", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 52, "name": "border_semantic_run_len_129_plus", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 53, "name": "border_implementable_run_len_2", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 54, "name": "border_implementable_run_len_3_4", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 55, "name": "border_implementable_run_len_5_8", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 56, "name": "border_implementable_run_len_9_16", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 57, "name": "border_implementable_run_len_17_32", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 58, "name": "border_implementable_run_len_33_64", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 59, "name": "border_implementable_run_len_65_128", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 60, "name": "border_implementable_run_len_129_plus", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 61, "name": "border_loop_decode_failures", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 62, "name": "border_loop_geometry_failures", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 63, "name": "border_loop_resolution_failures", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 64, "name": "border_roi_epoch_invalid", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "set when decode/thread invalidates ROI epoch (FREEZE snapshot uses with other freeze slots)"},
+    {"slot": 65, "name": "border_thread_checks", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 66, "name": "border_thread_mismatch_count", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 67, "name": "border_roi_freeze_partial_walk", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "TLS structural_draws_current_walk at OBS_FREEZE"},
+    {"slot": 68, "name": "border_roi_freeze_semantic_suppress", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 69, "name": "border_roi_freeze_implementable_suppress", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 70, "name": "border_roi_partial_walk_at_frame_boundary", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "diagnostic: cumulative partial structural walk at frame flush"}
   ],
   "v2_compat": {
     "eligible_pair_hits_slot": 16,

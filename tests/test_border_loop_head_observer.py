@@ -30,6 +30,7 @@ class BorderLoopHeadObserverTests(unittest.TestCase):
             "-o",
             str(out),
             str(BENCH / "border_loop_classifier.c"),
+            str(BENCH / "eu4_border_loop_head_decode.c"),
             str(BENCH / "eu4_submission_border_loop_head.c"),
             str(TESTS / "border_loop_head_observer_test.c"),
         ]

@@ -12,8 +12,8 @@ class BorderRoiEngagementTests(unittest.TestCase):
     def test_passes_observer_ladder(self) -> None:
         snap = {
             "border_loop_head_entries": 10,
-            "border_semantic_decisions": 2,
-            "border_implementable_decisions": 2,
+            "border_semantic_evaluations": 2,
+            "border_implementable_evaluations": 2,
             "candidate_swaps": 5,
             "border_multidraw_calls": 0,
             "border_draw_calls_eliminated": 0,
@@ -24,8 +24,8 @@ class BorderRoiEngagementTests(unittest.TestCase):
     def test_fails_on_mutation(self) -> None:
         snap = {
             "border_loop_head_entries": 10,
-            "border_semantic_decisions": 2,
-            "border_implementable_decisions": 2,
+            "border_semantic_evaluations": 2,
+            "border_implementable_evaluations": 2,
             "candidate_swaps": 5,
             "border_multidraw_calls": 1,
             "border_draw_calls_eliminated": 0,

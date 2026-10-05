@@ -12,18 +12,11 @@ enum {
 };
 
 typedef struct {
-    eu4_border_index_entry_t entry;
-    eu4_border_record_view_t record;
-    uint32_t required_ibo_identity;
-    uint32_t required_ibo_argument;
-} resolved_iteration_t;
-
-typedef struct {
     uint32_t mode;
     uint32_t color_state;
     uint32_t vbo_table_index;
-    uint32_t ibo_identity;
-    uint32_t ibo_argument;
+    uintptr_t ibo_identity;
+    uintptr_t ibo_argument;
 } batch_key_t;
 
 typedef enum { TS_UNKNOWN = 0, TS_MATCH = 1, TS_MISMATCH = 2 } tristate_t;
@@ -43,36 +36,15 @@ static bool entry_match_any_unknown(const entry_match_t *m) {
 }
 
 bool eu4_border_special_precolor_outer_batch(uint32_t outer_batch_index) {
-    if (outer_batch_index > 0xFFFFFFFFu) {
-        return true;
-    }
     const uint32_t idx = outer_batch_index & 0xFFFFFFFFu;
     return idx <= 7u && ((0xB0u >> idx) & 1u) != 0u;
 }
 
-static bool resolve_drawable(
-    const eu4_border_index_entry_t *entry,
-    const eu4_border_record_view_t *record_table,
-    const uint32_t *ibo_table,
-    uint32_t record_count,
-    resolved_iteration_t *out) {
-    const int32_t idx = entry->record_index;
-    if (idx < 0 || (uint32_t)idx >= record_count) {
-        return false;
-    }
-    const uint32_t arg = ibo_table[idx];
-    out->entry = *entry;
-    out->record = record_table[idx];
-    out->required_ibo_identity = arg;
-    out->required_ibo_argument = arg;
-    return true;
+static bool step_visible(const eu4_border_loop_context_t *ctx, const eu4_border_resolved_step_t *step) {
+    return (ctx->skip_or_visibility_mask & step->visibility_byte) != 0u;
 }
 
-static bool is_drawable(const eu4_border_loop_context_t *ctx, const eu4_border_index_entry_t *entry) {
-    return (ctx->skip_or_visibility_mask & entry->visibility_byte) != 0u;
-}
-
-static bool null_ibo_argument(uint32_t arg) {
+static bool null_ibo(uintptr_t arg) {
     return arg == 0u;
 }
 
@@ -91,28 +63,28 @@ static entry_match_t entry_matches_key(
     m.color = cmp_field(ctx->color_known, ctx->cached_color, key->color_state);
     m.vbo = cmp_field(ctx->vbo_known, ctx->cached_vbo_index, key->vbo_table_index);
     if (topology == EU4_BORDER_IBO_ONE_BIND) {
-        m.ibo = null_ibo_argument(key->ibo_argument) ? TS_MISMATCH : TS_MATCH;
+        m.ibo = null_ibo(key->ibo_argument) ? TS_MISMATCH : TS_MATCH;
     } else {
-        m.ibo = cmp_field(ctx->ibo_known, ctx->bound_ibo_identity, key->ibo_identity);
+        m.ibo = cmp_field(ctx->ibo_known, (uint32_t)ctx->bound_ibo_identity, (uint32_t)key->ibo_identity);
     }
     return m;
 }
 
-static uint32_t homogeneity_mask(const resolved_iteration_t *resolved, const batch_key_t *key) {
+static uint32_t homogeneity_mask_step(const eu4_border_resolved_step_t *step, const batch_key_t *key) {
     uint32_t boundary = 0;
-    if (resolved->entry.color_byte != key->color_state) {
+    if (step->color_byte != key->color_state) {
         boundary |= BARRIER_COLOR;
     }
-    if (resolved->record.vbo_table_index != key->vbo_table_index) {
+    if (step->vbo_table_index != key->vbo_table_index) {
         boundary |= BARRIER_VBO;
     }
-    if (resolved->required_ibo_identity != key->ibo_identity) {
+    if (step->ibo_identity != key->ibo_identity) {
         boundary |= BARRIER_IBO;
     }
-    if (null_ibo_argument(resolved->required_ibo_argument)) {
+    if (null_ibo(step->ibo_argument)) {
         boundary |= BARRIER_OTHER;
     }
-    if (resolved->record.triangle_count == 0u) {
+    if (step->triangle_count == 0u) {
         boundary |= BARRIER_OTHER;
     }
     return boundary;
@@ -137,13 +109,10 @@ static void fill_result(
     out->termination_kind = kind;
 }
 
-void eu4_border_classify_batchable_prefix(
+void eu4_border_classify_resolved_prefix(
     const eu4_border_loop_context_t *ctx,
-    const eu4_border_record_view_t *record_table,
-    const uint32_t *ibo_table,
-    uint32_t record_count,
-    const eu4_border_index_entry_t *side_entries,
-    uint32_t side_count,
+    const eu4_border_resolved_step_t *steps,
+    uint32_t step_count,
     eu4_border_ibo_topology_t ibo_topology,
     uint32_t max_scan_steps,
     bool unbounded_scan,
@@ -154,7 +123,6 @@ void eu4_border_classify_batchable_prefix(
         return;
     }
     memset(out, 0, sizeof(*out));
-
     if (ctx->deferred_attrib_upload_pending || ctx->secondary_upload_pending) {
         fill_result(out, 0, BARRIER_OTHER, 0, &empty, EU4_BORDER_TERM_BARRIER);
         return;
@@ -163,72 +131,63 @@ void eu4_border_classify_batchable_prefix(
         fill_result(out, 0, BARRIER_OTHER, 0, &empty, EU4_BORDER_TERM_BARRIER);
         return;
     }
-    if (side_count == 0) {
-        const eu4_border_termination_kind_t kind =
-            walk_exhausted ? EU4_BORDER_TERM_WALK_END : EU4_BORDER_TERM_SCAN_CAP;
-        fill_result(out, 0, 0, 0, &empty, kind);
+    if (step_count == 0) {
+        fill_result(out, 0, 0, 0, &empty, walk_exhausted ? EU4_BORDER_TERM_WALK_END : EU4_BORDER_TERM_SCAN_CAP);
         return;
     }
     if (ctx->mode != 0u) {
         fill_result(out, 0, BARRIER_UNSUPPORTED_MODE, BARRIER_UNSUPPORTED_MODE, &empty, EU4_BORDER_TERM_BARRIER);
         return;
     }
-
-    const eu4_border_index_entry_t *first = &side_entries[0];
-    if (!is_drawable(ctx, first)) {
+    const eu4_border_resolved_step_t *first = &steps[0];
+    if (!step_visible(ctx, first)) {
         fill_result(out, 0, BARRIER_SKIP, BARRIER_SKIP, &empty, EU4_BORDER_TERM_BARRIER);
         return;
     }
-
-    resolved_iteration_t resolved0;
-    if (!resolve_drawable(first, record_table, ibo_table, record_count, &resolved0)) {
+    if (!first->resolved_valid) {
         fill_result(out, 0, BARRIER_OTHER, BARRIER_OTHER, &empty, EU4_BORDER_TERM_INVALID);
         return;
     }
-
     batch_key_t key = {
         ctx->mode,
         first->color_byte,
-        resolved0.record.vbo_table_index,
-        resolved0.required_ibo_identity,
-        resolved0.required_ibo_argument,
+        first->vbo_table_index,
+        first->ibo_identity,
+        first->ibo_argument,
     };
     entry_match_t entry_match = entry_matches_key(ctx, &key, ibo_topology);
     if (entry_match_any_unknown(&entry_match) || !entry_match_all(&entry_match)) {
         fill_result(out, 0, BARRIER_OTHER, 0, &entry_match, EU4_BORDER_TERM_BARRIER);
         return;
     }
-    if (homogeneity_mask(&resolved0, &key) != 0u) {
+    if (homogeneity_mask_step(first, &key) != 0u) {
         fill_result(out, 0, BARRIER_OTHER, BARRIER_OTHER, &entry_match, EU4_BORDER_TERM_BARRIER);
         return;
     }
-
     uint32_t run_len = 0;
     uint32_t boundary = 0;
     eu4_border_termination_kind_t termination = EU4_BORDER_TERM_WALK_END;
     bool loop_broken = false;
-
-    for (uint32_t i = 0; i < side_count; i++) {
+    for (uint32_t i = 0; i < step_count; i++) {
         if (!unbounded_scan && run_len >= max_scan_steps) {
             termination = EU4_BORDER_TERM_SCAN_CAP;
             loop_broken = true;
             break;
         }
-        const eu4_border_index_entry_t *ent = &side_entries[i];
-        if (!is_drawable(ctx, ent)) {
+        const eu4_border_resolved_step_t *step = &steps[i];
+        if (!step_visible(ctx, step)) {
             boundary = BARRIER_SKIP;
             termination = EU4_BORDER_TERM_BARRIER;
             loop_broken = true;
             break;
         }
-        resolved_iteration_t resolved;
-        if (!resolve_drawable(ent, record_table, ibo_table, record_count, &resolved)) {
+        if (!step->resolved_valid) {
             boundary = BARRIER_OTHER;
             termination = EU4_BORDER_TERM_INVALID;
             loop_broken = true;
             break;
         }
-        const uint32_t mask = homogeneity_mask(&resolved, &key);
+        const uint32_t mask = homogeneity_mask_step(step, &key);
         if (mask != 0u) {
             boundary = mask;
             termination = EU4_BORDER_TERM_BARRIER;
@@ -241,4 +200,51 @@ void eu4_border_classify_batchable_prefix(
         termination = walk_exhausted ? EU4_BORDER_TERM_WALK_END : EU4_BORDER_TERM_SCAN_CAP;
     }
     fill_result(out, run_len, boundary, boundary, &entry_match, termination);
+}
+
+void eu4_border_classify_batchable_prefix(
+    const eu4_border_loop_context_t *ctx,
+    const eu4_border_record_view_t *record_table,
+    const uintptr_t *ibo_table,
+    uint32_t record_count,
+    const eu4_border_index_entry_t *side_entries,
+    uint32_t side_count,
+    eu4_border_ibo_topology_t ibo_topology,
+    uint32_t max_scan_steps,
+    bool unbounded_scan,
+    bool walk_exhausted,
+    eu4_border_prefix_result_t *out) {
+    if (!ctx || !out || !side_entries) {
+        return;
+    }
+    eu4_border_resolved_step_t steps[EU4_BORDER_MAX_RESOLVE_STEPS];
+    if (side_count > EU4_BORDER_MAX_RESOLVE_STEPS) {
+        entry_match_t empty = {TS_UNKNOWN, TS_UNKNOWN, TS_UNKNOWN};
+        fill_result(out, 0, BARRIER_OTHER, BARRIER_OTHER, &empty, EU4_BORDER_TERM_INVALID);
+        return;
+    }
+    for (uint32_t i = 0; i < side_count; i++) {
+        const eu4_border_index_entry_t *ent = &side_entries[i];
+        eu4_border_resolved_step_t *step = &steps[i];
+        step->record_index = (uint16_t)ent->record_index;
+        step->visibility_byte = ent->visibility_byte;
+        step->color_byte = ent->color_byte;
+        step->resolved_valid = false;
+        if ((ctx->skip_or_visibility_mask & ent->visibility_byte) == 0u) {
+            step->resolved_valid = true;
+            continue;
+        }
+        if (ent->record_index < 0 || (uint32_t)ent->record_index >= record_count) {
+            continue;
+        }
+        const eu4_border_record_view_t *rec = &record_table[ent->record_index];
+        const uintptr_t ibo = ibo_table[ent->record_index];
+        step->triangle_count = (uint16_t)rec->triangle_count;
+        step->vbo_table_index = (uint16_t)rec->vbo_table_index;
+        step->ibo_identity = ibo;
+        step->ibo_argument = ibo;
+        step->resolved_valid = true;
+    }
+    eu4_border_classify_resolved_prefix(
+        ctx, steps, side_count, ibo_topology, max_scan_steps, unbounded_scan, walk_exhausted, out);
 }

@@ -41,5 +41,9 @@ def validate_roi_readiness_payload(payload: dict) -> None:
     status = payload.get("roi_instrumentation_status")
     if status not in ("READY_OFFLINE", "PENDING", "FAILED_SELF_TEST"):
         raise AssertionError(f"unexpected roi_instrumentation_status {status!r}")
-    if payload.get("ready_for_single_venice_observer_run") is not True:
-        raise AssertionError("ready_for_single_venice_observer_run must be true when committed READY")
+    if status == "READY_OFFLINE":
+        if payload.get("ready_for_single_venice_observer_run") is not True:
+            raise AssertionError("ready_for_single_venice_observer_run must be true when READY_OFFLINE")
+    elif status == "PENDING":
+        if payload.get("ready_for_single_venice_observer_run") is not False:
+            raise AssertionError("ready_for_single_venice_observer_run must be false while PENDING")

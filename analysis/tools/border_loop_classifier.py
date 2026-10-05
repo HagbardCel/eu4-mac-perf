@@ -106,6 +106,44 @@ class ResolvedIteration:
 
 
 @dataclass
+class ResolvedStep:
+    record_index: int
+    visibility_byte: int
+    color_byte: int
+    resolved_valid: bool
+    triangle_count: int = 0
+    vbo_table_index: int = 0
+    ibo_identity: int = 0
+    ibo_argument: int = 0
+
+
+def build_resolved_steps(
+    ctx: LoopContext,
+    record_table: list[RecordView],
+    ibo_table: list[int],
+    side_entries: list[IndexTableEntry],
+) -> list[ResolvedStep]:
+    steps: list[ResolvedStep] = []
+    for ent in side_entries:
+        step = ResolvedStep(ent.record_index, ent.visibility_byte, ent.color_byte, False)
+        if not _is_drawable(ctx, ent):
+            step.resolved_valid = True
+            steps.append(step)
+            continue
+        resolved = _resolve_drawable(ent, record_table, ibo_table)
+        if resolved is None:
+            steps.append(step)
+            continue
+        step.resolved_valid = True
+        step.triangle_count = resolved.record.triangle_count
+        step.vbo_table_index = resolved.record.vbo_table_index
+        step.ibo_identity = resolved.required_ibo_identity
+        step.ibo_argument = resolved.required_ibo_argument
+        steps.append(step)
+    return steps
+
+
+@dataclass
 class PrefixResult:
     run_length: int
     stop_reason_mask: BarrierMask
@@ -183,11 +221,9 @@ def _homogeneity_mask(resolved: ResolvedIteration, key: BatchKey) -> BarrierMask
     return boundary
 
 
-def classify_batchable_prefix(
+def classify_resolved_prefix(
     ctx: LoopContext,
-    record_table: list[RecordView],
-    ibo_table: list[int],
-    side_entries: list[IndexTableEntry],
+    steps: list[ResolvedStep],
     *,
     ibo_bind_topology: IboBindTopology = "ONE_BIND",
     max_scan_steps: int | None = None,
@@ -221,27 +257,36 @@ def classify_batchable_prefix(
             termination_kind=kind,
         )
 
+    def step_entry(step: ResolvedStep) -> IndexTableEntry:
+        return IndexTableEntry(step.record_index, step.visibility_byte, step.color_byte)
+
+    def step_resolved(step: ResolvedStep) -> ResolvedIteration:
+        ent = step_entry(step)
+        rec = RecordView(0, step.triangle_count, step.vbo_table_index)
+        return ResolvedIteration(ent, rec, step.ibo_identity, step.ibo_argument)
+
     if ctx.deferred_attrib_upload_pending or ctx.secondary_upload_pending:
         return result(0, BarrierMask.OTHER_SIDE_EFFECT, BarrierMask(0), None, EntryStateMatch(), TerminationKind.BARRIER)
 
     if special_precolor_outer_batch(ctx.outer_batch_index):
         return result(0, BarrierMask.OTHER_SIDE_EFFECT, BarrierMask(0), None, EntryStateMatch(), TerminationKind.BARRIER)
 
-    if not side_entries:
+    if not steps:
         kind = TerminationKind.WALK_END if walk_exhausted else TerminationKind.SCAN_CAP
         return result(0, BarrierMask(0), BarrierMask(0), None, EntryStateMatch(), kind)
 
     if ctx.mode != 0:
         return result(0, BarrierMask.UNSUPPORTED_MODE, BarrierMask.UNSUPPORTED_MODE, None, EntryStateMatch(), TerminationKind.BARRIER)
 
-    first = side_entries[0]
-    if not _is_drawable(ctx, first):
+    first = steps[0]
+    first_ent = step_entry(first)
+    if not _is_drawable(ctx, first_ent):
         return result(0, BarrierMask.SKIP, BarrierMask.SKIP, None, EntryStateMatch(), TerminationKind.BARRIER)
 
-    resolved0 = _resolve_drawable(first, record_table, ibo_table)
-    if resolved0 is None:
+    if not first.resolved_valid:
         return result(0, BarrierMask.OTHER_SIDE_EFFECT, BarrierMask.OTHER_SIDE_EFFECT, None, EntryStateMatch(), TerminationKind.INVALID)
 
+    resolved0 = step_resolved(first)
     key = BatchKey(
         mode=ctx.mode,
         color_state=first.color_byte,
@@ -260,22 +305,23 @@ def classify_batchable_prefix(
     boundary = BarrierMask(0)
     termination = TerminationKind.WALK_END
 
-    for ent in side_entries:
+    for step in steps:
         if max_scan_steps is not None and run_len >= max_scan_steps:
             termination = TerminationKind.SCAN_CAP
             break
 
+        ent = step_entry(step)
         if not _is_drawable(ctx, ent):
             boundary = BarrierMask.SKIP
             termination = TerminationKind.BARRIER
             break
 
-        resolved = _resolve_drawable(ent, record_table, ibo_table)
-        if resolved is None:
+        if not step.resolved_valid:
             boundary = BarrierMask.OTHER_SIDE_EFFECT
             termination = TerminationKind.INVALID
             break
 
+        resolved = step_resolved(step)
         mask = _homogeneity_mask(resolved, key)
         if mask:
             boundary = mask
@@ -287,3 +333,23 @@ def classify_batchable_prefix(
         termination = TerminationKind.WALK_END if walk_exhausted else TerminationKind.SCAN_CAP
 
     return result(run_len, boundary, boundary, key, entry_match, termination)
+
+
+def classify_batchable_prefix(
+    ctx: LoopContext,
+    record_table: list[RecordView],
+    ibo_table: list[int],
+    side_entries: list[IndexTableEntry],
+    *,
+    ibo_bind_topology: IboBindTopology = "ONE_BIND",
+    max_scan_steps: int | None = None,
+    walk_exhausted: bool = True,
+) -> PrefixResult:
+    steps = build_resolved_steps(ctx, record_table, ibo_table, side_entries)
+    return classify_resolved_prefix(
+        ctx,
+        steps,
+        ibo_bind_topology=ibo_bind_topology,
+        max_scan_steps=max_scan_steps,
+        walk_exhausted=walk_exhausted,
+    )

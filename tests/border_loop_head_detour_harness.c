@@ -2,16 +2,21 @@
 #include <stdio.h>
 
 extern void eu4_border_loop_head_gateway(void);
-extern uint64_t eu4_border_loop_head_trampoline_ptr;
+extern uint64_t border_loop_draw_target;
+extern uint64_t border_loop_skip_target;
+
 static void resume_stub(void) {}
 
-void eu4_border_loop_head_gateway_from_regs(uint8_t *index_cursor, uint8_t visibility_mask) {
-    (void)index_cursor;
-    (void)visibility_mask;
+void eu4_border_loop_head_observe_frame(void *rbp, void *r12, uint64_t r13_full, void *rcx) {
+    (void)rbp;
+    (void)r12;
+    (void)r13_full;
+    (void)rcx;
 }
 
 int main(void) {
-    eu4_border_loop_head_trampoline_ptr = (uint64_t)(uintptr_t)resume_stub;
+    border_loop_draw_target = (uint64_t)(uintptr_t)resume_stub;
+    border_loop_skip_target = (uint64_t)(uintptr_t)resume_stub;
     uint64_t before = 0xDEADBEEFCAFEBABEull;
     uint64_t after = 0;
     __asm__ volatile(

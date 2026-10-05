@@ -32,7 +32,7 @@ int main(void) {
         .secondary_upload_pending = false,
     };
     eu4_border_record_view_t records[8];
-    uint32_t ibos[8];
+    uintptr_t ibos[8];
     eu4_border_index_entry_t entries[8];
     for (int i = 0; i < 8; i++) {
         records[i].arg3_u16_at_plus_04 = (uint16_t)(10 + i);

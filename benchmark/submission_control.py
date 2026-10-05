@@ -27,6 +27,7 @@ SUBMISSION_DYLIB_SOURCES_OBSERVER = (
 SUBMISSION_DYLIB_SOURCES_BORDER = (
     BENCH / "eu4_submission_experiment.c",
     BENCH / "border_loop_classifier.c",
+    BENCH / "eu4_border_loop_head_decode.c",
     BENCH / "eu4_submission_border_batch.c",
     BENCH / "eu4_submission_border_gl_interpose.c",
     BENCH / "eu4_submission_border_loop_head.c",
