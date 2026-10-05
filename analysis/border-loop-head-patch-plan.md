@@ -4,7 +4,7 @@
 **Patch span:** 14 bytes (`testb` + `movq` + `je rel32`)  
 **Encoding:** `RIP_INDIRECT_ABSOLUTE_JMP` (statically realizable; no rel32 island required)
 
-Runtime code-page modification / icache flush — **mutation PR only** (out of scope here).
+Runtime detour install — **mutation PR only** (out of scope here). Evidence `RUNTIME_DETOUR_INSTALLATION_AND_EXECUTION`: page protection / writable executable transition, 14-byte installation, instruction and translated-code coherence (incl. Rosetta), successful detour engagement. Static criterion **9** = encoding/relocation only.
 
 ## Flow (`ibo_bind_topology: ONE_BIND`)
 
@@ -19,7 +19,8 @@ classifier_trampoline:
     GfxSetIndexBuffer(prefix.batch_key.ibo_argument)   # once; rdi = -0x60(%rbp) deferred ctx
     glMultiDrawElements(GL_TRIANGLES, counts, GL_UNSIGNED_SHORT, indices[], drawcount)
     if prefix.termination_kind == WALK_END:
-        jmp terminal_prefix_resume @ 0x1010cc3e0   # %rax/%rcx DEAD; do not synthesize
+        movl -0xe4(%rbp), %ebx    # skipped @ 0x1010cc3d4 on direct jmp
+        jmp terminal_prefix_resume @ 0x1010cc3e0
     else:
         set rcx = first-unconsumed entry; displaced testb+movq; je path
         jmp non_recursive entry (not patched 0x1010cbe55)

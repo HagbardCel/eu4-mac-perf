@@ -18,6 +18,7 @@
     "skip_record": "visibility_test_before_deref",
     "triangle_count_zero": "boundary_OTHER_SIDE_EFFECT",
     "deferred_attrib_upload_pending": "fall_through_at_hook",
+    "secondary_upload_pending": "fall_through_at_hook",
     "scan_cap": "not_barrier_telemetry"
   },
   "telemetry_phase_a": [

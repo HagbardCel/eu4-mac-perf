@@ -1,112 +1,110 @@
 # Gate 3b — continuation state (prefix-batch model)
 
-## Loop tail (reference)
+**Criterion 6 proof:** CFG forward-use audit on pinned GOG 1.37.5 disassembly — [drawborders-inner-walk-disasm.txt](evidence/drawborders-inner-walk-disasm.txt) (`otool -tv`, sha256 `b3d38876…`). Machine conclusions: [border-hook-site.json](border-hook-site.json) `continuation_liveness_proof`.
+
+**Criterion 8:** resume topology only (interior vs `0x1010cc3e0`, non-recursive re-entry). Register/stack contract is criterion **6**.
+
+## Criterion 6 formulation
+
+Post-state equivalence on **all reachable successor paths** from each resume IP:
+
+| Part | Audit |
+|------|--------|
+| **A** | Caller-saved GPR, XMM0–15, **RFLAGS** after `GfxSetIndexBuffer` + `glMultiDrawElements` |
+| **B** | Callee-saved `%rbp`, `%rbx`, `%r12`–`%r15` + stack locals skipped by batching |
+
+Calls are **uses** of ABI argument registers. Caller-saved registers not live-in to a call are killed by the call. Width-sensitive defs (`movl`/`movw`/`movb`, XMM scalars). **No YMM/AVX** in this address range (`drawborders-inner-walk-disasm.txt` — `movss`/`movaps` only).
+
+## Loop tail
 
 ```asm
-1010cc3bd  movq -0x70(%rbp), %rcx      ; cursor from stack
+1010cc3bd  movq -0x70(%rbp), %rcx
 1010cc3c1  leaq -0x2(%rcx), %rax
-1010cc3c5  addq $4, %rcx               ; advance live rcx
+1010cc3c5  addq $4, %rcx
 1010cc3c9  addq $4, %rax
 1010cc3cd  cmpq -0x198(%rbp), %rax
 1010cc3d4  movl -0xe4(%rbp), %ebx
 1010cc3da  jne 0x1010cbe55
-1010cc3e0  incl %ebx                   ; terminal outer-step entry
+1010cc3e0  incl %ebx
+1010cc3e2  cmpl 0x10(%rbp), %ebx
 ```
 
-`-0x70(%rbp)` is written at `0x1010cbe59` on each loop-head entry, not updated in the tail.
+## Terminal trampoline (mandatory)
 
-## Continuation classes
-
-| Class | `termination_kind` | Resume |
-|-------|-------------------|--------|
-| Interior | `BARRIER`, `SCAN_CAP` | Displaced `testb`+`movq` + `je` semantics; `%rcx` = first-unconsumed entry |
-| Terminal | `WALK_END` | `@ 0x1010cc3e0` after k tail-equivalent steps |
-
-### Terminal exact state (k drawable steps consumed)
-
-Let `last_cursor` = index-table pointer for entry `k-1` (last **drawn** step). After original tail for entries `0..k-1`:
+Direct `jmp 0x1010cc3e0` skips `movl -0xe4(%rbp), %ebx` @ `0x1010cc3d4`. `%rbx` may hold stride offset on mode-0 path (`0x1010cc285`–`0x1010cc289`).
 
 ```text
-%rcx          = last_cursor + 4
-%rax          = last_cursor + 2
+movl -0xe4(%rbp), %ebx
+jmp  0x1010cc3e0
 ```
 
-At `WALK_END` (walk exhausted, `last_cursor + 2 == end_bound`):
+## Interior — displaced hook (`0x1010cbe55`)
+
+| State | Status | Evidence |
+|-------|--------|----------|
+| `%rcx` | LIVE — synthesize first-unconsumed cursor | `testb %r13b,0x1(%rcx)` @ `0x1010cbe55` |
+| `-0x70` | LIVE — displaced `movq %rcx,-0x70` @ `0x1010cbe59` | |
+| RFLAGS | LIVE — `testb` + `je` @ `0x1010cbe5d` | trampoline reproduces |
+
+## Interior — draw (`0x1010cbe63` → mode-0 @ `0x1010cc2e8`, fast-color via `0x1010cc1cd`→`0x1010cc22d`)
+
+**Scope:** eligible homogeneous prefix (classifier); not slow-color `0x1010cc1cf` XMM block.
+
+### A — caller-saved (incoming post-MDE value)
+
+| Reg | Status | First read / define on path | Notes |
+|-----|--------|----------------------------|--------|
+| `%rcx` | LIVE | read `movzwl -0x2(%rcx)` @ `0x1010cbe63` | synthesize cursor |
+| `%rax` | DEAD | define `movq 0x60(%r12),%rax` @ `0x1010cc2c1` before GfxSetIndexBuffer arg setup | |
+| `%rdi` | DEAD | define `movq -0x60(%rbp),%rdi` @ `0x1010cc2ca` / `0x1010cc2e2` | call-use to helpers |
+| `%rsi` | DEAD | define `movq (%rax,%r15,8),%rsi` @ `0x1010cc2c6` | then GfxSetIndexBuffer **use** |
+| `%rdx` | DEAD | define `movzwl 0x18(%r14,%rbx)` @ `0x1010cc28c` (cmp only) / `movzwl +0x04` @ `0x1010cc2dc` for GfxDrawIndexed | |
+| `%r8`–`%r11` | DEAD | no read `0x1010cbe63`…`0x1010cc2e8` on mode-0 fast join | |
+| XMM0–15 | DEAD | no XMM **read** on `0x1010cc22d`…`0x1010cc2e8` (slow XMM @ `0x1010cc200`+ bypassed) | batch calls may clobber |
+| RFLAGS | DEAD | flag consumers on fast path use fresh `cmp`/`test` | |
+
+GfxDrawIndexed @ `0x1010cc2e8`: `%rdi`,`%rsi`,`%edx`,`%ecx` are **call arguments** (defined immediately before) — resume-era values not read.
+
+### B — callee-saved / locals
+
+| State | Status | Evidence |
+|-------|--------|----------|
+| `%r12` | preserve hook-time | `SBorderDrawInfoSet*`; callees preserve; batch does not change expected value |
+| `%r14` | redefine before use | `movq 0x78(%r12),%r14` @ `0x1010cbe67` |
+| `%r15` | redefine | `movq -0x80(%rbp),%r15` @ `0x1010cc27d` |
+| `%rbx` | redefine | `leaq` chain @ `0x1010cc281`–`0x1010cc289` |
+| `-0x80` | read then refresh | set @ `0x1010cbe6f`; consumed @ `0x1010cc27d` |
+| `-0x51`, `-0x64` | unchanged | homogeneous batch; no terminal fixup on interior |
+| `%ebp` frame | preserve | standard frame |
+
+## Interior — skip tail (`0x1010cc3bd`)
+
+| State | Status | Evidence |
+|-------|--------|----------|
+| `%rcx` | define from stack | `movq -0x70(%rbp),%rcx` @ `0x1010cc3bd` — not resume `%rcx` |
+| `%rax` | define | `leaq -0x2(%rcx),%rax` @ `0x1010cc3c1` before `cmp` @ `0x1010cc3cd` |
+| Other caller-saved / XMM | DEAD | no read before `jne 0x1010cbe55` @ `0x1010cc3da` or merge |
+| RFLAGS | LIVE through `cmp`/`jne` | then dead at loop head if `testb` redefines |
+
+## Terminal (`0x1010cc3e0` successors)
+
+Trampoline supplies `%ebx` from `-0xe4` before `incl`.
+
+| State | Status | Forward successors `0x1010cc3e0`…`0x1010cc3fb` |
+|-------|--------|--------------------------------------------------|
+| `%ebx` | LIVE — **synthesize** from `-0xe4(%rbp)` | `incl %ebx` @ `0x1010cc3e0` |
+| `%rax`,`%rcx` | DEAD | no read before `0x1010cc3eb` |
+| `%rdi`,`%rsi` | DEAD until define @ `0x1010cc3f7`/`0x1010cc3eb` | profile tail |
+| `-0x70(%rbp)` | DEAD | no read in terminal span; next read @ `0x1010cbe38` only on **future** inner walk |
+| `-0x198` | unchanged | not read on terminal span |
+| XMM / RFLAGS | DEAD before `incl` | `cmp`/`jne` not taken; no flag consumer before `incl` |
+
+## glMultiDrawElements (mutation)
 
 ```text
-%rax          = end_bound
-%rcx          = end_bound + 2
--0x70(%rbp)   = last_cursor (last stored at loop head before final tail)
--0x198(%rbp)  = end bound (unchanged)
-%ebx          = reloaded from -0xe4(%rbp) @ 0x1010cc3d4
--0x51, -0x64  = prefix batch color/VBO caches
-RFLAGS        = DEAD @ 0x1010cc3e0 (no flag consumer before incl)
--0x80(%rbp)   = DEAD at interior trampoline entry (loaded @ 0x1010cbe63 only on draw path)
+rdi=GL_TRIANGLES rsi=&count rdx=type rcx=&indices r8=drawcount
 ```
-
-### `%rax` / `%rcx` at `0x1010cc3e0` (preferred)
-
-After `jne` not taken, execution reaches `incl %ebx` with **no intervening use** of `%rax` or `%rcx`. Mutation **need not synthesize** `%rax`/`%rcx` for terminal resume — only restore live `%ebx` path and stack locals the outer step expects.
-
-### Interior trampoline
-
-```text
-%rcx          = first-unconsumed entry pointer (LIVE)
--0x70(%rbp)   = set by displaced movq (LIVE through je)
-RFLAGS        = LIVE (testb + je)
-```
-
-## Trampoline / callee-saved discipline
-
-Mutation path is **non-leaf** (calls engine helpers + GL). Trampoline must preserve:
-
-```text
-%rbp, %rbx, %r12-%r15     callee-saved — must not clobber
-%rsp                      16-byte aligned before each call
-```
-
-Do not rely on leaf red-zone for scratch across calls.
-
-### macOS x86-64 SysV — caller-saved after inserted calls
-
-**XMM0–XMM15** and **`%rax`** are **caller-saved**. `GfxSetIndexBuffer` and `glMultiDrawElements` may clobber all XMM registers and `%rax`.
-
-| Register class | At interior resume after batch | At terminal `0x1010cc3e0` |
-|----------------|-------------------------------|---------------------------|
-| `%rdi`–`%r11`, `%r10`, `%rax` | Reload resume state from stack; do not assume preserved | Same |
-| `%r12` (`SBorderDrawInfoSet`) | LIVE if trampoline preserves callee-saved set | LIVE |
-| `%r14` record base | LIVE in loop scope | LIVE |
-| XMM0–15 | **DEAD** on fast-color path from `0x1010cc22d`–`0x1010cbe55` (no XMM traffic); calls clobber — treat as DEAD unless proven live and saved | Same |
-
-Slow-color XMM traffic @ `0x1010cc1ef`–`0x1010cc222` is skipped on fast-color prefix. At hook `0x1010cbe55`, XMM **DEAD** for skip-only interior trampoline.
-
-## GfxSetIndexBuffer @ `0x1010cc2ce` (macOS SysV)
-
-```text
-rdi = movq -0x60(%rbp), %rdi   @ 0x1010cc2ca  (GfxDeferredContextGFX*)
-rsi = movq (%rax,%r15,8), %rsi @ 0x1010cc2c6  (= batch_key.ibo_argument)
-```
-
-No stack arguments. Null `rsi` → helper returns without bind (`testq %rsi` @ `0x1015ec28e`).
-
-## glMultiDrawElements (mutation TLS arrays)
-
-```text
-rdi  = GL_TRIANGLES (0x0004)
-rsi  = &count[i]      (3 * triangle_count per record)
-rdx  = GL_UNSIGNED_SHORT (0x1403)
-rcx  = &indices[i]    (zero offsets — border mode-0)
-r8   = drawcount      (prefix run_length)
-```
-
-Five-register SysV call (no `r9` basevertex array). 16-byte stack alignment before `callq`. Resolve via engine `_glew*` / GL dispatch same as existing indexed draw path.
-
-`glMultiDrawElementsBaseVertex` with all `basevertex[i]=0` is rendering-equivalent but **not** chosen — see [border-mode0-basevertex-evidence-addendum.md](border-mode0-basevertex-evidence-addendum.md).
-
-## Engine / GL (`ONE_BIND`)
-
-One `GfxSetIndexBuffer(batch_key.ibo_argument)` then **`glMultiDrawElements`** replaces N×(bind+GfxDrawIndexed) for homogeneous mode-0 prefix subject to classifier exclusions (null IBO, zero tri, pending `+0x128` / `+0x170`, etc.).
 
 ## Non-recursive re-entry
 
-14-byte patch @ `0x1010cbe55`; see [border-hook-site.json](border-hook-site.json) incoming-CF audit.
+14-byte patch @ `0x1010cbe55`; [border-hook-site.json](border-hook-site.json).
