@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+V1_SCAN_CAP = 128
+
 from dataclasses import dataclass
 from enum import Enum, IntFlag
 from typing import Literal
@@ -199,12 +201,12 @@ def classify_batchable_prefix(
         entry_match: EntryStateMatch,
         kind: TerminationKind,
     ) -> PrefixResult:
-        elim = max(0, run_len - 1)
         eligible = (
             run_len >= 2
             and entry_match.all_match()
             and kind is not TerminationKind.INVALID
         )
+        elim = max(0, run_len - 1) if eligible else 0
         fall_through = run_len < 2 or kind is TerminationKind.INVALID
         return PrefixResult(
             run_length=run_len,

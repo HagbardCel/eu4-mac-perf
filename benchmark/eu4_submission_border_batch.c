@@ -1,5 +1,6 @@
 #define GL_SILENCE_DEPRECATION 1
 #include "eu4_submission_border.h"
+#include "eu4_submission_border_loop_head.h"
 
 #include "submission_counter_schema.h"
 
@@ -31,8 +32,6 @@ typedef void (*glMultiDrawElementsBaseVertex_fn)(
 static glDrawElementsBaseVertex_fn real_draw = NULL;
 static glMultiDrawElementsBaseVertex_fn real_multidraw __attribute__((unused)) = NULL;
 static bool symbols_resolved = false;
-static bool runtime_context_verified = false;
-static bool gate0_recorded = false;
 
 static _Thread_local uint64_t tls_unpublished_draws = 0;
 static _Thread_local uint32_t tls_unpublished_site0 = 0;
@@ -43,41 +42,11 @@ bool eu4_border_interpose_ready(void) {
 }
 
 bool eu4_border_multidraw_api_ready(void) {
-    return symbols_resolved && runtime_context_verified;
+    return symbols_resolved;
 }
 
 bool eu4_border_gl_api_ready(void) {
     return eu4_border_multidraw_api_ready();
-}
-
-static bool gl_version_supports_multidraw_base_vertex(const char *version) {
-    if (version == NULL) {
-        return false;
-    }
-    int major = 0;
-    int minor = 0;
-    if (sscanf(version, "%d.%d", &major, &minor) != 2) {
-        return false;
-    }
-    return major > 3 || (major == 3 && minor >= 2);
-}
-
-static void record_gate0_once(bool context_ok, bool multidraw_ok) {
-    if (gate0_recorded) {
-        return;
-    }
-    gate0_recorded = true;
-    eu4_submission_counter_add(EU4_COUNTER_BORDER_RUNTIME_CONTEXT_CHECKED, 1);
-    if (context_ok && multidraw_ok && symbols_resolved) {
-        eu4_submission_counter_add(EU4_COUNTER_BORDER_RUNTIME_CONTEXT_MULTIDRAW_SUPPORTED, 1);
-    }
-}
-
-static bool verify_active_gl_context_supports_multidraw(void) {
-    const char *version = (const char *)glGetString(GL_VERSION);
-    const bool ok = gl_version_supports_multidraw_base_vertex(version);
-    record_gate0_once(version != NULL, ok);
-    return ok;
 }
 
 void eu4_border_init_gl_apis(void) {
@@ -123,6 +92,7 @@ void eu4_border_reset_batch(void) {
 
 void eu4_submission_observation_arm_reset(void) {
     eu4_border_publish_tls_counters();
+    eu4_border_loop_head_epoch_reset();
 }
 
 static void note_border_draw(uint32_t site_id) {
@@ -146,9 +116,6 @@ void eu4_border_on_draw_elements_base_vertex(
     if (real_draw == NULL) {
         return;
     }
-    if (!runtime_context_verified) {
-        runtime_context_verified = verify_active_gl_context_supports_multidraw();
-    }
     if (eu4_border_minimal_hook()) {
         real_draw(mode, count, type, indices, basevertex);
         return;
@@ -165,5 +132,6 @@ void eu4_border_on_draw_elements_base_vertex(
 }
 
 void eu4_border_flush_pending(void) {
+    eu4_border_loop_head_flush_pending();
     eu4_border_publish_tls_counters();
 }

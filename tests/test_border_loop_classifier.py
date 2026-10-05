@@ -129,6 +129,7 @@ class BorderLoopClassifierTests(unittest.TestCase):
         self.assertEqual(out.run_length, 3)
         self.assertEqual(out.termination_kind, TerminationKind.INVALID)
         self.assertFalse(out.batch_eligible)
+        self.assertEqual(out.eligible_draw_calls_eliminable, 0)
         self.assertTrue(out.v1_fall_through_recommended)
 
     def test_ibo_boundary(self) -> None:

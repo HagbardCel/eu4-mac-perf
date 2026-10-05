@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-COUNTER_SCHEMA_VERSION = 3
-COUNTER_COUNT = 34
+COUNTER_SCHEMA_VERSION = 4
+COUNTER_COUNT = 43
 SUPPORTED_HYPOTHESIS_MASK_DEFAULT = 0xb
 SAFETY_HYPOTHESIS_MASK_DEFAULT = 0x0
 
@@ -42,6 +42,15 @@ COUNTER_SLOTS = {
     "border_site_2_draws_covered": 31,
     "border_runtime_context_checked": 32,
     "border_runtime_context_multidraw_supported": 33,
+    "border_loop_head_entries": 34,
+    "border_semantic_decisions": 35,
+    "border_semantic_eliminations": 36,
+    "border_implementable_decisions": 37,
+    "border_implementable_eliminations": 38,
+    "border_structural_draws": 39,
+    "border_structural_eliminations": 40,
+    "border_structural_walks": 41,
+    "border_roi_nonzero_suppression_at_frame_boundary": 42,
 }
 
 HYPOTHESES = [
@@ -56,3 +65,4 @@ HYPOTHESES = [
 
 HEALTH_COUNTER_NAMES = ('control_ticks', 'renderbuckets_invocations', 'site_entries', 'effective_actions')
 CANDIDATE_COUNTER_NAMES = ('candidate_site_entries', 'candidate_renderbuckets_invocations', 'candidate_nonempty_renderbuckets', 'adjacent_within_invocation', 'same_parent_pairs', 'cross_parent_pairs', 'same_parent_buffer_signature', 'cross_parent_buffer_signature', 'cross_parent_buffer_elision_eligible', 'same_subrecord_pointer_cross_parent', 'same_texture_input_signature', 'texture_setup_elision_eligible', 'legacy_eligible_pair_hits', 'candidate_swaps')
+ARMED_COUNTER_NAMES = ('candidate_site_entries', 'candidate_renderbuckets_invocations', 'candidate_nonempty_renderbuckets', 'adjacent_within_invocation', 'same_parent_pairs', 'cross_parent_pairs', 'same_parent_buffer_signature', 'cross_parent_buffer_signature', 'cross_parent_buffer_elision_eligible', 'same_subrecord_pointer_cross_parent', 'same_texture_input_signature', 'texture_setup_elision_eligible', 'legacy_eligible_pair_hits', 'candidate_swaps', 'border_candidate_runs', 'border_candidate_draws', 'border_draws_covered_by_multidraw', 'border_multidraw_calls', 'border_draw_calls_eliminated', 'border_original_draws_fallback', 'border_batch_size_sum', 'border_batch_size_max', 'border_fallback_site_change', 'border_fallback_batch_full', 'border_fallback_mutate_disabled', 'border_site_0_draws_covered', 'border_site_1_draws_covered', 'border_site_2_draws_covered', 'border_runtime_context_checked', 'border_runtime_context_multidraw_supported', 'border_loop_head_entries', 'border_semantic_decisions', 'border_semantic_eliminations', 'border_implementable_decisions', 'border_implementable_eliminations', 'border_structural_draws', 'border_structural_eliminations', 'border_structural_walks', 'border_roi_nonzero_suppression_at_frame_boundary')

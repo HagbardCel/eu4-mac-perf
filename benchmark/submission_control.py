@@ -26,8 +26,13 @@ SUBMISSION_DYLIB_SOURCES_OBSERVER = (
 )
 SUBMISSION_DYLIB_SOURCES_BORDER = (
     BENCH / "eu4_submission_experiment.c",
+    BENCH / "border_loop_classifier.c",
     BENCH / "eu4_submission_border_batch.c",
     BENCH / "eu4_submission_border_gl_interpose.c",
+    BENCH / "eu4_submission_border_loop_head.c",
+    BENCH / "eu4_submission_border_loop_head_gateway.c",
+    BENCH / "eu4_submission_border_loop_head_gateway.S",
+    BENCH / "eu4_submission_border_loop_head_install.c",
     BENCH / "eu4_submission_border_install.c",
 )
 LIBRARY = BENCH / ".build/libeu4_submission_experiment.dylib"
@@ -85,6 +90,7 @@ def _build_dylib(output: Path, *, compiled_capability: int, sources: tuple[Path,
         "-Wall",
         "-Wextra",
         "-Werror",
+        "-mno-avx",
         "-dynamiclib",
         "-framework",
         "OpenGL",

@@ -64,9 +64,11 @@ static _Atomic uint64_t *map_counters(void) {
     return (_Atomic uint64_t *)(control_map + COUNTER_REGION_OFFSET);
 }
 
-static void reset_candidate_bank_counters(void) {
-    for (uint32_t slot = EU4_COUNTER_CANDIDATE_SITE_ENTRIES; slot < EU4_COUNTER_BORDER_CANDIDATE_RUNS; slot++) {
-        atomic_store_explicit(&map_counters()[slot], 0, memory_order_relaxed);
+static void reset_armed_bank_counters(void) {
+    for (uint32_t slot = 0; slot < EU4_SUBMISSION_COUNTER_COUNT; slot++) {
+        if (eu4_submission_counter_slot_requires_armed((eu4_submission_counter_slot_t)slot)) {
+            atomic_store_explicit(&map_counters()[slot], 0, memory_order_relaxed);
+        }
     }
 }
 
@@ -138,7 +140,7 @@ void eu4_submission_counter_add(eu4_submission_counter_slot_t slot, uint64_t del
     if (!protocol_ok(words)) {
         return;
     }
-    if (slot >= EU4_COUNTER_CANDIDATE_SITE_ENTRIES && slot < EU4_COUNTER_BORDER_CANDIDATE_RUNS) {
+    if (eu4_submission_counter_slot_requires_armed(slot)) {
         if (!observation_bank_writable(words)) {
             return;
         }
@@ -191,7 +193,7 @@ static void handle_observation_command(uint32_t *words) {
         return;
     }
     if (obs_req == OBS_ARM) {
-        reset_candidate_bank_counters();
+        reset_armed_bank_counters();
         eu4_submission_observation_arm_reset();
         observation_frozen = false;
         words[14] = obs_gen;

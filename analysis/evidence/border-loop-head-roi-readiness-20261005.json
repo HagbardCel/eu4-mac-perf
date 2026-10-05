@@ -1,0 +1,32 @@
+{
+  "evidence_kind": "roi_instrumentation_readiness",
+  "evidence_id": "border-loop-head-roi-readiness-20261005",
+  "counter_schema_version": 4,
+  "semantic_policy": "proven_v1_semantics_unbounded_walk_scan",
+  "implementable_policy": "v1_with_scan_cap",
+  "observer_timing_usable": false,
+  "roi_instrumentation_status": "READY_OFFLINE",
+  "roi_gate": "PENDING_NUMERIC_EVIDENCE",
+  "semantic_eliminations_per_frame": null,
+  "implementable_eliminations_per_frame": null,
+  "record_stream_available": false,
+  "loop_head_roi_instrumentation_ready": true,
+  "classifier_counter_instrumentation_ready": true,
+  "live_loop_head_telemetry_observed": false,
+  "mutation_authorized": false,
+  "runtime_gate_0": "PENDING",
+  "runtime_detour_installation": "PENDING",
+  "structural_reference_per_frame": 1562,
+  "structural_reference_source": "historical_intrusive_draw_trace_not_validator",
+  "ready_for_single_venice_observer_run": true,
+  "static_feasibility_pointer": "analysis/evidence/border-loop-head-feasibility-20261004.json",
+  "self_tests": {
+    "observer_build": "PASS",
+    "classifier_python_c_parity": "PASS",
+    "counter_schema": "PASS",
+    "dual_suppression_replay": "PASS",
+    "border_detour_harness": "PASS",
+    "observation_epoch_gating": "PASS"
+  },
+  "note": "Instrumentation READY_OFFLINE; numeric ROI awaits single observer-only Venice run."
+}
