@@ -45,7 +45,7 @@
       "method": "cfg_forward_use_all_successor_paths",
       "disassembly_artifact": "analysis/evidence/drawborders-inner-walk-disasm.txt",
       "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-      "proof_complete": true,
+      "proof_complete": false,
       "ymm_avx_in_inner_walk": "none_observed",
       "interior_hook": {
         "rcx": "SYNTHESIZED_FIRST_UNCONSUMED",
