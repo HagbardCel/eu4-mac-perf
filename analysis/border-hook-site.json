@@ -51,10 +51,12 @@
       "ymm_avx_in_inner_walk": "none_observed",
       "interior_hook": {
         "rcx": "SYNTHESIZED_FIRST_UNCONSUMED",
+        "rbx": "SYNTHESIZE_EBX_FROM_STACK_-0xe4_BEFORE_DISPLACED_HOOK",
         "rflags": "LIVE_TESTB_JE_REPRODUCE",
         "stack_-0x70": "LIVE_DISPLACED_MOVQ"
       },
-      "interior_draw": {
+      "interior_draw_simple": {
+        "scope": "je_0x1010cc26b_at_0x1010cc1d5_mode0_0x1010cc2e8",
         "rcx": "SYNTHESIZED_FIRST_UNCONSUMED",
         "rax": "DEAD_BEFORE_READ",
         "rdi": "DEAD_BEFORE_READ",
@@ -67,8 +69,16 @@
         "r12": "PRESERVE_HOOK_VALUE",
         "r14": "REDEFINE_AT_0x1010cbe67",
         "r15": "REDEFINE_AT_0x1010cc27d",
-        "rbx": "REDEFINE_MODE0_STRIDE",
-        "eligible_path": "non_special_outer_batch_je_0x1010cc26b_at_0x1010cc1d5"
+        "rbx": "LIVE_OUTER_INDEX_THEN_REDEFINE_STRIDE_0x1010cc281"
+      },
+      "interior_boundary_first_unconsumed": {
+        "color_transition": "0x1010cc1cf_mismatch_cc1de_cc22d_helpers_0x1010cc242_0x1010cc266_CALLER_SAVED_DEFINED",
+        "vbo_transition": "0x1010cc297_GfxSetVertexBuffers_ARGS_DEFINED",
+        "ibo_transition": "0x1010cc2c1_GfxSetIndexBuffer_ARGS_DEFINED",
+        "null_ibo_fallthrough": "GFXSETINDEXBUFFER_NOOP_THEN_MODE0_ARG_REBUILD",
+        "zero_triangles": "GFXDRAWINDEXED_ARGS_DEFINED_BEFORE_CALL",
+        "scan_cap_homogeneous": "SEE_interior_draw_simple",
+        "skip": "SEE_interior_skip"
       },
       "interior_skip": {
         "rcx": "DEFINE_FROM_STACK_-0x70",
@@ -80,19 +90,23 @@
         "caller_saved": {
           "rax": "DEAD_BEFORE_READ_BOTH_SUCCESSORS",
           "rcx": "DEAD_BEFORE_READ_BOTH_SUCCESSORS",
+          "rdx": "DEAD_REDEFINE_0x1010cbd42_TAKEN",
           "rdi": "DEAD_UNTIL_DEFINE_SUCCESSOR",
           "rsi": "DEAD_UNTIL_DEFINE_SUCCESSOR",
+          "r8": "DEAD_DEFINE_BEFORE_CALL_TAKEN",
+          "r9": "DEAD_DEFINE_BEFORE_CALL_TAKEN",
+          "r10": "DEAD_NO_READ_BEFORE_CALL_OR_EXIT",
+          "r11": "DEAD_NO_READ_BEFORE_CALL_OR_EXIT",
           "xmm0_15": "DEAD_BEFORE_INCL",
           "rflags": "DEAD_BEFORE_INCL"
         },
         "callee_saved": {
           "rbp": "PRESERVE_FRAME_POINTER",
-          "rbx_stride": "PRESERVE_CALLEE_SAVED_UNTIL_0x1010cc285",
+          "rbx": "SYNTHESIZE_EBX_FROM_-0xe4_AT_TERMINAL_THEN_INCL",
           "r12": "PRESERVE_HOOK_VALUE_LIVE_0x8_r12_at_0x1010cbca5_and_0x1010cc3eb",
           "r13": "PRESERVE_FULL",
           "r14": "DEAD_REDEFINE_0x1010cbcc4_TAKEN",
-          "r15": "DEAD_REDEFINE_0x1010cbc8b_TAKEN",
-          "ebx_outer": "SYNTHESIZE_FROM_STACK_-0xe4_BEFORE_0x1010cc3e0"
+          "r15": "DEAD_REDEFINE_0x1010cbc8b_TAKEN"
         },
         "stack_locals": {
           "stack_-0x70": "DEAD_REDEFINE_0x1010cbca1_BEFORE_READ",

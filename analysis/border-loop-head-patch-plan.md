@@ -25,8 +25,10 @@ classifier_trampoline:
         # optional static fallback if audit ever required: last_cursor = -0x198(%rbp) - 2
         jmp terminal_prefix_resume @ 0x1010cc3e0
     else:
-        set rcx = first-unconsumed entry; displaced testb+movq; je path
-        jmp non_recursive entry (not patched 0x1010cbe55)
+        movl -0xe4(%rbp), %ebx       # outer index before cmpl/btl @ 0x1010cbe6c (symmetric with terminal)
+        movq first_unconsumed, %rcx
+        displaced testb %r13b,0x1(%rcx); movq %rcx,-0x70(%rbp); je skip_tail
+        jmp non_recursive entry (not patched 0x1010cbe55)  # first unconsumed may be boundary draw path
 ```
 
 ## Fail-closed

@@ -50,5 +50,5 @@
     "analysis/tools/border_loop_classifier.py",
     "analysis/tools/border_loop_evidence.py"
   ],
-  "note": "Criterion 6: full terminal callee-saved + stack-local table (gate3b + hook-site). Runtime gates pending."
+  "note": "Criterion 6: interior boundary matrix + ebx synthesis + terminal caller-saved completeness. Runtime gates pending."
 }
