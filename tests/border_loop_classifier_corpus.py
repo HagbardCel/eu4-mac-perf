@@ -232,6 +232,52 @@ def build_corpus() -> list[ClassifierCorpusCase]:
         )
     )
 
+    records4_oob, ibos4_oob = _tables(4)
+    entries4_oob = _entries([0, 1, 2, 3])
+    entries4_oob[3] = IndexTableEntry(99, 3, 5)
+    cases.append(
+        ClassifierCorpusCase(
+            "safe_prefix_then_oob_invalid",
+            _ctx(),
+            records4_oob,
+            ibos4_oob,
+            entries4_oob,
+        )
+    )
+
+    cases.append(
+        ClassifierCorpusCase(
+            "deferred_attrib_at_hook",
+            _ctx(deferred_attrib_upload_pending=True),
+            _tables(3)[0],
+            _tables(3)[1],
+            _entries([0, 1]),
+        )
+    )
+
+    cases.append(
+        ClassifierCorpusCase(
+            "secondary_upload_at_hook",
+            _ctx(secondary_upload_pending=True),
+            _tables(3)[0],
+            _tables(3)[1],
+            _entries([0, 1]),
+        )
+    )
+
+    records8_outer, ibos8_outer = _tables(8)
+    entries_outer = _entries([0, 1, 2, 3, 4])
+    for outer, name in ((4, "special_outer_batch_4"), (5, "special_outer_batch_5"), (7, "special_outer_batch_7")):
+        cases.append(
+            ClassifierCorpusCase(
+                name,
+                _ctx(outer_batch_index=outer),
+                records8_outer,
+                ibos8_outer,
+                entries_outer,
+            )
+        )
+
     cases.append(
         ClassifierCorpusCase(
             "negative_outer_batch_adapter",

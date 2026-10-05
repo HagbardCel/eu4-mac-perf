@@ -45,7 +45,10 @@ class BorderLoopHeadDetourTests(unittest.TestCase):
             out,
             str(BENCH / "eu4_submission_border_loop_head_gateway.S"),
             str(TESTS / "border_loop_head_gateway_observe_stub.S"),
+            str(TESTS / "border_loop_head_gateway_test_enter.S"),
+            str(TESTS / "border_loop_head_gateway_continuation.S"),
             str(TESTS / "border_loop_head_detour_harness.c"),
+            extra=["-I", str(TESTS)],
         )
         result = self._run(out)
         self.assertEqual(result.returncode, 0, msg=result.stderr or result.stdout)

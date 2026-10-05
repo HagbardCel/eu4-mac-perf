@@ -1,5 +1,6 @@
 #include "eu4_submission_border_loop_head.h"
 
+#include <assert.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <stdbool.h>
@@ -42,6 +43,10 @@ static int test_successful_install(void) {
         fprintf(stderr, "hook not installed\n");
         return 1;
     }
+    assert(memcmp(site, "\xff\x25\x00\x00\x00\x00", 6) == 0);
+    void *patched_target = NULL;
+    memcpy(&patched_target, (uint8_t *)site + 6, sizeof(patched_target));
+    assert(patched_target == (void *)eu4_border_loop_head_gateway);
     return 0;
 }
 
