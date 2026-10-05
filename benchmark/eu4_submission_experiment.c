@@ -77,10 +77,20 @@ static void try_install_hooks(void) {
     if (hooks_installed) {
         return;
     }
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+    if (eu4_border_loop_head_install_fatal()) {
+        abort();
+    }
+#endif
     if (eu4_submission_try_install_all_hooks()) {
         hooks_installed = true;
         return;
     }
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+    if (eu4_border_loop_head_install_fatal()) {
+        abort();
+    }
+#endif
     const char *test_stub = getenv("EU4_SUBMISSION_TEST_STUB_HOOK");
     if (test_stub && test_stub[0] == '1') {
         hooks_installed = true;

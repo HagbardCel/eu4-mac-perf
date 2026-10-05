@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class SubmissionCounterSchemaV4Tests(unittest.TestCase):
+class SubmissionCounterSchemaV5Tests(unittest.TestCase):
     def test_border_roi_slots_require_armed(self) -> None:
         schema = json.loads((ROOT / "benchmark" / "submission_counter_schema.json").read_text())
         self.assertEqual(schema["schema_version"], 5)

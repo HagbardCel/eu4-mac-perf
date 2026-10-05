@@ -18,8 +18,29 @@ extern uint64_t border_loop_skip_target;
 #define RX_RESTORE_MAX_ATTEMPTS 3
 
 static bool loop_head_installed = false;
+static bool loop_head_install_fatal_sticky = false;
 static uintptr_t loop_site = 0;
 static unsigned char loop_saved[14];
+
+static int test_force_rx_fail = -1;
+static int test_force_rollback_fail = -1;
+
+void eu4_border_loop_head_install_test_reset_hooks(void) {
+    test_force_rx_fail = -1;
+    test_force_rollback_fail = -1;
+}
+
+void eu4_border_loop_head_install_test_force_rx_fail(int attempts) {
+    test_force_rx_fail = attempts;
+}
+
+void eu4_border_loop_head_install_test_force_rollback_fail(int attempts) {
+    test_force_rollback_fail = attempts;
+}
+
+bool eu4_border_loop_head_install_fatal(void) {
+    return loop_head_install_fatal_sticky;
+}
 
 static bool page_begin(uintptr_t address, uintptr_t *begin_out) {
     long page = sysconf(_SC_PAGESIZE);
@@ -38,6 +59,10 @@ static bool set_page_rw(uintptr_t begin) {
 }
 
 static bool set_page_rx(uintptr_t begin) {
+    if (test_force_rx_fail > 0) {
+        test_force_rx_fail--;
+        return false;
+    }
     long page = sysconf(_SC_PAGESIZE);
     return mach_vm_protect(mach_task_self(), begin, (mach_vm_size_t)page, false, VM_PROT_READ | VM_PROT_EXECUTE) ==
            KERN_SUCCESS;
@@ -53,6 +78,10 @@ static bool restore_page_rx_bounded(uintptr_t begin) {
 }
 
 static bool rollback_patched_site(void) {
+    if (test_force_rollback_fail > 0) {
+        test_force_rollback_fail--;
+        return false;
+    }
     if (loop_site == 0) {
         return true;
     }
@@ -73,6 +102,11 @@ static bool rollback_patched_site(void) {
     return true;
 }
 
+static void clear_continuation_targets(void) {
+    border_loop_draw_target = 0;
+    border_loop_skip_target = 0;
+}
+
 static bool write_rip_indirect_jmp14(void *site, void *target) {
     unsigned char *p = (unsigned char *)site;
     p[0] = 0xff;
@@ -85,34 +119,40 @@ static bool write_rip_indirect_jmp14(void *site, void *target) {
     return true;
 }
 
-static bool install_loop_head_at(void *site, uintptr_t image_base) {
+eu4_border_loop_head_install_result_t eu4_border_loop_head_try_install_at(void *site, uintptr_t image_base) {
     const unsigned char expected[14] = {0x44, 0x84, 0x69, 0x01, 0x48, 0x89, 0x4d, 0x90,
                                         0x0f, 0x84, 0x5a, 0x05, 0x00, 0x00};
     if (memcmp(site, expected, sizeof(expected)) != 0) {
-        return false;
+        return EU4_BORDER_LOOP_HEAD_INSTALL_FAILED_CLEAN;
     }
     border_loop_draw_target = image_base + 0x10cbe63u;
     border_loop_skip_target = image_base + 0x10cc3bdu;
     uintptr_t address = (uintptr_t)site;
     uintptr_t begin = 0;
     if (!page_begin(address, &begin) || !set_page_rw(begin)) {
-        return false;
+        clear_continuation_targets();
+        return EU4_BORDER_LOOP_HEAD_INSTALL_FAILED_CLEAN;
     }
     memcpy(loop_saved, site, sizeof(loop_saved));
     loop_site = address;
     write_rip_indirect_jmp14(site, (void *)eu4_border_loop_head_gateway);
     sys_icache_invalidate(site, 14);
     if (!set_page_rx(begin)) {
-        (void)rollback_patched_site();
-        border_loop_draw_target = 0;
-        border_loop_skip_target = 0;
-        return false;
+        if (!rollback_patched_site()) {
+            loop_head_install_fatal_sticky = true;
+            return EU4_BORDER_LOOP_HEAD_INSTALL_FAILED_FATAL;
+        }
+        clear_continuation_targets();
+        return EU4_BORDER_LOOP_HEAD_INSTALL_FAILED_CLEAN;
     }
     loop_head_installed = true;
-    return true;
+    return EU4_BORDER_LOOP_HEAD_INSTALL_OK;
 }
 
 bool eu4_border_loop_head_hook_installed(void) {
+    if (loop_head_install_fatal_sticky) {
+        return false;
+    }
     const char *stub = getenv("EU4_SUBMISSION_TEST_STUB_HOOK");
     if (stub != NULL && stub[0] == '1') {
         return true;
@@ -120,31 +160,37 @@ bool eu4_border_loop_head_hook_installed(void) {
     return loop_head_installed;
 }
 
-bool eu4_border_loop_head_install(void) {
+eu4_border_loop_head_install_result_t eu4_border_loop_head_install_ex(void) {
+    if (loop_head_install_fatal_sticky) {
+        abort();
+    }
     if (loop_head_installed) {
-        return true;
+        return EU4_BORDER_LOOP_HEAD_INSTALL_OK;
     }
     const char *stub = getenv("EU4_SUBMISSION_TEST_STUB_HOOK");
     if (stub != NULL && stub[0] == '1') {
-        return true;
+        return EU4_BORDER_LOOP_HEAD_INSTALL_OK;
     }
     void *anchor = dlsym(
         RTLD_DEFAULT,
         "_ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc");
     if (anchor == NULL) {
-        return false;
+        return EU4_BORDER_LOOP_HEAD_INSTALL_FAILED_CLEAN;
     }
     Dl_info info;
     if (!dladdr(anchor, &info) || info.dli_fbase == NULL) {
-        return false;
+        return EU4_BORDER_LOOP_HEAD_INSTALL_FAILED_CLEAN;
     }
     uintptr_t image_base = (uintptr_t)info.dli_fbase;
     void *site = (void *)(image_base + 0x10cbe55u);
-    if (!install_loop_head_at(site, image_base)) {
+    eu4_border_loop_head_install_result_t result = eu4_border_loop_head_try_install_at(site, image_base);
+    if (result == EU4_BORDER_LOOP_HEAD_INSTALL_FAILED_CLEAN) {
         (void)rollback_patched_site();
-        border_loop_draw_target = 0;
-        border_loop_skip_target = 0;
-        return false;
+        clear_continuation_targets();
     }
-    return true;
+    return result;
+}
+
+bool eu4_border_loop_head_install(void) {
+    return eu4_border_loop_head_install_ex() == EU4_BORDER_LOOP_HEAD_INSTALL_OK;
 }

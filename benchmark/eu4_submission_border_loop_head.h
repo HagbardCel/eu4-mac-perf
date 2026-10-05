@@ -6,8 +6,21 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+typedef enum {
+    EU4_BORDER_LOOP_HEAD_INSTALL_OK = 0,
+    EU4_BORDER_LOOP_HEAD_INSTALL_FAILED_CLEAN = 1,
+    EU4_BORDER_LOOP_HEAD_INSTALL_FAILED_FATAL = 2,
+} eu4_border_loop_head_install_result_t;
+
+eu4_border_loop_head_install_result_t eu4_border_loop_head_install_ex(void);
+eu4_border_loop_head_install_result_t eu4_border_loop_head_try_install_at(void *site, uintptr_t image_base);
 bool eu4_border_loop_head_install(void);
 bool eu4_border_loop_head_hook_installed(void);
+bool eu4_border_loop_head_install_fatal(void);
+
+void eu4_border_loop_head_install_test_reset_hooks(void);
+void eu4_border_loop_head_install_test_force_rx_fail(int attempts);
+void eu4_border_loop_head_install_test_force_rollback_fail(int attempts);
 
 void eu4_border_loop_head_epoch_reset(void);
 void eu4_border_loop_head_flush_pending(void);

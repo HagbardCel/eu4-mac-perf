@@ -15,7 +15,7 @@ PYTHONPATH=benchmark python3 -c "import submission_control as c; c.build_border_
 python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa
 ```
 
-Manifest sets `venice_run_authorized: false`. Prefer offline loop-head RE at `0x1010cbe55` before spending a manual EU IV session.
+Experiment manifest sets `venice_observer_run_authorized: true` with `render_mutation_authorized: false` for observer-only ROI runs.
 
 Schedule if invoked: **N–A–B–A–B–A–N** (10 s phases). B phases set the mutate flag; the dylib does **not** multidraw (`border_fallback_mutate_disabled` is TLS-aggregated).
 

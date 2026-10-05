@@ -35,5 +35,16 @@
     "freeze_state_capture": "PASS",
     "counter_schema": "PASS"
   },
-  "note": "Semantic scan logically unbounded; EU4_BORDER_MAX_RESOLVE_STEPS exceedance invalidates epoch. Visible record_index is an engine invariant shared with DrawBorders; allocation extent not independently reconstructed. Venice runtime gates remain PENDING until live EU IV run."
+  "offline_verification": {
+    "macos_x86_64_border_build": {
+      "command": "PYTHONPATH=benchmark python3 -m unittest tests.test_border_multidraw_build",
+      "result": "PASS"
+    },
+    "darwin_harness_suite": {
+      "command": "python3 -m unittest tests.test_border_loop_classifier_parity tests.test_border_loop_resolved_core_parity tests.test_border_loop_head_detour",
+      "result": "PASS"
+    },
+    "note": "commit SHA is the git revision that contains this evidence file"
+  },
+  "note": "Semantic scan logically unbounded; EU4_BORDER_MAX_RESOLVE_STEPS exceedance invalidates epoch. Venice runtime gates remain PENDING until live EU IV observer run."
 }

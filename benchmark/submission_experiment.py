@@ -310,8 +310,9 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
         "border_api_runtime_assert": "recorded_in_counters",
         "pr_b_mutation_go": "NO-GO_interpose",
         "mutation_enabled": False,
-        "venice_run_authorized": False,
-        "note": "Harness retained for CI/dylib tests; manual Venice ABABA not authorized after PR B NO-GO.",
+        "venice_observer_run_authorized": True,
+        "render_mutation_authorized": False,
+        "note": "Observer-only Venice ROI run authorized; GL/render mutation remains unauthorized.",
     }
     manifest_path = run_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
