@@ -58,6 +58,32 @@ def border_phase_validation(
     }
 
 
+SEMANTIC_RUN_LEN_HISTOGRAM_KEYS = (
+    "border_semantic_run_len_2",
+    "border_semantic_run_len_3_4",
+    "border_semantic_run_len_5_8",
+    "border_semantic_run_len_9_16",
+    "border_semantic_run_len_17_32",
+    "border_semantic_run_len_33_64",
+    "border_semantic_run_len_65_128",
+    "border_semantic_run_len_129_plus",
+)
+
+IMPLEMENTABLE_RUN_LEN_HISTOGRAM_KEYS = (
+    "border_implementable_run_len_2",
+    "border_implementable_run_len_3_4",
+    "border_implementable_run_len_5_8",
+    "border_implementable_run_len_9_16",
+    "border_implementable_run_len_17_32",
+    "border_implementable_run_len_33_64",
+    "border_implementable_run_len_65_128",
+    "border_implementable_run_len_129_plus",
+)
+
+ARMED_ROI_PHASE_NAMES = ("a1", "b1", "a2", "b2", "a3")
+BORDER_ROI_PRIMARY_PHASE = "a1"
+
+
 def border_gate0_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     checked = int(snapshot.get("border_runtime_context_checked", 0))
     supported = int(snapshot.get("border_runtime_context_multidraw_supported", 0))
@@ -66,6 +92,92 @@ def border_gate0_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
         "multidraw_supported": supported > 0,
         "border_runtime_context_checked": checked,
         "border_runtime_context_multidraw_supported": supported,
+    }
+
+
+def border_gate0_passes(snapshot: dict[str, Any]) -> bool:
+    gate0 = border_gate0_from_snapshot(snapshot)
+    return bool(gate0["context_checked"] and gate0["multidraw_supported"])
+
+
+def border_roi_validity_gate(snapshot: dict[str, Any]) -> dict[str, Any]:
+    fields = {
+        "border_loop_decode_failures": int(snapshot.get("border_loop_decode_failures", 0)),
+        "border_roi_epoch_invalid": int(snapshot.get("border_roi_epoch_invalid", 0)),
+        "border_thread_mismatch_count": int(snapshot.get("border_thread_mismatch_count", 0)),
+        "border_roi_freeze_partial_walk": int(snapshot.get("border_roi_freeze_partial_walk", 0)),
+        "border_roi_freeze_semantic_suppress": int(snapshot.get("border_roi_freeze_semantic_suppress", 0)),
+        "border_roi_freeze_implementable_suppress": int(
+            snapshot.get("border_roi_freeze_implementable_suppress", 0)
+        ),
+    }
+    failures = [name for name, value in fields.items() if value != 0]
+    ok = not failures
+    return {
+        "status": "passed" if ok else "failed",
+        "reason": None if ok else f"nonzero validity field(s): {', '.join(failures)}",
+        **fields,
+    }
+
+
+def border_roi_consistency_gate(snapshot: dict[str, Any]) -> dict[str, Any]:
+    impl_elim = int(snapshot.get("border_implementable_eliminations", 0))
+    sem_elim = int(snapshot.get("border_semantic_eliminations", 0))
+    struct_elim = int(snapshot.get("border_structural_eliminations", 0))
+    sem_decisions = int(snapshot.get("border_semantic_decisions", 0))
+    impl_decisions = int(snapshot.get("border_implementable_decisions", 0))
+    sem_evals = int(snapshot.get("border_semantic_evaluations", 0))
+    impl_evals = int(snapshot.get("border_implementable_evaluations", 0))
+    sem_hist = sum(int(snapshot.get(k, 0)) for k in SEMANTIC_RUN_LEN_HISTOGRAM_KEYS)
+    impl_hist = sum(int(snapshot.get(k, 0)) for k in IMPLEMENTABLE_RUN_LEN_HISTOGRAM_KEYS)
+    failures: list[str] = []
+    if impl_elim > sem_elim:
+        failures.append("implementable_eliminations > semantic_eliminations")
+    if sem_elim > struct_elim:
+        failures.append("semantic_eliminations > structural_eliminations")
+    if sem_hist != sem_decisions:
+        failures.append("semantic histogram sum != semantic_decisions")
+    if impl_hist != impl_decisions:
+        failures.append("implementable histogram sum != implementable_decisions")
+    if sem_decisions > sem_evals:
+        failures.append("semantic_decisions > semantic_evaluations")
+    if impl_decisions > impl_evals:
+        failures.append("implementable_decisions > implementable_evaluations")
+    ok = not failures
+    return {
+        "status": "passed" if ok else "failed",
+        "reason": None if ok else "; ".join(failures),
+        "border_implementable_eliminations": impl_elim,
+        "border_semantic_eliminations": sem_elim,
+        "border_structural_eliminations": struct_elim,
+        "semantic_histogram_sum": sem_hist,
+        "implementable_histogram_sum": impl_hist,
+    }
+
+
+def border_phase_roi_authoritative_gates(snapshot: dict[str, Any]) -> dict[str, Any]:
+    engagement = border_roi_engagement_validation(snapshot)
+    validity = border_roi_validity_gate(snapshot)
+    consistency = border_roi_consistency_gate(snapshot)
+    gate0_ok = border_gate0_passes(snapshot)
+    failures: list[str] = []
+    if engagement["status"] != "passed":
+        failures.append("engagement")
+    if validity["status"] != "passed":
+        failures.append(f"validity: {validity.get('reason')}")
+    if consistency["status"] != "passed":
+        failures.append(f"consistency: {consistency.get('reason')}")
+    if not gate0_ok:
+        failures.append("gate0")
+    ok = not failures
+    return {
+        "status": "passed" if ok else "failed",
+        "reason": None if ok else "; ".join(failures),
+        "border_roi_engagement_gate": engagement,
+        "border_roi_validity_gate": validity,
+        "border_roi_consistency_gate": consistency,
+        "border_gate0": border_gate0_from_snapshot(snapshot),
+        "border_gate0_passed": gate0_ok,
     }
 
 

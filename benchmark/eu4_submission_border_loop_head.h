@@ -28,7 +28,19 @@ void eu4_border_loop_head_on_armed_hit(
 void eu4_border_loop_head_test_reset_tls(void);
 uint64_t eu4_border_loop_head_test_tls_semantic_eliminations(void);
 uint64_t eu4_border_loop_head_test_tls_implementable_eliminations(void);
+uint64_t eu4_border_loop_head_test_tls_semantic_evaluations(void);
+uint64_t eu4_border_loop_head_test_tls_implementable_evaluations(void);
+uint64_t eu4_border_loop_head_test_tls_semantic_decisions(void);
+uint64_t eu4_border_loop_head_test_tls_implementable_decisions(void);
 bool eu4_border_loop_head_test_epoch_invalid(void);
+void eu4_border_loop_head_test_on_armed_hit_suffix(
+    const eu4_border_loop_context_t *ctx,
+    const eu4_border_record_view_t *record_table,
+    const uintptr_t *ibo_table,
+    uint32_t record_count,
+    const eu4_border_index_entry_t *side_entries,
+    uint32_t side_count,
+    bool walk_end);
 bool eu4_border_loop_head_self_test_decode_geometry(void);
 bool eu4_border_loop_head_self_test_thread_affinity(void);
 bool eu4_border_loop_head_self_test_freeze_capture(void);

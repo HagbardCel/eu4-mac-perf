@@ -47,3 +47,9 @@ def validate_roi_readiness_payload(payload: dict) -> None:
     elif status == "PENDING":
         if payload.get("ready_for_single_venice_observer_run") is not False:
             raise AssertionError("ready_for_single_venice_observer_run must be false while PENDING")
+    for runtime_key in ("runtime_gate_0", "runtime_detour_installation"):
+        val = payload.get(runtime_key)
+        if status == "READY_OFFLINE" and val not in ("PENDING",):
+            raise AssertionError(f"{runtime_key} must remain PENDING until Venice proves runtime")
+        if status == "PENDING" and val not in ("PENDING",):
+            raise AssertionError(f"{runtime_key} must be PENDING during verification")

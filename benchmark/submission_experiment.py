@@ -343,6 +343,8 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                 if pm.poll() is not None:
                     raise base.BenchmarkError("Powermetrics helper exited before EU IV launch")
                 env = control.dylib_env(control_path, auto.PROBE, submission_dylib=control.LIBRARY_BORDER)
+                env.pop("EU4_SUBMISSION_TEST_STUB_HOOK", None)
+                manifest["test_stub_hook_enabled"] = False
                 env["EU4_AUTO_PROBE_LOG"] = str(run_dir / "auto-probe.csv")
                 with (run_dir / "game.stdout").open("wb") as stdout, (run_dir / "game.stderr").open("wb") as stderr:
                     game = subprocess.Popen(
@@ -382,13 +384,30 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                 pm = None
                 _attach_phase_summaries(phases, run_dir, anchor, game.pid, tail)
                 manifest["phases"] = phases
-                gate0 = border_validation.border_gate0_from_snapshot(submission.snapshot())
-                manifest["border_gate0"] = gate0
-                manifest["border_engagement_gate"] = border_validation.border_experiment_gate(phases)
-                if manifest["border_engagement_gate"]["status"] != "passed":
+                manifest["border_roi_primary_phase"] = border_validation.BORDER_ROI_PRIMARY_PHASE
+                manifest["border_roi_validation_phases"] = list(border_validation.ARMED_ROI_PHASE_NAMES)
+                manifest["border_legacy_gl_engagement_gate"] = border_validation.border_experiment_gate(phases)
+                roi_phase_gates: dict[str, dict] = {}
+                roi_failures: list[str] = []
+                primary_snapshot: dict | None = None
+                for phase in phases:
+                    name = str(phase.get("name", ""))
+                    if name not in border_validation.ARMED_ROI_PHASE_NAMES:
+                        continue
+                    cv = phase.get("control_validation") or {}
+                    end = cv.get("end") or {}
+                    gates = border_validation.border_phase_roi_authoritative_gates(end)
+                    roi_phase_gates[name] = gates
+                    if gates["status"] != "passed":
+                        roi_failures.append(f"{name}: {gates.get('reason')}")
+                    if name == border_validation.BORDER_ROI_PRIMARY_PHASE:
+                        primary_snapshot = end
+                manifest["border_roi_phase_gates"] = roi_phase_gates
+                if primary_snapshot is not None:
+                    manifest["border_roi_primary_snapshot"] = primary_snapshot
+                if roi_failures:
                     raise base.BenchmarkError(
-                        "border_engagement_gate failed: "
-                        + str(manifest["border_engagement_gate"].get("reason"))
+                        "border_roi_authoritative_gates failed: " + "; ".join(roi_failures)
                     )
                 manifest["status"] = "complete"
         except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:

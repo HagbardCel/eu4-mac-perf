@@ -1,4 +1,1 @@
-#include <stdint.h>
-
-uint64_t border_loop_draw_target;
-uint64_t border_loop_skip_target;
+/* Gateway draw/skip targets are defined in eu4_submission_border_loop_head_gateway.S */

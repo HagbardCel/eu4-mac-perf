@@ -92,5 +92,54 @@ int main(void) {
     const uint64_t after_first = eu4_border_loop_head_test_tls_semantic_eliminations();
     eu4_border_loop_head_on_armed_hit(&ctx, records, ibos, 4, entries, 4, false);
     assert(eu4_border_loop_head_test_tls_semantic_eliminations() == after_first);
+
+    enum { SUFFIX_N = 8 };
+    eu4_border_record_view_t big_records[SUFFIX_N];
+    uintptr_t big_ibos[SUFFIX_N];
+    eu4_border_index_entry_t big_entries[SUFFIX_N];
+    for (int i = 0; i < SUFFIX_N; i++) {
+        big_records[i].arg3_u16_at_plus_04 = 1;
+        big_records[i].triangle_count = 4;
+        big_records[i].vbo_table_index = 1;
+        big_ibos[i] = 100;
+        big_entries[i].record_index = i;
+        big_entries[i].visibility_byte = 0xFF;
+        big_entries[i].color_byte = 1;
+    }
+    eu4_border_loop_head_epoch_reset();
+    for (int hook = 0; hook < SUFFIX_N; hook++) {
+        const int side_count = SUFFIX_N - hook;
+        const bool walk_end = hook == SUFFIX_N - 1;
+        eu4_border_loop_head_test_on_armed_hit_suffix(
+            &ctx, big_records, big_ibos, SUFFIX_N, &big_entries[hook], (uint32_t)side_count, walk_end);
+    }
+    assert(eu4_border_loop_head_test_tls_semantic_eliminations() == (uint64_t)(SUFFIX_N - 1));
+    assert(eu4_border_loop_head_test_tls_semantic_evaluations() == 1);
+    assert(eu4_border_loop_head_test_tls_implementable_evaluations() == 1);
+
+    enum { LONG_N = 200 };
+    eu4_border_record_view_t long_records[LONG_N];
+    uintptr_t long_ibos[LONG_N];
+    eu4_border_index_entry_t long_entries[LONG_N];
+    for (int i = 0; i < LONG_N; i++) {
+        long_records[i].arg3_u16_at_plus_04 = 1;
+        long_records[i].triangle_count = 4;
+        long_records[i].vbo_table_index = 1;
+        long_ibos[i] = 100;
+        long_entries[i].record_index = (int16_t)i;
+        long_entries[i].visibility_byte = 0xFF;
+        long_entries[i].color_byte = 1;
+    }
+    eu4_border_loop_head_epoch_reset();
+    for (int hook = 0; hook < LONG_N; hook++) {
+        const int side_count = LONG_N - hook;
+        const bool walk_end = hook == LONG_N - 1;
+        eu4_border_loop_head_test_on_armed_hit_suffix(
+            &ctx, long_records, long_ibos, LONG_N, &long_entries[hook], (uint32_t)side_count, walk_end);
+    }
+    assert(eu4_border_loop_head_test_tls_semantic_eliminations() == (uint64_t)(LONG_N - 1));
+    assert(eu4_border_loop_head_test_tls_semantic_evaluations() == 1);
+    assert(eu4_border_loop_head_test_tls_implementable_eliminations() == (uint64_t)(LONG_N - 2));
+    assert(eu4_border_loop_head_test_tls_implementable_evaluations() == 2);
     return 0;
 }

@@ -41,6 +41,7 @@ static _Thread_local uint64_t tls_partial_walk_diag = 0;
 static _Thread_local uint64_t tls_decode_failures = 0;
 static _Thread_local uint64_t tls_geometry_failures = 0;
 static _Thread_local uint64_t tls_resolution_failures = 0;
+static _Thread_local uint64_t tls_thread_checks = 0;
 
 static uint64_t current_thread_id(void) {
     uint64_t tid = 0;
@@ -50,7 +51,7 @@ static uint64_t current_thread_id(void) {
 
 static bool check_thread_affinity(void) {
     const uint64_t tid = current_thread_id();
-    eu4_submission_counter_add(EU4_COUNTER_BORDER_THREAD_CHECKS, 1);
+    tls_thread_checks++;
     uint64_t expected = 0;
     if (atomic_compare_exchange_strong(&g_roi_loop_thread_id, &expected, tid)) {
         return true;
@@ -130,8 +131,8 @@ static void apply_decision(
         tls_semantic_suppress--;
     } else {
         tls_semantic_evaluations++;
-        record_run_length_histogram(true, semantic->run_length);
         if (semantic->batch_eligible) {
+            record_run_length_histogram(true, semantic->run_length);
             tls_semantic_decisions++;
             tls_semantic_elim += semantic->eligible_draw_calls_eliminable;
             tls_semantic_suppress = semantic->run_length > 0 ? semantic->run_length - 1u : 0u;
@@ -143,8 +144,8 @@ static void apply_decision(
         tls_implementable_suppress--;
     } else {
         tls_implementable_evaluations++;
-        record_run_length_histogram(false, implementable->run_length);
         if (implementable->batch_eligible) {
+            record_run_length_histogram(false, implementable->run_length);
             tls_implementable_decisions++;
             tls_implementable_elim += implementable->eligible_draw_calls_eliminable;
             tls_implementable_suppress = implementable->run_length > 0 ? implementable->run_length - 1u : 0u;
@@ -184,6 +185,7 @@ void eu4_border_loop_head_epoch_reset(void) {
     tls_decode_failures = 0;
     tls_geometry_failures = 0;
     tls_resolution_failures = 0;
+    tls_thread_checks = 0;
     gate0_recorded = false;
 }
 
@@ -201,6 +203,34 @@ uint64_t eu4_border_loop_head_test_tls_implementable_eliminations(void) {
 
 bool eu4_border_loop_head_test_epoch_invalid(void) {
     return atomic_load_explicit(&g_roi_epoch_invalid, memory_order_relaxed);
+}
+
+uint64_t eu4_border_loop_head_test_tls_semantic_evaluations(void) {
+    return tls_semantic_evaluations;
+}
+
+uint64_t eu4_border_loop_head_test_tls_implementable_evaluations(void) {
+    return tls_implementable_evaluations;
+}
+
+uint64_t eu4_border_loop_head_test_tls_semantic_decisions(void) {
+    return tls_semantic_decisions;
+}
+
+uint64_t eu4_border_loop_head_test_tls_implementable_decisions(void) {
+    return tls_implementable_decisions;
+}
+
+void eu4_border_loop_head_test_on_armed_hit_suffix(
+    const eu4_border_loop_context_t *ctx,
+    const eu4_border_record_view_t *record_table,
+    const uintptr_t *ibo_table,
+    uint32_t record_count,
+    const eu4_border_index_entry_t *side_entries,
+    uint32_t side_count,
+    bool walk_end) {
+    eu4_border_loop_head_on_armed_hit(
+        ctx, record_table, ibo_table, record_count, side_entries, side_count, walk_end);
 }
 
 void eu4_border_loop_head_on_armed_hit(
@@ -296,6 +326,14 @@ void eu4_border_loop_head_observe_frame(void *rbp, void *r12, uint64_t r13_full,
         current.triangle_count > 0) {
         tls_structural_draws_walk++;
     }
+    if (tls_semantic_suppress > 0 && tls_implementable_suppress > 0) {
+        tls_semantic_suppress--;
+        tls_implementable_suppress--;
+        if (geom.walk_end) {
+            close_structural_walk();
+        }
+        return;
+    }
     eu4_border_resolved_step_t steps[EU4_BORDER_MAX_RESOLVE_STEPS];
     uint32_t resolved = 0;
     if (!eu4_border_resolve_remaining_steps(
@@ -305,35 +343,17 @@ void eu4_border_loop_head_observe_frame(void *rbp, void *r12, uint64_t r13_full,
     }
     eu4_border_prefix_result_t semantic;
     eu4_border_prefix_result_t implementable;
+    memset(&semantic, 0, sizeof(semantic));
+    memset(&implementable, 0, sizeof(implementable));
     if (tls_semantic_suppress == 0) {
         eu4_border_classify_resolved_prefix(
-            &ctx, steps, resolved, EU4_BORDER_IBO_ONE_BIND, 0, true, geom.walk_end, &semantic);
-    } else {
-        memset(&semantic, 0, sizeof(semantic));
+            &ctx, steps, resolved, EU4_BORDER_IBO_ONE_BIND, 0, true, true, &semantic);
     }
     if (tls_implementable_suppress == 0) {
         eu4_border_classify_resolved_prefix(
-            &ctx,
-            steps,
-            resolved,
-            EU4_BORDER_IBO_ONE_BIND,
-            EU4_BORDER_V1_SCAN_CAP,
-            false,
-            geom.walk_end,
-            &implementable);
-    } else {
-        memset(&implementable, 0, sizeof(implementable));
+            &ctx, steps, resolved, EU4_BORDER_IBO_ONE_BIND, EU4_BORDER_V1_SCAN_CAP, false, true, &implementable);
     }
-    if (tls_semantic_suppress == 0 || tls_implementable_suppress == 0) {
-        apply_decision(&semantic, &implementable);
-    } else {
-        if (tls_semantic_suppress > 0) {
-            tls_semantic_suppress--;
-        }
-        if (tls_implementable_suppress > 0) {
-            tls_implementable_suppress--;
-        }
-    }
+    apply_decision(&semantic, &implementable);
     if (geom.walk_end) {
         close_structural_walk();
     }
@@ -420,6 +440,10 @@ void eu4_border_loop_head_flush_pending(void) {
             EU4_COUNTER_BORDER_ROI_NONZERO_SUPPRESSION_AT_FRAME_BOUNDARY, tls_suppression_diag);
         tls_suppression_diag = 0;
     }
+    if (tls_thread_checks > 0) {
+        eu4_submission_counter_add(EU4_COUNTER_BORDER_THREAD_CHECKS, tls_thread_checks);
+        tls_thread_checks = 0;
+    }
 }
 
 bool eu4_border_loop_head_self_test_decode_geometry(void) {
@@ -434,6 +458,9 @@ bool eu4_border_loop_head_self_test_decode_geometry(void) {
         return false;
     }
     if (eu4_border_decode_walk_geometry(100u, 103u, &geom)) {
+        return false;
+    }
+    if (eu4_border_decode_walk_geometry(0u, (uintptr_t)(1ull << 34), &geom)) {
         return false;
     }
     return true;

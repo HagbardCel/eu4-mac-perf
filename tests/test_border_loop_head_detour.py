@@ -13,8 +13,6 @@ class BorderLoopHeadDetourTests(unittest.TestCase):
     def test_gateway_preserves_r11(self) -> None:
         if platform.system() != "Darwin":
             self.skipTest("requires macOS")
-        if platform.machine() != "x86_64":
-            self.skipTest("runtime detour harness requires native x86_64")
         out = BENCH / ".build" / "border_loop_head_detour_harness"
         cmd = [
             "clang",

@@ -15,27 +15,61 @@ extern void eu4_border_loop_head_gateway(void);
 extern uint64_t border_loop_draw_target;
 extern uint64_t border_loop_skip_target;
 
+#define RX_RESTORE_MAX_ATTEMPTS 3
+
 static bool loop_head_installed = false;
 static uintptr_t loop_site = 0;
 static unsigned char loop_saved[14];
 
-static bool restore_site_bytes(void) {
+static bool page_begin(uintptr_t address, uintptr_t *begin_out) {
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0) {
+        return false;
+    }
+    *begin_out = address & ~((uintptr_t)page - 1);
+    return true;
+}
+
+static bool set_page_rw(uintptr_t begin) {
+    long page = sysconf(_SC_PAGESIZE);
+    return mach_vm_protect(
+               mach_task_self(), begin, (mach_vm_size_t)page, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) ==
+           KERN_SUCCESS;
+}
+
+static bool set_page_rx(uintptr_t begin) {
+    long page = sysconf(_SC_PAGESIZE);
+    return mach_vm_protect(mach_task_self(), begin, (mach_vm_size_t)page, false, VM_PROT_READ | VM_PROT_EXECUTE) ==
+           KERN_SUCCESS;
+}
+
+static bool restore_page_rx_bounded(uintptr_t begin) {
+    for (int attempt = 0; attempt < RX_RESTORE_MAX_ATTEMPTS; attempt++) {
+        if (set_page_rx(begin)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool rollback_patched_site(void) {
     if (loop_site == 0) {
         return true;
     }
-    long page = sysconf(_SC_PAGESIZE);
-    uintptr_t begin = loop_site & ~((uintptr_t)page - 1);
-    if (mach_vm_protect(
-            mach_task_self(), begin, (mach_vm_size_t)page, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) !=
-        KERN_SUCCESS) {
+    uintptr_t begin = 0;
+    if (!page_begin(loop_site, &begin)) {
+        return false;
+    }
+    if (!set_page_rw(begin)) {
         return false;
     }
     memcpy((void *)loop_site, loop_saved, sizeof(loop_saved));
     sys_icache_invalidate((void *)loop_site, sizeof(loop_saved));
-    if (mach_vm_protect(mach_task_self(), begin, (mach_vm_size_t)page, false, VM_PROT_READ | VM_PROT_EXECUTE) !=
-        KERN_SUCCESS) {
+    if (!restore_page_rx_bounded(begin)) {
         return false;
     }
+    loop_site = 0;
+    loop_head_installed = false;
     return true;
 }
 
@@ -59,23 +93,19 @@ static bool install_loop_head_at(void *site, uintptr_t image_base) {
     }
     border_loop_draw_target = image_base + 0x10cbe63u;
     border_loop_skip_target = image_base + 0x10cc3bdu;
-    long page = sysconf(_SC_PAGESIZE);
     uintptr_t address = (uintptr_t)site;
-    uintptr_t begin = address & ~((uintptr_t)page - 1);
-    if (mach_vm_protect(
-            mach_task_self(), begin, (mach_vm_size_t)page, false, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) !=
-        KERN_SUCCESS) {
+    uintptr_t begin = 0;
+    if (!page_begin(address, &begin) || !set_page_rw(begin)) {
         return false;
     }
     memcpy(loop_saved, site, sizeof(loop_saved));
     loop_site = address;
     write_rip_indirect_jmp14(site, (void *)eu4_border_loop_head_gateway);
     sys_icache_invalidate(site, 14);
-    if (mach_vm_protect(mach_task_self(), begin, (mach_vm_size_t)page, false, VM_PROT_READ | VM_PROT_EXECUTE) !=
-        KERN_SUCCESS) {
-        memcpy((void *)loop_site, loop_saved, sizeof(loop_saved));
-        sys_icache_invalidate((void *)loop_site, sizeof(loop_saved));
-        loop_site = 0;
+    if (!set_page_rx(begin)) {
+        (void)rollback_patched_site();
+        border_loop_draw_target = 0;
+        border_loop_skip_target = 0;
         return false;
     }
     loop_head_installed = true;
@@ -111,11 +141,9 @@ bool eu4_border_loop_head_install(void) {
     uintptr_t image_base = (uintptr_t)info.dli_fbase;
     void *site = (void *)(image_base + 0x10cbe55u);
     if (!install_loop_head_at(site, image_base)) {
-        (void)restore_site_bytes();
+        (void)rollback_patched_site();
         border_loop_draw_target = 0;
         border_loop_skip_target = 0;
-        loop_site = 0;
-        loop_head_installed = false;
         return false;
     }
     return true;

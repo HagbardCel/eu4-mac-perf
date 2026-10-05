@@ -55,6 +55,13 @@ static tristate_t cmp_field(bool known, uint32_t current, uint32_t required) {
     return current == required ? TS_MATCH : TS_MISMATCH;
 }
 
+static tristate_t cmp_ptr_field(bool known, uintptr_t current, uintptr_t required) {
+    if (!known) {
+        return TS_UNKNOWN;
+    }
+    return current == required ? TS_MATCH : TS_MISMATCH;
+}
+
 static entry_match_t entry_matches_key(
     const eu4_border_loop_context_t *ctx,
     const batch_key_t *key,
@@ -65,7 +72,7 @@ static entry_match_t entry_matches_key(
     if (topology == EU4_BORDER_IBO_ONE_BIND) {
         m.ibo = null_ibo(key->ibo_argument) ? TS_MISMATCH : TS_MATCH;
     } else {
-        m.ibo = cmp_field(ctx->ibo_known, (uint32_t)ctx->bound_ibo_identity, (uint32_t)key->ibo_identity);
+        m.ibo = cmp_ptr_field(ctx->ibo_known, ctx->bound_ibo_identity, key->ibo_identity);
     }
     return m;
 }

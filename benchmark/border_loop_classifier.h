@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #define EU4_BORDER_V1_SCAN_CAP 128u
+/* Harness safety capacity; semantic scan is logically unbounded — exceedance invalidates ROI epoch. */
 #define EU4_BORDER_MAX_RESOLVE_STEPS 8192u
 
 typedef enum {

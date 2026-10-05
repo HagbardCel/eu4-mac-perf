@@ -21,6 +21,14 @@ static bool checked_mul(uintptr_t a, uintptr_t b, uintptr_t *out) {
     return true;
 }
 
+static bool checked_add(uintptr_t a, uintptr_t b, uintptr_t *out) {
+    if (a > (uintptr_t)(-1) - b) {
+        return false;
+    }
+    *out = a + b;
+    return true;
+}
+
 bool eu4_border_decode_walk_geometry(uintptr_t cursor, uintptr_t end_bound, eu4_border_walk_geometry_t *out) {
     if (!out) {
         return false;
@@ -40,11 +48,11 @@ bool eu4_border_decode_walk_geometry(uintptr_t cursor, uintptr_t end_bound, eu4_
     if (((delta + 2u) & 3u) != 0u) {
         return false;
     }
-    const uint32_t remaining = (uint32_t)((delta + 2u) / 4u);
-    if (remaining == 0u) {
+    const uintptr_t remaining_wide = (delta + 2u) / 4u;
+    if (remaining_wide == 0u || remaining_wide > (uintptr_t)UINT32_MAX) {
         return false;
     }
-    out->remaining = remaining;
+    out->remaining = (uint32_t)remaining_wide;
     out->walk_end = delta == 2u;
     out->valid = true;
     return true;
@@ -133,8 +141,18 @@ bool eu4_border_resolve_step_at_cursor(
     if (!checked_mul((uintptr_t)record_index, RECORD_STRIDE, &record_off)) {
         return false;
     }
-    const uintptr_t record_addr = record_base + record_off;
-    const uintptr_t ibo_slot_addr = ibo_base_ptr + (uintptr_t)record_index * sizeof(uintptr_t);
+    uintptr_t record_addr = 0;
+    uintptr_t ibo_off = 0;
+    if (!checked_add(record_base, record_off, &record_addr)) {
+        return false;
+    }
+    if (!checked_mul((uintptr_t)record_index, sizeof(uintptr_t), &ibo_off)) {
+        return false;
+    }
+    uintptr_t ibo_slot_addr = 0;
+    if (!checked_add(ibo_base_ptr, ibo_off, &ibo_slot_addr)) {
+        return false;
+    }
     const uintptr_t ibo_val = *(const uintptr_t *)ibo_slot_addr;
     out->triangle_count = *(const uint16_t *)(record_addr + 6u);
     out->vbo_table_index = *(const uint16_t *)(record_addr + 0x18u);

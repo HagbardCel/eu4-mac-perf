@@ -14,22 +14,26 @@
   "classifier_counter_instrumentation_ready": true,
   "live_loop_head_telemetry_observed": false,
   "mutation_authorized": false,
-  "runtime_gate_0": "READY_OFFLINE",
-  "runtime_detour_installation": "READY_OFFLINE",
+  "runtime_gate_0": "PENDING",
+  "runtime_detour_installation": "PENDING",
+  "runtime_gate_0_probe_ready": true,
+  "runtime_detour_installer_ready": true,
   "structural_reference_per_frame": 1562,
   "structural_reference_source": "historical_intrusive_draw_trace_not_validator",
   "ready_for_single_venice_observer_run": true,
   "static_feasibility_pointer": "analysis/evidence/border-loop-head-feasibility-20261004.json",
   "self_tests": {
-    "observer_build": "PASS",
+    "portable_suite": "PASS",
+    "macos_x86_64_border_build": "PASS",
     "classifier_python_c_parity": "PASS",
-    "counter_schema": "PASS",
+    "classifier_resolved_core_parity": "PASS",
     "dual_suppression_replay": "PASS",
-    "border_detour_harness": "PASS",
-    "observation_epoch_gating": "PASS",
+    "gateway_runtime": "PASS",
+    "border_detour_installer": "PASS",
     "decode_failures": "PASS",
     "thread_affinity": "PASS",
-    "freeze_state_capture": "PASS"
+    "freeze_state_capture": "PASS",
+    "counter_schema": "PASS"
   },
-  "note": "Live loop-head decode/classify path wired; Venice numerics remain null until manual observer run."
+  "note": "Semantic scan logically unbounded; EU4_BORDER_MAX_RESOLVE_STEPS exceedance invalidates epoch. Visible record_index is an engine invariant shared with DrawBorders; allocation extent not independently reconstructed. Venice runtime gates remain PENDING until live EU IV run."
 }
