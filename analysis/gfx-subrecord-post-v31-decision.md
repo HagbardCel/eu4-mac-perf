@@ -46,8 +46,8 @@ Profiler-off readiness on the same run: **~1,115 CPU-ms/s**, **~55 swaps/s**. Bo
 
 ## Next work
 
-1. **PR B** — Border static gate chain → [border-multidraw-go-nogo.md](border-multidraw-go-nogo.md).  
-2. **PR C** — One Venice ABABA only if PR B GO-A/GO-B.  
-3. **PR D** — Map-text RE if border NO-GO or after border experiment.
+1. **Loop-head feasibility (offline)** — [border-loop-head-feasibility.md](border-loop-head-feasibility.md); semantic/implementable ceilings unresolved until classifier + live counters.  
+2. **No Venice observer ABABA** — PR B mutation NO-GO; GL-tail interpose not decision-critical.  
+3. **Map-text RE** — [map-text-multidraw-re.md](map-text-multidraw-re.md) remains fallback charter.
 
 Mesh observer dylib remains **maintenance-only** (v3.1 entry + site hooks).

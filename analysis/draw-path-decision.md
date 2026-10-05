@@ -26,9 +26,12 @@ share the **tracked** program, texture, uniform, vertex, buffer, framebuffer,
 and render-state signatures. Of these, 48,418 are border pairs, 11,744 are map
 text, and only 128 are mesh-object pairs. A 943-draw border run recurs in each
 of the 31 complete frames. The border draws use one index buffer and zero
-index offset, but varying base vertices; no adjacent pair has a strictly
-contiguous index range. A multi-draw API that accepts per-draw base vertices
-is therefore the structural candidate. Repeated mesh geometry with changed
+index offset on the realized GL path; historical screening text conflated
+varying record `+0x04` with GL basevertex — corrected in
+[border-mode0-basevertex-evidence-addendum.md](border-mode0-basevertex-evidence-addendum.md).
+No adjacent pair has a strictly contiguous index range. Loop-head consolidation
+targets **`glMultiDrawElements`** (mode-0 effective draws are
+`glDrawElements` with zero index offset). Repeated mesh geometry with changed
 uniforms accounts for only 6.1% of all draws, below the planned 15%
 instancing threshold.
 

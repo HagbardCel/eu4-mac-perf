@@ -61,19 +61,18 @@ versus mesh work.
 `CPdxMapBorderLayer::DrawBorders` has three direct `GfxDrawIndexed` call sites
 at `0x1010cc2e8`, `0x1010cc352`, and `0x1010cc3b8`. Its inner record stride is
 28 bytes. The observed call paths pass a draw count derived from record `+0x06`,
-an integer base vertex from `+0x04`, and either zero or the integer at `+0x10`
-as the helper's fourth argument. The function selects a vertex buffer, selects
-an index buffer on one path, then calls the draw helper. `GfxDrawIndexed`
-chooses `GL_UNSIGNED_SHORT`, index offset zero, and tail-jumps to
-`glDrawElementsBaseVertex` when the base vertex is nonzero. This tail jump
-means the GL call's immediate return address is already the engine call site;
-an extra stack-frame walk is wrong for attribution.
+a uint16 at `+0x04` loaded into `%edx`, **`xor %ecx,%ecx`** as the helper's fourth
+argument on mode-0, and record `+0x10` on other branches. The function selects
+a vertex buffer, selects an index buffer on one path, then calls the draw helper.
+On mode-0 border, static RE shows **`%edx` is dead** inside `GfxDrawIndexed` and
+**`%ecx==0` selects `glDrawElements`** (index offset zero, `GL_UNSIGNED_SHORT`).
+See [border-mode0-basevertex-evidence-addendum.md](border-mode0-basevertex-evidence-addendum.md).
 
-The captured complete frame has 2,285 border draws, all using one index buffer
-and index offset zero, but 2,285 distinct base vertices. It uses one program,
-four tracked texture signatures, and 500 tracked uniform signatures. The
-different base vertices rule out a simple contiguous-index-range merge, while
-`glMultiDrawElementsBaseVertex` can express differing base vertices in one API
-call. That API is declared by the installed macOS OpenGL SDK. This only
-establishes a candidate shape: exact ordering, intervening state, constant
-updates, and driver behavior must be checked in a prototype.
+The captured complete frame has 2,285 border draws, one index buffer, and index
+offset zero. GL observers record **`base_vertex=0`** on the realized
+`glDrawElements` path; record `+0x04` may still vary per draw but is **not**
+the effective OpenGL base vertex on mode-0. It uses one program, four tracked
+texture signatures, and 500 tracked uniform signatures. Loop-head consolidation
+candidate: **`glMultiDrawElements`** with per-draw counts and zero index offsets.
+Exact ordering, intervening state, constant updates, and driver behavior must be
+checked in a prototype.

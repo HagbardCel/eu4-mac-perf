@@ -5,7 +5,11 @@
 
 ## Motivation
 
-Paused Venice: ~2,285 border draws/frame (single IBO, distinct base vertices). Intrusive screening: ~1,562 same-state border adjacencies/frame; recurring **943-draw** runs (`943×31` frames). `glMultiDrawElementsBaseVertex` matches varying `basevertex` with shared mode/type/IBO.
+Paused Venice: ~2,285 border draws/frame (single IBO, zero GL index offset on mode-0).
+Intrusive screening: ~1,562 same-state border adjacencies/frame; recurring **943-draw**
+runs (`943×31` frames). Record `+0x04` varies but is **not** GL basevertex on mode-0
+([addendum](border-mode0-basevertex-evidence-addendum.md)). Loop-head target:
+**`glMultiDrawElements`** with shared mode/type/IBO.
 
 Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — see [gfx-subrecord-post-v31-decision.md](gfx-subrecord-post-v31-decision.md).
 
@@ -33,4 +37,4 @@ Mesh adjacency recurrence is a **screened negative** on paused Venice v3.1 — s
 
 ## Status
 
-PR B artifacts live in stacked PR **#36** (not on `main` until merged). **Mutation go/no-go: NO** for GL interpose; observer ABABA may validate hook engagement only.
+PR B/C/D merged on `main`. **Mutation: NO** for GL interpose. **Active track:** [border-loop-head-feasibility.md](border-loop-head-feasibility.md) @ `0x1010cbe55` (PR #39 offline RE).

@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "api": "classify_batchable_prefix",
+  "ibo_bind_topology_default": "ONE_BIND",
+  "barrier_mask_bits": {
+    "SKIP": 1,
+    "UNSUPPORTED_MODE": 2,
+    "COLOR_TRANSITION": 4,
+    "VBO_TRANSITION": 8,
+    "IBO_TRANSITION": 16,
+    "OTHER_SIDE_EFFECT": 32
+  },
+  "termination_kind": ["BARRIER", "WALK_END", "SCAN_CAP", "INVALID"],
+  "batch_key_fields": ["mode", "color_state", "vbo_table_index", "ibo_identity", "ibo_argument"],
+  "batch_eligible_formula": "run_length>=2 AND entry_match AND homogeneous_included_prefix AND termination_kind!=INVALID",
+  "null_ibo_argument_policy": "OTHER_SIDE_EFFECT",
+  "v1_policies": {
+    "skip_record": "visibility_test_before_deref",
+    "triangle_count_zero": "boundary_OTHER_SIDE_EFFECT",
+    "deferred_attrib_upload_pending": "fall_through_at_hook",
+    "secondary_upload_pending": "fall_through_at_hook",
+    "special_precolor_outer_batch": "OTHER_SIDE_EFFECT_when_0xb0_mask_bit_set",
+    "special_precolor_outer_batch_mask": "0xB0_bits_4_5_7",
+    "special_precolor_outer_batch_disasm": "0x1010cbe6c_cmpl_7_ja_0x1010cc1cf;0x1010cbe79_btl_0xb0_jae_0x1010cc1cf",
+    "outer_batch_index_hook_source": "uint32_memory32_at_minus_0xe4_rbp",
+    "scan_cap": "not_barrier_telemetry"
+  },
+  "telemetry_phase_a": [
+    "eligible_runs",
+    "eligible_draws",
+    "eligible_draw_calls_eliminable",
+    "barrier_skip",
+    "barrier_mode",
+    "barrier_color",
+    "barrier_vbo",
+    "barrier_ibo",
+    "barrier_other",
+    "run_length_histogram",
+    "max_run_length"
+  ],
+  "telemetry_phase_b_additional": [
+    "actual_multidraw_calls",
+    "actual_draw_calls_eliminated"
+  ],
+  "invariant_b_phase_local": "actual_draw_calls_eliminated <= eligible_draw_calls_eliminable",
+  "barrier_counter_semantics": "count_set_bits_per_event_not_mutually_exclusive"
+}

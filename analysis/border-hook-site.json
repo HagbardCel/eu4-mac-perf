@@ -1,14 +1,124 @@
 {
-  "schema_version": 1,
+  "schema_version": 4,
   "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "owner_symbol": "_ZN18CPdxMapBorderLayer11DrawBordersEP21GfxDeferredContextGFXPK10CEU3CameraR18SBorderDrawInfoSet6CArrayIiEiifP19CWrapWorldShadowMapc",
   "pr_c_implementation": "observer_only_glDrawElementsBaseVertex_interpose_immediate_pass_through",
   "mutation_target": "future_loop_head_at_0x1010cbe55",
   "future_loop_head": {
-    "preferred_address": "0x1010cbe55",
+    "detour_site": "0x1010cbe55",
     "image_offset": "0x10cbe55",
     "instruction": "testb %r13b, 0x1(%rcx)",
-    "note": "Preferred loop-head patch when binary detour lands"
+    "instruction_bytes": "44 84 69 01 48 89 4d 90 0f 84 5a 05 00 00",
+    "patch_span_bytes": 14,
+    "detour_encoding": "RIP_INDIRECT_ABSOLUTE_JMP",
+    "detour_target_requirement": "8-byte absolute target in trampoline; no rel32 reachability limit",
+    "near_island_required": false,
+    "direct_incoming_edges_to_mid_span": [],
+    "indirect_target_risk": "assessed_not_indicated",
+    "incoming_control_flow_audit": {
+      "method": "otool -tv full __TEXT scan; rg for 0x1010cbe55|59|5d branch/call targets",
+      "limits": "Indirect jump tables not exhaustively ruled out; mid-span addresses are fall-through interiors of a single 14-byte basic block from 0x1010cbe55",
+      "audit_method": "otool -tv + branch-target scan; indirect tables not exhaustively ruled out",
+      "0x1010cbe55": {
+        "incoming_edges": ["0x1010cc3da jne → 0x1010cbe55"],
+        "notes": "Loop back-edge only in scanned disassembly"
+      },
+      "0x1010cbe59": {
+        "independent_incoming_edges": [],
+        "notes": "No branch/call targets found outside sequential fall-through from 0x1010cbe55"
+      },
+      "0x1010cbe5d": {
+        "independent_incoming_edges": [],
+        "notes": "No branch/call targets found outside sequential fall-through from 0x1010cbe59"
+      }
+    },
+    "displaced_instructions": [
+      {"address": "0x1010cbe55", "bytes": "44 84 69 01", "mnemonic": "testb %r13b, 0x1(%rcx)"},
+      {"address": "0x1010cbe59", "bytes": "48 89 4d 90", "mnemonic": "movq %rcx, -0x70(%rbp)"},
+      {"address": "0x1010cbe5d", "bytes": "0f 84 5a 05 00 00", "mnemonic": "je 0x1010cc3bd"}
+    ],
+    "detour_return_after_displaced_span": "0x1010cbe63",
+    "first_unconsumed_trampoline_entry": "displaced_testb_movq_then_je_semantics",
+    "terminal_prefix_resume": "0x1010cc3e0",
+    "feasibility_doc": "analysis/border-loop-head-patch-plan.md",
+    "continuation_liveness_proof": {
+      "method": "cfg_forward_use_all_successor_paths",
+      "disassembly_artifact": "analysis/evidence/drawborders-drawborders-fn-disasm.txt",
+      "cfg_evidence_complete_function": true,
+      "terminal_successors": ["0x1010cbc7f", "0x1010cc3eb"],
+      "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "proof_complete": true,
+      "ymm_avx_in_inner_walk": "none_observed",
+      "interior_hook": {
+        "rcx": "SYNTHESIZED_FIRST_UNCONSUMED",
+        "rbx": "SYNTHESIZE_EBX_FROM_STACK_-0xe4_BEFORE_DISPLACED_HOOK",
+        "rflags": "LIVE_TESTB_JE_REPRODUCE",
+        "stack_-0x70": "LIVE_DISPLACED_MOVQ"
+      },
+      "interior_draw_simple": {
+        "scope": "je_0x1010cc26b_at_0x1010cc1d5_mode0_0x1010cc2e8",
+        "rcx": "SYNTHESIZED_FIRST_UNCONSUMED",
+        "rax": "DEAD_BEFORE_READ",
+        "rdi": "DEAD_BEFORE_READ",
+        "rsi": "DEAD_BEFORE_READ",
+        "rdx": "DEAD_BEFORE_READ",
+        "r8_r11": "DEAD_BEFORE_READ",
+        "xmm0_15": "DEAD_BEFORE_READ",
+        "rbp": "PRESERVE_FRAME_POINTER",
+        "r13": "PRESERVE_FULL",
+        "r12": "PRESERVE_HOOK_VALUE",
+        "r14": "REDEFINE_AT_0x1010cbe67",
+        "r15": "REDEFINE_AT_0x1010cc27d",
+        "rbx": "LIVE_OUTER_INDEX_THEN_REDEFINE_STRIDE_0x1010cc281"
+      },
+      "interior_boundary_first_unconsumed": {
+        "color_transition": "0x1010cc1cf_mismatch_cc1de_cc22d_helpers_0x1010cc242_0x1010cc266_CALLER_SAVED_DEFINED",
+        "vbo_transition": "0x1010cc297_GfxSetVertexBuffers_ARGS_DEFINED",
+        "ibo_transition": "0x1010cc2c1_GfxSetIndexBuffer_ARGS_DEFINED",
+        "null_ibo_fallthrough": "GFXSETINDEXBUFFER_NOOP_THEN_MODE0_ARG_REBUILD",
+        "zero_triangles": "GFXDRAWINDEXED_ARGS_DEFINED_BEFORE_CALL",
+        "scan_cap_homogeneous": "SEE_interior_draw_simple",
+        "skip": "SEE_interior_skip"
+      },
+      "interior_skip": {
+        "rcx": "DEFINE_FROM_STACK_-0x70",
+        "rax": "DEFINE_AT_0x1010cc3c1",
+        "caller_saved_other": "DEAD_BEFORE_READ",
+        "xmm0_15": "DEAD_BEFORE_READ"
+      },
+      "terminal": {
+        "caller_saved": {
+          "rax": "DEAD_BEFORE_READ_BOTH_SUCCESSORS",
+          "rcx": "DEAD_BEFORE_READ_BOTH_SUCCESSORS",
+          "rdx": "DEAD_REDEFINE_0x1010cbd42_TAKEN",
+          "rdi": "DEAD_UNTIL_DEFINE_SUCCESSOR",
+          "rsi": "DEAD_UNTIL_DEFINE_SUCCESSOR",
+          "r8": "DEAD_DEFINE_BEFORE_CALL_TAKEN",
+          "r9": "DEAD_DEFINE_BEFORE_CALL_TAKEN",
+          "r10": "DEAD_NO_READ_BEFORE_CALL_OR_EXIT",
+          "r11": "DEAD_NO_READ_BEFORE_CALL_OR_EXIT",
+          "xmm0_15": "DEAD_BEFORE_INCL",
+          "rflags": "DEAD_BEFORE_INCL"
+        },
+        "callee_saved": {
+          "rbp": "PRESERVE_FRAME_POINTER",
+          "rbx": "SYNTHESIZE_EBX_FROM_-0xe4_AT_TERMINAL_THEN_INCL",
+          "r12": "PRESERVE_HOOK_VALUE_LIVE_0x8_r12_at_0x1010cbca5_and_0x1010cc3eb",
+          "r13": "PRESERVE_FULL",
+          "r14": "DEAD_REDEFINE_0x1010cbcc4_TAKEN",
+          "r15": "DEAD_REDEFINE_0x1010cbc8b_TAKEN"
+        },
+        "stack_locals": {
+          "stack_-0x70": "DEAD_REDEFINE_0x1010cbca1_BEFORE_READ",
+          "stack_-0x198": "DEAD_REDEFINE_0x1010cbe40_BEFORE_TAIL_CMP",
+          "stack_-0xe4": "LIVE_SYNTHESIS_SOURCE_FOR_EBX",
+          "stack_-0x51": "PRESERVED_EQUIVALENT_HOMOGENEOUS_COLOR",
+          "stack_-0x64": "PRESERVED_EQUIVALENT_HOMOGENEOUS_VBO_PERSISTS_OUTER",
+          "stack_-0x80": "DEAD_REDEFINE_0x1010cbe6f_BEFORE_MODE0_USE"
+        },
+        "stack_-0x70_fallback_if_needed": "movq_minus_0x198_sub_2_to_minus_0x70"
+      }
+    }
   },
   "draw_sites": [
     {"preferred_address": "0x1010cc2e8", "image_offset": "0x10cc2e8", "return_offset": "0x10cc2ed", "mode": 0},

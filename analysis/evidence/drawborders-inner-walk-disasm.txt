@@ -1,0 +1,3 @@
+# SUPERSEDED — do not use for criterion 6.
+# Authoritative artifact: drawborders-drawborders-fn-disasm.txt
+# Regenerate: EU4_PATH=... ./analysis/tools/border_draw_inner_disasm.sh

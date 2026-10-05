@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "record_name": "SBorderDraw",
   "stride_bytes": 28,
@@ -11,18 +11,19 @@
       "addq %r15, %rbx           ; index*28 byte offset into %r14"
     ]
   },
+  "mode0_basevertex_evidence": "analysis/border-mode0-basevertex-evidence-addendum.md",
   "multidraw_arguments": [
     {
-      "api_parameter": "basevertex[i]",
+      "api_parameter": "not_used_for_gl_on_mode0",
       "record_offset": 4,
       "storage_width_bits": 16,
       "signedness": "unsigned",
       "load_instruction": "movzwl 0x4(%r14,%rbx), %edx",
       "preferred_address": "0x1010cc2dc",
-      "extension_to_api_width": "zero_extend_16_to_32",
-      "target_c_type": "GLint",
-      "unit": "base vertex for glDrawElementsBaseVertex",
-      "range_observed_or_static": "0..65535; Venice capture used distinct base vertices per draw"
+      "extension_to_api_width": "zero_extend_16_to_32 into %edx",
+      "target_c_type": "uint16",
+      "unit": "third GfxDrawIndexed argument at callsite; DEAD inside GfxDrawIndexed on GOG 1.37.5 mode-0 (incoming %edx unused; %ecx=0 selects glDrawElements)",
+      "range_observed_or_static": "field may vary per record; must not be used as glMultiDrawElementsBaseVertex basevertex[i]"
     },
     {
       "api_parameter": "count[i] (via GfxDrawIndexed index count)",
@@ -46,7 +47,7 @@
       "extension_to_api_width": "pointer-sized client offset 0",
       "target_c_type": "const void *",
       "unit": "byte offset into bound GL_ELEMENT_ARRAY_BUFFER",
-      "range_observed_or_static": "constant zero for border path (complete-frame capture)"
+      "range_observed_or_static": "constant zero for border mode-0 path (complete-frame capture)"
     },
     {
       "api_parameter": "GfxDrawIndexed fourth argument (helper path)",
@@ -58,7 +59,7 @@
       "extension_to_api_width": "none",
       "target_c_type": "int32",
       "unit": "passed as %ecx to GfxDrawIndexed on draw_mode!=0,1 branch only",
-      "range_observed_or_static": "site-specific; not part of mode-0 bulk multidraw gather"
+      "range_observed_or_static": "mode-0 bulk path forces %ecx=0 @ 0x1010cc2e6"
     },
     {
       "api_parameter": "vertex buffer table index",
@@ -74,5 +75,6 @@
     }
   ],
   "mode": "GL_TRIANGLES",
-  "index_type": "GL_UNSIGNED_SHORT"
+  "index_type": "GL_UNSIGNED_SHORT",
+  "mutation_multidraw_api": "glMultiDrawElements"
 }
