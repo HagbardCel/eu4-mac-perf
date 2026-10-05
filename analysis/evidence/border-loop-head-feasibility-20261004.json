@@ -5,20 +5,20 @@
   "live_game_run": false,
   "record_stream_available": false,
   "classifier_test_evidence": "synthetic_only",
-  "static_feasibility": "GO_CONDITIONAL_RUNTIME_GATES",
+  "static_feasibility": "PENDING_STATIC_RE",
   "static_criteria": {
     "1_classifier_inputs": "PASS",
     "2_control_flow_prefix_realizability": "PASS",
     "3_entry_state": "PASS",
     "4_fail_closed_paths": "PASS",
     "5_helper_side_effect_equivalence": "PASS",
-    "6_cpu_continuation": "PASS",
+    "6_cpu_continuation": "PENDING",
     "7_engine_gl_equivalence": "PASS",
     "8_continuation_mechanics": "PASS",
     "9_detour_relocation": "PASS",
     "10_uncertainty_falls_through": "PASS"
   },
-  "open_static_items": [],
+  "open_static_items": ["6_cpu_continuation"],
   "failed_static_items": [],
   "ibo_bind_topology": "ONE_BIND",
   "multidraw_api": "glMultiDrawElements",
@@ -26,7 +26,10 @@
   "detour_encoding": "RIP_INDIRECT_ABSOLUTE_JMP",
   "patch_span_bytes": 14,
   "runtime_gate_0": "PENDING",
-  "runtime_preconditions": ["GATE0_GL_MULTIDRAW_ELEMENTS_IN_ACTIVE_CONTEXT"],
+  "runtime_preconditions": [
+    "GATE0_GL_MULTIDRAW_ELEMENTS_IN_ACTIVE_CONTEXT",
+    "RUNTIME_DETOUR_INSTALLATION_AND_EXECUTION"
+  ],
   "mutation_authorized": false,
   "roi_gate": "PENDING_NUMERIC_EVIDENCE",
   "semantic_eliminations_per_frame": null,
@@ -42,8 +45,9 @@
     "analysis/border-hook-site.json",
     "analysis/border-mode0-basevertex-evidence-addendum.md",
     "analysis/border-draw-record-layout.json",
+    "analysis/evidence/drawborders-inner-walk-disasm.txt",
     "analysis/tools/border_loop_classifier.py",
     "analysis/tools/border_loop_evidence.py"
   ],
-  "note": "static_feasibility derived mechanically from static_criteria. Runtime Gate 0 and ROI pending."
+  "note": "Criterion 6 pending CFG proof; commit 1 rollback."
 }
