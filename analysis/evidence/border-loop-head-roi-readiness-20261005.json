@@ -5,7 +5,7 @@
   "semantic_policy": "proven_v1_semantics_unbounded_walk_scan",
   "implementable_policy": "v1_with_scan_cap",
   "observer_timing_usable": false,
-  "roi_instrumentation_status": "PENDING",
+  "roi_instrumentation_status": "READY_OFFLINE",
   "roi_gate": "PENDING_NUMERIC_EVIDENCE",
   "semantic_eliminations_per_frame": null,
   "implementable_eliminations_per_frame": null,
@@ -20,17 +20,17 @@
   "runtime_detour_installer_ready": true,
   "structural_reference_per_frame": 1562,
   "structural_reference_source": "historical_intrusive_draw_trace_not_validator",
-  "ready_for_single_venice_observer_run": false,
+  "ready_for_single_venice_observer_run": true,
   "static_feasibility_pointer": "analysis/evidence/border-loop-head-feasibility-20261004.json",
   "self_tests": {
-    "portable_suite": "PENDING",
-    "macos_x86_64_border_build": "PENDING",
-    "gateway_runtime": "PENDING",
-    "deferred_install_lifecycle": "PENDING",
-    "dual_suppression_replay": "PENDING",
-    "decode_failures": "PENDING",
-    "thread_affinity": "PENDING",
-    "freeze_state_capture": "PENDING",
+    "portable_suite": "PASS",
+    "macos_x86_64_border_build": "PASS",
+    "gateway_runtime": "PASS",
+    "deferred_install_lifecycle": "PASS",
+    "dual_suppression_replay": "PASS",
+    "decode_failures": "PASS",
+    "thread_affinity": "PASS",
+    "freeze_state_capture": "PASS",
     "classifier_python_c_parity": "PASS",
     "classifier_resolved_core_parity": "PASS",
     "border_detour_installer": "PASS",
@@ -47,6 +47,13 @@
       "result": "PASS"
     },
     "note": "Pre-defer-install gateway; valid for that commit only."
+  },
+  "offline_verification": {
+    "verified_commit": "2aceeff5273185c32ad231945dbde9259fb9b485",
+    "darwin_full_suite": {
+      "command": "python3 -m unittest discover -s tests",
+      "result": "PASS"
+    }
   },
   "runtime_smoke": {
     "status": "FAIL_PRE_READY",
@@ -66,5 +73,5 @@
     ],
     "interpretation": "Both failures occurred with the loop-head detour installed before readiness and the ROI bank unarmed."
   },
-  "note": "Deferred-install follow-up: affected self_tests PENDING until Darwin suite on Commit A. Venice authorized only after Commit B READY_OFFLINE."
+  "note": "Offline verification on verified_commit authorizes one pre-merge Venice observer run; runtime gates remain PENDING until live evidence."
 }
