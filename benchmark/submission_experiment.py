@@ -17,7 +17,23 @@ import submission_control as control
 import submission_multi_hypothesis as multi
 import submission_border_validation as border_validation
 import submission_validation as validation
-from autonomous_runner import capture_scene, focus, mark, probe_rows, stop_process, summarize, warm_up
+from autonomous_runner import (
+    capture_scene,
+    ensure_game_focus_interior,
+    focus,
+    mark,
+    probe_rows,
+    stop_process,
+    summarize,
+    warm_up,
+)
+
+
+class PhaseRunError(base.BenchmarkError):
+    def __init__(self, phase: str, stage: str, message: str) -> None:
+        self.phase = phase
+        self.stage = stage
+        super().__init__(message)
 from fixture_manager import FixtureManager
 from submission_control import MODE_CANDIDATE, MODE_REFERENCE
 
@@ -154,6 +170,60 @@ def _count_paused_swaps(run_dir: Path, anchor: dict, start_ns: int, end_ns: int)
     return sum(int(r.get("paused_swaps", 0)) for r in rows)
 
 
+def _run_phase_settle(
+    game: subprocess.Popen,
+    submission: control.SubmissionControl,
+    name: str,
+    mode: int,
+    settle_seconds: float,
+    *,
+    border_experiment: bool,
+    control_ticks_start: int | None,
+) -> tuple[dict | None, int | None]:
+    passive_liveness: dict | None = None
+    liveness_checked = False
+    settle_start = time.monotonic()
+    settle_deadline = settle_start + settle_seconds
+    ticks_start = control_ticks_start
+    while time.monotonic() < settle_deadline:
+        if game.poll() is not None:
+            raise base.BenchmarkError(f"EU IV exited during {name} settle")
+        focus_state = ensure_game_focus_interior(game.pid)
+        if focus_state.repaired:
+            settle_start = time.monotonic()
+            settle_deadline = settle_start + settle_seconds
+            if border_experiment and mode == MODE_CANDIDATE and name == "a1" and ticks_start is not None:
+                ticks_start = submission.snapshot()["control_ticks"]
+                liveness_checked = False
+        if not focus_state.interior:
+            raise base.BenchmarkError(f"EU IV lost focus during {name} settle")
+        if (
+            border_experiment
+            and mode == MODE_CANDIDATE
+            and name == "a1"
+            and ticks_start is not None
+            and not liveness_checked
+            and time.monotonic() - settle_start >= 1.5
+        ):
+            ticks_end = submission.snapshot()["control_ticks"]
+            elapsed = time.monotonic() - settle_start
+            delta = ticks_end - ticks_start
+            if delta <= 0:
+                raise base.BenchmarkError(
+                    f"{name}: passive detour liveness failed (control_ticks {ticks_start} -> {ticks_end})"
+                )
+            passive_liveness = {
+                "control_ticks_start": ticks_start,
+                "control_ticks_end": ticks_end,
+                "delta": delta,
+                "elapsed_seconds": round(elapsed, 3),
+                "ticks_per_second": round(delta / max(elapsed, 1e-6), 3),
+            }
+            liveness_checked = True
+        time.sleep(0.25)
+    return passive_liveness, ticks_start
+
+
 def _run_phase(
     game: subprocess.Popen,
     run_dir: Path,
@@ -173,123 +243,123 @@ def _run_phase(
     border_mutate: bool = False,
     border_experiment: bool = False,
 ) -> dict:
-    submission.set_border_flags(minimal=border_minimal, mutate=border_mutate)
-    generation = submission.request_mode(mode)
-    ack = submission.wait_ack(generation)
-    if ack["ack_mode"] != mode:
-        raise base.BenchmarkError(f"{name}: ack mode {ack['ack_mode']} != requested {mode}")
-    passive_liveness: dict | None = None
-    settle_start = time.monotonic()
-    control_ticks_start: int | None = None
-    if border_experiment and mode == MODE_CANDIDATE and name == "a1":
-        control_ticks_start = submission.snapshot()["control_ticks"]
-    settle_deadline = settle_start + settle_seconds
-    liveness_checked = False
-    while time.monotonic() < settle_deadline:
-        if game.poll() is not None:
-            raise base.BenchmarkError(f"EU IV exited during {name} settle")
-        if not focus("interior", game.pid):
-            raise base.BenchmarkError(f"EU IV lost focus during {name} settle")
-        if (
-            border_experiment
-            and mode == MODE_CANDIDATE
-            and name == "a1"
-            and control_ticks_start is not None
-            and not liveness_checked
-            and time.monotonic() - settle_start >= 1.5
-        ):
-            ticks_end = submission.snapshot()["control_ticks"]
-            elapsed = time.monotonic() - settle_start
-            delta = ticks_end - control_ticks_start
-            if delta <= 0:
-                raise base.BenchmarkError(
-                    f"{name}: passive detour liveness failed (control_ticks {control_ticks_start} -> {ticks_end})"
-                )
-            passive_liveness = {
-                "control_ticks_start": control_ticks_start,
-                "control_ticks_end": ticks_end,
-                "delta": delta,
-                "elapsed_seconds": round(elapsed, 3),
-                "ticks_per_second": round(delta / max(elapsed, 1e-6), 3),
-            }
-            liveness_checked = True
-        time.sleep(0.25)
-    screenshot = run_dir / f"measure-scene-{name}.png"
-    capture_scene(screenshot)
-    if not focus("interior", game.pid):
-        raise base.BenchmarkError(f"EU IV lost focus after {name} screenshot")
-    obs_arm_gen: int | None = None
-    if mode == MODE_CANDIDATE:
-        obs_arm_gen = submission.request_observation_arm()
-        submission.wait_observation_ack(obs_arm_gen, expected_state=control.OBS_ACK_ARMED)
-        counter_start = submission.snapshot()
-    else:
-        counter_start = submission.snapshot()
-    measurement_start = mark(events, "measurement_start", phase=name, mode=mode)
-    measurement_deadline = time.monotonic() + duration
-    while time.monotonic() < measurement_deadline:
-        if game.poll() is not None:
-            raise base.BenchmarkError(f"EU IV exited during {name} measurement")
-        if not focus("interior", game.pid):
-            raise base.BenchmarkError(f"EU IV lost focus during {name} measurement")
-        tail.poll()
-        time.sleep(min(1.0, max(0.0, measurement_deadline - time.monotonic())))
-    if mode == MODE_CANDIDATE and obs_arm_gen is not None:
-        freeze_gen = submission.request_observation_freeze()
-        submission.wait_observation_ack(freeze_gen, expected_state=control.OBS_ACK_FROZEN)
-    measurement_end = mark(events, "measurement_end", phase=name, mode=mode)
-    counter_end = submission.snapshot_frozen_candidate_bank() if mode == MODE_CANDIDATE else submission.snapshot()
-    phase_payload = {
-        "name": name,
-        "role": role,
-        "mode": mode,
-        "run_dir": str(run_dir),
-        "start_ns": measurement_start["monotonic_ns"],
-        "end_ns": measurement_end["monotonic_ns"],
-        "screenshot": str(screenshot),
-    }
-    if passive_liveness is not None:
-        phase_payload["passive_detour_liveness"] = passive_liveness
-    if border_experiment and expected_capability_id == MUTATING_CAPABILITY_ID:
-        phase_payload["control_validation"] = {
-            "status": "skipped",
-            "reason": "border experiment uses border_validation, not mesh pair counters",
-            "start": counter_start,
-            "end": counter_end,
+    stage = "mode_ack"
+    try:
+        submission.set_border_flags(minimal=border_minimal, mutate=border_mutate)
+        generation = submission.request_mode(mode)
+        ack = submission.wait_ack(generation)
+        if ack["ack_mode"] != mode:
+            raise base.BenchmarkError(f"{name}: ack mode {ack['ack_mode']} != requested {mode}")
+        control_ticks_start: int | None = None
+        if border_experiment and mode == MODE_CANDIDATE and name == "a1":
+            control_ticks_start = submission.snapshot()["control_ticks"]
+        stage = "settle"
+        passive_liveness, _ = _run_phase_settle(
+            game,
+            submission,
+            name,
+            mode,
+            settle_seconds,
+            border_experiment=border_experiment,
+            control_ticks_start=control_ticks_start,
+        )
+        stage = "screenshot"
+        pre_shot = ensure_game_focus_interior(game.pid)
+        if not pre_shot.interior:
+            raise base.BenchmarkError(f"EU IV lost focus before {name} screenshot")
+        screenshot = run_dir / f"measure-scene-{name}.png"
+        capture_scene(screenshot)
+        post_shot = ensure_game_focus_interior(game.pid)
+        if post_shot.repaired:
+            stage = "settle"
+            passive_liveness, _ = _run_phase_settle(
+                game,
+                submission,
+                name,
+                mode,
+                settle_seconds,
+                border_experiment=border_experiment,
+                control_ticks_start=control_ticks_start,
+            )
+        elif not post_shot.interior:
+            raise base.BenchmarkError(f"EU IV lost focus after {name} screenshot")
+        stage = "arm"
+        obs_arm_gen: int | None = None
+        if mode == MODE_CANDIDATE:
+            obs_arm_gen = submission.request_observation_arm()
+            submission.wait_observation_ack(obs_arm_gen, expected_state=control.OBS_ACK_ARMED)
+            counter_start = submission.snapshot()
+        else:
+            counter_start = submission.snapshot()
+        stage = "measurement"
+        measurement_start = mark(events, "measurement_start", phase=name, mode=mode)
+        measurement_deadline = time.monotonic() + duration
+        while time.monotonic() < measurement_deadline:
+            if game.poll() is not None:
+                raise base.BenchmarkError(f"EU IV exited during {name} measurement")
+            if not focus("interior", game.pid):
+                raise base.BenchmarkError(f"EU IV lost focus during {name} measurement")
+            tail.poll()
+            time.sleep(min(1.0, max(0.0, measurement_deadline - time.monotonic())))
+        stage = "freeze"
+        if mode == MODE_CANDIDATE and obs_arm_gen is not None:
+            freeze_gen = submission.request_observation_freeze()
+            submission.wait_observation_ack(freeze_gen, expected_state=control.OBS_ACK_FROZEN)
+        measurement_end = mark(events, "measurement_end", phase=name, mode=mode)
+        counter_end = submission.snapshot_frozen_candidate_bank() if mode == MODE_CANDIDATE else submission.snapshot()
+        phase_payload = {
+            "name": name,
+            "role": role,
+            "mode": mode,
+            "run_dir": str(run_dir),
+            "start_ns": measurement_start["monotonic_ns"],
+            "end_ns": measurement_end["monotonic_ns"],
+            "screenshot": str(screenshot),
         }
-        phase_payload["border_validation"] = border_validation.border_phase_validation(
-            role,
-            counter_start,
-            counter_end,
-            border_mutate=border_mutate,
-            border_minimal=border_minimal,
-            legacy_gl_engagement=False,
-        )
-        phase_payload["border_minimal"] = border_minimal
-        phase_payload["border_mutate"] = border_mutate
-    else:
-        phase_payload["control_validation"] = _validate_control_deltas(
-            role,
-            counter_start,
-            counter_end,
-            expected_capability_id=expected_capability_id,
-            require_v1_pair_hits=not multi_hypothesis and expected_capability_id != MUTATING_CAPABILITY_ID,
-        )
-    if multi_hypothesis and role == "candidate":
-        wall_s = max(1e-6, (measurement_end["monotonic_ns"] - measurement_start["monotonic_ns"]) / 1e9)
-        swaps = _count_paused_swaps(run_dir, anchor, measurement_start["monotonic_ns"], measurement_end["monotonic_ns"])
-        cv = phase_payload["control_validation"]
-        phase_payload["multi_hypothesis"] = multi.evaluate_b_phase(
-            counter_end,
-            health_start=counter_start,
-            health_end=counter_end,
-            measurement_paused_swaps=swaps,
-            measurement_wall_seconds=wall_s,
-        )
-        control_ok = cv.get("status") == "passed"
-        mh_ok = phase_payload["multi_hypothesis"]["harness_ok"]
-        phase_payload["multi_hypothesis"]["phase_ok"] = control_ok and mh_ok
-    return phase_payload
+        if passive_liveness is not None:
+            phase_payload["passive_detour_liveness"] = passive_liveness
+        if border_experiment and expected_capability_id == MUTATING_CAPABILITY_ID:
+            phase_payload["control_validation"] = {
+                "status": "skipped",
+                "reason": "border experiment uses border_validation, not mesh pair counters",
+                "start": counter_start,
+                "end": counter_end,
+            }
+            phase_payload["border_validation"] = border_validation.border_phase_validation(
+                role,
+                counter_start,
+                counter_end,
+                border_mutate=border_mutate,
+                border_minimal=border_minimal,
+                legacy_gl_engagement=False,
+            )
+            phase_payload["border_minimal"] = border_minimal
+            phase_payload["border_mutate"] = border_mutate
+        else:
+            phase_payload["control_validation"] = _validate_control_deltas(
+                role,
+                counter_start,
+                counter_end,
+                expected_capability_id=expected_capability_id,
+                require_v1_pair_hits=not multi_hypothesis and expected_capability_id != MUTATING_CAPABILITY_ID,
+            )
+        if multi_hypothesis and role == "candidate":
+            wall_s = max(1e-6, (measurement_end["monotonic_ns"] - measurement_start["monotonic_ns"]) / 1e9)
+            swaps = _count_paused_swaps(run_dir, anchor, measurement_start["monotonic_ns"], measurement_end["monotonic_ns"])
+            cv = phase_payload["control_validation"]
+            phase_payload["multi_hypothesis"] = multi.evaluate_b_phase(
+                counter_end,
+                health_start=counter_start,
+                health_end=counter_end,
+                measurement_paused_swaps=swaps,
+                measurement_wall_seconds=wall_s,
+            )
+            control_ok = cv.get("status") == "passed"
+            mh_ok = phase_payload["multi_hypothesis"]["harness_ok"]
+            phase_payload["multi_hypothesis"]["phase_ok"] = control_ok and mh_ok
+        return phase_payload
+    except base.BenchmarkError as exc:
+        raise PhaseRunError(name, stage, str(exc)) from exc
 
 
 def _min_metric_samples_for_phase(phase: dict) -> int:
@@ -388,8 +458,17 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                         stderr=stderr,
                     )
                 tail = auto.PowerTail(pm_path)
+                wait_diag: dict = {}
                 try:
-                    ready = auto.wait_until_ready(game, run_dir / "auto-probe.csv", tail, anchor, game_log, old_log)
+                    ready = auto.wait_until_ready(
+                        game,
+                        run_dir / "auto-probe.csv",
+                        tail,
+                        anchor,
+                        game_log,
+                        old_log,
+                        wait_diag=wait_diag,
+                    )
                 except base.BenchmarkError as ready_exc:
                     if str(ready_exc) == auto.VENICE_READY_TIMEOUT_MSG:
                         auto.best_effort_record_pre_ready_diagnostics(
@@ -402,6 +481,7 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                             game_log=game_log,
                             old_log=old_log,
                             submission_snapshot=submission.snapshot(),
+                            wait_diag=wait_diag,
                         )
                     raise
                 manifest["readiness"] = ready
@@ -409,25 +489,27 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                 capture_scene(run_dir / "ready-scene.png")
                 phases = []
                 for name, role, mode, border_minimal, border_mutate in BORDER_PHASE_SCHEDULE:
-                    phases.append(
-                        _run_phase(
-                            game,
-                            run_dir,
-                            events,
-                            tail,
-                            submission,
-                            name,
-                            role,
-                            mode,
-                            BORDER_PHASE_SECONDS,
-                            anchor,
-                            expected_capability_id=MUTATING_CAPABILITY_ID,
-                            settle_seconds=BORDER_SETTLE_SECONDS,
-                            border_minimal=border_minimal,
-                            border_mutate=border_mutate,
-                            border_experiment=True,
-                        ),
+                    phase = _run_phase(
+                        game,
+                        run_dir,
+                        events,
+                        tail,
+                        submission,
+                        name,
+                        role,
+                        mode,
+                        BORDER_PHASE_SECONDS,
+                        anchor,
+                        expected_capability_id=MUTATING_CAPABILITY_ID,
+                        settle_seconds=BORDER_SETTLE_SECONDS,
+                        border_minimal=border_minimal,
+                        border_mutate=border_mutate,
+                        border_experiment=True,
                     )
+                    phases.append(phase)
+                    manifest["phases"] = phases
+                    manifest["last_completed_phase"] = phase["name"]
+                    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
                 stop_process(pm, 5)
                 pm = None
                 _attach_phase_summaries(phases, run_dir, anchor, game.pid, tail)
@@ -461,6 +543,16 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                         "border_roi_authoritative_gates failed: " + "; ".join(roi_failures)
                     )
                 manifest["status"] = "complete"
+        except PhaseRunError as exc:
+            error = str(exc)
+            manifest["status"] = "incomplete"
+            manifest["error"] = error
+            manifest["failure_stage"] = {
+                "phase": exc.phase,
+                "stage": exc.stage,
+                "error": error,
+            }
+            raise
         except (base.BenchmarkError, OSError, subprocess.SubprocessError) as exc:
             error = str(exc)
             manifest["status"] = "incomplete"

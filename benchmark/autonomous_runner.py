@@ -17,6 +17,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 import eu4_benchmark as base
@@ -326,6 +327,104 @@ def cpu_samples(raw: list[dict], pid: int, anchor: dict, start_ns: int = 0) -> l
     return values
 
 
+def cpu_samples_between(
+    raw: list[dict],
+    pid: int,
+    anchor: dict,
+    start_ns: int,
+    end_ns: int,
+) -> list[tuple[int, float]]:
+    return [
+        (when, value)
+        for when, value in cpu_samples(raw, pid, anchor, start_ns)
+        if when <= end_ns
+    ]
+
+
+@dataclass(frozen=True)
+class FocusState:
+    frontmost: bool
+    interior: bool
+    activated: bool
+    parked: bool
+
+    @property
+    def repaired(self) -> bool:
+        return self.activated or self.parked
+
+
+def ensure_game_focus_interior(
+    pid: int,
+    *,
+    allow_activate: bool = True,
+    allow_park: bool = True,
+) -> FocusState:
+    activated = False
+    parked = False
+    frontmost = focus("check", pid)
+    if not frontmost and allow_activate:
+        focus("activate", pid)
+        activated = True
+        frontmost = focus("check", pid)
+    if not frontmost:
+        return FocusState(False, False, activated, parked)
+    interior = focus("interior", pid)
+    if not interior and allow_park:
+        focus("park", pid)
+        parked = True
+        interior = focus("interior", pid)
+    return FocusState(frontmost, interior, activated, parked)
+
+
+def readiness_predicates(
+    *,
+    logged: bool,
+    frontmost: bool,
+    pointer_interior: bool,
+    rows: list[dict],
+    now_ns: int,
+    power: list[tuple[int, float]],
+    gate_swap_stability: bool = False,
+    gate_power_stability: bool = False,
+) -> dict[str, bool | int]:
+    probe_fresh = (
+        len(rows) >= 1
+        and 0 <= now_ns - rows[-1]["monotonic_ns"] <= 2_000_000_000
+    )
+    paused_rows_ok = len(rows) >= 10 and all(
+        r["swaps_s"] >= 20 and r["paused_swaps"] >= 0.95 * r["swaps"] for r in rows[-10:]
+    )
+    swap_rates = [r["swaps_s"] for r in rows[-10:]] if len(rows) >= 10 else []
+    power_values = [v for _, v in power]
+    swap_rate_stable = stable(swap_rates, 10, 0.10) if len(swap_rates) >= 10 else False
+    power_stable = stable(power_values, 10, 0.10) if len(power_values) >= 10 else False
+    ready_core = (
+        logged
+        and frontmost
+        and pointer_interior
+        and len(rows) >= 10
+        and probe_fresh
+        and paused_rows_ok
+    )
+    ready_to_pass = ready_core
+    if gate_swap_stability:
+        ready_to_pass = ready_to_pass and swap_rate_stable
+    if gate_power_stability:
+        ready_to_pass = ready_to_pass and power_stable
+    return {
+        "game_log_ready": logged,
+        "frontmost": frontmost,
+        "pointer_interior": pointer_interior,
+        "probe_sample_count": len(rows),
+        "probe_fresh": probe_fresh,
+        "paused_rows_ok": paused_rows_ok,
+        "swap_rate_stable": swap_rate_stable,
+        "power_sample_count": len(power_values),
+        "power_stable": power_stable,
+        "ready_to_pass": ready_to_pass,
+    }
+
+
 def stable(values: list[float], needed: int, limit: float) -> bool:
     return (len(values) >= needed and statistics.mean(values) > 0 and
             statistics.pstdev(values[-needed:])/statistics.mean(values[-needed:]) <= limit)
@@ -384,7 +483,7 @@ def collect_pre_ready_diagnostics(
         "probe_span_seconds": round((rows[-1]["monotonic_ns"] - rows[0]["monotonic_ns"]) / 1e9, 3) if len(rows) >= 2 else 0.0,
         "first_probe_offset_seconds": round(first_offset, 3) if first_offset is not None else None,
         "last_probe_offset_seconds": round(last_offset, 3) if last_offset is not None else None,
-        "last_probe_age_seconds": round(READY_TIMEOUT_S - last_offset, 3) if last_offset is not None else None,
+        "last_probe_age_seconds": round((now_ns - rows[-1]["monotonic_ns"]) / 1e9, 3) if rows else None,
         "max_probe_interval_seconds": round(max(intervals_s), 3) if intervals_s else None,
         "min_probe_interval_seconds": round(min(intervals_s), 3) if intervals_s else None,
         "median_probe_interval_seconds": round(statistics.median(intervals_s), 3) if intervals_s else None,
@@ -415,12 +514,13 @@ def best_effort_record_pre_ready_diagnostics(
     game_log: Path,
     old_log: bytes,
     submission_snapshot: dict | None,
+    wait_diag: dict | None = None,
 ) -> None:
     try:
         if game is None:
             manifest["pre_ready_diagnostics"] = {"status": "skipped", "reason": "game handle missing"}
             return
-        manifest["pre_ready_diagnostics"] = collect_pre_ready_diagnostics(
+        payload = collect_pre_ready_diagnostics(
             probe,
             anchor,
             tail,
@@ -430,6 +530,13 @@ def best_effort_record_pre_ready_diagnostics(
             pid=game.pid,
             submission_snapshot=submission_snapshot,
         )
+        if wait_diag:
+            if wait_diag.get("last_predicates"):
+                payload["readiness_predicates"] = wait_diag["last_predicates"]
+            counters = wait_diag.get("counters")
+            if counters:
+                payload["readiness_wait_counters"] = counters
+        manifest["pre_ready_diagnostics"] = payload
     except Exception as diagnostic_error:
         manifest["pre_ready_diagnostics"] = {
             "status": "collection_failed",
@@ -524,55 +631,95 @@ def mark(path: Path, event: str, **fields: object) -> dict:
     return item
 
 
-def wait_until_ready(game: subprocess.Popen, probe: Path, raw: PowerTail,
-                     anchor: dict, game_log: Path, old_log: bytes) -> dict:
-    deadline = time.monotonic()+READY_TIMEOUT_S
-    next_activation = 0.0
-    pointer_parked = False
+def wait_until_ready(
+    game: subprocess.Popen,
+    probe: Path,
+    raw: PowerTail,
+    anchor: dict,
+    game_log: Path,
+    old_log: bytes,
+    *,
+    wait_diag: dict | None = None,
+) -> dict:
+    deadline = time.monotonic() + READY_TIMEOUT_S
+    counters = {
+        "activation_attempts": 0,
+        "pointer_reparks": 0,
+        "frontmost_false_iterations": 0,
+        "pointer_noninterior_iterations": 0,
+    }
+    if wait_diag is not None:
+        wait_diag.setdefault("counters", counters)
+        counters = wait_diag["counters"]
     while time.monotonic() < deadline:
         if game.poll() is not None:
             raise base.BenchmarkError("GOG EU IV exited before the Venice scene became ready")
-        if time.monotonic() >= next_activation and not focus("check", game.pid):
-            focus("activate", game.pid)
-            next_activation = time.monotonic()+5
-        if focus("check", game.pid) and not pointer_parked:
-            if not focus("park", game.pid):
-                raise base.BenchmarkError("Could not park the pointer away from EU IV's scrolling edges")
-            pointer_parked = True
+        focus_state = ensure_game_focus_interior(game.pid)
+        if focus_state.activated:
+            counters["activation_attempts"] += 1
+        if focus_state.parked:
+            counters["pointer_reparks"] += 1
+        if not focus_state.frontmost:
+            counters["frontmost_false_iterations"] += 1
+        if focus_state.frontmost and not focus_state.interior:
+            counters["pointer_noninterior_iterations"] += 1
         now_ns = time.monotonic_ns()
         rows = probe_rows(probe, anchor)[-10:]
-        power = cpu_samples(raw.poll(), game.pid, anchor, now_ns-12_000_000_000)[-10:]
+        power = cpu_samples_between(
+            raw.poll(), game.pid, anchor, now_ns - 12_000_000_000, now_ns
+        )[-10:]
         logged = game_log_ready(fresh_game_log(game_log, old_log))
-        if (logged and pointer_parked and focus("interior", game.pid) and len(rows) == 10 and
-                0 <= now_ns-rows[-1]["monotonic_ns"] <= 2_000_000_000 and
-                all(r["swaps_s"] >= 20 and r["paused_swaps"] >= .95*r["swaps"]
-                    for r in rows) and
-                stable([r["swaps_s"] for r in rows], 10, .10) and
-                stable([v for _, v in power], 10, .10)):
-            return {"ready_ns": time.monotonic_ns(), "swap_rate": round(statistics.median(
-                r["swaps_s"] for r in rows), 2), "cpu_ms_s": round(statistics.median(
-                v for _, v in power), 2)}
+        predicates = readiness_predicates(
+            logged=logged,
+            frontmost=focus_state.frontmost,
+            pointer_interior=focus_state.interior,
+            rows=rows,
+            now_ns=now_ns,
+            power=power,
+        )
+        if wait_diag is not None:
+            wait_diag["last_predicates"] = predicates
+        if predicates["ready_to_pass"]:
+            return {
+                "ready_ns": time.monotonic_ns(),
+                "swap_rate": round(statistics.median(r["swaps_s"] for r in rows), 2),
+                "cpu_ms_s": round(statistics.median(v for _, v in power), 2)
+                if power
+                else None,
+            }
         time.sleep(1)
     raise base.BenchmarkError(VENICE_READY_TIMEOUT_MSG)
 
 
 def warm_up(game: subprocess.Popen, probe: Path, raw: PowerTail, anchor: dict) -> dict:
     started = time.monotonic_ns()
-    deadline = time.monotonic()+WARMUP_S
-    extension_deadline = deadline+WARMUP_EXTENSION_S
+    deadline = time.monotonic() + WARMUP_S
+    extension_deadline = deadline + WARMUP_EXTENSION_S
+    last_focus_repair = 0.0
     while time.monotonic() < extension_deadline:
         if game.poll() is not None:
             raise base.BenchmarkError("GOG EU IV exited during warm-up")
-        if not focus("interior", game.pid):
+        focus_state = ensure_game_focus_interior(game.pid)
+        if focus_state.repaired:
+            last_focus_repair = time.monotonic()
+        if not focus_state.interior:
             raise base.BenchmarkError("EU IV lost focus or the pointer left the safe interior during warm-up")
         now_ns = time.monotonic_ns()
+        now_mono = time.monotonic()
         rows = probe_rows(probe, anchor)[-15:]
-        power = cpu_samples(raw.poll(), game.pid, anchor, now_ns-17_000_000_000)[-15:]
-        if (time.monotonic() >= deadline and len(rows) == 15 and
-                0 <= now_ns-rows[-1]["monotonic_ns"] <= 2_000_000_000 and all(
-                r["swaps_s"] >= 20 and r["paused_swaps"] >= .95*r["swaps"] for r in rows) and
-                stable([r["swaps_s"] for r in rows], 15, .05) and
-                stable([v for _, v in power], 15, .05)):
+        power = cpu_samples_between(
+            raw.poll(), game.pid, anchor, now_ns - 17_000_000_000, now_ns
+        )[-15:]
+        quiet_ok = last_focus_repair == 0.0 or (now_mono - last_focus_repair) >= 15.0
+        if (
+            quiet_ok
+            and now_mono >= deadline
+            and len(rows) == 15
+            and 0 <= now_ns - rows[-1]["monotonic_ns"] <= 2_000_000_000
+            and all(r["swaps_s"] >= 20 and r["paused_swaps"] >= 0.95 * r["swaps"] for r in rows)
+            and stable([r["swaps_s"] for r in rows], 15, 0.05)
+            and stable([v for _, v in power], 15, 0.05)
+        ):
             return {"start_ns": started, "end_ns": time.monotonic_ns()}
         time.sleep(1)
     raise base.BenchmarkError("Paused EU IV did not stabilize after 150 seconds of warm-up")
