@@ -58,6 +58,15 @@ class BorderLoopRoiTests(unittest.TestCase):
         }
         validate_roi_readiness_payload(p)
 
+    def test_pending_deferred_install_bucket(self) -> None:
+        p = _base_payload()
+        p["roi_instrumentation_status"] = "PENDING"
+        p["ready_for_single_venice_observer_run"] = False
+        p["self_tests"] = _all_pass_buckets()
+        p["self_tests"]["deferred_install_lifecycle"] = "PENDING"
+        p["self_tests"]["gateway_runtime"] = "PENDING"
+        validate_roi_readiness_payload(p)
+
     def test_pending_all_pass_invalid(self) -> None:
         p = _base_payload()
         p["roi_instrumentation_status"] = "PENDING"

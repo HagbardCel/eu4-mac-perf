@@ -84,6 +84,9 @@ class BorderLoopHeadDetourTests(unittest.TestCase):
 
     def test_gateway_asm_preserves_r11_push_pop(self) -> None:
         text = (BENCH / "eu4_submission_border_loop_head_gateway.S").read_text()
+        self.assertIn("_g_eu4_border_observer_active", text)
+        self.assertIn("cmpb $0, _g_eu4_border_observer_active", text)
+        self.assertIn("active_observer", text)
         self.assertIn("pushq %r11", text)
         self.assertIn("popq %r11", text)
         self.assertIn("jne", text)

@@ -178,12 +178,41 @@ def _run_phase(
     ack = submission.wait_ack(generation)
     if ack["ack_mode"] != mode:
         raise base.BenchmarkError(f"{name}: ack mode {ack['ack_mode']} != requested {mode}")
-    settle_deadline = time.monotonic() + settle_seconds
+    passive_liveness: dict | None = None
+    settle_start = time.monotonic()
+    control_ticks_start: int | None = None
+    if border_experiment and mode == MODE_CANDIDATE and name == "a1":
+        control_ticks_start = submission.snapshot()["control_ticks"]
+    settle_deadline = settle_start + settle_seconds
+    liveness_checked = False
     while time.monotonic() < settle_deadline:
         if game.poll() is not None:
             raise base.BenchmarkError(f"EU IV exited during {name} settle")
         if not focus("interior", game.pid):
             raise base.BenchmarkError(f"EU IV lost focus during {name} settle")
+        if (
+            border_experiment
+            and mode == MODE_CANDIDATE
+            and name == "a1"
+            and control_ticks_start is not None
+            and not liveness_checked
+            and time.monotonic() - settle_start >= 1.5
+        ):
+            ticks_end = submission.snapshot()["control_ticks"]
+            elapsed = time.monotonic() - settle_start
+            delta = ticks_end - control_ticks_start
+            if delta <= 0:
+                raise base.BenchmarkError(
+                    f"{name}: passive detour liveness failed (control_ticks {control_ticks_start} -> {ticks_end})"
+                )
+            passive_liveness = {
+                "control_ticks_start": control_ticks_start,
+                "control_ticks_end": ticks_end,
+                "delta": delta,
+                "elapsed_seconds": round(elapsed, 3),
+                "ticks_per_second": round(delta / max(elapsed, 1e-6), 3),
+            }
+            liveness_checked = True
         time.sleep(0.25)
     screenshot = run_dir / f"measure-scene-{name}.png"
     capture_scene(screenshot)
@@ -219,6 +248,8 @@ def _run_phase(
         "end_ns": measurement_end["monotonic_ns"],
         "screenshot": str(screenshot),
     }
+    if passive_liveness is not None:
+        phase_payload["passive_detour_liveness"] = passive_liveness
     if border_experiment and expected_capability_id == MUTATING_CAPABILITY_ID:
         phase_payload["control_validation"] = {
             "status": "skipped",

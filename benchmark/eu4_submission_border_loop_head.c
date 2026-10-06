@@ -42,6 +42,7 @@ static _Thread_local uint64_t tls_decode_failures = 0;
 static _Thread_local uint64_t tls_geometry_failures = 0;
 static _Thread_local uint64_t tls_resolution_failures = 0;
 static _Thread_local uint64_t tls_thread_checks = 0;
+static _Thread_local eu4_border_resolved_step_t tls_resolved_steps[EU4_BORDER_MAX_RESOLVE_STEPS];
 
 static uint64_t current_thread_id(void) {
     uint64_t tid = 0;
@@ -248,7 +249,7 @@ void eu4_border_loop_head_on_armed_hit(
     tls_loop_head_entries++;
     eu4_border_prefix_result_t semantic;
     eu4_border_prefix_result_t implementable;
-    eu4_border_resolved_step_t steps[EU4_BORDER_MAX_RESOLVE_STEPS];
+    eu4_border_resolved_step_t *steps = tls_resolved_steps;
     if (side_count > EU4_BORDER_MAX_RESOLVE_STEPS) {
         record_decode_failure(true, false);
         return;
@@ -334,7 +335,7 @@ void eu4_border_loop_head_observe_frame(void *rbp, void *r12, uint64_t r13_full,
         }
         return;
     }
-    eu4_border_resolved_step_t steps[EU4_BORDER_MAX_RESOLVE_STEPS];
+    eu4_border_resolved_step_t *steps = tls_resolved_steps;
     uint32_t resolved = 0;
     if (!eu4_border_resolve_remaining_steps(
             rbp, r12, cursor, visibility_mask, geom.remaining, steps, EU4_BORDER_MAX_RESOLVE_STEPS, &resolved)) {

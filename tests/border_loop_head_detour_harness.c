@@ -1,6 +1,8 @@
 #include "border_loop_head_gateway_test_shared.h"
+#include "eu4_submission_border_observer_active.h"
 
 #include <setjmp.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,11 +11,14 @@
 extern uint64_t border_loop_draw_target;
 extern uint64_t border_loop_skip_target;
 
+_Atomic unsigned char g_eu4_border_observer_active = 0;
+
 static jmp_buf g_gateway_return;
 
 gateway_test_machine_state_t gateway_test_seed;
 gateway_test_machine_state_t gateway_test_capture;
 volatile int gateway_test_branch_id = 0;
+volatile int gateway_test_observe_invocations = 0;
 
 void *gateway_test_live_rbp;
 void *gateway_test_live_r12;
@@ -47,11 +52,17 @@ static int states_equal(const gateway_test_machine_state_t *a, const gateway_tes
     return memcmp(a->xmm0, b->xmm0, 16) == 0;
 }
 
+static int replay_slot_matches_rcx(void *rbp, void *rcx) {
+    const uintptr_t slot = *(const uintptr_t *)((uintptr_t)rbp - 0x70u);
+    return slot == (uintptr_t)rcx;
+}
+
 void gateway_test_longjmp_back(void) {
     longjmp(g_gateway_return, 1);
 }
 
 void border_loop_gateway_test_observe_body(void *rbp, void *r12, uint64_t r13_full, void *rcx) {
+    gateway_test_observe_invocations++;
     if ((border_loop_gateway_test_captured_rsp & 15ull) != 8ull) {
         fprintf(stderr, "observe raw rsp mod16 expected 8\n");
         _exit(10);
@@ -63,10 +74,13 @@ void border_loop_gateway_test_observe_body(void *rbp, void *r12, uint64_t r13_fu
     }
 }
 
-static int run_gateway_branch(int draw_path) {
+static int run_gateway_branch(int draw_path, int observer_active) {
     gateway_test_branch_id = 0;
+    gateway_test_observe_invocations = 0;
     memset(&gateway_test_capture, 0, sizeof(gateway_test_capture));
     fill_seed_state();
+
+    atomic_store_explicit(&g_eu4_border_observer_active, observer_active ? 1u : 0u, memory_order_release);
 
     border_loop_draw_target = (uint64_t)(uintptr_t)gateway_test_continuation_draw;
     border_loop_skip_target = (uint64_t)(uintptr_t)gateway_test_continuation_skip;
@@ -82,12 +96,17 @@ static int run_gateway_branch(int draw_path) {
     gateway_test_live_r12 = (void *)index_stream;
     gateway_test_live_r13 = 0xffull;
 
-    /* rcx in seed is overwritten by live rcx at enter; compare capture to live values for rcx. */
     gateway_test_seed.rcx = (uint64_t)(uintptr_t)gateway_test_live_rcx;
 
     if (setjmp(g_gateway_return) == 0) {
         gateway_test_enter();
         fprintf(stderr, "gateway enter fell through\n");
+        return 1;
+    }
+
+    const int expected_observe = observer_active ? 1 : 0;
+    if (gateway_test_observe_invocations != expected_observe) {
+        fprintf(stderr, "observe invocations expected %d got %d\n", expected_observe, gateway_test_observe_invocations);
         return 1;
     }
 
@@ -97,6 +116,10 @@ static int run_gateway_branch(int draw_path) {
     }
     if (!draw_path && gateway_test_branch_id != 2) {
         fprintf(stderr, "expected skip branch got %d\n", gateway_test_branch_id);
+        return 1;
+    }
+    if (!replay_slot_matches_rcx(gateway_test_live_rbp, gateway_test_live_rcx)) {
+        fprintf(stderr, "displaced movq to -0x70(rbp) did not store rcx\n");
         return 1;
     }
     if (!states_equal(&gateway_test_seed, &gateway_test_capture)) {
@@ -110,10 +133,16 @@ static int run_gateway_branch(int draw_path) {
 }
 
 int main(void) {
-    if (run_gateway_branch(1) != 0) {
+    if (run_gateway_branch(1, 0) != 0) {
         return 1;
     }
-    if (run_gateway_branch(0) != 0) {
+    if (run_gateway_branch(0, 0) != 0) {
+        return 1;
+    }
+    if (run_gateway_branch(1, 1) != 0) {
+        return 1;
+    }
+    if (run_gateway_branch(0, 1) != 0) {
         return 1;
     }
     return 0;

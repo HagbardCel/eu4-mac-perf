@@ -15,6 +15,8 @@
 #if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
 #include "eu4_submission_border.h"
 #include "eu4_submission_border_loop_head.h"
+#include "eu4_submission_border_observer_active.h"
+#include "eu4_submission_test_hooks.h"
 void eu4_submission_observation_arm_reset(void);
 #else
 #include "eu4_submission_observation.h"
@@ -34,6 +36,15 @@ void eu4_submission_observation_arm_reset(void);
 
 #if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
 uint32_t g_eu4_border_control_flags = 0;
+_Atomic unsigned char g_eu4_border_observer_active = 0;
+#endif
+
+#if defined(EU4_SUBMISSION_TRACK_INSTALL_ATTEMPTS)
+static uint32_t g_install_attempt_count = 0;
+
+uint32_t eu4_submission_test_install_attempt_count(void) {
+    return g_install_attempt_count;
+}
 #endif
 
 #define OBS_DISARMED 0u
@@ -77,6 +88,9 @@ static void try_install_hooks(void) {
     if (hooks_installed) {
         return;
     }
+#if defined(EU4_SUBMISSION_TRACK_INSTALL_ATTEMPTS)
+    g_install_attempt_count++;
+#endif
 #if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
     if (eu4_border_loop_head_install_fatal()) {
         abort();
@@ -108,7 +122,6 @@ static void setup(void) {
     }
     control_map = mmap(NULL, CONTROL_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
-    try_install_hooks(); /* installs entry + site when binary prefix matches */
     if (control_map != MAP_FAILED) {
         pthread_mutex_lock(&header_lock);
         uint32_t *words = (uint32_t *)control_map;
@@ -203,6 +216,31 @@ static void handle_observation_command(uint32_t *words) {
     if (obs_gen <= obs_ack_gen) {
         return;
     }
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+    if (obs_req == OBS_ARM) {
+        atomic_store_explicit(&g_eu4_border_observer_active, 0, memory_order_release);
+        reset_armed_bank_counters();
+        eu4_submission_observation_arm_reset();
+        observation_frozen = false;
+        const bool activate = candidate_mode_active(words);
+        words[15] = OBS_ACK_ARMED;
+        atomic_store_explicit(&g_eu4_border_observer_active, activate ? 1u : 0u, memory_order_release);
+        words[14] = obs_gen;
+    } else if (obs_req == OBS_FREEZE) {
+        atomic_store_explicit(&g_eu4_border_observer_active, 0, memory_order_release);
+        if (observation_bank_writable(words)) {
+            eu4_border_loop_head_capture_freeze_state();
+        }
+        observation_frozen = true;
+        words[15] = OBS_ACK_FROZEN;
+        words[14] = obs_gen;
+    } else if (obs_req == OBS_DISARMED) {
+        atomic_store_explicit(&g_eu4_border_observer_active, 0, memory_order_release);
+        observation_frozen = true;
+        words[15] = OBS_ACK_DISARMED;
+        words[14] = obs_gen;
+    }
+#else
     if (obs_req == OBS_ARM) {
         reset_armed_bank_counters();
         eu4_submission_observation_arm_reset();
@@ -210,11 +248,6 @@ static void handle_observation_command(uint32_t *words) {
         words[14] = obs_gen;
         words[15] = OBS_ACK_ARMED;
     } else if (obs_req == OBS_FREEZE) {
-#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
-        if (observation_bank_writable(words)) {
-            eu4_border_loop_head_capture_freeze_state();
-        }
-#endif
         observation_frozen = true;
         words[14] = obs_gen;
         words[15] = OBS_ACK_FROZEN;
@@ -223,6 +256,7 @@ static void handle_observation_command(uint32_t *words) {
         words[14] = obs_gen;
         words[15] = OBS_ACK_DISARMED;
     }
+#endif
 }
 
 static void poll_command_ack(void) {
@@ -248,8 +282,20 @@ static void poll_command_ack(void) {
         words[7] = advertised_capability;
     }
     if (command_generation > ack_generation) {
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+        if (requested_mode == MODE_REFERENCE) {
+            atomic_store_explicit(&g_eu4_border_observer_active, 0, memory_order_release);
+            eu4_submission_observation_arm_reset();
+        }
+#endif
         ack_mode = requested_mode;
         if (requested_mode == MODE_CANDIDATE) {
+            if (requested_capability == compiled && advertised_capability == compiled) {
+                try_install_hooks();
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+                atomic_store_explicit(&g_eu4_border_observer_active, 0, memory_order_release);
+#endif
+            }
             if (requested_capability != compiled || advertised_capability != compiled || !hooks_installed) {
                 ack_mode = MODE_REFERENCE;
             }
@@ -263,9 +309,16 @@ static void poll_command_ack(void) {
     g_eu4_border_control_flags = *(uint32_t *)(control_map + BORDER_FLAGS_OFFSET);
 #endif
     if (words[5] != last_observed_ack_mode) {
+#if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
+        if (words[5] == MODE_REFERENCE) {
+            atomic_store_explicit(&g_eu4_border_observer_active, 0, memory_order_release);
+            eu4_submission_observation_arm_reset();
+        }
+#else
         if (words[5] == MODE_REFERENCE) {
             eu4_submission_observation_arm_reset();
         }
+#endif
         last_observed_ack_mode = words[5];
     }
     pthread_mutex_unlock(&header_lock);

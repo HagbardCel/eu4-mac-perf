@@ -40,6 +40,8 @@ LIBRARY = BENCH / ".build/libeu4_submission_experiment.dylib"
 LIBRARY_BORDER = BENCH / ".build/libeu4_submission_border_multidraw.dylib"
 HARNESS = ROOT / "benchmark/.build/submission_dual_dylib_harness"
 HARNESS_SOURCE = ROOT / "tests/submission_dual_dylib_harness.c"
+DEFERRED_INSTALL_HARNESS = ROOT / "benchmark/.build/submission_deferred_install_harness"
+DEFERRED_INSTALL_HARNESS_SOURCE = ROOT / "tests/submission_deferred_install_harness.c"
 
 MAGIC = 0x53425545  # 'EUBS'
 PROTOCOL_VERSION = 3
@@ -75,13 +77,27 @@ def build_border_multidraw() -> None:
     _build_dylib(LIBRARY_BORDER, compiled_capability=2, sources=SUBMISSION_DYLIB_SOURCES_BORDER)
 
 
-def build_test_dylib(output: Path, *, compiled_capability: int) -> None:
+def build_test_dylib(output: Path, *, compiled_capability: int, track_install_attempts: bool = True) -> None:
     """Test-only dylib with explicit capability (harness / regression)."""
     sources = SUBMISSION_DYLIB_SOURCES_BORDER if int(compiled_capability) == 2 else SUBMISSION_DYLIB_SOURCES_OBSERVER
-    _build_dylib(output, compiled_capability=int(compiled_capability), sources=sources)
+    extra_defines: list[str] = []
+    if track_install_attempts and int(compiled_capability) == 2:
+        extra_defines.append("-DEU4_SUBMISSION_TRACK_INSTALL_ATTEMPTS=1")
+    _build_dylib(
+        output,
+        compiled_capability=int(compiled_capability),
+        sources=sources,
+        extra_defines=extra_defines,
+    )
 
 
-def _build_dylib(output: Path, *, compiled_capability: int, sources: tuple[Path, ...]) -> None:
+def _build_dylib(
+    output: Path,
+    *,
+    compiled_capability: int,
+    sources: tuple[Path, ...],
+    extra_defines: list[str] | None = None,
+) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     dylib_command = [
         "clang",
@@ -102,6 +118,8 @@ def _build_dylib(output: Path, *, compiled_capability: int, sources: tuple[Path,
         str(output),
         *[str(path) for path in sources],
     ]
+    if extra_defines:
+        dylib_command.extend(extra_defines)
     result = subprocess.run(dylib_command, capture_output=True, text=True, check=False)
     if result.returncode:
         raise base.BenchmarkError(f"Submission experiment build failed: {result.stderr.strip()}")
@@ -123,11 +141,25 @@ def _build_harness() -> None:
             str(HARNESS),
             str(HARNESS_SOURCE),
         ],
+        [
+            "clang",
+            "-arch",
+            "x86_64",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-framework",
+            "OpenGL",
+            "-o",
+            str(DEFERRED_INSTALL_HARNESS),
+            str(DEFERRED_INSTALL_HARNESS_SOURCE),
+        ],
     )
     for command in commands:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode:
-            raise base.BenchmarkError(f"Submission experiment build failed: {result.stderr.strip()}")
+            raise base.BenchmarkError(f"Submission harness build failed: {result.stderr.strip()}")
 
 
 def _read_counters_blob(map_view: mmap.mmap | memoryview) -> list[int]:

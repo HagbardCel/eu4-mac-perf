@@ -1,8 +1,11 @@
 #define GL_SILENCE_DEPRECATION 1
 #include "eu4_submission_border.h"
 #include "eu4_submission_border_loop_head.h"
+#include "eu4_submission_border_observer_active.h"
 
 #include "submission_counter_schema.h"
+
+#include <stdatomic.h>
 
 #include <OpenGL/gl.h>
 
@@ -91,6 +94,7 @@ void eu4_border_reset_batch(void) {
 }
 
 void eu4_submission_observation_arm_reset(void) {
+    atomic_store_explicit(&g_eu4_border_observer_active, 0, memory_order_release);
     eu4_border_publish_tls_counters();
     eu4_border_loop_head_epoch_reset();
 }

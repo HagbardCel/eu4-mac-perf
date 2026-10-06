@@ -15,6 +15,7 @@ MANDATORY_SELF_TEST_BUCKETS: tuple[str, ...] = (
     "classifier_resolved_core_parity",
     "dual_suppression_replay",
     "gateway_runtime",
+    "deferred_install_lifecycle",
     "border_detour_installer",
     "decode_failures",
     "thread_affinity",

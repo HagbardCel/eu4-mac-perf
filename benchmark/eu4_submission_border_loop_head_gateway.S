@@ -8,10 +8,23 @@ _border_loop_draw_target:
 _border_loop_skip_target:
     .quad 0
 
+.extern _g_eu4_border_observer_active
+
 .section __TEXT,__text
 .globl _eu4_border_loop_head_gateway
 .align 16
 _eu4_border_loop_head_gateway:
+    cmpb $0, _g_eu4_border_observer_active(%rip)
+    jne active_observer
+
+    testb %r13b, 0x1(%rcx)
+    movq %rcx, -0x70(%rbp)
+    jne 1f
+    jmpq *_border_loop_skip_target(%rip)
+1:
+    jmpq *_border_loop_draw_target(%rip)
+
+active_observer:
     pushq %rax
     pushq %rcx
     pushq %rdx
@@ -43,7 +56,7 @@ _eu4_border_loop_head_gateway:
     popq %rax
     testb %r13b, 0x1(%rcx)
     movq %rcx, -0x70(%rbp)
-    jne 1f
+    jne 2f
     jmpq *_border_loop_skip_target(%rip)
-1:
+2:
     jmpq *_border_loop_draw_target(%rip)
