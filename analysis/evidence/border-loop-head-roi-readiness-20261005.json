@@ -50,12 +50,12 @@
     "note": "Pre-defer-install gateway; valid for that commit only."
   },
   "offline_verification": {
-    "verified_commit": "3ae26023acb5f0e255c8d1182ab2438b47f7b74c",
+    "verified_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
     "darwin_full_suite": {
       "command": "python3 -m unittest discover -s tests",
       "result": "PASS"
     },
-    "note": "Capability-2 startup slim-down at 3ae2602; Darwin full suite PASS (400 tests). Authorize one Venice observer run pre-merge; do not merge PR #40 until pre_ready and ROI pass."
+    "note": "Readiness/focus harness at 4df49a4; Darwin suite PASS (406 tests). Cap2 dylib unchanged since 3ae2602. One Venice run authorized; do not merge PR #40 until full run passes."
   },
   "runtime_smoke": {
     "status": "MIXED_FAILURES",
