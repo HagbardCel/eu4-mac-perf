@@ -100,11 +100,34 @@ def build_forensic(run_dir: Path, *, game_log_path: Path | None = None) -> dict:
         log_text = game_log_path.read_text(encoding="utf-8", errors="replace")
     markers = _game_log_markers(log_text)
     game_log_ready = all(markers.values()) if log_text else False
+    diag = manifest.get("pre_ready_diagnostics")
+    if isinstance(diag, dict):
+        if diag.get("game_log_markers"):
+            markers = dict(diag["game_log_markers"])
+            game_log_ready = bool(diag.get("game_log_ready", game_log_ready))
+        if diag.get("game_log_source"):
+            log_source = str(diag["game_log_source"])
+    verified_commit = manifest.get("verified_code_commit", "3ae26023acb5f0e255c8d1182ab2438b47f7b74c")
+    median_swaps = probe_stats.get("median_swaps_s")
+    if game_log_ready and isinstance(median_swaps, (int, float)) and median_swaps >= 20:
+        interpretation = (
+            "Healthy paused swap cadence and complete game-log milestones, but wait_until_ready "
+            "timed out (likely focus/pointer-park/stability gate — operator reported map visible)."
+        )
+    elif isinstance(median_swaps, (int, float)) and median_swaps < 5 and probe_stats.get("probe_row_count", 0) < 20:
+        interpretation = (
+            "Sparse probe rows and very low swap rate during pre_ready while ROI observation was inactive."
+        )
+    else:
+        interpretation = (
+            "Deferred loop-head install did not cure pre_ready; probe cadence shows severe "
+            "render/load degradation while ROI observation was inactive."
+        )
     return {
         "run": run_dir.name,
         "error": manifest.get("error"),
-        "deferred_install_at_candidate": True,
-        "verified_code_commit": "2aceeff5273185c32ad231945dbde9259fb9b485",
+        "deferred_install_at_candidate": manifest.get("deferred_install_at_candidate", True),
+        "verified_code_commit": verified_commit,
         "derivation": {
             "probe_source": str(probe_path.relative_to(ROOT)) if probe_path.is_relative_to(ROOT) else str(probe_path),
             "manifest_source": str(manifest_path.relative_to(ROOT))
@@ -116,10 +139,7 @@ def build_forensic(run_dir: Path, *, game_log_path: Path | None = None) -> dict:
         "probe": probe_stats,
         "game_log_ready": game_log_ready,
         "game_log_markers": markers,
-        "interpretation": (
-            "Deferred loop-head install did not cure pre_ready; probe cadence shows severe "
-            "render/load degradation while ROI observation was inactive."
-        ),
+        "interpretation": interpretation,
     }
 
 

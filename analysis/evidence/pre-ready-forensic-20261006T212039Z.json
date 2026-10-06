@@ -1,0 +1,37 @@
+{
+  "run": "20261006T212039Z-submission-experiment",
+  "error": "Venice paused readiness was not verified within 180 seconds",
+  "deferred_install_at_candidate": true,
+  "verified_code_commit": "3ae26023acb5f0e255c8d1182ab2438b47f7b74c",
+  "derivation": {
+    "probe_source": "results/20261006T212039Z-submission-experiment/auto-probe.csv",
+    "manifest_source": "results/20261006T212039Z-submission-experiment/manifest.json",
+    "events_source": "results/20261006T212039Z-submission-experiment/events.jsonl",
+    "game_log_source": "unavailable"
+  },
+  "probe": {
+    "timeout_window_seconds": 180.0,
+    "probe_row_count": 156,
+    "probe_span_seconds": 161.789,
+    "first_probe_offset_seconds": 20.961,
+    "last_probe_offset_seconds": 182.75,
+    "last_probe_age_seconds": 0.0,
+    "max_probe_interval_seconds": 2.289,
+    "min_probe_interval_seconds": 1.0,
+    "median_probe_interval_seconds": 1.007,
+    "median_swaps_s": 55.897,
+    "min_swaps_s": 0.527,
+    "max_swaps_s": 63.983,
+    "paused_swaps_total": 8251,
+    "swaps_total": 8324
+  },
+  "game_log_ready": true,
+  "game_log_markers": {
+    "human_player": true,
+    "venice": true,
+    "launching_singleplayer": true,
+    "start_date": true,
+    "end_restore_device_objects": true
+  },
+  "interpretation": "Healthy paused swap cadence and complete game-log milestones, but wait_until_ready timed out (likely focus/pointer-park/stability gate \u2014 operator reported map visible)."
+}
