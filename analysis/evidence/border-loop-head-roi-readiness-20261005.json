@@ -5,7 +5,7 @@
   "semantic_policy": "proven_v1_semantics_unbounded_walk_scan",
   "implementable_policy": "v1_with_scan_cap",
   "observer_timing_usable": false,
-  "roi_instrumentation_status": "READY_OFFLINE",
+  "roi_instrumentation_status": "PENDING",
   "roi_gate": "PENDING_NUMERIC_EVIDENCE",
   "semantic_eliminations_per_frame": null,
   "implementable_eliminations_per_frame": null,
@@ -20,12 +20,12 @@
   "runtime_detour_installer_ready": true,
   "structural_reference_per_frame": 1562,
   "structural_reference_source": "historical_intrusive_draw_trace_not_validator",
-  "ready_for_single_venice_observer_run": true,
+  "ready_for_single_venice_observer_run": false,
   "static_feasibility_pointer": "analysis/evidence/border-loop-head-feasibility-20261004.json",
   "self_tests": {
     "portable_suite": "PASS",
     "macos_x86_64_border_build": "PASS",
-    "gateway_runtime": "PASS",
+    "gateway_runtime": "PENDING",
     "deferred_install_lifecycle": "PASS",
     "dual_suppression_replay": "PASS",
     "decode_failures": "PASS",
@@ -53,7 +53,8 @@
     "darwin_full_suite": {
       "command": "python3 -m unittest discover -s tests",
       "result": "PASS"
-    }
+    },
+    "note": "Deferred-install + passive gateway code commit; Darwin suite PASS at promotion 917bacb."
   },
   "runtime_smoke": {
     "status": "FAIL_PRE_READY",
@@ -62,16 +63,28 @@
         "run": "20261006T180547Z-submission-experiment",
         "stage": "pre_ready",
         "observation_armed": false,
-        "timeout_seconds": 180
+        "timeout_seconds": 180,
+        "deferred_install_at_candidate": false
       },
       {
         "run": "20261006T182402Z-submission-experiment",
         "stage": "pre_ready",
         "observation_armed": false,
-        "timeout_seconds": 180
+        "timeout_seconds": 180,
+        "deferred_install_at_candidate": false
+      },
+      {
+        "run": "20261006T193739Z-submission-experiment",
+        "stage": "pre_ready",
+        "observation_armed": false,
+        "timeout_seconds": 180,
+        "deferred_install_at_candidate": true,
+        "verified_code_commit": "2aceeff5273185c32ad231945dbde9259fb9b485",
+        "command": "python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa",
+        "error": "Venice paused readiness was not verified within 180 seconds"
       }
     ],
-    "interpretation": "Both failures occurred with the loop-head detour installed before readiness and the ROI bank unarmed."
+    "interpretation": "All three failures occurred before wait_until_ready completed (no ROI ARM). Attempts 1–2 had loop-head detour installed at first flush; attempt 3 used deferred install (no detour until first MODE_CANDIDATE) but still timed out at pre_ready — loading/readiness regression is not fully explained by the always-on gateway alone."
   },
-  "note": "Offline verification on verified_commit authorizes one pre-merge Venice observer run; runtime gates remain PENDING until live evidence."
+  "note": "Offline self_tests PASS on verified_commit 2aceeff; Venice observer run withdrawn after third pre_ready timeout. Runtime gates remain PENDING."
 }
