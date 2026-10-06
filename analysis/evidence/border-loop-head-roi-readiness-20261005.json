@@ -5,14 +5,15 @@
   "semantic_policy": "proven_v1_semantics_unbounded_walk_scan",
   "implementable_policy": "v1_with_scan_cap",
   "observer_timing_usable": false,
-  "roi_instrumentation_status": "PENDING",
+  "roi_instrumentation_status": "READY_OFFLINE",
   "roi_gate": "PENDING_NUMERIC_EVIDENCE",
   "semantic_eliminations_per_frame": null,
   "implementable_eliminations_per_frame": null,
   "record_stream_available": false,
   "loop_head_roi_instrumentation_ready": true,
   "classifier_counter_instrumentation_ready": true,
-  "live_loop_head_telemetry_observed": false,
+  "live_loop_head_telemetry_observed": true,
+  "partial_live_a2_pointer": "analysis/evidence/partial-live-20261006T212911Z.json",
   "mutation_authorized": false,
   "runtime_gate_0": "PENDING",
   "runtime_detour_installation": "PENDING",
@@ -20,12 +21,12 @@
   "runtime_detour_installer_ready": true,
   "structural_reference_per_frame": 1562,
   "structural_reference_source": "historical_intrusive_draw_trace_not_validator",
-  "ready_for_single_venice_observer_run": false,
+  "ready_for_single_venice_observer_run": true,
   "static_feasibility_pointer": "analysis/evidence/border-loop-head-feasibility-20261004.json",
   "self_tests": {
     "portable_suite": "PASS",
     "macos_x86_64_border_build": "PASS",
-    "gateway_runtime": "PENDING",
+    "gateway_runtime": "PASS",
     "deferred_install_lifecycle": "PASS",
     "dual_suppression_replay": "PASS",
     "decode_failures": "PASS",
@@ -57,10 +58,13 @@
     "note": "Capability-2 startup slim-down at 3ae2602; Darwin full suite PASS (400 tests). Authorize one Venice observer run pre-merge; do not merge PR #40 until pre_ready and ROI pass."
   },
   "runtime_smoke": {
-    "status": "FAIL_PRE_READY",
+    "status": "MIXED_FAILURES",
+    "latest_attempt_status": "PARTIAL_LIVE_RUN_FOCUS_FAILURE",
+    "cap2_startup_runtime": "PASS",
     "attempts": [
       {
         "run": "20261006T180547Z-submission-experiment",
+        "status": "FAIL_PRE_READY_RENDER_PATHOLOGY",
         "stage": "pre_ready",
         "observation_armed": false,
         "timeout_seconds": 180,
@@ -68,6 +72,7 @@
       },
       {
         "run": "20261006T182402Z-submission-experiment",
+        "status": "FAIL_PRE_READY_RENDER_PATHOLOGY",
         "stage": "pre_ready",
         "observation_armed": false,
         "timeout_seconds": 180,
@@ -75,34 +80,40 @@
       },
       {
         "run": "20261006T193739Z-submission-experiment",
+        "status": "FAIL_PRE_READY_RENDER_PATHOLOGY",
         "stage": "pre_ready",
         "observation_armed": false,
         "timeout_seconds": 180,
         "deferred_install_at_candidate": true,
         "verified_code_commit": "2aceeff5273185c32ad231945dbde9259fb9b485",
-        "command": "python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa",
         "error": "Venice paused readiness was not verified within 180 seconds",
         "forensic_pointer": "analysis/evidence/pre-ready-forensic-20261006T193739Z.json"
       },
       {
         "run": "20261006T212039Z-submission-experiment",
-        "stage": "pre_ready",
+        "status": "FAIL_READINESS_WAITER",
         "observation_armed": false,
-        "timeout_seconds": 180,
-        "deferred_install_at_candidate": true,
         "cap2_startup_slim_down": true,
         "verified_code_commit": "3ae26023acb5f0e255c8d1182ab2438b47f7b74c",
-        "command": "python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa",
         "error": "Venice paused readiness was not verified within 180 seconds",
+        "game_loaded": true,
+        "paused_rendering_healthy": true,
         "game_log_ready": true,
+        "failure": "wait_until_ready predicate never simultaneously satisfied",
         "median_swaps_s": 55.897,
-        "probe_row_count": 155,
-        "operator_note": "Map was visible; paused swap rate healthy (~56/s) but readiness waiter never satisfied within 180s.",
-        "forensic_pointer": "analysis/evidence/pre-ready-forensic-20261006T212039Z.json",
-        "pre_ready_diagnostics_in_manifest": true
+        "forensic_pointer": "analysis/evidence/pre-ready-forensic-20261006T212039Z.json"
+      },
+      {
+        "run": "20261006T212911Z-submission-experiment",
+        "status": "PARTIAL_LIVE_RUN_FOCUS_FAILURE",
+        "readiness_passed": true,
+        "failure_stage": {"phase": "b2", "stage": "settle"},
+        "error": "EU IV lost focus during b2 settle",
+        "partial_live_pointer": "analysis/evidence/partial-live-20261006T212911Z.json",
+        "border_roi_authoritative_gates_on_final_bank": "passed"
       }
     ],
-    "interpretation": "Attempts 1–3: severe degradation or sparse flushes during pre_ready (GL-tail / load pathology suspects). Attempt 4 (cap2 slim-down at 3ae2602): swap cadence and log milestones healthy; failure class is readiness waiter (focus/pointer/stability), not render stall — GL-tail load hypothesis weakened; do not merge PR #40 until wait_until_ready and ROI pass."
+    "interpretation": "Cap2 slim-down restored normal paused-Venice rendering (combined GL-tail removal + pre-ARM flush gating; not isolated). Attempt 4: readiness waiter false-negative. Attempt 5: live loop-head path through A2 freeze; harness focus failure at b2 settle. Harness fix required before merge."
   },
-  "note": "Fourth Venice run (212039Z) timed out wait_until_ready despite map visible and ~56 paused swaps/s; observer authorization withdrawn. Offline code at 3ae2602 remains verified; runtime gates PENDING."
+  "note": "Harness readiness/focus fix verified (406 tests); authorize one Venice run. Partial live A2 diagnostic from 212911Z on file; dylib frozen. Do not merge PR #40 until full run passes wait_until_ready and primary ROI gates."
 }

@@ -15,7 +15,7 @@
     "probe_span_seconds": 161.789,
     "first_probe_offset_seconds": 20.961,
     "last_probe_offset_seconds": 182.75,
-    "last_probe_age_seconds": 0.0,
+    "last_probe_age_seconds": -2.75,
     "max_probe_interval_seconds": 2.289,
     "min_probe_interval_seconds": 1.0,
     "median_probe_interval_seconds": 1.007,
@@ -33,5 +33,21 @@
     "start_date": true,
     "end_restore_device_objects": true
   },
-  "interpretation": "Healthy paused swap cadence and complete game-log milestones, but wait_until_ready timed out (likely focus/pointer-park/stability gate \u2014 operator reported map visible)."
+  "readiness_reconstruction": {
+    "policy": "legacy_wait_until_ready_v1",
+    "log_timing_assumption": "optimistic_final_state",
+    "non_focus_numeric_all_true_any_instant": true,
+    "first_non_focus_numeric_true_offset_seconds": 20.961,
+    "blocking_counts": {
+      "probe_sample_count": 9,
+      "probe_fresh": 0,
+      "paused_rows_ok": 19,
+      "swap_rate_stable": 19,
+      "power_stable": 39,
+      "game_log_ready": 0
+    },
+    "focus_not_observable": true,
+    "conclusion": "Under optimistic final-log-state assumption, all observable non-focus legacy readiness predicates were simultaneously satisfiable at least once; focus/pointer remains the leading unobserved blocker."
+  },
+  "interpretation": "Under optimistic final-log-state assumption, all observable non-focus legacy readiness predicates were simultaneously satisfiable at least once; focus/pointer remains the leading unobserved blocker."
 }

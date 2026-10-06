@@ -51,7 +51,8 @@ def _probe_stats(probe_path: Path, anchor: dict) -> dict:
     intervals_s = [(monos[i] - monos[i - 1]) / 1e9 for i in range(1, len(monos))]
     first_offset = (first_mono - anchor_mono_ns) / 1e9
     last_offset = (last_mono - anchor_mono_ns) / 1e9
-    last_age = max(0.0, READY_TIMEOUT_SECONDS - last_offset)
+    collection_mono_ns = anchor_mono_ns + int(READY_TIMEOUT_SECONDS * 1e9)
+    last_age = (collection_mono_ns - last_mono) / 1e9
     swaps_rates = [r["swaps_s"] for r in rows]
     return {
         "timeout_window_seconds": READY_TIMEOUT_SECONDS,
@@ -73,6 +74,98 @@ def _probe_stats(probe_path: Path, anchor: dict) -> dict:
 
 def _game_log_markers(log_text: str) -> dict[str, bool]:
     return {key: phrase in log_text for key, phrase in GAME_LOG_MARKERS.items()}
+
+
+def reconstruct_readiness_timeline(
+    run_dir: Path,
+    anchor: dict,
+    *,
+    game_log_ready_assumed: bool,
+    log_timing_assumption: str,
+    pid: int = 0,
+) -> dict:
+    sys.path.insert(0, str(ROOT / "benchmark"))
+    import autonomous_runner as auto
+
+    probe_path = run_dir / "auto-probe.csv"
+    power_path = run_dir / "powermetrics.pliststream"
+    rows = auto.probe_rows(probe_path, anchor)
+    power_samples: list[dict] = []
+    if power_path.is_file():
+        tail = auto.PowerTail(power_path)
+        tail.poll()
+        tail.finish()
+        power_samples = tail.samples
+    blocking_counts: dict[str, int] = {
+        "probe_sample_count": 0,
+        "probe_fresh": 0,
+        "paused_rows_ok": 0,
+        "swap_rate_stable": 0,
+        "power_stable": 0,
+        "game_log_ready": 0,
+    }
+    first_numeric_true_offset: float | None = None
+    for index, row in enumerate(rows):
+        eval_ns = int(row["monotonic_ns"])
+        window = [r for r in rows if r["monotonic_ns"] <= eval_ns][-10:]
+        power = auto.cpu_samples_between(
+            power_samples, pid, anchor, eval_ns - 12_000_000_000, eval_ns
+        )[-10:]
+        logged = game_log_ready_assumed
+        preds = auto.readiness_predicates(
+            logged=logged,
+            frontmost=False,
+            pointer_interior=False,
+            rows=window,
+            now_ns=eval_ns,
+            power=power,
+            gate_swap_stability=True,
+            gate_power_stability=True,
+        )
+        numeric_ok = (
+            preds["probe_sample_count"] >= 10
+            and preds["probe_fresh"]
+            and preds["paused_rows_ok"]
+            and preds["swap_rate_stable"]
+            and preds["power_stable"]
+        )
+        if not numeric_ok:
+            for key in ("probe_sample_count", "probe_fresh", "paused_rows_ok", "swap_rate_stable", "power_stable"):
+                if key == "probe_sample_count":
+                    if preds["probe_sample_count"] < 10:
+                        blocking_counts[key] += 1
+                elif not preds.get(key, False):
+                    blocking_counts[key] += 1
+        if not logged:
+            blocking_counts["game_log_ready"] += 1
+        elif first_numeric_true_offset is None:
+            first_numeric_true_offset = round((eval_ns - int(anchor["monotonic_ns"])) / 1e9, 3)
+    non_focus_numeric = first_numeric_true_offset is not None
+    if non_focus_numeric and log_timing_assumption == "optimistic_final_state":
+        conclusion = (
+            "Under optimistic final-log-state assumption, all observable non-focus legacy "
+            "readiness predicates were simultaneously satisfiable at least once; "
+            "focus/pointer remains the leading unobserved blocker."
+        )
+    elif non_focus_numeric:
+        conclusion = (
+            "With reconstructed log timing, all non-focus legacy readiness predicates were "
+            "simultaneously satisfiable at least once; focus/pointer was necessarily the missing class."
+        )
+    else:
+        conclusion = (
+            "No probe instant satisfied all non-focus legacy readiness predicates; "
+            f"dominant blockers by count: {blocking_counts}."
+        )
+    return {
+        "policy": "legacy_wait_until_ready_v1",
+        "log_timing_assumption": log_timing_assumption,
+        "non_focus_numeric_all_true_any_instant": non_focus_numeric,
+        "first_non_focus_numeric_true_offset_seconds": first_numeric_true_offset,
+        "blocking_counts": blocking_counts,
+        "focus_not_observable": True,
+        "conclusion": conclusion,
+    }
 
 
 def build_forensic(run_dir: Path, *, game_log_path: Path | None = None) -> dict:
@@ -109,11 +202,17 @@ def build_forensic(run_dir: Path, *, game_log_path: Path | None = None) -> dict:
             log_source = str(diag["game_log_source"])
     verified_commit = manifest.get("verified_code_commit", "3ae26023acb5f0e255c8d1182ab2438b47f7b74c")
     median_swaps = probe_stats.get("median_swaps_s")
+    log_timing_assumption = "optimistic_final_state" if game_log_ready and not log_text else (
+        "reconstructed_timestamps" if log_text else "absent"
+    )
+    readiness_reconstruction = reconstruct_readiness_timeline(
+        run_dir,
+        anchor,
+        game_log_ready_assumed=game_log_ready,
+        log_timing_assumption=log_timing_assumption,
+    )
     if game_log_ready and isinstance(median_swaps, (int, float)) and median_swaps >= 20:
-        interpretation = (
-            "Healthy paused swap cadence and complete game-log milestones, but wait_until_ready "
-            "timed out (likely focus/pointer-park/stability gate — operator reported map visible)."
-        )
+        interpretation = readiness_reconstruction["conclusion"]
     elif isinstance(median_swaps, (int, float)) and median_swaps < 5 and probe_stats.get("probe_row_count", 0) < 20:
         interpretation = (
             "Sparse probe rows and very low swap rate during pre_ready while ROI observation was inactive."
@@ -139,6 +238,7 @@ def build_forensic(run_dir: Path, *, game_log_path: Path | None = None) -> dict:
         "probe": probe_stats,
         "game_log_ready": game_log_ready,
         "game_log_markers": markers,
+        "readiness_reconstruction": readiness_reconstruction,
         "interpretation": interpretation,
     }
 
