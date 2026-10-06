@@ -5,7 +5,7 @@
   "semantic_policy": "proven_v1_semantics_unbounded_walk_scan",
   "implementable_policy": "v1_with_scan_cap",
   "observer_timing_usable": false,
-  "roi_instrumentation_status": "PENDING",
+  "roi_instrumentation_status": "READY_OFFLINE",
   "roi_gate": "PENDING_NUMERIC_EVIDENCE",
   "semantic_eliminations_per_frame": null,
   "implementable_eliminations_per_frame": null,
@@ -20,12 +20,12 @@
   "runtime_detour_installer_ready": true,
   "structural_reference_per_frame": 1562,
   "structural_reference_source": "historical_intrusive_draw_trace_not_validator",
-  "ready_for_single_venice_observer_run": false,
+  "ready_for_single_venice_observer_run": true,
   "static_feasibility_pointer": "analysis/evidence/border-loop-head-feasibility-20261004.json",
   "self_tests": {
-    "portable_suite": "PENDING",
-    "macos_x86_64_border_build": "PENDING",
-    "gateway_runtime": "PENDING",
+    "portable_suite": "PASS",
+    "macos_x86_64_border_build": "PASS",
+    "gateway_runtime": "PASS",
     "deferred_install_lifecycle": "PASS",
     "dual_suppression_replay": "PASS",
     "decode_failures": "PASS",
@@ -49,12 +49,12 @@
     "note": "Pre-defer-install gateway; valid for that commit only."
   },
   "offline_verification": {
-    "verified_commit": "2aceeff5273185c32ad231945dbde9259fb9b485",
+    "verified_commit": "3ae26023acb5f0e255c8d1182ab2438b47f7b74c",
     "darwin_full_suite": {
       "command": "python3 -m unittest discover -s tests",
       "result": "PASS"
     },
-    "note": "Deferred-install + passive gateway code commit; Darwin suite PASS at promotion 917bacb."
+    "note": "Capability-2 startup slim-down at 3ae2602; Darwin full suite PASS (400 tests). Authorize one Venice observer run pre-merge; do not merge PR #40 until pre_ready and ROI pass."
   },
   "runtime_smoke": {
     "status": "FAIL_PRE_READY",
@@ -87,5 +87,5 @@
     ],
     "interpretation": "All three failures occurred before wait_until_ready completed (no ROI ARM). Attempts 1–2 had loop-head detour installed at first flush; attempt 3 used deferred install (no detour until first MODE_CANDIDATE) but still timed out at pre_ready — loading/readiness regression is not fully explained by the always-on gateway alone."
   },
-  "note": "Capability-2 startup slim-down (no GL-tail interpose, passive flush until border_active); portable_suite and macos_x86_64_border_build PENDING re-verify on Darwin. Venice not authorized until READY_OFFLINE promotion."
+  "note": "READY_OFFLINE on slim-down commit 3ae2602; one Venice observer run authorized pre-merge. Runtime gates stay PENDING until live proof."
 }
