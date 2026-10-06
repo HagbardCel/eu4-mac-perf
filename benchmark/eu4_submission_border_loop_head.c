@@ -88,7 +88,6 @@ static void record_gate0_once(void) {
         return;
     }
     gate0_recorded = true;
-    eu4_border_init_gl_apis();
     if (real_gl_multidraw == NULL) {
         real_gl_multidraw = (glMultiDrawElements_fn)dlsym(RTLD_NEXT, "glMultiDrawElements");
     }

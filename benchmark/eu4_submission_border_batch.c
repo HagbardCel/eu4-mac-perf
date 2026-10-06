@@ -1,3 +1,4 @@
+/* Legacy GL-tail BaseVertex helpers; not used by ROI dylib after gl_interpose removal. */
 #define GL_SILENCE_DEPRECATION 1
 #include "eu4_submission_border.h"
 #include "eu4_submission_border_loop_head.h"

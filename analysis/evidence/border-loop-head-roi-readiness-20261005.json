@@ -23,8 +23,8 @@
   "ready_for_single_venice_observer_run": false,
   "static_feasibility_pointer": "analysis/evidence/border-loop-head-feasibility-20261004.json",
   "self_tests": {
-    "portable_suite": "PASS",
-    "macos_x86_64_border_build": "PASS",
+    "portable_suite": "PENDING",
+    "macos_x86_64_border_build": "PENDING",
     "gateway_runtime": "PENDING",
     "deferred_install_lifecycle": "PASS",
     "dual_suppression_replay": "PASS",
@@ -81,10 +81,11 @@
         "deferred_install_at_candidate": true,
         "verified_code_commit": "2aceeff5273185c32ad231945dbde9259fb9b485",
         "command": "python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa",
-        "error": "Venice paused readiness was not verified within 180 seconds"
+        "error": "Venice paused readiness was not verified within 180 seconds",
+        "forensic_pointer": "analysis/evidence/pre-ready-forensic-20261006T193739Z.json"
       }
     ],
     "interpretation": "All three failures occurred before wait_until_ready completed (no ROI ARM). Attempts 1–2 had loop-head detour installed at first flush; attempt 3 used deferred install (no detour until first MODE_CANDIDATE) but still timed out at pre_ready — loading/readiness regression is not fully explained by the always-on gateway alone."
   },
-  "note": "Offline self_tests PASS on verified_commit 2aceeff; Venice observer run withdrawn after third pre_ready timeout. Runtime gates remain PENDING."
+  "note": "Capability-2 startup slim-down (no GL-tail interpose, passive flush until border_active); portable_suite and macos_x86_64_border_build PENDING re-verify on Darwin. Venice not authorized until READY_OFFLINE promotion."
 }

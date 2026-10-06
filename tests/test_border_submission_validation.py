@@ -12,6 +12,10 @@ class BorderSubmissionValidationTests(unittest.TestCase):
     def test_reference_phase_requires_draws_without_multidraw(self) -> None:
         start = {"border_candidate_draws": 0, "border_multidraw_calls": 0, "border_draw_calls_eliminated": 0}
         end = {"border_candidate_draws": 100, "border_multidraw_calls": 0, "border_draw_calls_eliminated": 0}
+        out = bv.border_phase_validation(
+            "reference", start, end, border_mutate=False, border_minimal=False, legacy_gl_engagement=False
+        )
+        self.assertEqual(out["status"], "skipped")
         out = bv.border_phase_validation("reference", start, end, border_mutate=False, border_minimal=False)
         self.assertEqual(out["status"], "passed")
 

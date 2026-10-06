@@ -1,0 +1,37 @@
+{
+  "run": "20261006T193739Z-submission-experiment",
+  "error": "Venice paused readiness was not verified within 180 seconds",
+  "deferred_install_at_candidate": true,
+  "verified_code_commit": "2aceeff5273185c32ad231945dbde9259fb9b485",
+  "derivation": {
+    "probe_source": "results/20261006T193739Z-submission-experiment/auto-probe.csv",
+    "manifest_source": "results/20261006T193739Z-submission-experiment/manifest.json",
+    "events_source": "results/20261006T193739Z-submission-experiment/events.jsonl",
+    "game_log_source": "unavailable"
+  },
+  "probe": {
+    "timeout_window_seconds": 180.0,
+    "probe_row_count": 7,
+    "probe_span_seconds": 9.51,
+    "first_probe_offset_seconds": 21.358,
+    "last_probe_offset_seconds": 30.868,
+    "last_probe_age_seconds": 149.132,
+    "max_probe_interval_seconds": 2.253,
+    "min_probe_interval_seconds": 1.041,
+    "median_probe_interval_seconds": 1.427,
+    "median_swaps_s": 1.206,
+    "min_swaps_s": 0.68,
+    "max_swaps_s": 48.513,
+    "paused_swaps_total": 0,
+    "swaps_total": 70
+  },
+  "game_log_ready": false,
+  "game_log_markers": {
+    "human_player": false,
+    "venice": false,
+    "launching_singleplayer": false,
+    "start_date": false,
+    "end_restore_device_objects": false
+  },
+  "interpretation": "Deferred loop-head install did not cure pre_ready; probe cadence shows severe render/load degradation while ROI observation was inactive."
+}

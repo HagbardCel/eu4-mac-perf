@@ -1,3 +1,4 @@
+/* Legacy GL-tail interposer; not linked into LIBRARY_BORDER (capability 2 slim-down). */
 #define GL_SILENCE_DEPRECATION 1
 #include "eu4_submission_border.h"
 

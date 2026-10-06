@@ -337,11 +337,15 @@ static CGLError submission_flush(CGLContextObj context) {
     }
 #endif
 #if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
-    eu4_border_flush_pending();
+    const bool border_active =
+        atomic_load_explicit(&g_eu4_border_observer_active, memory_order_acquire) != 0;
+    if (border_active) {
+        eu4_border_flush_pending();
+    }
 #endif
     CGLError result = CGLFlushDrawable(context);
 #if EU4_SUBMISSION_COMPILED_CAPABILITY == 2
-    if (control_map != MAP_FAILED) {
+    if (border_active && control_map != MAP_FAILED) {
         uint32_t *words = (uint32_t *)control_map;
         if (protocol_ok(words) && candidate_mode_active(words)) {
             eu4_submission_counter_add(EU4_COUNTER_CANDIDATE_SWAPS, 1);

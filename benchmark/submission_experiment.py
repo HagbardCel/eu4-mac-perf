@@ -263,6 +263,7 @@ def _run_phase(
             counter_end,
             border_mutate=border_mutate,
             border_minimal=border_minimal,
+            legacy_gl_engagement=False,
         )
         phase_payload["border_minimal"] = border_minimal
         phase_payload["border_mutate"] = border_mutate
@@ -387,7 +388,22 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                         stderr=stderr,
                     )
                 tail = auto.PowerTail(pm_path)
-                ready = auto.wait_until_ready(game, run_dir / "auto-probe.csv", tail, anchor, game_log, old_log)
+                try:
+                    ready = auto.wait_until_ready(game, run_dir / "auto-probe.csv", tail, anchor, game_log, old_log)
+                except base.BenchmarkError as ready_exc:
+                    if str(ready_exc) == auto.VENICE_READY_TIMEOUT_MSG:
+                        auto.best_effort_record_pre_ready_diagnostics(
+                            manifest,
+                            run_dir=run_dir,
+                            game=game,
+                            probe=run_dir / "auto-probe.csv",
+                            tail=tail,
+                            anchor=anchor,
+                            game_log=game_log,
+                            old_log=old_log,
+                            submission_snapshot=submission.snapshot(),
+                        )
+                    raise
                 manifest["readiness"] = ready
                 warm_up(game, run_dir / "auto-probe.csv", tail, anchor)
                 capture_scene(run_dir / "ready-scene.png")
@@ -418,7 +434,10 @@ def run_border_multidraw_experiment(output_root: Path) -> Path:
                 manifest["phases"] = phases
                 manifest["border_roi_primary_phase"] = border_validation.BORDER_ROI_PRIMARY_PHASE
                 manifest["border_roi_validation_phases"] = list(border_validation.ARMED_ROI_PHASE_NAMES)
-                manifest["border_legacy_gl_engagement_gate"] = border_validation.border_experiment_gate(phases)
+                manifest["border_legacy_gl_engagement_gate"] = {
+                    "status": "disabled",
+                    "reason": "GL-tail pass-through observer removed; loop-head ROI gates are authoritative",
+                }
                 roi_phase_gates: dict[str, dict] = {}
                 roi_failures: list[str] = []
                 primary_snapshot: dict | None = None

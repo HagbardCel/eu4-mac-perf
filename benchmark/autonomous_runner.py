@@ -55,6 +55,7 @@ HARNESS = ROOT / "benchmark/.build/auto_probe_harness"
 SCENE = ROOT / "fixtures/venice_scene.png"
 SCENE_MANIFEST = ROOT / "fixtures/venice_scene.json"
 READY_TIMEOUT_S = 180
+VENICE_READY_TIMEOUT_MSG = "Venice paused readiness was not verified within 180 seconds"
 WARMUP_S = 90
 WARMUP_EXTENSION_S = 60
 MEASURE_S = 30
@@ -338,10 +339,107 @@ def fresh_game_log(path: Path, initial: bytes) -> str:
     return data[offset:].decode(errors="replace")
 
 
+def game_log_markers(text: str) -> dict[str, bool]:
+    return {
+        "human_player": "Human Player set as primary local" in text,
+        "venice": "Venice" in text,
+        "launching_singleplayer": "Launching SINGLEPLAYER-game" in text,
+        "start_date": "Start-date: 1444.11.11" in text,
+        "end_restore_device_objects": "End RestoreDeviceObjects" in text,
+    }
+
+
 def game_log_ready(text: str) -> bool:
-    return ("Human Player set as primary local" in text and "Venice" in text and
-            "Launching SINGLEPLAYER-game" in text and
-            "Start-date: 1444.11.11" in text and "End RestoreDeviceObjects" in text)
+    markers = game_log_markers(text)
+    return all(markers.values())
+
+
+def collect_pre_ready_diagnostics(
+    probe: Path,
+    anchor: dict,
+    raw: PowerTail,
+    game: subprocess.Popen,
+    game_log: Path,
+    old_log: bytes,
+    *,
+    pid: int,
+    submission_snapshot: dict | None = None,
+) -> dict:
+    rows = probe_rows(probe, anchor)
+    now_ns = time.monotonic_ns()
+    intervals_s: list[float] = []
+    if len(rows) >= 2:
+        monos = [r["monotonic_ns"] for r in rows]
+        intervals_s = [(monos[i] - monos[i - 1]) / 1e9 for i in range(1, len(monos))]
+    anchor_mono = int(anchor["monotonic_ns"])
+    first_offset = (rows[0]["monotonic_ns"] - anchor_mono) / 1e9 if rows else None
+    last_offset = (rows[-1]["monotonic_ns"] - anchor_mono) / 1e9 if rows else None
+    swaps_rates = [r["swaps_s"] for r in rows]
+    log_text = fresh_game_log(game_log, old_log)
+    markers = game_log_markers(log_text)
+    power = cpu_samples(raw.poll(), pid, anchor, now_ns - 12_000_000_000)[-10:]
+    payload: dict = {
+        "timeout_window_seconds": READY_TIMEOUT_S,
+        "probe_row_count": len(rows),
+        "probe_span_seconds": round((rows[-1]["monotonic_ns"] - rows[0]["monotonic_ns"]) / 1e9, 3) if len(rows) >= 2 else 0.0,
+        "first_probe_offset_seconds": round(first_offset, 3) if first_offset is not None else None,
+        "last_probe_offset_seconds": round(last_offset, 3) if last_offset is not None else None,
+        "last_probe_age_seconds": round(READY_TIMEOUT_S - last_offset, 3) if last_offset is not None else None,
+        "max_probe_interval_seconds": round(max(intervals_s), 3) if intervals_s else None,
+        "min_probe_interval_seconds": round(min(intervals_s), 3) if intervals_s else None,
+        "median_probe_interval_seconds": round(statistics.median(intervals_s), 3) if intervals_s else None,
+        "median_swaps_s": round(statistics.median(swaps_rates), 3) if swaps_rates else None,
+        "min_swaps_s": round(min(swaps_rates), 3) if swaps_rates else None,
+        "max_swaps_s": round(max(swaps_rates), 3) if swaps_rates else None,
+        "paused_swaps_total": sum(r["paused_swaps"] for r in rows),
+        "swaps_total": sum(r["swaps"] for r in rows),
+        "last_probe_rows": rows[-10:],
+        "game_log_ready": game_log_ready(log_text),
+        "game_log_markers": markers,
+        "recent_cpu_ms_s": [round(v, 2) for _, v in power],
+        "process_alive": game.poll() is None,
+    }
+    if submission_snapshot is not None:
+        payload["control_snapshot"] = submission_snapshot
+    return payload
+
+
+def best_effort_record_pre_ready_diagnostics(
+    manifest: dict,
+    *,
+    run_dir: Path,
+    game: subprocess.Popen | None,
+    probe: Path,
+    tail: PowerTail,
+    anchor: dict,
+    game_log: Path,
+    old_log: bytes,
+    submission_snapshot: dict | None,
+) -> None:
+    try:
+        if game is None:
+            manifest["pre_ready_diagnostics"] = {"status": "skipped", "reason": "game handle missing"}
+            return
+        manifest["pre_ready_diagnostics"] = collect_pre_ready_diagnostics(
+            probe,
+            anchor,
+            tail,
+            game,
+            game_log,
+            old_log,
+            pid=game.pid,
+            submission_snapshot=submission_snapshot,
+        )
+    except Exception as diagnostic_error:
+        manifest["pre_ready_diagnostics"] = {
+            "status": "collection_failed",
+            "error": str(diagnostic_error),
+        }
+    try:
+        if game is not None and game.poll() is None:
+            capture_scene(run_dir / "pre-ready-timeout.png")
+    except Exception as screenshot_error:
+        manifest["pre_ready_screenshot_error"] = str(screenshot_error)
 
 
 def focus(action: str, pid: int) -> bool:
@@ -455,7 +553,7 @@ def wait_until_ready(game: subprocess.Popen, probe: Path, raw: PowerTail,
                 r["swaps_s"] for r in rows), 2), "cpu_ms_s": round(statistics.median(
                 v for _, v in power), 2)}
         time.sleep(1)
-    raise base.BenchmarkError("Venice paused readiness was not verified within 180 seconds")
+    raise base.BenchmarkError(VENICE_READY_TIMEOUT_MSG)
 
 
 def warm_up(game: subprocess.Popen, probe: Path, raw: PowerTail, anchor: dict) -> dict:

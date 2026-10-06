@@ -16,7 +16,21 @@ def border_phase_validation(
     *,
     border_mutate: bool,
     border_minimal: bool,
+    legacy_gl_engagement: bool = True,
 ) -> dict[str, Any]:
+    if not legacy_gl_engagement:
+        return {
+            "status": "skipped",
+            "reason": "GL-tail pass-through observer removed; loop-head ROI gates are authoritative",
+            "legacy_gl_engagement": False,
+            "border_candidate_draws_delta": 0,
+            "border_multidraw_calls_delta": 0,
+            "border_draw_calls_eliminated_delta": 0,
+            "border_fallback_mutate_disabled_delta": 0,
+            "border_minimal": border_minimal,
+            "border_mutate": border_mutate,
+            "role": role,
+        }
     draws = _delta(start, end, "border_candidate_draws")
     multidraw = _delta(start, end, "border_multidraw_calls")
     eliminated = _delta(start, end, "border_draw_calls_eliminated")
