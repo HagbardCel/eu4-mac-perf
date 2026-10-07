@@ -2,9 +2,9 @@
 
 ## Purpose
 
-This document reviews the current plan in [`eu4_rendering_strategy_90pct.md`](eu4_rendering_strategy_90pct.md) against evidence already in the repository, lists alternative hypotheses with effort and savings estimates, and ranks all candidates by expected performance gain per unit of effort, with a bias toward work that later steps can build on.
+This document reviews the earlier plan, `eu4_rendering_strategy_90pct.md`, against evidence already in the repository. That plan has since been removed; it is available in git history, and its architecture is carried over into the canonical roadmap. This document also lists alternative hypotheses with effort and savings estimates, and ranks all candidates by expected performance gain per unit of effort, with a bias toward work that later steps can build on.
 
-The resulting forward plan is in [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md). State of knowledge: [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md).
+The resulting canonical roadmap is [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md); its §1.2 defines the metrics used here. State of knowledge: [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md).
 
 **Evidence labels used below:**
 
@@ -67,10 +67,11 @@ Derived: per frame in the same run's lighter "Paused Idle" phase (132,636 and 12
 - The CPU sample (2026-09-26) predates the current harness; the scene was the same paused Venice fixture at 3456×2234 / 120 Hz, but camera state was not independently controlled.
 - The per-call table comes from an intrusive run that lost ~20% swap rate; treat absolute µs as upper bounds.
 - Other threads (Metal completion queue, audio, GOG Galaxy SDK, Rosetta) make up the gap between main-thread time and ~1,110 CPU-ms/s. They are not broken down yet.
+- **Metric mismatch:** all shares in §1.2 are **main-thread wall-clock** shares, while 21.1 ms/swap in §1.1 is **process CPU** across all threads. A 44% mesh share therefore does not directly imply 44% of process CPU-ms/swap. Per-frame savings estimates below refer to **main-thread wall ms/frame** and stay provisional until per-thread CPU counters exist (S1).
 
 ---
 
-## 2. Assessment of the current strategy
+## 2. Assessment of the earlier strategy
 
 **What is right.** Replacing the OpenGL backend at the Clausewitz Gfx boundary, with shadow state and cached pipeline objects, is the correct long-run architecture. A raw GL→Metal shim would preserve the per-draw churn the driver is already paying for. Metal is also the only lever with a high ceiling for **active** scenes (unpaused, camera moving), where frames genuinely differ.
 
@@ -94,14 +95,16 @@ Savings are given for two scene types:
 - **Static:** paused, camera still, no input (the fixture).
 - **Active:** camera moving or game unpaused, frames genuinely change.
 
-"Per frame" savings convert into higher fps below 120 Hz; "CPU-ms/s" savings assume cadence is held.
+"Per frame" savings mean **main-thread wall ms/frame** (provisional, see §1.4); they convert into higher fps below 120 Hz. "CPU-ms/s" means **process CPU-ms/s** and assumes cadence is held.
 
 ### S1 — Cheap measurement probes
 
 - **Mechanism:** three probes, no mutation.
-  1. **Frame-evolution census:** hash the back buffer per region (`glReadPixels` downscaled, or a CRC over a PBO readback) just before `CGLFlushDrawable`, over several seconds of consecutive paused frames, across map modes and zoom levels, with the UI closed and open. Classify each region as static, periodic, continuous, or input-driven.
-  2. **Per-thread CPU:** `ps -M` / `top -stats` per thread, or thread CPU from a fresh `sample`, to split the ~1,110 CPU-ms/s into main thread vs Metal completion, audio, Galaxy SDK, Rosetta.
-  3. **Fresh profile at Gfx granularity:** a new `sample` on the current fixture, attributing samples to `GfxDrawIndexed` / `GfxSetTextures` / `GfxSetShader` call sites.
+  1. **Frame-evolution census:** run just before `CGLFlushDrawable`, over several seconds of consecutive paused frames, across map modes and zoom levels, with the UI closed and open.
+     - The **equality predicate** is an exact hash/CRC of the **full-resolution** back buffer (PBO readback). Only this can authorize lossless skipping; downscaling can hide a small flag, highlight, or pulse.
+     - Once frames differ, per-region hashes and downscaled difference maps **localize** the change, and each region is classified as static, periodic, continuous, or input-driven.
+  2. **Per-thread CPU accounting:** actual thread CPU-time counters (Mach `task_threads` + `thread_info` user/system time deltas, or an equivalent counter-based tool) to split the ~1,110 CPU-ms/s into main thread vs Metal completion, audio, Galaxy SDK, Rosetta. `sample` cannot do this: it records where each thread was, including blocked threads.
+  3. **Fresh stack attribution at Gfx granularity:** a new `sample` on the current fixture, attributing main-thread wall time to `GfxDrawIndexed` / `GfxSetTextures` / `GfxSetShader` call sites. It is a separate experiment from CPU accounting.
 - **Evidence:** [`analysis/diagnostic.md`](../analysis/diagnostic.md) states the map is animated; the diagnostic screenshot pair showed ~60% of pixels changed, but those shots were minutes apart and not controlled for camera.
 - **Falsifies:** S2 lossless viability (probe 1); "non-render threads are negligible" (probe 2).
 - **Effort:** 1–3 days. **Savings:** none directly; it decides between S2 and S2b and validates §1.
@@ -153,7 +156,7 @@ Savings are given for two scene types:
 - **Mechanism:**
   - **Test:** an occlusion-query census (`GL_SAMPLES_PASSED` per draw, counts only) or a CPU frustum check of per-object bounds, grouped by caller.
   - **Implement:** skip zero-pixel objects at the `RenderBuckets` / border-walk level.
-- **Falsifies:** if <10% of map draws (or of mesh driver time) are zero-sample, close it.
+- **Falsifies (cost-based):** proceed only if the census predicts **≥3–5% lower main-thread wall ms/frame**. Each rejectable draw is weighted by its caller's measured cost: mesh draws are ~3.5× border draws per call, so 5% of mesh draws can outweigh 15% of border draws. The visibility test must also be substantially cheaper than the saving.
 - **Effort:** test 2–4 days; implementation 1–3 weeks if positive (Estimate).
 - **Savings (Estimate):** unknown, 0–30% of map work, in **both** static and active scenes; lossless.
 - **Building-block value:** low-medium. Culling reduces **runtime** workload, but not Metal **implementation surface**: culled objects become visible from other camera positions, so their effects, shader variants, and resources must still be supported.
@@ -162,9 +165,9 @@ Savings are given for two scene types:
   - Thousands of occlusion queries are intrusive.
   - Shadow passes may legitimately draw off-screen geometry.
 
-### S6 — Border mode-other `glMultiDrawElementsBaseVertex` batching (current Phase 1)
+### S6 — Border mode-other `glMultiDrawElementsBaseVertex` batching (earlier Phase 1)
 
-- **Mechanism:** as in the current strategy: RE `record+0x10`, find homogeneous subruns, collapse each run into one multi-draw call at the loop head.
+- **Mechanism:** as in the earlier strategy: RE `record+0x10`, find homogeneous subruns, collapse each run into one multi-draw call at the loop head.
 - **Evidence:** borders ~12% of main-thread time; per-draw cost ~0.6 µs (§1.3); zero eliminations so far.
 - **Effort:** 2–6 more weeks (Estimate). **Savings (Estimate):** 3–7% per frame, all scenes, if feasible.
 - **Building-block value:** low-medium (RE knowledge informs a Metal border domain; the mutation itself will be superseded by Metal).
@@ -178,11 +181,11 @@ Savings are given for two scene types:
 
 ### S8 — First Metal vertical slice: mesh-anchored self-contained domain, via the S4a seam
 
-- **Mechanism:** shadow state + cached pipeline objects + MSL ports of the mesh effects, rendering the map's mesh objects in Metal. Preferred variant: render the **whole map layer** into the S4 offscreen target in Metal, starting with mesh plus whatever must share its depth buffer. This avoids interleaving GL and Metal inside one pass.
-- **Evidence:** mesh is 44% of the main thread, of which ~75% is driver time.
-- **Effort:** 3–6 months (Estimate; shader translation likely dominates). **Savings (Estimate):** 25–35% per frame, in all scenes.
+- **Mechanism:** shadow state + cached pipeline objects + MSL ports of the mesh effects, rendering the map's mesh objects in Metal. Preferred variant: render the **whole map layer** into the S4a offscreen target in Metal, starting with mesh plus whatever must share its depth buffer. This avoids interleaving GL and Metal inside one pass. In the roadmap this is stage **M2**, after the S13 learning probe (M0) and the GL↔Metal interop proof (M1).
+- **Evidence:** mesh is 44% of main-thread wall time, of which ~75% is driver time.
+- **Effort:** 3–6 months (Estimate; shader translation likely dominates). **Savings (Estimate):** 25–35% main-thread wall ms/frame, in all scenes; provisional until S13 measures actual GL vs Metal per-draw CPU.
 - **Building-block value:** very high; it is the core of backend B.
-- **Risk:** high. Depends on the Phase 0 Gfx minimum cut and on shader feasibility; terrain and mesh share depth, so the slice may have to include terrain.
+- **Risk:** high. Depends on the S12 minimum cut and pass/depth graph and on shader feasibility; if terrain and mesh share depth, the slice must include terrain.
 
 ### S9 — Full Gfx→Metal backend (B) then command collection (C)
 
@@ -191,17 +194,32 @@ Savings are given for two scene types:
 - **Building-block value:** it is the destination.
 - **Risk:** very high (scope, shaders, mods, UI, Rosetta-translated Metal calls still pay translation cost).
 
-### S12 — Architecture RE: Gfx minimum cut, shaders, pass/depth graph, interop proof
+### S12 — Architecture RE: Gfx minimum cut, shaders, pass/depth graph
 
-- **Mechanism:** the old strategy's Phase 0, not deferred:
+- **Mechanism:** the earlier strategy's Phase 0, not deferred:
   - map reachable Gfx/OpenGL entry points and bypasses;
-  - inventory shaders and effects, and test GLSL/ARB → MSL on one mesh and one terrain effect;
-  - map which map passes share color/depth/stencil targets;
-  - prove a minimal Metal producer writing into an IOSurface-backed target that GL composites.
+  - inventory shaders and effects;
+  - map which map passes share color/depth/stencil targets.
+  
+  The GL↔Metal interop proof is **not** part of S12. It needs the S4a seam to exist and follows it (roadmap R2b / M1).
 - **Evidence:** every Metal option (S8, S9) depends on these answers; the [findings](eu4_macos_rendering_findings.md#11-open-questions) open questions 1–6 are exactly these.
-- **Effort:** 2–4 weeks for the RE; 1–3 weeks for the interop proof (Estimate). **Savings:** none directly; very large option value.
+- **Effort:** 2–4 weeks (Estimate). **Savings:** none directly; very large option value.
 - **Building-block value:** very high. It decides the Metal slice boundary (mesh alone vs terrain + mesh vs the whole opaque map pass) and whether Metal is feasible at all.
-- **Risk:** low-medium (static RE; interop proof is small).
+- **Risk:** low-medium (static RE).
+
+### S13 — Early Metal learning probe (M0)
+
+- **Mechanism:**
+  1. Trace one representative mesh draw end to end (`CPdxMeshObject::RenderBuckets` → effect selection → `GfxSet*` → `GfxDrawIndexed` → GL state → `glDrawElements`), counting Gfx and GL calls per draw.
+  2. Capture its real vertex/index data, textures, constants, and shader, and reproduce it in a standalone x86-64 Metal harness (MSL translation, `MTLRenderPipelineState`, `drawIndexedPrimitives` into an offscreen texture), comparing output with GL.
+  3. Microbenchmark N draws with EU4-like buffer/texture/constant/pipeline churn, GL vs Metal, in CPU µs/draw from thread CPU counters.
+- **Why early:** it measures what is currently only inferred, namely how much of the per-draw driver work (`setRenderState`, texture/sampler binding, `prepareResourceForGPUAccess`, uniform uploads) actually disappears under Metal. It also forces a semantic model of the draw: what is pipeline state, what varies per material/object/frame. That model is the draft `DrawCommand` for command collection and shows where callers above Gfx could be restructured. The S12 shader-translation sample comes out of this naturally.
+- **Effort:** 1–2 weeks, no game integration (Estimate). **Savings:** none directly.
+- **Decision value:**
+  - Metal per-draw CPU ≤~25% of GL → pursue S8 with confidence.
+  - Metal at 50–70% of GL → command reduction (C) matters more than API replacement.
+- **Building-block value:** very high (harness code is reused by the interop proof and S8).
+- **Risk:** low-medium; a single draw may not be representative, so choose a common mesh effect and test realistic churn.
 
 ### S10 — GL-only static mesh pre-merging
 
@@ -238,30 +256,35 @@ Savings are given for two scene types:
 | Rank | Strategy | Effort | Expected gain (Estimate) | Confidence | Foundation | Why this rank |
 |---:|---|---|---|---|---|---|
 | 1 | **S1** Measurement probes | 2–5 d | decides S2/S4b/S2b; validates model | high | ×1.5 | Near-zero cost; gates the elimination levers |
-| 2 | **S12** Architecture RE + interop proof | 3–7 wk | decides Metal feasibility and slice boundary | high | ×1.5 | Large option value; runs in parallel from day one |
-| 3 | **S3** Cursor-set elision | 1–3 d | −2–8% frame time, all scenes | medium | ×1.0 | Tiny effort, independent |
-| 4 | **S2** Idle render-skip (conditional) | 1–2 wk | static: −50–65% CPU-ms/s **if** census shows static | low-medium until S1 | ×1.0 | Huge if the map is static; zero if it animates |
-| 5 | **S4a** Offscreen map seam | 2–4 wk | none directly | high | ×1.5 | Metal coexistence boundary; value independent of caching |
-| 6 | **S8** Metal mesh-anchored slice via S4a | 3–6 mo | −25–35% per frame, all scenes | medium-low | ×1.5 | First real per-frame lever for active scenes |
-| 7 | **S4b** Map-layer cache (conditional) | 2–6 wk | UI-active static: −45–55% **if** map static | low until S1 | ×1.0 | Dirty-key completeness is hard to prove |
-| 8 | **S5** Culling census (opportunistic) | 2–4 d test | 0–20% of map work | unknown | ×1.0 | Independent; implement only if trivially rejectable |
-| 9 | **S9** Full B→C | 6–18 mo | −50–60% per frame | low | ×1.5 | Destination; too large to rank higher on ratio |
-| 10 | **S6** Border multi-draw | 2–6 wk | −3–7% per frame | medium-low | ×0.7 | Small ceiling; superseded by Metal |
-| 11 | **S10** Static mesh pre-merge | 2–3 mo | −20–30% per frame | low | ×0.7 | Evidence against; throwaway under Metal |
-| 12 | **S7** Map-text batching | 2–4 wk | ≤1–3% | medium | ×0.7 | Negligible share of CPU |
+| 2 | **S12** Architecture RE | 2–4 wk | decides Metal feasibility and slice boundary | high | ×1.5 | Large option value; runs in parallel from day one |
+| 3 | **S13** Metal learning probe (M0) | 1–2 wk | measures GL vs Metal per-draw CPU; drafts `DrawCommand` | high | ×1.5 | Turns the Metal case from inference into measurement |
+| 4 | **S3** Cursor-set elision | 1–3 d | −2–8% main-thread wall ms/frame, all scenes | medium | ×1.0 | Tiny effort, independent |
+| 5 | **S2** Idle render-skip (conditional) | 1–2 wk | static: −50–65% process CPU-ms/s **if** full-res census shows static | low-medium until S1 | ×1.0 | Huge if the map is static; zero if it animates |
+| 6 | **S4a** Offscreen map seam, then interop proof (M1) | 3–6 wk | none directly | high | ×1.5 | Metal coexistence boundary; value independent of caching |
+| 7 | **S8** Metal mesh-anchored slice via S4a (M2) | 3–6 mo | −25–35% main-thread wall ms/frame, all scenes (provisional) | medium-low | ×1.5 | First real per-frame lever for active scenes |
+| 8 | **S4b** Map-layer cache (conditional) | 2–6 wk | UI-active static: −45–55% process CPU-ms/s **if** map static | low until S1 | ×1.0 | Dirty-key completeness is hard to prove |
+| 9 | **S5** Culling census (opportunistic) | 2–4 d test | 0–20% of map work | unknown | ×1.0 | Independent; cost-weighted gate |
+| 10 | **S9** Full B→C | 6–18 mo | −50–60% main-thread wall ms/frame | low | ×1.5 | Destination; too large to rank higher on ratio |
+| 11 | **S6** Border multi-draw | 2–6 wk | −3–7% per frame | medium-low | ×0.7 | Small ceiling; superseded by Metal |
+| 12 | **S10** Static mesh pre-merge | 2–3 mo | −20–30% per frame | low | ×0.7 | Evidence against; throwaway under Metal |
+| 13 | **S7** Map-text batching | 2–4 wk | ≤1–3% | medium | ×0.7 | Negligible share of CPU |
 | — | **S11** CrossOver reference | 1–2 d | reference only | — | — | Not a deliverable |
 
 ```mermaid
 flowchart LR
-    S1[S1_Probes] -->|"static frames only"| S2[S2_IdleRenderSkip]
+    S1[S1_Probes] -->|"full-res static only"| S2[S2_IdleRenderSkip]
     S1 -.->|"needs approval"| S2b[S2b_ReducedIdleRate]
     S1 -->|"temporal analysis"| S4b[S4b_MapLayerCache]
     S1 -.-> S5[S5_CullingCensus_Opportunistic]
     S3[S3_CursorElision]
-    S12[S12_ArchitectureRE_Interop] --> S4a[S4a_OffscreenMapSeam]
+    S12[S12_ArchitectureRE] --> S13[S13_MetalLearningProbe_M0]
+    S12 --> S4a[S4a_OffscreenMapSeam]
+    S4a --> M1[M1_GLMetalInteropProof]
     S4a --> S4b
-    S4a --> S8[S8_MetalSlice_MeshAnchored]
+    S13 -->|"harness and command shape"| M1
+    M1 --> S8[S8_MetalSlice_MeshAnchored_M2]
     S12 -->|"slice boundary"| S8
+    S13 -->|"per-draw cost evidence"| S8
     S8 --> S9[S9_FullMetal_B_to_C]
     S6[S6_BorderMultiDraw] -.->|"RE knowledge only"| S8
 ```
@@ -271,12 +294,12 @@ flowchart LR
 ## 5. Recommended revised sequencing
 
 1. Finish the current border RE step as a write-up; **do not** start S6 mutation work.
-2. Start **S1** and **S12** now, in parallel.
-3. Implement **S3**. Implement **S2** only if the S1 census shows static idle frames; S2b stays an explicit fidelity decision.
-4. Build the **S4a** seam and the interop proof; add the **S4b** cache only if temporal-dependency analysis supports it.
-5. Enter Metal (**S8**) through the S4a target with the highest-cost self-contained map domain, mesh-anchored, with the boundary chosen by the S12 pass/depth graph.
-6. Run the **S5** census opportunistically; implement only trivially rejectable culling.
-7. Add **CPU-ms per frame** as a primary metric alongside CPU-ms/s and swaps/s.
+2. Start **S1**, **S12**, and the **S13** Metal learning probe now, in parallel.
+3. Implement **S3**. Implement **S2** only if the full-resolution S1 census shows static idle frames; S2b stays an explicit fidelity decision.
+4. Build the **S4a** seam, then the GL↔Metal interop proof (M1). Add the **S4b** cache only if temporal-dependency analysis supports it.
+5. Enter Metal (**S8**, M2) through the S4a target with the highest-cost self-contained map domain, mesh-anchored, with the boundary chosen by the S12 pass/depth graph and the S13 results.
+6. Run the **S5** census opportunistically, with a cost-weighted gate.
+7. Use the four metrics defined in the roadmap (main-thread wall ms/frame, process CPU-ms/swap, process CPU-ms/s, swaps/s), with per-thread CPU counters for accounting.
 
 Phases, gates, and milestones are in [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md).
 
@@ -284,4 +307,4 @@ Phases, gates, and milestones are in [`eu4_recommended_strategy.md`](eu4_recomme
 
 ## 6. Decision for you
 
-If S1 shows that paused-idle frames are **not** pixel-identical (animated map shaders, trees, etc.), is a **reduced idle redraw rate** (S2b, e.g. 15–30 Hz after a few seconds without input, full rate on any input) acceptable? [`analysis/profiling.md`](../analysis/profiling.md) records an earlier full-experience requirement against lowering the frame rate. Without approval, S2 is limited to provably identical frames, and S4 carries the static-scene savings instead.
+If S1 shows that paused-idle frames are **not** full-resolution pixel-identical (animated map shaders, trees, etc.), is a **reduced idle redraw rate** (S2b, e.g. 15–30 Hz after a few seconds without input, full rate on any input) acceptable? [`analysis/profiling.md`](../analysis/profiling.md) records an earlier full-experience requirement against lowering the frame rate. Without approval, S2 is limited to provably identical frames, and S4 carries the static-scene savings instead.

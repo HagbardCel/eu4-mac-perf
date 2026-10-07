@@ -28,7 +28,8 @@ identified a recurring border run. Its trace failed its intrusion gate, so it
 does not establish an optimization benefit. Post–PR #40, consolidated rendering
 findings and the Gfx→Metal strategy live in
 [macOS rendering findings](docs/eu4_macos_rendering_findings.md) and
-[rendering strategy (~90% static-scene ambition)](docs/eu4_rendering_strategy_90pct.md).
+the canonical [rendering roadmap](docs/eu4_recommended_strategy.md), with its
+[cost-based ranking of alternatives](docs/eu4_rendering_alternatives_ranked.md).
 The local trace can be re-screened:
 
 ```sh

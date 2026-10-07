@@ -1,71 +1,117 @@
-# EU IV macOS Rendering — Recommended Strategy
+# EU IV macOS Rendering — Recommended Strategy (canonical roadmap)
 
 ## Mission
 
-Reduce EU IV's rendering cost on Apple Silicon without removing visual content, through layers of improvement that build on each other, ending at a Metal backend behind the Clausewitz Gfx layer.
+Reduce EU IV's rendering cost on Apple Silicon without removing visual content, through layers of improvement that build on each other, ending at a state-aware Metal backend behind the Clausewitz Gfx layer.
 
-This document is the forward plan, effectively **v2 of** [`eu4_rendering_strategy_90pct.md`](eu4_rendering_strategy_90pct.md). It keeps that document's renderer architecture (bottom-up RE, shadow state, pipeline caches, complete vertical slices, B→C) and changes the **ordering**: priorities follow measured cost rather than draw counts. The evidence, alternatives, and ranking behind it are in [`eu4_rendering_alternatives_ranked.md`](eu4_rendering_alternatives_ranked.md). State of knowledge: [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md).
+**This is the canonical roadmap.** It supersedes the earlier `eu4_rendering_strategy_90pct.md` (removed; available in git history). That document's lasting architecture (Gfx seam, shadow state, pipeline caches, complete vertical slices, B→C) is carried over in §3. Its sequencing is replaced: priorities now follow measured cost rather than draw counts.
+
+Related documents:
+
+- evidence, alternatives, and ranking behind this plan: [`eu4_rendering_alternatives_ranked.md`](eu4_rendering_alternatives_ranked.md);
+- state of knowledge: [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md).
 
 All savings and effort figures below are **estimates**, not measurements, unless linked to an artifact.
 
 ---
 
-## 1. Targets and scope
+## 1. Targets, scope, and metrics
+
+### 1.1 Targets
 
 A single "90%" figure mixes two very different problems. This strategy uses two targets:
 
 | Scene type | Definition | Target | Main levers |
 |---|---|---|---|
-| **Static** | Paused; camera still; map unchanged (UI may or may not be active) | **~80–90% less render work**, ≥50% less process CPU-ms/s, **if** the frame-evolution census shows the scene is static | Don't render unchanged frames or layers |
-| **Active** | Camera moving, game unpaused, or map content animating | **30–50% less CPU per frame** | Metal backend, then command collection |
+| **Static** | Paused; camera still; map unchanged (UI may or may not be active) | **~80–90% less render work**, ≥50% less process CPU-ms/s, **if** the frame-evolution census proves the scene static | Don't render unchanged frames or layers |
+| **Active** | Camera moving, game unpaused, or map content animating | **30–50% lower main-thread wall ms/frame** | Metal backend, then command collection |
 
 **Constraint:** rendering stays **lossless by default**: identical pixels for unchanged inputs and no reduced frame rate for anything that moves. Showing an old frame while something animates is a frame-rate reduction, whatever the reason. Any lossy idle mode (S2b) is a deliberate fidelity trade-off that needs explicit sign-off; it is not part of the default plan.
 
-**Fixture:** pinned GOG 1.37.5 x86-64 under Rosetta, paused Venice, 3456×2234 at 120 Hz. Baseline: ~1,114 CPU-ms/s, ~53 swaps/s, ~21 CPU-ms/swap ([`065747Z`](../results/20260928T065747Z-autonomous/summary.md)).
+**Fixture:** pinned GOG 1.37.5 x86-64 under Rosetta, paused Venice, 3456×2234 at 120 Hz. Baseline: ~1,114 process CPU-ms/s, ~53 swaps/s, ~21 process CPU-ms/swap ([`065747Z`](../results/20260928T065747Z-autonomous/summary.md)).
+
+### 1.2 Metric definitions
+
+These are not interchangeable. Every estimate and gate in this document names which one it uses.
+
+| Metric | Meaning | Source |
+|---|---|---|
+| **Main-thread wall ms/frame** | Critical-path latency of one frame on the main thread, including blocking; determines fps while main-thread bound | `sample` shares × frame time; per-frame timestamps |
+| **Process CPU-ms/swap** | CPU time consumed by **all** EU IV threads per presented frame | Per-thread CPU counters ÷ swaps |
+| **Process CPU-ms/s** | Total work rate; best proxy for power | Process/thread CPU counters |
+| **Swaps/s** | Delivered frame rate | `CGLFlushDrawable` counter |
+
+**Important:** the existing cost model (mesh ~44%, GL driver ~58%, cursor ~7.5%) comes from **main-thread wall-clock sampling**, while 21.1 CPU-ms/swap is **process CPU**. Until R0-M produces per-thread CPU accounting, per-frame savings estimates in this document refer to **main-thread wall ms/frame** and are provisional. A Metal conversion may also move work between the main thread, Apple driver/runtime threads, and the GPU rather than eliminating it.
+
+Behavior of the metrics:
+
+- The game is main-thread bound below 120 Hz VSync, so per-frame wins (cursor fix, Metal, culling) show up mainly as **higher swaps/s**; process CPU-ms/s may stay flat until fps reaches 120.
+- Frame-elimination wins (idle skip, map cache) show up as **lower process CPU-ms/s** at held cadence.
 
 ---
 
 ## 2. Core thesis
 
-The paused frame costs ~21 ms of CPU. ~74% of the main thread is rendering and ~58% sits inside the OpenGL driver's per-draw validation ([cost model](eu4_rendering_alternatives_ranked.md#1-baseline-cost-model-paused-venice)). Mesh is ~44% of the main thread; borders ~12%; map text <1%.
+The paused frame costs ~21 process CPU-ms. In main-thread wall time, ~74% is rendering and ~58% sits inside the OpenGL driver's per-draw validation ([cost model](eu4_rendering_alternatives_ranked.md#1-baseline-cost-model-paused-venice)). Mesh is ~44% of the main thread; borders ~12%; map text <1%.
 
 The strategy runs **two tracks in parallel from day one**:
 
-- **Elimination track:** do the work less often. Cheap fixes, then lossless frame skipping and map-layer caching, **only where measurement proves the content is static**.
-- **Architecture track:** make each frame cheaper. Continue the bottom-up RE of the Gfx/OpenGL boundary, the render-pass and depth graph, and shader feasibility **now**, so that the Metal decision is not delayed behind months of caching work.
+- **Elimination track:** do the work less often. Cheap fixes, then lossless frame skipping and map-layer caching, **only where measurement proves the content static**.
+- **Architecture track:** make each frame cheaper, and understand the renderer while doing so. Bottom-up RE of the Gfx/OpenGL boundary, the render-pass and depth graph, and shaders, **plus an early Metal learning probe** (M0), all starting now.
 
-They meet at the **offscreen map seam**: the map is rendered into an offscreen target and composited under the GL UI. The seam has two independent uses:
+Metal is treated both as an optimization and as **a tool for understanding the renderer's essential semantics**. Rebuilding one representative draw in Metal forces answers to questions static RE leaves open:
+
+- what is pipeline state, what varies per material, per object, per frame;
+- which resources actually need rebinding;
+- where ordering matters;
+- what could be collected rather than submitted immediately.
+
+Those answers tell us where to optimize the callers above the Gfx layer (the B→C path), and give an empirical figure for how much of the per-draw OpenGL overhead disappears under Metal.
+
+Metal has three stages, kept distinct:
+
+| Stage | Purpose | When |
+|---|---|---|
+| **M0** — learning probe | One representative mesh draw reproduced in Metal outside the game; GL vs Metal per-draw CPU microbenchmark | R0-A, immediately |
+| **M1** — GL↔Metal interop proof | Metal writes into the game's offscreen map target; GL composites | R2b, after the seam exists |
+| **M2** — real vertical slice | Highest-cost self-contained map domain on Metal in the game | R4 |
+
+The tracks meet at the **offscreen map seam**: the map is rendered into an offscreen target and composited under the GL UI. The seam has two independent uses:
 
 1. it is the GL/Metal coexistence boundary: Metal produces the map layer, GL composites the UI;
 2. it is the natural place to cache the map layer.
 
-The seam has strategic value **even if caching turns out to save nothing**, so the plan does not depend on the caching hypothesis being true.
+The seam is worth building **even if caching turns out to save nothing**.
 
-Culling is an **opportunistic side branch**: it reduces runtime workload, but not the Metal implementation surface. Effects, shader variants, vertex formats, and resources must be supported regardless, because culled objects become visible from other camera positions.
+Culling is an **opportunistic side branch**. It reduces runtime workload but not the Metal implementation surface: effects, shader variants, vertex formats, and resources must be supported regardless, because culled objects become visible from other camera positions.
 
 ```mermaid
 flowchart TD
-    R0m[R0_Measurements_FrameEvolution_ThreadCPU_Profile]
-    R0a[R0_ArchitectureRE_GfxCut_Shaders_PassDepthGraph]
+    R0m[R0M_FrameEvolution_ThreadCPU_StackSample]
+    R0a[R0A_GfxCut_Shaders_PassDepthGraph]
+    M0[M0_MetalLearningProbe]
+    Model[HigherLevelCommandModel]
     Cursor[R1_CursorElision]
     Skip[R1_LosslessIdleSkip_IfProvenStatic]
-    Seam[R2_OffscreenMapSeam_GL]
-    Interop[R2_GLMetalInteropProof]
+    Seam[R2a_OffscreenMapSeam_GL]
+    Interop[R2b_M1_GLMetalInteropProof]
     Cache[R3_MapLayerCache_IfTemporalAnalysisSupports]
-    Slice[R4_MetalSlice_MeshAnchoredSelfContainedDomain]
+    Slice[R4_M2_MetalSlice_MeshAnchored]
     B[R5_BroaderMetalB]
     C[R5_CommandCollectionC]
     Cull[Side_CullingCensus_Opportunistic]
 
     R0m --> Cursor
-    R0m -->|"static frames only"| Skip
+    R0m -->|"full-res hashes: static only"| Skip
     R0m -->|"temporal dependencies"| Cache
+    R0a --> M0
+    R0a --> Model
+    M0 --> Model
     R0a --> Seam
-    R0a --> Interop
+    Seam --> Interop
     Seam --> Cache
-    Seam --> Slice
     Interop --> Slice
-    R0a -->|"pass/depth graph picks slice"| Slice
+    Model -->|"slice boundary and command shape"| Slice
     Slice --> B
     B --> C
     R0m -.-> Cull
@@ -73,107 +119,197 @@ flowchart TD
 
 ---
 
-## 3. Phased plan
+## 3. Target architecture (carried over from the earlier strategy)
 
-Each phase lists deliverables, a go/kill gate, expected savings, and effort. Phases on different tracks run in parallel.
+### 3.1 Use the Gfx abstraction as the migration seam
+
+The executable funnels draw submission through a small Clausewitz graphics layer. There are 48 direct `GfxDraw*` call/jump sites in four helper families (`GfxDraw`, `GfxDrawIndexed`, `GfxDrawIndexedInstanced`, `GfxDraw2dLines`) ([`analysis/draw-callers.json`](../analysis/draw-callers.json)), plus `GfxSet*`, buffer, texture, and effect abstractions. Replace the backend at that boundary rather than rewriting high-level renderers. Whether state, resource, render-target, and present paths are equally centralized is an R0-A question.
+
+### 3.2 Why not a raw GL→Metal shim
+
+Translating OpenGL calls one-to-one would remove Apple's GL layer but keep the bind/set/upload/draw churn that the driver currently validates per draw. Metal pays off with explicit render passes, cached immutable pipeline states, explicit resource ownership, fewer redundant bindings, and batched command streams. The Gfx boundary exposes more intent than raw GL calls, so it is the better interception point.
+
+### 3.3 Option B — state-aware Metal backend behind Gfx semantics
+
+Keep a shadow state instead of emitting Metal commands for every legacy setter:
+
+```text
+CurrentRenderState
+    shader/effect, vertex layout, vertex/index buffers,
+    textures/samplers, blend, depth/stencil, raster,
+    constants, render targets
+```
+
+At draw time:
+
+```text
+GfxDraw* → derive PipelineKey → lookup/cache MTLRenderPipelineState
+        → bind only changed resources/state → encode Metal draw
+```
+
+Requirements:
+
+- **Pipeline/state caches:** cache PSOs, depth/stencil states, samplers, vertex descriptors, and binding layouts; never build them in hot draws.
+- **Resources:** GL buffer/texture IDs do not become Metal resources by aliasing; explicit upload and lifetime rules are needed.
+- **Dynamic constants:** ring buffers.
+- **Shaders:** a GLSL/ARB → MSL path, with effect permutations mapped to pipeline keys. Shader feasibility may dominate total backend effort.
+
+### 3.4 Option C — command collection
+
+Once a domain is correct on Metal, move from immediate translation toward collected commands within safe pass/order classes:
+
+```text
+DrawCommand
+    pipeline_key, geometry, resources (textures/samplers),
+    constant ranges, depth/order class, draw arguments
+```
+
+Group and batch within those classes to minimize pipeline and resource changes. M0 is expected to show what this command shape should look like for mesh.
+
+### 3.5 Architectural principles
+
+1. **Map bottom-up, implement as complete vertical slices.** A slice includes shaders, resources, pass/target, draws, and composition; do not bring up all `GfxDraw*` families horizontally while the rest stays on GL.
+2. **Never mix GL and Metal inside one depth-sharing pass.** Cross the API boundary only at offscreen targets (§3.6).
+3. **Optimize above the driver when possible.** Removing work before it reaches GL or Metal beats making the same work cheaper.
+4. **Preserve semantics first, then loosen compatibility.** B must be correct before C becomes aggressive.
+5. **Do not globally reorder rendering.** Respect pass, transparency, UI, and post-process ordering.
+6. **Prioritize by measured cost, not draw count.**
+7. **Fail closed.** On any uncertainty about equivalence or cache validity, take the original path.
+8. **Every phase produces a measurable win or a decisive feasibility answer.**
+
+### 3.6 GL/Metal coexistence
+
+The coexistence boundary is the offscreen map target, IOSurface-backed so both APIs can address it. Metal renders the map layer into it, GL composites the UI over it, with explicit synchronization. Whether depth must cross the boundary is decided by the R0-A pass/depth graph.
+
+---
+
+## 4. Phased plan
+
+Each phase lists deliverables, a go/kill gate (naming its metric), expected savings, and effort. Phases on different tracks run in parallel.
 
 ### Phase R0 — Refresh the factual model (both tracks, start immediately)
 
 **R0-M: measurement (days):**
 
-- **Frame-evolution census** (replaces the earlier "frame identity" probe). In the paused fixture, capture consecutive frames for several seconds (downscaled back-buffer readback before `CGLFlushDrawable`, plus per-region hashes). Produce per-region change maps and classify each region as:
-  - **static:** no change;
-  - **periodic:** repeating animation (e.g. shader time, water, flags);
-  - **continuous:** changes every frame;
-  - **input-driven:** changes only after hover/click/camera input.
-  
-  Repeat across several map modes and zoom levels, with the UI both closed and open. Record which shader inputs carry time (time uniforms) where they can be identified.
-- **Per-thread CPU split** of process CPU-ms/s (main, Metal completion, audio, Galaxy SDK, Rosetta).
-- **Fresh `sample` profile** on the current fixture, attributed to `GfxDraw*` / `GfxSet*` call sites, to refresh the [cost model](eu4_rendering_alternatives_ranked.md#12-main-thread-decomposition).
+- **Frame-evolution census** (replaces the earlier "frame identity" probe).
+  - **Equality predicate (authoritative):** exact hash/CRC of the **full-resolution** back buffer before `CGLFlushDrawable`, over several seconds of consecutive paused frames. Only full-resolution equality can authorize lossless skipping; downscaling can hide a small flag, highlight, or pulse.
+  - **Localization (diagnostic only):** once two frames differ, compute per-region hashes and downscaled difference maps to find where and how the frame changes. Classify each region as:
+    - **static:** no change;
+    - **periodic:** repeating animation (e.g. shader time, water, flags);
+    - **continuous:** changes every frame;
+    - **input-driven:** changes only after hover/click/camera input.
+  - Repeat across several map modes and zoom levels, with the UI both closed and open. Record which shader inputs carry time (time uniforms) where they can be identified.
+- **Per-thread CPU accounting:** actual CPU-time counters per thread (Mach `task_threads` + `thread_info(THREAD_BASIC_INFO)` user/system time deltas, or an equivalent counter-based tool). This splits process CPU-ms/s into main, Metal completion, audio, Galaxy SDK, and Rosetta threads. `sample` cannot do this: it records where each thread was, including blocked threads.
+- **Stack attribution (separate experiment):** a fresh `sample` profile on the current fixture, attributed to `GfxDraw*` / `GfxSet*` call sites. It refreshes the main-thread wall-time [cost model](eu4_rendering_alternatives_ranked.md#12-main-thread-decomposition) and is interpreted as latency attribution, not CPU accounting.
 - **Border track wind-down:** write up the mode-other / `+0x10` RE findings; no mutation work.
 
-**R0-A: architecture RE (weeks, parallel; the old Phase 0, no longer deferred):**
+**R0-A: architecture RE and Metal learning probe (weeks, parallel):**
 
-- **Gfx/OpenGL minimum cut:** reachable draw/state/resource/present entry points, OpenGL bypasses, cached GL state that higher layers depend on (old strategy Phase 0 questions 1–7).
-- **Shader/effect inventory:** where shaders are stored, the effect permutations in use in the fixture, and a GLSL/ARB → MSL feasibility sample on one mesh effect and one terrain effect.
+- **Gfx/OpenGL minimum cut:**
+  - which Gfx functions must emit or synchronize OpenGL for normal rendering (draw, state, resource, render-target, present);
+  - OpenGL calls that bypass the Gfx layer;
+  - GL-specific cached state that higher layers depend on.
+- **Shader/effect inventory:** where shaders are stored and compiled, and the effect permutations used in the fixture.
 - **Map render-pass and depth graph:** which passes write and read which color/depth/stencil targets, in what order. Specifically: do terrain, mesh, borders, and post-effects share a depth buffer, and where does `CEU3GraphicalMap::Render` hand off to post-effects and UI?
+- **M0 — Metal learning probe (≈1–2 weeks, no game integration):**
+  1. Trace one representative mesh draw end to end: `CPdxMeshObject::RenderBuckets` → effect selection → `GfxSet*` → `GfxDrawIndexed` → GL state → `glDrawElements`. Count Gfx and GL calls per draw.
+  2. Capture its real vertex/index data, textures, constants, and shader, and reproduce the draw in a standalone x86-64 Metal harness under Rosetta. This includes MSL translation of the effect, `MTLRenderPipelineState`, and `drawIndexedPrimitives` into an offscreen texture, compared with the GL output.
+  3. **Microbenchmark:** N draws with EU4-like churn (buffer, texture, constant, and pipeline changes at realistic rates) through the GL path vs the equivalent Metal path. Report CPU µs/draw (thread CPU counters).
+  4. Write down the **semantic compression**: how the GL call sequence collapses into `PipelineKey`, resource set, constant block, and draw arguments. That is the draft `DrawCommand` for C.
 
 **Gates:**
 
-- Census shows **static** map and UI regions while idle → lossless idle skip (R1) is viable.
-- Census shows **periodic/continuous** regions while idle → lossless idle skip is limited to scenes and modes where those regions are absent; S2b becomes an explicit open decision, not a default.
-- Minimum cut is a few dozen well-defined reachable entry points and shaders are translatable → continue the architecture track toward R2/R4. Otherwise reassess Metal scope before investing further.
+- **Idle skip (full-resolution equality):**
+  - Census shows full-resolution identical idle frames → lossless idle skip (R1) is viable.
+  - Census shows **periodic/continuous** regions while idle → lossless idle skip is limited to scenes and modes where those regions are absent; S2b becomes an explicit open decision, not a default.
+- **Architecture:** the minimum cut must be a few dozen well-defined reachable entry points, and shaders must be translatable; otherwise reassess Metal scope before investing further.
+- **M0:** the result shapes the plan either way.
+  - Metal per-draw CPU **≪ GL** (e.g. ≤25% of GL) → pursue the M1/M2 migration with confidence.
+  - Metal per-draw CPU only moderately lower (e.g. 50–70% of GL) → higher-level command reduction (C) matters more; plan R4/R5 around draw-count reduction, not just API replacement.
 
-**Effort:** R0-M 2–5 days; R0-A 2–4 weeks.
+**Effort:** R0-M 2–5 days; R0-A 2–4 weeks of RE plus 1–2 weeks for M0, in parallel.
 
 ### Phase R1 — Cheap wins (1–2 weeks; conditional parts)
 
 **Deliverables:**
 
 - **Cursor fix (unconditional):** make `-[NSCursor set]` a no-op when the cursor is unchanged, or fix the tracking-area setup that triggers it. Verify cursor appearance over map and UI.
-- **Lossless idle skip (only if R0-M proves the idle frame static):** when paused (`pause_verified()` from [`eu4_idle_pacer.c`](../benchmark/eu4_idle_pacer.c)), with no input and no dirty signal, skip `CInGameIdler::Render`, hold cadence with a sleep, and keep the last presented frame. Any input, tick, or UI change renders immediately. Dirty signals are counted per type for diagnosis.
+- **Lossless idle skip (only if R0-M proves the idle frame full-resolution static):**
+  - When paused (`pause_verified()` from [`eu4_idle_pacer.c`](../benchmark/eu4_idle_pacer.c)), with no input and no dirty signal, skip `CInGameIdler::Render`, hold cadence with a sleep, and keep the last presented frame.
+  - Any input, tick, or UI change renders immediately. Dirty signals are counted per type for diagnosis.
   - A maximum skip interval is a **safety net against missed dirty signals in a proven-static scene only**. It does not make skipping acceptable for animated content.
-- **Validation:** profiler-off ABABA with phase screenshots plus the R0 frame-evolution hashes.
+- **Validation:** profiler-off ABABA with phase screenshots plus full-resolution frame hashes.
 
 **Gates:**
 
-- Cursor fix: measurable reduction in `NSCursor set` calls/s and CPU-ms/frame or swaps/s improvement. Because the cost is partly blocking IPC, it may show as fps rather than CPU.
-- Idle skip: ≥40% lower process CPU-ms/s in paused idle; skipped and rendered frames hash-identical; wake-up latency ≤1 frame.
+- **Cursor fix:** measurable drop in `NSCursor set` calls/s, plus lower main-thread wall ms/frame or higher swaps/s. Because the cost is partly blocking IPC, it may not reduce process CPU-ms/swap.
+- **Idle skip:** ≥40% lower process CPU-ms/s in paused idle; skipped and rendered frames full-resolution hash-identical; wake-up latency ≤1 frame.
 
 **Expected savings (Estimate):**
 
-- Cursor fix: −2–8% frame time in all scenes.
-- Idle skip, if the census allows it: −50–65% CPU-ms/s and −80–90% GPU in static idle. If the map animates while idle: none, unless S2b is approved.
+- Cursor fix: −2–8% main-thread wall ms/frame in all scenes.
+- Idle skip, if the census allows it: −50–65% process CPU-ms/s and −80–90% GPU in static idle. If the map animates while idle: none, unless S2b is approved.
 
-### Phase R2 — Offscreen map seam + GL↔Metal interop proof (3–6 weeks)
+### Phase R2 — Offscreen map seam, then GL↔Metal interop (M1) (3–6 weeks)
 
-**Deliverables:**
+**R2a — seam (GL only):** render `CEU3GraphicalMap::Render` and the map post-effects into an IOSurface-backed offscreen target and composite it under the UI. Pixel parity with the normal path; no caching yet.
 
-- **R2a, seam (GL only):** render `CEU3GraphicalMap::Render` and the map post-effects into an offscreen target (IOSurface-backed if interop requires it) and composite it under the UI. Pixel parity with the normal path; no caching yet.
-- **R2b, interop proof:** a minimal Metal producer writes into the same IOSurface-backed target (e.g. a clear plus a few test draws, then one real map draw), with correct GL/Metal synchronization and composition. Resolve whether depth must cross the boundary (from the R0-A pass/depth graph).
+**R2b — interop proof (M1):** a minimal Metal producer, reusing the M0 harness code, writes into the R2a target inside the running game. Start with a clear and test draws, then one real map draw. GL synchronization and composition must be correct. Whether depth must cross the boundary follows the R0-A pass/depth graph.
 
-**Gates:** R2a: pixel parity and ≤2% CPU-ms/frame overhead from the extra composition. R2b: correct frames with no tearing or synchronization stalls visible in CPU-ms/frame.
+**Dependency order:** R0-A → R2a seam → R2b interop → R4.
+
+**Gates:**
+
+- **R2a:** full-resolution pixel parity; ≤2% added main-thread wall ms/frame for the extra composition.
+- **R2b:** correct frames with no tearing; no synchronization stalls visible in main-thread wall ms/frame.
 
 **Expected savings:** none directly; this is the enabling seam for R3 and R4.
 
 ### Phase R3 — Map-layer cache (2–6 weeks; only if temporal analysis supports it)
 
-**Precondition:** R0-M shows the map layer is static during common paused UI interaction (menus, tooltips, ledger) in the relevant map modes, **and** a temporal-dependency analysis identifies every input that can change map pixels (camera, map mode, hovered/selected province, date, province-graphics updates, time uniforms, effects) with a feasible way to observe each one.
+**Precondition:** R0-M shows (full-resolution) that the map layer is static during common paused UI interaction (menus, tooltips, ledger) in the relevant map modes. A temporal-dependency analysis must also identify every input that can change map pixels (camera, map mode, hovered/selected province, date, province-graphics updates, time uniforms, effects), with a feasible way to observe each one.
 
 **Deliverables:** cache the R2a target behind that dirty key; skip the map pass while the key is unchanged; draw the UI live at full rate.
 
-**Gates:** cached and fresh composition hash-identical across scripted UI interaction; no stale highlights; the key's completeness is checked by periodic shadow renders compared against the cache in validation runs.
+**Gates:**
 
-**Expected savings (Estimate):** −55–60% per frame (~−45–55% CPU-ms/s at held cadence) while paused with active UI, **if** the map is static then. Zero if the map is continuously dirty; the R2 seam remains valuable either way.
+- Cached and fresh composition are full-resolution hash-identical across scripted UI interaction, with no stale highlights.
+- Key completeness is checked by periodic shadow renders compared against the cache in validation runs.
+
+**Expected savings (Estimate):** −45–55% process CPU-ms/s at held cadence while paused with active UI, **if** the map is static then. Zero if the map is continuously dirty; the R2 seam remains valuable either way.
 
 **Risk:** completeness of the dirty key in a closed-source engine with mods. Fail closed: on any uncertainty, render.
 
-### Phase R4 — First Metal vertical slice (3–6 months)
+### Phase R4 — Real Metal vertical slice (M2) (3–6 months)
 
-**Prerequisites:** R0-A minimum cut, shader feasibility, and pass/depth graph; R2b interop proof.
+**Prerequisites:**
 
-**Slice choice:** migrate **the highest-cost self-contained map domain, with mesh as the preferred anchor**. Mesh is the economic target (~44% of the main thread, ~75% of it driver time), but a GL-terrain / Metal-mesh / GL-borders split that shares depth across APIs is a poor boundary. Let the pass/depth graph decide the minimum sensible slice, likely one of:
+- R0-A: minimum cut, shader feasibility, and pass/depth graph;
+- the M0 result and draft `DrawCommand` shape;
+- the R2b interop proof.
 
-- **terrain + mesh** (if they share depth and borders can follow later), or
-- **the whole opaque map pass**, or
+**Slice choice:** migrate **the highest-cost self-contained map domain, with mesh as the preferred anchor**. Mesh is the economic target (~44% of main-thread wall time, ~75% of it driver), but a GL-terrain / Metal-mesh / GL-borders split that shares depth across APIs is a poor boundary. The pass/depth graph decides the minimum sensible slice, likely one of:
+
+- **terrain + mesh**, if they share depth and borders can follow later;
+- **the whole opaque map pass**;
 - **the whole map layer** into the R2 target.
 
-**Deliverables:** shadow state → `PipelineKey` → cached `MTLRenderPipelineState`; resource and upload lifetimes for the slice's buffers and textures; MSL ports of the slice's effects (old strategy Phases 2–4), rendered into the R2 target.
+**Deliverables:** the B design from §3.3 applied to the slice's effects, buffers, and textures, rendered into the R2 target.
 
-**Gate:** pixel parity with the GL path within the normal-render variation envelope; ≥20% lower CPU-ms/frame in active-camera scenes.
+**Gate:** pixel parity with the GL path within the normal-render variation envelope; ≥20% lower main-thread wall ms/frame in active-camera scenes, confirmed with per-thread CPU accounting.
 
-**Expected savings (Estimate):** −25–35% per frame for a mesh-anchored slice; −35–45% for the full map layer; all scenes.
+**Expected savings (Estimate, main-thread wall ms/frame; provisional until M0 and R0-M):** −25–35% for a mesh-anchored slice; −35–45% for the full map layer; all scenes.
 
 ### Phase R5 — Broader Metal (B) and command collection (C) (long term)
 
 **Deliverables:**
 
 - Remaining map domains on Metal as complete slices.
-- Command collection and batching within the Metal map pass (original Option C), ordered by measured cost rather than draw count.
+- Command collection and batching within the Metal map pass (§3.4), ordered by measured cost.
 - UI on Metal last, which removes GL composition.
 - Dirty/static optimizations re-applied on top of the Metal path.
 
-**Expected savings (Estimate):** −50–60% per frame in active scenes. Combined with R1/R3, where the census allows, static scenes approach ~90% less render work.
+**Expected savings (Estimate, main-thread wall ms/frame):** −50–60% in active scenes. Combined with R1/R3, where the census allows, static scenes approach ~90% less render work.
 
 ### Side branch — Culling census (opportunistic, any time after R0-M)
 
@@ -181,25 +317,28 @@ Each phase lists deliverables, a go/kill gate, expected savings, and effort. Pha
 
 **Approach:** prefer a **cheap CPU frustum/wrap check** over per-draw occlusion queries. Zero-sample results from occlusion queries also count draws hidden behind other objects, which cannot be cheaply predicted before rendering, and thousands of queries are intrusive.
 
-**Gate:** implement only if ≥10% of map draws are trivially rejectable using visibility information that **already exists or is cheap at the `RenderBuckets` / border-walk level**.
+**Gate (cost-based, not draw-count-based):** implement only if the census predicts **≥3–5% lower main-thread wall ms/frame**. The prediction weights each rejectable draw by its caller's measured cost: mesh draws are ~3.5× border draws per call. The visibility test must also cost substantially less than that saving, using information that already exists or is cheap at the `RenderBuckets` / border-walk level.
 
 **Expected savings (Estimate):** 0–20% of map work in all scenes. This is not a Metal prerequisite and does not reduce Metal implementation surface.
 
 ---
 
-## 4. Metrics
+## 5. Measurement discipline
 
-- **Primary:** CPU-ms per frame (swap) **and** process CPU-ms/s, plus swaps/s.
-  - The game is CPU-bound below 120 Hz VSync, so per-frame wins (R1 cursor, R4, R5, culling) show up as higher fps rather than lower CPU-ms/s.
-  - Frame-elimination wins (R1 idle skip, R3) show up as lower CPU-ms/s at held cadence.
-- **Correctness:** frame-evolution hashes (R0) for lossless claims; phase screenshots; scripted UI interaction checks; periodic shadow renders for any cache.
+- Use the metric definitions of §1.2. Gates and estimates always name their metric.
+- **Correctness:**
+  - full-resolution frame hashes for any lossless claim;
+  - phase screenshots;
+  - scripted UI interaction checks;
+  - periodic shadow renders for any cache.
+- **CPU accounting:** per-thread CPU counters. `sample` is for stack attribution only.
 - **Supporting:** combined SoC power; GPU power.
 - **Structural counters (cheap, count-only):** frames skipped/s, map passes skipped/s, dirty-signal triggers by type, draws culled/s, Metal vs GL draws/frame.
-- **Discipline:** keep profiler-off ABABA ([`tier1-causal-policy.md`](tier1-causal-policy.md)), fail closed when uncertain, and allow runtime toggling for every intervention.
+- **Discipline:** profiler-off ABABA ([`tier1-causal-policy.md`](tier1-causal-policy.md)); fail closed when uncertain; runtime toggling for every intervention.
 
 ---
 
-## 5. Explicitly deprioritized
+## 6. Explicitly deprioritized
 
 | Item | Why | Evidence |
 |---|---|---|
@@ -207,29 +346,29 @@ Each phase lists deliverables, a go/kill gate, expected savings, and effort. Pha
 | Map-text batching | <1% of main-thread samples | [cost model](eu4_rendering_alternatives_ranked.md#12-main-thread-decomposition) |
 | GL setter / uniform caches | State calls are cheap; driver cost is per draw | [`state-cache-validation.md`](../analysis/state-cache-validation.md), [`sampler-uniform-validation.md`](../analysis/sampler-uniform-validation.md) |
 | Static mesh pre-merging (GL) | Recurrence screening negative; throwaway under Metal | [`draw-path-decision.md`](../analysis/draw-path-decision.md) |
-| Raw GL→Metal shim | Preserves per-draw churn | [`eu4_rendering_strategy_90pct.md` §4](eu4_rendering_strategy_90pct.md#4-why-not-build-a-raw-openglmetal-shim) |
+| Raw GL→Metal shim | Preserves per-draw churn | §3.2 |
 | Lower global frame caps | No headroom at 60 Hz; conflicts with the full-experience requirement | [`frame-rate.md`](../analysis/frame-rate.md), [`profiling.md`](../analysis/profiling.md) |
-| Mixed GL/Metal within one depth-sharing pass | Hard synchronization and ordering; use complete slices into the R2 target instead | §3 R4 |
+| Mixed GL/Metal within one depth-sharing pass | Hard synchronization and ordering; use complete slices into the R2 target instead | §3.5–3.6 |
 
 ---
 
-## 6. Milestones (cumulative, estimates)
+## 7. Milestones (cumulative, estimates)
 
-Ranges show "census unfavourable → favourable" for the static columns; the elimination savings depend on R0-M.
+Ranges in the static columns run from "census unfavourable" to "census favourable"; elimination savings depend on R0-M. Static columns use process CPU-ms/s; active columns use main-thread wall ms/frame.
 
 | Milestone | After | Static, idle | Static, UI active | Active camera / unpaused | Elapsed time |
 |---|---|---|---|---|---|
-| Near | R0-M + R1 | −2–8% → −50–65% CPU-ms/s | −2–8% frame time | −2–8% frame time | ~2–3 weeks |
-| Medium | + R0-A + R2 (+ R3 if supported) | −2–8% → −50–65% | −2–8% → −45–55% | −2–8% per frame | ~2–3 months |
-| Long | + R4 | −25–35% per frame → ~−60–70% | −25–35% → ~−60–70% | −25–45% per frame | ~6–9 months |
-| Destination | + R5 | −50–60% per frame → ~−80–90% render work | −50–60% → ~−70–80% | −50–60% per frame | 12+ months |
+| Near | R0-M + R1 | −0–5% → −50–65% | −0–5% | −2–8% | ~2–3 weeks |
+| Medium | + R0-A + M0 + R2 (+ R3 if supported) | −0–5% → −50–65% | −0–5% → −45–55% | −2–8% | ~2–3 months |
+| Long | + R4 | ~−20–30% → ~−60–70% | ~−20–30% → ~−60–70% | −25–45% | ~6–9 months |
+| Destination | + R5 | ~−40–50% → ~−80–90% render work | ~−40–50% → ~−70–80% | −50–60% | 12+ months |
 
-Even in the unfavourable case (the map animates while paused), the architecture track delivers its per-frame savings on schedule, because it no longer waits behind caching work.
+Even in the unfavourable case (the map animates while paused), the architecture track delivers its per-frame savings on schedule, because it no longer waits behind caching work. Static-scene figures under the unfavourable census assume per-frame savings convert into process CPU only at held cadence; they are the most uncertain numbers here.
 
 ---
 
-## 7. Open decisions
+## 8. Open decisions
 
 1. **Lossy idle mode (S2b):** if R0-M shows the paused map animates, may idle frames render at a reduced rate (e.g. 15–30 Hz after a few seconds without input, full rate on any input)? Default: no.
 2. **Border multi-draw:** close it after the RE write-up (recommended), or keep it as a low-priority side track?
-3. **R4 slice boundary:** decided by the R0-A pass/depth graph; mesh-anchored by default.
+3. **R4 slice boundary:** decided by the R0-A pass/depth graph and M0; mesh-anchored by default.

@@ -6,9 +6,9 @@ This document consolidates what we have learned so far about Europa Universalis 
 
 The goal is not merely to explain why EU IV runs hot on modern Apple Silicon. The deeper goal is to understand the renderer well enough to decide where the best effort/performance trade-offs lie: local batching, higher-level render-loop changes, or ultimately replacing the legacy OpenGL backend with a Metal backend.
 
-**Companion:** long-range program and phased plan — [`eu4_rendering_strategy_90pct.md`](eu4_rendering_strategy_90pct.md).
+**Companion:** canonical roadmap — [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md); cost-based assessment and ranking of alternatives — [`eu4_rendering_alternatives_ranked.md`](eu4_rendering_alternatives_ranked.md). The earlier `eu4_rendering_strategy_90pct.md` was superseded and removed (see git history).
 
-**See also:** cost-based assessment and ranking of alternatives — [`eu4_rendering_alternatives_ranked.md`](eu4_rendering_alternatives_ranked.md); revised forward plan — [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md).
+**Note:** "Current conclusion" / "Still promising" items below that prioritize border mode-other RE or map-text batching predate the cost-based ranking. The roadmap deprioritizes both.
 
 **Key evidence (repo):**
 
@@ -38,7 +38,7 @@ The investigation has converged on a fairly coherent picture:
 4. The border renderer is structurally much more regular. The schema-v6 census ([`074355Z` evidence](../analysis/evidence/border-mode-census-live-20261007T074355Z.json)) showed **all** paused-Venice border loop-head traffic is on the **mode-other engine branch**: exactly **2,285 drawable mode-other entries per candidate swap**, with **zero mode-0** and **zero mode-1** iterations. Census did **not** measure `record+0x10` or the effective GL endpoint. Static RE shows the mode-other site loads `+0x10` into `%ecx` before `GfxDrawIndexed` (see §7). In this fixture, **candidate swap ≈ one rendered map frame** (not simulation tick).
 5. The border work appears as roughly **4 large structural walks per swap**, averaging ~571 drawable records per walk (from census counters; see §7). Loop-head batching toward `glMultiDrawElementsBaseVertex` is a **candidate** only if RE establishes homogeneous subruns **and** a nonzero-BaseVertex GL path for those records — a more plausible direction than the closed mode-0 `glMultiDrawElements` hypothesis.
 6. The executable already uses a recognizable **Clausewitz Gfx abstraction layer** (`GfxDraw*`, `GfxSet*`, buffer/texture/effect abstractions). The pinned binary has **48 direct `GfxDraw*` call/jump sites** in [`analysis/draw-callers.json`](../analysis/draw-callers.json) (direct call/jump inventory only), funneled into four main draw-helper families. This raises a credible long-term possibility: replace or progressively supersede the OpenGL backend at the Gfx boundary rather than rewriting every game renderer.
-7. However, a naïve one-to-one Gfx→Metal translation would likely preserve much of the old immediate/state-machine behavior. A good Metal renderer requires pipeline-state caching, explicit resource management, command encoding, and eventually higher-level batching/collection. Therefore the promising architectural path is **B→C** (detailed in [`eu4_rendering_strategy_90pct.md`](eu4_rendering_strategy_90pct.md)):
+7. However, a naïve one-to-one Gfx→Metal translation would likely preserve much of the old immediate/state-machine behavior. A good Metal renderer requires pipeline-state caching, explicit resource management, command encoding, and eventually higher-level batching/collection. Therefore the promising architectural path is **B→C** (detailed in [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md) §3):
    - **B:** implement a state-aware Metal backend behind the existing Gfx API;
    - **C:** progressively move batching, command collection, and pass-level optimization upward once the backend boundary is understood.
 
@@ -336,7 +336,7 @@ However, simple one-to-one translation would likely preserve too much of the old
 - encode commands within explicit render passes;
 - eventually collect/batch work where ordering permits.
 
-Thus the realistic path is incremental: first preserve semantics behind the Gfx API, then optimize upward. **Implementation** should migrate **complete render domains vertically** (shader + resources + pass + draw), not bring up all four `GfxDraw*` families horizontally while the rest of the stack remains OpenGL — see [`eu4_rendering_strategy_90pct.md`](eu4_rendering_strategy_90pct.md) §6.
+Thus the realistic path is incremental: first preserve semantics behind the Gfx API, then optimize upward. **Implementation** should migrate **complete render domains vertically** (shader + resources + pass + draw), not bring up all four `GfxDraw*` families horizontally while the rest of the stack remains OpenGL — see [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md) §3.5.
 
 ---
 
