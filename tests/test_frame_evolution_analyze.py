@@ -7,17 +7,17 @@ from analysis.tools.frame_evolution_analyze import (
     build_report,
     classify_scenario,
     consecutive_equal_runs,
-    evaluate_positive_control,
+    evaluate_positive_control_windows,
 )
 
 
 class FrameEvolutionAnalyzeTests(unittest.TestCase):
     def test_consecutive_equal_runs(self) -> None:
         frames = [
-            FrameRecord(1, 1, 0, True, True, 64, 64, 0, True, 1),
-            FrameRecord(2, 1, 0, True, True, 64, 64, 1, True, 1),
-            FrameRecord(3, 1, 0, True, True, 64, 64, 1, True, 1),
-            FrameRecord(4, 1, 0, True, True, 64, 64, 0, True, 2),
+            FrameRecord(1, 1, 0, True, True, 64, 64, 0, True, 1, flush_ok=True),
+            FrameRecord(2, 1, 0, True, True, 64, 64, 1, True, 1, flush_ok=True),
+            FrameRecord(3, 1, 0, True, True, 64, 64, 1, True, 1, flush_ok=True),
+            FrameRecord(4, 1, 0, True, True, 64, 64, 0, True, 2, flush_ok=True),
         ]
         runs = consecutive_equal_runs(frames)
         self.assertEqual(len(runs), 1)
@@ -34,7 +34,7 @@ class FrameEvolutionAnalyzeTests(unittest.TestCase):
     def test_positive_control(self) -> None:
         before = [FrameRecord(1, 1, 1, True, True, 64, 64, 0, True, 10)]
         after = [FrameRecord(2, 1, 1, True, True, 64, 64, 0, True, 20)]
-        result = evaluate_positive_control(before, after)
+        result = evaluate_positive_control_windows(before, after, stable_tail=1, stable_head=1)
         self.assertEqual(result["status"], "passed")
 
     def test_build_report_writes_candidates(self) -> None:
@@ -55,6 +55,7 @@ class FrameEvolutionAnalyzeTests(unittest.TestCase):
             log_path=log,
             scenario_segments={"0": frames},
             positive_control=None,
+            positive_control_passed=True,
         )
         self.assertTrue(report["candidate_for_lossless_skip"])
 

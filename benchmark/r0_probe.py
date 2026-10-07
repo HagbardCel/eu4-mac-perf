@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import ctypes
 import mmap
 import os
-import struct
+import platform
 import subprocess
 import tempfile
 from pathlib import Path
@@ -16,17 +17,37 @@ import eu4_benchmark as base
 import eu4_r0_control as r0_control
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = Path(__file__).with_name("eu4_r0_probe.c")
-CONTROL_HEADER = Path(__file__).with_name("eu4_r0_control.h")
-LIBRARY = SOURCE.parent / ".build/libeu4_r0_probe.dylib"
+BENCHMARK = Path(__file__).resolve().parent
+SOURCE = BENCHMARK / "eu4_r0_probe.c"
+READBACK_SOURCE = BENCHMARK / "eu4_r0_readback.c"
+CONTROL_SOURCE = BENCHMARK / "eu4_r0_control.c"
+LIBRARY = BENCHMARK / ".build/libeu4_r0_probe.dylib"
+HOST_CONTROL_LIBRARY = BENCHMARK / ".build/libeu4_r0_control_host.dylib"
+HOST_ARCH = platform.machine()
 HARNESS = ROOT / "tests/r0_probe_harness.c"
-HARNESS_EXE = SOURCE.parent / ".build/r0_probe_harness"
+HARNESS_EXE = BENCHMARK / ".build/r0_probe_harness"
+READBACK_HARNESS = BENCHMARK / ".build/r0_readback_harness"
 GOG_SHA256 = "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d"
+
+_PROBE_SOURCES = [SOURCE, READBACK_SOURCE, CONTROL_SOURCE]
 
 
 def build() -> None:
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
     commands = [
+        [
+            "clang",
+            "-arch",
+            HOST_ARCH,
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-dynamiclib",
+            "-o",
+            str(HOST_CONTROL_LIBRARY),
+            str(CONTROL_SOURCE),
+        ],
         [
             "clang",
             "-arch",
@@ -40,7 +61,7 @@ def build() -> None:
             "OpenGL",
             "-o",
             str(LIBRARY),
-            str(SOURCE),
+            *[str(path) for path in _PROBE_SOURCES],
         ],
         [
             "clang",
@@ -50,11 +71,14 @@ def build() -> None:
             "-Wall",
             "-Wextra",
             "-Werror",
+            "-I",
+            str(BENCHMARK),
             "-framework",
             "OpenGL",
             "-o",
-            str(ROOT / "benchmark/.build/r0_readback_harness"),
+            str(READBACK_HARNESS),
             str(ROOT / "tests/r0_readback_harness.c"),
+            str(READBACK_SOURCE),
         ],
         [
             "clang",
@@ -77,17 +101,32 @@ def build() -> None:
             raise base.BenchmarkError(f"R0 probe build failed: {result.stderr.strip()}")
 
 
+def _publish_native() -> ctypes._CFuncPtr:
+    if not HOST_CONTROL_LIBRARY.is_file():
+        build()
+    lib = ctypes.CDLL(str(HOST_CONTROL_LIBRARY))
+    publish = lib.eu4_r0_control_publish
+    publish.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32]
+    publish.restype = None
+    return publish
+
+
 def write_control(path: Path, *, generation: int, mode: int, scenario_id: int) -> None:
+    if not LIBRARY.is_file():
+        build()
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         path.write_bytes(b"\x00" * r0_control.EU4_R0_CONTROL_PAGE_SIZE)
-    payload = r0_control.pack_control_snapshot(
-        generation=generation, mode=mode, scenario_id=scenario_id
-    )
+    publish = _publish_native()
     with path.open("r+b") as handle:
-        with mmap.mmap(handle.fileno(), r0_control.EU4_R0_CONTROL_PAGE_SIZE) as mapping:
-            mapping[0 : len(payload)] = payload
+        mapping = mmap.mmap(handle.fileno(), r0_control.EU4_R0_CONTROL_PAGE_SIZE)
+        try:
+            page = (ctypes.c_uint8 * r0_control.EU4_R0_CONTROL_PAGE_SIZE).from_buffer_copy(mapping[:])
+            publish(ctypes.cast(page, ctypes.c_void_p), generation, mode, scenario_id)
+            mapping[:] = bytes(page)
             mapping.flush()
+        finally:
+            mapping.close()
 
 
 def probe_env(control_path: Path, log_path: Path) -> dict[str, str]:
@@ -109,12 +148,46 @@ def parse_log(path: Path) -> dict[str, Any]:
         if not parts:
             continue
         kind = parts[0]
-        if kind == "ACK" and len(parts) >= 4:
+        if kind == "ACK" and len(parts) >= 6:
             acks.append(
                 {
                     "generation": int(parts[1]),
                     "frame_index": int(parts[2]),
                     "uptime_ns": int(parts[3]),
+                    "mode": int(parts[4]),
+                    "scenario_id": int(parts[5]),
+                }
+            )
+        elif kind == "ACK" and len(parts) >= 4:
+            acks.append(
+                {
+                    "generation": int(parts[1]),
+                    "frame_index": int(parts[2]),
+                    "uptime_ns": int(parts[3]),
+                    "mode": 0,
+                    "scenario_id": 0,
+                }
+            )
+        elif kind == "F" and len(parts) >= 18:
+            frames.append(
+                {
+                    "frame_index": int(parts[1]),
+                    "mode": int(parts[2]),
+                    "scenario_id": int(parts[3]),
+                    "pause_verified": int(parts[4]),
+                    "census_ok": int(parts[5]),
+                    "context_id": int(parts[6]),
+                    "width": int(parts[7]),
+                    "height": int(parts[8]),
+                    "memcmp_equal_prev": int(parts[9]),
+                    "census_attempted": int(parts[10]),
+                    "crc64": int(parts[11]),
+                    "flush_is_main_thread": int(parts[12]),
+                    "uptime_ns": int(parts[13]),
+                    "gl_error_observed": int(parts[14]),
+                    "flush_ok": int(parts[15]),
+                    "flush_cgl_error": int(parts[16]),
+                    "pthread_tid": int(parts[17]),
                 }
             )
         elif kind == "F" and len(parts) >= 13:
@@ -132,14 +205,22 @@ def parse_log(path: Path) -> dict[str, Any]:
                     "census_attempted": int(parts[10]),
                     "crc64": int(parts[11]),
                     "flush_is_main_thread": int(parts[12]),
+                    "uptime_ns": 0,
+                    "gl_error_observed": 0,
+                    "flush_ok": 1,
+                    "flush_cgl_error": 0,
+                    "pthread_tid": 0,
                 }
             )
-        elif kind == "S" and len(parts) >= 6:
+        elif kind == "S" and len(parts) >= 7:
             swaps.append(
                 {
                     "uptime_ns": int(parts[1]),
+                    "wall_ns": int(parts[2]),
                     "mode": int(parts[3]),
+                    "interval_ns": int(parts[4]),
                     "swaps": int(parts[5]),
+                    "paused_swaps": int(parts[6]),
                 }
             )
     return {"acks": acks, "frames": frames, "swaps": swaps}

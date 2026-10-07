@@ -640,6 +640,7 @@ def wait_until_ready(
     old_log: bytes,
     *,
     wait_diag: dict | None = None,
+    probe_parser=probe_rows,
 ) -> dict:
     deadline = time.monotonic() + READY_TIMEOUT_S
     counters = {
@@ -664,7 +665,7 @@ def wait_until_ready(
         if focus_state.frontmost and not focus_state.interior:
             counters["pointer_noninterior_iterations"] += 1
         now_ns = time.monotonic_ns()
-        rows = probe_rows(probe, anchor)[-10:]
+        rows = probe_parser(probe, anchor)[-10:]
         power = cpu_samples_between(
             raw.poll(), game.pid, anchor, now_ns - 12_000_000_000, now_ns
         )[-10:]
@@ -691,7 +692,9 @@ def wait_until_ready(
     raise base.BenchmarkError(VENICE_READY_TIMEOUT_MSG)
 
 
-def warm_up(game: subprocess.Popen, probe: Path, raw: PowerTail, anchor: dict) -> dict:
+def warm_up(
+    game: subprocess.Popen, probe: Path, raw: PowerTail, anchor: dict, *, probe_parser=probe_rows
+) -> dict:
     started = time.monotonic_ns()
     deadline = time.monotonic() + WARMUP_S
     extension_deadline = deadline + WARMUP_EXTENSION_S
@@ -706,7 +709,7 @@ def warm_up(game: subprocess.Popen, probe: Path, raw: PowerTail, anchor: dict) -
             raise base.BenchmarkError("EU IV lost focus or the pointer left the safe interior during warm-up")
         now_ns = time.monotonic_ns()
         now_mono = time.monotonic()
-        rows = probe_rows(probe, anchor)[-15:]
+        rows = probe_parser(probe, anchor)[-15:]
         power = cpu_samples_between(
             raw.poll(), game.pid, anchor, now_ns - 17_000_000_000, now_ns
         )[-15:]

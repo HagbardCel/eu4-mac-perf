@@ -18,13 +18,32 @@ libsystem = ctypes.CDLL(ctypes.util.find_library("System"))
 
 THREAD_BASIC_INFO = 3
 THREAD_IDENTIFIER_INFO = 4
-THREAD_INFO_MAX = 1024
+KERN_SUCCESS = 0
 
 mach_port_t = ctypes.c_uint
 kern_return_t = ctypes.c_int
 thread_t = ctypes.c_uint
 natural_t = ctypes.c_uint
 integer_t = ctypes.c_int
+vm_address_t = ctypes.c_uint64
+vm_size_t = ctypes.c_uint64
+
+SELF_TASK = ctypes.c_uint.in_dll(libsystem, "mach_task_self_").value
+
+libsystem.task_for_pid.argtypes = [mach_port_t, ctypes.c_int, ctypes.POINTER(mach_port_t)]
+libsystem.task_for_pid.restype = kern_return_t
+libsystem.task_threads.argtypes = [
+    mach_port_t,
+    ctypes.POINTER(ctypes.POINTER(thread_t)),
+    ctypes.POINTER(natural_t),
+]
+libsystem.task_threads.restype = kern_return_t
+libsystem.thread_info.argtypes = [thread_t, ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(natural_t)]
+libsystem.thread_info.restype = kern_return_t
+libsystem.mach_port_deallocate.argtypes = [mach_port_t, mach_port_t]
+libsystem.mach_port_deallocate.restype = kern_return_t
+libsystem.vm_deallocate.argtypes = [mach_port_t, vm_address_t, vm_size_t]
+libsystem.vm_deallocate.restype = kern_return_t
 
 
 class TimeValue(ctypes.Structure):
@@ -63,96 +82,134 @@ class ThreadSample:
         return self.user_us + self.system_us
 
 
-def _mach_task_threads(
-    task: int, threads_out: ctypes.POINTER(ctypes.POINTER(thread_t)), count_out: ctypes.POINTER(natural_t)
-) -> kern_return_t:
-    return libsystem.task_threads(task, threads_out, count_out)
-
-
-def _mach_thread_info(
-    thread: thread_t, flavor: int, info: ctypes.c_void_p, count: ctypes.POINTER(natural_t)
-) -> kern_return_t:
-    return libsystem.thread_info(thread, flavor, info, count)
-
-
-def _mach_task_for_pid(target: int) -> mach_port_t:
-    task = mach_port_t()
-    result = libsystem.task_for_pid(mach_port_t(0), target, ctypes.byref(task))
-    if result != 0:
-        raise base.BenchmarkError(f"task_for_pid failed ({result}); run with appropriate permissions")
-    return task
-
-
 def _timevalue_us(tv: TimeValue) -> int:
     return int(tv.seconds) * 1_000_000 + int(tv.microseconds)
 
 
+def _mach_task_for_pid(pid: int) -> mach_port_t:
+    task = mach_port_t()
+    result = libsystem.task_for_pid(SELF_TASK, pid, ctypes.byref(task))
+    if result != KERN_SUCCESS:
+        raise base.BenchmarkError(f"task_for_pid failed ({result}); run with appropriate permissions")
+    return task
+
+
+def _deallocate_thread_list(target_task: mach_port_t, thread_array: ctypes.POINTER(thread_t), count: int) -> None:
+    if count:
+        for index in range(count):
+            libsystem.mach_port_deallocate(SELF_TASK, thread_array[index])
+        libsystem.vm_deallocate(
+            SELF_TASK,
+            vm_address_t(ctypes.cast(thread_array, ctypes.c_void_p).value),
+            vm_size_t(count * ctypes.sizeof(thread_t)),
+        )
+    libsystem.mach_port_deallocate(SELF_TASK, target_task)
+
+
 def sample_threads(pid: int) -> list[ThreadSample]:
-    task = _mach_task_for_pid(pid)
+    target_task = _mach_task_for_pid(pid)
     thread_array = ctypes.POINTER(thread_t)()
     count = natural_t()
-    if _mach_task_threads(task, ctypes.byref(thread_array), ctypes.byref(count)) != 0:
-        raise base.BenchmarkError("task_threads failed")
-    samples: list[ThreadSample] = []
-    basic = ThreadBasicInfo()
-    ident = ThreadIdentifierInfo()
-    for index in range(int(count.value)):
-        thread = thread_array[index]
-        info_count = natural_t(ctypes.sizeof(ThreadBasicInfo) // ctypes.sizeof(integer_t))
-        if _mach_thread_info(thread, THREAD_BASIC_INFO, ctypes.byref(basic), ctypes.byref(info_count)) != 0:
-            continue
-        info_count = natural_t(ctypes.sizeof(ThreadIdentifierInfo) // ctypes.sizeof(integer_t))
-        thread_id = 0
-        if _mach_thread_info(thread, THREAD_IDENTIFIER_INFO, ctypes.byref(ident), ctypes.byref(info_count)) == 0:
-            thread_id = int(ident.thread_id)
-        samples.append(
-            ThreadSample(
-                thread_id=thread_id,
-                user_us=_timevalue_us(basic.user_time),
-                system_us=_timevalue_us(basic.system_time),
+    try:
+        if libsystem.task_threads(target_task, ctypes.byref(thread_array), ctypes.byref(count)) != KERN_SUCCESS:
+            raise base.BenchmarkError("task_threads failed")
+        samples: list[ThreadSample] = []
+        basic = ThreadBasicInfo()
+        ident = ThreadIdentifierInfo()
+        thread_count = int(count.value)
+        for index in range(thread_count):
+            thread = thread_array[index]
+            info_count = natural_t(ctypes.sizeof(ThreadBasicInfo) // ctypes.sizeof(integer_t))
+            if libsystem.thread_info(thread, THREAD_BASIC_INFO, ctypes.byref(basic), ctypes.byref(info_count)) != KERN_SUCCESS:
+                continue
+            info_count = natural_t(ctypes.sizeof(ThreadIdentifierInfo) // ctypes.sizeof(integer_t))
+            thread_id = 0
+            if libsystem.thread_info(thread, THREAD_IDENTIFIER_INFO, ctypes.byref(ident), ctypes.byref(info_count)) == KERN_SUCCESS:
+                thread_id = int(ident.thread_id)
+            samples.append(
+                ThreadSample(
+                    thread_id=thread_id,
+                    user_us=_timevalue_us(basic.user_time),
+                    system_us=_timevalue_us(basic.system_time),
+                )
             )
-        )
-    for index in range(int(count.value)):
-        libsystem.mach_port_deallocate(task, thread_array[index])
-    return samples
+        return samples
+    finally:
+        _deallocate_thread_list(target_task, thread_array, int(count.value))
 
 
-def poll_window(pid: int, *, duration_s: float, interval_s: float) -> dict[str, Any]:
-    start = sample_threads(pid)
-    time.sleep(duration_s)
-    end = sample_threads(pid)
-    by_id_start = {sample.thread_id: sample for sample in start if sample.thread_id}
-    by_id_end = {sample.thread_id: sample for sample in end if sample.thread_id}
-    deltas: list[dict[str, int]] = []
-    for thread_id, end_sample in by_id_end.items():
-        begin = by_id_start.get(thread_id)
-        if not begin:
-            continue
-        delta_us = end_sample.total_us - begin.total_us
-        if delta_us < 0:
-            continue
-        deltas.append({"thread_id": thread_id, "delta_us": delta_us})
+def poll_window(
+    pid: int,
+    *,
+    duration_s: float,
+    interval_s: float,
+    process_cpu_ms_per_s: float | None = None,
+    reconcile_tolerance_ms_per_s: float | None = None,
+) -> dict[str, Any]:
+    window_start_ns = time.monotonic_ns()
+    start_wall = time.time()
+    accumulated: dict[int, int] = {}
+    appeared = 0
+    disappeared = 0
+    previous_ids: set[int] = set()
+    start_by_id = {s.thread_id: s.total_us for s in sample_threads(pid) if s.thread_id}
+    previous_ids = set(start_by_id)
+    deadline = time.monotonic() + duration_s
+    while time.monotonic() < deadline:
+        time.sleep(interval_s)
+        current = sample_threads(pid)
+        current_ids = {s.thread_id for s in current if s.thread_id}
+        appeared += len(current_ids - previous_ids)
+        disappeared += len(previous_ids - current_ids)
+        for sample in current:
+            if not sample.thread_id or sample.thread_id not in start_by_id:
+                continue
+            delta = sample.total_us - start_by_id[sample.thread_id]
+            if delta >= 0:
+                accumulated[sample.thread_id] = delta
+        previous_ids = current_ids
+
+    window_end_ns = time.monotonic_ns()
+    observed_duration_s = (window_end_ns - window_start_ns) / 1e9
+    if observed_duration_s <= 0:
+        observed_duration_s = duration_s
+
+    deltas = [{"thread_id": tid, "delta_us": delta} for tid, delta in accumulated.items() if delta > 0]
     total_delta_us = sum(item["delta_us"] for item in deltas)
-    window_us = int(duration_s * 1_000_000)
-    unattributed_us = max(0, window_us - total_delta_us) if window_us else 0
+    thread_cpu_ms_per_s = total_delta_us / 1000.0 / observed_duration_s if observed_duration_s else 0.0
+    reconciliation_residual_ms_per_s = None
+    reconcile_ok = None
+    if process_cpu_ms_per_s is not None:
+        reconciliation_residual_ms_per_s = process_cpu_ms_per_s - thread_cpu_ms_per_s
+        if reconcile_tolerance_ms_per_s is not None:
+            reconcile_ok = abs(reconciliation_residual_ms_per_s) <= reconcile_tolerance_ms_per_s
+
     return {
         "pid": pid,
-        "duration_s": duration_s,
+        "duration_s_requested": duration_s,
         "interval_s": interval_s,
+        "window_start_ns": window_start_ns,
+        "window_end_ns": window_end_ns,
+        "observed_duration_s": observed_duration_s,
+        "wall_start_s": start_wall,
         "thread_deltas": deltas,
         "total_attributed_us": total_delta_us,
-        "potentially_unattributed_us": unattributed_us,
-        "cpu_ms_per_s": total_delta_us / 1000.0 / duration_s if duration_s else 0.0,
+        "thread_cpu_ms_per_s": thread_cpu_ms_per_s,
+        "process_cpu_ms_per_s": process_cpu_ms_per_s,
+        "reconciliation_residual_ms_per_s": reconciliation_residual_ms_per_s,
+        "reconcile_ok": reconcile_ok,
+        "threads_appeared_mid_window": appeared,
+        "threads_disappeared_mid_window": disappeared,
+        "vm_deallocate_task": "mach_task_self_",
     }
 
 
-def preflight(pid: int | None = None) -> dict[str, Any]:
-    target = pid or 1
+def preflight(pid: int) -> dict[str, Any]:
     try:
-        _mach_task_for_pid(target)
-        return {"status": "ready", "pid_tested": target}
+        _mach_task_for_pid(pid)
+        return {"status": "ready", "pid_tested": pid}
     except base.BenchmarkError as error:
-        return {"status": "needs_permission", "error": str(error)}
+        return {"status": "needs_permission", "error": str(error), "pid_tested": pid}
 
 
 def main() -> None:

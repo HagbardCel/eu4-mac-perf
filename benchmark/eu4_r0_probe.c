@@ -1,6 +1,7 @@
-// R0 frame-evolution probe: single CGLFlushDrawable owner, read-only control mmap, log ACK (F13).
+// R0 frame-evolution probe: single CGLFlushDrawable owner, seqlock control mmap, census readback.
 #define GL_SILENCE_DEPRECATION 1
 #include "eu4_r0_control.h"
+#include "eu4_r0_readback.h"
 
 #include <OpenGL/OpenGL.h>
 #include <OpenGL/gl.h>
@@ -20,7 +21,7 @@
 static pthread_once_t setup_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static int log_fd = -1;
-static const volatile eu4_r0_control_snapshot_t *control;
+static const volatile eu4_r0_control_page_t *control;
 
 static void *(*app_instance)(void);
 static bool (*actually_paused)(void *);
@@ -64,7 +65,7 @@ static void setup(void) {
         if (fd >= 0) {
             void *mapping = mmap(NULL, EU4_R0_CONTROL_PAGE_SIZE, PROT_READ, MAP_SHARED, fd, 0);
             if (mapping != MAP_FAILED) {
-                control = (const volatile eu4_r0_control_snapshot_t *)mapping;
+                control = (const volatile eu4_r0_control_page_t *)mapping;
             }
             close(fd);
         }
@@ -136,125 +137,99 @@ static void snapshot_swap_stats(uint64_t now, bool paused) {
     pthread_mutex_unlock(&lock);
 }
 
-static bool read_control_snapshot(eu4_r0_control_snapshot_t *out) {
-    if (!control || !out) {
-        return false;
-    }
-    out->magic = control->magic;
-    out->generation = control->generation;
-    out->mode = control->mode;
-    out->scenario_id = control->scenario_id;
-    return out->magic == EU4_R0_CONTROL_MAGIC;
-}
-
-static uint64_t crc64_ecma(const uint8_t *data, size_t len) {
-    uint64_t crc = 0;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= (uint64_t)data[i];
-        for (int bit = 0; bit < 8; bit++) {
-            if (crc & 1ull) {
-                crc = (crc >> 1) ^ 0xc96c5795d7870f42ull;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-    return crc;
-}
-
-static void invalidate_reference(void) {
-    reference_size = 0;
-}
-
-static bool ensure_readback_buffer(size_t needed) {
-    if (readback_capacity >= needed) {
+static bool buffer_grow(uint8_t **buf, size_t *cap, size_t needed) {
+    if (*cap >= needed) {
         return true;
     }
-    uint8_t *grown = realloc(readback_buffer, needed);
+    uint8_t *grown = realloc(*buf, needed);
     uint8_t *ref_grown = realloc(reference_buffer, needed);
     if (!grown || !ref_grown) {
         free(grown);
         free(ref_grown);
         return false;
     }
-    readback_buffer = grown;
+    *buf = grown;
     reference_buffer = ref_grown;
     readback_capacity = needed;
+    *cap = needed;
     return true;
 }
 
-static bool census_readback(CGLContextObj context, int *width_out, int *height_out, uint64_t *crc_out) {
-    if (!context || CGLGetCurrentContext() != context) {
+static void invalidate_reference(void) {
+    reference_size = 0;
+}
+
+static bool census_readback(CGLContextObj context, int *width_out, int *height_out, uint64_t *crc_out,
+                            GLenum *gl_error_out) {
+    eu4_r0_readback_buffers_t buffers = {
+        .pixels_out = &readback_buffer,
+        .capacity_out = &readback_capacity,
+        .grow = buffer_grow,
+    };
+    eu4_r0_readback_result_t result;
+    bool relaxed = test_census_enabled();
+    if (!eu4_r0_readback_capture(context, EU4_R0_TARGET_DRAWABLE_BACK, relaxed, &buffers, &result)) {
+        if (gl_error_out) {
+            *gl_error_out = result.gl_error_observed;
+        }
         return false;
     }
-    GLint viewport[4] = {0, 0, 0, 0};
-    glGetIntegerv(GL_VIEWPORT, viewport);
-    int width = viewport[2];
-    int height = viewport[3];
-    if (width <= 0 || height <= 0) {
-        return false;
-    }
-    size_t row_bytes = (size_t)width * 4u;
-    size_t total = row_bytes * (size_t)height;
-    if (!ensure_readback_buffer(total)) {
-        return false;
-    }
-
-    GLint prev_pack_buffer = 0;
-    GLint prev_pack_alignment = 4;
-    GLint prev_read_buffer = GL_BACK;
-    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prev_pack_buffer);
-    glGetIntegerv(GL_PACK_ALIGNMENT, &prev_pack_alignment);
-    glGetIntegerv(GL_READ_BUFFER, &prev_read_buffer);
-
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-    glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    glReadBuffer(GL_BACK);
-    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, readback_buffer);
-
-    glBindBuffer(GL_PIXEL_PACK_BUFFER, (GLuint)prev_pack_buffer);
-    glPixelStorei(GL_PACK_ALIGNMENT, prev_pack_alignment);
-    glReadBuffer((GLenum)prev_read_buffer);
-
     if (width_out) {
-        *width_out = width;
+        *width_out = result.width;
     }
     if (height_out) {
-        *height_out = height;
+        *height_out = result.height;
     }
     if (crc_out) {
-        *crc_out = crc64_ecma(readback_buffer, total);
+        *crc_out = result.crc64;
+    }
+    if (gl_error_out) {
+        *gl_error_out = result.gl_error_observed;
     }
     return true;
 }
 
-static void maybe_ack_generation(uint32_t generation, uint64_t now) {
-    if (generation == 0 || generation == last_acked_generation) {
+static void maybe_ack_generation(const eu4_r0_control_snapshot_t *snap, uint64_t now) {
+    if (!snap || snap->generation == 0 || snap->generation == last_acked_generation) {
         return;
     }
-    char line[128];
-    int n = snprintf(line, sizeof(line), "ACK,%u,%llu,%llu\n", generation,
-                     (unsigned long long)frame_index, (unsigned long long)now);
+    char line[160];
+    int n = snprintf(line, sizeof(line), "ACK,%u,%llu,%llu,%u,%u\n", snap->generation,
+                     (unsigned long long)frame_index, (unsigned long long)now, (unsigned)snap->mode,
+                     (unsigned)snap->scenario_id);
     if (n > 0 && (size_t)n < sizeof(line)) {
         log_line(line);
-        last_acked_generation = generation;
+        last_acked_generation = snap->generation;
     }
+}
+
+static uint64_t pthread_tid_self(void) {
+#if defined(__APPLE__)
+    uint64_t tid = 0;
+    pthread_threadid_np(NULL, &tid);
+    return tid;
+#else
+    return 0;
+#endif
 }
 
 static void log_frame_record(CGLContextObj context, bool census_attempted, bool census_ok, int width,
-                             int height, int memcmp_equal, uint64_t crc) {
+                             int height, int memcmp_equal, uint64_t crc, uint64_t uptime_ns,
+                             GLenum gl_error_observed, bool flush_ok, int flush_cgl_error) {
     int flush_is_main = 0;
 #if defined(__APPLE__)
     flush_is_main = pthread_main_np();
 #endif
-    char line[256];
-    int n = snprintf(line, sizeof(line),
-                     "F,%llu,%u,%u,%u,%u,%llu,%d,%d,%d,%d,%llu,%d\n",
-                     (unsigned long long)frame_index, (unsigned)active_mode,
-                     (unsigned)active_scenario_id, (unsigned)pause_verified(),
-                     (unsigned)(census_attempted && census_ok), (unsigned long long)(uintptr_t)context,
-                     width, height, memcmp_equal, (unsigned)census_attempted, (unsigned long long)crc,
-                     flush_is_main);
+    char line[320];
+    int n = snprintf(
+        line, sizeof(line),
+        "F,%llu,%u,%u,%u,%u,%llu,%d,%d,%d,%d,%llu,%d,%llu,%u,%u,%d,%llu\n",
+        (unsigned long long)frame_index, (unsigned)active_mode, (unsigned)active_scenario_id,
+        (unsigned)pause_verified(), (unsigned)(census_attempted && census_ok),
+        (unsigned long long)(uintptr_t)context, width, height, memcmp_equal,
+        (unsigned)census_attempted, (unsigned long long)crc, flush_is_main,
+        (unsigned long long)uptime_ns, (unsigned)gl_error_observed, (unsigned)flush_ok,
+        flush_cgl_error, (unsigned long long)pthread_tid_self());
     if (n > 0 && (size_t)n < sizeof(line)) {
         log_line(line);
     }
@@ -266,7 +241,8 @@ static CGLError probed_flush(CGLContextObj context) {
     bool paused = pause_verified();
 
     eu4_r0_control_snapshot_t snap = {0};
-    if (read_control_snapshot(&snap)) {
+    bool have_snap = control && eu4_r0_control_consume(control, &snap);
+    if (have_snap) {
         if (snap.generation != last_seen_generation || snap.mode != active_mode ||
             snap.scenario_id != active_scenario_id) {
             if (context != last_context || snap.scenario_id != active_scenario_id) {
@@ -275,7 +251,7 @@ static CGLError probed_flush(CGLContextObj context) {
             last_seen_generation = snap.generation;
             active_mode = snap.mode;
             active_scenario_id = snap.scenario_id;
-            maybe_ack_generation(snap.generation, now);
+            maybe_ack_generation(&snap, now);
         }
     }
 
@@ -285,11 +261,12 @@ static CGLError probed_flush(CGLContextObj context) {
     int height = 0;
     int memcmp_equal = -1;
     uint64_t crc = 0;
+    GLenum gl_error_observed = GL_NO_ERROR;
 
-    if (active_mode == EU4_R0_MODE_CENSUS && paused && snap.generation != 0 &&
+    if (have_snap && active_mode == EU4_R0_MODE_CENSUS && paused && snap.generation != 0 &&
         snap.generation == last_acked_generation) {
         census_attempted = true;
-        census_ok = census_readback(context, &width, &height, &crc);
+        census_ok = census_readback(context, &width, &height, &crc, &gl_error_observed);
         if (census_ok) {
             size_t total = (size_t)width * 4u * (size_t)height;
             if (context != last_context || width != last_width || height != last_height) {
@@ -309,13 +286,14 @@ static CGLError probed_flush(CGLContextObj context) {
     }
 
     frame_index++;
-    log_frame_record(context, census_attempted, census_ok, width, height, memcmp_equal, crc);
-
-    CGLError result = CGLFlushDrawable(context);
+    CGLError flush_result = CGLFlushDrawable(context);
     int saved_errno = errno;
-    snapshot_swap_stats(now, result == kCGLNoError && paused);
+    bool flush_ok = flush_result == kCGLNoError;
+    log_frame_record(context, census_attempted, census_ok, width, height, memcmp_equal, crc, now,
+                     gl_error_observed, flush_ok, (int)flush_result);
+    snapshot_swap_stats(now, flush_ok && paused);
     errno = saved_errno;
-    return result;
+    return flush_result;
 }
 
 __attribute__((used, section("__DATA,__interpose")))

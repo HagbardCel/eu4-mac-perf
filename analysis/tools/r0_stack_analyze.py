@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Two-dimensional main-thread stack attribution from sample(1) text output."""
+"""Weighted main-thread stack attribution from sample(1) text output."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,8 @@ EXECUTION_RULES: list[tuple[str, str]] = [
     (r"NSCursor", "nscursor"),
 ]
 
+_FRAME_LINE = re.compile(r"^(\s+)(\d+)\s+(.+)$")
+
 
 def classify_line(line: str, rules: list[tuple[str, str]]) -> str:
     for pattern, label in rules:
@@ -34,28 +36,63 @@ def classify_line(line: str, rules: list[tuple[str, str]]) -> str:
     return "unattributed"
 
 
-def analyze_sample_text(text: str) -> dict[str, Any]:
-    functional = Counter()
-    execution = Counter()
-    cross = Counter()
+def _parse_weighted_stacks(text: str) -> list[list[tuple[str, int]]]:
+    if "Call graph" not in text and not _FRAME_LINE.search(text):
+        raise ValueError("unsupported sample format: missing Call graph or weighted frame lines")
+    stacks: list[list[tuple[str, int]]] = []
+    current: list[tuple[int, str, int]] = []
     for raw in text.splitlines():
-        if not raw.strip():
+        match = _FRAME_LINE.match(raw.rstrip())
+        if not match:
             continue
-        func = classify_line(raw, FUNCTIONAL_RULES)
-        exec_loc = classify_line(raw, EXECUTION_RULES)
-        functional[func] += 1
-        execution[exec_loc] += 1
-        cross[(func, exec_loc)] += 1
+        indent, count_s, symbol = match.groups()
+        depth = len(indent.expandtabs(4))
+        count = int(count_s)
+        if current and depth <= current[-1][0]:
+            stacks.append([(sym, cnt) for _, sym, cnt in current])
+            current = []
+        current.append((depth, symbol.strip(), count))
+    if current:
+        stacks.append([(sym, cnt) for _, sym, cnt in current])
+    if not stacks:
+        raise ValueError("unsupported sample format: no weighted stacks parsed")
+    return stacks
+
+
+def _exclusive_weights(stack: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    weighted: list[tuple[str, int]] = []
+    for index, (symbol, count) in enumerate(stack):
+        next_count = stack[index + 1][1] if index + 1 < len(stack) else 0
+        weight = count - next_count
+        if weight > 0:
+            weighted.append((symbol, weight))
+    return weighted
+
+
+def analyze_sample_text(text: str) -> dict[str, Any]:
+    stacks = _parse_weighted_stacks(text)
+    functional: Counter[str] = Counter()
+    execution: Counter[str] = Counter()
+    cross: Counter[tuple[str, str]] = Counter()
+    total_exclusive = 0
+    for stack in stacks:
+        for symbol, weight in _exclusive_weights(stack):
+            total_exclusive += weight
+            func = classify_line(symbol, FUNCTIONAL_RULES)
+            exec_loc = classify_line(symbol, EXECUTION_RULES)
+            functional[func] += weight
+            execution[exec_loc] += weight
+            cross[(func, exec_loc)] += weight
     total = sum(functional.values()) or 1
     return {
         "functional_caller": {key: value / total for key, value in functional.items()},
         "execution_location": {key: value / total for key, value in execution.items()},
         "cross_tab_counts": {f"{a}|{b}": count for (a, b), count in cross.items()},
-        "sample_lines": total,
+        "attributed_sample_weight": total_exclusive,
         "rules": {
             "functional_precedence": [label for _, label in FUNCTIONAL_RULES],
             "execution_precedence": [label for _, label in EXECUTION_RULES],
-            "note": "each dimension is mutually exclusive by first matching rule",
+            "note": "exclusive weights from inclusive stack lines; no double counting",
         },
     }
 
