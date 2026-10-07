@@ -183,7 +183,7 @@ Savings are given for two scene types:
 
 - **Mechanism:** shadow state + cached pipeline objects + MSL ports of the mesh effects, rendering the map's mesh objects in Metal. Preferred variant: render the **whole map layer** into the S4a offscreen target in Metal, starting with mesh plus whatever must share its depth buffer. This avoids interleaving GL and Metal inside one pass. In the roadmap this is stage **M2**, after the S13–S15 probes and studies (M0a–M0c) and the GL↔Metal interop proof (M1). The domain gets both a minimal compatibility path (B0) and a command-oriented path (C0), with callers emitting commands where S14/S15 show it pays. Caller redesign means detouring closed-source x86-64 code above Gfx, which is harder to patch and more exposed to mods than the backend; B0 is the fail-closed fallback.
 - **Evidence:** mesh is 44% of main-thread wall time, of which ~75% is driver time.
-- **Effort:** 3–6 months (Estimate; shader translation likely dominates). **Savings (Estimate):** 25–35% main-thread wall ms/frame, in all scenes; provisional until S13 measures actual GL vs Metal per-draw CPU. The C0 command path adds a further reduction that S14 will bound.
+- **Effort:** 3–6 months (Estimate; shader translation likely dominates). **Savings (Estimate):** 25–35% main-thread wall ms/frame, in all scenes; provisional until S13 measures actual GL vs Metal per-draw CPU. The C0 command path adds a further reduction: S14 bounds the compatibility-preserving part (C0a), and S15 investigates and bounds the additional Metal-native part (C0b).
 - **Building-block value:** very high; it is the core of backend B.
 - **Risk:** high. Depends on the S12 minimum cut and pass/depth graph and on shader feasibility; if terrain and mesh share depth, the slice must include terrain.
 
@@ -226,7 +226,7 @@ Savings are given for two scene types:
 
 ### S14 — Command-stream census (M0b)
 
-- **Mechanism:** capture 1–10 complete `RenderBuckets` sequences (count-only observer) and convert them offline into candidate commands using the S13 command shape. Measure **state entropy** before and after legal grouping, not primarily command count (draw count is what misled the border work):
+- **Mechanism:** capture 1–10 complete `RenderBuckets` sequences as a bounded structural trace (fixed-size binary buffer, stops when done, no timing; performance numbers from that run are invalid) and convert them offline into candidate commands using the S13 command shape. Measure **state entropy** before and after legal grouping, not primarily command count (draw count is what misled the border work):
   - distinct pipelines and pipeline transitions per frame;
   - resource/texture-set changes and material diversity;
   - constant and object-data bytes written per frame;
@@ -246,11 +246,11 @@ Savings are given for two scene types:
 - **Mechanism:** for every batching barrier S14 finds, decide whether it is semantically necessary or an artifact of the GL-era resource/shader/submission architecture:
   - per-object texture changes → indexed resources (argument buffers, texture arrays)?
   - per-draw constants → an instance/object-data buffer?
-  - shader permutations → genuinely distinct pipelines, or shared via function constants?
+  - shader permutations → do the differences truly require distinct PSOs, or can runtime/data-driven variants share a shader? (Function constants help with compile-time specialization but still produce specialized pipelines.)
   - per-draw geometry → instancing, indirect draws, merged geometry?
   - ordering → real transparency/depth dependency, or just today's loop order?
   
-  Then propose the domain's Metal-native representation (C0b), within what engine data and detourable call sites allow. Replay a captured stream in the S13 harness as B0-equivalent vs candidate C0, giving an early GL → B0 / B0 → C0 / GL → C0 decomposition.
+  Then propose the domain's Metal-native representation (C0b), within what engine data and detourable call sites allow. Replay a captured stream in the S13 harness as B0-equivalent vs candidate C0, giving an early GL → B0 / B0 → C0 / GL → C0 decomposition. The C0 side must include the CPU cost of building and repacking its command/object/resource data each frame, not just Metal encoding; only provably static data may be amortized at load time.
 - **Why:** S14 measures today's renderer; a disappointing S14 result could just reflect GL-era layouts that Metal lets us change. This step separates the two ceilings.
 - **Effort:** 2–3 weeks after S14 (Estimate; mostly analysis, plus the replay harness). **Savings:** none directly; it sets the C0 design for S8 and supplies the falsifiable part of the Metal kill criterion.
 - **Building-block value:** very high (defines the command IR and resource layout S8/S9 build on; the IR may change here).
@@ -337,7 +337,7 @@ flowchart LR
 2. Start **S1**, **S12**, and the **S13** single-draw Metal probe now, in parallel; follow S13 with the **S14** command-stream census and the **S15** Metal-native domain study.
 3. Implement **S3**. Implement **S2** only if the full-resolution S1 census shows static idle frames; S2b stays an explicit fidelity decision.
 4. Build the **S4a** seam, then the GL↔Metal interop proof (M1). Add the **S4b** cache only if temporal-dependency analysis supports it.
-5. Enter Metal (**S8**, M2) through the S4a target with the highest-cost self-contained map domain, mesh-anchored, with the boundary chosen by the S12 pass/depth graph. Build B0 (compatibility, reference, fallback) and C0 (command path, designed in S15) together. Measure GL → B0, B0 → C0, and GL → C0, and judge the domain by its own attributable cost, not a fixed whole-frame threshold.
+5. Enter Metal (**S8**, M2) through the S4a target with the highest-cost self-contained map domain, mesh-anchored, with the boundary chosen by the S12 pass/depth graph. Build B0 (compatibility, reference, fallback) and C0 (command path, designed in S15) together. Measure GL → B0, B0 → C0, and GL → C0, and judge the domain by its own attributable cost (profiler-off ABABA savings over the `sample`-attributed baseline share), not a fixed whole-frame threshold.
 6. Run the **S5** census opportunistically, with a cost-weighted gate.
 7. Use the four metrics defined in the roadmap (main-thread wall ms/frame, process CPU-ms/swap, process CPU-ms/s, swaps/s), with per-thread CPU counters for accounting.
 

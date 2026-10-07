@@ -84,7 +84,7 @@ Today's ~16% engine-side render work is the cost of the **current OpenGL-oriente
 There are two different ceilings for the command path, and they must not be confused:
 
 - **C0a — compatibility-preserving command optimization:** collect and regroup today's stream while keeping today's shader interfaces, texture binding model, resource layout, constants, and effect permutations.
-- **C0b — Metal-native redesign:** change those representations as well, e.g. indexed resource tables instead of per-object texture binds, an instance/object-data buffer instead of per-object constant binds, shared pipelines via function constants, instanced or indirect draws.
+- **C0b — Metal-native redesign:** change those representations as well, e.g. indexed resource tables instead of per-object texture binds, an instance/object-data buffer instead of per-object constant binds, fewer distinct pipelines where permutations do not truly need separate PSOs, instanced or indirect draws.
 
 A disappointing C0a result does not bound C0b.
 
@@ -94,7 +94,7 @@ Metal has these stages, kept distinct:
 |---|---|---|
 | **M0a** — single-draw probe | One representative mesh draw reproduced in Metal outside the game; semantics-preserving GL vs Metal microbenchmark (the **backend tax**); first draft of the command IR | R0-A, immediately |
 | **M0b** — command-stream census | Whole captured `RenderBuckets` sequences converted offline into candidate commands; **state-entropy** and legal-regrouping analysis (the C0a ceiling) | R0-A, after M0a |
-| **M0c** — Metal-native domain study | For each M0b batching barrier: fundamental or GL-era artifact? Proposes the domain's Metal-native representation (the C0b opportunity) and replays the captured stream as B0-equivalent vs C0 candidate | R0-A, after M0b |
+| **M0c** — Metal-native domain study | For each M0b batching barrier: fundamental or GL-era artifact? Proposes the domain's Metal-native representation (the C0b opportunity) and replays the captured stream as B0-equivalent vs C0 candidate, **including the CPU cost of building the new representation** | R0-A, after M0b |
 | **M1** — GL↔Metal interop proof | Metal writes into the game's offscreen map target; GL composites | R2b, after the seam exists |
 | **M2** — first real domain | Highest-cost self-contained map domain on Metal in the game, with both a compatibility path (B0) and a command path (C0) | R4 |
 
@@ -265,7 +265,7 @@ Each phase lists deliverables, a go/kill gate (naming its metric), expected savi
   3. **Semantic-equivalence microbenchmark (backend tax):** N draws with EU4-like churn (the same buffer, texture, constant, and pipeline changes at realistic rates) through the GL path vs an equivalent B0-style Metal path. Report CPU µs/draw (thread CPU counters).
   4. Write down the **semantic compression**: how the GL call sequence collapses into `PipelineKey`, resource set, constant block, and draw arguments. That is the first draft of the command IR (`DrawCommand`).
 - **M0b — command-stream census (≈1–2 weeks, after M0a; offline analysis of captured streams):**
-  1. Capture 1–10 complete `RenderBuckets` sequences with the per-draw Gfx state. Use count-only, observer-style capture; timing is not needed.
+  1. Capture 1–10 complete `RenderBuckets` sequences with the ordered per-draw Gfx state (pipeline key, textures, geometry, constants, order class). This is a **bounded structural trace**, not a performance capture: it writes into a fixed-size binary buffer, stops once the requested frames are captured, and records no timing. Performance numbers from that run are invalid.
   2. Convert them offline into candidate commands.
   3. Report **state entropy**, not primarily command count. Draw count is what misled the border work; 2,774 → 2,400 draws can still be excellent if pipeline changes drop from 1,800 to 30, so measure, before and after legal grouping:
      - distinct pipelines and pipeline transitions per frame;
@@ -285,13 +285,23 @@ Each phase lists deliverables, a go/kill gate (naming its metric), expected savi
      | Depth / transparency ordering | often | preserve the order class; regroup only within it |
      | Texture changes per object | rarely | indexed resources: argument buffers, texture arrays, resource tables |
      | Object constants per draw | no | structured / ring / instance object-data buffer |
-     | Shader permutation changes | depends | genuinely different pipeline, or shared pipeline via function constants |
+     | Shader permutation changes | depends | check whether the differences truly require distinct PSOs; fold runtime/data-driven variants into shared shaders where appropriate; use function constants for compile-time specialization (they produce specialized pipelines, not one shared PSO) |
      | Geometry changes per draw | depends | instancing, indirect draws, merged geometry |
      | Separate object submission | often not | collected batch |
      | Submission order | sometimes | real dependency vs. current loop order |
 
   2. Propose the domain's **Metal-native representation** (the command IR and resource layout it needs), within the §3.4 limit on what engine data allows.
-  3. **Replay benchmark:** replay a captured stream in the M0a harness, for the effects already ported, in two forms: a B0-equivalent replay and the candidate C0 representation. Together with M0a this gives an early, approximate decomposition: **GL → B0** (backend gain), **B0 → C0** (architecture/caller gain), **GL → C0** (total opportunity).
+  3. **Replay benchmark:** replay a captured stream in the M0a harness, for the effects already ported, in two forms. Both sides must include the CPU work that produces their input, not just Metal encoding:
+
+     ```text
+     B0:  caller-equivalent preparation (state setup, constant writes)  + Metal encoding
+     C0:  building the new command/object/resource data
+          + per-frame repacking and dynamic updates                     + Metal encoding
+     ```
+
+     Work that is truly static may be moved to load time and amortized, but only if the study shows which inputs are static. Everything dynamic is counted every frame. Otherwise the replay gives an artificially optimistic C0b ceiling.
+
+     Together with M0a this gives an early, approximate decomposition: **GL → B0** (backend gain), **B0 → C0** (architecture/caller gain), **GL → C0** (total opportunity).
   4. Output: a ranked list of upstream (caller-level) redesign opportunities for the first real domain, each tagged C0a or C0b, with the estimated entropy reduction and the call sites it requires detouring.
 
 **Gates:**
@@ -299,12 +309,12 @@ Each phase lists deliverables, a go/kill gate (naming its metric), expected savi
 - **Idle skip (full-resolution equality):**
   - Census shows full-resolution identical idle frames → lossless idle skip (R1) is viable.
   - Census shows **periodic/continuous** regions while idle → lossless idle skip is limited to scenes and modes where those regions are absent; S2b becomes an explicit open decision, not a default.
-- **Architecture:** the minimum cut must be a few dozen well-defined reachable entry points, and shaders must be translatable; otherwise reassess Metal scope before investing further.
+- **Architecture (domain-local):** at least one high-cost domain must have a **tractable vertical cut**: an understood state and resource lifecycle for that domain, translatable shaders for its effects, and a viable pass boundary at the offscreen target. For example, an opaque map domain with ~18 functions, 4 effects, and a clean target boundary is a GO for M2 even if the whole renderer touches 120 Gfx/resource paths. A large global Gfx surface delays full replacement (R5) but does not by itself stop domain-level migration. If no high-cost domain has a tractable cut, reassess Metal scope before investing further.
 - **M0a/M0b/M0c decide where the gains must come from, not whether Metal is worth it.**
   - **Large backend gain** (Metal per-draw CPU ≤~25% of GL in the equivalence benchmark): B0 alone carries much of the domain's saving; C0 adds to it.
   - **Moderate backend gain** (Metal at 50–70% of GL): most of the value must come from changing the work presented to Metal. M0b/M0c opportunities become the primary target for C0, which makes early command-oriented work **more** important, not less.
   - **Weak M0a + weak M0b** falsifies only *backend replacement plus compatibility-preserving command collection* (B0 + C0a). It does not falsify Metal-native redesign (C0b).
-  - **Kill criterion (Metal track):** reassess Metal only if, in addition, **M0c finds few accidental barriers**: most barriers are fundamental (ordering, genuinely distinct pipelines), or removing them would need data the detourable call sites do not have, and the replay benchmark shows little B0 → C0 gain. This keeps the track falsifiable.
+  - **Kill criterion (Metal track):** reassess Metal only if, in addition, **M0c finds few accidental barriers**: most barriers are fundamental (ordering, genuinely distinct pipelines), or removing them would need data the detourable call sites do not have, and the replay benchmark, with C0 preparation costs included, shows little B0 → C0 gain. This keeps the track falsifiable.
 
 **Effort:** R0-M 2–5 days; R0-A 2–4 weeks of RE plus 4–7 weeks for M0a + M0b + M0c, in parallel.
 
@@ -363,7 +373,7 @@ Each phase lists deliverables, a go/kill gate (naming its metric), expected savi
 
 **Prerequisites:**
 
-- R0-A: minimum cut, shader feasibility, and pass/depth graph;
+- R0-A: a tractable vertical cut for the chosen domain (state/resource lifecycle, shader feasibility), and the pass/depth graph;
 - M0a backend-tax result and draft command IR;
 - M0b state-entropy census and M0c Metal-native domain study, with ranked caller-redesign opportunities;
 - the R2b interop proof.
@@ -394,6 +404,12 @@ all in main-thread wall ms/frame, with per-thread CPU accounting (work can move 
 - whole-frame change is reported, with no material regression elsewhere (other passes, composition, other threads).
 
 For example, a domain worth 25% of the frame that loses 60% of its cost is a 15% whole-frame win, and a success. Expansion (R5) is ordered by realized ROI per domain.
+
+**How the domain-relative number is obtained** (no new timing profiler):
+
+- **Numerator (causal):** the saved ms comes only from **profiler-off whole-frame ABABA** with the runtime GL/B0/C0 toggle, in main-thread wall ms/frame.
+- **Denominator (attribution):** the domain's baseline share comes from **low-overhead stack sampling** (`sample`) of the GL path, using the main-thread share of samples under the domain's call sites, multiplied by the profiler-off baseline frame time. The domain's call sites are fixed in R0-A before migration.
+- Domain-relative reduction = numerator ÷ denominator. The sampled share is an estimate and is reported with its sample count. Instrumented timings are never used for either term.
 
 **Expected savings (Estimate; provisional until M0a–M0c and R0-M):**
 
