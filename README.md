@@ -25,7 +25,11 @@ Default `run` (without `--diagnostic-only`) still requires passing offline causa
 The [Phase II draw-path decision](analysis/draw-path-decision.md) remains
 historical screening evidence: 31 complete paused frames at 5,863 draws/frame
 identified a recurring border run. Its trace failed its intrusion gate, so it
-does not establish an optimization benefit. The local trace can be re-screened:
+does not establish an optimization benefit. Post–PR #40, consolidated rendering
+findings and the Gfx→Metal strategy live in
+[macOS rendering findings](docs/eu4_macos_rendering_findings.md) and
+[rendering strategy (~90% static-scene ambition)](docs/eu4_rendering_strategy_90pct.md).
+The local trace can be re-screened:
 
 ```sh
 python3 benchmark/eu4_draw_trace.py screen-partial results/20260928T113359Z-draw-trace
