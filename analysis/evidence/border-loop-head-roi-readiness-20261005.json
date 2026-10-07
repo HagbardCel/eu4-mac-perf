@@ -15,13 +15,14 @@
   "live_loop_head_telemetry_observed": true,
   "partial_live_a2_pointer": "analysis/evidence/partial-live-20261006T212911Z.json",
   "mutation_authorized": false,
-  "runtime_gate_0": "PENDING",
-  "runtime_detour_installation": "PENDING",
+  "runtime_gate_0": "PASS",
+  "runtime_detour_installation": "PASS",
   "runtime_gate_0_probe_ready": true,
   "runtime_detour_installer_ready": true,
   "structural_reference_per_frame": 1562,
   "structural_reference_source": "historical_intrusive_draw_trace_not_validator",
-  "ready_for_single_venice_observer_run": true,
+  "ready_for_single_venice_observer_run": false,
+  "live_venice_run_pointer": "analysis/evidence/border-loop-head-roi-live-20261007T055904Z.json",
   "static_feasibility_pointer": "analysis/evidence/border-loop-head-feasibility-20261004.json",
   "self_tests": {
     "portable_suite": "PASS",
@@ -58,8 +59,8 @@
     "note": "Readiness/focus harness at 4df49a4; Darwin suite PASS (406 tests). Cap2 dylib unchanged since 3ae2602. One Venice run authorized; do not merge PR #40 until full run passes."
   },
   "runtime_smoke": {
-    "status": "MIXED_FAILURES",
-    "latest_attempt_status": "PARTIAL_LIVE_RUN_FOCUS_FAILURE",
+    "status": "PASS_VENICE_MEASURED",
+    "latest_attempt_status": "PASS_VENICE_MEASURED",
     "cap2_startup_runtime": "PASS",
     "attempts": [
       {
@@ -111,9 +112,21 @@
         "error": "EU IV lost focus during b2 settle",
         "partial_live_pointer": "analysis/evidence/partial-live-20261006T212911Z.json",
         "border_roi_authoritative_gates_on_final_bank": "passed"
+      },
+      {
+        "run": "20261007T055904Z-submission-experiment",
+        "status": "PASS_VENICE_MEASURED",
+        "verified_code_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
+        "readiness_passed": true,
+        "manifest_status": "complete",
+        "border_roi_primary_phase": "a1",
+        "all_authoritative_phase_gates": "passed",
+        "primary_candidate_swaps": 511,
+        "primary_implementable_eliminations_per_frame": 0.0,
+        "live_evidence_pointer": "analysis/evidence/border-loop-head-roi-live-20261007T055904Z.json"
       }
     ],
-    "interpretation": "Cap2 slim-down restored normal paused-Venice rendering (combined GL-tail removal + pre-ARM flush gating; not isolated). Attempt 4: readiness waiter false-negative. Attempt 5: live loop-head path through A2 freeze; harness focus failure at b2 settle. Harness fix required before merge."
+    "interpretation": "Attempt 6 (20261007T055904Z): full ABABA after harness fix — readiness, warm-up, all ROI authoritative gates, and primary A1 freeze passed. Prior attempts document cap2 startup recovery, readiness waiter, and partial live A2. ROI numeric gate still pending (zero eliminations/frame in Venice scene)."
   },
-  "note": "Harness readiness/focus fix verified (406 tests); authorize one Venice run. Partial live A2 diagnostic from 212911Z on file; dylib frozen. Do not merge PR #40 until full run passes wait_until_ready and primary ROI gates."
+  "note": "Live Venice measured at 4df49a4 (run 20261007T055904Z). Runtime gates PASS; observer authorization withdrawn. PR #40 merge still gated on roi_gate numeric policy and review."
 }

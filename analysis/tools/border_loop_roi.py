@@ -84,9 +84,13 @@ def validate_roi_readiness_payload(payload: dict) -> None:
     status = payload.get("roi_instrumentation_status")
     if status not in ("READY_OFFLINE", "PENDING", "FAILED_SELF_TEST"):
         raise AssertionError(f"unexpected roi_instrumentation_status {status!r}")
+    smoke_status = (payload.get("runtime_smoke") or {}).get("status")
+    live_runtime_proven = smoke_status == "PASS_VENICE_MEASURED"
     if status == "READY_OFFLINE":
-        if payload.get("ready_for_single_venice_observer_run") is not True:
-            raise AssertionError("ready_for_single_venice_observer_run must be true when READY_OFFLINE")
+        if not live_runtime_proven and payload.get("ready_for_single_venice_observer_run") is not True:
+            raise AssertionError(
+                "ready_for_single_venice_observer_run must be true when READY_OFFLINE before live Venice"
+            )
         if payload.get("runtime_gate_0_probe_ready") is not True:
             raise AssertionError("runtime_gate_0_probe_ready must be true when READY_OFFLINE")
         if payload.get("runtime_detour_installer_ready") is not True:
@@ -96,8 +100,11 @@ def validate_roi_readiness_payload(payload: dict) -> None:
             raise AssertionError("ready_for_single_venice_observer_run must be false while PENDING")
     for runtime_key in ("runtime_gate_0", "runtime_detour_installation"):
         val = payload.get(runtime_key)
-        if status == "READY_OFFLINE" and val not in ("PENDING",):
+        if live_runtime_proven:
+            if val != "PASS":
+                raise AssertionError(f"{runtime_key} must be PASS when runtime_smoke is PASS_VENICE_MEASURED")
+        elif status == "READY_OFFLINE" and val not in ("PENDING",):
             raise AssertionError(f"{runtime_key} must remain PENDING until Venice proves runtime")
-        if status in ("PENDING", "FAILED_SELF_TEST") and val not in ("PENDING",):
+        elif status in ("PENDING", "FAILED_SELF_TEST") and val not in ("PENDING",):
             raise AssertionError(f"{runtime_key} must be PENDING during verification")
     _validate_self_tests(status, payload.get("self_tests", {}))
