@@ -32,9 +32,6 @@ Validation runs with **profiler off**; measure CPU, power, swap, cadence, visual
 
 ## Rendering / border ROI (post–PR #40)
 
-Border loop-head mode-0 `glMultiDrawElements` ROI is **closed** for paused Venice (`MODE0_DOMAIN_EMPTY`; schema-v6 census `20261007T074355Z`). Next engineering tracks (parallel):
-
-- **Local:** mode-other / helper-arg (+0x10) branch RE; MDEBV only if feasible — see [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md).
-- **Strategic:** Gfx minimum-cut inventory and state-aware Metal backend (B→C) — see [`eu4_rendering_strategy_90pct.md`](eu4_rendering_strategy_90pct.md).
+Border loop-head mode-0 `glMultiDrawElements` ROI is **closed** for paused Venice (`MODE0_DOMAIN_EMPTY`; schema-v6 census `20261007T074355Z`). Border mode-other multi-draw is now **deprioritized**: write up the RE to date, with no mutation work. Next engineering tracks are defined in the canonical roadmap [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md); findings are in [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md).
 
 Evidence JSON: [`analysis/evidence/border-mode-census-live-20261007T074355Z.json`](../analysis/evidence/border-mode-census-live-20261007T074355Z.json), [`analysis/evidence/border-loop-head-roi-readiness-20261005.json`](../analysis/evidence/border-loop-head-roi-readiness-20261005.json).
