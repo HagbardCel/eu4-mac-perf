@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 .venv/
 benchmark/.build/
+tests/border_loop_classifier_parity_cases.h
+tests/border_loop_resolved_parity_cases.h
 
 # Local fixtures (not tracked; see results/README.md)
 fixtures/

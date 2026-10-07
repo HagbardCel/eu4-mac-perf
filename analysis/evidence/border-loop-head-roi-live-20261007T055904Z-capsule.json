@@ -1,0 +1,625 @@
+{
+  "evidence_kind": "border_loop_head_roi_live_capsule",
+  "run": "20261007T055904Z-submission-experiment",
+  "experiment": "submission_border_multidraw_v1",
+  "manifest_status": "complete",
+  "run_git_commit": null,
+  "offline_verified_code_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
+  "offline_verified_code_commit_source": "registered_provenance",
+  "source_hashes": {
+    "manifest.json": "e81aa2f814aaa3d186600ac46001a47da5b09b4634c86a43d876793902b783c9",
+    "events.jsonl": "49f09ca40bd0f64ca1ea8cb5a76118c4c6920940fe8c7322b6b32b84039058ae",
+    "submission_control.bin": "bb2dcdcb4546f143d742c473c0d046a45ad6dc68c4d3b74318b81cb95f4f3f95"
+  },
+  "phases": [
+    {
+      "phase": "n1",
+      "counter_schema_version": 5,
+      "run_git_commit": null,
+      "offline_verified_code_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
+      "counters": {
+        "border_loop_head_entries": 0,
+        "candidate_swaps": 0,
+        "border_semantic_evaluations": 0,
+        "border_semantic_decisions": 0,
+        "border_semantic_eliminations": 0,
+        "border_implementable_evaluations": 0,
+        "border_implementable_decisions": 0,
+        "border_implementable_eliminations": 0,
+        "border_structural_draws": 0,
+        "border_structural_eliminations": 0,
+        "border_structural_walks": 0,
+        "border_runtime_context_checked": 0,
+        "border_runtime_context_multidraw_supported": 0,
+        "border_loop_decode_failures": 0,
+        "border_loop_geometry_failures": 0,
+        "border_loop_resolution_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0
+      },
+      "histogram_sums": {
+        "semantic": 0,
+        "implementable": 0
+      },
+      "border_gate0": {
+        "context_checked": false,
+        "multidraw_supported": false,
+        "border_runtime_context_checked": 0,
+        "border_runtime_context_multidraw_supported": 0
+      },
+      "border_roi_validity_gate": {
+        "status": "passed",
+        "reason": null,
+        "border_loop_decode_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0,
+        "border_roi_freeze_semantic_suppress": 0,
+        "border_roi_freeze_implementable_suppress": 0
+      },
+      "border_roi_authoritative_gates": {
+        "status": "failed",
+        "reason": "engagement; gate0",
+        "border_roi_engagement_gate": {
+          "status": "failed",
+          "border_loop_head_entries": 0,
+          "border_semantic_evaluations": 0,
+          "border_implementable_evaluations": 0,
+          "candidate_swaps": 0,
+          "border_multidraw_calls": 0,
+          "border_draw_calls_eliminated": 0
+        },
+        "border_roi_validity_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_loop_decode_failures": 0,
+          "border_roi_epoch_invalid": 0,
+          "border_thread_mismatch_count": 0,
+          "border_roi_freeze_partial_walk": 0,
+          "border_roi_freeze_semantic_suppress": 0,
+          "border_roi_freeze_implementable_suppress": 0
+        },
+        "border_roi_consistency_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_implementable_eliminations": 0,
+          "border_semantic_eliminations": 0,
+          "border_structural_eliminations": 0,
+          "semantic_histogram_sum": 0,
+          "implementable_histogram_sum": 0
+        },
+        "border_gate0": {
+          "context_checked": false,
+          "multidraw_supported": false,
+          "border_runtime_context_checked": 0,
+          "border_runtime_context_multidraw_supported": 0
+        },
+        "border_gate0_passed": false
+      }
+    },
+    {
+      "phase": "a1",
+      "counter_schema_version": 5,
+      "run_git_commit": null,
+      "offline_verified_code_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
+      "counters": {
+        "border_loop_head_entries": 1167635,
+        "candidate_swaps": 511,
+        "border_semantic_evaluations": 1167635,
+        "border_semantic_decisions": 0,
+        "border_semantic_eliminations": 0,
+        "border_implementable_evaluations": 1167635,
+        "border_implementable_decisions": 0,
+        "border_implementable_eliminations": 0,
+        "border_structural_draws": 0,
+        "border_structural_eliminations": 0,
+        "border_structural_walks": 2044,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1,
+        "border_loop_decode_failures": 0,
+        "border_loop_geometry_failures": 0,
+        "border_loop_resolution_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0
+      },
+      "histogram_sums": {
+        "semantic": 0,
+        "implementable": 0
+      },
+      "border_gate0": {
+        "context_checked": true,
+        "multidraw_supported": true,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1
+      },
+      "border_roi_validity_gate": {
+        "status": "passed",
+        "reason": null,
+        "border_loop_decode_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0,
+        "border_roi_freeze_semantic_suppress": 0,
+        "border_roi_freeze_implementable_suppress": 0
+      },
+      "border_roi_authoritative_gates": {
+        "status": "passed",
+        "reason": null,
+        "border_roi_engagement_gate": {
+          "status": "passed",
+          "border_loop_head_entries": 1167635,
+          "border_semantic_evaluations": 1167635,
+          "border_implementable_evaluations": 1167635,
+          "candidate_swaps": 511,
+          "border_multidraw_calls": 0,
+          "border_draw_calls_eliminated": 0
+        },
+        "border_roi_validity_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_loop_decode_failures": 0,
+          "border_roi_epoch_invalid": 0,
+          "border_thread_mismatch_count": 0,
+          "border_roi_freeze_partial_walk": 0,
+          "border_roi_freeze_semantic_suppress": 0,
+          "border_roi_freeze_implementable_suppress": 0
+        },
+        "border_roi_consistency_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_implementable_eliminations": 0,
+          "border_semantic_eliminations": 0,
+          "border_structural_eliminations": 0,
+          "semantic_histogram_sum": 0,
+          "implementable_histogram_sum": 0
+        },
+        "border_gate0": {
+          "context_checked": true,
+          "multidraw_supported": true,
+          "border_runtime_context_checked": 1,
+          "border_runtime_context_multidraw_supported": 1
+        },
+        "border_gate0_passed": true
+      },
+      "passive_detour_liveness": {
+        "control_ticks_start": 6550,
+        "control_ticks_end": 6640,
+        "delta": 90,
+        "elapsed_seconds": 1.679,
+        "ticks_per_second": 53.595
+      }
+    },
+    {
+      "phase": "b1",
+      "counter_schema_version": 5,
+      "run_git_commit": null,
+      "offline_verified_code_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
+      "counters": {
+        "border_loop_head_entries": 1169920,
+        "candidate_swaps": 512,
+        "border_semantic_evaluations": 1169920,
+        "border_semantic_decisions": 0,
+        "border_semantic_eliminations": 0,
+        "border_implementable_evaluations": 1169920,
+        "border_implementable_decisions": 0,
+        "border_implementable_eliminations": 0,
+        "border_structural_draws": 0,
+        "border_structural_eliminations": 0,
+        "border_structural_walks": 2048,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1,
+        "border_loop_decode_failures": 0,
+        "border_loop_geometry_failures": 0,
+        "border_loop_resolution_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0
+      },
+      "histogram_sums": {
+        "semantic": 0,
+        "implementable": 0
+      },
+      "border_gate0": {
+        "context_checked": true,
+        "multidraw_supported": true,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1
+      },
+      "border_roi_validity_gate": {
+        "status": "passed",
+        "reason": null,
+        "border_loop_decode_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0,
+        "border_roi_freeze_semantic_suppress": 0,
+        "border_roi_freeze_implementable_suppress": 0
+      },
+      "border_roi_authoritative_gates": {
+        "status": "passed",
+        "reason": null,
+        "border_roi_engagement_gate": {
+          "status": "passed",
+          "border_loop_head_entries": 1169920,
+          "border_semantic_evaluations": 1169920,
+          "border_implementable_evaluations": 1169920,
+          "candidate_swaps": 512,
+          "border_multidraw_calls": 0,
+          "border_draw_calls_eliminated": 0
+        },
+        "border_roi_validity_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_loop_decode_failures": 0,
+          "border_roi_epoch_invalid": 0,
+          "border_thread_mismatch_count": 0,
+          "border_roi_freeze_partial_walk": 0,
+          "border_roi_freeze_semantic_suppress": 0,
+          "border_roi_freeze_implementable_suppress": 0
+        },
+        "border_roi_consistency_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_implementable_eliminations": 0,
+          "border_semantic_eliminations": 0,
+          "border_structural_eliminations": 0,
+          "semantic_histogram_sum": 0,
+          "implementable_histogram_sum": 0
+        },
+        "border_gate0": {
+          "context_checked": true,
+          "multidraw_supported": true,
+          "border_runtime_context_checked": 1,
+          "border_runtime_context_multidraw_supported": 1
+        },
+        "border_gate0_passed": true
+      }
+    },
+    {
+      "phase": "a2",
+      "counter_schema_version": 5,
+      "run_git_commit": null,
+      "offline_verified_code_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
+      "counters": {
+        "border_loop_head_entries": 1195055,
+        "candidate_swaps": 523,
+        "border_semantic_evaluations": 1195055,
+        "border_semantic_decisions": 0,
+        "border_semantic_eliminations": 0,
+        "border_implementable_evaluations": 1195055,
+        "border_implementable_decisions": 0,
+        "border_implementable_eliminations": 0,
+        "border_structural_draws": 0,
+        "border_structural_eliminations": 0,
+        "border_structural_walks": 2092,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1,
+        "border_loop_decode_failures": 0,
+        "border_loop_geometry_failures": 0,
+        "border_loop_resolution_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0
+      },
+      "histogram_sums": {
+        "semantic": 0,
+        "implementable": 0
+      },
+      "border_gate0": {
+        "context_checked": true,
+        "multidraw_supported": true,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1
+      },
+      "border_roi_validity_gate": {
+        "status": "passed",
+        "reason": null,
+        "border_loop_decode_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0,
+        "border_roi_freeze_semantic_suppress": 0,
+        "border_roi_freeze_implementable_suppress": 0
+      },
+      "border_roi_authoritative_gates": {
+        "status": "passed",
+        "reason": null,
+        "border_roi_engagement_gate": {
+          "status": "passed",
+          "border_loop_head_entries": 1195055,
+          "border_semantic_evaluations": 1195055,
+          "border_implementable_evaluations": 1195055,
+          "candidate_swaps": 523,
+          "border_multidraw_calls": 0,
+          "border_draw_calls_eliminated": 0
+        },
+        "border_roi_validity_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_loop_decode_failures": 0,
+          "border_roi_epoch_invalid": 0,
+          "border_thread_mismatch_count": 0,
+          "border_roi_freeze_partial_walk": 0,
+          "border_roi_freeze_semantic_suppress": 0,
+          "border_roi_freeze_implementable_suppress": 0
+        },
+        "border_roi_consistency_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_implementable_eliminations": 0,
+          "border_semantic_eliminations": 0,
+          "border_structural_eliminations": 0,
+          "semantic_histogram_sum": 0,
+          "implementable_histogram_sum": 0
+        },
+        "border_gate0": {
+          "context_checked": true,
+          "multidraw_supported": true,
+          "border_runtime_context_checked": 1,
+          "border_runtime_context_multidraw_supported": 1
+        },
+        "border_gate0_passed": true
+      }
+    },
+    {
+      "phase": "b2",
+      "counter_schema_version": 5,
+      "run_git_commit": null,
+      "offline_verified_code_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
+      "counters": {
+        "border_loop_head_entries": 1172205,
+        "candidate_swaps": 513,
+        "border_semantic_evaluations": 1172205,
+        "border_semantic_decisions": 0,
+        "border_semantic_eliminations": 0,
+        "border_implementable_evaluations": 1172205,
+        "border_implementable_decisions": 0,
+        "border_implementable_eliminations": 0,
+        "border_structural_draws": 0,
+        "border_structural_eliminations": 0,
+        "border_structural_walks": 2052,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1,
+        "border_loop_decode_failures": 0,
+        "border_loop_geometry_failures": 0,
+        "border_loop_resolution_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0
+      },
+      "histogram_sums": {
+        "semantic": 0,
+        "implementable": 0
+      },
+      "border_gate0": {
+        "context_checked": true,
+        "multidraw_supported": true,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1
+      },
+      "border_roi_validity_gate": {
+        "status": "passed",
+        "reason": null,
+        "border_loop_decode_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0,
+        "border_roi_freeze_semantic_suppress": 0,
+        "border_roi_freeze_implementable_suppress": 0
+      },
+      "border_roi_authoritative_gates": {
+        "status": "passed",
+        "reason": null,
+        "border_roi_engagement_gate": {
+          "status": "passed",
+          "border_loop_head_entries": 1172205,
+          "border_semantic_evaluations": 1172205,
+          "border_implementable_evaluations": 1172205,
+          "candidate_swaps": 513,
+          "border_multidraw_calls": 0,
+          "border_draw_calls_eliminated": 0
+        },
+        "border_roi_validity_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_loop_decode_failures": 0,
+          "border_roi_epoch_invalid": 0,
+          "border_thread_mismatch_count": 0,
+          "border_roi_freeze_partial_walk": 0,
+          "border_roi_freeze_semantic_suppress": 0,
+          "border_roi_freeze_implementable_suppress": 0
+        },
+        "border_roi_consistency_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_implementable_eliminations": 0,
+          "border_semantic_eliminations": 0,
+          "border_structural_eliminations": 0,
+          "semantic_histogram_sum": 0,
+          "implementable_histogram_sum": 0
+        },
+        "border_gate0": {
+          "context_checked": true,
+          "multidraw_supported": true,
+          "border_runtime_context_checked": 1,
+          "border_runtime_context_multidraw_supported": 1
+        },
+        "border_gate0_passed": true
+      }
+    },
+    {
+      "phase": "a3",
+      "counter_schema_version": 5,
+      "run_git_commit": null,
+      "offline_verified_code_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
+      "counters": {
+        "border_loop_head_entries": 1179060,
+        "candidate_swaps": 516,
+        "border_semantic_evaluations": 1179060,
+        "border_semantic_decisions": 0,
+        "border_semantic_eliminations": 0,
+        "border_implementable_evaluations": 1179060,
+        "border_implementable_decisions": 0,
+        "border_implementable_eliminations": 0,
+        "border_structural_draws": 0,
+        "border_structural_eliminations": 0,
+        "border_structural_walks": 2064,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1,
+        "border_loop_decode_failures": 0,
+        "border_loop_geometry_failures": 0,
+        "border_loop_resolution_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0
+      },
+      "histogram_sums": {
+        "semantic": 0,
+        "implementable": 0
+      },
+      "border_gate0": {
+        "context_checked": true,
+        "multidraw_supported": true,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1
+      },
+      "border_roi_validity_gate": {
+        "status": "passed",
+        "reason": null,
+        "border_loop_decode_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0,
+        "border_roi_freeze_semantic_suppress": 0,
+        "border_roi_freeze_implementable_suppress": 0
+      },
+      "border_roi_authoritative_gates": {
+        "status": "passed",
+        "reason": null,
+        "border_roi_engagement_gate": {
+          "status": "passed",
+          "border_loop_head_entries": 1179060,
+          "border_semantic_evaluations": 1179060,
+          "border_implementable_evaluations": 1179060,
+          "candidate_swaps": 516,
+          "border_multidraw_calls": 0,
+          "border_draw_calls_eliminated": 0
+        },
+        "border_roi_validity_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_loop_decode_failures": 0,
+          "border_roi_epoch_invalid": 0,
+          "border_thread_mismatch_count": 0,
+          "border_roi_freeze_partial_walk": 0,
+          "border_roi_freeze_semantic_suppress": 0,
+          "border_roi_freeze_implementable_suppress": 0
+        },
+        "border_roi_consistency_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_implementable_eliminations": 0,
+          "border_semantic_eliminations": 0,
+          "border_structural_eliminations": 0,
+          "semantic_histogram_sum": 0,
+          "implementable_histogram_sum": 0
+        },
+        "border_gate0": {
+          "context_checked": true,
+          "multidraw_supported": true,
+          "border_runtime_context_checked": 1,
+          "border_runtime_context_multidraw_supported": 1
+        },
+        "border_gate0_passed": true
+      }
+    },
+    {
+      "phase": "n2",
+      "counter_schema_version": 5,
+      "run_git_commit": null,
+      "offline_verified_code_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
+      "counters": {
+        "border_loop_head_entries": 1179060,
+        "candidate_swaps": 516,
+        "border_semantic_evaluations": 1179060,
+        "border_semantic_decisions": 0,
+        "border_semantic_eliminations": 0,
+        "border_implementable_evaluations": 1179060,
+        "border_implementable_decisions": 0,
+        "border_implementable_eliminations": 0,
+        "border_structural_draws": 0,
+        "border_structural_eliminations": 0,
+        "border_structural_walks": 2064,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1,
+        "border_loop_decode_failures": 0,
+        "border_loop_geometry_failures": 0,
+        "border_loop_resolution_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0
+      },
+      "histogram_sums": {
+        "semantic": 0,
+        "implementable": 0
+      },
+      "border_gate0": {
+        "context_checked": true,
+        "multidraw_supported": true,
+        "border_runtime_context_checked": 1,
+        "border_runtime_context_multidraw_supported": 1
+      },
+      "border_roi_validity_gate": {
+        "status": "passed",
+        "reason": null,
+        "border_loop_decode_failures": 0,
+        "border_roi_epoch_invalid": 0,
+        "border_thread_mismatch_count": 0,
+        "border_roi_freeze_partial_walk": 0,
+        "border_roi_freeze_semantic_suppress": 0,
+        "border_roi_freeze_implementable_suppress": 0
+      },
+      "border_roi_authoritative_gates": {
+        "status": "passed",
+        "reason": null,
+        "border_roi_engagement_gate": {
+          "status": "passed",
+          "border_loop_head_entries": 1179060,
+          "border_semantic_evaluations": 1179060,
+          "border_implementable_evaluations": 1179060,
+          "candidate_swaps": 516,
+          "border_multidraw_calls": 0,
+          "border_draw_calls_eliminated": 0
+        },
+        "border_roi_validity_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_loop_decode_failures": 0,
+          "border_roi_epoch_invalid": 0,
+          "border_thread_mismatch_count": 0,
+          "border_roi_freeze_partial_walk": 0,
+          "border_roi_freeze_semantic_suppress": 0,
+          "border_roi_freeze_implementable_suppress": 0
+        },
+        "border_roi_consistency_gate": {
+          "status": "passed",
+          "reason": null,
+          "border_implementable_eliminations": 0,
+          "border_semantic_eliminations": 0,
+          "border_structural_eliminations": 0,
+          "semantic_histogram_sum": 0,
+          "implementable_histogram_sum": 0
+        },
+        "border_gate0": {
+          "context_checked": true,
+          "multidraw_supported": true,
+          "border_runtime_context_checked": 1,
+          "border_runtime_context_multidraw_supported": 1
+        },
+        "border_gate0_passed": true
+      }
+    }
+  ]
+}

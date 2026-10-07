@@ -129,7 +129,17 @@ class BorderLoopClassifierTests(unittest.TestCase):
         self.assertEqual(out.run_length, 3)
         self.assertEqual(out.termination_kind, TerminationKind.INVALID)
         self.assertFalse(out.batch_eligible)
+        self.assertEqual(out.eligible_draw_calls_eliminable, 0)
         self.assertTrue(out.v1_fall_through_recommended)
+
+    def test_ibo_high_bits_distinct_not_low32_alias(self) -> None:
+        ctx = self._ctx()
+        records, ibos = self._tables(4, ibo=0x0000000112345678)
+        ibos[3] = 0x0000000212345678
+        entries = self._entries([0, 1, 2, 3])
+        out = classify_batchable_prefix(ctx, records, ibos, entries)
+        self.assertEqual(out.run_length, 3)
+        self.assertIn(BarrierMask.IBO_TRANSITION, out.boundary_reason_mask)
 
     def test_ibo_boundary(self) -> None:
         ctx = self._ctx()

@@ -1,0 +1,50 @@
+{
+  "evidence_kind": "border_loop_head_roi_live_venice",
+  "run": "20261007T055904Z-submission-experiment",
+  "verified_code_commit": "4df49a4b8b5ff1ed4ee17ce16c7c7a6eff8a7949",
+  "manifest_status": "complete",
+  "derivation": {
+    "manifest_source": "results/20261007T055904Z-submission-experiment/manifest.json",
+    "command": "python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa"
+  },
+  "readiness": {
+    "ready_ns": 218857704567875,
+    "swap_rate": 56.25,
+    "cpu_ms_s": 1145.02
+  },
+  "border_roi_primary_phase": "a1",
+  "border_roi_phase_gates_status": {
+    "a1": "passed",
+    "b1": "passed",
+    "a2": "passed",
+    "b2": "passed",
+    "a3": "passed"
+  },
+  "primary_a1_engagement": {
+    "border_loop_head_entries": 1167635,
+    "border_semantic_evaluations": 1167635,
+    "border_implementable_evaluations": 1167635,
+    "candidate_swaps": 511,
+    "border_multidraw_calls": 0,
+    "border_draw_calls_eliminated": 0
+  },
+  "primary_roi_per_frame": {
+    "semantic_eliminations_per_frame": 0.0,
+    "implementable_eliminations_per_frame": 0.0,
+    "structural_eliminations_per_frame": 0.0
+  },
+  "passive_detour_liveness_a1": {
+    "control_ticks_start": 6550,
+    "control_ticks_end": 6640,
+    "delta": 90,
+    "elapsed_seconds": 1.679,
+    "ticks_per_second": 53.595
+  },
+  "runtime_proven": {
+    "gate0_context_multidraw": true,
+    "loop_head_detour_live": true,
+    "authoritative_gates_all_phases": true,
+    "decode_epoch_thread_freeze_health": "clean"
+  },
+  "interpretation": "First full Venice border ABABA run after harness fix: wait_until_ready, warm-up, all ROI phases, and authoritative gates passed. Registered primary A1 shows classifier engagement with zero eliminations per frame in this scene. ROI numeric interpretation pending schema-v6 mode-domain census."
+}

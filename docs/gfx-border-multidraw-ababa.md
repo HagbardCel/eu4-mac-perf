@@ -15,7 +15,7 @@ PYTHONPATH=benchmark python3 -c "import submission_control as c; c.build_border_
 python3 benchmark/submission_experiment.py --output results --border-multidraw-ababa
 ```
 
-Manifest sets `venice_run_authorized: false`. Prefer offline loop-head RE at `0x1010cbe55` before spending a manual EU IV session.
+Experiment manifest sets `venice_observer_run_authorized: true` with `render_mutation_authorized: false` for observer-only ROI runs.
 
 Schedule if invoked: **N–A–B–A–B–A–N** (10 s phases). B phases set the mutate flag; the dylib does **not** multidraw (`border_fallback_mutate_disabled` is TLS-aggregated).
 
@@ -25,12 +25,16 @@ Per phase `border_validation` when the command is run locally. Not a substitute 
 
 ## Gate 0 (recorded)
 
-On first border-site draw with gameplay context current: `glGetString(GL_VERSION)` parsed for **core ≥ 3.2** (not `dlsym` alone). Results:
+On the **first armed loop-head detour hit** (not GL interpose alone): `CGLGetCurrentContext() != NULL` and `glMultiDrawElements` resolved via `dlsym` — **no test multidraw call**. Results:
 
 - `border_runtime_context_checked`
 - `border_runtime_context_multidraw_supported`
 
 surfaced in manifest `border_gate0` at run end.
+
+## ROI observer (READY_OFFLINE)
+
+Capability-2 ACK requires the **14-byte loop-head detour** installed (`hooks_installed` chain), not MDEBV interpose alone. ROI counters are **observation-arm gated** (schema v4 `requires_armed`); `observer_timing_usable` is false — per-frame rates use `candidate_swaps`; production `/s` estimates use profiler-off Venice FPS in `analysis/tools/border_loop_roi.py`.
 
 ## Endpoints
 

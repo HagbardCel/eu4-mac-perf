@@ -1,0 +1,66 @@
+{
+  "evidence_kind": "border_mode_census_live_venice",
+  "run": "20261007T074355Z-submission-experiment",
+  "run_git_commit": "d40f74746fefa425624d61fafc437a328e60a152",
+  "offline_verified_code_commit": "56d7b99d6fd35a960728429c2d25c5983277c64d",
+  "run_provenance_delta": {
+    "run": "20261007T074355Z-submission-experiment",
+    "offline_verified_commit": "56d7b99d6fd35a960728429c2d25c5983277c64d",
+    "authorization_commit": "204202488e0714b2b9e8eae49e8f63089c8f41ee",
+    "run_git_commit": "d40f74746fefa425624d61fafc437a328e60a152",
+    "post_authorization_code_commits": ["d40f74746fefa425624d61fafc437a328e60a152"],
+    "changed_files": ["benchmark/submission_experiment.py"],
+    "scope": "_git_provenance dirty-tree admission check only",
+    "measurement_code_changed": false,
+    "dylib_build_inputs_changed": false,
+    "counter_or_gate_semantics_changed": false
+  },
+  "manifest_status": "complete",
+  "derivation": {
+    "manifest_source": "results/20261007T074355Z-submission-experiment/manifest.json",
+    "capsule_source": "analysis/evidence/border-mode-census-live-20261007T074355Z-capsule.json",
+    "command": "python3 benchmark/submission_experiment.py --output results --border-mode-census"
+  },
+  "readiness": {
+    "ready_ns": 225147400930875,
+    "swap_rate": 55.77,
+    "cpu_ms_s": 1120.72
+  },
+  "census_phase": "census",
+  "border_domain_coverage_gate": {
+    "status": "passed",
+    "measurement_valid": true,
+    "mode0_domain_status": "empty",
+    "mode0_domain_exercised": false,
+    "structural_census_consistent": true
+  },
+  "census_counters_frozen_end": {
+    "border_loop_head_entries": 584960,
+    "candidate_swaps": 256,
+    "border_mode0_entries": 0,
+    "border_mode1_entries": 0,
+    "border_mode_other_entries": 584960,
+    "border_mode0_visible_nonzero_triangle_entries": 0,
+    "border_mode1_visible_nonzero_triangle_entries": 0,
+    "border_mode_other_visible_nonzero_triangle_entries": 584960,
+    "border_structural_draws": 0,
+    "border_semantic_eliminations": 0,
+    "border_implementable_eliminations": 0
+  },
+  "census_per_swap": {
+    "loop_head_entries_per_swap": 2285.0,
+    "mode_other_visible_nonzero_triangle_per_swap": 2285.0,
+    "mode0_visible_nonzero_triangle_per_swap": 0.0,
+    "structural_eliminations_per_swap": 0.0,
+    "semantic_eliminations_per_swap": 0.0,
+    "implementable_eliminations_per_swap": 0.0
+  },
+  "passive_detour_liveness": {
+    "control_ticks_start": 5736,
+    "control_ticks_end": 5827,
+    "delta": 91,
+    "elapsed_seconds": 1.675,
+    "ticks_per_second": 54.34
+  },
+  "interpretation": "Schema-v6 mode census: measurement valid; mode-0 drawable domain empty (mode0_vnz=0, structural_draws=0). Paused Venice border loop traffic is entirely mode-other with visible nonzero triangles. The census observes exactly 2,285 draw-producing mode-other entries per paused swap, consistent with the ~2.3k border-draws-per-frame scale seen in the historical intrusive trace. Mode-0 glMultiDrawElements ROI closed for this fixture; pursue static RE of loop-head BaseVertex (other) branch."
+}

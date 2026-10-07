@@ -1,0 +1,90 @@
+{
+  "evidence_kind": "PARTIAL_LIVE_A2_DIAGNOSTIC",
+  "run": "20261006T212911Z-submission-experiment",
+  "verified_code_commit": "3ae26023acb5f0e255c8d1182ab2438b47f7b74c",
+  "derivation": {
+    "control_source": "results/20261006T212911Z-submission-experiment/submission_control.bin",
+    "manifest_source": "results/20261006T212911Z-submission-experiment/manifest.json"
+  },
+  "readiness": {
+    "ready_ns": 188281745940041,
+    "swap_rate": 55.81,
+    "cpu_ms_s": 1146.19
+  },
+  "error": "EU IV lost focus during b2 settle",
+  "failure_stage": {
+    "phase": "b2",
+    "stage": "settle"
+  },
+  "snapshot_excerpt": {
+    "border_loop_head_entries": 1174490,
+    "border_runtime_context_checked": 1,
+    "border_runtime_context_multidraw_supported": 1,
+    "border_semantic_evaluations": 1174490,
+    "border_semantic_decisions": 0,
+    "border_semantic_eliminations": 0,
+    "border_implementable_evaluations": 1174490,
+    "border_implementable_decisions": 0,
+    "border_implementable_eliminations": 0,
+    "border_structural_draws": 0,
+    "border_structural_eliminations": 0,
+    "border_loop_decode_failures": 0,
+    "border_loop_geometry_failures": 0,
+    "border_loop_resolution_failures": 0,
+    "border_roi_epoch_invalid": 0,
+    "border_thread_mismatch_count": 0,
+    "border_roi_freeze_partial_walk": 0,
+    "border_roi_freeze_semantic_suppress": 0,
+    "border_roi_freeze_implementable_suppress": 0,
+    "candidate_swaps": 514,
+    "border_multidraw_calls": 0,
+    "border_draw_calls_eliminated": 0
+  },
+  "border_roi_authoritative_gates": {
+    "status": "passed",
+    "reason": null,
+    "border_roi_engagement_gate": {
+      "status": "passed",
+      "border_loop_head_entries": 1174490,
+      "border_semantic_evaluations": 1174490,
+      "border_implementable_evaluations": 1174490,
+      "candidate_swaps": 514,
+      "border_multidraw_calls": 0,
+      "border_draw_calls_eliminated": 0
+    },
+    "border_roi_validity_gate": {
+      "status": "passed",
+      "reason": null,
+      "border_loop_decode_failures": 0,
+      "border_roi_epoch_invalid": 0,
+      "border_thread_mismatch_count": 0,
+      "border_roi_freeze_partial_walk": 0,
+      "border_roi_freeze_semantic_suppress": 0,
+      "border_roi_freeze_implementable_suppress": 0
+    },
+    "border_roi_consistency_gate": {
+      "status": "passed",
+      "reason": null,
+      "border_implementable_eliminations": 0,
+      "border_semantic_eliminations": 0,
+      "border_structural_eliminations": 0,
+      "semantic_histogram_sum": 0,
+      "implementable_histogram_sum": 0
+    },
+    "border_gate0": {
+      "context_checked": true,
+      "multidraw_supported": true,
+      "border_runtime_context_checked": 1,
+      "border_runtime_context_multidraw_supported": 1
+    },
+    "border_gate0_passed": true
+  },
+  "provisional_roi": {
+    "semantic_eliminations_per_frame": 0.0,
+    "implementable_eliminations_per_frame": 0.0,
+    "structural_eliminations_per_frame": 0.0,
+    "candidate_swaps": 514,
+    "note": "PARTIAL_LIVE_A2_DIAGNOSTIC \u2014 not registered primary Venice ROI estimate"
+  },
+  "interpretation": "Frozen control mmap after incomplete run; authoritative gates on final bank. Live loop-head observer executed (detour, gateway, Gate 0, classifier path) even if eliminations are zero."
+}
