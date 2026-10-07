@@ -56,7 +56,7 @@ GfxSet* / GfxDraw* / Gfx resource abstractions
 OpenGL
 ```
 
-There are only 48 direct draw-helper sites ([`analysis/draw-callers.json`](../analysis/draw-callers.json)) and four main draw-helper families:
+There are only 48 direct `GfxDraw*` call/jump sites ([`analysis/draw-callers.json`](../analysis/draw-callers.json); direct call/jump inventory only) and four main draw-helper families:
 
 ```text
 GfxDraw
@@ -196,7 +196,9 @@ Therefore the Gfx boundary is a much more promising interception point than raw 
 
 The **~90% target applies to avoidable graphical workload in favorable static/paused scenarios**, not to total process CPU usage and not necessarily to active gameplay (battles, animations, multiplayer, mod overlays).
 
-**Primary metric for the ambition:** profiler-off **process CPU-ms/s** attributable to rendering / idler work (with draw submissions and swap cadence as structural corroboration). Power is supporting evidence.
+**Structural target (static scene):** ~90% reduction in avoidable **frame-proportional renderer work** vs the current paused-Venice baseline, tracked through draw submissions/s, state transitions/s, buffer and texture binds/s, constant updates/s, rendered frames/s, and pass executions/s.
+
+**Outcome metric (causal A/B):** profiler-off **process CPU-ms/s** when comparing otherwise-identical interventions, plus system SoC power as supporting evidence. Do **not** treat absolute process CPU as “rendering CPU” without a render-suppressed counterfactual (e.g. paused normal vs near-zero render cadence).
 
 A plausible decomposition of that ambition is:
 
@@ -214,7 +216,7 @@ A native Metal backend could remove substantial CPU cost currently spent in:
 
 Examples:
 
-- border BaseVertex walks;
+- mode-other border loop walks (2,285 entries/swap; GL endpoint via +0x10 TBD);
 - map-text draws;
 - future safe batching domains discovered by RE.
 
@@ -258,6 +260,16 @@ Together, these mechanisms make a ~90% static-scene graphical-workload reduction
 
 ## 6. Phased research and implementation plan
 
+Three axes (do not conflate them):
+
+```text
+RE direction (mapping):     bottom-up — OpenGL → Gfx → passes → renderer loops
+Implementation (Metal):       vertical slices — one complete render domain at a time
+Optimization maturity:      B semantic compat → caches → pass aggregation → C → dirty/static
+```
+
+**Principle:** map the stack bottom-up; **implement** Metal as end-to-end vertical slices, not disconnected horizontal layers (all draw helpers before resources/shaders).
+
 ### Phase 0 — map the Gfx/OpenGL minimum cut
 
 Before writing Metal code, build a complete inventory of the Clausewitz graphics backend.
@@ -286,156 +298,97 @@ Questions to answer:
 4. How are shaders stored and compiled?
 5. Where are render-target/pass transitions represented?
 6. Which functions contain OpenGL-specific cached state that higher layers depend on?
+7. What is the **GL/Metal coexistence boundary** during migration: whole frame, render pass, offscreen target + composition, or no mixing? Mixing GL and Metal within the same framebuffer/pass is an architecture risk to resolve before broad migration.
 
 **Decision gate:** if the practical minimum cut of **Gfx functions that must emit or synchronize OpenGL for normal rendering** is on the order of a few dozen well-defined entry points, continue toward a backend prototype. A large total Gfx symbol count (debug, resource creation, edge cases) does not by itself fail the gate — only **reachable draw/state/present paths** matter. If OpenGL semantics are deeply embedded across hundreds of unrelated high-level routines with no clean seam, reassess.
 
 ---
 
-### Phase 1 — continue the highest-value local RE in parallel
+### Phase 1 — mode-other / helper-arg (+0x10) branch RE (parallel)
 
-Proceed with mode-other/BaseVertex border analysis.
+Proceed with border static RE on the census-proven **mode-other** branch (`0x1010cc3b8`).
 
 Goals:
 
-- map per-record varying state;
-- determine homogeneous run lengths;
-- understand VBO/IBO/basevertex behavior;
-- prove or reject `glMultiDrawElementsBaseVertex` equivalence;
+- map per-record varying state, especially `record+0x10` distribution;
+- determine homogeneous run lengths within walks;
+- understand VBO/IBO stability and Gfx/GL state barriers;
+- establish how often `%ecx != 0` implies `glDrawElementsBaseVertex`;
+- **conditionally** prove or reject `glMultiDrawElementsBaseVertex` equivalence;
 - quantify non-draw setup that could disappear when consuming a run at loop head.
 
-This work serves two purposes:
-
-1. potential immediate performance improvement;
-2. concrete understanding of what the future Metal backend must optimize.
+This work serves immediate batching decisions and concrete requirements for a future Metal backend.
 
 ---
 
-### Phase 2 — prototype Metal backend skeleton
+### Phase 2 — one complete Metal vertical slice
 
-Only after the minimum-cut inventory is encouraging.
+Only after Phase 0 is encouraging. Do **not** target the full paused-Venice scene yet.
 
-Start with the smallest viable slice:
+Deliver **one bounded end-to-end slice** that includes all of:
 
 ```text
-context/frame lifecycle
-render target
-one vertex format
-one shader/effect path
-vertex/index buffers
-one texture path
-GfxDrawIndexed
-present
+MSL shader(s)
+MTLRenderPipelineState
+MTLBuffer vertex/index data
+MTLTexture + sampler
+render target / pass
+encoded draw
+present or composition into the frame
 ```
 
-Do not attempt the entire game immediately.
-
-Success criterion: render a deliberately narrow known path or synthetic harness through Metal with engine-compatible Gfx state semantics.
+Success criterion: a narrow harness or single render domain reproduces correct pixels through Metal — not “all GfxDraw* without resources.”
 
 ---
 
-### Phase 3 — state shadow + pipeline cache
-
-Implement:
+### Phase 3 — Gfx state shadow + pipeline/resource caches
 
 ```text
-Clausewitz state changes
-        ↓
-shadow state only
-        ↓
-PipelineKey / ResourceKey
-        ↓
-cached Metal objects
+Clausewitz state changes → shadow state → PipelineKey / ResourceKey → cached Metal objects
 ```
 
-Avoid creating/rebuilding Metal pipeline state during normal draws.
-
-Core cache candidates:
-
-- render pipeline states;
-- depth/stencil states;
-- sampler states;
-- vertex descriptors;
-- shader function combinations;
-- resource binding layouts.
+Avoid creating/rebuilding pipeline state during hot draws. Cache PSOs, depth/stencil, samplers, vertex descriptors, and binding layouts.
 
 ---
 
-### Phase 4 — full draw-helper coverage
+### Phase 4 — resource + shader compatibility framework
 
-Support all observed draw families:
+GL buffer/texture IDs do not become Metal resources by alias alone. Build explicit:
 
-```text
-GfxDraw
-GfxDrawIndexed
-GfxDrawIndexedInstanced
-GfxDraw2dLines
-```
+- upload/lifetime rules;
+- shader discovery and GLSL/ARB → MSL path;
+- effect permutation → pipeline keys;
+- ring buffers for dynamic constants.
 
-Then close remaining reachable draw variants as needed.
-
-Goal: make the Metal backend capable of reproducing the main paused-Venice scene without relying on OpenGL for draw submission.
+Shader feasibility may dominate total backend effort.
 
 ---
 
-### Phase 5 — resource backend
+### Phase 5 — migrate complete render passes/domains
 
-Implement/replace:
+Move **whole passes** (map text, borders, or other bounded domains) onto Metal using the Phase 4 framework — before attempting universal Gfx coverage. Respect ordering, transparency, and UI constraints.
 
-- textures;
-- vertex/index buffers;
-- dynamic/transient constant data;
-- render targets;
-- clears;
-- uploads;
-- lifetime management;
-- synchronization.
-
-Use ring buffers / suballocation for high-frequency constants rather than emulating repeated GL uniform uploads literally.
+Full paused-Venice reproduction without OpenGL draw submission is a **Phase 5 outcome**, not Phase 2.
 
 ---
 
-### Phase 6 — shader migration
+### Phase 6 — expand Gfx operation coverage as demanded
 
-Determine the least-cost shader path:
-
-- recover original GLSL/ARB sources if available;
-- identify engine shader metadata;
-- evaluate GLSL → SPIR-V → MSL tooling;
-- precompile/cache Metal shader functions where possible;
-- map Clausewitz effect permutations to pipeline keys.
-
-Shader feasibility may be the largest single determinant of the full backend effort.
+Add `GfxDraw`, `GfxDrawIndexed`, `GfxDrawIndexedInstanced`, `GfxDraw2dLines`, and remaining reachable variants **only as required** by migrated passes — not ahead of pass migration.
 
 ---
 
-### Phase 7 — evolve B toward C
+### Phase 7 — evolve B toward C (command collection)
 
-Once Metal output is correct, move selected rendering domains from immediate calls to collected commands.
-
-Priority domains:
-
-1. borders;
-2. map text;
-3. opaque terrain/map overlays;
-4. opaque mesh subsets where ordering permits;
-5. UI subsets only if worthwhile.
-
-Do not globally reorder transparent or order-sensitive work.
+Once domains are correct on Metal, collect commands within safe pass/order classes; batch and minimize pipeline/resource churn. Priority: borders, map text, then other opaque subsets. Do not globally reorder transparent work.
 
 ---
 
 ### Phase 8 — frame-level workload elimination
 
-Add high-level scheduling/caching optimizations:
+Paused/static scheduling: adaptive frame caps, dirty pass tracking, cached map layers (research policy — see §5C). Scope: static paused-map scenes; not battles, tooltips, animations, multiplayer, or mod overlays without explicit product decisions.
 
-- paused/static adaptive frame limit;
-- dirty-region / dirty-pass tracking;
-- cached static map layers;
-- separate high-frequency UI from low-frequency map redraw where feasible.
-
-Scope: **paused-map / visually static** scenes only. Success is measured primarily against **profiler-off process CPU-ms/s** (and corroborating draw/swap reduction), not a single draw-count proxy.
-
-This phase is likely necessary to approach the ~90% static-scene ambition.
+Success: structural renderer-work reduction (§5 metrics) **and** causal **process CPU-ms/s** gains on matched interventions; optional future render-suppressed baseline to estimate render-attributable CPU.
 
 ---
 
@@ -443,7 +396,7 @@ This phase is likely necessary to approach the ~90% static-scene ambition.
 
 | Option | Effort | Likely payoff | Strategic value |
 |---|---:|---:|---|
-| Border MDEBV batching (post-census RE + proof) | Medium (RE first) | Moderate if feasible | Immediate + informs backend |
+| Border mode-other RE (+0x10 → GL path); MDEBV if feasible | Medium (RE first) | Moderate if feasible | Immediate + informs backend |
 | Map-text batching | Low–medium | Small–moderate | Useful secondary win |
 | Targeted state/uniform elision | Medium | Unknown/moderate | Backend-relevant |
 | Paused adaptive frame cap | Low–medium | Large for static scenes | High practical value |
@@ -461,14 +414,14 @@ The project should avoid a single all-or-nothing 90% criterion. Use staged targe
 ### Near term
 
 - demonstrate one local optimization with **≥2–5% CPU improvement** profiler-off;
-- quantify border BaseVertex removable calls;
+- quantify mode-other `+0x10` distribution and conditional MDEBV opportunity;
 - map the Gfx minimum cut.
 
 ### Medium term
 
 - reduce draw/state submissions materially without lowering visual fidelity;
 - demonstrate a Metal-backed subset of rendering;
-- reach **20–40% lower rendering-side CPU/power** in paused scenes through backend + batching + state reduction.
+- reach **20–40% lower process CPU-ms/s** in paused scenes (profiler-off A/B) through backend + batching + state reduction, with power as supporting evidence.
 
 ### Long term
 
@@ -543,14 +496,15 @@ Produce:
 - list of OpenGL bypasses;
 - estimate of backend replacement surface.
 
-### Deliverable B — mode-other/BaseVertex static RE
+### Deliverable B — mode-other / helper-arg (+0x10) branch RE
 
 Produce:
 
-- exact call/state path;
+- exact call/state path at `0x1010cc3b8` and `GfxDrawIndexed` branching;
+- distribution of `record+0x10` and effective GL endpoint mix;
 - per-walk state invariants/barriers;
-- MDEBV feasibility verdict;
-- expected eliminated calls/frame;
+- **conditional** MDEBV feasibility verdict;
+- expected eliminated calls/frame if batching is justified;
 - expected eliminated setup work/frame.
 
 ### Deliverable C — architecture decision

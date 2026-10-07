@@ -34,7 +34,7 @@ Validation runs with **profiler off**; measure CPU, power, swap, cadence, visual
 
 Border loop-head mode-0 `glMultiDrawElements` ROI is **closed** for paused Venice (`MODE0_DOMAIN_EMPTY`; schema-v6 census `20261007T074355Z`). Next engineering tracks (parallel):
 
-- **Local:** mode-other / BaseVertex static RE and feasible batching — see [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md).
+- **Local:** mode-other / helper-arg (+0x10) branch RE; MDEBV only if feasible — see [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md).
 - **Strategic:** Gfx minimum-cut inventory and state-aware Metal backend (B→C) — see [`eu4_rendering_strategy_90pct.md`](eu4_rendering_strategy_90pct.md).
 
 Evidence JSON: [`analysis/evidence/border-mode-census-live-20261007T074355Z.json`](../analysis/evidence/border-mode-census-live-20261007T074355Z.json), [`analysis/evidence/border-loop-head-roi-readiness-20261005.json`](../analysis/evidence/border-loop-head-roi-readiness-20261005.json).

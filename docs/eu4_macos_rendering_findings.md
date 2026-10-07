@@ -15,8 +15,9 @@ The goal is not merely to explain why EU IV runs hot on modern Apple Silicon. Th
 | Draw decomposition (5,863/frame, intrusive screening) | [`analysis/draw-path-decision.md`](../analysis/draw-path-decision.md), trace `results/20260928T113359Z-draw-trace` (failed 5% intrusion gate; counts still useful) |
 | Border mode census (live, schema v6) | [`analysis/evidence/border-mode-census-live-20261007T074355Z.json`](../analysis/evidence/border-mode-census-live-20261007T074355Z.json) |
 | Mode-0 ROI closed (`MODE0_DOMAIN_EMPTY`) | [`analysis/evidence/border-loop-head-roi-readiness-20261005.json`](../analysis/evidence/border-loop-head-roi-readiness-20261005.json) |
-| Mode-0 / BaseVertex screening corrections | [`analysis/border-mode0-basevertex-evidence-addendum.md`](../analysis/border-mode0-basevertex-evidence-addendum.md) |
-| Direct `GfxDraw*` call-site inventory (static) | [`analysis/draw-callers.json`](../analysis/draw-callers.json) |
+| Mode-0 Gfx path / record-field corrections (mode-0 only) | [`analysis/border-mode0-basevertex-evidence-addendum.md`](../analysis/border-mode0-basevertex-evidence-addendum.md) |
+| Mode-other draw site `0x1010cc3b8` / `GfxDrawIndexed` helper branch | [`analysis/border-draw-inner-loop-re.md`](../analysis/border-draw-inner-loop-re.md), [`analysis/border-gfxdrawindexed-helper-audit.md`](../analysis/border-gfxdrawindexed-helper-audit.md) |
+| Direct `GfxDraw*` call/jump inventory (static) | [`analysis/draw-callers.json`](../analysis/draw-callers.json) |
 
 ---
 
@@ -32,9 +33,9 @@ The investigation has converged on a fairly coherent picture:
    - UI/text: ~251 draws/frame;
    - other/unclassified: ~172 draws/frame.
 3. The largest branch by count, mesh rendering, turned out to be a poor target for simple adjacency batching because per-object/per-subrecord state changes are real and recurrence was screened negative under the tested predicates.
-4. The border renderer is structurally much more regular. The schema-v6 census ([`074355Z` evidence](../analysis/evidence/border-mode-census-live-20261007T074355Z.json)) showed the paused-Venice border workload is **entirely the mode-other / BaseVertex path**: exactly **2,285 drawable mode-other loop-head entries per candidate swap**, with **zero mode-0** and **zero mode-1** iterations. In this fixture, **candidate swap ≈ one rendered map frame** (not simulation tick).
-5. The border work appears as roughly **4 large structural walks per swap**, averaging ~571 drawable records per walk (from census counters; see §7). This makes a loop-head / run-head transformation toward `glMultiDrawElementsBaseVertex` — **if static RE finds homogeneous subruns** — a much more plausible optimization target than the closed mode-0 `glMultiDrawElements` hypothesis.
-6. The executable already uses a recognizable **Clausewitz Gfx abstraction layer** (`GfxDraw*`, `GfxSet*`, buffer/texture/effect abstractions). The pinned binary has **48 direct draw-helper call sites** in [`analysis/draw-callers.json`](../analysis/draw-callers.json), funneled into four main draw-helper families. This raises a credible long-term possibility: replace or progressively supersede the OpenGL backend at the Gfx boundary rather than rewriting every game renderer.
+4. The border renderer is structurally much more regular. The schema-v6 census ([`074355Z` evidence](../analysis/evidence/border-mode-census-live-20261007T074355Z.json)) showed **all** paused-Venice border loop-head traffic is on the **mode-other engine branch**: exactly **2,285 drawable mode-other entries per candidate swap**, with **zero mode-0** and **zero mode-1** iterations. Census did **not** measure `record+0x10` or the effective GL endpoint. Static RE shows the mode-other site loads `+0x10` into `%ecx` before `GfxDrawIndexed` (see §7). In this fixture, **candidate swap ≈ one rendered map frame** (not simulation tick).
+5. The border work appears as roughly **4 large structural walks per swap**, averaging ~571 drawable records per walk (from census counters; see §7). Loop-head batching toward `glMultiDrawElementsBaseVertex` is a **candidate** only if RE establishes homogeneous subruns **and** a nonzero-BaseVertex GL path for those records — a more plausible direction than the closed mode-0 `glMultiDrawElements` hypothesis.
+6. The executable already uses a recognizable **Clausewitz Gfx abstraction layer** (`GfxDraw*`, `GfxSet*`, buffer/texture/effect abstractions). The pinned binary has **48 direct `GfxDraw*` call/jump sites** in [`analysis/draw-callers.json`](../analysis/draw-callers.json) (direct call/jump inventory only), funneled into four main draw-helper families. This raises a credible long-term possibility: replace or progressively supersede the OpenGL backend at the Gfx boundary rather than rewriting every game renderer.
 7. However, a naïve one-to-one Gfx→Metal translation would likely preserve much of the old immediate/state-machine behavior. A good Metal renderer requires pipeline-state caching, explicit resource management, command encoding, and eventually higher-level batching/collection. Therefore the promising architectural path is **B→C** (detailed in [`eu4_rendering_strategy_90pct.md`](eu4_rendering_strategy_90pct.md)):
    - **B:** implement a state-aware Metal backend behind the existing Gfx API;
    - **C:** progressively move batching, command collection, and pass-level optimization upward once the backend boundary is understood.
@@ -127,7 +128,7 @@ This immediately suggests that optimization leverage is highly concentrated. Mes
 
 ## 5. Clausewitz draw abstraction
 
-Static inventory found **48 direct `GfxDraw*` call sites** in the pinned executable ([`analysis/draw-callers.json`](../analysis/draw-callers.json); see also [`analysis/frame-model-draw-api.json`](../analysis/frame-model-draw-api.json)):
+Static inventory found **48 direct `GfxDraw*` call/jump sites** in the pinned executable ([`analysis/draw-callers.json`](../analysis/draw-callers.json) — see `limits`; see also [`analysis/frame-model-draw-api.json`](../analysis/frame-model-draw-api.json)):
 
 | Engine helper family | Direct call sites |
 |---|---:|
@@ -240,13 +241,19 @@ Schema-v6 `border_structural_draws = 0` reflects an **empty mode-0 drawable doma
 
 In this fixture, **candidate swap ≈ one rendered map frame** at paused cadence.
 
+**What census measured:** mode partition (0 / 1 / other), visibility, triangle count, loop-head entry counts, structural walks.
+
+**What census did not measure:** `record+0x10`, `%ecx` at the mode-other `GfxDrawIndexed` site (`0x1010cc3b8`), or whether draws reach `glDrawElements` vs `glDrawElementsBaseVertex`.
+
+**Static RE (not census):** at `0x1010cc3b8`, `movl record+0x10, %ecx` then `call GfxDrawIndexed`; the helper uses `%ecx` to select `glDrawElements` when zero vs `glDrawElementsBaseVertex` when nonzero ([helper audit](../analysis/border-gfxdrawindexed-helper-audit.md)).
+
 ### Current conclusion
 
-The mode-0 `glMultiDrawElements` hypothesis is closed for paused Venice because the domain is empty. The next border target is the **mode-other / `glDrawElementsBaseVertex` path** at the GL layer behind `GfxDrawIndexed` when the BaseVertex argument is nonzero — **not** a global GL interposer. `glMultiDrawElementsBaseVertex` is a natural candidate transformation **only if** static RE finds batchable homogeneous subruns per walk.
+The mode-0 `glMultiDrawElements` hypothesis is closed for paused Venice because the domain is empty. The immediate track is **mode-other / helper-arg (+0x10) branch RE**: determine the distribution of `+0x10` and therefore how often the effective GL path is BaseVertex — **not** a global GL interposer. `glMultiDrawElementsBaseVertex` remains a **candidate** transformation only if RE finds batchable homogeneous subruns per walk **and** establishes nonzero-BaseVertex use for those records.
 
 The key static questions are now:
 
-- exact meaning of record `+0x10` / BaseVertex argument;
+- distribution and semantics of record `+0x10` as the fourth `GfxDrawIndexed` argument;
 - VBO and IBO stability within walks;
 - state mutations between successive records;
 - whether counts/indices/basevertex arrays can be gathered cheaply;
@@ -280,7 +287,7 @@ UI/text contributes roughly **251 draws/frame** across many renderers (`CBitmapF
 
 ### Still promising
 
-- mode-other/BaseVertex border batching;
+- mode-other / helper-arg (+0x10) border RE; conditional MDEBV if GL path and subruns support it;
 - map-text batching;
 - state/uniform reduction where counts justify it;
 - frame-level throttling/caching for paused/static scenes;
@@ -327,7 +334,7 @@ However, simple one-to-one translation would likely preserve too much of the old
 - encode commands within explicit render passes;
 - eventually collect/batch work where ordering permits.
 
-Thus the realistic path is incremental: first preserve semantics behind the Gfx API, then optimize upward.
+Thus the realistic path is incremental: first preserve semantics behind the Gfx API, then optimize upward. **Implementation** should migrate **complete render domains vertically** (shader + resources + pass + draw), not bring up all four `GfxDraw*` families horizontally while the rest of the stack remains OpenGL — see [`eu4_rendering_strategy_90pct.md`](eu4_rendering_strategy_90pct.md) §6.
 
 ---
 
