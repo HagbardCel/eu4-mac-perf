@@ -79,25 +79,97 @@ def _runtime_smoke_v5_proven(payload: dict) -> bool:
     return schema == 5
 
 
-def _validate_domain_census_authorization(payload: dict, status: str) -> None:
+def _non_empty_str(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise AssertionError(f"{field} must be a non-empty string")
+    return value
+
+
+def _non_empty_str_list(value: object, field: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        raise AssertionError(f"{field} must be a non-empty list")
+    for i, item in enumerate(value):
+        if not isinstance(item, str) or not item:
+            raise AssertionError(f"{field}[{i}] must be a non-empty string")
+    return value
+
+
+def _validate_run_provenance_delta(domain_census: dict, delta: object) -> None:
+    if not isinstance(delta, dict):
+        raise AssertionError("run_provenance_delta must be an object when run commit differs from offline")
+    dc_run = _non_empty_str(domain_census.get("run"), "domain_census_live.run")
+    dc_offline = _non_empty_str(
+        domain_census.get("offline_verified_commit"),
+        "domain_census_live.offline_verified_commit",
+    )
+    dc_run_commit = _non_empty_str(
+        domain_census.get("run_git_commit"),
+        "domain_census_live.run_git_commit",
+    )
+    if delta.get("run") != dc_run:
+        raise AssertionError("run_provenance_delta.run must match domain_census_live.run")
+    if delta.get("offline_verified_commit") != dc_offline:
+        raise AssertionError(
+            "run_provenance_delta.offline_verified_commit must match domain_census_live.offline_verified_commit"
+        )
+    if delta.get("run_git_commit") != dc_run_commit:
+        raise AssertionError(
+            "run_provenance_delta.run_git_commit must match domain_census_live.run_git_commit"
+        )
+    _non_empty_str(delta.get("authorization_commit"), "run_provenance_delta.authorization_commit")
+    _non_empty_str_list(
+        delta.get("post_authorization_code_commits"),
+        "run_provenance_delta.post_authorization_code_commits",
+    )
+    _non_empty_str_list(delta.get("changed_files"), "run_provenance_delta.changed_files")
+    _non_empty_str(delta.get("scope"), "run_provenance_delta.scope")
+    for flag in (
+        "measurement_code_changed",
+        "dylib_build_inputs_changed",
+        "counter_or_gate_semantics_changed",
+    ):
+        if delta.get(flag) is not False:
+            raise AssertionError(f"run_provenance_delta.{flag} must be false")
+
+
+def _validate_domain_census_authorization(payload: dict, status: str) -> dict:
     schema_top = int(payload.get("counter_schema_version", 0))
     if schema_top < 6:
-        return
+        return {"status": None, "live_proven": False}
     domain_census = payload.get("domain_census_live")
     if not isinstance(domain_census, dict):
         raise AssertionError("counter_schema_version >= 6 requires domain_census_live object")
     if int(domain_census.get("counter_schema_version", 0)) != 6:
         raise AssertionError("domain_census_live.counter_schema_version must be 6")
     dc_status = domain_census.get("status")
+    offline_verify = payload.get("offline_verification") or {}
+    verified_commit = offline_verify.get("verified_commit")
+
     if dc_status == "PASS_VENICE_MEASURED":
         if domain_census.get("domain_gate") != "passed":
             raise AssertionError("domain_census_live PASS requires domain_gate passed")
-        return
+        if not verified_commit:
+            raise AssertionError("PASS_VENICE_MEASURED requires offline_verification.verified_commit")
+        dc_offline = domain_census.get("offline_verified_commit")
+        if not dc_offline:
+            raise AssertionError("PASS_VENICE_MEASURED requires domain_census_live.offline_verified_commit")
+        if verified_commit != dc_offline:
+            raise AssertionError("offline_verification and domain_census_live commits must match")
+        _non_empty_str(domain_census.get("run_git_commit"), "domain_census_live.run_git_commit")
+        _non_empty_str(domain_census.get("run"), "domain_census_live.run")
+        if domain_census.get("ready_for_single_venice_census_run") is not False:
+            raise AssertionError(
+                "PASS_VENICE_MEASURED requires domain_census_live.ready_for_single_venice_census_run false"
+            )
+        run_commit = domain_census["run_git_commit"]
+        if run_commit != dc_offline:
+            delta = domain_census.get("run_provenance_delta")
+            _validate_run_provenance_delta(domain_census, delta)
+        return {"status": "PASS_VENICE_MEASURED", "live_proven": True}
+
     if dc_status != "PENDING":
         raise AssertionError(f"unexpected domain_census_live.status {dc_status!r}")
     census_ready = domain_census.get("ready_for_single_venice_census_run")
-    offline_verify = payload.get("offline_verification") or {}
-    verified_commit = offline_verify.get("verified_commit")
     dc_offline = domain_census.get("offline_verified_commit")
     if status == "READY_OFFLINE":
         if not verified_commit:
@@ -114,15 +186,7 @@ def _validate_domain_census_authorization(payload: dict, status: str) -> None:
         raise AssertionError(
             "PENDING instrumentation requires domain_census_live.ready_for_single_venice_census_run false"
         )
-
-
-def _domain_census_live_proven(payload: dict) -> bool:
-    dc = payload.get("domain_census_live") or {}
-    return (
-        dc.get("status") == "PASS_VENICE_MEASURED"
-        and int(dc.get("counter_schema_version", 0)) == 6
-        and dc.get("domain_gate") == "passed"
-    )
+    return {"status": "PENDING", "live_proven": False}
 
 
 def validate_roi_readiness_payload(payload: dict) -> None:
@@ -132,6 +196,12 @@ def validate_roi_readiness_payload(payload: dict) -> None:
         raise AssertionError("mutation_authorized must be false")
     if payload.get("observer_timing_usable") is not False:
         raise AssertionError("observer_timing_usable must be false")
+
+    status = payload.get("roi_instrumentation_status")
+    if status not in ("READY_OFFLINE", "PENDING", "FAILED_SELF_TEST"):
+        raise AssertionError(f"unexpected roi_instrumentation_status {status!r}")
+
+    census_state = _validate_domain_census_authorization(payload, status)
 
     roi_gate = payload.get("roi_gate")
     if roi_gate == "PENDING_NUMERIC_EVIDENCE":
@@ -143,24 +213,23 @@ def validate_roi_readiness_payload(payload: dict) -> None:
             if payload.get(key) is not None:
                 raise AssertionError(f"{key} must be null while roi_gate is PENDING_NUMERIC_EVIDENCE")
     elif roi_gate == "FAIL_BELOW_THRESHOLD":
-        if not _domain_census_live_proven(payload):
+        if not census_state["live_proven"]:
             raise AssertionError("FAIL_BELOW_THRESHOLD requires proven schema-v6 domain census")
         if payload.get("mode0_domain_status") != "empty":
             raise AssertionError("FAIL_BELOW_THRESHOLD requires mode0_domain_status empty")
+        if payload.get("roi_gate_reason") != "MODE0_DOMAIN_EMPTY":
+            raise AssertionError("FAIL_BELOW_THRESHOLD requires roi_gate_reason MODE0_DOMAIN_EMPTY")
         for key in (
             "semantic_eliminations_per_frame",
             "implementable_eliminations_per_frame",
             "structural_eliminations_per_frame",
+            "estimated_implementable_eliminations_per_second",
         ):
             val = payload.get(key)
             if val != 0.0:
                 raise AssertionError(f"{key} must be 0.0 for validated empty mode-0 domain")
     else:
         raise AssertionError(f"unsupported roi_gate {roi_gate!r}")
-
-    status = payload.get("roi_instrumentation_status")
-    if status not in ("READY_OFFLINE", "PENDING", "FAILED_SELF_TEST"):
-        raise AssertionError(f"unexpected roi_instrumentation_status {status!r}")
 
     v5_runtime_proven = _runtime_smoke_v5_proven(payload)
     if status == "READY_OFFLINE":
@@ -180,8 +249,6 @@ def validate_roi_readiness_payload(payload: dict) -> None:
     elif status == "PENDING":
         if payload.get("ready_for_single_venice_observer_run") is not False:
             raise AssertionError("ready_for_single_venice_observer_run must be false while PENDING")
-
-    _validate_domain_census_authorization(payload, status)
 
     for runtime_key in ("runtime_gate_0", "runtime_detour_installation"):
         val = payload.get(runtime_key)

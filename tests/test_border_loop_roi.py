@@ -29,6 +29,7 @@ def _ready_offline_authorized(commit: str = "a" * 40) -> dict:
     p = _base_payload()
     p["roi_instrumentation_status"] = "READY_OFFLINE"
     p["roi_gate"] = "PENDING_NUMERIC_EVIDENCE"
+    p.pop("roi_gate_reason", None)
     p["mode0_domain_status"] = None
     p["semantic_eliminations_per_frame"] = None
     p["implementable_eliminations_per_frame"] = None
@@ -59,6 +60,53 @@ def _ready_offline_authorized(commit: str = "a" * 40) -> dict:
 def _pending_census_payload() -> dict:
     p = _ready_offline_authorized()
     p["domain_census_live"]["ready_for_single_venice_census_run"] = False
+    return p
+
+
+def _valid_mismatch_delta_proven_payload() -> dict:
+    offline = "a" * 40
+    run_commit = "c" * 40
+    auth = "b" * 40
+    run_id = "fixture-run-submission-experiment"
+    p = _base_payload()
+    p["roi_gate"] = "FAIL_BELOW_THRESHOLD"
+    p["roi_gate_reason"] = "MODE0_DOMAIN_EMPTY"
+    p["mode0_domain_status"] = "empty"
+    p["semantic_eliminations_per_frame"] = 0.0
+    p["implementable_eliminations_per_frame"] = 0.0
+    p["structural_eliminations_per_frame"] = 0.0
+    p["estimated_implementable_eliminations_per_second"] = 0.0
+    p["offline_verification"] = {
+        "verified_commit": offline,
+        "darwin_full_suite": {
+            "command": "python3 -m unittest discover -s tests",
+            "result": "PASS",
+            "tests_run": 1,
+        },
+        "note": "test fixture",
+    }
+    delta = {
+        "run": run_id,
+        "offline_verified_commit": offline,
+        "authorization_commit": auth,
+        "run_git_commit": run_commit,
+        "post_authorization_code_commits": [run_commit],
+        "changed_files": ["benchmark/submission_experiment.py"],
+        "scope": "test fixture delta",
+        "measurement_code_changed": False,
+        "dylib_build_inputs_changed": False,
+        "counter_or_gate_semantics_changed": False,
+    }
+    p["domain_census_live"] = {
+        "status": "PASS_VENICE_MEASURED",
+        "counter_schema_version": 6,
+        "offline_verified_commit": offline,
+        "run_git_commit": run_commit,
+        "run": run_id,
+        "domain_gate": "passed",
+        "ready_for_single_venice_census_run": False,
+        "run_provenance_delta": copy.deepcopy(delta),
+    }
     return p
 
 
@@ -160,6 +208,7 @@ class BorderLoopRoiTests(unittest.TestCase):
     def test_fail_below_threshold_requires_proven_census(self) -> None:
         p = _pending_census_payload()
         p["roi_gate"] = "FAIL_BELOW_THRESHOLD"
+        p["roi_gate_reason"] = "MODE0_DOMAIN_EMPTY"
         p["mode0_domain_status"] = "empty"
         p["semantic_eliminations_per_frame"] = 0.0
         p["implementable_eliminations_per_frame"] = 0.0
@@ -168,21 +217,91 @@ class BorderLoopRoiTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             validate_roi_readiness_payload(p)
 
-    def test_fail_below_threshold_after_proven_census(self) -> None:
+    def test_fail_below_threshold_minimal_pass_stub_fails(self) -> None:
         p = _base_payload()
-        p["roi_gate"] = "FAIL_BELOW_THRESHOLD"
-        p["mode0_domain_status"] = "empty"
-        p["semantic_eliminations_per_frame"] = 0.0
-        p["implementable_eliminations_per_frame"] = 0.0
-        p["structural_eliminations_per_frame"] = 0.0
-        p["estimated_implementable_eliminations_per_second"] = 0.0
         p["domain_census_live"] = {
             "status": "PASS_VENICE_MEASURED",
             "counter_schema_version": 6,
             "run": "20261007T120000Z-submission-experiment",
             "domain_gate": "passed",
         }
-        validate_roi_readiness_payload(p)
+        with self.assertRaises(AssertionError):
+            validate_roi_readiness_payload(p)
+
+    def test_pass_venice_missing_offline_commit_fails(self) -> None:
+        p = _base_payload()
+        p["offline_verification"]["verified_commit"] = None
+        with self.assertRaises(AssertionError):
+            validate_roi_readiness_payload(p)
+
+    def test_pass_venice_offline_mismatch_fails(self) -> None:
+        p = _base_payload()
+        p["domain_census_live"]["offline_verified_commit"] = "f" * 40
+        with self.assertRaises(AssertionError):
+            validate_roi_readiness_payload(p)
+
+    def test_pass_venice_census_ready_true_fails(self) -> None:
+        p = _base_payload()
+        p["domain_census_live"]["ready_for_single_venice_census_run"] = True
+        with self.assertRaises(AssertionError):
+            validate_roi_readiness_payload(p)
+
+    def test_pass_venice_commit_mismatch_without_delta_fails(self) -> None:
+        p = _valid_mismatch_delta_proven_payload()
+        del p["domain_census_live"]["run_provenance_delta"]
+        with self.assertRaises(AssertionError):
+            validate_roi_readiness_payload(p)
+
+    def test_mismatch_delta_proven_fixture_passes(self) -> None:
+        validate_roi_readiness_payload(_valid_mismatch_delta_proven_payload())
+
+    def test_mismatch_delta_binding_and_shape_failures(self) -> None:
+        base = _valid_mismatch_delta_proven_payload()
+        mutations: list[tuple[str, object]] = [
+            ("delta.run", lambda p: p["domain_census_live"]["run_provenance_delta"].update({"run": "wrong"})),
+            (
+                "delta.offline_verified_commit",
+                lambda p: p["domain_census_live"]["run_provenance_delta"].update(
+                    {"offline_verified_commit": "d" * 40}
+                ),
+            ),
+            (
+                "delta.run_git_commit",
+                lambda p: p["domain_census_live"]["run_provenance_delta"].update(
+                    {"run_git_commit": "e" * 40}
+                ),
+            ),
+            (
+                "empty post_authorization_code_commits",
+                lambda p: p["domain_census_live"]["run_provenance_delta"].update(
+                    {"post_authorization_code_commits": []}
+                ),
+            ),
+            (
+                "empty changed_files",
+                lambda p: p["domain_census_live"]["run_provenance_delta"].update({"changed_files": []}),
+            ),
+            (
+                "empty scope",
+                lambda p: p["domain_census_live"]["run_provenance_delta"].update({"scope": ""}),
+            ),
+            (
+                "measurement_code_changed=0",
+                lambda p: p["domain_census_live"]["run_provenance_delta"].update(
+                    {"measurement_code_changed": 0}
+                ),
+            ),
+            (
+                "missing authorization_commit",
+                lambda p: p["domain_census_live"]["run_provenance_delta"].pop("authorization_commit"),
+            ),
+        ]
+        for label, mutate in mutations:
+            p = copy.deepcopy(base)
+            mutate(p)
+            with self.subTest(label=label):
+                with self.assertRaises(AssertionError):
+                    validate_roi_readiness_payload(p)
 
 
 if __name__ == "__main__":

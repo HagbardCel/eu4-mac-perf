@@ -7,6 +7,7 @@
   "observer_timing_usable": false,
   "roi_instrumentation_status": "READY_OFFLINE",
   "roi_gate": "FAIL_BELOW_THRESHOLD",
+  "roi_gate_reason": "MODE0_DOMAIN_EMPTY",
   "mode0_domain_status": "empty",
   "semantic_eliminations_per_frame": 0.0,
   "implementable_eliminations_per_frame": 0.0,
@@ -71,7 +72,19 @@
     "run_git_commit": "d40f74746fefa425624d61fafc437a328e60a152",
     "run": "20261007T074355Z-submission-experiment",
     "domain_gate": "passed",
-    "ready_for_single_venice_census_run": false
+    "ready_for_single_venice_census_run": false,
+    "run_provenance_delta": {
+      "run": "20261007T074355Z-submission-experiment",
+      "offline_verified_commit": "56d7b99d6fd35a960728429c2d25c5983277c64d",
+      "authorization_commit": "204202488e0714b2b9e8eae49e8f63089c8f41ee",
+      "run_git_commit": "d40f74746fefa425624d61fafc437a328e60a152",
+      "post_authorization_code_commits": ["d40f74746fefa425624d61fafc437a328e60a152"],
+      "changed_files": ["benchmark/submission_experiment.py"],
+      "scope": "_git_provenance dirty-tree admission check only",
+      "measurement_code_changed": false,
+      "dylib_build_inputs_changed": false,
+      "counter_or_gate_semantics_changed": false
+    }
   },
   "runtime_smoke": {
     "status": "PASS_VENICE_MEASURED",
