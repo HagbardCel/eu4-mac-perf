@@ -8,6 +8,8 @@ This is a **directional systems goal**, not a current measured prediction. The e
 
 **State of knowledge (facts, closed hypotheses, evidence pointers):** [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md). Border mode-0 MDE is closed for paused Venice — [`analysis/evidence/border-loop-head-roi-readiness-20261005.json`](../analysis/evidence/border-loop-head-roi-readiness-20261005.json) (`roi_gate_reason: MODE0_DOMAIN_EMPTY`); live census — [`analysis/evidence/border-mode-census-live-20261007T074355Z.json`](../analysis/evidence/border-mode-census-live-20261007T074355Z.json).
 
+**See also:** [`eu4_rendering_alternatives_ranked.md`](eu4_rendering_alternatives_ranked.md) (cost-based assessment of this plan and alternatives) and [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md), which keeps this document's Metal architecture but proposes a revised phase order (frame/layer elimination and culling first, Metal entering through a map-layer seam, mesh first).
+
 - cheaper rendering backend;
 - removal of redundant state/submission work;
 - batching of high-volume render loops;

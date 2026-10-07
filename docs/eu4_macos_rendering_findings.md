@@ -8,6 +8,8 @@ The goal is not merely to explain why EU IV runs hot on modern Apple Silicon. Th
 
 **Companion:** long-range program and phased plan — [`eu4_rendering_strategy_90pct.md`](eu4_rendering_strategy_90pct.md).
 
+**See also:** cost-based assessment and ranking of alternatives — [`eu4_rendering_alternatives_ranked.md`](eu4_rendering_alternatives_ranked.md); revised forward plan — [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md).
+
 **Key evidence (repo):**
 
 | Topic | Source |
