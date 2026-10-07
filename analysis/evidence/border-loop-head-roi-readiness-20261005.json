@@ -5,7 +5,7 @@
   "semantic_policy": "proven_v1_semantics_unbounded_walk_scan",
   "implementable_policy": "v1_with_scan_cap",
   "observer_timing_usable": false,
-  "roi_instrumentation_status": "PENDING",
+  "roi_instrumentation_status": "READY_OFFLINE",
   "roi_gate": "PENDING_NUMERIC_EVIDENCE",
   "semantic_eliminations_per_frame": null,
   "implementable_eliminations_per_frame": null,
@@ -25,8 +25,8 @@
   "live_venice_run_pointer": "analysis/evidence/border-loop-head-roi-live-20261007T055904Z.json",
   "static_feasibility_pointer": "analysis/evidence/border-loop-head-feasibility-20261004.json",
   "self_tests": {
-    "portable_suite": "PENDING",
-    "macos_x86_64_border_build": "PENDING",
+    "portable_suite": "PASS",
+    "macos_x86_64_border_build": "PASS",
     "gateway_runtime": "PASS",
     "deferred_install_lifecycle": "PASS",
     "dual_suppression_replay": "PASS",
@@ -36,7 +36,7 @@
     "classifier_python_c_parity": "PASS",
     "classifier_resolved_core_parity": "PASS",
     "border_detour_installer": "PASS",
-    "counter_schema": "PENDING"
+    "counter_schema": "PASS"
   },
   "prior_offline_verification": {
     "verified_commit": "c1d7d2d17af7b49c347332b881286dc4bda4cbeb",
@@ -51,18 +51,19 @@
     "note": "Pre-defer-install gateway; valid for that commit only."
   },
   "offline_verification": {
-    "verified_commit": null,
+    "verified_commit": "56d7b99d6fd35a960728429c2d25c5983277c64d",
     "darwin_full_suite": {
       "command": "python3 -m unittest discover -s tests",
-      "result": "PENDING"
+      "result": "PASS",
+      "tests_run": 419
     },
-    "note": "Schema-v6 census verification pending."
+    "note": "Schema-v6 census instrumentation qualified at 56d7b99; domain census live PENDING."
   },
   "domain_census_live": {
     "status": "PENDING",
     "counter_schema_version": 6,
-    "offline_verified_commit": null,
-    "ready_for_single_venice_census_run": false
+    "offline_verified_commit": "56d7b99d6fd35a960728429c2d25c5983277c64d",
+    "ready_for_single_venice_census_run": true
   },
   "runtime_smoke": {
     "status": "PASS_VENICE_MEASURED",
@@ -137,5 +138,5 @@
     ],
     "interpretation": "Attempt 6 (20261007T055904Z): schema-v5 full ABABA after harness fix — readiness, warm-up, all ROI authoritative gates, and primary A1 freeze passed. Schema-v6 domain census counters are offline-qualified only until one --border-mode-census run. ROI numeric interpretation pending schema-v6 mode-domain census (threshold known)."
   },
-  "note": "Schema-v5 live proof at 4df49a4 (055904Z). Schema-v6 offline verification PENDING; census not authorized until READY_OFFLINE promotion."
+  "note": "Schema-v5 live proof at 4df49a4 (055904Z). Schema-v6 offline qualified at 56d7b99; one --border-mode-census run authorized."
 }
