@@ -177,8 +177,9 @@ def _git_provenance() -> dict:
         capture_output=True,
         text=True,
     ).stdout.strip()
+    # Untracked files (e.g. local results/) must not block census; only tracked-tree changes.
     dirty_out = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "status", "--porcelain", "--untracked-files=no"],
         cwd=ROOT,
         check=True,
         capture_output=True,
