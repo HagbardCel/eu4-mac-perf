@@ -28,6 +28,12 @@ def _all_pass_buckets() -> dict:
 def _ready_offline_authorized(commit: str = "a" * 40) -> dict:
     p = _base_payload()
     p["roi_instrumentation_status"] = "READY_OFFLINE"
+    p["roi_gate"] = "PENDING_NUMERIC_EVIDENCE"
+    p["mode0_domain_status"] = None
+    p["semantic_eliminations_per_frame"] = None
+    p["implementable_eliminations_per_frame"] = None
+    p["structural_eliminations_per_frame"] = None
+    p["estimated_implementable_eliminations_per_second"] = None
     p["ready_for_single_venice_observer_run"] = False
     p["runtime_gate_0_probe_ready"] = True
     p["runtime_detour_installer_ready"] = True
@@ -50,6 +56,12 @@ def _ready_offline_authorized(commit: str = "a" * 40) -> dict:
     return p
 
 
+def _pending_census_payload() -> dict:
+    p = _ready_offline_authorized()
+    p["domain_census_live"]["ready_for_single_venice_census_run"] = False
+    return p
+
+
 class BorderLoopRoiTests(unittest.TestCase):
     def test_readiness_artifact(self) -> None:
         validate_roi_readiness_payload(_base_payload())
@@ -60,11 +72,12 @@ class BorderLoopRoiTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             validate_roi_readiness_payload(p)
 
-    def test_census_auth_pending_not_ready(self) -> None:
+    def test_census_auth_pass_venice_measured(self) -> None:
         validate_roi_readiness_payload(_base_payload())
 
     def test_census_auth_pending_ready_fails(self) -> None:
-        p = _base_payload()
+        p = _pending_census_payload()
+        p["roi_instrumentation_status"] = "PENDING"
         p["domain_census_live"]["ready_for_single_venice_census_run"] = True
         with self.assertRaises(AssertionError):
             validate_roi_readiness_payload(p)
@@ -91,7 +104,8 @@ class BorderLoopRoiTests(unittest.TestCase):
             validate_roi_readiness_payload(p)
 
     def test_pending_with_mixed_buckets(self) -> None:
-        p = _base_payload()
+        p = _pending_census_payload()
+        p["roi_gate"] = "PENDING_NUMERIC_EVIDENCE"
         p["roi_instrumentation_status"] = "PENDING"
         p["ready_for_single_venice_observer_run"] = False
         p["self_tests"] = {
@@ -109,7 +123,8 @@ class BorderLoopRoiTests(unittest.TestCase):
         validate_roi_readiness_payload(p)
 
     def test_pending_deferred_install_bucket(self) -> None:
-        p = _base_payload()
+        p = _pending_census_payload()
+        p["roi_gate"] = "PENDING_NUMERIC_EVIDENCE"
         p["roi_instrumentation_status"] = "PENDING"
         p["ready_for_single_venice_observer_run"] = False
         p["self_tests"] = _all_pass_buckets()
@@ -118,7 +133,8 @@ class BorderLoopRoiTests(unittest.TestCase):
         validate_roi_readiness_payload(p)
 
     def test_pending_all_pass_invalid(self) -> None:
-        p = _base_payload()
+        p = _pending_census_payload()
+        p["roi_gate"] = "PENDING_NUMERIC_EVIDENCE"
         p["roi_instrumentation_status"] = "PENDING"
         p["ready_for_single_venice_observer_run"] = False
         p["self_tests"] = _all_pass_buckets()
@@ -126,7 +142,8 @@ class BorderLoopRoiTests(unittest.TestCase):
             validate_roi_readiness_payload(p)
 
     def test_failed_self_test(self) -> None:
-        p = _base_payload()
+        p = _pending_census_payload()
+        p["roi_gate"] = "PENDING_NUMERIC_EVIDENCE"
         p["roi_instrumentation_status"] = "FAILED_SELF_TEST"
         p["self_tests"] = copy.deepcopy(_base_payload()["self_tests"])
         p["self_tests"]["gateway_runtime"] = "FAIL"
@@ -141,7 +158,7 @@ class BorderLoopRoiTests(unittest.TestCase):
         self.assertEqual(est, 220.0)
 
     def test_fail_below_threshold_requires_proven_census(self) -> None:
-        p = _base_payload()
+        p = _pending_census_payload()
         p["roi_gate"] = "FAIL_BELOW_THRESHOLD"
         p["mode0_domain_status"] = "empty"
         p["semantic_eliminations_per_frame"] = 0.0
