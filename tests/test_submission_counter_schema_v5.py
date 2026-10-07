@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class SubmissionCounterSchemaV5Tests(unittest.TestCase):
     def test_border_roi_slots_require_armed(self) -> None:
         schema = json.loads((ROOT / "benchmark" / "submission_counter_schema.json").read_text())
-        self.assertEqual(schema["schema_version"], 5)
+        self.assertEqual(schema["schema_version"], 6)
         for row in schema["counters"]:
             if row.get("bank") == "border":
                 self.assertTrue(row.get("requires_armed"), msg=row["name"])

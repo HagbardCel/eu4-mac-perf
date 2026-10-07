@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "hypotheses": [
     {
       "bit": 0,
@@ -115,7 +115,16 @@
     {"slot": 67, "name": "border_roi_freeze_partial_walk", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "TLS structural_draws_current_walk at OBS_FREEZE"},
     {"slot": 68, "name": "border_roi_freeze_semantic_suppress", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
     {"slot": 69, "name": "border_roi_freeze_implementable_suppress", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
-    {"slot": 70, "name": "border_roi_partial_walk_at_frame_boundary", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "diagnostic: cumulative partial structural walk at frame flush"}
+    {"slot": 70, "name": "border_roi_partial_walk_at_frame_boundary", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "diagnostic: cumulative partial structural walk at frame flush"},
+    {"slot": 71, "name": "border_mode0_entries", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "schema v6 domain census: decoded loop-head iterations by DrawBorders mode"},
+    {"slot": 72, "name": "border_mode1_entries", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 73, "name": "border_mode_other_entries", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "mode not 0 or 1"},
+    {"slot": 74, "name": "border_mode0_visible_entries", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 75, "name": "border_mode1_visible_entries", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 76, "name": "border_mode_other_visible_entries", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 77, "name": "border_mode0_visible_nonzero_triangle_entries", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 78, "name": "border_mode1_visible_nonzero_triangle_entries", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true},
+    {"slot": 79, "name": "border_mode_other_visible_nonzero_triangle_entries", "bank": "border", "modes": ["reference", "candidate"], "requires_armed": true, "note": "visible && triangle_count>0; cross-mode draw-producing proxy"}
   ],
   "v2_compat": {
     "eligible_pair_hits_slot": 16,

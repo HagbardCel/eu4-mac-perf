@@ -46,5 +46,5 @@
     "authoritative_gates_all_phases": true,
     "decode_epoch_thread_freeze_health": "clean"
   },
-  "interpretation": "First full Venice border ABABA run after harness fix: wait_until_ready, warm-up, all ROI phases, and authoritative gates passed. Registered primary A1 shows classifier engagement with zero eliminations per frame in this scene (ROI numeric gate remains pending threshold work)."
+  "interpretation": "First full Venice border ABABA run after harness fix: wait_until_ready, warm-up, all ROI phases, and authoritative gates passed. Registered primary A1 shows classifier engagement with zero eliminations per frame in this scene. ROI numeric interpretation pending schema-v6 mode-domain census."
 }

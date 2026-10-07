@@ -81,6 +81,55 @@ class BorderSubmissionValidationTests(unittest.TestCase):
         out = bv.border_phase_roi_authoritative_gates(snap)
         self.assertEqual(out["status"], "passed")
 
+    def test_domain_coverage_gate_rejects_unengaged_hook(self) -> None:
+        snap = {
+            "counter_schema_version": 6,
+            "border_loop_head_entries": 0,
+            "candidate_swaps": 250,
+            "border_mode0_entries": 0,
+            "border_mode1_entries": 0,
+            "border_mode_other_entries": 0,
+            "border_mode0_visible_nonzero_triangle_entries": 0,
+            "border_structural_draws": 0,
+        }
+        out = bv.border_roi_domain_coverage_gate(snap)
+        self.assertEqual(out["status"], "failed")
+        self.assertFalse(out["measurement_valid"])
+        self.assertIsNone(out["mode0_domain_status"])
+
+    def test_domain_coverage_gate_valid_empty_mode0(self) -> None:
+        snap = {
+            "counter_schema_version": 6,
+            "border_loop_head_entries": 100,
+            "candidate_swaps": 10,
+            "border_mode0_entries": 0,
+            "border_mode1_entries": 0,
+            "border_mode_other_entries": 100,
+            "border_mode0_visible_nonzero_triangle_entries": 0,
+            "border_structural_draws": 0,
+            "border_mode_other_visible_nonzero_triangle_entries": 100,
+        }
+        out = bv.border_roi_domain_coverage_gate(snap)
+        self.assertEqual(out["status"], "passed")
+        self.assertTrue(out["measurement_valid"])
+        self.assertEqual(out["mode0_domain_status"], "empty")
+        self.assertFalse(out["mode0_domain_exercised"])
+
+    def test_domain_coverage_gate_structural_mismatch_fails(self) -> None:
+        snap = {
+            "counter_schema_version": 6,
+            "border_loop_head_entries": 5,
+            "candidate_swaps": 1,
+            "border_mode0_entries": 5,
+            "border_mode1_entries": 0,
+            "border_mode_other_entries": 0,
+            "border_mode0_visible_nonzero_triangle_entries": 3,
+            "border_structural_draws": 1,
+        }
+        out = bv.border_roi_domain_coverage_gate(snap)
+        self.assertEqual(out["status"], "failed")
+        self.assertFalse(out["structural_census_consistent"])
+
 
 if __name__ == "__main__":
     unittest.main()

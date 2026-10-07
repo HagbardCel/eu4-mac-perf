@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-COUNTER_SCHEMA_VERSION = 5
-COUNTER_COUNT = 71
+COUNTER_SCHEMA_VERSION = 6
+COUNTER_COUNT = 80
 SUPPORTED_HYPOTHESIS_MASK_DEFAULT = 0xb
 SAFETY_HYPOTHESIS_MASK_DEFAULT = 0x0
 
@@ -79,6 +79,15 @@ COUNTER_SLOTS = {
     "border_roi_freeze_semantic_suppress": 68,
     "border_roi_freeze_implementable_suppress": 69,
     "border_roi_partial_walk_at_frame_boundary": 70,
+    "border_mode0_entries": 71,
+    "border_mode1_entries": 72,
+    "border_mode_other_entries": 73,
+    "border_mode0_visible_entries": 74,
+    "border_mode1_visible_entries": 75,
+    "border_mode_other_visible_entries": 76,
+    "border_mode0_visible_nonzero_triangle_entries": 77,
+    "border_mode1_visible_nonzero_triangle_entries": 78,
+    "border_mode_other_visible_nonzero_triangle_entries": 79,
 }
 
 HYPOTHESES = [
@@ -93,4 +102,4 @@ HYPOTHESES = [
 
 HEALTH_COUNTER_NAMES = ('control_ticks', 'renderbuckets_invocations', 'site_entries', 'effective_actions')
 CANDIDATE_COUNTER_NAMES = ('candidate_site_entries', 'candidate_renderbuckets_invocations', 'candidate_nonempty_renderbuckets', 'adjacent_within_invocation', 'same_parent_pairs', 'cross_parent_pairs', 'same_parent_buffer_signature', 'cross_parent_buffer_signature', 'cross_parent_buffer_elision_eligible', 'same_subrecord_pointer_cross_parent', 'same_texture_input_signature', 'texture_setup_elision_eligible', 'legacy_eligible_pair_hits', 'candidate_swaps')
-ARMED_COUNTER_NAMES = ('candidate_site_entries', 'candidate_renderbuckets_invocations', 'candidate_nonempty_renderbuckets', 'adjacent_within_invocation', 'same_parent_pairs', 'cross_parent_pairs', 'same_parent_buffer_signature', 'cross_parent_buffer_signature', 'cross_parent_buffer_elision_eligible', 'same_subrecord_pointer_cross_parent', 'same_texture_input_signature', 'texture_setup_elision_eligible', 'legacy_eligible_pair_hits', 'candidate_swaps', 'border_candidate_runs', 'border_candidate_draws', 'border_draws_covered_by_multidraw', 'border_multidraw_calls', 'border_draw_calls_eliminated', 'border_original_draws_fallback', 'border_batch_size_sum', 'border_batch_size_max', 'border_fallback_site_change', 'border_fallback_batch_full', 'border_fallback_mutate_disabled', 'border_site_0_draws_covered', 'border_site_1_draws_covered', 'border_site_2_draws_covered', 'border_runtime_context_checked', 'border_runtime_context_multidraw_supported', 'border_loop_head_entries', 'border_semantic_decisions', 'border_semantic_eliminations', 'border_implementable_decisions', 'border_implementable_eliminations', 'border_structural_draws', 'border_structural_eliminations', 'border_structural_walks', 'border_roi_nonzero_suppression_at_frame_boundary', 'border_semantic_evaluations', 'border_implementable_evaluations', 'border_semantic_run_len_2', 'border_semantic_run_len_3_4', 'border_semantic_run_len_5_8', 'border_semantic_run_len_9_16', 'border_semantic_run_len_17_32', 'border_semantic_run_len_33_64', 'border_semantic_run_len_65_128', 'border_semantic_run_len_129_plus', 'border_implementable_run_len_2', 'border_implementable_run_len_3_4', 'border_implementable_run_len_5_8', 'border_implementable_run_len_9_16', 'border_implementable_run_len_17_32', 'border_implementable_run_len_33_64', 'border_implementable_run_len_65_128', 'border_implementable_run_len_129_plus', 'border_loop_decode_failures', 'border_loop_geometry_failures', 'border_loop_resolution_failures', 'border_roi_epoch_invalid', 'border_thread_checks', 'border_thread_mismatch_count', 'border_roi_freeze_partial_walk', 'border_roi_freeze_semantic_suppress', 'border_roi_freeze_implementable_suppress', 'border_roi_partial_walk_at_frame_boundary')
+ARMED_COUNTER_NAMES = ('candidate_site_entries', 'candidate_renderbuckets_invocations', 'candidate_nonempty_renderbuckets', 'adjacent_within_invocation', 'same_parent_pairs', 'cross_parent_pairs', 'same_parent_buffer_signature', 'cross_parent_buffer_signature', 'cross_parent_buffer_elision_eligible', 'same_subrecord_pointer_cross_parent', 'same_texture_input_signature', 'texture_setup_elision_eligible', 'legacy_eligible_pair_hits', 'candidate_swaps', 'border_candidate_runs', 'border_candidate_draws', 'border_draws_covered_by_multidraw', 'border_multidraw_calls', 'border_draw_calls_eliminated', 'border_original_draws_fallback', 'border_batch_size_sum', 'border_batch_size_max', 'border_fallback_site_change', 'border_fallback_batch_full', 'border_fallback_mutate_disabled', 'border_site_0_draws_covered', 'border_site_1_draws_covered', 'border_site_2_draws_covered', 'border_runtime_context_checked', 'border_runtime_context_multidraw_supported', 'border_loop_head_entries', 'border_semantic_decisions', 'border_semantic_eliminations', 'border_implementable_decisions', 'border_implementable_eliminations', 'border_structural_draws', 'border_structural_eliminations', 'border_structural_walks', 'border_roi_nonzero_suppression_at_frame_boundary', 'border_semantic_evaluations', 'border_implementable_evaluations', 'border_semantic_run_len_2', 'border_semantic_run_len_3_4', 'border_semantic_run_len_5_8', 'border_semantic_run_len_9_16', 'border_semantic_run_len_17_32', 'border_semantic_run_len_33_64', 'border_semantic_run_len_65_128', 'border_semantic_run_len_129_plus', 'border_implementable_run_len_2', 'border_implementable_run_len_3_4', 'border_implementable_run_len_5_8', 'border_implementable_run_len_9_16', 'border_implementable_run_len_17_32', 'border_implementable_run_len_33_64', 'border_implementable_run_len_65_128', 'border_implementable_run_len_129_plus', 'border_loop_decode_failures', 'border_loop_geometry_failures', 'border_loop_resolution_failures', 'border_roi_epoch_invalid', 'border_thread_checks', 'border_thread_mismatch_count', 'border_roi_freeze_partial_walk', 'border_roi_freeze_semantic_suppress', 'border_roi_freeze_implementable_suppress', 'border_roi_partial_walk_at_frame_boundary', 'border_mode0_entries', 'border_mode1_entries', 'border_mode_other_entries', 'border_mode0_visible_entries', 'border_mode1_visible_entries', 'border_mode_other_visible_entries', 'border_mode0_visible_nonzero_triangle_entries', 'border_mode1_visible_nonzero_triangle_entries', 'border_mode_other_visible_nonzero_triangle_entries')

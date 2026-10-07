@@ -42,7 +42,94 @@ static _Thread_local uint64_t tls_decode_failures = 0;
 static _Thread_local uint64_t tls_geometry_failures = 0;
 static _Thread_local uint64_t tls_resolution_failures = 0;
 static _Thread_local uint64_t tls_thread_checks = 0;
+static _Thread_local uint64_t tls_census_mode0_entries = 0;
+static _Thread_local uint64_t tls_census_mode1_entries = 0;
+static _Thread_local uint64_t tls_census_mode_other_entries = 0;
+static _Thread_local uint64_t tls_census_mode0_visible = 0;
+static _Thread_local uint64_t tls_census_mode1_visible = 0;
+static _Thread_local uint64_t tls_census_mode_other_visible = 0;
+static _Thread_local uint64_t tls_census_mode0_vnz = 0;
+static _Thread_local uint64_t tls_census_mode1_vnz = 0;
+static _Thread_local uint64_t tls_census_mode_other_vnz = 0;
 static _Thread_local eu4_border_resolved_step_t tls_resolved_steps[EU4_BORDER_MAX_RESOLVE_STEPS];
+
+static void record_domain_census(
+    const eu4_border_loop_context_t *ctx,
+    const eu4_border_resolved_step_t *current,
+    uint8_t visibility_mask) {
+    if (!ctx || !current) {
+        return;
+    }
+    const bool vis = (visibility_mask & current->visibility_byte) != 0u;
+    const bool vnz = vis && current->triangle_count > 0u;
+    if (ctx->mode == 0u) {
+        tls_census_mode0_entries++;
+        if (vis) {
+            tls_census_mode0_visible++;
+        }
+        if (vnz) {
+            tls_census_mode0_vnz++;
+        }
+    } else if (ctx->mode == 1u) {
+        tls_census_mode1_entries++;
+        if (vis) {
+            tls_census_mode1_visible++;
+        }
+        if (vnz) {
+            tls_census_mode1_vnz++;
+        }
+    } else {
+        tls_census_mode_other_entries++;
+        if (vis) {
+            tls_census_mode_other_visible++;
+        }
+        if (vnz) {
+            tls_census_mode_other_vnz++;
+        }
+    }
+}
+
+static void flush_census_tls(void) {
+    if (tls_census_mode0_entries > 0) {
+        eu4_submission_counter_add(EU4_COUNTER_BORDER_MODE0_ENTRIES, tls_census_mode0_entries);
+        tls_census_mode0_entries = 0;
+    }
+    if (tls_census_mode1_entries > 0) {
+        eu4_submission_counter_add(EU4_COUNTER_BORDER_MODE1_ENTRIES, tls_census_mode1_entries);
+        tls_census_mode1_entries = 0;
+    }
+    if (tls_census_mode_other_entries > 0) {
+        eu4_submission_counter_add(EU4_COUNTER_BORDER_MODE_OTHER_ENTRIES, tls_census_mode_other_entries);
+        tls_census_mode_other_entries = 0;
+    }
+    if (tls_census_mode0_visible > 0) {
+        eu4_submission_counter_add(EU4_COUNTER_BORDER_MODE0_VISIBLE_ENTRIES, tls_census_mode0_visible);
+        tls_census_mode0_visible = 0;
+    }
+    if (tls_census_mode1_visible > 0) {
+        eu4_submission_counter_add(EU4_COUNTER_BORDER_MODE1_VISIBLE_ENTRIES, tls_census_mode1_visible);
+        tls_census_mode1_visible = 0;
+    }
+    if (tls_census_mode_other_visible > 0) {
+        eu4_submission_counter_add(EU4_COUNTER_BORDER_MODE_OTHER_VISIBLE_ENTRIES, tls_census_mode_other_visible);
+        tls_census_mode_other_visible = 0;
+    }
+    if (tls_census_mode0_vnz > 0) {
+        eu4_submission_counter_add(
+            EU4_COUNTER_BORDER_MODE0_VISIBLE_NONZERO_TRIANGLE_ENTRIES, tls_census_mode0_vnz);
+        tls_census_mode0_vnz = 0;
+    }
+    if (tls_census_mode1_vnz > 0) {
+        eu4_submission_counter_add(
+            EU4_COUNTER_BORDER_MODE1_VISIBLE_NONZERO_TRIANGLE_ENTRIES, tls_census_mode1_vnz);
+        tls_census_mode1_vnz = 0;
+    }
+    if (tls_census_mode_other_vnz > 0) {
+        eu4_submission_counter_add(
+            EU4_COUNTER_BORDER_MODE_OTHER_VISIBLE_NONZERO_TRIANGLE_ENTRIES, tls_census_mode_other_vnz);
+        tls_census_mode_other_vnz = 0;
+    }
+}
 
 static uint64_t current_thread_id(void) {
     uint64_t tid = 0;
@@ -186,6 +273,15 @@ void eu4_border_loop_head_epoch_reset(void) {
     tls_geometry_failures = 0;
     tls_resolution_failures = 0;
     tls_thread_checks = 0;
+    tls_census_mode0_entries = 0;
+    tls_census_mode1_entries = 0;
+    tls_census_mode_other_entries = 0;
+    tls_census_mode0_visible = 0;
+    tls_census_mode1_visible = 0;
+    tls_census_mode_other_visible = 0;
+    tls_census_mode0_vnz = 0;
+    tls_census_mode1_vnz = 0;
+    tls_census_mode_other_vnz = 0;
     gate0_recorded = false;
 }
 
@@ -274,6 +370,9 @@ void eu4_border_loop_head_on_armed_hit(
         step->ibo_argument = ibo_table[ent->record_index];
         step->resolved_valid = true;
     }
+    if (side_count > 0) {
+        record_domain_census(ctx, &steps[0], ctx->skip_or_visibility_mask);
+    }
     if (side_count > 0 && ctx->mode == 0) {
         const eu4_border_resolved_step_t *cur = &steps[0];
         if ((ctx->skip_or_visibility_mask & cur->visibility_byte) != 0 && cur->resolved_valid &&
@@ -322,6 +421,7 @@ void eu4_border_loop_head_observe_frame(void *rbp, void *r12, uint64_t r13_full,
     }
     record_gate0_once();
     tls_loop_head_entries++;
+    record_domain_census(&ctx, &current, visibility_mask);
     if (ctx.mode == 0 && (visibility_mask & current.visibility_byte) != 0 && current.resolved_valid &&
         current.triangle_count > 0) {
         tls_structural_draws_walk++;
@@ -444,6 +544,7 @@ void eu4_border_loop_head_flush_pending(void) {
         eu4_submission_counter_add(EU4_COUNTER_BORDER_THREAD_CHECKS, tls_thread_checks);
         tls_thread_checks = 0;
     }
+    flush_census_tls();
 }
 
 bool eu4_border_loop_head_self_test_decode_geometry(void) {

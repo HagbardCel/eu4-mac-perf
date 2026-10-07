@@ -32,7 +32,7 @@ class BorderLoopRoiTests(unittest.TestCase):
     def test_ready_requires_all_pass(self) -> None:
         p = _base_payload()
         p["roi_instrumentation_status"] = "READY_OFFLINE"
-        p["ready_for_single_venice_observer_run"] = True
+        p["ready_for_single_venice_observer_run"] = False
         p["runtime_gate_0_probe_ready"] = True
         p["runtime_detour_installer_ready"] = True
         p["self_tests"] = _all_pass_buckets()
@@ -89,6 +89,33 @@ class BorderLoopRoiTests(unittest.TestCase):
     def test_production_rate_uses_baseline_fps(self) -> None:
         est = estimated_production_eliminations_per_second(4.0, fps_baseline=55.0)
         self.assertEqual(est, 220.0)
+
+    def test_fail_below_threshold_requires_proven_census(self) -> None:
+        p = _base_payload()
+        p["roi_gate"] = "FAIL_BELOW_THRESHOLD"
+        p["mode0_domain_status"] = "empty"
+        p["semantic_eliminations_per_frame"] = 0.0
+        p["implementable_eliminations_per_frame"] = 0.0
+        p["structural_eliminations_per_frame"] = 0.0
+        p["estimated_implementable_eliminations_per_second"] = 0.0
+        with self.assertRaises(AssertionError):
+            validate_roi_readiness_payload(p)
+
+    def test_fail_below_threshold_after_proven_census(self) -> None:
+        p = _base_payload()
+        p["roi_gate"] = "FAIL_BELOW_THRESHOLD"
+        p["mode0_domain_status"] = "empty"
+        p["semantic_eliminations_per_frame"] = 0.0
+        p["implementable_eliminations_per_frame"] = 0.0
+        p["structural_eliminations_per_frame"] = 0.0
+        p["estimated_implementable_eliminations_per_second"] = 0.0
+        p["domain_census_live"] = {
+            "status": "PASS_VENICE_MEASURED",
+            "counter_schema_version": 6,
+            "run": "20261007T120000Z-submission-experiment",
+            "domain_gate": "passed",
+        }
+        validate_roi_readiness_payload(p)
 
 
 if __name__ == "__main__":

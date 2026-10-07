@@ -68,26 +68,88 @@ def _validate_self_tests(status: str, self_tests: dict) -> None:
             raise AssertionError("PENDING requires at least one mandatory bucket != PASS")
 
 
+def _runtime_smoke_v5_proven(payload: dict) -> bool:
+    smoke = payload.get("runtime_smoke") or {}
+    if smoke.get("status") != "PASS_VENICE_MEASURED":
+        return False
+    schema = int(smoke.get("counter_schema_version", 0))
+    if schema == 0:
+        # Legacy flat runtime_smoke without schema version.
+        return True
+    return schema == 5
+
+
+def _domain_census_live_proven(payload: dict) -> bool:
+    dc = payload.get("domain_census_live") or {}
+    return (
+        dc.get("status") == "PASS_VENICE_MEASURED"
+        and int(dc.get("counter_schema_version", 0)) == 6
+        and dc.get("domain_gate") == "passed"
+    )
+
+
 def validate_roi_readiness_payload(payload: dict) -> None:
     if payload.get("evidence_kind") != "roi_instrumentation_readiness":
         raise AssertionError("evidence_kind must be roi_instrumentation_readiness")
-    if payload.get("roi_gate") != "PENDING_NUMERIC_EVIDENCE":
-        raise AssertionError("readiness artifact must not pass roi_gate")
-    if payload.get("semantic_eliminations_per_frame") is not None:
-        raise AssertionError("semantic_eliminations_per_frame must be null at readiness")
-    if payload.get("implementable_eliminations_per_frame") is not None:
-        raise AssertionError("implementable_eliminations_per_frame must be null at readiness")
     if payload.get("mutation_authorized") is not False:
         raise AssertionError("mutation_authorized must be false")
     if payload.get("observer_timing_usable") is not False:
         raise AssertionError("observer_timing_usable must be false")
+
+    roi_gate = payload.get("roi_gate")
+    if roi_gate == "PENDING_NUMERIC_EVIDENCE":
+        for key in (
+            "semantic_eliminations_per_frame",
+            "implementable_eliminations_per_frame",
+            "structural_eliminations_per_frame",
+        ):
+            if payload.get(key) is not None:
+                raise AssertionError(f"{key} must be null while roi_gate is PENDING_NUMERIC_EVIDENCE")
+    elif roi_gate == "FAIL_BELOW_THRESHOLD":
+        if not _domain_census_live_proven(payload):
+            raise AssertionError("FAIL_BELOW_THRESHOLD requires proven schema-v6 domain census")
+        if payload.get("mode0_domain_status") != "empty":
+            raise AssertionError("FAIL_BELOW_THRESHOLD requires mode0_domain_status empty")
+        for key in (
+            "semantic_eliminations_per_frame",
+            "implementable_eliminations_per_frame",
+            "structural_eliminations_per_frame",
+        ):
+            val = payload.get(key)
+            if val != 0.0:
+                raise AssertionError(f"{key} must be 0.0 for validated empty mode-0 domain")
+    else:
+        raise AssertionError(f"unsupported roi_gate {roi_gate!r}")
+
+    schema_top = int(payload.get("counter_schema_version", 0))
+    domain_census = payload.get("domain_census_live")
+    if schema_top >= 6:
+        if not isinstance(domain_census, dict):
+            raise AssertionError("counter_schema_version >= 6 requires domain_census_live object")
+        if int(domain_census.get("counter_schema_version", 0)) != 6:
+            raise AssertionError("domain_census_live.counter_schema_version must be 6")
+        dc_status = domain_census.get("status")
+        if dc_status == "PENDING":
+            if domain_census.get("ready_for_single_venice_census_run") is not True:
+                raise AssertionError("domain_census_live PENDING requires ready_for_single_venice_census_run")
+        elif dc_status == "PASS_VENICE_MEASURED":
+            if domain_census.get("domain_gate") != "passed":
+                raise AssertionError("domain_census_live PASS requires domain_gate passed")
+        else:
+            raise AssertionError(f"unexpected domain_census_live.status {dc_status!r}")
+
     status = payload.get("roi_instrumentation_status")
     if status not in ("READY_OFFLINE", "PENDING", "FAILED_SELF_TEST"):
         raise AssertionError(f"unexpected roi_instrumentation_status {status!r}")
-    smoke_status = (payload.get("runtime_smoke") or {}).get("status")
-    live_runtime_proven = smoke_status == "PASS_VENICE_MEASURED"
+
+    v5_runtime_proven = _runtime_smoke_v5_proven(payload)
     if status == "READY_OFFLINE":
-        if not live_runtime_proven and payload.get("ready_for_single_venice_observer_run") is not True:
+        if v5_runtime_proven:
+            if payload.get("ready_for_single_venice_observer_run") is not False:
+                raise AssertionError(
+                    "ready_for_single_venice_observer_run must be false after v5 ABABA live proof"
+                )
+        elif payload.get("ready_for_single_venice_observer_run") is not True:
             raise AssertionError(
                 "ready_for_single_venice_observer_run must be true when READY_OFFLINE before live Venice"
             )
@@ -98,13 +160,15 @@ def validate_roi_readiness_payload(payload: dict) -> None:
     elif status == "PENDING":
         if payload.get("ready_for_single_venice_observer_run") is not False:
             raise AssertionError("ready_for_single_venice_observer_run must be false while PENDING")
+
     for runtime_key in ("runtime_gate_0", "runtime_detour_installation"):
         val = payload.get(runtime_key)
-        if live_runtime_proven:
+        if v5_runtime_proven:
             if val != "PASS":
-                raise AssertionError(f"{runtime_key} must be PASS when runtime_smoke is PASS_VENICE_MEASURED")
+                raise AssertionError(f"{runtime_key} must be PASS when schema-v5 runtime_smoke is proven")
         elif status == "READY_OFFLINE" and val not in ("PENDING",):
             raise AssertionError(f"{runtime_key} must remain PENDING until Venice proves runtime")
         elif status in ("PENDING", "FAILED_SELF_TEST") and val not in ("PENDING",):
             raise AssertionError(f"{runtime_key} must be PENDING during verification")
+
     _validate_self_tests(status, payload.get("self_tests", {}))

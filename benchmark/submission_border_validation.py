@@ -169,6 +169,56 @@ def border_roi_consistency_gate(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def border_roi_domain_coverage_gate(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Schema-v6 mode census validity (measurement vs empty mode-0 domain)."""
+    schema = int(snapshot.get("counter_schema_version", 0))
+    loop_head = int(snapshot.get("border_loop_head_entries", 0))
+    swaps = int(snapshot.get("candidate_swaps", 0))
+    m0 = int(snapshot.get("border_mode0_entries", 0))
+    m1 = int(snapshot.get("border_mode1_entries", 0))
+    m_other = int(snapshot.get("border_mode_other_entries", 0))
+    m0_vnz = int(snapshot.get("border_mode0_visible_nonzero_triangle_entries", 0))
+    structural = int(snapshot.get("border_structural_draws", 0))
+
+    validity = border_roi_validity_gate(snapshot)
+    failures: list[str] = []
+    if schema != 6:
+        failures.append("counter_schema_version != 6")
+    if loop_head <= 0:
+        failures.append("border_loop_head_entries == 0")
+    if swaps <= 0:
+        failures.append("candidate_swaps == 0")
+    if validity["status"] != "passed":
+        failures.append(f"validity: {validity.get('reason')}")
+    mode_partition_valid = m0 + m1 + m_other == loop_head
+    if not mode_partition_valid:
+        failures.append("mode partition does not sum to loop_head_entries")
+    structural_census_consistent = m0_vnz == structural
+    if validity["status"] == "passed" and loop_head > 0 and not structural_census_consistent:
+        failures.append("mode0_vnz != border_structural_draws")
+
+    measurement_valid = not failures
+    mode0_domain_exercised = m0_vnz > 0
+    mode0_domain_status = "present" if mode0_domain_exercised else "empty"
+    status = "passed" if measurement_valid else "failed"
+    return {
+        "status": status,
+        "measurement_valid": measurement_valid,
+        "counter_schema_version": schema,
+        "loop_head_engaged": loop_head > 0,
+        "mode_partition_valid": mode_partition_valid,
+        "structural_census_consistent": structural_census_consistent,
+        "mode0_domain_status": mode0_domain_status if measurement_valid else None,
+        "mode0_domain_exercised": mode0_domain_exercised if measurement_valid else False,
+        "reason": None if measurement_valid else "; ".join(failures),
+        "border_roi_validity_gate": validity,
+        "border_loop_head_entries": loop_head,
+        "candidate_swaps": swaps,
+        "border_mode0_visible_nonzero_triangle_entries": m0_vnz,
+        "border_structural_draws": structural,
+    }
+
+
 def border_phase_roi_authoritative_gates(snapshot: dict[str, Any]) -> dict[str, Any]:
     engagement = border_roi_engagement_validation(snapshot)
     validity = border_roi_validity_gate(snapshot)

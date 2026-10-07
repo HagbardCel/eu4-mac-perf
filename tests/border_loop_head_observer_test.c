@@ -21,6 +21,141 @@ void eu4_submission_counter_add(eu4_submission_counter_slot_t slot, uint64_t del
 
 void eu4_border_init_gl_apis(void) {}
 
+static void census_hit(
+    uint32_t mode,
+    uint8_t visibility_byte,
+    uint16_t triangle_count,
+    bool walk_end) {
+    eu4_border_loop_context_t ctx = {
+        .mode = mode,
+        .cached_color = 1,
+        .cached_vbo_index = 1,
+        .skip_or_visibility_mask = 0xFF,
+        .outer_batch_index = 8,
+        .bound_ibo_identity = 100,
+        .ibo_known = true,
+        .color_known = true,
+        .vbo_known = true,
+    };
+    eu4_border_record_view_t records[1];
+    uintptr_t ibos[1] = {100};
+    eu4_border_index_entry_t entries[1];
+    memset(&records[0], 0, sizeof(records[0]));
+    records[0].triangle_count = triangle_count;
+    records[0].vbo_table_index = 1;
+    entries[0].record_index = 0;
+    entries[0].visibility_byte = visibility_byte;
+    entries[0].color_byte = 1;
+    eu4_border_loop_head_on_armed_hit(&ctx, records, ibos, 1, entries, 1, walk_end);
+}
+
+static void test_domain_census_on_armed_hit(void) {
+    g_armed = true;
+    eu4_border_loop_head_epoch_reset();
+    memset(g_counter_values, 0, sizeof(g_counter_values));
+
+    census_hit(0, 0xFF, 4, false);
+    eu4_border_loop_head_flush_pending();
+    assert(g_counter_values[EU4_COUNTER_BORDER_LOOP_HEAD_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_VISIBLE_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_VISIBLE_NONZERO_TRIANGLE_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_STRUCTURAL_DRAWS] == 0);
+
+    eu4_border_loop_head_epoch_reset();
+    memset(g_counter_values, 0, sizeof(g_counter_values));
+    census_hit(1, 0xFF, 4, true);
+    eu4_border_loop_head_flush_pending();
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE1_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE1_VISIBLE_NONZERO_TRIANGLE_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_STRUCTURAL_DRAWS] == 0);
+
+    eu4_border_loop_head_epoch_reset();
+    memset(g_counter_values, 0, sizeof(g_counter_values));
+    census_hit(2, 0xFF, 4, true);
+    eu4_border_loop_head_flush_pending();
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE_OTHER_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE_OTHER_VISIBLE_NONZERO_TRIANGLE_ENTRIES] == 1);
+
+    eu4_border_loop_head_epoch_reset();
+    memset(g_counter_values, 0, sizeof(g_counter_values));
+    census_hit(0, 0x00, 4, true);
+    eu4_border_loop_head_flush_pending();
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_VISIBLE_ENTRIES] == 0);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_VISIBLE_NONZERO_TRIANGLE_ENTRIES] == 0);
+
+    eu4_border_loop_head_epoch_reset();
+    memset(g_counter_values, 0, sizeof(g_counter_values));
+    census_hit(0, 0xFF, 0, true);
+    eu4_border_loop_head_flush_pending();
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_VISIBLE_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_VISIBLE_NONZERO_TRIANGLE_ENTRIES] == 0);
+
+    eu4_border_loop_head_epoch_reset();
+    memset(g_counter_values, 0, sizeof(g_counter_values));
+    census_hit(0, 0xFF, 4, false);
+    census_hit(1, 0xFF, 4, false);
+    census_hit(2, 0xFF, 4, false);
+    census_hit(0, 0x00, 4, false);
+    census_hit(0, 0xFF, 0, true);
+    eu4_border_loop_head_flush_pending();
+    const uint64_t loop = g_counter_values[EU4_COUNTER_BORDER_LOOP_HEAD_ENTRIES];
+    const uint64_t m0 = g_counter_values[EU4_COUNTER_BORDER_MODE0_ENTRIES];
+    const uint64_t m1 = g_counter_values[EU4_COUNTER_BORDER_MODE1_ENTRIES];
+    const uint64_t mo = g_counter_values[EU4_COUNTER_BORDER_MODE_OTHER_ENTRIES];
+    assert(loop == 5);
+    assert(m0 + m1 + mo == loop);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_VISIBLE_NONZERO_TRIANGLE_ENTRIES] ==
+           g_counter_values[EU4_COUNTER_BORDER_STRUCTURAL_DRAWS]);
+}
+
+static void test_domain_census_observe_frame(void) {
+    uint8_t inner_obj[0x200];
+    memset(inner_obj, 0, sizeof(inner_obj));
+    void *inner_ptr = inner_obj;
+
+    uint8_t frame[0x300];
+    memset(frame, 0, sizeof(frame));
+    void *rbp = frame + 0x198;
+    *(void **)((uintptr_t)rbp - 0x60) = &inner_ptr;
+    *(uint8_t *)((uintptr_t)rbp - 0x51) = 1;
+    *(int32_t *)((uintptr_t)rbp - 0x64) = 1;
+    *(uint32_t *)((uintptr_t)rbp - 0xe4) = 8;
+
+    uint8_t r12_buf[0x100];
+    memset(r12_buf, 0, sizeof(r12_buf));
+    void *r12 = r12_buf;
+    *(uint32_t *)(r12_buf + 0x24) = 0;
+
+    uint8_t record_bytes[28];
+    memset(record_bytes, 0, sizeof(record_bytes));
+    *(uint16_t *)(record_bytes + 6) = 4;
+    *(uint16_t *)(record_bytes + 0x18) = 1;
+    *(uintptr_t *)(r12_buf + 0x78) = (uintptr_t)record_bytes;
+
+    uintptr_t ibo_table[1] = {100};
+    *(uintptr_t *)(r12_buf + 0x60) = (uintptr_t)ibo_table;
+
+    uint8_t step_blob[6];
+    memset(step_blob, 0, sizeof(step_blob));
+    step_blob[2] = 1;
+    step_blob[3] = 0xFF;
+    uintptr_t cursor = (uintptr_t)&step_blob[2];
+    *(uintptr_t *)((uintptr_t)rbp - 0x198) = cursor + 2;
+
+    g_armed = true;
+    eu4_border_loop_head_epoch_reset();
+    memset(g_counter_values, 0, sizeof(g_counter_values));
+    eu4_border_loop_head_observe_frame(rbp, r12, 0xFFu, (void *)cursor);
+    eu4_border_loop_head_flush_pending();
+
+    assert(g_counter_values[EU4_COUNTER_BORDER_LOOP_HEAD_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_VISIBLE_ENTRIES] == 1);
+    assert(g_counter_values[EU4_COUNTER_BORDER_MODE0_VISIBLE_NONZERO_TRIANGLE_ENTRIES] == 1);
+}
+
 int main(void) {
     assert(eu4_border_loop_head_self_test_decode_geometry());
     assert(eu4_border_loop_head_self_test_thread_affinity());
@@ -141,5 +276,8 @@ int main(void) {
     assert(eu4_border_loop_head_test_tls_semantic_evaluations() == 1);
     assert(eu4_border_loop_head_test_tls_implementable_eliminations() == (uint64_t)(LONG_N - 2));
     assert(eu4_border_loop_head_test_tls_implementable_evaluations() == 2);
+
+    test_domain_census_on_armed_hit();
+    test_domain_census_observe_frame();
     return 0;
 }
