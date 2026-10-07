@@ -30,6 +30,7 @@ findings and the Gfx→Metal strategy live in
 [macOS rendering findings](docs/eu4_macos_rendering_findings.md) and
 the canonical [rendering roadmap](docs/eu4_recommended_strategy.md), with its
 [cost-based ranking of alternatives](docs/eu4_rendering_alternatives_ranked.md).
+R0-M measurement tooling is documented in [docs/r0-measurement.md](docs/r0-measurement.md).
 The local trace can be re-screened:
 
 ```sh
