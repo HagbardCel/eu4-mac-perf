@@ -14,9 +14,7 @@ sys.path.insert(0, str(ROOT / "benchmark"))
 
 import submission_border_validation as bv  # noqa: E402
 
-COUNTER_KEYS = (
-    "border_loop_head_entries",
-    "candidate_swaps",
+SCHEMA_V6_CENSUS_KEYS = (
     "border_mode0_entries",
     "border_mode1_entries",
     "border_mode_other_entries",
@@ -26,6 +24,12 @@ COUNTER_KEYS = (
     "border_mode0_visible_nonzero_triangle_entries",
     "border_mode1_visible_nonzero_triangle_entries",
     "border_mode_other_visible_nonzero_triangle_entries",
+)
+
+COUNTER_KEYS = (
+    "border_loop_head_entries",
+    "candidate_swaps",
+    *SCHEMA_V6_CENSUS_KEYS,
     "border_semantic_evaluations",
     "border_semantic_decisions",
     "border_semantic_eliminations",
@@ -56,24 +60,25 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _phase_capsule(phase: dict, *, verified_code_commit: str | None, manifest_git: dict | None) -> dict:
+def _phase_capsule(
+    phase: dict,
+    *,
+    offline_verified_code_commit: str | None,
+    run_git_commit: str | None,
+) -> dict:
     end = (phase.get("control_validation") or {}).get("end") or {}
     schema = int(end.get("counter_schema_version", 0))
-    commit = verified_code_commit
-    if manifest_git and manifest_git.get("commit"):
-        commit = manifest_git["commit"]
-    counters = {k: int(end.get(k, 0)) for k in COUNTER_KEYS if k in end or k in COUNTER_KEYS}
-    for k in COUNTER_KEYS:
-        counters.setdefault(k, int(end.get(k, 0)))
-    hist = {k: int(end.get(k, 0)) for k in HISTOGRAM_KEYS}
+    counters = {k: int(end[k]) for k in COUNTER_KEYS if k in end}
+    hist = {k: int(end.get(k, 0)) for k in HISTOGRAM_KEYS if k in end}
     out: dict[str, Any] = {
         "phase": phase.get("name"),
         "counter_schema_version": schema,
-        "verified_code_commit": commit,
+        "run_git_commit": run_git_commit,
+        "offline_verified_code_commit": offline_verified_code_commit,
         "counters": counters,
         "histogram_sums": {
-            "semantic": sum(hist[k] for k in bv.SEMANTIC_RUN_LEN_HISTOGRAM_KEYS),
-            "implementable": sum(hist[k] for k in bv.IMPLEMENTABLE_RUN_LEN_HISTOGRAM_KEYS),
+            "semantic": sum(hist.get(k, 0) for k in bv.SEMANTIC_RUN_LEN_HISTOGRAM_KEYS),
+            "implementable": sum(hist.get(k, 0) for k in bv.IMPLEMENTABLE_RUN_LEN_HISTOGRAM_KEYS),
         },
         "border_gate0": bv.border_gate0_from_snapshot(end),
         "border_roi_validity_gate": bv.border_roi_validity_gate(end),
@@ -96,17 +101,19 @@ def build_capsule(
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     git = manifest.get("git")
-    provenance_commit = registered_provenance_commit
-    if provenance_commit:
-        provenance_note = "registered_provenance"
-    else:
-        provenance_commit = (git or {}).get("commit")
-        provenance_note = "manifest_git" if git else None
+    run_git_commit = (git or {}).get("commit") if git else None
+    offline_verified = registered_provenance_commit
+    if offline_verified is None and git:
+        offline_verified = git.get("commit")
 
     phases_out = []
     for phase in manifest.get("phases") or []:
         phases_out.append(
-            _phase_capsule(phase, verified_code_commit=provenance_commit, manifest_git=git)
+            _phase_capsule(
+                phase,
+                offline_verified_code_commit=offline_verified,
+                run_git_commit=run_git_commit,
+            )
         )
 
     capsule: dict[str, Any] = {
@@ -114,9 +121,11 @@ def build_capsule(
         "run": run_dir.name,
         "experiment": manifest.get("experiment"),
         "manifest_status": manifest.get("status"),
-        "verified_code_commit": provenance_commit,
-        "verified_code_commit_source": provenance_note,
-        "git": git,
+        "run_git_commit": run_git_commit,
+        "offline_verified_code_commit": offline_verified,
+        "offline_verified_code_commit_source": (
+            "registered_provenance" if registered_provenance_commit else ("manifest_git" if git else None)
+        ),
         "source_hashes": {
             "manifest.json": _sha256(manifest_path),
             "events.jsonl": _sha256(run_dir / "events.jsonl") if (run_dir / "events.jsonl").is_file() else None,

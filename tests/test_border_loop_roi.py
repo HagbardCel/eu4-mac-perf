@@ -25,18 +25,68 @@ def _all_pass_buckets() -> dict:
     return {k: "PASS" for k in MANDATORY_SELF_TEST_BUCKETS}
 
 
+def _ready_offline_authorized(commit: str = "a" * 40) -> dict:
+    p = _base_payload()
+    p["roi_instrumentation_status"] = "READY_OFFLINE"
+    p["ready_for_single_venice_observer_run"] = False
+    p["runtime_gate_0_probe_ready"] = True
+    p["runtime_detour_installer_ready"] = True
+    p["self_tests"] = _all_pass_buckets()
+    p["offline_verification"] = {
+        "verified_commit": commit,
+        "darwin_full_suite": {
+            "command": "python3 -m unittest discover -s tests",
+            "result": "PASS",
+            "tests_run": 1,
+        },
+        "note": "test fixture",
+    }
+    p["domain_census_live"] = {
+        "status": "PENDING",
+        "counter_schema_version": 6,
+        "offline_verified_commit": commit,
+        "ready_for_single_venice_census_run": True,
+    }
+    return p
+
+
 class BorderLoopRoiTests(unittest.TestCase):
     def test_readiness_artifact(self) -> None:
         validate_roi_readiness_payload(_base_payload())
 
     def test_ready_requires_all_pass(self) -> None:
-        p = _base_payload()
-        p["roi_instrumentation_status"] = "READY_OFFLINE"
-        p["ready_for_single_venice_observer_run"] = False
-        p["runtime_gate_0_probe_ready"] = True
-        p["runtime_detour_installer_ready"] = True
-        p["self_tests"] = _all_pass_buckets()
+        p = _ready_offline_authorized()
         p["self_tests"]["gateway_runtime"] = "PENDING"
+        with self.assertRaises(AssertionError):
+            validate_roi_readiness_payload(p)
+
+    def test_census_auth_pending_not_ready(self) -> None:
+        validate_roi_readiness_payload(_base_payload())
+
+    def test_census_auth_pending_ready_fails(self) -> None:
+        p = _base_payload()
+        p["domain_census_live"]["ready_for_single_venice_census_run"] = True
+        with self.assertRaises(AssertionError):
+            validate_roi_readiness_payload(p)
+
+    def test_census_auth_ready_offline_match_passes(self) -> None:
+        validate_roi_readiness_payload(_ready_offline_authorized("c" * 40))
+
+    def test_census_auth_ready_offline_missing_commit_fails(self) -> None:
+        p = _ready_offline_authorized()
+        p["offline_verification"]["verified_commit"] = None
+        with self.assertRaises(AssertionError):
+            validate_roi_readiness_payload(p)
+
+    def test_census_auth_ready_offline_mismatch_fails(self) -> None:
+        p = _ready_offline_authorized("d" * 40)
+        p["domain_census_live"]["offline_verified_commit"] = "e" * 40
+        with self.assertRaises(AssertionError):
+            validate_roi_readiness_payload(p)
+
+    def test_census_auth_ready_offline_not_ready_fails(self) -> None:
+        p = _ready_offline_authorized()
+        p["domain_census_live"]["ready_for_single_venice_census_run"] = False
         with self.assertRaises(AssertionError):
             validate_roi_readiness_payload(p)
 

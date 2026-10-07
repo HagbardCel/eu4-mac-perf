@@ -79,6 +79,43 @@ def _runtime_smoke_v5_proven(payload: dict) -> bool:
     return schema == 5
 
 
+def _validate_domain_census_authorization(payload: dict, status: str) -> None:
+    schema_top = int(payload.get("counter_schema_version", 0))
+    if schema_top < 6:
+        return
+    domain_census = payload.get("domain_census_live")
+    if not isinstance(domain_census, dict):
+        raise AssertionError("counter_schema_version >= 6 requires domain_census_live object")
+    if int(domain_census.get("counter_schema_version", 0)) != 6:
+        raise AssertionError("domain_census_live.counter_schema_version must be 6")
+    dc_status = domain_census.get("status")
+    if dc_status == "PASS_VENICE_MEASURED":
+        if domain_census.get("domain_gate") != "passed":
+            raise AssertionError("domain_census_live PASS requires domain_gate passed")
+        return
+    if dc_status != "PENDING":
+        raise AssertionError(f"unexpected domain_census_live.status {dc_status!r}")
+    census_ready = domain_census.get("ready_for_single_venice_census_run")
+    offline_verify = payload.get("offline_verification") or {}
+    verified_commit = offline_verify.get("verified_commit")
+    dc_offline = domain_census.get("offline_verified_commit")
+    if status == "READY_OFFLINE":
+        if not verified_commit:
+            raise AssertionError("READY_OFFLINE requires offline_verification.verified_commit")
+        if not dc_offline:
+            raise AssertionError("READY_OFFLINE requires domain_census_live.offline_verified_commit")
+        if verified_commit != dc_offline:
+            raise AssertionError("offline_verification and domain_census_live commits must match")
+        if census_ready is not True:
+            raise AssertionError(
+                "READY_OFFLINE requires domain_census_live.ready_for_single_venice_census_run true"
+            )
+    elif census_ready is not False:
+        raise AssertionError(
+            "PENDING instrumentation requires domain_census_live.ready_for_single_venice_census_run false"
+        )
+
+
 def _domain_census_live_proven(payload: dict) -> bool:
     dc = payload.get("domain_census_live") or {}
     return (
@@ -121,23 +158,6 @@ def validate_roi_readiness_payload(payload: dict) -> None:
     else:
         raise AssertionError(f"unsupported roi_gate {roi_gate!r}")
 
-    schema_top = int(payload.get("counter_schema_version", 0))
-    domain_census = payload.get("domain_census_live")
-    if schema_top >= 6:
-        if not isinstance(domain_census, dict):
-            raise AssertionError("counter_schema_version >= 6 requires domain_census_live object")
-        if int(domain_census.get("counter_schema_version", 0)) != 6:
-            raise AssertionError("domain_census_live.counter_schema_version must be 6")
-        dc_status = domain_census.get("status")
-        if dc_status == "PENDING":
-            if domain_census.get("ready_for_single_venice_census_run") is not True:
-                raise AssertionError("domain_census_live PENDING requires ready_for_single_venice_census_run")
-        elif dc_status == "PASS_VENICE_MEASURED":
-            if domain_census.get("domain_gate") != "passed":
-                raise AssertionError("domain_census_live PASS requires domain_gate passed")
-        else:
-            raise AssertionError(f"unexpected domain_census_live.status {dc_status!r}")
-
     status = payload.get("roi_instrumentation_status")
     if status not in ("READY_OFFLINE", "PENDING", "FAILED_SELF_TEST"):
         raise AssertionError(f"unexpected roi_instrumentation_status {status!r}")
@@ -161,6 +181,8 @@ def validate_roi_readiness_payload(payload: dict) -> None:
         if payload.get("ready_for_single_venice_observer_run") is not False:
             raise AssertionError("ready_for_single_venice_observer_run must be false while PENDING")
 
+    _validate_domain_census_authorization(payload, status)
+
     for runtime_key in ("runtime_gate_0", "runtime_detour_installation"):
         val = payload.get(runtime_key)
         if v5_runtime_proven:
@@ -168,7 +190,7 @@ def validate_roi_readiness_payload(payload: dict) -> None:
                 raise AssertionError(f"{runtime_key} must be PASS when schema-v5 runtime_smoke is proven")
         elif status == "READY_OFFLINE" and val not in ("PENDING",):
             raise AssertionError(f"{runtime_key} must remain PENDING until Venice proves runtime")
-        elif status in ("PENDING", "FAILED_SELF_TEST") and val not in ("PENDING",):
+        elif status in ("PENDING", "FAILED_SELF_TEST") and not v5_runtime_proven and val not in ("PENDING",):
             raise AssertionError(f"{runtime_key} must be PENDING during verification")
 
     _validate_self_tests(status, payload.get("self_tests", {}))
