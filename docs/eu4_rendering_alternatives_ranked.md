@@ -181,18 +181,18 @@ Savings are given for two scene types:
 
 ### S8 — First Metal vertical slice: mesh-anchored self-contained domain, via the S4a seam
 
-- **Mechanism:** shadow state + cached pipeline objects + MSL ports of the mesh effects, rendering the map's mesh objects in Metal. Preferred variant: render the **whole map layer** into the S4a offscreen target in Metal, starting with mesh plus whatever must share its depth buffer. This avoids interleaving GL and Metal inside one pass. In the roadmap this is stage **M2**, after the S13/S14 probes (M0a/M0b) and the GL↔Metal interop proof (M1). The domain gets both a minimal compatibility path (B0) and a command-oriented path (C0), with callers emitting commands where S14 shows it pays. Caller redesign means detouring closed-source x86-64 code above Gfx, which is harder to patch and more exposed to mods than the backend; B0 is the fail-closed fallback.
+- **Mechanism:** shadow state + cached pipeline objects + MSL ports of the mesh effects, rendering the map's mesh objects in Metal. Preferred variant: render the **whole map layer** into the S4a offscreen target in Metal, starting with mesh plus whatever must share its depth buffer. This avoids interleaving GL and Metal inside one pass. In the roadmap this is stage **M2**, after the S13–S15 probes and studies (M0a–M0c) and the GL↔Metal interop proof (M1). The domain gets both a minimal compatibility path (B0) and a command-oriented path (C0), with callers emitting commands where S14/S15 show it pays. Caller redesign means detouring closed-source x86-64 code above Gfx, which is harder to patch and more exposed to mods than the backend; B0 is the fail-closed fallback.
 - **Evidence:** mesh is 44% of main-thread wall time, of which ~75% is driver time.
 - **Effort:** 3–6 months (Estimate; shader translation likely dominates). **Savings (Estimate):** 25–35% main-thread wall ms/frame, in all scenes; provisional until S13 measures actual GL vs Metal per-draw CPU. The C0 command path adds a further reduction that S14 will bound.
 - **Building-block value:** very high; it is the core of backend B.
 - **Risk:** high. Depends on the S12 minimum cut and pass/depth graph and on shader feasibility; if terrain and mesh share depth, the slice must include terrain.
 
-### S9 — Full Gfx→Metal: backend (B) as compatibility substrate, command collection (C) per domain
+### S9 — Full Gfx→Metal: backend (B) for compatibility, command collection (C) per domain
 
 - **Evidence:** driver ≈ 58% of the main thread; engine render work ≈ 16% remains.
 - **Effort:** 6–18 months (Estimate). **Savings (Estimate, main-thread wall ms/frame):** 35–45% with B; 50–60% with C on today's caller structure; all scenes.
   - These are working estimates, **not a ceiling**: the ~16% engine-side render work reflects today's OpenGL-oriented callers and may shrink once callers emit compact commands (`Submit(DrawCommand)` instead of setter sequences).
-  - The roadmap develops B (as compatibility substrate) and C (as performance architecture) together per domain, rather than B broadly first.
+  - The roadmap develops B and C together per domain, rather than B broadly first. B's primary role is compatibility, reference, and fallback; its performance share is empirical (S13) and may be large, but it must not constrain caller redesign.
 - **Building-block value:** it is the destination.
 - **Risk:** very high (scope, shaders, mods, UI, Rosetta-translated Metal calls still pay translation cost).
 
@@ -214,31 +214,47 @@ Savings are given for two scene types:
 - **Mechanism:**
   1. Trace one representative mesh draw end to end (`CPdxMeshObject::RenderBuckets` → effect selection → `GfxSet*` → `GfxDrawIndexed` → GL state → `glDrawElements`), counting Gfx and GL calls per draw.
   2. Capture its real vertex/index data, textures, constants, and shader, and reproduce it in a standalone x86-64 Metal harness (MSL translation, `MTLRenderPipelineState`, `drawIndexedPrimitives` into an offscreen texture), comparing output with GL.
-  3. Microbenchmark N draws with EU4-like buffer/texture/constant/pipeline churn, GL vs Metal, in CPU µs/draw from thread CPU counters.
-- **Why early:** it measures what is currently only inferred, namely how much of the per-draw driver work (`setRenderState`, texture/sampler binding, `prepareResourceForGPUAccess`, uniform uploads) actually disappears under Metal. It also forces a semantic model of the draw: what is pipeline state, what varies per material/object/frame. That model is the draft `DrawCommand` for command collection and shows where callers above Gfx could be restructured. The S12 shader-translation sample comes out of this naturally.
+  3. Semantic-equivalence microbenchmark: N draws with today's buffer/texture/constant/pipeline churn, GL vs an equivalent B0-style Metal path, in CPU µs/draw from thread CPU counters. This measures the **backend tax**.
+- **Why early:** it measures what is currently only inferred, namely how much of the per-draw driver work (`setRenderState`, texture/sampler binding, `prepareResourceForGPUAccess`, uniform uploads) actually disappears under Metal. It also forces a semantic model of the draw: what is pipeline state, what varies per material/object/frame. That model is the first draft of the command IR (`DrawCommand`, explicitly provisional) and shows where callers above Gfx could be restructured. The S12 shader-translation sample comes out of this naturally.
 - **Effort:** 1–2 weeks, no game integration (Estimate). **Savings:** none directly.
 - **Decision value:** it decides *where* the gains must come from, not whether Metal is worth pursuing.
-  - Metal per-draw CPU ≤~25% of GL → API replacement carries much of the saving.
-  - Metal at 50–70% of GL → most value must come from changing the work presented to Metal (S14), which makes early command-oriented work more important.
-  - Reassess Metal only if this **and** S14 are both weak.
+  - Metal per-draw CPU ≤~25% of GL → B0 (API replacement) carries much of the saving.
+  - Metal at 50–70% of GL → most value must come from changing the work presented to Metal (S14/S15), which makes early command-oriented work more important.
+  - Weak S13 + weak S14 rules out only backend replacement plus compatibility-preserving regrouping; Metal is reassessed only if S15 also finds few accidental barriers.
 - **Building-block value:** very high (harness code is reused by the interop proof and S8).
 - **Risk:** low-medium; a single draw may not be representative, so choose a common mesh effect and test realistic churn.
 
 ### S14 — Command-stream census (M0b)
 
-- **Mechanism:** capture 1–10 complete `RenderBuckets` sequences (count-only observer) and convert them offline into candidate `DrawCommand`s using the S13 command shape. Measure:
-  - distinct pipeline keys;
-  - how often only geometry, only constants, or one texture changes between commands;
-  - same-pipeline run lengths;
-  - ordering constraints that block regrouping;
-  - the achievable command count after legal grouping.
+- **Mechanism:** capture 1–10 complete `RenderBuckets` sequences (count-only observer) and convert them offline into candidate commands using the S13 command shape. Measure **state entropy** before and after legal grouping, not primarily command count (draw count is what misled the border work):
+  - distinct pipelines and pipeline transitions per frame;
+  - resource/texture-set changes and material diversity;
+  - constant and object-data bytes written per frame;
+  - geometry-buffer changes, encoder calls, draw/indirect-draw calls;
+  - order classes and the ordering constraints that block regrouping;
+  - average objects per compatible group.
   
   Classify per-draw caller work as essential semantics, OpenGL-induced bookkeeping, or submission-order artifact.
 - **Why:** upstream optimization opportunities live in the *sequence* of draws, not in one draw. This turns the bottom-up RE into a concrete map of what callers above Gfx could stop doing.
 - **Evidence:** existing screening found low geometry recurrence for mesh under GL-level predicates ([`draw-path-decision.md`](../analysis/draw-path-decision.md)). A command-level view (pipeline + resources + constants) asks a different question: what can be grouped or encoded compactly, not which GL calls repeat.
-- **Effort:** 1–2 weeks after S13 (Estimate). **Savings:** none directly; it bounds the C0 gain for the first Metal domain and ranks caller-redesign opportunities.
-- **Building-block value:** very high (input to S8's command path).
+- **Effort:** 1–2 weeks after S13 (Estimate). **Savings:** none directly. It bounds the **compatibility-preserving** command gain (C0a: today's shader interfaces, binding model, and resource layout) and lists the batching barriers that remain. It does not bound a Metal-native redesign (S15).
+- **Building-block value:** very high (input to S15 and S8's command path).
 - **Risk:** low (offline analysis of observer captures); caller redesign itself carries the patching risk noted under S8.
+
+### S15 — Metal-native domain study (M0c)
+
+- **Mechanism:** for every batching barrier S14 finds, decide whether it is semantically necessary or an artifact of the GL-era resource/shader/submission architecture:
+  - per-object texture changes → indexed resources (argument buffers, texture arrays)?
+  - per-draw constants → an instance/object-data buffer?
+  - shader permutations → genuinely distinct pipelines, or shared via function constants?
+  - per-draw geometry → instancing, indirect draws, merged geometry?
+  - ordering → real transparency/depth dependency, or just today's loop order?
+  
+  Then propose the domain's Metal-native representation (C0b), within what engine data and detourable call sites allow. Replay a captured stream in the S13 harness as B0-equivalent vs candidate C0, giving an early GL → B0 / B0 → C0 / GL → C0 decomposition.
+- **Why:** S14 measures today's renderer; a disappointing S14 result could just reflect GL-era layouts that Metal lets us change. This step separates the two ceilings.
+- **Effort:** 2–3 weeks after S14 (Estimate; mostly analysis, plus the replay harness). **Savings:** none directly; it sets the C0 design for S8 and supplies the falsifiable part of the Metal kill criterion.
+- **Building-block value:** very high (defines the command IR and resource layout S8/S9 build on; the IR may change here).
+- **Risk:** medium; the replay is limited to effects already ported to MSL, so its numbers are approximate.
 
 ### S10 — GL-only static mesh pre-merging
 
@@ -276,8 +292,9 @@ Savings are given for two scene types:
 |---:|---|---|---|---|---|---|
 | 1 | **S1** Measurement probes | 2–5 d | decides S2/S4b/S2b; validates model | high | ×1.5 | Near-zero cost; gates the elimination levers |
 | 2 | **S12** Architecture RE | 2–4 wk | decides Metal feasibility and slice boundary | high | ×1.5 | Large option value; runs in parallel from day one |
-| 3 | **S13** Metal single-draw probe (M0a) | 1–2 wk | measures GL vs Metal per-draw CPU; drafts `DrawCommand` | high | ×1.5 | Turns the Metal case from inference into measurement |
-| 3b | **S14** Command-stream census (M0b) | 1–2 wk | bounds command/caller-level gains; ranks redesign targets | high | ×1.5 | Where most of the Metal-era value may come from |
+| 3 | **S13** Metal single-draw probe (M0a) | 1–2 wk | measures the backend tax (GL vs B0-style Metal per-draw CPU); drafts the command IR | high | ×1.5 | Turns the Metal case from inference into measurement |
+| 3b | **S14** Command-stream census (M0b) | 1–2 wk | state entropy; bounds compatibility-preserving gains (C0a); lists barriers | high | ×1.5 | Where much of the Metal-era value may come from |
+| 3c | **S15** Metal-native domain study (M0c) | 2–3 wk | separates fundamental from GL-era barriers; C0b design; early B0/C0 replay | medium | ×1.5 | Keeps a weak S14 from being misread as a Metal ceiling |
 | 4 | **S3** Cursor-set elision | 1–3 d | −2–8% main-thread wall ms/frame, all scenes | medium | ×1.0 | Tiny effort, independent |
 | 5 | **S2** Idle render-skip (conditional) | 1–2 wk | static: −50–65% process CPU-ms/s **if** full-res census shows static | low-medium until S1 | ×1.0 | Huge if the map is static; zero if it animates |
 | 6 | **S4a** Offscreen map seam, then interop proof (M1) | 3–6 wk | none directly | high | ×1.5 | Metal coexistence boundary; value independent of caching |
@@ -298,8 +315,9 @@ flowchart LR
     S1 -.-> S5[S5_CullingCensus_Opportunistic]
     S3[S3_CursorElision]
     S12[S12_ArchitectureRE] --> S13[S13_SingleDrawProbe_M0a]
-    S13 -->|"draft DrawCommand"| S14[S14_CommandStreamCensus_M0b]
-    S14 -->|"caller redesign targets"| S8
+    S13 -->|"draft command IR"| S14[S14_CommandStreamCensus_M0b]
+    S14 -->|"batching barriers"| S15[S15_MetalNativeDomainStudy_M0c]
+    S15 -->|"C0 design and redesign targets"| S8
     S12 --> S4a[S4a_OffscreenMapSeam]
     S4a --> M1[M1_GLMetalInteropProof]
     S4a --> S4b
@@ -316,10 +334,10 @@ flowchart LR
 ## 5. Recommended revised sequencing
 
 1. Finish the current border RE step as a write-up; **do not** start S6 mutation work.
-2. Start **S1**, **S12**, and the **S13** single-draw Metal probe now, in parallel; follow S13 with the **S14** command-stream census.
+2. Start **S1**, **S12**, and the **S13** single-draw Metal probe now, in parallel; follow S13 with the **S14** command-stream census and the **S15** Metal-native domain study.
 3. Implement **S3**. Implement **S2** only if the full-resolution S1 census shows static idle frames; S2b stays an explicit fidelity decision.
 4. Build the **S4a** seam, then the GL↔Metal interop proof (M1). Add the **S4b** cache only if temporal-dependency analysis supports it.
-5. Enter Metal (**S8**, M2) through the S4a target with the highest-cost self-contained map domain, mesh-anchored, with the boundary chosen by the S12 pass/depth graph. Build B0 (compatibility) and C0 (command path, informed by S14) together, and measure their combined effect.
+5. Enter Metal (**S8**, M2) through the S4a target with the highest-cost self-contained map domain, mesh-anchored, with the boundary chosen by the S12 pass/depth graph. Build B0 (compatibility, reference, fallback) and C0 (command path, designed in S15) together. Measure GL → B0, B0 → C0, and GL → C0, and judge the domain by its own attributable cost, not a fixed whole-frame threshold.
 6. Run the **S5** census opportunistically, with a cost-weighted gate.
 7. Use the four metrics defined in the roadmap (main-thread wall ms/frame, process CPU-ms/swap, process CPU-ms/s, swaps/s), with per-thread CPU counters for accounting.
 
