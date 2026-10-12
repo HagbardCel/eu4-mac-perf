@@ -10,6 +10,8 @@ This memo records whether R0-M evidence supports **`candidate_for_lossless_skip`
 | Fixture / save SHA | |
 | GOG executable SHA | `b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d` |
 | Manifest | `manifest.json` |
+| `thread_cpu_backend` | `libproc` or `mach` |
+| Thread CPU preflight | offline + target entries in manifest |
 
 ## Evidence matrix
 

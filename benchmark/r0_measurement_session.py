@@ -362,6 +362,15 @@ def acceptance_gates(manifest: dict[str, Any], output_dir: Path | None = None) -
     return gates
 
 
+def _bootstrap_thread_cpu_sampling(manifest: dict[str, Any]) -> None:
+    backend = thread_cpu_sampler.set_session_backend()
+    manifest["thread_cpu_backend"] = backend
+    offline = thread_cpu_sampler.preflight_offline()
+    manifest["thread_cpu_preflight_offline"] = offline
+    if offline.get("status") != "ready":
+        raise base.BenchmarkError(f"thread CPU offline preflight failed: {offline}")
+
+
 def run_integrated(output_dir: Path) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, Any] = {
@@ -380,6 +389,8 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
     log_path = output_dir / "r0_probe.log"
     manifest["probe_log_path"] = str(log_path)
     control_path.write_bytes(b"\x00" * r0_control.EU4_R0_CONTROL_PAGE_SIZE)
+
+    _bootstrap_thread_cpu_sampling(manifest)
 
     evidence = auto.preflight(require_privilege=True)
     manifest["preflight"] = evidence
@@ -430,10 +441,11 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                         stderr=stderr,
                     )
                 manifest["game_pid"] = game.pid
-                preflight = thread_cpu_sampler.preflight(game.pid)
-                manifest["thread_cpu_preflight"] = preflight
-                if preflight.get("status") != "ready":
-                    raise base.BenchmarkError(f"thread CPU preflight failed: {preflight}")
+                target_preflight = thread_cpu_sampler.preflight(game.pid)
+                manifest["thread_cpu_preflight_target"] = target_preflight
+                manifest["thread_cpu_preflight"] = target_preflight
+                if target_preflight.get("status") != "ready":
+                    raise base.BenchmarkError(f"thread CPU preflight failed: {target_preflight}")
 
                 tail = auto.PowerTail(pm_path)
                 ready = auto.wait_until_ready(
@@ -709,9 +721,9 @@ def session(output_dir: Path, *, dry_run: bool = False, integrated: bool = False
         write_manifest(output_dir / "manifest.json", manifest)
         return manifest
 
+    _bootstrap_thread_cpu_sampling(manifest)
+
     r0_probe.build()
-    preflight = thread_cpu_sampler.preflight(1)
-    manifest["thread_cpu_preflight"] = preflight
 
     control_path = output_dir / "r0_control.bin"
     log_path = output_dir / "r0_probe.log"
@@ -732,9 +744,10 @@ def session(output_dir: Path, *, dry_run: bool = False, integrated: bool = False
         return manifest
 
     pid = int(attach_pid)
-    preflight = thread_cpu_sampler.preflight(pid)
-    manifest["thread_cpu_preflight"] = preflight
-    if preflight.get("status") != "ready":
+    target_preflight = thread_cpu_sampler.preflight(pid)
+    manifest["thread_cpu_preflight_target"] = target_preflight
+    manifest["thread_cpu_preflight"] = target_preflight
+    if target_preflight.get("status") != "ready":
         manifest["status"] = "needs_permission"
         write_manifest(output_dir / "manifest.json", manifest)
         return manifest

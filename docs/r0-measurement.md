@@ -37,6 +37,19 @@ Logged on each `F` record (`readback_failure_code`). Only `UNSUPPORTED_DRAWABLE`
 
 The R0 probe claims a single nonzero `pthread` thread ID on first `CGLFlushDrawable` interposition. Any other thread bypasses census/capture and logs one `T` violation record per session. Integrated acceptance requires `flush_single_owner` (unanimous nonzero `F` thread IDs, no `T` records).
 
+## Epoch A thread CPU (libproc)
+
+Per-thread CPU for epoch A uses **`libproc`** by default (`PROC_PIDLISTTHREADIDS` + `PROC_PIDTHREADID64INFO`). Set `EU4_THREAD_CPU_BACKEND=mach` only for diagnostic comparisons with the legacy `task_for_pid` path.
+
+Offline qualification (no EU IV):
+
+```sh
+PYTHONPATH=benchmark python3 benchmark/thread_cpu_sampler.py --preflight-offline
+PYTHONPATH=benchmark python3 -m unittest tests.test_thread_cpu_libproc_qualification -v
+```
+
+Integrated sessions run **`preflight_offline()`** before fixture install / EU IV launch, then **target `preflight(game.pid)`** after the game PID is known. Dry-run manifests skip CPU preflight.
+
 ## Build and test
 
 ```sh

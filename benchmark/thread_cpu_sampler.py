@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Poll Mach thread CPU counters for a target PID (epoch A only)."""
+"""Per-thread CPU counters for epoch A (libproc default on macOS)."""
 
 from __future__ import annotations
 
 import argparse
-import ctypes
-import ctypes.util
 import json
+import os
+import re
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -16,63 +17,11 @@ from typing import Any
 import cpu_delta
 import eu4_benchmark as base
 
-THREAD_BASIC_INFO = 3
-THREAD_IDENTIFIER_INFO = 4
-KERN_SUCCESS = 0
+ROOT = Path(__file__).resolve().parents[1]
+_SPIN_WORKER_SOURCE = ROOT / "tests/sample_spin_worker.c"
+_SPIN_WORKER_BINARY = ROOT / "benchmark/.build/sample_spin_worker"
 
-_libsystem: ctypes.CDLL | None = None
-_SELF_TASK: int | None = None
-
-
-def _init_mach() -> ctypes.CDLL:
-    global _libsystem, _SELF_TASK
-    if _libsystem is not None:
-        return _libsystem
-    if sys.platform != "darwin":
-        raise base.BenchmarkError("Mach thread CPU sampling requires macOS")
-    lib = ctypes.CDLL(ctypes.util.find_library("System"))
-    lib.task_for_pid.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.POINTER(ctypes.c_uint)]
-    lib.task_for_pid.restype = ctypes.c_int
-    lib.task_threads.argtypes = [
-        ctypes.c_uint,
-        ctypes.POINTER(ctypes.POINTER(ctypes.c_uint)),
-        ctypes.POINTER(ctypes.c_uint),
-    ]
-    lib.task_threads.restype = ctypes.c_int
-    lib.thread_info.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
-    lib.thread_info.restype = ctypes.c_int
-    lib.mach_port_deallocate.argtypes = [ctypes.c_uint, ctypes.c_uint]
-    lib.mach_port_deallocate.restype = ctypes.c_int
-    lib.vm_deallocate.argtypes = [ctypes.c_uint, ctypes.c_uint64, ctypes.c_uint64]
-    lib.vm_deallocate.restype = ctypes.c_int
-    _libsystem = lib
-    _SELF_TASK = ctypes.c_uint.in_dll(lib, "mach_task_self_").value
-    return lib
-
-
-class TimeValue(ctypes.Structure):
-    _fields_ = [("seconds", ctypes.c_int), ("microseconds", ctypes.c_int)]
-
-
-class ThreadBasicInfo(ctypes.Structure):
-    _fields_ = [
-        ("user_time", TimeValue),
-        ("system_time", TimeValue),
-        ("cpu_usage", ctypes.c_int),
-        ("policy", ctypes.c_int),
-        ("run_state", ctypes.c_int),
-        ("flags", ctypes.c_int),
-        ("suspend_count", ctypes.c_int),
-        ("sleep_time", ctypes.c_int),
-    ]
-
-
-class ThreadIdentifierInfo(ctypes.Structure):
-    _fields_ = [
-        ("thread_id", ctypes.c_uint64),
-        ("thread_handle", ctypes.c_uint64),
-        ("dispatch_qaddr", ctypes.c_uint64),
-    ]
+_SELECTED_BACKEND: str | None = None
 
 
 @dataclass
@@ -86,63 +35,182 @@ class ThreadSample:
         return self.user_us + self.system_us
 
 
-def _timevalue_us(tv: TimeValue) -> int:
-    return int(tv.seconds) * 1_000_000 + int(tv.microseconds)
+@dataclass
+class ThreadSnapshot:
+    samples: list[ThreadSample]
+    diagnostics: dict[str, int]
 
 
-def _mach_task_for_pid(pid: int) -> int:
-    lib = _init_mach()
-    task = ctypes.c_uint()
-    result = lib.task_for_pid(_SELF_TASK, pid, ctypes.byref(task))
-    if result != KERN_SUCCESS:
-        raise base.BenchmarkError(f"task_for_pid failed ({result}); run with appropriate permissions")
-    return int(task.value)
+def empty_diagnostics() -> dict[str, int]:
+    return {
+        "threads_enumerated": 0,
+        "threads_sampled_ok": 0,
+        "threads_skipped_esrch": 0,
+    }
 
 
-def _deallocate_thread_list(target_task: int, thread_array: ctypes.POINTER(ctypes.c_uint), count: int) -> None:
-    lib = _init_mach()
-    if count:
-        for index in range(count):
-            lib.mach_port_deallocate(_SELF_TASK, thread_array[index])
-        lib.vm_deallocate(
-            _SELF_TASK,
-            ctypes.c_uint64(ctypes.cast(thread_array, ctypes.c_void_p).value or 0),
-            ctypes.c_uint64(count * ctypes.sizeof(ctypes.c_uint)),
-        )
-    lib.mach_port_deallocate(_SELF_TASK, target_task)
+def selected_backend() -> str:
+    global _SELECTED_BACKEND
+    if _SELECTED_BACKEND is None:
+        _SELECTED_BACKEND = resolve_backend()
+    return _SELECTED_BACKEND
+
+
+def resolve_backend() -> str:
+    if sys.platform != "darwin":
+        raise base.BenchmarkError("thread CPU sampling requires macOS")
+    value = os.environ.get("EU4_THREAD_CPU_BACKEND", "libproc").strip().lower()
+    if value not in ("libproc", "mach"):
+        raise base.BenchmarkError(f"invalid EU4_THREAD_CPU_BACKEND: {value!r}")
+    return value
+
+
+def set_session_backend(value: str | None = None) -> str:
+    """Resolve and pin backend for a measurement session."""
+    global _SELECTED_BACKEND
+    if value is None:
+        _SELECTED_BACKEND = resolve_backend()
+    else:
+        normalized = value.strip().lower()
+        if normalized not in ("libproc", "mach"):
+            raise base.BenchmarkError(f"invalid thread CPU backend: {value!r}")
+        _SELECTED_BACKEND = normalized
+    return _SELECTED_BACKEND
+
+
+def sample_snapshot(pid: int) -> ThreadSnapshot:
+    backend = selected_backend()
+    if backend == "mach":
+        import thread_cpu_mach
+
+        return thread_cpu_mach.sample_snapshot_mach(pid)
+    import thread_cpu_libproc
+
+    return thread_cpu_libproc.sample_snapshot_libproc(pid)
 
 
 def sample_threads(pid: int) -> list[ThreadSample]:
-    lib = _init_mach()
-    target_task = _mach_task_for_pid(pid)
-    thread_array = ctypes.POINTER(ctypes.c_uint)()
-    count = ctypes.c_uint()
+    return sample_snapshot(pid).samples
+
+
+def _build_spin_worker() -> Path:
+    _SPIN_WORKER_BINARY.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "clang",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-o",
+            str(_SPIN_WORKER_BINARY),
+            str(_SPIN_WORKER_SOURCE),
+        ],
+        check=True,
+    )
+    return _SPIN_WORKER_BINARY
+
+
+def _spawn_spin_worker() -> tuple[subprocess.Popen[str], int]:
+    worker = _build_spin_worker()
+    process = subprocess.Popen(
+        [str(worker)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    line = process.stdout.readline()
+    match = re.search(r"MAIN_TID=(\d+)", line)
+    if match is None:
+        process.kill()
+        raise base.BenchmarkError("spin worker did not report MAIN_TID")
+    return process, int(match.group(1))
+
+
+def preflight_offline() -> dict[str, Any]:
+    if sys.platform != "darwin":
+        return {"status": "failed", "error": "requires macOS", "phase": "offline"}
     try:
-        if lib.task_threads(target_task, ctypes.byref(thread_array), ctypes.byref(count)) != KERN_SUCCESS:
-            raise base.BenchmarkError("task_threads failed")
-        samples: list[ThreadSample] = []
-        basic = ThreadBasicInfo()
-        ident = ThreadIdentifierInfo()
-        thread_count = int(count.value)
-        for index in range(thread_count):
-            thread = thread_array[index]
-            info_count = ctypes.c_uint(ctypes.sizeof(ThreadBasicInfo) // ctypes.sizeof(ctypes.c_int))
-            if lib.thread_info(thread, THREAD_BASIC_INFO, ctypes.byref(basic), ctypes.byref(info_count)) != KERN_SUCCESS:
-                continue
-            info_count = ctypes.c_uint(ctypes.sizeof(ThreadIdentifierInfo) // ctypes.sizeof(ctypes.c_int))
-            thread_id = 0
-            if lib.thread_info(thread, THREAD_IDENTIFIER_INFO, ctypes.byref(ident), ctypes.byref(info_count)) == KERN_SUCCESS:
-                thread_id = int(ident.thread_id)
-            samples.append(
-                ThreadSample(
-                    thread_id=thread_id,
-                    user_us=_timevalue_us(basic.user_time),
-                    system_us=_timevalue_us(basic.system_time),
-                )
-            )
-        return samples
+        set_session_backend()
+    except base.BenchmarkError as error:
+        return {"status": "failed", "error": str(error), "phase": "offline"}
+    process: subprocess.Popen[str] | None = None
+    try:
+        process, main_tid = _spawn_spin_worker()
+        snapshot = sample_snapshot(process.pid)
+        if snapshot.diagnostics.get("threads_enumerated", 0) < 1:
+            return {
+                "status": "failed",
+                "thread_enumeration": "failed",
+                "error": "no threads enumerated",
+                "phase": "offline",
+            }
+        if snapshot.diagnostics.get("threads_sampled_ok", 0) < 1:
+            return {
+                "status": "failed",
+                "thread_enumeration": "failed",
+                "error": "no complete thread-info records",
+                "phase": "offline",
+            }
+        first_total = sum(item.total_us for item in snapshot.samples if item.thread_id)
+        time.sleep(0.2)
+        second = sample_snapshot(process.pid)
+        second_total = sum(item.total_us for item in second.samples if item.thread_id)
+        if second_total <= first_total:
+            return {
+                "status": "failed",
+                "thread_enumeration": "passed",
+                "cpu_delta": "failed",
+                "error": "CPU counters did not increase on spin worker",
+                "phase": "offline",
+                "pid_tested": process.pid,
+                "main_thread_id": main_tid,
+            }
+        record_bytes = 112
+        if selected_backend() == "libproc":
+            import thread_cpu_libproc as libproc_mod
+
+            record_bytes = libproc_mod.PROC_THREADINFO_SIZE
+        return {
+            "status": "ready",
+            "thread_enumeration": "passed",
+            "cpu_delta": "passed",
+            "record_bytes": record_bytes,
+            "pid_tested": process.pid,
+            "main_thread_id": main_tid,
+            "phase": "offline",
+            "thread_cpu_backend": selected_backend(),
+        }
+    except base.BenchmarkError as error:
+        message = str(error)
+        status = "needs_permission" if "denied" in message else "failed"
+        return {"status": status, "error": message, "phase": "offline"}
     finally:
-        _deallocate_thread_list(target_task, thread_array, int(count.value))
+        if process is not None:
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()
+            process.kill()
+            process.wait(timeout=5)
+
+
+def preflight(pid: int) -> dict[str, Any]:
+    try:
+        backend = selected_backend()
+    except base.BenchmarkError as error:
+        return {"status": "failed", "error": str(error), "pid_tested": pid, "phase": "target"}
+    if backend == "mach":
+        import thread_cpu_mach
+
+        result = thread_cpu_mach.preflight_target_mach(pid)
+    else:
+        import thread_cpu_libproc
+
+        result = thread_cpu_libproc.preflight_target_libproc(pid)
+    result["thread_cpu_backend"] = backend
+    return result
 
 
 def poll_window(
@@ -154,13 +222,19 @@ def poll_window(
     reconcile_tolerance_ms_per_s: float | None = None,
     main_thread_id: int | None = None,
 ) -> dict[str, Any]:
+    backend = selected_backend()
     window_start_ns = time.monotonic_ns()
     polls: list[dict[int, int]] = []
-    polls.append({s.thread_id: s.total_us for s in sample_threads(pid) if s.thread_id})
+    poll_diagnostics: list[dict[str, int]] = []
+    first = sample_snapshot(pid)
+    poll_diagnostics.append(dict(first.diagnostics))
+    polls.append({s.thread_id: s.total_us for s in first.samples if s.thread_id})
     deadline = time.monotonic() + duration_s
     while time.monotonic() < deadline:
         time.sleep(interval_s)
-        polls.append({s.thread_id: s.total_us for s in sample_threads(pid) if s.thread_id})
+        snap = sample_snapshot(pid)
+        poll_diagnostics.append(dict(snap.diagnostics))
+        polls.append({s.thread_id: s.total_us for s in snap.samples if s.thread_id})
     window_end_ns = time.monotonic_ns()
     observed_duration_s = (window_end_ns - window_start_ns) / 1e9
     if observed_duration_s <= 0:
@@ -181,7 +255,7 @@ def poll_window(
         if reconcile_tolerance_ms_per_s is not None:
             reconcile_ok = abs(reconciliation_residual_ms_per_s) <= reconcile_tolerance_ms_per_s
 
-    return {
+    report: dict[str, Any] = {
         "pid": pid,
         "duration_s_requested": duration_s,
         "interval_s": interval_s,
@@ -200,24 +274,31 @@ def poll_window(
         "reconcile_ok": reconcile_ok,
         "threads_appeared_mid_window": appeared,
         "threads_disappeared_mid_window": disappeared,
-        "vm_deallocate_task": "mach_task_self_",
+        "thread_cpu_backend": backend,
+        "poll_diagnostics": poll_diagnostics,
     }
-
-
-def preflight(pid: int) -> dict[str, Any]:
-    try:
-        _mach_task_for_pid(pid)
-        return {"status": "ready", "pid_tested": pid}
-    except base.BenchmarkError as error:
-        return {"status": "needs_permission", "error": str(error), "pid_tested": pid}
+    if backend == "mach":
+        report["vm_deallocate_task"] = "mach_task_self_"
+    return report
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("pid", type=int)
+    parser.add_argument("pid", type=int, nargs="?", help="target pid for poll_window")
     parser.add_argument("--duration", type=float, default=5.0)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--preflight-offline", action="store_true")
+    parser.add_argument("--preflight-target", type=int, metavar="PID")
     args = parser.parse_args()
+    set_session_backend()
+    if args.preflight_offline:
+        print(json.dumps(preflight_offline(), indent=2))
+        return
+    if args.preflight_target is not None:
+        print(json.dumps(preflight(args.preflight_target), indent=2))
+        return
+    if args.pid is None:
+        parser.error("pid required unless --preflight-offline or --preflight-target")
     report = poll_window(args.pid, duration_s=args.duration, interval_s=0.1)
     payload = json.dumps(report, indent=2)
     if args.output:
