@@ -127,6 +127,82 @@ class R0ControlAtomicTests(unittest.TestCase):
                     f"{generation} {mode} {scenario_id}",
                 )
 
+    def test_cross_arch_concurrent_stress(self) -> None:
+        if platform.machine() != "arm64":
+            self.skipTest("cross-arch concurrent stress expects arm64 host")
+        if not shutil.which("arch"):
+            self.skipTest("arch wrapper unavailable")
+        r0_probe.build()
+        consumer = r0_probe.BENCHMARK / ".build/r0_control_consume_x86_64"
+        subprocess.run(
+            [
+                "clang",
+                "-arch",
+                "x86_64",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-std=c11",
+                "-I",
+                str(r0_probe.BENCHMARK),
+                "-o",
+                str(consumer),
+                str(r0_probe.ROOT / "tests/r0_control_consume_x86.c"),
+                str(r0_probe.CONTROL_SOURCE),
+            ],
+            check=True,
+        )
+        publish_count = 128
+        min_distinct = 32
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            control = root / "control.bin"
+            ready = root / "consumer.ready"
+            done = root / "publisher.done"
+            result_path = root / "consumer.result"
+            control.write_bytes(b"\x00" * r0_control.EU4_R0_CONTROL_PAGE_SIZE)
+            process = subprocess.Popen(
+                [
+                    "arch",
+                    "-x86_64",
+                    str(consumer),
+                    str(control),
+                    "stress",
+                    str(ready),
+                    str(done),
+                    str(result_path),
+                    str(min_distinct),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            deadline = 10.0
+            import time
+
+            start = time.time()
+            while not ready.is_file() and time.time() - start < deadline:
+                time.sleep(0.01)
+            self.assertTrue(ready.is_file(), "consumer did not signal ready")
+            for index in range(publish_count):
+                generation = 100 + index
+                mode = generation % 3
+                scenario_id = generation % 11
+                r0_probe.write_control(
+                    control,
+                    generation=generation,
+                    mode=mode,
+                    scenario_id=scenario_id,
+                )
+            done.touch()
+            stdout, stderr = process.communicate(timeout=30)
+            self.assertEqual(process.returncode, 0, msg=stderr or stdout)
+            summary = result_path.read_text()
+            self.assertIn("violations=0", summary)
+            distinct = int(summary.split("distinct=")[1].strip())
+            self.assertGreaterEqual(distinct, min_distinct)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -38,7 +39,12 @@ static uint32_t active_scenario_id;
 static uint32_t active_mode;
 
 static uint32_t capture_track_generation;
-static bool capture_written_for_generation;
+static bool capture_attempted_for_generation;
+static bool capture_succeeded_for_generation;
+
+static _Atomic uint64_t flush_owner_tid;
+static _Atomic bool flush_thread_violation;
+static bool violation_logged;
 
 static CGLContextObj last_context;
 static int last_width;
@@ -197,7 +203,21 @@ static bool is_census_mode(uint32_t mode) {
     return mode == EU4_R0_MODE_CENSUS || mode == EU4_R0_MODE_CENSUS_CAPTURE;
 }
 
-static bool capture_already_written(uint32_t generation) {
+static bool write_all(int fd, const void *buffer, size_t length) {
+    const uint8_t *cursor = (const uint8_t *)buffer;
+    size_t remaining = length;
+    while (remaining > 0) {
+        ssize_t chunk = write(fd, cursor, remaining);
+        if (chunk <= 0) {
+            return false;
+        }
+        cursor += (size_t)chunk;
+        remaining -= (size_t)chunk;
+    }
+    return true;
+}
+
+static bool capture_success_on_disk(uint32_t generation) {
     const char *dir = getenv("EU4_R0_CAPTURE_DIR");
     if (!dir || !dir[0]) {
         return false;
@@ -210,10 +230,85 @@ static bool capture_already_written(uint32_t generation) {
     return access(path, F_OK) == 0;
 }
 
+static bool capture_failure_on_disk(uint32_t generation) {
+    const char *dir = getenv("EU4_R0_CAPTURE_DIR");
+    if (!dir || !dir[0]) {
+        return false;
+    }
+    char path[512];
+    int n = snprintf(path, sizeof(path), "%s/capture_%u.failed.json", dir, (unsigned)generation);
+    if (n <= 0 || (size_t)n >= sizeof(path)) {
+        return false;
+    }
+    return access(path, F_OK) == 0;
+}
+
+static void sync_capture_flags_for_generation(uint32_t generation) {
+    capture_track_generation = generation;
+    capture_succeeded_for_generation = capture_success_on_disk(generation);
+    capture_attempted_for_generation =
+        capture_succeeded_for_generation || capture_failure_on_disk(generation);
+}
+
+static bool test_capture_fail_once_active(void) {
+    const char *flag = getenv("EU4_R0_TEST_CAPTURE_FAIL_ONCE");
+    return flag && flag[0] && strcmp(flag, "0") != 0;
+}
+
+static bool test_capture_fail_once_should_reject(void) {
+    static bool armed = true;
+    if (!test_capture_fail_once_active()) {
+        return false;
+    }
+    if (!armed) {
+        return false;
+    }
+    armed = false;
+    return true;
+}
+
+static bool write_capture_failure_sidecar(uint32_t generation, int error_code, const char *reason) {
+    const char *dir = getenv("EU4_R0_CAPTURE_DIR");
+    if (!dir || !dir[0]) {
+        return false;
+    }
+    char json_tmp[512];
+    char json_final[512];
+    int n = snprintf(json_tmp, sizeof(json_tmp), "%s/capture_%u.failed.json.tmp", dir, (unsigned)generation);
+    if (n <= 0 || (size_t)n >= sizeof(json_tmp)) {
+        return false;
+    }
+    snprintf(json_final, sizeof(json_final), "%s/capture_%u.failed.json", dir, (unsigned)generation);
+    int jfd = open(json_tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (jfd < 0) {
+        return false;
+    }
+    char meta[512];
+    int mlen = snprintf(meta, sizeof(meta),
+                        "{\"artifact_kind\":\"capture_failure\",\"control_generation\":%u,"
+                        "\"write_ok\":false,\"capture_error\":\"%s\",\"errno\":%d}\n",
+                        (unsigned)generation, reason ? reason : "write_failed", error_code);
+    if (mlen <= 0 || !write_all(jfd, meta, (size_t)mlen)) {
+        close(jfd);
+        unlink(json_tmp);
+        return false;
+    }
+    close(jfd);
+    if (rename(json_tmp, json_final) != 0) {
+        unlink(json_tmp);
+        return false;
+    }
+    return true;
+}
+
 static bool write_capture_artifact(uint32_t generation, uint32_t scenario_id, uint64_t record_frame_index,
                                    uint64_t uptime_ns, const eu4_r0_readback_result_t *result) {
     const char *dir = getenv("EU4_R0_CAPTURE_DIR");
-    if (!dir || !dir[0] || !result || !result->ok || capture_already_written(generation)) {
+    if (!dir || !dir[0] || !result || !result->ok || capture_success_on_disk(generation)) {
+        return false;
+    }
+    if (test_capture_fail_once_should_reject()) {
+        errno = EIO;
         return false;
     }
     char rgba_tmp[512];
@@ -232,9 +327,9 @@ static bool write_capture_artifact(uint32_t generation, uint32_t scenario_id, ui
     if (fd < 0) {
         return false;
     }
-    ssize_t written = write(fd, result->pixels, result->pixel_bytes);
+    bool rgba_ok = write_all(fd, result->pixels, result->pixel_bytes);
     close(fd);
-    if (written != (ssize_t)result->pixel_bytes) {
+    if (!rgba_ok) {
         unlink(rgba_tmp);
         return false;
     }
@@ -257,7 +352,7 @@ static bool write_capture_artifact(uint32_t generation, uint32_t scenario_id, ui
                         (unsigned long long)record_frame_index, result->width, result->height,
                         (unsigned long long)result->crc64, (unsigned long long)uptime_ns,
                         result->pixel_bytes);
-    if (mlen <= 0 || write(jfd, meta, (size_t)mlen) != mlen) {
+    if (mlen <= 0 || !write_all(jfd, meta, (size_t)mlen)) {
         close(jfd);
         unlink(json_tmp);
         unlink(rgba_final);
@@ -270,6 +365,19 @@ static bool write_capture_artifact(uint32_t generation, uint32_t scenario_id, ui
         return false;
     }
     return true;
+}
+
+static void attempt_generation_capture(uint32_t generation, uint32_t scenario_id, uint64_t record_frame_index,
+                                       uint64_t uptime_ns, const eu4_r0_readback_result_t *rb) {
+    if (capture_attempted_for_generation) {
+        return;
+    }
+    capture_attempted_for_generation = true;
+    if (write_capture_artifact(generation, scenario_id, record_frame_index, uptime_ns, rb)) {
+        capture_succeeded_for_generation = true;
+        return;
+    }
+    write_capture_failure_sidecar(generation, errno, "rgba_or_sidecar_write_failed");
 }
 
 static void maybe_ack_generation(const eu4_r0_control_snapshot_t *snap, uint64_t now) {
@@ -320,9 +428,52 @@ static void log_frame_record(CGLContextObj context, uint64_t record_frame_index,
     }
 }
 
+static CGLError forward_flush_only(CGLContextObj context) {
+    return CGLFlushDrawable(context);
+}
+
+static void log_thread_violation(uint64_t now, uint64_t owner_tid, uint64_t offender_tid) {
+    atomic_store_explicit(&flush_thread_violation, true, memory_order_release);
+    pthread_mutex_lock(&lock);
+    if (!violation_logged) {
+        violation_logged = true;
+        char line[160];
+        int n = snprintf(line, sizeof(line), "T,%llu,%llu,%llu\n", (unsigned long long)now,
+                         (unsigned long long)owner_tid, (unsigned long long)offender_tid);
+        if (n > 0 && (size_t)n < sizeof(line)) {
+            log_line(line);
+        }
+    }
+    pthread_mutex_unlock(&lock);
+}
+
+static bool ensure_flush_owner(uint64_t self_tid, uint64_t now) {
+    if (self_tid == 0) {
+        return false;
+    }
+    uint64_t owner = atomic_load_explicit(&flush_owner_tid, memory_order_acquire);
+    if (owner == 0) {
+        uint64_t expected = 0;
+        if (atomic_compare_exchange_strong_explicit(&flush_owner_tid, &expected, self_tid,
+                                                    memory_order_acq_rel, memory_order_acquire)) {
+            return true;
+        }
+        owner = atomic_load_explicit(&flush_owner_tid, memory_order_acquire);
+    }
+    if (owner == self_tid) {
+        return true;
+    }
+    log_thread_violation(now, owner, self_tid);
+    return false;
+}
+
 static CGLError probed_flush(CGLContextObj context) {
     pthread_once(&setup_once, setup);
     uint64_t now = ns(CLOCK_UPTIME_RAW);
+    uint64_t self_tid = pthread_tid_self();
+    if (!ensure_flush_owner(self_tid, now)) {
+        return forward_flush_only(context);
+    }
     bool paused = pause_verified();
 
     eu4_r0_control_snapshot_t snap = {0};
@@ -337,8 +488,7 @@ static CGLError probed_flush(CGLContextObj context) {
             active_mode = snap.mode;
             active_scenario_id = snap.scenario_id;
             if (snap.generation != capture_track_generation) {
-                capture_track_generation = snap.generation;
-                capture_written_for_generation = capture_already_written(snap.generation);
+                sync_capture_flags_for_generation(snap.generation);
             }
             maybe_ack_generation(&snap, now);
         }
@@ -380,13 +530,8 @@ static CGLError probed_flush(CGLContextObj context) {
             }
             memcpy(reference_buffer, readback_buffer, total);
             reference_size = total;
-            if (active_mode == EU4_R0_MODE_CENSUS_CAPTURE && !capture_written_for_generation) {
-                pthread_mutex_lock(&lock);
-                if (!capture_written_for_generation &&
-                    write_capture_artifact(snap.generation, snap.scenario_id, record_frame_index, now, &rb)) {
-                    capture_written_for_generation = true;
-                }
-                pthread_mutex_unlock(&lock);
+            if (active_mode == EU4_R0_MODE_CENSUS_CAPTURE && !capture_succeeded_for_generation) {
+                attempt_generation_capture(snap.generation, snap.scenario_id, record_frame_index, now, &rb);
             }
         }
     }

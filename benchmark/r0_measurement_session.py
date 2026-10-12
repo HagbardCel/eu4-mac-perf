@@ -148,6 +148,20 @@ def _positive_control_gate(manifest: dict[str, Any]) -> bool:
     return False
 
 
+def _flush_single_owner_gate(manifest: dict[str, Any], output_dir: Path) -> bool:
+    log_path = _probe_log_path_from_manifest(manifest, output_dir)
+    has_probe_evidence = bool(
+        manifest.get("probe_log_path")
+        or any(epoch.get("log_path") for epoch in manifest.get("epochs", []))
+        or log_path.is_file()
+    )
+    if not has_probe_evidence:
+        return True
+    if not log_path.is_file():
+        return False
+    return r0_probe.flush_single_owner_passes(r0_probe.parse_log(log_path))
+
+
 def _roi_verified_gate(manifest: dict[str, Any]) -> bool:
     report = manifest.get("frame_evolution_report")
     if not report:
@@ -155,19 +169,39 @@ def _roi_verified_gate(manifest: dict[str, Any]) -> bool:
     return report.get("roi_config", {}).get("verified") is True
 
 
+def _probe_log_path_from_manifest(manifest: dict[str, Any], output_dir: Path) -> Path:
+    if manifest.get("probe_log_path"):
+        return Path(manifest["probe_log_path"])
+    for epoch in manifest.get("epochs", []):
+        if epoch.get("log_path"):
+            return Path(epoch["log_path"])
+    return output_dir / "r0_probe.log"
+
+
 def run_offline_analyzers(
     output_dir: Path, manifest: dict[str, Any], *, roi_config: Path | None = None
 ) -> None:
-    log_path = output_dir / "r0_probe.log"
+    log_path = _probe_log_path_from_manifest(manifest, output_dir)
     events_path = output_dir / "events.jsonl"
-    if not log_path.is_file():
-        return
     frame_out = output_dir / "frame_evolution_report.json"
     stack_out = output_dir / "stack_report.json"
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
     manifest["analyzer_results"] = {}
     manifest.pop("frame_evolution_report", None)
     manifest.pop("stack_report", None)
+    for artifact in (frame_out, stack_out):
+        if artifact.is_file():
+            try:
+                artifact.unlink()
+            except OSError:
+                pass
+    if not log_path.is_file():
+        manifest["analyzer_results"]["frame_evolution"] = {
+            "exit_code": 1,
+            "error": "missing_probe_log",
+        }
+        _apply_positive_control_status(manifest, None)
+        return
     captures = manifest.get("captures", {})
     pre_gen = captures.get("pre", {}).get("generation")
     post_gen = captures.get("post", {}).get("generation")
@@ -270,10 +304,14 @@ def _stack_report_valid(report: dict[str, Any] | None) -> bool:
     return attributed == root_inclusive
 
 
-def acceptance_gates(manifest: dict[str, Any]) -> dict[str, Any]:
+def acceptance_gates(manifest: dict[str, Any], output_dir: Path | None = None) -> dict[str, Any]:
     gates: dict[str, Any] = {}
     cpu = manifest.get("epoch_a_thread_cpu", {})
     gates["cpu_reconcile"] = cpu.get("reconcile_ok") is True
+    if output_dir is not None:
+        gates["flush_single_owner"] = _flush_single_owner_gate(manifest, output_dir)
+    else:
+        gates["flush_single_owner"] = True
     gates["main_thread_mapping"] = cpu.get("main_thread_mapping_status") == "verified"
     gates["thread_cpu_preflight"] = manifest.get("thread_cpu_preflight", {}).get("status") == "ready"
     clock_status = manifest.get("event_clock_alignment", {}).get("status")
@@ -325,6 +363,7 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
     events_path = output_dir / "events.jsonl"
     control_path = output_dir / "r0_control.bin"
     log_path = output_dir / "r0_probe.log"
+    manifest["probe_log_path"] = str(log_path)
     control_path.write_bytes(b"\x00" * r0_control.EU4_R0_CONTROL_PAGE_SIZE)
 
     evidence = auto.preflight(require_privilege=True)
@@ -632,7 +671,7 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
             finally:
                 run_offline_analyzers(output_dir, manifest)
                 if manifest.get("status") not in TERMINAL_FAILURE_STATUSES:
-                    acceptance_gates(manifest)
+                    acceptance_gates(manifest, output_dir)
                 manifest["ended_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
                 write_manifest(output_dir / "manifest.json", manifest)
     return manifest
@@ -735,7 +774,7 @@ def requalify_session(output_dir: Path, *, roi_config: Path | None = None) -> di
         manifest["roi_pending_verification"] = False
     run_offline_analyzers(output_dir, manifest, roi_config=roi_config)
     if manifest.get("status") not in TERMINAL_FAILURE_STATUSES:
-        acceptance_gates(manifest)
+        acceptance_gates(manifest, output_dir)
     manifest["requalified_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
     write_manifest(manifest_path, manifest)
     return manifest

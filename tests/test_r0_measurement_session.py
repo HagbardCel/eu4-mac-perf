@@ -154,6 +154,7 @@ class R0MeasurementSessionTests(unittest.TestCase):
             manifest["roi_pending_verification"] = True
             manifest["roi_config_path"] = str(unverified_roi)
             manifest["frame_evolution_status"] = "run"
+            manifest["probe_log_path"] = str(root / "r0_probe.log")
             (root / "manifest.json").write_text(json.dumps(manifest))
             session.run_offline_analyzers(root, manifest)
             session.acceptance_gates(manifest)
@@ -190,6 +191,40 @@ class R0MeasurementSessionTests(unittest.TestCase):
         }
         session.acceptance_gates(manifest)
         self.assertEqual(manifest["status"], "partial_complete")
+
+    def test_requalify_missing_probe_log_clears_completed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gens = build_success_fixture(root)
+            sample_snippet = _TESTS / "fixtures" / "r0_epoch_b_sample_snippet.txt"
+            (root / "epoch_b.sample.txt").write_text(sample_snippet.read_text())
+            frame_report = {
+                "qualified_windows": {
+                    "0": _qualified_window(control_generation=100),
+                    "1": _qualified_window(frame_count=55, duration_seconds=1.2, control_generation=104),
+                },
+                "positive_control": {"status": "passed"},
+                "roi_config": {"verified": True},
+            }
+            manifest = _gate_ready_manifest(frame_report)
+            manifest["status"] = "completed"
+            manifest["probe_log_path"] = str(root / "r0_probe.log")
+            manifest["captures"] = {
+                "pre": {"generation": gens["pre_generation"]},
+                "post": {"generation": gens["post_generation"]},
+            }
+            manifest["roi_config_path"] = str(ROI_FIXTURE)
+            manifest["frame_evolution_status"] = "run"
+            (root / "manifest.json").write_text(json.dumps(manifest))
+            (root / "frame_evolution_report.json").write_text(json.dumps(frame_report))
+            (root / "stack_report.json").write_text(json.dumps(manifest["stack_report"]))
+            (root / "r0_probe.log").unlink()
+            session.requalify_session(root, roi_config=ROI_FIXTURE)
+            updated = json.loads((root / "manifest.json").read_text())
+            self.assertNotEqual(updated.get("status"), "completed")
+            self.assertEqual(updated.get("positive_control_status"), "failed")
+            self.assertNotIn("frame_evolution_report", updated)
+            self.assertFalse((root / "frame_evolution_report.json").exists())
 
     def test_cleanup_error_not_upgraded(self) -> None:
         manifest = {

@@ -33,6 +33,10 @@ Panel ROI from [`fixtures/venice_panel_roi.json`](../fixtures/venice_panel_roi.j
 
 Logged on each `F` record (`readback_failure_code`). Only `UNSUPPORTED_DRAWABLE` enables `partial_complete` without epoch C.
 
+## Flush ownership
+
+The R0 probe claims a single nonzero `pthread` thread ID on first `CGLFlushDrawable` interposition. Any other thread bypasses census/capture and logs one `T` violation record per session. Integrated acceptance requires `flush_single_owner` (unanimous nonzero `F` thread IDs, no `T` records).
+
 ## Build and test
 
 ```sh

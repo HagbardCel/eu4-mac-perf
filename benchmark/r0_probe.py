@@ -338,11 +338,45 @@ def wait_until_qualified_window(
     }
 
 
+def capture_failure_artifact(capture_dir: Path, generation: int) -> dict[str, Any] | None:
+    path = capture_dir / f"capture_{generation}.failed.json"
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return {"write_ok": False, "artifact_kind": "capture_failure"}
+
+
 def wait_for_capture_verified(
     capture_dir: Path, log_path: Path, generation: int, *, timeout_s: float = 30.0
 ) -> dict[str, Any]:
+    failure = capture_failure_artifact(capture_dir, generation)
+    if failure is not None:
+        return {
+            "status": "failed",
+            "reason": "capture_write_failed",
+            "generation": generation,
+            "failure": failure,
+        }
+    sidecar = load_capture_sidecar(capture_dir, generation)
+    if sidecar is not None and sidecar.get("write_ok") is False:
+        return {
+            "status": "failed",
+            "reason": "capture_write_failed",
+            "generation": generation,
+            "failure": sidecar,
+        }
     deadline = time.time() + timeout_s
     while time.time() < deadline:
+        failure = capture_failure_artifact(capture_dir, generation)
+        if failure is not None:
+            return {
+                "status": "failed",
+                "reason": "capture_write_failed",
+                "generation": generation,
+                "failure": failure,
+            }
         result = verify_capture_artifact(capture_dir, generation, log_path)
         if result.get("status") == "verified":
             return result
@@ -383,6 +417,22 @@ def probe_production_drawable(
     }
 
 
+def flush_single_owner_passes(parsed: dict[str, Any]) -> bool:
+    violations = parsed.get("thread_violations") or []
+    if violations:
+        return False
+    frames = parsed.get("frames") or []
+    if not frames:
+        return False
+    thread_ids: list[int] = []
+    for frame in frames:
+        tid = int(frame.get("pthread_tid") or 0)
+        if tid == 0:
+            return False
+        thread_ids.append(tid)
+    return len(set(thread_ids)) == 1
+
+
 def infer_main_thread_id(frames: list[dict[str, Any]]) -> int | None:
     votes: dict[int, int] = {}
     for frame in frames:
@@ -398,8 +448,14 @@ def parse_log(path: Path) -> dict[str, Any]:
     acks: list[dict[str, int]] = []
     frames: list[dict[str, Any]] = []
     swaps: list[dict[str, Any]] = []
+    thread_violations: list[dict[str, int]] = []
     if not path.is_file():
-        return {"acks": acks, "frames": frames, "swaps": swaps}
+        return {
+            "acks": acks,
+            "frames": frames,
+            "swaps": swaps,
+            "thread_violations": thread_violations,
+        }
     for raw in path.read_text(errors="replace").splitlines():
         parts = raw.split(",")
         if not parts:
@@ -495,6 +551,14 @@ def parse_log(path: Path) -> dict[str, Any]:
                     "pthread_tid": 0,
                 }
             )
+        elif kind == "T" and len(parts) >= 4:
+            thread_violations.append(
+                {
+                    "uptime_ns": int(parts[1]),
+                    "owner_tid": int(parts[2]),
+                    "offender_tid": int(parts[3]),
+                }
+            )
         elif kind == "S" and len(parts) >= 7:
             swaps.append(
                 {
@@ -506,7 +570,12 @@ def parse_log(path: Path) -> dict[str, Any]:
                     "paused_swaps": int(parts[6]),
                 }
             )
-    return {"acks": acks, "frames": frames, "swaps": swaps}
+    return {
+        "acks": acks,
+        "frames": frames,
+        "swaps": swaps,
+        "thread_violations": thread_violations,
+    }
 
 
 def preflight() -> dict[str, Any]:
@@ -534,6 +603,8 @@ def preflight() -> dict[str, Any]:
         census_ok_frames = [f for f in parsed["frames"] if f.get("census_ok")]
         if not census_ok_frames:
             raise base.BenchmarkError("R0 preflight did not produce census_ok readback")
+        if not flush_single_owner_passes(parsed):
+            raise base.BenchmarkError("R0 preflight failed flush_single_owner gate")
         return {"status": "ready", "acks": len(parsed["acks"]), "frames": len(parsed["frames"])}
 
 

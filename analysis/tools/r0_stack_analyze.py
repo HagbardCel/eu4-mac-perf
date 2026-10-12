@@ -110,11 +110,15 @@ def build_tree(lines: list[tuple[int, int, str]]) -> StackNode:
 def extract_main_thread_section(text: str, main_thread_id: int | None) -> str:
     if main_thread_id is None:
         return text
+    decimal_token = str(main_thread_id)
     hex_token = f"{main_thread_id:x}".lower()
     lines = text.splitlines()
     start = None
     for index, line in enumerate(lines):
         lowered = line.lower()
+        if f"thread_{decimal_token}" in lowered.replace(" ", ""):
+            start = index
+            break
         if "thread 0x" in lowered and hex_token in lowered:
             start = index
             break
@@ -122,16 +126,33 @@ def extract_main_thread_section(text: str, main_thread_id: int | None) -> str:
         raise ValueError("main thread section not found in sample output")
     end = len(lines)
     for index in range(start + 1, len(lines)):
+        stripped = lines[index].strip()
+        if stripped.startswith("Binary Images:"):
+            end = index
+            break
+        if stripped.startswith("Total number in stack"):
+            end = index
+            break
+        if " Thread_" in lines[index] and decimal_token not in lines[index]:
+            end = index
+            break
         if lines[index].strip().startswith("Thread ") and index != start:
             end = index
             break
     return "\n".join(lines[start:end])
 
 
+def _has_weighted_frame_lines(text: str) -> bool:
+    return any(_FRAME_LINE.match(line.rstrip()) for line in text.splitlines())
+
+
 def analyze_sample_text(text: str, *, main_thread_id: int | None = None) -> dict[str, Any]:
     text = extract_main_thread_section(text, main_thread_id)
-    if "Call graph" not in text and not _FRAME_LINE.search(text):
+    has_frames = _has_weighted_frame_lines(text)
+    if "Call graph" not in text and not has_frames:
         raise ValueError("unsupported sample format: missing Call graph or weighted frame lines")
+    if "Call graph" not in text and has_frames:
+        text = "Call graph:\n" + text
     lines = _parse_frame_lines(text)
     if not lines:
         raise ValueError("unsupported sample format: no weighted stacks parsed")

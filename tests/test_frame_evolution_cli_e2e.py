@@ -319,7 +319,7 @@ class FrameEvolutionCliE2ETests(unittest.TestCase):
                     "root_inclusive": 10,
                 },
             }
-            session.acceptance_gates(manifest)
+            session.acceptance_gates(manifest, root)
             self.assertEqual(manifest["status"], "completed")
 
 
