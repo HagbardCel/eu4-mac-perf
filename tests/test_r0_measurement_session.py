@@ -1,12 +1,17 @@
 import importlib
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 import r0_measurement_session as session
+
+ROOT = Path(__file__).resolve().parents[1]
+AUTHENTIC_SAMPLE = ROOT / "results/r0-native-qualification/authentic-sample.txt"
 
 _TESTS = Path(__file__).resolve().parent
 _E2E = importlib.util.spec_from_file_location(
@@ -280,6 +285,51 @@ class R0MeasurementSessionTests(unittest.TestCase):
         }
         session.acceptance_gates(manifest)
         self.assertEqual(manifest["status"], "cleanup_error")
+
+    @unittest.skipUnless(AUTHENTIC_SAMPLE.is_file(), "missing authentic-sample.txt")
+    def test_sample_corroboration_authentic_main_thread(self) -> None:
+        text = AUTHENTIC_SAMPLE.read_text(errors="replace")
+        self.assertEqual(session.sample_main_thread_corroboration(text, 6322634), "matched")
+        self.assertEqual(session.sample_main_thread_corroboration(text, 9999999), "unavailable")
+
+    def test_sample_corroboration_call_graph_hex_thread(self) -> None:
+        text = """
+Analysis of sampling Thread 0xdead (pid 1): other
+Call graph:
+    100 Thread 0x2a   main
+      100 foo
+        """
+        self.assertEqual(session.sample_main_thread_corroboration(text, 0x2a), "matched")
+
+    def test_sample_corroboration_ignores_descriptive_when_call_graph_differs(self) -> None:
+        text = """
+Analysis of sampling Thread 0x2a (pid 42 eu4): main thread
+Call graph:
+    100 Thread_9999   other
+      100 foo
+        """
+        self.assertEqual(session.sample_main_thread_corroboration(text, 0x2a), "unavailable")
+
+    def test_sample_corroboration_fallback_descriptive_only(self) -> None:
+        snippet = Path(__file__).parent.joinpath("fixtures/r0_epoch_b_sample_snippet.txt").read_text()
+        self.assertEqual(session.sample_main_thread_corroboration(snippet, 0x2a), "matched")
+
+    def test_sample_corroboration_importable_benchmark_pythonpath_only(self) -> None:
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(ROOT / "benchmark")
+        code = (
+            "import r0_measurement_session as s\n"
+            'assert s.sample_main_thread_corroboration("Call graph:\\n    10 Thread_42\\n", 42) == "matched"\n'
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            env=env,
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
 
 if __name__ == "__main__":

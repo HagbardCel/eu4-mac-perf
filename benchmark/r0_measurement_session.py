@@ -88,12 +88,29 @@ def _process_cpu_ms_per_s(
     return float(sum(value for _, value in values) / len(values))
 
 
+def _ensure_repo_import_path() -> None:
+    root = str(ROOT)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
 def sample_main_thread_corroboration(sample_text: str, main_thread_id: int | None) -> str:
     if main_thread_id is None:
         return "unavailable"
-    hex_id = f"{main_thread_id:x}"
-    for line in sample_text.splitlines():
-        if line.strip().startswith("Thread ") and hex_id in line.lower():
+    _ensure_repo_import_path()
+    from analysis.tools.r0_stack_analyze import partition_sample_call_graph, thread_header_id
+
+    preamble, call_graph = partition_sample_call_graph(sample_text)
+    call_graph_ids: list[int] = []
+    for line in call_graph:
+        parsed = thread_header_id(line)
+        if parsed:
+            call_graph_ids.append(parsed[1])
+    if call_graph_ids:
+        return "matched" if main_thread_id in call_graph_ids else "unavailable"
+    for line in preamble:
+        parsed = thread_header_id(line)
+        if parsed and parsed[1] == main_thread_id:
             return "matched"
     return "unavailable"
 

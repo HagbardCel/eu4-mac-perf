@@ -16,6 +16,9 @@ WORKER_SOURCE = ROOT / "tests/sample_spin_worker.c"
 EVIDENCE_DIR = ROOT / "results/r0-native-qualification"
 SAMPLE_PATH = EVIDENCE_DIR / "authentic-sample.txt"
 PROVENANCE_PATH = EVIDENCE_DIR / "provenance.json"
+LIVE_DIR = EVIDENCE_DIR / "live"
+LIVE_SAMPLE_PATH = LIVE_DIR / "live-sample.txt"
+LIVE_PROVENANCE_PATH = LIVE_DIR / "live-provenance.json"
 
 
 def _load_provenance() -> dict | None:
@@ -39,6 +42,7 @@ class R0AuthenticSampleQualification(unittest.TestCase):
         self.assertEqual(int(report["weighted_row_count"]), 15)
         self.assertEqual(root_inclusive, 722)
 
+    # EU4_R0_REFRESH_NATIVE_EVIDENCE=1 writes live/live-sample.txt (never overwrites authentic-sample.txt).
     @unittest.skipUnless(sys.platform == "darwin", "native sample capture requires macOS")
     def test_authentic_sample_native_capture(self) -> None:
         worker = ROOT / "benchmark/.build/sample_spin_worker"
@@ -81,8 +85,8 @@ class R0AuthenticSampleQualification(unittest.TestCase):
             if os.environ.get("EU4_R0_REFRESH_NATIVE_EVIDENCE") != "1":
                 return
 
-            EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-            SAMPLE_PATH.write_text(text)
+            LIVE_DIR.mkdir(parents=True, exist_ok=True)
+            LIVE_SAMPLE_PATH.write_text(text)
             commit = (
                 subprocess.run(
                     ["git", "rev-parse", "HEAD"],
@@ -108,7 +112,7 @@ class R0AuthenticSampleQualification(unittest.TestCase):
                 "platform": platform.platform(),
                 "git_commit": commit,
             }
-            PROVENANCE_PATH.write_text(json.dumps(provenance, indent=2) + "\n")
+            LIVE_PROVENANCE_PATH.write_text(json.dumps(provenance, indent=2) + "\n")
 
 
 if __name__ == "__main__":

@@ -22,13 +22,17 @@ python3 analysis/tools/r0_stack_analyze.py \
 
 ## Attribution rules
 
-Each stack line is classified independently in **two dimensions**:
+The analyzer reconstructs a **weighted inclusive call tree** from `sample` output (including decorated macOS branch lines). For each tree node it computes **exclusive** sample weight (inclusive minus the sum of children). Only exclusive weight is attributed.
 
-| Dimension | Purpose | Mutual exclusivity |
+Classification uses the **full ancestor path** from root to the node (not each printed line in isolation):
+
+| Dimension | Purpose | Rule application |
 |---|---|---|
-| Functional caller | Which renderer or Gfx callsite | First matching rule in the functional list |
-| Execution location | Where time is spent (GL driver, encode, etc.) | First matching rule in the execution list |
+| Functional caller | Which EU IV renderer or Gfx callsite owns the path | First matching functional rule scanning symbols from leaf toward root |
+| Execution location | Where time executes (GL driver, encode, etc.) | First matching execution rule scanning symbols from leaf toward root |
 
-A line may contribute to one bucket in each dimension. Use the **cross-tab** for joint counts. Incomplete lines remain `unattributed` in that dimension.
+Each attributed exclusive node increments one functional bucket, one execution bucket, and the **cross-tab** joint count `(functional_caller, execution_location)`. Paths with no rule match contribute `unattributed` in that dimension. JSON output normalizes functional and execution marginals to shares; cross-tab retains raw counts.
 
-Main-thread identification for epoch A↔B mapping uses Mach `THREAD_IDENTIFIER_INFO.thread_id` in [`benchmark/thread_cpu_sampler.py`](../benchmark/thread_cpu_sampler.py) and thread metadata in the `sample` file. If mapping is ambiguous, report `unresolved` in the gate memo.
+Example: exclusive samples on a path `CInGameIdler::Render → … → glDrawElements → GLDContextRec::setRenderState` attribute functional `ingame_render` (or a deeper Gfx rule if matched) and execution `gl_driver_set_render_state`, with the joint key recorded in the cross-tab.
+
+Main-thread identification for epoch A↔B mapping uses Mach `THREAD_IDENTIFIER_INFO.thread_id` in [`benchmark/thread_cpu_sampler.py`](../benchmark/thread_cpu_sampler.py) and thread metadata in the `sample` file. Session manifests record `sample_main_thread_corroboration` by matching call-graph thread headers first. If mapping is ambiguous, report `unresolved` in the gate memo.

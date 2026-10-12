@@ -95,26 +95,47 @@ def parse_weighted_frame_line(raw: str) -> tuple[int, int, str]:
     return depth, int(count_s), symbol.strip()
 
 
-def enumerate_weighted_call_graph_lines(text: str) -> list[str]:
-    """Return raw lines that must parse as weighted stack rows in order."""
-    rows: list[str] = []
+def partition_sample_call_graph(text: str) -> tuple[list[str], list[str]]:
+    """Split sample text into preamble (outside call graph) and call-graph body lines."""
+    preamble: list[str] = []
+    call_graph: list[str] = []
     in_call_graph = False
+    ended = False
     for raw in text.splitlines():
         stripped = raw.strip()
+        if ended:
+            preamble.append(raw)
+            continue
         if stripped.startswith("Call graph:"):
             in_call_graph = True
             continue
         if not in_call_graph:
             if _WEIGHTED_ROW.match(raw.rstrip()):
                 in_call_graph = True
+                call_graph.append(raw)
             else:
-                continue
-        if stripped.startswith("Total number in stack"):
-            break
-        if stripped.startswith("Binary Images:"):
-            break
+                preamble.append(raw)
+            continue
+        if stripped.startswith("Total number in stack") or stripped.startswith("Binary Images:"):
+            ended = True
+            preamble.append(raw)
+            continue
         if stripped == "":
             continue
+        call_graph.append(raw)
+    return preamble, call_graph
+
+
+def call_graph_region_lines(text: str) -> list[str]:
+    """Non-empty lines inside the call-graph section (weighted rows and peers)."""
+    _, call_graph = partition_sample_call_graph(text)
+    return call_graph
+
+
+def enumerate_weighted_call_graph_lines(text: str) -> list[str]:
+    """Return raw lines that must parse as weighted stack rows in order."""
+    rows: list[str] = []
+    for raw in call_graph_region_lines(text):
         if not _WEIGHTED_ROW.match(raw.rstrip()):
             raise ValueError(f"unsupported sample call-graph line: {raw!r}")
         rows.append(raw)
@@ -154,7 +175,7 @@ _THREAD_DECIMAL_HEADER = re.compile(r"Thread_(\d+)", re.IGNORECASE)
 _THREAD_HEX_HEADER = re.compile(r"Thread\s+0x([0-9a-f]+)", re.IGNORECASE)
 
 
-def _thread_header_id(line: str) -> tuple[str, int] | None:
+def thread_header_id(line: str) -> tuple[str, int] | None:
     match = _THREAD_DECIMAL_HEADER.search(line)
     if match:
         return ("decimal", int(match.group(1)))
@@ -162,6 +183,9 @@ def _thread_header_id(line: str) -> tuple[str, int] | None:
     if match:
         return ("hex", int(match.group(1), 16))
     return None
+
+
+_thread_header_id = thread_header_id
 
 
 def _thread_header_sample_count(text: str) -> int | None:

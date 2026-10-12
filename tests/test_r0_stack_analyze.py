@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 
@@ -14,7 +15,13 @@ from analysis.tools.r0_stack_analyze import (
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTHENTIC_SAMPLE = ROOT / "results/r0-native-qualification/authentic-sample.txt"
-AUTHENTIC_MAIN_TID = 6322634
+PROVENANCE_PATH = ROOT / "results/r0-native-qualification/provenance.json"
+
+
+def _authentic_main_thread_id() -> int:
+    if not PROVENANCE_PATH.is_file():
+        return 6322634
+    return int(json.loads(PROVENANCE_PATH.read_text())["main_thread_id"])
 
 
 def _child_matching(node: StackNode, substring: str) -> StackNode:
@@ -26,7 +33,7 @@ def _child_matching(node: StackNode, substring: str) -> StackNode:
 
 def _parse_authentic_tree() -> StackNode:
     text = AUTHENTIC_SAMPLE.read_text(errors="replace")
-    section = extract_main_thread_section(text, AUTHENTIC_MAIN_TID)
+    section = extract_main_thread_section(text, _authentic_main_thread_id())
     section = "Call graph:\n" + section
     return build_tree(_parse_frame_lines(section))
 
@@ -126,7 +133,7 @@ Call graph:
     @unittest.skipUnless(AUTHENTIC_SAMPLE.is_file(), "missing committed authentic-sample.txt")
     def test_authentic_sample_complete_parse_and_conservation(self) -> None:
         text = AUTHENTIC_SAMPLE.read_text(errors="replace")
-        report = analyze_sample_text(text, main_thread_id=AUTHENTIC_MAIN_TID)
+        report = analyze_sample_text(text, main_thread_id=_authentic_main_thread_id())
         self.assertEqual(report["weighted_row_count"], 15)
         self.assertEqual(report["root_inclusive"], 722)
         self.assertEqual(report["attributed_sample_weight"], 722)
@@ -155,7 +162,7 @@ Call graph:
     @unittest.skipUnless(AUTHENTIC_SAMPLE.is_file(), "missing committed authentic-sample.txt")
     def test_authentic_sample_enumerates_fifteen_weighted_rows(self) -> None:
         text = AUTHENTIC_SAMPLE.read_text(errors="replace")
-        section = extract_main_thread_section(text, AUTHENTIC_MAIN_TID)
+        section = extract_main_thread_section(text, _authentic_main_thread_id())
         rows = enumerate_weighted_call_graph_lines("Call graph:\n" + section)
         self.assertEqual(len(rows), 15)
         for raw in rows:
