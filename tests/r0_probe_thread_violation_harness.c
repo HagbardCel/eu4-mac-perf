@@ -12,8 +12,7 @@ static CGLContextObj owner_context;
 static CGLContextObj worker_context;
 static volatile bool worker_done;
 
-static GLuint fbo_with_texture(CGLContextObj context, int width, int height) {
-    (void)context;
+static GLuint fbo_with_texture(int width, int height) {
     GLuint texture = 0;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -29,9 +28,20 @@ static GLuint fbo_with_texture(CGLContextObj context, int width, int height) {
     return fbo;
 }
 
+static void owner_flush(CGLContextObj context, GLuint fbo) {
+    CGLSetCurrentContext(context);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    CGLFlushDrawable(context);
+}
+
 static void *worker_flush(void *arg) {
-    (void)arg;
-    CGLSetCurrentContext(worker_context);
+    GLuint worker_fbo = (GLuint)(uintptr_t)arg;
+    if (CGLSetCurrentContext(worker_context) != kCGLNoError) {
+        return (void *)1;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, worker_fbo);
     for (int frame = 0; frame < 3; frame++) {
         glClearColor(0.2f, 0.3f, 0.4f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -55,28 +65,34 @@ int main(void) {
     if (CGLCreateContext(format, owner_context, &worker_context) != kCGLNoError || !worker_context) {
         return 4;
     }
-    CGLSetCurrentContext(owner_context);
     const int width = 64;
     const int height = 64;
-    GLuint owner_fbo = fbo_with_texture(owner_context, width, height);
-    glBindFramebuffer(GL_FRAMEBUFFER, owner_fbo);
+
+    if (CGLSetCurrentContext(owner_context) != kCGLNoError) {
+        return 5;
+    }
+    GLuint owner_fbo = fbo_with_texture(width, height);
+    glViewport(0, 0, width, height);
+    owner_flush(owner_context, owner_fbo);
+
+    if (CGLSetCurrentContext(worker_context) != kCGLNoError) {
+        return 6;
+    }
+    GLuint worker_fbo = fbo_with_texture(width, height);
     glViewport(0, 0, width, height);
 
-    CGLSetCurrentContext(worker_context);
-    GLuint worker_fbo = fbo_with_texture(worker_context, width, height);
-    glBindFramebuffer(GL_FRAMEBUFFER, worker_fbo);
-    glViewport(0, 0, width, height);
+    if (CGLSetCurrentContext(owner_context) != kCGLNoError) {
+        return 7;
+    }
 
     pthread_t thread;
     worker_done = false;
-    pthread_create(&thread, NULL, worker_flush, NULL);
+    if (pthread_create(&thread, NULL, worker_flush, (void *)(uintptr_t)worker_fbo) != 0) {
+        return 8;
+    }
 
-    CGLSetCurrentContext(owner_context);
-    glBindFramebuffer(GL_FRAMEBUFFER, owner_fbo);
-    for (int frame = 0; frame < 6; frame++) {
-        glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        CGLFlushDrawable(owner_context);
+    for (int frame = 0; frame < 5; frame++) {
+        owner_flush(owner_context, owner_fbo);
         usleep(2000);
     }
     pthread_join(thread, NULL);

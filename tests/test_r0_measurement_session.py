@@ -77,9 +77,13 @@ class R0MeasurementSessionTests(unittest.TestCase):
             "positive_control": {"status": "passed"},
             "roi_config": {"verified": True},
         }
-        manifest = _gate_ready_manifest(frame_report)
-        session.acceptance_gates(manifest)
-        self.assertEqual(manifest["status"], "completed")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            build_success_fixture(root)
+            manifest = _gate_ready_manifest(frame_report)
+            manifest["probe_log_path"] = str(root / "r0_probe.log")
+            session.acceptance_gates(manifest, root)
+            self.assertEqual(manifest["status"], "completed")
 
     def test_unverified_roi_blocks_completed(self) -> None:
         frame_report = {
@@ -93,11 +97,45 @@ class R0MeasurementSessionTests(unittest.TestCase):
             },
             "roi_config": {"verified": False},
         }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            build_success_fixture(root)
+            manifest = _gate_ready_manifest(frame_report)
+            manifest["roi_pending_verification"] = True
+            manifest["probe_log_path"] = str(root / "r0_probe.log")
+            session.acceptance_gates(manifest, root)
+            self.assertEqual(manifest["status"], "incomplete_gates")
+            self.assertFalse(manifest["acceptance_gates"]["roi_verified"])
+
+    def test_acceptance_gates_v1_without_output_dir_fails_flush_gate(self) -> None:
+        frame_report = {
+            "qualified_windows": {
+                "0": _qualified_window(control_generation=100),
+                "1": _qualified_window(frame_count=55, duration_seconds=1.2, control_generation=104),
+            },
+            "positive_control": {"status": "passed"},
+            "roi_config": {"verified": True},
+        }
         manifest = _gate_ready_manifest(frame_report)
-        manifest["roi_pending_verification"] = True
         session.acceptance_gates(manifest)
-        self.assertEqual(manifest["status"], "incomplete_gates")
-        self.assertFalse(manifest["acceptance_gates"]["roi_verified"])
+        self.assertFalse(manifest["acceptance_gates"]["flush_single_owner"])
+        self.assertNotEqual(manifest["status"], "completed")
+
+    def test_acceptance_gates_v1_empty_output_dir_missing_log_fails_flush(self) -> None:
+        frame_report = {
+            "qualified_windows": {
+                "0": _qualified_window(control_generation=100),
+                "1": _qualified_window(frame_count=55, duration_seconds=1.2, control_generation=104),
+            },
+            "positive_control": {"status": "passed"},
+            "roi_config": {"verified": True},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _gate_ready_manifest(frame_report)
+            session.acceptance_gates(manifest, root)
+            self.assertFalse(manifest["acceptance_gates"]["flush_single_owner"])
+            self.assertNotEqual(manifest["status"], "completed")
 
     def test_stale_positive_control_overwritten_on_reanalyze(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

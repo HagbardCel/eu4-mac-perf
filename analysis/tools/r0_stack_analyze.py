@@ -107,19 +107,28 @@ def build_tree(lines: list[tuple[int, int, str]]) -> StackNode:
     return root
 
 
+_THREAD_DECIMAL_HEADER = re.compile(r"Thread_(\d+)", re.IGNORECASE)
+_THREAD_HEX_HEADER = re.compile(r"Thread\s+0x([0-9a-f]+)", re.IGNORECASE)
+
+
+def _thread_header_id(line: str) -> tuple[str, int] | None:
+    match = _THREAD_DECIMAL_HEADER.search(line)
+    if match:
+        return ("decimal", int(match.group(1)))
+    match = _THREAD_HEX_HEADER.search(line)
+    if match:
+        return ("hex", int(match.group(1), 16))
+    return None
+
+
 def extract_main_thread_section(text: str, main_thread_id: int | None) -> str:
     if main_thread_id is None:
         return text
-    decimal_token = str(main_thread_id)
-    hex_token = f"{main_thread_id:x}".lower()
     lines = text.splitlines()
     start = None
     for index, line in enumerate(lines):
-        lowered = line.lower()
-        if f"thread_{decimal_token}" in lowered.replace(" ", ""):
-            start = index
-            break
-        if "thread 0x" in lowered and hex_token in lowered:
+        parsed = _thread_header_id(line)
+        if parsed and parsed[1] == main_thread_id:
             start = index
             break
     if start is None:
@@ -133,10 +142,8 @@ def extract_main_thread_section(text: str, main_thread_id: int | None) -> str:
         if stripped.startswith("Total number in stack"):
             end = index
             break
-        if " Thread_" in lines[index] and decimal_token not in lines[index]:
-            end = index
-            break
-        if lines[index].strip().startswith("Thread ") and index != start:
+        parsed = _thread_header_id(lines[index])
+        if parsed and parsed[1] != main_thread_id:
             end = index
             break
     return "\n".join(lines[start:end])

@@ -49,6 +49,18 @@ Call graph:
         report = analyze_sample_text(text, main_thread_id=0x2A)
         self.assertEqual(report["attributed_sample_weight"], 100)
 
+    def test_main_thread_section_rejects_prefix_thread_id(self) -> None:
+        text = """
+Call graph:
+    10 Thread_1234   main
+      10 foo
+    20 Thread_12345   other
+      20 bar
+        """
+        report = analyze_sample_text(text, main_thread_id=1234)
+        self.assertEqual(report["attributed_sample_weight"], 10)
+        self.assertNotIn("bar", str(report))
+
     def test_branched_siblings(self) -> None:
         text = """
 Call graph:

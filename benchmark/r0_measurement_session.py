@@ -150,13 +150,6 @@ def _positive_control_gate(manifest: dict[str, Any]) -> bool:
 
 def _flush_single_owner_gate(manifest: dict[str, Any], output_dir: Path) -> bool:
     log_path = _probe_log_path_from_manifest(manifest, output_dir)
-    has_probe_evidence = bool(
-        manifest.get("probe_log_path")
-        or any(epoch.get("log_path") for epoch in manifest.get("epochs", []))
-        or log_path.is_file()
-    )
-    if not has_probe_evidence:
-        return True
     if not log_path.is_file():
         return False
     return r0_probe.flush_single_owner_passes(r0_probe.parse_log(log_path))
@@ -308,7 +301,12 @@ def acceptance_gates(manifest: dict[str, Any], output_dir: Path | None = None) -
     gates: dict[str, Any] = {}
     cpu = manifest.get("epoch_a_thread_cpu", {})
     gates["cpu_reconcile"] = cpu.get("reconcile_ok") is True
-    if output_dir is not None:
+    if manifest.get("schema") == "r0_measurement_session_v1":
+        if output_dir is None:
+            gates["flush_single_owner"] = False
+        else:
+            gates["flush_single_owner"] = _flush_single_owner_gate(manifest, output_dir)
+    elif output_dir is not None:
         gates["flush_single_owner"] = _flush_single_owner_gate(manifest, output_dir)
     else:
         gates["flush_single_owner"] = True

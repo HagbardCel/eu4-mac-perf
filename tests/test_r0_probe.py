@@ -152,8 +152,11 @@ class R0ProbeTests(unittest.TestCase):
             parsed = r0_probe.parse_log(log)
             self.assertEqual(len(parsed["thread_violations"]), 1)
             self.assertFalse(r0_probe.flush_single_owner_passes(parsed))
-            self.assertTrue(parsed["frames"])
-            thread_ids = {int(frame["pthread_tid"]) for frame in parsed["frames"]}
+            frames = parsed["frames"]
+            self.assertEqual(len(frames), 6)
+            self.assertEqual([int(frame["frame_index"]) for frame in frames], [1, 2, 3, 4, 5, 6])
+            self.assertTrue(all(int(frame["flush_is_main_thread"]) == 1 for frame in frames))
+            thread_ids = {int(frame["pthread_tid"]) for frame in frames}
             self.assertEqual(len(thread_ids), 1)
             self.assertNotEqual(next(iter(thread_ids)), 0)
             self.assertFalse(list(root.glob("captures/*.rgba")))

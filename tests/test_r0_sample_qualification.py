@@ -1,50 +1,44 @@
+import json
+import platform
 import re
+import socket
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 from analysis.tools.r0_stack_analyze import analyze_sample_text
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER_SOURCE = ROOT / "tests/sample_spin_worker.c"
-FIXTURE_PATH = ROOT / "tests/fixtures/r0_authentic_sample.txt"
+EVIDENCE_DIR = ROOT / "results/r0-native-qualification"
+SAMPLE_PATH = EVIDENCE_DIR / "authentic-sample.txt"
+PROVENANCE_PATH = EVIDENCE_DIR / "provenance.json"
 
 
-def _main_thread_id_from_sample(text: str, expected_decimal: int | None = None) -> int:
-    if expected_decimal is not None:
-        hex_token = f"{expected_decimal:x}".lower()
-        for line in text.splitlines():
-            lowered = line.lower()
-            if "thread 0x" in lowered and hex_token in lowered:
-                match = re.search(r"0x([0-9a-f]+)", line, re.IGNORECASE)
-                if match:
-                    return int(match.group(1), 16)
-    for block in text.split("Thread ")[1:]:
-        if "sample_spin_worker" not in block:
-            continue
-        match = re.search(r"0x([0-9a-f]+)", block.splitlines()[0], re.IGNORECASE)
-        if match:
-            return int(match.group(1), 16)
-    raise ValueError("main thread section not found in sample output")
+def _load_provenance() -> dict | None:
+    if not PROVENANCE_PATH.is_file():
+        return None
+    return json.loads(PROVENANCE_PATH.read_text())
 
 
-@unittest.skipUnless(sys.platform == "darwin", "sample qualification requires macOS")
 class R0AuthenticSampleQualification(unittest.TestCase):
-    def test_authentic_sample_parser_conservation(self) -> None:
-        if FIXTURE_PATH.is_file():
-            raw = FIXTURE_PATH.read_text(errors="replace")
-            thread_match = re.search(r"Thread_(\d+)", raw)
-            self.assertIsNotNone(thread_match, "fixture missing Thread_<id> header")
-            main_tid = int(thread_match.group(1))
-            report = analyze_sample_text(raw, main_thread_id=main_tid)
-            attributed = int(report["attributed_sample_weight"])
-            root_inclusive = int(report["root_inclusive"])
-            self.assertGreater(attributed, 0)
-            self.assertEqual(attributed, root_inclusive)
-            return
+    def test_authentic_sample_cached_replay(self) -> None:
+        provenance = _load_provenance()
+        if provenance is None or not SAMPLE_PATH.is_file():
+            self.skipTest("missing results/r0-native-qualification evidence (run native capture on macOS)")
+        main_tid = int(provenance["main_thread_id"])
+        text = SAMPLE_PATH.read_text(errors="replace")
+        report = analyze_sample_text(text, main_thread_id=main_tid)
+        attributed = int(report["attributed_sample_weight"])
+        root_inclusive = int(report["root_inclusive"])
+        self.assertGreater(attributed, 0)
+        self.assertEqual(attributed, root_inclusive)
 
+    @unittest.skipUnless(sys.platform == "darwin", "native sample capture requires macOS")
+    def test_authentic_sample_native_capture(self) -> None:
         worker = ROOT / "benchmark/.build/sample_spin_worker"
         subprocess.run(
             [
@@ -66,23 +60,42 @@ class R0AuthenticSampleQualification(unittest.TestCase):
             line = process.stdout.readline()
             match = re.search(r"MAIN_TID=(\d+)", line)
             self.assertIsNotNone(match)
-            expected_tid = int(match.group(1))
-            subprocess.run(
-                ["sample", str(process.pid), "1", "-file", str(sample_path), "-mayDie"],
-                check=True,
-            )
-            process.wait(timeout=10)
-            process.stdout.close()
-            process.stderr.close()
+            main_tid = int(match.group(1))
+            sample_cmd = ["sample", str(process.pid), "1", "-file", str(sample_path), "-mayDie"]
+            subprocess.run(sample_cmd, check=True)
+            process.wait(timeout=15)
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()
             text = sample_path.read_text(errors="replace")
-            main_tid = _main_thread_id_from_sample(text, expected_decimal=expected_tid)
-            FIXTURE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            FIXTURE_PATH.write_text(text)
             report = analyze_sample_text(text, main_thread_id=main_tid)
             attributed = int(report["attributed_sample_weight"])
             root_inclusive = int(report["root_inclusive"])
             self.assertGreater(attributed, 0)
             self.assertEqual(attributed, root_inclusive)
+
+            EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
+            SAMPLE_PATH.write_text(text)
+            commit = (
+                subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    cwd=str(ROOT),
+                ).stdout.strip()
+                or None
+            )
+            provenance = {
+                "captured_utc": datetime.now(timezone.utc).isoformat(),
+                "main_thread_id": main_tid,
+                "sample_command": sample_cmd,
+                "host": socket.gethostname(),
+                "platform": platform.platform(),
+                "git_commit": commit,
+            }
+            PROVENANCE_PATH.write_text(json.dumps(provenance, indent=2) + "\n")
 
 
 if __name__ == "__main__":
