@@ -98,11 +98,61 @@ def sample_main_thread_corroboration(sample_text: str, main_thread_id: int | Non
     return "unavailable"
 
 
-def _analyzer_ran(command: list[str], env: dict[str, str]) -> tuple[int, dict[str, Any] | None]:
-    result = subprocess.run(command, capture_output=True, text=True, check=False, cwd=str(ROOT), env=env)
-    output_path = Path(command[command.index("--output") + 1])
-    payload = json.loads(output_path.read_text()) if output_path.is_file() else None
-    return result.returncode, payload
+def _analyzer_ran(command: list[str], env: dict[str, str], output_path: Path) -> tuple[int, dict[str, Any] | None, str | None]:
+    temp_path = output_path.with_suffix(".tmp.json")
+    command = command.copy()
+    output_index = command.index("--output") + 1
+    command[output_index] = str(temp_path)
+    try:
+        if output_path.is_file():
+            output_path.unlink()
+        if temp_path.is_file():
+            temp_path.unlink()
+        result = subprocess.run(command, capture_output=True, text=True, check=False, cwd=str(ROOT), env=env)
+        if result.returncode != 0:
+            return result.returncode, None, "nonzero_exit"
+        if not temp_path.is_file():
+            return result.returncode, None, "missing_output"
+        try:
+            payload = json.loads(temp_path.read_text())
+        except json.JSONDecodeError:
+            return result.returncode, None, "malformed_json"
+        temp_path.replace(output_path)
+        return result.returncode, payload, None
+    except OSError as exc:
+        return 1, None, str(exc)
+    finally:
+        if temp_path.is_file():
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+
+def _apply_positive_control_status(manifest: dict[str, Any], payload: dict[str, Any] | None) -> None:
+    if manifest.get("positive_control_status") == "skipped_unsupported_drawable":
+        return
+    if not payload:
+        manifest["positive_control_status"] = "failed"
+        return
+    status = payload.get("positive_control", {}).get("status")
+    manifest["positive_control_status"] = "passed" if status == "passed" else "failed"
+
+
+def _positive_control_gate(manifest: dict[str, Any]) -> bool:
+    report = manifest.get("frame_evolution_report")
+    if report is not None:
+        return report.get("positive_control", {}).get("status") == "passed"
+    if manifest.get("schema") != "r0_measurement_session_v1":
+        return manifest.get("positive_control_status") == "passed"
+    return False
+
+
+def _roi_verified_gate(manifest: dict[str, Any]) -> bool:
+    report = manifest.get("frame_evolution_report")
+    if not report:
+        return False
+    return report.get("roi_config", {}).get("verified") is True
 
 
 def run_offline_analyzers(
@@ -113,8 +163,11 @@ def run_offline_analyzers(
     if not log_path.is_file():
         return
     frame_out = output_dir / "frame_evolution_report.json"
+    stack_out = output_dir / "stack_report.json"
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
     manifest["analyzer_results"] = {}
+    manifest.pop("frame_evolution_report", None)
+    manifest.pop("stack_report", None)
     captures = manifest.get("captures", {})
     pre_gen = captures.get("pre", {}).get("generation")
     post_gen = captures.get("post", {}).get("generation")
@@ -147,22 +200,21 @@ def run_offline_analyzers(
     if manifest.get("frame_evolution_status") == "skipped_unsupported_drawable":
         manifest["analyzer_results"]["frame_evolution"] = {"exit_code": 0, "skipped": True}
     else:
-        code, payload = _analyzer_ran(frame_cmd, env)
-        manifest["analyzer_results"]["frame_evolution"] = {"exit_code": code}
-        if payload:
-            manifest["frame_evolution_report"] = payload
-            positive = payload.get("positive_control", {})
-            if positive.get("status") == "passed":
-                manifest["positive_control_status"] = "passed"
-            elif manifest.get("positive_control_status") not in (
-                "skipped_unsupported_drawable",
-                "passed",
-            ):
-                manifest["positive_control_status"] = "failed"
+        try:
+            code, payload, error = _analyzer_ran(frame_cmd, env, frame_out)
+            manifest["analyzer_results"]["frame_evolution"] = {"exit_code": code, "error": error}
+            if payload:
+                manifest["frame_evolution_report"] = payload
+            _apply_positive_control_status(manifest, payload)
+        except Exception as exc:  # noqa: BLE001 — must not break integrated cleanup
+            manifest["analyzer_results"]["frame_evolution"] = {
+                "exit_code": 1,
+                "error": f"analyzer_exception:{exc}",
+            }
+            _apply_positive_control_status(manifest, None)
 
     sample_path = output_dir / "epoch_b.sample.txt"
     if sample_path.is_file():
-        stack_out = output_dir / "stack_report.json"
         stack_cmd = [
             sys.executable,
             str(ROOT / "analysis/tools/r0_stack_analyze.py"),
@@ -172,19 +224,36 @@ def run_offline_analyzers(
         ]
         if manifest.get("main_thread_id"):
             stack_cmd.extend(["--main-thread-id", str(manifest["main_thread_id"])])
-        code, payload = _analyzer_ran(stack_cmd, env)
-        manifest["analyzer_results"]["stack"] = {"exit_code": code}
-        if payload:
-            manifest["stack_report"] = payload
+        try:
+            code, payload, error = _analyzer_ran(stack_cmd, env, stack_out)
+            manifest["analyzer_results"]["stack"] = {"exit_code": code, "error": error}
+            if payload:
+                manifest["stack_report"] = payload
+        except Exception as exc:  # noqa: BLE001
+            manifest["analyzer_results"]["stack"] = {"exit_code": 1, "error": f"analyzer_exception:{exc}"}
 
 
-def _qualified_windows_pass(report: dict[str, Any] | None) -> bool:
+def _qualified_windows_pass(report: dict[str, Any] | None, manifest: dict[str, Any]) -> bool:
     if not report:
         return False
     windows = report.get("qualified_windows") or {}
-    for key in ("0", "1"):
+    thresholds = {
+        "0": (BASELINE_MIN_FRAMES, MIN_CENSUS_SECONDS, "baseline"),
+        "1": (SCENARIO_1_MIN_FRAMES, SCENARIO_1_MIN_SECONDS, "scenario_1_census"),
+    }
+    acquisition = manifest.get("acquisition_generations") or {}
+    for key, (min_frames, min_seconds, gen_key) in thresholds.items():
         window = windows.get(key) or {}
         if not window.get("qualified"):
+            return False
+        if int(window.get("frame_count", 0)) < min_frames:
+            return False
+        if float(window.get("duration_seconds") or 0) < min_seconds:
+            return False
+        if window.get("continuity", {}).get("status") != "passed":
+            return False
+        expected_gen = acquisition.get(gen_key)
+        if expected_gen is not None and window.get("control_generation") != expected_gen:
             return False
     return True
 
@@ -196,7 +265,9 @@ def _stack_report_valid(report: dict[str, Any] | None) -> bool:
         return False
     attributed = int(report.get("attributed_sample_weight", 0))
     root_inclusive = int(report.get("root_inclusive", 0))
-    return attributed == root_inclusive or root_inclusive == 0
+    if attributed <= 0 or root_inclusive <= 0:
+        return False
+    return attributed == root_inclusive
 
 
 def acceptance_gates(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -218,10 +289,12 @@ def acceptance_gates(manifest: dict[str, Any]) -> dict[str, Any]:
     if partial:
         gates["qualified_windows"] = True
         gates["positive_control"] = True
+        gates["roi_verified"] = True
         gates["frame_analyzer"] = analyzers.get("frame_evolution", {}).get("skipped") is True
     else:
-        gates["qualified_windows"] = _qualified_windows_pass(frame_report)
-        gates["positive_control"] = manifest.get("positive_control_status") == "passed"
+        gates["qualified_windows"] = _qualified_windows_pass(frame_report, manifest)
+        gates["positive_control"] = _positive_control_gate(manifest)
+        gates["roi_verified"] = _roi_verified_gate(manifest)
         gates["frame_analyzer"] = analyzers.get("frame_evolution", {}).get("exit_code") == 0
     prior = manifest.get("status")
     if prior in TERMINAL_FAILURE_STATUSES:
@@ -417,7 +490,7 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                     r0_probe.write_control(
                         control_path,
                         generation=gen_pre,
-                        mode=r0_control.EU4_R0_MODE_CENSUS,
+                        mode=r0_control.EU4_R0_MODE_CENSUS_CAPTURE,
                         scenario_id=0,
                     )
                     r0_probe.wait_for_ack(log_path, gen_pre)
@@ -465,7 +538,7 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                     r0_probe.write_control(
                         control_path,
                         generation=gen_post,
-                        mode=r0_control.EU4_R0_MODE_CENSUS,
+                        mode=r0_control.EU4_R0_MODE_CENSUS_CAPTURE,
                         scenario_id=1,
                     )
                     r0_probe.wait_for_ack(log_path, gen_post)

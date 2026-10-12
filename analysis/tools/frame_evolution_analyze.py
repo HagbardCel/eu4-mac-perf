@@ -516,8 +516,9 @@ def evaluate_positive_control_windows(
     min_roi_changed_fraction: float = 0.05,
     roi: tuple[float, float, float, float] | None = None,
     roi_verified: bool = True,
+    allow_provisional_pixels: bool = False,
 ) -> dict[str, Any]:
-    if not roi_verified:
+    if not roi_verified and not allow_provisional_pixels:
         return {"status": "insufficient_evidence", "reason": "roi_not_verified"}
     if len(pre) < stable_tail or len(post) < stable_head:
         return {"status": "failed", "reason": "insufficient stable window frames"}
@@ -546,6 +547,13 @@ def evaluate_positive_control_windows(
     )
     if not localized:
         return {**result, "status": "failed", "reason": "panel change not localized to registered ROI"}
+    if not roi_verified:
+        return {
+            **result,
+            "status": "insufficient_evidence",
+            "reason": "roi_not_verified",
+            "provisional_roi_check": "passed",
+        }
     return {**result, "status": "passed", "reason": "localized panel ROI change"}
 
 
@@ -684,7 +692,8 @@ def build_report(
                 width=capture_width,
                 height=capture_height,
                 roi=roi_tuple,
-                roi_verified=roi_verified if require_roi_verified else True,
+                roi_verified=roi_verified,
+                allow_provisional_pixels=not require_roi_verified,
             ),
         }
         positive_control_passed = positive.get("status") == "passed"
@@ -744,6 +753,9 @@ def main() -> None:
     args = parser.parse_args()
     frames = load_frames_from_log(args.log)
     events = load_events(args.events) if args.events else []
+    if args.capture_dir and args.pre_generation is not None and args.post_generation is not None:
+        if not args.events or not args.events.is_file():
+            raise SystemExit("frame analyzer requires --events when capture provenance is requested")
     log_frames = _load_log_frames_dict(args.log)
     positive: dict[str, Any] | None = None
     if args.pre_generation is not None and args.post_generation is not None:

@@ -47,7 +47,7 @@ def verify_capture_provenance(
     events: list[dict[str, Any]] | None = None,
     window: str | None = None,
 ) -> dict[str, Any]:
-    """window: 'pre' (uptime < pre_window_end) or 'post' (uptime >= post_window_start)."""
+    """window: 'pre' (uptime <= pre_window_end) or 'post' (uptime >= post_window_start)."""
     sidecar = load_capture_sidecar(capture_dir, generation)
     if not sidecar or not sidecar.get("write_ok"):
         return {"status": "failed", "reason": "missing_or_incomplete_sidecar"}
@@ -84,15 +84,28 @@ def verify_capture_provenance(
     log_crc = int(frame.get("crc64", -1))
     if computed != sidecar_crc or computed != log_crc:
         return {"status": "failed", "reason": "crc64_mismatch", "computed": computed}
-    uptime_ns = int(frame.get("uptime_ns") or sidecar.get("uptime_ns") or 0)
-    if events and window in {"pre", "post"}:
+    frame_uptime = frame.get("uptime_ns")
+    if frame_uptime is None or int(frame_uptime) <= 0:
+        return {"status": "failed", "reason": "missing_frame_uptime_ns"}
+    uptime_ns = int(frame_uptime)
+    if "uptime_ns" not in sidecar:
+        return {"status": "failed", "reason": "missing_sidecar_uptime_ns"}
+    if int(sidecar["uptime_ns"]) != uptime_ns:
+        return {"status": "failed", "reason": "sidecar_frame_uptime_mismatch"}
+    if window in {"pre", "post"}:
+        if not events:
+            return {"status": "failed", "reason": "missing_acquisition_events"}
         if window == "pre":
             pre_end = _event_uptime_ns(events, "pre_window_end")
-            if pre_end is not None and uptime_ns > pre_end:
+            if pre_end is None:
+                return {"status": "failed", "reason": "missing_pre_window_end"}
+            if uptime_ns > pre_end:
                 return {"status": "failed", "reason": "capture_outside_pre_window"}
         else:
             post_start = _event_uptime_ns(events, "post_window_start")
-            if post_start is not None and uptime_ns < post_start:
+            if post_start is None:
+                return {"status": "failed", "reason": "missing_post_window_start"}
+            if uptime_ns < post_start:
                 return {"status": "failed", "reason": "capture_outside_post_window"}
     return {
         "status": "verified",

@@ -22,7 +22,8 @@ bool eu4_r0_control_unpack(uint64_t packed, eu4_r0_control_snapshot_t *out) {
     if (out->mode > EU4_R0_MODE_MAX || out->scenario_id > EU4_R0_SCENARIO_MAX) {
         return false;
     }
-    if (out->mode != EU4_R0_MODE_PASSIVE && out->mode != EU4_R0_MODE_CENSUS) {
+    if (out->mode != EU4_R0_MODE_PASSIVE && out->mode != EU4_R0_MODE_CENSUS &&
+        out->mode != EU4_R0_MODE_CENSUS_CAPTURE) {
         return false;
     }
     out->valid = true;

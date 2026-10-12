@@ -23,7 +23,7 @@ Canonical strategy: [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md)
 
 ## F24 positive control
 
-Launch-time `EU4_R0_CAPTURE_DIR`. Each capture uses a distinct **control generation** (not post-launch env slots).
+Launch-time `EU4_R0_CAPTURE_DIR`. RGBA files are written only for **`CENSUS_CAPTURE`** generations (`gen_pre` / `gen_post`); ordinary **`CENSUS`** performs readback without disk capture.
 
 Operator order: stabilize (UI closed) → publish pre generation → verify capture → `pre_window_end` → operator opens panel → discard → `post_window_start` → publish post generation → verify capture.
 

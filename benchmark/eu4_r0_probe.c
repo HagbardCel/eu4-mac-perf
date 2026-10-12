@@ -37,6 +37,9 @@ static uint32_t last_seen_generation;
 static uint32_t active_scenario_id;
 static uint32_t active_mode;
 
+static uint32_t capture_track_generation;
+static bool capture_written_for_generation;
+
 static CGLContextObj last_context;
 static int last_width;
 static int last_height;
@@ -190,6 +193,10 @@ static bool census_readback(CGLContextObj context, eu4_r0_readback_result_t *res
     return ok;
 }
 
+static bool is_census_mode(uint32_t mode) {
+    return mode == EU4_R0_MODE_CENSUS || mode == EU4_R0_MODE_CENSUS_CAPTURE;
+}
+
 static bool capture_already_written(uint32_t generation) {
     const char *dir = getenv("EU4_R0_CAPTURE_DIR");
     if (!dir || !dir[0]) {
@@ -329,6 +336,10 @@ static CGLError probed_flush(CGLContextObj context) {
             last_seen_generation = snap.generation;
             active_mode = snap.mode;
             active_scenario_id = snap.scenario_id;
+            if (snap.generation != capture_track_generation) {
+                capture_track_generation = snap.generation;
+                capture_written_for_generation = capture_already_written(snap.generation);
+            }
             maybe_ack_generation(&snap, now);
         }
     }
@@ -344,7 +355,7 @@ static CGLError probed_flush(CGLContextObj context) {
     unsigned readback_failure_code = (unsigned)EU4_R0_READBACK_UNKNOWN_FAILURE;
     uint32_t control_generation = have_snap ? snap.generation : 0;
 
-    if (have_snap && active_mode == EU4_R0_MODE_CENSUS && paused && snap.generation != 0 &&
+    if (have_snap && is_census_mode(active_mode) && paused && snap.generation != 0 &&
         snap.generation == last_acked_generation) {
         census_attempted = true;
         eu4_r0_readback_result_t rb = {0};
@@ -369,7 +380,14 @@ static CGLError probed_flush(CGLContextObj context) {
             }
             memcpy(reference_buffer, readback_buffer, total);
             reference_size = total;
-            write_capture_artifact(snap.generation, snap.scenario_id, record_frame_index, now, &rb);
+            if (active_mode == EU4_R0_MODE_CENSUS_CAPTURE && !capture_written_for_generation) {
+                pthread_mutex_lock(&lock);
+                if (!capture_written_for_generation &&
+                    write_capture_artifact(snap.generation, snap.scenario_id, record_frame_index, now, &rb)) {
+                    capture_written_for_generation = true;
+                }
+                pthread_mutex_unlock(&lock);
+            }
         }
     }
 

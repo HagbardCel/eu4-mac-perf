@@ -8,6 +8,11 @@ EU4_R0_CONTROL_PAGE_SIZE = 4096
 EU4_R0_CONTROL_VERSION = 1
 EU4_R0_MODE_PASSIVE = 0
 EU4_R0_MODE_CENSUS = 1
+EU4_R0_MODE_CENSUS_CAPTURE = 2
+
+_VALID_MODES = frozenset(
+    {EU4_R0_MODE_PASSIVE, EU4_R0_MODE_CENSUS, EU4_R0_MODE_CENSUS_CAPTURE}
+)
 
 
 def pack_control_word(*, generation: int, mode: int, scenario_id: int, version: int = EU4_R0_CONTROL_VERSION) -> int:
@@ -26,7 +31,7 @@ def unpack_control_word(word: int) -> tuple[int, int, int, int, bool]:
     scenario_id = (word >> 32) & 0xFFFF
     mode = (word >> 48) & 0xFF
     version = (word >> 56) & 0xFF
-    valid = version == EU4_R0_CONTROL_VERSION and mode in (EU4_R0_MODE_PASSIVE, EU4_R0_MODE_CENSUS)
+    valid = version == EU4_R0_CONTROL_VERSION and mode in _VALID_MODES
     return generation, mode, scenario_id, version, valid
 
 

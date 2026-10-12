@@ -75,7 +75,57 @@ class R0ControlAtomicTests(unittest.TestCase):
                 0,
                 msg=result.stderr.strip() or result.stdout.strip(),
             )
-            self.assertEqual(int(result.stdout.strip()), 42)
+            self.assertEqual(result.stdout.strip(), "42 0 7")
+
+    def test_cross_arch_tuple_stress(self) -> None:
+        if platform.machine() != "arm64":
+            self.skipTest("cross-arch stress expects arm64 host")
+        if not shutil.which("arch"):
+            self.skipTest("arch wrapper unavailable")
+        r0_probe.build()
+        consumer = r0_probe.BENCHMARK / ".build/r0_control_consume_x86_64"
+        subprocess.run(
+            [
+                "clang",
+                "-arch",
+                "x86_64",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-std=c11",
+                "-I",
+                str(r0_probe.BENCHMARK),
+                "-o",
+                str(consumer),
+                str(r0_probe.ROOT / "tests/r0_control_consume_x86.c"),
+                str(r0_probe.CONTROL_SOURCE),
+            ],
+            check=True,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "control.bin"
+            path.write_bytes(b"\x00" * r0_control.EU4_R0_CONTROL_PAGE_SIZE)
+            for index in range(40):
+                generation = 100 + index
+                mode = [r0_control.EU4_R0_MODE_PASSIVE, r0_control.EU4_R0_MODE_CENSUS, r0_control.EU4_R0_MODE_CENSUS_CAPTURE][
+                    index % 3
+                ]
+                scenario_id = index % 11
+                r0_probe.write_control(
+                    path, generation=generation, mode=mode, scenario_id=scenario_id
+                )
+                result = subprocess.run(
+                    ["arch", "-x86_64", str(consumer), str(path)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                self.assertEqual(
+                    result.stdout.strip(),
+                    f"{generation} {mode} {scenario_id}",
+                )
 
 
 if __name__ == "__main__":

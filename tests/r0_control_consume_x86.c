@@ -21,6 +21,6 @@ int main(int argc, char **argv) {
     if (!eu4_r0_control_consume(&page, &snap) || !snap.valid) {
         return 5;
     }
-    printf("%u\n", (unsigned)snap.generation);
+    printf("%u %u %u\n", (unsigned)snap.generation, (unsigned)snap.mode, (unsigned)snap.scenario_id);
     return 0;
 }

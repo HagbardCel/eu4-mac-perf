@@ -110,7 +110,9 @@ def build_success_fixture(root: Path) -> dict[str, int]:
             )
         )
         frame += 1
-    (root / "probe.log").write_text("".join(log_lines))
+    log_text = "".join(log_lines)
+    (root / "probe.log").write_text(log_text)
+    (root / "r0_probe.log").write_text(log_text)
     events = [
         {"event": "pre_window_end", "event_uptime_ns": 5_200_000_000},
         {"event": "post_window_start", "event_uptime_ns": 6_000_000_000},
@@ -156,7 +158,9 @@ def build_success_fixture(root: Path) -> dict[str, int]:
             parts[11] = str(capture_crc[generation])
             line = ",".join(parts) + "\n"
         updated_lines.append(line)
-    (root / "probe.log").write_text("".join(updated_lines))
+    log_text = "".join(updated_lines)
+    (root / "probe.log").write_text(log_text)
+    (root / "r0_probe.log").write_text(log_text)
     return {
         "pre_generation": GEN_PRE,
         "post_generation": GEN_POST,
@@ -257,6 +261,34 @@ class FrameEvolutionCliE2ETests(unittest.TestCase):
             )
             self.assertIn(report["positive_control"]["status"], {"failed", "insufficient_evidence"})
 
+    def test_missing_post_window_start_insufficient_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gens = build_success_fixture(root)
+            events = [{"event": "pre_window_end", "event_uptime_ns": 5_200_000_000}]
+            (root / "events.jsonl").write_text(json.dumps(events[0]) + "\n")
+            report = run_analyzer(
+                root, pre_gen=gens["pre_generation"], post_gen=gens["post_generation"], roi_config=ROI_FIXTURE
+            )
+            self.assertEqual(report["positive_control"]["status"], "insufficient_evidence")
+
+    def test_baseline_gap_not_qualified(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            gens = build_success_fixture(root)
+            lines = []
+            for line in (root / "probe.log").read_text().splitlines():
+                parts = line.split(",")
+                if parts[0] == "F" and parts[1] == "120":
+                    continue
+                lines.append(line)
+            (root / "probe.log").write_text("\n".join(lines) + "\n")
+            report = run_analyzer(
+                root, pre_gen=gens["pre_generation"], post_gen=gens["post_generation"], roi_config=ROI_FIXTURE
+            )
+            window = report["qualified_windows"]["0"]
+            self.assertFalse(window.get("qualified", False) and window.get("frame_count", 0) >= 240)
+
     def test_acceptance_gates_eligible(self) -> None:
         import r0_measurement_session as session
 
@@ -267,19 +299,20 @@ class FrameEvolutionCliE2ETests(unittest.TestCase):
                 root, pre_gen=gens["pre_generation"], post_gen=gens["post_generation"], roi_config=ROI_FIXTURE
             )
             manifest = {
+                "schema": "r0_measurement_session_v1",
                 "epoch_a_thread_cpu": {
                     "reconcile_ok": True,
                     "main_thread_mapping_status": "verified",
                 },
                 "thread_cpu_preflight": {"status": "ready"},
                 "event_clock_alignment": {"status": "passed"},
-                "positive_control_status": "passed",
                 "analyzer_results": {
                     "stack": {"exit_code": 0},
                     "frame_evolution": {"exit_code": 0},
                 },
                 "drawable_capability": {"status": "supported"},
                 "frame_evolution_report": report,
+                "acquisition_generations": {"baseline": GEN_BASE, "scenario_1_census": GEN_S1},
                 "stack_report": {
                     "functional_caller": {"ingame_render": 0.5},
                     "attributed_sample_weight": 10,

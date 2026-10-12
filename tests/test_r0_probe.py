@@ -52,6 +52,35 @@ class R0ProbeTests(unittest.TestCase):
             self.assertTrue(parsed["frames"])
             self.assertFalse(any(frame.get("census_ok") for frame in parsed["frames"]))
 
+    @unittest.skipUnless(sys.platform == "darwin", "R0 harness requires macOS")
+    def test_census_capture_writes_single_rgba(self) -> None:
+        import eu4_r0_control as r0_control
+
+        r0_probe.build()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            control = root / "control.bin"
+            log = root / "probe.log"
+            capture_dir = root / "captures"
+            capture_dir.mkdir()
+            env = os.environ.copy()
+            env.update(r0_probe.probe_env(control, log, capture_dir=capture_dir))
+            env["EU4_R0_TEST_CENSUS"] = "1"
+            r0_probe.write_control(
+                control, generation=1, mode=r0_control.EU4_R0_MODE_CENSUS, scenario_id=0
+            )
+            subprocess.run([str(r0_probe.HARNESS_EXE)], env=env, check=True, timeout=30)
+            self.assertFalse(list(capture_dir.glob("capture_*.rgba")))
+            r0_probe.write_control(
+                control,
+                generation=2,
+                mode=r0_control.EU4_R0_MODE_CENSUS_CAPTURE,
+                scenario_id=0,
+            )
+            subprocess.run([str(r0_probe.HARNESS_EXE)], env=env, check=True, timeout=30)
+            rgba_files = list(capture_dir.glob("capture_*.rgba"))
+            self.assertEqual(len(rgba_files), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
