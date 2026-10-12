@@ -1,7 +1,7 @@
 import json
+import os
 import platform
 import re
-import socket
 import subprocess
 import sys
 import tempfile
@@ -36,6 +36,8 @@ class R0AuthenticSampleQualification(unittest.TestCase):
         root_inclusive = int(report["root_inclusive"])
         self.assertGreater(attributed, 0)
         self.assertEqual(attributed, root_inclusive)
+        self.assertEqual(int(report["weighted_row_count"]), 15)
+        self.assertEqual(root_inclusive, 722)
 
     @unittest.skipUnless(sys.platform == "darwin", "native sample capture requires macOS")
     def test_authentic_sample_native_capture(self) -> None:
@@ -74,6 +76,10 @@ class R0AuthenticSampleQualification(unittest.TestCase):
             root_inclusive = int(report["root_inclusive"])
             self.assertGreater(attributed, 0)
             self.assertEqual(attributed, root_inclusive)
+            self.assertGreater(int(report["weighted_row_count"]), 0)
+
+            if os.environ.get("EU4_R0_REFRESH_NATIVE_EVIDENCE") != "1":
+                return
 
             EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
             SAMPLE_PATH.write_text(text)
@@ -90,8 +96,15 @@ class R0AuthenticSampleQualification(unittest.TestCase):
             provenance = {
                 "captured_utc": datetime.now(timezone.utc).isoformat(),
                 "main_thread_id": main_tid,
-                "sample_command": sample_cmd,
-                "host": socket.gethostname(),
+                "sample_command": [
+                    "sample",
+                    "<pid>",
+                    "1",
+                    "-file",
+                    "<output>",
+                    "-mayDie",
+                ],
+                "host": "native-qualification",
                 "platform": platform.platform(),
                 "git_commit": commit,
             }

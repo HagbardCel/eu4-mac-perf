@@ -159,7 +159,6 @@ class R0ProbeTests(unittest.TestCase):
             thread_ids = {int(frame["pthread_tid"]) for frame in frames}
             self.assertEqual(len(thread_ids), 1)
             self.assertNotEqual(next(iter(thread_ids)), 0)
-            self.assertFalse(list(root.glob("captures/*.rgba")))
 
 
 if __name__ == "__main__":

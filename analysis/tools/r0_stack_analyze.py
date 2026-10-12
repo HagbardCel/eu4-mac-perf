@@ -27,7 +27,9 @@ EXECUTION_RULES: list[tuple[str, str]] = [
     (r"NSCursor", "nscursor"),
 ]
 
-_FRAME_LINE = re.compile(r"^(\s+)(\d+)\s+(.+)$")
+_WEIGHTED_ROW = re.compile(r"^(\s+)((?:\+ |! |: |\| )*)(\d+)\s+(.+)$")
+_BRANCH_TOKEN = re.compile(r"(?:\+ |! |: |\| )")
+_THREAD_HEADER_COUNT = re.compile(r"^\s+(\d+)\s+Thread_", re.IGNORECASE)
 
 
 @dataclass
@@ -83,15 +85,46 @@ def _attribute(node: StackNode, path: list[str], functional: Counter, execution:
     return total
 
 
+def parse_weighted_frame_line(raw: str) -> tuple[int, int, str]:
+    line = raw.rstrip()
+    match = _WEIGHTED_ROW.match(line)
+    if not match:
+        raise ValueError(f"unsupported sample call-graph line: {raw!r}")
+    indent, branch, count_s, symbol = match.groups()
+    depth = len(indent.expandtabs(4)) + 2 * len(_BRANCH_TOKEN.findall(branch))
+    return depth, int(count_s), symbol.strip()
+
+
+def enumerate_weighted_call_graph_lines(text: str) -> list[str]:
+    """Return raw lines that must parse as weighted stack rows in order."""
+    rows: list[str] = []
+    in_call_graph = False
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if stripped.startswith("Call graph:"):
+            in_call_graph = True
+            continue
+        if not in_call_graph:
+            if _WEIGHTED_ROW.match(raw.rstrip()):
+                in_call_graph = True
+            else:
+                continue
+        if stripped.startswith("Total number in stack"):
+            break
+        if stripped.startswith("Binary Images:"):
+            break
+        if stripped == "":
+            continue
+        if not _WEIGHTED_ROW.match(raw.rstrip()):
+            raise ValueError(f"unsupported sample call-graph line: {raw!r}")
+        rows.append(raw)
+    return rows
+
+
 def _parse_frame_lines(text: str) -> list[tuple[int, int, str]]:
     lines: list[tuple[int, int, str]] = []
-    for raw in text.splitlines():
-        match = _FRAME_LINE.match(raw.rstrip())
-        if not match:
-            continue
-        indent, count_s, symbol = match.groups()
-        depth = len(indent.expandtabs(4))
-        lines.append((depth, int(count_s), symbol.strip()))
+    for raw in enumerate_weighted_call_graph_lines(text):
+        lines.append(parse_weighted_frame_line(raw))
     return lines
 
 
@@ -107,6 +140,16 @@ def build_tree(lines: list[tuple[int, int, str]]) -> StackNode:
     return root
 
 
+def assert_tree_exclusive_nonnegative(root: StackNode) -> None:
+    def walk(node: StackNode) -> None:
+        _exclusive(node)
+        for child in node.children.values():
+            walk(child)
+
+    for child in root.children.values():
+        walk(child)
+
+
 _THREAD_DECIMAL_HEADER = re.compile(r"Thread_(\d+)", re.IGNORECASE)
 _THREAD_HEX_HEADER = re.compile(r"Thread\s+0x([0-9a-f]+)", re.IGNORECASE)
 
@@ -118,6 +161,14 @@ def _thread_header_id(line: str) -> tuple[str, int] | None:
     match = _THREAD_HEX_HEADER.search(line)
     if match:
         return ("hex", int(match.group(1), 16))
+    return None
+
+
+def _thread_header_sample_count(text: str) -> int | None:
+    for line in text.splitlines():
+        match = _THREAD_HEADER_COUNT.match(line.rstrip())
+        if match:
+            return int(match.group(1))
     return None
 
 
@@ -150,7 +201,7 @@ def extract_main_thread_section(text: str, main_thread_id: int | None) -> str:
 
 
 def _has_weighted_frame_lines(text: str) -> bool:
-    return any(_FRAME_LINE.match(line.rstrip()) for line in text.splitlines())
+    return any(_WEIGHTED_ROW.match(line.rstrip()) for line in text.splitlines())
 
 
 def analyze_sample_text(text: str, *, main_thread_id: int | None = None) -> dict[str, Any]:
@@ -160,10 +211,12 @@ def analyze_sample_text(text: str, *, main_thread_id: int | None = None) -> dict
         raise ValueError("unsupported sample format: missing Call graph or weighted frame lines")
     if "Call graph" not in text and has_frames:
         text = "Call graph:\n" + text
-    lines = _parse_frame_lines(text)
-    if not lines:
+    weighted_rows = enumerate_weighted_call_graph_lines(text)
+    if not weighted_rows:
         raise ValueError("unsupported sample format: no weighted stacks parsed")
+    lines = [parse_weighted_frame_line(raw) for raw in weighted_rows]
     root = build_tree(lines)
+    assert_tree_exclusive_nonnegative(root)
     functional: Counter[str] = Counter()
     execution: Counter[str] = Counter()
     cross: Counter[tuple[str, str]] = Counter()
@@ -171,6 +224,12 @@ def analyze_sample_text(text: str, *, main_thread_id: int | None = None) -> dict
     for symbol, child in root.children.items():
         attributed += _attribute(child, [symbol], functional, execution, cross)
     root_inclusive = sum(child.inclusive for child in root.children.values())
+    header_count = _thread_header_sample_count(text)
+    if header_count is not None and root_inclusive != header_count:
+        raise ValueError(
+            "stack conservation failed: root inclusive weight "
+            f"{root_inclusive} != thread header sample count {header_count}"
+        )
     total = sum(functional.values()) or 1
     if attributed != root_inclusive and root.children:
         raise ValueError("stack conservation failed: attributed weight mismatch")
@@ -180,6 +239,7 @@ def analyze_sample_text(text: str, *, main_thread_id: int | None = None) -> dict
         "cross_tab_counts": {f"{a}|{b}": count for (a, b), count in cross.items()},
         "attributed_sample_weight": attributed,
         "root_inclusive": root_inclusive,
+        "weighted_row_count": len(weighted_rows),
         "rules": {
             "note": "branched inclusive tree; path-based cross-tab per exclusive node",
         },
