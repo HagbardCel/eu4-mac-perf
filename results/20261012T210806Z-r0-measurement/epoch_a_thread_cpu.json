@@ -1,0 +1,445 @@
+{
+  "pid": 98200,
+  "duration_s_requested": 30.0,
+  "interval_s": 0.5,
+  "window_start_ns": 378384359061916,
+  "window_end_ns": 378414600898250,
+  "observed_duration_s": 30.241836334,
+  "thread_deltas": [
+    {
+      "thread_id": 6650541,
+      "delta_us": 23394621
+    },
+    {
+      "thread_id": 6650575,
+      "delta_us": 210232
+    },
+    {
+      "thread_id": 6651013,
+      "delta_us": 405282
+    },
+    {
+      "thread_id": 6651014,
+      "delta_us": 392864
+    },
+    {
+      "thread_id": 6651015,
+      "delta_us": 401082
+    },
+    {
+      "thread_id": 6651016,
+      "delta_us": 412706
+    },
+    {
+      "thread_id": 6651017,
+      "delta_us": 392939
+    },
+    {
+      "thread_id": 6651018,
+      "delta_us": 403153
+    },
+    {
+      "thread_id": 6651019,
+      "delta_us": 395295
+    },
+    {
+      "thread_id": 6651020,
+      "delta_us": 394521
+    },
+    {
+      "thread_id": 6651021,
+      "delta_us": 400513
+    },
+    {
+      "thread_id": 6651022,
+      "delta_us": 400858
+    },
+    {
+      "thread_id": 6651023,
+      "delta_us": 397397
+    },
+    {
+      "thread_id": 6651024,
+      "delta_us": 395809
+    },
+    {
+      "thread_id": 6651025,
+      "delta_us": 409613
+    },
+    {
+      "thread_id": 6651026,
+      "delta_us": 407678
+    },
+    {
+      "thread_id": 6651027,
+      "delta_us": 406446
+    },
+    {
+      "thread_id": 6651028,
+      "delta_us": 404375
+    },
+    {
+      "thread_id": 6651029,
+      "delta_us": 400631
+    },
+    {
+      "thread_id": 6651143,
+      "delta_us": 391450
+    },
+    {
+      "thread_id": 6651320,
+      "delta_us": 226214
+    },
+    {
+      "thread_id": 6651322,
+      "delta_us": 2896
+    },
+    {
+      "thread_id": 6651361,
+      "delta_us": 39628
+    },
+    {
+      "thread_id": 6651372,
+      "delta_us": 30395
+    },
+    {
+      "thread_id": 6651373,
+      "delta_us": 195825
+    },
+    {
+      "thread_id": 6651391,
+      "delta_us": 70548
+    },
+    {
+      "thread_id": 6651497,
+      "delta_us": 208392
+    },
+    {
+      "thread_id": 6651892,
+      "delta_us": 370117
+    },
+    {
+      "thread_id": 6652289,
+      "delta_us": 250153
+    }
+  ],
+  "total_attributed_us": 32211633,
+  "thread_cpu_ms_per_s": 1065.1348233038818,
+  "main_thread_id": 6650541,
+  "main_thread_cpu_ms_per_s": 773.5846706404571,
+  "non_main_thread_cpu_ms_per_s": 291.5501526634246,
+  "main_thread_mapping_status": "verified",
+  "process_cpu_ms_per_s": 1065.2781481481481,
+  "reconciliation_residual_ms_per_s": 0.1433248442663171,
+  "reconcile_ok": true,
+  "threads_appeared_mid_window": 59,
+  "threads_disappeared_mid_window": 0,
+  "thread_cpu_backend": "libproc",
+  "poll_diagnostics": [
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    },
+    {
+      "threads_enumerated": 59,
+      "threads_sampled_ok": 59,
+      "threads_skipped_esrch": 0
+    }
+  ]
+}

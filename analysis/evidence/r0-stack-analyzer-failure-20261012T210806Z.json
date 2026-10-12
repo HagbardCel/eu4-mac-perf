@@ -1,0 +1,19 @@
+{
+  "schema": "r0_stack_analyzer_failure_v1",
+  "run_dir": "results/20261012T210806Z-r0-measurement",
+  "command": [
+    "python3",
+    "analysis/tools/r0_stack_analyze.py",
+    "results/20261012T210806Z-r0-measurement/epoch_b.sample.txt",
+    "--output",
+    "results/20261012T210806Z-r0-measurement/stack_report.json",
+    "--main-thread-id",
+    "6650541"
+  ],
+  "exit_code": 1,
+  "exception": "ValueError: unsupported sample call-graph line: '    +   791 main  (in eu4) + 10903  [0x100757441]'",
+  "manifest_analyzer_results": {
+    "exit_code": 1,
+    "error": "nonzero_exit"
+  }
+}

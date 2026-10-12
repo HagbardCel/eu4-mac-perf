@@ -1,0 +1,67 @@
+{
+  "evidence_id": "r0-integrated-session-20261012T210806Z",
+  "kind": "r0_measurement_session_v1",
+  "recorded_at_utc": "2026-10-12T21:11:31.559830+00:00",
+  "repository_commit_at_acquisition": "a9048e19e80eb391feea91f3890940a9307dfd9d",
+  "run_dir": "results/20261012T210806Z-r0-measurement",
+  "manifest_status": "incomplete_gates",
+  "interpretation_summary": "First live R0-M Venice session: reconciled main-thread and process-CPU baseline, timing/ownership controls verified, raw stack sample captured. Production drawable census did not proceed under current readback policy; automated stack attribution failed on an unsupported sample formatting variant. Frame staticity and lossless-skip candidates were not evaluated.",
+  "readiness": {
+    "swap_rate": 57.25,
+    "cpu_ms_s": 1065.9
+  },
+  "epoch_a_thread_cpu": {
+    "process_cpu_ms_per_s": 1065.2781481481481,
+    "main_thread_cpu_ms_per_s": 773.5846706404571,
+    "thread_cpu_ms_per_s": 1065.1348233038818,
+    "reconciliation_residual_ms_per_s": 0.1433248442663171,
+    "reconcile_ok": true,
+    "thread_cpu_backend": "libproc",
+    "observed_duration_s": 30.241836334
+  },
+  "drawable_capability": {
+    "status": "unsupported_drawable",
+    "failure_code": 1,
+    "failure_class": "unsupported_drawable",
+    "interpretation": "Conservative kCGLCPSurfaceBackingSize dimension discovery could not establish usable drawable dimensions; not proof that readback is impossible on macOS/Rosetta/Apple GL."
+  },
+  "acceptance_gates_raw": {
+    "cpu_reconcile": true,
+    "flush_single_owner": true,
+    "main_thread_mapping": true,
+    "thread_cpu_preflight": true,
+    "event_clock_alignment": true,
+    "stack_analyzer": false,
+    "qualified_windows": true,
+    "positive_control": true,
+    "roi_verified": true,
+    "frame_analyzer": true
+  },
+  "evidence_interpretation": {
+    "epoch_a_cpu_reconciliation": "passed",
+    "main_thread_mapping": "passed",
+    "clock_alignment": "passed",
+    "flush_ownership": "passed",
+    "production_drawable_dimension_discovery": "failed",
+    "qualified_census_windows": "not_evaluated",
+    "positive_control_pixel_verification": "not_evaluated",
+    "roi_pixel_verification": "not_evaluated",
+    "frame_evolution_classification": "not_evaluated",
+    "automated_stack_attribution": "failed",
+    "acceptance_gate_bypass_note": "When drawable_capability.failure_class is unsupported_drawable, acceptance_gates() sets qualified_windows, positive_control, roi_verified, and frame_analyzer to true as policy bypasses for partial completion—not evidence those experiments passed."
+  },
+  "fixture": {
+    "country": "VEN",
+    "date": "1444.11.11",
+    "save_sha256": "a04bc2e86eeda8025d7a914efb11b18b82dea423631fdcf48c50471578369607",
+    "eu4_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
+    "architecture": "x86_64 (translated)"
+  },
+  "related_evidence": {
+    "frame_evolution": "analysis/evidence/r0-frame-evolution-20261012T210806Z.json",
+    "stack_analyzer_failure": "analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json",
+    "process_cpu_samples": "results/20261012T210806Z-r0-measurement/epoch_a_process_cpu_samples.json"
+  },
+  "immutable_acquisition_note": "This capsule is the immutable acquisition record. Do not run --requalify in-place on the committed tree; use a working copy and commit derived evidence separately (see validation.md)."
+}

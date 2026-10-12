@@ -1,0 +1,143 @@
+{
+  "schema": "r0_epoch_a_process_cpu_samples_v1",
+  "run_dir": "results/20261012T210806Z-r0-measurement",
+  "powermetrics_pliststream_sha256": "9654bf7eb198938dc285db76f99b964bd3be77e47b31fe4946bd0f2f730df680",
+  "powermetrics_pliststream_bytes": 70033213,
+  "powermetrics_pliststream_note": "Full stream preserved locally; not committed (size/privacy). SHA-256 fingerprints local file.",
+  "clock_anchor": {
+    "event": "clock_anchor",
+    "monotonic_ns": 378243908357375,
+    "wall_ns": 1791839297653459000
+  },
+  "game_pid": 98200,
+  "selection": {
+    "method": "benchmark.autonomous_runner.cpu_samples_between",
+    "start_monotonic_ns": 378384359061916,
+    "end_monotonic_ns": 378414600898250,
+    "source": "epoch_a_thread_cpu.json window_start_ns/window_end_ns (libproc poll window)",
+    "acquisition_note": "Live session process_cpu_ms_per_s used ephemeral monotonic_ns() immediately before epoch_a_start mark; exact bounds not persisted. Window above reproduces mean within ~0.2 CPU-ms/s of manifest."
+  },
+  "sample_count": 29,
+  "samples": [
+    {
+      "monotonic_ns": 378385254898375,
+      "cputime_ms_per_s": 1063.93
+    },
+    {
+      "monotonic_ns": 378386254898375,
+      "cputime_ms_per_s": 1065.16
+    },
+    {
+      "monotonic_ns": 378387254898375,
+      "cputime_ms_per_s": 1086.61
+    },
+    {
+      "monotonic_ns": 378388254898375,
+      "cputime_ms_per_s": 1080.03
+    },
+    {
+      "monotonic_ns": 378389254898375,
+      "cputime_ms_per_s": 1057.9
+    },
+    {
+      "monotonic_ns": 378390254898375,
+      "cputime_ms_per_s": 1070.05
+    },
+    {
+      "monotonic_ns": 378391254898375,
+      "cputime_ms_per_s": 1056.31
+    },
+    {
+      "monotonic_ns": 378392254898375,
+      "cputime_ms_per_s": 1069.03
+    },
+    {
+      "monotonic_ns": 378393254898375,
+      "cputime_ms_per_s": 1083.44
+    },
+    {
+      "monotonic_ns": 378394254898375,
+      "cputime_ms_per_s": 1064.36
+    },
+    {
+      "monotonic_ns": 378395254898375,
+      "cputime_ms_per_s": 1061.97
+    },
+    {
+      "monotonic_ns": 378396254898375,
+      "cputime_ms_per_s": 1061.66
+    },
+    {
+      "monotonic_ns": 378397254898375,
+      "cputime_ms_per_s": 1061.49
+    },
+    {
+      "monotonic_ns": 378398254898375,
+      "cputime_ms_per_s": 1095.17
+    },
+    {
+      "monotonic_ns": 378400254898375,
+      "cputime_ms_per_s": 1060.12
+    },
+    {
+      "monotonic_ns": 378401254898375,
+      "cputime_ms_per_s": 1058.03
+    },
+    {
+      "monotonic_ns": 378402254898375,
+      "cputime_ms_per_s": 1055.29
+    },
+    {
+      "monotonic_ns": 378403254898375,
+      "cputime_ms_per_s": 1070.47
+    },
+    {
+      "monotonic_ns": 378404254898375,
+      "cputime_ms_per_s": 1059.51
+    },
+    {
+      "monotonic_ns": 378405254898375,
+      "cputime_ms_per_s": 1063.82
+    },
+    {
+      "monotonic_ns": 378406254898375,
+      "cputime_ms_per_s": 1058.32
+    },
+    {
+      "monotonic_ns": 378407254898375,
+      "cputime_ms_per_s": 1058.87
+    },
+    {
+      "monotonic_ns": 378408254898375,
+      "cputime_ms_per_s": 1064.79
+    },
+    {
+      "monotonic_ns": 378409254898375,
+      "cputime_ms_per_s": 1053.67
+    },
+    {
+      "monotonic_ns": 378410254898375,
+      "cputime_ms_per_s": 1056.84
+    },
+    {
+      "monotonic_ns": 378411254898375,
+      "cputime_ms_per_s": 1062.57
+    },
+    {
+      "monotonic_ns": 378412254898375,
+      "cputime_ms_per_s": 1063.1
+    },
+    {
+      "monotonic_ns": 378413254898375,
+      "cputime_ms_per_s": 1065.76
+    },
+    {
+      "monotonic_ns": 378414254898375,
+      "cputime_ms_per_s": 1069.94
+    }
+  ],
+  "recomputed_mean_cputime_ms_per_s": 1065.4555172413793,
+  "manifest_process_cpu_ms_per_s": 1065.2781481481481,
+  "manifest_thread_cpu_ms_per_s": 1065.1348233038818,
+  "manifest_reconciliation_residual_ms_per_s": 0.1433248442663171
+}
