@@ -88,17 +88,18 @@ def _process_cpu_ms_per_s(
 def sample_main_thread_corroboration(sample_text: str, main_thread_id: int | None) -> str:
     if main_thread_id is None:
         return "unavailable"
-    token = str(main_thread_id)
-    if token in sample_text:
-        return "matched"
+    hex_id = f"{main_thread_id:x}"
+    for line in sample_text.splitlines():
+        if line.strip().startswith("Thread ") and hex_id in line.lower():
+            return "matched"
     return "unavailable"
 
 
-def clock_alignment_check(log_path: Path, host_uptime_ns: int) -> dict[str, Any]:
-    from analysis.tools.frame_evolution_analyze import FrameRecord, clock_alignment_sanity, load_frames_from_log
-
-    frames = load_frames_from_log(log_path)
-    return clock_alignment_sanity(frames, host_uptime_ns)
+def _analyzer_ran(command: list[str], env: dict[str, str]) -> tuple[int, dict[str, Any] | None]:
+    result = subprocess.run(command, capture_output=True, text=True, check=False, cwd=str(ROOT), env=env)
+    output_path = Path(command[command.index("--output") + 1])
+    payload = json.loads(output_path.read_text()) if output_path.is_file() else None
+    return result.returncode, payload
 
 
 def run_offline_analyzers(output_dir: Path, manifest: dict[str, Any]) -> None:
@@ -107,46 +108,64 @@ def run_offline_analyzers(output_dir: Path, manifest: dict[str, Any]) -> None:
     if not log_path.is_file():
         return
     frame_out = output_dir / "frame_evolution_report.json"
-    env = {**os.environ, "PYTHONPATH": str(ROOT / "benchmark")}
-    subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / "analysis/tools/frame_evolution_analyze.py"),
-            str(log_path),
-            "--output",
-            str(frame_out),
-            "--events",
-            str(events_path),
-        ],
-        check=False,
-        cwd=str(ROOT),
-        env=env,
-    )
-    if frame_out.is_file():
-        manifest["frame_evolution_report"] = json.loads(frame_out.read_text())
-        positive = manifest["frame_evolution_report"].get("positive_control", {})
-        if positive.get("status") == "passed":
-            manifest["positive_control_status"] = "passed"
-        elif manifest.get("positive_control_status") != "unsupported_drawable":
-            manifest["positive_control_status"] = "failed"
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    manifest["analyzer_results"] = {}
+    captures = manifest.get("captures", {})
+    pre_gen = captures.get("pre", {}).get("generation")
+    post_gen = captures.get("post", {}).get("generation")
+    frame_cmd = [
+        sys.executable,
+        str(ROOT / "analysis/tools/frame_evolution_analyze.py"),
+        str(log_path),
+        "--output",
+        str(frame_out),
+        "--events",
+        str(events_path),
+    ]
+    capture_dir = output_dir / "captures"
+    if capture_dir.is_dir() and pre_gen and post_gen:
+        frame_cmd.extend(
+            [
+                "--capture-dir",
+                str(capture_dir),
+                "--pre-generation",
+                str(pre_gen),
+                "--post-generation",
+                str(post_gen),
+            ]
+        )
+    if manifest.get("frame_evolution_status") == "skipped_unsupported_drawable":
+        manifest["analyzer_results"]["frame_evolution"] = {"exit_code": 0, "skipped": True}
+    else:
+        code, payload = _analyzer_ran(frame_cmd, env)
+        manifest["analyzer_results"]["frame_evolution"] = {"exit_code": code}
+        if payload:
+            manifest["frame_evolution_report"] = payload
+            positive = payload.get("positive_control", {})
+            if positive.get("status") == "passed":
+                manifest["positive_control_status"] = "passed"
+            elif manifest.get("positive_control_status") not in (
+                "skipped_unsupported_drawable",
+                "passed",
+            ):
+                manifest["positive_control_status"] = "failed"
 
     sample_path = output_dir / "epoch_b.sample.txt"
     if sample_path.is_file():
         stack_out = output_dir / "stack_report.json"
-        subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "analysis/tools/r0_stack_analyze.py"),
-                str(sample_path),
-                "--output",
-                str(stack_out),
-            ],
-            check=False,
-            cwd=str(ROOT),
-            env=env,
-        )
-        if stack_out.is_file():
-            manifest["stack_report"] = json.loads(stack_out.read_text())
+        stack_cmd = [
+            sys.executable,
+            str(ROOT / "analysis/tools/r0_stack_analyze.py"),
+            str(sample_path),
+            "--output",
+            str(stack_out),
+        ]
+        if manifest.get("main_thread_id"):
+            stack_cmd.extend(["--main-thread-id", str(manifest["main_thread_id"])])
+        code, payload = _analyzer_ran(stack_cmd, env)
+        manifest["analyzer_results"]["stack"] = {"exit_code": code}
+        if payload:
+            manifest["stack_report"] = payload
 
 
 def acceptance_gates(manifest: dict[str, Any]) -> dict[str, Any]:
@@ -155,24 +174,32 @@ def acceptance_gates(manifest: dict[str, Any]) -> dict[str, Any]:
     gates["cpu_reconcile"] = cpu.get("reconcile_ok") is True
     gates["main_thread_mapping"] = cpu.get("main_thread_mapping_status") == "verified"
     gates["thread_cpu_preflight"] = manifest.get("thread_cpu_preflight", {}).get("status") == "ready"
-    gates["event_clock_alignment"] = manifest.get("event_clock_alignment", {}).get("status") == "passed"
+    clock_status = manifest.get("event_clock_alignment", {}).get("status")
+    gates["event_clock_alignment"] = clock_status == "passed"
+    analyzers = manifest.get("analyzer_results", {})
+    gates["stack_analyzer"] = analyzers.get("stack", {}).get("exit_code") == 0
     drawable = manifest.get("drawable_capability", {})
-    if drawable.get("status") == "unsupported_drawable":
+    partial = drawable.get("failure_class") == "unsupported_drawable"
+    if partial:
         gates["census_frames"] = True
         gates["positive_control"] = True
-        prior = manifest.get("status")
-        if prior not in TERMINAL_FAILURE_STATUSES:
-            manifest["status"] = "partial_complete" if all(gates.values()) else "incomplete_gates"
+        gates["frame_analyzer"] = analyzers.get("frame_evolution", {}).get("skipped") is True
     else:
-        gates["census_frames"] = manifest.get("census_frame_count", 0) >= MIN_CENSUS_FRAMES
+        by_scenario = manifest.get("census_frame_count_by_scenario", {})
+        gates["census_frames"] = all(
+            count >= (30 if sid != "0" else MIN_CENSUS_FRAMES) for sid, count in by_scenario.items()
+        ) if by_scenario else manifest.get("census_frame_count", 0) >= MIN_CENSUS_FRAMES
         gates["positive_control"] = manifest.get("positive_control_status") == "passed"
-        prior = manifest.get("status")
-        if prior in TERMINAL_FAILURE_STATUSES:
-            pass
-        elif all(gates.values()):
-            manifest["status"] = "completed"
-        else:
-            manifest["status"] = "incomplete_gates"
+        gates["frame_analyzer"] = analyzers.get("frame_evolution", {}).get("exit_code") == 0
+    prior = manifest.get("status")
+    if prior in TERMINAL_FAILURE_STATUSES:
+        pass
+    elif partial and all(gates.values()):
+        manifest["status"] = "partial_complete"
+    elif all(gates.values()):
+        manifest["status"] = "completed"
+    else:
+        manifest["status"] = "incomplete_gates"
     manifest["acceptance_gates"] = gates
     return gates
 
@@ -228,15 +255,16 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                 time.sleep(2)
                 if pm.poll() is not None:
                     raise base.BenchmarkError("Powermetrics helper exited before EU IV launch")
+                capture_dir = output_dir / "captures"
                 env = os.environ.copy()
-                env.update(r0_probe.probe_env(control_path, log_path))
+                env.update(r0_probe.probe_env(control_path, log_path, capture_dir=capture_dir))
                 env["EU4_R0_EXPECT_WIDTH"] = str(EXPECT_WIDTH)
                 env["EU4_R0_EXPECT_HEIGHT"] = str(EXPECT_HEIGHT)
                 with (output_dir / "game.stdout").open("wb") as stdout, (output_dir / "game.stderr").open(
                     "wb"
                 ) as stderr:
                     game = subprocess.Popen(
-                        ["./eu4", *evidence["launcher_args"]],
+                        ["./eu4", *evidence["launcher_args"], "--continuelastsave"],
                         cwd=base.GOG_EXE.parent,
                         env=env,
                         stdout=stdout,
@@ -267,10 +295,11 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                 auto.capture_scene(scene_path)
                 manifest["scene_alignment"] = auto.verify_scene(scene_path, bootstrap=False)
 
-                host_uptime = r0_probe.event_uptime_ns()
-                manifest["event_clock_alignment"] = clock_alignment_check(log_path, host_uptime)
-
                 generation = 1
+                manifest["event_clock_alignment"] = r0_probe.paired_clock_alignment(
+                    control_path, log_path, generation
+                )
+                generation += 1
                 r0_probe.write_control(
                     control_path,
                     generation=generation,
@@ -325,26 +354,26 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                     control_path, log_path, generation, timeout_s=20.0
                 )
                 manifest["drawable_capability"] = drawable
+                failure_class = drawable.get("failure_class", "unknown_failure")
                 if drawable.get("supported"):
                     manifest["drawable_capability"]["status"] = "supported"
-                else:
-                    manifest["drawable_capability"]["status"] = "unsupported_drawable"
-                    manifest["positive_control_status"] = "skipped_unsupported_drawable"
-                    manifest["census_frame_count"] = 0
-                else:
+                    manifest["captures"] = {}
+
                     generation += 1
+                    gen_pre = generation
                     r0_probe.write_control(
                         control_path,
-                        generation=generation,
+                        generation=gen_pre,
                         mode=r0_control.EU4_R0_MODE_CENSUS,
                         scenario_id=0,
                     )
-                    r0_probe.wait_for_ack(log_path, generation)
-                    time.sleep(MIN_CENSUS_SECONDS)
-
+                    r0_probe.wait_for_ack(log_path, gen_pre)
+                    pre_cap = r0_probe.wait_for_capture_verified(capture_dir, log_path, gen_pre)
+                    manifest["captures"]["pre"] = {"generation": gen_pre, **pre_cap}
                     mark_uptime(events_path, "pre_window_end")
+
                     print(
-                        "Operator: toggle the province panel UI, then press Enter to confirm.",
+                        "Operator: open the province panel, restore game focus, then press Enter.",
                         file=sys.stderr,
                     )
                     try:
@@ -354,6 +383,29 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                     mark_uptime(events_path, "ui_action_confirmed")
                     time.sleep(TRANSITION_DISCARD_FRAMES / 60.0)
                     mark_uptime(events_path, "post_window_start")
+                    time.sleep(1.0)
+
+                    generation += 1
+                    gen_post = generation
+                    r0_probe.write_control(
+                        control_path,
+                        generation=gen_post,
+                        mode=r0_control.EU4_R0_MODE_CENSUS,
+                        scenario_id=1,
+                    )
+                    r0_probe.wait_for_ack(log_path, gen_post)
+                    post_cap = r0_probe.wait_for_capture_verified(capture_dir, log_path, gen_post)
+                    manifest["captures"]["post"] = {"generation": gen_post, **post_cap}
+
+                    generation += 1
+                    r0_probe.write_control(
+                        control_path,
+                        generation=generation,
+                        mode=r0_control.EU4_R0_MODE_CENSUS,
+                        scenario_id=0,
+                    )
+                    r0_probe.wait_for_ack(log_path, generation)
+                    time.sleep(MIN_CENSUS_SECONDS)
 
                     generation += 1
                     r0_probe.write_control(
@@ -372,6 +424,11 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                         if f.get("census_attempted") and f.get("census_ok") and f.get("flush_ok")
                     ]
                     manifest["census_frame_count"] = len(census_frames)
+                    by_scenario: dict[str, int] = {}
+                    for frame in census_frames:
+                        key = str(frame.get("scenario_id", 0))
+                        by_scenario[key] = by_scenario.get(key, 0) + 1
+                    manifest["census_frame_count_by_scenario"] = by_scenario
                     manifest["epochs"].append(
                         {
                             "id": "C",
@@ -381,6 +438,17 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                         }
                     )
                     manifest["positive_control_status"] = "pending_offline_analysis"
+                    manifest["frame_evolution_status"] = "run"
+                elif failure_class == "unsupported_drawable":
+                    manifest["drawable_capability"]["status"] = "unsupported_drawable"
+                    manifest["positive_control_status"] = "skipped_unsupported_drawable"
+                    manifest["frame_evolution_status"] = "skipped_unsupported_drawable"
+                    manifest["census_frame_count"] = 0
+                    manifest["census_frame_count_by_scenario"] = {}
+                else:
+                    manifest["drawable_capability"]["status"] = "failed"
+                    manifest["status"] = "incomplete"
+                    manifest["error"] = f"drawable probe failed: {failure_class}"
 
                 auto.stop_process(pm, 5)
         except (base.BenchmarkError, OSError, subprocess.SubprocessError, KeyboardInterrupt) as exc:
@@ -392,7 +460,11 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                 auto.stop_process(pm, 3)
                 auto.stop_process(game, 10)
                 if installed:
-                    manifest["working_save_changed"] = fixture.finish(output_dir)
+                    try:
+                        manifest["working_save_changed"] = fixture.finish(output_dir)
+                    except Exception as exc:
+                        manifest["status"] = "cleanup_error"
+                        manifest["cleanup_error"] = str(exc)
             finally:
                 run_offline_analyzers(output_dir, manifest)
                 if manifest.get("status") not in TERMINAL_FAILURE_STATUSES:

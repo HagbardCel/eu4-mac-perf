@@ -7,6 +7,16 @@
 #include <stdint.h>
 
 typedef enum {
+    EU4_R0_READBACK_OK = 0,
+    EU4_R0_READBACK_UNSUPPORTED_DRAWABLE = 1,
+    EU4_R0_READBACK_FRAMEBUFFER_MISMATCH = 2,
+    EU4_R0_READBACK_DIMENSION_MISMATCH = 3,
+    EU4_R0_READBACK_ALLOCATION_FAILED = 4,
+    EU4_R0_READBACK_GL_ERROR = 5,
+    EU4_R0_READBACK_UNKNOWN_FAILURE = 6,
+} eu4_r0_readback_failure_t;
+
+typedef enum {
     EU4_R0_TARGET_DRAWABLE_BACK,
     EU4_R0_TARGET_TEST_FBO
 } eu4_r0_target_t;
@@ -19,9 +29,9 @@ typedef struct {
     const uint8_t *pixels;
     size_t pixel_bytes;
     uint64_t crc64;
+    eu4_r0_readback_failure_t failure_code;
 } eu4_r0_readback_result_t;
 
-/* Caller-owned buffers; capture writes into *pixels_out (reallocated via grow_fn). */
 typedef struct {
     uint8_t **pixels_out;
     size_t *capacity_out;

@@ -98,6 +98,7 @@ static bool validate_expected_dims(int width, int height) {
 }
 
 static bool validate_target(eu4_r0_target_t target, bool test_relaxed) {
+    (void)test_relaxed;
     GLint draw_fbo = 0;
     GLint read_fbo = 0;
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &draw_fbo);
@@ -107,12 +108,7 @@ static bool validate_target(eu4_r0_target_t target, bool test_relaxed) {
         return draw_fbo != 0;
     }
     if (draw_fbo != 0 || read_fbo != 0) {
-        return test_relaxed ? false : false;
-    }
-    GLint read_buffer = 0;
-    glGetIntegerv(GL_READ_BUFFER, &read_buffer);
-    if (!test_relaxed && read_buffer != GL_BACK && read_buffer != GL_NONE) {
-        /* read buffer may be GL_BACK after we set it */
+        return false;
     }
     return true;
 }
@@ -120,10 +116,17 @@ static bool validate_target(eu4_r0_target_t target, bool test_relaxed) {
 bool eu4_r0_readback_capture(CGLContextObj context, eu4_r0_target_t target, bool test_relaxed_policy,
                              eu4_r0_readback_buffers_t *buffers, eu4_r0_readback_result_t *result) {
     if (!context || CGLGetCurrentContext() != context || !buffers || !result) {
+        if (result) {
+            memset(result, 0, sizeof(*result));
+            result->failure_code = EU4_R0_READBACK_UNKNOWN_FAILURE;
+        }
         return false;
     }
     memset(result, 0, sizeof(*result));
+    result->failure_code = EU4_R0_READBACK_UNKNOWN_FAILURE;
+
     if (!validate_target(target, test_relaxed_policy)) {
+        result->failure_code = EU4_R0_READBACK_FRAMEBUFFER_MISMATCH;
         return false;
     }
 
@@ -134,10 +137,22 @@ bool eu4_r0_readback_capture(CGLContextObj context, eu4_r0_target_t target, bool
         glGetIntegerv(GL_VIEWPORT, viewport);
         width = viewport[2];
         height = viewport[3];
+        if (!plausible_dim(width) || !plausible_dim(height)) {
+            result->failure_code = EU4_R0_READBACK_FRAMEBUFFER_MISMATCH;
+            return false;
+        }
     } else if (!establish_drawable_dims(context, test_relaxed_policy, &width, &height)) {
+        result->failure_code = EU4_R0_READBACK_UNSUPPORTED_DRAWABLE;
         return false;
     }
-    if (!plausible_dim(width) || !plausible_dim(height) || !validate_expected_dims(width, height)) {
+    if (!plausible_dim(width) || !plausible_dim(height)) {
+        result->failure_code = EU4_R0_READBACK_UNSUPPORTED_DRAWABLE;
+        return false;
+    }
+    if (!validate_expected_dims(width, height)) {
+        result->failure_code = EU4_R0_READBACK_DIMENSION_MISMATCH;
+        result->width = width;
+        result->height = height;
         return false;
     }
 
@@ -145,6 +160,7 @@ bool eu4_r0_readback_capture(CGLContextObj context, eu4_r0_target_t target, bool
     size_t total = row_bytes * (size_t)height;
     bool (*grow_fn)(uint8_t **, size_t *, size_t) = buffers->grow ? buffers->grow : default_grow;
     if (!grow_fn(buffers->pixels_out, buffers->capacity_out, total)) {
+        result->failure_code = EU4_R0_READBACK_ALLOCATION_FAILED;
         return false;
     }
 
@@ -186,6 +202,7 @@ bool eu4_r0_readback_capture(CGLContextObj context, eu4_r0_target_t target, bool
         result->ok = false;
         result->width = width;
         result->height = height;
+        result->failure_code = EU4_R0_READBACK_GL_ERROR;
         return false;
     }
 
@@ -195,5 +212,6 @@ bool eu4_r0_readback_capture(CGLContextObj context, eu4_r0_target_t target, bool
     result->pixels = *buffers->pixels_out;
     result->pixel_bytes = total;
     result->crc64 = eu4_r0_crc64_ecma(result->pixels, total);
+    result->failure_code = EU4_R0_READBACK_OK;
     return true;
 }

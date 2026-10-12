@@ -33,31 +33,42 @@ class R0ControlAtomicTests(unittest.TestCase):
         supported.restype = ctypes.c_bool
         self.assertTrue(supported())
 
-    def test_cross_arch_reader_sees_same_word(self) -> None:
+    def test_cross_arch_native_consume(self) -> None:
         if platform.machine() != "arm64":
-            self.skipTest("cross-arch reader test expects arm64 host")
+            self.skipTest("cross-arch consume test expects arm64 host")
         r0_probe.build()
+        consumer = r0_probe.BENCHMARK / ".build/r0_control_consume_x86_64"
+        subprocess.run(
+            [
+                "clang",
+                "-arch",
+                "x86_64",
+                "-O2",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-std=c11",
+                "-I",
+                str(r0_probe.BENCHMARK),
+                "-o",
+                str(consumer),
+                str(r0_probe.ROOT / "tests/r0_control_consume_x86.c"),
+                str(r0_probe.CONTROL_SOURCE),
+            ],
+            check=True,
+        )
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "control.bin"
             path.write_bytes(b"\x00" * r0_control.EU4_R0_CONTROL_PAGE_SIZE)
             r0_probe.write_control(path, generation=42, mode=0, scenario_id=7)
-            script = (
-                "import mmap,sys; from pathlib import Path; "
-                "import eu4_r0_control as c; "
-                f"p=Path('{path}'); "
-                "h=p.open('rb'); m=mmap.mmap(h.fileno(), c.EU4_R0_CONTROL_PAGE_SIZE); "
-                "w=int.from_bytes(m[0:8],'little'); "
-                "print(c.unpack_control_word(w)[0])"
-            )
             result = subprocess.run(
-                ["arch", "-x86_64", sys.executable, "-c", script],
+                ["arch", "-x86_64", str(consumer), str(path)],
                 capture_output=True,
                 text=True,
                 check=False,
-                env={**dict(__import__('os').environ), "PYTHONPATH": str(r0_probe.BENCHMARK)},
             )
             if result.returncode:
-                self.skipTest(f"x86_64 python unavailable: {result.stderr.strip()}")
+                self.skipTest(f"x86_64 consumer failed: {result.stderr.strip()}")
             self.assertEqual(int(result.stdout.strip()), 42)
 
 

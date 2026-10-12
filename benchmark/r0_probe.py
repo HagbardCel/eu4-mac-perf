@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import mmap
 import os
 import platform
@@ -24,7 +25,28 @@ READBACK_SOURCE = BENCHMARK / "eu4_r0_readback.c"
 CONTROL_SOURCE = BENCHMARK / "eu4_r0_control.c"
 LIBRARY = BENCHMARK / ".build/libeu4_r0_probe.dylib"
 HOST_CONTROL_LIBRARY = BENCHMARK / ".build/libeu4_r0_control_host.dylib"
+HOST_CONTROL_LIBRARY_X86 = BENCHMARK / ".build/libeu4_r0_control_host_x86_64.dylib"
 HOST_ARCH = platform.machine()
+CLOCK_ALIGNMENT_TOLERANCE_NS = 50_000_000
+CLOCK_ALIGNMENT_MAX_RTT_NS = 5_000_000_000
+
+READBACK_OK = 0
+READBACK_UNSUPPORTED_DRAWABLE = 1
+READBACK_FRAMEBUFFER_MISMATCH = 2
+READBACK_DIMENSION_MISMATCH = 3
+READBACK_ALLOCATION_FAILED = 4
+READBACK_GL_ERROR = 5
+READBACK_UNKNOWN_FAILURE = 6
+
+FAILURE_CODE_NAMES = {
+    READBACK_OK: "ok",
+    READBACK_UNSUPPORTED_DRAWABLE: "unsupported_drawable",
+    READBACK_FRAMEBUFFER_MISMATCH: "framebuffer_mismatch",
+    READBACK_DIMENSION_MISMATCH: "dimension_mismatch",
+    READBACK_ALLOCATION_FAILED: "allocation_failed",
+    READBACK_GL_ERROR: "gl_error",
+    READBACK_UNKNOWN_FAILURE: "unknown_failure",
+}
 HARNESS = ROOT / "tests/r0_probe_harness.c"
 HARNESS_EXE = BENCHMARK / ".build/r0_probe_harness"
 READBACK_HARNESS = BENCHMARK / ".build/r0_readback_harness"
@@ -48,6 +70,20 @@ def build() -> None:
             "-dynamiclib",
             "-o",
             str(HOST_CONTROL_LIBRARY),
+            str(CONTROL_SOURCE),
+        ],
+        [
+            "clang",
+            "-arch",
+            "x86_64",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-std=c11",
+            "-dynamiclib",
+            "-o",
+            str(HOST_CONTROL_LIBRARY_X86),
             str(CONTROL_SOURCE),
         ],
         [
@@ -131,12 +167,16 @@ def write_control(path: Path, *, generation: int, mode: int, scenario_id: int) -
             mapping.flush()
 
 
-def probe_env(control_path: Path, log_path: Path) -> dict[str, str]:
-    return {
+def probe_env(control_path: Path, log_path: Path, *, capture_dir: Path | None = None) -> dict[str, str]:
+    env = {
         "EU4_R0_CONTROL": str(control_path),
         "EU4_R0_LOG": str(log_path),
         "DYLD_INSERT_LIBRARIES": str(LIBRARY),
     }
+    if capture_dir is not None:
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        env["EU4_R0_CAPTURE_DIR"] = str(capture_dir)
+    return env
 
 
 def event_uptime_ns() -> int:
@@ -154,6 +194,96 @@ def wait_for_ack(log_path: Path, generation: int, timeout_s: float = 10.0) -> di
     raise base.BenchmarkError(f"Timed out waiting for ACK generation={generation}")
 
 
+def paired_clock_alignment(
+    control_path: Path,
+    log_path: Path,
+    generation: int,
+    *,
+    timeout_s: float = 10.0,
+    tolerance_ns: int = CLOCK_ALIGNMENT_TOLERANCE_NS,
+    max_rtt_ns: int = CLOCK_ALIGNMENT_MAX_RTT_NS,
+) -> dict[str, Any]:
+    t_before = event_uptime_ns()
+    write_control(
+        control_path,
+        generation=generation,
+        mode=r0_control.EU4_R0_MODE_PASSIVE,
+        scenario_id=0,
+    )
+    ack = wait_for_ack(log_path, generation, timeout_s=timeout_s)
+    t_after = event_uptime_ns()
+    t_ack = int(ack["uptime_ns"])
+    round_trip_ns = t_after - t_before
+    if round_trip_ns > max_rtt_ns:
+        return {
+            "status": "inconclusive",
+            "reason": "excessive_round_trip",
+            "round_trip_ns": round_trip_ns,
+            "t_before": t_before,
+            "t_after": t_after,
+            "t_ack": t_ack,
+        }
+    contained = (t_before - tolerance_ns) <= t_ack <= (t_after + tolerance_ns)
+    return {
+        "status": "passed" if contained else "failed",
+        "round_trip_ns": round_trip_ns,
+        "t_before": t_before,
+        "t_after": t_after,
+        "t_ack": t_ack,
+        "tolerance_ns": tolerance_ns,
+    }
+
+
+def load_capture_sidecar(capture_dir: Path, generation: int) -> dict[str, Any] | None:
+    path = capture_dir / f"capture_{generation}.json"
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text())
+
+
+def verify_capture_artifact(
+    capture_dir: Path, generation: int, log_path: Path
+) -> dict[str, Any]:
+    sidecar = load_capture_sidecar(capture_dir, generation)
+    if not sidecar or not sidecar.get("write_ok"):
+        return {"status": "failed", "reason": "missing_or_incomplete_sidecar"}
+    rgba_path = capture_dir / f"capture_{generation}.rgba"
+    if not rgba_path.is_file():
+        return {"status": "failed", "reason": "missing_rgba"}
+    expected_bytes = int(sidecar["width"]) * int(sidecar["height"]) * 4
+    if rgba_path.stat().st_size != expected_bytes:
+        return {"status": "failed", "reason": "rgba_size_mismatch"}
+    frame = find_frame_for_generation(log_path, generation)
+    if not frame:
+        return {"status": "failed", "reason": "no_matching_f_record"}
+    mismatches = []
+    for key in ("frame_index", "control_generation", "width", "height", "crc64"):
+        if int(sidecar.get(key, -1)) != int(frame.get(key, -2)):
+            mismatches.append(key)
+    if mismatches:
+        return {"status": "failed", "reason": "log_sidecar_mismatch", "fields": mismatches}
+    return {"status": "verified", "sidecar": sidecar, "frame": frame}
+
+
+def find_frame_for_generation(log_path: Path, generation: int) -> dict[str, Any] | None:
+    for frame in reversed(parse_log(log_path)["frames"]):
+        if frame.get("control_generation") == generation and frame.get("census_attempted"):
+            return frame
+    return None
+
+
+def wait_for_capture_verified(
+    capture_dir: Path, log_path: Path, generation: int, *, timeout_s: float = 30.0
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        result = verify_capture_artifact(capture_dir, generation, log_path)
+        if result.get("status") == "verified":
+            return result
+        time.sleep(0.25)
+    return {"status": "failed", "reason": "capture_verify_timeout", "generation": generation}
+
+
 def probe_production_drawable(
     control_path: Path, log_path: Path, generation: int, *, timeout_s: float = 15.0
 ) -> dict[str, Any]:
@@ -167,17 +297,24 @@ def probe_production_drawable(
     wait_for_ack(log_path, generation, timeout_s=timeout_s)
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        parsed = parse_log(log_path)
-        for frame in reversed(parsed["frames"]):
-            if not frame.get("census_attempted"):
-                continue
+        frame = find_frame_for_generation(log_path, generation)
+        if frame:
+            code = int(frame.get("readback_failure_code", READBACK_UNKNOWN_FAILURE))
+            name = FAILURE_CODE_NAMES.get(code, "unknown_failure")
             return {
-                "supported": bool(frame.get("census_ok")),
+                "supported": code == READBACK_OK and bool(frame.get("census_ok")),
+                "failure_code": code,
+                "failure_class": name,
                 "frame": frame,
                 "generation": generation,
             }
         time.sleep(0.2)
-    return {"supported": False, "reason": "no census frame observed", "generation": generation}
+    return {
+        "supported": False,
+        "failure_class": "timeout",
+        "reason": "no census frame observed",
+        "generation": generation,
+    }
 
 
 def infer_main_thread_id(frames: list[dict[str, Any]]) -> int | None:
@@ -222,6 +359,30 @@ def parse_log(path: Path) -> dict[str, Any]:
                     "scenario_id": 0,
                 }
             )
+        elif kind == "F" and len(parts) >= 20:
+            frames.append(
+                {
+                    "frame_index": int(parts[1]),
+                    "mode": int(parts[2]),
+                    "scenario_id": int(parts[3]),
+                    "pause_verified": int(parts[4]),
+                    "census_ok": int(parts[5]),
+                    "context_id": int(parts[6]),
+                    "width": int(parts[7]),
+                    "height": int(parts[8]),
+                    "memcmp_equal_prev": int(parts[9]),
+                    "census_attempted": int(parts[10]),
+                    "crc64": int(parts[11]),
+                    "flush_is_main_thread": int(parts[12]),
+                    "uptime_ns": int(parts[13]),
+                    "gl_error_observed": int(parts[14]),
+                    "flush_ok": int(parts[15]),
+                    "flush_cgl_error": int(parts[16]),
+                    "pthread_tid": int(parts[17]),
+                    "control_generation": int(parts[18]),
+                    "readback_failure_code": int(parts[19]),
+                }
+            )
         elif kind == "F" and len(parts) >= 18:
             frames.append(
                 {
@@ -242,6 +403,8 @@ def parse_log(path: Path) -> dict[str, Any]:
                     "flush_ok": int(parts[15]),
                     "flush_cgl_error": int(parts[16]),
                     "pthread_tid": int(parts[17]),
+                    "control_generation": 0,
+                    "readback_failure_code": READBACK_UNKNOWN_FAILURE,
                 }
             )
         elif kind == "F" and len(parts) >= 13:

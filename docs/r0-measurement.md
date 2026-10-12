@@ -1,67 +1,51 @@
 # R0-M measurement (implementation)
 
-Canonical strategy: [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md). This document describes the **implemented** R0-M tooling.
+Canonical strategy: [`eu4_recommended_strategy.md`](eu4_recommended_strategy.md).
+
+## Stopping rule
+
+- **PR A** (this branch): validated tooling; merge after offline gates pass.
+- **PR B**: single live Venice evidence session only.
 
 ## Evidence levels
 
 | Level | Establishes |
 |---|---|
-| Synthetic FBO harness (`r0_readback_harness`) | Shared `eu4_r0_readback_capture()` on explicit FBO |
-| Probe offline preflight | Injection, seqlock control, ACK, synthetic census |
-| Live integrated / positive control | Default back-buffer content with operator UI bracket |
+| Synthetic FBO harness | Shared `eu4_r0_readback_capture()` on explicit FBO |
+| Probe offline preflight | Injection, atomic control, ACK, synthetic census |
+| Live integrated session | Production drawable + generation-bound captures |
 
-Preflight does **not** claim production drawable verification.
+## Control and clock
 
-## Build and offline checks
+- **64-bit atomic** mmap control word (`generation`, `scenario_id`, `mode`, `version`).
+- **Clock:** `CLOCK_UPTIME_RAW` for probe `uptime_ns` and session `event_uptime_ns`.
+- **Calibration:** interval containment \(t_{\mathrm{before}} \le t_{\mathrm{ack}} \le t_{\mathrm{after}}\) with bounded RTT; no offset estimation.
+
+## F24 positive control
+
+Launch-time `EU4_R0_CAPTURE_DIR`. Each capture uses a distinct **control generation** (not post-launch env slots).
+
+Operator order: stabilize (UI closed) → publish pre generation → verify capture → `pre_window_end` → operator opens panel → discard → `post_window_start` → publish post generation → verify capture.
+
+Panel ROI from [`fixtures/venice_panel_roi.json`](../fixtures/venice_panel_roi.json) (OpenGL bottom-left). Offline gate requires capture files + localized ROI change.
+
+## Readback failure codes
+
+Logged on each `F` record (`readback_failure_code`). Only `UNSUPPORTED_DRAWABLE` enables `partial_complete` without epoch C.
+
+## Build and test
 
 ```sh
 PYTHONPATH=benchmark python3 benchmark/r0_probe.py build
 PYTHONPATH=benchmark python3 benchmark/r0_probe.py preflight
-benchmark/.build/r0_readback_harness
-python3 -m unittest discover -s tests -p 'test_r0*.py'
+python -m compileall -q benchmark analysis
+PYTHONPATH=benchmark python3 -m unittest discover -s tests -p 'test_r0*.py'
 ```
 
-## One launch protocol
-
-[`benchmark/r0_measurement_session.py`](../benchmark/r0_measurement_session.py) runs epochs **A** (thread CPU + powermetrics reconcile), **B** (`sample`), **C** (census readback) with a single `libeu4_r0_probe.dylib` owner.
-
-Runtime mode changes use a **seqlock** mmap control page (`eu4_r0_control_publish`); acknowledgments are `ACK,generation,frame_index,uptime_ns,mode,scenario_id`.
-
-Frame records (`F,...`) include `uptime_ns`, `gl_error_observed`, `flush_ok`, and `pthread_tid`. Analyzer excludes failed flushes and observed GL errors.
-
-### Integrated Venice session
+## Integrated session
 
 ```sh
-PYTHONPATH=benchmark python3 benchmark/r0_measurement_session.py results/$(date -u +%Y%m%dT%H%M%SZ)-r0-integrated --run-integrated
+PYTHONPATH=benchmark python3 benchmark/r0_measurement_session.py results/<run> --run-integrated
 ```
 
-Uses [`FixtureManager`](../benchmark/fixture_manager.py), [`wait_until_ready`](../benchmark/autonomous_runner.py) / `warm_up` with `probe_parser=r0_probe_rows`, and fixture save recovery on cleanup.
-
-### Attach mode
-
-```sh
-export EU4_R0_ATTACH_PID=<eu4_pid>
-PYTHONPATH=benchmark python3 benchmark/r0_measurement_session.py results/$(date -u +%Y%m%dT%H%M%SZ)-r0-measurement
-```
-
-Dry-run manifest only:
-
-```sh
-PYTHONPATH=benchmark python3 benchmark/r0_measurement_session.py results/r0-dry-run --dry-run
-```
-
-## Analysis
-
-```sh
-python3 analysis/tools/frame_evolution_analyze.py results/<run>/r0_probe.log \
-  --events results/<run>/events.jsonl \
-  --clock-offset-ns <from manifest> \
-  --output analysis/evidence/r0-frame-evolution-<run>.json
-
-python3 analysis/tools/r0_stack_analyze.py results/<run>/epoch_b.sample.txt \
-  --output analysis/evidence/r0-main-thread-cost-model.json
-```
-
-Stack protocol: [`analysis/r0-stack-attribution-protocol.md`](../analysis/r0-stack-attribution-protocol.md).
-
-Gate memo template: [`analysis/r0-gate-memo.md`](../analysis/r0-gate-memo.md).
+Launch uses `--continuelastsave` and fixture save via [`FixtureManager`](../benchmark/fixture_manager.py).

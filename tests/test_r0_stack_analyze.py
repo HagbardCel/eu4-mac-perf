@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from analysis.tools.r0_stack_analyze import analyze_sample_text
 
@@ -42,6 +43,11 @@ Call graph:
         self.assertIn("border_draw", report["functional_caller"])
         self.assertIn("gfx_draw_indexed", report["functional_caller"])
         self.assertEqual(report["attributed_sample_weight"], 1234)
+
+    def test_fixture_snippet_with_main_thread_id(self) -> None:
+        text = Path(__file__).parent.joinpath("fixtures/r0_epoch_b_sample_snippet.txt").read_text()
+        report = analyze_sample_text(text, main_thread_id=0x2A)
+        self.assertEqual(report["attributed_sample_weight"], 100)
 
     def test_branched_siblings(self) -> None:
         text = """

@@ -173,8 +173,7 @@ static void invalidate_reference(void) {
     reference_size = 0;
 }
 
-static bool census_readback(CGLContextObj context, int *width_out, int *height_out, uint64_t *crc_out,
-                            GLenum *gl_error_out) {
+static bool census_readback(CGLContextObj context, eu4_r0_readback_result_t *result_out) {
     eu4_r0_readback_buffers_t buffers = {
         .pixels_out = &readback_buffer,
         .capacity_out = &readback_capacity,
@@ -184,23 +183,84 @@ static bool census_readback(CGLContextObj context, int *width_out, int *height_o
     bool relaxed = test_census_enabled();
     eu4_r0_target_t target =
         test_census_enabled() ? EU4_R0_TARGET_TEST_FBO : EU4_R0_TARGET_DRAWABLE_BACK;
-    if (!eu4_r0_readback_capture(context, target, relaxed, &buffers, &result)) {
-        if (gl_error_out) {
-            *gl_error_out = result.gl_error_observed;
-        }
+    bool ok = eu4_r0_readback_capture(context, target, relaxed, &buffers, &result);
+    if (result_out) {
+        *result_out = result;
+    }
+    return ok;
+}
+
+static bool capture_already_written(uint32_t generation) {
+    const char *dir = getenv("EU4_R0_CAPTURE_DIR");
+    if (!dir || !dir[0]) {
         return false;
     }
-    if (width_out) {
-        *width_out = result.width;
+    char path[512];
+    int n = snprintf(path, sizeof(path), "%s/capture_%u.json", dir, (unsigned)generation);
+    if (n <= 0 || (size_t)n >= sizeof(path)) {
+        return false;
     }
-    if (height_out) {
-        *height_out = result.height;
+    return access(path, F_OK) == 0;
+}
+
+static bool write_capture_artifact(uint32_t generation, uint32_t scenario_id, uint64_t record_frame_index,
+                                   uint64_t uptime_ns, const eu4_r0_readback_result_t *result) {
+    const char *dir = getenv("EU4_R0_CAPTURE_DIR");
+    if (!dir || !dir[0] || !result || !result->ok || capture_already_written(generation)) {
+        return false;
     }
-    if (crc_out) {
-        *crc_out = result.crc64;
+    char rgba_tmp[512];
+    char json_tmp[512];
+    char rgba_final[512];
+    char json_final[512];
+    int n = snprintf(rgba_tmp, sizeof(rgba_tmp), "%s/capture_%u.rgba.tmp", dir, (unsigned)generation);
+    if (n <= 0 || (size_t)n >= sizeof(rgba_tmp)) {
+        return false;
     }
-    if (gl_error_out) {
-        *gl_error_out = result.gl_error_observed;
+    snprintf(json_tmp, sizeof(json_tmp), "%s/capture_%u.json.tmp", dir, (unsigned)generation);
+    snprintf(rgba_final, sizeof(rgba_final), "%s/capture_%u.rgba", dir, (unsigned)generation);
+    snprintf(json_final, sizeof(json_final), "%s/capture_%u.json", dir, (unsigned)generation);
+
+    int fd = open(rgba_tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        return false;
+    }
+    ssize_t written = write(fd, result->pixels, result->pixel_bytes);
+    close(fd);
+    if (written != (ssize_t)result->pixel_bytes) {
+        unlink(rgba_tmp);
+        return false;
+    }
+    if (rename(rgba_tmp, rgba_final) != 0) {
+        unlink(rgba_tmp);
+        return false;
+    }
+
+    int jfd = open(json_tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (jfd < 0) {
+        unlink(rgba_final);
+        return false;
+    }
+    char meta[640];
+    int mlen = snprintf(meta, sizeof(meta),
+                        "{\"control_generation\":%u,\"scenario_id\":%u,\"frame_index\":%llu,"
+                        "\"width\":%d,\"height\":%d,\"crc64\":%llu,\"uptime_ns\":%llu,"
+                        "\"write_ok\":true,\"readback_failure_code\":0,\"pixel_bytes\":%zu}\n",
+                        (unsigned)generation, (unsigned)scenario_id,
+                        (unsigned long long)record_frame_index, result->width, result->height,
+                        (unsigned long long)result->crc64, (unsigned long long)uptime_ns,
+                        result->pixel_bytes);
+    if (mlen <= 0 || write(jfd, meta, (size_t)mlen) != mlen) {
+        close(jfd);
+        unlink(json_tmp);
+        unlink(rgba_final);
+        return false;
+    }
+    close(jfd);
+    if (rename(json_tmp, json_final) != 0) {
+        unlink(json_tmp);
+        unlink(rgba_final);
+        return false;
     }
     return true;
 }
@@ -229,23 +289,25 @@ static uint64_t pthread_tid_self(void) {
 #endif
 }
 
-static void log_frame_record(CGLContextObj context, bool census_attempted, bool census_ok, int width,
-                             int height, int memcmp_equal, uint64_t crc, uint64_t uptime_ns,
-                             GLenum gl_error_observed, bool flush_ok, int flush_cgl_error) {
+static void log_frame_record(CGLContextObj context, uint64_t record_frame_index, bool census_attempted,
+                             bool census_ok, int width, int height, int memcmp_equal, uint64_t crc,
+                             uint64_t uptime_ns, GLenum gl_error_observed, bool flush_ok, int flush_cgl_error,
+                             uint32_t control_generation, unsigned readback_failure_code) {
     int flush_is_main = 0;
 #if defined(__APPLE__)
     flush_is_main = pthread_main_np();
 #endif
-    char line[320];
+    char line[384];
     int n = snprintf(
         line, sizeof(line),
-        "F,%llu,%u,%u,%u,%u,%llu,%d,%d,%d,%d,%llu,%d,%llu,%u,%u,%d,%llu\n",
-        (unsigned long long)frame_index, (unsigned)active_mode, (unsigned)active_scenario_id,
+        "F,%llu,%u,%u,%u,%u,%llu,%d,%d,%d,%d,%llu,%d,%llu,%u,%u,%d,%llu,%u,%u\n",
+        (unsigned long long)record_frame_index, (unsigned)active_mode, (unsigned)active_scenario_id,
         (unsigned)pause_verified(), (unsigned)(census_attempted && census_ok),
         (unsigned long long)(uintptr_t)context, width, height, memcmp_equal,
         (unsigned)census_attempted, (unsigned long long)crc, flush_is_main,
         (unsigned long long)uptime_ns, (unsigned)gl_error_observed, (unsigned)flush_ok,
-        flush_cgl_error, (unsigned long long)pthread_tid_self());
+        flush_cgl_error, (unsigned long long)pthread_tid_self(), (unsigned)control_generation,
+        readback_failure_code);
     if (n > 0 && (size_t)n < sizeof(line)) {
         log_line(line);
     }
@@ -271,6 +333,7 @@ static CGLError probed_flush(CGLContextObj context) {
         }
     }
 
+    uint64_t record_frame_index = frame_index + 1;
     bool census_attempted = false;
     bool census_ok = false;
     int width = 0;
@@ -278,11 +341,19 @@ static CGLError probed_flush(CGLContextObj context) {
     int memcmp_equal = -1;
     uint64_t crc = 0;
     GLenum gl_error_observed = GL_NO_ERROR;
+    unsigned readback_failure_code = (unsigned)EU4_R0_READBACK_UNKNOWN_FAILURE;
+    uint32_t control_generation = have_snap ? snap.generation : 0;
 
     if (have_snap && active_mode == EU4_R0_MODE_CENSUS && paused && snap.generation != 0 &&
         snap.generation == last_acked_generation) {
         census_attempted = true;
-        census_ok = census_readback(context, &width, &height, &crc, &gl_error_observed);
+        eu4_r0_readback_result_t rb = {0};
+        census_ok = census_readback(context, &rb);
+        width = rb.width;
+        height = rb.height;
+        crc = rb.crc64;
+        gl_error_observed = rb.gl_error_observed;
+        readback_failure_code = (unsigned)rb.failure_code;
         if (census_ok) {
             size_t total = (size_t)width * 4u * (size_t)height;
             if (context != last_context || width != last_width || height != last_height) {
@@ -298,15 +369,17 @@ static CGLError probed_flush(CGLContextObj context) {
             }
             memcpy(reference_buffer, readback_buffer, total);
             reference_size = total;
+            write_capture_artifact(snap.generation, snap.scenario_id, record_frame_index, now, &rb);
         }
     }
 
-    frame_index++;
+    frame_index = record_frame_index;
     CGLError flush_result = CGLFlushDrawable(context);
     int saved_errno = errno;
     bool flush_ok = flush_result == kCGLNoError;
-    log_frame_record(context, census_attempted, census_ok, width, height, memcmp_equal, crc, now,
-                     gl_error_observed, flush_ok, (int)flush_result);
+    log_frame_record(context, record_frame_index, census_attempted, census_ok, width, height, memcmp_equal,
+                     crc, now, gl_error_observed, flush_ok, (int)flush_result, control_generation,
+                     readback_failure_code);
     snapshot_swap_stats(now, flush_ok && paused);
     errno = saved_errno;
     return flush_result;

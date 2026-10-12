@@ -46,7 +46,10 @@ def classify_path(symbols: list[str], rules: list[tuple[str, str]]) -> str:
 
 def _exclusive(node: StackNode) -> int:
     child_sum = sum(child.inclusive for child in node.children.values())
-    return max(0, node.inclusive - child_sum)
+    weight = node.inclusive - child_sum
+    if weight < 0:
+        raise ValueError("inconsistent inclusive tree: negative exclusive weight")
+    return weight
 
 
 def _insert_path(root: StackNode, symbols: list[str], count: int) -> None:
@@ -104,7 +107,29 @@ def build_tree(lines: list[tuple[int, int, str]]) -> StackNode:
     return root
 
 
-def analyze_sample_text(text: str) -> dict[str, Any]:
+def extract_main_thread_section(text: str, main_thread_id: int | None) -> str:
+    if main_thread_id is None:
+        return text
+    hex_token = f"{main_thread_id:x}".lower()
+    lines = text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        lowered = line.lower()
+        if "thread 0x" in lowered and hex_token in lowered:
+            start = index
+            break
+    if start is None:
+        raise ValueError("main thread section not found in sample output")
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].strip().startswith("Thread ") and index != start:
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
+
+def analyze_sample_text(text: str, *, main_thread_id: int | None = None) -> dict[str, Any]:
+    text = extract_main_thread_section(text, main_thread_id)
     if "Call graph" not in text and not _FRAME_LINE.search(text):
         raise ValueError("unsupported sample format: missing Call graph or weighted frame lines")
     lines = _parse_frame_lines(text)
@@ -117,8 +142,10 @@ def analyze_sample_text(text: str) -> dict[str, Any]:
     attributed = 0
     for symbol, child in root.children.items():
         attributed += _attribute(child, [symbol], functional, execution, cross)
-    root_inclusive = max((child.inclusive for child in root.children.values()), default=0)
+    root_inclusive = sum(child.inclusive for child in root.children.values())
     total = sum(functional.values()) or 1
+    if attributed != root_inclusive and root.children:
+        raise ValueError("stack conservation failed: attributed weight mismatch")
     return {
         "functional_caller": {key: value / total for key, value in functional.items()},
         "execution_location": {key: value / total for key, value in execution.items()},
@@ -135,8 +162,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("sample_file", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--main-thread-id", type=int)
     args = parser.parse_args()
-    report = analyze_sample_text(args.sample_file.read_text(errors="replace"))
+    report = analyze_sample_text(
+        args.sample_file.read_text(errors="replace"), main_thread_id=args.main_thread_id
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")
 

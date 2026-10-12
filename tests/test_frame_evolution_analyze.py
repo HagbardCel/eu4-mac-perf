@@ -27,17 +27,19 @@ class FrameEvolutionAnalyzeTests(unittest.TestCase):
 
     def test_classify_static(self) -> None:
         frames = [
-            FrameRecord(i, 1, 0, True, True, 64, 64, 1 if i > 1 else 0, True, 1)
+            FrameRecord(
+                i, 1, 0, True, True, 64, 64, 1 if i > 1 else 0, True, 1, uptime_ns=i * 10_000_000
+            )
             for i in range(1, 300)
         ]
         summary = classify_scenario(frames, min_frames=120, min_seconds=2.0, fps_hint=60.0)
         self.assertEqual(summary["classification"], "static")
 
-    def test_positive_control(self) -> None:
+    def test_positive_control_requires_pixels(self) -> None:
         before = [FrameRecord(1, 1, 1, True, True, 64, 64, 0, True, 10)]
         after = [FrameRecord(2, 1, 1, True, True, 64, 64, 0, True, 20)]
         result = evaluate_positive_control_windows(before, after, stable_tail=1, stable_head=1)
-        self.assertEqual(result["status"], "passed")
+        self.assertEqual(result["status"], "insufficient_evidence")
 
     def test_positive_control_uptime_events(self) -> None:
         frames = [
@@ -74,7 +76,9 @@ class FrameEvolutionAnalyzeTests(unittest.TestCase):
         log.write_text("".join(lines))
         frames = accepted_census_frames(
             [
-                FrameRecord(i, 1, 0, True, True, 64, 64, 1 if i > 1 else 0, True, 42)
+                FrameRecord(
+                    i, 1, 0, True, True, 64, 64, 1 if i > 1 else 0, True, 42, uptime_ns=i * 10_000_000
+                )
                 for i in range(1, 301)
             ]
         )

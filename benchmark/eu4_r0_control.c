@@ -30,9 +30,8 @@ bool eu4_r0_control_unpack(uint64_t packed, eu4_r0_control_snapshot_t *out) {
 }
 
 bool eu4_r0_control_atomics_supported(void) {
-    atomic_uint_fast64_t probe = 0;
-    atomic_store_explicit(&probe, 1u, memory_order_relaxed);
-    return atomic_load_explicit(&probe, memory_order_relaxed) == 1u;
+    _Atomic uint64_t word = 0;
+    return atomic_is_lock_free(&word);
 }
 
 void eu4_r0_control_publish(void *page, uint32_t generation, uint32_t mode, uint32_t scenario_id) {
