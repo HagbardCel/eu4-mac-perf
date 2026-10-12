@@ -7,8 +7,16 @@ import argparse
 import json
 import math
 from dataclasses import dataclass
+import sys
 from pathlib import Path
 from typing import Any, Iterable
+
+ROOT = Path(__file__).resolve().parents[2]
+_BENCHMARK = ROOT / "benchmark"
+if str(_BENCHMARK) not in sys.path:
+    sys.path.insert(0, str(_BENCHMARK))
+
+import r0_capture_provenance  # noqa: E402
 
 TILE_SIZE = 64
 TRANSITION_DISCARD_FRAMES = 3
@@ -127,15 +135,46 @@ def consecutive_equal_runs(frames: list[FrameRecord]) -> list[dict[str, Any]]:
     return runs
 
 
-def registered_panel_roi(fixture_root: Path | None = None) -> tuple[float, float, float, float]:
-    root = fixture_root or Path(__file__).resolve().parents[2]
-    path = root / "fixtures" / "venice_panel_roi.json"
-    if path.is_file():
-        payload = json.loads(path.read_text())
-        roi = payload.get("panel_roi_opengl_bottom_left")
-        if isinstance(roi, list) and len(roi) == 4:
-            return tuple(float(v) for v in roi)
-    return PROVINCE_PANEL_ROI
+def load_roi_config(
+    roi_config: Path | None = None,
+    *,
+    fixture_root: Path | None = None,
+    require_verified: bool = False,
+) -> dict[str, Any]:
+    root = fixture_root or ROOT
+    path = roi_config or (root / "fixtures" / "venice_panel_roi.json")
+    if not path.is_file():
+        return {
+            "verified": False,
+            "roi": PROVINCE_PANEL_ROI,
+            "path": str(path),
+            "error": "missing_roi_config",
+        }
+    payload = json.loads(path.read_text())
+    roi = payload.get("panel_roi_opengl_bottom_left")
+    if not (isinstance(roi, list) and len(roi) == 4):
+        return {"verified": False, "roi": PROVINCE_PANEL_ROI, "path": str(path), "error": "invalid_roi"}
+    verified = bool(payload.get("verified", False))
+    if require_verified and not verified:
+        return {
+            "verified": False,
+            "roi": tuple(float(v) for v in roi),
+            "path": str(path),
+            "error": "roi_not_verified",
+        }
+    return {
+        "verified": verified,
+        "roi": tuple(float(v) for v in roi),
+        "path": str(path),
+        "payload": payload,
+    }
+
+
+def registered_panel_roi(
+    roi_config: Path | None = None, *, require_verified: bool = False
+) -> tuple[float, float, float, float]:
+    loaded = load_roi_config(roi_config, require_verified=require_verified)
+    return loaded["roi"]
 
 
 def segment_accepts(frame: FrameRecord) -> bool:
@@ -191,6 +230,65 @@ def contiguous_census_segments(frames: list[FrameRecord]) -> list[dict[str, Any]
             }
         )
     return segments
+
+
+def segment_to_summary(segment: dict[str, Any]) -> dict[str, Any]:
+    frames = segment["frames"]
+    accepted = [frame for frame in frames if segment_accepts(frame)]
+    duration = scenario_duration_seconds(accepted)
+    continuity = segment.get("continuity") or raw_frame_index_continuity(frames)
+    first = frames[0]
+    last = frames[-1]
+    return {
+        "scenario_id": segment["scenario_id"],
+        "control_generation": segment["control_generation"],
+        "context_id": first.context_id,
+        "width": first.width,
+        "height": first.height,
+        "frame_index_start": first.frame_index,
+        "frame_index_end": last.frame_index,
+        "frame_count": len(frames),
+        "accepted_count": len(accepted),
+        "duration_seconds": duration,
+        "continuity": continuity,
+    }
+
+
+def qualified_windows_from_segments(
+    segments: list[dict[str, Any]],
+    *,
+    requirements: dict[str, dict[str, float | int]],
+) -> dict[str, Any]:
+    qualified: dict[str, Any] = {}
+    for scenario_key, req in requirements.items():
+        scenario_id = int(scenario_key)
+        best: dict[str, Any] | None = None
+        for segment in segments:
+            if int(segment["scenario_id"]) != scenario_id:
+                continue
+            accepted = [frame for frame in segment["frames"] if segment_accepts(frame)]
+            continuity = segment.get("continuity") or raw_frame_index_continuity(segment["frames"])
+            if continuity.get("status") != "passed":
+                continue
+            duration = scenario_duration_seconds(accepted)
+            min_frames = int(req["min_frames"])
+            min_seconds = float(req["min_seconds"])
+            if len(accepted) < min_frames or duration is None or duration < min_seconds:
+                continue
+            candidate = {
+                "qualified": True,
+                "scenario_id": scenario_id,
+                "control_generation": segment["control_generation"],
+                "frame_count": len(accepted),
+                "duration_seconds": duration,
+                "frame_index_start": accepted[0].frame_index,
+                "frame_index_end": accepted[-1].frame_index,
+                "continuity": continuity,
+            }
+            if best is None or candidate["frame_count"] > best["frame_count"]:
+                best = candidate
+        qualified[scenario_key] = best or {"qualified": False, "scenario_id": scenario_id}
+    return qualified
 
 
 def classify_scenario(
@@ -273,6 +371,40 @@ def clock_alignment_interval(
     }
 
 
+def pixel_change_fractions(
+    before: bytes,
+    after: bytes,
+    width: int,
+    height: int,
+    roi: tuple[float, float, float, float],
+) -> tuple[float, float]:
+    expected = width * height * 4
+    if len(before) != expected or len(after) != expected:
+        return 0.0, 0.0
+    left, bottom, width_frac, height_frac = roi
+    x0 = min(width - 1, max(0, int(left * width)))
+    y0 = min(height - 1, max(0, int(bottom * height)))
+    roi_w = max(1, min(width - x0, int(width_frac * width)))
+    roi_h = max(1, min(height - y0, int(height_frac * height)))
+    inside_total = roi_w * roi_h
+    inside_changed = 0
+    outside_total = width * height - inside_total
+    outside_changed = 0
+    row_bytes = width * 4
+    for y in range(height):
+        for x in range(width):
+            offset = y * row_bytes + x * 4
+            if before[offset : offset + 4] == after[offset : offset + 4]:
+                continue
+            if x0 <= x < x0 + roi_w and y0 <= y < y0 + roi_h:
+                inside_changed += 1
+            else:
+                outside_changed += 1
+    inside_fraction = inside_changed / inside_total if inside_total else 0.0
+    outside_fraction = outside_changed / outside_total if outside_total else 0.0
+    return inside_fraction, outside_fraction
+
+
 def extract_roi_pixels(
     pixels: bytes, width: int, height: int, roi: tuple[float, float, float, float] = PROVINCE_PANEL_ROI
 ) -> bytes:
@@ -299,11 +431,16 @@ def tile_mask_from_pixels(
     roi: tuple[float, float, float, float] = PROVINCE_PANEL_ROI,
 ) -> dict[str, Any]:
     """Compare tiles inside ROI using OpenGL bottom-left pixel layout."""
+    expected = width * height * 4
+    if len(before) != expected or len(after) != expected:
+        return {"status": "error", "reason": "buffer_size_mismatch"}
     left, bottom, width_frac, height_frac = roi
-    x0 = int(left * width)
-    y0 = int(bottom * height)
-    roi_w = int(width_frac * width)
-    roi_h = int(height_frac * height)
+    x0 = min(width - 1, max(0, int(left * width)))
+    y0 = min(height - 1, max(0, int(bottom * height)))
+    roi_w = max(1, min(width - x0, int(width_frac * width)))
+    roi_h = max(1, min(height - y0, int(height_frac * height)))
+    roi_right = x0 + roi_w
+    roi_top = y0 + roi_h
     cols = math.ceil(roi_w / tile_size) if roi_w else 0
     rows = math.ceil(roi_h / tile_size) if roi_h else 0
     changed = 0
@@ -313,12 +450,13 @@ def tile_mask_from_pixels(
             py = y0 + row * tile_size
             if px >= width or py >= height:
                 continue
-            size = tile_size * 4
             row_bytes = width * 4
             b_off = py * row_bytes + px * 4
             a_off = b_off
-            tile_w = min(tile_size, width - px)
-            tile_h = min(tile_size, height - py)
+            tile_w = min(tile_size, roi_right - px, width - px)
+            tile_h = min(tile_size, roi_top - py, height - py)
+            if tile_w <= 0 or tile_h <= 0:
+                continue
             equal = True
             for ty in range(tile_h):
                 b_row = before[b_off + ty * row_bytes : b_off + ty * row_bytes + tile_w * 4]
@@ -376,7 +514,11 @@ def evaluate_positive_control_windows(
     width: int = 0,
     height: int = 0,
     min_roi_changed_fraction: float = 0.05,
+    roi: tuple[float, float, float, float] | None = None,
+    roi_verified: bool = True,
 ) -> dict[str, Any]:
+    if not roi_verified:
+        return {"status": "insufficient_evidence", "reason": "roi_not_verified"}
     if len(pre) < stable_tail or len(post) < stable_head:
         return {"status": "failed", "reason": "insufficient stable window frames"}
     pre_tail = pre[-stable_tail:]
@@ -391,13 +533,16 @@ def evaluate_positive_control_windows(
     }
     if not (pre_pixels and post_pixels and width > 0 and height > 0):
         return {**result, "status": "insufficient_evidence", "reason": "missing capture buffers"}
-    roi = registered_panel_roi()
-    panel = tile_mask_from_pixels(pre_pixels, post_pixels, width, height, roi=roi)
+    panel_roi = roi or registered_panel_roi()
+    panel = tile_mask_from_pixels(pre_pixels, post_pixels, width, height, roi=panel_roi)
+    inside_fraction, outside_fraction = pixel_change_fractions(
+        pre_pixels, post_pixels, width, height, panel_roi
+    )
     result["panel_roi"] = panel
-    outside = tile_mask_from_pixels(pre_pixels, post_pixels, width, height, roi=(0.0, 0.0, 1.0, 1.0))
-    result["full_frame_tiles"] = outside
-    localized = panel["changed_fraction"] >= min_roi_changed_fraction and (
-        panel["changed_fraction"] >= max(0.15, outside["changed_fraction"] * 2.0)
+    result["panel_pixel_change_fraction"] = inside_fraction
+    result["outside_pixel_change_fraction"] = outside_fraction
+    localized = inside_fraction >= min_roi_changed_fraction and (
+        inside_fraction >= max(0.15, outside_fraction * 2.0)
     )
     if not localized:
         return {**result, "status": "failed", "reason": "panel change not localized to registered ROI"}
@@ -426,7 +571,39 @@ def positive_control_segments(
     return {"before": pre, "after": post}
 
 
-def load_capture_rgba(capture_dir: Path, generation: int) -> tuple[bytes, int, int] | None:
+def positive_control_by_generations(
+    frames: list[FrameRecord],
+    pre_generation: int,
+    post_generation: int,
+) -> dict[str, Any] | None:
+    pre = [frame for frame in frames if frame.control_generation == pre_generation and segment_accepts(frame)]
+    post = [frame for frame in frames if frame.control_generation == post_generation and segment_accepts(frame)]
+    if not pre or not post:
+        return None
+    return {
+        "before": pre,
+        "after": post,
+        "pre_generation": pre_generation,
+        "post_generation": post_generation,
+    }
+
+
+def load_capture_rgba(
+    capture_dir: Path,
+    generation: int,
+    *,
+    log_path: Path | None = None,
+    log_frames: list[dict[str, Any]] | None = None,
+    events: list[dict[str, Any]] | None = None,
+    window: str | None = None,
+) -> tuple[bytes, int, int] | None:
+    if log_path is not None or log_frames is not None:
+        frames = log_frames if log_frames is not None else _load_log_frames_dict(log_path)
+        provenance = r0_capture_provenance.verify_capture_provenance(
+            capture_dir, generation, frames, events=events, window=window
+        )
+        if provenance.get("status") != "verified":
+            return None
     sidecar_path = capture_dir / f"capture_{generation}.json"
     rgba_path = capture_dir / f"capture_{generation}.rgba"
     if not sidecar_path.is_file() or not rgba_path.is_file():
@@ -439,22 +616,79 @@ def load_capture_rgba(capture_dir: Path, generation: int) -> tuple[bytes, int, i
     return data, int(meta["width"]), int(meta["height"])
 
 
+def _load_log_frames_dict(log_path: Path) -> list[dict[str, Any]]:
+    import r0_probe
+
+    return r0_probe.parse_log(log_path)["frames"]
+
+
 def build_report(
     *,
     log_path: Path,
-    scenario_segments: dict[str, list[FrameRecord]],
-    positive_control: dict[str, list[FrameRecord]] | None,
+    scenario_segments: dict[str, list[FrameRecord]] | None = None,
+    positive_control: dict[str, Any] | None,
     fps_hint: float = 53.0,
     min_frames: int = 120,
     min_seconds: float = 2.0,
-    positive_control_passed: bool = False,
+    scenario_1_min_frames: int = 30,
+    scenario_1_min_seconds: float = 1.0,
     pre_pixels: bytes | None = None,
     post_pixels: bytes | None = None,
     capture_width: int = 0,
     capture_height: int = 0,
+    roi_config: Path | None = None,
+    require_roi_verified: bool = True,
 ) -> dict[str, Any]:
     all_frames = load_frames_from_log(log_path)
     segment_report = contiguous_census_segments(all_frames)
+    segment_summaries = [segment_to_summary(segment) for segment in segment_report]
+    window_requirements = {
+        "0": {"min_frames": min_frames, "min_seconds": min_seconds},
+        "1": {"min_frames": scenario_1_min_frames, "min_seconds": scenario_1_min_seconds},
+    }
+    qualified_windows = qualified_windows_from_segments(segment_report, requirements=window_requirements)
+    if scenario_segments is None:
+        scenario_segments = {}
+        for key, window in qualified_windows.items():
+            if not window.get("qualified"):
+                continue
+            for segment in segment_report:
+                if int(segment["scenario_id"]) != int(key):
+                    continue
+                if segment["control_generation"] != window["control_generation"]:
+                    continue
+                scenario_segments[key] = [frame for frame in segment["frames"] if segment_accepts(frame)]
+                break
+
+    roi_info = load_roi_config(roi_config, require_verified=require_roi_verified)
+    roi_tuple = roi_info["roi"]
+    roi_verified = bool(roi_info.get("verified")) and roi_info.get("error") is None
+
+    positive = {"status": "not_run"}
+    positive_control_passed = False
+    if positive_control and "before" in positive_control and "after" in positive_control:
+        if "pre_generation" in positive_control:
+            positive["pre_generation"] = positive_control["pre_generation"]
+            positive["post_generation"] = positive_control["post_generation"]
+        before = positive_control["before"]
+        after = positive_control["after"]
+        positive = {
+            **positive,
+            **evaluate_positive_control_windows(
+                before,
+                after,
+                stable_tail=min(5, len(before)),
+                stable_head=min(5, len(after)),
+                pre_pixels=pre_pixels,
+                post_pixels=post_pixels,
+                width=capture_width,
+                height=capture_height,
+                roi=roi_tuple,
+                roi_verified=roi_verified if require_roi_verified else True,
+            ),
+        }
+        positive_control_passed = positive.get("status") == "passed"
+
     candidates: list[dict[str, Any]] = []
     scenarios_out: dict[str, Any] = {}
     for scenario_id, segment in scenario_segments.items():
@@ -479,25 +713,15 @@ def build_report(
                 }
             )
 
-    positive = {"status": "not_run"}
-    if positive_control and "before" in positive_control and "after" in positive_control:
-        positive = evaluate_positive_control_windows(
-            positive_control["before"],
-            positive_control["after"],
-            pre_pixels=pre_pixels,
-            post_pixels=post_pixels,
-            width=capture_width,
-            height=capture_height,
-        )
-        positive_control_passed = positive.get("status") == "passed"
-
     if not positive_control_passed:
         candidates = []
 
     return {
         "log_path": str(log_path),
         "frame_records_total": len(all_frames),
-        "contiguous_segments": segment_report,
+        "contiguous_segments": segment_summaries,
+        "qualified_windows": qualified_windows,
+        "roi_config": {"path": roi_info.get("path"), "verified": roi_verified},
         "scenarios": scenarios_out,
         "candidate_for_lossless_skip": candidates,
         "positive_control": positive,
@@ -515,37 +739,57 @@ def main() -> None:
     parser.add_argument("--capture-dir", type=Path)
     parser.add_argument("--pre-generation", type=int)
     parser.add_argument("--post-generation", type=int)
+    parser.add_argument("--roi-config", type=Path)
+    parser.add_argument("--allow-unverified-roi", action="store_true")
     args = parser.parse_args()
     frames = load_frames_from_log(args.log)
-    qualified: dict[str, list[FrameRecord]] = {}
-    for segment in contiguous_census_segments(frames):
-        accepted = [f for f in segment["frames"] if segment_accepts(f)]
-        if not accepted or segment["continuity"].get("status") != "passed":
-            continue
-        key = str(segment["scenario_id"])
-        if key not in qualified or len(accepted) > len(qualified[key]):
-            qualified[key] = accepted
     events = load_events(args.events) if args.events else []
-    positive = positive_control_segments(frames, events)
+    log_frames = _load_log_frames_dict(args.log)
+    positive: dict[str, Any] | None = None
+    if args.pre_generation is not None and args.post_generation is not None:
+        positive = positive_control_by_generations(frames, args.pre_generation, args.post_generation)
+        if positive is None:
+            positive = {
+                "before": [],
+                "after": [],
+                "pre_generation": args.pre_generation,
+                "post_generation": args.post_generation,
+            }
+    else:
+        positive = positive_control_segments(frames, events)
     pre_pixels = post_pixels = None
     cap_w = cap_h = 0
     if args.capture_dir and args.pre_generation:
-        loaded = load_capture_rgba(args.capture_dir, args.pre_generation)
+        loaded = load_capture_rgba(
+            args.capture_dir,
+            args.pre_generation,
+            log_frames=log_frames,
+            events=events,
+            window="pre",
+        )
         if loaded:
             pre_pixels, cap_w, cap_h = loaded
     if args.capture_dir and args.post_generation:
-        loaded = load_capture_rgba(args.capture_dir, args.post_generation)
+        loaded = load_capture_rgba(
+            args.capture_dir,
+            args.post_generation,
+            log_frames=log_frames,
+            events=events,
+            window="post",
+        )
         if loaded:
             post_pixels, cap_w, cap_h = loaded
     report = build_report(
         log_path=args.log,
-        scenario_segments=qualified,
+        scenario_segments=None,
         positive_control=positive,
         fps_hint=args.fps_hint,
         pre_pixels=pre_pixels,
         post_pixels=post_pixels,
         capture_width=cap_w,
         capture_height=cap_h,
+        roi_config=args.roi_config,
+        require_roi_verified=not args.allow_unverified_roi,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2) + "\n")

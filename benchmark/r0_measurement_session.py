@@ -26,7 +26,10 @@ ROOT = Path(__file__).resolve().parents[1]
 EPOCH_A_SECONDS = 30.0
 EPOCH_B_SAMPLE_SECONDS = 10
 MIN_CENSUS_FRAMES = 120
+BASELINE_MIN_FRAMES = 240
 MIN_CENSUS_SECONDS = 2.0
+SCENARIO_1_MIN_FRAMES = 30
+SCENARIO_1_MIN_SECONDS = 1.0
 CPU_RECONCILE_TOLERANCE_MS_PER_S = 50.0
 TRANSITION_DISCARD_FRAMES = 3
 EXPECT_WIDTH = 3456
@@ -102,7 +105,9 @@ def _analyzer_ran(command: list[str], env: dict[str, str]) -> tuple[int, dict[st
     return result.returncode, payload
 
 
-def run_offline_analyzers(output_dir: Path, manifest: dict[str, Any]) -> None:
+def run_offline_analyzers(
+    output_dir: Path, manifest: dict[str, Any], *, roi_config: Path | None = None
+) -> None:
     log_path = output_dir / "r0_probe.log"
     events_path = output_dir / "events.jsonl"
     if not log_path.is_file():
@@ -134,6 +139,11 @@ def run_offline_analyzers(output_dir: Path, manifest: dict[str, Any]) -> None:
                 str(post_gen),
             ]
         )
+    roi_path = roi_config or manifest.get("roi_config_path")
+    if roi_path:
+        frame_cmd.extend(["--roi-config", str(roi_path)])
+    elif manifest.get("roi_pending_verification"):
+        frame_cmd.append("--allow-unverified-roi")
     if manifest.get("frame_evolution_status") == "skipped_unsupported_drawable":
         manifest["analyzer_results"]["frame_evolution"] = {"exit_code": 0, "skipped": True}
     else:
@@ -168,6 +178,27 @@ def run_offline_analyzers(output_dir: Path, manifest: dict[str, Any]) -> None:
             manifest["stack_report"] = payload
 
 
+def _qualified_windows_pass(report: dict[str, Any] | None) -> bool:
+    if not report:
+        return False
+    windows = report.get("qualified_windows") or {}
+    for key in ("0", "1"):
+        window = windows.get(key) or {}
+        if not window.get("qualified"):
+            return False
+    return True
+
+
+def _stack_report_valid(report: dict[str, Any] | None) -> bool:
+    if not report:
+        return False
+    if "functional_caller" not in report or "attributed_sample_weight" not in report:
+        return False
+    attributed = int(report.get("attributed_sample_weight", 0))
+    root_inclusive = int(report.get("root_inclusive", 0))
+    return attributed == root_inclusive or root_inclusive == 0
+
+
 def acceptance_gates(manifest: dict[str, Any]) -> dict[str, Any]:
     gates: dict[str, Any] = {}
     cpu = manifest.get("epoch_a_thread_cpu", {})
@@ -177,18 +208,19 @@ def acceptance_gates(manifest: dict[str, Any]) -> dict[str, Any]:
     clock_status = manifest.get("event_clock_alignment", {}).get("status")
     gates["event_clock_alignment"] = clock_status == "passed"
     analyzers = manifest.get("analyzer_results", {})
-    gates["stack_analyzer"] = analyzers.get("stack", {}).get("exit_code") == 0
+    frame_report = manifest.get("frame_evolution_report")
+    stack_report = manifest.get("stack_report")
+    gates["stack_analyzer"] = analyzers.get("stack", {}).get("exit_code") == 0 and _stack_report_valid(
+        stack_report
+    )
     drawable = manifest.get("drawable_capability", {})
     partial = drawable.get("failure_class") == "unsupported_drawable"
     if partial:
-        gates["census_frames"] = True
+        gates["qualified_windows"] = True
         gates["positive_control"] = True
         gates["frame_analyzer"] = analyzers.get("frame_evolution", {}).get("skipped") is True
     else:
-        by_scenario = manifest.get("census_frame_count_by_scenario", {})
-        gates["census_frames"] = all(
-            count >= (30 if sid != "0" else MIN_CENSUS_FRAMES) for sid, count in by_scenario.items()
-        ) if by_scenario else manifest.get("census_frame_count", 0) >= MIN_CENSUS_FRAMES
+        gates["qualified_windows"] = _qualified_windows_pass(frame_report)
         gates["positive_control"] = manifest.get("positive_control_status") == "passed"
         gates["frame_analyzer"] = analyzers.get("frame_evolution", {}).get("exit_code") == 0
     prior = manifest.get("status")
@@ -360,6 +392,27 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                     manifest["captures"] = {}
 
                     generation += 1
+                    gen_baseline = generation
+                    r0_probe.write_control(
+                        control_path,
+                        generation=gen_baseline,
+                        mode=r0_control.EU4_R0_MODE_CENSUS,
+                        scenario_id=0,
+                    )
+                    r0_probe.wait_for_ack(log_path, gen_baseline)
+                    baseline_window = r0_probe.wait_until_qualified_window(
+                        log_path,
+                        gen_baseline,
+                        min_frames=BASELINE_MIN_FRAMES,
+                        min_seconds=MIN_CENSUS_SECONDS,
+                    )
+                    manifest["baseline_window"] = baseline_window
+                    if baseline_window.get("status") != "qualified":
+                        raise base.BenchmarkError(
+                            f"baseline window incomplete: {baseline_window.get('reason')}"
+                        )
+
+                    generation += 1
                     gen_pre = generation
                     r0_probe.write_control(
                         control_path,
@@ -368,8 +421,27 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                         scenario_id=0,
                     )
                     r0_probe.wait_for_ack(log_path, gen_pre)
+                    events_so_far = [
+                        json.loads(line)
+                        for line in events_path.read_text(errors="replace").splitlines()
+                        if line.strip()
+                    ]
                     pre_cap = r0_probe.wait_for_capture_verified(capture_dir, log_path, gen_pre)
+                    pre_verify = r0_probe.verify_capture_artifact(capture_dir, gen_pre, log_path)
+                    if pre_verify.get("status") != "verified":
+                        raise base.BenchmarkError(f"pre capture provenance failed: {pre_verify}")
                     manifest["captures"]["pre"] = {"generation": gen_pre, **pre_cap}
+
+                    generation += 1
+                    gen_passive = generation
+                    r0_probe.write_control(
+                        control_path,
+                        generation=gen_passive,
+                        mode=r0_control.EU4_R0_MODE_PASSIVE,
+                        scenario_id=0,
+                    )
+                    r0_probe.wait_for_ack(log_path, gen_passive)
+                    manifest["passive_generation"] = gen_passive
                     mark_uptime(events_path, "pre_window_end")
 
                     print(
@@ -382,6 +454,9 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                         time.sleep(2.0)
                     mark_uptime(events_path, "ui_action_confirmed")
                     time.sleep(TRANSITION_DISCARD_FRAMES / 60.0)
+                    focus_state = auto.ensure_game_focus_interior(game.pid)
+                    if not focus_state.frontmost or not focus_state.interior:
+                        raise base.BenchmarkError("failed to restore game focus before post window")
                     mark_uptime(events_path, "post_window_start")
                     time.sleep(1.0)
 
@@ -394,28 +469,44 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                         scenario_id=1,
                     )
                     r0_probe.wait_for_ack(log_path, gen_post)
+                    events_so_far = [
+                        json.loads(line)
+                        for line in events_path.read_text(errors="replace").splitlines()
+                        if line.strip()
+                    ]
                     post_cap = r0_probe.wait_for_capture_verified(capture_dir, log_path, gen_post)
+                    post_verify = r0_probe.verify_capture_artifact(
+                        capture_dir, gen_post, log_path, events=events_so_far, window="post"
+                    )
+                    if post_verify.get("status") != "verified":
+                        raise base.BenchmarkError(f"post capture provenance failed: {post_verify}")
                     manifest["captures"]["post"] = {"generation": gen_post, **post_cap}
 
                     generation += 1
+                    gen_scenario_1 = generation
                     r0_probe.write_control(
                         control_path,
-                        generation=generation,
-                        mode=r0_control.EU4_R0_MODE_CENSUS,
-                        scenario_id=0,
-                    )
-                    r0_probe.wait_for_ack(log_path, generation)
-                    time.sleep(MIN_CENSUS_SECONDS)
-
-                    generation += 1
-                    r0_probe.write_control(
-                        control_path,
-                        generation=generation,
+                        generation=gen_scenario_1,
                         mode=r0_control.EU4_R0_MODE_CENSUS,
                         scenario_id=1,
                     )
-                    r0_probe.wait_for_ack(log_path, generation)
-                    time.sleep(MIN_CENSUS_SECONDS)
+                    r0_probe.wait_for_ack(log_path, gen_scenario_1)
+                    scenario_1_window = r0_probe.wait_until_qualified_window(
+                        log_path,
+                        gen_scenario_1,
+                        min_frames=SCENARIO_1_MIN_FRAMES,
+                        min_seconds=SCENARIO_1_MIN_SECONDS,
+                    )
+                    manifest["scenario_1_window"] = scenario_1_window
+                    manifest["acquisition_generations"] = {
+                        "baseline": gen_baseline,
+                        "pre_capture": gen_pre,
+                        "passive": gen_passive,
+                        "post_capture": gen_post,
+                        "scenario_1_census": gen_scenario_1,
+                    }
+                    manifest["roi_pending_verification"] = True
+                    manifest["roi_config_path"] = str(ROOT / "fixtures" / "venice_panel_roi.json")
 
                     parsed = r0_probe.parse_log(log_path)
                     census_frames = [
@@ -559,13 +650,36 @@ def session(output_dir: Path, *, dry_run: bool = False, integrated: bool = False
     return manifest
 
 
+def requalify_session(output_dir: Path, *, roi_config: Path | None = None) -> dict[str, Any]:
+    manifest_path = output_dir / "manifest.json"
+    if not manifest_path.is_file():
+        raise base.BenchmarkError(f"missing manifest: {manifest_path}")
+    manifest = json.loads(manifest_path.read_text())
+    if manifest.get("status") == "cleanup_error":
+        return manifest
+    if roi_config:
+        manifest["roi_config_path"] = str(roi_config)
+        manifest["roi_pending_verification"] = False
+    run_offline_analyzers(output_dir, manifest, roi_config=roi_config)
+    if manifest.get("status") not in TERMINAL_FAILURE_STATUSES:
+        acceptance_gates(manifest)
+    manifest["requalified_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    write_manifest(manifest_path, manifest)
+    return manifest
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--run-integrated", action="store_true")
+    parser.add_argument("--requalify", action="store_true")
+    parser.add_argument("--roi-config", type=Path)
     args = parser.parse_args()
-    payload = session(args.output_dir, dry_run=args.dry_run, integrated=args.run_integrated)
+    if args.requalify:
+        payload = requalify_session(args.output_dir, roi_config=args.roi_config)
+    else:
+        payload = session(args.output_dir, dry_run=args.dry_run, integrated=args.run_integrated)
     print(json.dumps(payload, indent=2))
 
 

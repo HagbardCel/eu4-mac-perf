@@ -14,6 +14,7 @@ typedef enum {
     EU4_R0_READBACK_ALLOCATION_FAILED = 4,
     EU4_R0_READBACK_GL_ERROR = 5,
     EU4_R0_READBACK_UNKNOWN_FAILURE = 6,
+    EU4_R0_READBACK_DRAWABLE_STATE_MISMATCH = 7,
 } eu4_r0_readback_failure_t;
 
 typedef enum {

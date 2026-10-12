@@ -17,6 +17,7 @@ from typing import Any
 import eu4_benchmark as base
 
 import eu4_r0_control as r0_control
+import r0_capture_provenance as capture_provenance
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK = Path(__file__).resolve().parent
@@ -37,6 +38,7 @@ READBACK_DIMENSION_MISMATCH = 3
 READBACK_ALLOCATION_FAILED = 4
 READBACK_GL_ERROR = 5
 READBACK_UNKNOWN_FAILURE = 6
+READBACK_DRAWABLE_STATE_MISMATCH = 7
 
 FAILURE_CODE_NAMES = {
     READBACK_OK: "ok",
@@ -46,6 +48,7 @@ FAILURE_CODE_NAMES = {
     READBACK_ALLOCATION_FAILED: "allocation_failed",
     READBACK_GL_ERROR: "gl_error",
     READBACK_UNKNOWN_FAILURE: "unknown_failure",
+    READBACK_DRAWABLE_STATE_MISMATCH: "drawable_state_mismatch",
 }
 HARNESS = ROOT / "tests/r0_probe_harness.c"
 HARNESS_EXE = BENCHMARK / ".build/r0_probe_harness"
@@ -235,34 +238,29 @@ def paired_clock_alignment(
 
 
 def load_capture_sidecar(capture_dir: Path, generation: int) -> dict[str, Any] | None:
-    path = capture_dir / f"capture_{generation}.json"
-    if not path.is_file():
-        return None
-    return json.loads(path.read_text())
+    return capture_provenance.load_capture_sidecar(capture_dir, generation)
 
 
 def verify_capture_artifact(
-    capture_dir: Path, generation: int, log_path: Path
+    capture_dir: Path,
+    generation: int,
+    log_path: Path,
+    *,
+    events: list[dict[str, Any]] | None = None,
+    window: str | None = None,
 ) -> dict[str, Any]:
-    sidecar = load_capture_sidecar(capture_dir, generation)
-    if not sidecar or not sidecar.get("write_ok"):
-        return {"status": "failed", "reason": "missing_or_incomplete_sidecar"}
-    rgba_path = capture_dir / f"capture_{generation}.rgba"
-    if not rgba_path.is_file():
-        return {"status": "failed", "reason": "missing_rgba"}
-    expected_bytes = int(sidecar["width"]) * int(sidecar["height"]) * 4
-    if rgba_path.stat().st_size != expected_bytes:
-        return {"status": "failed", "reason": "rgba_size_mismatch"}
-    frame = find_frame_for_generation(log_path, generation)
-    if not frame:
-        return {"status": "failed", "reason": "no_matching_f_record"}
-    mismatches = []
-    for key in ("frame_index", "control_generation", "width", "height", "crc64"):
-        if int(sidecar.get(key, -1)) != int(frame.get(key, -2)):
-            mismatches.append(key)
-    if mismatches:
-        return {"status": "failed", "reason": "log_sidecar_mismatch", "fields": mismatches}
-    return {"status": "verified", "sidecar": sidecar, "frame": frame}
+    frames = parse_log(log_path)["frames"]
+    return capture_provenance.verify_capture_provenance(
+        capture_dir, generation, frames, events=events, window=window
+    )
+
+
+def find_frame_for_generation_and_index(
+    log_path: Path, generation: int, frame_index: int
+) -> dict[str, Any] | None:
+    return capture_provenance.find_frame_for_generation_and_index(
+        parse_log(log_path)["frames"], generation, frame_index
+    )
 
 
 def find_frame_for_generation(log_path: Path, generation: int) -> dict[str, Any] | None:
@@ -270,6 +268,74 @@ def find_frame_for_generation(log_path: Path, generation: int) -> dict[str, Any]
         if frame.get("control_generation") == generation and frame.get("census_attempted"):
             return frame
     return None
+
+
+def _frame_segment_accepts(frame: dict[str, Any]) -> bool:
+    return bool(
+        frame.get("census_attempted")
+        and frame.get("census_ok")
+        and frame.get("pause_verified")
+        and int(frame.get("width", 0)) > 0
+        and frame.get("flush_ok")
+        and int(frame.get("gl_error_observed", 0)) == 0
+    )
+
+
+def _longest_contiguous_segment(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not frames:
+        return []
+    ordered = sorted(frames, key=lambda item: int(item["frame_index"]))
+    best: list[dict[str, Any]] = []
+    current: list[dict[str, Any]] = []
+    prev_index: int | None = None
+    for frame in ordered:
+        index = int(frame["frame_index"])
+        if prev_index is not None and index != prev_index + 1:
+            if len(current) > len(best):
+                best = current
+            current = []
+        current.append(frame)
+        prev_index = index
+    if len(current) > len(best):
+        best = current
+    return best
+
+
+def wait_until_qualified_window(
+    log_path: Path,
+    generation: int,
+    *,
+    min_frames: int,
+    min_seconds: float,
+    timeout_s: float = 180.0,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        accepted = [
+            frame
+            for frame in parse_log(log_path)["frames"]
+            if frame.get("control_generation") == generation and _frame_segment_accepts(frame)
+        ]
+        segment = _longest_contiguous_segment(accepted)
+        if len(segment) >= min_frames and segment[0].get("uptime_ns") and len(segment) >= 2:
+            duration = (int(segment[-1]["uptime_ns"]) - int(segment[0]["uptime_ns"])) / 1e9
+            if duration >= min_seconds:
+                return {
+                    "status": "qualified",
+                    "generation": generation,
+                    "frame_count": len(segment),
+                    "duration_seconds": duration,
+                    "frame_index_start": int(segment[0]["frame_index"]),
+                    "frame_index_end": int(segment[-1]["frame_index"]),
+                }
+        time.sleep(0.25)
+    return {
+        "status": "incomplete",
+        "reason": "qualified_window_timeout",
+        "generation": generation,
+        "min_frames": min_frames,
+        "min_seconds": min_seconds,
+    }
 
 
 def wait_for_capture_verified(

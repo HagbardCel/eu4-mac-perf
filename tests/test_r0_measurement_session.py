@@ -16,14 +16,20 @@ class R0MeasurementSessionTests(unittest.TestCase):
             },
             "thread_cpu_preflight": {"status": "ready"},
             "event_clock_alignment": {"status": "passed"},
-            "census_frame_count": 200,
-            "census_frame_count_by_scenario": {"0": 150, "1": 50},
             "positive_control_status": "passed",
             "analyzer_results": {
                 "stack": {"exit_code": 0},
                 "frame_evolution": {"exit_code": 0},
             },
             "drawable_capability": {"status": "supported"},
+            "frame_evolution_report": {
+                "qualified_windows": {"0": {"qualified": True}, "1": {"qualified": True}},
+            },
+            "stack_report": {
+                "functional_caller": {"ingame_render": 0.5},
+                "attributed_sample_weight": 10,
+                "root_inclusive": 10,
+            },
         }
         session.acceptance_gates(manifest)
         self.assertEqual(manifest["status"], "completed")
@@ -41,6 +47,11 @@ class R0MeasurementSessionTests(unittest.TestCase):
                 "frame_evolution": {"skipped": True},
             },
             "drawable_capability": {"failure_class": "unsupported_drawable"},
+            "stack_report": {
+                "functional_caller": {"ingame_render": 0.5},
+                "attributed_sample_weight": 10,
+                "root_inclusive": 10,
+            },
         }
         session.acceptance_gates(manifest)
         self.assertEqual(manifest["status"], "partial_complete")

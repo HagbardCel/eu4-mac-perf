@@ -56,7 +56,14 @@ static bool plausible_dim(int value) {
     return value > 0 && value <= 16384;
 }
 
-static bool establish_drawable_dims(CGLContextObj context, bool test_relaxed, int *width_out, int *height_out) {
+typedef enum {
+    EU4_R0_DIMS_OK = 0,
+    EU4_R0_DIMS_UNSUPPORTED = 1,
+    EU4_R0_DIMS_VIEWPORT_MISMATCH = 2,
+} eu4_r0_dims_status_t;
+
+static eu4_r0_dims_status_t establish_drawable_dims(CGLContextObj context, bool test_relaxed, int *width_out,
+                                                     int *height_out) {
     GLint dims[2] = {0, 0};
     CGLError err = CGLGetParameter(context, kCGLCPSurfaceBackingSize, dims);
     if (err == kCGLNoError && plausible_dim(dims[0]) && plausible_dim(dims[1])) {
@@ -66,10 +73,10 @@ static bool establish_drawable_dims(CGLContextObj context, bool test_relaxed, in
         glGetIntegerv(GL_VIEWPORT, viewport);
         if (plausible_dim(viewport[2]) && plausible_dim(viewport[3])) {
             if (viewport[2] != dims[0] || viewport[3] != dims[1]) {
-                return false;
+                return EU4_R0_DIMS_VIEWPORT_MISMATCH;
             }
         }
-        return true;
+        return EU4_R0_DIMS_OK;
     }
     if (test_relaxed) {
         GLint viewport[4] = {0, 0, 0, 0};
@@ -77,10 +84,10 @@ static bool establish_drawable_dims(CGLContextObj context, bool test_relaxed, in
         if (plausible_dim(viewport[2]) && plausible_dim(viewport[3])) {
             *width_out = viewport[2];
             *height_out = viewport[3];
-            return true;
+            return EU4_R0_DIMS_OK;
         }
     }
-    return false;
+    return EU4_R0_DIMS_UNSUPPORTED;
 }
 
 static bool validate_expected_dims(int width, int height) {
@@ -141,9 +148,17 @@ bool eu4_r0_readback_capture(CGLContextObj context, eu4_r0_target_t target, bool
             result->failure_code = EU4_R0_READBACK_FRAMEBUFFER_MISMATCH;
             return false;
         }
-    } else if (!establish_drawable_dims(context, test_relaxed_policy, &width, &height)) {
-        result->failure_code = EU4_R0_READBACK_UNSUPPORTED_DRAWABLE;
-        return false;
+    } else {
+        eu4_r0_dims_status_t dims_status =
+            establish_drawable_dims(context, test_relaxed_policy, &width, &height);
+        if (dims_status == EU4_R0_DIMS_VIEWPORT_MISMATCH) {
+            result->failure_code = EU4_R0_READBACK_DRAWABLE_STATE_MISMATCH;
+            return false;
+        }
+        if (dims_status != EU4_R0_DIMS_OK) {
+            result->failure_code = EU4_R0_READBACK_UNSUPPORTED_DRAWABLE;
+            return false;
+        }
     }
     if (!plausible_dim(width) || !plausible_dim(height)) {
         result->failure_code = EU4_R0_READBACK_UNSUPPORTED_DRAWABLE;

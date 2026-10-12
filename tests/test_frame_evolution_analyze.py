@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 
@@ -72,23 +73,50 @@ class FrameEvolutionAnalyzeTests(unittest.TestCase):
         lines = []
         for i in range(1, 301):
             eq = 1 if i > 1 else 0
-            lines.append(f"F,{i},1,0,1,1,0,64,64,{eq},1,42,1\n")
+            lines.append(f"F,{i},1,0,1,1,0,64,64,{eq},1,42,1,{i * 10_000_000},0,1,0,99,7,0\n")
         log.write_text("".join(lines))
-        frames = accepted_census_frames(
-            [
-                FrameRecord(
-                    i, 1, 0, True, True, 64, 64, 1 if i > 1 else 0, True, 42, uptime_ns=i * 10_000_000
-                )
-                for i in range(1, 301)
-            ]
+        roi = Path(self._testMethodName) / "roi.json"
+        roi.write_text(
+            json.dumps(
+                {
+                    "verified": True,
+                    "panel_roi_opengl_bottom_left": [0.5, 0.5, 0.12, 0.12],
+                }
+            )
         )
+        width, height = 64, 64
+        before = bytearray(width * height * 4)
+        after = bytearray(before)
+        for y in range(32, 39):
+            for x in range(32, 39):
+                after[y * width * 4 + x * 4] = 255
+        positive = {
+            "before": [FrameRecord(1, 1, 0, True, True, 64, 64, 0, True, 10, uptime_ns=1)],
+            "after": [FrameRecord(2, 1, 1, True, True, 64, 64, 0, True, 20, uptime_ns=2)],
+            "pre_generation": 8,
+            "post_generation": 9,
+        }
         report = build_report(
             log_path=log,
-            scenario_segments={"0": frames},
-            positive_control=None,
-            positive_control_passed=True,
+            positive_control=positive,
+            pre_pixels=bytes(before),
+            post_pixels=bytes(after),
+            capture_width=width,
+            capture_height=height,
+            roi_config=roi,
+            require_roi_verified=True,
         )
         self.assertTrue(report["candidate_for_lossless_skip"])
+        json.dumps(report)
+
+    def test_outside_roi_change_rejected(self) -> None:
+        width, height = 64, 64
+        roi = (0.5, 0.5, 0.12, 0.12)
+        before = bytearray(width * height * 4)
+        after = bytearray(before)
+        after[0] = 255
+        panel = tile_mask_from_pixels(bytes(before), bytes(after), width, height, roi=roi)
+        self.assertEqual(panel["changed_fraction"], 0.0)
 
 
 if __name__ == "__main__":

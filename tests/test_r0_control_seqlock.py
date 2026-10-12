@@ -1,6 +1,7 @@
 import ctypes
 import mmap
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,8 @@ class R0ControlAtomicTests(unittest.TestCase):
     def test_cross_arch_native_consume(self) -> None:
         if platform.machine() != "arm64":
             self.skipTest("cross-arch consume test expects arm64 host")
+        if not shutil.which("arch"):
+            self.skipTest("arch wrapper unavailable")
         r0_probe.build()
         consumer = r0_probe.BENCHMARK / ".build/r0_control_consume_x86_64"
         subprocess.run(
@@ -67,8 +70,11 @@ class R0ControlAtomicTests(unittest.TestCase):
                 text=True,
                 check=False,
             )
-            if result.returncode:
-                self.skipTest(f"x86_64 consumer failed: {result.stderr.strip()}")
+            self.assertEqual(
+                result.returncode,
+                0,
+                msg=result.stderr.strip() or result.stdout.strip(),
+            )
             self.assertEqual(int(result.stdout.strip()), 42)
 
 
