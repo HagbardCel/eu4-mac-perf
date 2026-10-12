@@ -29,6 +29,31 @@ Call graph:
         report = analyze_sample_text(text)
         self.assertEqual(report["attributed_sample_weight"], 100)
 
+    def test_real_sample_snippet(self) -> None:
+        text = """
+Call graph:
+    1234 CInGameIdler::Render(void*)
+      800 CPdxMeshObject::RenderBuckets
+        500 GfxDrawIndexed
+          500 glDrawElements
+        300 CPdxMapBorderLayer::DrawBorders
+        """
+        report = analyze_sample_text(text)
+        self.assertIn("border_draw", report["functional_caller"])
+        self.assertIn("gfx_draw_indexed", report["functional_caller"])
+        self.assertEqual(report["attributed_sample_weight"], 1234)
+
+    def test_branched_siblings(self) -> None:
+        text = """
+Call graph:
+    100 root
+      60 branch_a
+      40 branch_b
+        """
+        report = analyze_sample_text(text)
+        self.assertEqual(report["attributed_sample_weight"], 100)
+        self.assertGreaterEqual(len(report["cross_tab_counts"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

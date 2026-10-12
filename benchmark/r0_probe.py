@@ -9,6 +9,7 @@ import os
 import platform
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,7 @@ def build() -> None:
             "-Wall",
             "-Wextra",
             "-Werror",
+            "-std=c11",
             "-dynamiclib",
             "-o",
             str(HOST_CONTROL_LIBRARY),
@@ -56,6 +58,7 @@ def build() -> None:
             "-Wall",
             "-Wextra",
             "-Werror",
+            "-std=c11",
             "-dynamiclib",
             "-framework",
             "OpenGL",
@@ -119,14 +122,13 @@ def write_control(path: Path, *, generation: int, mode: int, scenario_id: int) -
         path.write_bytes(b"\x00" * r0_control.EU4_R0_CONTROL_PAGE_SIZE)
     publish = _publish_native()
     with path.open("r+b") as handle:
-        mapping = mmap.mmap(handle.fileno(), r0_control.EU4_R0_CONTROL_PAGE_SIZE)
-        try:
-            page = (ctypes.c_uint8 * r0_control.EU4_R0_CONTROL_PAGE_SIZE).from_buffer_copy(mapping[:])
-            publish(ctypes.cast(page, ctypes.c_void_p), generation, mode, scenario_id)
-            mapping[:] = bytes(page)
+        with mmap.mmap(
+            handle.fileno(), r0_control.EU4_R0_CONTROL_PAGE_SIZE, access=mmap.ACCESS_WRITE
+        ) as mapping:
+            page = (ctypes.c_uint8 * r0_control.EU4_R0_CONTROL_PAGE_SIZE).from_buffer(mapping)
+            publish(ctypes.c_void_p(ctypes.addressof(page)), generation, mode, scenario_id)
+            del page
             mapping.flush()
-        finally:
-            mapping.close()
 
 
 def probe_env(control_path: Path, log_path: Path) -> dict[str, str]:
@@ -135,6 +137,58 @@ def probe_env(control_path: Path, log_path: Path) -> dict[str, str]:
         "EU4_R0_LOG": str(log_path),
         "DYLD_INSERT_LIBRARIES": str(LIBRARY),
     }
+
+
+def event_uptime_ns() -> int:
+    return time.clock_gettime_ns(time.CLOCK_UPTIME_RAW)
+
+
+def wait_for_ack(log_path: Path, generation: int, timeout_s: float = 10.0) -> dict[str, Any]:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        parsed = parse_log(log_path)
+        for ack in parsed["acks"]:
+            if ack["generation"] == generation:
+                return ack
+        time.sleep(0.1)
+    raise base.BenchmarkError(f"Timed out waiting for ACK generation={generation}")
+
+
+def probe_production_drawable(
+    control_path: Path, log_path: Path, generation: int, *, timeout_s: float = 15.0
+) -> dict[str, Any]:
+    """One census generation against the real drawable (no EU4_R0_TEST_CENSUS)."""
+    write_control(
+        control_path,
+        generation=generation,
+        mode=r0_control.EU4_R0_MODE_CENSUS,
+        scenario_id=0,
+    )
+    wait_for_ack(log_path, generation, timeout_s=timeout_s)
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        parsed = parse_log(log_path)
+        for frame in reversed(parsed["frames"]):
+            if not frame.get("census_attempted"):
+                continue
+            return {
+                "supported": bool(frame.get("census_ok")),
+                "frame": frame,
+                "generation": generation,
+            }
+        time.sleep(0.2)
+    return {"supported": False, "reason": "no census frame observed", "generation": generation}
+
+
+def infer_main_thread_id(frames: list[dict[str, Any]]) -> int | None:
+    votes: dict[int, int] = {}
+    for frame in frames:
+        if frame.get("flush_is_main_thread") and frame.get("pthread_tid"):
+            tid = int(frame["pthread_tid"])
+            votes[tid] = votes.get(tid, 0) + 1
+    if not votes:
+        return None
+    return max(votes, key=votes.get)
 
 
 def parse_log(path: Path) -> dict[str, Any]:
@@ -248,9 +302,9 @@ def preflight() -> dict[str, Any]:
         parsed = parse_log(log)
         if not parsed["acks"] or not parsed["frames"]:
             raise base.BenchmarkError("R0 preflight log missing ACK or frame records")
-        census_frames = [f for f in parsed["frames"] if f["census_attempted"]]
-        if not census_frames:
-            raise base.BenchmarkError("R0 preflight did not attempt census readback")
+        census_ok_frames = [f for f in parsed["frames"] if f.get("census_ok")]
+        if not census_ok_frames:
+            raise base.BenchmarkError("R0 preflight did not produce census_ok readback")
         return {"status": "ready", "acks": len(parsed["acks"]), "frames": len(parsed["frames"])}
 
 

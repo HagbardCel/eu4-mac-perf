@@ -138,19 +138,33 @@ static void snapshot_swap_stats(uint64_t now, bool paused) {
 }
 
 static bool buffer_grow(uint8_t **buf, size_t *cap, size_t needed) {
+    const char *force_fail = getenv("EU4_R0_TEST_BUFFER_GROW_FAIL");
+    if (force_fail && force_fail[0] && strcmp(force_fail, "0") != 0) {
+        return false;
+    }
     if (*cap >= needed) {
         return true;
     }
-    uint8_t *grown = realloc(*buf, needed);
-    uint8_t *ref_grown = realloc(reference_buffer, needed);
-    if (!grown || !ref_grown) {
-        free(grown);
-        free(ref_grown);
+    uint8_t *new_readback = (uint8_t *)malloc(needed);
+    uint8_t *new_reference = (uint8_t *)malloc(needed);
+    if (!new_readback || !new_reference) {
+        free(new_readback);
+        free(new_reference);
         return false;
     }
-    *buf = grown;
-    reference_buffer = ref_grown;
+    size_t preserve = readback_capacity < needed ? readback_capacity : needed;
+    if (preserve && readback_buffer) {
+        memcpy(new_readback, readback_buffer, preserve);
+    }
+    if (preserve && reference_buffer) {
+        memcpy(new_reference, reference_buffer, preserve);
+    }
+    free(readback_buffer);
+    free(reference_buffer);
+    readback_buffer = new_readback;
+    reference_buffer = new_reference;
     readback_capacity = needed;
+    *buf = readback_buffer;
     *cap = needed;
     return true;
 }
@@ -168,7 +182,9 @@ static bool census_readback(CGLContextObj context, int *width_out, int *height_o
     };
     eu4_r0_readback_result_t result;
     bool relaxed = test_census_enabled();
-    if (!eu4_r0_readback_capture(context, EU4_R0_TARGET_DRAWABLE_BACK, relaxed, &buffers, &result)) {
+    eu4_r0_target_t target =
+        test_census_enabled() ? EU4_R0_TARGET_TEST_FBO : EU4_R0_TARGET_DRAWABLE_BACK;
+    if (!eu4_r0_readback_capture(context, target, relaxed, &buffers, &result)) {
         if (gl_error_out) {
             *gl_error_out = result.gl_error_observed;
         }
@@ -190,7 +206,7 @@ static bool census_readback(CGLContextObj context, int *width_out, int *height_o
 }
 
 static void maybe_ack_generation(const eu4_r0_control_snapshot_t *snap, uint64_t now) {
-    if (!snap || snap->generation == 0 || snap->generation == last_acked_generation) {
+    if (!snap || !snap->valid || snap->generation == 0 || snap->generation == last_acked_generation) {
         return;
     }
     char line[160];
@@ -241,7 +257,7 @@ static CGLError probed_flush(CGLContextObj context) {
     bool paused = pause_verified();
 
     eu4_r0_control_snapshot_t snap = {0};
-    bool have_snap = control && eu4_r0_control_consume(control, &snap);
+    bool have_snap = control && eu4_r0_control_consume(control, &snap) && snap.valid;
     if (have_snap) {
         if (snap.generation != last_seen_generation || snap.mode != active_mode ||
             snap.scenario_id != active_scenario_id) {

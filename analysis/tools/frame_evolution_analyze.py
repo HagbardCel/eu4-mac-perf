@@ -12,6 +12,9 @@ from typing import Any, Iterable
 
 TILE_SIZE = 64
 TRANSITION_DISCARD_FRAMES = 3
+# Normalized OpenGL viewport coordinates: origin bottom-left (x, y, width, height).
+PROVINCE_PANEL_ROI = (0.72, 0.02, 0.26, 0.42)
+EVENT_UPTIME_TOLERANCE_NS = 50_000_000
 
 
 @dataclass(frozen=True)
@@ -162,6 +165,118 @@ def classify_scenario(
     }
 
 
+def _event_uptime_ns(events: list[dict[str, Any]], name: str) -> int | None:
+    for item in events:
+        if item.get("phase") == name or item.get("event") == name:
+            value = item.get("event_uptime_ns")
+            if value is not None:
+                return int(value)
+    return None
+
+
+def raw_frame_index_continuity(frames: list[FrameRecord]) -> dict[str, Any]:
+    if not frames:
+        return {"status": "failed", "reason": "no frames"}
+    indices = [frame.frame_index for frame in frames]
+    gaps = [
+        (indices[index - 1], indices[index])
+        for index in range(1, len(indices))
+        if indices[index] != indices[index - 1] + 1
+    ]
+    return {"status": "passed" if not gaps else "failed", "gaps": gaps, "count": len(indices)}
+
+
+def clock_alignment_sanity(frames: list[FrameRecord], host_uptime_ns: int | None) -> dict[str, Any]:
+    if host_uptime_ns is None:
+        return {"status": "not_run", "reason": "missing host uptime"}
+    paired = [frame for frame in frames if frame.uptime_ns]
+    if not paired:
+        return {"status": "failed", "reason": "no probe uptime_ns"}
+    probe_ns = paired[0].uptime_ns
+    delta = abs(probe_ns - host_uptime_ns)
+    return {
+        "status": "passed" if delta <= EVENT_UPTIME_TOLERANCE_NS else "failed",
+        "delta_ns": delta,
+        "tolerance_ns": EVENT_UPTIME_TOLERANCE_NS,
+    }
+
+
+def extract_roi_pixels(
+    pixels: bytes, width: int, height: int, roi: tuple[float, float, float, float] = PROVINCE_PANEL_ROI
+) -> bytes:
+    left, bottom, width_frac, height_frac = roi
+    x0 = min(width - 1, max(0, int(left * width)))
+    y0 = min(height - 1, max(0, int(bottom * height)))
+    roi_w = max(1, min(width - x0, int(width_frac * width)))
+    roi_h = max(1, min(height - y0, int(height_frac * height)))
+    row_bytes = width * 4
+    out = bytearray()
+    for row in range(y0, y0 + roi_h):
+        start = row * row_bytes + x0 * 4
+        out.extend(pixels[start : start + roi_w * 4])
+    return bytes(out)
+
+
+def tile_mask_from_pixels(
+    before: bytes,
+    after: bytes,
+    width: int,
+    height: int,
+    *,
+    tile_size: int = TILE_SIZE,
+    roi: tuple[float, float, float, float] = PROVINCE_PANEL_ROI,
+) -> dict[str, Any]:
+    """Compare tiles inside ROI using OpenGL bottom-left pixel layout."""
+    left, bottom, width_frac, height_frac = roi
+    x0 = int(left * width)
+    y0 = int(bottom * height)
+    roi_w = int(width_frac * width)
+    roi_h = int(height_frac * height)
+    cols = math.ceil(roi_w / tile_size) if roi_w else 0
+    rows = math.ceil(roi_h / tile_size) if roi_h else 0
+    changed = 0
+    for row in range(rows):
+        for col in range(cols):
+            px = x0 + col * tile_size
+            py = y0 + row * tile_size
+            if px >= width or py >= height:
+                continue
+            size = tile_size * 4
+            row_bytes = width * 4
+            b_off = py * row_bytes + px * 4
+            a_off = b_off
+            tile_w = min(tile_size, width - px)
+            tile_h = min(tile_size, height - py)
+            equal = True
+            for ty in range(tile_h):
+                b_row = before[b_off + ty * row_bytes : b_off + ty * row_bytes + tile_w * 4]
+                a_row = after[a_off + ty * row_bytes : a_off + ty * row_bytes + tile_w * 4]
+                if b_row != a_row:
+                    equal = False
+                    break
+            if not equal:
+                changed += 1
+    total = max(1, cols * rows)
+    return {
+        "status": "ok",
+        "coordinate_system": "opengl_bottom_left",
+        "roi": roi,
+        "changed_tiles": changed,
+        "total_tiles": total,
+        "changed_fraction": changed / total,
+    }
+
+
+def baseline_scenario_strict_memcmp(frames: list[FrameRecord]) -> dict[str, Any]:
+    segment = [frame for frame in frames if frame.scenario_id == 0 and frame.census_attempted]
+    if len(segment) < 2:
+        return {"status": "insufficient_data"}
+    flags = [frame.memcmp_equal_prev == 1 for frame in segment[1:]]
+    if all(flags):
+        return {"status": "passed", "frames": len(segment)}
+    return {"status": "failed", "reason": "baseline memcmp not uniformly equal"}
+
+
 def tile_mask_from_crc_series(frames: list[FrameRecord], tile_size: int = TILE_SIZE) -> dict[str, Any]:
     if len(frames) < 2:
         return {"status": "unavailable", "reason": "need raw captures for tile mask"}
@@ -179,37 +294,53 @@ def tile_mask_from_crc_series(frames: list[FrameRecord], tile_size: int = TILE_S
 
 
 def evaluate_positive_control_windows(
-    pre: list[FrameRecord], post: list[FrameRecord], *, stable_tail: int = 5, stable_head: int = 5
+    pre: list[FrameRecord],
+    post: list[FrameRecord],
+    *,
+    stable_tail: int = 5,
+    stable_head: int = 5,
+    pre_pixels: bytes | None = None,
+    post_pixels: bytes | None = None,
+    width: int = 0,
+    height: int = 0,
+    min_roi_changed_fraction: float = 0.05,
 ) -> dict[str, Any]:
     if len(pre) < stable_tail or len(post) < stable_head:
         return {"status": "failed", "reason": "insufficient stable window frames"}
     pre_tail = pre[-stable_tail:]
     post_head = post[:stable_head]
-    if all(f.crc64 == pre_tail[0].crc64 for f in pre_tail) is False:
-        pass
     pre_crcs = {f.crc64 for f in pre_tail}
     post_crcs = {f.crc64 for f in post_head}
     if pre_crcs == post_crcs:
-        return {"status": "failed", "reason": "pre/post stable windows identical"}
-    return {
-        "status": "passed",
-        "reason": "stable windows differ",
+        return {"status": "failed", "reason": "pre/post stable windows identical (full-frame crc)"}
+    result: dict[str, Any] = {
         "pre_crcs": sorted(pre_crcs),
         "post_crcs": sorted(post_crcs),
     }
+    if pre_pixels and post_pixels and width > 0 and height > 0:
+        panel = tile_mask_from_pixels(pre_pixels, post_pixels, width, height)
+        result["panel_roi"] = panel
+        if panel["changed_fraction"] < min_roi_changed_fraction:
+            return {**result, "status": "failed", "reason": "province panel ROI change too small"}
+        return {**result, "status": "passed", "reason": "panel ROI changed plausibly"}
+    return {**result, "status": "passed", "reason": "stable windows differ (crc metadata)"}
 
 
 def positive_control_segments(
     frames: list[FrameRecord],
     events: list[dict[str, Any]],
     *,
-    clock_offset_ns: int = 0,
     discard_frames: int = TRANSITION_DISCARD_FRAMES,
 ) -> dict[str, list[FrameRecord]] | None:
-    action_events = [e for e in events if e.get("phase") == "ui_action_confirmed"]
-    if not action_events:
+    pre_end = _event_uptime_ns(events, "pre_window_end")
+    post_start = _event_uptime_ns(events, "post_window_start")
+    action_ns = _event_uptime_ns(events, "ui_action_confirmed")
+    if pre_end is not None and post_start is not None:
+        pre = [f for f in frames if f.uptime_ns and f.uptime_ns <= pre_end]
+        post = [f for f in frames if f.uptime_ns and f.uptime_ns >= post_start]
+        return {"before": pre, "after": post}
+    if action_ns is None:
         return None
-    action_ns = int(action_events[0].get("monotonic_ns", 0)) + clock_offset_ns
     pre = [f for f in frames if f.uptime_ns and f.uptime_ns <= action_ns]
     post = [f for f in frames if f.uptime_ns and f.uptime_ns > action_ns]
     if discard_frames:
@@ -278,7 +409,6 @@ def main() -> None:
     parser.add_argument("log", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--events", type=Path)
-    parser.add_argument("--clock-offset-ns", type=int, default=0)
     parser.add_argument("--fps-hint", type=float, default=53.0)
     args = parser.parse_args()
     frames = load_frames_from_log(args.log)
@@ -287,7 +417,7 @@ def main() -> None:
         key = str(frame.scenario_id)
         by_scenario.setdefault(key, []).append(frame)
     events = load_events(args.events) if args.events else []
-    positive = positive_control_segments(frames, events, clock_offset_ns=args.clock_offset_ns)
+    positive = positive_control_segments(frames, events)
     report = build_report(
         log_path=args.log,
         scenario_segments=by_scenario,

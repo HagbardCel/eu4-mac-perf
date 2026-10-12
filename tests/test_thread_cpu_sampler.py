@@ -1,9 +1,11 @@
+import sys
 import unittest
 from unittest.mock import patch
 
 import thread_cpu_sampler
 
 
+@unittest.skipUnless(sys.platform == "darwin", "Mach thread CPU sampling requires macOS")
 class ThreadCpuSamplerTests(unittest.TestCase):
     def test_poll_window_reports_self_task_dealloc(self) -> None:
         samples = [

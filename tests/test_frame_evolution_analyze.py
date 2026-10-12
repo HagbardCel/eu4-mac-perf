@@ -8,6 +8,8 @@ from analysis.tools.frame_evolution_analyze import (
     classify_scenario,
     consecutive_equal_runs,
     evaluate_positive_control_windows,
+    positive_control_segments,
+    tile_mask_from_pixels,
 )
 
 
@@ -36,6 +38,31 @@ class FrameEvolutionAnalyzeTests(unittest.TestCase):
         after = [FrameRecord(2, 1, 1, True, True, 64, 64, 0, True, 20)]
         result = evaluate_positive_control_windows(before, after, stable_tail=1, stable_head=1)
         self.assertEqual(result["status"], "passed")
+
+    def test_positive_control_uptime_events(self) -> None:
+        frames = [
+            FrameRecord(1, 1, 1, True, True, 64, 64, 0, True, 10, uptime_ns=100),
+            FrameRecord(2, 1, 1, True, True, 64, 64, 0, True, 11, uptime_ns=200),
+            FrameRecord(3, 1, 1, True, True, 64, 64, 0, True, 20, uptime_ns=400),
+        ]
+        events = [
+            {"event": "pre_window_end", "event_uptime_ns": 250},
+            {"event": "post_window_start", "event_uptime_ns": 350},
+        ]
+        segments = positive_control_segments(frames, events)
+        self.assertIsNotNone(segments)
+        self.assertEqual(len(segments["before"]), 2)
+        self.assertEqual(len(segments["after"]), 1)
+
+    def test_panel_roi_detects_change(self) -> None:
+        width, height = 64, 64
+        before = bytearray(width * height * 4)
+        after = bytearray(before)
+        roi_x = int(0.72 * width)
+        roi_y = int(0.02 * height)
+        after[roi_y * width * 4 + roi_x * 4] = 255
+        panel = tile_mask_from_pixels(bytes(before), bytes(after), width, height)
+        self.assertGreater(panel["changed_fraction"], 0.0)
 
     def test_build_report_writes_candidates(self) -> None:
         log = Path(self._testMethodName) / "probe.log"
