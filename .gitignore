@@ -1,3 +1,6 @@
+# Local EU IV / Ghidra / decompiled corpus (never publish)
+.local/
+
 __pycache__/
 *.pyc
 .venv/
