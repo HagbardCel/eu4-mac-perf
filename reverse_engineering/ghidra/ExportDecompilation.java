@@ -46,8 +46,7 @@ public class ExportDecompilation extends GhidraScript {
         decomp.openProgram(currentProgram);
         decomp.setSimplificationStyle("decompile");
 
-        File temp = new File(outFile.getAbsolutePath() + ".tmp");
-        BufferedWriter writer = new BufferedWriter(new FileWriter(temp));
+        BufferedWriter writer = new BufferedWriter(new FileWriter(outFile));
         List<String> rvas = Files.readAllLines(rvaFile.toPath());
         for (String line : rvas) {
             if (line.trim().isEmpty() || line.startsWith("#")) {
@@ -89,12 +88,6 @@ public class ExportDecompilation extends GhidraScript {
         }
         writer.close();
         decomp.dispose();
-        if (outFile.exists()) {
-            outFile.delete();
-        }
-        if (!temp.renameTo(outFile)) {
-            throw new IllegalStateException("failed to rename batch output");
-        }
         println("ExportDecompilation wrote " + outFile.getAbsolutePath());
     }
 

@@ -79,7 +79,9 @@ Each `exports/<baseline-revision>/` tree is immutable for batch export. If Ghidr
 
 ## Reports (Git)
 
-Aggregate census only: [`reports/renderer-size-census.md`](reports/renderer-size-census.md) and `.json`. No per-function pseudocode in the repository. Bounded classification QC: [`reports/classification-qc.md`](reports/classification-qc.md).
+Authoritative census files are generated only after `corpus qualify` — see [`reports/README.md`](reports/README.md). Bounded classification QC: [`reports/classification-qc.md`](reports/classification-qc.md).
+
+`corpus import` creates the Ghidra project; `corpus smoke` is retryable and does not delete the project on failure.
 
 ## Tests
 

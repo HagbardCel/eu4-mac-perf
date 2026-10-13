@@ -26,6 +26,17 @@ class CensusTests(unittest.TestCase):
         self.assertEqual(cls["primary_subsystem"], "B0")
         self.assertIn("direct_opengl_caller", cls["tags"])
 
+    def test_pseudocode_gl_does_not_set_b0(self) -> None:
+        row = {
+            "entry_rva": "0x4000",
+            "kind": "internal",
+            "name_mangled": "__ZN4util6mallocEm",
+            "name_demangled": "util::malloc(unsigned long)",
+            "namespace": "",
+        }
+        cls = classify_function(row, [], "glUseProgram(1);")
+        self.assertEqual(cls["primary_subsystem"], "U")
+
     def test_callee_alone_not_graphics(self) -> None:
         row = {
             "entry_rva": "0x4000",

@@ -14,6 +14,26 @@ TERMINAL_STATUSES = frozenset({"success", "failed", "timeout", "skipped"})
 BATCH_NAME_RE = re.compile(r"^batch-(\d{5})\.jsonl$")
 
 
+def inventory_bundle_digest(inv_dir: Path) -> str:
+    """SHA-256 over canonical functions, call_edges, and coverage JSON."""
+    parts: list[str] = []
+    functions = inv_dir / "functions.jsonl"
+    edges = inv_dir / "call_edges.jsonl"
+    coverage = inv_dir / "coverage.json"
+    if functions.is_file():
+        lines = [line for line in functions.read_text().splitlines() if line.strip()]
+        lines.sort(key=lambda raw: parse_rva(json.loads(raw)["entry_rva"]))
+        parts.append("functions.jsonl\n" + "\n".join(lines))
+    if edges.is_file():
+        lines = [line for line in edges.read_text().splitlines() if line.strip()]
+        lines.sort()
+        parts.append("call_edges.jsonl\n" + "\n".join(lines))
+    if coverage.is_file():
+        cov = json.loads(coverage.read_text())
+        parts.append("coverage.json\n" + json.dumps(cov, sort_keys=True))
+    return hashlib.sha256("\n---\n".join(parts).encode()).hexdigest()
+
+
 def inventory_digest(functions_jsonl: Path) -> str:
     """SHA-256 of canonical functions.jsonl (sorted lines by entry_rva)."""
     lines: list[str] = []
@@ -44,6 +64,7 @@ def build_batch_manifest(
     batch_size: int,
     exporter_script_hash: str,
     inventory_digest_value: str,
+    inventory_bundle_digest_value: str | None = None,
 ) -> dict[str, Any]:
     rvas = eligible_internal_rvas(functions_jsonl)
     batches: dict[str, list[str]] = {}
@@ -54,6 +75,7 @@ def build_batch_manifest(
     return {
         "baseline_revision": baseline_revision,
         "inventory_digest": inventory_digest_value,
+        "inventory_bundle_digest": inventory_bundle_digest_value or inventory_digest_value,
         "batch_size": batch_size,
         "exporter_script_hash": exporter_script_hash,
         "eligible_function_count": len(rvas),
@@ -124,6 +146,33 @@ def export_completeness(manifest: dict[str, Any], decompiled_dir: Path) -> tuple
         errors.append("eligible_function_count does not match manifest partition size")
     complete = len(errors) == 0
     return (1.0 if complete else 0.0, errors)
+
+
+def pilot_sample_rvas(functions_jsonl: Path, n: int, seed: int = 0) -> list[int]:
+    """Deterministic tertile-stratified sample by decoded_instruction_bytes."""
+    import random
+
+    rows: list[tuple[int, int]] = []
+    for line in functions_jsonl.read_text().splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if row.get("kind") != "internal":
+            continue
+        rows.append((parse_rva(row["entry_rva"]), int(row.get("decoded_instruction_bytes", 0))))
+    if not rows or n <= 0:
+        return []
+    by_size = sorted(rows, key=lambda item: item[1])
+    third = max(1, len(by_size) // 3)
+    buckets = [by_size[:third], by_size[third : 2 * third], by_size[2 * third :]]
+    rng = random.Random(seed)
+    per = max(1, n // 3)
+    sample: list[int] = []
+    for bucket in buckets:
+        pool = [rva for rva, _ in bucket]
+        rng.shuffle(pool)
+        sample.extend(pool[:per])
+    return sorted(set(sample))[:n]
 
 
 def decompilation_success_stats(

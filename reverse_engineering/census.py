@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from reverse_engineering.intervals import intervals_from_ranges, union_size
+from reverse_engineering.export_identity import validate_export_identity
 from reverse_engineering.paths import RE_DIR, ReError, binary_sha256, local_binary_root, resolve_export_dir
 
 REPORTS = RE_DIR / "reports"
@@ -44,21 +45,13 @@ def load_edges(inventory_dir: Path) -> list[dict[str, Any]]:
 
 def classify_function(row: dict[str, Any], edges: list[dict[str, Any]], pseudocode: str | None) -> dict[str, Any]:
     rva = row["entry_rva"]
-    text = " ".join(
-        filter(
-            None,
-            [
-                row.get("name_mangled"),
-                row.get("name_demangled"),
-                row.get("namespace"),
-                pseudocode or "",
-            ],
-        )
+    identity_text = " ".join(
+        filter(None, [row.get("name_mangled"), row.get("name_demangled"), row.get("namespace")])
     )
     tags: list[str] = []
     fn_edges = [e for e in edges if e.get("caller_rva") == rva]
     for edge in fn_edges:
-        sym = edge.get("callee_external_symbol") or ""
+        sym = edge.get("ultimate_external_symbol") or edge.get("callee_external_symbol") or ""
         if OPENGL_RE.match(sym):
             if edge.get("resolution") == "external_via_stub":
                 tags.append("opengl_via_stub")
@@ -69,15 +62,13 @@ def classify_function(row: dict[str, Any], edges: list[dict[str, Any]], pseudoco
     primary = "U"
     confidence = "possible"
     for subsystem, conf, pattern in SUBSYSTEM_RULES:
-        if pattern.search(text):
+        if pattern.search(identity_text):
             primary = subsystem
             confidence = conf
             break
-    if row.get("kind") == "thunk" and "opengl" in text.lower():
-        primary = "B0"
-        confidence = "probable"
+    if row.get("kind") == "thunk" and primary == "U" and GFX_RE.search(identity_text):
         tags.append("graphics_thunk")
-    if GFX_RE.search(text) and primary == "U":
+    if GFX_RE.search(identity_text) and primary == "U":
         primary = "S"
         confidence = "possible"
     return {"primary_subsystem": primary, "confidence": confidence, "tags": sorted(set(tags))}
@@ -90,7 +81,9 @@ def subsystem_bytes(functions: list[dict], classifications: dict[str, dict]) -> 
         if row.get("kind") not in ("internal", "thunk"):
             continue
         cls = classifications[row["entry_rva"]]
-        if cls["confidence"] == "possible" and cls["primary_subsystem"] != "S":
+        if cls["primary_subsystem"] == "U":
+            continue
+        if cls["confidence"] == "possible" and cls["primary_subsystem"] not in ("S",):
             continue
         intervals = intervals_from_ranges(row.get("instruction_ranges", []))
         by_sub[cls["primary_subsystem"]].extend(intervals)
@@ -132,7 +125,11 @@ def build_census(exp: Path) -> dict[str, Any]:
     functions = load_functions(inv)
     edges = load_edges(inv)
     pseudocode: dict[str, str] = {}
-    for batch in (exp / "decompiled").glob("batch-*.jsonl"):
+    import re
+
+    for batch in sorted((exp / "decompiled").glob("batch-*.jsonl")):
+        if not re.fullmatch(r"batch-\d{5}\.jsonl", batch.name):
+            continue
         for line in batch.read_text().splitlines():
             if not line.strip():
                 continue
@@ -149,7 +146,7 @@ def build_census(exp: Path) -> dict[str, Any]:
     decomp_report = exp / "logs" / "decompile-report.json"
     decomp = json.loads(decomp_report.read_text()) if decomp_report.is_file() else {}
     return {
-        "measurement_source": "local_ghidra_export" if "exports" in str(exp) and "re_fixtures" not in str(exp) else "synthetic_integration_fixture",
+        "measurement_source": "local_ghidra_export",
         "coverage": coverage,
         "renderer_subsystems": sizes,
         "opengl_coupling": coupling_stats(edges),
@@ -205,13 +202,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline-revision", default=None)
     parser.add_argument("--export-dir", type=Path, default=None, help="override export tree (tests)")
     parser.add_argument("--write-reports", action="store_true")
+    parser.add_argument("--allow-unqualified", action="store_true")
     args = parser.parse_args(argv)
     try:
         exp = args.export_dir or resolve_export_dir(local_binary_root(binary_sha256()), args.baseline_revision)
+        provenance_path = exp / "provenance.json"
+        provenance = json.loads(provenance_path.read_text()) if provenance_path.is_file() else {}
         census = build_census(exp)
         if args.write_reports:
-            write_reports(census)
-            print(f"wrote reports under {REPORTS}")
+            if args.allow_unqualified:
+                local = exp / ".local" / "renderer-size-census.json"
+                local.parent.mkdir(parents=True, exist_ok=True)
+                local.write_text(json.dumps(census, indent=2) + "\n")
+                print(f"wrote diagnostic census to {local}")
+            else:
+                validate_export_identity(exp, provenance, "census_write")
+                write_reports(census)
+                print(f"wrote reports under {REPORTS}")
         else:
             print(json.dumps(census, indent=2))
         return 0

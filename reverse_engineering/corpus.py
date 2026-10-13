@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,14 +16,25 @@ from typing import Any
 
 from reverse_engineering import index_db
 from reverse_engineering.intervals import format_rva, parse_rva
+from reverse_engineering.export_identity import (
+    compute_qualification,
+    inventory_complete,
+    publish_batch_staging,
+    publish_inventory_from_staging,
+    read_ghidra_version,
+    validate_export_identity,
+)
 from reverse_engineering.manifest import (
     build_batch_manifest,
     decompilation_success_stats,
     export_completeness,
+    inventory_bundle_digest,
     inventory_digest,
     load_batch_manifest,
+    pilot_sample_rvas,
     write_batch_manifest,
 )
+from reverse_engineering.reconcile_gfx import reconcile_draw_sites
 from reverse_engineering.paths import (
     GHIDRA_SCRIPTS,
     RE_DIR,
@@ -82,17 +94,21 @@ def ghidra_install() -> Path:
     return root
 
 
-def analyze_headless(project_dir: Path, project_name: str, *extra: str) -> None:
+def build_analyze_headless_argv(project_dir: Path, project_name: str, *extra: str) -> list[str]:
     ghidra = ghidra_install()
     headless = ghidra / "support" / "analyzeHeadless"
-    script_path = str(GHIDRA_SCRIPTS)
-    args = [
+    return [
         str(headless),
         str(project_dir),
         project_name,
-        f"-scriptPath={script_path}",
+        "-scriptPath",
+        str(GHIDRA_SCRIPTS),
         *extra,
     ]
+
+
+def analyze_headless(project_dir: Path, project_name: str, *extra: str) -> None:
+    args = build_analyze_headless_argv(project_dir, project_name, *extra)
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
         tail = (result.stderr or result.stdout)[-4000:]
@@ -203,25 +219,12 @@ def cmd_import(args: argparse.Namespace) -> int:
         "image_base": program_meta.get("image_base"),
     }
     ghidra_project_meta_path(binary_root).write_text(json.dumps(ghidra_meta, indent=2) + "\n")
-    smoke_report = exp / "logs" / "smoke-decompile.json"
-    anchor_args = list(SMOKE_ANCHORS)
-    analyze_headless(
-        project_dir,
-        project_name,
-        "-process",
-        ghidra_meta["program_name"],
-        "-noanalysis",
-        "-readOnly",
-        "-postScript",
-        "SmokeDecompile.java",
-        str(smoke_report),
-        *anchor_args,
-    )
+    ghidra_root = ghidra_install()
     provenance = {
         "baseline_revision": baseline,
         "binary_sha256": digest,
+        "ghidra_version": read_ghidra_version(ghidra_root),
         "ghidra_meta": ghidra_meta,
-        "smoke_decompile": json.loads(smoke_report.read_text()) if smoke_report.is_file() else {},
         "import_script_hashes": {
             "RecordProjectMetadata.java": script_hash("RecordProjectMetadata.java"),
             "ImportAndInventory.java": script_hash("ImportAndInventory.java"),
@@ -230,10 +233,53 @@ def cmd_import(args: argparse.Namespace) -> int:
     }
     save_provenance(exp, provenance)
     print(f"import complete: baseline_revision={baseline}")
+    if getattr(args, "run_smoke", False):
+        return cmd_smoke(argparse.Namespace(baseline_revision=baseline))
+    return 0
+
+
+def cmd_smoke(args: argparse.Namespace) -> int:
+    verify_binary()
+    digest = binary_sha256()
+    binary_root = local_binary_root(digest)
+    meta = load_ghidra_meta(binary_root)
+    exp = resolve_export_dir(binary_root, args.baseline_revision)
+    provenance = load_provenance(exp)
+    if not provenance:
+        raise ReError("missing provenance; run import first")
+    smoke_report = exp / "logs" / "smoke-decompile.json"
+    smoke_report.parent.mkdir(parents=True, exist_ok=True)
+    qualified = False
+    try:
+        analyze_headless(
+            Path(meta["project_dir"]),
+            meta["project_name"],
+            "-process",
+            meta["program_name"],
+            "-noanalysis",
+            "-readOnly",
+            "-postScript",
+            "SmokeDecompile.java",
+            str(smoke_report),
+            *SMOKE_ANCHORS,
+        )
+        smoke_payload = json.loads(smoke_report.read_text()) if smoke_report.is_file() else {}
+        qualified = bool(smoke_payload.get("anchors_ok"))
+    except ReError:
+        smoke_payload = json.loads(smoke_report.read_text()) if smoke_report.is_file() else {}
+        qualified = False
+    provenance["smoke_decompile"] = smoke_payload
+    provenance["smoke_qualified"] = qualified
+    save_provenance(exp, provenance)
+    if not qualified:
+        print("smoke decompile failed (project preserved; fix anchors and rerun corpus smoke)", file=sys.stderr)
+        return 1
+    print("smoke decompile passed")
     return 0
 
 
 def cmd_inventory(args: argparse.Namespace) -> int:
+    verify_binary()
     digest = binary_sha256()
     binary_root = local_binary_root(digest)
     meta = load_ghidra_meta(binary_root)
@@ -242,6 +288,12 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     if not provenance:
         raise ReError("missing provenance; run import first")
     inv_dir = exp / "inventory"
+    mode = "inventory_regen" if inventory_complete(inv_dir) else "inventory"
+    validate_export_identity(exp, provenance, mode)
+    staging = inv_dir / ".staging"
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True, exist_ok=True)
     analyze_headless(
         Path(meta["project_dir"]),
         meta["project_name"],
@@ -251,14 +303,22 @@ def cmd_inventory(args: argparse.Namespace) -> int:
         "-readOnly",
         "-postScript",
         "ImportAndInventory.java",
-        str(inv_dir),
+        str(staging),
     )
+    if not inventory_complete(staging):
+        raise ReError("inventory staging incomplete after Ghidra export")
+    bundle = inventory_bundle_digest(staging)
+    if provenance.get("inventory_bundle_digest") and provenance["inventory_bundle_digest"] != bundle:
+        raise ReError("inventory bundle digest changed; create a new baseline_revision")
+    publish_inventory_from_staging(staging, inv_dir)
     functions_path = inv_dir / "functions.jsonl"
     digest_value = inventory_digest(functions_path)
     provenance["inventory_digest"] = digest_value
+    provenance["inventory_bundle_digest"] = bundle
+    provenance["inventory_script_hash"] = script_hash("ImportAndInventory.java")
     provenance["coverage"] = json.loads((inv_dir / "coverage.json").read_text())
     save_provenance(exp, provenance)
-    print(f"inventory exported to {inv_dir} (digest={digest_value[:12]}…)")
+    print(f"inventory exported to {inv_dir} (bundle={bundle[:12]}…)")
     return 0
 
 
@@ -267,18 +327,22 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     binary_root = local_binary_root(digest)
     exp = resolve_export_dir(binary_root, args.baseline_revision)
     provenance = load_provenance(exp)
-    functions_path = exp / "inventory" / "functions.jsonl"
+    validate_export_identity(exp, provenance, "manifest")
+    inv = exp / "inventory"
+    functions_path = inv / "functions.jsonl"
     if not functions_path.is_file():
         raise ReError("run inventory before manifest")
     digest_value = inventory_digest(functions_path)
-    if provenance.get("inventory_digest") and provenance["inventory_digest"] != digest_value:
-        raise ReError("inventory digest changed; create a new baseline_revision")
+    bundle_value = inventory_bundle_digest(inv)
+    if provenance.get("inventory_bundle_digest") and provenance["inventory_bundle_digest"] != bundle_value:
+        raise ReError("inventory bundle digest mismatch")
     manifest = build_batch_manifest(
         functions_jsonl=functions_path,
         baseline_revision=provenance["baseline_revision"],
         batch_size=args.batch_size,
         exporter_script_hash=script_hash("ExportDecompilation.java"),
         inventory_digest_value=digest_value,
+        inventory_bundle_digest_value=bundle_value,
     )
     write_batch_manifest(exp / "decompiled" / "batch_manifest.json", manifest)
     print(f"batch manifest: {manifest['eligible_function_count']} functions")
@@ -296,37 +360,36 @@ def cmd_decompile(args: argparse.Namespace) -> int:
     meta = load_ghidra_meta(binary_root)
     exp = resolve_export_dir(binary_root, args.baseline_revision)
     provenance = load_provenance(exp)
+    exporter_hash = script_hash("ExportDecompilation.java")
     manifest_path = exp / "decompiled" / "batch_manifest.json"
     if not manifest_path.is_file():
         cmd_manifest(argparse.Namespace(baseline_revision=exp.name, batch_size=args.batch_size))
     manifest = load_batch_manifest(manifest_path)
+    validate_export_identity(exp, provenance, "decompile", exporter_script_hash=exporter_hash)
     functions_path = exp / "inventory" / "functions.jsonl"
     batches = manifest["batches"]
+    pilot_dir: Path | None = None
     if args.pilot:
-        rvas = []
-        for batch_rvas in batches.values():
-            rvas.extend(batch_rvas)
-        rvas_int = sorted(parse_rva(r) for r in rvas)
-        sizes = {}
-        for line in functions_path.read_text().splitlines():
-            row = json.loads(line)
-            sizes[row["entry_rva"]] = row.get("decoded_instruction_bytes", 0)
-        tertile = max(1, len(rvas_int) // 3)
-        sample = rvas_int[:: max(1, len(rvas_int) // args.pilot)][: args.pilot]
-        pilot_manifest = {
-            **manifest,
-            "batches": {"batch-pilot": [format_rva(r) for r in sample]},
-        }
-        batches = pilot_manifest["batches"]
+        sample = pilot_sample_rvas(functions_path, args.pilot)
+        pilot_dir = exp / "logs" / "pilot"
+        pilot_dir.mkdir(parents=True, exist_ok=True)
+        batches = {"pilot-sample": [format_rva(r) for r in sample]}
     timeout = args.timeout_seconds
-    decomp_dir = exp / "decompiled"
+    decomp_dir = pilot_dir or (exp / "decompiled")
     decomp_dir.mkdir(parents=True, exist_ok=True)
     for batch_id, rvas in batches.items():
-        out_path = decomp_dir / f"{batch_id}.jsonl"
+        if args.pilot:
+            out_path = decomp_dir / "batch-pilot.jsonl"
+            staging = decomp_dir / "batch-pilot.jsonl.staging"
+        else:
+            out_path = decomp_dir / f"{batch_id}.jsonl"
+            staging = decomp_dir / f"{batch_id}.jsonl.staging"
         if out_path.is_file() and not args.force:
             errors = export_completeness({"batches": {batch_id: rvas}}, decomp_dir)[1]
             if not errors:
                 continue
+        if staging.is_file():
+            staging.unlink()
         with tempfile.TemporaryDirectory() as tmp:
             rva_file = Path(tmp) / "rvas.txt"
             _write_rva_list(rva_file, rvas)
@@ -340,24 +403,59 @@ def cmd_decompile(args: argparse.Namespace) -> int:
                 "-postScript",
                 "ExportDecompilation.java",
                 str(rva_file),
-                str(out_path),
+                str(staging),
                 str(timeout),
             )
+        publish_batch_staging(staging, out_path, rvas)
+    if args.pilot:
+        print(f"pilot decompile written under {pilot_dir}")
+        return 0
     c_export, errors = export_completeness(manifest, decomp_dir)
     stats = decompilation_success_stats(manifest, decomp_dir, functions_path)
+    qual = compute_qualification(
+        exp,
+        provenance,
+        args.min_success_bytes,
+        lambda: cmd_check_anchors(argparse.Namespace(baseline_revision=exp.name)),
+    )
+    qual["c_export"] = c_export
+    qual["export_errors"] = errors
+    provenance["qualification"] = qual
+    save_provenance(exp, provenance)
     report = {
         "c_export": c_export,
         "export_errors": errors,
         "decompilation_stats": stats,
         "min_success_bytes_threshold": args.min_success_bytes,
+        "qualification": qual,
     }
     (exp / "logs" / "decompile-report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
-    if c_export < 1.0 and not args.pilot:
+    if c_export < 1.0:
         return 1
-    if not args.pilot and stats["c_success_bytes"] < args.min_success_bytes:
-        print("warning: below min_success_bytes threshold", file=sys.stderr)
+    if not qual["passed"]:
+        print("decompile finished but export is not qualified", file=sys.stderr)
+        return 1
     return 0
+
+
+def cmd_qualify(args: argparse.Namespace) -> int:
+    digest = binary_sha256()
+    binary_root = local_binary_root(digest)
+    exp = resolve_export_dir(binary_root, args.baseline_revision)
+    provenance = load_provenance(exp)
+    validate_export_identity(exp, provenance, "qualify")
+    qual = compute_qualification(
+        exp,
+        provenance,
+        args.min_success_bytes,
+        lambda: cmd_check_anchors(argparse.Namespace(baseline_revision=exp.name)),
+    )
+    provenance["qualification"] = qual
+    save_provenance(exp, provenance)
+    (exp / "logs" / "qualification.json").write_text(json.dumps(qual, indent=2) + "\n")
+    print(json.dumps(qual, indent=2))
+    return 0 if qual["passed"] else 1
 
 
 def cmd_index(args: argparse.Namespace) -> int:
@@ -365,52 +463,41 @@ def cmd_index(args: argparse.Namespace) -> int:
     binary_root = local_binary_root(digest)
     exp = resolve_export_dir(binary_root, args.baseline_revision)
     provenance = load_provenance(exp)
+    validate_export_identity(exp, provenance, "index")
+    manifest_path = exp / "decompiled" / "batch_manifest.json"
+    manifest = load_batch_manifest(manifest_path)
+    decomp_dir = exp / "decompiled"
+    if not args.allow_incomplete:
+        c_export, errors = export_completeness(manifest, decomp_dir)
+        if c_export < 1.0 and not args.partial:
+            raise ReError(f"incomplete export (c_export={c_export}); use --partial or --allow-incomplete")
+        if errors and not args.partial:
+            raise ReError("export completeness errors: " + "; ".join(errors[:5]))
+    db_path = exp / "index.sqlite"
+    if args.partial or args.allow_incomplete:
+        db_path = exp / ".local" / "index-partial.sqlite"
     prov_strings = {k: json.dumps(v) if not isinstance(v, str) else v for k, v in provenance.items()}
     index_db.rebuild_index(
-        exp / "index.sqlite",
+        db_path,
         exp / "inventory",
-        exp / "decompiled",
+        decomp_dir,
         prov_strings,
+        manifest=manifest,
     )
-    print(f"index rebuilt: {exp / 'index.sqlite'}")
+    print(f"index rebuilt: {db_path}")
     return 0
 
 
-def cmd_reconcile(_: argparse.Namespace) -> int:
+def cmd_reconcile(args: argparse.Namespace) -> int:
     digest = binary_sha256()
     binary_root = local_binary_root(digest)
-    prov_files = list((binary_root / "exports").glob("*/provenance.json"))
-    if not prov_files:
-        raise ReError("no export provenance found")
-    prov = json.loads(sorted(prov_files)[-1].read_text())
-    exp = export_root(binary_root, prov["baseline_revision"])
+    exp = resolve_export_dir(binary_root, args.baseline_revision)
+    provenance = load_provenance(exp)
+    validate_export_identity(exp, provenance, "reconcile")
     draw = json.loads(DRAW_CALLERS.read_text())
-    edges_path = exp / "inventory" / "call_edges.jsonl"
-    edges = [json.loads(line) for line in edges_path.read_text().splitlines() if line.strip()]
-    sites = draw["direct_sites"]
-    mismatches = []
-    for site in sites:
-        offset = site["callsite_offset"]
-        callsite = format_rva(offset)
-        op = site["operation"]
-        target_names = {f"_{op}", op, f"Gfx{op}"}
-        matching = [
-            e
-            for e in edges
-            if e["callsite_rva"] == callsite
-            and (
-                (e.get("callee_external_symbol") in target_names)
-                or ((e.get("callee_external_symbol") or "").endswith(op))
-            )
-        ]
-        if not matching:
-            mismatches.append({"callsite": callsite, "operation": op, "owner": site.get("owner_symbol")})
-    report = {
-        "draw_callers_count": len(sites),
-        "matched": len(sites) - len(mismatches),
-        "mismatches": mismatches,
-    }
+    report = reconcile_draw_sites(draw, exp / "inventory")
     out = exp / "logs" / "gfx-reconcile.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     return 0
@@ -448,13 +535,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="EU IV Ghidra corpus orchestration")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("preflight", help="verify binary and toolchain").set_defaults(func=cmd_preflight)
-    p_import = sub.add_parser("import", help="D1 Ghidra import and smoke decompile")
+    p_import = sub.add_parser("import", help="D1 Ghidra import (analyze only)")
     p_import.add_argument("--baseline-revision", default=None)
+    p_import.add_argument("--run-smoke", action="store_true", dest="run_smoke")
     p_import.set_defaults(func=cmd_import)
-    for name in ("inventory", "manifest", "index", "reconcile", "check-anchors"):
+    p_smoke = sub.add_parser("smoke", help="retryable smoke decompile validation")
+    p_smoke.add_argument("--baseline-revision", default=None)
+    p_smoke.set_defaults(func=cmd_smoke)
+    for name in ("inventory", "manifest", "reconcile", "check-anchors"):
         p = sub.add_parser(name)
         p.add_argument("--baseline-revision", default=None)
         p.set_defaults(func=globals()[f"cmd_{name.replace('-', '_')}"])
+    p_index = sub.add_parser("index")
+    p_index.add_argument("--baseline-revision", default=None)
+    p_index.add_argument("--partial", action="store_true")
+    p_index.add_argument("--allow-incomplete", action="store_true")
+    p_index.set_defaults(func=cmd_index)
+    p_qualify = sub.add_parser("qualify", help="persist qualification.passed in provenance")
+    p_qualify.add_argument("--baseline-revision", default=None)
+    p_qualify.add_argument("--min-success-bytes", type=float, default=DEFAULT_MIN_SUCCESS_BYTES)
+    p_qualify.set_defaults(func=cmd_qualify)
     p_manifest = sub.choices["manifest"]
     p_manifest.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     p_decomp = sub.add_parser("decompile")

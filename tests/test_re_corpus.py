@@ -1,13 +1,16 @@
 import json
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from reverse_engineering.intervals import merge_intervals, parse_rva, union_size
+from reverse_engineering.corpus import build_analyze_headless_argv
 from reverse_engineering.manifest import (
     build_batch_manifest,
     decompilation_success_stats,
     export_completeness,
+    inventory_bundle_digest,
     inventory_digest,
     validate_batch_file,
 )
@@ -59,6 +62,27 @@ class ManifestTests(unittest.TestCase):
             path.write_text('{"entry_rva":"0x1","status":"success"}\n')
             errors = validate_batch_file(path, ["0x0000000000000001", "0x0000000000000002"])
             self.assertTrue(errors)
+
+
+class HeadlessArgvTests(unittest.TestCase):
+    def test_script_path_is_separate_argv(self) -> None:
+        with unittest.mock.patch.dict("os.environ", {"GHIDRA_INSTALL": "/tmp/ghidra"}):
+            with unittest.mock.patch("reverse_engineering.corpus.ghidra_install") as mock_install:
+                mock_install.return_value = Path("/tmp/ghidra")
+                argv = build_analyze_headless_argv(Path("/proj"), "EU4_test", "-import", "/eu4")
+        self.assertIn("-scriptPath", argv)
+        idx = argv.index("-scriptPath")
+        self.assertNotEqual(argv[idx + 1], "")
+        self.assertFalse(argv[idx].startswith("-scriptPath="))
+
+
+class BundleDigestTests(unittest.TestCase):
+    def test_inventory_bundle_digest_stable(self) -> None:
+        inv = FIXTURE / "inventory"
+        d1 = inventory_bundle_digest(inv)
+        d2 = inventory_bundle_digest(inv)
+        self.assertEqual(d1, d2)
+        self.assertEqual(len(d1), 64)
 
 
 class TargetPinTests(unittest.TestCase):

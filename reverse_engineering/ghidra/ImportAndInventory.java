@@ -242,19 +242,19 @@ public class ImportAndInventory extends GhidraScript {
         InstructionIterator it = listing.getInstructions(fn.getBody(), true);
         while (it.hasNext()) {
             Instruction ins = it.next();
-            if (!ins.getFlowType().isCall() && !ins.getFlowType().isJump()) {
+            if (!ins.getFlowType().isCall()) {
                 continue;
             }
             Reference[] refs = ins.getReferencesFrom();
             String callsite = rva(ins.getMinAddress());
             if (refs == null || refs.length == 0) {
                 if (ins.getFlowType().isIndirect()) {
-                    writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, null, "unresolved_indirect");
+                    writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, null, null, "unresolved_indirect");
                 }
                 continue;
             }
             for (Reference ref : refs) {
-                if (!ref.getReferenceType().isCall() && !ref.getReferenceType().isJump()) {
+                if (!ref.getReferenceType().isCall()) {
                     continue;
                 }
                 classifyCall(edgeWriter, edgeKeys, callsite, callerRva, ref);
@@ -266,7 +266,7 @@ public class ImportAndInventory extends GhidraScript {
             String callerRva, Reference ref) throws Exception {
         Address to = ref.getToAddress();
         if (to == null) {
-            writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, null, "unresolved_other");
+            writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, null, null, "unresolved_other");
             return;
         }
         Function targetFn = functionManager.getFunctionAt(to);
@@ -275,28 +275,42 @@ public class ImportAndInventory extends GhidraScript {
         }
         if (targetFn != null) {
             if (targetFn.isThunk()) {
-                writeEdge(edgeWriter, edgeKeys, callsite, callerRva, rva(targetFn.getEntryPoint()), null, "thunk");
+                Function ultimate = functionManager.getThunkedFunction(targetFn, true);
+                String calleeInternal = null;
+                String calleeExternal = null;
+                String ultimateExternal = null;
+                if (ultimate != null) {
+                    if (ultimate.isExternal()) {
+                        ultimateExternal = externalName(ultimate.getEntryPoint());
+                        calleeExternal = ultimateExternal;
+                    } else {
+                        calleeInternal = rva(ultimate.getEntryPoint());
+                    }
+                } else {
+                    calleeInternal = rva(targetFn.getEntryPoint());
+                }
+                writeEdge(edgeWriter, edgeKeys, callsite, callerRva, calleeInternal, calleeExternal, ultimateExternal, "thunk");
                 return;
             }
             if (targetFn.isExternal()) {
                 String sym = externalName(to);
-                writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, sym, "direct_external");
+                writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, sym, sym, "direct_external");
                 return;
             }
-            writeEdge(edgeWriter, edgeKeys, callsite, callerRva, rva(targetFn.getEntryPoint()), null, "direct_internal");
+            writeEdge(edgeWriter, edgeKeys, callsite, callerRva, rva(targetFn.getEntryPoint()), null, null, "direct_internal");
             return;
         }
         if (to.isExternalAddress()) {
             String sym = externalName(to);
             String resolution = sym != null && sym.contains("stub") ? "external_via_stub" : "direct_external";
-            writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, sym, resolution);
+            writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, sym, sym, resolution);
             return;
         }
         if (ref.getReferenceType() == RefType.COMPUTED_JUMP || ref.getReferenceType() == RefType.INDIRECTION) {
-            writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, null, "unresolved_indirect");
+            writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, null, null, "unresolved_indirect");
             return;
         }
-        writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, externalName(to), "unresolved_other");
+        writeEdge(edgeWriter, edgeKeys, callsite, callerRva, null, externalName(to), null, "unresolved_other");
     }
 
     private String externalName(Address addr) {
@@ -312,8 +326,8 @@ public class ImportAndInventory extends GhidraScript {
     }
 
     private void writeEdge(BufferedWriter w, Set<String> keys, String callsite, String caller,
-            String calleeInternal, String calleeExternal, String resolution) throws Exception {
-        String key = callsite + "|" + resolution + "|" + calleeInternal + "|" + calleeExternal;
+            String calleeInternal, String calleeExternal, String ultimateExternal, String resolution) throws Exception {
+        String key = callsite + "|" + resolution + "|" + calleeInternal + "|" + calleeExternal + "|" + ultimateExternal;
         if (keys.contains(key)) {
             return;
         }
@@ -324,6 +338,7 @@ public class ImportAndInventory extends GhidraScript {
         line.append(",\"caller_rva\":").append(esc(caller));
         line.append(",\"callee_internal_rva\":").append(calleeInternal == null ? "null" : esc(calleeInternal));
         line.append(",\"callee_external_symbol\":").append(calleeExternal == null ? "null" : esc(calleeExternal));
+        line.append(",\"ultimate_external_symbol\":").append(ultimateExternal == null ? "null" : esc(ultimateExternal));
         line.append(",\"resolution\":").append(esc(resolution));
         line.append("}\n");
         w.write(line.toString());

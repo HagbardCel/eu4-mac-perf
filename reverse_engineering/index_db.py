@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
@@ -66,6 +67,7 @@ def rebuild_index(
     inventory_dir: Path,
     decompiled_dir: Path,
     provenance: dict[str, str] | None = None,
+    manifest: dict[str, Any] | None = None,
 ) -> None:
     functions_path = inventory_dir / "functions.jsonl"
     edges_path = inventory_dir / "call_edges.jsonl"
@@ -73,7 +75,7 @@ def rebuild_index(
         db_path.unlink()
     conn = connect(db_path)
     conn.executescript(SCHEMA)
-    decomp_status = _load_decompile_status(decompiled_dir)
+    decomp_status = _load_decompile_status(decompiled_dir, manifest)
 
     for line in functions_path.read_text().splitlines():
         if not line.strip():
@@ -139,11 +141,25 @@ def rebuild_index(
     conn.close()
 
 
-def _load_decompile_status(decompiled_dir: Path) -> dict[str, str]:
+def _manifest_batch_paths(decompiled_dir: Path, manifest: dict[str, Any] | None) -> list[Path]:
+    if manifest is None:
+        return sorted(
+            p
+            for p in decompiled_dir.glob("batch-*.jsonl")
+            if re.fullmatch(r"batch-\d{5}\.jsonl", p.name)
+        )
+    paths: list[Path] = []
+    for batch_id in manifest.get("batches", {}):
+        if re.fullmatch(r"batch-\d{5}", batch_id):
+            paths.append(decompiled_dir / f"{batch_id}.jsonl")
+    return sorted(paths)
+
+
+def _load_decompile_status(decompiled_dir: Path, manifest: dict[str, Any] | None = None) -> dict[str, str]:
     out: dict[str, str] = {}
     if not decompiled_dir.is_dir():
         return out
-    for path in sorted(decompiled_dir.glob("batch-*.jsonl")):
+    for path in _manifest_batch_paths(decompiled_dir, manifest):
         for line in path.read_text().splitlines():
             if not line.strip():
                 continue

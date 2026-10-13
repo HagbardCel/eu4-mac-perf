@@ -1,5 +1,5 @@
 {
-  "measurement_source": "synthetic_integration_fixture",
+  "measurement_source": "local_ghidra_export",
   "coverage": {
     "image_base": 4294967296,
     "E_executable_section_bytes": 10000,
