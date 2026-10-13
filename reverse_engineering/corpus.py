@@ -118,8 +118,13 @@ def analyze_headless(project_dir: Path, project_name: str, *extra: str) -> None:
     args = build_analyze_headless_argv(project_dir, project_name, *extra)
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
-        tail = (result.stderr or result.stdout)[-4000:]
-        raise ReError(f"analyzeHeadless failed:\n{tail}")
+        stdout_tail = (result.stdout or "")[-8000:]
+        stderr_tail = (result.stderr or "")[-4000:]
+        raise ReError(
+            f"analyzeHeadless failed (exit {result.returncode})\n"
+            f"STDOUT:\n{stdout_tail}\n"
+            f"STDERR:\n{stderr_tail}"
+        )
 
 
 def verify_binary() -> Path:
