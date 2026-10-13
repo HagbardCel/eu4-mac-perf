@@ -1,3 +1,4 @@
+import hashlib
 import json
 import plistlib
 import shutil
@@ -45,10 +46,25 @@ def _gate_cpu() -> dict:
 def _v1_manifest_with_sidecar(root: Path, cpu: dict | None = None) -> dict:
     manifest = {
         "cpu_accounting_contract": cpu_reconcile.CPU_ACCOUNTING_CONTRACT_V1,
+        "cpu_reconcile_tolerance_ms_per_s": 50.0,
+        "epoch_a_process_cpu_samples_path": cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME,
         "epoch_a_thread_cpu": dict(cpu or _gate_cpu()),
     }
     materialize_v1_sidecar_for_gate(root, manifest)
     return manifest
+
+
+def _write_sidecar_and_refresh_sha(root: Path, cpu: dict, sidecar: dict) -> None:
+    path = root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME
+    payload = (json.dumps(sidecar) + "\n").encode()
+    path.write_bytes(payload)
+    cpu["process_cpu_sidecar_sha256"] = hashlib.sha256(payload).hexdigest()
+
+
+def _write_raw_sidecar_and_refresh_sha(root: Path, cpu: dict, payload: bytes) -> None:
+    path = root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME
+    path.write_bytes(payload)
+    cpu["process_cpu_sidecar_sha256"] = hashlib.sha256(payload).hexdigest()
 
 
 class CpuReconcileTests(unittest.TestCase):
@@ -244,7 +260,7 @@ class CpuReconcileTests(unittest.TestCase):
                 )
             )
 
-    def test_v1_sidecar_integrity_mutations(self) -> None:
+    def test_v1_sidecar_hash_layer_mutations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest = _v1_manifest_with_sidecar(root)
@@ -267,15 +283,6 @@ class CpuReconcileTests(unittest.TestCase):
             root = Path(temporary)
             manifest = _v1_manifest_with_sidecar(root)
             cpu = manifest["epoch_a_thread_cpu"]
-            sidecar = json.loads((root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).read_text())
-            sidecar["reconcile_ok"] = not sidecar["reconcile_ok"]
-            (root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).write_text(json.dumps(sidecar))
-            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            manifest = _v1_manifest_with_sidecar(root)
-            cpu = manifest["epoch_a_thread_cpu"]
             cpu.pop("process_cpu_sidecar_sha256", None)
             self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
 
@@ -283,16 +290,16 @@ class CpuReconcileTests(unittest.TestCase):
             root = Path(temporary)
             manifest = _v1_manifest_with_sidecar(root)
             cpu = manifest["epoch_a_thread_cpu"]
-            manifest["epoch_a_process_cpu_samples_path"] = "/etc/passwd"
+            sidecar = json.loads((root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).read_text())
+            sidecar["reconcile_ok"] = not sidecar["reconcile_ok"]
+            _write_sidecar_and_refresh_sha(root, cpu, sidecar)
             self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest = _v1_manifest_with_sidecar(root)
             cpu = manifest["epoch_a_thread_cpu"]
-            sidecar = json.loads((root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).read_text())
-            sidecar["game_pid"] = 99999
-            (root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).write_text(json.dumps(sidecar))
+            manifest["epoch_a_process_cpu_samples_path"] = "/etc/passwd"
             self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -305,6 +312,169 @@ class CpuReconcileTests(unittest.TestCase):
             sidecar_path.unlink()
             sidecar_path.symlink_to(outside)
             self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+    def test_v1_sidecar_semantic_mutations_with_refreshed_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            sidecar = json.loads((root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).read_text())
+            sidecar["game_pid"] = 99999
+            _write_sidecar_and_refresh_sha(root, cpu, sidecar)
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            sidecar = json.loads((root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).read_text())
+            sidecar["selection"]["end_monotonic_ns"] = cpu["window_end_ns"] + 1
+            _write_sidecar_and_refresh_sha(root, cpu, sidecar)
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            sidecar = json.loads((root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).read_text())
+            sidecar["manifest_process_cpu_ms_per_s"] = 999.0
+            sidecar["recomputed_mean_cputime_ms_per_s"] = 999.0
+            _write_sidecar_and_refresh_sha(root, cpu, sidecar)
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+    def test_v1_rejects_inconsistent_residual_with_matching_sha(self) -> None:
+        window_start = 1_000_000
+        window_end = 2_000_000
+        pid = 42
+        thread_report = {
+            "pid": pid,
+            "thread_cpu_ms_per_s": 900.0,
+            "window_start_ns": window_start,
+            "window_end_ns": window_end,
+        }
+        observations = [{"monotonic_ns": window_start, "cputime_ms_per_s": 1000.0}]
+        fraudulent_residual = 20.0
+        sidecar = cpu_reconcile.build_epoch_a_process_cpu_sidecar(
+            observations=observations,
+            process_mean=1000.0,
+            thread_report=thread_report,
+            clock_anchor={"monotonic_ns": window_start, "wall_ns": 0},
+            pid=pid,
+            reconciliation_residual_ms_per_s=fraudulent_residual,
+            reconcile_ok=True,
+            powermetrics_stream_path=None,
+        )
+        cpu = {
+            "reconcile_ok": True,
+            "cpu_reconciliation_phase": "finalized",
+            "main_thread_mapping_status": "verified",
+            "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
+            "process_cpu_sample_count": 1,
+            "process_cpu_sidecar_persisted": True,
+            "powermetrics_producer": _running_producer(),
+            "pid": pid,
+            "thread_cpu_ms_per_s": 900.0,
+            "process_cpu_ms_per_s": 1000.0,
+            "reconciliation_residual_ms_per_s": fraudulent_residual,
+            "window_start_ns": window_start,
+            "window_end_ns": window_end,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = {
+                "cpu_accounting_contract": cpu_reconcile.CPU_ACCOUNTING_CONTRACT_V1,
+                "cpu_reconcile_tolerance_ms_per_s": 50.0,
+                "epoch_a_process_cpu_samples_path": cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME,
+                "epoch_a_thread_cpu": cpu,
+            }
+            _write_sidecar_and_refresh_sha(root, cpu, sidecar)
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+    def test_v1_rejects_correct_residual_exceeding_tolerance(self) -> None:
+        window_start = 1_000_000
+        window_end = 2_000_000
+        pid = 42
+        thread_cpu = 940.0
+        process_cpu = 1000.0
+        residual = process_cpu - thread_cpu
+        thread_report = {
+            "pid": pid,
+            "thread_cpu_ms_per_s": thread_cpu,
+            "window_start_ns": window_start,
+            "window_end_ns": window_end,
+        }
+        observations = [{"monotonic_ns": window_start, "cputime_ms_per_s": process_cpu}]
+        sidecar = cpu_reconcile.build_epoch_a_process_cpu_sidecar(
+            observations=observations,
+            process_mean=process_cpu,
+            thread_report=thread_report,
+            clock_anchor={"monotonic_ns": window_start, "wall_ns": 0},
+            pid=pid,
+            reconciliation_residual_ms_per_s=residual,
+            reconcile_ok=True,
+            powermetrics_stream_path=None,
+        )
+        cpu = {
+            "reconcile_ok": True,
+            "cpu_reconciliation_phase": "finalized",
+            "main_thread_mapping_status": "verified",
+            "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
+            "process_cpu_sample_count": 1,
+            "process_cpu_sidecar_persisted": True,
+            "powermetrics_producer": _running_producer(),
+            "pid": pid,
+            "thread_cpu_ms_per_s": thread_cpu,
+            "process_cpu_ms_per_s": process_cpu,
+            "reconciliation_residual_ms_per_s": residual,
+            "window_start_ns": window_start,
+            "window_end_ns": window_end,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = {
+                "cpu_accounting_contract": cpu_reconcile.CPU_ACCOUNTING_CONTRACT_V1,
+                "cpu_reconcile_tolerance_ms_per_s": 50.0,
+                "epoch_a_process_cpu_samples_path": cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME,
+                "epoch_a_thread_cpu": cpu,
+            }
+            _write_sidecar_and_refresh_sha(root, cpu, sidecar)
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+    def test_v1_sidecar_structure_mutations_with_matching_sha(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            _write_raw_sidecar_and_refresh_sha(root, cpu, b"[]\n")
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            _write_raw_sidecar_and_refresh_sha(root, cpu, b"{}\n")
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            sidecar = json.loads((root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).read_text())
+            sidecar["selection"] = []
+            _write_sidecar_and_refresh_sha(root, cpu, sidecar)
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+    def test_acceptance_gates_survives_malformed_sidecar_json_array(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            _write_raw_sidecar_and_refresh_sha(root, cpu, b"[]\n")
+            manifest["schema"] = "r0_measurement_session_v1"
+            manifest["thread_cpu_preflight"] = {"status": "ready"}
+            manifest["event_clock_alignment"] = {"status": "passed"}
+            session.acceptance_gates(manifest, root)
+            self.assertFalse(manifest["acceptance_gates"]["cpu_reconcile"])
 
 
 if __name__ == "__main__":

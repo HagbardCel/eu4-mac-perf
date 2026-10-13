@@ -300,6 +300,21 @@ def _manifest_sidecar_path_valid(manifest: dict[str, Any]) -> bool:
     return True
 
 
+def _reconcile_tolerance_ms_per_s(manifest: dict[str, Any]) -> float | None:
+    raw = manifest.get("cpu_reconcile_tolerance_ms_per_s", 50.0)
+    if isinstance(raw, bool):
+        return None
+    if type(raw) is int:
+        value = float(raw)
+    elif type(raw) is float:
+        value = raw
+    else:
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return value
+
+
 def verify_epoch_a_sidecar_integrity(
     cpu: dict[str, Any],
     output_dir: Path,
@@ -330,21 +345,35 @@ def verify_epoch_a_sidecar_integrity(
     except (OSError, json.JSONDecodeError):
         return False
 
+    if not isinstance(sidecar, dict):
+        return False
+
     if sidecar.get("schema") != LIVE_SIDECAR_SCHEMA:
         return False
     if sidecar.get("observation_origin") != LIVE_OBSERVATION_ORIGIN:
         return False
 
     pid = cpu.get("pid")
-    if sidecar.get("game_pid") != pid:
+    if type(pid) is not int or sidecar.get("game_pid") != pid:
         return False
 
     window_start = cpu.get("window_start_ns")
     window_end = cpu.get("window_end_ns")
-    selection = sidecar.get("selection") or {}
+    if type(window_start) is not int or type(window_end) is not int:
+        return False
+    if window_start >= window_end:
+        return False
+
+    selection = sidecar.get("selection")
+    if not isinstance(selection, dict):
+        return False
     if selection.get("start_monotonic_ns") != window_start:
         return False
     if selection.get("end_monotonic_ns") != window_end:
+        return False
+
+    tolerance = _reconcile_tolerance_ms_per_s(manifest)
+    if tolerance is None:
         return False
 
     process_mean = cpu.get("process_cpu_ms_per_s")
@@ -357,14 +386,16 @@ def verify_epoch_a_sidecar_integrity(
         return False
 
     sample_count = cpu.get("process_cpu_sample_count")
+    if type(sample_count) is not int or sample_count < 1:
+        return False
     if sidecar.get("sample_count") != sample_count:
         return False
     samples = sidecar.get("samples")
-    if not isinstance(samples, list) or len(samples) != int(sample_count or 0):
+    if not isinstance(samples, list) or len(samples) != sample_count:
         return False
 
-    ws = int(window_start)
-    we = int(window_end)
+    ws = window_start
+    we = window_end
     values: list[float] = []
     for item in samples:
         if not isinstance(item, dict):
@@ -409,6 +440,38 @@ def verify_epoch_a_sidecar_integrity(
         rel_tol=_ARITHMETIC_REL_TOL,
         abs_tol=_ARITHMETIC_ABS_TOL,
     ):
+        return False
+
+    sidecar_process = sidecar.get("manifest_process_cpu_ms_per_s")
+    sidecar_thread = sidecar.get("manifest_thread_cpu_ms_per_s")
+    if not isinstance(sidecar_process, (int, float)) or not math.isfinite(float(sidecar_process)):
+        return False
+    if not isinstance(sidecar_thread, (int, float)) or not math.isfinite(float(sidecar_thread)):
+        return False
+    if not math.isclose(
+        float(sidecar_process),
+        float(process_mean),
+        rel_tol=_ARITHMETIC_REL_TOL,
+        abs_tol=_ARITHMETIC_ABS_TOL,
+    ):
+        return False
+    if not math.isclose(
+        float(sidecar_thread),
+        float(thread_cpu),
+        rel_tol=_ARITHMETIC_REL_TOL,
+        abs_tol=_ARITHMETIC_ABS_TOL,
+    ):
+        return False
+
+    expected_residual = float(process_mean) - float(thread_cpu)
+    if not math.isclose(
+        expected_residual,
+        float(residual),
+        rel_tol=_ARITHMETIC_REL_TOL,
+        abs_tol=_ARITHMETIC_ABS_TOL,
+    ):
+        return False
+    if cpu.get("reconcile_ok") is True and abs(expected_residual) > tolerance:
         return False
 
     return True
