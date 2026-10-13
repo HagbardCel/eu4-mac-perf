@@ -5,10 +5,12 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Any, Iterable
 
 from reverse_engineering.intervals import parse_rva
+from reverse_engineering.manifest import validate_batch_file
 
 
 SCHEMA = """
@@ -161,7 +163,18 @@ def _load_decompile_status(decompiled_dir: Path, manifest: dict[str, Any] | None
     out: dict[str, str] = {}
     if not decompiled_dir.is_dir():
         return out
+    missing = 0
     for path in _manifest_batch_paths(decompiled_dir, manifest):
+        if not path.is_file():
+            missing += 1
+            continue
+        batch_id = path.stem
+        expected = manifest.get("batches", {}).get(batch_id) if manifest else None
+        if expected is not None:
+            errors = validate_batch_file(path, expected)
+            if errors:
+                print(f"warning: skipping {path.name}: {errors[0]}", file=sys.stderr)
+                continue
         for line in path.read_text().splitlines():
             if not line.strip():
                 continue
@@ -170,6 +183,11 @@ def _load_decompile_status(decompiled_dir: Path, manifest: dict[str, Any] | None
             out[rva] = row.get("status")
             if row.get("status") == "success" and row.get("pseudocode"):
                 out[f"{rva}:body"] = row["pseudocode"]
+    if missing:
+        print(
+            f"warning: {missing} manifest batch file(s) missing under {decompiled_dir}",
+            file=sys.stderr,
+        )
     return out
 
 

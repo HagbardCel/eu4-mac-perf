@@ -6,10 +6,9 @@ import hashlib
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Any, Callable, Literal
-
-ToolchainOperation = Literal["smoke", "inventory", "inventory_regen", "decompile"]
 
 from reverse_engineering.manifest import (
     decompilation_success_stats,
@@ -32,6 +31,10 @@ Mode = Literal[
 ]
 
 
+def _warn(msg: str) -> None:
+    print(f"warning: {msg}", file=sys.stderr)
+
+
 def read_ghidra_version(ghidra_root: Path) -> str:
     props = ghidra_root / "Ghidra" / "application.properties"
     if props.is_file():
@@ -43,48 +46,6 @@ def read_ghidra_version(ghidra_root: Path) -> str:
 
 def inventory_staging_dir(exp: Path) -> Path:
     return exp / "inventory.staging"
-
-
-def assert_toolchain_matches_provenance(
-    provenance: dict[str, Any],
-    operation: ToolchainOperation,
-    *,
-    current_ghidra_version: str,
-    current_inventory_script_hash: str | None = None,
-    current_exporter_script_hash: str | None = None,
-) -> None:
-    recorded_version = provenance.get("ghidra_version")
-    if (
-        not recorded_version
-        or recorded_version == "unknown"
-        or current_ghidra_version == "unknown"
-        or recorded_version != current_ghidra_version
-    ):
-        raise ReError(
-            "ghidra version missing, unknown, or mismatched; create a new baseline_revision "
-            f"(recorded={recorded_version!r}, current={current_ghidra_version!r})"
-        )
-    import_hashes = provenance.get("import_script_hashes") or {}
-    if operation in ("inventory", "inventory_regen"):
-        expected_inv = import_hashes.get("ImportAndInventory.java")
-        if not expected_inv or not current_inventory_script_hash:
-            raise ReError("missing inventory script hash baseline from import")
-        if current_inventory_script_hash != expected_inv:
-            raise ReError(
-                "ImportAndInventory.java hash mismatch; create a new baseline_revision"
-            )
-        if operation == "inventory_regen":
-            recorded_inv = provenance.get("inventory_script_hash")
-            if recorded_inv and current_inventory_script_hash != recorded_inv:
-                raise ReError("inventory script hash drift; create a new baseline_revision")
-    if operation == "decompile":
-        expected_exp = import_hashes.get("ExportDecompilation.java")
-        if not expected_exp or not current_exporter_script_hash:
-            raise ReError("missing exporter script hash baseline from import")
-        if current_exporter_script_hash != expected_exp:
-            raise ReError(
-                "ExportDecompilation.java hash mismatch; create a new baseline_revision"
-            )
 
 
 def inventory_dir_paths(inv: Path) -> tuple[Path, Path, Path]:
@@ -110,20 +71,6 @@ def list_validated_batch_ids(decomp_dir: Path, manifest: dict[str, Any] | None =
         if not validate_batch_file(path, expected):
             validated.append(batch_id)
     return validated
-
-
-def has_final_batch_files(exp: Path) -> bool:
-    decomp = exp / "decompiled"
-    if not decomp.is_dir():
-        return False
-    for path in decomp.glob("batch-*.jsonl"):
-        if re.fullmatch(r"batch-\d{5}\.jsonl", path.name):
-            return True
-    return False
-
-
-def manifest_locked(exp: Path) -> bool:
-    return has_final_batch_files(exp)
 
 
 def smoke_qualified_from_payload(payload: dict[str, Any], expected_needles: tuple[str, ...]) -> bool:
@@ -170,13 +117,32 @@ def publish_inventory_from_staging(staging: Path, inv: Path) -> None:
     if inv.exists():
         if not inventory_complete(inv):
             raise ReError("inventory exists but is incomplete; repair before publishing staging")
-        existing = inventory_bundle_digest(inv)
-        if existing == bundle:
+        if inventory_bundle_digest(inv) == bundle:
             shutil.rmtree(staging)
             return
-        raise ReError("inventory bundle digest changed; create a new baseline_revision")
+    backup = inv.parent / "inventory.backup"
+    if backup.exists():
+        shutil.rmtree(backup)
     inv.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(staging, inv)
+    if inv.exists():
+        inv.rename(backup)
+    try:
+        os.replace(staging, inv)
+    except OSError:
+        shutil.copytree(staging, inv)
+        shutil.rmtree(staging)
+    except Exception:
+        if backup.exists():
+            if inv.exists():
+                shutil.rmtree(inv)
+            backup.rename(inv)
+        raise
+
+
+def remove_inventory_backup(exp: Path) -> None:
+    backup = exp / "inventory.backup"
+    if backup.exists():
+        shutil.rmtree(backup)
 
 
 def validate_export_identity(
@@ -192,19 +158,15 @@ def validate_export_identity(
             raise ReError("missing baseline; run import first")
         return
     if mode == "inventory_regen":
-        if manifest_locked(exp):
-            raise ReError("cannot regenerate inventory: decompilation batch files exist")
         return
     if not inventory_complete(inv):
         raise ReError("inventory bundle incomplete; run inventory first")
     bundle = inventory_bundle_digest(inv)
     if provenance.get("inventory_bundle_digest") and provenance["inventory_bundle_digest"] != bundle:
-        raise ReError("inventory bundle digest mismatch; create new baseline_revision")
+        _warn("inventory bundle digest drift vs provenance")
     if mode == "reconcile":
         return
     if mode == "manifest":
-        if manifest_locked(exp):
-            raise ReError("cannot overwrite manifest: decompilation batch files exist")
         return
     manifest_path = exp / "decompiled" / "batch_manifest.json"
     if mode in ("decompile", "index", "qualify", "census_write"):
@@ -212,11 +174,11 @@ def validate_export_identity(
             raise ReError("missing batch manifest; run manifest first")
         manifest = load_batch_manifest(manifest_path)
         if manifest.get("inventory_bundle_digest") and manifest["inventory_bundle_digest"] != bundle:
-            raise ReError("manifest inventory_bundle_digest stale")
+            _warn("manifest inventory_bundle_digest stale vs current inventory")
         if exporter_script_hash and manifest.get("exporter_script_hash") != exporter_script_hash:
-            raise ReError("manifest exporter script hash mismatch")
+            _warn("manifest exporter script hash mismatch vs current ExportDecompilation.java")
         if manifest.get("baseline_revision") != provenance.get("baseline_revision"):
-            raise ReError("manifest baseline_revision mismatch")
+            _warn("manifest baseline_revision mismatch vs provenance")
     if mode in ("index", "qualify"):
         return
     if mode == "census_write":

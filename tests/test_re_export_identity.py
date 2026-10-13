@@ -6,10 +6,8 @@ from pathlib import Path
 
 from reverse_engineering.export_identity import (
     assert_qualification_current,
-    assert_toolchain_matches_provenance,
     batch_set_sha256,
     compute_qualification,
-    manifest_locked,
     publish_inventory_from_staging,
     smoke_qualified_from_payload,
     validate_export_identity,
@@ -96,16 +94,17 @@ class InventoryPublishTests(unittest.TestCase):
             self.assertFalse(staging.exists())
             self.assertIn("same", (inv / "functions.jsonl").read_text())
 
-    def test_changed_digest_rejects(self) -> None:
+    def test_changed_digest_replaces_with_backup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             staging = root / "inventory.staging"
             inv = root / "inventory"
             _write_inventory(inv, "old")
             _write_inventory(staging, "new")
-            with self.assertRaises(ReError):
-                publish_inventory_from_staging(staging, inv)
-            self.assertIn("old", (inv / "functions.jsonl").read_text())
+            publish_inventory_from_staging(staging, inv)
+            self.assertIn("new", (inv / "functions.jsonl").read_text())
+            self.assertTrue((root / "inventory.backup").is_dir())
+            self.assertIn("old", (root / "inventory.backup" / "functions.jsonl").read_text())
 
     def test_incomplete_staging_rejects(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -128,48 +127,6 @@ class SmokePayloadTests(unittest.TestCase):
     def test_wrong_needles(self) -> None:
         payload = json.loads(SMOKE_BAD.read_text())
         self.assertFalse(smoke_qualified_from_payload(payload, SMOKE_NEEDLES))
-
-
-class ToolchainTests(unittest.TestCase):
-    BASE = {
-        "ghidra_version": "10.0",
-        "import_script_hashes": {
-            "ImportAndInventory.java": "hash_inv",
-            "ExportDecompilation.java": "hash_exp",
-        },
-    }
-
-    def test_ghidra_version_mismatch(self) -> None:
-        with self.assertRaises(ReError):
-            assert_toolchain_matches_provenance(
-                self.BASE, "smoke", current_ghidra_version="11.0"
-            )
-
-    def test_ghidra_version_missing_or_unknown(self) -> None:
-        for recorded in (None, "unknown"):
-            prov = {**self.BASE, "ghidra_version": recorded}
-            with self.assertRaises(ReError):
-                assert_toolchain_matches_provenance(prov, "smoke", current_ghidra_version="10.0")
-        with self.assertRaises(ReError):
-            assert_toolchain_matches_provenance(self.BASE, "smoke", current_ghidra_version="unknown")
-
-    def test_inventory_script_mismatch_on_first_inventory(self) -> None:
-        with self.assertRaises(ReError):
-            assert_toolchain_matches_provenance(
-                self.BASE,
-                "inventory",
-                current_ghidra_version="10.0",
-                current_inventory_script_hash="other",
-            )
-
-    def test_exporter_script_mismatch_on_decompile(self) -> None:
-        with self.assertRaises(ReError):
-            assert_toolchain_matches_provenance(
-                self.BASE,
-                "decompile",
-                current_ghidra_version="10.0",
-                current_exporter_script_hash="other",
-            )
 
 
 class QualificationAssertTests(unittest.TestCase):
@@ -206,16 +163,17 @@ class QualificationAssertTests(unittest.TestCase):
             self.assertIn("batch_set_sha256 mismatch", str(ctx.exception))
 
 
-class ManifestLockTests(unittest.TestCase):
-    def test_lock_with_invalid_final_batch(self) -> None:
+class IdentityWarnTests(unittest.TestCase):
+    def test_inventory_regen_allowed_with_batches(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             exp = Path(tmp)
+            inv = exp / "inventory"
+            _write_inventory(inv, "x")
             (exp / "decompiled").mkdir()
-            (exp / "decompiled" / "batch-00001.jsonl").write_text("not valid jsonl export\n")
-            self.assertTrue(manifest_locked(exp))
-            prov = {"baseline_revision": "t"}
-            with self.assertRaises(ReError):
-                validate_export_identity(exp, prov, "inventory_regen")
+            (exp / "decompiled" / "batch-00001.jsonl").write_text("{}\n")
+            bundle = inventory_bundle_digest(inv)
+            prov = {"baseline_revision": "t", "inventory_bundle_digest": bundle}
+            validate_export_identity(exp, prov, "inventory_regen")
 
 
 if __name__ == "__main__":

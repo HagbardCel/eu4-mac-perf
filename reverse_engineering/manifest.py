@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,42 @@ def write_batch_manifest(path: Path, manifest: dict[str, Any]) -> None:
 
 def load_batch_manifest(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
+
+
+def manifest_partition_digest(manifest: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for batch_id in sorted(manifest.get("batches", {})):
+        rvas = manifest["batches"][batch_id]
+        parts.append(f"{batch_id}\n" + "\n".join(rvas))
+    return hashlib.sha256("\n---\n".join(parts).encode()).hexdigest()
+
+
+def batches_archive_required(old: dict[str, Any] | None, new: dict[str, Any]) -> bool:
+    if old is None:
+        return False
+    if old.get("inventory_digest") != new.get("inventory_digest"):
+        return True
+    if manifest_partition_digest(old) != manifest_partition_digest(new):
+        return True
+    return False
+
+
+def call_edges_only_inventory_drift(old: dict[str, Any] | None, new: dict[str, Any]) -> bool:
+    if old is None or batches_archive_required(old, new):
+        return False
+    return old.get("inventory_bundle_digest") != new.get("inventory_bundle_digest")
+
+
+def archive_decompiled_batches(decomp_dir: Path, label: str) -> Path | None:
+    """Move batch-NNNNN.jsonl files to decompiled/.archive/<label>/ (not batch_manifest.json)."""
+    batch_files = [p for p in decomp_dir.glob("batch-*.jsonl") if BATCH_NAME_RE.match(p.name)]
+    if not batch_files:
+        return None
+    archive_dir = decomp_dir / ".archive" / label
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    for path in sorted(batch_files):
+        shutil.move(str(path), str(archive_dir / path.name))
+    return archive_dir
 
 
 def validate_batch_file(path: Path, expected_rvas: list[str]) -> list[str]:

@@ -1,3 +1,5 @@
+import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -32,6 +34,20 @@ class SearchIndexTests(unittest.TestCase):
         callees = list(index_db.callees(conn, "0x0000000000002000"))
         self.assertTrue(callees)
         self.assertEqual(callees[0]["resolution"], "thunk")
+
+    def test_missing_manifest_batch_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copytree(FIXTURE / "inventory", root / "inventory")
+            decomp = root / "decompiled"
+            shutil.copytree(FIXTURE / "decompiled", decomp)
+            manifest = json.loads((decomp / "batch_manifest.json").read_text())
+            (decomp / "batch-00001.jsonl").unlink()
+            db = root / "index.sqlite"
+            index_db.rebuild_index(db, root / "inventory", decomp, manifest=manifest)
+            conn = index_db.connect(db)
+            rows = index_db.search_text(conn, "glUseProgram")
+            self.assertEqual(len(rows), 0)
 
 
 if __name__ == "__main__":

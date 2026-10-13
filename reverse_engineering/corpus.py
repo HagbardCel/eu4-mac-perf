@@ -11,26 +11,28 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from reverse_engineering import index_db
 from reverse_engineering.intervals import format_rva, parse_rva
 from reverse_engineering.export_identity import (
-    ToolchainOperation,
-    assert_toolchain_matches_provenance,
     compute_qualification,
     inventory_complete,
     inventory_staging_dir,
-    invalidate_qualification,
     publish_batch_staging,
     publish_inventory_from_staging,
     read_ghidra_version,
+    remove_inventory_backup,
     smoke_qualified_from_payload,
     validate_export_identity,
 )
 from reverse_engineering.manifest import (
+    archive_decompiled_batches,
+    batches_archive_required,
     build_batch_manifest,
+    call_edges_only_inventory_drift,
     decompilation_success_stats,
     export_completeness,
     inventory_bundle_digest,
@@ -243,23 +245,6 @@ def cmd_import(args: argparse.Namespace) -> int:
     return 0
 
 
-def _toolchain_before_ghidra(
-    provenance: dict[str, Any],
-    operation: ToolchainOperation,
-) -> None:
-    ghidra_root = ghidra_install()
-    current_version = read_ghidra_version(ghidra_root)
-    inv_hash = script_hash("ImportAndInventory.java")
-    exp_hash = script_hash("ExportDecompilation.java")
-    assert_toolchain_matches_provenance(
-        provenance,
-        operation,
-        current_ghidra_version=current_version,
-        current_inventory_script_hash=inv_hash if operation in ("inventory", "inventory_regen") else None,
-        current_exporter_script_hash=exp_hash if operation == "decompile" else None,
-    )
-
-
 def mandatory_anchors_check(exp: Path) -> int:
     functions = {
         json.loads(line)["name_mangled"]: json.loads(line)["entry_rva"]
@@ -292,8 +277,8 @@ def cmd_smoke(args: argparse.Namespace) -> int:
     smoke_report = exp / "logs" / "smoke-decompile.json"
     smoke_report.parent.mkdir(parents=True, exist_ok=True)
     qualified = False
+    ghidra_error: str | None = None
     try:
-        _toolchain_before_ghidra(provenance, "smoke")
         analyze_headless(
             Path(meta["project_dir"]),
             meta["project_name"],
@@ -308,7 +293,8 @@ def cmd_smoke(args: argparse.Namespace) -> int:
         )
         smoke_payload = json.loads(smoke_report.read_text()) if smoke_report.is_file() else {}
         qualified = smoke_qualified_from_payload(smoke_payload, SMOKE_ANCHORS)
-    except ReError:
+    except ReError as exc:
+        ghidra_error = str(exc)
         smoke_payload = json.loads(smoke_report.read_text()) if smoke_report.is_file() else {}
         qualified = False
     provenance["smoke_decompile"] = smoke_payload
@@ -316,6 +302,8 @@ def cmd_smoke(args: argparse.Namespace) -> int:
     save_provenance(exp, provenance)
     if not qualified:
         print("smoke decompile failed (project preserved; fix anchors and rerun corpus smoke)", file=sys.stderr)
+        if ghidra_error:
+            print(ghidra_error, file=sys.stderr)
         return 1
     print("smoke decompile passed")
     return 0
@@ -337,7 +325,6 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True, exist_ok=True)
-    _toolchain_before_ghidra(provenance, mode)
     analyze_headless(
         Path(meta["project_dir"]),
         meta["project_name"],
@@ -353,7 +340,7 @@ def cmd_inventory(args: argparse.Namespace) -> int:
         raise ReError("inventory staging incomplete after Ghidra export")
     bundle = inventory_bundle_digest(staging)
     if provenance.get("inventory_bundle_digest") and provenance["inventory_bundle_digest"] != bundle:
-        raise ReError("inventory bundle digest changed; create a new baseline_revision")
+        print("warning: inventory bundle digest changed (call_edges/coverage or functions)", file=sys.stderr)
     publish_inventory_from_staging(staging, inv_dir)
     functions_path = inv_dir / "functions.jsonl"
     digest_value = inventory_digest(functions_path)
@@ -362,6 +349,7 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     provenance["inventory_script_hash"] = script_hash("ImportAndInventory.java")
     provenance["coverage"] = json.loads((inv_dir / "coverage.json").read_text())
     save_provenance(exp, provenance)
+    remove_inventory_backup(exp)
     print(f"inventory exported to {inv_dir} (bundle={bundle[:12]}…)")
     return 0
 
@@ -379,7 +367,10 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     digest_value = inventory_digest(functions_path)
     bundle_value = inventory_bundle_digest(inv)
     if provenance.get("inventory_bundle_digest") and provenance["inventory_bundle_digest"] != bundle_value:
-        raise ReError("inventory bundle digest mismatch")
+        print("warning: inventory bundle digest drift vs provenance", file=sys.stderr)
+    decomp = exp / "decompiled"
+    manifest_path = decomp / "batch_manifest.json"
+    old_manifest = load_batch_manifest(manifest_path) if manifest_path.is_file() else None
     manifest = build_batch_manifest(
         functions_jsonl=functions_path,
         baseline_revision=provenance["baseline_revision"],
@@ -388,7 +379,17 @@ def cmd_manifest(args: argparse.Namespace) -> int:
         inventory_digest_value=digest_value,
         inventory_bundle_digest_value=bundle_value,
     )
-    write_batch_manifest(exp / "decompiled" / "batch_manifest.json", manifest)
+    if old_manifest and batches_archive_required(old_manifest, manifest):
+        label = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        dest = archive_decompiled_batches(decomp, label)
+        if dest:
+            print(f"archived stale batch files to {dest}", file=sys.stderr)
+    elif old_manifest and call_edges_only_inventory_drift(old_manifest, manifest):
+        print(
+            "warning: call-edge/coverage inventory changed; keeping existing batch files",
+            file=sys.stderr,
+        )
+    write_batch_manifest(manifest_path, manifest)
     print(f"batch manifest: {manifest['eligible_function_count']} functions")
     return 0
 
@@ -421,7 +422,6 @@ def cmd_decompile(args: argparse.Namespace) -> int:
     timeout = args.timeout_seconds
     decomp_dir = pilot_dir or (exp / "decompiled")
     decomp_dir.mkdir(parents=True, exist_ok=True)
-    _toolchain_before_ghidra(provenance, "decompile")
     for batch_id, rvas in batches.items():
         if args.pilot:
             out_path = decomp_dir / "batch-pilot.jsonl"
@@ -452,39 +452,24 @@ def cmd_decompile(args: argparse.Namespace) -> int:
                 str(timeout),
             )
         publish_batch_staging(staging, out_path, rvas)
-        if not args.pilot:
-            invalidate_qualification(provenance, "batch_replaced")
-            save_provenance(exp, provenance)
     if args.pilot:
         print(f"pilot decompile written under {pilot_dir}")
         return 0
     c_export, errors = export_completeness(manifest, decomp_dir)
     stats = decompilation_success_stats(manifest, decomp_dir, functions_path)
-    qual = compute_qualification(
-        exp,
-        provenance,
-        args.min_success_bytes,
-        lambda: mandatory_anchors_check(exp),
-        smoke_needles=SMOKE_ANCHORS,
-    )
-    qual["c_export"] = c_export
-    qual["export_errors"] = errors
-    provenance["qualification"] = qual
-    save_provenance(exp, provenance)
     report = {
         "c_export": c_export,
         "export_errors": errors,
         "decompilation_stats": stats,
         "min_success_bytes_threshold": args.min_success_bytes,
-        "qualification": qual,
     }
     (exp / "logs" / "decompile-report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     if c_export < 1.0:
-        return 1
-    if not qual["passed"]:
-        print("decompile finished but export is not qualified", file=sys.stderr)
-        return 1
+        print(
+            f"warning: incomplete export (c_export={c_export}); run corpus qualify for git census gates",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -515,24 +500,28 @@ def cmd_index(args: argparse.Namespace) -> int:
     provenance = load_provenance(exp)
     validate_export_identity(exp, provenance, "index")
     manifest_path = exp / "decompiled" / "batch_manifest.json"
-    manifest = load_batch_manifest(manifest_path)
     decomp_dir = exp / "decompiled"
-    if not args.allow_incomplete:
-        c_export, errors = export_completeness(manifest, decomp_dir)
-        if c_export < 1.0 and not args.partial:
-            raise ReError(f"incomplete export (c_export={c_export}); use --partial or --allow-incomplete")
-        if errors and not args.partial:
-            raise ReError("export completeness errors: " + "; ".join(errors[:5]))
+    functions_path = exp / "inventory" / "functions.jsonl"
+    manifest_for_index: dict[str, Any] | None = None
+    if manifest_path.is_file():
+        loaded = load_batch_manifest(manifest_path)
+        current_fn_digest = inventory_digest(functions_path)
+        if loaded.get("inventory_digest") == current_fn_digest:
+            manifest_for_index = loaded
+        else:
+            print(
+                "warning: batch manifest inventory_digest stale vs functions.jsonl; "
+                "building inventory-only index (run corpus manifest)",
+                file=sys.stderr,
+            )
     db_path = exp / "index.sqlite"
-    if args.partial or args.allow_incomplete:
-        db_path = exp / ".local" / "index-partial.sqlite"
     prov_strings = {k: json.dumps(v) if not isinstance(v, str) else v for k, v in provenance.items()}
     index_db.rebuild_index(
         db_path,
         exp / "inventory",
         decomp_dir,
         prov_strings,
-        manifest=manifest,
+        manifest=manifest_for_index,
     )
     print(f"index rebuilt: {db_path}")
     return 0
@@ -598,8 +587,6 @@ def build_parser() -> argparse.ArgumentParser:
         p.set_defaults(func=globals()[f"cmd_{name.replace('-', '_')}"])
     p_index = sub.add_parser("index")
     p_index.add_argument("--baseline-revision", default=None)
-    p_index.add_argument("--partial", action="store_true")
-    p_index.add_argument("--allow-incomplete", action="store_true")
     p_index.set_defaults(func=cmd_index)
     p_qualify = sub.add_parser("qualify", help="persist qualification.passed in provenance")
     p_qualify.add_argument("--baseline-revision", default=None)

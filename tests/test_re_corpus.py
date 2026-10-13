@@ -7,6 +7,8 @@ from pathlib import Path
 from reverse_engineering.intervals import merge_intervals, parse_rva, union_size
 from reverse_engineering.corpus import build_analyze_headless_argv
 from reverse_engineering.manifest import (
+    archive_decompiled_batches,
+    batches_archive_required,
     build_batch_manifest,
     decompilation_success_stats,
     export_completeness,
@@ -74,6 +76,29 @@ class HeadlessArgvTests(unittest.TestCase):
         idx = argv.index("-scriptPath")
         self.assertNotEqual(argv[idx + 1], "")
         self.assertFalse(argv[idx].startswith("-scriptPath="))
+
+
+class ManifestArchiveTests(unittest.TestCase):
+    def test_inventory_digest_change_requires_archive(self) -> None:
+        old = {"inventory_digest": "a", "batches": {"batch-00001": ["0x1"]}}
+        new = {"inventory_digest": "b", "batches": {"batch-00001": ["0x1"]}}
+        self.assertTrue(batches_archive_required(old, new))
+        self.assertFalse(batches_archive_required(None, new))
+
+    def test_partition_change_requires_archive(self) -> None:
+        old = {"inventory_digest": "a", "batches": {"batch-00001": ["0x1", "0x2"]}}
+        new = {"inventory_digest": "a", "batches": {"batch-00001": ["0x1"], "batch-00002": ["0x2"]}}
+        self.assertTrue(batches_archive_required(old, new))
+
+    def test_archive_moves_batch_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            decomp = Path(tmp)
+            batch = decomp / "batch-00001.jsonl"
+            batch.write_text('{"entry_rva":"0x1","status":"success"}\n')
+            dest = archive_decompiled_batches(decomp, "20260101T000000Z")
+            self.assertIsNotNone(dest)
+            self.assertFalse(batch.is_file())
+            self.assertTrue((dest / "batch-00001.jsonl").is_file())
 
 
 class BundleDigestTests(unittest.TestCase):
