@@ -59,8 +59,33 @@ def ghidra_project_meta_path(binary_root: Path) -> Path:
     return binary_root / "ghidra_project.json"
 
 
+def ghidra_work_root(digest: str | None = None) -> Path:
+    """Directory for Ghidra project files (must not live under dot-prefixed paths)."""
+    digest = digest or binary_sha256()
+    export_override = os.environ.get("EU4_RE_EXPORT")
+    if export_override:
+        return Path(export_override).expanduser()
+    work_override = os.environ.get("EU4_GHIDRA_WORK")
+    if work_override:
+        return Path(work_override).expanduser() / digest
+    return Path.home() / "GhidraEU4" / digest
+
+
 def ghidra_project_dir(binary_root: Path) -> Path:
-    return binary_root / "ghidra-project"
+    if os.environ.get("EU4_RE_EXPORT"):
+        return binary_root / "ghidra-project"
+    return ghidra_work_root(binary_root.name) / "ghidra-project"
+
+
+def assert_ghidra_safe_path(path: Path) -> None:
+    """Ghidra headless rejects path components starting with '.' (e.g. .local)."""
+    resolved = path.expanduser().resolve()
+    for part in resolved.parts:
+        if part.startswith("."):
+            raise ReError(
+                f"Ghidra project path has forbidden component {part!r}: {resolved}. "
+                "Use the default ~/GhidraEU4/<sha>/ghidra-project layout or set EU4_RE_EXPORT."
+            )
 
 
 def default_baseline_revision() -> str:

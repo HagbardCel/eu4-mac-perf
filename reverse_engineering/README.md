@@ -5,10 +5,10 @@ Recover and understand the original EU IV macOS implementation. Phase 1 (PR D) p
 ## Local corpus (not in Git)
 
 ```text
-.local/eu4/<binary-sha256>/
-  ghidra_project.json
-  ghidra-project/
+.local/eu4/<binary-sha256>/          # corpus (inventory, exports, index)
+  ghidra_project.json                 # pointer to external Ghidra project
   exports/<baseline-revision>/
+    logs/program_metadata.json        # language_id / compiler_spec_id after import
     inventory/
     inventory.staging/   # Ghidra export scratch; promoted to inventory/ once validated
     inventory.backup/    # transient during inventory regen; removed after provenance update
@@ -17,6 +17,9 @@ Recover and understand the original EU IV macOS implementation. Phase 1 (PR D) p
     index.sqlite
     provenance.json
     logs/
+
+~/GhidraEU4/<binary-sha256>/        # Ghidra project (headless rejects dot-prefixed paths)
+  ghidra-project/
 ```
 
 Pin identity: [`target.json`](target.json) (SHA-256, default GOG executable path). Tooling does **not** import `benchmark/` at runtime; CI cross-checks the SHA against `benchmark/eu4_engine_inventory.py`.
@@ -33,15 +36,21 @@ Pin identity: [`target.json`](target.json) (SHA-256, default GOG executable path
 |----------|---------|
 | `GHIDRA_INSTALL` | Ghidra installation root |
 | `EU4_EXE` | Override path to `eu4` binary |
-| `EU4_RE_EXPORT` | Override `.local/eu4/<sha>/` root |
+| `EU4_RE_EXPORT` | Override corpus root; Ghidra `ghidra-project/` is co-located under this path (no `.local`) |
+| `EU4_GHIDRA_WORK` | Optional parent of `~/GhidraEU4/<sha>/` when corpus stays in `.local` |
+
+Ghidra headless **cannot** open a project under paths with a component starting with `.` (e.g. `.local`). Default layout keeps corpus in-repo under `.local` and the Ghidra database under `~/GhidraEU4/<sha>/ghidra-project/`.
+
+**Workaround (no code change):** `export EU4_RE_EXPORT="$HOME/GhidraEU4"` and `mkdir -p "$EU4_RE_EXPORT"` relocates corpus and Ghidra together outside `.local`. Old failed projects under `.local/.../ghidra-project` are not migrated automatically.
 
 ## Ghidra lifecycle
 
 - **Never** use `-deleteProject` in automation.
-- **D1 `import`**: `-import` with full analysis (no `-readOnly`). Fails if `ghidra-project/` already exists.
+- **D1 `import`**: `-import` with full analysis (no `-readOnly`); Mach-O loader picks processor and `gcc` compiler spec (no `-processor` override). Fails if the external `ghidra-project/` already exists.
 - **D2/D3**: `-process <program_name> -noanalysis -readOnly` with `-scriptPath reverse_engineering/ghidra`.
 - `-process` uses the **program name** inside the project (usually `eu4`), not the Ghidra project name (`EU4_<sha8>`). Recorded in `ghidra_project.json` after import.
-- Reset: manually delete `ghidra-project/` and `exports/` if a full re-analysis is required.
+- Reset: delete `~/GhidraEU4/<sha>/ghidra-project/` (or under `EU4_RE_EXPORT`) and corpus `exports/` if a full re-analysis is required.
+- If `corpus inventory` fails, inspect `exports/<revision>/inventory.staging/` (the error lists each expected file as MISSING or byte size) and Ghidra `~/Library/ghidra/ghidra_*/application.log` for `ImportAndInventory` before re-running inventory (re-run deletes staging).
 
 ## Pipeline
 
@@ -110,7 +119,9 @@ Portable unit tests use [`tests/re_fixtures/`](../tests/re_fixtures/). CI runs `
 
 No EU IV game process required. Summarize results in PR #48 before merge.
 
-1. **`corpus import`** — Ghidra imports the pinned EU IV binary (`target.json` SHA).
+1. **`corpus import`** — Ghidra imports the pinned EU IV binary (`target.json` SHA). Unset `EU4_RE_EXPORT` / `EU4_GHIDRA_WORK` when testing the split default. After success:
+   - `cat .local/eu4/<sha>/ghidra_project.json` — `project_dir` must not contain a dot-prefixed path component.
+   - `cat .local/eu4/<sha>/exports/<baseline-revision>/logs/program_metadata.json` — expect `"language_id": "x86:LE:64:default"` and `"compiler_spec_id": "gcc"` (among other fields).
 2. **`corpus smoke`** — all three renderer anchors decompile successfully (`SmokeDecompile.java`).
 3. **`corpus inventory`** — real `functions.jsonl`, `call_edges.jsonl`, `coverage.json`.
 4. **Anchor pseudocode (manual headless)** — for the three anchor **entry RVAs** from inventory, run `analyzeHeadless` with `-scriptPath reverse_engineering/ghidra` and `ExportDecompilation.java` (same argv layout as [`build_analyze_headless_argv`](corpus.py): project dir/name, `-process <program_name> -noanalysis -readOnly`, RVA list file, output jsonl path, timeout seconds).

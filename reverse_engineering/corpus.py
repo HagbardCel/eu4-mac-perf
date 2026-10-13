@@ -50,6 +50,7 @@ from reverse_engineering.paths import (
     default_baseline_revision,
     executable_path,
     export_root,
+    assert_ghidra_safe_path,
     ghidra_project_dir,
     ghidra_project_meta_path,
     load_target,
@@ -202,6 +203,7 @@ def cmd_import(args: argparse.Namespace) -> int:
     digest = sha256_file(exe)
     binary_root = local_binary_root(digest)
     project_dir = ghidra_project_dir(binary_root)
+    assert_ghidra_safe_path(project_dir)
     if project_dir.exists() and any(project_dir.iterdir()):
         raise ReError(f"ghidra project already exists at {project_dir}; remove manually to re-import")
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -216,8 +218,6 @@ def cmd_import(args: argparse.Namespace) -> int:
         project_name,
         "-import",
         str(exe),
-        "-processor",
-        "x86:LE:64:default",
         "-postScript",
         "RecordProjectMetadata.java",
         str(meta_tmp),
@@ -342,7 +342,22 @@ def cmd_inventory(args: argparse.Namespace) -> int:
         str(staging),
     )
     if not inventory_complete(staging):
-        raise ReError("inventory staging incomplete after Ghidra export")
+        names = ("functions.jsonl", "call_edges.jsonl", "coverage.json")
+        status = [
+            f"{name}: "
+            + (
+                f"{(staging / name).stat().st_size:,} bytes"
+                if (staging / name).is_file()
+                else "MISSING"
+            )
+            for name in names
+        ]
+        raise ReError(
+            "inventory staging incomplete after Ghidra export\n"
+            f"staging: {staging}\n"
+            + "\n".join(status)
+            + "\nInspect Ghidra application.log for ImportAndInventory errors."
+        )
     bundle = inventory_bundle_digest(staging)
     if provenance.get("inventory_bundle_digest") and provenance["inventory_bundle_digest"] != bundle:
         print("warning: inventory bundle digest changed (call_edges/coverage or functions)", file=sys.stderr)

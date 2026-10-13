@@ -315,14 +315,16 @@ public class ImportAndInventory extends GhidraScript {
 
     private String externalName(Address addr) {
         Symbol[] syms = symbolTable.getSymbols(addr);
-        if (syms != null && syms.length > 0) {
-            return syms[0].getName();
+        if (syms == null || syms.length == 0) {
+            return null;
         }
-        ExternalLocation ext = currentProgram.getExternalManager().getExternalLocation(addr);
-        if (ext != null && ext.getLabel() != null) {
-            return ext.getLabel();
+        for (Symbol sym : syms) {
+            ExternalLocation ext = currentProgram.getExternalManager().getExternalLocation(sym);
+            if (ext != null && ext.getLabel() != null) {
+                return ext.getLabel();
+            }
         }
-        return null;
+        return syms[0].getName();
     }
 
     private void writeEdge(BufferedWriter w, Set<String> keys, String callsite, String caller,
