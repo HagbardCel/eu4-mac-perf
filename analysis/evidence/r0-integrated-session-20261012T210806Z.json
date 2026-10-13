@@ -48,7 +48,7 @@
     "roi_pixel_verification": "not_evaluated",
     "frame_evolution_classification": "not_evaluated",
     "automated_stack_attribution": "failed",
-    "acceptance_gate_bypass_note": "When drawable_capability.failure_class is unsupported_drawable, acceptance_gates() sets qualified_windows, positive_control, roi_verified, and frame_analyzer to true as policy bypasses for partial completion\u2014not evidence those experiments passed."
+    "acceptance_gate_bypass_note": "When drawable_capability.failure_class is unsupported_drawable, acceptance_gates() sets qualified_windows, positive_control, roi_verified, and frame_analyzer to true as policy bypasses for partial completion—not evidence those experiments passed."
   },
   "fixture": {
     "country": "VEN",

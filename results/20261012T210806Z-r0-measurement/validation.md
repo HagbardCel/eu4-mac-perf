@@ -125,6 +125,6 @@ After a stack-parser fix:
 | `r0_control.bin` | `ca592c4483feb74784b7a5b5d9baa53ba74e90650b150f48f74b040e9ab6129e` |
 | `game.stdout` / `game.stderr` | (empty) `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 
-| `analysis/evidence/r0-integrated-session-20261012T210806Z.json` | `fae318a53de7eb72e4c434319f95582a2bec990a5410bdcf6f2f8c8740be2021` |
+| `analysis/evidence/r0-integrated-session-20261012T210806Z.json` | `17ea2613faa0d03109c30729614c89c4cfb77c6d07b0408864debbb8060a01dc` |
 
 Other evidence JSON: [`r0-frame-evolution-20261012T210806Z.json`](../../analysis/evidence/r0-frame-evolution-20261012T210806Z.json), [`r0-stack-analyzer-failure-20261012T210806Z.json`](../../analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json) (unchanged this commit).
