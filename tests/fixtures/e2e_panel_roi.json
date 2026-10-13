@@ -1,0 +1,7 @@
+{
+  "resolution": [64, 64],
+  "coordinate_system": "opengl_bottom_left",
+  "panel_roi_opengl_bottom_left": [0.5, 0.5, 0.12, 0.12],
+  "verified": true,
+  "note": "Synthetic E2E ROI for 64x64 captures."
+}

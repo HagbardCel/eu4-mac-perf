@@ -1,0 +1,15 @@
+{
+  "captured_utc": "2026-10-12T15:01:02.473960+00:00",
+  "main_thread_id": 6322634,
+  "sample_command": [
+    "sample",
+    "<pid>",
+    "1",
+    "-file",
+    "<output>",
+    "-mayDie"
+  ],
+  "host": "native-qualification",
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "git_commit": "4ab263b76259441e19c795b89f52504ac6a31628"
+}
