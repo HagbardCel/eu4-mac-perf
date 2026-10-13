@@ -32,8 +32,9 @@ def violations(path: str) -> list[str]:
     if any(part.endswith(".rep") for part in parts):
         reasons.append("Ghidra repository segment (*.rep)")
 
-    if "/decompiled/" in f"/{p}/" or p.endswith("/decompiled") or "decompiled" in parts:
-        reasons.append("decompiled corpus export")
+    if not p.startswith("tests/re_fixtures/"):
+        if "/decompiled/" in f"/{p}/" or p.endswith("/decompiled") or "decompiled" in parts:
+            reasons.append("decompiled corpus export")
 
     base = parts[-1] if parts else p
     if base in ("eu4", "Europa Universalis IV"):

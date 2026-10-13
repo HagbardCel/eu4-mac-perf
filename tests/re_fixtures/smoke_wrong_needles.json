@@ -1,0 +1,7 @@
+{
+  "anchors": [
+    {"needle": "wrong1", "matched": "sym1", "success": true},
+    {"needle": "wrong2", "matched": "sym2", "success": true},
+    {"needle": "wrong3", "matched": "sym3", "success": true}
+  ]
+}

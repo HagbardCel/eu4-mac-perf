@@ -19,6 +19,12 @@ class ForbiddenTrackedPathsTests(unittest.TestCase):
     def test_blocks_decompiled_segment(self) -> None:
         self.assertTrue(violations("scratch/decompiled/foo.c"))
 
+    def test_allows_re_fixtures_decompiled_layout(self) -> None:
+        self.assertEqual(
+            violations("tests/re_fixtures/export_mini/decompiled/batch-00001.jsonl"),
+            [],
+        )
+
     def test_blocks_patched_eu4_under_patches(self) -> None:
         self.assertTrue(violations("patches/implementations/v1/eu4"))
 

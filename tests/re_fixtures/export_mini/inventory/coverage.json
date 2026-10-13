@@ -1,0 +1,10 @@
+{
+  "image_base": 4294967296,
+  "E_executable_section_bytes": 10000,
+  "D_decoded_instruction_bytes": 5000,
+  "F_internal_bytes": 17,
+  "F_thunk_bytes": 6,
+  "F_all_bytes": 23,
+  "C_section": 0.0023,
+  "C_decoded": 0.0046
+}

@@ -1,0 +1,14 @@
+{
+  "baseline_revision": "fixture-mini",
+  "inventory_digest": "pending",
+  "batch_size": 500,
+  "exporter_script_hash": "fixture",
+  "eligible_function_count": 3,
+  "batches": {
+    "batch-00001": [
+      "0x0000000000001000",
+      "0x0000000000002000",
+      "0x0000000000004000"
+    ]
+  }
+}
