@@ -27,8 +27,8 @@ EXECUTION_RULES: list[tuple[str, str]] = [
     (r"NSCursor", "nscursor"),
 ]
 
-_WEIGHTED_ROW = re.compile(r"^(\s+)((?:\+ |! |: |\| )*)(\d+)\s+(.+)$")
-_BRANCH_TOKEN = re.compile(r"(?:\+ |! |: |\| )")
+# Decoration symbols with flexible spacing before count.
+_WEIGHTED_ROW = re.compile(r"^(\s*)((?:[\+\!\:\|]\s*)*)(\d+)\s+(.+)$")
 _THREAD_HEADER_COUNT = re.compile(r"^\s+(\d+)\s+Thread_", re.IGNORECASE)
 
 
@@ -54,16 +54,27 @@ def _exclusive(node: StackNode) -> int:
     return weight
 
 
-def _insert_path(root: StackNode, symbols: list[str], count: int) -> None:
+def _insert_path_strict(root: StackNode, symbols: list[str], count: int) -> None:
+    if not symbols:
+        raise ValueError("empty stack path")
     node = root
     for index, symbol in enumerate(symbols):
-        child = node.children.setdefault(symbol, StackNode())
+        child = node.children.get(symbol)
+        if child is None:
+            child = StackNode()
+            node.children[symbol] = child
         if index == len(symbols) - 1:
-            child.inclusive = max(child.inclusive, count)
+            if child.inclusive != 0 and child.inclusive != count:
+                raise ValueError(
+                    f"conflicting inclusive weight for {symbol!r}: "
+                    f"{child.inclusive} vs {count}"
+                )
+            child.inclusive = count
         node = child
 
 
 def _finalize_inclusive(node: StackNode) -> int:
+    """Legacy helper for tests that explicitly need repaired trees."""
     if not node.children:
         return node.inclusive
     child_max = max(_finalize_inclusive(child) for child in node.children.values())
@@ -85,14 +96,18 @@ def _attribute(node: StackNode, path: list[str], functional: Counter, execution:
     return total
 
 
+def _count_column(raw: str, count_group_start: int) -> int:
+    return len(raw[:count_group_start].expandtabs(4))
+
+
 def parse_weighted_frame_line(raw: str) -> tuple[int, int, str]:
     line = raw.rstrip()
     match = _WEIGHTED_ROW.match(line)
     if not match:
         raise ValueError(f"unsupported sample call-graph line: {raw!r}")
-    indent, branch, count_s, symbol = match.groups()
-    depth = len(indent.expandtabs(4)) + 2 * len(_BRANCH_TOKEN.findall(branch))
-    return depth, int(count_s), symbol.strip()
+    count_s, symbol = match.group(3), match.group(4).strip()
+    depth = _count_column(line, match.start(3))
+    return depth, int(count_s), symbol
 
 
 def partition_sample_call_graph(text: str) -> tuple[list[str], list[str]]:
@@ -149,15 +164,37 @@ def _parse_frame_lines(text: str) -> list[tuple[int, int, str]]:
     return lines
 
 
-def build_tree(lines: list[tuple[int, int, str]]) -> StackNode:
+def build_raw_tree(lines: list[tuple[int, int, str]]) -> StackNode:
     root = StackNode()
     path: list[tuple[int, str]] = []
     for depth, count, symbol in lines:
         while path and path[-1][0] >= depth:
             path.pop()
         path.append((depth, symbol))
-        _insert_path(root, [sym for _, sym in path], count)
-    _finalize_inclusive(root)
+        _insert_path_strict(root, [sym for _, sym in path], count)
+    return root
+
+
+def validate_raw_parent_child_weights(root: StackNode) -> None:
+    def walk(node: StackNode) -> None:
+        if node.inclusive > 0 and node.children:
+            child_sum = sum(child.inclusive for child in node.children.values())
+            if child_sum > node.inclusive:
+                raise ValueError(
+                    "invalid inclusive weights: children sum "
+                    f"{child_sum} exceeds parent {node.inclusive}"
+                )
+        for child in node.children.values():
+            walk(child)
+
+    for child in root.children.values():
+        walk(child)
+
+
+def build_tree(lines: list[tuple[int, int, str]]) -> StackNode:
+    """Production tree build: strict raw tree + validation, no silent repair."""
+    root = build_raw_tree(lines)
+    validate_raw_parent_child_weights(root)
     return root
 
 
@@ -257,15 +294,21 @@ def analyze_sample_text(text: str, *, main_thread_id: int | None = None) -> dict
     total = sum(functional.values()) or 1
     if attributed != root_inclusive and root.children:
         raise ValueError("stack conservation failed: attributed weight mismatch")
+    unattributed = functional.get("unattributed", 0)
     return {
         "functional_caller": {key: value / total for key, value in functional.items()},
         "execution_location": {key: value / total for key, value in execution.items()},
         "cross_tab_counts": {f"{a}|{b}": count for (a, b), count in cross.items()},
+        "functional_caller_counts": dict(functional),
+        "execution_location_counts": dict(execution),
+        "unattributed_sample_weight": unattributed,
+        "unattributed_sample_fraction": unattributed / total if total else 0.0,
         "attributed_sample_weight": attributed,
         "root_inclusive": root_inclusive,
         "weighted_row_count": len(weighted_rows),
         "rules": {
-            "note": "branched inclusive tree; path-based cross-tab per exclusive node",
+            "note": "sample-weight proportions only; not CPU-ms/s. "
+            "Depth from count column; no silent inclusive repair.",
         },
     }
 

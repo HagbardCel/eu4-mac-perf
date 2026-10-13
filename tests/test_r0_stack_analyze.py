@@ -6,6 +6,7 @@ from analysis.tools.r0_stack_analyze import (
     StackNode,
     analyze_sample_text,
     assert_tree_exclusive_nonnegative,
+    build_raw_tree,
     build_tree,
     enumerate_weighted_call_graph_lines,
     extract_main_thread_section,
@@ -16,6 +17,8 @@ from analysis.tools.r0_stack_analyze import (
 ROOT = Path(__file__).resolve().parents[1]
 AUTHENTIC_SAMPLE = ROOT / "results/r0-native-qualification/authentic-sample.txt"
 PROVENANCE_PATH = ROOT / "results/r0-native-qualification/provenance.json"
+ROSETTA_EXCERPT = Path(__file__).parent / "fixtures/rosetta_venice_excerpt.txt"
+VENICE_SAMPLE = ROOT / "results/20261012T210806Z-r0-measurement/epoch_b.sample.txt"
 
 
 def _authentic_main_thread_id() -> int:
@@ -29,6 +32,17 @@ def _child_matching(node: StackNode, substring: str) -> StackNode:
         if substring in symbol:
             return child
     raise AssertionError(f"no child matching {substring!r} in {list(node.children)}")
+
+
+def _find_matching(node: StackNode, substring: str) -> StackNode:
+    for symbol, child in node.children.items():
+        if substring in symbol:
+            return child
+        try:
+            return _find_matching(child, substring)
+        except AssertionError:
+            continue
+    raise AssertionError(f"no node matching {substring!r}")
 
 
 def _parse_authentic_tree() -> StackNode:
@@ -120,6 +134,39 @@ Call graph:
         self.assertEqual(report["weighted_row_count"], 4)
         self.assertIn("mesh_render_buckets|gl_driver_set_render_state", report["cross_tab_counts"])
         self.assertEqual(report["cross_tab_counts"]["mesh_render_buckets|gl_driver_set_render_state"], 100)
+
+    def test_invalid_parent_child_declared_weights_rejected(self) -> None:
+        lines = _parse_frame_lines(
+            "Call graph:\n    100 parent\n      120 child\n"
+        )
+        with self.assertRaises(ValueError):
+            build_tree(lines)
+
+    def test_conflicting_duplicate_symbol_under_parent_rejected(self) -> None:
+        lines = [
+            (4, 100, "root"),
+            (6, 50, "child"),
+            (6, 60, "child"),
+        ]
+        with self.assertRaises(ValueError):
+            build_raw_tree(lines)
+
+    def test_rosetta_excerpt_ancestry_and_render_buckets_weight(self) -> None:
+        text = ROSETTA_EXCERPT.read_text()
+        report = analyze_sample_text(text, main_thread_id=6650541)
+        self.assertEqual(report["root_inclusive"], 791)
+        root = build_tree(_parse_frame_lines(text))
+        assert_tree_exclusive_nonnegative(root)
+        mesh = _find_matching(root, "CPdxMeshObject::RenderBuckets")
+        self.assertEqual(mesh.inclusive, 315)
+
+    @unittest.skipUnless(VENICE_SAMPLE.is_file(), "missing Venice epoch_b.sample.txt")
+    def test_venice_full_sample_offline_gate(self) -> None:
+        text = VENICE_SAMPLE.read_text(errors="replace")
+        report = analyze_sample_text(text, main_thread_id=6650541)
+        self.assertEqual(report["weighted_row_count"], 1744)
+        self.assertEqual(report["root_inclusive"], 791)
+        self.assertEqual(report["attributed_sample_weight"], 791)
 
     def test_unparsed_call_graph_line_fails_closed(self) -> None:
         text = """
