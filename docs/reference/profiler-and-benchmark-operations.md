@@ -239,8 +239,10 @@ renderer findings.
 ## Unattended paused baseline (P0)
 
 The [autonomous runner](../../benchmark/autonomous_runner.py) pins the GOG executable,
-the [Venice fixture](../../fixtures/venice_paused.eu4), render settings, and DLC/mod
-selection. It starts the disposable save with `--continuelastsave`, checks a
+the pinned Venice save (`fixtures/venice_paused.eu4`, local only, not distributed in Git;
+see the fixture setup instructions in this manual). The `autonomous_runner` bootstrap and
+`register-scene` commands separately establish the reference screenshot. Render settings and DLC/mod
+selection are also pinned. It starts the disposable save with `--continuelastsave`, checks a
 fresh Venice game log plus the in-game paused signal, activates the EU IV
 window, warms up for at least 90 seconds, and records 30 seconds of CPU,
 power, and swap samples. It restores the original `continue_game.json` after

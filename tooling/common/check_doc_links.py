@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Validate markdown relative file links; optional baseline for legacy docs."""
+"""Validate markdown relative links for files and directories."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -35,21 +34,55 @@ def extract_links(md_path: Path, text: str) -> list[tuple[int, str]]:
 def check_file(md_path: Path, root: Path) -> list[str]:
     errors: list[str] = []
     text = md_path.read_text(encoding="utf-8")
+    rel_md = md_path.relative_to(root)
     for line_no, target in extract_links(md_path, text):
         resolved = (md_path.parent / target).resolve()
         try:
             resolved.relative_to(root.resolve())
         except ValueError:
-            errors.append(f"{md_path.relative_to(root)}:{line_no}: outside repo: {target}")
+            errors.append(f"{rel_md}:{line_no}: outside repo: {target}")
             continue
-        if not resolved.is_file():
-            errors.append(f"{md_path.relative_to(root)}:{line_no}: missing file: {target}")
+        if not resolved.exists():
+            errors.append(f"{rel_md}:{line_no}: missing path: {target}")
     return errors
+
+
+def collect_md_under(root: Path, base: Path) -> list[Path]:
+    if base.is_file():
+        return [base]
+    if base.is_dir():
+        return sorted(base.rglob("*.md"))
+    return []
+
+
+def resolve_strict_inputs(root: Path, rels: list[str]) -> tuple[list[Path], list[str]]:
+    """Return markdown files to scan and fatal configuration errors."""
+    if not rels:
+        return [], ["--strict requires at least one path"]
+
+    paths: list[Path] = []
+    errors: list[str] = []
+    for rel in rels:
+        base = root / rel
+        if not base.exists():
+            errors.append(f"missing strict input: {rel}")
+            continue
+        if base.is_file():
+            if base.suffix.lower() != ".md":
+                errors.append(f"unsupported strict input (not markdown): {rel}")
+                continue
+            paths.append(base)
+            continue
+        if base.is_dir():
+            paths.extend(collect_md_under(root, base))
+            continue
+        errors.append(f"missing strict input: {rel}")
+    return paths, errors
 
 
 def scan(paths: list[Path], root: Path) -> list[str]:
     errors: list[str] = []
-    for path in sorted(paths):
+    for path in sorted(set(paths)):
         if path.suffix.lower() != ".md":
             continue
         if not path.is_file():
@@ -59,66 +92,33 @@ def scan(paths: list[Path], root: Path) -> list[str]:
     return errors
 
 
-def collect_md_under(root: Path, rel: str) -> list[Path]:
-    base = root / rel
-    if base.is_file():
-        return [base]
-    return sorted(base.rglob("*.md")) if base.is_dir() else []
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--strict",
         nargs="*",
         default=None,
-        help="Paths (files or dirs) that must have zero broken file links",
+        help="Paths (markdown files or directories) that must have zero broken links",
     )
-    parser.add_argument(
-        "--baseline",
-        type=Path,
-        default=None,
-        help="JSON list of allowed broken links under --legacy-root",
-    )
-    parser.add_argument(
-        "--legacy-root",
-        default="docs",
-        help="Directory scanned for baseline regression checks",
-    )
-    parser.add_argument("--write-baseline", action="store_true", help="Print baseline JSON to stdout")
     args = parser.parse_args()
 
     root = repo_root()
-
-    if args.write_baseline:
-        legacy = collect_md_under(root, args.legacy_root)
-        errors = scan(legacy, root)
-        print(json.dumps(sorted(errors), indent=2))
-        return 0
-
     exit_code = 0
 
     if args.strict is not None:
-        strict_paths: list[Path] = []
-        for item in args.strict:
-            strict_paths.extend(collect_md_under(root, item))
-        errors = scan(strict_paths, root)
-        if errors:
+        paths, config_errors = resolve_strict_inputs(root, args.strict)
+        if config_errors:
             exit_code = 1
-            print("Strict documentation link errors:", file=sys.stderr)
-            for e in errors:
+            print("Strict documentation link configuration errors:", file=sys.stderr)
+            for e in config_errors:
                 print(f"  {e}", file=sys.stderr)
-
-    if args.baseline is not None:
-        legacy = collect_md_under(root, args.legacy_root)
-        current = sorted(scan(legacy, root))
-        allowed = set(json.loads(args.baseline.read_text(encoding="utf-8")))
-        new_failures = sorted(set(current) - allowed)
-        if new_failures:
-            exit_code = 1
-            print("New documentation link regressions under legacy root:", file=sys.stderr)
-            for e in new_failures:
-                print(f"  {e}", file=sys.stderr)
+        if exit_code == 0:
+            errors = scan(paths, root)
+            if errors:
+                exit_code = 1
+                print("Strict documentation link errors:", file=sys.stderr)
+                for e in errors:
+                    print(f"  {e}", file=sys.stderr)
 
     return exit_code
 

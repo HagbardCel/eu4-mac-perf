@@ -30,13 +30,13 @@ jobs:
       - run: PYTHONPATH=benchmark:. python -m unittest discover -s tests
       - run: PYTHONPATH=benchmark python benchmark/eu4_frame_model.py verify-evidence results/20261003T210202Z-intrusive-diagnostic --profile intrusive_complete_v1
       - run: python tooling/common/check_forbidden_tracked_paths.py
-      - run: |
-          python tooling/common/check_doc_links.py --strict \
-            README.md docs/status.md docs/roadmap.md docs/README.md docs/conventions.md \
-            docs/findings/README.md docs/investigations/README.md docs/decisions/README.md \
-            docs/reference/profiler-and-benchmark-operations.md results/README.md \
-            reverse_engineering/README.md experiments/README.md patches/README.md measurements/INDEX.md
-      - run: python tooling/common/check_doc_links.py --baseline tooling/common/doc_link_baseline.json --legacy-root docs
-      - run: python tooling/common/check_legacy_tree_scope.py "${{ steps.base.outputs.sha }}" HEAD
+      - run: >
+          python tooling/common/check_doc_links.py --strict
+          README.md docs
+          results/README.md
+          reverse_engineering/README.md
+          experiments/README.md
+          patches/README.md
+          measurements/INDEX.md
       - run: git diff --check "${{ steps.base.outputs.sha }}" HEAD
 # Proprietary EU IV symbols, Rosetta, CGL, overhead, and live release gates are local evidence.

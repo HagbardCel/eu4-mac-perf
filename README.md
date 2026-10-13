@@ -28,7 +28,7 @@ From the repository root, using Python 3.10+:
 
 ```sh
 python3 benchmark/eu4_benchmark.py inspect
-python3 -m unittest discover -s tests
+PYTHONPATH=benchmark:. python3 -m unittest discover -s tests
 ```
 
 Phase C sealed evidence verification (CI gate):
