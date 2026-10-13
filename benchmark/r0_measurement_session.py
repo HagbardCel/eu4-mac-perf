@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import subprocess
@@ -53,6 +54,16 @@ DEFAULT_SCENARIOS = [
 
 TERMINAL_FAILURE_STATUSES = frozenset({"incomplete", "cleanup_error"})
 
+MEASUREMENT_CRITICAL_SOURCE_PATHS = (
+    "benchmark/r0_measurement_session.py",
+    "benchmark/cpu_reconcile.py",
+    "benchmark/autonomous_runner.py",
+    "analysis/tools/r0_stack_analyze.py",
+    "benchmark/thread_cpu_sampler.py",
+    "benchmark/eu4_r0_probe.c",
+    "benchmark/eu4_r0_readback.c",
+)
+
 
 def mark_uptime(events_path: Path, event: str, **fields: object) -> dict[str, Any]:
     item = {
@@ -80,6 +91,20 @@ def write_manifest(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
+def _hash_measurement_critical_sources() -> dict[str, Any]:
+    entries: dict[str, Any] = {}
+    for relative in MEASUREMENT_CRITICAL_SOURCE_PATHS:
+        path = ROOT / relative
+        if not path.is_file():
+            entries[relative] = {"status": "missing"}
+            continue
+        try:
+            entries[relative] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        except OSError as exc:
+            entries[relative] = {"status": "unavailable", "error": str(exc)}
+    return entries
+
+
 def _record_measurement_source(manifest: dict[str, Any]) -> None:
     try:
         head = subprocess.run(
@@ -100,6 +125,7 @@ def _record_measurement_source(manifest: dict[str, Any]) -> None:
             manifest["measurement_source"] = {
                 "git_head": head.stdout.strip(),
                 "working_tree_dirty": bool(dirty.stdout.strip()),
+                "measurement_critical_source_sha256": _hash_measurement_critical_sources(),
             }
     except OSError:
         pass
@@ -122,17 +148,21 @@ def _finalize_epoch_a_cpu(
     anchor: dict[str, Any],
     pid: int,
     provisional_report: dict[str, Any],
+    powermetrics_producer: dict[str, Any],
+    pm_stream_path: Path | None,
 ) -> None:
     tail.poll()
     finish_result = tail.finish()
-    tolerance = float(manifest.get("cpu_reconcile_tolerance_ms_per_s", CPU_RECONCILE_TOLERANCE_MS_PER_S))
-    finalized = cpu_reconcile.reconcile_cpu(
+    finalized = cpu_reconcile.persist_finalized_cpu_with_sidecar(
+        output_dir,
+        manifest,
         provisional_report,
-        powermetrics_samples=tail.samples,
+        tail_samples=tail.samples,
+        tail_finalization=finish_result,
         clock_anchor=anchor,
         pid=pid,
-        reconcile_tolerance_ms_per_s=tolerance,
-        tail_finalization=finish_result,
+        powermetrics_producer=powermetrics_producer,
+        pm_stream_path=pm_stream_path,
     )
     _persist_epoch_a_cpu(output_dir, manifest, finalized)
 
@@ -470,6 +500,9 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
         manifest["clock_anchor"] = anchor
         game = pm = None
         tail = None
+        pm_path: Path | None = None
+        powermetrics_producer: dict[str, Any] | None = None
+        pm_shutdown_done = False
         provisional_cpu_report: dict[str, Any] | None = None
         cpu_finalize_anchor: dict[str, Any] | None = None
         cpu_finalize_pid: int | None = None
@@ -729,19 +762,22 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                     manifest["status"] = "incomplete"
                     manifest["error"] = f"drawable probe failed: {failure_class}"
 
-                auto.stop_process(pm, 5)
         except (base.BenchmarkError, OSError, subprocess.SubprocessError, KeyboardInterrupt) as exc:
             manifest["status"] = "incomplete"
             manifest["error"] = str(exc)
             raise
         finally:
             try:
-                auto.stop_process(pm, 3)
+                if not pm_shutdown_done:
+                    powermetrics_producer = cpu_reconcile.shutdown_powermetrics(pm, 5.0)
+                    manifest["powermetrics_producer"] = powermetrics_producer
+                    pm_shutdown_done = True
                 if (
                     tail is not None
                     and provisional_cpu_report is not None
                     and cpu_finalize_anchor is not None
                     and cpu_finalize_pid is not None
+                    and powermetrics_producer is not None
                 ):
                     try:
                         _finalize_epoch_a_cpu(
@@ -751,12 +787,16 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                             cpu_finalize_anchor,
                             cpu_finalize_pid,
                             provisional_cpu_report,
+                            powermetrics_producer,
+                            pm_path,
                         )
                     except (base.BenchmarkError, OSError, ValueError) as finalize_exc:
                         manifest["cpu_finalization_error"] = str(finalize_exc)
                         failed = dict(provisional_cpu_report)
                         failed["cpu_reconciliation_phase"] = "finalized"
                         failed["reconcile_ok"] = False
+                        failed["process_cpu_sidecar_persisted"] = False
+                        failed["powermetrics_producer"] = powermetrics_producer
                         _persist_epoch_a_cpu(output_dir, manifest, failed)
                 auto.stop_process(game, 10)
                 if installed:

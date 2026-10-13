@@ -292,6 +292,8 @@ class FrameEvolutionCliE2ETests(unittest.TestCase):
     def test_acceptance_gates_eligible(self) -> None:
         import r0_measurement_session as session
 
+        from r0_v1_cpu_gate_fixtures import materialize_v1_sidecar_for_gate
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             gens = build_success_fixture(root)
@@ -307,9 +309,18 @@ class FrameEvolutionCliE2ETests(unittest.TestCase):
                     "main_thread_mapping_status": "verified",
                     "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
                     "process_cpu_sample_count": 10,
+                    "process_cpu_sidecar_persisted": True,
+                    "powermetrics_producer": {
+                        "state_before_stop": "running",
+                        "exit_code_before_stop": None,
+                        "stop_completed": True,
+                    },
+                    "pid": 42,
                     "thread_cpu_ms_per_s": 100.0,
-                    "window_start_ns": 0,
-                    "window_end_ns": 1,
+                    "process_cpu_ms_per_s": 100.0,
+                    "reconciliation_residual_ms_per_s": 0.0,
+                    "window_start_ns": 1_000_000,
+                    "window_end_ns": 2_000_000,
                 },
                 "thread_cpu_preflight": {"status": "ready"},
                 "event_clock_alignment": {"status": "passed"},
@@ -326,6 +337,7 @@ class FrameEvolutionCliE2ETests(unittest.TestCase):
                     "root_inclusive": 10,
                 },
             }
+            materialize_v1_sidecar_for_gate(root, manifest)
             session.acceptance_gates(manifest, root)
             self.assertEqual(manifest["status"], "completed")
 

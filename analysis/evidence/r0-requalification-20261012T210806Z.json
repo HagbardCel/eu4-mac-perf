@@ -23,6 +23,12 @@
   "source_acquisition": "20261012T210806Z-r0-measurement",
   "original_status": "incomplete_gates",
   "requalification_tool_commit": "7559e843f28ee24ac99331cbbb96711dcf910a24",
+  "requalification_tool_commit_status": "not_retrievable_from_current_remote_history",
+  "requalification_verification_commit": "3ab57fad3cec525f94461de85656844906444c94",
+  "requalification_analyzer_source_sha256": "dc224ffa733ca110149a74780dbf0b2eb015d133f9cac05a9bca5823c14b6a51",
+  "requalification_replay_verified": true,
+  "requalification_replay_match": "exact",
+  "requalification_replay_fields_compared": "full_normalized_analyzer_report_json",
   "live_game_rerun": false,
   "canonical_input_hashes": {
     "manifest.json": "a1310398a36b7919cae6850328179ca9266290a4dd02df4742e91b80f5311ad7",

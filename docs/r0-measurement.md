@@ -52,7 +52,9 @@ Integrated sessions run **`preflight_offline()`** before fixture install / EU IV
 
 ### Process CPU finalization (epoch A)
 
-Thread CPU from libproc is checkpointed after the epoch-A poll window with `cpu_reconciliation_phase: provisional` and `reconcile_ok: false`. Process CPU from powermetrics is reconciled only after intentional helper shutdown: `PowerTail.finish()` must report a clean drain (no `incomplete` status, zero `trailing_partial_bytes`). New integrated manifests set `cpu_accounting_contract: r0_cpu_finalize_v1`; acceptance requires `cpu_reconciliation_phase: finalized` and a passing reconcile residual.
+Thread CPU from libproc is checkpointed after the epoch-A poll window with `cpu_reconciliation_phase: provisional` and `reconcile_ok: false`. Process CPU from powermetrics is reconciled only after a **single** intentional `powermetrics` shutdown: capture `pm.poll()` immediately before the first `stop_process`, require `state_before_stop: running` and `stop_completed: true`, then `PowerTail.finish()` with `status` in `clean`/`appended` and zero `trailing_partial_bytes`. Observations used for reconciliation are persisted atomically to `epoch_a_process_cpu_samples.json` (`observation_origin: live_finalize_v1`) with per-sample `monotonic_ns` for coverage review.
+
+New integrated manifests set `cpu_accounting_contract: r0_cpu_finalize_v1`; acceptance requires finalized phase, acceptable tail status, successful producer shutdown, persisted sidecar, and a passing reconcile residual. Producer liveness and a nonempty sample list do not alone prove full temporal coverage of the epoch-A window.
 
 The committed Oct 12 Venice capsule (`20261012T210806Z-r0-measurement`) remains on the legacy gate (`reconcile_ok` only). Offline retrospective process-CPU means (27 vs 29 plist samples) use `benchmark/cpu_reconcile.py` against `epoch_a_process_cpu_samples.json` without mutating acquisition `epoch_a_thread_cpu.json`.
 
