@@ -1,0 +1,37 @@
+{
+  "measurement_source": "synthetic_integration_fixture",
+  "coverage": {
+    "image_base": 4294967296,
+    "E_executable_section_bytes": 10000,
+    "D_decoded_instruction_bytes": 5000,
+    "F_internal_bytes": 17,
+    "F_thunk_bytes": 6,
+    "F_all_bytes": 23,
+    "C_section": 0.0023,
+    "C_decoded": 0.0046
+  },
+  "renderer_subsystems": {
+    "by_subsystem": {
+      "B0": {
+        "functions": 2,
+        "code_bytes": 14
+      },
+      "B1": {
+        "functions": 1,
+        "code_bytes": 5
+      }
+    },
+    "by_confidence": {
+      "confirmed": 14,
+      "probable": 5
+    }
+  },
+  "opengl_coupling": {
+    "internal_functions_direct_opengl": 1,
+    "internal_functions_opengl_via_stub": 0,
+    "unresolved_indirect_call_sites": 1
+  },
+  "decompilation_quality": {},
+  "gfx_reconciliation": {},
+  "methodology": "Positive-evidence classification; union of instruction-byte intervals; see reverse_engineering/README.md"
+}

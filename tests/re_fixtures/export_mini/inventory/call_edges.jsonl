@@ -1,0 +1,3 @@
+{"callsite_rva":"0x0000000000001005","caller_rva":"0x0000000000001000","callee_internal_rva":null,"callee_external_symbol":"_glUseProgram","resolution":"direct_external"}
+{"callsite_rva":"0x0000000000002002","caller_rva":"0x0000000000002000","callee_internal_rva":"0x0000000000003000","callee_external_symbol":null,"resolution":"thunk"}
+{"callsite_rva":"0x0000000000002003","caller_rva":"0x0000000000002000","callee_internal_rva":null,"callee_external_symbol":null,"resolution":"unresolved_indirect"}

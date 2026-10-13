@@ -29,9 +29,10 @@ Future **targeted** measurements (including further R0-M work) remain possible w
 - Renderer **reconstruction**, **differential validation**, and **elimination of unnecessary rendering work** per the canonical [rendering strategy](eu4_recommended_strategy.md) ([navigation](roadmap.md)).
 - Consolidated rendering knowledge: [macOS rendering findings](eu4_macos_rendering_findings.md), [alternatives ranking](eu4_rendering_alternatives_ranked.md).
 
-## Next foundation (after PR A merge)
+## Reverse engineering (PR D tooling)
 
-- **Ghidra Phase 1 (PR D):** full auto-analysis, local decompiled corpus, and searchable index under [`reverse_engineering/`](../reverse_engineering/README.md) — not blocked on remaining `benchmark/` migration (PR C).
+- **Ghidra Phase 1 automation** is in [`reverse_engineering/`](../reverse_engineering/README.md): headless import/inventory/decompile orchestration, SQLite search CLI, and census reports.
+- **Local full export** requires `GHIDRA_INSTALL` and a maintainer run of D1–D5; committed aggregate reports are integration-fixture samples until `measurement_source` is `local_ghidra_export`.
 
 ## Pinned environment
 
