@@ -25,7 +25,7 @@ Raw `acceptance_gates` in `manifest.json` are preserved. Several `true` values a
 | Pixel equality | **Not evaluated** | Epoch C not run |
 | Classification | **Not evaluated** | Frame evolution skipped |
 | Thread CPU | **Passed** | Epoch A reconcile residual 0.14 ms/s |
-| Stack attribution | **Failed** | Parser fail-closed on Rosetta `sample` line format |
+| Stack attribution | **Passed (requalification)** | PR #43 column-depth parser; 1744 rows, root 791; see [`r0-requalification-20261012T210806Z.json`](evidence/r0-requalification-20261012T210806Z.json) |
 | Positive control | **Not evaluated** | Skipped with drawable |
 | R1 decision | **No candidates evaluated** | Dirty-state **unresolved** |
 
@@ -51,7 +51,9 @@ Instrumented paused-Venice baseline; not an uninstrumented EU IV overhead estima
 
 ## Stack attribution (epoch B)
 
-[`epoch_b.sample.txt`](../results/20261012T210806Z-r0-measurement/epoch_b.sample.txt) committed. Automated attribution failed; see [`analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json`](evidence/r0-stack-analyzer-failure-20261012T210806Z.json).
+[`epoch_b.sample.txt`](../results/20261012T210806Z-r0-measurement/epoch_b.sample.txt) committed. Acquisition-time analyzer failed on Rosetta whitespace ([`r0-stack-analyzer-failure-20261012T210806Z.json`](evidence/r0-stack-analyzer-failure-20261012T210806Z.json)). **Offline requalification** on a working copy with PR #43 tooling yields `partial_complete`: [`r0-stack-report-20261012T210806Z.json`](evidence/r0-stack-report-20261012T210806Z.json), [`r0-main-thread-cost-model-20261012T210806Z.json`](evidence/r0-main-thread-cost-model-20261012T210806Z.json). Sample-weight `unattributed` share ≈22.9% — structurally valid but limited optimization guidance.
+
+Retrospective process CPU (29 plist samples) is documented separately and does **not** replace the acquisition 27-sample gate: [`r0-cpu-reconciliation-20261012T210806Z.json`](evidence/r0-cpu-reconciliation-20261012T210806Z.json).
 
 ## Explicit non-claims
 

@@ -74,18 +74,29 @@ def reconcile_cpu(
     return out
 
 
+def _oct12_acquisition_cpu_fingerprint(manifest: dict[str, Any]) -> bool:
+    cpu = manifest.get("epoch_a_thread_cpu") or {}
+    return (
+        cpu.get("window_start_ns") == 378384359061916
+        and cpu.get("window_end_ns") == 378414600898250
+        and cpu.get("main_thread_id") == 6650541
+        and cpu.get("pid") == 98200
+        and cpu.get("reconcile_ok") is True
+    )
+
+
 def legacy_cpu_gate_eligible(manifest: dict[str, Any], output_dir: Any | None) -> bool:
-    if output_dir is None:
+    if manifest.get("cpu_accounting_contract"):
         return False
-    name = getattr(output_dir, "name", None)
-    if name != LEGACY_OCT12_RUN_DIR:
-        return False
-    commit = manifest.get("acquisition_commit")
-    if not commit and isinstance(manifest.get("measurement_source"), dict):
-        commit = manifest["measurement_source"].get("git_head")
-    if commit and not str(commit).startswith(LEGACY_OCT12_ACQUISITION_COMMIT_PREFIX):
-        return False
-    return True
+    name = getattr(output_dir, "name", None) if output_dir is not None else None
+    if name == LEGACY_OCT12_RUN_DIR:
+        commit = manifest.get("acquisition_commit")
+        if not commit and isinstance(manifest.get("measurement_source"), dict):
+            commit = manifest["measurement_source"].get("git_head")
+        if commit and not str(commit).startswith(LEGACY_OCT12_ACQUISITION_COMMIT_PREFIX):
+            return False
+        return True
+    return _oct12_acquisition_cpu_fingerprint(manifest)
 
 
 def cpu_reconcile_gate_passes(

@@ -62,7 +62,8 @@ Instrumented paused-Venice baseline—not an uninstrumented EU IV overhead estim
 | Positive-control pixel verification | Not evaluated |
 | ROI pixel verification | Not evaluated |
 | Frame-evolution classification | Not evaluated |
-| Automated stack attribution | Failed |
+| Automated stack attribution (acquisition) | Failed |
+| Automated stack attribution (offline requalification, PR #43) | Passed (`partial_complete` on working copy) |
 
 Structured mirror: [`analysis/evidence/r0-integrated-session-20261012T210806Z.json`](../../analysis/evidence/r0-integrated-session-20261012T210806Z.json).
 
@@ -78,13 +79,7 @@ PYTHONPATH=benchmark python3 analysis/tools/r0_stack_analyze.py \
   --output /tmp/stack_report.json --main-thread-id 6650541
 ```
 
-Fails with:
-
-```text
-ValueError: unsupported sample call-graph line: '    +   791 main  (in eu4) + 10903  [0x100757441]'
-```
-
-The weighted-row pattern expects the sample count immediately after a branch marker and single space; extra whitespace in the Rosetta-produced line triggers fail-closed behavior. Details: [`analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json`](../../analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json).
+Acquisition tooling (`a9048e1`) failed closed on Rosetta whitespace (see [`r0-stack-analyzer-failure-20261012T210806Z.json`](../../analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json)). After PR #43, the same `epoch_b.sample.txt` parses offline on a **working copy** requalification run: 1744 weighted rows, root inclusive 791, `stack_analyzer` gate passes. Derived reports: [`r0-stack-report-20261012T210806Z.json`](../../analysis/evidence/r0-stack-report-20261012T210806Z.json), [`r0-requalification-20261012T210806Z.json`](../../analysis/evidence/r0-requalification-20261012T210806Z.json). Canonical acquisition bytes are unchanged.
 
 ## Process CPU reproducibility
 
@@ -127,4 +122,9 @@ After a stack-parser fix:
 
 | `analysis/evidence/r0-integrated-session-20261012T210806Z.json` | `17ea2613faa0d03109c30729614c89c4cfb77c6d07b0408864debbb8060a01dc` |
 
-Other evidence JSON: [`r0-frame-evolution-20261012T210806Z.json`](../../analysis/evidence/r0-frame-evolution-20261012T210806Z.json), [`r0-stack-analyzer-failure-20261012T210806Z.json`](../../analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json) (unchanged this commit).
+| `analysis/evidence/r0-stack-report-20261012T210806Z.json` | `094b24f29336a1c2c4e7ac42754fd35a5406ab2417bda1bdca7c04e28bcaac44` |
+| `analysis/evidence/r0-main-thread-cost-model-20261012T210806Z.json` | `b2f5da6ea09406888fd73d2916294b32e605829b6e418b8bf9fd399e798aaacb` |
+| `analysis/evidence/r0-cpu-reconciliation-20261012T210806Z.json` | `1e8bc51e2e683746c372abc4515884e15170da0519201ee7f7e6f675fcb72b3a` |
+| `analysis/evidence/r0-requalification-20261012T210806Z.json` | `9bd9fd1f88a9cf470c376228f067a237fbd06ba0cd45255cc6002503bb5451c7` |
+
+Other evidence JSON: [`r0-frame-evolution-20261012T210806Z.json`](../../analysis/evidence/r0-frame-evolution-20261012T210806Z.json), [`r0-stack-analyzer-failure-20261012T210806Z.json`](../../analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json) (historical acquisition failure record).

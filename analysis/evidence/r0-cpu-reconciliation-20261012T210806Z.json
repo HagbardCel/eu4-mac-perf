@@ -1,0 +1,16 @@
+{
+  "evidence_id": "r0-cpu-reconciliation-20261012T210806Z",
+  "source_acquisition": "20261012T210806Z-r0-measurement",
+  "acquisition_gate_uses": "27-sample manifest mean (unchanged epoch_a_thread_cpu.json)",
+  "retrospective_analysis": {
+    "retrospective_sample_count": 29,
+    "acquisition_sample_count": 27,
+    "retrospective_mean_cputime_ms_per_s": 1065.4555172413793,
+    "acquisition_mean_cputime_ms_per_s": 1065.2781481481481
+  },
+  "reconciliation_residuals_ms_per_s": {
+    "acquisition_vs_thread_total": 0.1433248442663171,
+    "retrospective_vs_thread_total": 0.3206939374974809
+  },
+  "tolerance_ms_per_s": 50.0
+}

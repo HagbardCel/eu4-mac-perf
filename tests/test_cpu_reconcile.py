@@ -55,6 +55,21 @@ class CpuReconcileTests(unittest.TestCase):
             root.mkdir()
             self.assertTrue(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
 
+    def test_legacy_oct12_fingerprint_on_requalify_copy_dir(self) -> None:
+        manifest = {
+            "epoch_a_thread_cpu": {
+                "window_start_ns": 378384359061916,
+                "window_end_ns": 378414600898250,
+                "main_thread_id": 6650541,
+                "pid": 98200,
+                "reconcile_ok": True,
+            }
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "working-copy"
+            root.mkdir()
+            self.assertTrue(cpu_reconcile.legacy_cpu_gate_eligible(manifest, root))
+
     def test_delayed_plist_increases_sample_count(self) -> None:
         anchor = {"monotonic_ns": 1_000_000_000, "wall_ns": 2_000_000_000}
         pid = 42

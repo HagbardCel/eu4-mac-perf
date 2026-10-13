@@ -1,0 +1,58 @@
+{
+  "requalification_status": "partial_complete",
+  "scientific_coverage": {
+    "thread_cpu": "passed",
+    "stack_attribution": "passed",
+    "production_drawable": "unsupported",
+    "frame_evolution": "not_evaluated",
+    "positive_control": "not_evaluated",
+    "lossless_skip_screening": "not_evaluated"
+  },
+  "acceptance_gates_raw": {
+    "cpu_reconcile": true,
+    "flush_single_owner": true,
+    "main_thread_mapping": true,
+    "thread_cpu_preflight": true,
+    "event_clock_alignment": true,
+    "stack_analyzer": true,
+    "qualified_windows": true,
+    "positive_control": true,
+    "roi_verified": true,
+    "frame_analyzer": true
+  },
+  "source_acquisition": "20261012T210806Z-r0-measurement",
+  "original_status": "incomplete_gates",
+  "requalification_tool_commit": "7559e843f28ee24ac99331cbbb96711dcf910a24",
+  "live_game_rerun": false,
+  "canonical_input_hashes": {
+    "manifest.json": "a1310398a36b7919cae6850328179ca9266290a4dd02df4742e91b80f5311ad7",
+    "epoch_a_thread_cpu.json": "efb0d03b0d26cfbd0f6f46a29869f69b36d3755b7cd3ba214225986a6a34ed29",
+    "epoch_b.sample.txt": "5c7cd25e584843a61c1db9dd09440d3ce0d4900b9e61576c0bd9c8e0d18d8518",
+    "r0_probe.log": "c855a958fc9d1c544428f3ecf77961b193464250818ea309103832a351eeff1f",
+    "events.jsonl": "a6470d89d3f32d0fd17d11b5d01e2550275164b3e8d6348c1ab37ba75fd3f81d",
+    "r0_control.bin": "ca592c4483feb74784b7a5b5d9baa53ba74e90650b150f48f74b040e9ab6129e"
+  },
+  "copy_input_hashes_pre_patch": {
+    "manifest.json": "a1310398a36b7919cae6850328179ca9266290a4dd02df4742e91b80f5311ad7",
+    "epoch_a_thread_cpu.json": "efb0d03b0d26cfbd0f6f46a29869f69b36d3755b7cd3ba214225986a6a34ed29",
+    "epoch_b.sample.txt": "5c7cd25e584843a61c1db9dd09440d3ce0d4900b9e61576c0bd9c8e0d18d8518",
+    "r0_probe.log": "c855a958fc9d1c544428f3ecf77961b193464250818ea309103832a351eeff1f",
+    "events.jsonl": "a6470d89d3f32d0fd17d11b5d01e2550275164b3e8d6348c1ab37ba75fd3f81d",
+    "r0_control.bin": "ca592c4483feb74784b7a5b5d9baa53ba74e90650b150f48f74b040e9ab6129e"
+  },
+  "working_copy_manifest_sha256_post_patch": "be12574d5b0ecb580567d272bbe51bc0eca18892682ce94bb0be493e3f3c0234",
+  "source_input_hashes": {
+    "manifest.json": "a1310398a36b7919cae6850328179ca9266290a4dd02df4742e91b80f5311ad7",
+    "epoch_a_thread_cpu.json": "efb0d03b0d26cfbd0f6f46a29869f69b36d3755b7cd3ba214225986a6a34ed29",
+    "epoch_b.sample.txt": "5c7cd25e584843a61c1db9dd09440d3ce0d4900b9e61576c0bd9c8e0d18d8518",
+    "r0_probe.log": "c855a958fc9d1c544428f3ecf77961b193464250818ea309103832a351eeff1f",
+    "events.jsonl": "a6470d89d3f32d0fd17d11b5d01e2550275164b3e8d6348c1ab37ba75fd3f81d",
+    "r0_control.bin": "ca592c4483feb74784b7a5b5d9baa53ba74e90650b150f48f74b040e9ab6129e"
+  },
+  "requalified_utc": "2026-10-13T07:47:16.518679+00:00",
+  "derived_artifacts": {
+    "stack_report": "analysis/evidence/r0-stack-report-20261012T210806Z.json",
+    "cost_model": "analysis/evidence/r0-main-thread-cost-model-20261012T210806Z.json",
+    "cpu_reconciliation": "analysis/evidence/r0-cpu-reconciliation-20261012T210806Z.json"
+  }
+}
