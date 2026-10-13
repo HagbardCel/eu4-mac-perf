@@ -50,6 +50,14 @@ PYTHONPATH=benchmark python3 -m unittest tests.test_thread_cpu_libproc_qualifica
 
 Integrated sessions run **`preflight_offline()`** before fixture install / EU IV launch, then **target `preflight(game.pid)`** after the game PID is known. Dry-run manifests skip CPU preflight.
 
+### Process CPU finalization (epoch A)
+
+Thread CPU from libproc is checkpointed after the epoch-A poll window with `cpu_reconciliation_phase: provisional` and `reconcile_ok: false`. Process CPU from powermetrics is reconciled only after intentional helper shutdown: `PowerTail.finish()` must report a clean drain (no `incomplete` status, zero `trailing_partial_bytes`). New integrated manifests set `cpu_accounting_contract: r0_cpu_finalize_v1`; acceptance requires `cpu_reconciliation_phase: finalized` and a passing reconcile residual.
+
+The committed Oct 12 Venice capsule (`20261012T210806Z-r0-measurement`) remains on the legacy gate (`reconcile_ok` only). Offline retrospective process-CPU means (27 vs 29 plist samples) use `benchmark/cpu_reconcile.py` against `epoch_a_process_cpu_samples.json` without mutating acquisition `epoch_a_thread_cpu.json`.
+
+Requalify copies must patch **copy-only** `manifest.json` `probe_log_path` to the working copy; relative paths also resolve under the run directory when the canonical path is absent.
+
 ## Build and test
 
 ```sh

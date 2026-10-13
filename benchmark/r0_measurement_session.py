@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import autonomous_runner as auto
+import cpu_reconcile
 import eu4_benchmark as base
 import eu4_r0_control as r0_control
 from fixture_manager import FixtureManager
@@ -79,13 +80,61 @@ def write_manifest(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
-def _process_cpu_ms_per_s(
-    samples: list[dict], anchor: dict[str, Any], start_ns: int, end_ns: int, pid: int
-) -> float | None:
-    values = auto.cpu_samples_between(samples, pid, anchor, start_ns, end_ns)
-    if not values:
-        return None
-    return float(sum(value for _, value in values) / len(values))
+def _record_measurement_source(manifest: dict[str, Any]) -> None:
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if head.returncode == 0:
+            manifest["measurement_source"] = {
+                "git_head": head.stdout.strip(),
+                "working_tree_dirty": bool(dirty.stdout.strip()),
+            }
+    except OSError:
+        pass
+
+
+def _persist_epoch_a_cpu(output_dir: Path, manifest: dict[str, Any], cpu_report: dict[str, Any]) -> None:
+    (output_dir / "epoch_a_thread_cpu.json").write_text(json.dumps(cpu_report, indent=2) + "\n")
+    manifest["epoch_a_thread_cpu"] = cpu_report
+    for epoch in manifest.get("epochs", []):
+        if epoch.get("id") == "A":
+            epoch["thread_cpu"] = cpu_report
+            return
+    manifest["epochs"].append({"id": "A", "thread_cpu": cpu_report})
+
+
+def _finalize_epoch_a_cpu(
+    output_dir: Path,
+    manifest: dict[str, Any],
+    tail: auto.PowerTail,
+    anchor: dict[str, Any],
+    pid: int,
+    provisional_report: dict[str, Any],
+) -> None:
+    tail.poll()
+    finish_result = tail.finish()
+    tolerance = float(manifest.get("cpu_reconcile_tolerance_ms_per_s", CPU_RECONCILE_TOLERANCE_MS_PER_S))
+    finalized = cpu_reconcile.reconcile_cpu(
+        provisional_report,
+        powermetrics_samples=tail.samples,
+        clock_anchor=anchor,
+        pid=pid,
+        reconcile_tolerance_ms_per_s=tolerance,
+        tail_finalization=finish_result,
+    )
+    _persist_epoch_a_cpu(output_dir, manifest, finalized)
 
 
 def _ensure_repo_import_path() -> None:
@@ -181,7 +230,16 @@ def _roi_verified_gate(manifest: dict[str, Any]) -> bool:
 
 def _probe_log_path_from_manifest(manifest: dict[str, Any], output_dir: Path) -> Path:
     if manifest.get("probe_log_path"):
-        return Path(manifest["probe_log_path"])
+        path = Path(manifest["probe_log_path"])
+        if path.is_file():
+            return path
+        under_run = output_dir / path
+        if under_run.is_file():
+            return under_run
+        by_name = output_dir / path.name
+        if by_name.is_file():
+            return by_name
+        return path
     for epoch in manifest.get("epochs", []):
         if epoch.get("log_path"):
             return Path(epoch["log_path"])
@@ -317,7 +375,7 @@ def _stack_report_valid(report: dict[str, Any] | None) -> bool:
 def acceptance_gates(manifest: dict[str, Any], output_dir: Path | None = None) -> dict[str, Any]:
     gates: dict[str, Any] = {}
     cpu = manifest.get("epoch_a_thread_cpu", {})
-    gates["cpu_reconcile"] = cpu.get("reconcile_ok") is True
+    gates["cpu_reconcile"] = cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, output_dir)
     if manifest.get("schema") == "r0_measurement_session_v1":
         if output_dir is None:
             gates["flush_single_owner"] = False
@@ -376,6 +434,7 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
     manifest: dict[str, Any] = {
         "schema": "r0_measurement_session_v1",
         "mode": "integrated",
+        "cpu_accounting_contract": cpu_reconcile.CPU_ACCOUNTING_CONTRACT_V1,
         "cpu_reconcile_tolerance_ms_per_s": CPU_RECONCILE_TOLERANCE_MS_PER_S,
         "transition_discard_frames": TRANSITION_DISCARD_FRAMES,
         "expect_width": EXPECT_WIDTH,
@@ -391,6 +450,7 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
     control_path.write_bytes(b"\x00" * r0_control.EU4_R0_CONTROL_PAGE_SIZE)
 
     _bootstrap_thread_cpu_sampling(manifest)
+    _record_measurement_source(manifest)
 
     evidence = auto.preflight(require_privilege=True)
     manifest["preflight"] = evidence
@@ -409,6 +469,10 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
         anchor = auto.mark(events_path, "clock_anchor")
         manifest["clock_anchor"] = anchor
         game = pm = None
+        tail = None
+        provisional_cpu_report: dict[str, Any] | None = None
+        cpu_finalize_anchor: dict[str, Any] | None = None
+        cpu_finalize_pid: int | None = None
         installed = False
         generation = 0
         try:
@@ -479,7 +543,6 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                 )
                 r0_probe.wait_for_ack(log_path, generation)
 
-                epoch_a_start_ns = time.monotonic_ns()
                 mark_uptime(events_path, "epoch_a_start")
                 warmup_frames = r0_probe.parse_log(log_path)["frames"]
                 main_thread_id = r0_probe.infer_main_thread_id(warmup_frames)
@@ -490,27 +553,13 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
                     duration_s=EPOCH_A_SECONDS,
                     interval_s=0.5,
                     main_thread_id=main_thread_id,
-                    reconcile_tolerance_ms_per_s=CPU_RECONCILE_TOLERANCE_MS_PER_S,
                 )
-                tail.poll()
-                epoch_a_end_ns = time.monotonic_ns()
-                process_cpu = _process_cpu_ms_per_s(
-                    tail.samples, anchor, epoch_a_start_ns, epoch_a_end_ns, game.pid
-                )
-                if process_cpu is not None:
-                    cpu_report["process_cpu_ms_per_s"] = process_cpu
-                    cpu_report["reconciliation_residual_ms_per_s"] = (
-                        process_cpu - cpu_report["thread_cpu_ms_per_s"]
-                    )
-                    cpu_report["reconcile_ok"] = (
-                        abs(cpu_report["reconciliation_residual_ms_per_s"])
-                        <= CPU_RECONCILE_TOLERANCE_MS_PER_S
-                    )
-                else:
-                    cpu_report["reconcile_ok"] = False
-                (output_dir / "epoch_a_thread_cpu.json").write_text(json.dumps(cpu_report, indent=2) + "\n")
-                manifest["epoch_a_thread_cpu"] = cpu_report
-                manifest["epochs"].append({"id": "A", "thread_cpu": cpu_report})
+                cpu_report["cpu_reconciliation_phase"] = "provisional"
+                cpu_report["reconcile_ok"] = False
+                provisional_cpu_report = cpu_report
+                cpu_finalize_anchor = anchor
+                cpu_finalize_pid = game.pid
+                _persist_epoch_a_cpu(output_dir, manifest, cpu_report)
 
                 sample_path = output_dir / "epoch_b.sample.txt"
                 run_sample(game.pid, sample_path, EPOCH_B_SAMPLE_SECONDS)
@@ -688,6 +737,27 @@ def run_integrated(output_dir: Path) -> dict[str, Any]:
         finally:
             try:
                 auto.stop_process(pm, 3)
+                if (
+                    tail is not None
+                    and provisional_cpu_report is not None
+                    and cpu_finalize_anchor is not None
+                    and cpu_finalize_pid is not None
+                ):
+                    try:
+                        _finalize_epoch_a_cpu(
+                            output_dir,
+                            manifest,
+                            tail,
+                            cpu_finalize_anchor,
+                            cpu_finalize_pid,
+                            provisional_cpu_report,
+                        )
+                    except (base.BenchmarkError, OSError, ValueError) as finalize_exc:
+                        manifest["cpu_finalization_error"] = str(finalize_exc)
+                        failed = dict(provisional_cpu_report)
+                        failed["cpu_reconciliation_phase"] = "finalized"
+                        failed["reconcile_ok"] = False
+                        _persist_epoch_a_cpu(output_dir, manifest, failed)
                 auto.stop_process(game, 10)
                 if installed:
                     try:

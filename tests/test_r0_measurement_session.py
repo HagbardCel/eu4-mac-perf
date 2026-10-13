@@ -47,9 +47,16 @@ def _gate_ready_manifest(
 ) -> dict:
     return {
         "schema": "r0_measurement_session_v1",
+        "cpu_accounting_contract": "r0_cpu_finalize_v1",
         "epoch_a_thread_cpu": {
             "reconcile_ok": True,
+            "cpu_reconciliation_phase": "finalized",
             "main_thread_mapping_status": "verified",
+            "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
+            "process_cpu_sample_count": 10,
+            "thread_cpu_ms_per_s": 100.0,
+            "window_start_ns": 0,
+            "window_end_ns": 1,
         },
         "thread_cpu_preflight": {"status": "ready"},
         "event_clock_alignment": {"status": "passed"},
@@ -215,9 +222,16 @@ class R0MeasurementSessionTests(unittest.TestCase):
 
     def test_partial_complete_requires_stack(self) -> None:
         manifest = {
+            "cpu_accounting_contract": "r0_cpu_finalize_v1",
             "epoch_a_thread_cpu": {
                 "reconcile_ok": True,
+                "cpu_reconciliation_phase": "finalized",
                 "main_thread_mapping_status": "verified",
+                "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
+                "process_cpu_sample_count": 10,
+                "thread_cpu_ms_per_s": 100.0,
+                "window_start_ns": 0,
+                "window_end_ns": 1,
             },
             "thread_cpu_preflight": {"status": "ready"},
             "event_clock_alignment": {"status": "passed"},
@@ -272,7 +286,14 @@ class R0MeasurementSessionTests(unittest.TestCase):
     def test_cleanup_error_not_upgraded(self) -> None:
         manifest = {
             "status": "cleanup_error",
-            "epoch_a_thread_cpu": {"reconcile_ok": True, "main_thread_mapping_status": "verified"},
+            "cpu_accounting_contract": "r0_cpu_finalize_v1",
+            "epoch_a_thread_cpu": {
+                "reconcile_ok": True,
+                "cpu_reconciliation_phase": "finalized",
+                "main_thread_mapping_status": "verified",
+                "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
+                "process_cpu_sample_count": 10,
+            },
             "thread_cpu_preflight": {"status": "ready"},
             "event_clock_alignment": {"status": "passed"},
             "analyzer_results": {"stack": {"exit_code": 0}, "frame_evolution": {"skipped": True}},
@@ -313,6 +334,15 @@ Call graph:
     def test_sample_corroboration_fallback_descriptive_only(self) -> None:
         snippet = Path(__file__).parent.joinpath("fixtures/r0_epoch_b_sample_snippet.txt").read_text()
         self.assertEqual(session.sample_main_thread_corroboration(snippet, 0x2a), "matched")
+
+    def test_probe_log_path_resolves_under_output_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            log_path = root / "r0_probe.log"
+            log_path.write_text("probe\n")
+            manifest = {"probe_log_path": "results/other-run/r0_probe.log"}
+            resolved = session._probe_log_path_from_manifest(manifest, root)
+            self.assertEqual(resolved, log_path)
 
     def test_sample_corroboration_importable_benchmark_pythonpath_only(self) -> None:
         env = os.environ.copy()
