@@ -121,7 +121,7 @@ class CpuReconcileTests(unittest.TestCase):
             self.assertEqual(file_cpu, loaded["epoch_a_thread_cpu"])
             self.assertEqual(epoch_cpu, file_cpu)
 
-    @unittest.skipUnless(OCT12_RUN.is_dir(), "missing Oct12 acquisition capsule")
+    @unittest.skipUnless((OCT12_RUN / "manifest.json").is_file(), "missing Oct12 acquisition capsule")
     def test_oct12_requalify_cpu_legacy_gate(self) -> None:
         manifest = json.loads((OCT12_RUN / "manifest.json").read_text())
         cpu = manifest.get("epoch_a_thread_cpu", {})

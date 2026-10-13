@@ -300,9 +300,16 @@ class FrameEvolutionCliE2ETests(unittest.TestCase):
             )
             manifest = {
                 "schema": "r0_measurement_session_v1",
+                "cpu_accounting_contract": "r0_cpu_finalize_v1",
                 "epoch_a_thread_cpu": {
                     "reconcile_ok": True,
+                    "cpu_reconciliation_phase": "finalized",
                     "main_thread_mapping_status": "verified",
+                    "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
+                    "process_cpu_sample_count": 10,
+                    "thread_cpu_ms_per_s": 100.0,
+                    "window_start_ns": 0,
+                    "window_end_ns": 1,
                 },
                 "thread_cpu_preflight": {"status": "ready"},
                 "event_clock_alignment": {"status": "passed"},
