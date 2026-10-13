@@ -3,6 +3,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from reverse_engineering.export_identity import (
     assert_qualification_current,
@@ -117,6 +118,31 @@ class InventoryPublishTests(unittest.TestCase):
             with self.assertRaises(ReError):
                 publish_inventory_from_staging(staging, inv)
 
+    def test_existing_backup_blocks_before_identical_shortcut(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging = root / "inventory.staging"
+            inv = root / "inventory"
+            _write_inventory(inv, "same")
+            _write_inventory(staging, "same")
+            (root / "inventory.backup").mkdir()
+            with self.assertRaises(ReError) as ctx:
+                publish_inventory_from_staging(staging, inv)
+            self.assertIn("existing inventory backup", str(ctx.exception))
+
+    def test_replace_failure_restores_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging = root / "inventory.staging"
+            inv = root / "inventory"
+            _write_inventory(inv, "old")
+            _write_inventory(staging, "new")
+            with mock.patch("reverse_engineering.export_identity.os.replace", side_effect=OSError("fail")):
+                with self.assertRaises(OSError):
+                    publish_inventory_from_staging(staging, inv)
+            self.assertIn("old", (inv / "functions.jsonl").read_text())
+            self.assertFalse((root / "inventory.backup").exists())
+
 
 class SmokePayloadTests(unittest.TestCase):
     def test_all_ok(self) -> None:
@@ -161,6 +187,22 @@ class QualificationAssertTests(unittest.TestCase):
                     exp, provenance, lambda: 0, smoke_needles=SMOKE_NEEDLES
                 )
             self.assertIn("batch_set_sha256 mismatch", str(ctx.exception))
+
+
+class QualifyManifestDigestTests(unittest.TestCase):
+    def test_qualify_rejects_stale_functions_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exp = _copy_export_mini(Path(tmp) / "exp")
+            prov = {"baseline_revision": "fixture-mini"}
+            with self.assertRaises(ReError) as ctx:
+                validate_export_identity(exp, prov, "qualify")
+            self.assertIn("inventory_digest stale", str(ctx.exception))
+
+    def test_index_identity_allows_stale_functions_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exp = _copy_export_mini(Path(tmp) / "exp")
+            prov = {"baseline_revision": "fixture-mini"}
+            validate_export_identity(exp, prov, "index")
 
 
 class IdentityWarnTests(unittest.TestCase):

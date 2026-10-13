@@ -114,7 +114,7 @@ No EU IV game process required. Summarize results in PR #48 before merge.
 2. **`corpus smoke`** — all three renderer anchors decompile successfully (`SmokeDecompile.java`).
 3. **`corpus inventory`** — real `functions.jsonl`, `call_edges.jsonl`, `coverage.json`.
 4. **Anchor pseudocode (manual headless)** — for the three anchor **entry RVAs** from inventory, run `analyzeHeadless` with `-scriptPath reverse_engineering/ghidra` and `ExportDecompilation.java` (same argv layout as [`build_analyze_headless_argv`](corpus.py): project dir/name, `-process <program_name> -noanalysis -readOnly`, RVA list file, output jsonl path, timeout seconds).
-5. **One manifest batch + index** — `corpus manifest` → `corpus decompile` for **one** batch (or the minimal batch containing an anchor) → `corpus index` → `search symbol` / `callers` / `callees` / `text` on anchor symbols.
+5. **One manifest batch + index** — `corpus manifest`, then pick one batch id (e.g. `batch-00001`) and its RVA list from `decompiled/batch_manifest.json`. Run headless `ExportDecompilation.java` (same argv as step 4: RVA list file, output path, timeout). Write the validated export to `decompiled/<batch-id>.jsonl` (use a `*.jsonl.staging` file and `publish_batch_staging` from Python, or match manifest RVAs exactly). **Do not** use `corpus decompile` for a single batch—it processes the full manifest. Then `corpus index` → `search symbol` / `callers` / `callees` / `text` on anchor symbols (reuse a batch that contains an anchor if convenient).
 
 Do **not** expect the index to load ad-hoc RVA exports without a manifest batch — `index` reads manifest-listed `batch-*.jsonl` only.
 

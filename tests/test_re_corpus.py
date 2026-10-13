@@ -1,11 +1,16 @@
+import argparse
+import io
 import json
+import shutil
+import sys
 import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
 
+from reverse_engineering import index_db
 from reverse_engineering.intervals import merge_intervals, parse_rva, union_size
-from reverse_engineering.corpus import build_analyze_headless_argv
+from reverse_engineering.corpus import build_analyze_headless_argv, cmd_index
 from reverse_engineering.manifest import (
     archive_decompiled_batches,
     batches_archive_required,
@@ -19,6 +24,34 @@ from reverse_engineering.manifest import (
 
 FIXTURE = Path(__file__).resolve().parent / "re_fixtures" / "export_mini"
 FUNCTIONS = FIXTURE / "inventory" / "functions.jsonl"
+
+
+class CmdIndexStaleManifestTests(unittest.TestCase):
+    def test_stale_manifest_builds_inventory_only_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary_root = Path(tmp) / "eu4"
+            exp = binary_root / "exports" / "fixture-mini"
+            shutil.copytree(FIXTURE, exp)
+            manifest_path = exp / "decompiled" / "batch_manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest["inventory_digest"] = "stale-functions-digest"
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+            (exp / "provenance.json").write_text(
+                json.dumps({"baseline_revision": "fixture-mini"}) + "\n"
+            )
+            stderr = io.StringIO()
+            with unittest.mock.patch("reverse_engineering.corpus.binary_sha256", return_value="sha"):
+                with unittest.mock.patch(
+                    "reverse_engineering.corpus.local_binary_root", return_value=binary_root
+                ):
+                    with unittest.mock.patch.object(sys, "stderr", stderr):
+                        rc = cmd_index(argparse.Namespace(baseline_revision="fixture-mini"))
+            self.assertEqual(rc, 0)
+            self.assertIn("inventory_digest stale", stderr.getvalue())
+            conn = index_db.connect(exp / "index.sqlite")
+            self.assertEqual(len(index_db.search_text(conn, "glUseProgram")), 0)
+            self.assertGreaterEqual(len(index_db.search_symbol(conn, "SShader")), 1)
+            self.assertTrue(list(index_db.callees(conn, "0x0000000000002000")))
 
 
 class IntervalTests(unittest.TestCase):

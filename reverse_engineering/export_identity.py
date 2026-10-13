@@ -14,6 +14,7 @@ from reverse_engineering.manifest import (
     decompilation_success_stats,
     export_completeness,
     inventory_bundle_digest,
+    inventory_digest,
     load_batch_manifest,
     validate_batch_file,
 )
@@ -113,24 +114,19 @@ def batch_set_sha256(manifest: dict[str, Any], decomp_dir: Path) -> str:
 def publish_inventory_from_staging(staging: Path, inv: Path) -> None:
     if not inventory_complete(staging):
         raise ReError("inventory staging incomplete")
-    bundle = inventory_bundle_digest(staging)
+    backup = inv.parent / "inventory.backup"
+    if backup.exists():
+        raise ReError("existing inventory backup; inspect or recover it first")
     if inv.exists():
         if not inventory_complete(inv):
             raise ReError("inventory exists but is incomplete; repair before publishing staging")
-        if inventory_bundle_digest(inv) == bundle:
+        if inventory_bundle_digest(inv) == inventory_bundle_digest(staging):
             shutil.rmtree(staging)
             return
-    backup = inv.parent / "inventory.backup"
-    if backup.exists():
-        shutil.rmtree(backup)
-    inv.parent.mkdir(parents=True, exist_ok=True)
-    if inv.exists():
         inv.rename(backup)
+    inv.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.replace(staging, inv)
-    except OSError:
-        shutil.copytree(staging, inv)
-        shutil.rmtree(staging)
     except Exception:
         if backup.exists():
             if inv.exists():
@@ -179,6 +175,12 @@ def validate_export_identity(
             _warn("manifest exporter script hash mismatch vs current ExportDecompilation.java")
         if manifest.get("baseline_revision") != provenance.get("baseline_revision"):
             _warn("manifest baseline_revision mismatch vs provenance")
+        if mode == "qualify":
+            fn_digest = inventory_digest(inv / "functions.jsonl")
+            if manifest.get("inventory_digest") != fn_digest:
+                raise ReError(
+                    "batch manifest inventory_digest stale vs functions.jsonl; run corpus manifest"
+                )
     if mode in ("index", "qualify"):
         return
     if mode == "census_write":

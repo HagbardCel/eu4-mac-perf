@@ -72,6 +72,11 @@ def rebuild_index(
     provenance: dict[str, str] | None = None,
     manifest: dict[str, Any] | None = None,
 ) -> None:
+    """Rebuild SQLite corpus from inventory and optional decompilation batches.
+
+    manifest=None discovers all batch-NNNNN.jsonl under decompiled_dir (unrestricted).
+    manifest with batches={} loads no batch files (inventory-only index).
+    """
     functions_path = inventory_dir / "functions.jsonl"
     edges_path = inventory_dir / "call_edges.jsonl"
     if db_path.exists():
@@ -146,6 +151,7 @@ def rebuild_index(
 
 
 def _manifest_batch_paths(decompiled_dir: Path, manifest: dict[str, Any] | None) -> list[Path]:
+    """None → glob all batch-NNNNN.jsonl; empty batches → none."""
     if manifest is None:
         return sorted(
             p

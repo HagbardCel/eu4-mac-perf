@@ -514,6 +514,7 @@ def cmd_index(args: argparse.Namespace) -> int:
                 "building inventory-only index (run corpus manifest)",
                 file=sys.stderr,
             )
+            manifest_for_index = {"batches": {}}
     db_path = exp / "index.sqlite"
     prov_strings = {k: json.dumps(v) if not isinstance(v, str) else v for k, v in provenance.items()}
     index_db.rebuild_index(
