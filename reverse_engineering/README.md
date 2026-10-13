@@ -80,6 +80,8 @@ python3 -m reverse_engineering.search callees 0xRVA
 
 Each `exports/<baseline-revision>/` tree is immutable for batch export. If Ghidra analysis changes, create a new revision directory. `inventory_digest` detects inventory drift; it does not capture every Ghidra type change.
 
+Resumed smoke, inventory, or decompile work must use the **same Ghidra version** and the **same Java script hashes** recorded at `corpus import`; otherwise create a new `baseline_revision`.
+
 ## Reports (Git)
 
 Authoritative census files are generated only after `corpus qualify` — see [`reports/README.md`](reports/README.md). Bounded classification QC: [`reports/classification-qc.md`](reports/classification-qc.md).

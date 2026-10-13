@@ -9,6 +9,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+ToolchainOperation = Literal["smoke", "inventory", "inventory_regen", "decompile"]
+
 from reverse_engineering.manifest import (
     decompilation_success_stats,
     export_completeness,
@@ -41,6 +43,48 @@ def read_ghidra_version(ghidra_root: Path) -> str:
 
 def inventory_staging_dir(exp: Path) -> Path:
     return exp / "inventory.staging"
+
+
+def assert_toolchain_matches_provenance(
+    provenance: dict[str, Any],
+    operation: ToolchainOperation,
+    *,
+    current_ghidra_version: str,
+    current_inventory_script_hash: str | None = None,
+    current_exporter_script_hash: str | None = None,
+) -> None:
+    recorded_version = provenance.get("ghidra_version")
+    if (
+        not recorded_version
+        or recorded_version == "unknown"
+        or current_ghidra_version == "unknown"
+        or recorded_version != current_ghidra_version
+    ):
+        raise ReError(
+            "ghidra version missing, unknown, or mismatched; create a new baseline_revision "
+            f"(recorded={recorded_version!r}, current={current_ghidra_version!r})"
+        )
+    import_hashes = provenance.get("import_script_hashes") or {}
+    if operation in ("inventory", "inventory_regen"):
+        expected_inv = import_hashes.get("ImportAndInventory.java")
+        if not expected_inv or not current_inventory_script_hash:
+            raise ReError("missing inventory script hash baseline from import")
+        if current_inventory_script_hash != expected_inv:
+            raise ReError(
+                "ImportAndInventory.java hash mismatch; create a new baseline_revision"
+            )
+        if operation == "inventory_regen":
+            recorded_inv = provenance.get("inventory_script_hash")
+            if recorded_inv and current_inventory_script_hash != recorded_inv:
+                raise ReError("inventory script hash drift; create a new baseline_revision")
+    if operation == "decompile":
+        expected_exp = import_hashes.get("ExportDecompilation.java")
+        if not expected_exp or not current_exporter_script_hash:
+            raise ReError("missing exporter script hash baseline from import")
+        if current_exporter_script_hash != expected_exp:
+            raise ReError(
+                "ExportDecompilation.java hash mismatch; create a new baseline_revision"
+            )
 
 
 def inventory_dir_paths(inv: Path) -> tuple[Path, Path, Path]:

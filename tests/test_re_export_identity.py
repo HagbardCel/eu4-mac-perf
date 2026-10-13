@@ -5,16 +5,27 @@ import unittest
 from pathlib import Path
 
 from reverse_engineering.export_identity import (
+    assert_qualification_current,
+    assert_toolchain_matches_provenance,
+    batch_set_sha256,
+    compute_qualification,
     manifest_locked,
     publish_inventory_from_staging,
     smoke_qualified_from_payload,
     validate_export_identity,
 )
+from reverse_engineering.manifest import inventory_bundle_digest, load_batch_manifest, validate_batch_file
 from reverse_engineering.paths import ReError
 
 FIXTURE = Path(__file__).resolve().parent / "re_fixtures"
+EXPORT_MINI = FIXTURE / "export_mini"
 SMOKE_OK = FIXTURE / "smoke_all_ok.json"
 SMOKE_BAD = FIXTURE / "smoke_wrong_needles.json"
+SMOKE_NEEDLES = (
+    "SShaderOpenGL6SetAll",
+    "CPdxMeshObject13RenderBuckets",
+    "CEU3GraphicalMap6Render",
+)
 
 
 def _write_inventory(inv: Path, marker: str) -> None:
@@ -28,6 +39,38 @@ def _write_inventory(inv: Path, marker: str) -> None:
     (inv / "coverage.json").write_text(
         json.dumps({"D_decoded_instruction_bytes": 10, "tag": marker}, sort_keys=True) + "\n"
     )
+
+
+def _copy_export_mini(dest: Path) -> Path:
+    shutil.copytree(EXPORT_MINI, dest)
+    return dest
+
+
+def _qualified_provenance(exp: Path, *, include_threshold: bool = True) -> dict:
+    inv = exp / "inventory"
+    bundle = inventory_bundle_digest(inv)
+    manifest = load_batch_manifest(exp / "decompiled" / "batch_manifest.json")
+    batch_digest = batch_set_sha256(manifest, exp / "decompiled")
+    smoke = json.loads(SMOKE_OK.read_text())
+    qual: dict = {
+        "passed": True,
+        "batch_set_sha256": batch_digest,
+        "inventory_bundle_digest": bundle,
+    }
+    if include_threshold:
+        qual["min_success_bytes_threshold"] = 0.0
+    return {
+        "baseline_revision": manifest["baseline_revision"],
+        "inventory_bundle_digest": bundle,
+        "ghidra_version": "10.0",
+        "import_script_hashes": {
+            "ImportAndInventory.java": "a",
+            "ExportDecompilation.java": "e",
+        },
+        "smoke_decompile": smoke,
+        "smoke_qualified": True,
+        "qualification": qual,
+    }
 
 
 class InventoryPublishTests(unittest.TestCase):
@@ -84,24 +127,83 @@ class SmokePayloadTests(unittest.TestCase):
 
     def test_wrong_needles(self) -> None:
         payload = json.loads(SMOKE_BAD.read_text())
-        self.assertFalse(
-            smoke_qualified_from_payload(
-                payload,
-                ("SShaderOpenGL6SetAll", "CPdxMeshObject13RenderBuckets", "CEU3GraphicalMap6Render"),
+        self.assertFalse(smoke_qualified_from_payload(payload, SMOKE_NEEDLES))
+
+
+class ToolchainTests(unittest.TestCase):
+    BASE = {
+        "ghidra_version": "10.0",
+        "import_script_hashes": {
+            "ImportAndInventory.java": "hash_inv",
+            "ExportDecompilation.java": "hash_exp",
+        },
+    }
+
+    def test_ghidra_version_mismatch(self) -> None:
+        with self.assertRaises(ReError):
+            assert_toolchain_matches_provenance(
+                self.BASE, "smoke", current_ghidra_version="11.0"
             )
-        )
+
+    def test_ghidra_version_missing_or_unknown(self) -> None:
+        for recorded in (None, "unknown"):
+            prov = {**self.BASE, "ghidra_version": recorded}
+            with self.assertRaises(ReError):
+                assert_toolchain_matches_provenance(prov, "smoke", current_ghidra_version="10.0")
+        with self.assertRaises(ReError):
+            assert_toolchain_matches_provenance(self.BASE, "smoke", current_ghidra_version="unknown")
+
+    def test_inventory_script_mismatch_on_first_inventory(self) -> None:
+        with self.assertRaises(ReError):
+            assert_toolchain_matches_provenance(
+                self.BASE,
+                "inventory",
+                current_ghidra_version="10.0",
+                current_inventory_script_hash="other",
+            )
+
+    def test_exporter_script_mismatch_on_decompile(self) -> None:
+        with self.assertRaises(ReError):
+            assert_toolchain_matches_provenance(
+                self.BASE,
+                "decompile",
+                current_ghidra_version="10.0",
+                current_exporter_script_hash="other",
+            )
 
 
 class QualificationAssertTests(unittest.TestCase):
     def test_missing_threshold_rejected(self) -> None:
-        from reverse_engineering.export_identity import assert_qualification_current
-
         with tempfile.TemporaryDirectory() as tmp:
-            exp = Path(tmp)
-            (exp / "inventory").mkdir()
-            provenance = {"qualification": {"passed": True, "batch_set_sha256": "abc"}}
-            with self.assertRaises(ReError):
-                assert_qualification_current(exp, provenance, lambda: 0)
+            exp = _copy_export_mini(Path(tmp) / "exp")
+            provenance = _qualified_provenance(exp, include_threshold=False)
+            with self.assertRaises(ReError) as ctx:
+                assert_qualification_current(
+                    exp, provenance, lambda: 0, smoke_needles=SMOKE_NEEDLES
+                )
+            self.assertIn("min_success_bytes_threshold", str(ctx.exception))
+
+    def test_batch_digest_mismatch_with_valid_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exp = _copy_export_mini(Path(tmp) / "exp")
+            provenance = _qualified_provenance(exp)
+            manifest = load_batch_manifest(exp / "decompiled" / "batch_manifest.json")
+            batch_path = exp / "decompiled" / "batch-00001.jsonl"
+            expected = manifest["batches"]["batch-00001"]
+            text = batch_path.read_text()
+            lines = text.splitlines()
+            lines[0] = lines[0] + " "
+            batch_path.write_text("\n".join(lines) + "\n")
+            self.assertEqual(validate_batch_file(batch_path, expected), [])
+            live = compute_qualification(
+                exp, provenance, 0.0, lambda: 0, smoke_needles=SMOKE_NEEDLES
+            )
+            self.assertTrue(live["passed"])
+            with self.assertRaises(ReError) as ctx:
+                assert_qualification_current(
+                    exp, provenance, lambda: 0, smoke_needles=SMOKE_NEEDLES
+                )
+            self.assertIn("batch_set_sha256 mismatch", str(ctx.exception))
 
 
 class ManifestLockTests(unittest.TestCase):

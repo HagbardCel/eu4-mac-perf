@@ -17,6 +17,8 @@ from typing import Any
 from reverse_engineering import index_db
 from reverse_engineering.intervals import format_rva, parse_rva
 from reverse_engineering.export_identity import (
+    ToolchainOperation,
+    assert_toolchain_matches_provenance,
     compute_qualification,
     inventory_complete,
     inventory_staging_dir,
@@ -241,6 +243,23 @@ def cmd_import(args: argparse.Namespace) -> int:
     return 0
 
 
+def _toolchain_before_ghidra(
+    provenance: dict[str, Any],
+    operation: ToolchainOperation,
+) -> None:
+    ghidra_root = ghidra_install()
+    current_version = read_ghidra_version(ghidra_root)
+    inv_hash = script_hash("ImportAndInventory.java")
+    exp_hash = script_hash("ExportDecompilation.java")
+    assert_toolchain_matches_provenance(
+        provenance,
+        operation,
+        current_ghidra_version=current_version,
+        current_inventory_script_hash=inv_hash if operation in ("inventory", "inventory_regen") else None,
+        current_exporter_script_hash=exp_hash if operation == "decompile" else None,
+    )
+
+
 def mandatory_anchors_check(exp: Path) -> int:
     functions = {
         json.loads(line)["name_mangled"]: json.loads(line)["entry_rva"]
@@ -274,6 +293,7 @@ def cmd_smoke(args: argparse.Namespace) -> int:
     smoke_report.parent.mkdir(parents=True, exist_ok=True)
     qualified = False
     try:
+        _toolchain_before_ghidra(provenance, "smoke")
         analyze_headless(
             Path(meta["project_dir"]),
             meta["project_name"],
@@ -317,6 +337,7 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True, exist_ok=True)
+    _toolchain_before_ghidra(provenance, mode)
     analyze_headless(
         Path(meta["project_dir"]),
         meta["project_name"],
@@ -400,6 +421,7 @@ def cmd_decompile(args: argparse.Namespace) -> int:
     timeout = args.timeout_seconds
     decomp_dir = pilot_dir or (exp / "decompiled")
     decomp_dir.mkdir(parents=True, exist_ok=True)
+    _toolchain_before_ghidra(provenance, "decompile")
     for batch_id, rvas in batches.items():
         if args.pilot:
             out_path = decomp_dir / "batch-pilot.jsonl"
@@ -430,8 +452,9 @@ def cmd_decompile(args: argparse.Namespace) -> int:
                 str(timeout),
             )
         publish_batch_staging(staging, out_path, rvas)
-        invalidate_qualification(provenance, "batch_replaced")
-        save_provenance(exp, provenance)
+        if not args.pilot:
+            invalidate_qualification(provenance, "batch_replaced")
+            save_provenance(exp, provenance)
     if args.pilot:
         print(f"pilot decompile written under {pilot_dir}")
         return 0
