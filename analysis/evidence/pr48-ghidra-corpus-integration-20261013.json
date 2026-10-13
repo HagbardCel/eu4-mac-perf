@@ -1,0 +1,48 @@
+{
+  "kind": "pr48_ghidra_integration_v1",
+  "status": "partial_complete",
+  "repository_commit": "8303e0b62936f12c3252aa14cfc5034ecfae119b",
+  "baseline_revision": "auto-v1-20261013",
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "local_corpus_root": ".local/eu4/b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "ghidra_project_dir": "/Users/fabian/GhidraEU4/b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d/ghidra-project",
+  "compiler_spec_id": "gcc",
+  "acceptance": {
+    "import_metadata": true,
+    "smoke_three_anchors": true,
+    "anchor_pseudocode_three_success": true,
+    "inventory_three_files": true,
+    "manifest_batch_size_25": true,
+    "batch_export_validated": true,
+    "batch_id": "batch-02666",
+    "batch_success_with_pseudocode": 25,
+    "batch_rva_count": 25,
+    "index_functions_gt_zero": true,
+    "index_call_edges_gt_zero": true,
+    "index_pseudocode_gt_zero": true,
+    "fts_hit": true,
+    "fts_query": "RenderBuckets",
+    "call_graph_navigation": true,
+    "call_graph_example": {
+      "query": "callees",
+      "rva": "0x0000000000009d00",
+      "sample_callee_internal_rva": "0x0000000000a4804c"
+    }
+  },
+  "index_counts": {
+    "functions": 85826,
+    "call_edges": 544566,
+    "pseudocode": 25
+  },
+  "inventory_bytes": {
+    "functions.jsonl": 32672677,
+    "call_edges.jsonl": 112583637,
+    "coverage.json": 393
+  },
+  "anchor_entry_rvas": [
+    "0x00000000015ebc40",
+    "0x00000000014c7da4",
+    "0x0000000000ed4ac8"
+  ],
+  "manifest_eligible_function_count": 84779
+}
