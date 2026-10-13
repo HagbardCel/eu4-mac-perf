@@ -275,7 +275,7 @@ public class ImportAndInventory extends GhidraScript {
         }
         if (targetFn != null) {
             if (targetFn.isThunk()) {
-                Function ultimate = functionManager.getThunkedFunction(targetFn, true);
+                Function ultimate = targetFn.getThunkedFunction(true);
                 String calleeInternal = null;
                 String calleeExternal = null;
                 String ultimateExternal = null;

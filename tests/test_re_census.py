@@ -48,11 +48,12 @@ class CensusTests(unittest.TestCase):
         cls = classify_function(row, [], None)
         self.assertEqual(cls["primary_subsystem"], "U")
 
-    def test_coupling_counts_stub_and_direct(self) -> None:
+    def test_coupling_counts_stub_direct_and_thunk(self) -> None:
         edges = [
             {
                 "caller_rva": "0x2000",
-                "callee_external_symbol": "_glDrawElements",
+                "callee_external_symbol": "stub",
+                "ultimate_external_symbol": "_glDrawElements",
                 "resolution": "external_via_stub",
             },
             {
@@ -60,10 +61,41 @@ class CensusTests(unittest.TestCase):
                 "callee_external_symbol": "_glUseProgram",
                 "resolution": "direct_external",
             },
+            {
+                "caller_rva": "0x3000",
+                "callee_internal_rva": "0x5000",
+                "ultimate_external_symbol": "_glBindTexture",
+                "resolution": "thunk",
+            },
         ]
         stats = coupling_stats(edges)
         self.assertEqual(stats["internal_functions_opengl_via_stub"], 1)
         self.assertEqual(stats["internal_functions_direct_opengl"], 1)
+        self.assertEqual(stats["internal_functions_opengl_via_thunk"], 1)
+
+    def test_subsystem_counts_match_eligible_set(self) -> None:
+        from reverse_engineering.census import subsystem_bytes
+
+        functions = [
+            {
+                "entry_rva": "0x1000",
+                "kind": "internal",
+                "name_mangled": "__ZN13SShaderOpenGL6SetAllEv",
+                "instruction_ranges": [{"start_rva": "0x1000", "end_rva": "0x1010"}],
+            },
+            {
+                "entry_rva": "0x2000",
+                "kind": "internal",
+                "name_mangled": "util",
+                "instruction_ranges": [{"start_rva": "0x2000", "end_rva": "0x2005"}],
+            },
+        ]
+        classifications = {
+            "0x1000": {"primary_subsystem": "B0", "confidence": "confirmed", "tags": []},
+            "0x2000": {"primary_subsystem": "U", "confidence": "possible", "tags": []},
+        }
+        sizes = subsystem_bytes(functions, classifications)
+        self.assertEqual(sizes["by_subsystem"]["B0"]["functions"], 1)
 
     def test_build_census_fixture(self) -> None:
         census = build_census(FIXTURE)

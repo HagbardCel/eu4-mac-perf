@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
+import hashlib
+import os
 import re
 import shutil
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from reverse_engineering.manifest import (
     decompilation_success_stats,
@@ -38,6 +39,10 @@ def read_ghidra_version(ghidra_root: Path) -> str:
     return "unknown"
 
 
+def inventory_staging_dir(exp: Path) -> Path:
+    return exp / "inventory.staging"
+
+
 def inventory_dir_paths(inv: Path) -> tuple[Path, Path, Path]:
     return inv / "functions.jsonl", inv / "call_edges.jsonl", inv / "coverage.json"
 
@@ -63,19 +68,71 @@ def list_validated_batch_ids(decomp_dir: Path, manifest: dict[str, Any] | None =
     return validated
 
 
-def has_validated_batches(exp: Path) -> bool:
+def has_final_batch_files(exp: Path) -> bool:
     decomp = exp / "decompiled"
-    return bool(list_validated_batch_ids(decomp))
+    if not decomp.is_dir():
+        return False
+    for path in decomp.glob("batch-*.jsonl"):
+        if re.fullmatch(r"batch-\d{5}\.jsonl", path.name):
+            return True
+    return False
 
 
 def manifest_locked(exp: Path) -> bool:
-    return has_validated_batches(exp)
+    return has_final_batch_files(exp)
+
+
+def smoke_qualified_from_payload(payload: dict[str, Any], expected_needles: tuple[str, ...]) -> bool:
+    anchors = payload.get("anchors", [])
+    if len(anchors) != len(expected_needles):
+        return False
+    by_needle: dict[str, dict[str, Any]] = {}
+    for entry in anchors:
+        needle = entry.get("needle")
+        if needle is None or needle in by_needle:
+            return False
+        by_needle[needle] = entry
+    for needle in expected_needles:
+        entry = by_needle.get(needle)
+        if entry is None:
+            return False
+        if not entry.get("success"):
+            return False
+        if entry.get("matched") is None:
+            return False
+    return True
+
+
+def batch_set_sha256(manifest: dict[str, Any], decomp_dir: Path) -> str:
+    """SHA-256 over manifest batch files in sorted batch-id order (raw file bytes)."""
+    digest = hashlib.sha256()
+    for batch_id in sorted(manifest.get("batches", {})):
+        if not re.fullmatch(r"batch-\d{5}", batch_id):
+            continue
+        path = decomp_dir / f"{batch_id}.jsonl"
+        if not path.is_file():
+            raise ReError(f"missing batch file for digest: {batch_id}")
+        digest.update(batch_id.encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
 def publish_inventory_from_staging(staging: Path, inv: Path) -> None:
+    if not inventory_complete(staging):
+        raise ReError("inventory staging incomplete")
+    bundle = inventory_bundle_digest(staging)
     if inv.exists():
-        shutil.rmtree(inv)
-    shutil.copytree(staging, inv)
+        if not inventory_complete(inv):
+            raise ReError("inventory exists but is incomplete; repair before publishing staging")
+        existing = inventory_bundle_digest(inv)
+        if existing == bundle:
+            shutil.rmtree(staging)
+            return
+        raise ReError("inventory bundle digest changed; create a new baseline_revision")
+    inv.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(staging, inv)
 
 
 def validate_export_identity(
@@ -92,7 +149,7 @@ def validate_export_identity(
         return
     if mode == "inventory_regen":
         if manifest_locked(exp):
-            raise ReError("cannot regenerate inventory: validated decompilation batches exist")
+            raise ReError("cannot regenerate inventory: decompilation batch files exist")
         return
     if not inventory_complete(inv):
         raise ReError("inventory bundle incomplete; run inventory first")
@@ -103,7 +160,7 @@ def validate_export_identity(
         return
     if mode == "manifest":
         if manifest_locked(exp):
-            raise ReError("cannot overwrite manifest: validated batches exist")
+            raise ReError("cannot overwrite manifest: decompilation batch files exist")
         return
     manifest_path = exp / "decompiled" / "batch_manifest.json"
     if mode in ("decompile", "index", "qualify", "census_write"):
@@ -132,11 +189,17 @@ def assert_no_stray_batches(decomp_dir: Path, manifest: dict[str, Any]) -> list[
     return errors
 
 
+def invalidate_qualification(provenance: dict[str, Any], reason: str) -> None:
+    provenance["qualification"] = {"passed": False, "invalidated_reason": reason}
+
+
 def compute_qualification(
     exp: Path,
     provenance: dict[str, Any],
     min_success_bytes: float,
-    mandatory_anchor_check,
+    mandatory_anchor_check: Callable[[], int],
+    *,
+    smoke_needles: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     manifest = load_batch_manifest(exp / "decompiled" / "batch_manifest.json")
     decomp_dir = exp / "decompiled"
@@ -145,7 +208,11 @@ def compute_qualification(
     stats = decompilation_success_stats(manifest, decomp_dir, functions_path)
     stray = assert_no_stray_batches(decomp_dir, manifest)
     anchors_ok = mandatory_anchor_check() == 0
-    smoke_ok = provenance.get("smoke_qualified", False)
+    smoke_payload = provenance.get("smoke_decompile") or {}
+    if smoke_needles:
+        smoke_ok = smoke_qualified_from_payload(smoke_payload, smoke_needles)
+    else:
+        smoke_ok = bool(provenance.get("smoke_qualified"))
     passed = (
         c_export >= 1.0
         and not stray
@@ -153,7 +220,7 @@ def compute_qualification(
         and smoke_ok
         and stats["c_success_bytes"] >= min_success_bytes
     )
-    return {
+    qual: dict[str, Any] = {
         "passed": passed,
         "c_export": c_export,
         "export_errors": export_errors + stray,
@@ -162,6 +229,45 @@ def compute_qualification(
         "mandatory_anchors_ok": anchors_ok,
         "smoke_qualified": smoke_ok,
     }
+    if passed:
+        qual["batch_set_sha256"] = batch_set_sha256(manifest, decomp_dir)
+        qual["inventory_bundle_digest"] = inventory_bundle_digest(exp / "inventory")
+    return qual
+
+
+def assert_qualification_current(
+    exp: Path,
+    provenance: dict[str, Any],
+    mandatory_anchor_check: Callable[[], int],
+    *,
+    smoke_needles: tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    validate_export_identity(exp, provenance, "census_write")
+    stored = provenance.get("qualification") or {}
+    if not stored.get("passed"):
+        raise ReError("export not qualified; run corpus qualify")
+    if "min_success_bytes_threshold" not in stored:
+        raise ReError("qualification record missing min_success_bytes_threshold; rerun corpus qualify")
+    threshold = float(stored["min_success_bytes_threshold"])
+    live = compute_qualification(
+        exp,
+        provenance,
+        threshold,
+        mandatory_anchor_check,
+        smoke_needles=smoke_needles,
+    )
+    if not live["passed"]:
+        raise ReError(
+            "qualification no longer valid: "
+            f"c_export={live['c_export']}, smoke={live['smoke_qualified']}, "
+            f"anchors={live['mandatory_anchors_ok']}, "
+            f"c_success_bytes={live['decompilation_stats'].get('c_success_bytes')}"
+        )
+    if stored.get("batch_set_sha256") != live.get("batch_set_sha256"):
+        raise ReError("batch_set_sha256 mismatch; batches changed since qualification")
+    if stored.get("inventory_bundle_digest") != live.get("inventory_bundle_digest"):
+        raise ReError("inventory_bundle_digest mismatch since qualification")
+    return live
 
 
 def publish_batch_staging(staging: Path, final: Path, expected_rvas: list[str]) -> None:

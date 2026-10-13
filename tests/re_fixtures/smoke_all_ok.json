@@ -1,0 +1,7 @@
+{
+  "anchors": [
+    {"needle": "SShaderOpenGL6SetAll", "matched": "__ZN13SShaderOpenGL6SetAllEv", "success": true},
+    {"needle": "CPdxMeshObject13RenderBuckets", "matched": "_ZN14CPdxMeshObject13RenderBucketsEv", "success": true},
+    {"needle": "CEU3GraphicalMap6Render", "matched": "__ZN16CEU3GraphicalMap6RenderEv", "success": true}
+  ]
+}

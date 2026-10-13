@@ -29,6 +29,7 @@
   "opengl_coupling": {
     "internal_functions_direct_opengl": 1,
     "internal_functions_opengl_via_stub": 0,
+    "internal_functions_opengl_via_thunk": 0,
     "unresolved_indirect_call_sites": 1
   },
   "decompilation_quality": {},

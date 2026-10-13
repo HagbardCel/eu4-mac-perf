@@ -19,9 +19,12 @@ from reverse_engineering.intervals import format_rva, parse_rva
 from reverse_engineering.export_identity import (
     compute_qualification,
     inventory_complete,
+    inventory_staging_dir,
+    invalidate_qualification,
     publish_batch_staging,
     publish_inventory_from_staging,
     read_ghidra_version,
+    smoke_qualified_from_payload,
     validate_export_identity,
 )
 from reverse_engineering.manifest import (
@@ -238,6 +241,26 @@ def cmd_import(args: argparse.Namespace) -> int:
     return 0
 
 
+def mandatory_anchors_check(exp: Path) -> int:
+    functions = {
+        json.loads(line)["name_mangled"]: json.loads(line)["entry_rva"]
+        for line in (exp / "inventory" / "functions.jsonl").read_text().splitlines()
+        if line.strip()
+    }
+    decomp_dir = exp / "decompiled"
+    status_by_rva: dict[str, str | None] = {}
+    for path in decomp_dir.glob("batch-*.jsonl"):
+        for line in path.read_text().splitlines():
+            if line.strip():
+                row = json.loads(line)
+                status_by_rva[row["entry_rva"]] = row.get("status")
+    for sym in MANDATORY_ANCHOR_SYMBOLS:
+        rva = functions.get(sym)
+        if not rva or status_by_rva.get(rva) != "success":
+            return 1
+    return 0
+
+
 def cmd_smoke(args: argparse.Namespace) -> int:
     verify_binary()
     digest = binary_sha256()
@@ -264,7 +287,7 @@ def cmd_smoke(args: argparse.Namespace) -> int:
             *SMOKE_ANCHORS,
         )
         smoke_payload = json.loads(smoke_report.read_text()) if smoke_report.is_file() else {}
-        qualified = bool(smoke_payload.get("anchors_ok"))
+        qualified = smoke_qualified_from_payload(smoke_payload, SMOKE_ANCHORS)
     except ReError:
         smoke_payload = json.loads(smoke_report.read_text()) if smoke_report.is_file() else {}
         qualified = False
@@ -290,7 +313,7 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     inv_dir = exp / "inventory"
     mode = "inventory_regen" if inventory_complete(inv_dir) else "inventory"
     validate_export_identity(exp, provenance, mode)
-    staging = inv_dir / ".staging"
+    staging = inventory_staging_dir(exp)
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True, exist_ok=True)
@@ -407,6 +430,8 @@ def cmd_decompile(args: argparse.Namespace) -> int:
                 str(timeout),
             )
         publish_batch_staging(staging, out_path, rvas)
+        invalidate_qualification(provenance, "batch_replaced")
+        save_provenance(exp, provenance)
     if args.pilot:
         print(f"pilot decompile written under {pilot_dir}")
         return 0
@@ -416,7 +441,8 @@ def cmd_decompile(args: argparse.Namespace) -> int:
         exp,
         provenance,
         args.min_success_bytes,
-        lambda: cmd_check_anchors(argparse.Namespace(baseline_revision=exp.name)),
+        lambda: mandatory_anchors_check(exp),
+        smoke_needles=SMOKE_ANCHORS,
     )
     qual["c_export"] = c_export
     qual["export_errors"] = errors
@@ -449,7 +475,8 @@ def cmd_qualify(args: argparse.Namespace) -> int:
         exp,
         provenance,
         args.min_success_bytes,
-        lambda: cmd_check_anchors(argparse.Namespace(baseline_revision=exp.name)),
+        lambda: mandatory_anchors_check(exp),
+        smoke_needles=SMOKE_ANCHORS,
     )
     provenance["qualification"] = qual
     save_provenance(exp, provenance)

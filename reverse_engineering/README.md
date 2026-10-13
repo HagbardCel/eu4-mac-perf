@@ -10,6 +10,7 @@ Recover and understand the original EU IV macOS implementation. Phase 1 (PR D) p
   ghidra-project/
   exports/<baseline-revision>/
     inventory/
+    inventory.staging/   # Ghidra export scratch; promoted to inventory/ once validated
     decompiled/
     index.sqlite
     provenance.json
@@ -47,6 +48,7 @@ export GHIDRA_INSTALL=/path/to/ghidra
 
 python3 -m reverse_engineering.corpus preflight
 python3 -m reverse_engineering.corpus import
+python3 -m reverse_engineering.corpus smoke
 python3 -m reverse_engineering.corpus inventory
 python3 -m reverse_engineering.corpus manifest
 python3 -m reverse_engineering.corpus decompile --pilot 250
@@ -54,6 +56,7 @@ python3 -m reverse_engineering.corpus decompile
 python3 -m reverse_engineering.corpus index
 python3 -m reverse_engineering.corpus reconcile
 python3 -m reverse_engineering.corpus check-anchors
+python3 -m reverse_engineering.corpus qualify
 python3 -m reverse_engineering.census --write-reports
 ```
 
@@ -85,4 +88,18 @@ Authoritative census files are generated only after `corpus qualify` — see [`r
 
 ## Tests
 
-Portable unit tests use [`tests/re_fixtures/`](../tests/re_fixtures/). Full Ghidra integration is a local maintainer step before merging measured EU IV census numbers (`measurement_source: local_ghidra_export`).
+Portable unit tests use [`tests/re_fixtures/`](../tests/re_fixtures/). CI runs `python -m compileall` on Python only; **Java Ghidra scripts are not compiled in CI**.
+
+### Maintainer Ghidra smoke (optional)
+
+Do **not** use `corpus import` with a toy binary — `corpus import` enforces the pinned EU IV SHA-256 in `target.json`.
+
+To validate Java scripts compile and export schemas locally:
+
+1. Build a tiny **x86-64** Mach-O test program.
+2. Run `support/analyzeHeadless` with `-scriptPath reverse_engineering/ghidra` and `ImportAndInventory.java` (same argv layout as [`build_analyze_headless_argv`](corpus.py)).
+3. Confirm `functions.jsonl`, `call_edges.jsonl`, and `coverage.json` are written.
+
+EU IV anchor smoke (`corpus smoke`) and full D1–D5 remain the follow-up integration gate after PR #48 infrastructure merges.
+
+Full measured EU IV census (`measurement_source: local_ghidra_export`) is a follow-up PR after qualified export.

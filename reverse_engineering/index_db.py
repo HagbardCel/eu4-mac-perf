@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS call_edges (
   caller_rva TEXT,
   callee_internal_rva TEXT,
   callee_external_symbol TEXT,
+  ultimate_external_symbol TEXT,
   resolution TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_functions_mangled ON functions(name_mangled);
@@ -119,14 +120,15 @@ def rebuild_index(
                 """
                 INSERT INTO call_edges (
                   callsite_rva, caller_rva, callee_internal_rva,
-                  callee_external_symbol, resolution
-                ) VALUES (?, ?, ?, ?, ?)
+                  callee_external_symbol, ultimate_external_symbol, resolution
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     edge.get("callsite_rva"),
                     edge.get("caller_rva"),
                     edge.get("callee_internal_rva"),
                     edge.get("callee_external_symbol"),
+                    edge.get("ultimate_external_symbol"),
                     edge.get("resolution"),
                 ),
             )
