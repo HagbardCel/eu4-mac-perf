@@ -31,18 +31,13 @@ python3 benchmark/eu4_benchmark.py inspect
 PYTHONPATH=benchmark:. python3 -m unittest discover -s tests
 ```
 
-Phase C sealed evidence verification (CI gate):
+Phase C sealed evidence verification (CI gate; capsule is closed — see [docs/status.md](docs/status.md)):
 
 ```sh
 PYTHONPATH=benchmark python3 benchmark/eu4_frame_model.py verify-evidence \
   results/20261003T210202Z-intrusive-diagnostic --profile intrusive_complete_v1
 ```
 
-Intrusive diagnostic capture (live macOS; see [docs/status.md](docs/status.md)):
-
-```sh
-python3 benchmark/eu4_frame_model.py preflight --intrusive-diagnostic-contract
-python3 benchmark/eu4_frame_model.py run --diagnostic-only --output results
-```
+Live profiler and Phase C capture commands are documented in the [operations manual](docs/reference/profiler-and-benchmark-operations.md) (do not repeat Phase C live capture for new diagnostic data).
 
 Conventions and document types: [docs/conventions.md](docs/conventions.md).
