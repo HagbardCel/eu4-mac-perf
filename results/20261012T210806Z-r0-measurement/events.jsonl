@@ -1,0 +1,3 @@
+{"event": "clock_anchor", "monotonic_ns": 378243908357375, "wall_ns": 1791839297653459000}
+{"cpu_ms_s": 1065.9, "event": "ready", "monotonic_ns": 378383472367333, "ready_ns": 378288907357625, "swap_rate": 57.25, "wall_ns": 1791839437218251000}
+{"event": "epoch_a_start", "event_uptime_ns": 378384353007583, "monotonic_ns": 378384353007708, "phase": "epoch_a_start", "wall_ns": 1791839438098896000}

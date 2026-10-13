@@ -1,0 +1,12 @@
+{
+  "evidence_id": "r0-frame-evolution-20261012T210806Z",
+  "kind": "r0_frame_evolution_v1",
+  "run_dir": "results/20261012T210806Z-r0-measurement",
+  "status": "skipped_unsupported_drawable",
+  "screening_performed": false,
+  "candidate_for_lossless_skip": null,
+  "reason": "Production drawable readback unavailable under current probe policy",
+  "frame_evolution_status": "skipped_unsupported_drawable",
+  "positive_control_status": "skipped_unsupported_drawable",
+  "census_frame_count": 0
+}

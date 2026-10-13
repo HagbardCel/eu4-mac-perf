@@ -1,0 +1,64 @@
+{
+  "functional_caller": {
+    "mesh_render_buckets": 0.438685208596713,
+    "gfx_draw_indexed": 0.03286978508217446,
+    "ingame_render": 0.1972187104930468,
+    "border_draw": 0.09987357774968394,
+    "gfx_draw_other": 0.0025284450063211127,
+    "unattributed": 0.22882427307206069
+  },
+  "execution_location": {
+    "apple_metal_gl_renderer": 0.504424778761062,
+    "gl_driver_set_render_state": 0.029077117572692796,
+    "gl_draw_elements": 0.018963337547408345,
+    "gl_engine": 0.07838179519595449,
+    "unattributed": 0.29329962073324906,
+    "nscursor": 0.07585335018963338
+  },
+  "cross_tab_counts": {
+    "mesh_render_buckets|apple_metal_gl_renderer": 259,
+    "mesh_render_buckets|gl_driver_set_render_state": 15,
+    "mesh_render_buckets|gl_draw_elements": 6,
+    "mesh_render_buckets|gl_engine": 33,
+    "gfx_draw_indexed|gl_engine": 17,
+    "gfx_draw_indexed|unattributed": 9,
+    "mesh_render_buckets|unattributed": 34,
+    "ingame_render|unattributed": 59,
+    "border_draw|apple_metal_gl_renderer": 59,
+    "border_draw|gl_driver_set_render_state": 4,
+    "border_draw|gl_draw_elements": 8,
+    "border_draw|gl_engine": 1,
+    "border_draw|unattributed": 7,
+    "ingame_render|gl_driver_set_render_state": 4,
+    "ingame_render|apple_metal_gl_renderer": 81,
+    "ingame_render|gl_draw_elements": 1,
+    "ingame_render|gl_engine": 11,
+    "gfx_draw_other|unattributed": 2,
+    "unattributed|unattributed": 121,
+    "unattributed|nscursor": 60
+  },
+  "functional_caller_counts": {
+    "mesh_render_buckets": 347,
+    "gfx_draw_indexed": 26,
+    "ingame_render": 156,
+    "border_draw": 79,
+    "gfx_draw_other": 2,
+    "unattributed": 181
+  },
+  "execution_location_counts": {
+    "apple_metal_gl_renderer": 399,
+    "gl_driver_set_render_state": 23,
+    "gl_draw_elements": 15,
+    "gl_engine": 62,
+    "unattributed": 232,
+    "nscursor": 60
+  },
+  "unattributed_sample_weight": 181,
+  "unattributed_sample_fraction": 0.22882427307206069,
+  "attributed_sample_weight": 791,
+  "root_inclusive": 791,
+  "weighted_row_count": 1744,
+  "rules": {
+    "note": "sample-weight proportions only; not CPU-ms/s. Depth from count column; no silent inclusive repair."
+  }
+}

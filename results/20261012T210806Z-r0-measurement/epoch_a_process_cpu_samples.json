@@ -1,0 +1,187 @@
+{
+  "schema": "r0_epoch_a_process_cpu_samples_v1",
+  "run_dir": "results/20261012T210806Z-r0-measurement",
+  "powermetrics_pliststream_sha256": "9654bf7eb198938dc285db76f99b964bd3be77e47b31fe4946bd0f2f730df680",
+  "powermetrics_pliststream_bytes": 70033213,
+  "powermetrics_pliststream_note": "Full stream preserved locally; not committed (size/privacy). SHA-256 fingerprints local file.",
+  "clock_anchor": {
+    "event": "clock_anchor",
+    "monotonic_ns": 378243908357375,
+    "wall_ns": 1791839297653459000
+  },
+  "game_pid": 98200,
+  "selection": {
+    "method": "benchmark.autonomous_runner.cpu_samples_between",
+    "start_monotonic_ns": 378384359061916,
+    "end_monotonic_ns": 378414600898250,
+    "source": "epoch_a_thread_cpu.json window_start_ns/window_end_ns (libproc poll window)",
+    "acquisition_note": "Retrospective extraction uses cpu_samples_between over the libproc poll window on a fully drained pliststream (PowerTail.finish). Live acquisition called tail.poll() once before _process_cpu_ms_per_s; samples 28-29 fall within the saved monotonic window but likely arrived after that poll (best-supported hypothesis, not conclusively established)."
+  },
+  "sample_count": 29,
+  "samples": [
+    {
+      "monotonic_ns": 378385254898375,
+      "cputime_ms_per_s": 1063.93,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378386254898375,
+      "cputime_ms_per_s": 1065.16,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378387254898375,
+      "cputime_ms_per_s": 1086.61,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378388254898375,
+      "cputime_ms_per_s": 1080.03,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378389254898375,
+      "cputime_ms_per_s": 1057.9,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378390254898375,
+      "cputime_ms_per_s": 1070.05,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378391254898375,
+      "cputime_ms_per_s": 1056.31,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378392254898375,
+      "cputime_ms_per_s": 1069.03,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378393254898375,
+      "cputime_ms_per_s": 1083.44,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378394254898375,
+      "cputime_ms_per_s": 1064.36,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378395254898375,
+      "cputime_ms_per_s": 1061.97,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378396254898375,
+      "cputime_ms_per_s": 1061.66,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378397254898375,
+      "cputime_ms_per_s": 1061.49,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378398254898375,
+      "cputime_ms_per_s": 1095.17,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378400254898375,
+      "cputime_ms_per_s": 1060.12,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378401254898375,
+      "cputime_ms_per_s": 1058.03,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378402254898375,
+      "cputime_ms_per_s": 1055.29,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378403254898375,
+      "cputime_ms_per_s": 1070.47,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378404254898375,
+      "cputime_ms_per_s": 1059.51,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378405254898375,
+      "cputime_ms_per_s": 1063.82,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378406254898375,
+      "cputime_ms_per_s": 1058.32,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378407254898375,
+      "cputime_ms_per_s": 1058.87,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378408254898375,
+      "cputime_ms_per_s": 1064.79,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378409254898375,
+      "cputime_ms_per_s": 1053.67,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378410254898375,
+      "cputime_ms_per_s": 1056.84,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378411254898375,
+      "cputime_ms_per_s": 1062.57,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378412254898375,
+      "cputime_ms_per_s": 1063.1,
+      "in_acquisition_subset": true
+    },
+    {
+      "monotonic_ns": 378413254898375,
+      "cputime_ms_per_s": 1065.76,
+      "in_acquisition_subset": false
+    },
+    {
+      "monotonic_ns": 378414254898375,
+      "cputime_ms_per_s": 1069.94,
+      "in_acquisition_subset": false
+    }
+  ],
+  "recomputed_mean_cputime_ms_per_s": 1065.4555172413793,
+  "manifest_process_cpu_ms_per_s": 1065.2781481481481,
+  "manifest_thread_cpu_ms_per_s": 1065.1348233038818,
+  "manifest_reconciliation_residual_ms_per_s": 0.1433248442663171,
+  "retrospective_sample_count": 29,
+  "acquisition_sample_count": 27,
+  "acquisition_mean_cputime_ms_per_s": 1065.2781481481481,
+  "retrospective_mean_cputime_ms_per_s": 1065.4555172413793,
+  "acquisition_subset": {
+    "method": "first_n_samples",
+    "n": 27,
+    "inference": "exact_match_to_manifest_process_cpu_ms_per_s",
+    "note": "Live PowerTail.samples snapshot was not preserved; membership in acquisition poll is inferred from numerical match, not conclusively established."
+  },
+  "reconciliation": {
+    "acquisition_residual_ms_per_s": 0.1433248442663171,
+    "retrospective_residual_ms_per_s": 0.3206939374974809,
+    "tolerance_ms_per_s": 50.0
+  }
+}
