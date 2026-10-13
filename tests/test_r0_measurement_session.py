@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 import r0_measurement_session as session
+from r0_v1_cpu_gate_fixtures import materialize_v1_sidecar_for_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 AUTHENTIC_SAMPLE = ROOT / "results/r0-native-qualification/authentic-sample.txt"
@@ -60,9 +61,12 @@ def _gate_ready_manifest(
                 "exit_code_before_stop": None,
                 "stop_completed": True,
             },
+            "pid": 42,
             "thread_cpu_ms_per_s": 100.0,
-            "window_start_ns": 0,
-            "window_end_ns": 1,
+            "process_cpu_ms_per_s": 100.0,
+            "reconciliation_residual_ms_per_s": 0.0,
+            "window_start_ns": 1_000_000,
+            "window_end_ns": 2_000_000,
         },
         "thread_cpu_preflight": {"status": "ready"},
         "event_clock_alignment": {"status": "passed"},
@@ -100,6 +104,7 @@ class R0MeasurementSessionTests(unittest.TestCase):
             build_success_fixture(root)
             manifest = _gate_ready_manifest(frame_report)
             manifest["probe_log_path"] = str(root / "r0_probe.log")
+            materialize_v1_sidecar_for_gate(root, manifest)
             session.acceptance_gates(manifest, root)
             self.assertEqual(manifest["status"], "completed")
 
@@ -121,6 +126,7 @@ class R0MeasurementSessionTests(unittest.TestCase):
             manifest = _gate_ready_manifest(frame_report)
             manifest["roi_pending_verification"] = True
             manifest["probe_log_path"] = str(root / "r0_probe.log")
+            materialize_v1_sidecar_for_gate(root, manifest)
             session.acceptance_gates(manifest, root)
             self.assertEqual(manifest["status"], "incomplete_gates")
             self.assertFalse(manifest["acceptance_gates"]["roi_verified"])
@@ -151,6 +157,7 @@ class R0MeasurementSessionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             manifest = _gate_ready_manifest(frame_report)
+            materialize_v1_sidecar_for_gate(root, manifest)
             session.acceptance_gates(manifest, root)
             self.assertFalse(manifest["acceptance_gates"]["flush_single_owner"])
             self.assertNotEqual(manifest["status"], "completed")
@@ -211,9 +218,10 @@ class R0MeasurementSessionTests(unittest.TestCase):
             manifest["roi_config_path"] = str(unverified_roi)
             manifest["frame_evolution_status"] = "run"
             manifest["probe_log_path"] = str(root / "r0_probe.log")
+            materialize_v1_sidecar_for_gate(root, manifest)
             (root / "manifest.json").write_text(json.dumps(manifest))
             session.run_offline_analyzers(root, manifest)
-            session.acceptance_gates(manifest)
+            session.acceptance_gates(manifest, root)
             self.assertEqual(manifest["status"], "incomplete_gates")
             session.requalify_session(root, roi_config=ROI_FIXTURE)
             promoted = json.loads((root / "manifest.json").read_text())
@@ -226,7 +234,7 @@ class R0MeasurementSessionTests(unittest.TestCase):
             demoted = json.loads((root / "manifest.json").read_text())
             self.assertNotEqual(demoted.get("status"), "completed")
 
-    def test_partial_complete_requires_stack(self) -> None:
+    def test_partial_complete_requires_stack_without_output_dir_cpu_gate_fails(self) -> None:
         manifest = {
             "cpu_accounting_contract": "r0_cpu_finalize_v1",
             "epoch_a_thread_cpu": {
@@ -241,9 +249,12 @@ class R0MeasurementSessionTests(unittest.TestCase):
                     "exit_code_before_stop": None,
                     "stop_completed": True,
                 },
+                "pid": 42,
                 "thread_cpu_ms_per_s": 100.0,
-                "window_start_ns": 0,
-                "window_end_ns": 1,
+                "process_cpu_ms_per_s": 100.0,
+                "reconciliation_residual_ms_per_s": 0.0,
+                "window_start_ns": 1_000_000,
+                "window_end_ns": 2_000_000,
             },
             "thread_cpu_preflight": {"status": "ready"},
             "event_clock_alignment": {"status": "passed"},
@@ -259,6 +270,51 @@ class R0MeasurementSessionTests(unittest.TestCase):
             },
         }
         session.acceptance_gates(manifest)
+        self.assertFalse(manifest["acceptance_gates"]["cpu_reconcile"])
+        self.assertNotEqual(manifest["status"], "partial_complete")
+
+    def test_partial_complete_requires_stack(self) -> None:
+        manifest = {
+            "schema": "r0_measurement_session_v1",
+            "cpu_accounting_contract": "r0_cpu_finalize_v1",
+            "epoch_a_thread_cpu": {
+                "reconcile_ok": True,
+                "cpu_reconciliation_phase": "finalized",
+                "main_thread_mapping_status": "verified",
+                "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
+                "process_cpu_sample_count": 10,
+                "process_cpu_sidecar_persisted": True,
+                "powermetrics_producer": {
+                    "state_before_stop": "running",
+                    "exit_code_before_stop": None,
+                    "stop_completed": True,
+                },
+                "pid": 42,
+                "thread_cpu_ms_per_s": 100.0,
+                "process_cpu_ms_per_s": 100.0,
+                "reconciliation_residual_ms_per_s": 0.0,
+                "window_start_ns": 1_000_000,
+                "window_end_ns": 2_000_000,
+            },
+            "thread_cpu_preflight": {"status": "ready"},
+            "event_clock_alignment": {"status": "passed"},
+            "analyzer_results": {
+                "stack": {"exit_code": 0},
+                "frame_evolution": {"skipped": True},
+            },
+            "drawable_capability": {"failure_class": "unsupported_drawable"},
+            "stack_report": {
+                "functional_caller": {"ingame_render": 0.5},
+                "attributed_sample_weight": 10,
+                "root_inclusive": 10,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            build_success_fixture(root)
+            manifest["probe_log_path"] = str(root / "r0_probe.log")
+            materialize_v1_sidecar_for_gate(root, manifest)
+            session.acceptance_gates(manifest, root)
         self.assertEqual(manifest["status"], "partial_complete")
 
     def test_requalify_missing_probe_log_clears_completed(self) -> None:
@@ -276,6 +332,7 @@ class R0MeasurementSessionTests(unittest.TestCase):
                 "roi_config": {"verified": True},
             }
             manifest = _gate_ready_manifest(frame_report)
+            materialize_v1_sidecar_for_gate(root, manifest)
             manifest["status"] = "completed"
             manifest["probe_log_path"] = str(root / "r0_probe.log")
             manifest["captures"] = {

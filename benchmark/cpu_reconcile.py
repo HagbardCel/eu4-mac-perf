@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,10 @@ LEGACY_OCT12_RUN_DIR = "20261012T210806Z-r0-measurement"
 LEGACY_OCT12_ACQUISITION_COMMIT_PREFIX = "a9048e1"
 LIVE_SIDECAR_SCHEMA = "r0_epoch_a_process_cpu_samples_v1"
 LIVE_OBSERVATION_ORIGIN = "live_finalize_v1"
+EPOCH_A_PROCESS_CPU_SIDECAR_NAME = "epoch_a_process_cpu_samples.json"
 ACCEPTABLE_TAIL_STATUSES = frozenset({"clean", "appended"})
+_ARITHMETIC_REL_TOL = 1e-9
+_ARITHMETIC_ABS_TOL = 1e-6
 
 
 def list_process_cpu_observations(
@@ -157,7 +161,7 @@ def build_epoch_a_process_cpu_sidecar(
 
 
 def write_epoch_a_process_cpu_sidecar_atomic(output_dir: Path, sidecar: dict[str, Any]) -> Path:
-    path = output_dir / "epoch_a_process_cpu_samples.json"
+    path = output_dir / EPOCH_A_PROCESS_CPU_SIDECAR_NAME
     temp = path.with_suffix(".tmp.json")
     payload = json.dumps(sidecar, indent=2) + "\n"
     temp.write_text(payload)
@@ -246,7 +250,7 @@ def persist_finalized_cpu_with_sidecar(
         clock_anchor=clock_anchor,
         pid=pid,
         reconciliation_residual_ms_per_s=residual,
-        reconcile_ok=False,
+        reconcile_ok=reconcile_ok,
         powermetrics_stream_path=pm_stream_path,
         run_dir=str(output_dir),
     )
@@ -254,15 +258,160 @@ def persist_finalized_cpu_with_sidecar(
     if reconcile_ok:
         try:
             sidecar_path = write_epoch_a_process_cpu_sidecar_atomic(output_dir, sidecar)
-            manifest["epoch_a_process_cpu_samples_path"] = str(sidecar_path)
+            manifest["epoch_a_process_cpu_samples_path"] = sidecar_path.name
+            sidecar_sha, _ = _sha256_file(sidecar_path)
+            if sidecar_sha is None:
+                raise OSError("sidecar missing after write")
             finalized["process_cpu_sidecar_persisted"] = True
+            finalized["process_cpu_sidecar_sha256"] = sidecar_sha
         except OSError:
             finalized["reconcile_ok"] = False
             finalized["process_cpu_sidecar_persisted"] = False
+            finalized.pop("process_cpu_sidecar_sha256", None)
     else:
         finalized["process_cpu_sidecar_persisted"] = False
+        finalized.pop("process_cpu_sidecar_sha256", None)
 
     return finalized
+
+
+def _path_resolves_within_dir(path: Path, output_dir: Path) -> bool:
+    try:
+        resolved = path.resolve()
+        base = output_dir.resolve()
+        resolved.relative_to(base)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _sidecar_path_for_verification(output_dir: Path) -> Path:
+    return output_dir / EPOCH_A_PROCESS_CPU_SIDECAR_NAME
+
+
+def _manifest_sidecar_path_valid(manifest: dict[str, Any]) -> bool:
+    ref = manifest.get("epoch_a_process_cpu_samples_path")
+    if ref is None:
+        return False
+    if ref != EPOCH_A_PROCESS_CPU_SIDECAR_NAME:
+        return False
+    if ".." in Path(ref).parts:
+        return False
+    return True
+
+
+def verify_epoch_a_sidecar_integrity(
+    cpu: dict[str, Any],
+    output_dir: Path,
+    manifest: dict[str, Any],
+) -> bool:
+    if not _manifest_sidecar_path_valid(manifest):
+        return False
+    if cpu.get("process_cpu_sidecar_persisted") is not True:
+        return False
+    recorded_sha = cpu.get("process_cpu_sidecar_sha256")
+    if not isinstance(recorded_sha, str) or len(recorded_sha) != 64:
+        return False
+
+    sidecar_path = _sidecar_path_for_verification(output_dir)
+    if sidecar_path.is_symlink() and not _path_resolves_within_dir(sidecar_path, output_dir):
+        return False
+    if not _path_resolves_within_dir(sidecar_path, output_dir):
+        return False
+    if not sidecar_path.is_file():
+        return False
+
+    file_sha, _ = _sha256_file(sidecar_path)
+    if file_sha != recorded_sha:
+        return False
+
+    try:
+        sidecar = json.loads(sidecar_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+
+    if sidecar.get("schema") != LIVE_SIDECAR_SCHEMA:
+        return False
+    if sidecar.get("observation_origin") != LIVE_OBSERVATION_ORIGIN:
+        return False
+
+    pid = cpu.get("pid")
+    if sidecar.get("game_pid") != pid:
+        return False
+
+    window_start = cpu.get("window_start_ns")
+    window_end = cpu.get("window_end_ns")
+    selection = sidecar.get("selection") or {}
+    if selection.get("start_monotonic_ns") != window_start:
+        return False
+    if selection.get("end_monotonic_ns") != window_end:
+        return False
+
+    process_mean = cpu.get("process_cpu_ms_per_s")
+    thread_cpu = cpu.get("thread_cpu_ms_per_s")
+    residual = cpu.get("reconciliation_residual_ms_per_s")
+    if not all(
+        isinstance(value, (int, float)) and math.isfinite(float(value))
+        for value in (process_mean, thread_cpu, residual)
+    ):
+        return False
+
+    sample_count = cpu.get("process_cpu_sample_count")
+    if sidecar.get("sample_count") != sample_count:
+        return False
+    samples = sidecar.get("samples")
+    if not isinstance(samples, list) or len(samples) != int(sample_count or 0):
+        return False
+
+    ws = int(window_start)
+    we = int(window_end)
+    values: list[float] = []
+    for item in samples:
+        if not isinstance(item, dict):
+            return False
+        when = item.get("monotonic_ns")
+        rate = item.get("cputime_ms_per_s")
+        if not isinstance(when, int) or when < ws or when > we:
+            return False
+        if not isinstance(rate, (int, float)) or not math.isfinite(float(rate)) or float(rate) <= 0:
+            return False
+        values.append(float(rate))
+
+    if not values:
+        return False
+    recomputed_mean = sum(values) / len(values)
+    if not math.isclose(
+        recomputed_mean,
+        float(process_mean),
+        rel_tol=_ARITHMETIC_REL_TOL,
+        abs_tol=_ARITHMETIC_ABS_TOL,
+    ):
+        return False
+    sidecar_mean = sidecar.get("recomputed_mean_cputime_ms_per_s")
+    if not isinstance(sidecar_mean, (int, float)) or not math.isfinite(float(sidecar_mean)):
+        return False
+    if not math.isclose(
+        float(sidecar_mean),
+        float(process_mean),
+        rel_tol=_ARITHMETIC_REL_TOL,
+        abs_tol=_ARITHMETIC_ABS_TOL,
+    ):
+        return False
+
+    if sidecar.get("reconcile_ok") is not cpu.get("reconcile_ok"):
+        return False
+    sidecar_residual = sidecar.get("manifest_reconciliation_residual_ms_per_s")
+    if not isinstance(sidecar_residual, (int, float)) or not math.isfinite(float(sidecar_residual)):
+        return False
+    if not math.isclose(
+        float(sidecar_residual),
+        float(residual),
+        rel_tol=_ARITHMETIC_REL_TOL,
+        abs_tol=_ARITHMETIC_ABS_TOL,
+    ):
+        return False
+
+    return True
 
 
 def _oct12_acquisition_cpu_fingerprint(manifest: dict[str, Any]) -> bool:
@@ -313,7 +462,9 @@ def cpu_reconcile_gate_passes(
             return False
         if not cpu.get("process_cpu_sample_count"):
             return False
-        return True
+        if output_dir is None:
+            return False
+        return verify_epoch_a_sidecar_integrity(cpu, Path(output_dir), manifest)
     if legacy_cpu_gate_eligible(manifest, output_dir):
         return cpu.get("reconcile_ok") is True
     return False

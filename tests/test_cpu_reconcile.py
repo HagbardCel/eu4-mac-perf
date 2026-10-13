@@ -1,5 +1,6 @@
 import json
 import plistlib
+import shutil
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from pathlib import Path
 import autonomous_runner as auto
 import cpu_reconcile
 import r0_measurement_session as session
+from r0_v1_cpu_gate_fixtures import materialize_v1_sidecar_for_gate
 
 ROOT = Path(__file__).resolve().parents[1]
 OCT12_SIDECAR = Path(__file__).parent / "fixtures/oct12_epoch_a_process_cpu_samples.json"
@@ -28,13 +30,25 @@ def _gate_cpu() -> dict:
         "cpu_reconciliation_phase": "finalized",
         "main_thread_mapping_status": "verified",
         "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
-        "process_cpu_sample_count": 27,
+        "process_cpu_sample_count": 3,
         "process_cpu_sidecar_persisted": True,
         "powermetrics_producer": _running_producer(),
+        "pid": 42,
         "thread_cpu_ms_per_s": 100.0,
-        "window_start_ns": 0,
-        "window_end_ns": 1,
+        "process_cpu_ms_per_s": 100.0,
+        "reconciliation_residual_ms_per_s": 0.0,
+        "window_start_ns": 1_000_000,
+        "window_end_ns": 2_000_000,
     }
+
+
+def _v1_manifest_with_sidecar(root: Path, cpu: dict | None = None) -> dict:
+    manifest = {
+        "cpu_accounting_contract": cpu_reconcile.CPU_ACCOUNTING_CONTRACT_V1,
+        "epoch_a_thread_cpu": dict(cpu or _gate_cpu()),
+    }
+    materialize_v1_sidecar_for_gate(root, manifest)
+    return manifest
 
 
 class CpuReconcileTests(unittest.TestCase):
@@ -69,10 +83,12 @@ class CpuReconcileTests(unittest.TestCase):
         self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, None))
 
     def test_tail_gate_rejects_bogus_status(self) -> None:
-        manifest = {"cpu_accounting_contract": cpu_reconcile.CPU_ACCOUNTING_CONTRACT_V1}
-        cpu = _gate_cpu()
-        cpu["tail_finalization_status"] = {"status": "bogus", "trailing_partial_bytes": 0}
-        self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, None))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            cpu["tail_finalization_status"] = {"status": "bogus", "trailing_partial_bytes": 0}
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
 
     def test_reconcile_cpu_without_tail_fails(self) -> None:
         thread_report = {
@@ -184,7 +200,9 @@ class CpuReconcileTests(unittest.TestCase):
                 "epochs": [{"id": "A", "thread_cpu": {"thread_cpu_ms_per_s": 1.0}}],
             }
             cpu = _gate_cpu()
-            session._persist_epoch_a_cpu(root, manifest, cpu)
+            manifest["epoch_a_thread_cpu"] = cpu
+            materialize_v1_sidecar_for_gate(root, manifest)
+            session._persist_epoch_a_cpu(root, manifest, manifest["epoch_a_thread_cpu"])
             session.write_manifest(root / "manifest.json", manifest)
             loaded = json.loads((root / "manifest.json").read_text())
             file_cpu = json.loads((root / "epoch_a_thread_cpu.json").read_text())
@@ -197,6 +215,96 @@ class CpuReconcileTests(unittest.TestCase):
         manifest = json.loads((OCT12_RUN / "manifest.json").read_text())
         cpu = manifest.get("epoch_a_thread_cpu", {})
         self.assertTrue(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, OCT12_RUN))
+
+    def test_v1_gate_passes_with_valid_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            self.assertTrue(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+    def test_v1_gate_passes_after_run_dir_relocation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "source"
+            source.mkdir()
+            manifest = _v1_manifest_with_sidecar(source)
+            cpu = manifest["epoch_a_thread_cpu"]
+            dest = Path(temporary) / "dest"
+            shutil.copytree(source, dest)
+            relocated_manifest = {
+                "cpu_accounting_contract": manifest["cpu_accounting_contract"],
+                "epoch_a_process_cpu_samples_path": manifest["epoch_a_process_cpu_samples_path"],
+                "epoch_a_thread_cpu": dict(cpu),
+            }
+            self.assertTrue(
+                cpu_reconcile.cpu_reconcile_gate_passes(
+                    relocated_manifest["epoch_a_thread_cpu"],
+                    relocated_manifest,
+                    dest,
+                )
+            )
+
+    def test_v1_sidecar_integrity_mutations(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            self.assertTrue(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+            sidecar_path = root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME
+            sidecar_path.unlink()
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            sidecar_path = root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME
+            sidecar_path.write_text("{not json")
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            sidecar = json.loads((root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).read_text())
+            sidecar["reconcile_ok"] = not sidecar["reconcile_ok"]
+            (root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).write_text(json.dumps(sidecar))
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            cpu.pop("process_cpu_sidecar_sha256", None)
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            manifest["epoch_a_process_cpu_samples_path"] = "/etc/passwd"
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            sidecar = json.loads((root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).read_text())
+            sidecar["game_pid"] = 99999
+            (root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME).write_text(json.dumps(sidecar))
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            outside = Path(temporary) / "outside.json"
+            outside.write_text('{"samples":[]}')
+            manifest = _v1_manifest_with_sidecar(root)
+            cpu = manifest["epoch_a_thread_cpu"]
+            sidecar_path = root / cpu_reconcile.EPOCH_A_PROCESS_CPU_SIDECAR_NAME
+            sidecar_path.unlink()
+            sidecar_path.symlink_to(outside)
+            self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, root))
 
 
 if __name__ == "__main__":

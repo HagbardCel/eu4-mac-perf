@@ -1,3 +1,4 @@
+import json
 import plistlib
 import tempfile
 import unittest
@@ -7,6 +8,8 @@ from unittest import mock
 
 import autonomous_runner as auto
 import cpu_reconcile
+import r0_measurement_session as session
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -87,6 +90,62 @@ class R0CpuFinalizeTests(unittest.TestCase):
             self.assertFalse(finalized["reconcile_ok"])
             self.assertFalse(finalized["process_cpu_sidecar_persisted"])
             self.assertFalse((Path(temporary) / "epoch_a_process_cpu_samples.json").exists())
+            self.assertNotIn("process_cpu_sidecar_sha256", finalized)
+
+    def test_finalize_epoch_a_cpu_persists_consistent_artifacts(self) -> None:
+        anchor = {"monotonic_ns": 1_000_000_000, "wall_ns": 2_000_000_000}
+        pid = 42
+        ts = datetime.fromtimestamp(2.0, tz=timezone.utc)
+        payload = {"timestamp": ts, "tasks": [{"pid": pid, "cputime_ms_per_s": 1000.0}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "stream.plist"
+            path.write_bytes(plistlib.dumps(payload) + b"\0")
+            tail = auto.PowerTail(path)
+            tail.poll()
+            provisional = {
+                "pid": pid,
+                "thread_cpu_ms_per_s": 1000.0,
+                "window_start_ns": anchor["monotonic_ns"],
+                "window_end_ns": anchor["monotonic_ns"] + 3_000_000_000,
+            }
+            manifest: dict = {
+                "cpu_accounting_contract": cpu_reconcile.CPU_ACCOUNTING_CONTRACT_V1,
+                "cpu_reconcile_tolerance_ms_per_s": 50.0,
+                "epochs": [{"id": "A", "thread_cpu": {}}],
+            }
+            producer = {
+                "state_before_stop": "running",
+                "exit_code_before_stop": None,
+                "stop_completed": True,
+            }
+            session._finalize_epoch_a_cpu(
+                root,
+                manifest,
+                tail,
+                anchor,
+                pid,
+                provisional,
+                producer,
+                path,
+            )
+            file_cpu = json.loads((root / "epoch_a_thread_cpu.json").read_text())
+            sidecar = json.loads((root / "epoch_a_process_cpu_samples.json").read_text())
+            self.assertEqual(file_cpu, manifest["epoch_a_thread_cpu"])
+            self.assertEqual(
+                sidecar["sample_count"],
+                file_cpu["process_cpu_sample_count"],
+            )
+            self.assertEqual(sidecar["reconcile_ok"], file_cpu["reconcile_ok"])
+            self.assertAlmostEqual(
+                sidecar["recomputed_mean_cputime_ms_per_s"],
+                file_cpu["process_cpu_ms_per_s"],
+            )
+            self.assertEqual(manifest["epoch_a_process_cpu_samples_path"], "epoch_a_process_cpu_samples.json")
+            self.assertIn("process_cpu_sidecar_sha256", file_cpu)
+            epoch_a = next(e for e in manifest["epochs"] if e["id"] == "A")
+            self.assertEqual(epoch_a["thread_cpu"], file_cpu)
+            self.assertTrue(cpu_reconcile.cpu_reconcile_gate_passes(file_cpu, manifest, root))
 
     def test_persist_failed_finalize_does_not_clear_session_error(self) -> None:
         manifest = {
