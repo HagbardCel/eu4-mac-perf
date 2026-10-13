@@ -48,7 +48,7 @@
     "roi_pixel_verification": "not_evaluated",
     "frame_evolution_classification": "not_evaluated",
     "automated_stack_attribution": "failed",
-    "acceptance_gate_bypass_note": "When drawable_capability.failure_class is unsupported_drawable, acceptance_gates() sets qualified_windows, positive_control, roi_verified, and frame_analyzer to true as policy bypasses for partial completion—not evidence those experiments passed."
+    "acceptance_gate_bypass_note": "When drawable_capability.failure_class is unsupported_drawable, acceptance_gates() sets qualified_windows, positive_control, roi_verified, and frame_analyzer to true as policy bypasses for partial completion\u2014not evidence those experiments passed."
   },
   "fixture": {
     "country": "VEN",
@@ -63,5 +63,12 @@
     "stack_analyzer_failure": "analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json",
     "process_cpu_samples": "results/20261012T210806Z-r0-measurement/epoch_a_process_cpu_samples.json"
   },
-  "immutable_acquisition_note": "This capsule is the immutable acquisition record. Do not run --requalify in-place on the committed tree; use a working copy and commit derived evidence separately (see validation.md)."
+  "immutable_acquisition_note": "This capsule is the immutable acquisition record. Do not run --requalify in-place on the committed tree; use a working copy and commit derived evidence separately (see validation.md).",
+  "process_cpu_reproducibility": {
+    "sidecar": "results/20261012T210806Z-r0-measurement/epoch_a_process_cpu_samples.json",
+    "acquisition_sample_count_inferred": 27,
+    "acquisition_mean_cpu_ms_per_s": 1065.2781481481481,
+    "retrospective_sample_count": 29,
+    "note": "First 27 samples exactly reproduce manifest process CPU mean; live PowerTail snapshot not preserved."
+  }
 }

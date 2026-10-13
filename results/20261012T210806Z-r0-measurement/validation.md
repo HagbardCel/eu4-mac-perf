@@ -20,6 +20,18 @@ Acquisition status remains **`incomplete_gates`** (immutable; see [Future requal
 | `thread_cpu_backend` | `libproc` |
 | Session ended (UTC) | `2026-10-12T21:11:31.559830+00:00` |
 
+### Runtime source provenance
+
+| Component | Confidence |
+|---|---|
+| Git HEAD baseline `a9048e1` | Known (recorded above) |
+| GOG executable and fixture hashes | Recorded in manifest preflight |
+| Runtime Python source identical to HEAD | **Unverified** |
+| Stashed local changes saved at PR B branch time | Known (git stash object `b4f0bc437124b9f548e9a80b757478dcd319b3a1`; not a preserved patch) |
+| Exact dirty-tree contents at acquisition | **Not established** |
+
+The acquisition was performed with Git HEAD at `a9048e1`, but the runtime source-tree contents were not independently hashed. The stash object indicates possible local modifications to `benchmark/r0_measurement_session.py`, `benchmark/autonomous_runner.py`, `benchmark/r0_probe.py`, and tests (e.g. `probe_env` path resolution, `normalize_output_dir` for relative `results/...` invocations, ready-timeout diagnostics). A successful run shows probe injection worked; that does not prove every modified path had zero effect. **No identified change is currently known to invalidate the CPU arithmetic**; exact source-state reproducibility cannot be established.
+
 ## Measurements (epoch A / readiness)
 
 | Metric | Value |
@@ -32,6 +44,8 @@ Acquisition status remains **`incomplete_gates`** (immutable; see [Future requal
 | Scene alignment `mean_rgb_delta` | 9.59 (0 px shift) |
 
 Instrumented paused-Venice baseline—not an uninstrumented EU IV overhead estimate.
+
+`epoch_a_thread_cpu.json` reports `threads_appeared_mid_window: 59` with zero `threads_disappeared_mid_window`. In `cpu_delta.accumulate_thread_deltas()`, the first poll snapshot counts all observed threads as “appeared”; with 59 threads stable across 61 polls and no `ESRCH` skips, this reflects **initial population**, not 59 thread creations during epoch A.
 
 ## Evidence interpretation vs raw `acceptance_gates`
 
@@ -74,9 +88,18 @@ The weighted-row pattern expects the sample count immediately after a branch mar
 
 ## Process CPU reproducibility
 
-Committed: [`epoch_a_process_cpu_samples.json`](epoch_a_process_cpu_samples.json) — powermetrics-derived samples for `game_pid` within the epoch-A libproc window, with clock anchor and selection metadata.
+Committed: [`epoch_a_process_cpu_samples.json`](epoch_a_process_cpu_samples.json) — 29 powermetrics-derived samples for `game_pid` within the epoch-A libproc monotonic window (`window_start_ns` / `window_end_ns` in `epoch_a_thread_cpu.json`), with clock anchor and selection metadata.
 
-Local-only (not committed): `powermetrics.pliststream` (~70 MB). Fingerprint: `powermetrics_pliststream_sha256` in `epoch_a_process_cpu_samples.json` (`9654bf7eb198938dc285db76f99b964bd3be77e47b31fe4946bd0f2f730df680`). Recomputed mean from committed samples is ~1065.46 CPU-ms/s (29 points); manifest process mean 1065.28 ms/s because live session used ephemeral monotonic bounds not fully persisted (~0.18 ms/s difference).
+Live acquisition (`a9048e1`) calls `tail.poll()` once, then `_process_cpu_ms_per_s(tail.samples, …)`; retrospective extraction drains the full local stream via `PowerTail.finish()` and can include additional plists inside the same window.
+
+| Subset | Sample count | Mean CPU-ms/s | Residual vs thread sum (1065.135) |
+|---|---:|---:|---:|
+| Acquisition (inferred first 27) | 27 | 1065.278148 | 0.143325 (matches manifest) |
+| Retrospective (all committed) | 29 | 1065.455517 | 0.320694 |
+
+The 27-sample acquisition subset is reconstructed by **exact numerical match** to `manifest.process_cpu_ms_per_s`; the live `PowerTail.samples` snapshot was not preserved separately. Samples 28–29 are marked `in_acquisition_subset: false`; late plist arrival after live `poll()` is the best-supported explanation, not a conclusively established root cause. Both residuals are within the ±50 ms/s reconciliation tolerance. **`manifest.json` is unchanged.**
+
+Local-only (not committed): `powermetrics.pliststream` (~70 MB). Fingerprint: `powermetrics_pliststream_sha256` in `epoch_a_process_cpu_samples.json`.
 
 ## Future requalification
 
@@ -96,10 +119,12 @@ After a stack-parser fix:
 | `manifest.json` | `a1310398a36b7919cae6850328179ca9266290a4dd02df4742e91b80f5311ad7` |
 | `events.jsonl` | `a6470d89d3f32d0fd17d11b5d01e2550275164b3e8d6348c1ab37ba75fd3f81d` |
 | `epoch_a_thread_cpu.json` | `efb0d03b0d26cfbd0f6f46a29869f69b36d3755b7cd3ba214225986a6a34ed29` |
-| `epoch_a_process_cpu_samples.json` | `306ad5850335564c424f240906c2571ff6cd4de488123ee18f21412917a09f67` |
+| `epoch_a_process_cpu_samples.json` | `286dd065d2b6edbfe6fd171eebe9145816f8eef51abbfd99dcbaf5640573a5d3` |
 | `epoch_b.sample.txt` | `5c7cd25e584843a61c1db9dd09440d3ce0d4900b9e61576c0bd9c8e0d18d8518` |
 | `r0_probe.log` | `c855a958fc9d1c544428f3ecf77961b193464250818ea309103832a351eeff1f` |
 | `r0_control.bin` | `ca592c4483feb74784b7a5b5d9baa53ba74e90650b150f48f74b040e9ab6129e` |
 | `game.stdout` / `game.stderr` | (empty) `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
 
-Evidence JSON hashes: see [`analysis/evidence/`](../../analysis/evidence/) files listed in [`results/INDEX.md`](../INDEX.md).
+| `analysis/evidence/r0-integrated-session-20261012T210806Z.json` | `fae318a53de7eb72e4c434319f95582a2bec990a5410bdcf6f2f8c8740be2021` |
+
+Other evidence JSON: [`r0-frame-evolution-20261012T210806Z.json`](../../analysis/evidence/r0-frame-evolution-20261012T210806Z.json), [`r0-stack-analyzer-failure-20261012T210806Z.json`](../../analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json) (unchanged this commit).
