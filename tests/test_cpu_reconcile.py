@@ -14,6 +14,14 @@ OCT12_SIDECAR = Path(__file__).parent / "fixtures/oct12_epoch_a_process_cpu_samp
 OCT12_RUN = ROOT / "results/20261012T210806Z-r0-measurement"
 
 
+def _running_producer() -> dict:
+    return {
+        "state_before_stop": "running",
+        "exit_code_before_stop": None,
+        "stop_completed": True,
+    }
+
+
 def _gate_cpu() -> dict:
     return {
         "reconcile_ok": True,
@@ -21,6 +29,8 @@ def _gate_cpu() -> dict:
         "main_thread_mapping_status": "verified",
         "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
         "process_cpu_sample_count": 27,
+        "process_cpu_sidecar_persisted": True,
+        "powermetrics_producer": _running_producer(),
         "thread_cpu_ms_per_s": 100.0,
         "window_start_ns": 0,
         "window_end_ns": 1,
@@ -46,6 +56,49 @@ class CpuReconcileTests(unittest.TestCase):
         manifest = {"cpu_accounting_contract": cpu_reconcile.CPU_ACCOUNTING_CONTRACT_V1}
         cpu = {"reconcile_ok": True}
         self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, None))
+
+    def test_tail_gate_rejects_missing_finalization_status(self) -> None:
+        manifest = {"cpu_accounting_contract": cpu_reconcile.CPU_ACCOUNTING_CONTRACT_V1}
+        cpu = {
+            "reconcile_ok": True,
+            "cpu_reconciliation_phase": "finalized",
+            "process_cpu_sample_count": 5,
+            "process_cpu_sidecar_persisted": True,
+            "powermetrics_producer": _running_producer(),
+        }
+        self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, None))
+
+    def test_tail_gate_rejects_bogus_status(self) -> None:
+        manifest = {"cpu_accounting_contract": cpu_reconcile.CPU_ACCOUNTING_CONTRACT_V1}
+        cpu = _gate_cpu()
+        cpu["tail_finalization_status"] = {"status": "bogus", "trailing_partial_bytes": 0}
+        self.assertFalse(cpu_reconcile.cpu_reconcile_gate_passes(cpu, manifest, None))
+
+    def test_reconcile_cpu_without_tail_fails(self) -> None:
+        thread_report = {
+            "thread_cpu_ms_per_s": 100.0,
+            "window_start_ns": 0,
+            "window_end_ns": 1,
+        }
+        result = cpu_reconcile.reconcile_cpu(
+            thread_report,
+            powermetrics_samples=[],
+            clock_anchor={"monotonic_ns": 0, "wall_ns": 0},
+            pid=1,
+            reconcile_tolerance_ms_per_s=50.0,
+            tail_finalization=None,
+            powermetrics_producer=_running_producer(),
+        )
+        self.assertFalse(result["reconcile_ok"])
+
+    def test_sidecar_arithmetic_invariants(self) -> None:
+        observations = [
+            {"monotonic_ns": 1, "cputime_ms_per_s": 1000.0},
+            {"monotonic_ns": 2, "cputime_ms_per_s": 1020.0},
+        ]
+        mean, count = cpu_reconcile.mean_from_observations(observations)
+        self.assertEqual(count, 2)
+        self.assertAlmostEqual(mean, 1010.0)
 
     def test_legacy_oct12_gate_without_contract(self) -> None:
         manifest = {"schema": "r0_measurement_session_v1"}
@@ -94,6 +147,7 @@ class CpuReconcileTests(unittest.TestCase):
                 "window_start_ns": anchor["monotonic_ns"],
                 "window_end_ns": anchor["monotonic_ns"] + 3_000_000_000,
             }
+            producer = _running_producer()
             first_pass = cpu_reconcile.reconcile_cpu(
                 thread_report,
                 powermetrics_samples=tail.samples,
@@ -101,6 +155,7 @@ class CpuReconcileTests(unittest.TestCase):
                 pid=pid,
                 reconcile_tolerance_ms_per_s=50.0,
                 tail_finalization={"status": "clean", "trailing_partial_bytes": 0},
+                powermetrics_producer=producer,
             )
             self.assertEqual(first_pass["process_cpu_sample_count"], 1)
 
@@ -115,6 +170,7 @@ class CpuReconcileTests(unittest.TestCase):
                 pid=pid,
                 reconcile_tolerance_ms_per_s=50.0,
                 tail_finalization=finish,
+                powermetrics_producer=producer,
             )
             self.assertEqual(second_pass["process_cpu_sample_count"], 2)
             self.assertGreater(second_pass["process_cpu_ms_per_s"], first_pass["process_cpu_ms_per_s"])

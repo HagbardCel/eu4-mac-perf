@@ -125,6 +125,6 @@ After a stack-parser fix:
 | `analysis/evidence/r0-stack-report-20261012T210806Z.json` | `094b24f29336a1c2c4e7ac42754fd35a5406ab2417bda1bdca7c04e28bcaac44` |
 | `analysis/evidence/r0-main-thread-cost-model-20261012T210806Z.json` | `b2f5da6ea09406888fd73d2916294b32e605829b6e418b8bf9fd399e798aaacb` |
 | `analysis/evidence/r0-cpu-reconciliation-20261012T210806Z.json` | `1e8bc51e2e683746c372abc4515884e15170da0519201ee7f7e6f675fcb72b3a` |
-| `analysis/evidence/r0-requalification-20261012T210806Z.json` | `9bd9fd1f88a9cf470c376228f067a237fbd06ba0cd45255cc6002503bb5451c7` |
+| `analysis/evidence/r0-requalification-20261012T210806Z.json` | `76e218d924447fe7b73da0b833defa2a82d506d44b77355a5f9a14a312847796` |
 
 Other evidence JSON: [`r0-frame-evolution-20261012T210806Z.json`](../../analysis/evidence/r0-frame-evolution-20261012T210806Z.json), [`r0-stack-analyzer-failure-20261012T210806Z.json`](../../analysis/evidence/r0-stack-analyzer-failure-20261012T210806Z.json) (historical acquisition failure record).

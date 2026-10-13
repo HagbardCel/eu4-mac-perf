@@ -307,6 +307,12 @@ class FrameEvolutionCliE2ETests(unittest.TestCase):
                     "main_thread_mapping_status": "verified",
                     "tail_finalization_status": {"status": "clean", "trailing_partial_bytes": 0},
                     "process_cpu_sample_count": 10,
+                    "process_cpu_sidecar_persisted": True,
+                    "powermetrics_producer": {
+                        "state_before_stop": "running",
+                        "exit_code_before_stop": None,
+                        "stop_completed": True,
+                    },
                     "thread_cpu_ms_per_s": 100.0,
                     "window_start_ns": 0,
                     "window_end_ns": 1,
