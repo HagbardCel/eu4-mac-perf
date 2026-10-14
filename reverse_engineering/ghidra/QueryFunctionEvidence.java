@@ -20,6 +20,8 @@ import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.pcode.PcodeOp;
+import ghidra.program.model.pcode.PcodeOpAST;
+import ghidra.program.model.pcode.SequenceNumber;
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -32,7 +34,29 @@ public class QueryFunctionEvidence extends GhidraScript {
 
     private static String esc(String s) {
         if (s == null) return "null";
-        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n") + "\"";
+        StringBuilder out = new StringBuilder();
+        out.append('\"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '\\': out.append("\\\\"); break;
+                case '\"': out.append("\\\""); break;
+                case '\n': out.append("\\n"); break;
+                case '\r': out.append("\\r"); break;
+                case '\t': out.append("\\t"); break;
+                default:
+                    if (c < 0x20) out.append(String.format("\\u%04x", (int) c));
+                    else out.append(c);
+            }
+        }
+        out.append('\"');
+        return out.toString();
+    }
+
+    private String seqRvaJson(long imageBase, SequenceNumber seq) {
+        if (seq == null || seq.getTarget() == null) return "null";
+        long off = seq.getTarget().getOffset() - imageBase;
+        return esc(rvaHex(off));
     }
 
     private long parseRva(String text) {
@@ -154,12 +178,21 @@ public class QueryFunctionEvidence extends GhidraScript {
     }
 
     private void emitReferences(Function fn, ReferenceManager refMgr, List<String> facts, List<String> interpretations) {
-        ReferenceIterator fromIter = refMgr.getReferencesFrom(fn.getEntryPoint());
+        long imageBase = currentProgram.getImageBase().getOffset();
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
         int c = 0;
-        while (fromIter.hasNext() && c < 200) {
-            Reference ref = fromIter.next();
-            facts.add(refJson(ref, "outgoing"));
-            c++;
+        InstructionIterator it = currentProgram.getListing().getInstructions(fn.getBody(), true);
+        while (it.hasNext() && c < 200) {
+            Instruction ins = it.next();
+            ReferenceIterator fromIter = refMgr.getReferencesFrom(ins.getAddress());
+            while (fromIter.hasNext() && c < 200) {
+                Reference ref = fromIter.next();
+                String key = ref.getFromAddress() + "->" + ref.getToAddress();
+                if (seen.add(key)) {
+                    facts.add(refJson(ref, "outgoing"));
+                    c++;
+                }
+            }
         }
         ReferenceIterator toIter = refMgr.getReferencesTo(fn.getEntryPoint());
         c = 0;
@@ -194,6 +227,11 @@ public class QueryFunctionEvidence extends GhidraScript {
 
     private void emitTypeLayout(Function fn, List<String> facts, List<String> interpretations) {
         DataType dt = fn.getReturnType();
+        if (dt != null) {
+            facts.add("{\"kind\":\"return_type\",\"type\":" + esc(dt.getName())
+                + ",\"size\":" + dt.getLength()
+                + ",\"provenance\":\"ghidra_type_inference\"}");
+        }
         if (dt instanceof Structure) {
             Structure st = (Structure) dt;
             for (int i = 0; i < st.getNumComponents() && i < 64; i++) {
@@ -202,6 +240,12 @@ public class QueryFunctionEvidence extends GhidraScript {
                     + ",\"size\":" + st.getComponent(i).getLength()
                     + ",\"provenance\":\"ghidra_type_inference\"}");
             }
+        }
+        for (int p = 0; p < fn.getParameterCount() && p < 32; p++) {
+            DataType pt = fn.getParameter(p).getDataType();
+            facts.add("{\"kind\":\"parameter_type\",\"index\":" + p
+                + ",\"type\":" + esc(pt.getName())
+                + ",\"provenance\":\"ghidra_type_inference\"}");
         }
         interpretations.add("{\"note\":\"class_identity_may_be_unknown\",\"provenance\":\"ghidra_type_inference\"}");
     }
@@ -223,6 +267,7 @@ public class QueryFunctionEvidence extends GhidraScript {
             }
             n++;
         }
+        long imageBase = currentProgram.getImageBase().getOffset();
         try {
             DecompInterface decomp = new DecompInterface();
             decomp.openProgram(currentProgram);
@@ -230,12 +275,12 @@ public class QueryFunctionEvidence extends GhidraScript {
             if (res != null && res.decompileCompleted()) {
                 HighFunction hf = res.getHighFunction();
                 if (hf != null) {
-                    Iterator<PcodeOp> pcodeIt = hf.getPcodeOps();
+                    Iterator<PcodeOpAST> pcodeIt = hf.getPcodeOps();
                     while (pcodeIt.hasNext()) {
-                        PcodeOp op = pcodeIt.next();
+                        PcodeOpAST op = pcodeIt.next();
                         if (op.getOpcode() == PcodeOp.LOAD || op.getOpcode() == PcodeOp.STORE) {
                             facts.add("{\"kind\":\"pcode_mem_op\",\"opcode\":" + esc(op.getMnemonic())
-                                + ",\"seq\":" + op.getSeqnum().getTarget()
+                                + ",\"seq\":" + seqRvaJson(imageBase, op.getSeqnum())
                                 + ",\"provenance\":\"ghidra_pcode\"}");
                             any = true;
                         }

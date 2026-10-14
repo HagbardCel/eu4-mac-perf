@@ -12,7 +12,7 @@ from reverse_engineering.graphics_agent.budgets import ensure_budget_tables
 from reverse_engineering.graphics_agent.validation import REVIEW_HUMAN_ACCEPTED, REVIEW_MODEL_VERIFIED
 from reverse_engineering.paths import ReError
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -111,6 +111,9 @@ def migrate(conn: sqlite3.Connection) -> None:
             (str(SCHEMA_VERSION),),
         )
     _ensure_ghidra_columns(conn)
+    from reverse_engineering.graphics_agent.ghidra_acquire import ensure_ghidra_schema
+
+    ensure_ghidra_schema(conn)
     conn.commit()
 
 

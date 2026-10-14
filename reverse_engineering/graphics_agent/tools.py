@@ -169,19 +169,27 @@ class EvidenceService:
         self._tool_budget()
         node_budget = min(node_budget, self.limits.max_graph_nodes)
         g = self.graph()
-        start_nodes = [format_rva(parse_rva(s)) for s in seeds]
+        start_nodes = [self._resolve_path_endpoint(g, s) for s in seeds]
         visited: set[str] = set()
         edges_out: list[dict[str, Any]] = []
         queue: deque[str] = deque(start_nodes)
+        reverse_adj: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        if direction == "reverse":
+            for caller, edges in g.resolved_adj.items():
+                for callee, meta in edges:
+                    reverse_adj.setdefault(callee, []).append((caller, meta))
         while queue and len(visited) < node_budget:
             node = queue.popleft()
             if node in visited:
                 continue
             visited.add(node)
-            for callee, meta in g.resolved_adj.get(node, []):
-                edges_out.append({"from": node, "to": callee, "meta": meta})
-                if callee not in visited and not is_external_node(callee):
-                    queue.append(callee)
+            edge_list = reverse_adj.get(node, []) if direction == "reverse" else g.resolved_adj.get(node, [])
+            for nxt, meta in edge_list:
+                edges_out.append(
+                    {"from": node, "to": nxt, "meta": meta} if direction != "reverse" else {"from": nxt, "to": node, "meta": meta}
+                )
+                if nxt not in visited and not is_external_node(nxt):
+                    queue.append(nxt)
         frontiers = []
         for s in start_nodes:
             frontiers.extend(g.reachable_frontiers(s, frozenset())[:20])
@@ -197,6 +205,11 @@ class EvidenceService:
         if raw.startswith("ext:"):
             return raw
         if not raw.startswith("0x"):
+            needle = raw.lstrip("_")
+            for rva, row in g.functions.items():
+                name = (row.get("name_mangled") or row.get("name") or "") or ""
+                if name == raw or name.endswith(needle) or needle in name:
+                    return rva
             sym = raw if raw.startswith("_") else f"_{raw}"
             node = external_node(sym)
             if any(callee == node for edges in g.resolved_adj.values() for callee, _ in edges):
@@ -338,13 +351,8 @@ class EvidenceService:
 
     def decompile_functions(self, rvas: list[str], timeout_seconds: int = 120) -> dict[str, Any]:
         self._tool_budget()
-        budgets.check_and_increment(
-            self.research_conn,
-            self.investigation_id,
-            "decompilations",
-            self.limits.max_new_decompilations,
-            delta=len(rvas),
-        )
+        if len(rvas) > 8:
+            rvas = rvas[:8]
         from reverse_engineering.graphics_agent.ghidra_queries import run_decompile_batch
 
         digest = binary_sha256()
