@@ -1,0 +1,17 @@
+{
+  "mandatory_identity": [
+    "__ZN16CEU3GraphicalMap6RenderEP21GfxDeferredContextGFXRK10CEU3Camerafb"
+  ],
+  "renderer_roots": [
+    "__ZN16CEU3GraphicalMap6RenderEP21GfxDeferredContextGFXRK10CEU3Camerafb"
+  ],
+  "gfx_abstraction_cut": {
+    "draw": ["_GfxDrawIndexed"],
+    "state": ["_GfxSetShader"],
+    "buffers_textures": [],
+    "render_targets": [],
+    "presentation": []
+  },
+  "backend_implementation_cut": {"shaders": []},
+  "endpoint_classification": {"_glDrawElements": "draw"}
+}

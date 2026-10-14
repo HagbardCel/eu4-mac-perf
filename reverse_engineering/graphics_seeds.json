@@ -1,0 +1,52 @@
+{
+  "schema": 2,
+  "mandatory_identity": [
+    "__ZN13SShaderOpenGL6SetAllEv",
+    "_ZN14CPdxMeshObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraibb",
+    "__ZN16CEU3GraphicalMap6RenderEP21GfxDeferredContextGFXRK10CEU3Camerafb"
+  ],
+  "renderer_roots": [
+    "__ZN16CEU3GraphicalMap6RenderEP21GfxDeferredContextGFXRK10CEU3Camerafb"
+  ],
+  "renderer_sub_entries": [
+    "_ZN14CPdxMeshObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraibb"
+  ],
+  "backend_anchors": [
+    "__ZN13SShaderOpenGL6SetAllEv"
+  ],
+  "measured_hot_path_symbols": [
+    "_ZN14CPdxMeshObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraibb"
+  ],
+  "endpoint_classification": {
+    "_glDrawElements": "draw",
+    "_glDrawArrays": "draw",
+    "_glDrawElementsInstanced": "draw",
+    "_glDrawArraysInstanced": "draw",
+    "_glMultiDrawElements": "draw",
+    "_glMultiDrawArrays": "draw",
+    "_glDrawElementsBaseVertex": "draw",
+    "_glMultiDrawElementsBaseVertex": "draw"
+  },
+  "gfx_abstraction_cut": {
+    "draw": [
+      "_GfxDraw",
+      "_GfxDrawIndexed",
+      "_GfxDrawInstanced",
+      "_GfxDrawIndexedInstanced",
+      "_GfxDraw2dLines"
+    ],
+    "state": [],
+    "buffers_textures": [],
+    "render_targets": [],
+    "presentation": []
+  },
+  "backend_implementation_cut": {
+    "shaders": [
+      "__ZN13SShaderOpenGL6SetAllEv"
+    ],
+    "buffers_textures": [],
+    "render_targets": [],
+    "presentation": []
+  },
+  "exploratory_roots": []
+}

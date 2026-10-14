@@ -1,0 +1,3 @@
+{"callsite_rva":"0x0000000000005001","caller_rva":"0x0000000000005000","callee_internal_rva":"0x0000000000006010","resolution":"direct_internal"}
+{"callsite_rva":"0x0000000000006011","caller_rva":"0x0000000000006010","callee_external_symbol":"_glDrawElements","ultimate_external_symbol":"_glDrawElements","resolution":"direct_external"}
+{"callsite_rva":"0x0000000000006012","caller_rva":"0x0000000000006010","callee_external_symbol":"_glDrawRangeElements","ultimate_external_symbol":"_glDrawRangeElements","resolution":"direct_external"}

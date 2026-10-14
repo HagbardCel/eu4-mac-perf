@@ -1,0 +1,3 @@
+{"entry_rva":"0x0000000000005000","kind":"internal","name_mangled":"__ZN16CEU3GraphicalMap6RenderEP21GfxDeferredContextGFXRK10CEU3Camerafb","instruction_ranges":[{"start_rva":"0x0000000000005000","end_rva":"0x0000000000005010"}]}
+{"entry_rva":"0x0000000000006010","kind":"internal","name_mangled":"_GfxDrawIndexed","instruction_ranges":[{"start_rva":"0x0000000000006010","end_rva":"0x0000000000006018"}]}
+{"entry_rva":"0x0000000000006100","kind":"internal","name_mangled":"_GfxSetShader","instruction_ranges":[{"start_rva":"0x0000000000006100","end_rva":"0x0000000000006108"}]}

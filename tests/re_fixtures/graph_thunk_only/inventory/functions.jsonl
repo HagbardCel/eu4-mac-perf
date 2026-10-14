@@ -1,0 +1,3 @@
+{"entry_rva":"0x0000000000005000","kind":"internal","name_mangled":"renderer","instruction_ranges":[{"start_rva":"0x0000000000005000","end_rva":"0x0000000000005010"}]}
+{"entry_rva":"0x0000000000006010","kind":"internal","name_mangled":"_GfxDrawIndexed","instruction_ranges":[{"start_rva":"0x0000000000006010","end_rva":"0x0000000000006018"}]}
+{"entry_rva":"0x0000000000008000","kind":"internal","name_mangled":"thunk_helper","instruction_ranges":[{"start_rva":"0x0000000000008000","end_rva":"0x0000000000008010"}]}
