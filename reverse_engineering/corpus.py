@@ -115,9 +115,14 @@ def build_analyze_headless_argv(project_dir: Path, project_name: str, *extra: st
     ]
 
 
-def analyze_headless(project_dir: Path, project_name: str, *extra: str) -> None:
+def analyze_headless(
+    project_dir: Path,
+    project_name: str,
+    *extra: str,
+    timeout_seconds: int | None = None,
+) -> None:
     args = build_analyze_headless_argv(project_dir, project_name, *extra)
-    result = subprocess.run(args, capture_output=True, text=True)
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout_seconds)
     if result.returncode != 0:
         stdout_tail = (result.stdout or "")[-8000:]
         stderr_tail = (result.stderr or "")[-4000:]

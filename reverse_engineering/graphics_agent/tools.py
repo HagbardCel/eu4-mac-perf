@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +18,7 @@ from reverse_engineering.call_graph import (
     external_node,
     is_external_node,
     load_call_graph,
+    _resolved_target,
 )
 from reverse_engineering.census import OPENGL_RE
 from reverse_engineering.graphics_agent import budgets
@@ -27,14 +29,18 @@ from reverse_engineering.graphics_agent.architecture_kb import (
 from reverse_engineering.paths import ROOT
 from reverse_engineering.graphics_agent.evidence_ids import call_edge_id, function_id
 from reverse_engineering.graphics_agent.ghidra_queries import run_query_evidence
+from reverse_engineering.graphics_agent.provenance_guard import assert_corpus_consistency
 from reverse_engineering.graphics_agent.research_store import (
     bump_revision,
+    enqueue_verification,
     known_evidence_ids,
     log_event,
+    register_evidence,
     research_revision,
     upsert_claim,
 )
 from reverse_engineering.graphics_agent.validation import (
+    REVIEW_EVIDENCE_VALIDATED,
     REVIEW_PROPOSED,
     validate_claim_evidence_refs,
 )
@@ -53,6 +59,7 @@ class EvidenceService:
     limits: budgets.BudgetLimits = field(default_factory=budgets.BudgetLimits)
     _graph: CallGraph | None = None
     _index_conn: sqlite3.Connection | None = None
+    _db_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     @classmethod
     def open(
@@ -68,18 +75,24 @@ class EvidenceService:
         from reverse_engineering.graphics_agent.research_store import connect, ensure_investigation
 
         inv_digest = inventory_bundle_digest(exp / "inventory")
+        assert_corpus_consistency(exp, digest)
         conn = connect(agent_dir / "research.sqlite")
         ensure_investigation(conn, investigation_id, digest, inv_digest, baseline_revision)
         limits = budgets.limits_from_config(config or {})
         return cls(investigation_id, baseline_revision, exp, conn, limits)
 
+    def _register_evidence(self, evidence_id: str, kind: str, artifact: dict[str, Any]) -> None:
+        with self._db_lock:
+            register_evidence(self.research_conn, evidence_id, kind, artifact)
+
     def _tool_budget(self) -> None:
-        budgets.check_and_increment(
-            self.research_conn,
-            self.investigation_id,
-            "tool_calls",
-            self.limits.max_tool_calls,
-        )
+        with self._db_lock:
+            budgets.check_and_increment(
+                self.research_conn,
+                self.investigation_id,
+                "tool_calls",
+                self.limits.max_tool_calls,
+            )
 
     def inventory_dir(self) -> Path:
         return self.export_dir / "inventory"
@@ -148,6 +161,8 @@ class EvidenceService:
                 dossier["decompilation"] = {"status": "loaded", "body": pseudo["body"][:8000]}
             else:
                 dossier["decompilation"] = {"status": "not_in_index"}
+        fid = function_id(digest, rva)
+        self._register_evidence(fid, "function", {"entry_rva": rva, "function": dict(row)})
         return dossier
 
     def get_subgraph(self, seeds: list[str], direction: str = "forward", node_budget: int = 250) -> dict[str, Any]:
@@ -177,6 +192,34 @@ class EvidenceService:
             "truncated": len(visited) >= node_budget,
         }
 
+    def _resolve_path_endpoint(self, g: CallGraph, endpoint: str) -> str:
+        raw = endpoint.strip()
+        if raw.startswith("ext:"):
+            return raw
+        if not raw.startswith("0x"):
+            sym = raw if raw.startswith("_") else f"_{raw}"
+            node = external_node(sym)
+            if any(callee == node for edges in g.resolved_adj.values() for callee, _ in edges):
+                return node
+            for ext in g.collect_external_endpoints(OPENGL_RE):
+                if ext == node or ext.endswith(raw) or ext.endswith(sym):
+                    return ext
+            return node
+        return format_rva(parse_rva(raw))
+
+    def _edge_record_for_hop(
+        self, g: CallGraph, parent: str, child: str, edge_meta: dict[str, Any]
+    ) -> tuple[dict[str, Any], int] | None:
+        callsite = edge_meta.get("callsite_rva") or ""
+        for idx, row in enumerate(g.edges_raw):
+            if row.get("callsite_rva") != callsite:
+                continue
+            if row.get("caller_rva") != parent:
+                continue
+            if _resolved_target(row) == child:
+                return row, idx
+        return None
+
     def find_paths(
         self,
         source_rva: str,
@@ -185,28 +228,48 @@ class EvidenceService:
     ) -> dict[str, Any]:
         self._tool_budget()
         g = self.graph()
-        src = format_rva(parse_rva(source_rva))
-        tgt = format_rva(parse_rva(target_rva))
-        if tgt.startswith("ext:") or not tgt.startswith("0x"):
-            for sym, node in g.functions.items():
-                name = g.functions[sym].get("name_mangled") or ""
-                if name == tgt or name.endswith(tgt):
-                    tgt = sym
-                    break
+        src = self._resolve_path_endpoint(g, source_rva)
+        tgt = self._resolve_path_endpoint(g, target_rva)
         path = g.shortest_path(src, tgt, False, frozenset(), max_depth=max_depth)
         witness = path or []
         digest = self.inventory_digest()
         evidence = []
+        prev_node = None
         for step in witness:
+            node = step.get("node")
             edge = step.get("edge")
-            if edge:
-                cid = call_edge_id(
-                    digest,
-                    edge.get("callsite_rva", ""),
-                    step.get("node"),
-                    edge.get("callee_internal_rva") or edge.get("callee_external_symbol") or "",
-                )
-                evidence.append(cid)
+            if edge and prev_node is not None and node is not None:
+                matched = self._edge_record_for_hop(g, prev_node, node, edge)
+                if matched:
+                    row, row_idx = matched
+                    callee_key = (
+                        row.get("callee_internal_rva")
+                        or row.get("ultimate_external_symbol")
+                        or row.get("callee_external_symbol")
+                        or ""
+                    )
+                    cid = call_edge_id(
+                        digest,
+                        row.get("callsite_rva", ""),
+                        row.get("caller_rva"),
+                        callee_key,
+                        edge_row_id=row_idx,
+                    )
+                    self._register_evidence(
+                        cid,
+                        "call-edge",
+                        {
+                            "callsite_rva": row.get("callsite_rva"),
+                            "caller_rva": row.get("caller_rva"),
+                            "callee_internal_rva": row.get("callee_internal_rva"),
+                            "callee_external_symbol": row.get("callee_external_symbol"),
+                            "ultimate_external_symbol": row.get("ultimate_external_symbol"),
+                            "resolution": row.get("resolution"),
+                            "inventory_bundle_digest": digest,
+                        },
+                    )
+                    evidence.append(cid)
+            prev_node = node
         return {"path": witness, "found": path is not None, "evidence_ids": evidence}
 
     def get_api_endpoints(
@@ -231,7 +294,7 @@ class EvidenceService:
                 }
             )
         else:
-            endpoints = g.opengl_endpoints()
+            return {"error": "unknown_api_family", "api_family": api_family}
         if symbol_filter:
             sf = symbol_filter.lower()
             endpoints = [e for e in endpoints if sf in e.lower()]
@@ -290,10 +353,12 @@ class EvidenceService:
             self.research_conn,
             self.investigation_id,
             self.inventory_digest(),
+            self.export_dir,
             binary_root,
             self.agent_dir() / "cache" / "decompiled",
             rvas,
             timeout_seconds,
+            limits=self.limits,
         )
         return {"results": results}
 
@@ -332,16 +397,19 @@ class EvidenceService:
         )
         digest = binary_sha256()
         binary_root = local_binary_root(digest)
-        rows = run_query_evidence(
-            self.research_conn,
-            self.investigation_id,
-            self.inventory_digest(),
-            binary_root,
-            self.cache_dir(),
-            operation,
-            [rva],
-            max_insns=max_insns,
-        )
+        with self._db_lock:
+            rows = run_query_evidence(
+                self.research_conn,
+                self.investigation_id,
+                self.inventory_digest(),
+                self.export_dir,
+                binary_root,
+                self.cache_dir(),
+                operation,
+                [rva],
+                max_insns=max_insns,
+                limits=self.limits,
+            )
         return rows[0] if rows else {"status": "unresolved", "status_detail": "empty_result"}
 
     def get_disassembly(self, rva: str, max_insns: int = 128) -> dict[str, Any]:
@@ -373,7 +441,15 @@ class EvidenceService:
 
     def get_measurement_provenance(self, manifest_path: str) -> dict[str, Any]:
         self._tool_budget()
-        path = ROOT / manifest_path
+        if ".." in manifest_path or manifest_path.startswith("/"):
+            return {"error": "path_not_allowed"}
+        allowed_roots = (
+            ROOT / "analysis",
+            ROOT / "results",
+        )
+        path = (ROOT / manifest_path).resolve()
+        if not any(path.is_relative_to(root.resolve()) for root in allowed_roots if root.exists()):
+            return {"error": "path_not_allowed"}
         if not path.is_file():
             return {"error": "not_found"}
         return {"manifest": json.loads(path.read_text()), "note": "not_general_renderer_law"}
@@ -406,19 +482,22 @@ class EvidenceService:
         self._tool_budget()
         known = known_evidence_ids(self.research_conn)
         errors = validate_claim_evidence_refs(finding, self.inventory_digest(), known)
-        if errors and finding.get("evidence_ids"):
+        if errors:
             return {"ok": False, "errors": errors}
+        refs = finding.get("evidence_ids") or []
+        review_status = REVIEW_EVIDENCE_VALIDATED if refs else REVIEW_PROPOSED
         claim = {
             "claim_id": finding["claim_id"],
             "investigation_id": self.investigation_id,
             "statement": finding["statement"],
             "scientific_status": finding.get("scientific_status", "hypothesis"),
-            "review_status": REVIEW_PROPOSED,
-            "evidence_ids": finding.get("evidence_ids", []),
+            "review_status": review_status,
+            "evidence_ids": refs,
             "limitations": finding.get("limitations"),
         }
-        upsert_claim(self.research_conn, claim)
-        return {"ok": True, "claim_id": claim["claim_id"]}
+        with self._db_lock:
+            upsert_claim(self.research_conn, claim)
+        return {"ok": True, "claim_id": claim["claim_id"], "review_status": review_status}
 
     def propose_investigation(self, domain: str, question: str) -> dict[str, Any]:
         self._tool_budget()
@@ -443,6 +522,7 @@ class EvidenceService:
         return build_backlog_snapshot(self.research_conn, self.investigation_id, rev, digests)
 
     def request_verification(self, claim_id: str) -> dict[str, Any]:
+        enqueue_verification(self.research_conn, self.investigation_id, claim_id)
         log_event(self.research_conn, self.investigation_id, "verification_requested", {"claim_id": claim_id})
         return {"queued": True, "claim_id": claim_id}
 

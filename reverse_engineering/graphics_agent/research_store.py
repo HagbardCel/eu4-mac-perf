@@ -9,13 +9,15 @@ from pathlib import Path
 from typing import Any
 
 from reverse_engineering.graphics_agent.budgets import ensure_budget_tables
+from reverse_engineering.graphics_agent.validation import REVIEW_HUMAN_ACCEPTED, REVIEW_MODEL_VERIFIED
+from reverse_engineering.paths import ReError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     migrate(conn)
@@ -79,8 +81,17 @@ def migrate(conn: sqlite3.Connection) -> None:
           operation TEXT NOT NULL,
           args_json TEXT NOT NULL,
           output_artifact_hash TEXT,
+          output_path TEXT,
           error TEXT,
+          lease_owner TEXT,
+          lease_expires_at REAL,
           created_at REAL NOT NULL,
+          updated_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS verification_queue (
+          claim_id TEXT PRIMARY KEY,
+          investigation_id TEXT NOT NULL,
+          status TEXT NOT NULL,
           updated_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS events (
@@ -99,7 +110,19 @@ def migrate(conn: sqlite3.Connection) -> None:
             "INSERT INTO meta (key, value) VALUES ('schema_version', ?)",
             (str(SCHEMA_VERSION),),
         )
+    _ensure_ghidra_columns(conn)
     conn.commit()
+
+
+def _ensure_ghidra_columns(conn: sqlite3.Connection) -> None:
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(ghidra_operations)").fetchall()}
+    for name, ddl in (
+        ("output_path", "ALTER TABLE ghidra_operations ADD COLUMN output_path TEXT"),
+        ("lease_owner", "ALTER TABLE ghidra_operations ADD COLUMN lease_owner TEXT"),
+        ("lease_expires_at", "ALTER TABLE ghidra_operations ADD COLUMN lease_expires_at REAL"),
+    ):
+        if name not in cols:
+            conn.execute(ddl)
 
 
 def research_revision(conn: sqlite3.Connection) -> int:
@@ -131,11 +154,17 @@ def ensure_investigation(
     initial_state: str = "PENDING",
 ) -> None:
     now = time.time()
+    row = conn.execute("SELECT * FROM investigations WHERE id = ?", (investigation_id,)).fetchone()
+    if row:
+        if row["binary_sha256"] != binary_sha256 or row["inventory_digest"] != inventory_digest:
+            raise ReError("investigation corpus identity mismatch (binary or inventory digest)")
+        if baseline_revision and row["baseline_revision"] and row["baseline_revision"] != baseline_revision:
+            raise ReError("investigation baseline_revision mismatch")
+        return
     conn.execute(
         """
         INSERT INTO investigations (id, state, binary_sha256, inventory_digest, baseline_revision, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO NOTHING
         """,
         (investigation_id, initial_state, binary_sha256, inventory_digest, baseline_revision, now, now),
     )
@@ -167,7 +196,17 @@ def known_evidence_ids(conn: sqlite3.Connection) -> set[str]:
     return {r["evidence_id"] for r in rows}
 
 
+def get_claim(conn: sqlite3.Connection, claim_id: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM claims WHERE claim_id = ?", (claim_id,)).fetchone()
+
+
 def upsert_claim(conn: sqlite3.Connection, claim: dict[str, Any]) -> None:
+    existing = get_claim(conn, claim["claim_id"])
+    if existing:
+        if existing["investigation_id"] != claim["investigation_id"]:
+            raise ReError("claim_id already used by another investigation")
+        if existing["review_status"] in (REVIEW_HUMAN_ACCEPTED, REVIEW_MODEL_VERIFIED):
+            raise ReError("cannot overwrite accepted or model-verified claim")
     now = time.time()
     conn.execute(
         """
@@ -234,23 +273,181 @@ def ghidra_op_reserve(
     investigation_id: str,
     operation: str,
     args: dict[str, Any],
+    *,
+    lease_owner: str | None = None,
+    lease_ttl_seconds: float = 600.0,
+    commit: bool = True,
 ) -> str:
     """Return state: reserved, running, published, failed (existing), or newly reserved."""
     existing = ghidra_op_get(conn, idempotency_key)
     if existing:
         return existing["state"]
     now = time.time()
+    lease_exp = now + lease_ttl_seconds if lease_owner else None
     conn.execute(
         """
         INSERT INTO ghidra_operations (
           idempotency_key, investigation_id, state, operation, args_json,
-          output_artifact_hash, error, created_at, updated_at
-        ) VALUES (?, ?, 'reserved', ?, ?, NULL, NULL, ?, ?)
+          output_artifact_hash, output_path, error, lease_owner, lease_expires_at,
+          created_at, updated_at
+        ) VALUES (?, ?, 'reserved', ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)
         """,
-        (idempotency_key, investigation_id, operation, json.dumps(args), now, now),
+        (
+            idempotency_key,
+            investigation_id,
+            operation,
+            json.dumps(args),
+            lease_owner,
+            lease_exp,
+            now,
+            now,
+        ),
+    )
+    if commit:
+        conn.commit()
+    return "reserved"
+
+
+def ghidra_acquire_lease(
+    conn: sqlite3.Connection,
+    investigation_id: str,
+    idempotency_key: str,
+    owner: str,
+    lease_ttl_seconds: float = 600.0,
+    max_concurrent: int = 1,
+) -> None:
+    """Atomically reserve op row + investigation Ghidra lease (BEGIN IMMEDIATE)."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        now = time.time()
+        active = conn.execute(
+            """
+            SELECT idempotency_key FROM ghidra_operations
+            WHERE investigation_id = ? AND state IN ('reserved', 'running')
+              AND lease_expires_at IS NOT NULL AND lease_expires_at > ?
+            """,
+            (investigation_id, now),
+        ).fetchall()
+        if len(active) >= max_concurrent:
+            other = [r["idempotency_key"] for r in active if r["idempotency_key"] != idempotency_key]
+            if other:
+                raise ReError("ghidra lease unavailable (concurrent acquisition limit)")
+        row = ghidra_op_get(conn, idempotency_key)
+        if row and row["state"] == "published":
+            conn.execute("COMMIT")
+            return
+        if not row:
+            now = time.time()
+            conn.execute(
+                """
+                INSERT INTO ghidra_operations (
+                  idempotency_key, investigation_id, state, operation, args_json,
+                  output_artifact_hash, output_path, error, lease_owner, lease_expires_at,
+                  created_at, updated_at
+                ) VALUES (?, ?, 'reserved', ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)
+                """,
+                (
+                    idempotency_key,
+                    investigation_id,
+                    "pending",
+                    json.dumps({}),
+                    owner,
+                    now + lease_ttl_seconds,
+                    now,
+                    now,
+                ),
+            )
+            row = ghidra_op_get(conn, idempotency_key)
+        conn.execute(
+            """
+            UPDATE ghidra_operations
+            SET lease_owner = ?, lease_expires_at = ?, updated_at = ?
+            WHERE idempotency_key = ?
+            """,
+            (owner, now + lease_ttl_seconds, now, idempotency_key),
+        )
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
+def reconcile_uncommitted_publish(
+    conn: sqlite3.Connection,
+    idempotency_key: str,
+    output_path: Path,
+    output_hash: str,
+) -> bool:
+    """If artifact exists on disk but DB not published, complete step 5 without re-running Ghidra."""
+    row = ghidra_op_get(conn, idempotency_key)
+    if not row:
+        return False
+    if row["state"] == "published":
+        if row["output_artifact_hash"] and row["output_artifact_hash"] != output_hash:
+            ghidra_op_transition(conn, idempotency_key, "failed", error="artifact hash mismatch")
+            raise ReError("published operation hash mismatch vs filesystem")
+        return True
+    if not output_path.is_file():
+        return False
+    ghidra_op_transition(
+        conn,
+        idempotency_key,
+        "published",
+        output_hash=output_hash,
+        output_path=str(output_path),
+    )
+    return True
+
+
+def verify_published_artifact(conn: sqlite3.Connection, idempotency_key: str) -> None:
+    row = ghidra_op_get(conn, idempotency_key)
+    if not row or row["state"] != "published":
+        return
+    path_text = row["output_path"]
+    if not path_text:
+        ghidra_op_transition(conn, idempotency_key, "failed", error="published row missing output_path")
+        raise ReError("ghidra artifact missing for published operation")
+    path = Path(path_text)
+    if not path.is_file():
+        ghidra_op_transition(conn, idempotency_key, "failed", error="artifact file missing")
+        raise ReError("ghidra artifact file missing for published operation")
+    import hashlib
+
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if row["output_artifact_hash"] and digest != row["output_artifact_hash"]:
+        ghidra_op_transition(conn, idempotency_key, "failed", error="artifact hash mismatch")
+        raise ReError("ghidra artifact hash mismatch vs database")
+
+
+def enqueue_verification(conn: sqlite3.Connection, investigation_id: str, claim_id: str) -> None:
+    now = time.time()
+    conn.execute(
+        """
+        INSERT INTO verification_queue (claim_id, investigation_id, status, updated_at)
+        VALUES (?, ?, 'pending', ?)
+        ON CONFLICT(claim_id) DO UPDATE SET status = 'pending', updated_at = excluded.updated_at
+        """,
+        (claim_id, investigation_id, now),
     )
     conn.commit()
-    return "reserved"
+
+
+def set_verification_status(conn: sqlite3.Connection, claim_id: str, status: str) -> None:
+    conn.execute(
+        "UPDATE verification_queue SET status = ?, updated_at = ? WHERE claim_id = ?",
+        (status, time.time(), claim_id),
+    )
+    conn.commit()
+
+
+def resolve_evidence_artifact(conn: sqlite3.Connection, evidence_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "SELECT kind, artifact_json FROM evidence_registry WHERE evidence_id = ?",
+        (evidence_id,),
+    ).fetchone()
+    if not row:
+        return None
+    return {"evidence_id": evidence_id, "kind": row["kind"], "artifact": json.loads(row["artifact_json"])}
 
 
 def ghidra_op_transition(
@@ -259,12 +456,38 @@ def ghidra_op_transition(
     state: str,
     output_hash: str | None = None,
     error: str | None = None,
+    output_path: str | None = None,
+    release_lease: bool = False,
 ) -> None:
+    lease_owner = None
+    lease_expires = None
+    if release_lease:
+        lease_owner = None
+        lease_expires = None
     conn.execute(
         """
-        UPDATE ghidra_operations SET state = ?, output_artifact_hash = ?, error = ?, updated_at = ?
+        UPDATE ghidra_operations SET state = ?, output_artifact_hash = ?, output_path = COALESCE(?, output_path),
+          error = ?, lease_owner = COALESCE(?, lease_owner), lease_expires_at = ?,
+          updated_at = ?
         WHERE idempotency_key = ?
         """,
-        (state, output_hash, error, time.time(), idempotency_key),
+        (
+            state,
+            output_hash,
+            output_path,
+            error,
+            lease_owner if release_lease else None,
+            lease_expires if release_lease else None,
+            time.time(),
+            idempotency_key,
+        ),
     )
+    if release_lease:
+        conn.execute(
+            """
+            UPDATE ghidra_operations SET lease_owner = NULL, lease_expires_at = NULL
+            WHERE idempotency_key = ?
+            """,
+            (idempotency_key,),
+        )
     conn.commit()

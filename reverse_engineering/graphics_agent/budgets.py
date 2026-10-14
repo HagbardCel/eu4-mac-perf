@@ -73,10 +73,38 @@ def check_and_increment(
     limit: int,
     delta: int = 1,
 ) -> int:
-    current = get_counter(conn, investigation_id, counter_key)
-    if current + delta > limit:
-        raise BudgetExceeded(f"{counter_key} would exceed limit {limit} (current {current})")
-    return increment_counter(conn, investigation_id, counter_key, delta)
+    ensure_budget_tables(conn)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT value FROM budget_counters WHERE investigation_id = ? AND counter_key = ?",
+            (investigation_id, counter_key),
+        ).fetchone()
+        current = int(row[0]) if row else 0
+        if current + delta > limit:
+            conn.execute("ROLLBACK")
+            raise BudgetExceeded(f"{counter_key} would exceed limit {limit} (current {current})")
+        if row:
+            conn.execute(
+                "UPDATE budget_counters SET value = value + ? WHERE investigation_id = ? AND counter_key = ?",
+                (delta, investigation_id, counter_key),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO budget_counters (investigation_id, counter_key, value) VALUES (?, ?, ?)",
+                (investigation_id, counter_key, delta),
+            )
+        new_row = conn.execute(
+            "SELECT value FROM budget_counters WHERE investigation_id = ? AND counter_key = ?",
+            (investigation_id, counter_key),
+        ).fetchone()
+        conn.execute("COMMIT")
+        return int(new_row[0]) if new_row else delta
+    except BudgetExceeded:
+        raise
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
 
 
 def limits_from_config(config: dict[str, Any]) -> BudgetLimits:

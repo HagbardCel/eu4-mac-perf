@@ -25,6 +25,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 
 public class QueryFunctionEvidence extends GhidraScript {
@@ -229,7 +230,9 @@ public class QueryFunctionEvidence extends GhidraScript {
             if (res != null && res.decompileCompleted()) {
                 HighFunction hf = res.getHighFunction();
                 if (hf != null) {
-                    for (PcodeOp op : hf.getPcodeOps()) {
+                    Iterator<PcodeOp> pcodeIt = hf.getPcodeOps();
+                    while (pcodeIt.hasNext()) {
+                        PcodeOp op = pcodeIt.next();
                         if (op.getOpcode() == PcodeOp.LOAD || op.getOpcode() == PcodeOp.STORE) {
                             facts.add("{\"kind\":\"pcode_mem_op\",\"opcode\":" + esc(op.getMnemonic())
                                 + ",\"seq\":" + op.getSeqnum().getTarget()

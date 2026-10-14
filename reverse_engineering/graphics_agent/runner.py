@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
 
 from reverse_engineering.graphics_agent.model_registry import model_string, profile_for_mode
-from reverse_engineering.graphics_agent.session_checkpoint import connect as checkpoint_connect, load_messages, save_messages
+from reverse_engineering.graphics_agent.session_checkpoint import (
+    connect as checkpoint_connect,
+    load_session_meta,
+    parse_message_history,
+    persist_run_messages,
+    sha256_text,
+    validate_resume_meta,
+    write_session_meta,
+)
 from reverse_engineering.graphics_agent.tools import EvidenceService
+from reverse_engineering.graphics_agent.verification import run_verification
 
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 
@@ -34,6 +44,7 @@ MODE_TOOLS: dict[str, list[str]] = {
         "get_data_accesses",
         "get_indirect_dispatch",
         "find_paths",
+        "decompile_functions",
         "submit_findings",
     ],
     "verify": [
@@ -58,13 +69,8 @@ def load_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text()
 
 
-def _build_agent(mode: str, service: EvidenceService, model_override: Any = None, with_tools: bool = True):
-    from pydantic_ai import Agent
-    from pydantic_ai.toolsets.function import FunctionToolset
-
-    profile = profile_for_mode(mode)
-    model = model_override if model_override is not None else model_string(profile)
-    system = load_prompt("system.md") + "\n\n" + load_prompt(
+def _system_prompt(mode: str) -> str:
+    return load_prompt("system.md") + "\n\n" + load_prompt(
         {
             "discovery": "discover.md",
             "reconstruct": "reconstruct.md",
@@ -72,6 +78,35 @@ def _build_agent(mode: str, service: EvidenceService, model_override: Any = None
             "report": "summarize.md",
         }.get(mode, "discover.md")
     )
+
+
+def _inject_briefing(service: EvidenceService, system: str) -> str:
+    ctx_path = service.agent_dir() / "graphics-agent-context.json"
+    briefing = json.loads(ctx_path.read_text()) if ctx_path.is_file() else {}
+    summary = briefing.get("known_architecture") or briefing.get("briefing") or {}
+    return system + "\n\n## Corpus briefing\n" + json.dumps(summary, indent=2)[:12000]
+
+
+def _checkpoint_meta(service: EvidenceService, mode: str, system: str, session_id: str) -> dict[str, str]:
+    inv = service.inventory_digest()
+    return {
+        "session_id": session_id,
+        "mode": mode,
+        "model_profile": str(profile_for_mode(mode).get("model", "unknown")),
+        "investigation_id": service.investigation_id,
+        "baseline_revision": service.baseline_revision,
+        "binary_sha256": __import__("reverse_engineering.paths", fromlist=["binary_sha256"]).binary_sha256(),
+        "inventory_bundle_digest": inv,
+        "system_prompt_sha256": sha256_text(system),
+    }
+
+
+def _build_agent(mode: str, service: EvidenceService, system: str, model_override: Any = None, with_tools: bool = True):
+    from pydantic_ai import Agent
+    from pydantic_ai.toolsets.function import FunctionToolset
+
+    profile = profile_for_mode(mode)
+    model = model_override if model_override is not None else model_string(profile)
     toolset = FunctionToolset()
     allowed = set(MODE_TOOLS.get(mode, MODE_TOOLS["discovery"]))
 
@@ -115,6 +150,9 @@ def _build_agent(mode: str, service: EvidenceService, model_override: Any = None
 
         def get_indirect_dispatch(rva: str) -> dict[str, Any]:
             return service.get_indirect_dispatch(rva)
+
+        def decompile_functions(rvas: list[str], timeout_seconds: int = 120) -> dict[str, Any]:
+            return service.decompile_functions(rvas, timeout_seconds=timeout_seconds)
 
         def get_runtime_evidence(subsystem: str | None = None) -> dict[str, Any]:
             return service.get_runtime_evidence(subsystem)
@@ -160,6 +198,7 @@ def _build_agent(mode: str, service: EvidenceService, model_override: Any = None
             "get_type_layout": get_type_layout,
             "get_data_accesses": get_data_accesses,
             "get_indirect_dispatch": get_indirect_dispatch,
+            "decompile_functions": decompile_functions,
             "get_runtime_evidence": get_runtime_evidence,
             "submit_findings": submit_findings,
             "propose_investigation": propose_investigation,
@@ -183,31 +222,45 @@ def run_investigation(
     session_id: str,
     config: dict[str, Any] | None = None,
     use_test_model: bool = False,
+    claim_id_to_verify: str | None = None,
 ) -> dict[str, Any]:
     service = EvidenceService.open(baseline_revision, investigation_id, config)
     session_dir = service.agent_dir() / "sessions" / session_id
     ckpt = checkpoint_connect(session_dir / "checkpoint.sqlite")
 
+    if mode == "verify" and claim_id_to_verify:
+        outcome = run_verification(service.research_conn, investigation_id, claim_id_to_verify)
+        service.export_snapshots()
+        return {"verification": outcome}
+
+    system = _inject_briefing(service, _system_prompt(mode))
+    meta = _checkpoint_meta(service, mode, system, session_id)
+    history = parse_message_history(ckpt)
+    if history:
+        mismatches = validate_resume_meta(ckpt, meta)
+        if mismatches:
+            raise ValueError("session resume refused: " + "; ".join(mismatches))
+    elif not load_session_meta(ckpt):
+        write_session_meta(ckpt, meta)
+
     test_mode = use_test_model or os.environ.get("ALLOW_MODEL_REQUESTS", "true").lower() == "false"
     if test_mode:
         from pydantic_ai.models.test import TestModel
 
-        agent = _build_agent(mode, service, model_override=TestModel(), with_tools=False)
-        result = agent.run_sync(user_prompt)
-        save_messages(ckpt, [{"role": "result", "content": str(result.output)}])
+        agent = _build_agent(
+            mode,
+            service,
+            system,
+            model_override=TestModel(call_tools=[]),
+            with_tools=True,
+        )
+        result = agent.run_sync(user_prompt, message_history=history or None)
+        persist_run_messages(ckpt, result)
         service.export_snapshots()
         return {"output": result.output, "test_model": True}
 
-    agent = _build_agent(mode, service, with_tools=True)
-    history = load_messages(ckpt)
-    prompt = user_prompt
-    if history:
-        prompt = user_prompt + "\n\n(previous session messages restored: " + str(len(history)) + ")"
-    result = agent.run_sync(prompt)
-    save_messages(
-        ckpt,
-        history
-        + [{"role": "user", "content": user_prompt}, {"role": "assistant", "content": str(result.output)}],
-    )
+    agent = _build_agent(mode, service, system, with_tools=True)
+    result = agent.run_sync(user_prompt, message_history=history or None)
+    persist_run_messages(ckpt, result)
     service.export_snapshots()
     return {"output": result.output, "model": model_string(profile_for_mode(mode))}

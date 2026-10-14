@@ -20,7 +20,13 @@ class GraphicsAgentToolsTests(unittest.TestCase):
         for name in ("functions.jsonl", "call_edges.jsonl", "coverage.json"):
             (inv / name).write_text((inv_src / name).read_text())
         (exp / "provenance.json").write_text(
-            json.dumps({"inventory_bundle_digest": inventory_bundle_digest(inv_src)}) + "\n"
+            json.dumps(
+                {
+                    "inventory_bundle_digest": inventory_bundle_digest(inv_src),
+                    "baseline_revision": "rev",
+                }
+            )
+            + "\n"
         )
         from reverse_engineering import index_db
 

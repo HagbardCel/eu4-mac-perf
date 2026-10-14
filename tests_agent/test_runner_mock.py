@@ -24,7 +24,13 @@ class RunnerMockTests(unittest.TestCase):
             from reverse_engineering.manifest import inventory_bundle_digest
 
             (exp / "provenance.json").write_text(
-                json.dumps({"inventory_bundle_digest": inventory_bundle_digest(inv_src)}) + "\n"
+                json.dumps(
+                    {
+                        "inventory_bundle_digest": inventory_bundle_digest(inv_src),
+                        "baseline_revision": "rev",
+                    }
+                )
+                + "\n"
             )
             from reverse_engineering import index_db
 

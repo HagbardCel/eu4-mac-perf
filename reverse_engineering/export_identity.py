@@ -29,6 +29,7 @@ Mode = Literal[
     "index",
     "qualify",
     "census_write",
+    "agent_ghidra",
 ]
 
 
@@ -154,6 +155,15 @@ def validate_export_identity(
             raise ReError("missing baseline; run import first")
         return
     if mode == "inventory_regen":
+        return
+    if mode == "agent_ghidra":
+        if not inventory_complete(inv):
+            raise ReError("inventory bundle incomplete; run inventory first")
+        bundle = inventory_bundle_digest(inv)
+        if provenance.get("inventory_bundle_digest") and provenance["inventory_bundle_digest"] != bundle:
+            raise ReError("inventory bundle digest drift vs provenance (agent_ghidra)")
+        if not provenance.get("baseline_revision"):
+            raise ReError("missing baseline_revision in provenance")
         return
     if not inventory_complete(inv):
         raise ReError("inventory bundle incomplete; run inventory first")

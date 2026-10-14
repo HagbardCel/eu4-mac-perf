@@ -27,6 +27,14 @@ SCIENTIFIC_STATUSES = frozenset(
     }
 )
 
+REQUIRES_EVIDENCE_IDS = frozenset(
+    {
+        "observed_static",
+        "supported_inference",
+        "contradicted",
+    }
+)
+
 MEMBERSHIP_STATUSES = frozenset(
     {"graphics_owned", "shared_dependency", "non_graphics", "unknown"}
 )
@@ -51,8 +59,11 @@ def validate_claim_evidence_refs(
     """Return list of errors; empty if evidence IDs resolve."""
     errors: list[str] = []
     refs = claim.get("evidence_ids") or []
+    status = claim.get("scientific_status", "hypothesis")
+    if status in REQUIRES_EVIDENCE_IDS and not refs:
+        errors.append(f"{status} requires non-empty evidence_ids")
+        return errors
     if not refs:
-        errors.append("claim has no evidence_ids")
         return errors
     for eid in refs:
         if not evidence_exists(eid, inventory_digest, known_evidence_ids):
