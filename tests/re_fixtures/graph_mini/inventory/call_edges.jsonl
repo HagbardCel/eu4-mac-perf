@@ -1,0 +1,6 @@
+{"callsite_rva":"0x0000000000005001","caller_rva":"0x0000000000005000","callee_internal_rva":"0x0000000000007000","callee_external_symbol":null,"ultimate_external_symbol":null,"resolution":"direct_internal"}
+{"callsite_rva":"0x0000000000005002","caller_rva":"0x0000000000005000","callee_internal_rva":"0x0000000000008000","callee_external_symbol":null,"ultimate_external_symbol":null,"resolution":"direct_internal"}
+{"callsite_rva":"0x0000000000007001","caller_rva":"0x0000000000007000","callee_internal_rva":null,"callee_external_symbol":"_glDrawElements","ultimate_external_symbol":"_glDrawElements","resolution":"direct_external"}
+{"callsite_rva":"0x0000000000008001","caller_rva":"0x0000000000008000","callee_internal_rva":null,"callee_external_symbol":"_glDrawElements","ultimate_external_symbol":"_glDrawElements","resolution":"thunk"}
+{"callsite_rva":"0x0000000000009001","caller_rva":"0x0000000000009000","callee_internal_rva":null,"callee_external_symbol":null,"ultimate_external_symbol":null,"resolution":"unresolved_indirect"}
+{"callsite_rva":"0x0000000000005201","caller_rva":"0x0000000000005200","callee_internal_rva":null,"callee_external_symbol":"_glUseProgram","ultimate_external_symbol":"_glUseProgram","resolution":"direct_external"}

@@ -93,6 +93,21 @@ python3 -m reverse_engineering.search callers 0xRVA
 python3 -m reverse_engineering.search callees 0xRVA
 ```
 
+## Graph analysis (static inventory)
+
+After `corpus inventory` / `corpus index`, analyze the recovered call graph without re-running Ghidra:
+
+```bash
+python3 -m reverse_engineering.graph_analysis audit --baseline-revision <rev>
+python3 -m reverse_engineering.graph_analysis extract --baseline-revision <rev> --write-report
+```
+
+Outputs land under `exports/<rev>/logs/` (`call-graph-audit.json`, `graphics-subgraph.json`, optional `graphics-architecture-report.md`). Review before copying anything into git.
+
+Graph evidence uses a recomputed `inventory_bundle_digest` (must match `provenance.json` for authoritative boundary conclusions unless `--allow-digest-mismatch`). Seed definitions: [`graphics_seeds.json`](graphics_seeds.json).
+
+Exporter improvements (tail jumps, direct thunk RVAs) are deferred until an audit shows a material graphics gap.
+
 ## Inventory notes
 
 [`ImportAndInventory.java`](ghidra/ImportAndInventory.java) records call instructions from decoded code; **tail-call jumps may be missing** from `call_edges.jsonl` until a later fix.
