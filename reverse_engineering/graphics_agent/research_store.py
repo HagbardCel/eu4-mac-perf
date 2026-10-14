@@ -319,6 +319,7 @@ def ghidra_acquire_lease(
     lease_ttl_seconds: float = 600.0,
     max_concurrent: int = 1,
 ) -> None:
+    raise RuntimeError("ghidra_acquire_lease is removed; use ghidra_try_acquire in ghidra_acquire.py")
     """Atomically reserve op row + investigation Ghidra lease (BEGIN IMMEDIATE)."""
     conn.execute("BEGIN IMMEDIATE")
     try:

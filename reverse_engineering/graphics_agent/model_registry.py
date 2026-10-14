@@ -35,11 +35,8 @@ def validate_profile(profile: dict[str, Any]) -> None:
     if alias and provider != "deepseek":
         raise ValueError(f"api_model_alias is only supported for deepseek, not {provider}")
     if alias and provider == "deepseek":
-        import warnings
-
-        warnings.warn(
-            "api_model_alias is recorded but not applied by model_string; using model field",
-            stacklevel=2,
+        raise ValueError(
+            "api_model_alias is set but not applied by model_string; fix models.json or implement alias mapping"
         )
 
 

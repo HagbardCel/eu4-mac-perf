@@ -100,6 +100,26 @@ def validate_meta(meta_file: Path, identity: dict[str, Any], output_hash: str) -
         raise ReError("cache metadata project identity mismatch")
 
 
+def validate_stored_ghidra_artifact(
+    out_path: Path,
+    meta_file: Path,
+    identity: dict[str, Any],
+    operation: str,
+    requested_rvas: list[str],
+    output_hash: str,
+) -> list[dict[str, Any]]:
+    """Re-validate recovered or cached artifacts before they become authoritative."""
+    if not out_path.is_file():
+        raise ReError("ghidra artifact file missing")
+    on_disk = hashlib.sha256(out_path.read_bytes()).hexdigest()
+    if on_disk != output_hash:
+        raise ReError("ghidra artifact hash mismatch")
+    validate_meta(meta_file, identity, output_hash)
+    rows = _read_jsonl(out_path)
+    _validate_jsonl_rows(rows, operation, requested_rvas)
+    return rows
+
+
 def _validate_jsonl_rows(rows: list[dict[str, Any]], operation: str, requested_rvas: list[str]) -> None:
     seen = {format_rva(parse_rva(r["entry_rva"])) for r in rows if r.get("entry_rva")}
     for rva in requested_rvas:
@@ -200,6 +220,8 @@ def run_query_evidence(
                 "output_hash": out_hash,
             },
             project_key,
+            meta_file=meta_file,
+            identity=identity,
         )
         hit = _cache_hit(conn, ikey, out_path, meta_file, identity)
         if hit is not None:

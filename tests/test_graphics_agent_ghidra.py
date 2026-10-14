@@ -1,6 +1,6 @@
 import hashlib
 import json
-import threading
+import multiprocessing
 import os
 import tempfile
 import unittest
@@ -9,11 +9,15 @@ from unittest import mock
 
 from reverse_engineering.graphics_agent import ghidra_queries
 from reverse_engineering.graphics_agent.ghidra_acquire import (
-    AcquireOutcome,
     ghidra_complete_publish,
     ghidra_try_acquire,
     project_key_from_identity,
+    reconcile_published_evidence,
 )
+from reverse_engineering.graphics_agent.evidence_ids import args_canonical_hash, ghidra_artifact_id
+from reverse_engineering.corpus import script_hash
+from reverse_engineering.paths import ReError
+from tests.ghidra_mp_workers import mp_try_acquire
 from reverse_engineering.graphics_agent.research_store import (
     connect,
     ensure_investigation,
@@ -168,46 +172,179 @@ class GhidraProtocolTests(unittest.TestCase):
                 evidence_artifact={},
             )
 
-    def test_concurrent_acquire_rejects_second_owner(self) -> None:
+    def test_multiprocess_acquire_one_winner(self) -> None:
         ikey = self._ikey("disassembly", ["0x0000000000005000"], {"max_insns": 8})
         project_key = project_key_from_identity(self.identity)
-        db_path = self.exp / "agent" / "research.sqlite"
-        barrier = threading.Barrier(2)
+        db_path = str(self.exp / "agent" / "research.sqlite")
+        ctx = multiprocessing.get_context("spawn")
+        barrier = ctx.Barrier(2)
+        queue: multiprocessing.Queue = ctx.Queue()
+        args = (
+            db_path,
+            self.inv_digest,
+            "inv",
+            project_key,
+            ikey,
+        )
+        p1 = ctx.Process(
+            target=mp_try_acquire,
+            args=(*args, "owner-a", 10, barrier, queue),
+        )
+        p2 = ctx.Process(
+            target=mp_try_acquire,
+            args=(*args, "owner-b", 10, barrier, queue),
+        )
+        p1.start()
+        p2.start()
+        p1.join(timeout=30)
+        p2.join(timeout=30)
+        results = [queue.get(timeout=5), queue.get(timeout=5)]
+        ok = sum(1 for r in results if r.get("ok"))
+        err = sum(1 for r in results if r.get("error"))
+        self.assertEqual(ok, 1)
+        self.assertEqual(err, 1)
 
-        def worker(owner: str, out: dict) -> None:
-            conn = connect(db_path)
-            barrier.wait()
-            try:
-                ghidra_try_acquire(
-                    conn,
-                    project_key=project_key,
-                    idempotency_key=ikey,
-                    investigation_id="inv",
-                    operation="disassembly",
-                    args={"rvas": ["0x5000"]},
-                    owner=owner,
-                    worker_pid=os.getpid(),
-                    quota_key="ghidra_queries",
-                    quota_limit=10,
-                    quota_delta=1,
-                    max_concurrent=1,
-                )
-                out["ok"] = True
-            except Exception as exc:
-                out["error"] = str(exc)
+    def test_multiprocess_quota_single_slot(self) -> None:
+        ikey_a = self._ikey("disassembly", ["0x0000000000005000"], {"max_insns": 4})
+        ikey_b = self._ikey("references", ["0x0000000000005000"], {"max_insns": 4})
+        project_key = project_key_from_identity(self.identity)
+        db_path = str(self.exp / "agent" / "research.sqlite")
+        ctx = multiprocessing.get_context("spawn")
+        barrier = ctx.Barrier(2)
+        queue: multiprocessing.Queue = ctx.Queue()
+        base = (db_path, self.inv_digest, "inv", project_key)
+        p1 = ctx.Process(
+            target=mp_try_acquire,
+            args=(*base, ikey_a, "quota-a", 1, barrier, queue),
+        )
+        p2 = ctx.Process(
+            target=mp_try_acquire,
+            args=(*base, ikey_b, "quota-b", 1, barrier, queue),
+        )
+        p1.start()
+        p2.start()
+        p1.join(timeout=30)
+        p2.join(timeout=30)
+        results = [queue.get(timeout=5), queue.get(timeout=5)]
+        self.assertEqual(sum(1 for r in results if r.get("ok")), 1)
 
-        out_a: dict = {}
-        out_b: dict = {}
-        t1 = threading.Thread(target=worker, args=("owner-a", out_a))
-        t2 = threading.Thread(target=worker, args=("owner-b", out_b))
-        t1.start()
-        t2.start()
-        t1.join()
-        t2.join()
-        successes = sum(1 for o in (out_a, out_b) if o.get("ok"))
-        failures = sum(1 for o in (out_a, out_b) if o.get("error"))
-        self.assertEqual(successes, 1)
-        self.assertEqual(failures, 1)
+    def test_cross_investigation_blocks_second_project_lease(self) -> None:
+        ensure_investigation(self.conn, "inv-b", "bin", self.inv_digest, "rev")
+        project_key = project_key_from_identity(self.identity)
+        ikey1 = self._ikey("disassembly", ["0x0000000000005000"], {"max_insns": 8})
+        ikey2 = self._ikey("references", ["0x0000000000005000"], {"max_insns": 8})
+        ghidra_try_acquire(
+            self.conn,
+            project_key=project_key,
+            idempotency_key=ikey1,
+            investigation_id="inv",
+            operation="disassembly",
+            args={"rvas": ["0x5000"]},
+            owner="owner-a",
+            worker_pid=os.getpid(),
+            quota_key="ghidra_queries",
+            quota_limit=10,
+            quota_delta=1,
+            max_concurrent=1,
+        )
+        with self.assertRaises(ReError):
+            ghidra_try_acquire(
+                self.conn,
+                project_key=project_key,
+                idempotency_key=ikey2,
+                investigation_id="inv-b",
+                operation="references",
+                args={"rvas": ["0x5000"]},
+                owner="owner-b",
+                worker_pid=os.getpid(),
+                quota_key="ghidra_queries",
+                quota_limit=10,
+                quota_delta=1,
+                max_concurrent=1,
+            )
+
+    def test_published_missing_evidence_reregisters_after_validation(self) -> None:
+        rvas = ["0x0000000000005000"]
+        ikey = self._ikey("disassembly", rvas, {"max_insns": 8})
+        out_path = ghidra_queries.cache_path(self.cache, ikey)
+        meta_file = ghidra_queries.meta_path(self.cache, ikey)
+        payload = json.dumps(
+            {
+                "entry_rva": "0x0000000000005000",
+                "operation": "disassembly",
+                "status": "complete_for_requested_scope",
+                "facts": [],
+            }
+        )
+        out_path.write_text(payload + "\n")
+        out_hash = hashlib.sha256(out_path.read_bytes()).hexdigest()
+        ghidra_queries.write_meta(meta_file, self.identity, out_hash)
+        ghidra_op_reserve(self.conn, ikey, "inv", "disassembly", {"rvas": rvas})
+        ghidra_op_transition(
+            self.conn,
+            ikey,
+            "published",
+            output_hash=out_hash,
+            output_path=str(out_path),
+        )
+        project_key = project_key_from_identity(self.identity)
+        args_hash = args_canonical_hash({"operation": "disassembly", "rvas": rvas, "max_insns": 8})
+        eid = ghidra_artifact_id(
+            self.inv_digest,
+            "fixture",
+            "fixture",
+            script_hash("QueryFunctionEvidence.java"),
+            "disassembly",
+            args_hash,
+            out_hash,
+        )
+        artifact = {
+            "operation": "disassembly",
+            "rvas": rvas,
+            "output_path": str(out_path),
+            "output_hash": out_hash,
+        }
+        self.assertTrue(
+            reconcile_published_evidence(
+                self.conn,
+                ikey,
+                out_path,
+                out_hash,
+                eid,
+                "ghidra",
+                artifact,
+                project_key,
+                meta_file=meta_file,
+                identity=self.identity,
+            )
+        )
+        row = ghidra_op_get(self.conn, ikey)
+        self.assertEqual(row["evidence_id"], eid)
+
+    def test_reconcile_rejects_hash_mismatch(self) -> None:
+        rvas = ["0x0000000000005000"]
+        ikey = self._ikey("disassembly", rvas, {"max_insns": 8})
+        out_path = ghidra_queries.cache_path(self.cache, ikey)
+        meta_file = ghidra_queries.meta_path(self.cache, ikey)
+        out_path.write_text('{"entry_rva":"0x0000000000005000","operation":"disassembly","status":"complete_for_requested_scope","facts":[]}\n')
+        out_hash = hashlib.sha256(out_path.read_bytes()).hexdigest()
+        ghidra_queries.write_meta(meta_file, self.identity, out_hash)
+        ghidra_op_reserve(self.conn, ikey, "inv", "disassembly", {"rvas": rvas})
+        ghidra_op_transition(self.conn, ikey, "running")
+        project_key = project_key_from_identity(self.identity)
+        with self.assertRaises(ReError):
+            reconcile_published_evidence(
+                self.conn,
+                ikey,
+                out_path,
+                "deadbeef",
+                "ghidra:x",
+                "ghidra",
+                {"operation": "disassembly", "rvas": rvas, "output_hash": "deadbeef"},
+                project_key,
+                meta_file=meta_file,
+                identity=self.identity,
+            )
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ from reverse_engineering.graphics_agent.verification_agent import (
 )
 
 REVIEW_REJECTED = REVIEW_REJECTED
+REVIEW_NEEDS_MORE = REVIEW_NEEDS_MORE
 
 
 def run_verification(

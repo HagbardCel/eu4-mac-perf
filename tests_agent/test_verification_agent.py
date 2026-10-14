@@ -7,11 +7,10 @@ from pathlib import Path
 from reverse_engineering.graphics_agent.research_store import register_evidence, upsert_claim
 from reverse_engineering.graphics_agent.tools import EvidenceService
 from reverse_engineering.graphics_agent.validation import REVIEW_EVIDENCE_VALIDATED, REVIEW_MODEL_VERIFIED
-from reverse_engineering.graphics_agent.verification import REVIEW_REJECTED, run_verification
+from reverse_engineering.graphics_agent.verification import REVIEW_NEEDS_MORE, REVIEW_REJECTED, run_verification
 from reverse_engineering.graphics_agent.verification_agent import run_model_verification
 
 GRAPH_MINI = Path(__file__).resolve().parents[1] / "tests" / "re_fixtures" / "graph_mini"
-FIXTURE = Path(__file__).resolve().parents[1] / "tests" / "re_fixtures" / "agent_graphics" / "unsupported_claim.json"
 
 
 class VerificationAgentTests(unittest.TestCase):
@@ -41,9 +40,10 @@ class VerificationAgentTests(unittest.TestCase):
         index_db.rebuild_index(exp / "index.sqlite", inv, exp / "decompiled", manifest={"batches": {}})
         (exp / "agent").mkdir(parents=True)
         os.environ["EU4_RE_EXPORT"] = tmp
+        os.environ["EU4_AGENT_FIXTURE_MODE"] = "1"
         return EvidenceService.open("rev", "verify-agent-inv")
 
-    def test_supported_claim_verified_via_agent_path(self) -> None:
+    def test_supported_claim_verified_after_evidence_retrieval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             svc = self._service(tmp)
             path_res = svc.find_paths("0x5000", "ext:_glDrawElements")
@@ -59,30 +59,40 @@ class VerificationAgentTests(unittest.TestCase):
             out = run_model_verification(svc, "agent-supported")
             self.assertTrue(out["ok"])
             self.assertEqual(out["outcome"], REVIEW_MODEL_VERIFIED)
+            self.assertIn(eid, out["citations"])
 
-    def test_unsupported_claim_rejected_via_agent_path(self) -> None:
+    def test_contradictory_claim_rejected_after_evidence_retrieval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             svc = self._service(tmp)
-            fixture = json.loads(FIXTURE.read_text())
-            register_evidence(
-                svc.research_conn,
-                fixture["evidence_ids"][0],
-                "call-edge",
-                {"ultimate_external_symbol": "_glDrawElements", "caller_rva": "0x5000"},
-            )
-            upsert_claim(
-                svc.research_conn,
+            path_res = svc.find_paths("0x5000", "ext:_glDrawElements")
+            eid = path_res["evidence_ids"][0]
+            svc.submit_findings(
                 {
-                    "claim_id": fixture["claim_id"],
-                    "investigation_id": "verify-agent-inv",
-                    "statement": fixture["statement"],
-                    "scientific_status": fixture["scientific_status"],
-                    "review_status": REVIEW_EVIDENCE_VALIDATED,
-                    "evidence_ids": fixture["evidence_ids"],
-                },
+                    "claim_id": "agent-reject",
+                    "statement": "The draw path only calls malloc and never reaches OpenGL",
+                    "evidence_ids": [eid],
+                    "scientific_status": "hypothesis",
+                }
             )
-            out = run_verification(svc.research_conn, "verify-agent-inv", fixture["claim_id"], service=svc)
+            out = run_verification(svc.research_conn, "verify-agent-inv", "agent-reject", service=svc)
             self.assertEqual(out["outcome"], REVIEW_REJECTED)
+            self.assertIn(eid, out["citations"])
+
+    def test_weak_claim_needs_more_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            svc = self._service(tmp)
+            path_res = svc.find_paths("0x5000", "ext:_glDrawElements")
+            eid = path_res["evidence_ids"][0]
+            svc.submit_findings(
+                {
+                    "claim_id": "agent-weak",
+                    "statement": "The engine uses exclusively immediate-mode rendering without index buffers",
+                    "evidence_ids": [eid],
+                    "scientific_status": "hypothesis",
+                }
+            )
+            out = run_verification(svc.research_conn, "verify-agent-inv", "agent-weak", service=svc)
+            self.assertEqual(out["outcome"], REVIEW_NEEDS_MORE)
 
 
 if __name__ == "__main__":

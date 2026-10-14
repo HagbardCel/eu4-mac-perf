@@ -4,19 +4,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from reverse_engineering.graphics_agent.research_store import connect, ensure_investigation, register_evidence, upsert_claim
 from reverse_engineering.graphics_agent.tools import EvidenceService
 from reverse_engineering.graphics_agent.validation import REVIEW_EVIDENCE_VALIDATED, REVIEW_PROPOSED
 from reverse_engineering.graphics_agent.verification import REVIEW_REJECTED, run_verification
 from reverse_engineering.manifest import inventory_bundle_digest
 
 GRAPH_MINI = Path(__file__).resolve().parent / "re_fixtures" / "graph_mini"
-FIXTURE = Path(__file__).resolve().parent / "re_fixtures" / "agent_graphics" / "unsupported_claim.json"
-
-
 class VerificationTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ["ALLOW_MODEL_REQUESTS"] = "false"
+        os.environ["EU4_AGENT_FIXTURE_MODE"] = "1"
 
     def _service(self, tmp: str) -> EvidenceService:
         inv_src = GRAPH_MINI / "inventory"
@@ -59,28 +56,20 @@ class VerificationTests(unittest.TestCase):
             self.assertTrue(verify["ok"])
             self.assertNotEqual(verify["outcome"], REVIEW_PROPOSED)
 
-    def test_unsupported_fixture_rejected_by_verifier(self) -> None:
+    def test_contradictory_claim_rejected_by_verifier(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             svc = self._service(tmp)
-            fixture = json.loads(FIXTURE.read_text())
-            register_evidence(
-                svc.research_conn,
-                fixture["evidence_ids"][0],
-                "call-edge",
-                {"ultimate_external_symbol": "_glDrawElements", "caller_rva": "0x5000"},
-            )
-            upsert_claim(
-                svc.research_conn,
+            path_res = svc.find_paths("0x5000", "ext:_glDrawElements")
+            eid = path_res["evidence_ids"][0]
+            svc.submit_findings(
                 {
-                    "claim_id": fixture["claim_id"],
-                    "investigation_id": "test-inv",
-                    "statement": fixture["statement"],
-                    "scientific_status": fixture["scientific_status"],
-                    "review_status": REVIEW_EVIDENCE_VALIDATED,
-                    "evidence_ids": fixture["evidence_ids"],
-                },
+                    "claim_id": "draw-reject",
+                    "statement": "The draw path only calls malloc and never reaches OpenGL",
+                    "evidence_ids": [eid],
+                    "scientific_status": "hypothesis",
+                }
             )
-            out = run_verification(svc.research_conn, "test-inv", fixture["claim_id"], service=svc)
+            out = run_verification(svc.research_conn, "test-inv", "draw-reject", service=svc)
             self.assertEqual(out["outcome"], REVIEW_REJECTED)
 
 

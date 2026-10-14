@@ -57,22 +57,9 @@ def run_model_verification(
     model = model_override
     if model is None:
         if os.environ.get("ALLOW_MODEL_REQUESTS", "true").lower() == "false":
-            from pydantic_ai.models.test import TestModel
+            from reverse_engineering.graphics_agent.verification_ci_model import build_ci_verification_model
 
-            stmt = row["statement"].lower()
-            if "allocates all vertex buffers" in stmt:
-                preview = VerificationOutcome(
-                    verdict="rejected",
-                    reasoning="Buffer allocation claim is not supported by cited draw-path edge evidence content.",
-                    citations=evidence_ids[:1],
-                )
-            else:
-                preview = VerificationOutcome(
-                    verdict="verified",
-                    reasoning="Cited evidence content is consistent with the claim statement.",
-                    citations=evidence_ids,
-                )
-            model = TestModel(custom_output_args=preview, call_tools=[])
+            model = build_ci_verification_model(evidence_ids)
         else:
             model = model_string(profile_for_mode("verify"))
 

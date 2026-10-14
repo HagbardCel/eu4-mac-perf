@@ -84,6 +84,7 @@ def _active_project_lease(conn: sqlite3.Connection, project_key: str, now: float
     ).fetchone()
 
 
+# ghidra_project_leases holds one row per project_key: only one concurrent acquisition per project.
 def ghidra_try_acquire(
     conn: sqlite3.Connection,
     *,
@@ -241,6 +242,8 @@ def ghidra_try_acquire(
     except budgets.BudgetExceeded:
         conn.execute("ROLLBACK")
         raise
+    except ReError:
+        raise
     except Exception:
         conn.execute("ROLLBACK")
         raise
@@ -319,15 +322,27 @@ def reconcile_published_evidence(
     evidence_kind: str,
     evidence_artifact: dict[str, Any],
     project_key: str,
+    *,
+    meta_file: Path | None = None,
+    identity: dict[str, Any] | None = None,
 ) -> bool:
     """Complete DB when artifact exists but evidence or publish incomplete."""
     from reverse_engineering.graphics_agent.research_store import ghidra_op_get
 
     if not output_path.is_file():
         return False
-    on_disk = hashlib.sha256(output_path.read_bytes()).hexdigest()
-    if on_disk != output_hash:
-        raise ReError("reconcile: artifact hash mismatch")
+    if evidence_kind == "ghidra" and meta_file and identity:
+        from reverse_engineering.graphics_agent.ghidra_queries import validate_stored_ghidra_artifact
+
+        op = evidence_artifact.get("operation") or ""
+        rvas = evidence_artifact.get("rvas") or []
+        validate_stored_ghidra_artifact(
+            output_path, meta_file, identity, op, list(rvas), output_hash
+        )
+    else:
+        on_disk = hashlib.sha256(output_path.read_bytes()).hexdigest()
+        if on_disk != output_hash:
+            raise ReError("reconcile: artifact hash mismatch")
     row = ghidra_op_get(conn, idempotency_key)
     if not row:
         return False

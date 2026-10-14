@@ -17,20 +17,10 @@ def load_investigation_config() -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
-def main() -> int:
-    if sys.version_info < (3, 11):
-        print("MCP server requires Python 3.11+", file=sys.stderr)
-        return 1
+def build_server(service: EvidenceService):
+    """Construct MCP server with EvidenceService tool wrappers (testable in-process)."""
     from mcp.server.mcpserver import MCPServer
 
-    cfg = load_investigation_config()
-    inv_id = os.environ.get("EU4_AGENT_INVESTIGATION_ID", cfg.get("investigation_id", "default-mcp"))
-    baseline = os.environ.get("EU4_AGENT_BASELINE_REVISION")
-    if not baseline:
-        print("Set EU4_AGENT_BASELINE_REVISION", file=sys.stderr)
-        return 1
-
-    service = EvidenceService.open(baseline, inv_id)
     mcp = MCPServer("eu4-graphics-agent")
 
     @mcp.tool()
@@ -62,6 +52,22 @@ def main() -> int:
         return service.get_references(rva)
 
     @mcp.tool()
+    def get_function_signature(rva: str) -> dict[str, Any]:
+        return service.get_function_signature(rva)
+
+    @mcp.tool()
+    def get_type_layout(rva: str) -> dict[str, Any]:
+        return service.get_type_layout(rva)
+
+    @mcp.tool()
+    def get_data_accesses(rva: str) -> dict[str, Any]:
+        return service.get_data_accesses(rva)
+
+    @mcp.tool()
+    def get_indirect_dispatch(rva: str) -> dict[str, Any]:
+        return service.get_indirect_dispatch(rva)
+
+    @mcp.tool()
     def get_research_state(area: str | None = None) -> dict[str, Any]:
         return service.get_research_state(area)
 
@@ -71,7 +77,22 @@ def main() -> int:
             {"claim_id": claim_id, "statement": statement, "evidence_ids": evidence_ids}
         )
 
-    mcp.run(transport="stdio")
+    return mcp
+
+
+def main() -> int:
+    if sys.version_info < (3, 11):
+        print("MCP server requires Python 3.11+", file=sys.stderr)
+        return 1
+    cfg = load_investigation_config()
+    inv_id = os.environ.get("EU4_AGENT_INVESTIGATION_ID", cfg.get("investigation_id", "default-mcp"))
+    baseline = os.environ.get("EU4_AGENT_BASELINE_REVISION")
+    if not baseline:
+        print("Set EU4_AGENT_BASELINE_REVISION", file=sys.stderr)
+        return 1
+
+    service = EvidenceService.open(baseline, inv_id)
+    build_server(service).run(transport="stdio")
     return 0
 
 

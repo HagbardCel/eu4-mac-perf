@@ -43,16 +43,15 @@
 - Verification: PydanticAI `verification_agent` with hash-validated `load_evidence_content`; CI uses `TestModel(custom_output_args=…, call_tools=[])`
 - E2E: `tests_agent/test_runner_investigation.py` (FunctionModel tool use + resume history), expanded MCP tools, `pilot_run.py --smoke` / `--agent`
 
-### Smoke / agent commands (live corpus)
+### Pilot modes
 
-```bash
-export EU4_AGENT_BASELINE_REVISION=auto-v1-20261013
-# optional: export EU4_RE_EXPORT=… if corpus not in default layout
-uv run python -m reverse_engineering.graphics_agent.pilot_run \
-  --baseline-revision auto-v1-20261013 --investigation-id agent-pilot --smoke
-ALLOW_MODEL_REQUESTS=true uv run python -m reverse_engineering.graphics_agent.pilot_run \
-  --baseline-revision auto-v1-20261013 --investigation-id agent-pilot --agent --session pilot-agent-session
-```
+| Mode | Command |
+|------|---------|
+| CI fixture | `uv run python -m reverse_engineering.graphics_agent.pilot_run --fixture-smoke --investigation-id ci-fixture-smoke` |
+| Live Ghidra | `uv run python -m reverse_engineering.graphics_agent.pilot_run --live-smoke --baseline-revision auto-v1-20261013 --investigation-id agent-pilot` |
+| Real agent | `ALLOW_MODEL_REQUESTS=true uv run python -m reverse_engineering.graphics_agent.pilot_run --agent --baseline-revision auto-v1-20261013 --investigation-id agent-pilot --session pilot-agent-session` |
+
+Local six-op Ghidra gate: `./scripts/ghidra_six_op_local_gate.sh [rva]`
 
 ## Operator checklist (live pilot)
 
@@ -61,3 +60,13 @@ ALLOW_MODEL_REQUESTS=true uv run python -m reverse_engineering.graphics_agent.pi
 3. Submit one `supported_inference` with evidence IDs; run `verify` mode on claim id
 4. Resume session; confirm no second headless for same idempotency key
 5. Update this file with real evidence IDs and outcomes
+
+
+## Pilot run 2026-10-14T19:09Z
+
+- mode: `fixture-smoke`
+- investigation: `ci-fixture-smoke`
+- find_paths found: `True`
+- evidence_ids: `['call-edge:e77605a539b4c0da:0x0000000000005001:67a8979d2542', 'call-edge:e77605a539b4c0da:0x0000000000007001:00288e919c0a']`
+- submit: `{'ok': True, 'claim_id': 'pilot-fixture-claim', 'review_status': 'evidence_validated'}`
+- verify: `{'ok': True, 'outcome': 'semantic_review_passed', 'verdict': 'verified', 'reasoning': 'Retrieved call-edge content documents a caller/callee step along the cited draw path.', 'citations': ['call-edge:e77605a539b4c0da:0x0000000000005001:67a8979d2542']}`
