@@ -20,7 +20,16 @@ This repository measures and profiles the **GOG** macOS build of Europa Universa
 | Legacy analysis | [analysis/](analysis/README.md) | Investigations and generated evidence |
 | Run outputs | [results/](results/README.md) | Timestamped captures and sealed Phase C capsule |
 
-Local-only decompilation and Ghidra projects live under `.local/` (gitignored). See [reverse_engineering/README.md](reverse_engineering/README.md).
+Corpus exports live under `.local/` (gitignored); Ghidra projects default to `~/GhidraEU4/<sha>/`. See [reverse_engineering/README.md](reverse_engineering/README.md).
+
+Optional Git hook (run once per clone; skip if you already use a custom `core.hooksPath`):
+
+```sh
+chmod +x .githooks/pre-commit
+git config --local core.hooksPath .githooks
+```
+
+The hook runs `git diff --cached --check` on staged changes; CI still validates the full PR diff.
 
 ## Quick start
 

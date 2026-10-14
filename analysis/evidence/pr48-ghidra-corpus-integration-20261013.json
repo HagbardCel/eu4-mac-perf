@@ -5,7 +5,15 @@
   "baseline_revision": "auto-v1-20261013",
   "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "local_corpus_root": ".local/eu4/b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
-  "ghidra_project_dir": "/Users/fabian/GhidraEU4/b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d/ghidra-project",
+  "ghidra_project_dir": "~/GhidraEU4/b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d/ghidra-project",
+  "manifest_batch_count": 3392,
+  "manifest_batch_id_range": ["batch-00001", "batch-03392"],
+  "local_artifact_sha256": {
+    "note": "SHA-256 of currently retained local export files (not committed to git)",
+    "inventory/functions.jsonl": "772382c8093eddc5a0525b2f34e4c709db5f8677428dcea996a52a58be9e340c",
+    "inventory/call_edges.jsonl": "c6d70c3125da5710697eb5c73d43d291cf08dcf3ade1125ecff15c7aea69cee9",
+    "decompiled/batch-02666.jsonl": "a349a49422dc40b93430936392f217ce77bb629bd1e059bb7fdebaece5a43a81"
+  },
   "compiler_spec_id": "gcc",
   "acceptance": {
     "import_metadata": true,
