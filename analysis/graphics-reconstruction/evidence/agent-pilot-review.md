@@ -53,6 +53,8 @@
 
 Local six-op Ghidra gate: `./scripts/ghidra_six_op_local_gate.sh [rva]`
 
+**Operator merge gate (pending on this machine):** `--live-smoke` and `--agent` on `auto-v1-20261013` require a complete local export + Ghidra project and `ALLOW_MODEL_REQUESTS=true` for the agent run. CI covers `--fixture-smoke` only.
+
 ## Operator checklist (live pilot)
 
 1. `prepare_package` / existing agent context on `auto-v1-20261013`
