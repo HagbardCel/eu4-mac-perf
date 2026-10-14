@@ -26,7 +26,25 @@ def profile_for_mode(mode: str) -> dict[str, Any]:
     return profiles.get(key, profiles["discovery"])
 
 
+def validate_profile(profile: dict[str, Any]) -> None:
+    thinking = profile.get("thinking")
+    alias = profile.get("api_model_alias")
+    provider = profile.get("provider", "openai")
+    if thinking and provider not in ("deepseek", "openai"):
+        raise ValueError(f"thinking=true not supported for provider {provider}")
+    if alias and provider != "deepseek":
+        raise ValueError(f"api_model_alias is only supported for deepseek, not {provider}")
+    if alias and provider == "deepseek":
+        import warnings
+
+        warnings.warn(
+            "api_model_alias is recorded but not applied by model_string; using model field",
+            stacklevel=2,
+        )
+
+
 def model_string(profile: dict[str, Any]) -> str:
+    validate_profile(profile)
     provider = profile.get("provider", "openai")
     model = profile.get("model", "gpt-4.1-mini")
     if provider == "deepseek":

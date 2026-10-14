@@ -15,6 +15,9 @@ FIXTURE = Path(__file__).resolve().parent / "re_fixtures" / "agent_graphics" / "
 
 
 class VerificationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        os.environ["ALLOW_MODEL_REQUESTS"] = "false"
+
     def _service(self, tmp: str) -> EvidenceService:
         inv_src = GRAPH_MINI / "inventory"
         exp = Path(tmp) / "exports" / "rev"
@@ -52,23 +55,22 @@ class VerificationTests(unittest.TestCase):
                 "SELECT review_status FROM claims WHERE claim_id = ?", ("draw-path-1",)
             ).fetchone()
             self.assertEqual(row["review_status"], REVIEW_EVIDENCE_VALIDATED)
-            verify = run_verification(svc.research_conn, "test-inv", "draw-path-1")
+            verify = run_verification(svc.research_conn, "test-inv", "draw-path-1", service=svc)
             self.assertTrue(verify["ok"])
             self.assertNotEqual(verify["outcome"], REVIEW_PROPOSED)
 
     def test_unsupported_fixture_rejected_by_verifier(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            conn = connect(Path(tmp) / "research.sqlite")
+            svc = self._service(tmp)
             fixture = json.loads(FIXTURE.read_text())
-            ensure_investigation(conn, "test-inv", "bin", "digest", "rev")
             register_evidence(
-                conn,
+                svc.research_conn,
                 fixture["evidence_ids"][0],
                 "call-edge",
                 {"ultimate_external_symbol": "_glDrawElements", "caller_rva": "0x5000"},
             )
             upsert_claim(
-                conn,
+                svc.research_conn,
                 {
                     "claim_id": fixture["claim_id"],
                     "investigation_id": "test-inv",
@@ -78,7 +80,7 @@ class VerificationTests(unittest.TestCase):
                     "evidence_ids": fixture["evidence_ids"],
                 },
             )
-            out = run_verification(conn, "test-inv", fixture["claim_id"])
+            out = run_verification(svc.research_conn, "test-inv", fixture["claim_id"], service=svc)
             self.assertEqual(out["outcome"], REVIEW_REJECTED)
 
 

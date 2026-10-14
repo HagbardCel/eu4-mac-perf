@@ -83,8 +83,13 @@ def _system_prompt(mode: str) -> str:
 def _inject_briefing(service: EvidenceService, system: str) -> str:
     ctx_path = service.agent_dir() / "graphics-agent-context.json"
     briefing = json.loads(ctx_path.read_text()) if ctx_path.is_file() else {}
-    summary = briefing.get("known_architecture") or briefing.get("briefing") or {}
-    return system + "\n\n## Corpus briefing\n" + json.dumps(summary, indent=2)[:12000]
+    blocks = {
+        "mission": briefing.get("mission"),
+        "known_architecture": briefing.get("known_architecture"),
+        "research_questions": briefing.get("research_questions"),
+        "evidence_rules": briefing.get("evidence_rules"),
+    }
+    return system + "\n\n## Corpus briefing\n" + json.dumps(blocks, indent=2)[:16000]
 
 
 def _checkpoint_meta(service: EvidenceService, mode: str, system: str, session_id: str) -> dict[str, str]:
@@ -228,8 +233,15 @@ def run_investigation(
     session_dir = service.agent_dir() / "sessions" / session_id
     ckpt = checkpoint_connect(session_dir / "checkpoint.sqlite")
 
-    if mode == "verify" and claim_id_to_verify:
-        outcome = run_verification(service.research_conn, investigation_id, claim_id_to_verify)
+    if mode == "verify":
+        if not claim_id_to_verify:
+            raise ValueError("verify mode requires claim_id_to_verify (use CLI --claim-id)")
+        outcome = run_verification(
+            service.research_conn,
+            investigation_id,
+            claim_id_to_verify,
+            service=service,
+        )
         service.export_snapshots()
         return {"verification": outcome}
 

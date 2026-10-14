@@ -74,6 +74,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         args.session or "default",
         config=pilot,
         use_test_model=args.test_model,
+        claim_id_to_verify=getattr(args, "claim_id", None),
     )
     print(json.dumps(result, indent=2, default=str))
     return 0
@@ -126,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--prompt", default="Survey known Gfx draw boundary evidence.")
     p_run.add_argument("--session", default=None)
     p_run.add_argument("--test-model", action="store_true")
+    p_run.add_argument("--claim-id", default=None, help="Required for --mode verify")
     p_run.set_defaults(func=cmd_run)
 
     p_resume = sub.add_parser("resume")
