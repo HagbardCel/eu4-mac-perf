@@ -10,7 +10,20 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from reverse_engineering.graphics_agent.evidence_resolver import load_evidence_content
-from reverse_engineering.graphics_agent.model_registry import model_string, profile_for_mode, validate_profile
+from reverse_engineering.graphics_agent.context_guard import build_context_guard_hooks
+from reverse_engineering.graphics_agent.model_budget import (
+    extract_run_usage_from_exception,
+    finalize_paid_run_after_failure,
+    paid_model_requests_allowed,
+    reserve_paid_run,
+    settle_paid_run,
+)
+from reverse_engineering.graphics_agent.model_registry import (
+    model_settings_for_profile,
+    model_string,
+    profile_for_mode,
+    validate_profile,
+)
 from reverse_engineering.graphics_agent.research_store import get_claim
 from reverse_engineering.graphics_agent.tools import EvidenceService
 from reverse_engineering.graphics_agent.validation import REVIEW_MODEL_VERIFIED
@@ -47,8 +60,9 @@ def run_model_verification(
         return {"ok": True, "outcome": REVIEW_NEEDS_MORE, "reason": "no_evidence_ids"}
 
     for eid in evidence_ids:
-        if load_evidence_content(conn, eid) is None:
-            return {"ok": True, "outcome": REVIEW_NEEDS_MORE, "reason": f"unresolved {eid}"}
+        payload = load_evidence_content(conn, eid)
+        if payload is None or payload.get("error"):
+            return {"ok": True, "outcome": REVIEW_NEEDS_MORE, "reason": f"unresolved or corrupt {eid}"}
 
     from pydantic_ai import Agent
     from pydantic_ai.toolsets.function import FunctionToolset
@@ -87,9 +101,30 @@ def run_model_verification(
         "Use get_evidence_content for each citation. "
         "Return verified only with explicit support; rejected only for contradiction; otherwise needs_more_evidence."
     )
-    agent = Agent(model, system_prompt=system, output_type=VerificationOutcome, toolsets=[toolset])
+    profile = profile_for_mode("verify")
+    agent = Agent(
+        model,
+        system_prompt=system,
+        output_type=VerificationOutcome,
+        toolsets=[toolset],
+        capabilities=[build_context_guard_hooks()],
+        model_settings=model_settings_for_profile(profile),
+    )
     prompt = f"Claim: {row['statement']}\nCited evidence IDs: {evidence_ids}"
-    result = agent.run_sync(prompt)
+    if model_override is not None or os.environ.get("ALLOW_MODEL_REQUESTS", "true").lower() == "false":
+        result = agent.run_sync(prompt)
+    else:
+        if not paid_model_requests_allowed():
+            return {"ok": False, "error": "paid_verification_not_authorized"}
+        paid = reserve_paid_run(conn, service.investigation_id, "verify", profile, None)
+        try:
+            result = agent.run_sync(prompt, usage_limits=paid.usage_limits)
+            settle_paid_run(conn, paid.run_id, getattr(result, "usage", None))
+        except Exception as exc:
+            finalize_paid_run_after_failure(
+                conn, paid.run_id, exc, extract_run_usage_from_exception(exc)
+            )
+            raise
     outcome: VerificationOutcome = result.output
     valid_citations = [c for c in outcome.citations if c in evidence_ids]
     if outcome.verdict == "verified" and not valid_citations:

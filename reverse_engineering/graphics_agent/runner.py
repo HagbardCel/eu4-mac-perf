@@ -7,7 +7,15 @@ import os
 from pathlib import Path
 from typing import Any
 
-from reverse_engineering.graphics_agent.model_registry import model_string, profile_for_mode
+from reverse_engineering.graphics_agent.context_guard import build_context_guard_hooks
+from reverse_engineering.graphics_agent.model_budget import (
+    extract_run_usage_from_exception,
+    finalize_paid_run_after_failure,
+    paid_model_requests_allowed,
+    reserve_paid_run,
+    settle_paid_run,
+)
+from reverse_engineering.graphics_agent.model_registry import model_settings_for_profile, model_string, profile_for_mode
 from reverse_engineering.graphics_agent.session_checkpoint import (
     connect as checkpoint_connect,
     load_session_meta,
@@ -106,12 +114,23 @@ def _checkpoint_meta(service: EvidenceService, mode: str, system: str, session_i
     }
 
 
-def _build_agent(mode: str, service: EvidenceService, system: str, model_override: Any = None, with_tools: bool = True):
+def _build_agent(
+    mode: str,
+    service: EvidenceService,
+    system: str,
+    model_override: Any = None,
+    with_tools: bool = True,
+    extra_capabilities: list[Any] | None = None,
+    model_settings: Any = None,
+):
     from pydantic_ai import Agent
     from pydantic_ai.toolsets.function import FunctionToolset
 
     profile = profile_for_mode(mode)
     model = model_override if model_override is not None else model_string(profile)
+    capabilities = [build_context_guard_hooks()]
+    if extra_capabilities:
+        capabilities.extend(extra_capabilities)
     toolset = FunctionToolset()
     allowed = set(MODE_TOOLS.get(mode, MODE_TOOLS["discovery"]))
 
@@ -216,7 +235,14 @@ def _build_agent(mode: str, service: EvidenceService, system: str, model_overrid
             if name in registry:
                 toolset.add_function(registry[name], name=name)
 
-    return Agent(model, system_prompt=system, toolsets=[toolset] if with_tools else [])
+    kwargs: dict[str, Any] = {
+        "system_prompt": system,
+        "toolsets": [toolset] if with_tools else [],
+        "capabilities": capabilities,
+    }
+    if model_settings is not None:
+        kwargs["model_settings"] = model_settings
+    return Agent(model, **kwargs)
 
 
 def run_investigation(
@@ -271,8 +297,38 @@ def run_investigation(
         service.export_snapshots()
         return {"output": result.output, "test_model": True}
 
-    agent = _build_agent(mode, service, system, with_tools=True)
-    result = agent.run_sync(user_prompt, message_history=history or None)
+    if not paid_model_requests_allowed():
+        raise RuntimeError(
+            "Paid investigation run blocked: set ALLOW_MODEL_REQUESTS and EU4_AGENT_AUTHORIZE_PAID_RUN=1"
+        )
+    profile = profile_for_mode(mode)
+    paid = reserve_paid_run(service.research_conn, investigation_id, mode, profile, config)
+    agent = _build_agent(
+        mode,
+        service,
+        system,
+        with_tools=True,
+        model_settings=model_settings_for_profile(profile),
+    )
+    try:
+        result = agent.run_sync(
+            user_prompt,
+            message_history=history or None,
+            usage_limits=paid.usage_limits,
+        )
+        settle_paid_run(service.research_conn, paid.run_id, getattr(result, "usage", None))
+    except Exception as exc:
+        finalize_paid_run_after_failure(
+            service.research_conn,
+            paid.run_id,
+            exc,
+            extract_run_usage_from_exception(exc),
+        )
+        raise
     persist_run_messages(ckpt, result)
     service.export_snapshots()
-    return {"output": result.output, "model": model_string(profile_for_mode(mode))}
+    return {
+        "output": result.output,
+        "model": paid.effective.wire_model_key,
+        "paid_run_id": paid.run_id,
+    }

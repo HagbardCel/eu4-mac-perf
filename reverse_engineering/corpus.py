@@ -120,9 +120,19 @@ def analyze_headless(
     project_name: str,
     *extra: str,
     timeout_seconds: int | None = None,
+    headless_pid: list[int] | None = None,
 ) -> None:
     args = build_analyze_headless_argv(project_dir, project_name, *extra)
-    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout_seconds)
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if headless_pid is not None:
+        headless_pid.append(proc.pid)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        raise
+    result = subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
     if result.returncode != 0:
         stdout_tail = (result.stdout or "")[-8000:]
         stderr_tail = (result.stderr or "")[-4000:]

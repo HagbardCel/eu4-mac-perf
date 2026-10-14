@@ -12,7 +12,7 @@ from reverse_engineering.graphics_agent.budgets import ensure_budget_tables
 from reverse_engineering.graphics_agent.validation import REVIEW_HUMAN_ACCEPTED, REVIEW_MODEL_VERIFIED
 from reverse_engineering.paths import ReError
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
@@ -104,6 +104,9 @@ def migrate(conn: sqlite3.Connection) -> None:
         """
     )
     ensure_budget_tables(conn)
+    from reverse_engineering.graphics_agent.model_budget import ensure_model_spend_tables
+
+    ensure_model_spend_tables(conn)
     row = conn.execute("SELECT value FROM meta WHERE key = 'schema_version'").fetchone()
     if not row:
         conn.execute(

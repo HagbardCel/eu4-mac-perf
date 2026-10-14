@@ -17,13 +17,15 @@ from reverse_engineering.graphics_agent.evidence_ids import args_canonical_hash,
 from reverse_engineering.graphics_agent.ghidra_acquire import (
     AcquireOutcome,
     ghidra_complete_publish,
+    ghidra_mark_failed_fenced,
     ghidra_mark_running,
+    ghidra_set_worker_pid,
     ghidra_try_acquire,
     project_key_from_identity,
     reconcile_published_evidence,
 )
 from reverse_engineering.graphics_agent.provenance_guard import assert_authoritative_acquisition
-from reverse_engineering.graphics_agent.research_store import ghidra_op_get, ghidra_op_transition
+from reverse_engineering.graphics_agent.research_store import ghidra_op_get
 from reverse_engineering.intervals import format_rva, parse_rva
 from reverse_engineering.paths import ReError
 
@@ -69,6 +71,14 @@ def cache_path(cache_dir: Path, key: str, suffix: str = ".jsonl") -> Path:
 
 def meta_path(cache_dir: Path, key: str) -> Path:
     return cache_dir / f"{key[:32]}.meta.json"
+
+
+def immutable_artifact_path(cache_dir: Path, content_hash: str) -> Path:
+    return (cache_dir / "immutable" / f"{content_hash}.jsonl").resolve()
+
+
+def immutable_meta_path(cache_dir: Path, content_hash: str) -> Path:
+    return (cache_dir / "immutable" / f"{content_hash}.meta.json").resolve()
 
 
 def publish_atomic(staging: Path, final: Path) -> None:
@@ -143,6 +153,17 @@ def _assert_rvas_in_inventory(export_dir: Path, rvas: list[str]) -> None:
             raise ReError(f"RVA not in inventory functions: {rva}")
 
 
+def _attach_evidence_id(rows: list[dict[str, Any]], evidence_id: str | None) -> list[dict[str, Any]]:
+    if not evidence_id:
+        return rows
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        merged = dict(row)
+        merged["evidence_id"] = evidence_id
+        out.append(merged)
+    return out
+
+
 def _cache_hit(
     conn: sqlite3.Connection,
     ikey: str,
@@ -151,7 +172,12 @@ def _cache_hit(
     identity: dict[str, Any],
 ) -> list[dict[str, Any]] | None:
     row = ghidra_op_get(conn, ikey)
-    if not row or row["state"] != "published" or not out_path.is_file():
+    if not row or row["state"] != "published":
+        return None
+    if row["output_path"]:
+        out_path = Path(row["output_path"])
+        meta_file = out_path.parent / f"{out_path.stem}.meta.json"
+    if not out_path.is_file():
         return None
     stored = row["output_artifact_hash"]
     if not stored:
@@ -160,7 +186,8 @@ def _cache_hit(
     if stored != on_disk:
         raise ReError("cached ghidra artifact hash mismatch")
     validate_meta(meta_file, identity, stored)
-    return _read_jsonl(out_path)
+    rows = _read_jsonl(out_path)
+    return _attach_evidence_id(rows, row["evidence_id"] if row else None)
 
 
 def run_query_evidence(
@@ -252,7 +279,8 @@ def run_query_evidence(
         "project_name": "fixture",
         "program_name": "fixture",
     }
-    staging = out_path.with_suffix(".staging.jsonl")
+    staging = cache_dir / "staging" / f"{ikey[:24]}.staging.jsonl"
+    staging.parent.mkdir(parents=True, exist_ok=True)
     timeout = int(os.environ.get("EU4_GHIDRA_TIMEOUT", str(DEFAULT_HEADLESS_TIMEOUT)))
     try:
         with tempfile.TemporaryDirectory() as tmp:
@@ -260,6 +288,7 @@ def run_query_evidence(
             rva_file.write_text("\n".join(norm_rvas) + "\n")
             if fixture_mode():
                 raise ReError("headless ghidra not available in fixture mode")
+            headless_pids: list[int] = []
             analyze_headless(
                 Path(meta["project_dir"]),
                 meta["project_name"],
@@ -274,11 +303,16 @@ def run_query_evidence(
                 str(staging),
                 str(max_insns),
                 timeout_seconds=timeout,
+                headless_pid=headless_pids,
             )
+            if headless_pids:
+                ghidra_set_worker_pid(conn, ikey, acquire.lease_generation, headless_pids[-1])
         content = staging.read_bytes()
         out_hash = hashlib.sha256(content).hexdigest()
         rows = _read_jsonl(staging)
         _validate_jsonl_rows(rows, operation, norm_rvas)
+        out_path = immutable_artifact_path(cache_dir, out_hash)
+        meta_file = immutable_meta_path(cache_dir, out_hash)
         publish_atomic(staging, out_path)
         write_meta(meta_file, identity, out_hash)
         args_hash = args_canonical_hash({"operation": operation, "rvas": norm_rvas, "max_insns": max_insns})
@@ -307,9 +341,16 @@ def run_query_evidence(
                 "output_hash": out_hash,
             },
         )
-        return rows
+        return _attach_evidence_id(rows, eid)
     except Exception as exc:
-        ghidra_op_transition(conn, ikey, "failed", error=str(exc), release_lease=True)
+        ghidra_mark_failed_fenced(
+            conn,
+            ikey,
+            project_key=project_key,
+            lease_generation=acquire.lease_generation,
+            lease_owner=owner,
+            error=str(exc),
+        )
         raise
 
 
@@ -367,13 +408,15 @@ def run_decompile_batch(
 
     ghidra_mark_running(conn, ikey, acquire.lease_generation)
     meta = load_ghidra_meta(binary_root)
-    staging = out_path.with_suffix(".staging.jsonl")
+    staging = cache_dir / "staging" / f"{ikey[:24]}.decompile.staging.jsonl"
+    staging.parent.mkdir(parents=True, exist_ok=True)
     try:
         with tempfile.TemporaryDirectory() as tmp:
             rva_file = Path(tmp) / "rvas.txt"
             rva_file.write_text("\n".join(norm_rvas) + "\n")
             if fixture_mode():
                 raise ReError("headless ghidra not available in fixture mode")
+            headless_pids: list[int] = []
             analyze_headless(
                 Path(meta["project_dir"]),
                 meta["project_name"],
@@ -387,13 +430,18 @@ def run_decompile_batch(
                 str(staging),
                 str(timeout_seconds),
                 timeout_seconds=timeout_seconds,
+                headless_pid=headless_pids,
             )
+            if headless_pids:
+                ghidra_set_worker_pid(conn, ikey, acquire.lease_generation, headless_pids[-1])
         content = staging.read_bytes()
         out_hash = hashlib.sha256(content).hexdigest()
         rows = _read_jsonl(staging)
         for rva in norm_rvas:
             if not any(format_rva(parse_rva(r.get("entry_rva", "0"))) == rva for r in rows):
                 raise ReError(f"decompile output missing {rva}")
+        out_path = immutable_artifact_path(cache_dir, out_hash)
+        meta_file = immutable_meta_path(cache_dir, out_hash)
         publish_atomic(staging, out_path)
         write_meta(meta_file, identity, out_hash)
         args_hash = args_canonical_hash({"operation": "decompile", "rvas": norm_rvas})
@@ -428,7 +476,14 @@ def run_decompile_batch(
                 per.write_text(json.dumps(row) + "\n")
         return rows
     except Exception as exc:
-        ghidra_op_transition(conn, ikey, "failed", error=str(exc), release_lease=True)
+        ghidra_mark_failed_fenced(
+            conn,
+            ikey,
+            project_key=project_key,
+            lease_generation=acquire.lease_generation,
+            lease_owner=owner,
+            error=str(exc),
+        )
         raise
 
 

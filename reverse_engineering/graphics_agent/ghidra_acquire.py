@@ -30,6 +30,70 @@ class AcquireResult:
     output_path: Path | None = None
 
 
+def ghidra_set_worker_pid(
+    conn: sqlite3.Connection, idempotency_key: str, lease_generation: int, worker_pid: int
+) -> None:
+    row = conn.execute(
+        "SELECT lease_generation FROM ghidra_operations WHERE idempotency_key = ?", (idempotency_key,)
+    ).fetchone()
+    if not row or int(row["lease_generation"] or 0) != lease_generation:
+        raise ReError("ghidra fencing token mismatch updating worker pid")
+    conn.execute(
+        "UPDATE ghidra_operations SET worker_pid = ?, updated_at = ? WHERE idempotency_key = ?",
+        (worker_pid, time.time(), idempotency_key),
+    )
+    proj = conn.execute(
+        "SELECT project_key FROM ghidra_operations WHERE idempotency_key = ?", (idempotency_key,)
+    ).fetchone()
+    if proj and proj["project_key"]:
+        conn.execute(
+            "UPDATE ghidra_project_leases SET worker_pid = ?, updated_at = ? WHERE project_key = ?",
+            (worker_pid, time.time(), proj["project_key"]),
+        )
+    conn.commit()
+
+
+def ghidra_mark_failed_fenced(
+    conn: sqlite3.Connection,
+    idempotency_key: str,
+    *,
+    project_key: str,
+    lease_generation: int,
+    lease_owner: str,
+    error: str,
+) -> None:
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute(
+            "SELECT lease_generation, lease_owner, state FROM ghidra_operations WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+        if not row:
+            conn.execute("ROLLBACK")
+            return
+        if int(row["lease_generation"] or 0) != lease_generation or row["lease_owner"] != lease_owner:
+            conn.execute("ROLLBACK")
+            raise ReError("ghidra failed transition rejected: stale owner or generation")
+        conn.execute(
+            """
+            UPDATE ghidra_operations SET state = 'failed', error = ?, lease_owner = NULL,
+              lease_expires_at = NULL, updated_at = ?
+            WHERE idempotency_key = ? AND lease_generation = ?
+            """,
+            (error, time.time(), idempotency_key, lease_generation),
+        )
+        lease = conn.execute(
+            "SELECT lease_generation, lease_owner FROM ghidra_project_leases WHERE project_key = ?",
+            (project_key,),
+        ).fetchone()
+        if lease and int(lease["lease_generation"] or 0) == lease_generation and lease["lease_owner"] == lease_owner:
+            conn.execute("DELETE FROM ghidra_project_leases WHERE project_key = ?", (project_key,))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
 def _pid_alive(pid: int | None) -> bool:
     if not pid or pid <= 0:
         return False
@@ -141,8 +205,12 @@ def ghidra_try_acquire(
 
         if row and row["state"] in ("reserved", "running"):
             gen = int(row["lease_generation"] or 0)
+            expired = not row["lease_expires_at"] or row["lease_expires_at"] <= now
+            if expired and _pid_alive(row["worker_pid"]):
+                conn.execute("ROLLBACK")
+                raise ReError("ghidra lease expired but headless worker still running")
             if row["lease_owner"] and row["lease_owner"] != owner:
-                if row["lease_expires_at"] and row["lease_expires_at"] > now and _pid_alive(row["worker_pid"]):
+                if not expired and _pid_alive(row["worker_pid"]):
                     conn.execute("ROLLBACK")
                     raise ReError("ghidra operation in progress by another owner")
             conn.execute(

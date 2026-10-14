@@ -9,7 +9,6 @@ import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.Reference;
-import ghidra.program.model.symbol.ReferenceIterator;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.data.DataType;
@@ -184,22 +183,26 @@ public class QueryFunctionEvidence extends GhidraScript {
         InstructionIterator it = currentProgram.getListing().getInstructions(fn.getBody(), true);
         while (it.hasNext() && c < 200) {
             Instruction ins = it.next();
-            ReferenceIterator fromIter = refMgr.getReferencesFrom(ins.getAddress());
-            while (fromIter.hasNext() && c < 200) {
-                Reference ref = fromIter.next();
-                String key = ref.getFromAddress() + "->" + ref.getToAddress();
-                if (seen.add(key)) {
-                    facts.add(refJson(ref, "outgoing"));
-                    c++;
+            Reference[] refs = ins.getReferencesFrom();
+            if (refs != null) {
+                for (Reference ref : refs) {
+                    if (c >= 200) break;
+                    String key = ref.getFromAddress() + "->" + ref.getToAddress();
+                    if (seen.add(key)) {
+                        facts.add(refJson(ref, "outgoing"));
+                        c++;
+                    }
                 }
             }
         }
-        ReferenceIterator toIter = refMgr.getReferencesTo(fn.getEntryPoint());
+        Reference[] incoming = refMgr.getReferencesTo(fn.getEntryPoint());
         c = 0;
-        while (toIter.hasNext() && c < 200) {
-            Reference ref = toIter.next();
-            facts.add(refJson(ref, "incoming"));
-            c++;
+        if (incoming != null) {
+            for (Reference ref : incoming) {
+                if (c >= 200) break;
+                facts.add(refJson(ref, "incoming"));
+                c++;
+            }
         }
         interpretations.add("{\"note\":\"reference_list_may_be_incomplete\",\"provenance\":\"ghidra_reference\"}");
     }

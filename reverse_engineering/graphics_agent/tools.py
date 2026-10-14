@@ -48,6 +48,18 @@ from reverse_engineering.intervals import format_rva, parse_rva
 from reverse_engineering.manifest import inventory_bundle_digest
 from reverse_engineering.paths import ReError, binary_sha256, local_binary_root, resolve_export_dir
 
+MAX_TOOL_RESPONSE_BYTES = 96_000
+
+
+def cap_tool_payload(payload: dict[str, Any], max_bytes: int = MAX_TOOL_RESPONSE_BYTES) -> dict[str, Any]:
+    raw = json.dumps(payload, default=str)
+    if len(raw.encode("utf-8")) <= max_bytes:
+        return payload
+    return {
+        "status": "truncated",
+        "status_detail": f"tool response exceeded {max_bytes} bytes",
+        "preview": raw[: max_bytes // 2],
+    }
 
 
 @dataclass
@@ -397,12 +409,6 @@ class EvidenceService:
 
     def get_semantic_query(self, rva: str, operation: str, max_insns: int = 128) -> dict[str, Any]:
         self._tool_budget()
-        budgets.check_and_increment(
-            self.research_conn,
-            self.investigation_id,
-            "ghidra_queries",
-            self.limits.max_ghidra_queries,
-        )
         digest = binary_sha256()
         binary_root = local_binary_root(digest)
         with self._db_lock:
@@ -418,7 +424,12 @@ class EvidenceService:
                 max_insns=max_insns,
                 limits=self.limits,
             )
-        return rows[0] if rows else {"status": "unresolved", "status_detail": "empty_result"}
+        if not rows:
+            return {"status": "unresolved", "status_detail": "empty_result"}
+        row = rows[0]
+        if isinstance(row, dict) and row.get("evidence_id"):
+            return cap_tool_payload(row)
+        return cap_tool_payload(row if isinstance(row, dict) else {"rows": row})
 
     def get_disassembly(self, rva: str, max_insns: int = 128) -> dict[str, Any]:
         return self.get_semantic_query(rva, "disassembly", max_insns)

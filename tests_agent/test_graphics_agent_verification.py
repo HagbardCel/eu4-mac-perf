@@ -9,7 +9,7 @@ from reverse_engineering.graphics_agent.validation import REVIEW_EVIDENCE_VALIDA
 from reverse_engineering.graphics_agent.verification import REVIEW_REJECTED, run_verification
 from reverse_engineering.manifest import inventory_bundle_digest
 
-GRAPH_MINI = Path(__file__).resolve().parent / "re_fixtures" / "graph_mini"
+GRAPH_MINI = Path(__file__).resolve().parent.parent / "tests" / "re_fixtures" / "graph_mini"
 class VerificationTests(unittest.TestCase):
     def setUp(self) -> None:
         os.environ["ALLOW_MODEL_REQUESTS"] = "false"

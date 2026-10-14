@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from reverse_engineering.graphics_agent import ghidra_queries
+from reverse_engineering.graphics_agent.ghidra_six_op_cert import certify_operation_row
 from reverse_engineering.graphics_agent.tools import EvidenceService
 from reverse_engineering.intervals import format_rva, parse_rva
 from reverse_engineering.paths import binary_sha256, local_binary_root
@@ -45,7 +46,8 @@ def main(argv: list[str] | None = None) -> int:
         for row in rows:
             if not row.get("entry_rva"):
                 raise SystemExit(f"operation {op}: row missing entry_rva")
-        summary.append({"operation": op, "rows": len(rows)})
+        certify_operation_row(op, rows[0], norm, inventory_has_function=True)
+        summary.append({"operation": op, "rows": len(rows), "status": rows[0].get("status")})
     print(json.dumps({"ok": True, "rva": norm, "operations": summary}, indent=2))
     return 0
 
