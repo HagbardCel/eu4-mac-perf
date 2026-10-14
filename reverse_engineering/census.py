@@ -17,12 +17,17 @@ from reverse_engineering.paths import RE_DIR, ReError, binary_sha256, local_bina
 
 REPORTS = RE_DIR / "reports"
 
-OPENGL_RE = re.compile(r"^(_)?gl[A-Z]", re.I)
+# OpenGL API names are case-sensitive: gl followed by uppercase.
+OPENGL_RE = re.compile(r"^_?gl[A-Z]")
 GFX_RE = re.compile(r"Gfx|OpenGL|SShader|CGraphics|CPdxMesh|CEU3Graphical|TextureGFX|SGfxEffect", re.I)
 
 SUBSYSTEM_RULES: list[tuple[str, str, re.Pattern[str]]] = [
-    ("B0", "confirmed", re.compile(r"SShaderOpenGL|OpenGL|SVertexBufferOpenGL|gl[A-Z]", re.I)),
-    ("B2", "probable", re.compile(r"CEU3GraphicalMap|GraphicalMap|CCountryName", re.I)),
+    (
+        "B0",
+        "confirmed",
+        re.compile(r"SShaderOpenGL|OpenGL|SVertexBufferOpenGL|(?-i:gl[A-Z])", re.I),
+    ),
+    ("B2", "probable", re.compile(r"CEU3GraphicalMap|GraphicalMap|CCountryName|CPdxMapBorderLayer", re.I)),
     ("B3", "probable", re.compile(r"BitmapFont|CEU3Idler", re.I)),
     ("B1", "probable", re.compile(r"CGraphics|GfxDeferred|SGfxEffect|TextureGFX|ConstantBufferGFX", re.I)),
 ]
@@ -43,13 +48,22 @@ def load_edges(inventory_dir: Path) -> list[dict[str, Any]]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def classify_function(row: dict[str, Any], edges: list[dict[str, Any]], pseudocode: str | None) -> dict[str, Any]:
-    rva = row["entry_rva"]
+def edges_by_caller(edges: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for edge in edges:
+        caller = edge.get("caller_rva")
+        if caller:
+            grouped[caller].append(edge)
+    return grouped
+
+
+def classify_function(
+    row: dict[str, Any], fn_edges: list[dict[str, Any]], pseudocode: str | None
+) -> dict[str, Any]:
     identity_text = " ".join(
         filter(None, [row.get("name_mangled"), row.get("name_demangled"), row.get("namespace")])
     )
     tags: list[str] = []
-    fn_edges = [e for e in edges if e.get("caller_rva") == rva]
     for edge in fn_edges:
         sym = edge.get("ultimate_external_symbol") or edge.get("callee_external_symbol") or ""
         if OPENGL_RE.match(sym):
@@ -139,8 +153,8 @@ def build_census(exp: Path) -> dict[str, Any]:
     coverage = json.loads((inv / "coverage.json").read_text())
     functions = load_functions(inv)
     edges = load_edges(inv)
+    by_caller = edges_by_caller(edges)
     pseudocode: dict[str, str] = {}
-    import re
 
     for batch in sorted((exp / "decompiled").glob("batch-*.jsonl")):
         if not re.fullmatch(r"batch-\d{5}\.jsonl", batch.name):
@@ -152,7 +166,9 @@ def build_census(exp: Path) -> dict[str, Any]:
             if row.get("status") == "success":
                 pseudocode[row["entry_rva"]] = row.get("pseudocode", "")
     classifications = {
-        row["entry_rva"]: classify_function(row, edges, pseudocode.get(row["entry_rva"]))
+        row["entry_rva"]: classify_function(
+            row, by_caller.get(row["entry_rva"], []), pseudocode.get(row["entry_rva"])
+        )
         for row in functions
     }
     sizes = subsystem_bytes(functions, classifications)
