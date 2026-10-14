@@ -21,6 +21,17 @@ CONFIDENCE_THUNK = "collapsed_thunk"
 CONFIDENCE_UNRESOLVED = "unresolved_dispatch"
 CONFIDENCE_RESOLVED_OTHER = "resolved_non_direct"
 
+ENDPOINT_STATUS_NOT_OBSERVED = "not_observed_before"
+ENDPOINT_STATUS_DIRECT_BYPASS = "direct_supported_bypass_candidate"
+ENDPOINT_STATUS_INDETERMINATE = "indeterminate_after_cut"
+ENDPOINT_STATUS_INTERCEPTED = "intercepted_in_recovered_graph"
+
+
+@dataclass
+class BfsResult:
+    visited: set[str]
+    prev: dict[str, tuple[str, dict[str, Any]]]
+
 
 def external_node(symbol: str) -> str:
     return f"ext:{symbol}"
@@ -148,6 +159,57 @@ class CallGraph:
 
     def cgl_endpoints(self) -> list[str]:
         return self.collect_external_endpoints(CGL_RE)
+
+    def bfs(
+        self,
+        start: str,
+        use_direct: bool,
+        cut_rvas: frozenset[str],
+    ) -> BfsResult:
+        adj_map = self.direct_adj if use_direct else self.resolved_adj
+        cut = cut_rvas
+        if start in cut:
+            return BfsResult(set(), {})
+        visited: set[str] = {start}
+        prev: dict[str, tuple[str, dict[str, Any]]] = {}
+        queue: deque[str] = deque([start])
+        while queue:
+            node = queue.popleft()
+            for callee, meta in adj_map.get(node, []):
+                if callee in cut:
+                    continue
+                if callee not in visited:
+                    visited.add(callee)
+                    prev[callee] = (node, meta)
+                    queue.append(callee)
+        return BfsResult(visited, prev)
+
+    def path_from_pred(
+        self,
+        start: str,
+        goal: str,
+        prev: dict[str, tuple[str, dict[str, Any]]],
+    ) -> list[dict[str, Any]] | None:
+        if start == goal:
+            return [{"node": start, "edge": None}]
+        if goal not in prev:
+            return None
+        return _reconstruct_path(start, goal, prev)
+
+
+def endpoint_status_from_sets(
+    before: set[str],
+    after_resolved: set[str],
+    after_direct: set[str],
+    endpoint: str,
+) -> str:
+    if endpoint not in before:
+        return ENDPOINT_STATUS_NOT_OBSERVED
+    if endpoint in after_direct:
+        return ENDPOINT_STATUS_DIRECT_BYPASS
+    if endpoint in after_resolved:
+        return ENDPOINT_STATUS_INDETERMINATE
+    return ENDPOINT_STATUS_INTERCEPTED
 
 
 def _reconstruct_path(
@@ -324,7 +386,8 @@ def verify_inventory_digest(inventory_dir: Path, provenance_path: Path | None) -
     return {
         "inventory_bundle_digest_computed": computed,
         "inventory_bundle_digest_recorded": recorded,
-        "digest_match": recorded is None or recorded == computed,
+        "digest_recorded_missing": recorded is None,
+        "digest_match": recorded is not None and recorded == computed,
     }
 
 

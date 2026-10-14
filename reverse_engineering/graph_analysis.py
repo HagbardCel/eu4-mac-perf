@@ -31,7 +31,12 @@ def cmd_audit(args: argparse.Namespace) -> int:
         report = build_audit_report(inv, DRAW_CALLERS, exp / "provenance.json")
         out = logs / "call-graph-audit.json"
         out.write_text(json.dumps(report, indent=2) + "\n")
-        print(json.dumps({"written": str(out), "digest_match": report["inventory_provenance"]["digest_match"]}, indent=2))
+        print(
+            json.dumps(
+                {"written": str(out), "digest_match": report["inventory_provenance"]["digest_match"]},
+                indent=2,
+            )
+        )
         return 0
     except (ReError, FileNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -52,55 +57,79 @@ def cmd_extract(args: argparse.Namespace) -> int:
         out = logs / "graphics-subgraph.json"
         out.write_text(json.dumps(bundle, indent=2) + "\n")
         if args.write_report:
-            report_md = _render_report(bundle)
             report_path = logs / "graphics-architecture-report.md"
-            report_path.write_text(report_md)
+            report_path.write_text(_render_report(bundle, graph_functions_path=inv / "functions.jsonl"))
             print(f"wrote {report_path}")
-        print(json.dumps({"written": str(out), "boundary_conclusion": bundle["boundary_conclusion"]}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "written": str(out),
+                    "authoritative": bundle.get("authoritative"),
+                    "overall_boundary_verdict": bundle.get("overall_boundary_verdict"),
+                },
+                indent=2,
+            )
+        )
         return 0
-    except SeedResolutionError as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-    except (ReError, FileNotFoundError) as exc:
+    except (SeedResolutionError, ReError, FileNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
 
-def _render_report(bundle: dict) -> str:
+def _name_for_rva(functions_path: Path, rva: str) -> str:
+    if not functions_path.is_file():
+        return rva
+    for line in functions_path.read_text().splitlines():
+        if line.strip():
+            row = json.loads(line)
+            if row.get("entry_rva") == rva:
+                return row.get("name_demangled") or row.get("name_mangled") or rva
+    return rva
+
+
+def _render_report(bundle: dict, graph_functions_path: Path) -> str:
     lines = [
         "# Graphics architecture report (local)",
         "",
-        "Generated from recovered static call graph. Not an exhaustive executable model.",
+        f"**Authoritative:** `{bundle.get('authoritative')}`",
+        f"**Overall boundary verdict:** `{bundle.get('overall_boundary_verdict')}`",
+        f"**Unknown target risk:** `{bundle.get('unknown_target_risk')}`",
         "",
-        f"**Boundary conclusion:** `{bundle.get('boundary_conclusion')}`",
+        "## Family verdicts (Gfx abstraction)",
         "",
-        "## Inventory provenance",
+        json.dumps(bundle.get("family_verdicts", {}), indent=2),
         "",
-        json.dumps(bundle.get("inventory_provenance", {}), indent=2),
+        "## Cut characterization",
         "",
-        "## Structural sets",
+        json.dumps(bundle.get("cut_characterization", {}), indent=2),
         "",
-        json.dumps(bundle.get("structural", {}), indent=2),
-        "",
-        "## Gfx abstraction cut summary",
+        "## Representative witnesses (Gfx overall cut)",
         "",
     ]
-    gfx = bundle.get("cuts", {}).get("gfx_abstraction", {})
-    lines.append(json.dumps(gfx.get("status_summary", {}), indent=2))
-    lines.append("")
-    lines.append("## Backend implementation cut summary")
-    lines.append("")
-    backend = bundle.get("cuts", {}).get("backend_implementation", {})
-    lines.append(json.dumps(backend.get("status_summary", {}), indent=2))
-    lines.append("")
-    lines.append("## Missing connections")
-    lines.append("")
-    lines.append(json.dumps(bundle.get("missing_connections", []), indent=2))
-    lines.append("")
-    lines.append("## Top decompilation priorities")
-    lines.append("")
+    overall = (
+        bundle.get("cuts", {})
+        .get("gfx_abstraction", {})
+        .get("overall_cut_coverage", {})
+        .get("endpoint_coverage", [])
+    )
+    shown = 0
+    for row in overall:
+        if shown >= 8:
+            break
+        if row.get("witness_before_cut") or row.get("witness_after_cut"):
+            lines.append(
+                f"- {row.get('status')} {row.get('endpoint')} from "
+                f"`{_name_for_rva(graph_functions_path, row.get('root_rva', ''))}`"
+            )
+            shown += 1
+    lines.extend(["", "## Top decompilation priorities", ""])
     for row in bundle.get("decompile_priorities", [])[:25]:
-        lines.append(f"- `{row.get('entry_rva')}` {row.get('name_mangled')}: {', '.join(row.get('reasons', []))}")
+        lines.append(
+            f"- score {row.get('priority_score')} `{row.get('entry_rva')}` "
+            f"{row.get('name_mangled')}: {', '.join(row.get('reasons', []))}"
+        )
+        if row.get("unresolved_questions"):
+            lines.append(f"  - questions: {row['unresolved_questions']}")
     lines.append("")
     return "\n".join(lines)
 
@@ -108,11 +137,11 @@ def _render_report(bundle: dict) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="EU IV call-graph audit and graphics extraction")
     sub = parser.add_subparsers(dest="command", required=True)
-    p_audit = sub.add_parser("audit", help="write call-graph-audit.json")
+    p_audit = sub.add_parser("audit")
     p_audit.add_argument("--baseline-revision", default=None)
     p_audit.add_argument("--export-dir", type=Path, default=None)
     p_audit.set_defaults(func=cmd_audit)
-    p_ext = sub.add_parser("extract", help="write graphics-subgraph.json")
+    p_ext = sub.add_parser("extract")
     p_ext.add_argument("--baseline-revision", default=None)
     p_ext.add_argument("--export-dir", type=Path, default=None)
     p_ext.add_argument("--write-report", action="store_true")

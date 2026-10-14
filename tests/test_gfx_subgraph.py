@@ -4,14 +4,20 @@ import unittest
 from pathlib import Path
 
 from reverse_engineering.gfx_subgraph import (
-    SeedResolutionError,
+    VERDICT_BYPASSED,
+    VERDICT_INSUFFICIENT,
+    VERDICT_SUPPORTED,
     build_extract,
     resolve_cut_symbols,
-    resolve_symbol_to_rva,
 )
 from reverse_engineering.call_graph import load_call_graph
+from reverse_engineering.paths import ReError
 
 GRAPH_MINI = Path(__file__).resolve().parent / "re_fixtures" / "graph_mini"
+BYPASS = Path(__file__).resolve().parent / "re_fixtures" / "graph_bypass_only"
+CROSS = Path(__file__).resolve().parent / "re_fixtures" / "graph_cross_family_intercept"
+BYPASS_SEEDS = Path(__file__).resolve().parent / "re_fixtures" / "bypass_test_seeds.json"
+CROSS_SEEDS = Path(__file__).resolve().parent / "re_fixtures" / "cross_test_seeds.json"
 SEEDS = Path(__file__).resolve().parents[1] / "reverse_engineering" / "graphics_seeds.json"
 
 
@@ -23,37 +29,47 @@ class GfxSubgraphTests(unittest.TestCase):
         self.assertNotIn("__ZN13SShaderOpenGL6SetAllEv", gfx_syms)
         self.assertIn("__ZN13SShaderOpenGL6SetAllEv", backend_syms)
 
-    def test_cut_rejects_external_symbol(self) -> None:
-        graph = load_call_graph(GRAPH_MINI / "inventory")
-        with self.assertRaises(SeedResolutionError):
-            resolve_cut_symbols(
-                graph.functions,
-                {"draw": ["ext:_glDrawElements"]},
-                "gfx_abstraction_cut",
-            )
-
-    def test_mandatory_seeds_resolve_graph_mini(self) -> None:
+    def test_extract_requires_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             inv = Path(tmp) / "inventory"
             inv.mkdir()
             for name in ("functions.jsonl", "call_edges.jsonl", "coverage.json"):
-                src = GRAPH_MINI / "inventory" / name
-                inv.joinpath(name).write_text(src.read_text())
-            bundle = build_extract(inv, allow_digest_mismatch=True)
-            self.assertEqual(len(bundle["seed_resolution"]["mandatory"]), 3)
+                (inv / name).write_text((GRAPH_MINI / "inventory" / name).read_text())
+            with self.assertRaises(ReError):
+                build_extract(inv)
 
-    def test_ss_shader_not_renderer_root_in_seeds(self) -> None:
-        seeds = json.loads(SEEDS.read_text())
-        self.assertNotIn("__ZN13SShaderOpenGL6SetAllEv", seeds["renderer_roots"])
+    def test_graph_mini_extract_allow_digest(self) -> None:
+        bundle = build_extract(GRAPH_MINI / "inventory", allow_digest_mismatch=True)
+        self.assertEqual(bundle["overall_boundary_verdict"], VERDICT_INSUFFICIENT)
+        self.assertFalse(bundle["authoritative"])
 
-    def test_gfx_cut_members_internal(self) -> None:
-        graph = load_call_graph(GRAPH_MINI / "inventory")
-        seeds = json.loads(SEEDS.read_text())
-        resolved = resolve_cut_symbols(
-            graph.functions, seeds["gfx_abstraction_cut"], "gfx_abstraction"
+    def test_bypass_only_overall_bypassed(self) -> None:
+        bundle = build_extract(
+            BYPASS / "inventory",
+            seeds_path=BYPASS_SEEDS,
+            allow_digest_mismatch=True,
         )
-        draw_rvas = [m["entry_rva"] for m in resolved["draw"]]
-        self.assertIn(resolve_symbol_to_rva(graph.functions, "_GfxDrawIndexed"), draw_rvas)
+        self.assertEqual(bundle["structural_boundary_verdict"], VERDICT_BYPASSED)
+        self.assertEqual(bundle["overall_boundary_verdict"], VERDICT_INSUFFICIENT)
+
+    def test_cross_family_draw_not_supported(self) -> None:
+        bundle = build_extract(
+            CROSS / "inventory",
+            seeds_path=CROSS_SEEDS,
+            allow_digest_mismatch=True,
+        )
+        draw_verdict = bundle["family_verdicts"]["draw"]["verdict"]
+        self.assertNotEqual(draw_verdict, VERDICT_SUPPORTED)
+        self.assertEqual(bundle["overall_boundary_verdict"], VERDICT_INSUFFICIENT)
+
+    def test_cut_rejects_external(self) -> None:
+        graph = load_call_graph(GRAPH_MINI / "inventory")
+        with self.assertRaises(Exception):
+            resolve_cut_symbols(
+                graph.functions,
+                {"draw": ["ext:_glDrawElements"]},
+                "gfx",
+            )
 
 
 if __name__ == "__main__":

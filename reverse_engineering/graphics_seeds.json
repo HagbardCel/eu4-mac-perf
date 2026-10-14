@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "mandatory_identity": [
     "__ZN13SShaderOpenGL6SetAllEv",
     "_ZN14CPdxMeshObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraibb",
@@ -14,6 +14,17 @@
   "backend_anchors": [
     "__ZN13SShaderOpenGL6SetAllEv"
   ],
+  "measured_hot_path_symbols": [
+    "_ZN14CPdxMeshObject13RenderBucketsEP9CGraphicsP21GfxDeferredContextGFXPK7CCameraibb"
+  ],
+  "endpoint_classification": {
+    "_glDrawElements": "draw",
+    "_glDrawArrays": "draw",
+    "_glDrawElementsInstanced": "draw",
+    "_glDrawArraysInstanced": "draw",
+    "_glMultiDrawElements": "draw",
+    "_glMultiDrawArrays": "draw"
+  },
   "gfx_abstraction_cut": {
     "draw": [
       "_GfxDraw",
@@ -22,7 +33,10 @@
       "_GfxDrawIndexedInstanced",
       "_GfxDraw2dLines"
     ],
-    "state": []
+    "state": [],
+    "buffers_textures": [],
+    "render_targets": [],
+    "presentation": []
   },
   "backend_implementation_cut": {
     "shaders": [

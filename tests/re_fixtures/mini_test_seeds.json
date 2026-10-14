@@ -1,0 +1,18 @@
+{
+  "mandatory_identity": ["renderer"],
+  "renderer_roots": ["renderer"],
+  "renderer_sub_entries": [],
+  "gfx_abstraction_cut": {
+    "draw": ["_GfxDrawIndexed"],
+    "state": ["_GfxSetShader"],
+    "buffers_textures": [],
+    "render_targets": [],
+    "presentation": []
+  },
+  "backend_implementation_cut": {
+    "shaders": []
+  },
+  "endpoint_classification": {
+    "_glDrawElements": "draw"
+  }
+}
