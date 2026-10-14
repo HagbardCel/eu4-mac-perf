@@ -46,8 +46,24 @@ def main() -> int:
         return service.find_paths(source_rva, target_rva)
 
     @mcp.tool()
-    def get_api_endpoints(api_family: str = "opengl", symbol_filter: str | None = None) -> dict[str, Any]:
-        return service.get_api_endpoints(api_family=api_family, symbol_filter=symbol_filter)
+    def get_pseudocode(rva: str) -> dict[str, Any]:
+        return service.get_pseudocode(rva)
+
+    @mcp.tool()
+    def decompile_functions(rvas: list[str], timeout_seconds: int = 120) -> dict[str, Any]:
+        return service.decompile_functions(rvas, timeout_seconds=timeout_seconds)
+
+    @mcp.tool()
+    def get_disassembly(rva: str) -> dict[str, Any]:
+        return service.get_disassembly(rva)
+
+    @mcp.tool()
+    def get_references(rva: str) -> dict[str, Any]:
+        return service.get_references(rva)
+
+    @mcp.tool()
+    def get_research_state(area: str | None = None) -> dict[str, Any]:
+        return service.get_research_state(area)
 
     @mcp.tool()
     def submit_findings(claim_id: str, statement: str, evidence_ids: list[str]) -> dict[str, Any]:

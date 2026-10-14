@@ -35,8 +35,13 @@ class McpSmokeTests(unittest.TestCase):
             (exp / "agent").mkdir(parents=True)
             os.environ["EU4_RE_EXPORT"] = tmp
             svc = EvidenceService.open("rev", "mcp-inv")
+            from reverse_engineering.graphics_agent.mcp_server import load_investigation_config
+
+            load_investigation_config()
             res = svc.find_paths("0x5000", "ext:_glDrawElements")
             self.assertTrue(res["found"])
+            state = svc.get_research_state()
+            self.assertIn("claims", state)
 
 
 if __name__ == "__main__":

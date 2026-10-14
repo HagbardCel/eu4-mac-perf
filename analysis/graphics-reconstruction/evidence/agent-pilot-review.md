@@ -37,6 +37,23 @@
 - [ ] Significant claims human_accepted (live pilot)
 - [ ] Complete live cycle on `auto-v1-20261013`: retrieve evidence, Ghidra acquisition, claim, verification, resume without duplicate headless
 
+## Round-2 remediation (post `9b2bcfe`)
+
+- Ghidra: `ghidra_try_acquire` + lease fencing, cache meta sidecar, `EU4_AGENT_FIXTURE_MODE` for fixture-only binary skip
+- Verification: PydanticAI `verification_agent` with hash-validated `load_evidence_content`; CI uses `TestModel(custom_output_args=…, call_tools=[])`
+- E2E: `tests_agent/test_runner_investigation.py` (FunctionModel tool use + resume history), expanded MCP tools, `pilot_run.py --smoke` / `--agent`
+
+### Smoke / agent commands (live corpus)
+
+```bash
+export EU4_AGENT_BASELINE_REVISION=auto-v1-20261013
+# optional: export EU4_RE_EXPORT=… if corpus not in default layout
+uv run python -m reverse_engineering.graphics_agent.pilot_run \
+  --baseline-revision auto-v1-20261013 --investigation-id agent-pilot --smoke
+ALLOW_MODEL_REQUESTS=true uv run python -m reverse_engineering.graphics_agent.pilot_run \
+  --baseline-revision auto-v1-20261013 --investigation-id agent-pilot --agent --session pilot-agent-session
+```
+
 ## Operator checklist (live pilot)
 
 1. `prepare_package` / existing agent context on `auto-v1-20261013`
