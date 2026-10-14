@@ -1,6 +1,6 @@
 # Graphics call-graph integration (2026-10-14)
 
-Full-inventory run on pinned GOG export `auto-v1-20261013` after PR #50 review remediation (Mach-O demangle, draw-endpoint coverage, unassessed-draw safeguards).
+Full-inventory run on pinned GOG export `auto-v1-20261013` after PR #50 review remediation (Mach-O demangle, draw-endpoint coverage, unassessed-draw safeguards, backend-family scoping, interception counting).
 
 ## Commands
 
@@ -50,12 +50,25 @@ Draw-cut members: `_GfxDraw`, `_GfxDrawIndexed`, `_GfxDrawInstanced`, `_GfxDrawI
 | Field | Value |
 |-------|-------|
 | `verdict` | `candidate_boundary_supported` |
-| `intercepted_endpoint_count` | 3 |
+| `intercepted_root_endpoint_pair_count` | 3 |
+| `distinct_intercepted_endpoint_count` | 2 |
+| `distinct_intercepted_endpoint_symbols` | `_glDrawArrays`, `_glDrawElements` |
 | `has_indeterminate_survivors` | `false` |
 | `status_counts` | 3× `intercepted_in_recovered_graph`, 1× `not_observed_before` |
 | `unassessed_draw_candidate_count` | (none observed on this export) |
 
+Interception counts are per **(renderer root, OpenGL endpoint)** pair; distinct symbols are listed separately.
+
 Evidence path: `cuts.gfx_abstraction.family_coverage.draw.endpoint_coverage` (not overall cut alone).
+
+### Backend shaders family (`cuts.backend_implementation.family_verdicts.shaders`)
+
+| Field | Value |
+|-------|-------|
+| `verdict` | `insufficient_evidence` |
+| `note` | no explicit endpoint classification for backend family `shaders` |
+
+Backend verdicts are scoped to explicitly classified endpoints in each backend family; draw bypasses do not affect the shader cut conclusion until shader/program GL imports are classified.
 
 ### Witness semantics (`_glDrawElements`, draw-family cut)
 

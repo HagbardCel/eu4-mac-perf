@@ -24,6 +24,7 @@ UNASSESSED_BYPASS_SEEDS = Path(__file__).resolve().parent / "re_fixtures" / "una
 UNASSESSED_INTERCEPT_SEEDS = (
     Path(__file__).resolve().parent / "re_fixtures" / "unassessed_draw_intercept_seeds.json"
 )
+BACKEND_SCOPE_SEEDS = Path(__file__).resolve().parent / "re_fixtures" / "backend_scope_test_seeds.json"
 SEEDS = Path(__file__).resolve().parents[1] / "reverse_engineering" / "graphics_seeds.json"
 
 
@@ -85,6 +86,17 @@ class GfxSubgraphTests(unittest.TestCase):
         draw = bundle["family_verdicts"]["draw"]
         self.assertEqual(draw["verdict"], VERDICT_INSUFFICIENT)
         self.assertNotEqual(draw["verdict"], VERDICT_SUPPORTED)
+
+    def test_backend_shaders_insufficient_without_shader_endpoints(self) -> None:
+        bundle = build_extract(
+            GRAPH_MINI / "inventory",
+            seeds_path=BACKEND_SCOPE_SEEDS,
+            allow_digest_mismatch=True,
+        )
+        shaders = bundle["cuts"]["backend_implementation"]["family_verdicts"]["shaders"]
+        self.assertEqual(shaders["verdict"], VERDICT_INSUFFICIENT)
+        self.assertNotEqual(shaders["verdict"], VERDICT_BYPASSED)
+        self.assertIn("no explicit endpoint classification", shaders.get("note", ""))
 
     def test_cut_rejects_external(self) -> None:
         graph = load_call_graph(GRAPH_MINI / "inventory")

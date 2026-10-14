@@ -99,6 +99,30 @@ def classify_endpoint_symbol(symbol: str, explicit: dict[str, str]) -> str:
     return "unclassified"
 
 
+def explicit_family_classified(family: str, explicit: dict[str, str]) -> bool:
+    return any(auth == family for auth in explicit.values())
+
+
+def intercepted_endpoint_metrics(
+    all_rows: list[dict[str, Any]],
+    total_counts: dict[str, int],
+) -> dict[str, Any]:
+    symbols = sorted(
+        {
+            row["endpoint"]
+            for row in all_rows
+            if row.get("status") == ENDPOINT_STATUS_INTERCEPTED
+        }
+    )
+    return {
+        "intercepted_root_endpoint_pair_count": total_counts.get(
+            ENDPOINT_STATUS_INTERCEPTED, 0
+        ),
+        "distinct_intercepted_endpoint_count": len(symbols),
+        "distinct_intercepted_endpoint_symbols": symbols,
+    }
+
+
 def suggested_endpoint_family(symbol: str) -> str:
     if CGL_PATTERN.match(symbol):
         return "presentation"
@@ -227,7 +251,7 @@ def family_verdict_from_counts(
     )
     base: dict[str, Any] = {
         "status_counts": counts,
-        "intercepted_endpoint_count": intercepted,
+        "intercepted_root_endpoint_pair_count": intercepted,
         "has_indeterminate_survivors": indeterminate > 0,
     }
     if bypass > 0:
@@ -490,6 +514,7 @@ def build_extract(
                 {"endpoint": r["endpoint"], "status": r["status"], "assessed": False}
                 for r in unassessed_full[:UNASSESSED_DRAW_DIAGNOSTIC_LIMIT]
             ]
+        verdict.update(intercepted_endpoint_metrics(all_rows, dict(total_counts)))
         family_verdicts[family] = verdict
 
     for family in gfx_cut_resolved:
@@ -527,23 +552,47 @@ def build_extract(
     }
 
     backend_family_verdicts: dict[str, Any] = {}
+    backend_family_coverage: dict[str, Any] = {}
     for family, cut_set in backend_cut_by_family.items():
         characterized = bool(backend_cut_resolved.get(family))
+        if not characterized:
+            backend_family_verdicts[family] = {"verdict": VERDICT_NOT_CHARACTERIZED}
+            continue
+        if not explicit_family_classified(family, explicit_class):
+            backend_family_verdicts[family] = {
+                "verdict": VERDICT_INSUFFICIENT,
+                "note": (
+                    f"no explicit endpoint classification for backend family {family}"
+                ),
+            }
+            continue
+        backend_rows: list[dict[str, Any]] = []
         total_counts: dict[str, int] = defaultdict(int)
         for root in renderer_roots:
-            _, counts = analyze_endpoints_for_cut(
+            rows, counts = analyze_endpoints_for_cut(
                 graph,
                 root,
                 cut_set,
                 all_endpoints,
-                scope_family=None,
+                scope_family=family,
                 explicit_class=explicit_class,
             )
+            backend_rows.extend(rows)
             for k, v in counts.items():
                 total_counts[k] += v
-        backend_family_verdicts[family] = family_verdict_from_counts(dict(total_counts), characterized)
+        backend_family_coverage[family] = {
+            "cut_rvas": sorted(cut_set),
+            "endpoint_coverage": backend_rows,
+            "status_summary": dict(total_counts),
+        }
+        verdict = family_verdict_from_counts(dict(total_counts), characterized)
+        verdict.update(intercepted_endpoint_metrics(backend_rows, dict(total_counts)))
+        backend_family_verdicts[family] = verdict
 
-    cuts_analysis["backend_implementation"] = {"family_verdicts": backend_family_verdicts}
+    cuts_analysis["backend_implementation"] = {
+        "family_verdicts": backend_family_verdicts,
+        "family_coverage": backend_family_coverage,
+    }
 
     frontiers_before: list[dict[str, Any]] = []
     frontiers_after: list[dict[str, Any]] = []
