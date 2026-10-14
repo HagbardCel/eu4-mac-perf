@@ -76,18 +76,66 @@ def cmd_extract(args: argparse.Namespace) -> int:
         return 1
 
 
-def _name_for_rva(functions_path: Path, rva: str) -> str:
+def _load_name_map(functions_path: Path) -> dict[str, str]:
+    names: dict[str, str] = {}
     if not functions_path.is_file():
-        return rva
+        return names
     for line in functions_path.read_text().splitlines():
         if line.strip():
             row = json.loads(line)
-            if row.get("entry_rva") == rva:
-                return row.get("name_demangled") or row.get("name_mangled") or rva
-    return rva
+            rva = row.get("entry_rva")
+            if rva:
+                names[rva] = row.get("name_demangled") or row.get("name_mangled") or rva
+    return names
+
+
+def _name_for_rva(name_map: dict[str, str], rva: str) -> str:
+    if rva.startswith("ext:"):
+        return rva[4:]
+    return name_map.get(rva, rva)
+
+
+def _format_witness_lines(
+    label: str,
+    witness: list[dict] | None,
+    name_map: dict[str, str],
+) -> list[str]:
+    if not witness:
+        return []
+    out = [f"  {label}:"]
+    for step in witness:
+        node = step.get("node", "")
+        edge = step.get("edge")
+        name = _name_for_rva(name_map, node)
+        if edge is None:
+            out.append(f"    `{node}` {name}")
+            continue
+        site = edge.get("callsite_rva", "?")
+        res = edge.get("resolution", "?")
+        out.append(f"    → `{node}` {name} @ `{site}` ({res})")
+    return out
+
+
+def _append_witness_block(
+    lines: list[str],
+    row: dict,
+    name_map: dict[str, str],
+    heading: str,
+) -> None:
+    lines.append(heading)
+    lines.extend(
+        _format_witness_lines("before_cut", row.get("witness_before_cut"), name_map)
+    )
+    after = row.get("witness_after_cut")
+    if after:
+        lines.extend(_format_witness_lines("after_cut", after, name_map))
+    elif row.get("status") == "intercepted_in_recovered_graph":
+        lines.append("  after_cut: (no recovered path)")
+    lines.append("")
 
 
 def _render_report(bundle: dict, graph_functions_path: Path) -> str:
+    name_map = _load_name_map(graph_functions_path)
     lines = [
         "# Graphics architecture report (local)",
         "",
@@ -103,9 +151,30 @@ def _render_report(bundle: dict, graph_functions_path: Path) -> str:
         "",
         json.dumps(bundle.get("cut_characterization", {}), indent=2),
         "",
-        "## Representative witnesses (Gfx overall cut)",
+        "## Representative witnesses (Gfx draw family cut)",
         "",
     ]
+    draw_rows = (
+        bundle.get("cuts", {})
+        .get("gfx_abstraction", {})
+        .get("family_coverage", {})
+        .get("draw", {})
+        .get("endpoint_coverage", [])
+    )
+    shown = 0
+    for row in draw_rows:
+        if shown >= 4:
+            break
+        if row.get("witness_before_cut") or row.get("witness_after_cut"):
+            root = _name_for_rva(name_map, row.get("root_rva", ""))
+            _append_witness_block(
+                lines,
+                row,
+                name_map,
+                f"### {row.get('status')} `{row.get('endpoint')}` (root: `{root}`)",
+            )
+            shown += 1
+    lines.extend(["", "## Representative witnesses (Gfx overall cut)", ""])
     overall = (
         bundle.get("cuts", {})
         .get("gfx_abstraction", {})
@@ -114,12 +183,15 @@ def _render_report(bundle: dict, graph_functions_path: Path) -> str:
     )
     shown = 0
     for row in overall:
-        if shown >= 8:
+        if shown >= 4:
             break
         if row.get("witness_before_cut") or row.get("witness_after_cut"):
-            lines.append(
-                f"- {row.get('status')} {row.get('endpoint')} from "
-                f"`{_name_for_rva(graph_functions_path, row.get('root_rva', ''))}`"
+            root = _name_for_rva(name_map, row.get("root_rva", ""))
+            _append_witness_block(
+                lines,
+                row,
+                name_map,
+                f"### {row.get('status')} `{row.get('endpoint')}` (root: `{root}`)",
             )
             shown += 1
     lines.extend(["", "## Top decompilation priorities", ""])

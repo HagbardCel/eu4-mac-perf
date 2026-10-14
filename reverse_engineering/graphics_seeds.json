@@ -23,7 +23,9 @@
     "_glDrawElementsInstanced": "draw",
     "_glDrawArraysInstanced": "draw",
     "_glMultiDrawElements": "draw",
-    "_glMultiDrawArrays": "draw"
+    "_glMultiDrawArrays": "draw",
+    "_glDrawElementsBaseVertex": "draw",
+    "_glMultiDrawElementsBaseVertex": "draw"
   },
   "gfx_abstraction_cut": {
     "draw": [

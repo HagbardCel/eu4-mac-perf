@@ -18,6 +18,12 @@ BYPASS = Path(__file__).resolve().parent / "re_fixtures" / "graph_bypass_only"
 CROSS = Path(__file__).resolve().parent / "re_fixtures" / "graph_cross_family_intercept"
 BYPASS_SEEDS = Path(__file__).resolve().parent / "re_fixtures" / "bypass_test_seeds.json"
 CROSS_SEEDS = Path(__file__).resolve().parent / "re_fixtures" / "cross_test_seeds.json"
+UNASSESSED_BYPASS = Path(__file__).resolve().parent / "re_fixtures" / "graph_unassessed_draw_bypass"
+UNASSESSED_INTERCEPT = Path(__file__).resolve().parent / "re_fixtures" / "graph_unassessed_draw_intercept"
+UNASSESSED_BYPASS_SEEDS = Path(__file__).resolve().parent / "re_fixtures" / "unassessed_draw_bypass_seeds.json"
+UNASSESSED_INTERCEPT_SEEDS = (
+    Path(__file__).resolve().parent / "re_fixtures" / "unassessed_draw_intercept_seeds.json"
+)
 SEEDS = Path(__file__).resolve().parents[1] / "reverse_engineering" / "graphics_seeds.json"
 
 
@@ -61,6 +67,24 @@ class GfxSubgraphTests(unittest.TestCase):
         draw_verdict = bundle["family_verdicts"]["draw"]["verdict"]
         self.assertNotEqual(draw_verdict, VERDICT_SUPPORTED)
         self.assertEqual(bundle["overall_boundary_verdict"], VERDICT_INSUFFICIENT)
+
+    def test_unassessed_draw_bypass_family_verdict(self) -> None:
+        bundle = build_extract(
+            UNASSESSED_BYPASS / "inventory",
+            seeds_path=UNASSESSED_BYPASS_SEEDS,
+            allow_digest_mismatch=True,
+        )
+        self.assertEqual(bundle["family_verdicts"]["draw"]["verdict"], VERDICT_BYPASSED)
+
+    def test_unassessed_draw_intercept_not_supported(self) -> None:
+        bundle = build_extract(
+            UNASSESSED_INTERCEPT / "inventory",
+            seeds_path=UNASSESSED_INTERCEPT_SEEDS,
+            allow_digest_mismatch=True,
+        )
+        draw = bundle["family_verdicts"]["draw"]
+        self.assertEqual(draw["verdict"], VERDICT_INSUFFICIENT)
+        self.assertNotEqual(draw["verdict"], VERDICT_SUPPORTED)
 
     def test_cut_rejects_external(self) -> None:
         graph = load_call_graph(GRAPH_MINI / "inventory")

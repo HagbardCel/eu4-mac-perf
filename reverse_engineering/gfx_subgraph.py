@@ -34,6 +34,7 @@ from reverse_engineering.symbol_resolve import (
 SEEDS_PATH = RE_DIR / "graphics_seeds.json"
 BORDER_HOOK = RE_DIR.parent / "analysis" / "border-hook-site.json"
 WITNESS_LIMIT = 5
+UNASSESSED_DRAW_DIAGNOSTIC_LIMIT = 20
 
 VERDICT_NOT_CHARACTERIZED = "not_characterized"
 VERDICT_INSUFFICIENT = "insufficient_evidence"
@@ -165,7 +166,14 @@ def analyze_endpoints_for_cut(
     for endpoint in endpoints:
         sym = endpoint[4:]
         auth_family = classify_endpoint_symbol(sym, explicit_class)
-        if scope_family is not None and auth_family != scope_family:
+        suggested = suggested_endpoint_family(sym)
+        assessed = auth_family != "unclassified"
+        in_scope = scope_family is None or auth_family == scope_family or (
+            scope_family == "draw"
+            and auth_family == "unclassified"
+            and suggested == "draw"
+        )
+        if not in_scope:
             continue
         status = endpoint_status_from_sets(
             views.before, views.after_resolved, views.after_direct, endpoint
@@ -189,7 +197,8 @@ def analyze_endpoints_for_cut(
                 "endpoint": sym,
                 "endpoint_class": endpoint_class(endpoint),
                 "auth_family": auth_family,
-                "suggested_family": suggested_endpoint_family(sym),
+                "suggested_family": suggested,
+                "assessed": assessed,
                 "status": status,
                 "witness_before_cut": witness_before,
                 "witness_after_cut": witness_after,
@@ -201,6 +210,7 @@ def analyze_endpoints_for_cut(
 def family_verdict_from_counts(
     counts: dict[str, int],
     characterized: bool,
+    unassessed_draw_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not characterized:
         return {"verdict": VERDICT_NOT_CHARACTERIZED}
@@ -215,20 +225,36 @@ def family_verdict_from_counts(
             ENDPOINT_STATUS_INTERCEPTED,
         )
     )
+    base: dict[str, Any] = {
+        "status_counts": counts,
+        "intercepted_endpoint_count": intercepted,
+        "has_indeterminate_survivors": indeterminate > 0,
+    }
     if bypass > 0:
-        return {"verdict": VERDICT_BYPASSED, "status_counts": counts}
+        return {**base, "verdict": VERDICT_BYPASSED}
+    if unassessed_draw_candidates:
+        return {
+            **base,
+            "verdict": VERDICT_INSUFFICIENT,
+            "note": (
+                f"{len(unassessed_draw_candidates)} unassessed draw endpoint(s) "
+                "observed in recovered graph"
+            ),
+        }
     if intercepted > 0 and indeterminate == 0:
-        return {"verdict": VERDICT_SUPPORTED, "status_counts": counts, "qualified": False}
+        return {**base, "verdict": VERDICT_SUPPORTED}
     if intercepted > 0 and indeterminate > 0:
         return {
+            **base,
             "verdict": VERDICT_SUPPORTED,
-            "status_counts": counts,
-            "qualified": True,
-            "note": f"applies only to observed intercepted paths; {indeterminate} indeterminate in-scope survivors",
+            "note": (
+                f"applies only to observed intercepted paths; "
+                f"{indeterminate} indeterminate in-scope survivors"
+            ),
         }
     if observed == 0:
-        return {"verdict": VERDICT_INSUFFICIENT, "status_counts": counts}
-    return {"verdict": VERDICT_INSUFFICIENT, "status_counts": counts}
+        return {**base, "verdict": VERDICT_INSUFFICIENT}
+    return {**base, "verdict": VERDICT_INSUFFICIENT}
 
 
 def overall_gfx_verdict(
@@ -447,7 +473,24 @@ def build_extract(
             "endpoint_coverage": all_rows,
             "status_summary": dict(total_counts),
         }
-        family_verdicts[family] = family_verdict_from_counts(dict(total_counts), characterized)
+        unassessed_full = [
+            r
+            for r in all_rows
+            if not r.get("assessed", True)
+            and r.get("status") != ENDPOINT_STATUS_NOT_OBSERVED
+        ]
+        verdict = family_verdict_from_counts(
+            dict(total_counts),
+            characterized,
+            unassessed_draw_candidates=unassessed_full if family == "draw" else None,
+        )
+        if family == "draw" and unassessed_full:
+            verdict["unassessed_draw_candidate_count"] = len(unassessed_full)
+            verdict["unassessed_draw_candidates"] = [
+                {"endpoint": r["endpoint"], "status": r["status"], "assessed": False}
+                for r in unassessed_full[:UNASSESSED_DRAW_DIAGNOSTIC_LIMIT]
+            ]
+        family_verdicts[family] = verdict
 
     for family in gfx_cut_resolved:
         if family not in family_verdicts:

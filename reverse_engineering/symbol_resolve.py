@@ -48,19 +48,27 @@ def build_symbol_index(functions: dict[str, dict[str, Any]]) -> dict[str, list[s
     return {key: sorted(rvas) for key, rvas in buckets.items()}
 
 
+def mach_o_demangle_input(symbol: str) -> str:
+    return symbol[1:] if symbol.startswith("__Z") else symbol
+
+
 @lru_cache(maxsize=256)
 def demangle_itanium(symbol: str) -> str | None:
     if not ITANIUM_RE.match(symbol):
         return None
+    filt_input = mach_o_demangle_input(symbol)
     result = subprocess.run(
-        ["c++filt", symbol],
+        ["c++filt", filt_input],
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode != 0 or not result.stdout.strip():
         return None
-    return result.stdout.strip()
+    out = result.stdout.strip()
+    if out == filt_input:
+        return None
+    return out
 
 
 def _filter_matches(

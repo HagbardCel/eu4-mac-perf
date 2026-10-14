@@ -4,6 +4,8 @@ from reverse_engineering.corpus import MANDATORY_ANCHOR_SYMBOLS
 from reverse_engineering.symbol_resolve import (
     SeedResolutionError,
     build_symbol_index,
+    demangle_itanium,
+    mach_o_demangle_input,
     normalize_demangled,
     resolve_symbol_to_rva,
 )
@@ -50,6 +52,15 @@ class SymbolResolveTests(unittest.TestCase):
             ),
             "CPdxMapBorderLayer::DrawBorders",
         )
+
+    def test_mach_o_demangle_input_strips_leading_underscore(self) -> None:
+        sym = "__ZN13SShaderOpenGL6SetAllEv"
+        self.assertEqual(mach_o_demangle_input(sym), "_ZN13SShaderOpenGL6SetAllEv")
+
+    def test_mach_o_double_underscore_demangles(self) -> None:
+        demangle_itanium.cache_clear()
+        out = demangle_itanium("__ZN13SShaderOpenGL6SetAllEv")
+        self.assertEqual(normalize_demangled(out), "SShaderOpenGL::SetAll")
 
     def test_mandatory_anchors_on_short_inventory(self) -> None:
         functions = _short_inventory()
