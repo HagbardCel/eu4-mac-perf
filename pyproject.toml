@@ -1,0 +1,14 @@
+[project]
+name = "eu4-graphics-agent"
+version = "0.1.0"
+description = "EU IV graphics reconstruction agent harness (local tooling)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+graphics-agent = [
+    "pydantic-ai-slim[openai]>=0.2.0",
+    "mcp>=2,<3",
+    "pydantic>=2.0",
+]

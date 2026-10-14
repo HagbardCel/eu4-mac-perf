@@ -1,0 +1,28 @@
+{
+  "profiles": {
+    "discovery": {
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "api_model_alias": "deepseek-flash",
+      "thinking": true,
+      "structured_output": "tool"
+    },
+    "reconstruction": {
+      "provider": "openai",
+      "model": "gpt-4.1",
+      "thinking": false,
+      "structured_output": "tool"
+    },
+    "verification": {
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "thinking": false,
+      "structured_output": "tool"
+    },
+    "reporting": {
+      "provider": "openai",
+      "model": "gpt-4.1-mini",
+      "thinking": false
+    }
+  }
+}

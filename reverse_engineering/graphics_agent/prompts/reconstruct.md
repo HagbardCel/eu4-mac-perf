@@ -1,0 +1,1 @@
+Reconstruction mode: analyze functions for control/data flow, state reads/writes, resource operations, and Gfx/GL boundaries. Request type layouts and data accesses when pseudocode references object offsets.

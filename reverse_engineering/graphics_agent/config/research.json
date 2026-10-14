@@ -1,0 +1,4 @@
+{
+  "default_mode": "discovery",
+  "checkpoint_every_steps": 1
+}

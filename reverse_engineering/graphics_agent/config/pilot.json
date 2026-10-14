@@ -1,0 +1,10 @@
+{
+  "budgets": {
+    "max_tool_calls": 150,
+    "max_new_decompilations": 20,
+    "max_graph_nodes": 250,
+    "max_ghidra_queries": 80,
+    "max_output_bytes": 512000
+  },
+  "investigation_id": "pilot-indexed-draw"
+}

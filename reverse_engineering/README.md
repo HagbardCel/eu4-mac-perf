@@ -106,6 +106,17 @@ Outputs land under `exports/<rev>/logs/` (`call-graph-audit.json`, `graphics-sub
 
 Graph evidence uses a recomputed `inventory_bundle_digest` (must match `provenance.json` for authoritative boundary conclusions unless `--allow-digest-mismatch`). Seed definitions: [`graphics_seeds.json`](graphics_seeds.json).
 
+## Graphics reconstruction agent (PR #51)
+
+Python **3.11+** harness with optional deps (`uv sync --extra graphics-agent`). Main CI (3.10/3.14) does not install agent packages; see [`.github/workflows/agent.yml`](../.github/workflows/agent.yml).
+
+```bash
+uv run python -m reverse_engineering.graphics_agent.cli prepare --baseline-revision <rev>
+uv run python -m reverse_engineering.graphics_agent.cli doctor --baseline-revision <rev>
+```
+
+Details: [`analysis/graphics-reconstruction/README.md`](../analysis/graphics-reconstruction/README.md).
+
 Exporter improvements (tail jumps, direct thunk RVAs) are deferred until an audit shows a material graphics gap.
 
 ## Inventory notes
