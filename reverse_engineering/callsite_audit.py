@@ -325,7 +325,7 @@ def resolve_draw_borders_entry(
     if pinned_row is not None:
         if _function_identity_matches_draw_borders(pinned_row):
             return PINNED_BORDER_RVA, None
-        return PINNED_BORDER_RVA, (
+        return None, (
             f"pinned RVA {PINNED_BORDER_RVA} is "
             f"{pinned_row.get('name_demangled')!r}, expected {DRAW_BORDERS_DEMANGLED}"
         )

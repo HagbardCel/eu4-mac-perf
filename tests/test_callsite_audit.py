@@ -247,7 +247,7 @@ class CallsiteAuditTests(unittest.TestCase):
             }
         }
         rva, warn = resolve_draw_borders_entry(functions)
-        self.assertEqual(rva, PINNED_BORDER_RVA)
+        self.assertIsNone(rva)
         self.assertIsNotNone(warn)
 
     def test_draw_borders_in_focused_renderers(self) -> None:

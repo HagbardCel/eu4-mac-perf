@@ -62,7 +62,31 @@ class GhidraExportCallsitesTests(unittest.TestCase):
             "classification_conflict",
         ):
             self.assertIn(key, callsites[0])
+        self._assert_start_fixture_callsites(callsites)
         return canonical_jsonl_bytes(callsites)
+
+    def _assert_start_fixture_callsites(self, callsites: list[dict]) -> None:
+        by_caller: dict[str, list[dict]] = {}
+        for row in callsites:
+            caller = row.get("caller_rva")
+            if caller:
+                by_caller.setdefault(caller, []).append(row)
+        self.assertGreaterEqual(len(by_caller), 1)
+        start_rva = max(by_caller, key=lambda rva: len(by_caller[rva]))
+        start_rows = by_caller[start_rva]
+        self.assertEqual(len(start_rows), 3, "expected _start: 1 direct + 2 indirect calls")
+
+        callinds = [r for r in start_rows if r.get("pcode_kind") == "CALLIND"]
+        self.assertEqual(len(callinds), 2)
+        for row in callinds:
+            self.assertEqual(row["instruction_class"], "indirect")
+            self.assertEqual(row["flow_instruction_class"], "indirect")
+            self.assertFalse(row["classification_conflict"])
+
+        direct_rows = [r for r in start_rows if r.get("pcode_kind") == "CALL"]
+        self.assertEqual(len(direct_rows), 1)
+        self.assertEqual(direct_rows[0]["flow_instruction_class"], "direct")
+        self.assertFalse(direct_rows[0]["classification_conflict"])
 
     def test_direct_and_indirect_callsites(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

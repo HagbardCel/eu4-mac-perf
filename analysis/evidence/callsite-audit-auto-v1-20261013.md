@@ -1,6 +1,6 @@
-# Callsite audit — `auto-v1-20261013` (offline, post-remediation)
+# Callsite audit — `auto-v1-20261013` (offline, post-`isComputed` fix)
 
-Generated after PR #52 remediation (removed invalid `timeout_seconds`, classifier diagnostics, atomic publish). Prior artifacts archived to `audits.pre-remediation/`.
+After PR #52 remediation and `FlowType.isComputed()` fix in `ExportCallsites.java`. Prior census archived to `audits.pre-iscomputed-fix/` (earlier remediation: `audits.pre-remediation/`).
 
 Command:
 
@@ -16,8 +16,8 @@ Artifacts: `.local/eu4/<sha>/exports/auto-v1-20261013/audits/` (not committed).
 |--------|------:|
 | Instructions scanned | 5,895,057 |
 | Call sites (unique) | 601,904 |
-| Direct | 539,772 |
-| Indirect | 62,132 |
+| Direct | 539,594 |
+| Indirect | 62,310 |
 | Ambiguous | 0 |
 | Outside recognized function | 12 |
 | P-code decode failures | 0 |
@@ -30,11 +30,46 @@ Artifacts: `.local/eu4/<sha>/exports/auto-v1-20261013/audits/` (not committed).
 | P-code only (flow not call) | 0 |
 | Flow only (P-code not call, usable) | 24,822 |
 | Flow with P-code unavailable | 0 |
-| Direct/indirect classification conflicts | 62,132 |
+| Direct/indirect classification conflicts | 0 |
 
-Interpretation: all usable-P-code “disagreements” are flow-only (Ghidra flow marks call where P-code has no CALL/CALLIND). Classification conflicts (both agree call, differ direct vs indirect) align with indirect call volume — spot-check samples in the report.
+Samples are capped in `classifier_diagnostics` in `callsite-audit.json`.
 
-Samples are capped in `classifier_diagnostics` in `callsite-audit.json`. Manual spot-check of ~10 RVAs per bucket recommended before decompilation prioritization.
+## Invariant regression vs `audits.pre-iscomputed-fix`
+
+| Metric | Pre-fix | Post-fix | Notes |
+|--------|--------:|---------:|-------|
+| Total callsites | 601,904 | 601,904 | OK |
+| Flow-only / pcode-only | 24,822 / 0 | 24,822 / 0 | OK |
+| Instructions scanned | 5,895,057 | 5,895,057 | OK |
+| Graph: matched | 544,205 | 544,205 | OK |
+| Graph: missing direct | 12 | 12 | OK |
+| Graph: missing indirect | 57,687 | 57,687 | OK |
+| Orphan edges | 0 | 0 | OK |
+| Classification conflicts | 62,132 | 0 | Expected drop (`isIndirect` → `isComputed`) |
+| Direct / indirect (census) | 539,772 / 62,132 | 539,594 / 62,310 | +178 indirect |
+
+The direct/indirect census shift (+178) is expected for **flow-only** rows: when raw P-code has no `CALL`/`CALLIND`, `instruction_class` falls back to flow (`isComputed()`), so corrected flow semantics change bucket labels without changing total callsite count or graph partition.
+
+P-code-tagged indirect volume (rows with `pcode_kind == CALLIND`) is unchanged at export time; the census headline indirect count includes flow-fallback labeling.
+
+## Flow-only spot-check (10 sample RVAs)
+
+Manual Ghidra inspection on `classifier_diagnostics.flow_only_rvas` (EU IV project `EU4_b3d38876`):
+
+| RVA | Mnemonic | `getFlowOverride()` | `getPcode()` | `getPcode(true)` |
+|-----|----------|---------------------|--------------|------------------|
+| `0x…9dfb` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x…9ed8` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x…9ede` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x…9eed` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x…a0ad` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x…a41a` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x…a430` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x…a444` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x…a573` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x…a976` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+
+All ten samples are **explained by Ghidra flow overrides**: disassembly is `JMP`, default P-code is a branch, and `getPcode(true)` injects call/return semantics. The census union (flow ∪ P-code) is still correct; we do **not** treat all 24,822 flow-only sites as individually validated—only that this bucket is dominated by override-injected calls on jump instructions.
 
 ## Graph coverage
 
@@ -53,6 +88,10 @@ Partition: 544,205 + 12 + 57,687 + 0 = 601,904.
 `CPdxMapBorderLayer::DrawBorders` (`0x00000000010cbb00`): 52 direct + 1 indirect call sites in body, 1 missing graph edge, unresolved RVA `0x00000000010cbbb7`.
 
 Mandatory anchors and `_Gfx*` helpers: see `callsite-audit.json` → `graphics`.
+
+## Deferred call-graph exporter work
+
+[`ImportAndInventory.java`](reverse_engineering/ghidra/ImportAndInventory.java) still uses `FlowType.isIndirect()` for zero-reference indirect fallback and skips edges when references exist but none are call-type. Not changed in 1A; future call-graph hardening.
 
 ## Notes
 
