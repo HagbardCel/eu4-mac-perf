@@ -30,6 +30,7 @@ ARTIFACTS_EVIDENCE_ZIP = ROOT / "artifacts" / "eu4-callsite-evidence.zip"
 
 BATCH_PLAN_SCHEMA = 1
 BATCH_ID_PREFIX = "gfx-batch-"
+FROZEN_RENDERER_BATCH_SIZE = 100
 
 SCOPE_HASH_FILES = (
     "README.md",

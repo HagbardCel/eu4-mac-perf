@@ -167,6 +167,54 @@ python3 -m reverse_engineering.renderer_scope prepare \
 
 Decompiled bodies and machine evidence stay gitignored under `.local/` (or `EU4_RE_EXPORT`). Tests: `python3 -m unittest tests.test_renderer_scope`.
 
+## Renderer snapshot extraction (Stage 2)
+
+After `renderer_scope prepare`, [`renderer_extract.py`](renderer_extract.py) exports static machine evidence and decompilation into sealed batch ZIPs under `renderer_snapshot/v1/batches/gfx-batch-NNNNN.zip` (members: `static.jsonl`, `decompiled.jsonl`, `receipt.json` only). Publication is create-only (`os.link`); identical bytes are a no-op. Replace one batch with `--repair` and `--batch-id`.
+
+```bash
+python3 -m reverse_engineering.renderer_scope prepare \
+  --baseline-revision auto-v1-20261013
+
+python3 -m reverse_engineering.renderer_extract run \
+  --baseline-revision auto-v1-20261013 \
+  --batch-id gfx-batch-00001
+
+python3 -m reverse_engineering.renderer_extract run \
+  --baseline-revision auto-v1-20261013
+
+python3 -m reverse_engineering.renderer_extract report \
+  --baseline-revision auto-v1-20261013
+```
+
+`run` and `report` both require `batch_plan.json` to match the frozen scope partition exactly (`build_batch_plan` at batch size 100). `run` additionally checks live Ghidra version and executable SHA against [`target.json`](target.json). Each package is validated offline: receipt identity (frozen summary + `ghidra_project.json`, no live Ghidra), instruction bytes recomputed from `instructions[]`, field-level callsite agreement with `audits/callsites-v1.jsonl`, and decompilation status rules. Static `failed` rows are allowed alongside successful functions. `--repair` validates a replacement before removing the active ZIP; failed publish restores the original only when the destination is absent (concurrent repair of the same batch is unsupported). `report` writes `renderer_snapshot/v1/logs/coverage.json` with package progress and evidence acceptance.
+
+### Coverage report semantics
+
+`report` separates **package validation** from **machine-evidence acceptance**:
+
+| `status` | Meaning |
+| --- | --- |
+| `partial` | Fewer than 45 valid batch ZIPs (or invalid/missing batches) |
+| `packages_complete` | All 45 ZIPs validate offline, but one or more required evidence checks failed |
+| `evidence_complete` | All `evidence_acceptance.required_checks` passed |
+
+`evidence_acceptance` is always present. `evidence_complete` is computed only from `required_checks` (45 packages, 4,450 functions, no static failures, instruction/byte totals 281,654 / 1,145,487, 9/9 priority anchors, 92/92 `_Gfx*` helpers). `advisory_checks.decompile_failures_zero` is informational only — decompile failure does not block machine-evidence acceptance.
+
+Post-acquisition gates (combinable; exit 1 on failure, `coverage.json` still written):
+
+```bash
+python3 -m reverse_engineering.renderer_extract report \
+  --baseline-revision auto-v1-20261013 \
+  --require-evidence \
+  --verify-binary-bytes
+```
+
+### Optional executable-byte verification (P3)
+
+`--verify-binary-bytes` compares each static `success` instruction’s `bytes_hex` to the pinned EU IV Mach-O at `VA = image_base + instruction_rva`, using file-backed segment ranges only (`filesize`, not zero-filled `vmsize` tail). In mismatch reports, `expected_hex` is from the **executable file** and `observed_hex` from the **snapshot**. This gate is independent of `evidence_complete` (structural acceptance can pass while byte verification fails). Scope is **all currently valid batches** only — a partial snapshot does not imply all 4,450 functions were checked. With zero valid batches, verification reports `no_valid_batches` and exits nonzero. If valid batches contain no static `success` rows with instructions, verification reports `no_verifiable_instructions` and exits nonzero.
+
+Tests: `python3 -m unittest tests.test_renderer_extract tests.test_macho_rva`. With `GHIDRA_INSTALL`: `python3 -m unittest tests.test_ghidra_export_renderer_static`.
+
 ## Analysis revisions
 
 Each `exports/<baseline-revision>/` tree is the working export root. `inventory_digest` (functions only) drives batch partitioning; `inventory_bundle_digest` includes call edges and coverage.
