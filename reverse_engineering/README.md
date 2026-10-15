@@ -136,9 +136,11 @@ exports/<baseline-revision>/audits/
 
 **Coverage partition** (every census callsite exactly one bucket): `matched`, `missing_direct`, `missing_indirect`, `missing_ambiguous`. Classifier disagreement and calls outside functions are separate diagnostics. Orphan graph edges (edge RVA not in census) are listed separately.
 
-**Publication:** if `audits/` is absent, both files are written atomically via a same-filesystem directory rename. If `audits/` exists with identical bytes, the command succeeds without rewriting. If `audits/` is incomplete or differs, the command fails; remove or rename `audits/` explicitly before replacing.
+**Flow-only rows** (Ghidra flow marks a call where default P-code has no `CALL`/`CALLIND`) are **Ghidra-semantic callsites**, not necessarily machine `CALL` instructions—for example `JMP` sites with `CALL_RETURN` flow overrides. That union is appropriate for Ghidra call-graph alignment; interpret carefully when tracing low-level dispatch.
 
-**Out of scope:** indirect target resolution, tail-call `jmp` recovery, decompilation, EU IV execution, changes to qualification or graphics graph-cut verdicts.
+**Out of scope:** indirect target resolution; **target recovery for tail-call jumps** (jump sites already classified as calls via Ghidra flow overrides are included in the census); decompilation; EU IV execution; changes to qualification or graphics graph-cut verdicts.
+
+**Publication:** if `audits/` is absent, both files are written atomically via a same-filesystem directory rename. If `audits/` exists with identical bytes, the command succeeds without rewriting. If `audits/` is incomplete or differs, the command fails; remove or rename `audits/` explicitly before replacing.
 
 **Tests:** `python3 -m unittest tests.test_callsite_audit` (portable). With `GHIDRA_INSTALL` set: build [`tests/re_fixtures/callsite_mini`](../tests/re_fixtures/callsite_mini) via `build_callsite_mini.sh`, then `python3 -m unittest tests.test_ghidra_export_callsites`.
 

@@ -32,6 +32,8 @@ Artifacts: `.local/eu4/<sha>/exports/auto-v1-20261013/audits/` (not committed).
 | Flow with P-code unavailable | 0 |
 | Direct/indirect classification conflicts | 0 |
 
+The 24,822 flow-only callsites are **Ghidra-semantic callsites** (flow ∪ default P-code union): they include jump instructions Ghidra reclassifies with call-related flow overrides, not only machine `CALL` opcodes. That is appropriate for census vs Ghidra’s call graph; it matters when interpreting graphics dispatch at the instruction level.
+
 Samples are capped in `classifier_diagnostics` in `callsite-audit.json`.
 
 ## Invariant regression vs `audits.pre-iscomputed-fix`
@@ -58,18 +60,18 @@ Manual Ghidra inspection on `classifier_diagnostics.flow_only_rvas` (EU IV proje
 
 | RVA | Mnemonic | `getFlowOverride()` | `getPcode()` | `getPcode(true)` |
 |-----|----------|---------------------|--------------|------------------|
-| `0x…9dfb` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
-| `0x…9ed8` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
-| `0x…9ede` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
-| `0x…9eed` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
-| `0x…a0ad` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
-| `0x…a41a` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
-| `0x…a430` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
-| `0x…a444` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
-| `0x…a573` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
-| `0x…a976` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x0000000000009dfb` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x0000000000009ed8` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x0000000000009ede` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x0000000000009eed` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x000000000000a0ad` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x000000000000a41a` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x000000000000a430` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x000000000000a444` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x000000000000a573` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
+| `0x000000000000a976` | JMP | CALL_RETURN | BRANCH | CALL, RETURN |
 
-All ten samples are **explained by Ghidra flow overrides**: disassembly is `JMP`, default P-code is a branch, and `getPcode(true)` injects call/return semantics. The census union (flow ∪ P-code) is still correct; we do **not** treat all 24,822 flow-only sites as individually validated—only that this bucket is dominated by override-injected calls on jump instructions.
+All ten inspected samples were explained by `CALL_RETURN` flow overrides: disassembly is `JMP`, default P-code is a branch, and `getPcode(true)` injects call/return semantics. This does not establish the proportion across all 24,822 flow-only callsites; we do not treat the full bucket as individually validated. The census remains the union of Ghidra’s call classifiers.
 
 ## Graph coverage
 
