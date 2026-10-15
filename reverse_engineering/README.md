@@ -167,6 +167,29 @@ python3 -m reverse_engineering.renderer_scope prepare \
 
 Decompiled bodies and machine evidence stay gitignored under `.local/` (or `EU4_RE_EXPORT`). Tests: `python3 -m unittest tests.test_renderer_scope`.
 
+## Renderer snapshot extraction (Stage 2)
+
+After `renderer_scope prepare`, [`renderer_extract.py`](renderer_extract.py) exports static machine evidence and decompilation into sealed batch ZIPs under `renderer_snapshot/v1/batches/gfx-batch-NNNNN.zip` (members: `static.jsonl`, `decompiled.jsonl`, `receipt.json` only). Publication is create-only (`os.link`); identical bytes are a no-op. Replace one batch with `--repair` and `--batch-id`.
+
+```bash
+python3 -m reverse_engineering.renderer_scope prepare \
+  --baseline-revision auto-v1-20261013
+
+python3 -m reverse_engineering.renderer_extract run \
+  --baseline-revision auto-v1-20261013 \
+  --batch-id gfx-batch-00001
+
+python3 -m reverse_engineering.renderer_extract run \
+  --baseline-revision auto-v1-20261013
+
+python3 -m reverse_engineering.renderer_extract report \
+  --baseline-revision auto-v1-20261013
+```
+
+`run` checks live Ghidra version and executable SHA against [`target.json`](target.json), validates each package against inventory instruction identity and per-function callsite sets (`audits/callsites-v1.jsonl`), and copies boundary thunks when `graphics-boundary-thunks.jsonl` matches `scope-v1.sha256`. `report` writes `renderer_snapshot/v1/logs/coverage.json` and reports `partial` until all 45 batch ZIPs validate.
+
+Tests: `python3 -m unittest tests.test_renderer_extract`. With `GHIDRA_INSTALL`: `python3 -m unittest tests.test_ghidra_export_renderer_static`.
+
 ## Analysis revisions
 
 Each `exports/<baseline-revision>/` tree is the working export root. `inventory_digest` (functions only) drives batch partitioning; `inventory_bundle_digest` includes call edges and coverage.
