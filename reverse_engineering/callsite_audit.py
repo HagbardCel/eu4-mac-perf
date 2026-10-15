@@ -20,6 +20,7 @@ from reverse_engineering.corpus import (
     script_hash,
     verify_binary,
 )
+from reverse_engineering.gfx_subgraph import PINNED_BORDER_RVA
 from reverse_engineering.manifest import inventory_bundle_digest
 from reverse_engineering.paths import (
     ReError,
@@ -31,12 +32,20 @@ from reverse_engineering.paths import (
 RE_DIR = Path(__file__).resolve().parent
 GRAPHICS_SEEDS_PATH = RE_DIR / "graphics_seeds.json"
 RVA_RE = re.compile(r"^0x[0-9a-f]{16}$")
+AUDITS_CALLSITES_FILE = "callsites-v1.jsonl"
+AUDITS_REPORT_FILE = "callsite-audit.json"
+DIAGNOSTIC_SAMPLE_CAP = 10
+DRAW_BORDERS_DEMANGLED = "CPdxMapBorderLayer::DrawBorders"
+
 CALLSITE_FIELDS = (
     "callsite_rva",
     "caller_rva",
     "mnemonic",
     "pcode_kind",
     "flow_type_is_call",
+    "pcode_is_call",
+    "flow_instruction_class",
+    "classification_conflict",
     "classifier_status",
     "instruction_class",
     "call_reference_count",
@@ -98,6 +107,13 @@ def validate_callsite_row(row: dict[str, Any], line_no: int) -> None:
         raise ReError(f"callsite line {line_no}: flow_type_is_call must be bool")
     if not isinstance(row["call_reference_count"], int):
         raise ReError(f"callsite line {line_no}: call_reference_count must be int")
+    if not isinstance(row["pcode_is_call"], bool):
+        raise ReError(f"callsite line {line_no}: pcode_is_call must be bool")
+    if not isinstance(row["classification_conflict"], bool):
+        raise ReError(f"callsite line {line_no}: classification_conflict must be bool")
+    fic = row["flow_instruction_class"]
+    if fic is not None and fic not in INSTRUCTION_CLASSES:
+        raise ReError(f"callsite line {line_no}: bad flow_instruction_class")
 
 
 def validate_census(callsites_path: Path, scan_meta: dict[str, Any]) -> list[dict[str, Any]]:
@@ -155,6 +171,11 @@ def coverage_bucket(row: dict[str, Any], edges_at_site: list[dict[str, Any]]) ->
     return "missing_ambiguous"
 
 
+def _append_sample(samples: list[str], rva: str) -> None:
+    if len(samples) < DIAGNOSTIC_SAMPLE_CAP:
+        samples.append(rva)
+
+
 def reconcile_callsites(
     callsites: list[dict[str, Any]],
     edges: list[dict[str, Any]],
@@ -172,28 +193,42 @@ def reconcile_callsites(
         "missing_indirect": 0,
         "missing_ambiguous": 0,
     }
-    classifier_disagreement_count = 0
+    pcode_only_count = 0
+    flow_only_count = 0
+    flow_with_pcode_unavailable_count = 0
+    classification_conflict_count = 0
     outside_recognized_function = 0
-    per_callsite: list[dict[str, Any]] = []
+    pcode_only_sample: list[str] = []
+    flow_only_sample: list[str] = []
+    flow_unavail_sample: list[str] = []
+    conflict_sample: list[str] = []
 
     for row in callsites:
         site = row["callsite_rva"]
         site_edges = by_callsite.get(site, [])
-        bucket = coverage_bucket(row, site_edges)
-        counts[bucket] += 1
-        if row["classifier_status"] == "disagreement":
-            classifier_disagreement_count += 1
+        counts[coverage_bucket(row, site_edges)] += 1
+
+        status = row["classifier_status"]
+        flow_is_call = row["flow_type_is_call"]
+        pcode_is_call = row["pcode_is_call"]
+
+        if status == "pcode_unavailable":
+            if flow_is_call:
+                flow_with_pcode_unavailable_count += 1
+                _append_sample(flow_unavail_sample, site)
+        elif pcode_is_call and not flow_is_call:
+            pcode_only_count += 1
+            _append_sample(pcode_only_sample, site)
+        elif flow_is_call and not pcode_is_call:
+            flow_only_count += 1
+            _append_sample(flow_only_sample, site)
+
+        if row.get("classification_conflict"):
+            classification_conflict_count += 1
+            _append_sample(conflict_sample, site)
+
         if row.get("caller_rva") is None:
             outside_recognized_function += 1
-        per_callsite.append(
-            {
-                "callsite_rva": site,
-                "coverage": bucket,
-                "edge_count": len(site_edges),
-                "classifier_status": row["classifier_status"],
-                "instruction_class": row["instruction_class"],
-            }
-        )
 
     n_callsites = len(callsites)
     partition_sum = sum(counts.values())
@@ -202,6 +237,8 @@ def reconcile_callsites(
             f"partition identity failed: {partition_sum} != {n_callsites} "
             f"({counts})"
         )
+
+    classifier_disagreement_count = pcode_only_count + flow_only_count
 
     orphan_edge_callsites: list[str] = []
     for site in sorted(by_callsite):
@@ -212,10 +249,19 @@ def reconcile_callsites(
         "counts": counts,
         "total_callsites": n_callsites,
         "classifier_disagreement_count": classifier_disagreement_count,
+        "pcode_only_callsites": pcode_only_count,
+        "flow_only_callsites": flow_only_count,
+        "flow_with_pcode_unavailable": flow_with_pcode_unavailable_count,
+        "classification_conflict_count": classification_conflict_count,
+        "classifier_samples": {
+            "pcode_only_rvas": sorted(pcode_only_sample),
+            "flow_only_rvas": sorted(flow_only_sample),
+            "flow_with_pcode_unavailable_rvas": sorted(flow_unavail_sample),
+            "classification_conflict_rvas": sorted(conflict_sample),
+        },
         "outside_recognized_function": outside_recognized_function,
         "orphan_edge_callsites": orphan_edge_callsites,
         "orphan_edge_callsite_count": len(orphan_edge_callsites),
-        "per_callsite": per_callsite,
     }
 
 
@@ -263,10 +309,36 @@ def gfx_functions(functions: dict[str, dict[str, Any]]) -> dict[str, str]:
     return out
 
 
-def callsites_for_caller(
-    callsites: list[dict[str, Any]], caller_rva: str
-) -> list[dict[str, Any]]:
-    return [c for c in callsites if c.get("caller_rva") == caller_rva]
+def _function_identity_matches_draw_borders(row: dict[str, Any]) -> bool:
+    demangled = row.get("name_demangled") or ""
+    if demangled == DRAW_BORDERS_DEMANGLED:
+        return True
+    mangled = row.get("name_mangled") or ""
+    return mangled == "DrawBorders" and row.get("namespace") == "CPdxMapBorderLayer"
+
+
+def resolve_draw_borders_entry(
+    functions: dict[str, dict[str, Any]],
+) -> tuple[str | None, str | None]:
+    """Return (entry_rva, identity_warning)."""
+    pinned_row = functions.get(PINNED_BORDER_RVA)
+    if pinned_row is not None:
+        if _function_identity_matches_draw_borders(pinned_row):
+            return PINNED_BORDER_RVA, None
+        return PINNED_BORDER_RVA, (
+            f"pinned RVA {PINNED_BORDER_RVA} is "
+            f"{pinned_row.get('name_demangled')!r}, expected {DRAW_BORDERS_DEMANGLED}"
+        )
+    matches = [
+        rva
+        for rva, row in functions.items()
+        if _function_identity_matches_draw_borders(row)
+    ]
+    if len(matches) == 1:
+        return matches[0], None
+    if len(matches) > 1:
+        return None, "multiple DrawBorders symbols in inventory"
+    return None, "DrawBorders not found in inventory"
 
 
 def unresolved_callsite_rvas(
@@ -288,6 +360,34 @@ def unresolved_callsite_rvas(
     return sorted(unresolved)
 
 
+def _caller_stats_report(
+    name_mangled: str,
+    entry_rva: str,
+    caller_sites: list[dict[str, Any]],
+    by_callsite: dict[str, list[dict[str, Any]]],
+    *,
+    identity_warning: str | None = None,
+) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "name_mangled": name_mangled,
+        "entry_rva": entry_rva,
+        "direct_callsites": sum(1 for c in caller_sites if c["instruction_class"] == "direct"),
+        "indirect_callsites": sum(
+            1 for c in caller_sites if c["instruction_class"] == "indirect"
+        ),
+        "ambiguous_callsites": sum(
+            1 for c in caller_sites if c["instruction_class"] == "ambiguous"
+        ),
+        "missing_graph_edges": sum(
+            1 for c in caller_sites if not by_callsite.get(c["callsite_rva"])
+        ),
+        "unresolved_callsite_rvas": unresolved_callsite_rvas(caller_sites, by_callsite),
+    }
+    if identity_warning:
+        report["identity_warning"] = identity_warning
+    return report
+
+
 def build_graphics_section(
     callsites: list[dict[str, Any]],
     edges: list[dict[str, Any]],
@@ -299,52 +399,58 @@ def build_graphics_section(
         if site:
             by_callsite[site].append(edge)
 
+    by_caller: dict[str | None, list[dict[str, Any]]] = defaultdict(list)
+    for row in callsites:
+        by_caller[row.get("caller_rva")].append(row)
+
     anchors = resolve_mandatory_anchors(functions)
     anchor_reports: list[dict[str, Any]] = []
     for sym, entry_rva in sorted(anchors.items(), key=lambda x: x[1]):
-        caller_sites = callsites_for_caller(callsites, entry_rva)
-        direct = sum(1 for c in caller_sites if c["instruction_class"] == "direct")
-        indirect = sum(1 for c in caller_sites if c["instruction_class"] == "indirect")
-        ambiguous = sum(1 for c in caller_sites if c["instruction_class"] == "ambiguous")
-        missing_edges = sum(
-            1 for c in caller_sites if not by_callsite.get(c["callsite_rva"])
-        )
         anchor_reports.append(
-            {
-                "name_mangled": sym,
-                "entry_rva": entry_rva,
-                "direct_callsites": direct,
-                "indirect_callsites": indirect,
-                "ambiguous_callsites": ambiguous,
-                "missing_graph_edges": missing_edges,
-                "unresolved_callsite_rvas": unresolved_callsite_rvas(
-                    caller_sites, by_callsite
-                ),
-            }
+            _caller_stats_report(
+                sym,
+                entry_rva,
+                by_caller.get(entry_rva, []),
+                by_callsite,
+            )
         )
 
     gfx_reports: list[dict[str, Any]] = []
     for name, entry_rva in sorted(gfx_functions(functions).items(), key=lambda x: x[1]):
-        caller_sites = callsites_for_caller(callsites, entry_rva)
         gfx_reports.append(
+            _caller_stats_report(
+                name,
+                entry_rva,
+                by_caller.get(entry_rva, []),
+                by_callsite,
+            )
+        )
+
+    draw_rva, draw_warn = resolve_draw_borders_entry(functions)
+    focused_renderers: list[dict[str, Any]] = []
+    if draw_rva is not None:
+        row = functions[draw_rva]
+        label = row.get("name_demangled") or row.get("name_mangled") or DRAW_BORDERS_DEMANGLED
+        focused_renderers.append(
+            _caller_stats_report(
+                label,
+                draw_rva,
+                by_caller.get(draw_rva, []),
+                by_callsite,
+                identity_warning=draw_warn,
+            )
+        )
+    else:
+        focused_renderers.append(
             {
-                "name_mangled": name,
-                "entry_rva": entry_rva,
-                "direct_callsites": sum(
-                    1 for c in caller_sites if c["instruction_class"] == "direct"
-                ),
-                "indirect_callsites": sum(
-                    1 for c in caller_sites if c["instruction_class"] == "indirect"
-                ),
-                "ambiguous_callsites": sum(
-                    1 for c in caller_sites if c["instruction_class"] == "ambiguous"
-                ),
-                "missing_graph_edges": sum(
-                    1 for c in caller_sites if not by_callsite.get(c["callsite_rva"])
-                ),
-                "unresolved_callsite_rvas": unresolved_callsite_rvas(
-                    caller_sites, by_callsite
-                ),
+                "name_mangled": DRAW_BORDERS_DEMANGLED,
+                "entry_rva": None,
+                "identity_warning": draw_warn,
+                "direct_callsites": 0,
+                "indirect_callsites": 0,
+                "ambiguous_callsites": 0,
+                "missing_graph_edges": 0,
+                "unresolved_callsite_rvas": [],
             }
         )
 
@@ -370,6 +476,7 @@ def build_graphics_section(
     return {
         "mandatory_anchors": anchor_reports,
         "gfx_helpers": gfx_reports,
+        "focused_renderers": focused_renderers,
         "top_missing_by_function": top_missing,
     }
 
@@ -414,10 +521,15 @@ def build_audit_report(
             "classifier_disagreement_count": reconciliation[
                 "classifier_disagreement_count"
             ],
+            "pcode_only_callsites": reconciliation["pcode_only_callsites"],
+            "flow_only_callsites": reconciliation["flow_only_callsites"],
+            "flow_with_pcode_unavailable": reconciliation["flow_with_pcode_unavailable"],
+            "classification_conflict_count": reconciliation["classification_conflict_count"],
             "outside_recognized_function": reconciliation[
                 "outside_recognized_function"
             ],
         },
+        "classifier_diagnostics": reconciliation["classifier_samples"],
         "graph_coverage": {
             "callsites_with_edges": reconciliation["counts"]["matched"],
             "missing_direct": reconciliation["counts"]["missing_direct"],
@@ -446,32 +558,48 @@ def canonical_jsonl_bytes(callsites: list[dict[str, Any]]) -> bytes:
     return ("\n".join(lines) + "\n").encode() if lines else b""
 
 
+def audits_complete(audits_dir: Path) -> bool:
+    return (
+        (audits_dir / AUDITS_CALLSITES_FILE).is_file()
+        and (audits_dir / AUDITS_REPORT_FILE).is_file()
+    )
+
+
+def existing_audits_equal(
+    audits_dir: Path, callsites_bytes: bytes, report_bytes: bytes
+) -> bool:
+    if not audits_complete(audits_dir):
+        return False
+    return (
+        (audits_dir / AUDITS_CALLSITES_FILE).read_bytes() == callsites_bytes
+        and (audits_dir / AUDITS_REPORT_FILE).read_bytes() == report_bytes
+    )
+
+
 def publish_audits(
-    staging_callsites: bytes,
-    staging_report: bytes,
-    audits_dir: Path,
+    audits_parent: Path,
+    callsites_bytes: bytes,
+    report_bytes: bytes,
 ) -> None:
-    audits_dir.parent.mkdir(parents=True, exist_ok=True)
-    final_callsites = audits_dir / "callsites-v1.jsonl"
-    final_report = audits_dir / "callsite-audit.json"
-    if not audits_dir.exists():
-        audits_dir.mkdir(parents=True)
-        final_callsites.write_bytes(staging_callsites)
-        final_report.write_bytes(staging_report)
-        return
-    if final_callsites.is_file() and final_report.is_file():
-        if (
-            final_callsites.read_bytes() == staging_callsites
-            and final_report.read_bytes() == staging_report
-        ):
+    audits_parent.mkdir(parents=True, exist_ok=True)
+    audits_dir = audits_parent / "audits"
+    if audits_dir.exists():
+        if existing_audits_equal(audits_dir, callsites_bytes, report_bytes):
             return
         raise ReError(
-            f"audits/ exists with different content; remove or rename {audits_dir} "
-            "before replacing"
+            "audits/ exists with different or incomplete content; "
+            "remove or rename before publishing"
         )
-    raise ReError(
-        f"audits/ exists but is incomplete; remove or rename {audits_dir} before publish"
-    )
+    staging = Path(tempfile.mkdtemp(dir=audits_parent, prefix="audits.publish-"))
+    try:
+        (staging / AUDITS_CALLSITES_FILE).write_bytes(callsites_bytes)
+        (staging / AUDITS_REPORT_FILE).write_bytes(report_bytes)
+        if audits_dir.exists():
+            raise ReError("audits/ appeared during publish; aborting")
+        staging.rename(audits_dir)
+    except Exception:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
 
 def assert_inventory_identity(exp: Path, provenance: dict[str, Any]) -> str:
@@ -504,7 +632,6 @@ def run_ghidra_export(staging_dir: Path, ghidra_meta: dict[str, Any]) -> None:
         "-postScript",
         "ExportCallsites.java",
         str(staging_dir),
-        timeout_seconds=7200,
     )
 
 
@@ -550,16 +677,14 @@ def run_audit(exp: Path, baseline_revision: str) -> Path:
         callsites_bytes = canonical_jsonl_bytes(callsites)
         report_bytes = canonical_json_bytes(report)
 
-        audits_dir = exp / "audits"
-        publish_audits(callsites_bytes, report_bytes, audits_dir)
+        digest_after = inventory_bundle_digest(exp / "inventory")
+        if digest_after != digest_before:
+            raise ReError("inventory bundle digest changed during audit")
+        publish_audits(exp, callsites_bytes, report_bytes)
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
 
-    digest_after = inventory_bundle_digest(exp / "inventory")
-    if digest_after != digest_before:
-        raise ReError("inventory bundle digest changed during audit")
-
-    return audits_dir / "callsite-audit.json"
+    return exp / "audits" / AUDITS_REPORT_FILE
 
 
 def main(argv: list[str] | None = None) -> int:

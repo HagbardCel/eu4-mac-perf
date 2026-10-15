@@ -56,6 +56,12 @@ class GhidraExportCallsitesTests(unittest.TestCase):
         classes = {c["instruction_class"] for c in callsites}
         self.assertIn("direct", classes)
         self.assertIn("indirect", classes)
+        for key in (
+            "pcode_is_call",
+            "flow_instruction_class",
+            "classification_conflict",
+        ):
+            self.assertIn(key, callsites[0])
         return canonical_jsonl_bytes(callsites)
 
     def test_direct_and_indirect_callsites(self) -> None:

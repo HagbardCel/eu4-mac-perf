@@ -3,18 +3,22 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from reverse_engineering.callsite_audit import (
+    AUDITS_CALLSITES_FILE,
+    AUDITS_REPORT_FILE,
     build_audit_report,
     build_graphics_section,
     canonical_json_bytes,
-    canonical_jsonl_bytes,
-    coverage_bucket,
     publish_audits,
     reconcile_callsites,
+    resolve_draw_borders_entry,
+    run_ghidra_export,
     validate_census,
-    validate_scan_meta,
+    coverage_bucket,
 )
+from reverse_engineering.gfx_subgraph import PINNED_BORDER_RVA
 from reverse_engineering.manifest import inventory_bundle_digest
 from reverse_engineering.paths import ReError
 
@@ -41,13 +45,30 @@ def _row(
     iclass: str,
     caller: str | None = "0x0000000000005000",
     status: str = "agreement",
+    *,
+    flow_type_is_call: bool = True,
+    pcode_is_call: bool | None = None,
+    classification_conflict: bool = False,
+    flow_instruction_class: str | None = None,
 ) -> dict:
+    if pcode_is_call is None:
+        if status == "pcode_unavailable":
+            pcode_is_call = False
+        elif status == "agreement":
+            pcode_is_call = flow_type_is_call
+        else:
+            pcode_is_call = not flow_type_is_call
+    if flow_instruction_class is None and flow_type_is_call:
+        flow_instruction_class = "indirect" if iclass == "indirect" else "direct"
     return {
         "callsite_rva": rva,
         "caller_rva": caller,
         "mnemonic": "CALL",
         "pcode_kind": "CALL" if iclass == "direct" else "CALLIND",
-        "flow_type_is_call": True,
+        "flow_type_is_call": flow_type_is_call,
+        "pcode_is_call": pcode_is_call,
+        "flow_instruction_class": flow_instruction_class,
+        "classification_conflict": classification_conflict,
         "classifier_status": status,
         "instruction_class": iclass,
         "call_reference_count": 1,
@@ -86,14 +107,37 @@ class CallsiteAuditTests(unittest.TestCase):
         self.assertEqual(result["orphan_edge_callsite_count"], 1)
         self.assertIn("0x0000000000009999", result["orphan_edge_callsites"])
 
-    def test_classifier_disagreement_orthogonal(self) -> None:
+    def test_classifier_disagreement_partition(self) -> None:
         callsites = [
-            _row("0x0000000000005001", "direct", status="disagreement"),
+            _row(
+                "0x0000000000005001",
+                "direct",
+                flow_type_is_call=False,
+                pcode_is_call=True,
+            ),
         ]
         edges = [{"callsite_rva": "0x0000000000005001"}]
         result = reconcile_callsites(callsites, edges)
         self.assertEqual(result["counts"]["matched"], 1)
+        self.assertEqual(result["pcode_only_callsites"], 1)
+        self.assertEqual(result["flow_only_callsites"], 0)
         self.assertEqual(result["classifier_disagreement_count"], 1)
+
+    def test_pcode_unavailable_not_disagreement(self) -> None:
+        callsites = [
+            _row(
+                "0x0000000000005002",
+                "direct",
+                status="pcode_unavailable",
+                flow_type_is_call=True,
+                pcode_is_call=False,
+            ),
+        ]
+        result = reconcile_callsites(callsites, [])
+        self.assertEqual(result["flow_with_pcode_unavailable"], 1)
+        self.assertEqual(result["pcode_only_callsites"], 0)
+        self.assertEqual(result["flow_only_callsites"], 0)
+        self.assertEqual(result["classifier_disagreement_count"], 0)
 
     def test_validate_census_count_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,26 +158,40 @@ class CallsiteAuditTests(unittest.TestCase):
 
     def test_publish_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            audits = Path(tmp) / "audits"
+            exp = Path(tmp)
             a = b'{"x":1}\n'
             b = b'{"y":2}\n'
-            publish_audits(a, b, audits)
-            publish_audits(a, b, audits)
-            self.assertTrue((audits / "callsite-audit.json").is_file())
+            publish_audits(exp, a, b)
+            publish_audits(exp, a, b)
+            self.assertTrue((exp / "audits" / AUDITS_REPORT_FILE).is_file())
 
     def test_publish_rejects_differing_audits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            audits = Path(tmp) / "audits"
-            publish_audits(b"a\n", b"b\n", audits)
+            exp = Path(tmp)
+            publish_audits(exp, b"a\n", b"b\n")
             with self.assertRaises(ReError):
-                publish_audits(b"c\n", b"d\n", audits)
+                publish_audits(exp, b"c\n", b"d\n")
+
+    def test_publish_rejects_incomplete_audits(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exp = Path(tmp)
+            incomplete = exp / "audits"
+            incomplete.mkdir()
+            (incomplete / AUDITS_CALLSITES_FILE).write_bytes(b"x\n")
+            with self.assertRaises(ReError):
+                publish_audits(exp, b"a\n", b"b\n")
 
     def test_deterministic_report_bytes(self) -> None:
         callsites = [_row("0x0000000000005001", "direct")]
         recon = reconcile_callsites(callsites, [])
         prov = {"baseline_revision": "rev", "inventory_bundle_digest": "abc"}
         meta = _scan_meta(1)
-        gfx = {"mandatory_anchors": [], "gfx_helpers": [], "top_missing_by_function": []}
+        gfx = {
+            "mandatory_anchors": [],
+            "gfx_helpers": [],
+            "focused_renderers": [],
+            "top_missing_by_function": [],
+        }
         r1 = build_audit_report(
             provenance=prov,
             scan_meta=meta,
@@ -153,30 +211,57 @@ class CallsiteAuditTests(unittest.TestCase):
             pinned_sha="bb" * 32,
         )
         self.assertEqual(canonical_json_bytes(r1), canonical_json_bytes(r2))
-        self.assertEqual(
-            canonical_jsonl_bytes(callsites),
-            canonical_jsonl_bytes(callsites),
-        )
+
+    @mock.patch("reverse_engineering.callsite_audit.analyze_headless")
+    def test_run_ghidra_export_invokes_headless(self, mock_headless: mock.Mock) -> None:
+        staging = Path(tempfile.mkdtemp())
+        meta = {
+            "project_dir": "/proj",
+            "project_name": "EU4_test",
+            "program_name": "eu4",
+        }
+        run_ghidra_export(staging, meta)
+        mock_headless.assert_called_once()
+        args, kwargs = mock_headless.call_args
+        self.assertEqual(kwargs, {})
+        self.assertIn("ExportCallsites.java", args)
 
     def test_graphics_mandatory_anchors_from_graph_mini(self) -> None:
         callsites = [
             _row("0x0000000000005001", "direct", caller="0x0000000000005000"),
             _row("0x0000000000009001", "indirect", caller="0x0000000000009000"),
         ]
-        edges = [
-            json.loads(line)
-            for line in GRAPH_MINI.joinpath("call_edges.jsonl").read_text().splitlines()
-            if line.strip()
-        ]
-        functions = {
-            json.loads(line)["entry_rva"]: json.loads(line)
-            for line in GRAPH_MINI.joinpath("functions.jsonl").read_text().splitlines()
-            if line.strip()
-        }
+        edges = load_edges(GRAPH_MINI)
+        functions = load_functions(GRAPH_MINI)
         gfx = build_graphics_section(callsites, edges, functions)
         self.assertGreaterEqual(len(gfx["mandatory_anchors"]), 3)
         names = {a["name_mangled"] for a in gfx["mandatory_anchors"]}
         self.assertIn("__ZN13SShaderOpenGL6SetAllEv", names)
+
+    def test_draw_borders_pinned_identity_mismatch(self) -> None:
+        functions = {
+            PINNED_BORDER_RVA: {
+                "entry_rva": PINNED_BORDER_RVA,
+                "name_mangled": "wrong",
+                "name_demangled": "Other::Fn",
+            }
+        }
+        rva, warn = resolve_draw_borders_entry(functions)
+        self.assertEqual(rva, PINNED_BORDER_RVA)
+        self.assertIsNotNone(warn)
+
+    def test_draw_borders_in_focused_renderers(self) -> None:
+        functions = dict(load_functions(GRAPH_MINI))
+        functions[PINNED_BORDER_RVA] = {
+            "entry_rva": PINNED_BORDER_RVA,
+            "name_mangled": "DrawBorders",
+            "name_demangled": "CPdxMapBorderLayer::DrawBorders",
+            "namespace": "CPdxMapBorderLayer",
+        }
+        callsites = [_row("0x0000000000006001", "direct", caller=PINNED_BORDER_RVA)]
+        gfx = build_graphics_section(callsites, [], functions)
+        self.assertEqual(len(gfx["focused_renderers"]), 1)
+        self.assertEqual(gfx["focused_renderers"][0]["entry_rva"], PINNED_BORDER_RVA)
 
     def test_graphics_missing_anchor_fails(self) -> None:
         functions = {"0x1": {"entry_rva": "0x1", "name_mangled": "other"}}
@@ -209,9 +294,9 @@ class CallsiteAuditTests(unittest.TestCase):
                 pinned_sha="cc" * 32,
             )
             publish_audits(
-                canonical_jsonl_bytes(callsites),
+                exp,
+                json.dumps(callsites[0], sort_keys=True).encode() + b"\n",
                 canonical_json_bytes(report),
-                exp / "audits",
             )
             digest_after = inventory_bundle_digest(inv)
             self.assertEqual(digest_before, digest_after)

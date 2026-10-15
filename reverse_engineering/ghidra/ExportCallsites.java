@@ -115,12 +115,9 @@ public class ExportCallsites extends GhidraScript {
         return scan.usable && (scan.hasCall || scan.hasCallInd);
     }
 
-    private static String instructionClass(PcodeScan scan, boolean flowIsCall, boolean flowIsIndirect) {
+    private static String pcodeInstructionClass(PcodeScan scan) {
         if (!scan.usable) {
-            if (flowIsCall) {
-                return flowIsIndirect ? "indirect" : "direct";
-            }
-            return "ambiguous";
+            return null;
         }
         if (scan.hasCall && scan.hasCallInd) {
             return "ambiguous";
@@ -131,10 +128,41 @@ public class ExportCallsites extends GhidraScript {
         if (scan.hasCall) {
             return "direct";
         }
+        return null;
+    }
+
+    private static String flowInstructionClass(boolean flowIsCall, boolean flowIsIndirect) {
+        if (!flowIsCall) {
+            return null;
+        }
+        return flowIsIndirect ? "indirect" : "direct";
+    }
+
+    private static String instructionClass(PcodeScan scan, boolean flowIsCall, boolean flowIsIndirect) {
+        if (!scan.usable) {
+            if (flowIsCall) {
+                return flowIsIndirect ? "indirect" : "direct";
+            }
+            return "ambiguous";
+        }
+        String pcodeClass = pcodeInstructionClass(scan);
+        if (pcodeClass != null) {
+            return pcodeClass;
+        }
         if (flowIsCall) {
             return flowIsIndirect ? "indirect" : "direct";
         }
         return "ambiguous";
+    }
+
+    private static boolean classificationConflict(
+            PcodeScan scan, boolean flowIsCall, boolean flowIsIndirect, boolean pcodeCall) {
+        if (!scan.usable || !pcodeCall || !flowIsCall) {
+            return false;
+        }
+        String pcodeClass = pcodeInstructionClass(scan);
+        String flowClass = flowInstructionClass(flowIsCall, flowIsIndirect);
+        return pcodeClass != null && flowClass != null && !pcodeClass.equals(flowClass);
     }
 
     private static String classifierStatus(PcodeScan scan, boolean flowIsCall, boolean pcodeIsCall) {
@@ -226,6 +254,8 @@ public class ExportCallsites extends GhidraScript {
                 String pcodeKindStr = pcodeKind(scan);
                 String instrClass = instructionClass(scan, flowIsCall, flowIsIndirect);
                 String status = classifierStatus(scan, flowIsCall, pcodeCall);
+                String flowClass = flowInstructionClass(flowIsCall, flowIsIndirect);
+                boolean classConflict = classificationConflict(scan, flowIsCall, flowIsIndirect, pcodeCall);
                 String caller = callerRva(ins);
                 int refCount = callReferenceCount(ins);
                 String mnemonic = ins.getMnemonicString();
@@ -237,6 +267,10 @@ public class ExportCallsites extends GhidraScript {
                 line.append(",\"mnemonic\":").append(esc(mnemonic));
                 line.append(",\"pcode_kind\":").append(esc(pcodeKindStr));
                 line.append(",\"flow_type_is_call\":").append(flowIsCall);
+                line.append(",\"pcode_is_call\":").append(pcodeCall);
+                line.append(",\"flow_instruction_class\":").append(
+                    flowClass == null ? "null" : esc(flowClass));
+                line.append(",\"classification_conflict\":").append(classConflict);
                 line.append(",\"classifier_status\":").append(esc(status));
                 line.append(",\"instruction_class\":").append(esc(instrClass));
                 line.append(",\"call_reference_count\":").append(refCount);

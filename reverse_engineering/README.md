@@ -136,7 +136,7 @@ exports/<baseline-revision>/audits/
 
 **Coverage partition** (every census callsite exactly one bucket): `matched`, `missing_direct`, `missing_indirect`, `missing_ambiguous`. Classifier disagreement and calls outside functions are separate diagnostics. Orphan graph edges (edge RVA not in census) are listed separately.
 
-**Publication:** if `audits/` already exists with different bytes, the command fails; remove or rename `audits/` explicitly to replace. Identical reruns are idempotent.
+**Publication:** if `audits/` is absent, both files are written atomically via a same-filesystem directory rename. If `audits/` exists with identical bytes, the command succeeds without rewriting. If `audits/` is incomplete or differs, the command fails; remove or rename `audits/` explicitly before replacing.
 
 **Out of scope:** indirect target resolution, tail-call `jmp` recovery, decompilation, EU IV execution, changes to qualification or graphics graph-cut verdicts.
 
