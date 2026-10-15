@@ -1,0 +1,19 @@
+name: Graphics agent harness
+on: [push, pull_request]
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install agent environment
+        run: uv sync --extra graphics-agent
+      - name: Agent unit tests
+        env:
+          CI: "true"
+          ALLOW_MODEL_REQUESTS: "False"
+          PYDANTIC_AI_NO_BANNER: "1"
+          PYTHONPATH: benchmark:.
+        run: uv run python -m unittest discover -s tests_agent -v

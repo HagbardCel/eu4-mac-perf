@@ -1,0 +1,5 @@
+{
+  "investigation_id": "default-mcp",
+  "baseline_revision": null,
+  "note": "MCP server binds to investigation_id; override via EU4_AGENT_INVESTIGATION_ID"
+}

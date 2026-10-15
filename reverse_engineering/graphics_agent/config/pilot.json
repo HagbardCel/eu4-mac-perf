@@ -1,0 +1,19 @@
+{
+  "budgets": {
+    "max_tool_calls": 150,
+    "max_new_decompilations": 20,
+    "max_graph_nodes": 250,
+    "max_ghidra_queries": 80,
+    "max_output_bytes": 512000
+  },
+  "model_spend": {
+    "investigation_budget_usd": 2.0,
+    "per_run_cap_usd": 0.25,
+    "max_model_requests": 12,
+    "transport_retries": 2,
+    "canary_spend_authorization_id": "provider-canary-bundle",
+    "canary_budget_usd": 0.5,
+    "canary_per_run_cap_usd": 0.2
+  },
+  "investigation_id": "pilot-indexed-draw"
+}

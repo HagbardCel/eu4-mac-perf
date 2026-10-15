@@ -1,0 +1,1 @@
+Discovery mode: identify plausible graphics functions, subsystem boundaries, and unexplained dependencies. Use high-recall exploration but cite evidence for every classification. Propose investigations outside the candidate list when justified.

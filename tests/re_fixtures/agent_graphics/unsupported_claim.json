@@ -1,0 +1,7 @@
+{
+  "claim_id": "fixture-unsupported-001",
+  "statement": "SShaderOpenGL::SetAll allocates all vertex buffers for the engine",
+  "evidence_ids": ["call-edge:fixture:0x0000000000005000:deadbeef"],
+  "scientific_status": "hypothesis",
+  "expect_verifier_reject": true
+}
