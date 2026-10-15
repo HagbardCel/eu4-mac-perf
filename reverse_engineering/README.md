@@ -146,6 +146,27 @@ exports/<baseline-revision>/audits/
 
 **Pre-merge:** run one full offline audit on the qualified EU IV Ghidra project (e.g. `auto-v1-20261013`) and attach summary metrics to the PR.
 
+## Frozen renderer scope (Stage 1)
+
+The graphics extraction list is frozen under [`analysis/renderer-corpus/scope/v1/`](../analysis/renderer-corpus/scope/v1/). Later exporters read this explicit RVA list; they do not walk the call graph or select functions by name. Rows tagged `dependency` are static graph inclusions, not verified renderer roles.
+
+[`renderer_scope.py`](renderer_scope.py) is separate from `corpus manifest` / `corpus decompile` (which still partition the full internal inventory).
+
+```bash
+python3 -m reverse_engineering.renderer_scope validate \
+  --baseline-revision auto-v1-20261013
+
+python3 -m reverse_engineering.renderer_scope prepare \
+  --baseline-revision auto-v1-20261013 \
+  --batch-size 100
+```
+
+`validate` is read-only. It checks scope file hashes (`scope-v1.sha256`), `manifest-summary.json`, the three `source_inputs_sha256` files (`inventory/functions.jsonl`, `inventory/call_edges.jsonl`, `audits/callsites-v1.jsonl`), provenance identity, and per-function inventory matches for all 4,450 selected internal functions (plus deep subset, thunks, `_Gfx*` helpers, and nine priority anchors).
+
+`prepare` runs `validate`, then writes `renderer_snapshot/v1/manifest/batch_plan.json` under the resolved export directory (`local_binary_root()` / `resolve_export_dir()`, honoring `EU4_RE_EXPORT`). Publication is fail-closed: identical full plan payload is a no-op; a different `batch_size` or partition must be removed explicitly before replacing.
+
+Decompiled bodies and machine evidence stay gitignored under `.local/` (or `EU4_RE_EXPORT`). Tests: `python3 -m unittest tests.test_renderer_scope`.
+
 ## Analysis revisions
 
 Each `exports/<baseline-revision>/` tree is the working export root. `inventory_digest` (functions only) drives batch partitioning; `inventory_bundle_digest` includes call edges and coverage.

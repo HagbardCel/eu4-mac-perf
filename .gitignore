@@ -1,6 +1,9 @@
 # Local EU IV / Ghidra / decompiled corpus (never publish)
 .local/
 
+# Local evidence archives used to build frozen scope (not published)
+artifacts/
+
 __pycache__/
 *.pyc
 .venv/
