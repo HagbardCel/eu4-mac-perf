@@ -35,6 +35,17 @@ class CommittedScopeTests(unittest.TestCase):
         )
 
 
+def _mini_validate_patches():
+    return (
+        unittest.mock.patch.object(
+            renderer_scope,
+            "PRIORITY_ENTRIES",
+            (("0x0000000000001000", "SShaderOpenGL::SetAll()"),),
+        ),
+        unittest.mock.patch.object(renderer_scope, "is_gfx_helper", return_value=False),
+    )
+
+
 class BatchPlanPublicationTests(unittest.TestCase):
     def test_identical_plan_is_no_op_and_different_batch_size_fails(self) -> None:
         plan_a = {
@@ -69,6 +80,51 @@ class BatchPlanPublicationTests(unittest.TestCase):
             }
             with self.assertRaises(renderer_scope.ReError):
                 renderer_scope.publish_batch_plan(path, plan)
+
+    def _sample_plan_bytes(self) -> bytes:
+        plan = {
+            "schema": 1,
+            "baseline_revision": "t",
+            "selection_manifest_sha256": "a",
+            "inventory_bundle_digest": "b",
+            "batch_size": 1,
+            "selected_function_count": 1,
+            "batches": {"gfx-batch-00001": ["0x0000000000001000"]},
+        }
+        return renderer_scope.canonical_batch_plan_bytes(plan)
+
+    def _staging_files(self, parent: Path) -> list[Path]:
+        return [p for p in parent.iterdir() if p.name.startswith(".batch_plan.")]
+
+    def test_link_race_identical_bytes_returns_unchanged(self) -> None:
+        new_bytes = self._sample_plan_bytes()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "batch_plan.json"
+
+            def fake_link(_src: str, dst: str) -> None:
+                Path(dst).write_bytes(new_bytes)
+                raise FileExistsError
+
+            with unittest.mock.patch("reverse_engineering.renderer_scope.os.link", fake_link):
+                action = renderer_scope._link_batch_plan_bytes(path, new_bytes)
+            self.assertEqual(action, "unchanged")
+            self.assertEqual(path.read_bytes(), new_bytes)
+            self.assertEqual(self._staging_files(path.parent), [])
+
+    def test_link_race_different_bytes_raises_and_cleans_staging(self) -> None:
+        new_bytes = self._sample_plan_bytes()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "batch_plan.json"
+
+            def fake_link(_src: str, dst: str) -> None:
+                Path(dst).write_bytes(b"other-plan\n")
+                raise FileExistsError
+
+            with unittest.mock.patch("reverse_engineering.renderer_scope.os.link", fake_link):
+                with self.assertRaises(renderer_scope.ReError):
+                    renderer_scope._link_batch_plan_bytes(path, new_bytes)
+            self.assertEqual(path.read_bytes(), b"other-plan\n")
+            self.assertEqual(self._staging_files(path.parent), [])
 
 
 class CensusDriftTests(unittest.TestCase):
@@ -233,6 +289,78 @@ class PrepareFixtureTests(unittest.TestCase):
             plan_path = export / "renderer_snapshot" / "v1" / "manifest" / "batch_plan.json"
             self.assertTrue(plan_path.is_file())
             self.assertEqual((export / "provenance.json").read_text(), provenance_before)
+
+
+class BaselineResolutionTests(unittest.TestCase):
+    def test_validate_without_revision_ignores_newer_export(self) -> None:
+        import io
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            census = CensusDriftTests()
+            scope, _export = census._build_scope_tree(tmp_path, b'{"callsite_rva":"0x1"}\n')
+            newer = tmp_path / "exports" / "newer-export"
+            newer.mkdir(parents=True)
+            (newer / "provenance.json").write_text(
+                json.dumps({"baseline_revision": "newer-export", "binary_sha256": "dead"})
+                + "\n"
+            )
+            buf = io.StringIO()
+            patch_pri, patch_gfx = _mini_validate_patches()
+            with unittest.mock.patch(
+                "reverse_engineering.renderer_scope.binary_sha256",
+                return_value=load_target()["sha256"],
+            ):
+                with unittest.mock.patch(
+                    "reverse_engineering.renderer_scope.local_binary_root",
+                    return_value=tmp_path,
+                ):
+                    with patch_pri, patch_gfx:
+                        with unittest.mock.patch.object(sys, "stdout", buf):
+                            rc = renderer_scope.cmd_validate(
+                                argparse.Namespace(
+                                    scope_dir=str(scope),
+                                    baseline_revision=None,
+                                )
+                            )
+            self.assertEqual(rc, 0)
+            payload = json.loads(buf.getvalue())
+            self.assertTrue(str(payload["export_dir"]).endswith("fixture-renderer"))
+
+
+class ProvenanceDigestTests(unittest.TestCase):
+    def test_missing_inventory_digest_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            census = CensusDriftTests()
+            scope, export = census._build_scope_tree(tmp_path, b'{"callsite_rva":"0x1"}\n')
+            provenance = json.loads((export / "provenance.json").read_text())
+            provenance.pop("inventory_digest")
+            (export / "provenance.json").write_text(json.dumps(provenance) + "\n")
+            with _mini_validate_patches()[0], _mini_validate_patches()[1]:
+                with self.assertRaises(renderer_scope.ReError):
+                    renderer_scope.validate_scope(
+                        scope_dir=scope,
+                        exp=export,
+                        baseline_revision="fixture-renderer",
+                    )
+
+    def test_missing_inventory_bundle_digest_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            census = CensusDriftTests()
+            scope, export = census._build_scope_tree(tmp_path, b'{"callsite_rva":"0x1"}\n')
+            provenance = json.loads((export / "provenance.json").read_text())
+            provenance.pop("inventory_bundle_digest")
+            (export / "provenance.json").write_text(json.dumps(provenance) + "\n")
+            with _mini_validate_patches()[0], _mini_validate_patches()[1]:
+                with self.assertRaises(renderer_scope.ReError):
+                    renderer_scope.validate_scope(
+                        scope_dir=scope,
+                        exp=export,
+                        baseline_revision="fixture-renderer",
+                    )
 
 
 if __name__ == "__main__":

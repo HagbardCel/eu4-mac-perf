@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -177,6 +179,11 @@ def verify_scope_file_hashes(scope_dir: Path, summary: dict[str, Any]) -> None:
         raise ReError("deep_rva_list_sha256 mismatch vs stage2-deep-entry-rvas.txt")
 
 
+def resolved_baseline_revision(scope_dir: Path, cli_revision: str | None) -> str:
+    summary = load_summary(scope_dir)
+    return verify_summary_identity(summary, cli_revision)
+
+
 def verify_summary_identity(summary: dict[str, Any], baseline_revision: str | None) -> str:
     target = load_target()
     revision = summary.get("baseline_revision")
@@ -208,10 +215,10 @@ def verify_provenance_identity(exp: Path, summary: dict[str, Any], revision: str
         raise ReError("inventory_digest mismatch vs local inventory/functions.jsonl")
     if summary.get("inventory_bundle_digest") != bundle_digest:
         raise ReError("inventory_bundle_digest mismatch vs local inventory bundle")
-    if provenance.get("inventory_digest") and provenance["inventory_digest"] != fn_digest:
-        raise ReError("provenance inventory_digest mismatch vs local inventory")
-    if provenance.get("inventory_bundle_digest") and provenance["inventory_bundle_digest"] != bundle_digest:
-        raise ReError("provenance inventory_bundle_digest mismatch vs local inventory")
+    if provenance.get("inventory_digest") != fn_digest:
+        raise ReError("provenance inventory_digest missing or mismatched")
+    if provenance.get("inventory_bundle_digest") != bundle_digest:
+        raise ReError("provenance inventory_bundle_digest missing or mismatched")
     return bundle_digest
 
 
@@ -429,8 +436,25 @@ def parse_batch_plan(path: Path) -> dict[str, Any]:
     return plan
 
 
+def _link_batch_plan_bytes(path: Path, new_bytes: bytes) -> str:
+    """Create-only publication via hard link; handles concurrent FileExistsError."""
+    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=".batch_plan.")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(new_bytes)
+        try:
+            os.link(staging, path)
+            return "created"
+        except FileExistsError:
+            if path.is_file() and path.read_bytes() == new_bytes:
+                return "unchanged"
+            raise ReError("concurrent batch-plan publication conflict")
+    finally:
+        Path(staging).unlink(missing_ok=True)
+
+
 def publish_batch_plan(path: Path, plan: dict[str, Any]) -> str:
-    """Return action: created, unchanged, or replaced."""
+    """Return action: created or unchanged."""
     path.parent.mkdir(parents=True, exist_ok=True)
     new_bytes = canonical_batch_plan_bytes(plan)
     if path.is_file():
@@ -442,10 +466,7 @@ def publish_batch_plan(path: Path, plan: dict[str, Any]) -> str:
         except ReError:
             raise ReError(f"existing batch plan at {path} is malformed; remove it before replacing")
         raise ReError(f"existing batch plan at {path} differs; remove it before replacing")
-    staging = path.with_suffix(path.suffix + ".staging")
-    staging.write_bytes(new_bytes)
-    staging.replace(path)
-    return "created"
+    return _link_batch_plan_bytes(path, new_bytes)
 
 
 def snapshot_manifest_dir(exp: Path) -> Path:
@@ -454,15 +475,16 @@ def snapshot_manifest_dir(exp: Path) -> Path:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     scope_dir = Path(args.scope_dir).expanduser()
+    revision = resolved_baseline_revision(scope_dir, args.baseline_revision)
     binary_root = local_binary_root(binary_sha256())
-    exp = resolve_export_dir(binary_root, args.baseline_revision)
-    validate_scope(scope_dir=scope_dir, exp=exp, baseline_revision=args.baseline_revision)
+    exp = resolve_export_dir(binary_root, revision)
+    summary, _, _ = validate_scope(scope_dir=scope_dir, exp=exp, baseline_revision=revision)
     print(
         json.dumps(
             {
                 "status": "ok",
-                "baseline_revision": load_summary(scope_dir)["baseline_revision"],
-                "selected_internal_functions": load_summary(scope_dir)["selected_internal_functions"],
+                "baseline_revision": revision,
+                "selected_internal_functions": summary["selected_internal_functions"],
                 "export_dir": str(exp),
             },
             indent=2,
@@ -475,9 +497,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     scope_dir = Path(args.scope_dir).expanduser()
     if args.batch_size <= 0:
         raise ReError("batch_size must be a positive integer")
+    revision = resolved_baseline_revision(scope_dir, args.baseline_revision)
     binary_root = local_binary_root(binary_sha256())
-    summary = load_summary(scope_dir)
-    revision = args.baseline_revision or summary.get("baseline_revision")
     exp = resolve_export_dir(binary_root, revision)
     summary, bundle_digest, ordered_rvas = validate_scope(
         scope_dir=scope_dir,
