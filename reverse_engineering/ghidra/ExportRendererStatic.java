@@ -10,6 +10,7 @@ import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Listing;
+import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.Symbol;
@@ -250,7 +251,7 @@ public class ExportRendererStatic extends GhidraScript {
         return sb.toString();
     }
 
-    private String bytesHex(Instruction ins) {
+    private String bytesHex(Instruction ins) throws MemoryAccessException {
         byte[] raw = ins.getBytes();
         if (raw == null || raw.length == 0) {
             return "";
