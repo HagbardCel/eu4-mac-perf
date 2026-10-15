@@ -517,6 +517,45 @@ class EvidenceAcceptanceTests(unittest.TestCase):
         )
 
 
+class BinaryByteVerificationUnitTests(unittest.TestCase):
+    def test_parse_ghidra_image_base_rejects_invalid(self) -> None:
+        with self.assertRaises(ReError) as ctx:
+            renderer_extract.parse_ghidra_image_base({"image_base": "not-a-number"})
+        self.assertIn("image_base_mismatch", str(ctx.exception))
+
+    def test_no_verifiable_instructions_when_all_static_failed(self) -> None:
+        entry = "0x0000000000001000"
+        static = json.dumps({"entry_rva": entry, "status": "failed", "error": "walk failed"}) + "\n"
+        decomp = json.dumps({"entry_rva": entry, "status": "timeout"}) + "\n"
+        receipt = renderer_extract.build_receipt(
+            static_bytes=static.encode(),
+            decomp_bytes=decomp.encode(),
+            batch_id="gfx-batch-00001",
+            rvas=[entry],
+            plan=_plan(),
+            summary=_summary(),
+            meta={"program_name": "eu4", "image_base": 1, "executable_sha256": "a"},
+            ghidra_version="12.1.4",
+            binary_sha="a",
+        )
+        payload = renderer_extract.write_batch_zip(static, decomp, receipt)
+        with tempfile.TemporaryDirectory() as tmp:
+            exp = Path(tmp)
+            batch_dir = exp / "renderer_snapshot" / "v1" / "batches"
+            batch_dir.mkdir(parents=True)
+            (batch_dir / "gfx-batch-00001.zip").write_bytes(payload)
+            mapper = unittest.mock.MagicMock()
+            result = renderer_extract.verify_binary_bytes_for_valid_batches(
+                exp,
+                ["gfx-batch-00001"],
+                0x100000000,
+                mapper,
+            )
+        self.assertEqual(result["status"], "no_verifiable_instructions")
+        self.assertEqual(result["verified_batches"], 1)
+        mapper.read_bytes_at_va.assert_not_called()
+
+
 class ReportCommandTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -671,6 +710,22 @@ class ReportCommandTests(unittest.TestCase):
             },
         )
         self.assertEqual(report["status"], "evidence_complete")
+        self.assertEqual(code, 1)
+
+    def test_malformed_image_base_writes_coverage_and_classifies(self) -> None:
+        with unittest.mock.patch(
+            "reverse_engineering.renderer_extract.run_binary_byte_verification",
+            side_effect=ReError("image_base_mismatch: invalid image_base value 'nope'"),
+        ):
+            code, report = self._run_cmd_report(
+                valid=self.all_batch_ids,
+                missing=[],
+                verify_binary_bytes=True,
+            )
+        self.assertEqual(
+            report["binary_byte_verification"]["first_mismatch"]["reason"],
+            "image_base_mismatch",
+        )
         self.assertEqual(code, 1)
 
     def test_binary_io_error_recorded_on_verification_failure(self) -> None:

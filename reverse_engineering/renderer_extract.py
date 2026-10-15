@@ -952,6 +952,16 @@ def binary_byte_verification_failed(
     }
 
 
+def parse_ghidra_image_base(ghidra_meta: dict[str, Any]) -> int:
+    raw = ghidra_meta.get("image_base")
+    if raw is None:
+        raise ReError("image_base_mismatch: missing image_base in ghidra_project.json")
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ReError(f"image_base_mismatch: invalid image_base value {raw!r}") from exc
+
+
 def report_status_from_acceptance(
     packages_complete: bool,
     evidence_acceptance: dict[str, Any],
@@ -1021,6 +1031,15 @@ def verify_binary_bytes_for_valid_batches(
         verified_batches += 1
         verified_instructions += batch_ins
         verified_bytes += batch_bytes
+    if verified_instructions == 0:
+        return {
+            "status": "no_verifiable_instructions",
+            "scope": "all_valid_batches",
+            "verified_batches": verified_batches,
+            "verified_instructions": 0,
+            "verified_bytes": 0,
+            "first_mismatch": None,
+        }
     return {
         "status": "passed",
         "scope": "all_valid_batches",
@@ -1033,8 +1052,11 @@ def verify_binary_bytes_for_valid_batches(
 
 def run_binary_byte_verification(exp: Path, valid: list[str]) -> dict[str, Any]:
     exe = verify_binary()
-    ghidra_meta = load_ghidra_meta(local_binary_root(binary_sha256()))
-    image_base = int(ghidra_meta.get("image_base", 0))
+    try:
+        ghidra_meta = load_ghidra_meta(local_binary_root(binary_sha256()))
+    except json.JSONDecodeError as exc:
+        raise ReError(f"image_base_mismatch: invalid ghidra_project.json: {exc}") from exc
+    image_base = parse_ghidra_image_base(ghidra_meta)
     assert_image_base_matches_target(image_base)
     with MachOMapper(exe) as mapper:
         return verify_binary_bytes_for_valid_batches(exp, valid, image_base, mapper)
