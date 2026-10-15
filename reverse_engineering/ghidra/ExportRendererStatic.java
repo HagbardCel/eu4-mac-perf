@@ -2,7 +2,9 @@
 //@category EU4.RE
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressSetView;
+import ghidra.program.model.symbol.FlowTypeOverride;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Instruction;
@@ -117,6 +119,10 @@ public class ExportRendererStatic extends GhidraScript {
                 continue;
             }
             int opcode = op.getOpcode();
+            if (opcode == PcodeOp.UNIMPLEMENTED) {
+                out.usable = false;
+                return out;
+            }
             if (opcode == PcodeOp.CALL) {
                 out.hasCall = true;
             } else if (opcode == PcodeOp.CALLIND) {
@@ -128,7 +134,7 @@ public class ExportRendererStatic extends GhidraScript {
 
     private static String pcodeKind(PcodeScan scan) {
         if (!scan.usable) {
-            return "unavailable";
+            return "none";
         }
         if (scan.hasCall && scan.hasCallInd) {
             return "both";
@@ -146,6 +152,42 @@ public class ExportRendererStatic extends GhidraScript {
         return scan.usable && (scan.hasCall || scan.hasCallInd);
     }
 
+    private static String flowInstructionClass(boolean flowIsCall, boolean flowIsComputed) {
+        if (!flowIsCall) {
+            return null;
+        }
+        return flowIsComputed ? "indirect" : "direct";
+    }
+
+    private static String flowOverrideName(Instruction ins) {
+        FlowTypeOverride override = ins.getFlowOverride();
+        if (override == null || override == FlowTypeOverride.NONE) {
+            return "NONE";
+        }
+        return override.name();
+    }
+
+    private String flowDestinationsJson(Instruction ins) {
+        Address[] flows = ins.getFlows();
+        if (flows == null || flows.length == 0) {
+            return "[]";
+        }
+        StringBuilder sb = new StringBuilder("[");
+        boolean first = true;
+        for (Address dest : flows) {
+            if (dest == null || !dest.isMemoryAddress()) {
+                continue;
+            }
+            if (!first) {
+                sb.append(",");
+            }
+            first = false;
+            sb.append(esc(rva(dest)));
+        }
+        sb.append("]");
+        return sb.toString();
+    }
+
     private void writeMeta(File metaOut) throws Exception {
         String exeSha = currentProgram.getExecutableSHA256();
         StringBuilder sb = new StringBuilder();
@@ -158,8 +200,13 @@ public class ExportRendererStatic extends GhidraScript {
     }
 
     private String bodyRangesJson(AddressSetView body) {
-        List<Interval> intervals = instructionIntervals(body);
-        List<Interval> merged = mergeIntervals(new ArrayList<>(intervals));
+        List<Interval> intervals = new ArrayList<>();
+        for (AddressRange range : body.getAddressRanges()) {
+            long start = range.getMinAddress().getOffset() - imageBase;
+            long end = range.getMaxAddress().getOffset() + 1 - imageBase;
+            intervals.add(new Interval(start, end));
+        }
+        List<Interval> merged = mergeIntervals(intervals);
         StringBuilder sb = new StringBuilder("[");
         boolean first = true;
         for (Interval i : merged) {
@@ -304,6 +351,8 @@ public class ExportRendererStatic extends GhidraScript {
             String mnemonic = ins.getMnemonicString();
             boolean machineCall = mnemonic != null
                 && (mnemonic.equalsIgnoreCase("CALL") || mnemonic.equalsIgnoreCase("CALLQ"));
+            String flowClass = flowInstructionClass(flowIsCall, flowIsComputed);
+            Address fallThrough = ins.getFallThrough();
 
             instructions.append("{");
             instructions.append("\"instruction_rva\":").append(esc(rva(ins.getMinAddress())));
@@ -313,9 +362,18 @@ public class ExportRendererStatic extends GhidraScript {
             instructions.append(",\"operands\":").append(esc(ins.toString()));
             instructions.append(",\"flow_type_is_call\":").append(flowIsCall);
             instructions.append(",\"flow_is_computed\":").append(flowIsComputed);
+            instructions.append(",\"flow_override\":").append(esc(flowOverrideName(ins)));
+            instructions.append(",\"fallthrough_overridden\":").append(ins.isFallThroughOverridden());
+            if (fallThrough != null && fallThrough.isMemoryAddress()) {
+                instructions.append(",\"fallthrough_rva\":").append(esc(rva(fallThrough)));
+            }
+            instructions.append(",\"flow_destinations_rvas\":").append(flowDestinationsJson(ins));
             instructions.append(",\"pcode_kind\":").append(esc(pcodeKind(scan)));
             instructions.append(",\"pcode_is_call\":").append(pcodeCall);
             instructions.append(",\"census_call\":").append(censusCall);
+            if (flowClass != null) {
+                instructions.append(",\"flow_instruction_class\":").append(esc(flowClass));
+            }
             instructions.append(",\"machine_call\":").append(machineCall);
             instructions.append(",\"references_from\":").append(referencesJson(ins));
             instructions.append("}");
@@ -336,7 +394,7 @@ public class ExportRendererStatic extends GhidraScript {
         sb.append(",\"prototype\":").append(esc(proto));
         sb.append(",\"instruction_count\":").append(insCount);
         sb.append(",\"decoded_instruction_bytes\":").append(decodedBytes);
-        sb.append(",\"instruction_ranges\":").append(bodyRangesJson(body));
+        sb.append(",\"body_ranges\":").append(bodyRangesJson(body));
         sb.append(",\"decoded_instruction_ranges\":").append(rangesJsonFromMerged(mergedInsn));
         sb.append(",\"instructions\":").append(instructions);
         sb.append("}\n");

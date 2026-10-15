@@ -8,7 +8,6 @@ import hashlib
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,10 +36,12 @@ from reverse_engineering.paths import (
 )
 from reverse_engineering.renderer_scope import (
     DEFAULT_SCOPE_DIR,
+    FROZEN_RENDERER_BATCH_SIZE,
     PRIORITY_ENTRIES,
+    build_batch_plan,
+    canonical_batch_plan_bytes,
     is_gfx_helper,
     load_scope_hashes,
-    load_summary,
     resolved_baseline_revision,
     validate_scope,
 )
@@ -50,8 +51,15 @@ BATCH_ID_PREFIX = "gfx-batch-"
 ZIP_STATIC = "static.jsonl"
 ZIP_DECOMP = "decompiled.jsonl"
 ZIP_RECEIPT = "receipt.json"
-EXPECTED_FUNCTION_COUNT = 4450
 EXPECTED_INSTRUCTIONS = 281654
+DECOMP_STATUSES = frozenset({"success", "failed", "timeout", "skipped"})
+STATIC_STATUSES = frozenset({"success", "failed"})
+CENSUS_FIELD_KEYS = (
+    "pcode_kind",
+    "flow_type_is_call",
+    "pcode_is_call",
+    "flow_instruction_class",
+)
 EXPECTED_DECODED_BYTES = 1145487
 DEFAULT_DECOMP_TIMEOUT = 120
 DEFAULT_PROCESS_TIMEOUT = 3600
@@ -74,6 +82,39 @@ def load_batch_plan(exp: Path) -> dict[str, Any]:
     if not path.is_file():
         raise ReError(f"missing batch plan: {path}; run renderer_scope prepare first")
     return json.loads(path.read_text())
+
+
+def assert_frozen_batch_plan(
+    saved: dict[str, Any],
+    summary: dict[str, Any],
+    bundle_digest: str,
+    ordered_rvas: list[str],
+) -> None:
+    expected = build_batch_plan(
+        summary=summary,
+        bundle_digest=bundle_digest,
+        ordered_rvas=ordered_rvas,
+        batch_size=FROZEN_RENDERER_BATCH_SIZE,
+    )
+    if canonical_batch_plan_bytes(saved) != canonical_batch_plan_bytes(expected):
+        raise ReError(
+            f"batch_plan.json does not match frozen scope partition (batch_size={FROZEN_RENDERER_BATCH_SIZE})"
+        )
+
+
+def load_frozen_context(
+    scope_dir: Path,
+    baseline_revision: str | None,
+) -> tuple[Path, dict[str, Any], dict[str, Any], str, list[str], str]:
+    revision = resolved_baseline_revision(scope_dir, baseline_revision)
+    binary_root = local_binary_root(binary_sha256())
+    exp = resolve_export_dir(binary_root, revision)
+    summary, bundle_digest, ordered_rvas = validate_scope(
+        scope_dir=scope_dir, exp=exp, baseline_revision=revision
+    )
+    plan = load_batch_plan(exp)
+    assert_frozen_batch_plan(plan, summary, bundle_digest, ordered_rvas)
+    return exp, summary, plan, bundle_digest, ordered_rvas, revision
 
 
 def batch_rva_digest(rvas: list[str]) -> str:
@@ -142,30 +183,127 @@ def census_call_rvas_for_function(callsites: list[dict[str, Any]], entry_rva: st
     return {row["callsite_rva"] for row in callsites if row.get("caller_rva") == entry_rva}
 
 
-def validate_static_row(static_row: dict[str, Any], inv_row: dict[str, Any], callsites: list[dict[str, Any]]) -> None:
+def intervals_contained(inner: list[tuple[int, int]], outer: list[tuple[int, int]]) -> bool:
+    if not inner:
+        return True
+    if not outer:
+        return False
+    for i_start, i_end in inner:
+        covered = False
+        for o_start, o_end in outer:
+            if i_start >= o_start and i_end <= o_end:
+                covered = True
+                break
+        if not covered:
+            return False
+    return True
+
+
+def ranges_to_tuples(ranges: list[dict[str, Any]]) -> list[tuple[int, int]]:
+    return [(parse_rva(item["start_rva"]), parse_rva(item["end_rva"])) for item in ranges]
+
+
+def reconstruct_instruction_evidence(
+    instructions: list[dict[str, Any]],
+) -> tuple[int, int, list[tuple[int, int]]]:
+    if not instructions:
+        raise ReError("instructions array is empty")
+    intervals: list[tuple[int, int]] = []
+    total_bytes = 0
+    for ins in instructions:
+        rva_str = ins.get("instruction_rva")
+        length = ins.get("length")
+        bytes_hex = ins.get("bytes_hex")
+        if rva_str is None or length is None or bytes_hex is None:
+            raise ReError("instruction missing instruction_rva, length, or bytes_hex")
+        length = int(length)
+        if length <= 0:
+            raise ReError(f"invalid instruction length at {rva_str}")
+        if len(bytes_hex) != 2 * length:
+            raise ReError(f"bytes_hex length mismatch at {rva_str}")
+        try:
+            int(bytes_hex, 16)
+        except ValueError as exc:
+            raise ReError(f"invalid bytes_hex at {rva_str}: {exc}") from exc
+        start = parse_rva(rva_str)
+        end = start + length
+        intervals.append((start, end))
+        total_bytes += length
+    sorted_iv = sorted(intervals)
+    for index in range(1, len(sorted_iv)):
+        prev_end = sorted_iv[index - 1][1]
+        cur_start = sorted_iv[index][0]
+        if cur_start < prev_end:
+            raise ReError("overlapping or duplicate instruction intervals")
+    merged = merge_intervals(intervals)
+    return len(instructions), total_bytes, merged
+
+
+def validate_callsite_classification(
+    static_row: dict[str, Any],
+    callsites: list[dict[str, Any]],
+) -> None:
     entry = static_row["entry_rva"]
-    if static_row.get("status") != "success":
-        raise ReError(f"{entry}: static status must be success, got {static_row.get('status')}")
-    if int(static_row["instruction_count"]) != int(inv_row["instruction_count"]):
-        raise ReError(f"{entry}: instruction_count mismatch vs inventory")
-    if int(static_row["decoded_instruction_bytes"]) != int(inv_row["decoded_instruction_bytes"]):
-        raise ReError(f"{entry}: decoded_instruction_bytes mismatch vs inventory")
-    static_ranges = normalized_ranges(static_row.get("decoded_instruction_ranges") or [])
-    inv_ranges = normalized_ranges(inv_row.get("instruction_ranges") or [])
-    if static_ranges != inv_ranges:
-        raise ReError(f"{entry}: decoded instruction ranges mismatch vs inventory")
-    seen_insn: set[str] = set()
-    for ins in static_row.get("instructions") or []:
-        rva = ins["instruction_rva"]
-        if rva in seen_insn:
-            raise ReError(f"{entry}: duplicate instruction_rva {rva}")
-        seen_insn.add(rva)
+    census_by_site = {row["callsite_rva"]: row for row in callsites if row.get("caller_rva") == entry}
     static_calls = static_census_call_rvas(static_row)
-    census_calls = census_call_rvas_for_function(callsites, entry)
+    census_calls = set(census_by_site)
     if static_calls != census_calls:
         raise ReError(
             f"{entry}: callsite RVA set mismatch (static={len(static_calls)} census={len(census_calls)})"
         )
+    for ins in static_row.get("instructions") or []:
+        if not ins.get("census_call"):
+            continue
+        site = ins["instruction_rva"]
+        census = census_by_site.get(site)
+        if census is None:
+            raise ReError(f"{entry}: census_call at {site} missing from census")
+        for key in CENSUS_FIELD_KEYS:
+            static_val = ins.get(key)
+            census_val = census.get(key)
+            if static_val != census_val:
+                raise ReError(f"{entry}: callsite {site} field {key} mismatch (static={static_val!r} census={census_val!r})")
+
+
+def validate_static_failed_row(static_row: dict[str, Any], expected_rva: str) -> None:
+    entry = format_rva(parse_rva(expected_rva))
+    if static_row.get("entry_rva") != entry:
+        raise ReError(f"failed static entry_rva mismatch: expected {entry}")
+    if static_row.get("status") != "failed":
+        raise ReError(f"{entry}: expected failed static status")
+    error = static_row.get("error")
+    if not error or not str(error).strip():
+        raise ReError(f"{entry}: failed static row requires nonempty error")
+    instructions = static_row.get("instructions") or []
+    if instructions:
+        raise ReError(f"{entry}: failed static row must not include instructions")
+
+
+def validate_static_success_row(
+    static_row: dict[str, Any],
+    inv_row: dict[str, Any],
+    callsites: list[dict[str, Any]],
+) -> tuple[int, int]:
+    entry = static_row["entry_rva"]
+    instructions = static_row.get("instructions") or []
+    count, nbytes, decoded_ranges = reconstruct_instruction_evidence(instructions)
+    if int(static_row.get("instruction_count", -1)) != count:
+        raise ReError(f"{entry}: instruction_count does not match instructions array")
+    if int(static_row.get("decoded_instruction_bytes", -1)) != nbytes:
+        raise ReError(f"{entry}: decoded_instruction_bytes does not match instructions array")
+    header_ranges = normalized_ranges(static_row.get("decoded_instruction_ranges") or [])
+    if header_ranges != decoded_ranges:
+        raise ReError(f"{entry}: decoded_instruction_ranges do not match instructions array")
+    inv_ranges = normalized_ranges(inv_row.get("instruction_ranges") or [])
+    if decoded_ranges != inv_ranges:
+        raise ReError(f"{entry}: decoded instruction ranges mismatch vs inventory")
+    if int(inv_row["instruction_count"]) != count or int(inv_row["decoded_instruction_bytes"]) != nbytes:
+        raise ReError(f"{entry}: reconstructed evidence mismatch vs inventory")
+    body_ranges = normalized_ranges(static_row.get("body_ranges") or [])
+    if not intervals_contained(decoded_ranges, body_ranges):
+        raise ReError(f"{entry}: decoded instructions not contained in body_ranges")
+    validate_callsite_classification(static_row, callsites)
+    return count, nbytes
 
 
 def validate_decomp_rows(rows: list[dict[str, Any]], expected_rvas: list[str]) -> None:
@@ -174,12 +312,20 @@ def validate_decomp_rows(rows: list[dict[str, Any]], expected_rvas: list[str]) -
     by_rva = {row["entry_rva"]: row for row in rows}
     if len(by_rva) != len(rows):
         raise ReError("duplicate entry_rva in decompiled.jsonl")
-    for index, rva in enumerate(expected_rvas):
-        row = by_rva.get(rva)
+    for rva in expected_rvas:
+        key = format_rva(parse_rva(rva))
+        row = by_rva.get(key)
         if row is None:
             raise ReError(f"missing decompile row for {rva}")
-        if row["entry_rva"] != format_rva(parse_rva(rva)):
-            raise ReError(f"decompile entry_rva normalization mismatch at {rva}")
+        status = row.get("status")
+        if status not in DECOMP_STATUSES:
+            raise ReError(f"{key}: invalid decompile status {status!r}")
+        if status == "success":
+            pseudo = row.get("pseudocode")
+            if not pseudo or not str(pseudo).strip():
+                raise ReError(f"{key}: success decompile requires nonempty pseudocode")
+        elif status == "skipped":
+            continue
 
 
 def build_receipt(
@@ -214,21 +360,68 @@ def build_receipt(
     }
 
 
-def validate_receipt(receipt: dict[str, Any], static_bytes: bytes, decomp_bytes: bytes, plan: dict[str, Any]) -> None:
+def expected_receipt_identity(
+    *,
+    batch_id: str,
+    rvas: list[str],
+    plan: dict[str, Any],
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    pinned = load_target()
+    sha = pinned["sha256"]
+    ghidra_meta = load_ghidra_meta(local_binary_root(sha))
+    return {
+        "batch_id": batch_id,
+        "baseline_revision": plan["baseline_revision"],
+        "selection_manifest_sha256": summary["selection_manifest_sha256"],
+        "inventory_bundle_digest": plan["inventory_bundle_digest"],
+        "batch_rva_digest": batch_rva_digest(rvas),
+        "batch_size": len(rvas),
+        "exporter_script_hashes": exporter_hashes(),
+        "binary_sha256": sha,
+        "ghidra_version": summary["ghidra_version"],
+        "program_name": ghidra_meta.get("program_name"),
+        "image_base": ghidra_meta.get("image_base"),
+        "executable_sha256": sha.lower(),
+    }
+
+
+def validate_receipt(
+    receipt: dict[str, Any],
+    static_bytes: bytes,
+    decomp_bytes: bytes,
+    expected: dict[str, Any],
+) -> None:
     if receipt.get("static_sha256") != hashlib.sha256(static_bytes).hexdigest():
         raise ReError("receipt static_sha256 mismatch")
     if receipt.get("decompiled_sha256") != hashlib.sha256(decomp_bytes).hexdigest():
         raise ReError("receipt decompiled_sha256 mismatch")
-    if receipt.get("baseline_revision") != plan.get("baseline_revision"):
-        raise ReError("receipt baseline_revision mismatch")
-    expected_hashes = exporter_hashes()
-    got = receipt.get("exporter_script_hashes") or {}
-    if got != expected_hashes:
+    identity_keys = (
+        "batch_id",
+        "baseline_revision",
+        "selection_manifest_sha256",
+        "inventory_bundle_digest",
+        "batch_rva_digest",
+        "batch_size",
+        "binary_sha256",
+        "ghidra_version",
+        "program_name",
+        "image_base",
+    )
+    for key in identity_keys:
+        if receipt.get(key) != expected.get(key):
+            raise ReError(f"receipt {key} mismatch")
+    exe_receipt = (receipt.get("executable_sha256") or "").lower()
+    exe_expected = (expected.get("executable_sha256") or "").lower()
+    if exe_receipt != exe_expected:
+        raise ReError("receipt executable_sha256 mismatch")
+    if receipt.get("exporter_script_hashes") != expected.get("exporter_script_hashes"):
         raise ReError("receipt exporter_script_hashes mismatch")
 
 
 def validate_batch_package(
     *,
+    batch_id: str,
     static_text: str,
     decomp_text: str,
     receipt: dict[str, Any],
@@ -236,32 +429,47 @@ def validate_batch_package(
     inventory: dict[str, dict[str, Any]],
     callsites_by_caller: dict[str, list[dict[str, Any]]],
     plan: dict[str, Any],
+    summary: dict[str, Any],
 ) -> None:
     static_rows = load_jsonl_text(static_text)
     decomp_rows = load_jsonl_text(decomp_text)
     if [row["entry_rva"] for row in static_rows] != [format_rva(parse_rva(r)) for r in rvas]:
         raise ReError("static.jsonl RVAs do not match batch plan order")
     validate_decomp_rows(decomp_rows, rvas)
-    validate_receipt(receipt, static_text.encode(), decomp_text.encode(), plan)
+    expected = expected_receipt_identity(batch_id=batch_id, rvas=rvas, plan=plan, summary=summary)
+    validate_receipt(receipt, static_text.encode(), decomp_text.encode(), expected)
     for rva in rvas:
         key = format_rva(parse_rva(rva))
         inv = inventory.get(key)
         if inv is None:
             raise ReError(f"inventory missing {key}")
         static_row = next(row for row in static_rows if row["entry_rva"] == key)
+        status = static_row.get("status")
+        if status not in STATIC_STATUSES:
+            raise ReError(f"{key}: invalid static status {status!r}")
         callsites = callsites_by_caller.get(key, [])
-        validate_static_row(static_row, inv, callsites)
+        if status == "failed":
+            validate_static_failed_row(static_row, key)
+        else:
+            validate_static_success_row(static_row, inv, callsites)
 
 
 def read_zip_package(path: Path) -> tuple[str, str, dict[str, Any]]:
-    with zipfile.ZipFile(path, "r") as zf:
-        names = set(zf.namelist())
-        required = {ZIP_STATIC, ZIP_DECOMP, ZIP_RECEIPT}
-        if names != required:
-            raise ReError(f"{path.name}: expected members {required}, got {names}")
-        static_text = zf.read(ZIP_STATIC).decode()
-        decomp_text = zf.read(ZIP_DECOMP).decode()
-        receipt = json.loads(zf.read(ZIP_RECEIPT).decode())
+    try:
+        with zipfile.ZipFile(path, "r") as zf:
+            names = set(zf.namelist())
+            required = {ZIP_STATIC, ZIP_DECOMP, ZIP_RECEIPT}
+            if names != required:
+                raise ReError(f"{path.name}: expected members {required}, got {names}")
+            static_text = zf.read(ZIP_STATIC).decode()
+            decomp_text = zf.read(ZIP_DECOMP).decode()
+            receipt = json.loads(zf.read(ZIP_RECEIPT).decode())
+    except zipfile.BadZipFile as exc:
+        raise ReError(f"{path.name}: corrupt zip: {exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise ReError(f"{path.name}: zip member decode error: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ReError(f"{path.name}: receipt JSON error: {exc}") from exc
     return static_text, decomp_text, receipt
 
 
@@ -300,13 +508,15 @@ def publish_create_only(dest: Path, payload: bytes) -> str:
         Path(staging).unlink(missing_ok=True)
 
 
-def assert_live_identity(exp: Path, meta: dict[str, Any], ghidra_version: str) -> None:
+def assert_live_identity(meta: dict[str, Any], summary: dict[str, Any], ghidra_version: str) -> None:
     pinned = load_target()
     exe = verify_binary()
     if sha256_file(exe) != pinned["sha256"]:
         raise ReError("executable SHA-256 mismatch")
     if ghidra_version == "unknown":
         raise ReError("could not read Ghidra version")
+    if ghidra_version != summary.get("ghidra_version"):
+        raise ReError("live Ghidra version mismatch vs frozen summary")
     ghidra_meta = load_ghidra_meta(local_binary_root(pinned["sha256"]))
     if meta.get("program_name") != ghidra_meta.get("program_name"):
         raise ReError("Ghidra program_name mismatch vs ghidra_project.json")
@@ -378,6 +588,33 @@ def publish_boundary_thunks(scope_dir: Path, exp: Path) -> None:
     dest.write_bytes(src.read_bytes())
 
 
+def repair_publish(dest: Path, payload: bytes, archive_bytes: bytes | None) -> str:
+    archive_path: Path | None = None
+    if archive_bytes is not None:
+        archive_path = dest.parent / ".archive" / (
+            f"{dest.stem}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.zip"
+        )
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        archive_path.write_bytes(archive_bytes)
+        if dest.is_file():
+            dest.unlink()
+    try:
+        return publish_create_only(dest, payload)
+    except ReError:
+        if archive_bytes is not None and not dest.is_file():
+            dest.write_bytes(archive_bytes)
+            raise ReError(
+                f"repair publication failed; restored original package at {dest}"
+                + (f" (archive at {archive_path})" if archive_path else "")
+            )
+        if archive_bytes is not None and dest.is_file() and dest.read_bytes() != archive_bytes:
+            raise ReError(
+                "repair publication conflict: destination occupied by another package; "
+                f"original preserved at {archive_path}"
+            )
+        raise
+
+
 def acquire_batch(
     *,
     exp: Path,
@@ -396,10 +633,12 @@ def acquire_batch(
         raise ReError(f"unknown batch id: {batch_id}")
     rvas = batches[batch_id]
     dest = batch_zip_path(exp, batch_id)
+    archive_bytes: bytes | None = None
     if dest.is_file() and not repair:
         try:
             static_text, decomp_text, receipt = read_zip_package(dest)
             validate_batch_package(
+                batch_id=batch_id,
                 static_text=static_text,
                 decomp_text=decomp_text,
                 receipt=receipt,
@@ -407,14 +646,13 @@ def acquire_batch(
                 inventory=inventory,
                 callsites_by_caller=callsites_by_caller,
                 plan=plan,
+                summary=summary,
             )
             return "unchanged"
         except ReError:
             raise ReError(f"existing package {batch_id} is invalid; use --repair {batch_id}")
     if dest.is_file() and repair:
-        archive = batches_dir(exp) / ".archive" / f"{batch_id}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.zip"
-        archive.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(dest), str(archive))
+        archive_bytes = dest.read_bytes()
     binary_root = local_binary_root(binary_sha256())
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp)
@@ -426,7 +664,7 @@ def acquire_batch(
             process_timeout=process_timeout,
         )
         ghidra_version = read_ghidra_version(ghidra_install())
-        assert_live_identity(exp, meta, ghidra_version)
+        assert_live_identity(meta, summary, ghidra_version)
         static_text = staging.joinpath("static.jsonl").read_text()
         decomp_text = staging.joinpath("decompiled.jsonl").read_text()
         receipt = build_receipt(
@@ -441,6 +679,7 @@ def acquire_batch(
             binary_sha=binary_sha256(),
         )
         validate_batch_package(
+            batch_id=batch_id,
             static_text=static_text,
             decomp_text=decomp_text,
             receipt=receipt,
@@ -448,8 +687,11 @@ def acquire_batch(
             inventory=inventory,
             callsites_by_caller=callsites_by_caller,
             plan=plan,
+            summary=summary,
         )
         payload = write_batch_zip(static_text, decomp_text, receipt)
+    if repair and archive_bytes is not None:
+        return repair_publish(dest, payload, archive_bytes)
     return publish_create_only(dest, payload)
 
 
@@ -457,13 +699,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.repair and not args.batch_id:
         raise ReError("--repair requires --batch-id")
     scope_dir = Path(args.scope_dir).expanduser()
-    revision = resolved_baseline_revision(scope_dir, args.baseline_revision)
-    binary_root = local_binary_root(binary_sha256())
-    exp = resolve_export_dir(binary_root, revision)
-    summary, _, _ = validate_scope(scope_dir=scope_dir, exp=exp, baseline_revision=revision)
-    plan = load_batch_plan(exp)
-    if plan.get("selected_function_count") != EXPECTED_FUNCTION_COUNT:
-        raise ReError("batch plan function count mismatch")
+    exp, summary, plan, _, _, revision = load_frozen_context(scope_dir, args.baseline_revision)
     inventory = load_inventory_index(exp)
     callsites_by_caller = load_callsites_by_caller(exp)
     publish_boundary_thunks(scope_dir, exp)
@@ -490,15 +726,24 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
-def validated_batch_ids(exp: Path, plan: dict[str, Any], inventory: dict[str, Any], callsites_by_caller: dict) -> list[str]:
-    ok: list[str] = []
-    for batch_id in sorted(plan.get("batches", {})):
+def classify_batches(
+    exp: Path,
+    plan: dict[str, Any],
+    summary: dict[str, Any],
+    inventory: dict[str, Any],
+    callsites_by_caller: dict[str, list[dict[str, Any]]],
+) -> tuple[list[str], list[str], dict[str, str]]:
+    valid: list[str] = []
+    invalid: dict[str, str] = {}
+    all_batches = sorted(plan.get("batches", {}))
+    for batch_id in all_batches:
         path = batch_zip_path(exp, batch_id)
         if not path.is_file():
             continue
         try:
             static_text, decomp_text, receipt = read_zip_package(path)
             validate_batch_package(
+                batch_id=batch_id,
                 static_text=static_text,
                 decomp_text=decomp_text,
                 receipt=receipt,
@@ -506,23 +751,71 @@ def validated_batch_ids(exp: Path, plan: dict[str, Any], inventory: dict[str, An
                 inventory=inventory,
                 callsites_by_caller=callsites_by_caller,
                 plan=plan,
+                summary=summary,
             )
-            ok.append(batch_id)
-        except ReError:
-            continue
-    return ok
+            valid.append(batch_id)
+        except ReError as exc:
+            invalid[batch_id] = str(exc)
+    missing = [bid for bid in all_batches if bid not in valid and bid not in invalid]
+    return valid, missing, invalid
+
+
+def summarize_package_coverage(
+    exp: Path,
+    valid: list[str],
+    inventory: dict[str, Any],
+) -> dict[str, Any]:
+    static_success = 0
+    static_failed = 0
+    decomp_counts: dict[str, int] = defaultdict(int)
+    verified_ins = 0
+    verified_bytes = 0
+    static_success_rvas: set[str] = set()
+    for batch_id in valid:
+        static_text, decomp_text, _ = read_zip_package(batch_zip_path(exp, batch_id))
+        for row in load_jsonl_text(static_text):
+            status = row.get("status")
+            if status == "success":
+                static_success += 1
+                static_success_rvas.add(row["entry_rva"])
+                try:
+                    count, nbytes, _ = reconstruct_instruction_evidence(row.get("instructions") or [])
+                    verified_ins += count
+                    verified_bytes += nbytes
+                except ReError:
+                    pass
+            elif status == "failed":
+                static_failed += 1
+        for row in load_jsonl_text(decomp_text):
+            decomp_counts[row.get("status", "unknown")] += 1
+    gfx_helpers = [rva for rva, row in inventory.items() if is_gfx_helper(row)]
+    gfx_missing = [rva for rva in gfx_helpers if rva not in static_success_rvas]
+    priority_missing = [
+        label
+        for rva, label in PRIORITY_ENTRIES
+        if format_rva(parse_rva(rva)) not in static_success_rvas
+    ]
+    return {
+        "static_success_functions": static_success,
+        "static_failed_functions": static_failed,
+        "decompile_status_counts": dict(decomp_counts),
+        "verified_decoded_instructions": verified_ins,
+        "verified_decoded_bytes": verified_bytes,
+        "priority_entries_static_success": len(PRIORITY_ENTRIES) - len(priority_missing),
+        "priority_entries_missing_static_success": priority_missing,
+        "gfx_helpers_static_success": len(gfx_helpers) - len(gfx_missing),
+        "gfx_helpers_expected": len(gfx_helpers),
+        "gfx_helpers_missing_static_success": gfx_missing[:10],
+    }
 
 
 def cmd_report(args: argparse.Namespace) -> int:
     scope_dir = Path(args.scope_dir).expanduser()
-    revision = resolved_baseline_revision(scope_dir, args.baseline_revision)
-    exp = resolve_export_dir(local_binary_root(binary_sha256()), revision)
-    plan = load_batch_plan(exp)
+    exp, summary, plan, _, _, revision = load_frozen_context(scope_dir, args.baseline_revision)
     inventory = load_inventory_index(exp)
     callsites_by_caller = load_callsites_by_caller(exp)
     all_batches = sorted(plan.get("batches", {}))
-    valid = validated_batch_ids(exp, plan, inventory, callsites_by_caller)
-    missing = [bid for bid in all_batches if bid not in valid]
+    valid, missing, invalid = classify_batches(exp, plan, summary, inventory, callsites_by_caller)
     complete = len(valid) == len(all_batches) and len(all_batches) == 45
     observed_functions = sum(len(plan["batches"][bid]) for bid in valid)
     report: dict[str, Any] = {
@@ -531,48 +824,20 @@ def cmd_report(args: argparse.Namespace) -> int:
         "planned_batches": len(all_batches),
         "valid_batches": len(valid),
         "missing_batch_ids": missing,
+        "invalid_batch_ids": sorted(invalid),
+        "invalid_batch_errors": invalid,
         "planned_functions": plan.get("selected_function_count"),
-        "observed_functions": observed_functions if complete else observed_functions,
+        "observed_functions": observed_functions,
     }
+    report.update(summarize_package_coverage(exp, valid, inventory))
     if complete:
-        static_success = 0
-        decomp_success = 0
-        total_ins = 0
-        total_bytes = 0
-        static_success_rvas: set[str] = set()
-        for batch_id in valid:
-            static_text, decomp_text, _ = read_zip_package(batch_zip_path(exp, batch_id))
-            for row in load_jsonl_text(static_text):
-                if row.get("status") == "success":
-                    static_success += 1
-                    static_success_rvas.add(row["entry_rva"])
-                    total_ins += int(row.get("instruction_count", 0))
-                    total_bytes += int(row.get("decoded_instruction_bytes", 0))
-            for row in load_jsonl_text(decomp_text):
-                if row.get("status") == "success":
-                    decomp_success += 1
-        priority_missing = [
-            label
-            for rva, label in PRIORITY_ENTRIES
-            if format_rva(parse_rva(rva)) not in static_success_rvas
-        ]
-        gfx_helpers = [rva for rva, row in inventory.items() if is_gfx_helper(row)]
-        gfx_missing = [rva for rva in gfx_helpers if rva not in static_success_rvas]
         report.update(
             {
-                "static_success_functions": static_success,
-                "decompile_success_functions": decomp_success,
-                "decoded_instructions_selected": total_ins,
-                "decoded_bytes_selected": total_bytes,
                 "expected_decoded_instructions": EXPECTED_INSTRUCTIONS,
                 "expected_decoded_bytes": EXPECTED_DECODED_BYTES,
-                "instructions_match_expected": total_ins == EXPECTED_INSTRUCTIONS,
-                "bytes_match_expected": total_bytes == EXPECTED_DECODED_BYTES,
-                "priority_entries_static_success": len(PRIORITY_ENTRIES) - len(priority_missing),
-                "priority_entries_missing_static_success": priority_missing,
-                "gfx_helpers_static_success": len(gfx_helpers) - len(gfx_missing),
-                "gfx_helpers_expected": len(gfx_helpers),
-                "gfx_helpers_missing_static_success": gfx_missing[:10],
+                "instructions_match_expected": report["verified_decoded_instructions"]
+                == EXPECTED_INSTRUCTIONS,
+                "bytes_match_expected": report["verified_decoded_bytes"] == EXPECTED_DECODED_BYTES,
             }
         )
     logs = snapshot_root(exp) / "logs"

@@ -63,6 +63,9 @@ class GhidraExportRendererStaticTests(unittest.TestCase):
             ins = row.get("instructions") or []
             self.assertTrue(ins)
             self.assertIn("pcode_kind", ins[0])
+            self.assertIn("flow_override", ins[0])
+            self.assertIn("body_ranges", row)
+            self.assertIn("decoded_instruction_ranges", row)
 
 
 if __name__ == "__main__":

@@ -186,7 +186,7 @@ python3 -m reverse_engineering.renderer_extract report \
   --baseline-revision auto-v1-20261013
 ```
 
-`run` checks live Ghidra version and executable SHA against [`target.json`](target.json), validates each package against inventory instruction identity and per-function callsite sets (`audits/callsites-v1.jsonl`), and copies boundary thunks when `graphics-boundary-thunks.jsonl` matches `scope-v1.sha256`. `report` writes `renderer_snapshot/v1/logs/coverage.json` and reports `partial` until all 45 batch ZIPs validate.
+`run` and `report` both require `batch_plan.json` to match the frozen scope partition exactly (`build_batch_plan` at batch size 100). `run` additionally checks live Ghidra version and executable SHA against [`target.json`](target.json). Each package is validated offline: receipt identity (frozen summary + `ghidra_project.json`, no live Ghidra), instruction bytes recomputed from `instructions[]`, field-level callsite agreement with `audits/callsites-v1.jsonl`, and decompilation status rules. Static `failed` rows are allowed alongside successful functions. `--repair` validates a replacement before removing the active ZIP; failed publish restores the original only when the destination is absent (concurrent repair of the same batch is unsupported). `report` distinguishes missing vs invalid batches and writes `renderer_snapshot/v1/logs/coverage.json` (`partial` until all 45 ZIPs validate).
 
 Tests: `python3 -m unittest tests.test_renderer_extract`. With `GHIDRA_INSTALL`: `python3 -m unittest tests.test_ghidra_export_renderer_static`.
 
