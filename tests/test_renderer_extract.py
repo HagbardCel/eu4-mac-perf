@@ -299,7 +299,121 @@ class ZipPackageTests(IdentityPatchMixin, unittest.TestCase):
                 with self.assertRaises(ReError) as ctx:
                     renderer_extract.repair_publish(dest, replacement, original)
             self.assertEqual(dest.read_bytes(), concurrent)
-            self.assertIn("conflict", str(ctx.exception).lower())
+            msg = str(ctx.exception).lower()
+            self.assertIn("restoration also failed", msg)
+            self.assertIn("preserved at", msg)
+
+    def test_restore_create_only_rejects_occupied_dest_even_if_identical(self) -> None:
+        payload = b"same-bytes"
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "gfx-batch-00001.zip"
+            dest.write_bytes(payload)
+            with self.assertRaises(ReError) as ctx:
+                renderer_extract.restore_create_only(dest, payload)
+            self.assertIn("restoration conflict", str(ctx.exception).lower())
+
+    def test_archive_failure_leaves_dest_untouched(self) -> None:
+        original = b"original-package"
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "gfx-batch-00001.zip"
+            dest.write_bytes(original)
+            with unittest.mock.patch(
+                "reverse_engineering.renderer_extract.write_repair_archive",
+                side_effect=ReError("archive failed"),
+            ):
+                with self.assertRaises(ReError):
+                    renderer_extract.repair_publish(dest, b"new", original)
+            self.assertEqual(dest.read_bytes(), original)
+
+
+class PreflightTests(unittest.TestCase):
+    def test_wrong_ghidra_version_rejected(self) -> None:
+        with unittest.mock.patch(
+            "reverse_engineering.renderer_extract.read_ghidra_version",
+            return_value="11.0.0",
+        ):
+            with unittest.mock.patch("reverse_engineering.renderer_extract.verify_binary"):
+                with self.assertRaises(ReError):
+                    renderer_extract.assert_acquisition_preflight(_summary())
+
+    def test_ensure_preflight_wrapper_calls_assert_once(self) -> None:
+        summary = _summary()
+        with unittest.mock.patch(
+            "reverse_engineering.renderer_extract.assert_acquisition_preflight",
+            return_value="12.1.4",
+        ) as mock_assert:
+            preflight_done = False
+
+            def ensure_preflight() -> str:
+                nonlocal preflight_done
+                if not preflight_done:
+                    version = renderer_extract.assert_acquisition_preflight(summary)
+                    preflight_done = True
+                    return version
+                return "12.1.4"
+
+            ensure_preflight()
+            ensure_preflight()
+            mock_assert.assert_called_once()
+
+
+class UnchangedSkipsPreflightTests(IdentityPatchMixin, unittest.TestCase):
+    def test_unchanged_batch_skips_preflight(self) -> None:
+        preflight_calls = 0
+
+        def ensure_preflight() -> str:
+            nonlocal preflight_calls
+            preflight_calls += 1
+            return "12.1.4"
+
+        static = json.dumps(_valid_static_row()) + "\n"
+        decomp = json.dumps({"entry_rva": "0x0000000000001000", "status": "timeout"}) + "\n"
+        receipt = renderer_extract.build_receipt(
+            static_bytes=static.encode(),
+            decomp_bytes=decomp.encode(),
+            batch_id="gfx-batch-00001",
+            rvas=["0x0000000000001000"],
+            plan=_plan(),
+            summary=_summary(),
+            meta={"program_name": "eu4", "image_base": 1, "executable_sha256": "a"},
+            ghidra_version="12.1.4",
+            binary_sha="a",
+        )
+        payload = renderer_extract.write_batch_zip(static, decomp, receipt)
+        with tempfile.TemporaryDirectory() as tmp:
+            exp = Path(tmp)
+            batch_dir = exp / "renderer_snapshot" / "v1" / "batches"
+            batch_dir.mkdir(parents=True)
+            (batch_dir / "gfx-batch-00001.zip").write_bytes(payload)
+            inv_path = exp / "inventory" / "functions.jsonl"
+            inv_path.parent.mkdir(parents=True)
+            inv_path.write_text((FIXTURE_INV / "functions.jsonl").read_text())
+            audit_path = exp / "audits" / "callsites-v1.jsonl"
+            audit_path.parent.mkdir(parents=True)
+            audit_path.write_text(
+                json.dumps(_census_row("0x0000000000001005", "0x0000000000001000")) + "\n"
+            )
+            inventory = renderer_extract.load_inventory_index(exp)
+            callsites = renderer_extract.load_callsites_by_caller(exp)
+            with unittest.mock.patch(
+                "reverse_engineering.renderer_extract.run_ghidra_batch",
+            ) as mock_ghidra:
+                action = renderer_extract.acquire_batch(
+                    exp=exp,
+                    scope_dir=Path("/tmp"),
+                    plan=_plan(),
+                    summary=_summary(),
+                    batch_id="gfx-batch-00001",
+                    inventory=inventory,
+                    callsites_by_caller=callsites,
+                    decomp_timeout=120,
+                    process_timeout=3600,
+                    repair=False,
+                    ensure_preflight=ensure_preflight,
+                )
+                mock_ghidra.assert_not_called()
+        self.assertEqual(action, "unchanged")
+        self.assertEqual(preflight_calls, 0)
 
 
 class BatchPlanTests(unittest.TestCase):

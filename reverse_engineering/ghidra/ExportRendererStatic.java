@@ -4,7 +4,7 @@ import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressSetView;
-import ghidra.program.model.symbol.FlowTypeOverride;
+import ghidra.program.model.listing.FlowOverride;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Instruction;
@@ -160,8 +160,8 @@ public class ExportRendererStatic extends GhidraScript {
     }
 
     private static String flowOverrideName(Instruction ins) {
-        FlowTypeOverride override = ins.getFlowOverride();
-        if (override == null || override == FlowTypeOverride.NONE) {
+        FlowOverride override = ins.getFlowOverride();
+        if (override == null || override == FlowOverride.NONE) {
             return "NONE";
         }
         return override.name();

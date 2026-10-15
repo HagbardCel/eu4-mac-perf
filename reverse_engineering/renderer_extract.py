@@ -13,8 +13,8 @@ import sys
 import tempfile
 import zipfile
 from collections import defaultdict
-from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any
 
 from reverse_engineering.corpus import (
@@ -486,13 +486,15 @@ def write_batch_zip(
     return buf.getvalue()
 
 
-def publish_create_only(dest: Path, payload: bytes) -> str:
+def _link_create_only(dest: Path, payload: bytes, *, allow_unchanged: bool) -> str:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.is_file():
         existing = dest.read_bytes()
-        if existing == payload:
+        if allow_unchanged and existing == payload:
             return "unchanged"
-        raise ReError(f"existing package at {dest} differs; use --repair to replace")
+        if allow_unchanged:
+            raise ReError(f"existing package at {dest} differs; use --repair to replace")
+        raise ReError(f"restoration conflict: destination occupied ({dest})")
     fd, staging = tempfile.mkstemp(dir=dest.parent, prefix=".batch_pkg.")
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -501,22 +503,55 @@ def publish_create_only(dest: Path, payload: bytes) -> str:
             os.link(staging, dest)
             return "created"
         except FileExistsError:
-            if dest.is_file() and dest.read_bytes() == payload:
+            if allow_unchanged and dest.is_file() and dest.read_bytes() == payload:
                 return "unchanged"
-            raise ReError("concurrent batch-package publication conflict")
+            if allow_unchanged:
+                raise ReError("concurrent batch-package publication conflict")
+            raise ReError(f"restoration conflict: destination occupied ({dest})")
     finally:
         Path(staging).unlink(missing_ok=True)
 
 
-def assert_live_identity(meta: dict[str, Any], summary: dict[str, Any], ghidra_version: str) -> None:
-    pinned = load_target()
-    exe = verify_binary()
-    if sha256_file(exe) != pinned["sha256"]:
-        raise ReError("executable SHA-256 mismatch")
+def publish_create_only(dest: Path, payload: bytes) -> str:
+    return _link_create_only(dest, payload, allow_unchanged=True)
+
+
+def restore_create_only(dest: Path, payload: bytes) -> str:
+    if dest.is_file():
+        raise ReError(f"restoration conflict: destination occupied ({dest})")
+    return _link_create_only(dest, payload, allow_unchanged=False)
+
+
+def write_repair_archive(archive_dir: Path, stem: str, archive_bytes: bytes) -> Path:
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    fd, staging = tempfile.mkstemp(dir=archive_dir, prefix=f"{stem}-")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(archive_bytes)
+        fd2, archive_path = tempfile.mkstemp(dir=archive_dir, prefix=f"{stem}-", suffix=".zip")
+        os.close(fd2)
+        Path(archive_path).unlink(missing_ok=True)
+        os.link(staging, archive_path)
+        return Path(archive_path)
+    except (OSError, ReError) as exc:
+        Path(staging).unlink(missing_ok=True)
+        raise ReError(f"failed to write repair archive: {exc}") from exc
+    finally:
+        Path(staging).unlink(missing_ok=True)
+
+
+def assert_acquisition_preflight(summary: dict[str, Any]) -> str:
+    verify_binary()
+    ghidra_version = read_ghidra_version(ghidra_install())
     if ghidra_version == "unknown":
         raise ReError("could not read Ghidra version")
     if ghidra_version != summary.get("ghidra_version"):
         raise ReError("live Ghidra version mismatch vs frozen summary")
+    return ghidra_version
+
+
+def assert_export_meta(meta: dict[str, Any], summary: dict[str, Any]) -> None:
+    pinned = load_target()
     ghidra_meta = load_ghidra_meta(local_binary_root(pinned["sha256"]))
     if meta.get("program_name") != ghidra_meta.get("program_name"):
         raise ReError("Ghidra program_name mismatch vs ghidra_project.json")
@@ -589,30 +624,27 @@ def publish_boundary_thunks(scope_dir: Path, exp: Path) -> None:
 
 
 def repair_publish(dest: Path, payload: bytes, archive_bytes: bytes | None) -> str:
-    archive_path: Path | None = None
-    if archive_bytes is not None:
-        archive_path = dest.parent / ".archive" / (
-            f"{dest.stem}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.zip"
-        )
-        archive_path.parent.mkdir(parents=True, exist_ok=True)
-        archive_path.write_bytes(archive_bytes)
-        if dest.is_file():
-            dest.unlink()
+    if archive_bytes is None:
+        return publish_create_only(dest, payload)
+    archive_path = write_repair_archive(dest.parent / ".archive", dest.stem, archive_bytes)
+    if dest.is_file():
+        dest.unlink()
     try:
         return publish_create_only(dest, payload)
-    except ReError:
-        if archive_bytes is not None and not dest.is_file():
-            dest.write_bytes(archive_bytes)
+    except (ReError, OSError) as primary:
+        try:
+            restore_create_only(dest, archive_bytes)
             raise ReError(
-                f"repair publication failed; restored original package at {dest}"
-                + (f" (archive at {archive_path})" if archive_path else "")
-            )
-        if archive_bytes is not None and dest.is_file() and dest.read_bytes() != archive_bytes:
+                f"Replacement publication failed: {primary}. "
+                f"Restored original package at {dest} (archive at {archive_path})."
+            ) from primary
+        except ReError as restore_exc:
             raise ReError(
-                "repair publication conflict: destination occupied by another package; "
-                f"original preserved at {archive_path}"
-            )
-        raise
+                f"Replacement publication failed: {primary}. "
+                f"Restoration also failed: {restore_exc}. "
+                f"Original package preserved at: {archive_path}. "
+                f"Destination was not overwritten by restoration."
+            ) from restore_exc
 
 
 def acquire_batch(
@@ -627,6 +659,7 @@ def acquire_batch(
     decomp_timeout: int,
     process_timeout: int,
     repair: bool,
+    ensure_preflight: Callable[[], str],
 ) -> str:
     batches = plan.get("batches") or {}
     if batch_id not in batches:
@@ -653,6 +686,7 @@ def acquire_batch(
             raise ReError(f"existing package {batch_id} is invalid; use --repair {batch_id}")
     if dest.is_file() and repair:
         archive_bytes = dest.read_bytes()
+    ghidra_version = ensure_preflight()
     binary_root = local_binary_root(binary_sha256())
     with tempfile.TemporaryDirectory() as tmp:
         staging = Path(tmp)
@@ -663,8 +697,7 @@ def acquire_batch(
             decomp_timeout=decomp_timeout,
             process_timeout=process_timeout,
         )
-        ghidra_version = read_ghidra_version(ghidra_install())
-        assert_live_identity(meta, summary, ghidra_version)
+        assert_export_meta(meta, summary)
         static_text = staging.joinpath("static.jsonl").read_text()
         decomp_text = staging.joinpath("decompiled.jsonl").read_text()
         receipt = build_receipt(
@@ -706,6 +739,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     batch_ids = sorted(plan.get("batches", {}))
     if args.batch_id:
         batch_ids = [args.batch_id]
+    preflight_done = False
+    cached_ghidra_version = ""
+
+    def ensure_preflight() -> str:
+        nonlocal preflight_done, cached_ghidra_version
+        if not preflight_done:
+            cached_ghidra_version = assert_acquisition_preflight(summary)
+            preflight_done = True
+        return cached_ghidra_version
+
     results: dict[str, str] = {}
     for batch_id in batch_ids:
         action = acquire_batch(
@@ -719,6 +762,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             decomp_timeout=args.decomp_timeout,
             process_timeout=args.process_timeout,
             repair=args.repair and args.batch_id == batch_id,
+            ensure_preflight=ensure_preflight,
         )
         results[batch_id] = action
         print(f"{batch_id}: {action}", file=sys.stderr)
