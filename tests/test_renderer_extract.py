@@ -276,9 +276,40 @@ class ZipPackageTests(IdentityPatchMixin, unittest.TestCase):
                 "reverse_engineering.renderer_extract.publish_create_only",
                 fail_publish,
             ):
-                with self.assertRaises(ReError):
+                with self.assertRaises(ReError) as ctx:
                     renderer_extract.repair_publish(dest, replacement, original)
             self.assertEqual(dest.read_bytes(), original)
+            msg = str(ctx.exception)
+            self.assertIn("Original restored", msg)
+            self.assertIn("Archive retained", msg)
+            self.assertNotIn("Restoration also failed", msg)
+
+    def test_repair_restore_failure_reports_both_errors(self) -> None:
+        original = b"original-package"
+        replacement = b"replacement"
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / "gfx-batch-00001.zip"
+            dest.write_bytes(original)
+
+            def fail_publish(_dest: Path, _payload: bytes) -> str:
+                raise ReError("publish failed")
+
+            def fail_restore(_dest: Path, _payload: bytes) -> str:
+                raise OSError("restore io failed")
+
+            with unittest.mock.patch(
+                "reverse_engineering.renderer_extract.publish_create_only",
+                fail_publish,
+            ), unittest.mock.patch(
+                "reverse_engineering.renderer_extract.restore_create_only",
+                fail_restore,
+            ):
+                with self.assertRaises(ReError) as ctx:
+                    renderer_extract.repair_publish(dest, replacement, original)
+            msg = str(ctx.exception)
+            self.assertIn("publish failed", msg)
+            self.assertIn("Restoration also failed", msg)
+            self.assertIn("preserved at", msg.lower())
 
     def test_repair_conflict_does_not_overwrite_concurrent(self) -> None:
         original = b"original-package"

@@ -634,17 +634,18 @@ def repair_publish(dest: Path, payload: bytes, archive_bytes: bytes | None) -> s
     except (ReError, OSError) as primary:
         try:
             restore_create_only(dest, archive_bytes)
-            raise ReError(
-                f"Replacement publication failed: {primary}. "
-                f"Restored original package at {dest} (archive at {archive_path})."
-            ) from primary
-        except ReError as restore_exc:
+        except (ReError, OSError) as restore_exc:
             raise ReError(
                 f"Replacement publication failed: {primary}. "
                 f"Restoration also failed: {restore_exc}. "
                 f"Original package preserved at: {archive_path}. "
                 f"Destination was not overwritten by restoration."
             ) from restore_exc
+        raise ReError(
+            f"Replacement publication failed: {primary}. "
+            f"Original restored at {dest}. "
+            f"Archive retained at {archive_path}."
+        ) from primary
 
 
 def acquire_batch(
