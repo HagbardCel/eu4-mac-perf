@@ -116,6 +116,34 @@ Regenerating inventory replaces `inventory/` via a short-lived `inventory.backup
 
 Regenerating the batch manifest **archives** existing `batch-*.jsonl` under `decompiled/.archive/<iso>/` when the functions digest or batch partition changes, so stale pseudocode is not indexed as current.
 
+## Callsite audit (instruction coverage)
+
+[`ExportCallsites.java`](ghidra/ExportCallsites.java) walks **all decoded instructions in executable memory** (including outside recognized functions), classifies call sites via P-code `CALL`/`CALLIND` and flow-type, and does **not** resolve call targets. [`callsite_audit.py`](callsite_audit.py) reconciles that census against existing `inventory/call_edges.jsonl` without modifying inventory, manifests, or `provenance.json`.
+
+```bash
+python3 -m reverse_engineering.callsite_audit --baseline-revision <rev>
+```
+
+Each run uses a fresh temporary staging directory (removed in `finally`). Ghidra writes `callsites-v1.jsonl` and `scan-meta.json` there; only these are published under the export tree:
+
+```
+exports/<baseline-revision>/audits/
+  callsites-v1.jsonl
+  callsite-audit.json
+```
+
+**Identity gates:** pinned executable SHA on disk, `inventory_bundle_digest` must match `provenance.json`, and Ghidra `executable_sha256` from `scan-meta.json` must match the pinned binary.
+
+**Coverage partition** (every census callsite exactly one bucket): `matched`, `missing_direct`, `missing_indirect`, `missing_ambiguous`. Classifier disagreement and calls outside functions are separate diagnostics. Orphan graph edges (edge RVA not in census) are listed separately.
+
+**Publication:** if `audits/` already exists with different bytes, the command fails; remove or rename `audits/` explicitly to replace. Identical reruns are idempotent.
+
+**Out of scope:** indirect target resolution, tail-call `jmp` recovery, decompilation, EU IV execution, changes to qualification or graphics graph-cut verdicts.
+
+**Tests:** `python3 -m unittest tests.test_callsite_audit` (portable). With `GHIDRA_INSTALL` set: build [`tests/re_fixtures/callsite_mini`](../tests/re_fixtures/callsite_mini) via `build_callsite_mini.sh`, then `python3 -m unittest tests.test_ghidra_export_callsites`.
+
+**Pre-merge:** run one full offline audit on the qualified EU IV Ghidra project (e.g. `auto-v1-20261013`) and attach summary metrics to the PR.
+
 ## Analysis revisions
 
 Each `exports/<baseline-revision>/` tree is the working export root. `inventory_digest` (functions only) drives batch partitioning; `inventory_bundle_digest` includes call edges and coverage.
