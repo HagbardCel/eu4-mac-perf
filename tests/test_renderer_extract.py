@@ -447,6 +447,74 @@ class UnchangedSkipsPreflightTests(IdentityPatchMixin, unittest.TestCase):
         self.assertEqual(preflight_calls, 0)
 
 
+class EvidenceAcceptanceTests(unittest.TestCase):
+    def _acceptance_kwargs(self, **overrides: object) -> dict:
+        base = {
+            "packages_complete": True,
+            "planned_functions": 4450,
+            "observed_functions": 4450,
+            "invalid_batch_ids": [],
+            "static_failed_functions": 0,
+            "verified_decoded_instructions": renderer_extract.EXPECTED_INSTRUCTIONS,
+            "verified_decoded_bytes": renderer_extract.EXPECTED_DECODED_BYTES,
+            "priority_entries_static_success": len(renderer_scope.PRIORITY_ENTRIES),
+            "gfx_helpers_static_success": 92,
+            "gfx_helpers_expected": 92,
+            "decompile_status_counts": {"success": 4450},
+        }
+        base.update(overrides)
+        return base
+
+    def test_evidence_complete_when_all_required_pass(self) -> None:
+        result = renderer_extract.evaluate_evidence_acceptance(**self._acceptance_kwargs())
+        self.assertTrue(result["evidence_complete"])
+        self.assertTrue(all(result["required_checks"].values()))
+
+    def test_decompile_failures_advisory_only(self) -> None:
+        result = renderer_extract.evaluate_evidence_acceptance(
+            **self._acceptance_kwargs(decompile_status_counts={"success": 4449, "timeout": 1}),
+        )
+        self.assertTrue(result["evidence_complete"])
+        self.assertFalse(result["advisory_checks"]["decompile_failures_zero"])
+
+    def test_partial_packages_still_evaluates_all_required_checks(self) -> None:
+        result = renderer_extract.evaluate_evidence_acceptance(
+            **self._acceptance_kwargs(
+                packages_complete=False,
+                observed_functions=100,
+                verified_decoded_instructions=17126,
+                verified_decoded_bytes=79181,
+                priority_entries_static_success=0,
+                gfx_helpers_static_success=0,
+                decompile_status_counts={"success": 100},
+            ),
+        )
+        self.assertFalse(result["evidence_complete"])
+        self.assertFalse(result["required_checks"]["packages_complete"])
+        self.assertFalse(result["required_checks"]["instructions_match"])
+
+    def test_status_three_state_transitions(self) -> None:
+        partial_acc = renderer_extract.evaluate_evidence_acceptance(
+            **self._acceptance_kwargs(packages_complete=False, observed_functions=1),
+        )
+        self.assertEqual(
+            renderer_extract.report_status_from_acceptance(False, partial_acc),
+            "partial",
+        )
+        pkg_acc = renderer_extract.evaluate_evidence_acceptance(
+            **self._acceptance_kwargs(priority_entries_static_success=0),
+        )
+        self.assertEqual(
+            renderer_extract.report_status_from_acceptance(True, pkg_acc),
+            "packages_complete",
+        )
+        full_acc = renderer_extract.evaluate_evidence_acceptance(**self._acceptance_kwargs())
+        self.assertEqual(
+            renderer_extract.report_status_from_acceptance(True, full_acc),
+            "evidence_complete",
+        )
+
+
 class BatchPlanTests(unittest.TestCase):
     def test_permuted_partition_rejected(self) -> None:
         summary = {

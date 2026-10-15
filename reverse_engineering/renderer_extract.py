@@ -34,6 +34,13 @@ from reverse_engineering.paths import (
     local_binary_root,
     resolve_export_dir,
 )
+from reverse_engineering.macho_rva import (
+    ByteMismatchError,
+    MachOMapper,
+    assert_image_base_matches_target,
+    assert_pinned_executable,
+    verify_static_row_bytes,
+)
 from reverse_engineering.renderer_scope import (
     DEFAULT_SCOPE_DIR,
     FROZEN_RENDERER_BATCH_SIZE,
@@ -854,6 +861,151 @@ def summarize_package_coverage(
     }
 
 
+def packages_complete_from_report(
+    *,
+    planned_batches: int,
+    valid_batches: int,
+    missing_batch_ids: list[str],
+    invalid_batch_ids: list[str],
+) -> bool:
+    return (
+        planned_batches > 0
+        and valid_batches == planned_batches
+        and not missing_batch_ids
+        and not invalid_batch_ids
+    )
+
+
+def evaluate_evidence_acceptance(
+    *,
+    packages_complete: bool,
+    planned_functions: int,
+    observed_functions: int,
+    invalid_batch_ids: list[str],
+    static_failed_functions: int,
+    verified_decoded_instructions: int,
+    verified_decoded_bytes: int,
+    priority_entries_static_success: int,
+    gfx_helpers_static_success: int,
+    gfx_helpers_expected: int,
+    decompile_status_counts: dict[str, int],
+) -> dict[str, Any]:
+    required_checks = {
+        "packages_complete": packages_complete,
+        "functions_complete": observed_functions == planned_functions,
+        "no_invalid_batches": not invalid_batch_ids,
+        "no_static_failures": static_failed_functions == 0,
+        "instructions_match": verified_decoded_instructions == EXPECTED_INSTRUCTIONS,
+        "decoded_bytes_match": verified_decoded_bytes == EXPECTED_DECODED_BYTES,
+        "priority_entries_complete": priority_entries_static_success == len(PRIORITY_ENTRIES),
+        "gfx_helpers_complete": gfx_helpers_static_success == gfx_helpers_expected,
+    }
+    decomp_non_success = sum(
+        decompile_status_counts.get(status, 0)
+        for status in decompile_status_counts
+        if status != "success"
+    )
+    advisory_checks = {
+        "decompile_failures_zero": decomp_non_success == 0,
+    }
+    evidence_complete = all(required_checks.values())
+    return {
+        "evidence_complete": evidence_complete,
+        "required_checks": required_checks,
+        "advisory_checks": advisory_checks,
+    }
+
+
+def report_status_from_acceptance(
+    packages_complete: bool,
+    evidence_acceptance: dict[str, Any],
+) -> str:
+    if evidence_acceptance.get("evidence_complete"):
+        return "evidence_complete"
+    if packages_complete:
+        return "packages_complete"
+    return "partial"
+
+
+def verify_binary_bytes_for_valid_batches(
+    exp: Path,
+    valid: list[str],
+    image_base: int,
+    mapper: MachOMapper,
+) -> dict[str, Any]:
+    verified_batches = 0
+    verified_instructions = 0
+    verified_bytes = 0
+    for batch_id in valid:
+        static_text, _, _ = read_zip_package(batch_zip_path(exp, batch_id))
+        batch_ins = 0
+        batch_bytes = 0
+        for row in load_jsonl_text(static_text):
+            if row.get("status") != "success":
+                continue
+            entry_rva = row.get("entry_rva", "")
+            try:
+                ins_count, byte_count = verify_static_row_bytes(mapper, row, image_base)
+            except ByteMismatchError as exc:
+                return {
+                    "status": "failed",
+                    "scope": "all_valid_batches",
+                    "verified_batches": verified_batches,
+                    "verified_instructions": verified_instructions,
+                    "verified_bytes": verified_bytes,
+                    "first_mismatch": {
+                        "entry_rva": entry_rva,
+                        "instruction_rva": exc.instruction_rva,
+                        "reason": "byte_mismatch",
+                        "expected_hex": exc.expected_hex,
+                        "observed_hex": exc.observed_hex,
+                    },
+                }
+            except ReError as exc:
+                reason = "unmapped_or_non_file_backed"
+                msg = str(exc)
+                if msg.startswith("unsupported_macho"):
+                    reason = "unsupported_macho"
+                elif msg.startswith("binary_identity"):
+                    reason = "binary_identity_mismatch"
+                return {
+                    "status": "failed",
+                    "scope": "all_valid_batches",
+                    "verified_batches": verified_batches,
+                    "verified_instructions": verified_instructions,
+                    "verified_bytes": verified_bytes,
+                    "first_mismatch": {
+                        "entry_rva": entry_rva,
+                        "instruction_rva": None,
+                        "reason": reason,
+                        "message": msg,
+                    },
+                }
+            batch_ins += ins_count
+            batch_bytes += byte_count
+        verified_batches += 1
+        verified_instructions += batch_ins
+        verified_bytes += batch_bytes
+    return {
+        "status": "passed",
+        "scope": "all_valid_batches",
+        "verified_batches": verified_batches,
+        "verified_instructions": verified_instructions,
+        "verified_bytes": verified_bytes,
+        "first_mismatch": None,
+    }
+
+
+def run_binary_byte_verification(exp: Path, valid: list[str]) -> dict[str, Any]:
+    exe = verify_binary()
+    assert_pinned_executable(exe)
+    ghidra_meta = load_ghidra_meta(local_binary_root(binary_sha256()))
+    image_base = int(ghidra_meta.get("image_base", 0))
+    assert_image_base_matches_target(image_base)
+    with MachOMapper(exe) as mapper:
+        return verify_binary_bytes_for_valid_batches(exp, valid, image_base, mapper)
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     scope_dir = Path(args.scope_dir).expanduser()
     exp, summary, plan, _, _, revision = load_frozen_context(scope_dir, args.baseline_revision)
@@ -861,35 +1013,78 @@ def cmd_report(args: argparse.Namespace) -> int:
     callsites_by_caller = load_callsites_by_caller(exp)
     all_batches = sorted(plan.get("batches", {}))
     valid, missing, invalid = classify_batches(exp, plan, summary, inventory, callsites_by_caller)
-    complete = len(valid) == len(all_batches) and len(all_batches) == 45
+    planned_batches = len(all_batches)
+    packages_complete = packages_complete_from_report(
+        planned_batches=planned_batches,
+        valid_batches=len(valid),
+        missing_batch_ids=missing,
+        invalid_batch_ids=sorted(invalid),
+    )
     observed_functions = sum(len(plan["batches"][bid]) for bid in valid)
     report: dict[str, Any] = {
-        "status": "complete" if complete else "partial",
         "baseline_revision": revision,
-        "planned_batches": len(all_batches),
+        "planned_batches": planned_batches,
         "valid_batches": len(valid),
         "missing_batch_ids": missing,
         "invalid_batch_ids": sorted(invalid),
         "invalid_batch_errors": invalid,
         "planned_functions": plan.get("selected_function_count"),
         "observed_functions": observed_functions,
+        "packages_complete": packages_complete,
+        "expected_decoded_instructions": EXPECTED_INSTRUCTIONS,
+        "expected_decoded_bytes": EXPECTED_DECODED_BYTES,
     }
     report.update(summarize_package_coverage(exp, valid, inventory))
-    if complete:
-        report.update(
-            {
-                "expected_decoded_instructions": EXPECTED_INSTRUCTIONS,
-                "expected_decoded_bytes": EXPECTED_DECODED_BYTES,
-                "instructions_match_expected": report["verified_decoded_instructions"]
-                == EXPECTED_INSTRUCTIONS,
-                "bytes_match_expected": report["verified_decoded_bytes"] == EXPECTED_DECODED_BYTES,
+    report["evidence_acceptance"] = evaluate_evidence_acceptance(
+        packages_complete=packages_complete,
+        planned_functions=int(report["planned_functions"] or 0),
+        observed_functions=observed_functions,
+        invalid_batch_ids=report["invalid_batch_ids"],
+        static_failed_functions=report["static_failed_functions"],
+        verified_decoded_instructions=report["verified_decoded_instructions"],
+        verified_decoded_bytes=report["verified_decoded_bytes"],
+        priority_entries_static_success=report["priority_entries_static_success"],
+        gfx_helpers_static_success=report["gfx_helpers_static_success"],
+        gfx_helpers_expected=report["gfx_helpers_expected"],
+        decompile_status_counts=report["decompile_status_counts"],
+    )
+    report["status"] = report_status_from_acceptance(packages_complete, report["evidence_acceptance"])
+    if getattr(args, "verify_binary_bytes", False):
+        try:
+            report["binary_byte_verification"] = run_binary_byte_verification(exp, valid)
+        except ReError as exc:
+            msg = str(exc)
+            reason = "unmapped_or_non_file_backed"
+            if msg.startswith("unsupported_macho"):
+                reason = "unsupported_macho"
+            elif "binary_identity" in msg or "SHA-256" in msg:
+                reason = "binary_identity_mismatch"
+            report["binary_byte_verification"] = {
+                "status": "failed",
+                "scope": "all_valid_batches",
+                "verified_batches": 0,
+                "verified_instructions": 0,
+                "verified_bytes": 0,
+                "first_mismatch": {
+                    "entry_rva": None,
+                    "instruction_rva": None,
+                    "reason": reason,
+                    "message": msg,
+                },
             }
-        )
     logs = snapshot_root(exp) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     (logs / "coverage.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
-    return 0
+    exit_code = 0
+    if getattr(args, "require_evidence", False):
+        if not report["evidence_acceptance"]["evidence_complete"]:
+            exit_code = 1
+    if getattr(args, "verify_binary_bytes", False):
+        block = report.get("binary_byte_verification") or {}
+        if block.get("status") != "passed":
+            exit_code = 1
+    return exit_code
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -900,6 +1095,9 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--scope-dir", default=str(DEFAULT_SCOPE_DIR))
         p.add_argument("--baseline-revision", default=None)
         p.set_defaults(func=cmd_run if name == "run" else cmd_report)
+    report = sub.choices["report"]
+    report.add_argument("--require-evidence", action="store_true")
+    report.add_argument("--verify-binary-bytes", action="store_true")
     run = sub.choices["run"]
     run.add_argument("--batch-id", default=None)
     run.add_argument("--repair", action="store_true")
