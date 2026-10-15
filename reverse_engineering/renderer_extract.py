@@ -38,7 +38,6 @@ from reverse_engineering.macho_rva import (
     ByteMismatchError,
     MachOMapper,
     assert_image_base_matches_target,
-    assert_pinned_executable,
     verify_static_row_bytes,
 )
 from reverse_engineering.renderer_scope import (
@@ -916,6 +915,43 @@ def evaluate_evidence_acceptance(
     }
 
 
+def binary_verification_reason_from_message(msg: str) -> str:
+    if msg.startswith("binary_io_error"):
+        return "binary_io_error"
+    if msg.startswith("image_base_mismatch"):
+        return "image_base_mismatch"
+    if msg.startswith("binary_identity_mismatch") or "SHA-256" in msg:
+        return "binary_identity_mismatch"
+    if msg.startswith("unsupported_macho"):
+        return "unsupported_macho"
+    return "unmapped_or_non_file_backed"
+
+
+def binary_byte_verification_failed(
+    *,
+    reason: str,
+    message: str,
+    verified_batches: int = 0,
+    verified_instructions: int = 0,
+    verified_bytes: int = 0,
+    entry_rva: str | None = None,
+    instruction_rva: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "scope": "all_valid_batches",
+        "verified_batches": verified_batches,
+        "verified_instructions": verified_instructions,
+        "verified_bytes": verified_bytes,
+        "first_mismatch": {
+            "entry_rva": entry_rva,
+            "instruction_rva": instruction_rva,
+            "reason": reason,
+            "message": message,
+        },
+    }
+
+
 def report_status_from_acceptance(
     packages_complete: bool,
     evidence_acceptance: dict[str, Any],
@@ -933,6 +969,15 @@ def verify_binary_bytes_for_valid_batches(
     image_base: int,
     mapper: MachOMapper,
 ) -> dict[str, Any]:
+    if not valid:
+        return {
+            "status": "no_valid_batches",
+            "scope": "all_valid_batches",
+            "verified_batches": 0,
+            "verified_instructions": 0,
+            "verified_bytes": 0,
+            "first_mismatch": None,
+        }
     verified_batches = 0
     verified_instructions = 0
     verified_bytes = 0
@@ -962,25 +1007,15 @@ def verify_binary_bytes_for_valid_batches(
                     },
                 }
             except ReError as exc:
-                reason = "unmapped_or_non_file_backed"
                 msg = str(exc)
-                if msg.startswith("unsupported_macho"):
-                    reason = "unsupported_macho"
-                elif msg.startswith("binary_identity"):
-                    reason = "binary_identity_mismatch"
-                return {
-                    "status": "failed",
-                    "scope": "all_valid_batches",
-                    "verified_batches": verified_batches,
-                    "verified_instructions": verified_instructions,
-                    "verified_bytes": verified_bytes,
-                    "first_mismatch": {
-                        "entry_rva": entry_rva,
-                        "instruction_rva": None,
-                        "reason": reason,
-                        "message": msg,
-                    },
-                }
+                return binary_byte_verification_failed(
+                    reason=binary_verification_reason_from_message(msg),
+                    message=msg,
+                    verified_batches=verified_batches,
+                    verified_instructions=verified_instructions,
+                    verified_bytes=verified_bytes,
+                    entry_rva=entry_rva,
+                )
             batch_ins += ins_count
             batch_bytes += byte_count
         verified_batches += 1
@@ -998,7 +1033,6 @@ def verify_binary_bytes_for_valid_batches(
 
 def run_binary_byte_verification(exp: Path, valid: list[str]) -> dict[str, Any]:
     exe = verify_binary()
-    assert_pinned_executable(exe)
     ghidra_meta = load_ghidra_meta(local_binary_root(binary_sha256()))
     image_base = int(ghidra_meta.get("image_base", 0))
     assert_image_base_matches_target(image_base)
@@ -1052,26 +1086,17 @@ def cmd_report(args: argparse.Namespace) -> int:
     if getattr(args, "verify_binary_bytes", False):
         try:
             report["binary_byte_verification"] = run_binary_byte_verification(exp, valid)
+        except OSError as exc:
+            report["binary_byte_verification"] = binary_byte_verification_failed(
+                reason="binary_io_error",
+                message=str(exc),
+            )
         except ReError as exc:
             msg = str(exc)
-            reason = "unmapped_or_non_file_backed"
-            if msg.startswith("unsupported_macho"):
-                reason = "unsupported_macho"
-            elif "binary_identity" in msg or "SHA-256" in msg:
-                reason = "binary_identity_mismatch"
-            report["binary_byte_verification"] = {
-                "status": "failed",
-                "scope": "all_valid_batches",
-                "verified_batches": 0,
-                "verified_instructions": 0,
-                "verified_bytes": 0,
-                "first_mismatch": {
-                    "entry_rva": None,
-                    "instruction_rva": None,
-                    "reason": reason,
-                    "message": msg,
-                },
-            }
+            report["binary_byte_verification"] = binary_byte_verification_failed(
+                reason=binary_verification_reason_from_message(msg),
+                message=msg,
+            )
     logs = snapshot_root(exp) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     (logs / "coverage.json").write_text(json.dumps(report, indent=2) + "\n")

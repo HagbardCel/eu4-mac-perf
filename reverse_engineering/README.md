@@ -211,7 +211,7 @@ python3 -m reverse_engineering.renderer_extract report \
 
 ### Optional executable-byte verification (P3)
 
-`--verify-binary-bytes` compares each static `success` instruction’s `bytes_hex` to the pinned EU IV Mach-O at `VA = image_base + instruction_rva`, using file-backed segment ranges only (`filesize`, not zero-filled `vmsize` tail). In mismatch reports, `expected_hex` is from the **executable file** and `observed_hex` from the **snapshot**. This gate is independent of `evidence_complete` (structural acceptance can pass while byte verification fails). Scope is **all currently valid batches** only — a partial snapshot does not imply all 4,450 functions were checked.
+`--verify-binary-bytes` compares each static `success` instruction’s `bytes_hex` to the pinned EU IV Mach-O at `VA = image_base + instruction_rva`, using file-backed segment ranges only (`filesize`, not zero-filled `vmsize` tail). In mismatch reports, `expected_hex` is from the **executable file** and `observed_hex` from the **snapshot**. This gate is independent of `evidence_complete` (structural acceptance can pass while byte verification fails). Scope is **all currently valid batches** only — a partial snapshot does not imply all 4,450 functions were checked. With zero valid batches, verification reports `no_valid_batches` and exits nonzero.
 
 Tests: `python3 -m unittest tests.test_renderer_extract tests.test_macho_rva`. With `GHIDRA_INSTALL`: `python3 -m unittest tests.test_ghidra_export_renderer_static`.
 

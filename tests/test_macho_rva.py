@@ -1,3 +1,5 @@
+import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -8,8 +10,10 @@ from reverse_engineering.intervals import format_rva
 from reverse_engineering.macho_rva import (
     ByteMismatchError,
     MachOMapper,
+    build_macho_load_command_overflow,
     build_synthetic_macho_64,
     verify_instruction_bytes,
+    verify_static_row_bytes,
 )
 from reverse_engineering.paths import ReError
 
@@ -112,9 +116,47 @@ class MachOMapperTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_filesize_exceeds_vmsize_rejected(self) -> None:
+        code = b"\x90\x90\x90\x90"
+        payload = build_synthetic_macho_64(
+            image_base=IMAGE_BASE,
+            segment_fileoff=0x100,
+            code_bytes=code,
+            vmsize_override=2,
+        )
+        path = self._write_macho(payload)
+        try:
+            with self.assertRaises(ReError) as ctx:
+                with MachOMapper(path):
+                    pass
+            self.assertIn("filesize exceeds vmsize", str(ctx.exception))
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_load_command_beyond_sizeofcmds_rejected(self) -> None:
+        payload = build_macho_load_command_overflow()
+        path = self._write_macho(payload)
+        try:
+            with self.assertRaises(ReError) as ctx:
+                with MachOMapper(path):
+                    pass
+            self.assertIn("sizeofcmds", str(ctx.exception))
+        finally:
+            path.unlink(missing_ok=True)
+
 
 CALLSITE_MINI_DIR = Path(__file__).resolve().parent / "re_fixtures" / "callsite_mini"
 CALLSITE_MINI_BIN = CALLSITE_MINI_DIR / "callsite_mini"
+
+
+def _nm_symbol_va(binary: Path, symbol: str) -> int:
+    out = subprocess.check_output(["nm", "-n", str(binary)], text=True)
+    pattern = re.compile(rf"([0-9a-fA-F]+) [Tt] {re.escape(symbol)}$")
+    for line in out.splitlines():
+        match = pattern.search(line.strip())
+        if match:
+            return int(match.group(1), 16)
+    raise AssertionError(f"symbol {symbol} not found in nm output")
 
 
 @unittest.skipUnless(sys.platform == "darwin", "callsite_mini build requires macOS clang")
@@ -128,11 +170,43 @@ class CallsiteMiniIntegrationTests(unittest.TestCase):
                 check=True,
             )
 
-    def test_callsite_mini_text_bytes_readable(self) -> None:
+    def test_start_bytes_match_assembly_encoding(self) -> None:
+        start_va = _nm_symbol_va(CALLSITE_MINI_BIN, "_start")
+        target_va = _nm_symbol_va(CALLSITE_MINI_BIN, "_target_direct")
+        displacement = target_va - (start_va + 5)
+        expected = (
+            b"\xe8"
+            + struct.pack("<i", displacement)
+            + b"\xff\xd0\xff\x17\xc3"
+        )
         with MachOMapper(CALLSITE_MINI_BIN) as mapper:
-            # _start is at file offset 0 in this tiny static binary; image base matches EU IV layout.
-            got = mapper.read_bytes_at_rva(IMAGE_BASE, 0, 4)
-        self.assertGreater(len(got), 0)
+            image_base = mapper.primary_vmaddr
+            actual = mapper.read_bytes_at_va(start_va, len(expected))
+            self.assertEqual(actual, expected)
+            self.assertEqual(actual[0], 0xE8)
+            ins_specs = [
+                (0, 5),
+                (5, 2),
+                (7, 2),
+                (9, 1),
+            ]
+            instructions = []
+            for offset, length in ins_specs:
+                chunk = expected[offset : offset + length]
+                rva = start_va + offset - image_base
+                instructions.append(
+                    {
+                        "instruction_rva": format_rva(rva),
+                        "length": length,
+                        "bytes_hex": chunk.hex(),
+                    }
+                )
+            row = {
+                "entry_rva": format_rva(start_va - image_base),
+                "status": "success",
+                "instructions": instructions,
+            }
+            self.assertEqual(verify_static_row_bytes(mapper, row, image_base), (4, 10))
 
 
 if __name__ == "__main__":

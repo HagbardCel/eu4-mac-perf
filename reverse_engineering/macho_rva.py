@@ -33,28 +33,47 @@ class MachOMapper:
 
     def __init__(self, binary_path: Path) -> None:
         self._path = binary_path
-        self._file = binary_path.open("rb")
+        self._file = None
         self._mmap: mmap.mmap | None = None
         try:
-            self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                self._file = binary_path.open("rb")
+            except OSError as exc:
+                raise ReError(f"binary_io_error: {exc}") from exc
+            try:
+                self._mmap = mmap.mmap(self._file.fileno(), 0, access=mmap.ACCESS_READ)
+            except OSError as exc:
+                raise ReError(f"binary_io_error: {exc}") from exc
+            except ValueError as exc:
+                raise ReError(f"unsupported_macho: {exc}") from exc
+            if len(self._mmap) == 0:
+                raise ReError("unsupported_macho: empty file")
             self._segments = self._parse_segments()
-        except Exception:
-            if self._mmap is not None:
-                self._mmap.close()
-            self._file.close()
+        except ReError:
+            self._release()
             raise
 
-    def close(self) -> None:
+    def _release(self) -> None:
         if self._mmap is not None:
             self._mmap.close()
             self._mmap = None
-        self._file.close()
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+
+    def close(self) -> None:
+        self._release()
 
     def __enter__(self) -> MachOMapper:
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+    @property
+    def primary_vmaddr(self) -> int:
+        """Lowest vmaddr among file-backed segments (for fixture tests)."""
+        return min(seg.vmaddr for seg in self._segments)
 
     def _parse_segments(self) -> list[_Segment]:
         if self._mmap is None:
@@ -77,20 +96,24 @@ class MachOMapper:
         offset = MACH_HEADER_64_SIZE
         segments: list[_Segment] = []
         for _ in range(ncmds):
-            if offset + 8 > len(data):
-                raise ReError("unsupported_macho: load command truncated")
+            if offset + 8 > header_end:
+                raise ReError("unsupported_macho: load command header outside sizeofcmds")
             cmd, cmdsize = struct.unpack_from("<II", data, offset)
-            if cmdsize < 8 or offset + cmdsize > len(data):
-                raise ReError("unsupported_macho: invalid load command size")
+            if cmdsize < 8 or offset + cmdsize > header_end:
+                raise ReError("unsupported_macho: load command exceeds sizeofcmds")
             if cmd == LC_SEGMENT_64:
                 if cmdsize < SEGMENT_COMMAND_64_SIZE:
                     raise ReError("unsupported_macho: LC_SEGMENT_64 too small")
                 vmaddr, vmsize, fileoff, filesize = struct.unpack_from("<QQQQ", data, offset + 24)
                 if filesize > 0:
+                    if filesize > vmsize:
+                        raise ReError("unsupported_macho: segment filesize exceeds vmsize")
                     if fileoff + filesize > len(data):
                         raise ReError("unsupported_macho: segment extends past file end")
                     segments.append(_Segment(vmaddr=vmaddr, filesize=filesize, fileoff=fileoff))
             offset += cmdsize
+        if offset != header_end:
+            raise ReError("unsupported_macho: ncmds/sizeofcmds mismatch")
         if not segments:
             raise ReError("unsupported_macho: no file-backed segments")
         return segments
@@ -130,7 +153,7 @@ def assert_image_base_matches_target(image_base: int) -> None:
     expected = int(target["image_base"])
     if int(image_base) != expected:
         raise ReError(
-            f"image_base mismatch: Ghidra metadata {image_base} vs target.json {expected}"
+            f"image_base_mismatch: Ghidra metadata {image_base} vs target.json {expected}"
         )
 
 
@@ -172,9 +195,6 @@ def verify_static_row_bytes(
     """Return (instruction_count, byte_count) verified for a static success row."""
     if row.get("status") != "success":
         return 0, 0
-    entry_rva = row.get("entry_rva", "")
-    count = 0
-    nbytes = 0
     for ins in row.get("instructions") or []:
         length = int(ins.get("length", 0))
         observed_hex = ins.get("bytes_hex") or ""
@@ -190,13 +210,10 @@ def verify_static_row_bytes(
             )
         except ByteMismatchError:
             raise
-        except ReError as exc:
-            msg = str(exc)
-            if msg.startswith("binary_identity") or msg.startswith("unsupported_macho"):
-                raise
-            raise ReError(msg) from exc
-        count += 1
-        nbytes += length
+        except ReError:
+            raise
+    count = len(row.get("instructions") or [])
+    nbytes = sum(int(ins.get("length", 0)) for ins in row.get("instructions") or [])
     return count, nbytes
 
 
@@ -206,11 +223,12 @@ def build_synthetic_macho_64(
     segment_fileoff: int,
     code_bytes: bytes,
     vmaddr: int | None = None,
+    vmsize_override: int | None = None,
 ) -> bytes:
     """Build a minimal thin x86_64 Mach-O for unit tests (one file-backed __TEXT segment)."""
     vmaddr = vmaddr if vmaddr is not None else image_base
     filesize = len(code_bytes)
-    vmsize = filesize + 0x1000  # zero-fill tail beyond filesize (must not be readable)
+    vmsize = vmsize_override if vmsize_override is not None else filesize + 0x1000
     ncmds = 1
     sizeofcmds = SEGMENT_COMMAND_64_SIZE
     header = struct.pack(
@@ -245,3 +263,48 @@ def build_synthetic_macho_64(
     out[0 : len(prefix)] = prefix
     out[segment_fileoff : segment_fileoff + filesize] = code_bytes
     return bytes(out)
+
+
+def build_macho_load_command_overflow(*, padding_after_header_end: int = 128) -> bytes:
+    """Mach-O with declared sizeofcmds smaller than embedded second load command."""
+    sizeofcmds = SEGMENT_COMMAND_64_SIZE
+    fileoff = 0x100
+    header = struct.pack(
+        "<IIIIIIII",
+        MH_MAGIC_64,
+        CPU_TYPE_X86_64,
+        0x80000003,
+        0x02,
+        2,
+        sizeofcmds,
+        0,
+        0,
+    )
+    seg1 = _segment_command(vmaddr=0x100000000, vmsize=0x1000, fileoff=fileoff, filesize=4)
+    seg2 = _segment_command(vmaddr=0x200000000, vmsize=0x1000, fileoff=fileoff + 8, filesize=4)
+    header_end = MACH_HEADER_64_SIZE + sizeofcmds
+    total = max(header_end + padding_after_header_end, fileoff + 16)
+    out = bytearray(total)
+    out[0:MACH_HEADER_64_SIZE] = header
+    out[MACH_HEADER_64_SIZE : MACH_HEADER_64_SIZE + SEGMENT_COMMAND_64_SIZE] = seg1
+    out[header_end : header_end + SEGMENT_COMMAND_64_SIZE] = seg2
+    out[fileoff : fileoff + 4] = b"\xcc\xcc\xcc\xcc"
+    return bytes(out)
+
+
+def _segment_command(*, vmaddr: int, vmsize: int, fileoff: int, filesize: int) -> bytes:
+    segname = b"__TEXT" + b"\x00" * 10
+    segment = struct.pack("<II", LC_SEGMENT_64, SEGMENT_COMMAND_64_SIZE)
+    segment += segname
+    segment += struct.pack(
+        "<QQQQIIII",
+        vmaddr,
+        vmsize,
+        fileoff,
+        filesize,
+        7,
+        7,
+        0,
+        0,
+    )
+    return segment

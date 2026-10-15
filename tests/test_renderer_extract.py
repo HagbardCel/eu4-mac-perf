@@ -1,3 +1,5 @@
+import argparse
+import contextlib
 import io
 import json
 import tempfile
@@ -513,6 +515,175 @@ class EvidenceAcceptanceTests(unittest.TestCase):
             renderer_extract.report_status_from_acceptance(True, full_acc),
             "evidence_complete",
         )
+
+
+class ReportCommandTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.exp = Path(self._tmp.name) / "exp"
+        self.exp.mkdir()
+        batches = {
+            f"gfx-batch-{index:05d}": [f"0x{index:016x}"] * 100 for index in range(1, 45)
+        }
+        batches["gfx-batch-00045"] = [f"0x{45:016x}"] * 50
+        self.plan = {"batches": batches, "selected_function_count": 4450}
+        self.all_batch_ids = sorted(self.plan["batches"])
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _coverage_summary(self, **overrides: object) -> dict:
+        base = {
+            "static_success_functions": 4450,
+            "static_failed_functions": 0,
+            "decompile_status_counts": {"success": 4450},
+            "verified_decoded_instructions": renderer_extract.EXPECTED_INSTRUCTIONS,
+            "verified_decoded_bytes": renderer_extract.EXPECTED_DECODED_BYTES,
+            "priority_entries_static_success": len(renderer_scope.PRIORITY_ENTRIES),
+            "priority_entries_missing_static_success": [],
+            "gfx_helpers_static_success": 92,
+            "gfx_helpers_expected": 92,
+            "gfx_helpers_missing_static_success": [],
+        }
+        base.update(overrides)
+        return base
+
+    def _run_cmd_report(
+        self,
+        *,
+        valid: list[str],
+        missing: list[str],
+        invalid: dict[str, str] | None = None,
+        coverage: dict | None = None,
+        require_evidence: bool = False,
+        verify_binary_bytes: bool = False,
+        byte_verification: object | None = None,
+        byte_verification_error: Exception | None = None,
+    ) -> tuple[int, dict]:
+        invalid = invalid or {}
+        coverage = coverage if coverage is not None else self._coverage_summary()
+        args = argparse.Namespace(
+            scope_dir="/tmp",
+            baseline_revision="auto-v1-20261013",
+            require_evidence=require_evidence,
+            verify_binary_bytes=verify_binary_bytes,
+        )
+        patches = [
+            unittest.mock.patch(
+                "reverse_engineering.renderer_extract.load_frozen_context",
+                return_value=(self.exp, {}, self.plan, "", [], "auto-v1-20261013"),
+            ),
+            unittest.mock.patch(
+                "reverse_engineering.renderer_extract.load_inventory_index",
+                return_value={},
+            ),
+            unittest.mock.patch(
+                "reverse_engineering.renderer_extract.load_callsites_by_caller",
+                return_value={},
+            ),
+            unittest.mock.patch(
+                "reverse_engineering.renderer_extract.classify_batches",
+                return_value=(valid, missing, invalid),
+            ),
+            unittest.mock.patch(
+                "reverse_engineering.renderer_extract.summarize_package_coverage",
+                return_value=coverage,
+            ),
+        ]
+        if verify_binary_bytes:
+            if byte_verification_error is not None:
+                patches.append(
+                    unittest.mock.patch(
+                        "reverse_engineering.renderer_extract.run_binary_byte_verification",
+                        side_effect=byte_verification_error,
+                    )
+                )
+            elif byte_verification is not None:
+                patches.append(
+                    unittest.mock.patch(
+                        "reverse_engineering.renderer_extract.run_binary_byte_verification",
+                        return_value=byte_verification,
+                    )
+                )
+        with contextlib.ExitStack() as stack:
+            for patch in patches:
+                stack.enter_context(patch)
+            code = renderer_extract.cmd_report(args)
+        log_path = self.exp / "renderer_snapshot" / "v1" / "logs" / "coverage.json"
+        self.assertTrue(log_path.is_file())
+        report = json.loads(log_path.read_text())
+        return code, report
+
+    def test_partial_corpus_require_evidence_exits_one(self) -> None:
+        code, report = self._run_cmd_report(
+            valid=["gfx-batch-00001"],
+            missing=self.all_batch_ids[1:],
+            coverage=self._coverage_summary(
+                static_success_functions=100,
+                verified_decoded_instructions=17126,
+                verified_decoded_bytes=79181,
+                priority_entries_static_success=0,
+                gfx_helpers_static_success=0,
+                decompile_status_counts={"success": 100},
+            ),
+            require_evidence=True,
+        )
+        self.assertEqual(report["status"], "partial")
+        self.assertEqual(code, 1)
+
+    def test_packages_complete_static_failure_exits_one(self) -> None:
+        code, report = self._run_cmd_report(
+            valid=self.all_batch_ids,
+            missing=[],
+            coverage=self._coverage_summary(static_failed_functions=1),
+            require_evidence=True,
+        )
+        self.assertEqual(report["status"], "packages_complete")
+        self.assertFalse(report["evidence_acceptance"]["evidence_complete"])
+        self.assertEqual(code, 1)
+
+    def test_evidence_complete_require_evidence_exits_zero(self) -> None:
+        code, report = self._run_cmd_report(
+            valid=self.all_batch_ids,
+            missing=[],
+            require_evidence=True,
+        )
+        self.assertEqual(report["status"], "evidence_complete")
+        self.assertEqual(code, 0)
+
+    def test_byte_mismatch_fails_verify_gate_independently(self) -> None:
+        code, report = self._run_cmd_report(
+            valid=self.all_batch_ids,
+            missing=[],
+            coverage=self._coverage_summary(),
+            verify_binary_bytes=True,
+            byte_verification={
+                "status": "failed",
+                "scope": "all_valid_batches",
+                "verified_batches": 1,
+                "verified_instructions": 0,
+                "verified_bytes": 0,
+                "first_mismatch": {
+                    "entry_rva": "0x1",
+                    "instruction_rva": "0x2",
+                    "reason": "byte_mismatch",
+                },
+            },
+        )
+        self.assertEqual(report["status"], "evidence_complete")
+        self.assertEqual(code, 1)
+
+    def test_binary_io_error_recorded_on_verification_failure(self) -> None:
+        code, report = self._run_cmd_report(
+            valid=self.all_batch_ids,
+            missing=[],
+            verify_binary_bytes=True,
+            byte_verification_error=ReError("binary_io_error: permission denied"),
+        )
+        block = report["binary_byte_verification"]
+        self.assertEqual(block["status"], "failed")
+        self.assertEqual(block["first_mismatch"]["reason"], "binary_io_error")
+        self.assertEqual(code, 1)
 
 
 class BatchPlanTests(unittest.TestCase):
