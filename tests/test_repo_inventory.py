@@ -331,6 +331,21 @@ class ImportResolutionTests(unittest.TestCase):
             self.assertEqual({e.target for e in edges}, {"pkg/mod.py"})
             self.assertTrue(all(e.confidence == "high" for e in edges))
 
+    def test_unique_suffix_only_import_is_low_confidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("app/consumer.py", "import config\n")
+            # no config.py at the repo root: the only match is a suffix fallback
+            repo.write("unused/config.py", "x = 1\n")
+            repo.commit()
+            graph = repo_graph.build(snapshot_mod.RepoSnapshot.from_ref(repo.root, "HEAD"))
+            edges = [e for e in graph.edges if e.source == "app/consumer.py" and e.relationship == "import"]
+            self.assertEqual({e.target for e in edges}, {"unused/config.py"})
+            # uniqueness alone is not confidence
+            self.assertTrue(all(e.confidence == "low" for e in edges))
+            # ...but it is still a positive consumer reference
+            self.assertIn("unused/config.py", graph.consumer_targets())
+
 
 @unittest.skipIf(GIT is None, "git not available")
 class LifecycleTests(unittest.TestCase):
@@ -379,6 +394,21 @@ class LifecycleTests(unittest.TestCase):
             self.assertFalse(row["archive_candidate"])
             self.assertFalse(row["archive_eligible"])
             self.assertTrue(row["review_required"])
+
+    def test_low_confidence_reference_still_blocks_archival(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("gen/data.py", "x = 1\n")
+            repo.write("app/consumer.py", "import data\n")  # suffix-only -> low confidence
+            repo.commit()
+            policy = {
+                "rules": [{"match": "gen/**", "lifecycle": "GENERATED_DERIVED", "reason": "test"}],
+                "approved_for_archive": ["gen/data.py"],
+            }
+            row = self._resolve(repo.root, policy)["gen/data.py"]
+            # confidence does not gate protection: even a low-confidence consumer ref blocks
+            self.assertTrue(row["dependency_conflict"])
+            self.assertFalse(row["archive_eligible"])
 
     def test_generated_derived_with_ci_reference_blocked(self):
         with tempfile.TemporaryDirectory() as tmp:

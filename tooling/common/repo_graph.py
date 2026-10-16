@@ -136,16 +136,21 @@ class _PyResolver:
                 cands.add(suffix)
         return sorted(cands)
 
-    def resolve_absolute(self, modslash: str) -> list[str]:
-        """Prefer an exact package-qualified path; otherwise fall back to suffix matching."""
+    def resolve_absolute(self, modslash: str) -> tuple[list[str], bool]:
+        """Prefer an exact package-qualified match; otherwise fall back to suffix matching.
+
+        Returns ``(candidates, matched_exactly)``. A suffix-only match is weaker
+        evidence than a package-qualified one, so callers must not treat it as
+        high-confidence merely because a single candidate was found.
+        """
         exact = self.exact(modslash)
         if exact:
-            return exact
+            return exact, True
         cands = set()
         for p in self.py_paths:
             if p.endswith("/" + modslash + ".py") or p.endswith("/" + posixpath.join(modslash, "__init__.py")):
                 cands.add(p)
-        return sorted(cands)
+        return sorted(cands), False
 
 
 def _py_edges(resolver: _PyResolver, source: str, text: str, analysis: dict):
@@ -157,12 +162,17 @@ def _py_edges(resolver: _PyResolver, source: str, text: str, analysis: dict):
         return edges
 
     def add(modslash: str, line: int, *, relative: bool):
-        # Relative imports resolve strictly within their package: no suffix fallback,
-        # so a missing sibling never becomes a speculative cross-package dependency.
-        cands = resolver.exact(modslash) if relative else resolver.resolve_absolute(modslash)
+        if relative:
+            # Relative imports resolve strictly within their package: no suffix
+            # fallback, so a missing sibling never becomes a speculative edge.
+            cands, exact = resolver.exact(modslash), True
+        else:
+            cands, exact = resolver.resolve_absolute(modslash)
         if not cands:
             return
-        confidence = "high" if len(cands) == 1 else "low"
+        # Confidence reflects *how* the module was resolved, not just how many
+        # candidates were found: a unique suffix-only match is still low.
+        confidence = "high" if exact and len(cands) == 1 else "low"
         for cand in cands:
             if cand != source:
                 edges.append(Edge(source, cand, "import", confidence, f"{source}:{line}"))
