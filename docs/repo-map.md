@@ -1,54 +1,96 @@
 # Repository map and lifecycle labels (P1 audit)
 
-Inventory of Git-tracked paths at revision `8033e35` with lifecycle labels, so the
-Oracle migration (P2) can move only what is safe to move. **This document records
-classification; it moves nothing.**
+Inventory of Git-tracked paths with lifecycle labels, so the Oracle migration (P2) can
+move only what is safe to move. **This map records classification; it moves nothing,
+and a lifecycle label is never archival authorization.**
 
-Regenerate the mechanical summary below with:
+The audit is a function of three separately identified inputs:
 
-```sh
-PYTHONPATH=. python -m tooling.common.repo_inventory summary
-# full per-path manifest:
-PYTHONPATH=. python -m tooling.common.repo_inventory list
 ```
+AuditResult = f( SourceSnapshot , Policy , ToolVersion )
+```
+
+- **Source** — a frozen Git tree-ish (`8033e35`), read from Git objects, not the worktree.
+- **Policy** — `tooling/common/repo_lifecycle.json`, a curated, versioned classification layer.
+- **Tools** — `tooling/common/repo_{snapshot,inventory,graph,lifecycle,audit}.py`.
+
+All three identities are recorded in [`repo-audit-context.json`](repo-audit-context.json).
+Re-running with the same triple reproduces byte-identical artifacts.
 
 ## Lifecycle legend
 
-| Label | Meaning | Disposition |
+| Label | Meaning | Archival posture |
 | --- | --- | --- |
-| `ACTIVE` | Maintained; consumers depend on it now | Keep in place; migrate incrementally |
-| `SHARED_DEPENDENCY` | Used by active code/tests/CI across areas | Preserve interfaces until consumers migrate |
-| `FROZEN_VERIFIER` | Immutable evidence or the validators that check it | Never move; re-verify on any change |
-| `RETIRED_EXPERIMENT` | Completed/negative experiment, no active consumer | Preserve provenance; archive only after consumer check |
+| `ACTIVE` | Maintained; consumers depend on it now | Keep in place |
+| `SHARED_DEPENDENCY` | Imported/included by active code or the test suite | Preserve interfaces |
+| `FROZEN_VERIFIER` | Immutable evidence or the validators that check it | Never move; re-verify on change |
+| `RETIRED_EXPERIMENT` | Historically retired; no *proof* it is unused | **Not** automatically safe to move |
 | `GENERATED_DERIVED` | Regenerable output | Keep as evidence; regenerate, do not hand-edit |
 | `UNKNOWN` | Not yet classified | Do not delete or move until classified |
 
-## Area classification
+Classification precedence is `explicit override → curated rule → consumer signal → UNKNOWN`.
+A positively detected consumer reference (import / include / CI ref) always blocks archival
+eligibility regardless of which rule produced the label — classification precedence cannot
+conceal contradictory evidence.
 
-| Area | Files | Lifecycle | Owner responsibility | Notes |
-| --- | --- | --- | --- | --- |
-| `reverse_engineering/` | 29 | `ACTIVE` / `SHARED_DEPENDENCY` | Recover prototype implementation | Full-corpus pipeline + sealed snapshot validators are load-bearing (REUSE_MAP). |
-| `benchmark/` | 110 | `ACTIVE` (legacy home) | Profiler + CLI entry points | Operational despite "legacy" label; **do not rename**. Migrates to `tooling/*` incrementally. |
-| `tests/` | 186 | `ACTIVE` | Portable test suite | Flat `unittest` discovery; the single ceiling on regressions. |
-| `analysis/` | 134 | `GENERATED_DERIVED` / `RETIRED_EXPERIMENT` | Investigations + generated evidence | Evidence under `analysis/evidence/` is provenance; do not hand-edit. |
-| `docs/` | 45 | `ACTIVE` | Documentation | Canonical strategy, status, findings, reference; add `oracle/` here. |
-| `results/` | 207 | `FROZEN_VERIFIER` | Sealed/historical run evidence | Phase C capsule is CI-verified; leave at original paths. |
-| `tooling/` | 4 | `ACTIVE` / `SHARED_DEPENDENCY` | Guards + shared tooling | `check_doc_links`, `check_forbidden_tracked_paths`, new `repo_inventory`. |
-| `experiments/`, `measurements/`, `patches/`, `fixtures/` | 1 each | `ACTIVE` (placeholder) | Target homes during migration | Indexes only today. |
-| `.github/`, `.githooks/` | 1 each | `ACTIVE` | CI + hooks | CI compiles `benchmark analysis tooling reverse_engineering`. |
+## Curated area classification (human-authored)
+
+| Area | Lifecycle (base) | Owner responsibility | Notes |
+| --- | --- | --- | --- |
+| `reverse_engineering/` | `ACTIVE` | Recover prototype implementation | Full-corpus pipeline + sealed snapshot validators are load-bearing. |
+| `benchmark/` | `ACTIVE` (base) | Profiler + CLI entry points | Operational despite "legacy" label. Individual retired experiments are carved out by earlier rules. |
+| `tests/` | `ACTIVE` | Portable test suite | Flat `unittest` discovery; the ceiling on regressions. |
+| `analysis/` | `GENERATED_DERIVED` / `RETIRED_EXPERIMENT` | Investigations + generated evidence | `analysis/evidence/**` is `FROZEN_VERIFIER`. |
+| `docs/` | `ACTIVE` (base) | Documentation | Superseded memo families are carved out by earlier rules. |
+| `results/` | `FROZEN_VERIFIER` | Sealed/historical run evidence | Phase C capsule is CI-verified; leave at original paths. |
+| `tooling/` | `ACTIVE` | Guards + shared tooling | `check_doc_links`, `check_forbidden_tracked_paths`, repo audit tools. |
+| `experiments/`, `measurements/`, `patches/`, `fixtures/` | `ACTIVE` (placeholder) | Target homes during migration | Indexes only today. |
+| `.github/`, `.githooks/` | `ACTIVE` | CI + hooks | CI compiles `benchmark analysis tooling reverse_engineering`. |
+
+## Archival policy
+
+Three separate decisions, intentionally not collapsed:
+
+| Property | Meaning |
+| --- | --- |
+| `lifecycle` | Historical/operational classification |
+| `archive_candidate` | Worth investigating for archival (retired/generated, no conflict) |
+| `archive_eligible` | **Explicitly** approved for archival |
+
+In this audit `archive_eligible` is `false` for **every** path: `approved_for_archive` in the
+policy is empty. A later cleanup PR authorizes individual candidates after reviewing their
+consumers and updating references. Static analysis can miss dynamic dependencies, external
+scripts, and human operational procedures, so it never authorizes relocation by itself.
 
 ## Retired / preserved work (no deletion)
 
-These are preserved as evidence and provenance, not maintained. Archival (a move under
-`docs/archive/` or a tag) happens only in a later phase, after confirming no active CLI,
-test, verifier, or planned Oracle adapter depends on them.
+Preserved as evidence and provenance, not maintained. Archival requires the review above.
 
-- Border multi-draw experiments (NO-GO) and the observer harness — negative results.
+- Border multi-draw track (NO-GO) and the observer-bias calibration.
 - State-cache and sampler-uniform experiments (failed engage / no signal).
-- WP-series memos (`docs/wp*.md`) superseded by `docs/status.md` and the canonical strategy.
-- Legacy phase/tier diagnostic memos in `docs/`.
+- WP-series and other superseded historical memos under `docs/`.
 
-## Generated summary (revision `8033e35`)
+## Hygiene findings
+
+- `tests/re_fixtures/callsite_mini/callsite_mini` (built fixture binary) and
+  `test_build_report_writes_candidates/` (test debris written into the working tree) are ignored.
+- The test that writes `test_build_report_writes_candidates/` into the CWD, and the
+  `manifest.json`-vs-directory guard in `tests/test_pre_ready_forensic.py`, are code-quality
+  fixes deferred to a later phase (see [`oracle/BASELINE_P0.md`](oracle/BASELINE_P0.md)).
+
+## Regenerating
+
+```sh
+PYTHONPATH=. python -m tooling.common.repo_audit --ref 8033e35 --write   # regenerate
+PYTHONPATH=. python -m tooling.common.repo_audit --ref 8033e35 --check   # verify (CI)
+```
+
+## Not in scope here
+
+No code moved, renamed, or deleted; no canonical strategy rewrite (coordinated with PR #44);
+no new evidence system. Migration of the Oracle bundle and CI wiring is P2.
+
+<!-- BEGIN GENERATED: repo-inventory -->
 
 Tracked paths: **725**
 
@@ -73,7 +115,7 @@ Tracked paths: **725**
 |---|---|
 | python | 174 |
 | json | 148 |
-| markdown | 121 |
+| markdown | 122 |
 | c | 66 |
 | csv | 44 |
 | jsonl | 35 |
@@ -89,23 +131,48 @@ Tracked paths: **725**
 | image | 3 |
 | shell | 3 |
 | log | 2 |
+| cpp | 1 |
+| gitignore | 1 |
+| inc | 1 |
+| m | 1 |
+| recipe | 1 |
+| s | 1 |
+| sha256 | 1 |
+| tsv | 1 |
+| yaml | 1 |
 
-## Hygiene findings (this PR)
+Invariant: Σkinds = Σareas = N = 725 = 725 = 725.
 
-- `tests/re_fixtures/callsite_mini/callsite_mini` is a locally built fixture binary that
-  was untracked but not ignored; added to `.gitignore` so `git status` stays clean.
-- `tests/test_frame_evolution_analyze.py::test_build_report_writes_candidates` writes a
-  `test_build_report_writes_candidates/` directory into the working tree (via
-  `Path(self._testMethodName)`) instead of a temp directory. Ignored here as test debris;
-  the underlying fix (write to `tempfile.TemporaryDirectory`) is a code change for a later
-  phase, as is the P0 baseline finding in [`oracle/BASELINE_P0.md`](oracle/BASELINE_P0.md)
-  (guard on `manifest.json`, not the result directory).
-- Several `.pyc` cache sets (3.12 / 3.14 / 3.15) exist locally for the same modules; they
-  are already ignored and indicate multiple local interpreters, not CI drift.
-- `results/` is large on disk but almost entirely ignored; tracked `results/` files are
-  sealed evidence and are left untouched.
+| Lifecycle | Files |
+|---|---|
+| ACTIVE | 347 |
+| FROZEN_VERIFIER | 257 |
+| RETIRED_EXPERIMENT | 91 |
+| GENERATED_DERIVED | 28 |
+| UNKNOWN | 2 |
 
-## Not in scope here
+| Classification source | Files |
+|---|---|
+| rule | 725 |
 
-No code moved, renamed, or deleted; no canonical strategy rewrite (coordinated with
-PR #44); no new evidence system. Migration of the Oracle bundle and CI wiring is P2.
+| Analysis coverage | Files |
+|---|---|
+| analyzed | 705 |
+| skipped_not_text | 19 |
+| skipped_oversized | 1 |
+
+| Reference edge | Count |
+|---|---|
+| doc_link | 420 |
+| import | 330 |
+| include | 61 |
+| manifest_ref | 14 |
+| ci_ref | 10 |
+
+Audit invariants:
+
+- `N_classified = N_tracked` → `725 = 725` (ok)
+- `N_archive_eligible_but_unapproved = 0` (ok)
+- dependency conflicts: 9; archive candidates: 110; archive eligible: 0
+
+<!-- END GENERATED: repo-inventory -->
