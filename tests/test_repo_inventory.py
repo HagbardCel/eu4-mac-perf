@@ -227,6 +227,30 @@ class SnapshotTests(unittest.TestCase):
             with self.assertRaises(snapshot_mod.SnapshotError):
                 snapshot_mod.RepoSnapshot.from_index(repo.root)
 
+    def test_intent_to_add_deleted_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("base.txt", "base\n")
+            repo.commit()
+            repo.write("pending.txt", "nonempty pending content")
+            _git(repo.root, "add", "-N", "pending.txt")
+            # deleting the worktree file leaves a `.D` porcelain record that looks
+            # exactly like a deleted tracked file; only the index flag distinguishes it
+            (repo.root / "pending.txt").unlink()
+            with self.assertRaises(snapshot_mod.SnapshotError):
+                snapshot_mod.RepoSnapshot.from_index(repo.root)
+
+    def test_tracked_empty_file_deleted_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("empty.txt", "")
+            repo.commit()
+            (repo.root / "empty.txt").unlink()
+            snap = snapshot_mod.RepoSnapshot.from_index(repo.root)
+            entry = snap.entry("empty.txt")
+            self.assertEqual(entry.obj_type, "blob")
+            self.assertEqual(entry.size, 0)
+
     def test_staged_empty_file_is_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _Repo(tmp)
@@ -238,6 +262,19 @@ class SnapshotTests(unittest.TestCase):
             entry = snap.entry("empty.txt")
             self.assertEqual(entry.obj_type, "blob")
             self.assertEqual(entry.size, 0)
+
+    def test_debug_stage_disagreement_raises(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("a.txt", "a\n")
+            repo.commit()
+            original = snapshot_mod._read_debug_index
+            snapshot_mod._read_debug_index = lambda root: [("a.txt", 0), ("ghost.txt", 0)]
+            try:
+                with self.assertRaises(snapshot_mod.SnapshotError):
+                    snapshot_mod.RepoSnapshot.from_index(repo.root)
+            finally:
+                snapshot_mod._read_debug_index = original
 
 
 class InvariantTests(unittest.TestCase):

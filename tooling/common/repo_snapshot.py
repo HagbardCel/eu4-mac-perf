@@ -16,7 +16,9 @@ escapes and corrupt both paths and extension classification.
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,44 +31,84 @@ MAX_BLOB_BYTES_DEFAULT = 2 * 1024 * 1024
 BLOB_MODES = frozenset({"100644", "100755", "120000"})
 GITLINK_MODE = "160000"
 
+# In-memory index flag set by ``git add -N`` (cache.h). It survives the working
+# tree file being deleted, unlike any porcelain-status heuristic.
+CE_INTENT_TO_ADD = 0x20000000
+
 
 class SnapshotError(RuntimeError):
     """Raised when Git cannot produce the requested snapshot."""
 
 
-def _intent_to_add_paths(root: Path) -> set[str]:
-    """Index paths that only carry an ``git add -N`` intent-to-add entry.
+def _readonly_env() -> dict[str, str]:
+    """Environment that discourages Git from taking optional index locks."""
+    env = dict(os.environ)
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    return env
 
-    Git records intent-to-add entries with the *empty blob*, so they are
-    indistinguishable from a genuinely staged empty file by object id alone.
-    Porcelain v2 does distinguish them: an intent-to-add entry has an unmodified
-    index status (``.A``) and an all-zero index object id, whereas a staged file
-    carries its real blob id. Detection must therefore be flag-based, never
-    oid-based.
+
+def _parse_index_flags(line: str) -> int:
+    if "flags:" not in line:
+        raise SnapshotError(f"unexpected git ls-files --debug line: {line!r}")
+    value = line.rsplit("flags:", 1)[1].strip()
+    try:
+        return int(value, 16)
+    except ValueError as exc:
+        raise SnapshotError(f"unparsable index flags: {line!r}") from exc
+
+
+def _read_debug_index(root: Path) -> list[tuple[str, int]]:
+    """Read ``(path, flags)`` for every index entry via ``git ls-files --debug -z``.
+
+    Git terminates the *name* with NUL but the five metadata lines with newlines,
+    and the next name follows directly after the last metadata line. Splitting
+    each record on ``"\\n"`` at most five times keeps that trailing name whole, so
+    filenames containing newlines survive. The format is treated as
+    version-sensitive: anything unexpected raises rather than defaulting an entry
+    to "clean".
     """
     proc = subprocess.run(
-        [
-            "git", "-C", str(root), "status", "--porcelain=v2", "-z",
-            "--untracked-files=no", "--no-renames",
-        ],
+        ["git", "-C", str(root), "ls-files", "--debug", "-z"],
         capture_output=True,
+        env=_readonly_env(),
     )
     if proc.returncode != 0:
         raise SnapshotError(
-            "git status --porcelain=v2 failed: "
+            "git ls-files --debug failed: "
             + proc.stderr.decode("utf-8", "replace").strip()
         )
-    paths: set[str] = set()
-    for record in proc.stdout.decode("utf-8", "surrogateescape").split("\x00"):
-        if not record or record[0] != "1":
-            continue
-        fields = record.split(" ", 8)
-        if len(fields) != 9:
-            continue
-        xy, index_oid, path = fields[1], fields[7], fields[8]
-        if xy == ".A" and index_oid and set(index_oid) == {"0"}:
-            paths.add(path)
-    return paths
+    data = proc.stdout
+    if not data:
+        return []
+    chunks = data.split(b"\x00")
+    records: list[tuple[str, int]] = []
+    names = [chunks[0].decode("utf-8", "surrogateescape")]
+    for chunk in chunks[1:]:
+        body = chunk.decode("utf-8", "surrogateescape")
+        parts = body.split("\n", 5)
+        if len(parts) != 6:
+            raise SnapshotError(f"unexpected git ls-files --debug record: {body!r}")
+        records.append((names[-1], _parse_index_flags(parts[4])))
+        names.append(parts[5])
+    return records
+
+
+def _intent_to_add_paths(root: Path, stage_paths: list[str]) -> set[str]:
+    """Index paths carrying an intent-to-add entry.
+
+    Git records ``git add -N`` entries with the *empty blob*, so they are
+    indistinguishable from a genuinely staged empty file by object id — and, once
+    the working-tree file is deleted, indistinguishable by porcelain status too.
+    The reliable signal is the ``CE_INTENT_TO_ADD`` index flag. The debug listing
+    is cross-checked against the stage enumeration so a changed format cannot
+    silently drop an entry that ``ls-files -s`` still reports.
+    """
+    records = _read_debug_index(root)
+    if Counter(path for path, _ in records) != Counter(stage_paths):
+        raise SnapshotError(
+            "git ls-files --debug and ls-files --stage disagree on index contents"
+        )
+    return {path for path, flags in records if flags & CE_INTENT_TO_ADD}
 
 
 def _batch_check_blobs(root: Path, obj_ids: list[str]) -> dict[str, int]:
@@ -174,9 +216,8 @@ class RepoSnapshot:
     @classmethod
     def from_index(cls, root) -> "RepoSnapshot":
         root = Path(root).resolve()
-        intent_to_add = _intent_to_add_paths(root)
         raw = _git(root, ["ls-files", "-s", "-z"], binary=True)
-        entries: list[Entry] = []
+        parsed: list[tuple[str, str, str]] = []
         for record in raw.split(b"\x00"):
             if not record:
                 continue
@@ -193,13 +234,18 @@ class RepoSnapshot:
                     f"unmerged index entry for {path!r} (stage {stage}); "
                     "resolve the merge before auditing the index"
                 )
+            if mode != GITLINK_MODE and mode not in BLOB_MODES:
+                raise SnapshotError(f"unsupported index mode {mode!r} for {path!r}")
+            parsed.append((path, mode, obj_id))
+
+        intent_to_add = _intent_to_add_paths(root, [path for path, _, _ in parsed])
+        entries: list[Entry] = []
+        for path, mode, obj_id in parsed:
             if path in intent_to_add:
                 raise SnapshotError(
                     f"intent-to-add index entry for {path!r}; "
                     "stage the file content before auditing the index"
                 )
-            if mode != GITLINK_MODE and mode not in BLOB_MODES:
-                raise SnapshotError(f"unsupported index mode {mode!r} for {path!r}")
             # Gitlinks reference a submodule commit that may be absent here; its
             # size is intentionally unknown. Every other mode must resolve to a blob.
             entries.append(
