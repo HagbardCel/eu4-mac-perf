@@ -96,9 +96,11 @@ def resolve(snapshot: RepoSnapshot, graph, policy: dict) -> list[dict]:
     rows = []
     for path in snapshot.paths():
         lifecycle, reason, source, owner = _classify(path, policy, summary, consumer_targets)
-        conflict = lifecycle == "RETIRED_EXPERIMENT" and path in consumer_targets
+        conflict = lifecycle in ARCHIVAL_LIFECYCLES and path in consumer_targets
         candidate = lifecycle in ARCHIVAL_LIFECYCLES and not conflict
-        eligible = bool(path in approved and not conflict and lifecycle in ARCHIVAL_LIFECYCLES)
+        eligible = bool(
+            path in approved and lifecycle in ARCHIVAL_LIFECYCLES and path not in consumer_targets
+        )
         status, status_reason = graph.analysis.get(path, ("unknown", "not analyzed"))
         rows.append(
             {
@@ -118,21 +120,30 @@ def resolve(snapshot: RepoSnapshot, graph, policy: dict) -> list[dict]:
     return rows
 
 
-def invariants(rows: list[dict], n_tracked: int, approved) -> dict:
+def invariants(rows: list[dict], n_tracked: int, approved, consumer_targets=frozenset()) -> dict:
     approved = set(approved)
+    consumer_targets = set(consumer_targets)
     unique = {row["path"] for row in rows}
     eligible_unapproved = sum(
         1 for row in rows if row["archive_eligible"] and row["path"] not in approved
     )
+    # Independent of how the lifecycle was resolved: no eligible path may have a
+    # positively detected consumer reference.
+    eligible_with_consumer = sum(
+        1 for row in rows if row["archive_eligible"] and row["path"] in consumer_targets
+    )
+    all_classified = len(rows) == n_tracked and len(unique) == n_tracked
     return {
         "n_tracked": n_tracked,
         "n_classified": len(rows),
         "n_unique_paths": len(unique),
-        "all_classified": len(rows) == n_tracked and len(unique) == n_tracked,
+        "all_classified": all_classified,
         "n_dependency_conflicts": sum(1 for row in rows if row["dependency_conflict"]),
         "n_archive_candidates": sum(1 for row in rows if row["archive_candidate"]),
         "n_archive_eligible": sum(1 for row in rows if row["archive_eligible"]),
         "n_archive_eligible_but_unapproved": eligible_unapproved,
+        "n_archive_eligible_with_consumer": eligible_with_consumer,
+        "ok": all_classified and eligible_unapproved == 0 and eligible_with_consumer == 0,
     }
 
 
@@ -162,9 +173,11 @@ def main(argv: list[str]) -> int:
     policy = load_policy(args.policy)
     rows = resolve(snapshot, graph, policy)
     sys.stdout.write(render_csv(rows))
-    stats = invariants(rows, len(snapshot.paths()), policy.get("approved_for_archive", []))
+    stats = invariants(
+        rows, len(snapshot.paths()), policy.get("approved_for_archive", []), graph.consumer_targets()
+    )
     print(stats, file=sys.stderr)
-    return 0 if stats["all_classified"] and stats["n_archive_eligible_but_unapproved"] == 0 else 1
+    return 0 if stats["ok"] else 1
 
 
 if __name__ == "__main__":

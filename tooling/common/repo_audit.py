@@ -90,6 +90,8 @@ def render_block(snapshot, rows, graph, lifecycle_rows, stats) -> str:
                  f"({'ok' if stats['all_classified'] else 'FAIL'})")
     lines.append(f"- `N_archive_eligible_but_unapproved = {stats['n_archive_eligible_but_unapproved']}` "
                  f"({'ok' if stats['n_archive_eligible_but_unapproved'] == 0 else 'FAIL'})")
+    lines.append(f"- `N_archive_eligible_with_consumer = {stats['n_archive_eligible_with_consumer']}` "
+                 f"({'ok' if stats['n_archive_eligible_with_consumer'] == 0 else 'FAIL'})")
     lines.append(f"- dependency conflicts: {stats['n_dependency_conflicts']}; "
                  f"archive candidates: {stats['n_archive_candidates']}; "
                  f"archive eligible: {stats['n_archive_eligible']}")
@@ -110,15 +112,17 @@ def build_context(root, snapshot, policy, policy_path, stats) -> dict:
     }
 
 
-def generate(root: Path, ref: str, index: bool, policy_path: Path) -> dict[str, str]:
+def generate(root: Path, ref: str, index: bool, policy_path: Path):
     root = root.resolve()
     snapshot = RepoSnapshot.from_index(root) if index else RepoSnapshot.from_ref(root, ref)
     graph = build_graph(snapshot)
     policy = load_policy(policy_path)
     rows = repo_lifecycle.resolve(snapshot, graph, policy)
-    stats = repo_lifecycle.invariants(rows, len(snapshot.paths()), policy.get("approved_for_archive", []))
+    stats = repo_lifecycle.invariants(
+        rows, len(snapshot.paths()), policy.get("approved_for_archive", []), graph.consumer_targets()
+    )
 
-    return {
+    outputs = {
         "docs/repo-inventory.csv": render_inventory_csv(rows_inventory(snapshot)),
         "docs/repo-edges.csv": render_edges_csv(graph),
         "docs/repo-lifecycle.csv": repo_lifecycle.render_csv(rows),
@@ -126,6 +130,7 @@ def generate(root: Path, ref: str, index: bool, policy_path: Path) -> dict[str, 
                                                    indent=2, sort_keys=True) + "\n",
         "__map_block__": render_block(snapshot, rows_inventory(snapshot), graph, rows, stats),
     }
+    return outputs, stats
 
 
 def rows_inventory(snapshot):
@@ -154,7 +159,12 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
-    outputs = generate(root, args.ref, args.index, Path(args.policy))
+    outputs, stats = generate(root, args.ref, args.index, Path(args.policy))
+    if not stats["ok"]:
+        print("audit invariants violated:", file=sys.stderr)
+        for key in ("all_classified", "n_archive_eligible_but_unapproved", "n_archive_eligible_with_consumer"):
+            print(f"  {key} = {stats[key]}", file=sys.stderr)
+        return 1
     map_path = root / "docs" / "repo-map.md"
     new_map = _updated_map(map_path.read_text(encoding="utf-8"), outputs.pop("__map_block__"))
 

@@ -173,6 +173,7 @@ Audit invariants:
 
 - `N_classified = N_tracked` → `725 = 725` (ok)
 - `N_archive_eligible_but_unapproved = 0` (ok)
+- `N_archive_eligible_with_consumer = 0` (ok)
 - dependency conflicts: 9; archive candidates: 110; archive eligible: 0
 
 <!-- END GENERATED: repo-inventory -->

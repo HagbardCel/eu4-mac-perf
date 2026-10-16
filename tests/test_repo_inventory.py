@@ -146,6 +146,30 @@ class SnapshotTests(unittest.TestCase):
                 snapshot_mod.RepoSnapshot.from_index(repo.root)
 
 
+class InvariantTests(unittest.TestCase):
+    """The archival invariants are enforcement, not decoration: a violation flips ok."""
+
+    def _row(self, **over):
+        row = {"path": "x", "archive_eligible": False, "archive_candidate": False, "dependency_conflict": False}
+        row.update(over)
+        return row
+
+    def test_eligible_with_a_consumer_reference_fails(self):
+        stats = repo_lifecycle.invariants([self._row(archive_eligible=True)], 1, {"x"}, {"x"})
+        self.assertEqual(stats["n_archive_eligible_with_consumer"], 1)
+        self.assertFalse(stats["ok"])
+
+    def test_eligible_without_approval_fails(self):
+        stats = repo_lifecycle.invariants([self._row(archive_eligible=True)], 1, set(), {"y"})
+        self.assertEqual(stats["n_archive_eligible_but_unapproved"], 1)
+        self.assertFalse(stats["ok"])
+
+    def test_unclassified_path_fails(self):
+        stats = repo_lifecycle.invariants([self._row()], 2, set(), set())
+        self.assertFalse(stats["all_classified"])
+        self.assertFalse(stats["ok"])
+
+
 @unittest.skipIf(GIT is None, "git not available")
 class LifecycleTests(unittest.TestCase):
     def _resolve(self, repo_root, policy):
@@ -176,6 +200,36 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue(row["dependency_conflict"])
             self.assertTrue(row["review_required"])
             self.assertFalse(row["archive_candidate"])
+            self.assertFalse(row["archive_eligible"])
+
+    def test_generated_derived_with_active_consumer_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("gen/data.py", "x = 1\n")
+            repo.write("app/use.py", "from gen.data import x\n")
+            repo.commit()
+            policy = {
+                "rules": [{"match": "gen/**", "lifecycle": "GENERATED_DERIVED", "reason": "test"}],
+                "approved_for_archive": ["gen/data.py"],
+            }
+            row = self._resolve(repo.root, policy)["gen/data.py"]
+            self.assertTrue(row["dependency_conflict"])
+            self.assertFalse(row["archive_candidate"])
+            self.assertFalse(row["archive_eligible"])
+            self.assertTrue(row["review_required"])
+
+    def test_generated_derived_with_ci_reference_blocked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("gen/data.py", "x = 1\n")
+            repo.write(".github/workflows/w.yml", "run: gen/data.py\n")
+            repo.commit()
+            policy = {
+                "rules": [{"match": "gen/**", "lifecycle": "GENERATED_DERIVED", "reason": "test"}],
+                "approved_for_archive": ["gen/data.py"],
+            }
+            row = self._resolve(repo.root, policy)["gen/data.py"]
+            self.assertTrue(row["dependency_conflict"])
             self.assertFalse(row["archive_eligible"])
 
     def test_archival_requires_explicit_approval_and_no_conflict(self):
@@ -230,10 +284,14 @@ class RealRepoAuditTests(unittest.TestCase):
         graph = repo_graph.build(snap)
         policy = repo_lifecycle.load_policy()
         rows = repo_lifecycle.resolve(snap, graph, policy)
-        stats = repo_lifecycle.invariants(rows, len(snap.paths()), policy.get("approved_for_archive", []))
+        stats = repo_lifecycle.invariants(
+            rows, len(snap.paths()), policy.get("approved_for_archive", []), graph.consumer_targets()
+        )
         self.assertTrue(stats["all_classified"])
         self.assertEqual(stats["n_archive_eligible"], 0)
         self.assertEqual(stats["n_archive_eligible_but_unapproved"], 0)
+        self.assertEqual(stats["n_archive_eligible_with_consumer"], 0)
+        self.assertTrue(stats["ok"])
 
     def test_committed_artifacts_reproduce(self):
         context_path = ROOT / "docs" / "repo-audit-context.json"
@@ -241,7 +299,7 @@ class RealRepoAuditTests(unittest.TestCase):
             self.skipTest("no committed audit artifacts")
         context = json.loads(context_path.read_text(encoding="utf-8"))
         ref = context["source"]["ref"]
-        outputs = repo_audit.generate(ROOT, ref, False, repo_lifecycle.DEFAULT_POLICY_PATH)
+        outputs, _stats = repo_audit.generate(ROOT, ref, False, repo_lifecycle.DEFAULT_POLICY_PATH)
         block = outputs.pop("__map_block__")
         for relpath, content in outputs.items():
             self.assertEqual((ROOT / relpath).read_text(encoding="utf-8"), content, relpath)
