@@ -40,9 +40,9 @@ conceal contradictory evidence.
 | `reverse_engineering/` | `ACTIVE` | Recover prototype implementation | Full-corpus pipeline + sealed snapshot validators are load-bearing. |
 | `benchmark/` | `ACTIVE` (base) | Profiler + CLI entry points | Operational despite "legacy" label. Individual retired experiments are carved out by earlier rules. |
 | `tests/` | `ACTIVE` | Portable test suite | Flat `unittest` discovery; the ceiling on regressions. |
-| `analysis/` | `GENERATED_DERIVED` / `RETIRED_EXPERIMENT` | Investigations + generated evidence | `analysis/evidence/**` is `FROZEN_VERIFIER`. |
+| `analysis/` | `UNKNOWN` (base) | Investigations + generated evidence | `analysis/evidence/**` is `FROZEN_VERIFIER`; `analysis/renderer-corpus/**`, `held-out*`, `output/**` and top-level `*.json` stay `GENERATED_DERIVED`; every other path — including nested documents — defaults to `UNKNOWN`. |
 | `docs/` | `ACTIVE` (base) | Documentation | Superseded memo families are carved out by earlier rules. |
-| `results/` | `FROZEN_VERIFIER` | Sealed/historical run evidence | Phase C capsule is CI-verified; leave at original paths. |
+| `results/` | `FROZEN_VERIFIER` | Sealed/historical run evidence | Phase C capsule is CI-verified; leave at original paths. Per-run seal status is asserted through `evidence_capsules`. |
 | `tooling/` | `ACTIVE` | Guards + shared tooling | `check_doc_links`, `check_forbidden_tracked_paths`, repo audit tools. |
 | `experiments/`, `measurements/`, `patches/`, `fixtures/` | `ACTIVE` (placeholder) | Target homes during migration | Indexes only today. |
 | `.github/`, `.githooks/` | `ACTIVE` | CI + hooks | CI compiles `benchmark analysis tooling reverse_engineering`. |
@@ -61,6 +61,23 @@ In this audit `archive_eligible` is `false` for **every** path: `approved_for_ar
 policy is empty. A later cleanup PR authorizes individual candidates after reviewing their
 consumers and updating references. Static analysis can miss dynamic dependencies, external
 scripts, and human operational procedures, so it never authorizes relocation by itself.
+
+## Evidence qualification (curated)
+
+`results/**` is frozen evidence, but not all of it is equally verified. Two columns in
+`repo-lifecycle.csv` record a **curated judgment** about preserved evidence:
+
+| `evidence_qualification` | Meaning |
+| --- | --- |
+| `seal_descriptor` | The seal record itself (`raw_evidence.json`); describes the capsule. |
+| `verified_sealed_evidence` | A member of a capsule whose seal is asserted under a named `verification_profile`. |
+| `preserved_historical_evidence` | Evidence kept as provenance without an asserted seal. |
+
+`verification_profile` names the gate that asserts the seal (e.g. `intrusive_complete_v1`).
+These labels are **assertions recorded by the policy, not proof of integrity**: the
+cryptographic check is performed by the evidence gate (`verify-evidence`), and the labels
+would go stale if a file changed without re-verification. They exist to keep "we have
+verified this" distinct from "we have kept this", not to replace either.
 
 ## Retired / preserved work (no deletion)
 

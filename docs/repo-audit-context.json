@@ -13,7 +13,7 @@
   },
   "policy": {
     "path": "tooling/common/repo_lifecycle.json",
-    "sha256": "7bc8ce9176e615bbdae5761c728e791db1067e26e3084cfb9d2deeedc9192f85"
+    "sha256": "ef689db712cb2f90659afe06a1a2bec60b1275a37cc9703a5ae3c3cc545476bc"
   },
   "policy_version": "1",
   "source": {
@@ -28,7 +28,7 @@
     "tooling/common/repo_audit.py": "31d51f9e3ae71b65ec3433f1b9866bbf4b13dcd4f4b3013f454e7ea433b78b96",
     "tooling/common/repo_graph.py": "470f831b33a24342045ad1bf2b88d20e702e2239f1772e191870657ce79f1986",
     "tooling/common/repo_inventory.py": "1c2d35341b8be45454cc8b3cf9f5aaddbb885a1e8aa74ec832e67ac2000f1c54",
-    "tooling/common/repo_lifecycle.py": "463223c8e0519f328b2917532c8f419e297bc2f5e16cd5d4968ddb86485699f5",
+    "tooling/common/repo_lifecycle.py": "d753f09a4f2c8c376fee6c1420ff4722431476b9374159595cbce951abc65c8c",
     "tooling/common/repo_snapshot.py": "fb12b9ee5e8c09d6ff54b21a5053cfdbd9996a1697cce4be393665b88795b4f5"
   }
 }

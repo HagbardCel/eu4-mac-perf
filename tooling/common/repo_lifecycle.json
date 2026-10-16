@@ -2,7 +2,7 @@
   "policy_version": "1",
   "notes": "Curated, versioned classification layer. Rules are first-match in order; overrides win over rules. Patterns are path-aware globs: * and ? stay within a single path segment, ** spans segments. A classification is never archival authorization: archive_eligible requires an explicit entry in approved_for_archive AND no dependency conflict. Keep this file outside the analyzed source revision (it may not exist at that revision); its SHA-256 is recorded in docs/repo-audit-context.json.",
   "rules": [
-    {"match": "results/**", "lifecycle": "FROZEN_VERIFIER", "reason": "Sealed run evidence verified by the eu4_frame_model evidence gate", "owner": "evidence"},
+    {"match": "results/**", "lifecycle": "FROZEN_VERIFIER", "reason": "Preserved run evidence under results/; per-run seal verification is asserted separately via evidence_capsules", "owner": "evidence"},
     {"match": "analysis/evidence/**", "lifecycle": "FROZEN_VERIFIER", "reason": "Generated analysis evidence records; preservation required", "owner": "analysis"},
     {"match": "analysis/tools/**", "lifecycle": "ACTIVE", "reason": "Analysis tooling still invoked by tests and forensic workflows", "owner": "analysis"},
     {"match": "reverse_engineering/**", "lifecycle": "ACTIVE", "reason": "Static RE tooling; load-bearing for RE0 selection", "owner": "reverse-engineering"},
@@ -42,5 +42,27 @@
     {"match": "EU IV on Apple Silicon*", "lifecycle": "UNKNOWN", "reason": "Original plan document; ownership unresolved", "owner": "unassigned"}
   ],
   "overrides": [],
+  "evidence_capsules": [
+    {
+      "descriptor": "results/20261003T210202Z-intrusive-diagnostic/raw_evidence.json",
+      "profile": "intrusive_complete_v1",
+      "verified_inventory": [
+        "results/20261003T210202Z-intrusive-diagnostic/auto-probe.csv",
+        "results/20261003T210202Z-intrusive-diagnostic/control.bin",
+        "results/20261003T210202Z-intrusive-diagnostic/events.jsonl",
+        "results/20261003T210202Z-intrusive-diagnostic/game-ready.log",
+        "results/20261003T210202Z-intrusive-diagnostic/manifest.json",
+        "results/20261003T210202Z-intrusive-diagnostic/power.samples.json.gz",
+        "results/20261003T210202Z-intrusive-diagnostic/powermetrics.pliststream.gz",
+        "results/20261003T210202Z-intrusive-diagnostic/powermetrics.stderr",
+        "results/20261003T210202Z-intrusive-diagnostic/ready-scene.png",
+        "results/20261003T210202Z-intrusive-diagnostic/report.json",
+        "results/20261003T210202Z-intrusive-diagnostic/report.md",
+        "results/20261003T210202Z-intrusive-diagnostic/salvage-report.json",
+        "results/20261003T210202Z-intrusive-diagnostic/salvage-report.md",
+        "results/20261003T210202Z-intrusive-diagnostic/telemetry.csv.gz"
+      ]
+    }
+  ],
   "approved_for_archive": []
 }

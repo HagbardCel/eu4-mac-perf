@@ -16,6 +16,11 @@ An archival decision is computed separately and conservatively:
 
 Invariants: every tracked path gets exactly one resolved entry; no path is
 ``archive_eligible`` without explicit approval.
+
+Preserved evidence carries two curated, non-cryptographic judgement fields:
+``evidence_qualification`` (``seal_descriptor`` / ``verified_sealed_evidence`` /
+``preserved_historical_evidence``) and ``verification_profile``. They record what
+the policy asserts; the seal itself is checked by the evidence gate.
 """
 from __future__ import annotations
 
@@ -49,6 +54,8 @@ CSV_COLUMNS = [
     "source",
     "owner",
     "reason",
+    "evidence_qualification",
+    "verification_profile",
     "dependency_conflict",
     "archive_candidate",
     "archive_eligible",
@@ -101,6 +108,27 @@ def _classify(path, policy, summary, consumer_targets):
     return "UNKNOWN", "No positive consumer reference detected", "default", ""
 
 
+def _evidence_fields(path: str, lifecycle: str, policy: dict) -> tuple[str, str]:
+    """Curated, non-cryptographic qualification of preserved evidence.
+
+    Returns ``(evidence_qualification, verification_profile)``. These are
+    *curated judgments*, not proof of integrity: the cryptographic seal is checked
+    by the evidence gate (``verify-evidence``), while these fields record what the
+    policy asserts about each path. ``verified_inventory`` members are asserted to
+    be covered by the capsule named by ``descriptor`` at ``profile``; the
+    descriptor itself is the seal, not a member of it.
+    """
+    if lifecycle != "FROZEN_VERIFIER":
+        return "", ""
+    for capsule in policy.get("evidence_capsules", []):
+        profile = capsule.get("profile", "")
+        if path == capsule.get("descriptor"):
+            return "seal_descriptor", profile
+        if path in set(capsule.get("verified_inventory", [])):
+            return "verified_sealed_evidence", profile
+    return "preserved_historical_evidence", ""
+
+
 def resolve(snapshot: RepoSnapshot, graph, policy: dict) -> list[dict]:
     consumer_targets = graph.consumer_targets()
     summary = graph.summary_rows(snapshot.paths())
@@ -113,6 +141,7 @@ def resolve(snapshot: RepoSnapshot, graph, policy: dict) -> list[dict]:
         eligible = bool(
             path in approved and lifecycle in ARCHIVAL_LIFECYCLES and path not in consumer_targets
         )
+        qualification, profile = _evidence_fields(path, lifecycle, policy)
         status, status_reason = graph.analysis.get(path, ("unknown", "not analyzed"))
         rows.append(
             {
@@ -121,6 +150,8 @@ def resolve(snapshot: RepoSnapshot, graph, policy: dict) -> list[dict]:
                 "source": source,
                 "owner": owner,
                 "reason": reason,
+                "evidence_qualification": qualification,
+                "verification_profile": profile,
                 "dependency_conflict": conflict,
                 "archive_candidate": candidate,
                 "archive_eligible": eligible,

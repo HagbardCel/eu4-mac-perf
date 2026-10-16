@@ -330,6 +330,34 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(rows["analysis/output/table.json"]["lifecycle"], "GENERATED_DERIVED")
             self.assertTrue(rows["analysis/output/table.json"]["archive_candidate"])
 
+    def test_evidence_qualification_from_policy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("results/run/raw_evidence.json", "{}\n")
+            repo.write("results/run/report.json", "{}\n")
+            repo.write("results/other/note.md", "# note\n")
+            repo.write("app.py", "x = 1\n")
+            repo.commit()
+            policy = {
+                "rules": [{"match": "results/**", "lifecycle": "FROZEN_VERIFIER", "reason": "test"}],
+                "evidence_capsules": [
+                    {
+                        "descriptor": "results/run/raw_evidence.json",
+                        "profile": "intrusive_complete_v1",
+                        "verified_inventory": ["results/run/report.json"],
+                    }
+                ],
+            }
+            rows = self._resolve(repo.root, policy)
+            self.assertEqual(rows["results/run/raw_evidence.json"]["evidence_qualification"], "seal_descriptor")
+            self.assertEqual(rows["results/run/raw_evidence.json"]["verification_profile"], "intrusive_complete_v1")
+            self.assertEqual(rows["results/run/report.json"]["evidence_qualification"], "verified_sealed_evidence")
+            self.assertEqual(rows["results/run/report.json"]["verification_profile"], "intrusive_complete_v1")
+            self.assertEqual(rows["results/other/note.md"]["evidence_qualification"], "preserved_historical_evidence")
+            self.assertEqual(rows["results/other/note.md"]["verification_profile"], "")
+            # non-evidence paths carry no qualification
+            self.assertEqual(rows["app.py"]["evidence_qualification"], "")
+
     def test_policy_change_does_not_change_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _Repo(tmp)
@@ -378,6 +406,22 @@ class RealRepoAuditTests(unittest.TestCase):
         self.assertEqual(stats["n_archive_eligible_but_unapproved"], 0)
         self.assertEqual(stats["n_archive_eligible_with_consumer"], 0)
         self.assertTrue(stats["ok"])
+
+    def test_phase_c_capsule_members_are_qualified(self):
+        snap = snapshot_mod.RepoSnapshot.from_ref(ROOT, "HEAD")
+        graph = repo_graph.build(snap)
+        rows = {r["path"]: r for r in repo_lifecycle.resolve(snap, graph, repo_lifecycle.load_policy())}
+        prefix = "results/20261003T210202Z-intrusive-diagnostic/"
+        self.assertEqual(rows[prefix + "raw_evidence.json"]["evidence_qualification"], "seal_descriptor")
+        self.assertEqual(rows[prefix + "raw_evidence.json"]["verification_profile"], "intrusive_complete_v1")
+        self.assertEqual(rows[prefix + "manifest.json"]["evidence_qualification"], "verified_sealed_evidence")
+        self.assertEqual(rows[prefix + "report.md"]["evidence_qualification"], "verified_sealed_evidence")
+        # a results/ path outside the capsule is preserved but not sealed
+        others = [
+            r for r in rows.values()
+            if r["path"].startswith("results/") and r["evidence_qualification"] == "preserved_historical_evidence"
+        ]
+        self.assertTrue(others, "expected unqualified preserved evidence under results/")
 
     def test_committed_artifacts_reproduce(self):
         context_path = ROOT / "docs" / "repo-audit-context.json"
