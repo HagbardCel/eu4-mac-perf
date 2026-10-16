@@ -11,11 +11,14 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from reverse_engineering.manifest import (
+    build_batch_manifest,
     decompilation_success_stats,
     export_completeness,
     inventory_bundle_digest,
     inventory_digest,
     load_batch_manifest,
+    manifests_equivalent,
+    normalize_staging_batch_errors,
     validate_batch_file,
 )
 from reverse_engineering.paths import ReError
@@ -141,6 +144,87 @@ def remove_inventory_backup(exp: Path) -> None:
         shutil.rmtree(backup)
 
 
+def _ghidra_meta_matches(provenance: dict[str, Any], ghidra_meta: dict[str, Any]) -> bool:
+    prov_meta = provenance.get("ghidra_meta") or {}
+    for key in ("project_dir", "project_name", "program_name"):
+        if str(prov_meta.get(key)) != str(ghidra_meta.get(key)):
+            return False
+    return True
+
+
+def expected_manifest_from_inventory(
+    exp: Path,
+    provenance: dict[str, Any],
+    *,
+    batch_size: int,
+    exporter_script_hash: str,
+) -> dict[str, Any]:
+    inv = exp / "inventory"
+    functions_path = inv / "functions.jsonl"
+    return build_batch_manifest(
+        functions_jsonl=functions_path,
+        baseline_revision=provenance["baseline_revision"],
+        batch_size=batch_size,
+        exporter_script_hash=exporter_script_hash,
+        inventory_digest_value=inventory_digest(functions_path),
+        inventory_bundle_digest_value=inventory_bundle_digest(inv),
+    )
+
+
+def assert_manifest_matches_inventory(
+    saved: dict[str, Any],
+    expected: dict[str, Any],
+) -> None:
+    if not manifests_equivalent(saved, expected):
+        raise ReError(
+            "batch manifest does not match inventory partition; "
+            "run corpus manifest or corpus manifest --fresh"
+        )
+
+
+def validate_acquisition_preflight(
+    exp: Path,
+    provenance: dict[str, Any],
+    manifest: dict[str, Any],
+    *,
+    exporter_script_hash: str,
+    ghidra_version: str,
+    ghidra_meta: dict[str, Any],
+    require_exporter_match: bool = True,
+) -> None:
+    inv = exp / "inventory"
+    if not inventory_complete(inv):
+        raise ReError("inventory bundle incomplete; run inventory first")
+    bundle = inventory_bundle_digest(inv)
+    fn_digest = inventory_digest(inv / "functions.jsonl")
+    if provenance.get("inventory_bundle_digest") and provenance["inventory_bundle_digest"] != bundle:
+        raise ReError("inventory bundle digest drift vs provenance")
+    if provenance.get("inventory_digest") and provenance["inventory_digest"] != fn_digest:
+        raise ReError("inventory digest drift vs provenance")
+    if manifest.get("inventory_digest") != fn_digest:
+        raise ReError("batch manifest inventory_digest stale vs functions.jsonl; run corpus manifest")
+    if manifest.get("inventory_bundle_digest") != bundle:
+        raise ReError("batch manifest inventory_bundle_digest stale vs current inventory")
+    if require_exporter_match and manifest.get("exporter_script_hash") != exporter_script_hash:
+        raise ReError(
+            "manifest exporter script hash mismatch vs current ExportDecompilation.java; "
+            "run corpus manifest --fresh"
+        )
+    if provenance.get("ghidra_version") != ghidra_version:
+        raise ReError("ghidra_version mismatch vs provenance")
+    if manifest.get("baseline_revision") != provenance.get("baseline_revision"):
+        raise ReError("manifest baseline_revision mismatch vs provenance")
+    if not _ghidra_meta_matches(provenance, ghidra_meta):
+        raise ReError("ghidra project identity mismatch vs provenance")
+    expected = expected_manifest_from_inventory(
+        exp,
+        provenance,
+        batch_size=int(manifest.get("batch_size", 500)),
+        exporter_script_hash=exporter_script_hash,
+    )
+    assert_manifest_matches_inventory(manifest, expected)
+
+
 def validate_export_identity(
     exp: Path,
     provenance: dict[str, Any],
@@ -165,7 +249,7 @@ def validate_export_identity(
     if mode == "manifest":
         return
     manifest_path = exp / "decompiled" / "batch_manifest.json"
-    if mode in ("decompile", "index", "qualify", "census_write"):
+    if mode in ("index", "qualify", "census_write"):
         if not manifest_path.is_file():
             raise ReError("missing batch manifest; run manifest first")
         manifest = load_batch_manifest(manifest_path)
@@ -279,6 +363,7 @@ def assert_qualification_current(
 
 
 def publish_batch_staging(staging: Path, final: Path, expected_rvas: list[str]) -> None:
+    normalize_staging_batch_errors(staging)
     errors = validate_batch_file(staging, expected_rvas)
     if errors:
         raise ReError("batch staging validation failed: " + "; ".join(errors))

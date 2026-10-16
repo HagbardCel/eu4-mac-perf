@@ -8,9 +8,11 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,15 +23,17 @@ from reverse_engineering.export_identity import (
     compute_qualification,
     inventory_complete,
     inventory_staging_dir,
+    invalidate_qualification,
     publish_batch_staging,
     publish_inventory_from_staging,
     read_ghidra_version,
     remove_inventory_backup,
     smoke_qualified_from_payload,
+    validate_acquisition_preflight,
     validate_export_identity,
 )
 from reverse_engineering.manifest import (
-    archive_decompiled_batches,
+    archive_batch_files,
     batches_archive_required,
     build_batch_manifest,
     call_edges_only_inventory_drift,
@@ -39,6 +43,8 @@ from reverse_engineering.manifest import (
     inventory_digest,
     load_batch_manifest,
     pilot_sample_rvas,
+    rollback_archived_files,
+    unique_archive_dir,
     write_batch_manifest,
 )
 from reverse_engineering.reconcile_gfx import reconcile_draw_sites
@@ -65,6 +71,9 @@ RENDERBUCKETS_HOOK = ROOT / "analysis" / "renderbuckets-entry-hook-site.json"
 
 DEFAULT_BATCH_SIZE = 500
 DEFAULT_MIN_SUCCESS_BYTES = 0.85
+DEFAULT_PROCESS_TIMEOUT = 3600
+PROCESS_GROUP_GRACE_SECONDS = 5.0
+PILOT_BATCH_ID = "batch-pilot"
 SMOKE_ANCHORS = (
     "SShaderOpenGL6SetAll",
     "CPdxMeshObject13RenderBuckets",
@@ -115,14 +124,110 @@ def build_analyze_headless_argv(project_dir: Path, project_name: str, *extra: st
     ]
 
 
-def analyze_headless(project_dir: Path, project_name: str, *extra: str) -> None:
+def terminate_process_group(proc: subprocess.Popen[str], grace_seconds: float = PROCESS_GROUP_GRACE_SECONDS) -> None:
+    pgid = proc.pid
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+    deadline = time.monotonic() + grace_seconds
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    try:
+        proc.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _subprocess_output_text(value: str | bytes | None, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value
+
+
+def _subprocess_output_tail(
+    value: str | bytes | None,
+    fallback: str = "",
+    *,
+    limit: int = 8000,
+) -> str:
+    text = _subprocess_output_text(value, fallback)
+    return text[-limit:]
+
+
+def analyze_headless(
+    project_dir: Path,
+    project_name: str,
+    *extra: str,
+    process_timeout: int | None = None,
+) -> None:
     args = build_analyze_headless_argv(project_dir, project_name, *extra)
-    result = subprocess.run(args, capture_output=True, text=True)
-    if result.returncode != 0:
-        stdout_tail = (result.stdout or "")[-8000:]
-        stderr_tail = (result.stderr or "")[-4000:]
+    if process_timeout is None:
+        result = subprocess.run(args, capture_output=True, text=True)
+        if result.returncode != 0:
+            stdout_tail = (result.stdout or "")[-8000:]
+            stderr_tail = (result.stderr or "")[-4000:]
+            raise ReError(
+                f"analyzeHeadless failed (exit {result.returncode})\n"
+                f"STDOUT:\n{stdout_tail}\n"
+                f"STDERR:\n{stderr_tail}"
+            )
+        return
+
+    proc = subprocess.Popen(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    stdout = ""
+    stderr = ""
+    try:
+        try:
+            stdout, stderr = proc.communicate(timeout=process_timeout)
+        except subprocess.TimeoutExpired as exc:
+            terminate_process_group(proc)
+            stdout_tail = _subprocess_output_tail(
+                exc.stdout if exc.stdout is not None else stdout,
+                limit=8000,
+            )
+            stderr_tail = _subprocess_output_tail(
+                exc.stderr if exc.stderr is not None else stderr,
+                limit=4000,
+            )
+            raise ReError(
+                f"analyzeHeadless timed out after {process_timeout}s\n"
+                f"STDOUT:\n{stdout_tail}\n"
+                f"STDERR:\n{stderr_tail}"
+            )
+        except KeyboardInterrupt:
+            terminate_process_group(proc)
+            raise
+        except Exception:
+            terminate_process_group(proc)
+            raise
+    finally:
+        terminate_process_group(proc)
+    if proc.returncode != 0:
+        stdout_tail = (stdout or "")[-8000:]
+        stderr_tail = (stderr or "")[-4000:]
         raise ReError(
-            f"analyzeHeadless failed (exit {result.returncode})\n"
+            f"analyzeHeadless failed (exit {proc.returncode})\n"
             f"STDOUT:\n{stdout_tail}\n"
             f"STDERR:\n{stderr_tail}"
         )
@@ -374,11 +479,129 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     return 0
 
 
+def _archive_acquisition_state(
+    decomp: Path,
+    exp: Path,
+    label: str,
+    moves: list[tuple[Path, Path]],
+) -> tuple[Path, Path | None]:
+    archive_dir = unique_archive_dir(decomp, label)
+    archive_batch_files(decomp, archive_dir, moves)
+    index_path = exp / "index.sqlite"
+    if index_path.is_file():
+        dest = archive_dir / "index.sqlite"
+        shutil.move(str(index_path), str(dest))
+        moves.append((dest, index_path))
+    manifest_path = decomp / "batch_manifest.json"
+    archived_manifest: Path | None = None
+    if manifest_path.is_file():
+        archived_manifest = archive_dir / "batch_manifest.json"
+        part_path = archive_dir / "batch_manifest.json.part"
+        try:
+            shutil.copy2(str(manifest_path), str(part_path))
+            os.replace(part_path, archived_manifest)
+        except Exception:
+            part_path.unlink(missing_ok=True)
+            archived_manifest.unlink(missing_ok=True)
+            if archive_dir.is_dir() and not any(archive_dir.iterdir()):
+                archive_dir.rmdir()
+            raise
+    return archive_dir, archived_manifest
+
+
+def _commit_manifest_with_archive(
+    exp: Path,
+    decomp: Path,
+    manifest: dict[str, Any],
+    label: str,
+) -> None:
+    manifest_path = decomp / "batch_manifest.json"
+    staging_manifest = decomp / "batch_manifest.json.staging"
+    write_batch_manifest(staging_manifest, manifest)
+    moves: list[tuple[Path, Path]] = []
+    archived_manifest: Path | None = None
+    try:
+        _, archived_manifest = _archive_acquisition_state(decomp, exp, label, moves)
+        os.replace(staging_manifest, manifest_path)
+    except Exception:
+        _rollback_acquisition_archive(moves, archived_manifest, decomp)
+        staging_manifest.unlink(missing_ok=True)
+        raise
+    staging_manifest.unlink(missing_ok=True)
+
+
+def _write_pilot_report(
+    pilot_dir: Path,
+    pilot_rvas: list[str],
+    functions_path: Path,
+    pilot_started: float,
+    outcome: str,
+    error: str | None = None,
+) -> None:
+    report: dict[str, Any] = {
+        "sample_count": len(pilot_rvas),
+        "wall_seconds": time.monotonic() - pilot_started,
+        "subprocess_outcome": outcome,
+    }
+    if outcome == "success":
+        pilot_manifest = {"batches": {PILOT_BATCH_ID: pilot_rvas}}
+        stats = decompilation_success_stats(
+            pilot_manifest,
+            pilot_dir,
+            functions_path,
+            denominator_rvas=pilot_rvas,
+        )
+        report["success_count"] = stats["success_count"]
+        report["failed_count"] = stats["failed_count"]
+        report["timeout_count"] = stats["timeout_count"]
+        report["skipped_count"] = stats["skipped_count"]
+        report["c_success_bytes_attempted"] = stats["c_success_bytes_attempted"]
+        report["c_success_bytes_total"] = stats["c_success_bytes_total"]
+    else:
+        report["success_count"] = None
+        report["failed_count"] = None
+        report["timeout_count"] = None
+        report["skipped_count"] = None
+        report["c_success_bytes_attempted"] = None
+        report["c_success_bytes_total"] = None
+    if error is not None:
+        report["error"] = error
+    pilot_dir.mkdir(parents=True, exist_ok=True)
+    (pilot_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
+def _rollback_acquisition_archive(
+    moves: list[tuple[Path, Path]],
+    archived_manifest: Path | None,
+    decomp: Path,
+) -> None:
+    rollback_archived_files(moves)
+    if archived_manifest is not None and archived_manifest.is_file():
+        archived_manifest.unlink(missing_ok=True)
+        archive_parent = archived_manifest.parent
+        if archive_parent.is_dir() and not any(archive_parent.iterdir()):
+            archive_parent.rmdir()
+
+
+def _acquisition_preflight_context(binary_root: Path, exp: Path) -> tuple[str, dict[str, Any]]:
+    ghidra_root = ghidra_install()
+    ghidra_version = read_ghidra_version(ghidra_root)
+    if ghidra_version == "unknown":
+        raise ReError("could not read Ghidra version")
+    ghidra_meta = load_ghidra_meta(binary_root)
+    return ghidra_version, ghidra_meta
+
+
 def cmd_manifest(args: argparse.Namespace) -> int:
+    fresh = bool(getattr(args, "fresh", False))
+    if fresh:
+        verify_binary()
     digest = binary_sha256()
     binary_root = local_binary_root(digest)
     exp = resolve_export_dir(binary_root, args.baseline_revision)
     provenance = load_provenance(exp)
+    if not provenance:
+        raise ReError("missing provenance; run import first")
     validate_export_identity(exp, provenance, "manifest")
     inv = exp / "inventory"
     functions_path = inv / "functions.jsonl"
@@ -387,29 +610,80 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     digest_value = inventory_digest(functions_path)
     bundle_value = inventory_bundle_digest(inv)
     if provenance.get("inventory_bundle_digest") and provenance["inventory_bundle_digest"] != bundle_value:
+        if fresh:
+            raise ReError("inventory bundle digest drift vs provenance")
         print("warning: inventory bundle digest drift vs provenance", file=sys.stderr)
+    exporter_hash = script_hash("ExportDecompilation.java")
     decomp = exp / "decompiled"
+    decomp.mkdir(parents=True, exist_ok=True)
     manifest_path = decomp / "batch_manifest.json"
     old_manifest = load_batch_manifest(manifest_path) if manifest_path.is_file() else None
     manifest = build_batch_manifest(
         functions_jsonl=functions_path,
         baseline_revision=provenance["baseline_revision"],
         batch_size=args.batch_size,
-        exporter_script_hash=script_hash("ExportDecompilation.java"),
+        exporter_script_hash=exporter_hash,
         inventory_digest_value=digest_value,
         inventory_bundle_digest_value=bundle_value,
     )
-    if old_manifest and batches_archive_required(old_manifest, manifest):
+    ghidra_version, ghidra_meta = _acquisition_preflight_context(binary_root, exp)
+
+    if old_manifest and not fresh:
+        old_exporter = old_manifest.get("exporter_script_hash")
+        if old_exporter != exporter_hash:
+            raise ReError(
+                "manifest exporter script hash mismatch vs current ExportDecompilation.java; "
+                "run corpus manifest --fresh"
+            )
+
+    if fresh:
+        validate_acquisition_preflight(
+            exp,
+            provenance,
+            manifest,
+            exporter_script_hash=exporter_hash,
+            ghidra_version=ghidra_version,
+            ghidra_meta=ghidra_meta,
+            require_exporter_match=True,
+        )
         label = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        dest = archive_decompiled_batches(decomp, label)
-        if dest:
-            print(f"archived stale batch files to {dest}", file=sys.stderr)
+        try:
+            _commit_manifest_with_archive(exp, decomp, manifest, label)
+        except Exception as exc:
+            raise ReError(f"manifest --fresh archive failed: {exc}") from exc
+        invalidate_qualification(provenance, "manifest --fresh")
+        save_provenance(exp, provenance)
+        print(f"batch manifest (fresh): {manifest['eligible_function_count']} functions", file=sys.stderr)
+        print(f"batch manifest: {manifest['eligible_function_count']} functions")
+        return 0
+
+    archive_needed = old_manifest is not None and batches_archive_required(old_manifest, manifest)
+    if archive_needed:
+        validate_acquisition_preflight(
+            exp,
+            provenance,
+            manifest,
+            exporter_script_hash=exporter_hash,
+            ghidra_version=ghidra_version,
+            ghidra_meta=ghidra_meta,
+            require_exporter_match=True,
+        )
+        label = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        try:
+            _commit_manifest_with_archive(exp, decomp, manifest, label)
+        except Exception as exc:
+            raise ReError(f"manifest archive failed: {exc}") from exc
+        invalidate_qualification(provenance, "manifest inventory or partition change")
+        save_provenance(exp, provenance)
+        print(f"archived stale acquisition artifacts under {decomp / '.archive'}", file=sys.stderr)
     elif old_manifest and call_edges_only_inventory_drift(old_manifest, manifest):
         print(
             "warning: call-edge/coverage inventory changed; keeping existing batch files",
             file=sys.stderr,
         )
-    write_batch_manifest(manifest_path, manifest)
+        write_batch_manifest(manifest_path, manifest)
+    else:
+        write_batch_manifest(manifest_path, manifest)
     print(f"batch manifest: {manifest['eligible_function_count']} functions")
     return 0
 
@@ -420,59 +694,110 @@ def _write_rva_list(path: Path, rvas: list[str]) -> None:
 
 
 def cmd_decompile(args: argparse.Namespace) -> int:
+    if args.pilot and getattr(args, "batch_id", None):
+        raise ReError("cannot combine --pilot with --batch-id")
     digest = binary_sha256()
     binary_root = local_binary_root(digest)
-    meta = load_ghidra_meta(binary_root)
     exp = resolve_export_dir(binary_root, args.baseline_revision)
-    provenance = load_provenance(exp)
-    exporter_hash = script_hash("ExportDecompilation.java")
-    manifest_path = exp / "decompiled" / "batch_manifest.json"
-    if not manifest_path.is_file():
-        cmd_manifest(argparse.Namespace(baseline_revision=exp.name, batch_size=args.batch_size))
-    manifest = load_batch_manifest(manifest_path)
-    validate_export_identity(exp, provenance, "decompile", exporter_script_hash=exporter_hash)
-    functions_path = exp / "inventory" / "functions.jsonl"
-    batches = manifest["batches"]
     pilot_dir: Path | None = None
+    pilot_rvas: list[str] = []
+    pilot_started = 0.0
     if args.pilot:
-        sample = pilot_sample_rvas(functions_path, args.pilot)
         pilot_dir = exp / "logs" / "pilot"
         pilot_dir.mkdir(parents=True, exist_ok=True)
-        batches = {"pilot-sample": [format_rva(r) for r in sample]}
+        (pilot_dir / "report.json").unlink(missing_ok=True)
+        pilot_started = time.monotonic()
+    verify_binary()
+    meta = load_ghidra_meta(binary_root)
+    provenance = load_provenance(exp)
+    if not provenance:
+        raise ReError("missing provenance; run import first")
+    exporter_hash = script_hash("ExportDecompilation.java")
+    ghidra_version, ghidra_meta = _acquisition_preflight_context(binary_root, exp)
+    manifest_path = exp / "decompiled" / "batch_manifest.json"
+    if not manifest_path.is_file():
+        cmd_manifest(
+            argparse.Namespace(
+                baseline_revision=exp.name,
+                batch_size=args.batch_size,
+                fresh=False,
+            )
+        )
+    manifest = load_batch_manifest(manifest_path)
+    validate_acquisition_preflight(
+        exp,
+        provenance,
+        manifest,
+        exporter_script_hash=exporter_hash,
+        ghidra_version=ghidra_version,
+        ghidra_meta=ghidra_meta,
+        require_exporter_match=True,
+    )
+    functions_path = exp / "inventory" / "functions.jsonl"
+    batches = manifest["batches"]
+    if args.pilot:
+        sample = pilot_sample_rvas(functions_path, args.pilot)
+        pilot_rvas = [format_rva(r) for r in sample]
+        batches = {PILOT_BATCH_ID: pilot_rvas}
+    if getattr(args, "batch_id", None):
+        batch_id = args.batch_id
+        if batch_id not in batches:
+            raise ReError(f"unknown batch id: {batch_id}")
+        batches = {batch_id: batches[batch_id]}
     timeout = args.timeout_seconds
+    process_timeout = getattr(args, "process_timeout", DEFAULT_PROCESS_TIMEOUT)
     decomp_dir = pilot_dir or (exp / "decompiled")
     decomp_dir.mkdir(parents=True, exist_ok=True)
-    for batch_id, rvas in batches.items():
-        if args.pilot:
-            out_path = decomp_dir / "batch-pilot.jsonl"
-            staging = decomp_dir / "batch-pilot.jsonl.staging"
-        else:
+    try:
+        for batch_id, rvas in batches.items():
             out_path = decomp_dir / f"{batch_id}.jsonl"
             staging = decomp_dir / f"{batch_id}.jsonl.staging"
-        if out_path.is_file() and not args.force:
-            errors = export_completeness({"batches": {batch_id: rvas}}, decomp_dir)[1]
-            if not errors:
-                continue
-        if staging.is_file():
-            staging.unlink()
-        with tempfile.TemporaryDirectory() as tmp:
-            rva_file = Path(tmp) / "rvas.txt"
-            _write_rva_list(rva_file, rvas)
-            analyze_headless(
-                Path(meta["project_dir"]),
-                meta["project_name"],
-                "-process",
-                meta["program_name"],
-                "-noanalysis",
-                "-readOnly",
-                "-postScript",
-                "ExportDecompilation.java",
-                str(rva_file),
-                str(staging),
-                str(timeout),
+            if out_path.is_file() and not args.force:
+                errors = export_completeness({"batches": {batch_id: rvas}}, decomp_dir)[1]
+                if not errors:
+                    continue
+            if staging.is_file():
+                staging.unlink()
+            try:
+                with tempfile.TemporaryDirectory() as tmp:
+                    rva_file = Path(tmp) / "rvas.txt"
+                    _write_rva_list(rva_file, rvas)
+                    analyze_headless(
+                        Path(meta["project_dir"]),
+                        meta["project_name"],
+                        "-process",
+                        meta["program_name"],
+                        "-noanalysis",
+                        "-readOnly",
+                        "-postScript",
+                        "ExportDecompilation.java",
+                        str(rva_file),
+                        str(staging),
+                        str(timeout),
+                        process_timeout=process_timeout,
+                    )
+                publish_batch_staging(staging, out_path, rvas)
+            finally:
+                staging.unlink(missing_ok=True)
+    except (Exception, KeyboardInterrupt) as exc:
+        if args.pilot and pilot_dir is not None:
+            _write_pilot_report(
+                pilot_dir,
+                pilot_rvas,
+                functions_path,
+                pilot_started,
+                "failed",
+                error=f"{type(exc).__name__}: {exc}",
             )
-        publish_batch_staging(staging, out_path, rvas)
-    if args.pilot:
+        raise
+    if args.pilot and pilot_dir is not None:
+        _write_pilot_report(
+            pilot_dir,
+            pilot_rvas,
+            functions_path,
+            pilot_started,
+            "success",
+        )
         print(f"pilot decompile written under {pilot_dir}")
         return 0
     c_export, errors = export_completeness(manifest, decomp_dir)
@@ -480,16 +805,21 @@ def cmd_decompile(args: argparse.Namespace) -> int:
     report = {
         "c_export": c_export,
         "export_errors": errors,
+        "eligible_function_count": manifest.get("eligible_function_count"),
         "decompilation_stats": stats,
         "min_success_bytes_threshold": args.min_success_bytes,
     }
-    (exp / "logs" / "decompile-report.json").write_text(json.dumps(report, indent=2) + "\n")
+    report_path = exp / "logs" / "decompile-report.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     if c_export < 1.0:
         print(
             f"warning: incomplete export (c_export={c_export}); run corpus qualify for git census gates",
             file=sys.stderr,
         )
+    if getattr(args, "require_complete", False) and c_export < 1.0:
+        return 1
     return 0
 
 
@@ -615,12 +945,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_qualify.set_defaults(func=cmd_qualify)
     p_manifest = sub.choices["manifest"]
     p_manifest.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
+    p_manifest.add_argument(
+        "--fresh",
+        action="store_true",
+        help="archive existing batches and start a new acquisition manifest",
+    )
     p_decomp = sub.add_parser("decompile")
     p_decomp.add_argument("--baseline-revision", default=None)
     p_decomp.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     p_decomp.add_argument("--timeout-seconds", type=int, default=120)
+    p_decomp.add_argument("--process-timeout", type=int, default=DEFAULT_PROCESS_TIMEOUT)
     p_decomp.add_argument("--min-success-bytes", type=float, default=DEFAULT_MIN_SUCCESS_BYTES)
     p_decomp.add_argument("--pilot", type=int, default=0)
+    p_decomp.add_argument("--batch-id", default=None)
+    p_decomp.add_argument("--require-complete", action="store_true")
     p_decomp.add_argument("--force", action="store_true")
     p_decomp.set_defaults(func=cmd_decompile)
     return parser

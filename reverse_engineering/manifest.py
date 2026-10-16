@@ -12,7 +12,10 @@ from typing import Any
 from reverse_engineering.intervals import format_rva, parse_rva
 
 TERMINAL_STATUSES = frozenset({"success", "failed", "timeout", "skipped"})
+UNSUCCESSFUL_STATUSES = frozenset({"failed", "timeout", "skipped"})
 BATCH_NAME_RE = re.compile(r"^batch-(\d{5})\.jsonl$")
+CANONICAL_RVA_RE = re.compile(r"^0x[0-9a-f]{16}$")
+BLANK_ERROR_PREFIX = "decompilation_failed_without_message"
 
 
 def inventory_bundle_digest(inv_dir: Path) -> str:
@@ -93,6 +96,25 @@ def load_batch_manifest(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
+def canonical_manifest_bytes(manifest: dict[str, Any]) -> bytes:
+    """Deterministic encoding for exact manifest comparison."""
+    batches = manifest.get("batches") or {}
+    ordered: dict[str, Any] = {
+        "baseline_revision": manifest.get("baseline_revision"),
+        "inventory_digest": manifest.get("inventory_digest"),
+        "inventory_bundle_digest": manifest.get("inventory_bundle_digest"),
+        "batch_size": manifest.get("batch_size"),
+        "exporter_script_hash": manifest.get("exporter_script_hash"),
+        "eligible_function_count": manifest.get("eligible_function_count"),
+        "batches": {batch_id: list(batches[batch_id]) for batch_id in sorted(batches)},
+    }
+    return (json.dumps(ordered, sort_keys=True) + "\n").encode()
+
+
+def manifests_equivalent(saved: dict[str, Any], expected: dict[str, Any]) -> bool:
+    return canonical_manifest_bytes(saved) == canonical_manifest_bytes(expected)
+
+
 def manifest_partition_digest(manifest: dict[str, Any]) -> str:
     parts: list[str] = []
     for batch_id in sorted(manifest.get("batches", {})):
@@ -129,6 +151,64 @@ def archive_decompiled_batches(decomp_dir: Path, label: str) -> Path | None:
     return archive_dir
 
 
+def unique_archive_dir(decomp_dir: Path, label: str) -> Path:
+    base = decomp_dir / ".archive" / label
+    candidate = base
+    suffix = 0
+    while candidate.exists():
+        suffix += 1
+        candidate = decomp_dir / ".archive" / f"{label}-{suffix:02d}"
+    return candidate
+
+
+def list_manifest_batch_files(decomp_dir: Path) -> list[Path]:
+    return sorted(p for p in decomp_dir.glob("batch-*.jsonl") if BATCH_NAME_RE.match(p.name))
+
+
+def archive_batch_files(
+    decomp_dir: Path,
+    archive_dir: Path,
+    moves: list[tuple[Path, Path]],
+) -> None:
+    """Move batch JSONL files into archive_dir, appending each move to moves immediately."""
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    for path in list_manifest_batch_files(decomp_dir):
+        dest = archive_dir / path.name
+        shutil.move(str(path), str(dest))
+        moves.append((dest, path))
+
+
+def rollback_archived_files(moves: list[tuple[Path, Path]]) -> None:
+    for archived, original in reversed(moves):
+        if archived.is_file():
+            original.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(archived), str(original))
+
+
+def _nonempty_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def normalize_staging_batch_errors(staging: Path) -> None:
+    """Fill blank error fields on unsuccessful terminal records before validation."""
+    if not staging.is_file():
+        return
+    lines_out: list[str] = []
+    for line in staging.read_text().splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if not isinstance(row, dict):
+            lines_out.append(line)
+            continue
+        status = row.get("status")
+        if status in UNSUCCESSFUL_STATUSES and not _nonempty_text(row.get("error")):
+            rva = row.get("entry_rva", "unknown")
+            row["error"] = f"{BLANK_ERROR_PREFIX}: {rva}"
+        lines_out.append(json.dumps(row, sort_keys=True))
+    staging.write_text("\n".join(lines_out) + ("\n" if lines_out else ""))
+
+
 def validate_batch_file(path: Path, expected_rvas: list[str]) -> list[str]:
     """Return list of errors; empty if valid."""
     errors: list[str] = []
@@ -144,13 +224,29 @@ def validate_batch_file(path: Path, expected_rvas: list[str]) -> list[str]:
         except json.JSONDecodeError as exc:
             errors.append(f"{path.name}: invalid json: {exc}")
             continue
+        if not isinstance(row, dict):
+            errors.append(f"{path.name}: record must be a JSON object")
+            continue
         rva = row.get("entry_rva")
         status = row.get("status")
+        if not isinstance(rva, str) or not CANONICAL_RVA_RE.fullmatch(rva):
+            errors.append(f"{path.name}: invalid entry_rva: {rva!r}")
+            continue
+        if not isinstance(status, str):
+            errors.append(f"{path.name}: invalid status for {rva}: {status!r}")
+            continue
         if rva in seen:
             errors.append(f"{path.name}: duplicate entry_rva {rva}")
         seen[rva] = row
         if status not in TERMINAL_STATUSES:
             errors.append(f"{path.name}: non-terminal status for {rva}: {status}")
+            continue
+        if status == "success":
+            if not _nonempty_text(row.get("pseudocode")):
+                errors.append(f"{path.name}: success without pseudocode for {rva}")
+        elif status in UNSUCCESSFUL_STATUSES:
+            if not _nonempty_text(row.get("error")):
+                errors.append(f"{path.name}: {status} without error for {rva}")
     expected_set = set(expected_rvas)
     if set(seen) != expected_set:
         missing = expected_set - set(seen)
@@ -212,44 +308,89 @@ def pilot_sample_rvas(functions_jsonl: Path, n: int, seed: int = 0) -> list[int]
     return sorted(set(sample))[:n]
 
 
-def decompilation_success_stats(
-    manifest: dict[str, Any],
-    decompiled_dir: Path,
-    functions_jsonl: Path,
-) -> dict[str, float]:
-    bytes_by_rva: dict[str, int] = {}
+def _bytes_by_rva(functions_jsonl: Path, rvas: set[str] | None = None) -> dict[str, int]:
+    out: dict[str, int] = {}
     for line in functions_jsonl.read_text().splitlines():
         if not line.strip():
             continue
         row = json.loads(line)
         if row.get("kind") != "internal":
             continue
-        bytes_by_rva[row["entry_rva"]] = int(row.get("decoded_instruction_bytes", 0))
+        rva = row["entry_rva"]
+        if rvas is not None and rva not in rvas:
+            continue
+        out[rva] = int(row.get("decoded_instruction_bytes", 0))
+    return out
+
+
+def decompilation_success_stats(
+    manifest: dict[str, Any],
+    decompiled_dir: Path,
+    functions_jsonl: Path,
+    *,
+    denominator_rvas: list[str] | None = None,
+) -> dict[str, float | int]:
+    if denominator_rvas is not None:
+        denom_set = set(denominator_rvas)
+        bytes_by_rva = _bytes_by_rva(functions_jsonl, denom_set)
+        total_inventory_bytes = sum(bytes_by_rva.values())
+    else:
+        bytes_by_rva = _bytes_by_rva(functions_jsonl)
+        total_inventory_bytes = sum(bytes_by_rva.values())
 
     success_count = 0
-    total_count = 0
+    failed_count = 0
+    timeout_count = 0
+    skipped_count = 0
+    attempted_count = 0
     success_bytes = 0
-    total_bytes = 0
+    attempted_bytes = 0
+    completed_batches = 0
+
     for batch_id, expected in manifest.get("batches", {}).items():
         batch_path = decompiled_dir / f"{batch_id}.jsonl"
         if not batch_path.is_file():
             continue
+        if validate_batch_file(batch_path, expected):
+            continue
+        completed_batches += 1
         for line in batch_path.read_text().splitlines():
             if not line.strip():
                 continue
             row = json.loads(line)
-            rva = row["entry_rva"]
-            total_count += 1
+            if not isinstance(row, dict):
+                continue
+            rva = row.get("entry_rva")
+            if not isinstance(rva, str):
+                continue
+            status = row.get("status")
+            attempted_count += 1
             size = bytes_by_rva.get(rva, 0)
-            total_bytes += size
-            if row.get("status") == "success":
+            attempted_bytes += size
+            if status == "success":
                 success_count += 1
                 success_bytes += size
+            elif status == "failed":
+                failed_count += 1
+            elif status == "timeout":
+                timeout_count += 1
+            elif status == "skipped":
+                skipped_count += 1
+
+    c_attempted = success_bytes / attempted_bytes if attempted_bytes else 0.0
+    c_total = success_bytes / total_inventory_bytes if total_inventory_bytes else 0.0
     return {
-        "c_success_count": success_count / total_count if total_count else 0.0,
-        "c_success_bytes": success_bytes / total_bytes if total_bytes else 0.0,
+        "c_success_count": success_count / attempted_count if attempted_count else 0.0,
+        "c_success_bytes": c_attempted,
+        "c_success_bytes_attempted": c_attempted,
+        "c_success_bytes_total": c_total,
         "success_count": success_count,
-        "total_count": total_count,
+        "failed_count": failed_count,
+        "timeout_count": timeout_count,
+        "skipped_count": skipped_count,
+        "total_count": attempted_count,
         "success_bytes": success_bytes,
-        "total_bytes": total_bytes,
+        "total_bytes": attempted_bytes,
+        "total_inventory_bytes": total_inventory_bytes,
+        "completed_batches": completed_batches,
     }
