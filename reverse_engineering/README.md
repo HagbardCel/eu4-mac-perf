@@ -83,7 +83,7 @@ Decompile flags:
 | `--process-timeout` | Whole Ghidra subprocess limit (default 3600) |
 | `--require-complete` | Exit nonzero unless every manifest batch validates |
 | `--pilot N` | Stratified sample under `logs/pilot/` plus `logs/pilot/report.json` (failed runs keep prior `batch-pilot.jsonl`; report counts are `null` until success) |
-| `--force` | Rerun even when a valid batch exists; with `--pilot`, clears stale `report.json` before Ghidra |
+| `--force` | Rerun even when a valid batch already exists (each `--pilot` attempt still unlinks `report.json` before identity checks; failed pilots keep prior `batch-pilot.jsonl`) |
 
 `corpus manifest --fresh` archives existing `batch-*.jsonl`, `index.sqlite`, and a copy of the previous `batch_manifest.json` under `decompiled/.archive/<utc>/`, then writes a new manifest for a full acquisition. Use this after merge when starting the 84k-function run; it is **not** required for the pilot.
 
@@ -93,7 +93,7 @@ Decompile flags:
 |---------|---------|
 | `smoke` | Retryable anchor decompile check (`SmokeDecompile.java`; no batch export) |
 | `qualify` | Persist `qualification.passed` in provenance for census gates |
-| `decompile --pilot N` | Stratified sample under `logs/pilot/` |
+| `decompile --pilot N` | Same as `--pilot N`: `logs/pilot/report.json` plus `batch-pilot.jsonl` (failed run: `null` report counts, prior JSONL preserved) |
 | `reconcile` | Gfx draw-site vs inventory |
 | `check-anchors` | Mandatory renderer symbols in batch export |
 | `census --write-reports` | Git reports (requires qualified export or `--allow-unqualified` → `.local/`) |
