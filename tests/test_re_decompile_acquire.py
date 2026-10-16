@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 import unittest.mock
@@ -11,10 +12,12 @@ from reverse_engineering.corpus import (
     DEFAULT_PROCESS_TIMEOUT,
     PILOT_BATCH_ID,
     _commit_manifest_with_archive,
+    analyze_headless,
     cmd_decompile,
     cmd_manifest,
     terminate_process_group,
 )
+from reverse_engineering.paths import ReError
 from reverse_engineering.export_identity import (
     publish_batch_staging,
     validate_acquisition_preflight,
@@ -296,8 +299,64 @@ class DecompileOrchestrationTests(unittest.TestCase):
                         )
             report = json.loads((exp / "logs" / "pilot" / "report.json").read_text())
             self.assertEqual(report["subprocess_outcome"], "failed")
-            self.assertIn("boom", report["error"])
+            self.assertIn("RuntimeError: boom", report["error"])
+            self.assertIsNone(report["success_count"])
+            self.assertIsNone(report["c_success_bytes_attempted"])
             self.assertFalse((exp / "logs" / "pilot" / f"{PILOT_BATCH_ID}.jsonl.staging").is_file())
+
+    def test_failed_forced_pilot_does_not_reuse_prior_jsonl_stats(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary_root = Path(tmp) / "eu4"
+            exp = _copy_export_mini(binary_root / "exports" / "fixture-mini")
+            pilot_jsonl = exp / "logs" / "pilot" / f"{PILOT_BATCH_ID}.jsonl"
+            with self._pilot_mocks(exp, binary_root):
+                with unittest.mock.patch(
+                    "reverse_engineering.corpus.analyze_headless",
+                    side_effect=self._fake_headless_write_success,
+                ):
+                    rc = cmd_decompile(
+                        argparse.Namespace(
+                            baseline_revision="fixture-mini",
+                            batch_size=500,
+                            timeout_seconds=120,
+                            process_timeout=DEFAULT_PROCESS_TIMEOUT,
+                            min_success_bytes=0.0,
+                            pilot=2,
+                            batch_id=None,
+                            require_complete=False,
+                            force=True,
+                        )
+                    )
+            self.assertEqual(rc, 0)
+            prior_bytes = pilot_jsonl.read_bytes()
+            with self._pilot_mocks(exp, binary_root):
+                with unittest.mock.patch(
+                    "reverse_engineering.corpus.analyze_headless",
+                    side_effect=RuntimeError("boom"),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        cmd_decompile(
+                            argparse.Namespace(
+                                baseline_revision="fixture-mini",
+                                batch_size=500,
+                                timeout_seconds=120,
+                                process_timeout=DEFAULT_PROCESS_TIMEOUT,
+                                min_success_bytes=0.0,
+                                pilot=2,
+                                batch_id=None,
+                                require_complete=False,
+                                force=True,
+                            )
+                        )
+            report = json.loads((exp / "logs" / "pilot" / "report.json").read_text())
+            self.assertEqual(report["subprocess_outcome"], "failed")
+            self.assertIsNone(report["success_count"])
+            self.assertIsNone(report["failed_count"])
+            self.assertIsNone(report["timeout_count"])
+            self.assertIsNone(report["skipped_count"])
+            self.assertIsNone(report["c_success_bytes_attempted"])
+            self.assertIsNone(report["c_success_bytes_total"])
+            self.assertEqual(pilot_jsonl.read_bytes(), prior_bytes)
 
     def test_pilot_keyboard_interrupt_cleans_staging(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -324,6 +383,8 @@ class DecompileOrchestrationTests(unittest.TestCase):
                         )
             report = json.loads((exp / "logs" / "pilot" / "report.json").read_text())
             self.assertEqual(report["subprocess_outcome"], "failed")
+            self.assertEqual(report["error"], "KeyboardInterrupt: ")
+            self.assertIsNone(report["success_count"])
             self.assertFalse((exp / "logs" / "pilot" / f"{PILOT_BATCH_ID}.jsonl.staging").is_file())
 
     def test_keyboard_interrupt_terminates_process_group(self) -> None:
@@ -511,6 +572,71 @@ class ManifestArchiveRollbackTests(unittest.TestCase):
                             exp, exp / "decompiled", manifest, "rollback-test"
                         )
             self._assert_snapshot_unchanged(exp, snap)
+
+    def test_archive_rollback_on_manifest_copy2_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary_root = Path(tmp) / "eu4"
+            exp = self._two_batch_export(binary_root)
+            snap = self._snapshot_acquisition(exp)
+            manifest = build_batch_manifest(
+                functions_jsonl=exp / "inventory" / "functions.jsonl",
+                baseline_revision="fixture-mini",
+                batch_size=500,
+                exporter_script_hash=load_batch_manifest(
+                    exp / "decompiled" / "batch_manifest.json"
+                )["exporter_script_hash"],
+                inventory_digest_value=inventory_digest(exp / "inventory" / "functions.jsonl"),
+                inventory_bundle_digest_value=inventory_bundle_digest(exp / "inventory"),
+            )
+            real_copy2 = shutil.copy2
+
+            def copy2_inject(src, dst):
+                if str(dst).endswith("batch_manifest.json.part"):
+                    raise OSError("injected copy2 failure")
+                return real_copy2(src, dst)
+
+            with self._manifest_mocks(binary_root, exp):
+                with unittest.mock.patch("shutil.copy2", side_effect=copy2_inject):
+                    with self.assertRaises(OSError):
+                        _commit_manifest_with_archive(
+                            exp, exp / "decompiled", manifest, "rollback-test"
+                        )
+            self._assert_snapshot_unchanged(exp, snap)
+            archive_root = exp / "decompiled" / ".archive"
+            if archive_root.is_dir():
+                for path in archive_root.rglob("*"):
+                    self.assertFalse(path.name.endswith(".part"))
+                    if path.name == "batch_manifest.json":
+                        self.fail("partial archived manifest left behind")
+
+
+class AnalyzeHeadlessTimeoutTests(unittest.TestCase):
+    def _run_timeout(self, stdout, stderr) -> ReError:
+        proc = unittest.mock.MagicMock()
+        proc.pid = 1
+        proc.poll.return_value = None
+        proc.returncode = None
+
+        def communicate(timeout=None):
+            raise subprocess.TimeoutExpired(cmd="ghidra", timeout=timeout, output=stdout, stderr=stderr)
+
+        proc.communicate = communicate
+        with unittest.mock.patch("reverse_engineering.corpus.subprocess.Popen", return_value=proc):
+            with unittest.mock.patch("reverse_engineering.corpus.build_analyze_headless_argv", return_value=["ghidra"]):
+                with unittest.mock.patch("reverse_engineering.corpus.terminate_process_group"):
+                    with self.assertRaises(ReError) as ctx:
+                        analyze_headless(Path("/proj"), "EU4_test", process_timeout=60)
+        return ctx.exception
+
+    def test_timeout_includes_str_partial_output(self) -> None:
+        exc = self._run_timeout("partial-out-str", "partial-err-str")
+        self.assertIn("partial-out-str", str(exc))
+        self.assertIn("partial-err-str", str(exc))
+
+    def test_timeout_includes_bytes_partial_output(self) -> None:
+        exc = self._run_timeout(b"partial-out-bytes", b"partial-err-bytes")
+        self.assertIn("partial-out-bytes", str(exc))
+        self.assertIn("partial-err-bytes", str(exc))
 
 
 if __name__ == "__main__":

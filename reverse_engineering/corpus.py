@@ -151,6 +151,24 @@ def terminate_process_group(proc: subprocess.Popen[str], grace_seconds: float = 
         pass
 
 
+def _subprocess_output_text(value: str | bytes | None, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value
+
+
+def _subprocess_output_tail(
+    value: str | bytes | None,
+    fallback: str = "",
+    *,
+    limit: int = 8000,
+) -> str:
+    text = _subprocess_output_text(value, fallback)
+    return text[-limit:]
+
+
 def analyze_headless(
     project_dir: Path,
     project_name: str,
@@ -182,10 +200,16 @@ def analyze_headless(
     try:
         try:
             stdout, stderr = proc.communicate(timeout=process_timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             terminate_process_group(proc)
-            stdout_tail = (stdout or "")[-8000:]
-            stderr_tail = (stderr or "")[-4000:]
+            stdout_tail = _subprocess_output_tail(
+                exc.stdout if exc.stdout is not None else stdout,
+                limit=8000,
+            )
+            stderr_tail = _subprocess_output_tail(
+                exc.stderr if exc.stderr is not None else stderr,
+                limit=4000,
+            )
             raise ReError(
                 f"analyzeHeadless timed out after {process_timeout}s\n"
                 f"STDOUT:\n{stdout_tail}\n"
@@ -472,7 +496,16 @@ def _archive_acquisition_state(
     archived_manifest: Path | None = None
     if manifest_path.is_file():
         archived_manifest = archive_dir / "batch_manifest.json"
-        shutil.copy2(str(manifest_path), str(archived_manifest))
+        part_path = archive_dir / "batch_manifest.json.part"
+        try:
+            shutil.copy2(str(manifest_path), str(part_path))
+            os.replace(part_path, archived_manifest)
+        except Exception:
+            part_path.unlink(missing_ok=True)
+            archived_manifest.unlink(missing_ok=True)
+            if archive_dir.is_dir() and not any(archive_dir.iterdir()):
+                archive_dir.rmdir()
+            raise
     return archive_dir, archived_manifest
 
 
@@ -505,24 +538,32 @@ def _write_pilot_report(
     outcome: str,
     error: str | None = None,
 ) -> None:
-    pilot_manifest = {"batches": {PILOT_BATCH_ID: pilot_rvas}}
-    stats = decompilation_success_stats(
-        pilot_manifest,
-        pilot_dir,
-        functions_path,
-        denominator_rvas=pilot_rvas,
-    )
     report: dict[str, Any] = {
         "sample_count": len(pilot_rvas),
-        "success_count": stats["success_count"],
-        "failed_count": stats["failed_count"],
-        "timeout_count": stats["timeout_count"],
-        "skipped_count": stats["skipped_count"],
-        "c_success_bytes_attempted": stats["c_success_bytes_attempted"],
-        "c_success_bytes_total": stats["c_success_bytes_total"],
         "wall_seconds": time.monotonic() - pilot_started,
         "subprocess_outcome": outcome,
     }
+    if outcome == "success":
+        pilot_manifest = {"batches": {PILOT_BATCH_ID: pilot_rvas}}
+        stats = decompilation_success_stats(
+            pilot_manifest,
+            pilot_dir,
+            functions_path,
+            denominator_rvas=pilot_rvas,
+        )
+        report["success_count"] = stats["success_count"]
+        report["failed_count"] = stats["failed_count"]
+        report["timeout_count"] = stats["timeout_count"]
+        report["skipped_count"] = stats["skipped_count"]
+        report["c_success_bytes_attempted"] = stats["c_success_bytes_attempted"]
+        report["c_success_bytes_total"] = stats["c_success_bytes_total"]
+    else:
+        report["success_count"] = None
+        report["failed_count"] = None
+        report["timeout_count"] = None
+        report["skipped_count"] = None
+        report["c_success_bytes_attempted"] = None
+        report["c_success_bytes_total"] = None
     if error is not None:
         report["error"] = error
     pilot_dir.mkdir(parents=True, exist_ok=True)
@@ -746,7 +787,7 @@ def cmd_decompile(args: argparse.Namespace) -> int:
                 functions_path,
                 pilot_started,
                 "failed",
-                error=str(exc),
+                error=f"{type(exc).__name__}: {exc}",
             )
         raise
     if args.pilot and pilot_dir is not None:

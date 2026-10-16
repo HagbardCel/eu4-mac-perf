@@ -82,7 +82,7 @@ Decompile flags:
 | `--timeout-seconds` | Per-function Ghidra decompiler budget (default 120) |
 | `--process-timeout` | Whole Ghidra subprocess limit (default 3600) |
 | `--require-complete` | Exit nonzero unless every manifest batch validates |
-| `--pilot N` | Stratified sample under `logs/pilot/` plus `logs/pilot/report.json` |
+| `--pilot N` | Stratified sample under `logs/pilot/` plus `logs/pilot/report.json` (failed runs keep prior `batch-pilot.jsonl`; report counts are `null` until success) |
 | `--force` | Rerun even when a valid batch exists; with `--pilot`, clears stale `report.json` before Ghidra |
 
 `corpus manifest --fresh` archives existing `batch-*.jsonl`, `index.sqlite`, and a copy of the previous `batch_manifest.json` under `decompiled/.archive/<utc>/`, then writes a new manifest for a full acquisition. Use this after merge when starting the 84k-function run; it is **not** required for the pilot.
