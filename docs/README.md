@@ -10,5 +10,7 @@
 | [investigations/](investigations/README.md) | Pointers to detailed RE and analysis writeups |
 | [decisions/](decisions/README.md) | Architecture decision records (future) |
 | [reference/](reference/profiler-and-benchmark-operations.md) | Profiler and benchmark operations manual |
+| [oracle/](oracle/README.md) | Next-phase ground-truth acquisition + reconstruction program (plan of record, reuse map, baseline) |
+| [repo-map.md](repo-map.md) | Tracked-path inventory and lifecycle labels |
 
 Historical work packages (`wp*.md`, profiler memos) remain in this directory for traceability.
