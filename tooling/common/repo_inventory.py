@@ -1,21 +1,28 @@
 #!/usr/bin/env python3
 """Deterministic, read-only inventory of Git-tracked paths.
 
-Emits a mechanical manifest used by ``docs/repo-map.md`` (P1 audit). This tool
-does not classify lifecycle (ACTIVE / RETIRED_EXPERIMENT / ...) — that is an
-interpretation recorded by hand in the map. It only reports what Git tracks.
+This tool reports *what Git tracks* at a pinned revision. It does not assign
+lifecycle status — that is the curated layer in ``repo_lifecycle``.
 
 Usage::
 
-    PYTHONPATH=. python -m tooling.common.repo_inventory summary
-    PYTHONPATH=. python -m tooling.common.repo_inventory list
+    PYTHONPATH=. python -m tooling.common.repo_inventory summary --ref 8033e35
+    PYTHONPATH=. python -m tooling.common.repo_inventory list --ref 8033e35
+    PYTHONPATH=. python -m tooling.common.repo_inventory csv  --ref 8033e35
+
+``--ref`` reads a Git tree (reproducible). ``--index`` is a separate, explicitly
+named mode that inventories the current index instead.
 """
 from __future__ import annotations
 
 import argparse
-import subprocess
+import csv
+import io
 import sys
+from collections import Counter
 from pathlib import Path
+
+from .repo_snapshot import RepoSnapshot
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,67 +58,122 @@ KIND_BY_EXT = {
     "tsv": "tsv",
     "txt": "text",
     "yml": "yaml",
+    "yaml": "yaml",
     "bin": "binary",
     "gz": "gzip",
     "png": "image",
     "svg": "image",
 }
 
-
-def tracked_paths() -> list[str]:
-    out = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "ls-files"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    return sorted(line for line in out.splitlines() if line.strip())
+# Extensions whose contents the graph analyzer treats as parseable text.
+TEXT_EXT = frozenset(
+    {
+        "py", "c", "h", "cc", "cpp", "hpp", "m", "mm", "S", "s",
+        "java", "sh", "md", "json", "jsonl", "csv", "tsv", "txt",
+        "yml", "yaml", "sha256", "gitignore", "log", "stdout", "stderr",
+        "recipe", "inc", "def",
+    }
+)
 
 
 def area_of(path: str) -> str:
     return path.split("/", 1)[0] if "/" in path else "(root)"
 
 
+def ext_of(path: str) -> str:
+    name = path.rsplit("/", 1)[-1]
+    return name.rsplit(".", 1)[-1] if "." in name else ""
+
+
 def kind_of(path: str) -> str:
     name = path.rsplit("/", 1)[-1]
     if "." not in name:
         return "no-extension"
-    return KIND_BY_EXT.get(name.rsplit(".", 1)[-1], name.rsplit(".", 1)[-1])
+    ext = name.rsplit(".", 1)[-1]
+    return KIND_BY_EXT.get(ext, ext)
 
 
-def _counts(paths: list[str], key) -> list[tuple[str, int]]:
-    from collections import Counter
+def inventory_rows(snapshot: RepoSnapshot) -> list[dict]:
+    rows = []
+    for path in snapshot.paths():
+        entry = snapshot.entry(path)
+        rows.append(
+            {
+                "path": path,
+                "area": area_of(path),
+                "kind": kind_of(path),
+                "size_bytes": entry.size if entry else -1,
+            }
+        )
+    return rows
 
-    return sorted(Counter(key(p) for p in paths).items(), key=lambda kv: (-kv[1], kv[0]))
+
+def _counts(rows: list[dict], column: str) -> list[tuple[str, int]]:
+    counts = Counter(row[column] for row in rows)
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
-def render_summary(paths: list[str]) -> str:
-    lines: list[str] = []
-    lines.append(f"Tracked paths: **{len(paths)}**")
+def render_summary(snapshot: RepoSnapshot) -> str:
+    rows = inventory_rows(snapshot)
+    total = len(rows)
+    lines = []
+    lines.append(f"Tracked paths: **{total}**")
     lines.append("")
     lines.append("| Area | Role | Files |")
     lines.append("|---|---|---|")
-    for area, n in _counts(paths, area_of):
+    for area, n in _counts(rows, "area"):
         lines.append(f"| `{area}` | {AREA_ROLE.get(area, '—')} | {n} |")
     lines.append("")
     lines.append("| Kind | Files |")
     lines.append("|---|---|")
-    for kind, n in _counts(paths, kind_of):
+    for kind, n in _counts(rows, "kind"):
         lines.append(f"| {kind} | {n} |")
+    lines.append("")
+    lines.append(
+        "Invariant: Σkinds = Σareas = N = "
+        f"{sum(n for _, n in _counts(rows, 'kind'))} = "
+        f"{sum(n for _, n in _counts(rows, 'area'))} = {total}."
+    )
     return "\n".join(lines)
 
 
-def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=["summary", "list"], help="summary table or full manifest")
-    args = parser.parse_args(argv)
+CSV_COLUMNS = ["path", "area", "kind", "size_bytes"]
 
-    paths = tracked_paths()
+
+def render_csv(rows: list[dict]) -> str:
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=CSV_COLUMNS, lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: row.get(k, "") for k in CSV_COLUMNS})
+    return buf.getvalue()
+
+
+def _build_snapshot(args) -> RepoSnapshot:
+    if args.index:
+        return RepoSnapshot.from_index(args.root)
+    return RepoSnapshot.from_ref(args.root, args.ref)
+
+
+def make_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=["summary", "list", "csv"])
+    parser.add_argument("--root", default=str(REPO_ROOT), help="repository root")
+    parser.add_argument("--ref", default="HEAD", help="Git tree-ish to inventory (default: HEAD)")
+    parser.add_argument("--index", action="store_true", help="inventory the current index instead of a ref")
+    return parser
+
+
+def main(argv: list[str]) -> int:
+    args = make_parser().parse_args(argv)
+    snapshot = _build_snapshot(args)
     if args.command == "summary":
-        print(render_summary(paths))
-        return 0
-    for p in paths:
-        print(f"{area_of(p)}\t{kind_of(p)}\t{p}")
+        print(render_summary(snapshot))
+    elif args.command == "list":
+        for path in snapshot.paths():
+            print(f"{area_of(path)}\t{kind_of(path)}\t{path}")
+    else:
+        sys.stdout.write(render_csv(inventory_rows(snapshot)))
     return 0
 
 
