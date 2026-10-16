@@ -101,6 +101,50 @@ class SnapshotTests(unittest.TestCase):
             # still present in the inventory and lifecycle outputs
             self.assertIn("blob.bin", snap.paths())
 
+    def test_exact_blob_sizes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            small = b"x" * 42
+            large = b"y" * 1_500_003
+            repo.write("small.txt", small, binary=True)
+            repo.write("big.txt", large, binary=True)
+            repo.commit()
+            snap = snapshot_mod.RepoSnapshot.from_ref(repo.root, "HEAD")
+            self.assertEqual(snap.entry("small.txt").size, len(small))
+            self.assertEqual(snap.entry("big.txt").size, len(large))
+            # index mode resolves the same sizes explicitly
+            idx = snapshot_mod.RepoSnapshot.from_index(repo.root)
+            self.assertEqual(idx.entry("small.txt").size, len(small))
+            self.assertEqual(idx.entry("big.txt").size, len(large))
+
+    def test_above_size_limit_is_reported_oversized(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            content = "a = 1\n#" + "x" * (repo_graph.MAX_PARSE_BYTES + 10)
+            repo.write("huge.py", content)
+            repo.commit()
+            snap = snapshot_mod.RepoSnapshot.from_ref(repo.root, "HEAD")
+            self.assertEqual(snap.entry("huge.py").size, len(content.encode("utf-8")))
+            graph = repo_graph.build(snap)
+            self.assertEqual(graph.analysis["huge.py"][0], "skipped_oversized")
+
+    def test_unmerged_index_fails_explicitly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("f.txt", "base\n")
+            repo.commit()
+            main = _git(repo.root, "rev-parse", "--abbrev-ref", "HEAD").strip()
+            _git(repo.root, "checkout", "-q", "-b", "other")
+            repo.write("f.txt", "other\n")
+            repo.commit()
+            _git(repo.root, "checkout", "-q", main)
+            repo.write("f.txt", "main\n")
+            repo.commit()
+            # merge conflict leaves unmerged stages in the index
+            subprocess.run(["git", "-C", str(repo.root), "merge", "other"], capture_output=True, text=True)
+            with self.assertRaises(snapshot_mod.SnapshotError):
+                snapshot_mod.RepoSnapshot.from_index(repo.root)
+
 
 @unittest.skipIf(GIT is None, "git not available")
 class LifecycleTests(unittest.TestCase):

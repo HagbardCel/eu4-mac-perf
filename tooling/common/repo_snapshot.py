@@ -28,6 +28,24 @@ class SnapshotError(RuntimeError):
     """Raised when Git cannot produce the requested snapshot."""
 
 
+def _batch_check_sizes(root: Path, obj_ids: list[str]) -> dict[str, int]:
+    """Resolve blob sizes via ``git cat-file --batch-check``; missing objects are omitted."""
+    if not obj_ids:
+        return {}
+    stdin = "".join(obj_id + "\n" for obj_id in obj_ids).encode()
+    proc = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "--batch-check"],
+        input=stdin,
+        capture_output=True,
+    )
+    sizes: dict[str, int] = {}
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[1] != "missing":
+            sizes[fields[0]] = int(fields[2])
+    return sizes
+
+
 @dataclass(frozen=True)
 class Entry:
     path: str
@@ -74,7 +92,7 @@ class RepoSnapshot:
             if not record:
                 continue
             meta, _, path_b = record.partition(b"\t")
-            fields = meta.split(b" ")
+            fields = meta.split()
             size_s = fields[3].decode() if len(fields) > 3 else "-"
             entries.append(
                 Entry(
@@ -92,20 +110,34 @@ class RepoSnapshot:
         root = Path(root).resolve()
         raw = _git(root, ["ls-files", "-s", "-z"], binary=True)
         entries: list[Entry] = []
+        stages: dict[str, str] = {}
         for record in raw.split(b"\x00"):
             if not record:
                 continue
             meta, _, path_b = record.partition(b"\t")
-            fields = meta.split(b" ")
+            fields = meta.split()
+            stage = fields[2].decode() if len(fields) > 2 else "0"
+            path = path_b.decode("utf-8", "surrogateescape")
+            if path in stages and stages[path] != stage:
+                raise SnapshotError(
+                    f"unmerged index entry for {path!r} (stages {stages[path]} and {stage}); "
+                    "resolve the merge before auditing the index"
+                )
+            stages[path] = stage
             entries.append(
                 Entry(
-                    path=path_b.decode("utf-8", "surrogateescape"),
+                    path=path,
                     mode=fields[0].decode(),
                     obj_type="blob",
                     obj_id=fields[1].decode(),
                     size=-1,
                 )
             )
+        # Index metadata omits sizes; resolve them explicitly. Missing objects stay -1.
+        sizes = _batch_check_sizes(root, [e.obj_id for e in entries])
+        entries = [
+            Entry(e.path, e.mode, e.obj_type, e.obj_id, sizes.get(e.obj_id, -1)) for e in entries
+        ]
         return cls(root, "index", None, "", "", entries)
 
     # -- accessors --------------------------------------------------------
