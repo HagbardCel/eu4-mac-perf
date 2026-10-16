@@ -145,6 +145,100 @@ class SnapshotTests(unittest.TestCase):
             with self.assertRaises(snapshot_mod.SnapshotError):
                 snapshot_mod.RepoSnapshot.from_index(repo.root)
 
+    def _hash_blob(self, repo, content):
+        proc = subprocess.run(
+            ["git", "-C", str(repo.root), "hash-object", "-w", "--stdin"],
+            input=content,
+            capture_output=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout.decode().strip()
+
+    def test_lone_nonzero_stage_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("base.txt", "base\n")
+            repo.commit()
+            blob = self._hash_blob(repo, b"conflicted\n")
+            # a single stage-2 entry with no stage-1/stage-3 counterpart
+            subprocess.run(
+                ["git", "-C", str(repo.root), "update-index", "--index-info"],
+                input=f"100644 {blob} 2\tconflicted.txt\n".encode(),
+                capture_output=True,
+            )
+            self.assertEqual(
+                [l for l in _git(repo.root, "ls-files", "-s").splitlines() if "conflicted" in l][0].split()[2],
+                "2",
+            )
+            with self.assertRaises(snapshot_mod.SnapshotError):
+                snapshot_mod.RepoSnapshot.from_index(repo.root)
+
+    def test_missing_index_blob_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("base.txt", "base\n")
+            repo.commit()
+            absent = "1234567890abcdef1234567890abcdef12345678"
+            subprocess.run(
+                ["git", "-C", str(repo.root), "update-index", "--add", "--cacheinfo", f"100644,{absent},missing.txt"],
+                capture_output=True,
+            )
+            self.assertIn("missing.txt", _git(repo.root, "ls-files", "-s"))
+            with self.assertRaises(snapshot_mod.SnapshotError):
+                snapshot_mod.RepoSnapshot.from_index(repo.root)
+
+    def test_gitlink_without_local_commit_is_valid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("base.txt", "base\n")
+            repo.commit()
+            absent_commit = "1" * 40
+            subprocess.run(
+                ["git", "-C", str(repo.root), "update-index", "--add", "--cacheinfo", f"160000,{absent_commit},subdir"],
+                capture_output=True,
+            )
+            snap = snapshot_mod.RepoSnapshot.from_index(repo.root)
+            entry = snap.entry("subdir")
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry.obj_type, "commit")
+            self.assertEqual(entry.size, -1)
+            # a gitlink is never read as text
+            self.assertIsNone(snap.read_text("subdir"))
+
+    def test_symlink_index_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("base.txt", "base\n")
+            (repo.root / "linkfile").symlink_to("target")
+            _git(repo.root, "add", "linkfile")
+            snap = snapshot_mod.RepoSnapshot.from_index(repo.root)
+            entry = snap.entry("linkfile")
+            self.assertEqual(entry.obj_type, "blob")
+            self.assertEqual(entry.size, len("target"))
+            self.assertEqual(snap.read_text("linkfile"), "target")
+
+    def test_intent_to_add_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("base.txt", "base\n")
+            repo.commit()
+            repo.write("pending.txt", "nonempty pending content")
+            _git(repo.root, "add", "-N", "pending.txt")
+            with self.assertRaises(snapshot_mod.SnapshotError):
+                snapshot_mod.RepoSnapshot.from_index(repo.root)
+
+    def test_staged_empty_file_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("base.txt", "base\n")
+            repo.commit()
+            repo.write("empty.txt", "")
+            _git(repo.root, "add", "empty.txt")
+            snap = snapshot_mod.RepoSnapshot.from_index(repo.root)
+            entry = snap.entry("empty.txt")
+            self.assertEqual(entry.obj_type, "blob")
+            self.assertEqual(entry.size, 0)
+
 
 class InvariantTests(unittest.TestCase):
     """The archival invariants are enforcement, not decoration: a violation flips ok."""

@@ -23,26 +23,92 @@ from pathlib import Path
 # Guard against reading huge evidence blobs during textual analysis.
 MAX_BLOB_BYTES_DEFAULT = 2 * 1024 * 1024
 
+# Git index modes: regular (100644), executable (100755) and symlink (120000)
+# entries all reference a blob; a gitlink/submodule (160000) references a commit
+# that need not exist in this repository.
+BLOB_MODES = frozenset({"100644", "100755", "120000"})
+GITLINK_MODE = "160000"
+
 
 class SnapshotError(RuntimeError):
     """Raised when Git cannot produce the requested snapshot."""
 
 
-def _batch_check_sizes(root: Path, obj_ids: list[str]) -> dict[str, int]:
-    """Resolve blob sizes via ``git cat-file --batch-check``; missing objects are omitted."""
-    if not obj_ids:
+def _intent_to_add_paths(root: Path) -> set[str]:
+    """Index paths that only carry an ``git add -N`` intent-to-add entry.
+
+    Git records intent-to-add entries with the *empty blob*, so they are
+    indistinguishable from a genuinely staged empty file by object id alone.
+    Porcelain v2 does distinguish them: an intent-to-add entry has an unmodified
+    index status (``.A``) and an all-zero index object id, whereas a staged file
+    carries its real blob id. Detection must therefore be flag-based, never
+    oid-based.
+    """
+    proc = subprocess.run(
+        [
+            "git", "-C", str(root), "status", "--porcelain=v2", "-z",
+            "--untracked-files=no", "--no-renames",
+        ],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        raise SnapshotError(
+            "git status --porcelain=v2 failed: "
+            + proc.stderr.decode("utf-8", "replace").strip()
+        )
+    paths: set[str] = set()
+    for record in proc.stdout.decode("utf-8", "surrogateescape").split("\x00"):
+        if not record or record[0] != "1":
+            continue
+        fields = record.split(" ", 8)
+        if len(fields) != 9:
+            continue
+        xy, index_oid, path = fields[1], fields[7], fields[8]
+        if xy == ".A" and index_oid and set(index_oid) == {"0"}:
+            paths.add(path)
+    return paths
+
+
+def _batch_check_blobs(root: Path, obj_ids: list[str]) -> dict[str, int]:
+    """Resolve blob sizes via ``git cat-file --batch-check``, failing closed.
+
+    Every requested object must exist, be a ``blob`` and report a non-negative
+    size. A missing or malformed object raises ``SnapshotError``; callers must
+    never silently fall back to a sentinel size for an expected blob.
+    """
+    unique = list(dict.fromkeys(obj_ids))
+    if not unique:
         return {}
-    stdin = "".join(obj_id + "\n" for obj_id in obj_ids).encode()
+    stdin = "".join(oid + "\n" for oid in unique).encode()
     proc = subprocess.run(
         ["git", "-C", str(root), "cat-file", "--batch-check"],
         input=stdin,
         capture_output=True,
     )
+    if proc.returncode != 0:
+        raise SnapshotError(
+            "git cat-file --batch-check failed: "
+            + proc.stderr.decode("utf-8", "replace").strip()
+        )
+    lines = proc.stdout.decode("utf-8", "replace").splitlines()
+    if len(lines) != len(unique):
+        raise SnapshotError(
+            f"expected {len(unique)} object records from git cat-file, got {len(lines)}"
+        )
     sizes: dict[str, int] = {}
-    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+    for oid, line in zip(unique, lines):
         fields = line.split()
-        if len(fields) >= 3 and fields[1] != "missing":
-            sizes[fields[0]] = int(fields[2])
+        if len(fields) == 2 and fields[1] == "missing":
+            raise SnapshotError(f"index blob {oid} is missing from the object database")
+        if len(fields) != 3 or fields[0] != oid or fields[1] != "blob":
+            raise SnapshotError(f"unexpected git cat-file response for {oid}: {line!r}")
+        try:
+            size = int(fields[2])
+        except ValueError as exc:
+            raise SnapshotError(f"unexpected size for {oid}: {fields[2]!r}") from exc
+        if size < 0:
+            raise SnapshotError(f"negative size reported for {oid}: {size}")
+        sizes[oid] = size
     return sizes
 
 
@@ -108,35 +174,55 @@ class RepoSnapshot:
     @classmethod
     def from_index(cls, root) -> "RepoSnapshot":
         root = Path(root).resolve()
+        intent_to_add = _intent_to_add_paths(root)
         raw = _git(root, ["ls-files", "-s", "-z"], binary=True)
         entries: list[Entry] = []
-        stages: dict[str, str] = {}
         for record in raw.split(b"\x00"):
             if not record:
                 continue
             meta, _, path_b = record.partition(b"\t")
             fields = meta.split()
-            stage = fields[2].decode() if len(fields) > 2 else "0"
+            if len(fields) < 3:
+                raise SnapshotError(f"malformed index entry: {record!r}")
+            mode = fields[0].decode()
+            obj_id = fields[1].decode()
+            stage = fields[2].decode()
             path = path_b.decode("utf-8", "surrogateescape")
-            if path in stages and stages[path] != stage:
+            if stage != "0":
                 raise SnapshotError(
-                    f"unmerged index entry for {path!r} (stages {stages[path]} and {stage}); "
+                    f"unmerged index entry for {path!r} (stage {stage}); "
                     "resolve the merge before auditing the index"
                 )
-            stages[path] = stage
+            if path in intent_to_add:
+                raise SnapshotError(
+                    f"intent-to-add index entry for {path!r}; "
+                    "stage the file content before auditing the index"
+                )
+            if mode != GITLINK_MODE and mode not in BLOB_MODES:
+                raise SnapshotError(f"unsupported index mode {mode!r} for {path!r}")
+            # Gitlinks reference a submodule commit that may be absent here; its
+            # size is intentionally unknown. Every other mode must resolve to a blob.
             entries.append(
                 Entry(
                     path=path,
-                    mode=fields[0].decode(),
-                    obj_type="blob",
-                    obj_id=fields[1].decode(),
+                    mode=mode,
+                    obj_type="commit" if mode == GITLINK_MODE else "blob",
+                    obj_id=obj_id,
                     size=-1,
                 )
             )
-        # Index metadata omits sizes; resolve them explicitly. Missing objects stay -1.
-        sizes = _batch_check_sizes(root, [e.obj_id for e in entries])
+        blob_sizes = _batch_check_blobs(
+            root, [e.obj_id for e in entries if e.obj_type == "blob"]
+        )
         entries = [
-            Entry(e.path, e.mode, e.obj_type, e.obj_id, sizes.get(e.obj_id, -1)) for e in entries
+            Entry(
+                e.path,
+                e.mode,
+                e.obj_type,
+                e.obj_id,
+                blob_sizes[e.obj_id] if e.obj_type == "blob" else -1,
+            )
+            for e in entries
         ]
         return cls(root, "index", None, "", "", entries)
 
