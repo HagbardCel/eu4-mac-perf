@@ -73,6 +73,7 @@ DEFAULT_BATCH_SIZE = 500
 DEFAULT_MIN_SUCCESS_BYTES = 0.85
 DEFAULT_PROCESS_TIMEOUT = 3600
 PROCESS_GROUP_GRACE_SECONDS = 5.0
+PILOT_BATCH_ID = "batch-pilot"
 SMOKE_ANCHORS = (
     "SShaderOpenGL6SetAll",
     "CPdxMeshObject13RenderBuckets",
@@ -458,9 +459,10 @@ def _archive_acquisition_state(
     decomp: Path,
     exp: Path,
     label: str,
-) -> tuple[Path, list[tuple[Path, Path]], Path | None]:
+    moves: list[tuple[Path, Path]],
+) -> tuple[Path, Path | None]:
     archive_dir = unique_archive_dir(decomp, label)
-    moves = archive_batch_files(decomp, archive_dir)
+    archive_batch_files(decomp, archive_dir, moves)
     index_path = exp / "index.sqlite"
     if index_path.is_file():
         dest = archive_dir / "index.sqlite"
@@ -471,7 +473,60 @@ def _archive_acquisition_state(
     if manifest_path.is_file():
         archived_manifest = archive_dir / "batch_manifest.json"
         shutil.copy2(str(manifest_path), str(archived_manifest))
-    return archive_dir, moves, archived_manifest
+    return archive_dir, archived_manifest
+
+
+def _commit_manifest_with_archive(
+    exp: Path,
+    decomp: Path,
+    manifest: dict[str, Any],
+    label: str,
+) -> None:
+    manifest_path = decomp / "batch_manifest.json"
+    staging_manifest = decomp / "batch_manifest.json.staging"
+    write_batch_manifest(staging_manifest, manifest)
+    moves: list[tuple[Path, Path]] = []
+    archived_manifest: Path | None = None
+    try:
+        _, archived_manifest = _archive_acquisition_state(decomp, exp, label, moves)
+        os.replace(staging_manifest, manifest_path)
+    except Exception:
+        _rollback_acquisition_archive(moves, archived_manifest, decomp)
+        staging_manifest.unlink(missing_ok=True)
+        raise
+    staging_manifest.unlink(missing_ok=True)
+
+
+def _write_pilot_report(
+    pilot_dir: Path,
+    pilot_rvas: list[str],
+    functions_path: Path,
+    pilot_started: float,
+    outcome: str,
+    error: str | None = None,
+) -> None:
+    pilot_manifest = {"batches": {PILOT_BATCH_ID: pilot_rvas}}
+    stats = decompilation_success_stats(
+        pilot_manifest,
+        pilot_dir,
+        functions_path,
+        denominator_rvas=pilot_rvas,
+    )
+    report: dict[str, Any] = {
+        "sample_count": len(pilot_rvas),
+        "success_count": stats["success_count"],
+        "failed_count": stats["failed_count"],
+        "timeout_count": stats["timeout_count"],
+        "skipped_count": stats["skipped_count"],
+        "c_success_bytes_attempted": stats["c_success_bytes_attempted"],
+        "c_success_bytes_total": stats["c_success_bytes_total"],
+        "wall_seconds": time.monotonic() - pilot_started,
+        "subprocess_outcome": outcome,
+    }
+    if error is not None:
+        report["error"] = error
+    pilot_dir.mkdir(parents=True, exist_ok=True)
+    (pilot_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
 def _rollback_acquisition_archive(
@@ -550,19 +605,11 @@ def cmd_manifest(args: argparse.Namespace) -> int:
             ghidra_meta=ghidra_meta,
             require_exporter_match=True,
         )
-        staging_manifest = decomp / "batch_manifest.json.staging"
-        write_batch_manifest(staging_manifest, manifest)
         label = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        moves: list[tuple[Path, Path]] = []
-        archived_manifest: Path | None = None
         try:
-            _, moves, archived_manifest = _archive_acquisition_state(decomp, exp, label)
-            staging_manifest.replace(manifest_path)
+            _commit_manifest_with_archive(exp, decomp, manifest, label)
         except Exception as exc:
-            _rollback_acquisition_archive(moves, archived_manifest, decomp)
-            staging_manifest.unlink(missing_ok=True)
             raise ReError(f"manifest --fresh archive failed: {exc}") from exc
-        staging_manifest.unlink(missing_ok=True)
         invalidate_qualification(provenance, "manifest --fresh")
         save_provenance(exp, provenance)
         print(f"batch manifest (fresh): {manifest['eligible_function_count']} functions", file=sys.stderr)
@@ -581,13 +628,9 @@ def cmd_manifest(args: argparse.Namespace) -> int:
             require_exporter_match=True,
         )
         label = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        moves = []
-        archived_manifest = None
         try:
-            _, moves, archived_manifest = _archive_acquisition_state(decomp, exp, label)
-            write_batch_manifest(manifest_path, manifest)
+            _commit_manifest_with_archive(exp, decomp, manifest, label)
         except Exception as exc:
-            _rollback_acquisition_archive(moves, archived_manifest, decomp)
             raise ReError(f"manifest archive failed: {exc}") from exc
         invalidate_qualification(provenance, "manifest inventory or partition change")
         save_provenance(exp, provenance)
@@ -612,11 +655,19 @@ def _write_rva_list(path: Path, rvas: list[str]) -> None:
 def cmd_decompile(args: argparse.Namespace) -> int:
     if args.pilot and getattr(args, "batch_id", None):
         raise ReError("cannot combine --pilot with --batch-id")
-    verify_binary()
     digest = binary_sha256()
     binary_root = local_binary_root(digest)
-    meta = load_ghidra_meta(binary_root)
     exp = resolve_export_dir(binary_root, args.baseline_revision)
+    pilot_dir: Path | None = None
+    pilot_rvas: list[str] = []
+    pilot_started = 0.0
+    if args.pilot:
+        pilot_dir = exp / "logs" / "pilot"
+        pilot_dir.mkdir(parents=True, exist_ok=True)
+        (pilot_dir / "report.json").unlink(missing_ok=True)
+        pilot_started = time.monotonic()
+    verify_binary()
+    meta = load_ghidra_meta(binary_root)
     provenance = load_provenance(exp)
     if not provenance:
         raise ReError("missing provenance; run import first")
@@ -643,16 +694,10 @@ def cmd_decompile(args: argparse.Namespace) -> int:
     )
     functions_path = exp / "inventory" / "functions.jsonl"
     batches = manifest["batches"]
-    pilot_dir: Path | None = None
-    pilot_rvas: list[str] = []
     if args.pilot:
         sample = pilot_sample_rvas(functions_path, args.pilot)
         pilot_rvas = [format_rva(r) for r in sample]
-        pilot_dir = exp / "logs" / "pilot"
-        pilot_dir.mkdir(parents=True, exist_ok=True)
-        batches = {"pilot-sample": pilot_rvas}
-        if args.force:
-            (pilot_dir / "report.json").unlink(missing_ok=True)
+        batches = {PILOT_BATCH_ID: pilot_rvas}
     if getattr(args, "batch_id", None):
         batch_id = args.batch_id
         if batch_id not in batches:
@@ -662,16 +707,10 @@ def cmd_decompile(args: argparse.Namespace) -> int:
     process_timeout = getattr(args, "process_timeout", DEFAULT_PROCESS_TIMEOUT)
     decomp_dir = pilot_dir or (exp / "decompiled")
     decomp_dir.mkdir(parents=True, exist_ok=True)
-    pilot_started = time.monotonic()
-    pilot_outcome = "success"
     try:
         for batch_id, rvas in batches.items():
-            if args.pilot:
-                out_path = decomp_dir / "batch-pilot.jsonl"
-                staging = decomp_dir / "batch-pilot.jsonl.staging"
-            else:
-                out_path = decomp_dir / f"{batch_id}.jsonl"
-                staging = decomp_dir / f"{batch_id}.jsonl.staging"
+            out_path = decomp_dir / f"{batch_id}.jsonl"
+            staging = decomp_dir / f"{batch_id}.jsonl.staging"
             if out_path.is_file() and not args.force:
                 errors = export_completeness({"batches": {batch_id: rvas}}, decomp_dir)[1]
                 if not errors:
@@ -697,34 +736,27 @@ def cmd_decompile(args: argparse.Namespace) -> int:
                         process_timeout=process_timeout,
                     )
                 publish_batch_staging(staging, out_path, rvas)
-            except Exception:
-                pilot_outcome = "failed"
+            finally:
                 staging.unlink(missing_ok=True)
-                raise
-    except Exception:
-        if args.pilot:
-            pilot_outcome = "failed"
+    except (Exception, KeyboardInterrupt) as exc:
+        if args.pilot and pilot_dir is not None:
+            _write_pilot_report(
+                pilot_dir,
+                pilot_rvas,
+                functions_path,
+                pilot_started,
+                "failed",
+                error=str(exc),
+            )
         raise
-    if args.pilot:
-        pilot_manifest = {"batches": {"pilot-sample": pilot_rvas}}
-        stats = decompilation_success_stats(
-            pilot_manifest,
-            decomp_dir,
+    if args.pilot and pilot_dir is not None:
+        _write_pilot_report(
+            pilot_dir,
+            pilot_rvas,
             functions_path,
-            denominator_rvas=pilot_rvas,
+            pilot_started,
+            "success",
         )
-        pilot_report = {
-            "sample_count": len(pilot_rvas),
-            "success_count": stats["success_count"],
-            "failed_count": stats["failed_count"],
-            "timeout_count": stats["timeout_count"],
-            "skipped_count": stats["skipped_count"],
-            "c_success_bytes_attempted": stats["c_success_bytes_attempted"],
-            "c_success_bytes_total": stats["c_success_bytes_total"],
-            "wall_seconds": time.monotonic() - pilot_started,
-            "subprocess_outcome": pilot_outcome,
-        }
-        (pilot_dir / "report.json").write_text(json.dumps(pilot_report, indent=2) + "\n")
         print(f"pilot decompile written under {pilot_dir}")
         return 0
     c_export, errors = export_completeness(manifest, decomp_dir)

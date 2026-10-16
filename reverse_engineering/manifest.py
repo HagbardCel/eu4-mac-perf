@@ -165,15 +165,17 @@ def list_manifest_batch_files(decomp_dir: Path) -> list[Path]:
     return sorted(p for p in decomp_dir.glob("batch-*.jsonl") if BATCH_NAME_RE.match(p.name))
 
 
-def archive_batch_files(decomp_dir: Path, archive_dir: Path) -> list[tuple[Path, Path]]:
-    """Move batch JSONL files into archive_dir. Returns (archived_path, original_path) pairs."""
+def archive_batch_files(
+    decomp_dir: Path,
+    archive_dir: Path,
+    moves: list[tuple[Path, Path]],
+) -> None:
+    """Move batch JSONL files into archive_dir, appending each move to moves immediately."""
     archive_dir.mkdir(parents=True, exist_ok=True)
-    moves: list[tuple[Path, Path]] = []
     for path in list_manifest_batch_files(decomp_dir):
         dest = archive_dir / path.name
         shutil.move(str(path), str(dest))
         moves.append((dest, path))
-    return moves
 
 
 def rollback_archived_files(moves: list[tuple[Path, Path]]) -> None:

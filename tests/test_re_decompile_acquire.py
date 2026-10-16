@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -8,6 +9,8 @@ from pathlib import Path
 
 from reverse_engineering.corpus import (
     DEFAULT_PROCESS_TIMEOUT,
+    PILOT_BATCH_ID,
+    _commit_manifest_with_archive,
     cmd_decompile,
     cmd_manifest,
     terminate_process_group,
@@ -196,56 +199,132 @@ class DecompileOrchestrationTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             mock_headless.assert_not_called()
 
-    def test_pilot_writes_report(self) -> None:
+    def _pilot_mocks(self, exp: Path, binary_root: Path):
+        exporter = load_batch_manifest(exp / "decompiled" / "batch_manifest.json")[
+            "exporter_script_hash"
+        ]
+        return unittest.mock.patch.multiple(
+            "reverse_engineering.corpus",
+            binary_sha256=unittest.mock.Mock(return_value="sha"),
+            local_binary_root=unittest.mock.Mock(return_value=binary_root),
+            verify_binary=unittest.mock.Mock(),
+            load_ghidra_meta=unittest.mock.Mock(
+                return_value={
+                    "project_dir": "/proj",
+                    "project_name": "EU4_test",
+                    "program_name": "eu4",
+                }
+            ),
+            _acquisition_preflight_context=unittest.mock.Mock(
+                return_value=(
+                    "10.0",
+                    {"project_dir": "/proj", "project_name": "EU4_test", "program_name": "eu4"},
+                )
+            ),
+            script_hash=unittest.mock.Mock(return_value=exporter),
+        )
+
+    def _fake_headless_write_success(self, project_dir, project_name, *extra, process_timeout=None):
+        rva_file = Path(extra[6])
+        staging = Path(extra[7])
+        rvas = [line.strip() for line in rva_file.read_text().splitlines() if line.strip()]
+        lines = [
+            json.dumps(
+                {
+                    "entry_rva": rva,
+                    "status": "success",
+                    "decompilation_seconds": 0.1,
+                    "pseudocode": "void pilot_fn() {}",
+                }
+            )
+            for rva in rvas
+        ]
+        staging.write_text("\n".join(lines) + "\n")
+
+    def test_pilot_writes_report_with_nonzero_stats(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             binary_root = Path(tmp) / "eu4"
             exp = _copy_export_mini(binary_root / "exports" / "fixture-mini")
-            exporter = load_batch_manifest(exp / "decompiled" / "batch_manifest.json")[
-                "exporter_script_hash"
-            ]
-            with unittest.mock.patch("reverse_engineering.corpus.binary_sha256", return_value="sha"):
+            with self._pilot_mocks(exp, binary_root):
                 with unittest.mock.patch(
-                    "reverse_engineering.corpus.local_binary_root", return_value=binary_root
+                    "reverse_engineering.corpus.analyze_headless",
+                    side_effect=self._fake_headless_write_success,
                 ):
-                    with unittest.mock.patch("reverse_engineering.corpus.verify_binary"):
-                        with unittest.mock.patch(
-                            "reverse_engineering.corpus.load_ghidra_meta",
-                            return_value={
-                                "project_dir": "/proj",
-                                "project_name": "EU4_test",
-                                "program_name": "eu4",
-                            },
-                        ):
-                            with unittest.mock.patch(
-                                "reverse_engineering.corpus._acquisition_preflight_context",
-                                return_value=("10.0", {"project_dir": "/proj", "project_name": "EU4_test", "program_name": "eu4"}),
-                            ):
-                                with unittest.mock.patch(
-                                    "reverse_engineering.corpus.script_hash", return_value=exporter
-                                ):
-                                    with unittest.mock.patch(
-                                        "reverse_engineering.corpus.analyze_headless"
-                                    ):
-                                        with unittest.mock.patch(
-                                            "reverse_engineering.corpus.publish_batch_staging"
-                                        ):
-                                            rc = cmd_decompile(
-                                                argparse.Namespace(
-                                                    baseline_revision="fixture-mini",
-                                                    batch_size=500,
-                                                    timeout_seconds=120,
-                                                    process_timeout=DEFAULT_PROCESS_TIMEOUT,
-                                                    min_success_bytes=0.0,
-                                                    pilot=2,
-                                                    batch_id=None,
-                                                    require_complete=False,
-                                                    force=True,
-                                                )
-                                            )
+                    rc = cmd_decompile(
+                        argparse.Namespace(
+                            baseline_revision="fixture-mini",
+                            batch_size=500,
+                            timeout_seconds=120,
+                            process_timeout=DEFAULT_PROCESS_TIMEOUT,
+                            min_success_bytes=0.0,
+                            pilot=2,
+                            batch_id=None,
+                            require_complete=False,
+                            force=True,
+                        )
+                    )
             self.assertEqual(rc, 0)
+            pilot_dir = exp / "logs" / "pilot"
+            report = json.loads((pilot_dir / "report.json").read_text())
+            self.assertEqual(report["subprocess_outcome"], "success")
+            self.assertGreater(report["success_count"], 0)
+            self.assertGreater(report["c_success_bytes_attempted"], 0.0)
+            self.assertTrue((pilot_dir / f"{PILOT_BATCH_ID}.jsonl").is_file())
+
+    def test_pilot_failure_writes_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary_root = Path(tmp) / "eu4"
+            exp = _copy_export_mini(binary_root / "exports" / "fixture-mini")
+            with self._pilot_mocks(exp, binary_root):
+                with unittest.mock.patch(
+                    "reverse_engineering.corpus.analyze_headless",
+                    side_effect=RuntimeError("boom"),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        cmd_decompile(
+                            argparse.Namespace(
+                                baseline_revision="fixture-mini",
+                                batch_size=500,
+                                timeout_seconds=120,
+                                process_timeout=DEFAULT_PROCESS_TIMEOUT,
+                                min_success_bytes=0.0,
+                                pilot=2,
+                                batch_id=None,
+                                require_complete=False,
+                                force=True,
+                            )
+                        )
             report = json.loads((exp / "logs" / "pilot" / "report.json").read_text())
-            self.assertIn("sample_count", report)
-            self.assertIn("c_success_bytes_total", report)
+            self.assertEqual(report["subprocess_outcome"], "failed")
+            self.assertIn("boom", report["error"])
+            self.assertFalse((exp / "logs" / "pilot" / f"{PILOT_BATCH_ID}.jsonl.staging").is_file())
+
+    def test_pilot_keyboard_interrupt_cleans_staging(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary_root = Path(tmp) / "eu4"
+            exp = _copy_export_mini(binary_root / "exports" / "fixture-mini")
+            with self._pilot_mocks(exp, binary_root):
+                with unittest.mock.patch(
+                    "reverse_engineering.corpus.analyze_headless",
+                    side_effect=KeyboardInterrupt,
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        cmd_decompile(
+                            argparse.Namespace(
+                                baseline_revision="fixture-mini",
+                                batch_size=500,
+                                timeout_seconds=120,
+                                process_timeout=DEFAULT_PROCESS_TIMEOUT,
+                                min_success_bytes=0.0,
+                                pilot=2,
+                                batch_id=None,
+                                require_complete=False,
+                                force=True,
+                            )
+                        )
+            report = json.loads((exp / "logs" / "pilot" / "report.json").read_text())
+            self.assertEqual(report["subprocess_outcome"], "failed")
+            self.assertFalse((exp / "logs" / "pilot" / f"{PILOT_BATCH_ID}.jsonl.staging").is_file())
 
     def test_keyboard_interrupt_terminates_process_group(self) -> None:
         proc = unittest.mock.MagicMock()
@@ -295,6 +374,143 @@ class ManifestFreshTests(unittest.TestCase):
             self.assertTrue((archived / "batch_manifest.json").is_file())
             qual = json.loads((exp / "provenance.json").read_text())["qualification"]
             self.assertFalse(qual.get("passed", True))
+
+
+class ManifestArchiveRollbackTests(unittest.TestCase):
+    def _two_batch_export(self, binary_root: Path) -> Path:
+        exp = _copy_export_mini(binary_root / "exports" / "fixture-mini")
+        decomp = exp / "decompiled"
+        shutil.copy(decomp / "batch-00001.jsonl", decomp / "batch-00002.jsonl")
+        (exp / "index.sqlite").write_bytes(b"sqlite-index")
+        return exp
+
+    def _manifest_mocks(self, binary_root: Path, exp: Path):
+        exporter = load_batch_manifest(exp / "decompiled" / "batch_manifest.json")[
+            "exporter_script_hash"
+        ]
+        return unittest.mock.patch.multiple(
+            "reverse_engineering.corpus",
+            binary_sha256=unittest.mock.Mock(return_value="sha"),
+            local_binary_root=unittest.mock.Mock(return_value=binary_root),
+            verify_binary=unittest.mock.Mock(),
+            _acquisition_preflight_context=unittest.mock.Mock(
+                return_value=(
+                    "10.0",
+                    json.loads((exp / "provenance.json").read_text())["ghidra_meta"],
+                )
+            ),
+            script_hash=unittest.mock.Mock(return_value=exporter),
+        )
+
+    def _snapshot_acquisition(self, exp: Path) -> dict[str, bytes]:
+        decomp = exp / "decompiled"
+        snap = {
+            "manifest": (decomp / "batch_manifest.json").read_bytes(),
+            "batch-00001": (decomp / "batch-00001.jsonl").read_bytes(),
+            "batch-00002": (decomp / "batch-00002.jsonl").read_bytes(),
+            "index": (exp / "index.sqlite").read_bytes(),
+        }
+        return snap
+
+    def _assert_snapshot_unchanged(self, exp: Path, snap: dict[str, bytes]) -> None:
+        decomp = exp / "decompiled"
+        self.assertEqual((decomp / "batch_manifest.json").read_bytes(), snap["manifest"])
+        self.assertEqual((decomp / "batch-00001.jsonl").read_bytes(), snap["batch-00001"])
+        self.assertEqual((decomp / "batch-00002.jsonl").read_bytes(), snap["batch-00002"])
+        self.assertEqual((exp / "index.sqlite").read_bytes(), snap["index"])
+
+    def test_archive_rollback_on_second_batch_move(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary_root = Path(tmp) / "eu4"
+            exp = self._two_batch_export(binary_root)
+            snap = self._snapshot_acquisition(exp)
+            manifest = build_batch_manifest(
+                functions_jsonl=exp / "inventory" / "functions.jsonl",
+                baseline_revision="fixture-mini",
+                batch_size=500,
+                exporter_script_hash=load_batch_manifest(
+                    exp / "decompiled" / "batch_manifest.json"
+                )["exporter_script_hash"],
+                inventory_digest_value=inventory_digest(exp / "inventory" / "functions.jsonl"),
+                inventory_bundle_digest_value=inventory_bundle_digest(exp / "inventory"),
+            )
+            real_move = shutil.move
+            state = {"n": 0}
+
+            def move_inject(src, dst):
+                state["n"] += 1
+                if state["n"] == 2:
+                    raise OSError("injected batch move failure")
+                return real_move(src, dst)
+
+            with self._manifest_mocks(binary_root, exp):
+                with unittest.mock.patch("shutil.move", side_effect=move_inject):
+                    with self.assertRaises(OSError):
+                        _commit_manifest_with_archive(
+                            exp, exp / "decompiled", manifest, "rollback-test"
+                        )
+            self._assert_snapshot_unchanged(exp, snap)
+            self.assertFalse((exp / "decompiled" / "batch_manifest.json.staging").is_file())
+
+    def test_archive_rollback_on_index_move(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary_root = Path(tmp) / "eu4"
+            exp = self._two_batch_export(binary_root)
+            snap = self._snapshot_acquisition(exp)
+            manifest = build_batch_manifest(
+                functions_jsonl=exp / "inventory" / "functions.jsonl",
+                baseline_revision="fixture-mini",
+                batch_size=500,
+                exporter_script_hash=load_batch_manifest(
+                    exp / "decompiled" / "batch_manifest.json"
+                )["exporter_script_hash"],
+                inventory_digest_value=inventory_digest(exp / "inventory" / "functions.jsonl"),
+                inventory_bundle_digest_value=inventory_bundle_digest(exp / "inventory"),
+            )
+            real_move = shutil.move
+
+            def move_inject(src, dst):
+                if str(dst).endswith("index.sqlite") and ".archive" in str(dst):
+                    raise OSError("injected index move failure")
+                return real_move(src, dst)
+
+            with self._manifest_mocks(binary_root, exp):
+                with unittest.mock.patch("shutil.move", side_effect=move_inject):
+                    with self.assertRaises(OSError):
+                        _commit_manifest_with_archive(
+                            exp, exp / "decompiled", manifest, "rollback-test"
+                        )
+            self._assert_snapshot_unchanged(exp, snap)
+
+    def test_archive_rollback_on_manifest_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            binary_root = Path(tmp) / "eu4"
+            exp = self._two_batch_export(binary_root)
+            snap = self._snapshot_acquisition(exp)
+            manifest = build_batch_manifest(
+                functions_jsonl=exp / "inventory" / "functions.jsonl",
+                baseline_revision="fixture-mini",
+                batch_size=500,
+                exporter_script_hash=load_batch_manifest(
+                    exp / "decompiled" / "batch_manifest.json"
+                )["exporter_script_hash"],
+                inventory_digest_value=inventory_digest(exp / "inventory" / "functions.jsonl"),
+                inventory_bundle_digest_value=inventory_bundle_digest(exp / "inventory"),
+            )
+            real_replace = os.replace
+
+            def replace_inject(src, dst):
+                if str(dst).endswith("batch_manifest.json"):
+                    raise OSError("injected replace failure")
+                return real_replace(src, dst)
+
+            with self._manifest_mocks(binary_root, exp):
+                with unittest.mock.patch("os.replace", side_effect=replace_inject):
+                    with self.assertRaises(OSError):
+                        _commit_manifest_with_archive(
+                            exp, exp / "decompiled", manifest, "rollback-test"
+                        )
+            self._assert_snapshot_unchanged(exp, snap)
 
 
 if __name__ == "__main__":
