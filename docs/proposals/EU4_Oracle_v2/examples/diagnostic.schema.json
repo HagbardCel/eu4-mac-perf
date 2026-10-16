@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EU IV oracle v2 differential result",
+  "type": "object",
+  "required": ["schema_version", "function_id", "fixture_id", "run_id", "status", "capture"],
+  "properties": {
+    "schema_version": { "const": "eu4-oracle-diagnostic/v2" },
+    "function_id": { "type": "string", "minLength": 1 },
+    "fixture_id": { "type": "string", "minLength": 1 },
+    "run_id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["PASS", "MISMATCH", "UNREPLAYABLE", "INCOMPLETE_ORACLE", "CANDIDATE_CRASH", "CANDIDATE_TIMEOUT", "HARNESS_ERROR", "INCONCLUSIVE_NONDETERMINISM"] },
+    "first_divergence": {
+      "type": ["object", "null"],
+      "properties": {
+        "domain": { "enum": ["ABI", "return", "memory", "effects", "exception", "resource", "visual"] },
+        "object_id": { "type": "string" },
+        "byte_offset": { "type": "integer", "minimum": 0 },
+        "field_name": { "type": "string" },
+        "field_confidence": { "enum": ["verified", "inferred", "unknown"] },
+        "expected_hex": { "type": "string" },
+        "actual_hex": { "type": "string" },
+        "comparison_policy": { "type": "string" }
+      },
+      "required": ["domain"]
+    },
+    "capture": {
+      "type": "object",
+      "required": ["complete", "lost_events", "unknown_dependencies"],
+      "properties": {
+        "complete": { "type": "boolean" },
+        "lost_events": { "type": "integer", "minimum": 0 },
+        "unknown_dependencies": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

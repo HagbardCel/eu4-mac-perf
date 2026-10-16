@@ -1,0 +1,71 @@
+{
+  "kind": "eu4_oracle_v2_blueprint",
+  "status": "offline design, NOT runtime capture",
+  "files": [
+    {
+      "path": "README.md",
+      "sha256": "4bb28dd8be12d3bf8e5ea0c0632c5d235b7a1a38a549bf43eefcdc74572d67d2",
+      "bytes": 1800
+    },
+    {
+      "path": "design/MASTER_DESIGN_V2.md",
+      "sha256": "2ec8ec0e19e91e4f9c345efdb9854e800e73adb8dc44db8dd0aa70ac2dfe6325",
+      "bytes": 22686
+    },
+    {
+      "path": "design/OPENCODE_FEASIBILITY.md",
+      "sha256": "26dedfd34e65b31294255b66d9ce0defb0254a6f261930e598815911c4b968bb",
+      "bytes": 4987
+    },
+    {
+      "path": "design/PR_CHECKLIST.md",
+      "sha256": "c940dfe6a2d5d1fddac22efcfd3dd0798ff57b89c62048734d4b9d8e5768943b",
+      "bytes": 4543
+    },
+    {
+      "path": "examples/.opencode/agents/eu4-reconstructor.md",
+      "sha256": "95712a8bdabad187f66fefd67c29ce3d8e4c16603a8323f3bcdbddc996606432",
+      "bytes": 1498
+    },
+    {
+      "path": "examples/.opencode/tools/oracle.ts",
+      "sha256": "5f46f0ffa2cd581ca5f1cd6c318c08ef4623f47ccedb591c1852bad900d23a9f",
+      "bytes": 2876
+    },
+    {
+      "path": "examples/CONTROLLER_SKETCH.ts",
+      "sha256": "ce077254058fe9f21d15978929132e1df3bbaaeca05dfd6df621023548fbe712",
+      "bytes": 1126
+    },
+    {
+      "path": "examples/diagnostic.example.json",
+      "sha256": "53b182487fcb75c97bc410bd5ff859e318f6b713c7625cec463b289ec371b337",
+      "bytes": 635
+    },
+    {
+      "path": "examples/diagnostic.schema.json",
+      "sha256": "a432637828ece15a531e4582aeaecbe5f0bad8a5e3cacc478ab6d7034f74b0cf",
+      "bytes": 1582
+    },
+    {
+      "path": "examples/opencode.json",
+      "sha256": "6d9e8622fce35f2433d76729205026dfee9895640fe15ed24246ecaf4639d5c8",
+      "bytes": 451
+    },
+    {
+      "path": "oracle_proto/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "oracle_proto/core.py",
+      "sha256": "465a7b336cdc7524181ca5995b4f198b645664b8f890cfe8e1791e02e19db56d",
+      "bytes": 5214
+    },
+    {
+      "path": "tests/test_core.py",
+      "sha256": "247884615fef57bb93028b26c23274a3f611fc2367c26ebe874643d3e1f75998",
+      "bytes": 3039
+    }
+  ]
+}
