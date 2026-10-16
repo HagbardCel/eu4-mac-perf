@@ -63,14 +63,29 @@ python3 -m reverse_engineering.corpus preflight
 python3 -m reverse_engineering.corpus import
 python3 -m reverse_engineering.corpus inventory
 python3 -m reverse_engineering.corpus manifest
-python3 -m reverse_engineering.corpus decompile    # exploratory; per-function failed/timeout OK
+python3 -m reverse_engineering.corpus decompile    # resumable; per-function failed/timeout OK
 python3 -m reverse_engineering.corpus index
 python3 -m reverse_engineering.search symbol SShaderOpenGL
 ```
 
 `corpus index` always writes `exports/<rev>/index.sqlite`. It indexes manifest-listed batches when present and valid; missing or invalid batches are skipped with warnings. If `batch_manifest.json` is stale vs current `functions.jsonl`, the index is **inventory-only** until you run `corpus manifest`.
 
-`corpus decompile` writes `logs/decompile-report.json` only (no automatic `qualification` in provenance). Exit code **0** when headless orchestration completes; use `corpus qualify` before git census reports.
+`corpus decompile` writes `logs/decompile-report.json` only (no automatic `qualification` in provenance). Exit code **0** when headless orchestration completes unless `--require-complete` is set; use `corpus qualify` before git census reports.
+
+`c_export` is structural completeness (every manifest RVA has a terminal record). `decompilation_stats.c_success_bytes` / `c_success_bytes_attempted` measure byte-weighted success among validated batch records; `c_success_bytes_total` measures success against all eligible internal functions (or the pilot sample).
+
+Decompile flags:
+
+| Flag | Purpose |
+|------|---------|
+| `--batch-id batch-00001` | Run one manifest batch only |
+| `--timeout-seconds` | Per-function Ghidra decompiler budget (default 120) |
+| `--process-timeout` | Whole Ghidra subprocess limit (default 3600) |
+| `--require-complete` | Exit nonzero unless every manifest batch validates |
+| `--pilot N` | Stratified sample under `logs/pilot/` plus `logs/pilot/report.json` |
+| `--force` | Rerun even when a valid batch exists; with `--pilot`, clears stale `report.json` before Ghidra |
+
+`corpus manifest --fresh` archives existing `batch-*.jsonl`, `index.sqlite`, and a copy of the previous `batch_manifest.json` under `decompiled/.archive/<utc>/`, then writes a new manifest for a full acquisition. Use this after merge when starting the 84k-function run; it is **not** required for the pilot.
 
 ### Optional
 
@@ -239,7 +254,7 @@ No EU IV game process required. Summarize results in PR #48 before merge.
 2. **`corpus smoke`** — all three renderer anchors decompile successfully (`SmokeDecompile.java`).
 3. **`corpus inventory`** — real `functions.jsonl`, `call_edges.jsonl`, `coverage.json`.
 4. **Anchor pseudocode (manual headless)** — for the three anchor **entry RVAs** from inventory, run `analyzeHeadless` with `-scriptPath reverse_engineering/ghidra` and `ExportDecompilation.java` (same argv layout as [`build_analyze_headless_argv`](corpus.py): project dir/name, `-process <program_name> -noanalysis -readOnly`, RVA list file, output jsonl path, timeout seconds).
-5. **One manifest batch + index** — `corpus manifest`, then pick one batch id (e.g. `batch-00001`) and its RVA list from `decompiled/batch_manifest.json`. Run headless `ExportDecompilation.java` (same argv as step 4: RVA list file, output path, timeout). Write the validated export to `decompiled/<batch-id>.jsonl` (use a `*.jsonl.staging` file and `publish_batch_staging` from Python, or match manifest RVAs exactly). **Do not** use `corpus decompile` for a single batch—it processes the full manifest. Then `corpus index` → `search symbol` / `callers` / `callees` / `text` on anchor symbols (reuse a batch that contains an anchor if convenient).
+5. **One manifest batch + index** — `corpus manifest`, then `corpus decompile --batch-id batch-00001` (or manual headless with staging + `publish_batch_staging`). Then `corpus index` → `search symbol` / `callers` / `callees` / `text` on anchor symbols.
 
 Do **not** expect the index to load ad-hoc RVA exports without a manifest batch — `index` reads manifest-listed `batch-*.jsonl` only.
 
