@@ -145,11 +145,11 @@ Invariant: Σkinds = Σareas = N = 725 = 725 = 725.
 
 | Lifecycle | Files |
 |---|---|
-| ACTIVE | 347 |
+| ACTIVE | 348 |
 | FROZEN_VERIFIER | 257 |
-| RETIRED_EXPERIMENT | 91 |
+| RETIRED_EXPERIMENT | 86 |
 | GENERATED_DERIVED | 28 |
-| UNKNOWN | 2 |
+| UNKNOWN | 6 |
 
 | Classification source | Files |
 |---|---|
@@ -174,6 +174,6 @@ Audit invariants:
 - `N_classified = N_tracked` → `725 = 725` (ok)
 - `N_archive_eligible_but_unapproved = 0` (ok)
 - `N_archive_eligible_with_consumer = 0` (ok)
-- dependency conflicts: 9; archive candidates: 110; archive eligible: 0
+- dependency conflicts: 9; archive candidates: 105; archive eligible: 0
 
 <!-- END GENERATED: repo-inventory -->

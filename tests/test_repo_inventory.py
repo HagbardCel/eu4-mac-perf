@@ -170,6 +170,74 @@ class InvariantTests(unittest.TestCase):
         self.assertFalse(stats["ok"])
 
 
+class GlobMatchTests(unittest.TestCase):
+    def test_star_stays_within_one_segment(self):
+        self.assertTrue(repo_lifecycle.match("analysis/*.md", "analysis/x.md"))
+        self.assertFalse(repo_lifecycle.match("analysis/*.md", "analysis/sub/x.md"))
+
+    def test_question_mark_stays_within_one_segment(self):
+        self.assertTrue(repo_lifecycle.match("a?c.md", "abc.md"))
+        self.assertFalse(repo_lifecycle.match("a?c.md", "a/c.md"))
+
+    def test_double_star_spans_segments(self):
+        self.assertTrue(repo_lifecycle.match("analysis/**/*.md", "analysis/sub/x.md"))
+        self.assertTrue(repo_lifecycle.match("analysis/**/*.md", "analysis/a/b/x.md"))
+        self.assertTrue(repo_lifecycle.match("results/**", "results/a/b.bin"))
+        self.assertTrue(repo_lifecycle.match("results/**", "results"))
+
+    def test_non_glob_pattern_is_exact(self):
+        self.assertTrue(repo_lifecycle.match("plan.md", "plan.md"))
+        self.assertFalse(repo_lifecycle.match("plan.md", "docs/plan.md"))
+
+
+@unittest.skipIf(GIT is None, "git not available")
+class ImportResolutionTests(unittest.TestCase):
+    def _import_targets(self, repo_root, source):
+        graph = repo_graph.build(snapshot_mod.RepoSnapshot.from_ref(repo_root, "HEAD"))
+        return {e.target for e in graph.edges if e.source == source and e.relationship == "import"}
+
+    def test_relative_import_is_package_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("package_a/consumer.py", "from .helper import process\n")
+            # a same-named module in a different package must NOT satisfy the relative import
+            repo.write("package_b/helper.py", "def process():\n    return 1\n")
+            repo.commit()
+            self.assertEqual(self._import_targets(repo.root, "package_a/consumer.py"), set())
+            # adding the real sibling resolves exactly, high confidence
+            repo.write("package_a/helper.py", "def process():\n    return 2\n")
+            repo.commit()
+            graph = repo_graph.build(snapshot_mod.RepoSnapshot.from_ref(repo.root, "HEAD"))
+            edges = [e for e in graph.edges if e.source == "package_a/consumer.py" and e.relationship == "import"]
+            self.assertEqual({e.target for e in edges}, {"package_a/helper.py"})
+            self.assertTrue(all(e.confidence == "high" for e in edges))
+
+    def test_absolute_import_ambiguity_is_low_confidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("a/mod.py", "x = 1\n")
+            repo.write("b/mod.py", "y = 2\n")
+            repo.write("c/user.py", "import mod\n")
+            repo.commit()
+            graph = repo_graph.build(snapshot_mod.RepoSnapshot.from_ref(repo.root, "HEAD"))
+            edges = [e for e in graph.edges if e.source == "c/user.py" and e.relationship == "import"]
+            self.assertEqual({e.target for e in edges}, {"a/mod.py", "b/mod.py"})
+            self.assertTrue(all(e.confidence == "low" for e in edges))
+
+    def test_exact_absolute_import_prefers_package_qualified_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("pkg/mod.py", "x = 1\n")
+            # a decoy that only matches by suffix
+            repo.write("other/pkg/mod.py", "y = 2\n")
+            repo.write("user.py", "import pkg.mod\n")
+            repo.commit()
+            graph = repo_graph.build(snapshot_mod.RepoSnapshot.from_ref(repo.root, "HEAD"))
+            edges = [e for e in graph.edges if e.source == "user.py" and e.relationship == "import"]
+            self.assertEqual({e.target for e in edges}, {"pkg/mod.py"})
+            self.assertTrue(all(e.confidence == "high" for e in edges))
+
+
 @unittest.skipIf(GIT is None, "git not available")
 class LifecycleTests(unittest.TestCase):
     def _resolve(self, repo_root, policy):
@@ -243,6 +311,24 @@ class LifecycleTests(unittest.TestCase):
             }
             row = self._resolve(repo.root, policy)["bench/old.py"]
             self.assertTrue(row["archive_eligible"])
+
+    def test_nested_analysis_docs_are_unknown_not_generated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.write("analysis/README.md", "# index\n")
+            repo.write("analysis/legacy-writeup.md", "# writeup\n")
+            repo.write("analysis/notes/foo.md", "# nested notes\n")
+            repo.write("analysis/output/table.json", "{}\n")
+            repo.commit()
+            rows = self._resolve(repo.root, repo_lifecycle.load_policy())
+            self.assertEqual(rows["analysis/README.md"]["lifecycle"], "ACTIVE")
+            self.assertEqual(rows["analysis/legacy-writeup.md"]["lifecycle"], "RETIRED_EXPERIMENT")
+            # nested docs in an unrecognized subtree are uncertain, not assumed generated
+            self.assertEqual(rows["analysis/notes/foo.md"]["lifecycle"], "UNKNOWN")
+            self.assertFalse(rows["analysis/notes/foo.md"]["archive_candidate"])
+            # known generated families remain generated
+            self.assertEqual(rows["analysis/output/table.json"]["lifecycle"], "GENERATED_DERIVED")
+            self.assertTrue(rows["analysis/output/table.json"]["archive_candidate"])
 
     def test_policy_change_does_not_change_inventory(self):
         with tempfile.TemporaryDirectory() as tmp:

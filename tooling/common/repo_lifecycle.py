@@ -59,12 +59,24 @@ CSV_COLUMNS = [
 
 
 def match(pattern: str, path: str) -> bool:
-    if pattern.endswith("/**"):
-        prefix = pattern[:-3]
-        return path == prefix or path.startswith(prefix + "/")
-    if any(ch in pattern for ch in "*?["):
-        return fnmatch.fnmatchcase(path, pattern)
-    return path == pattern
+    """Path-aware glob: ``*``/``?`` stay within one path segment; ``**`` spans segments."""
+    return _match_segments(pattern.split("/"), path.split("/"))
+
+
+def _match_segments(psegs: list[str], tsegs: list[str]) -> bool:
+    if not psegs:
+        return not tsegs
+    head = psegs[0]
+    if head == "**":
+        rest = psegs[1:]
+        if not rest:
+            return True
+        return any(_match_segments(rest, tsegs[i:]) for i in range(len(tsegs) + 1))
+    if not tsegs:
+        return False
+    if fnmatch.fnmatchcase(tsegs[0], head):
+        return _match_segments(psegs[1:], tsegs[1:])
+    return False
 
 
 def load_policy(path=None, data=None) -> dict:

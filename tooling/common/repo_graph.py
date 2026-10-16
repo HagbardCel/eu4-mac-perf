@@ -123,17 +123,27 @@ def _is_parseable(path: str) -> bool:
 
 class _PyResolver:
     def __init__(self, py_paths: list[str]):
-        self.py_paths = py_paths
+        self.py_paths = list(py_paths)
+        self._known = set(py_paths)
 
-    def files_for_module(self, modslash: str) -> list[str]:
+    def exact(self, modslash: str) -> list[str]:
+        """Resolve a package-qualified module path exactly (no cross-package search)."""
         if not modslash:
             return []
-        init_rel = posixpath.join(modslash, "__init__.py")
+        cands = set()
+        for suffix in (modslash + ".py", posixpath.join(modslash, "__init__.py")):
+            if suffix in self._known:
+                cands.add(suffix)
+        return sorted(cands)
+
+    def resolve_absolute(self, modslash: str) -> list[str]:
+        """Prefer an exact package-qualified path; otherwise fall back to suffix matching."""
+        exact = self.exact(modslash)
+        if exact:
+            return exact
         cands = set()
         for p in self.py_paths:
-            if p == modslash + ".py" or p.endswith("/" + modslash + ".py"):
-                cands.add(p)
-            elif p == init_rel or p.endswith("/" + init_rel):
+            if p.endswith("/" + modslash + ".py") or p.endswith("/" + posixpath.join(modslash, "__init__.py")):
                 cands.add(p)
         return sorted(cands)
 
@@ -146,8 +156,10 @@ def _py_edges(resolver: _PyResolver, source: str, text: str, analysis: dict):
         analysis[source] = ("unparseable", f"python syntax error: {exc.msg}")
         return edges
 
-    def emit(modslash: str, line: int):
-        cands = resolver.files_for_module(modslash)
+    def add(modslash: str, line: int, *, relative: bool):
+        # Relative imports resolve strictly within their package: no suffix fallback,
+        # so a missing sibling never becomes a speculative cross-package dependency.
+        cands = resolver.exact(modslash) if relative else resolver.resolve_absolute(modslash)
         if not cands:
             return
         confidence = "high" if len(cands) == 1 else "low"
@@ -155,27 +167,37 @@ def _py_edges(resolver: _PyResolver, source: str, text: str, analysis: dict):
             if cand != source:
                 edges.append(Edge(source, cand, "import", confidence, f"{source}:{line}"))
 
+    base_dir = posixpath.dirname(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                emit(alias.name.replace(".", "/"), node.lineno)
+                add(alias.name.replace(".", "/"), node.lineno, relative=False)
         elif isinstance(node, ast.ImportFrom):
             level = node.level or 0
-            base = posixpath.dirname(source)
-            for _ in range(max(level - 1, 0)):
-                base = posixpath.dirname(base)
-            if node.module:
-                emit(node.module.replace(".", "/"), node.lineno)
+            if level > 0:
+                base = base_dir
+                for _ in range(level - 1):
+                    base = posixpath.dirname(base)
+                names = []
+                if node.module:
+                    rel = node.module.replace(".", "/")
+                    names.append(rel)
+                    for alias in node.names:
+                        if alias.name != "*":
+                            names.append(rel + "/" + alias.name)
+                else:
+                    for alias in node.names:
+                        if alias.name != "*":
+                            names.append(alias.name.replace(".", "/"))
+                for name in names:
+                    modslash = posixpath.normpath(posixpath.join(base, name)) if base else name
+                    add(modslash, node.lineno, relative=True)
+            elif node.module:
+                rel = node.module.replace(".", "/")
+                add(rel, node.lineno, relative=False)
                 for alias in node.names:
                     if alias.name != "*":
-                        emit(node.module.replace(".", "/") + "/" + alias.name, node.lineno)
-            else:
-                for alias in node.names:
-                    if alias.name != "*":
-                        modslash = alias.name.replace(".", "/")
-                        if level > 0:
-                            modslash = posixpath.normpath(posixpath.join(base, modslash)) if base else modslash
-                        emit(modslash, node.lineno)
+                        add(rel + "/" + alias.name, node.lineno, relative=False)
     return edges
 
 
