@@ -21,7 +21,7 @@ consumes. The project's power/heat objective is the downstream consumer of that 
 | [REUSE_MAP.md](REUSE_MAP.md) | REUSE / ADAPT / REPLACE / RETAIN_HISTORICAL decisions over existing assets |
 | [BASELINE_P0.md](BASELINE_P0.md) | Frozen baseline record (revision, checks, pre-existing failures) |
 | [../repo-map.md](../repo-map.md) | Tracked-path inventory and lifecycle labels (P1 audit) |
-
+| [../repo-audit-context.json](../repo-audit-context.json) | Audit identity triple (source snapshot, policy, tools); governs `docs/repo-{inventory,edges,lifecycle}.csv` |
 The design bundle that this program refines currently lives at
 `docs/proposals/EU4_Oracle_v2/` (delivered artifact, migrated into `docs/oracle/` and
 `oracle/` in P2, preserving its original bytes first). See
