@@ -257,6 +257,53 @@ class MaterializeTests(unittest.TestCase):
         self.assertEqual(config["permission"]["external_directory"], {"*": "deny"})
 
 
+class ConfigDigestTests(unittest.TestCase):
+    """The adapter must write exactly the configuration the preflight validated.
+
+    ``prepare`` renders the configuration and refuses to proceed unless the bytes
+    it is about to hand to the child match the declared digests - verified *before*
+    writing, so a mismatch never leaves a readable configuration behind. The
+    adapter renders through the same shared functions the driver uses, so the
+    declared, validated and executed configurations cannot drift.
+    """
+
+    def _base(self, tmp: Path) -> Path:
+        base = tmp / "staging" / "run-e2e"
+        (base / "workspace").mkdir(parents=True)
+        (base / "workspace" / "candidate.c").write_text("int main(void){return 0;}\n")
+        return base
+
+    def test_adapter_renders_from_the_shared_substitution_map(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            adapter = _adapter(Path(tmp), Path("/bin/true"))
+            run_dir = Path(tmp) / "staging" / "run-e2e"
+            expected = opencode.render_config(
+                SLICE_DIR / "opencode_config",
+                opencode.config_substitutions(
+                    provider="opencode", model_id="deepseek-v4.1-flash-free", variant="high",
+                    python=Path(sys.executable), repo_root=REPO_ROOT,
+                    run_dir=run_dir, workspace=run_dir / "workspace"))
+            self.assertEqual(adapter._render_config(), expected)
+
+    def test_prepare_refuses_a_materialized_digest_that_does_not_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._base(Path(tmp))
+            adapter = _adapter(Path(tmp), Path("/bin/true"),
+                               expected_materialized_sha256="0" * 64)
+            with self.assertRaises(opencode.BindingError) as ctx:
+                adapter.prepare(mock.Mock())
+            self.assertIn("rendered configuration", str(ctx.exception))
+
+    def test_prepare_refuses_a_template_digest_that_does_not_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._base(Path(tmp))
+            adapter = _adapter(Path(tmp), Path("/bin/true"),
+                               expected_template_sha256="0" * 64)
+            with self.assertRaises(opencode.BindingError) as ctx:
+                adapter.prepare(mock.Mock())
+            self.assertIn("configuration template", str(ctx.exception))
+
+
 class ChildEnvironmentTests(unittest.TestCase):
     """The child must not inherit the host repository as its project root.
 

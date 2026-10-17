@@ -35,6 +35,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import math
 import shutil
 import subprocess
 import sys
@@ -133,7 +134,10 @@ def _effective_limits(args, mode: str) -> dict:
 
     A declaration records *resolved* numbers, so the same resolution must check
     it: an omitted optional flag means the mode default, not ``None``. Generation
-    and enforcement must agree exactly, or a normal invocation is refused.
+    and enforcement must agree exactly, or a normal invocation is refused. This is
+    pure resolution - ``_limit_problems`` does the validation - and the *same*
+    object is what ``RunConfig`` is built from, so no second set of defaults can
+    apply afterwards.
     """
     return {
         "budget_calls": args.budget_calls if args.budget_calls is not None
@@ -142,6 +146,101 @@ def _effective_limits(args, mode: str) -> dict:
         else (900.0 if mode == "pilot" else 3600.0),
         "finalization_seconds": args.finalization_seconds,
     }
+
+
+def _valid_positive_duration(value) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and value > 0)
+
+
+_LIMIT_KEYS = ("budget_calls", "wall_seconds", "finalization_seconds")
+
+
+def _invalid_limit_keys(limits: dict) -> set[str]:
+    """The bounds that are not usable, by key.
+
+    ``budget_calls`` must be a positive integer - ``bool`` is excluded even though
+    it is an ``int`` subclass, because ``True`` is not a budget. The durations must
+    be finite and positive, which rejects zero, negatives, ``nan`` and ``inf``.
+    """
+    invalid: set[str] = set()
+    budget = limits.get("budget_calls")
+    if not (isinstance(budget, int) and not isinstance(budget, bool) and budget > 0):
+        invalid.add("budget_calls")
+    for key in ("wall_seconds", "finalization_seconds"):
+        if not _valid_positive_duration(limits.get(key)):
+            invalid.add(key)
+    return invalid
+
+
+def _limit_problems(limits: dict, *, label: str) -> list[str]:
+    """Why the run bounds are unusable, if they are. Fails closed."""
+    invalid = _invalid_limit_keys(limits)
+    problems: list[str] = []
+    for key in _LIMIT_KEYS:
+        if key not in invalid:
+            continue
+        value = limits.get(key)
+        if key == "budget_calls":
+            problems.append(f"{label} run.{key}={value!r} must be a positive integer")
+        else:
+            problems.append(
+                f"{label} run.{key}={value!r} must be a finite number greater than zero")
+    return problems
+
+
+def _config_identity(*, run_id: str, staging_root: Path, python: Path,
+                     provider: str, model_id: str, variant: str | None,
+                     config_dir: Path | None = None) -> tuple[dict, dict]:
+    """The configuration identity, rendered the way the adapter will render it.
+
+    Pre-registration records this; preflight recomputes it and compares. Both call
+    ``opencode.render_config`` over ``opencode.config_substitutions``, the same
+    functions the adapter uses, so the three cannot drift.
+    """
+    directory = CONFIG_DIR if config_dir is None else Path(config_dir)
+    run_dir = Path(staging_root) / run_id
+    substitutions = opencode.config_substitutions(
+        provider=provider, model_id=model_id, variant=variant, python=python,
+        repo_root=REPO_ROOT, run_dir=run_dir, workspace=run_dir / "workspace")
+    materialized = opencode.render_config(directory, substitutions)
+    return (
+        {
+            "template_path": "oracle/slice/opencode_config/opencode.json.template",
+            "template_sha256": _sha256_file(directory / opencode.CONFIG_TEMPLATE),
+            "materialized_sha256": hashlib.sha256(materialized.encode("utf-8")).hexdigest(),
+        },
+        substitutions,
+    )
+
+
+def _corpus_identity(fixtures_root: Path | None = None) -> dict:
+    """The visible and held-out manifests, as the guard recomputes them.
+
+    Reads ``REPO_ROOT/oracle/slice/fixtures`` (equal to ``corpus.FIXTURES_DIR`` in
+    the real tree, and the root the guard's corpus check uses), so a later commit
+    that changes a fixture is visible to the preflight.
+    """
+    root = (REPO_ROOT / "oracle" / "slice" / "fixtures"
+            if fixtures_root is None else Path(fixtures_root))
+    return {
+        set_name: corpus.manifest(corpus.load_corpus(set_name, root=root), set_name=set_name)
+        for set_name in (corpus.VISIBLE, corpus.HELD_OUT)
+    }
+
+
+def _staging_problems(staging_root: Path) -> list[str]:
+    """A staging root inside the repository would put the workspace inside it.
+
+    Symmetric containment, both paths resolved first so a symlink cannot route
+    around the check: the staging root must not be a child of the repository, and
+    the repository must not be a child of the staging root.
+    """
+    staging = Path(staging_root).resolve()
+    repo = REPO_ROOT.resolve()
+    if staging.is_relative_to(repo) or repo.is_relative_to(staging):
+        return [f"the staging root {staging} must lie outside the repository {repo}"]
+    return []
 
 
 def _visible_verdict(candidate: Path, run_id: str) -> dict:
@@ -170,18 +269,14 @@ def _preregistration(*, run_id: str, staging_root: Path, args, provider: str, mo
     so the run id and staging root are part of the declaration - which is why the
     staging base is preallocated at a stable path rather than chosen at run time.
     """
-    run_dir = staging_root / run_id
-    model = f"{provider}/{model_id}" + (f"#{variant}" if variant else "")
-    template_path = CONFIG_DIR / opencode.CONFIG_TEMPLATE
-    template = template_path.read_text(encoding="utf-8")
-    substitutions = {
-        "@MODEL@": model,
-        "@PYTHON@": str(Path(args.python)),
-        "@REPO_ROOT@": str(REPO_ROOT),
-        "@RUN_DIR@": str(run_dir),
-        "@WORKSPACE@": str(run_dir / "workspace"),
-    }
-    materialized = opencode.materialize(template, substitutions)
+    config, substitutions = _config_identity(
+        run_id=run_id, staging_root=staging_root, python=Path(args.python),
+        provider=provider, model_id=model_id, variant=variant)
+
+    limits = _effective_limits(args, "acceptance")
+    problems = _limit_problems(limits, label="declared")
+    if problems:
+        raise SystemExit("invalid execution bounds: " + "; ".join(problems))
 
     binary = Path(args.binary)
     probe = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
@@ -191,10 +286,7 @@ def _preregistration(*, run_id: str, staging_root: Path, args, provider: str, mo
     if probe.returncode != 0 or not version:
         raise SystemExit(f"cannot establish the OpenCode version from {binary}")
 
-    corpus_manifests = {}
-    for set_name in (corpus.VISIBLE, corpus.HELD_OUT):
-        corpus_manifests[set_name] = corpus.manifest(corpus.load_corpus(set_name),
-                                                     set_name=set_name)
+    corpus_manifests = _corpus_identity()
 
     return {
         "schema": PREREGISTRATION_SCHEMA,
@@ -208,11 +300,7 @@ def _preregistration(*, run_id: str, staging_root: Path, args, provider: str, mo
         "model": {"provider": provider, "id": model_id, "variant": variant},
         "prompt_path": "oracle/slice/opencode_config/prompt.txt",
         "prompt_sha256": _sha256_file(CONFIG_DIR / opencode.REPAIR_PROMPT),
-        "config": {
-            "template_path": "oracle/slice/opencode_config/opencode.json.template",
-            "template_sha256": _sha256_file(template_path),
-            "materialized_sha256": hashlib.sha256(materialized.encode("utf-8")).hexdigest(),
-        },
+        "config": config,
         "substitutions": substitutions,
         "corpus": corpus_manifests,
         "source": {
@@ -225,7 +313,7 @@ def _preregistration(*, run_id: str, staging_root: Path, args, provider: str, mo
         "run": {
             "mode": "acceptance",
             "attempts": 1,
-            **_effective_limits(args, "acceptance"),
+            **limits,
         },
         "conditions": [
             "C1 the pinned binary, model, variant and effective configuration are bound",
@@ -364,9 +452,54 @@ def _contract_problems(declared: dict, args, *, prereg_path: Path) -> list[str]:
             elif hashlib.sha256(blob).hexdigest() != wanted:
                 problems.append(f"{rel} differs from the declaration at the baseline_commit")
 
-    limits = _effective_limits(args, args.mode)
+    # The declaration's *other* pinned inputs. An ancestor-based revision policy
+    # deliberately permits a later commit C; without these checks a clean commit
+    # that changed a held-out fixture or the OpenCode configuration - leaving the
+    # pinned Python sources untouched - would still pass, and the run would spend
+    # the held-out corpus under conditions nobody declared.
+    model_declared = declared.get("model") or {}
+    try:
+        config, substitutions = _config_identity(
+            run_id=declared.get("run_id", ""),
+            staging_root=Path(declared.get("staging_root", "")),
+            python=Path(args.python),
+            provider=model_declared.get("provider"),
+            model_id=model_declared.get("id"),
+            variant=model_declared.get("variant"))
+    except (opencode.BindingError, OSError) as exc:
+        problems.append(f"the configuration cannot be re-materialized: {exc}")
+    else:
+        wanted_config = declared.get("config") or {}
+        for key in ("template_sha256", "materialized_sha256"):
+            if wanted_config.get(key) != config[key]:
+                problems.append(f"the configuration {key} differs from the declaration")
+        if declared.get("substitutions") != substitutions:
+            problems.append("the configuration substitutions differ from the declaration")
+
+    try:
+        corpus_identity = _corpus_identity()
+    except (corpus.CorpusError, OSError) as exc:
+        problems.append(f"the fixture corpus cannot be read: {exc}")
+    else:
+        wanted_corpus = declared.get("corpus") or {}
+        for set_name in (corpus.VISIBLE, corpus.HELD_OUT):
+            wanted = wanted_corpus.get(set_name)
+            if wanted is None:
+                problems.append(f"the declaration pins no {set_name} corpus manifest")
+            elif wanted != corpus_identity[set_name]:
+                problems.append(f"the {set_name} corpus differs from the declaration")
+
     run = declared.get("run") or {}
-    for key in ("budget_calls", "wall_seconds", "finalization_seconds"):
+    limits = _effective_limits(args, args.mode)
+    # Validate the *declaration* itself as well as the effective bounds, so a
+    # committed zero budget is refused because zero is invalid - not merely
+    # because it disagrees with the CLI default.
+    problems.extend(_limit_problems(run, label="declared"))
+    problems.extend(_limit_problems(limits, label="effective"))
+    invalid_declared = _invalid_limit_keys(run)
+    for key in _LIMIT_KEYS:
+        if key in invalid_declared:
+            continue
         if run.get(key) != limits[key]:
             problems.append(
                 f"run.{key}={limits[key]!r} differs from the declared {run.get(key)!r}")
@@ -401,6 +534,10 @@ def _enforce_preregistration(path: Path, *, run_id: str, staging_root: Path,
         raise SystemExit("run does not conform to the pre-registration: " + "; ".join(problems))
     args.expected_binary_sha256 = declared["binary"]["sha256"]
     args.expected_version = declared["binary"]["version"]
+    # The configuration the adapter writes must equal what preflight validated.
+    config = declared.get("config") or {}
+    args.expected_config_template_sha256 = config.get("template_sha256")
+    args.expected_config_sha256 = config.get("materialized_sha256")
     # The declaration is authoritative for the bounds the receipt will record.
     run = declared.get("run") or {}
     for key in ("budget_calls", "wall_seconds", "finalization_seconds"):
@@ -417,6 +554,10 @@ def main(argv: list[str] | None = None) -> int:
     run_id = args.run_id or _default_run_id(args.mode)
     staging_root = Path(args.staging_root).expanduser().resolve()
     run_dir = staging_root / run_id
+
+    staging_problems = _staging_problems(staging_root)
+    if staging_problems:
+        raise SystemExit("; ".join(staging_problems))
 
     if args.mode == "preregister":
         declaration = _preregistration(run_id=run_id, staging_root=staging_root, args=args,
@@ -463,6 +604,14 @@ def main(argv: list[str] | None = None) -> int:
         declaration_commit = _git("rev-parse", "HEAD")
         preregistration_path = _repo_relative(Path(args.preregistration))
 
+    # One validated effective-limits object, used for the bounds the receipt will
+    # record. ``RunConfig`` is built from exactly this object, so no second set of
+    # defaults can turn a declared zero into an hour.
+    limits = _effective_limits(args, args.mode)
+    bound_problems = _limit_problems(limits, label="effective")
+    if bound_problems:
+        raise SystemExit("invalid execution bounds: " + "; ".join(bound_problems))
+
     adapter = OpenCodeAdapter(OpenCodeRun(
         run_id=run_id,
         run_dir=run_dir,
@@ -480,6 +629,10 @@ def main(argv: list[str] | None = None) -> int:
         mode="probe" if args.mode == "pilot" else "repair",
         expected_binary_sha256=args.expected_binary_sha256,
         expected_version=args.expected_version,
+        # The adapter refuses to run unless the configuration it renders is exactly
+        # the one the declaration pinned and the preflight validated.
+        expected_template_sha256=getattr(args, "expected_config_template_sha256", None),
+        expected_materialized_sha256=getattr(args, "expected_config_sha256", None),
     ))
     # Only the acceptance mode may resolve the held-out corpus at all; the pilot
     # and rehearsal modes get a visible-only fixture root.
@@ -488,10 +641,10 @@ def main(argv: list[str] | None = None) -> int:
         run_id=run_id,
         candidate_src=Path(args.candidate),
         base_dir=staging_root,
-        budget_calls=args.budget_calls or (24 if args.mode == "pilot" else 40),
+        budget_calls=limits["budget_calls"],
         max_attempts=1,
-        wall_seconds=args.wall_seconds or (900.0 if args.mode == "pilot" else 3600.0),
-        finalization_seconds=args.finalization_seconds,
+        wall_seconds=limits["wall_seconds"],
+        finalization_seconds=limits["finalization_seconds"],
         model=model,
         fixtures_root=fixtures_root,
         baseline_commit=(declared or {}).get("source", {}).get("baseline_commit")

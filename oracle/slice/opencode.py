@@ -88,6 +88,33 @@ def materialize(template_text: str, substitutions: dict[str, str]) -> str:
     return rendered
 
 
+def config_substitutions(*, provider: str, model_id: str, variant: str | None,
+                         python: str | Path, repo_root: str | Path,
+                         run_dir: str | Path, workspace: str | Path) -> dict[str, str]:
+    """The one substitution map for the pinned configuration.
+
+    The pre-registration, the execution-time preflight and the adapter all render
+    from *this* map, so the configuration that is declared, the configuration that
+    is validated and the configuration the child actually runs under cannot drift.
+    """
+    model = f"{provider}/{model_id}"
+    if variant:
+        model = f"{model}#{variant}"
+    return {
+        "@MODEL@": model,
+        "@PYTHON@": str(python),
+        "@REPO_ROOT@": str(repo_root),
+        "@RUN_DIR@": str(run_dir),
+        "@WORKSPACE@": str(workspace),
+    }
+
+
+def render_config(template_dir: str | Path, substitutions: dict[str, str]) -> str:
+    """Render the tracked configuration template with a substitution map."""
+    template = (Path(template_dir) / CONFIG_TEMPLATE).read_text(encoding="utf-8")
+    return materialize(template, substitutions)
+
+
 # --- event stream -------------------------------------------------------------
 
 
@@ -250,6 +277,11 @@ class OpenCodeRun:
     mode: str = "repair"
     expected_binary_sha256: str | None = None
     expected_version: str | None = None
+    #: The configuration identities the run declared. When set, ``prepare`` fails
+    #: closed unless the template it read and the bytes it rendered match them, so
+    #: the child can never run under a configuration the preflight did not validate.
+    expected_template_sha256: str | None = None
+    expected_materialized_sha256: str | None = None
 
     @property
     def model(self) -> str:
@@ -299,14 +331,15 @@ class OpenCodeAdapter:
 
     # -- preparation ----------------------------------------------------------
     def _render_config(self) -> str:
-        template = (self._template_dir() / CONFIG_TEMPLATE).read_text(encoding="utf-8")
-        return materialize(template, {
-            "@MODEL@": self.run.model,
-            "@PYTHON@": str(self.run.python),
-            "@REPO_ROOT@": str(self.run.repo_root),
-            "@RUN_DIR@": str(self.run.run_dir),
-            "@WORKSPACE@": str(self.run.workspace),
-        })
+        return render_config(self._template_dir(), config_substitutions(
+            provider=self.run.provider,
+            model_id=self.run.model_id,
+            variant=self.run.variant,
+            python=self.run.python,
+            repo_root=self.run.repo_root,
+            run_dir=self.run.run_dir,
+            workspace=self.run.workspace,
+        ))
 
     def _probe_identity(self, supervisor: Any) -> dict[str, str]:
         binary = Path(self.run.binary)
@@ -340,14 +373,28 @@ class OpenCodeAdapter:
             raise BindingError(f"workspace has no candidate.c: {workspace}")
 
         rendered = self._render_config()
+        self._template_sha256 = _sha256_file(self._template_dir() / CONFIG_TEMPLATE)
+        self._materialized_sha256 = _sha256(rendered.encode("utf-8"))
+        # The invariant: the bytes the child will run under must be exactly the
+        # configuration the preflight validated. Verified *before* writing, so a
+        # mismatch never even leaves a readable config behind.
+        if (self.run.expected_template_sha256
+                and self._template_sha256 != self.run.expected_template_sha256):
+            raise BindingError(
+                "the configuration template does not match the declared digest "
+                f"({self._template_sha256} != {self.run.expected_template_sha256})")
+        if (self.run.expected_materialized_sha256
+                and self._materialized_sha256 != self.run.expected_materialized_sha256):
+            raise BindingError(
+                "the rendered configuration does not match the declared digest "
+                f"({self._materialized_sha256} != {self.run.expected_materialized_sha256})")
+
         self._config_path.parent.mkdir(parents=True, exist_ok=True)
         self._config_path.write_text(rendered, encoding="utf-8")
         self._config_path.chmod(0o600)
         for name in ("config", "data", "cache", "state"):
             (self._xdg / name).mkdir(parents=True, exist_ok=True)
 
-        self._template_sha256 = _sha256_file(self._template_dir() / CONFIG_TEMPLATE)
-        self._materialized_sha256 = _sha256(rendered.encode("utf-8"))
         self._prompt_sha256 = _sha256_file(self._prompt_path())
         self._identity = self._probe_identity(supervisor)
         self._prepared = True

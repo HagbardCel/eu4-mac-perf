@@ -141,8 +141,18 @@ It does **not** mean:
   declaration no longer has to be left uncommitted to satisfy a `HEAD == A`
   check), refuses an undeclared prompt before the adapter - and therefore the
   model - is built, and aborts a run whose mandatory journal cannot be published
-  instead of certifying it. Nothing about this run is retrofitted: it predates all
-  three, and its sealed receipt, artifact and summaries are unchanged.
+  instead of certifying it.
+* **This run also predates the corpus/configuration preflight, the positive-bounds
+  and the staging-root checks.** P3h4 added them: because the ancestor-based
+  revision policy permits a later commit C, the preflight now recomputes the
+  visible and held-out corpus manifests and the configuration template and
+  materialized digests and refuses any drift, refuses zero, negative or non-finite
+  execution bounds (building `RunConfig` from the one validated object, so a
+  declared zero can never become a default), refuses a staging root inside the
+  repository, and has the adapter refuse to launch unless the bytes it renders are
+  byte-identical to the declared digests. Nothing about this run is retrofitted: it
+  predates all of these, and its sealed receipt, artifact and summaries are
+  unchanged.
 * **The candidate snapshot is recorded as an absolute path.** Earlier receipts
   recorded `source.snapshot` absolutely; this one does too. Later runs record it
   relative to the staging root, so a committed receipt carries no user-specific

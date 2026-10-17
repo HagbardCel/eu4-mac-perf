@@ -464,8 +464,16 @@ explicitly.
   (`git cat-file blob HEAD:<path>`) rather than an arbitrary readable file, the
   candidate is the declared path (inside the repository, not a symlink) with the
   declared bytes, and the interpreter, prompt and execution bounds are the declared
-  ones. Acceptance has no prompt flexibility: `--prompt pilot` is refused before the
-  adapter - and therefore the model - is ever constructed.
+  ones. Because a later commit C is permitted by the ancestor policy, the preflight
+  also recomputes the **visible and held-out corpus manifests**, the **configuration
+  template and materialized digests** (from the declared substitution map) and the
+  **effective execution bounds**, and refuses if any differs - so a clean commit C
+  that changes a fixture or the permissions template is caught *before* the agent is
+  built. Bounds must be positive and finite (`budget_calls` a positive integer), and
+  the staging root must resolve outside the repository. The adapter additionally
+  refuses to launch unless the configuration it renders is byte-identical to the
+  declared digest. Acceptance has no prompt flexibility: `--prompt pilot` is refused
+  before the adapter - and therefore the model - is ever constructed.
 
 ### Where each guarantee is enforced
 
@@ -486,6 +494,10 @@ means it was reconstructed after the fact and carries no execution-time weight.
 | The declaration was committed before the run | the driver requires the declaration to be the Git object at HEAD, refusing an edited or uncommitted one | `git cat-file blob <declaration_commit>:<path>` equals the published pre-registration | the P3-B run, which predates the field |
 | The prompt is the declared one | prompt identity is checked before the adapter is built; acceptance refuses anything but the one declared prompt | `binding.prompt_sha256` vs the pre-registration | - |
 | Mandatory evidence was published | the journal export precedes the terminal status decision, so a failure aborts the run | a certified receipt must record no `execution.finalization.error` | - |
+| The corpus and configuration still match the declaration | the preflight recomputes the visible/held-out manifests and the configuration template and materialized digests before the adapter is built | the same recomputation from the pinned tree | - |
+| The child runs under the validated configuration | `OpenCodeAdapter.prepare` refuses unless the rendered bytes match the declared digests | the sealed `binding.config` digests | - |
+| The execution bounds are usable | positive and finite bounds; `RunConfig` is built from the one validated object, so no later default can apply | `run.*` against the pre-registration | - |
+| The staging root is outside the repository | symmetric containment check, before any workspace is materialized | - | - |
 | Both corpora pass | `certify_candidate`, once, after the gates | replay of both corpora in a fresh interpreter rooted in the pinned revision | - |
 | The corpora are unchanged | - | drift check recomputes both manifests from the tree | - |
 | No held-out material reaches the agent-visible surface | the binding fails closed on a leak in the stream | leak scan of the published summary | - |
@@ -521,8 +533,9 @@ reference only** and lists it as unauthenticated. Nothing here upgrades the
 original finding: the run's conditions remain the nine in the original
 pre-registration, and the gate contract above is enforced for runs after P3g.
 The committed-declaration, prompt-identity and journal-publication controls were
-added by P3h and are likewise enforced only for runs after it; the P3-B run
-predates them and its sealed evidence is unchanged.
+added by P3h, and the corpus/configuration preflight, the positive-bounds and the
+staging-root checks by P3h4; all are likewise enforced only for runs after them,
+and the P3-B run predates them and its sealed evidence is unchanged.
 
 ### Tests
 
@@ -545,6 +558,10 @@ predates them and its sealed evidence is unchanged.
 | The test double reaches the tools through a genuine MCP `tools/call` | `tests/test_oracle_slice_opencode.py` |
 | A committed declaration with default bounds is accepted; an edited, uncommitted, non-ancestor, or undeclared-path declaration is refused | `tests/test_oracle_slice_driver.py` |
 | An acceptance run refuses the pilot prompt before the adapter is built | `tests/test_oracle_slice_driver.py` |
+| A held-out fixture or the configuration template changed in a later clean commit is refused before the adapter is built | `tests/test_oracle_slice_driver.py` |
+| A declared or explicit zero, negative or non-finite bound is refused as invalid | `tests/test_oracle_slice_driver.py` |
+| A staging root inside the repository is refused before launch | `tests/test_oracle_slice_driver.py` |
+| The adapter refuses to launch unless the rendered configuration matches the declared digests | `tests/test_oracle_slice_opencode.py` |
 
 The acceptance run itself is published as a sealed receipt under
 `docs/oracle/receipts/`, the committed artifact under `docs/oracle/artifacts/`,
