@@ -6,6 +6,7 @@
     {"match": "analysis/evidence/**", "lifecycle": "FROZEN_VERIFIER", "reason": "Generated analysis evidence records; preservation required", "owner": "analysis"},
     {"match": "analysis/tools/**", "lifecycle": "ACTIVE", "reason": "Analysis tooling still invoked by tests and forensic workflows", "owner": "analysis"},
     {"match": "reverse_engineering/**", "lifecycle": "ACTIVE", "reason": "Static RE tooling; load-bearing for RE0 selection", "owner": "reverse-engineering"},
+    {"match": "oracle/**", "lifecycle": "ACTIVE", "reason": "Oracle capture/validation package; active program code", "owner": "oracle"},
     {"match": "tooling/**", "lifecycle": "ACTIVE", "reason": "Shared guards and audit tooling", "owner": "tooling"},
     {"match": "tests/**", "lifecycle": "ACTIVE", "reason": "Portable test suite", "owner": "tests"},
     {"match": "benchmark/*border*", "lifecycle": "RETIRED_EXPERIMENT", "reason": "Border multi-draw track wound down (NO-GO)", "owner": "benchmark"},
