@@ -1,0 +1,26 @@
+Repair `candidate.c` so that it reproduces the pinned behaviour of
+`synth_apply` (Oracle function id `synth:apply`), the function declared in
+`synth.h`, as evidenced by the visible fixtures under `fixtures/visible/`.
+
+An Oracle tool server exposes five direct tools:
+
+- `oracle_inspect({"function_id": "synth:apply"})` - static evidence and the
+  ABI/state layout.
+- `oracle_fixtures({"function_id": "synth:apply"})` - the visible fixtures.
+- `oracle_coverage({"function_id": "synth:apply"})` - counts and observable
+  domains.
+- `oracle_test({"function_id": "synth:apply", "candidate_path": "candidate.c"})`
+  - compiles `candidate.c` and runs the visible fixtures; returns a
+  `test_run_id`.
+- `oracle_diff({"run_id": "<test_run_id>"})` - the first observable divergence,
+  and the list of failing fixtures.
+
+`function_id` and `candidate_path` are both required, and `candidate_path` is
+relative to your working directory.
+
+Rules:
+
+- Change only `candidate.c`. Do not create, delete or rename any other file.
+- Do not shell out, and do not build or run anything yourself; take every
+  observation through `oracle_test` and `oracle_diff`.
+- Work until `oracle_test` reports that every visible fixture passes, then stop.

@@ -1,0 +1,34 @@
+{
+  "invariants": {
+    "all_classified": true,
+    "n_archive_candidates": 105,
+    "n_archive_eligible": 0,
+    "n_archive_eligible_but_unapproved": 0,
+    "n_archive_eligible_with_consumer": 0,
+    "n_classified": 725,
+    "n_dependency_conflicts": 9,
+    "n_tracked": 725,
+    "n_unique_paths": 725,
+    "ok": true
+  },
+  "policy": {
+    "path": "tooling/common/repo_lifecycle.json",
+    "sha256": "f63ecfdfe74e390218991e5ee91f91e9b0df32badecc8efd3ec02b6119ddd1c9"
+  },
+  "policy_version": "1",
+  "source": {
+    "blob_identity_sha256": "770849cf77f0511d3f0280b5102f23482b8b8e0bad38a96e6ae75c0eee222f47",
+    "commit": "8033e35de6b6bb689c6affb9498eae0c166c5635",
+    "mode": "ref",
+    "path_count": 725,
+    "ref": "8033e35",
+    "tree": "e00e1b0e88e3a10c1db6f9874fbf21b791b7b620"
+  },
+  "tools": {
+    "tooling/common/repo_audit.py": "31d51f9e3ae71b65ec3433f1b9866bbf4b13dcd4f4b3013f454e7ea433b78b96",
+    "tooling/common/repo_graph.py": "deeb7a4c4e9ae09853246aadd974299f2fd2fad6550d5e10b09ce81d016b93f8",
+    "tooling/common/repo_inventory.py": "1c2d35341b8be45454cc8b3cf9f5aaddbb885a1e8aa74ec832e67ac2000f1c54",
+    "tooling/common/repo_lifecycle.py": "d753f09a4f2c8c376fee6c1420ff4722431476b9374159595cbce951abc65c8c",
+    "tooling/common/repo_snapshot.py": "ea22b745fb75d3b3bf2fa76a7bc84397533ebd6c088ac8f52c2e469497dd7eab"
+  }
+}

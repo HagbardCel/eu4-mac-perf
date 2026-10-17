@@ -1,0 +1,6 @@
+Analysis of sampling Thread 0x2a (pid 42 eu4): main thread
+Call graph:
+    100 CInGameIdler::Render(void*)
+      100 CPdxMeshObject::RenderBuckets
+        60 GfxDrawIndexed
+          60 glDrawElements

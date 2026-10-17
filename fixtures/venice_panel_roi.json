@@ -1,0 +1,7 @@
+{
+  "resolution": [3456, 2234],
+  "coordinate_system": "opengl_bottom_left",
+  "panel_roi_opengl_bottom_left": [0.72, 0.02, 0.26, 0.42],
+  "verified": false,
+  "note": "Provisional bounds at pinned resolution; verify against panel-open reference during fixture registration."
+}

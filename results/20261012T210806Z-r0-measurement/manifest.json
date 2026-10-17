@@ -1,0 +1,1128 @@
+{
+  "schema": "r0_measurement_session_v1",
+  "mode": "integrated",
+  "cpu_reconcile_tolerance_ms_per_s": 50.0,
+  "transition_discard_frames": 3,
+  "expect_width": 3456,
+  "expect_height": 2234,
+  "measurement_valid_for_cpu": {
+    "epoch_a": true,
+    "epoch_b": true,
+    "epoch_c": false
+  },
+  "epochs": [
+    {
+      "id": "A",
+      "thread_cpu": {
+        "pid": 98200,
+        "duration_s_requested": 30.0,
+        "interval_s": 0.5,
+        "window_start_ns": 378384359061916,
+        "window_end_ns": 378414600898250,
+        "observed_duration_s": 30.241836334,
+        "thread_deltas": [
+          {
+            "thread_id": 6650541,
+            "delta_us": 23394621
+          },
+          {
+            "thread_id": 6650575,
+            "delta_us": 210232
+          },
+          {
+            "thread_id": 6651013,
+            "delta_us": 405282
+          },
+          {
+            "thread_id": 6651014,
+            "delta_us": 392864
+          },
+          {
+            "thread_id": 6651015,
+            "delta_us": 401082
+          },
+          {
+            "thread_id": 6651016,
+            "delta_us": 412706
+          },
+          {
+            "thread_id": 6651017,
+            "delta_us": 392939
+          },
+          {
+            "thread_id": 6651018,
+            "delta_us": 403153
+          },
+          {
+            "thread_id": 6651019,
+            "delta_us": 395295
+          },
+          {
+            "thread_id": 6651020,
+            "delta_us": 394521
+          },
+          {
+            "thread_id": 6651021,
+            "delta_us": 400513
+          },
+          {
+            "thread_id": 6651022,
+            "delta_us": 400858
+          },
+          {
+            "thread_id": 6651023,
+            "delta_us": 397397
+          },
+          {
+            "thread_id": 6651024,
+            "delta_us": 395809
+          },
+          {
+            "thread_id": 6651025,
+            "delta_us": 409613
+          },
+          {
+            "thread_id": 6651026,
+            "delta_us": 407678
+          },
+          {
+            "thread_id": 6651027,
+            "delta_us": 406446
+          },
+          {
+            "thread_id": 6651028,
+            "delta_us": 404375
+          },
+          {
+            "thread_id": 6651029,
+            "delta_us": 400631
+          },
+          {
+            "thread_id": 6651143,
+            "delta_us": 391450
+          },
+          {
+            "thread_id": 6651320,
+            "delta_us": 226214
+          },
+          {
+            "thread_id": 6651322,
+            "delta_us": 2896
+          },
+          {
+            "thread_id": 6651361,
+            "delta_us": 39628
+          },
+          {
+            "thread_id": 6651372,
+            "delta_us": 30395
+          },
+          {
+            "thread_id": 6651373,
+            "delta_us": 195825
+          },
+          {
+            "thread_id": 6651391,
+            "delta_us": 70548
+          },
+          {
+            "thread_id": 6651497,
+            "delta_us": 208392
+          },
+          {
+            "thread_id": 6651892,
+            "delta_us": 370117
+          },
+          {
+            "thread_id": 6652289,
+            "delta_us": 250153
+          }
+        ],
+        "total_attributed_us": 32211633,
+        "thread_cpu_ms_per_s": 1065.1348233038818,
+        "main_thread_id": 6650541,
+        "main_thread_cpu_ms_per_s": 773.5846706404571,
+        "non_main_thread_cpu_ms_per_s": 291.5501526634246,
+        "main_thread_mapping_status": "verified",
+        "process_cpu_ms_per_s": 1065.2781481481481,
+        "reconciliation_residual_ms_per_s": 0.1433248442663171,
+        "reconcile_ok": true,
+        "threads_appeared_mid_window": 59,
+        "threads_disappeared_mid_window": 0,
+        "thread_cpu_backend": "libproc",
+        "poll_diagnostics": [
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          },
+          {
+            "threads_enumerated": 59,
+            "threads_sampled_ok": 59,
+            "threads_skipped_esrch": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "B",
+      "sample_path": "results/20261012T210806Z-r0-measurement/epoch_b.sample.txt"
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario_id": 0,
+      "name": "paused_baseline_ui_closed",
+      "min_frames": 120,
+      "min_seconds": 2.0,
+      "positive_control": false
+    },
+    {
+      "scenario_id": 1,
+      "name": "positive_control_ui_toggle",
+      "min_frames": 30,
+      "min_seconds": 1.0,
+      "positive_control": true
+    }
+  ],
+  "probe_log_path": "results/20261012T210806Z-r0-measurement/r0_probe.log",
+  "thread_cpu_backend": "libproc",
+  "thread_cpu_preflight_offline": {
+    "status": "ready",
+    "thread_enumeration": "passed",
+    "cpu_delta": "passed",
+    "record_bytes": 112,
+    "pid_tested": 98057,
+    "main_thread_id": 6649469,
+    "phase": "offline",
+    "thread_cpu_backend": "libproc"
+  },
+  "preflight": {
+    "fixture": {
+      "save_sha256": "a04bc2e86eeda8025d7a914efb11b18b82dea423631fdcf48c50471578369607",
+      "eu4_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "render_settings_sha256": "cffdd7b53b8abdf8c3f698b32be208c659bd227fa0965efae78fe15f1474bd84",
+      "dlc_load_sha256": "83383e74e90d240c8ec8f420acf648459e0bfed1963710260a7ee8e9c090b705",
+      "country": "VEN",
+      "date": "1444.11.11",
+      "speed": 0,
+      "resolution": "3456x2234",
+      "refresh_hz": 120,
+      "power_mode": "normal"
+    },
+    "gog": {
+      "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+      "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "gog_game_id": "2057001589",
+      "gog_build_id": "59158198792514056",
+      "gog_package_version": "1",
+      "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
+      "eu4_branch": "release_1.37.5-gog-fix",
+      "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
+      "gog_user_data": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG",
+      "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
+      "linked_graphics": [
+        "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
+        "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
+      ]
+    },
+    "settings": {
+      "path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/settings.txt",
+      "sha256": "ef20417e1b05978cb6ed873b0597de1971967c90aa97dfdfea8371fb2ddd0499",
+      "render_settings_sha256": "cffdd7b53b8abdf8c3f698b32be208c659bd227fa0965efae78fe15f1474bd84",
+      "refreshRate": "60",
+      "fullScreen": "yes",
+      "borderless": "no",
+      "vsync": "yes",
+      "multi_sampling": "0",
+      "game_ui_scale": "1.500",
+      "autosave": "\"NEVER\"",
+      "game_resolution": "3456x2234"
+    },
+    "dlc_mods": {
+      "path": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/dlc_load.json",
+      "sha256": "83383e74e90d240c8ec8f420acf648459e0bfed1963710260a7ee8e9c090b705",
+      "selection": {
+        "enabled_mods": [
+          "mod/976a3320-468c-11ef-8896-71de0eb2c4d7.mod"
+        ],
+        "disabled_dlcs": []
+      }
+    },
+    "display": {
+      "display_id": 1,
+      "width": 1728,
+      "height": 1117,
+      "pixel_width": 3456,
+      "pixel_height": 2234,
+      "refresh_hz": 120.0,
+      "available_refresh_hz_at_current_resolution": [
+        47.94999694824219,
+        48.0,
+        50.0,
+        59.93998718261719,
+        60.0,
+        120.0
+      ],
+      "verified": true
+    },
+    "power": {
+      "source": "AC Power",
+      "mode": "normal",
+      "all_modes": {
+        "Battery Power": "normal",
+        "AC Power": "normal"
+      }
+    },
+    "launcher_args": [
+      "-enabletelemetry",
+      "-gdpr-compliant"
+    ],
+    "probe_sha256": "ff4a5654cbc4b5fec279685687813c86149351c5b5554a4b68177718ce554b11",
+    "probe_source_sha256": "539527655d7fe698a80e9a6d4a8a5109d4c62a6fd020e16f3941a175ed39f979",
+    "focus_source_sha256": "4e9894231186736fc14cbdb81827f8bbe0f63b42daa8854950eb4e8616e3f73e",
+    "powermetrics_helper_sha256": "084560117526df8ad72dc54e638a4bcc7ed727cfc67076202498caf22625e5da"
+  },
+  "clock_anchor": {
+    "event": "clock_anchor",
+    "monotonic_ns": 378243908357375,
+    "wall_ns": 1791839297653459000
+  },
+  "working_save": "$HOME/Documents/Paradox Interactive/Europa Universalis IV GOG/save games/EU4Benchmark_a04bc2e86eeda802.eu4",
+  "game_pid": 98200,
+  "thread_cpu_preflight_target": {
+    "status": "ready",
+    "pid_tested": 98200,
+    "phase": "target",
+    "record_bytes": 112,
+    "thread_cpu_backend": "libproc"
+  },
+  "thread_cpu_preflight": {
+    "status": "ready",
+    "pid_tested": 98200,
+    "phase": "target",
+    "record_bytes": 112,
+    "thread_cpu_backend": "libproc"
+  },
+  "readiness": {
+    "ready_ns": 378288907357625,
+    "swap_rate": 57.25,
+    "cpu_ms_s": 1065.9
+  },
+  "warmup": {
+    "start_ns": 378288907378833,
+    "end_ns": 378383472354583
+  },
+  "scene_alignment": {
+    "mean_rgb_delta": 9.59,
+    "shift_x_px": 0,
+    "shift_y_px": 0
+  },
+  "event_clock_alignment": {
+    "status": "passed",
+    "round_trip_ns": 126162250,
+    "t_before": 378384110367833,
+    "t_after": 378384236530083,
+    "t_ack": 378384134353041,
+    "tolerance_ns": 50000000
+  },
+  "main_thread_id": 6650541,
+  "epoch_a_thread_cpu": {
+    "pid": 98200,
+    "duration_s_requested": 30.0,
+    "interval_s": 0.5,
+    "window_start_ns": 378384359061916,
+    "window_end_ns": 378414600898250,
+    "observed_duration_s": 30.241836334,
+    "thread_deltas": [
+      {
+        "thread_id": 6650541,
+        "delta_us": 23394621
+      },
+      {
+        "thread_id": 6650575,
+        "delta_us": 210232
+      },
+      {
+        "thread_id": 6651013,
+        "delta_us": 405282
+      },
+      {
+        "thread_id": 6651014,
+        "delta_us": 392864
+      },
+      {
+        "thread_id": 6651015,
+        "delta_us": 401082
+      },
+      {
+        "thread_id": 6651016,
+        "delta_us": 412706
+      },
+      {
+        "thread_id": 6651017,
+        "delta_us": 392939
+      },
+      {
+        "thread_id": 6651018,
+        "delta_us": 403153
+      },
+      {
+        "thread_id": 6651019,
+        "delta_us": 395295
+      },
+      {
+        "thread_id": 6651020,
+        "delta_us": 394521
+      },
+      {
+        "thread_id": 6651021,
+        "delta_us": 400513
+      },
+      {
+        "thread_id": 6651022,
+        "delta_us": 400858
+      },
+      {
+        "thread_id": 6651023,
+        "delta_us": 397397
+      },
+      {
+        "thread_id": 6651024,
+        "delta_us": 395809
+      },
+      {
+        "thread_id": 6651025,
+        "delta_us": 409613
+      },
+      {
+        "thread_id": 6651026,
+        "delta_us": 407678
+      },
+      {
+        "thread_id": 6651027,
+        "delta_us": 406446
+      },
+      {
+        "thread_id": 6651028,
+        "delta_us": 404375
+      },
+      {
+        "thread_id": 6651029,
+        "delta_us": 400631
+      },
+      {
+        "thread_id": 6651143,
+        "delta_us": 391450
+      },
+      {
+        "thread_id": 6651320,
+        "delta_us": 226214
+      },
+      {
+        "thread_id": 6651322,
+        "delta_us": 2896
+      },
+      {
+        "thread_id": 6651361,
+        "delta_us": 39628
+      },
+      {
+        "thread_id": 6651372,
+        "delta_us": 30395
+      },
+      {
+        "thread_id": 6651373,
+        "delta_us": 195825
+      },
+      {
+        "thread_id": 6651391,
+        "delta_us": 70548
+      },
+      {
+        "thread_id": 6651497,
+        "delta_us": 208392
+      },
+      {
+        "thread_id": 6651892,
+        "delta_us": 370117
+      },
+      {
+        "thread_id": 6652289,
+        "delta_us": 250153
+      }
+    ],
+    "total_attributed_us": 32211633,
+    "thread_cpu_ms_per_s": 1065.1348233038818,
+    "main_thread_id": 6650541,
+    "main_thread_cpu_ms_per_s": 773.5846706404571,
+    "non_main_thread_cpu_ms_per_s": 291.5501526634246,
+    "main_thread_mapping_status": "verified",
+    "process_cpu_ms_per_s": 1065.2781481481481,
+    "reconciliation_residual_ms_per_s": 0.1433248442663171,
+    "reconcile_ok": true,
+    "threads_appeared_mid_window": 59,
+    "threads_disappeared_mid_window": 0,
+    "thread_cpu_backend": "libproc",
+    "poll_diagnostics": [
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      },
+      {
+        "threads_enumerated": 59,
+        "threads_sampled_ok": 59,
+        "threads_skipped_esrch": 0
+      }
+    ]
+  },
+  "sample_main_thread_corroboration": "matched",
+  "drawable_capability": {
+    "supported": false,
+    "failure_code": 1,
+    "failure_class": "unsupported_drawable",
+    "frame": {
+      "frame_index": 8579,
+      "mode": 1,
+      "scenario_id": 0,
+      "pause_verified": 1,
+      "census_ok": 0,
+      "context_id": 140567739297280,
+      "width": 0,
+      "height": 0,
+      "memcmp_equal_prev": -1,
+      "census_attempted": 1,
+      "crc64": 0,
+      "flush_is_main_thread": 1,
+      "uptime_ns": 378436572160249,
+      "gl_error_observed": 0,
+      "flush_ok": 1,
+      "flush_cgl_error": 0,
+      "pthread_tid": 6650541,
+      "control_generation": 3,
+      "readback_failure_code": 1
+    },
+    "generation": 3,
+    "status": "unsupported_drawable"
+  },
+  "positive_control_status": "skipped_unsupported_drawable",
+  "frame_evolution_status": "skipped_unsupported_drawable",
+  "census_frame_count": 0,
+  "census_frame_count_by_scenario": {},
+  "working_save_changed": false,
+  "analyzer_results": {
+    "frame_evolution": {
+      "exit_code": 0,
+      "skipped": true
+    },
+    "stack": {
+      "exit_code": 1,
+      "error": "nonzero_exit"
+    }
+  },
+  "status": "incomplete_gates",
+  "acceptance_gates": {
+    "cpu_reconcile": true,
+    "flush_single_owner": true,
+    "main_thread_mapping": true,
+    "thread_cpu_preflight": true,
+    "event_clock_alignment": true,
+    "stack_analyzer": false,
+    "qualified_windows": true,
+    "positive_control": true,
+    "roi_verified": true,
+    "frame_analyzer": true
+  },
+  "ended_utc": "2026-10-12T21:11:31.559830+00:00"
+}

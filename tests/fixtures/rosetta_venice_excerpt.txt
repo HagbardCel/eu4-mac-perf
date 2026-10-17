@@ -1,0 +1,11 @@
+Call graph:
+    791 Thread_6650541: Main Thread   DispatchQueue_<multiple>
+    + 791 start  (in dyld) + 3253  [0x2030e31b5]
+    +   791 main  (in eu4) + 10903  [0x100757441]
+    +     791 CApplication::Run()  (in eu4) + 48  [0x1013cb55c]
+    +       715 CApplication::UpdateOneFrame(bool)  (in eu4) + 306  [0x1013cb0b2]
+    +       ! 610 CInGameIdler::Idle(bool)  (in eu4) + 9894  [0x10070c3ba]
+    +       ! : 518 CInGameIdler::Render()  (in eu4) + 836  [0x100703082]
+    +       ! : | 374 CEU3GraphicalMap::Render(GfxDeferredContextGFX*, CEU3Camera const&, float, bool)  (in eu4) + 1045  [0x100ed4edd]
+    +       ! : | + 374 CGraphics::RenderBuckets(CCamera const*, int)  (in eu4) + 54  [0x10149cf12]
+    +       ! : | +   315 CPdxMeshObject::RenderBuckets(CGraphics*, GfxDeferredContextGFX*, CCamera const*, int, bool, bool)  (in eu4) + 1637  [0x1014c8409]

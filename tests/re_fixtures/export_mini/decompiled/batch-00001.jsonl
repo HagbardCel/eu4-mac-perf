@@ -1,0 +1,3 @@
+{"entry_rva":"0x0000000000001000","status":"success","decompilation_seconds":0.1,"pseudocode":"void SetAll() { glUseProgram(1); }"}
+{"entry_rva":"0x0000000000002000","status":"success","decompilation_seconds":0.2,"pseudocode":"void Flush() { indirect_call(); }"}
+{"entry_rva":"0x0000000000004000","status":"failed","decompilation_seconds":0.05,"error":"timeout"}

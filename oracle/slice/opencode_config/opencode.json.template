@@ -1,0 +1,38 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": false,
+  "codemode": false,
+  "model": "@MODEL@",
+  "mcp": {
+    "servers": {
+      "oracle": {
+        "type": "local",
+        "command": [
+          "@PYTHON@",
+          "-m",
+          "oracle.slice.bridge",
+          "serve",
+          "--run-dir",
+          "@RUN_DIR@",
+          "--workspace",
+          "@WORKSPACE@"
+        ],
+        "environment": {
+          "PYTHONPATH": "@REPO_ROOT@",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "disabled": false,
+        "codemode": false
+      }
+    }
+  },
+  "permission": {
+    "shell": "deny",
+    "subagent": "deny",
+    "webfetch": "deny",
+    "websearch": "deny",
+    "browser": "deny",
+    "question": "deny",
+    "external_directory": { "*": "deny" }
+  }
+}

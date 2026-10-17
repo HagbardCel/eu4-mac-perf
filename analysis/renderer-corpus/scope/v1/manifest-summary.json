@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "generated_from": "eu4-callsite-evidence.zip",
+  "source_zip_sha256": "ddb59dc222368fa93a2d5659a774580451899e48c74c0fdf5ccf32de4c0d6701",
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "baseline_revision": "auto-v1-20261013",
+  "ghidra_version": "12.1.4",
+  "input_inventory_functions": 85826,
+  "input_census_callsites": 601904,
+  "selected_internal_functions": 4450,
+  "selected_core_functions": 3544,
+  "selected_direct_dependencies": 874,
+  "selected_second_dependencies": 32,
+  "deep_shortlist_functions": 260,
+  "subsystem_counts": {
+    "dependency": 906,
+    "map_mesh": 841,
+    "lifecycle": 297,
+    "resources": 412,
+    "backend": 395,
+    "graphics_global": 15,
+    "ui_text": 1584
+  },
+  "tiers": {
+    "direct_dependency": 874,
+    "core": 3544,
+    "second_dependency": 32
+  },
+  "decoded_instructions_selected": 281654,
+  "decoded_bytes_selected": 1145487,
+  "selected_missing_indirect_callsites": 4604,
+  "selected_pcode_callind_sites": 4880,
+  "selected_flow_only_sites": 1331,
+  "selected_callsite_total": 31115,
+  "graphics_boundary_thunks": 44,
+  "all_92_gfx_helpers_present": true,
+  "known_priority_targets_present": 9,
+  "selection_manifest_sha256": "8335ee6365ea3848b3638bf1cffc3f44f8c6701132f1c055d0820ab07de0d2c4",
+  "rva_list_sha256": "ca2e785782dd4bc12f18e9d29cf376e6995637aa2415852479cdfe724b750280",
+  "deep_rva_list_sha256": "d0d4f2f06476502d037e89da3fc51107f3e7440cd90dfd01c4bbe7ee19c03751",
+  "deep_shortlist_subsystems": {
+    "map_mesh": 75,
+    "ui_text": 20,
+    "backend": 119,
+    "resources": 30,
+    "graphics_global": 4,
+    "lifecycle": 12
+  },
+  "inventory_bundle_digest": "1eaff96fe79d6b142a7c158a9701e24b78d11cc84e9e2f44cb8aed75d5bf7cae",
+  "inventory_digest": "772382c8093eddc5a0525b2f34e4c709db5f8677428dcea996a52a58be9e340c",
+  "source_inputs_sha256": {
+    "inventory/functions.jsonl": "772382c8093eddc5a0525b2f34e4c709db5f8677428dcea996a52a58be9e340c",
+    "inventory/call_edges.jsonl": "c6d70c3125da5710697eb5c73d43d291cf08dcf3ade1125ecff15c7aea69cee9",
+    "audits/callsites-v1.jsonl": "8b051074b0bae0f05e75b2537ae83664f95e56646410668f3089afd61bdad392"
+  }
+}

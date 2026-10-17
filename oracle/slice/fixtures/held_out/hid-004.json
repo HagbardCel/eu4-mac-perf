@@ -1,0 +1,31 @@
+{
+  "schema_version": "eu4-oracle-fixture/v1",
+  "fixture_id": "hid-004",
+  "function_id": "synth:apply",
+  "set": "held_out",
+  "input": {
+    "mode": 1,
+    "arg": -2147483648,
+    "dirty": 0,
+    "value": 2,
+    "counter": 2
+  },
+  "expected": {
+    "capture": {
+      "complete": true,
+      "lost_events": 0,
+      "unknown_dependencies": []
+    },
+    "return_hex": "80000002",
+    "exit": "normal",
+    "post_memory": {
+      "state": "000000000200000002000080"
+    },
+    "effects": [
+      {
+        "field": 3,
+        "value": -2147483646
+      }
+    ]
+  }
+}

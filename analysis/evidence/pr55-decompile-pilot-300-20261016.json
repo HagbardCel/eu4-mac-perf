@@ -1,0 +1,52 @@
+{
+  "kind": "pr55_decompile_pilot_v1",
+  "status": "passed",
+  "repository_commit": "f0f781cbfd8351acf64024865453145980c79f4e",
+  "baseline_revision": "auto-v1-20261013",
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "local_corpus_root": ".local/eu4/b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "ghidra_version": "12.1.4",
+  "pilot_sample_seed": 0,
+  "command": [
+    "python3",
+    "-m",
+    "reverse_engineering.corpus",
+    "decompile",
+    "--baseline-revision",
+    "auto-v1-20261013",
+    "--pilot",
+    "300",
+    "--timeout-seconds",
+    "120",
+    "--process-timeout",
+    "3600",
+    "--force"
+  ],
+  "timeout_seconds": 120,
+  "process_timeout": 3600,
+  "local_artifact_sha256": {
+    "note": "SHA-256 of local export files under .local/ (not committed to git)",
+    "inventory/functions.jsonl": "772382c8093eddc5a0525b2f34e4c709db5f8677428dcea996a52a58be9e340c",
+    "logs/pilot/batch-pilot.jsonl": "5bb7f97bcaf387274c98b6519eaad2544e3ff6269a0f6cb3eb3adbeb6584b7e2",
+    "logs/pilot/report.json": "e4cce24c5e51fa65cc02a751fadea8ee9d4a4551199799a831e1ce15803aaf93"
+  },
+  "report": {
+    "sample_count": 300,
+    "wall_seconds": 8.051750625,
+    "subprocess_outcome": "success",
+    "success_count": 300,
+    "failed_count": 0,
+    "timeout_count": 0,
+    "skipped_count": 0,
+    "c_success_bytes_attempted": 1.0,
+    "c_success_bytes_total": 1.0
+  },
+  "reconciliation": {
+    "jsonl_line_count": 300,
+    "status_histogram": {
+      "success": 300
+    },
+    "report_matches_jsonl": true
+  },
+  "acquisition_recommendation": "The 300-function pilot completed successfully in approximately 8.05 seconds, with 300 successful decompilations and no timeouts. This supports starting the offline full acquisition using the proposed defaults of 500 functions per batch and a 3,600-second subprocess timeout. These are provisional operating parameters, not validated upper bounds; reevaluate them using the initial full-acquisition batches."
+}

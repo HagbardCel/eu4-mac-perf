@@ -1,0 +1,44 @@
+{
+  "kind": "retrospective-identity-pin",
+  "schema": "eu4-oracle-retrospective-pin/v1",
+  "run_id": "p3b-acceptance-20261017",
+  "pre_image_commit": "8901593ccdb539fde8f9d1adf82405d71df05837",
+  "reconstructs": {
+    "statement": "The source identities of the single declared P3-B acceptance run, reconstructed AFTER the run from Git history. This is not a pre-registration: nothing here was declared before the run, and nothing here is an execution-time attestation. It exists because the sealed receipt recorded the identities but no revision, so the identities could not previously be checked against a revision at all.",
+    "method": "Each digest is sha256 of the blob at pre_image_commit, read with `git cat-file blob <commit>:<path>`. The receipt's own recorded toolchain identities (harness, comparator, driver, interface) and the original pre-registration's declared identities were both checked to agree with these blobs before this pin was written.",
+    "declared_at": "2026-10-17",
+    "supersedes_nothing": "The original pre-registration (docs/oracle/preregistration/p3b-acceptance-20261017.json) and the sealed receipt (docs/oracle/receipts/p3b-acceptance-20261017.json) are unchanged. Where this pin and the pre-registration both name an identity they agree, and the guard refuses to proceed if they do not.",
+    "authorised_by": "P3g remediation of PR #59."
+  },
+  "source_hashes": {
+    "adapters_sha256": "7807e966d1cf8b43db7ad827e8a032cba423f27b40b813227ead068333eb3464",
+    "bridge_sha256": "601c88336b43699cd1532d3cce3846869b36e893eef28dc486f87b3e2d62f2f0",
+    "comparator_sha256": "90fb4fa8b5ccd7d7930114b7dd15b48d5ecf7b5b08e155f81fc18a0d0d7bea33",
+    "controller_sha256": "0b948e6da07cbe0a702437339798294248943a444f49053993d4fdafb6401d65",
+    "core_sha256": "465a7b336cdc7524181ca5995b4f198b645664b8f890cfe8e1791e02e19db56d",
+    "corpus_sha256": "15bda417f21a57c35715aba93b59804708d44d6a584be4d1f5edeab0857dabec",
+    "driver_sha256": "07b311adfc9912436196e742a185d399502b4332c5be5a27045487c0ad148e9f",
+    "harness_sha256": "9bca1b223050be5f01c8f5b159e03f8f4a8473c21a0df558f9a10632f87ac488",
+    "interface_sha256": "ba785d568e000f907f43cafa988e6d67201a9c3831780f52aa0dedf622a1e98a",
+    "launch_driver_sha256": "c8e5c4d719d58c30542911d2992f871688390c576ca8d10eb6aef70951e896fa",
+    "opencode_sha256": "deb082a6393f3a18d226f705d0028a0501f1505dddf87ff56d59b1ecbd073117",
+    "receipts_sha256": "ede726a40c869920de28505904b8e96f5fd4d005fa54331db925262c964c5741"
+  },
+  "unauthenticated": {
+    "oracle/slice/opencode_run.py": "the launch driver was edited in the working tree at run time and was never committed, so no revision describes the bytes that actually ran. The digest recorded above is the committed file at pre_image_commit, kept for reference only; it must not be read as execution-time provenance."
+  },
+  "limits": [
+    {
+      "check": "baseline-commit",
+      "reason": "The receipt records no baseline_commit (it is null), because the run was launched from a working tree that had an uncommitted launch driver. The revision below is a reconstruction, not something the run recorded."
+    },
+    {
+      "check": "acceptance-gates",
+      "reason": "The receipt records no repair-acceptance gates: the run predates them. The conditions the run was actually held to are the nine in the original pre-registration; the gate contract (candidate changed, required diagnostics completed, trusted test record on the frozen bytes, call census reconciled) is enforced only for runs after P3g."
+    },
+    {
+      "check": "call-journal",
+      "reason": "The receipt records no per-tool call journal: the run predates it. Only the aggregate is available (the ledger granted 4 calls, the binding recorded 4 completed oracle calls), so per-tool admissions, pre-admission bridge rejections and permission denials cannot be separately re-verified for this run."
+    }
+  ]
+}
