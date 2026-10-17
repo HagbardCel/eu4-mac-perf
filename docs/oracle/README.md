@@ -9,8 +9,11 @@ acceptance run `p3b-acceptance-20261017`, which **certified** (visible 12/12,
 held-out 10/10) and whose sealed receipt is published under
 `docs/oracle/receipts/`. The program is now in the **P4** stage: a
 function-agnostic, policy-pluggable recorder plus a synthetic target, then a
-synthetic graphics replay harness (**P4b**). **No recorder or runtime capture is
-implemented yet**, and no EU IV launch is authorized until P4/P4b pass. This
+synthetic graphics replay harness (**P4b**). The recorder core is implemented and
+merged (**P4r-B**: exact capture accounting, a declared capture policy, offline
+finalization and concurrency); the resource registry/closure and R0-M protocol
+compatibility follow (**P4r-C**). No EU IV launch is authorized until P4/P4b pass.
+This
 directory is authoritative for **capture/validation infrastructure** only; the
 function-level reconstruction lifecycle stays in the reconstruction contract
 [`../renderer-reconstruction-and-differential-validation.md`](../renderer-reconstruction-and-differential-validation.md)
