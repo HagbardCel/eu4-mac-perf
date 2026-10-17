@@ -12,10 +12,9 @@ function-agnostic, policy-pluggable recorder plus a synthetic target, then a
 synthetic graphics replay harness (**P4b**). **No recorder or runtime capture is
 implemented yet**, and no EU IV launch is authorized until P4/P4b pass. This
 directory is authoritative for **capture/validation infrastructure** only; the
-function-level reconstruction lifecycle stays in the PR #44 contract
-`docs/renderer-reconstruction-and-differential-validation.md`
-(see [open PR #44](https://github.com/HagbardCel/eu4-mac-perf/pull/44), not yet
-on `main`).
+function-level reconstruction lifecycle stays in the reconstruction contract
+[`../renderer-reconstruction-and-differential-validation.md`](../renderer-reconstruction-and-differential-validation.md)
+(merged in PR #44).
 
 ## Purpose
 
@@ -47,7 +46,7 @@ The blueprint that this program refines is preserved verbatim at
 | Layer | Owner document | Scope |
 | --- | --- | --- |
 | Overall strategy | [`../eu4_recommended_strategy.md`](../eu4_recommended_strategy.md) | Mission and priorities |
-| Function lifecycle | `docs/renderer-reconstruction-and-differential-validation.md` (PR #44, not yet on `main`) | RE0–RE3 per-function reconstruction and oracle-strength comparison modes; RE3 optional |
+| Function lifecycle | [`../renderer-reconstruction-and-differential-validation.md`](../renderer-reconstruction-and-differential-validation.md) (merged, PR #44) | RE0–RE3 per-function reconstruction and oracle-strength comparison modes; RE3 optional |
 | Capture/validation infrastructure | this directory (`docs/oracle/`) | Recorder, deduplication, fixtures, comparator, service, epochs |
 
 Oracle infrastructure produces fixtures and a comparator that **RE2** consumes; RE0–RE3
@@ -55,14 +54,14 @@ remains the per-function lifecycle and does not define the recorder.
 
 ## Reconciliation actions
 
-1. **PR #44** is open on branch `roadmap-renderer-reconstruction` (head `d321a18`), not on
-   `main`. Its reconstruction contract must be reconciled on that branch or at merge —
-   #43 has merged, its "open PR #43" dependency language is stale, and its scope should
-   acknowledge the full-program corpus and the graphics-subsystem endpoint. Do **not**
-   introduce a competing copy of the reconstruction contract on `main`.
-2. **Canonical Mission update:** `../eu4_recommended_strategy.md` should name ground-truth
-   acquisition + reconstruction as the primary next-phase capability. Coordinated with the
-   PR #44 edit to avoid parallel edits to the same file.
+1. **PR #44 — done:** the reconstruction contract was merged (PR #44, merge `b7773f9`)
+   after being reconciled onto `main`: the stale "open PR #43" language now describes the
+   merged measurement infrastructure, the contract acknowledges the full renderer corpus
+   and the graphics-subsystem endpoint, and its metadata header is whitespace-clean. The
+   contract now lives on `main`; no competing copy exists.
+2. **Canonical Mission update — done:** `../eu4_recommended_strategy.md` names the gated
+   RE0–RE3 workstream in its Mission, and `../status.md` records ground-truth acquisition
+   plus reconstruction as the primary next-phase capability.
 3. **Seed migration (P2) — done:** the original `../proposals/EU4_Oracle_v2/` bytes are
    preserved verbatim and tagged (see [BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md)); the
    prototype is copied byte-identically into `oracle/` and its tests join `tests/`. The blueprint
