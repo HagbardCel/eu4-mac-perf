@@ -326,18 +326,63 @@ the preserved blueprint's V1 snippets:
   rewrite the permissions that constrain it. User configuration is isolated with
   per-run `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_CACHE_HOME` /
   `XDG_STATE_HOME`.
+* **`PWD` decides the project directory.** The server resolves its project root
+  from the `PWD` environment variable rather than from the child's real working
+  directory, and `subprocess` does not update `PWD` when it sets `cwd`. An
+  inherited `PWD` therefore made the **host repository** the agent's project
+  root, which put `oracle/slice/fixtures/held_out/` *inside* the agent's own
+  file-tool scope, where `external_directory` cannot deny it because it is an
+  internal path. The adapter pins `PWD` to the workspace, which makes the project
+  root correct under either reading. The pilot caught this; it is exactly the
+  class of defect a stub can never find.
 
 ### Trust boundary
 
-The agent's project root is `run_dir/workspace` with `run_dir` under an absolute
+The agent's project root is `run_dir/workspace`, with `run_dir` under an absolute
 staging root **outside the repository** (default
-`~/.local/share/eu4-oracle-p3/<run_id>`), so OpenCode cannot walk up into this
-repository's own configuration. The workspace still contains only `candidate.c`,
-`synth.h`, `fixtures/visible/` and `README.md`; the configuration lives beside
-the workspace, not in it. The MCP server imports `oracle.slice` from the host
-repository through `PYTHONPATH`, so the repository remains symbolically
-reachable: this is an application-level boundary, not an OS sandbox, and
-descendant containment is likewise not a sandbox. Both are PR-F work.
+`~/.local/share/eu4-oracle-p3/<run_id>`). Three things must agree for that to
+hold, and the pilot showed that one of them silently did not:
+
+1. the child's working directory is the workspace;
+2. `PWD` names the workspace, because OpenCode takes its project directory from
+   `PWD` rather than from the real cwd - without this the *host repository*
+   became the project root (see the `PWD` bullet above);
+3. `OPENCODE_CONFIG` names a configuration **outside** the workspace, so the
+   agent's file tools cannot rewrite the permissions that constrain it.
+
+The workspace contains only `candidate.c`, `synth.h`, `fixtures/visible/` and
+`README.md`. The MCP server imports `oracle.slice` from the host repository
+through `PYTHONPATH`, so the repository remains symbolically reachable: this is
+an **application-level** boundary, not an OS sandbox, and descendant containment
+is likewise not a sandbox. Both are PR-F work.
+
+### Pilot evidence
+
+Before the single declared run, the pilot drives the binding against the pinned
+binary with a **visible-only** fixture root and ends in a code-level `gave_up`,
+so it cannot spend the holdout. Machine-observed, it established that:
+
+* the pinned binary (`opencode v2.0.30`, digest recorded) and the pinned model
+  (`opencode/deepseek-v4.1-flash-free#high`) resolve and run;
+* the five Oracle tools are served as **direct top-level tools** - the server log
+  records `mcp connected server=oracle tools=5`, and `tools/list` returns
+  `inspect, fixtures, coverage, test, diff` with `function_id` and
+  `candidate_path` both required;
+* a **structured permission denial** is produced: a direct `read` of an external
+  path returns `status == "error"` with `Permission denied: external_directory`;
+* the other two shapes are distinguishable from a denial - a denied-outright
+  action is *absent* (`No tool named "shell" is currently available`), and a
+  malformed call is an argument error (`path: Missing key`);
+* the held-out corpus is unreachable from the agent's project root:
+  `glob **/held_out/*` returns nothing, and `glob **/*.json` returns only
+  `workspace/fixtures/visible/*`;
+* the full agent-facing path works end to end, model-free and repeatably:
+  `tools/call test` on the workspace candidate compiles it and evaluates all 12
+  visible fixtures (a repaired candidate passes; the defective one fails 4).
+
+The pilot also fixed the `PWD` project-directory defect above and showed that the
+pinned repair prompt must state the tool contract (including `candidate_path`)
+explicitly.
 
 ### Acceptance criteria
 
@@ -378,6 +423,8 @@ descendant containment is likewise not a sandbox. Both are PR-F work.
 | Property | Where |
 | --- | --- |
 | The tracked template renders valid JSON with the pinned restrictions | `tests/test_oracle_slice_opencode.py` |
+| The child's `PWD` is pinned to the workspace and its isolation roots lie outside it | `tests/test_oracle_slice_opencode.py` |
+| The materialized config's server block really lists the five tools and tests the candidate | `tests/test_oracle_slice_opencode.py` |
 | A malformed, empty or non-object event stream is refused | `tests/test_oracle_slice_opencode.py` |
 | A permission denial is normalized, and a refusal or absent tool is not one | `tests/test_oracle_slice_opencode.py` |
 | A real repair through the adapter is certified and bound end to end | `tests/test_oracle_slice_opencode.py` |

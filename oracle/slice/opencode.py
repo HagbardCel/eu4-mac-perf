@@ -365,6 +365,15 @@ class OpenCodeAdapter:
             # cwd is relied upon either.
             "OPENCODE_CONFIG": str(self._config_path),
             "OPENCODE_DISABLE_AUTOUPDATE": "1",
+            # ``PWD`` decides the project directory. The supervisor sets the
+            # child's real working directory to the workspace, but ``subprocess``
+            # does not update ``PWD``, so an inherited value silently made the
+            # *host repository* the agent's project root - which would place
+            # ``oracle/slice/fixtures/held_out/`` inside the agent's own file-tool
+            # scope, where ``external_directory`` cannot deny it because it is an
+            # internal path. Setting ``PWD`` to the workspace makes the project
+            # root correct under either reading (``PWD`` or real cwd).
+            "PWD": str(self.run.workspace),
         })
         return env
 

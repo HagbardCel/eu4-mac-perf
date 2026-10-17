@@ -11,10 +11,13 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from oracle.core import canonical_bytes
 from oracle.slice import controller, corpus, harness, opencode, receipts
@@ -136,6 +139,118 @@ class MaterializeTests(unittest.TestCase):
         for action in ("shell", "subagent", "webfetch", "websearch", "browser", "question"):
             self.assertEqual(config["permission"][action], "deny")
         self.assertEqual(config["permission"]["external_directory"], {"*": "deny"})
+
+
+class ChildEnvironmentTests(unittest.TestCase):
+    """The child must not inherit the host repository as its project root.
+
+    ``PWD`` decides OpenCode's project directory, and ``subprocess`` does not
+    update it. An inherited ``PWD`` pointing at the host repository makes the
+    repository's own files - including the held-out fixtures - *internal* to the
+    agent's file tools, where ``external_directory`` cannot deny them. The child
+    environment therefore pins ``PWD`` to the workspace.
+    """
+
+    def test_pwd_is_pinned_to_the_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stub = _write_stub(root, _completed_stream())
+            adapter = _adapter(root, stub)
+            with mock.patch.dict(os.environ, {"PWD": "/some/other/repository"}):
+                env = adapter._child_env()
+            self.assertEqual(env["PWD"], str(adapter.run.workspace))
+            self.assertNotEqual(env["PWD"], "/some/other/repository")
+
+    def test_isolation_roots_and_config_are_outside_the_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stub = _write_stub(root, _completed_stream())
+            adapter = _adapter(root, stub)
+            env = adapter._child_env()
+            workspace = str(adapter.run.workspace)
+            for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
+                         "OPENCODE_CONFIG"):
+                self.assertFalse(env[name].startswith(workspace), name)
+                self.assertTrue(env[name].startswith(str(adapter.run.run_dir)), name)
+
+
+class MaterializedServerTests(unittest.TestCase):
+    """The materialized config's MCP server block must actually work.
+
+    Reading ``opencode.json`` and launching exactly the command and environment it
+    declares is the only way to know the agent will have working tools: the
+    interpreter, the ``PYTHONPATH`` and the workspace flag all have to line up.
+    Model-free and deterministic - the same call an agent would make.
+    """
+
+    def _session(self, server, workspace, requests, want):
+        proc = subprocess.Popen(server["command"], cwd=str(workspace),
+                                env={**os.environ, **server["environment"]},
+                                text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE)
+        try:
+            for request in requests:
+                proc.stdin.write(json.dumps(request) + "\n")
+            proc.stdin.flush()
+            got = {}
+            deadline = time.time() + 240
+            while time.time() < deadline and len(got) < want:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                message = json.loads(line)
+                if isinstance(message, dict) and "id" in message:
+                    got[message["id"]] = message
+            return got
+        finally:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+                proc.kill()
+                proc.wait(timeout=10)
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                try:
+                    stream.close()
+                except OSError:  # pragma: no cover - defensive
+                    pass
+
+    def test_declared_server_lists_the_five_tools_and_tests_the_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stub = _write_stub(root, _completed_stream())
+            adapter = _adapter(root, stub)
+            _run(root, adapter, wall_seconds=600.0)
+
+            config = json.loads((adapter.run.run_dir / "opencode.json").read_text())
+            server = config["mcp"]["servers"]["oracle"]
+            self.assertEqual(server["command"][0], sys.executable)
+            self.assertIn("oracle.slice.bridge", server["command"])
+            self.assertEqual(server["environment"]["PYTHONPATH"], str(REPO_ROOT))
+
+            got = self._session(server, adapter.run.workspace, [
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                 "params": {"protocolVersion": "2024-11-05", "capabilities": {}}},
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                 "params": {"name": "test", "arguments": {"function_id": "synth:apply",
+                                                          "candidate_path": "candidate.c"}}},
+            ], want=3)
+
+            tools = got[2]["result"]["tools"]
+            self.assertEqual([t["name"] for t in tools],
+                             ["inspect", "fixtures", "coverage", "test", "diff"])
+            test_schema = tools[[t["name"] for t in tools].index("test")]["inputSchema"]
+            self.assertEqual(test_schema["required"], ["function_id", "candidate_path"])
+
+            result = got[3]["result"]
+            self.assertFalse(result.get("isError"))
+            payload = json.loads(result["content"][0]["text"])
+            # The stub repaired the candidate, so the visible suite must pass.
+            self.assertEqual(payload["status"], "PASS")
+            self.assertEqual(payload["total"], 12)
+            self.assertEqual(payload["passed"], 12)
 
 
 class EventStreamTests(unittest.TestCase):

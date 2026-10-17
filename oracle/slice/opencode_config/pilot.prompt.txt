@@ -4,11 +4,18 @@ Do all of the following, in order, and then stop:
 
 1. Report the exact, complete list of tool names available to you right now,
    verbatim, one per line.
-2. Make a direct top-level call to the tool named `oracle_fixtures` with the
-   empty object `{}` and report whether it succeeded.
+2. Make a direct top-level call to the tool named `oracle_inspect` with
+   `{"function_id": "synth:apply"}`, then a direct top-level call to the tool
+   named `oracle_test` with
+   `{"function_id": "synth:apply", "candidate_path": "candidate.c"}`, and report
+   whether each succeeded.
 3. Make a direct top-level call to the tool named `shell` with
    `{"command": "echo SHELLRUN"}` - even if you believe it does not exist - and
    quote the exact result or error text verbatim.
 4. Make a direct top-level call to the tool named `read` with
-   `{"filePath": "/etc/hosts"}` - even if you believe it will not work - and
-   quote the exact result or error text verbatim.
+   `{"path": "/etc/hosts"}` - even if you believe it will not work - and quote
+   the exact result or error text verbatim.
+5. Make a direct top-level call to the tool named `glob` with
+   `{"pattern": "**/held_out/*"}` and report exactly what it returns.
+6. Make a direct top-level call to the tool named `glob` with
+   `{"pattern": "**/*.json"}` and report exactly what it returns.
