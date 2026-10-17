@@ -4,12 +4,15 @@
 
 Reduce EU IV's rendering cost on Apple Silicon without removing visual content, through layers of improvement that build on each other, ending at a state-aware Metal backend behind the Clausewitz Gfx layer.
 
+A gated **RE0–RE3 renderer source-reconstruction and differential-validation** workstream supports the architecture track: recover a bounded Gfx/OpenGL function faithfully, prove its observable equivalence against the original binary, and only then test optimizations. It is a correctness and maintainability investment that makes the architecture tractable — **not** an independent savings claim and not a mandate to decompile the whole engine.
+
 **This is the canonical roadmap.** It supersedes the earlier `eu4_rendering_strategy_90pct.md` (removed; available in git history). That document's lasting architecture (Gfx seam, shadow state, pipeline caches, complete vertical slices, B→C) is carried over in §3. Its sequencing is replaced: priorities now follow measured cost rather than draw counts.
 
 Related documents:
 
 - evidence, alternatives, and ranking behind this plan: [`eu4_rendering_alternatives_ranked.md`](eu4_rendering_alternatives_ranked.md);
-- state of knowledge: [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md).
+- state of knowledge: [`eu4_macos_rendering_findings.md`](eu4_macos_rendering_findings.md);
+- gated, bottom-up source reconstruction and differential validation: [`renderer-reconstruction-and-differential-validation.md`](renderer-reconstruction-and-differential-validation.md).
 
 All savings and effort figures below are **estimates**, not measurements, unless linked to an artifact.
 
@@ -58,6 +61,8 @@ The strategy runs **two tracks in parallel from day one**:
 
 - **Elimination track:** do the work less often. Cheap fixes, then lossless frame skipping and map-layer caching, **only where measurement proves the content static**.
 - **Architecture track:** make each frame cheaper, and understand the renderer while doing so. Bottom-up RE of the Gfx/OpenGL boundary, the render-pass and depth graph, and shaders, **plus early Metal probes and studies** (M0a/M0b/M0c), all starting now.
+
+**Within the architecture track, add an RE0–RE3 reconstruction/verification workstream.** Recover a bounded Gfx/OpenGL function into faithful x86-64 C++20, prove its observable equivalence against the original as far as the oracle allows, and only then test optimizations or expand the slice upward. This is an enabling correctness/maintainability investment, not a third independent savings claim or a mandate to decompile the whole engine. **Do not block R0-M or M0a–M0c** on completion of the RE pilot. See the [detailed RE plan](renderer-reconstruction-and-differential-validation.md).
 
 **Design principle: the Metal work is an abstraction-discovery exercise, not only an API replacement.** Its value cannot be estimated by replacing today's OpenGL submissions one-for-one. An explicit state/resource/command model can remove or restructure work **in the Gfx layer and its callers**, not only in the driver. The question to answer is not "how much cheaper can we execute today's rendering?" but **"what is the cheapest renderer we can build once we understand today's semantics and are no longer bound to the OpenGL execution model?"**
 
@@ -111,6 +116,8 @@ Culling is an **opportunistic side branch**. It reduces runtime workload but not
 flowchart TD
     R0m[R0M_FrameEvolution_ThreadCPU_StackSample]
     R0a[R0A_GfxCut_Shaders_PassDepthGraph]
+    RE[RE0_RE2_FaithfulCpp_DifferentialOracle]
+    RE3[RE3_ValidatedBinaryIntegration_PerDomain]
     M0[M0a_SingleDrawMetalProbe]
     M0b[M0b_CommandStreamCensus_StateEntropy]
     M0c[M0c_MetalNativeDomainStudy_ReplayBenchmark]
@@ -128,6 +135,9 @@ flowchart TD
     R0m -->|"full-res hashes: static only"| Skip
     R0m -->|"temporal dependencies"| Cache
     R0a --> M0
+    R0a --> RE
+    RE -.->|"validated semantic contracts"| M0b
+    RE --> RE3
     M0 -->|"draft command IR"| M0b
     M0b -->|"batching barriers"| M0c
     R0a --> Model
@@ -137,6 +147,7 @@ flowchart TD
     Seam --> Cache
     Interop --> Slice
     Model -->|"slice boundary and command shape"| Slice
+    RE3 -.->|"gate for detoured functions only"| Slice
     Slice -->|"combined measurement"| Expand
     R0m -.-> Cull
 ```
@@ -231,6 +242,17 @@ The coexistence boundary is the offscreen map target, IOSurface-backed so both A
 
 ---
 
+### 3.7 Reconstruction as a verified compatibility/reference path (RE0–RE3)
+
+[Full experimental contract and ordered PR gates](renderer-reconstruction-and-differential-validation.md).
+
+1. **RE0 — identify a tractable, useful function boundary:** decompile with Ghidra/P-code and verify assembly, symbols, ABI, recovered object layout, callers, and hidden context/state. `InternalSetTextureAndSamplerState` is only a pilot candidate; it is **not** reprioritized as a GL setter-cache optimization.
+2. **RE1 — faithful C++20 reconstruction:** build x86-64 code with conservative ABI-facing interfaces and recorded/mock GL calls, without applying optimizations during reconstruction.
+3. **RE2 — differential validation:** compare original and replacement over matched states: exact memory/results and normalized GL traces for the deterministic faithful implementation; later compare semantic GL state and rendered output when optimizations legitimately change calls. Captured fixtures establish coverage of those cases, **not proof of universal equivalence**. Prefer callable original-function oracle where safe; label weaker recorded-trace oracles explicitly.
+4. **RE3 — reversible EU4 integration:** only after offline qualification, validate a version-pinned original/replacement/original toggle on the disposable Venice fixture, with fail-closed fallback. The integration gate is required only for in-process replacements needed by the chosen domain, **not for the standalone M0 probes**.
+
+**Expansion rule:** reconstruct a vertical slice when R0-A and M0b/M0c locate a credible cost/semantic opportunity. Avoid horizontal decompilation of all Gfx functions, global GL wrappers as the primary mutation path, and whole-engine reconstruction. No performance benefit is credited to RE0–RE3 without profiler-off causal measurement.
+
 ## 4. Phased plan
 
 Each phase lists deliverables, a go/kill gate (naming its metric), expected savings, and effort. Phases on different tracks run in parallel.
@@ -259,6 +281,7 @@ Each phase lists deliverables, a go/kill gate (naming its metric), expected savi
   - GL-specific cached state that higher layers depend on.
 - **Shader/effect inventory:** where shaders are stored and compiled, and the effect permutations used in the fixture.
 - **Map render-pass and depth graph:** which passes write and read which color/depth/stencil targets, in what order. Specifically: do terrain, mesh, borders, and post-effects share a depth buffer, and where does `CEU3GraphicalMap::Render` hand off to post-effects and UI?
+- **RE0–RE2 — reconstruction pilot (parallel, offline-first):** identify one tractable Gfx/OpenGL helper; recover its state and call dependencies; implement faithful x86-64 C++20; compare its memory effects and normalized GL trace against a qualified original-binary oracle. Reuse representative state/stream fixtures where available. Complete RE0/RE1 offline before requesting any new capture; treat capture intrusion separately from timing. **Do not delay M0a–M0c** for this pilot.
 - **M0a — single-draw Metal probe (≈1–2 weeks, no game integration):**
   1. Trace one representative mesh draw end to end: `CPdxMeshObject::RenderBuckets` → effect selection → `GfxSet*` → `GfxDrawIndexed` → GL state → `glDrawElements`. Count Gfx and GL calls per draw.
   2. Capture its real vertex/index data, textures, constants, and shader, and reproduce the draw in a standalone x86-64 Metal harness under Rosetta. This includes MSL translation of the effect, `MTLRenderPipelineState`, and `drawIndexedPrimitives` into an offscreen texture, compared with the GL output.
@@ -310,13 +333,14 @@ Each phase lists deliverables, a go/kill gate (naming its metric), expected savi
   - Census shows full-resolution identical idle frames → lossless idle skip (R1) is viable.
   - Census shows **periodic/continuous** regions while idle → lossless idle skip is limited to scenes and modes where those regions are absent; S2b becomes an explicit open decision, not a default.
 - **Architecture (domain-local):** at least one high-cost domain must have a **tractable vertical cut**: an understood state and resource lifecycle for that domain, translatable shaders for its effects, and a viable pass boundary at the offscreen target. For example, an opaque map domain with ~18 functions, 4 effects, and a clean target boundary is a GO for M2 even if the whole renderer touches 120 Gfx/resource paths. A large global Gfx surface delays full replacement (R5) but does not by itself stop domain-level migration. If no high-cost domain has a tractable cut, reassess Metal scope before investing further.
+- **RE pilot (correctness, not savings):** admit RE1 only after the function contract and ABI/hidden-state audit; admit RE3 only after qualified differential fixtures pass and all remaining unknowns are recorded. A failed pilot redirects effort to an alternative function or retains the source model offline; it does **not** invalidate the Metal architecture study.
 - **M0a/M0b/M0c decide where the gains must come from, not whether Metal is worth it.**
   - **Large backend gain** (Metal per-draw CPU ≤~25% of GL in the equivalence benchmark): B0 alone carries much of the domain's saving; C0 adds to it.
   - **Moderate backend gain** (Metal at 50–70% of GL): most of the value must come from changing the work presented to Metal. M0b/M0c opportunities become the primary target for C0, which makes early command-oriented work **more** important, not less.
   - **Weak M0a + weak M0b** falsifies only *backend replacement plus compatibility-preserving command collection* (B0 + C0a). It does not falsify Metal-native redesign (C0b).
   - **Kill criterion (Metal track):** reassess Metal only if, in addition, **M0c finds few accidental barriers**: most barriers are fundamental (ordering, genuinely distinct pipelines), or removing them would need data the detourable call sites do not have, and the replay benchmark, with C0 preparation costs included, shows little B0 → C0 gain. This keeps the track falsifiable.
 
-**Effort:** R0-M 2–5 days; R0-A 2–4 weeks of RE plus 4–7 weeks for M0a + M0b + M0c, in parallel.
+**Effort:** R0-M 2–5 days; R0-A 2–4 weeks of static architecture RE plus 4–7 weeks for M0a + M0b + M0c, in parallel (original estimates). **RE0–RE3 adds bounded pilot engineering effort**; duration is not evidence-backed and may affect critical path if the eventual domain requires in-process replacement. Do not silently assume it is free or postpone M0 work behind it.
 
 ### Phase R1 — Cheap wins (1–2 weeks; conditional parts)
 
@@ -376,7 +400,8 @@ Each phase lists deliverables, a go/kill gate (naming its metric), expected savi
 - R0-A: a tractable vertical cut for the chosen domain (state/resource lifecycle, shader feasibility), and the pass/depth graph;
 - M0a backend-tax result and draft command IR;
 - M0b state-entropy census and M0c Metal-native domain study, with ranked caller-redesign opportunities;
-- the R2b interop proof.
+- the R2b interop proof;
+- **RE3-equivalent binary integration and semantic gates** for any reconstructed/detoured functions required by that slice (not a prerequisite for standalone M0a/M0b/M0c or non-detoured paths).
 
 **Slice choice:** migrate **the highest-cost self-contained map domain, with mesh as the preferred anchor**. Mesh is the economic target (~44% of main-thread wall time, ~75% of it driver), but a GL-terrain / Metal-mesh / GL-borders split that shares depth across APIs is a poor boundary. The pass/depth graph decides the minimum sensible slice, likely one of:
 
@@ -444,6 +469,8 @@ For example, a domain worth 25% of the frame that loses 60% of its cost is a 15%
 
 - Use the metric definitions of §1.2. Gates and estimates always name their metric.
 - **Correctness:**
+  - exact original-vs-faithful reconstruction comparison on qualified deterministic CPU/GL traces, before optimizing reconstructed functions;
+  - semantic GL-state equivalence at observed draw/pass boundaries for GL command reduction; pixel/semantic tolerances explicitly defined for GL↔Metal, not blindly exact hashes;
   - full-resolution frame hashes for any lossless claim;
   - phase screenshots;
   - scripted UI interaction checks;
@@ -476,7 +503,7 @@ Ranges in the static columns run from "census unfavourable" to "census favourabl
 | Milestone | After | Static, idle | Static, UI active | Active camera / unpaused | Elapsed time |
 |---|---|---|---|---|---|
 | Near | R0-M + R1 | −0–5% → −50–65% | −0–5% | −2–8% | ~2–3 weeks |
-| Medium | + R0-A + M0a–M0c + R2 (+ R3 if supported) | −0–5% → −50–65% | −0–5% → −45–55% | −2–8% | ~2–3 months |
+| Medium | + R0-A + M0a–M0c + R2 (+ R3 if supported; RE0–RE2 parallel pilot) | −0–5% → −50–65% | −0–5% → −45–55% | −2–8% | ~2–3 months |
 | Long | + R4 | ~−20–30% → ~−60–70% | ~−20–30% → ~−60–70% | −25–45% | ~6–9 months |
 | Destination | + R5 | ~−40–50% → ~−80–90% render work | ~−40–50% → ~−70–80% | −50–60% or more (caller redesign not included) | 12+ months |
 
@@ -489,3 +516,4 @@ Even in the unfavourable case (the map animates while paused), the architecture 
 1. **Lossy idle mode (S2b):** if R0-M shows the paused map animates, may idle frames render at a reduced rate (e.g. 15–30 Hz after a few seconds without input, full rate on any input)? Default: no.
 2. **Border multi-draw:** close it after the RE write-up (recommended), or keep it as a low-priority side track?
 3. **R4 slice boundary:** decided by the R0-A pass/depth graph and M0a–M0c; mesh-anchored by default.
+4. **RE pilot:** select the narrowest function with recoverable ABI/context and a strong differential oracle; currently `InternalSetTextureAndSamplerState` or a nearby Gfx helper are candidates, not settled choices. The pilot cannot be promoted until evidence-based gates pass.
