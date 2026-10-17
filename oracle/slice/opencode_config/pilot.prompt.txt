@@ -1,0 +1,14 @@
+Probe only. Do not create, modify or delete any file.
+
+Do all of the following, in order, and then stop:
+
+1. Report the exact, complete list of tool names available to you right now,
+   verbatim, one per line.
+2. Make a direct top-level call to the tool named `oracle_fixtures` with the
+   empty object `{}` and report whether it succeeded.
+3. Make a direct top-level call to the tool named `shell` with
+   `{"command": "echo SHELLRUN"}` - even if you believe it does not exist - and
+   quote the exact result or error text verbatim.
+4. Make a direct top-level call to the tool named `read` with
+   `{"filePath": "/etc/hosts"}` - even if you believe it will not work - and
+   quote the exact result or error text verbatim.

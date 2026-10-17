@@ -33,6 +33,7 @@ not fail the comparison; the Oracle could not complete it.
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,7 @@ from oracle.slice.adapters import (
     AgentAdapter,
     AttemptContext,
     AttemptResult,
+    BindingError,
     BudgetStop,
     DeadlineExceeded,
     ProcessSupervisor,
@@ -171,6 +173,127 @@ def _compiler_identity_known(toolchain: dict[str, Any]) -> bool:
     return version != "unknown" and not version.startswith("unavailable")
 
 
+# --- binding provenance --------------------------------------------------------
+
+_HEX64 = re.compile(r"\A[0-9a-f]{64}\Z")
+
+
+def _require_sha256(value: Any, what: str) -> str:
+    if not isinstance(value, str) or not _HEX64.match(value):
+        raise BindingError(f"{what} must be a 64-character lowercase hex digest")
+    return value
+
+
+def _require_text(value: Any, what: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise BindingError(f"{what} is required")
+    return value
+
+
+def _require_mapping(value: Any, what: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise BindingError(f"{what} must be an object")
+    return value
+
+
+def _require_int(value: Any, what: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise BindingError(f"{what} must be a non-negative integer")
+    return value
+
+
+def _validate_binding(raw: Any) -> dict[str, Any]:
+    """Validate an adapter's binding metadata against a fixed schema.
+
+    The controller - not the model - folds this into the sealed receipt, so the
+    shape is checked rather than trusted: an adapter that returns a partial or
+    malformed object prevents acceptance instead of weakening the receipt.
+    """
+    binding = _require_mapping(raw, "binding metadata")
+    adapter = _require_text(binding.get("adapter"), "binding.adapter")
+    binary = _require_mapping(binding.get("binary"), "binding.binary")
+    model = _require_mapping(binding.get("model"), "binding.model")
+    config = _require_mapping(binding.get("config"), "binding.config")
+    events = _require_mapping(binding.get("events"), "binding.events")
+    variant = model.get("variant")
+    if variant is not None and not isinstance(variant, str):
+        raise BindingError("binding.model.variant must be a string or null")
+    denials = events.get("denials")
+    if not isinstance(denials, list):
+        raise BindingError("binding.events.denials must be a list")
+    validated_denials: list[dict[str, Any]] = []
+    for index, entry in enumerate(denials):
+        item = _require_mapping(entry, f"binding.events.denials[{index}]")
+        if item.get("decision") != "deny":
+            raise BindingError(
+                f"binding.events.denials[{index}].decision must be 'deny'")
+        reason = item.get("reason")
+        if reason is not None and not isinstance(reason, str):
+            raise BindingError(
+                f"binding.events.denials[{index}].reason must be a string or null")
+        validated_denials.append({
+            "action": _require_text(item.get("action"), f"binding.events.denials[{index}].action"),
+            "resource": _require_text(item.get("resource"), f"binding.events.denials[{index}].resource"),
+            "decision": "deny",
+            "reason": reason,
+        })
+    return {
+        "adapter": adapter,
+        "binary": {
+            "name": _require_text(binary.get("name"), "binding.binary.name"),
+            "sha256": _require_sha256(binary.get("sha256"), "binding.binary.sha256"),
+            "version": _require_text(binary.get("version"), "binding.binary.version"),
+        },
+        "model": {
+            "provider": _require_text(model.get("provider"), "binding.model.provider"),
+            "id": _require_text(model.get("id"), "binding.model.id"),
+            "variant": variant,
+        },
+        "prompt_sha256": _require_sha256(binding.get("prompt_sha256"), "binding.prompt_sha256"),
+        "config": {
+            "template_sha256": _require_sha256(
+                config.get("template_sha256"), "binding.config.template_sha256"),
+            "materialized_sha256": _require_sha256(
+                config.get("materialized_sha256"), "binding.config.materialized_sha256"),
+        },
+        "events": {
+            "raw_sha256": _require_sha256(events.get("raw_sha256"), "binding.events.raw_sha256"),
+            "raw_bytes": _require_int(events.get("raw_bytes"), "binding.events.raw_bytes"),
+            "summary_sha256": _require_sha256(
+                events.get("summary_sha256"), "binding.events.summary_sha256"),
+            "tool_calls": _require_int(events.get("tool_calls"), "binding.events.tool_calls"),
+            "denials": validated_denials,
+        },
+    }
+
+
+def _binding_metadata(adapter: Any) -> tuple[dict[str, Any] | None, str | None]:
+    """Collect and validate binding metadata, fail-closed on any fault."""
+    getter = getattr(adapter, "receipt_metadata", None)
+    if getter is None:
+        return None, None
+    try:
+        raw = getter()
+    except BindingError as exc:
+        return None, f"binding metadata unavailable: {exc}"
+    except Exception as exc:  # an adapter fault must not lose the receipt
+        return None, f"binding metadata unavailable: {type(exc).__name__}: {exc}"
+    if raw is None:
+        return None, None
+    try:
+        return _validate_binding(raw), None
+    except BindingError as exc:
+        return None, f"binding metadata invalid: {exc}"
+
+
+def _ledger_granted(ledger: Any) -> int | None:
+    """The ledger's authoritative granted-call total, or ``None`` if unreadable."""
+    try:
+        return int(ledger.granted())
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
 def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
     run_dir = Path(config.base_dir) / config.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -215,6 +338,11 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
             ctx = AttemptContext(attempt=attempt, workspace=workspace.root,
                                  candidate_path=workspace.candidate_path, tools=tools,
                                  deadline=deadline, supervisor=supervisor)
+            # Tool accounting is *ledger-authoritative*: a real agent calls the
+            # Oracle through the MCP server process, so ``tools.calls`` (which
+            # counts only in-process calls) would read zero. The shared SQLite
+            # ledger is the exact count of agent-initiated calls in either case.
+            granted_before = _ledger_granted(ledger)
             tool_calls_before = tools.calls
             attempt_started = time.monotonic()
             try:
@@ -241,11 +369,16 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
             if result.status == "done" and supervisor.expired():
                 result = AttemptResult(
                     "timeout", "run deadline exceeded before the candidate was accepted")
+            granted_after = _ledger_granted(ledger)
+            attempt_tool_calls = (
+                granted_after - granted_before
+                if granted_before is not None and granted_after is not None else None)
             attempts.append({
                 "attempt": attempt,
                 "status": result.status,
                 "note": result.note,
-                "tool_calls": tools.calls - tool_calls_before,
+                "tool_calls": attempt_tool_calls,
+                "in_process_tool_calls": tools.calls - tool_calls_before,
                 "duration_s": round(time.monotonic() - attempt_started, 6),
                 "candidate_sha256": candidate_sha,
             })
@@ -368,6 +501,18 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                 f"{toolchain.get('compiler_version')!r}")
             certification = "failed: unknown compiler identity"
 
+        # The agent's external toolchain - if the adapter binds one - supplies the
+        # pinned executable, model, configuration, prompt and event-evidence
+        # identities. The controller validates and folds them here, before the
+        # receipt is sealed; a partial or malformed binding prevents acceptance.
+        binding, binding_problem = _binding_metadata(adapter)
+        if binding is not None:
+            toolchain["opencode"] = binding
+        if binding_problem is not None:
+            finalization_error = finalization_error or binding_problem
+            if certification == CERTIFICATION_RAN:
+                certification = "failed: incomplete binding metadata"
+
         try:
             granted: int | None = ledger.granted()
             limit: int | None = ledger.limit()
@@ -409,7 +554,8 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
             "agent": {
                 "adapter": adapter.name,
                 "model": config.model,
-                "tool_calls": tools.calls,
+                "tool_calls": granted,
+                "in_process_tool_calls": tools.calls,
                 "budget": {"granted": granted, "limit": limit},
             },
             "execution": {

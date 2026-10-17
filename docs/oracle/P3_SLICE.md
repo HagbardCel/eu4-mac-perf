@@ -1,8 +1,12 @@
 # P3 synthetic OpenCode slice
 
 **Status:** PR-A (deterministic infrastructure) implemented under `oracle/slice/`.
-PR-B (the pinned real OpenCode run) is not yet performed. Nothing here launches
-EU IV, uses a model, or touches the network.
+PR-B is in progress: the pinned OpenCode **binding** is implemented and tested
+offline (`oracle/slice/opencode.py`, `oracle/slice/opencode_config/`), and the
+guarded CI re-verification (`tooling/common/check_oracle_receipt.py`) is wired in.
+The one declared acceptance **run** has not yet been performed; the receipts
+directory is intentionally empty until it is. Nothing here launches EU IV or
+implements a recorder.
 
 This document is authoritative for the P3 slice. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the preserved blueprint it refines is in
@@ -285,12 +289,104 @@ proves no compilation begins once the trusted deadline has passed.
   usage may arrive only after a response. Only local call, attempt, wall-clock
   and process limits are enforceable here.
 
-## PR-B (next)
+## PR-B: the pinned OpenCode binding
 
-Bound the pinned OpenCode binary (`opencode v2.0.30`), configure the `oracle`
-local stdio MCP server with `codemode: false` and a deny-by-default permission
-set (`shell`, `subagent`, `webfetch`, `websearch`, `external_directory` denied;
-candidate editing and the five Oracle tools allowed), prove a real tool
-invocation in an isolated service/session context, run the real repair with
-`opencode/deepseek-v4.1-flash-free#high` in an isolated candidate directory, and
-publish the sealed receipt and acceptance memo.
+PR-B has two halves: the **binding** (this repository's code, testable offline)
+and the **run** (one declared evaluation against the pinned binary and model).
+The binding is implemented under `oracle/slice/opencode.py` with the tracked
+configuration template in `oracle/slice/opencode_config/`; the run is driven by
+`oracle/slice/opencode_run.py` and re-verified by
+`tooling/common/check_oracle_receipt.py`.
+
+### What was pinned against the installed binary
+
+These were established by probing `opencode v2.0.30` directly, and they supersede
+the preserved blueprint's V1 snippets:
+
+* **Code mode is on by default** and wraps every MCP tool inside a JavaScript
+  `execute` sandbox. The binding sets `codemode: false` both globally and on the
+  server, which exposes the five Oracle tools as direct top-level tools
+  (`oracle_inspect` … `oracle_diff`). This is required: a tool that is only
+  reachable from inside `execute` cannot have its permissions observed at the
+  tool boundary.
+* **Permission precedence is last-match-wins**, and enforcement has two
+  observable shapes. A whole-action `"deny"` removes the tool from the catalog
+  (the model's catalog simply lacks it, and no event is emitted). A
+  pattern-form restriction that leaves *some* invocation allowed keeps the tool
+  present and rejects at call time with `part.state.status == "error"` and the
+  structured refusal prefix `"Permission denied: …"`. The binding denies the
+  dangerous actions outright (`shell`, `subagent`, `webfetch`, `websearch`,
+  `browser`, `question`) and pattern-denies `external_directory`, so the pinned
+  run produces **both** classes of evidence and the acceptance memo can
+  distinguish a genuine denial from an absent tool.
+* **Configuration discovery is explicit.** `OPENCODE_DIR` *et al.* do not
+  redirect discovery, but `OPENCODE_CONFIG=<path>` loads a specific file. The
+  binding therefore renders `opencode.json` **outside** the agent's workspace and
+  passes it through `OPENCODE_CONFIG`, so the agent's own file tools cannot
+  rewrite the permissions that constrain it. User configuration is isolated with
+  per-run `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_CACHE_HOME` /
+  `XDG_STATE_HOME`.
+
+### Trust boundary
+
+The agent's project root is `run_dir/workspace` with `run_dir` under an absolute
+staging root **outside the repository** (default
+`~/.local/share/eu4-oracle-p3/<run_id>`), so OpenCode cannot walk up into this
+repository's own configuration. The workspace still contains only `candidate.c`,
+`synth.h`, `fixtures/visible/` and `README.md`; the configuration lives beside
+the workspace, not in it. The MCP server imports `oracle.slice` from the host
+repository through `PYTHONPATH`, so the repository remains symbolically
+reachable: this is an application-level boundary, not an OS sandbox, and
+descendant containment is likewise not a sandbox. Both are PR-F work.
+
+### Acceptance criteria
+
+| # | Criterion |
+| --- | --- |
+| C1 | The pinned binary, model and variant, plus the *effective* configuration, are bound in the sealed receipt |
+| C2 | The pinned OpenCode process enforces its configured restrictions on its **direct** tools, with machine-observed denial evidence distinguishing denial from absent tool, model refusal and unrelated failure |
+| C3 | Held-out fixtures are absent from the agent workspace and are never intentionally exposed through the agent-facing API |
+| C3b | Exfiltration **detection**: no `hid-*` id or held-out expected-value fingerprint appears in any agent-visible surface |
+| C4 | The tool-call count is ledger-authoritative, and the event stream proves a successful `oracle_inspect` and `oracle_test` |
+| C5 | A real repair: the final candidate differs from the defective one, passes visible **and** held-out, and the certification ran |
+| C6 | The sealed receipt and committed artifact are re-verified by a model-free CI replay, cross-checked against a pre-registration committed **before** the run |
+| C7 | The run is bounded and not aborted |
+| C8 | The pre-registration was pushed before the run |
+| C9 | Honest scope: 22 fixtures are not universal equivalence, certification is not proof of repair, the holdout is spent once, and group termination is containment rather than a sandbox |
+
+### Evidence and accounting invariants
+
+* **Ledger-authoritative accounting.** A real agent calls the Oracle through the
+  MCP **server process**, so the controller's in-process counter would read zero.
+  Per-attempt and total counts come from the shared SQLite ledger;
+  `receipts.granted()` is the exact count of agent-initiated calls in either case.
+* **Complete bounded evidence.** Retention caches only 256 KiB of a child's
+  output, but the event stream is a full capture file (OS-capped at 8 MiB). The
+  binding is built from the file and **fails closed** on a missing, empty,
+  malformed or production-capped stream, and records the digest and byte length
+  before teardown.
+* **Binding is validated by the controller.** The adapter reports identities; the
+  controller checks their shape and folds them into `toolchain.opencode` before
+  sealing. A partial or malformed report is a finalization error and the run is
+  not acceptable.
+* **Replay integrity.** The guard refuses to replay a published receipt unless
+  the current harness, comparator, driver, interface and bridge still hash to the
+  pinned identities, because replaying against a changed oracle proves nothing.
+
+### Tests
+
+| Property | Where |
+| --- | --- |
+| The tracked template renders valid JSON with the pinned restrictions | `tests/test_oracle_slice_opencode.py` |
+| A malformed, empty or non-object event stream is refused | `tests/test_oracle_slice_opencode.py` |
+| A permission denial is normalized, and a refusal or absent tool is not one | `tests/test_oracle_slice_opencode.py` |
+| A real repair through the adapter is certified and bound end to end | `tests/test_oracle_slice_opencode.py` |
+| Held-out material in the stream, or a production-capped stream, prevents acceptance | `tests/test_oracle_slice_opencode.py` |
+| Probe mode is non-accepting and spends no holdout | `tests/test_oracle_slice_opencode.py` |
+| A clean publication verifies; tampered, reordered or replay-incompatible ones do not | `tests/test_check_oracle_receipt.py` |
+
+The acceptance run itself is published as a sealed receipt under
+`docs/oracle/receipts/`, the committed artifact under `docs/oracle/artifacts/`,
+the sanitized event summary under `docs/oracle/agents/`, and the pre-registration
+under `docs/oracle/preregistration/`, with the narrative in
+[P3B_ACCEPTANCE.md](P3B_ACCEPTANCE.md).

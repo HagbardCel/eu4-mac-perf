@@ -1,6 +1,7 @@
 """P3 slice: workspace freezing, receipts and the process supervisor."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import signal
@@ -291,6 +292,37 @@ class ProcessSupervisorTests(unittest.TestCase):
             self.assertEqual(supervisor._procs, [])
             self.assertIn("deadline", run.stderr)
             self.assertFalse(pid_file.exists(), "the process must not have been started")
+
+    def test_run_group_exposes_complete_bounded_capture_beyond_retention(self):
+        """Evidence must be readable from the full capture, not just retained text.
+
+        Retention is capped at ``MAX_CAPTURE_BYTES`` while production is capped at
+        ``MAX_OUTPUT_BYTES``; a stream larger than the retention cap must still
+        yield a digest over its complete bounded bytes.
+        """
+        total = harness.MAX_CAPTURE_BYTES + 150_000
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            supervisor = ProcessSupervisor(deadline=time.monotonic() + 30.0, log_dir=root / "logs")
+            run = supervisor.run_group(
+                [sys.executable, "-c",
+                 f"import sys; sys.stdout.write('x' * {total}); sys.stdout.flush()"]
+            )
+            self.assertEqual(run.returncode, 0)
+            self.assertTrue(run.truncated, "retention should be reported as truncated")
+            self.assertEqual(len(run.stdout), harness.MAX_CAPTURE_BYTES)
+            self.assertIsNotNone(run.stdout_path)
+            self.assertEqual(run.stdout_bytes, total)
+            self.assertEqual(run.stream_digest(), hashlib.sha256(b"x" * total).hexdigest())
+
+    def test_run_group_without_a_process_exposes_no_capture_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            supervisor = ProcessSupervisor(deadline=time.monotonic() - 1.0,
+                                           log_dir=Path(tmp) / "logs")
+            run = supervisor.run_group([sys.executable, "-c", "pass"])
+            self.assertTrue(run.timed_out)
+            self.assertIsNone(run.stdout_path)
+            self.assertIsNone(run.stream_digest())
 
 
 if __name__ == "__main__":

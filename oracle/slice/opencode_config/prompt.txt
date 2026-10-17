@@ -1,0 +1,14 @@
+Repair `candidate.c` so that it reproduces the pinned behaviour of the function
+declared in `synth.h`, as evidenced by the visible fixtures under
+`fixtures/visible/`.
+
+An Oracle tool server is available under the names `oracle_inspect`,
+`oracle_fixtures`, `oracle_coverage`, `oracle_test` and `oracle_diff`. They are
+read-only and observe the visible corpus only.
+
+Rules:
+
+- Change only `candidate.c`. Do not create, delete or rename any other file.
+- Do not shell out, and do not build or run anything yourself; take observations
+  through `oracle_test` and use `oracle_diff` to find the first divergent case.
+- Work until `oracle_test` reports that every visible fixture passes, then stop.

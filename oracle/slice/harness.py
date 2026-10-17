@@ -110,6 +110,15 @@ class Capture:
     timed_out: bool
     truncated: bool
     duration_s: float
+    #: The bounded capture files themselves. ``stdout``/``stderr`` retain at most
+    #: :data:`MAX_CAPTURE_BYTES` for parsing; a caller that needs *complete*
+    #: bounded evidence (for example an event-stream digest) reads these files,
+    #: which the OS caps at :data:`MAX_OUTPUT_BYTES`. They are ``None`` when no
+    #: process was started.
+    stdout_path: Path | None = None
+    stderr_path: Path | None = None
+    stdout_bytes: int = 0
+    stderr_bytes: int = 0
 
 
 # --- deadlines ----------------------------------------------------------------
@@ -223,6 +232,14 @@ def _read_bounded(path: Path, cap: int = MAX_CAPTURE_BYTES) -> tuple[str, bool]:
     return data.decode("utf-8", errors="replace"), size > cap
 
 
+def _file_size(path: Path) -> int:
+    """Size of a capture file in bytes, or 0 if it cannot be read."""
+    try:
+        return path.stat().st_size
+    except OSError:  # pragma: no cover - defensive
+        return 0
+
+
 def run_bounded(argv: list[str], *, cwd: Path | None, env: dict[str, str] | None,
                 timeout: float, capture_dir: Path, tag: str) -> Capture:
     """Run a command in its own process group with bounded time and output."""
@@ -267,6 +284,10 @@ def run_bounded(argv: list[str], *, cwd: Path | None, env: dict[str, str] | None
         timed_out=timed_out,
         truncated=out_truncated or err_truncated,
         duration_s=time.monotonic() - started,
+        stdout_path=out_path,
+        stderr_path=err_path,
+        stdout_bytes=_file_size(out_path),
+        stderr_bytes=_file_size(err_path),
     )
 
 

@@ -97,7 +97,9 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 > harness, completeness comparator, five-tool MCP bridge, restart-safe budget
 > ledger, controller with process-group abort and immutable candidate snapshots,
 > sealed receipts) — is implemented under `oracle/slice/`; see
-> [P3_SLICE.md](P3_SLICE.md). PR-B — the pinned real OpenCode run — is pending.
+> [P3_SLICE.md](P3_SLICE.md). PR-B — the pinned real OpenCode run — has its
+> binding and guarded CI re-verification implemented; the single declared
+> acceptance run is pending.
 
 ## Hard rule
 

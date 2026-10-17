@@ -31,6 +31,7 @@ jobs:
       - run: PYTHONPATH=benchmark python benchmark/eu4_frame_model.py verify-evidence results/20261003T210202Z-intrusive-diagnostic --profile intrusive_complete_v1
       - run: python tooling/common/check_forbidden_tracked_paths.py
       - run: python tooling/common/check_oracle_bundle.py
+      - run: python tooling/common/check_oracle_receipt.py
       - run: >
           python tooling/common/check_doc_links.py --strict
           README.md docs
