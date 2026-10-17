@@ -1,0 +1,15 @@
+GFX v1
+CREATE slot=0 gen=0 kind=1 size=16 result=0 contents=000102030405060708090a0b0c0d0e0f
+CREATE slot=1 gen=0 kind=2 size=8 result=0 contents=a0a1a2a3a4a5a6a7
+CREATE slot=2 gen=0 kind=1 size=8 result=0 contents=c0c1c2c3c4c5c6c7
+FILL slot=0 gen=0 offset=0 span=16 pattern=3 result=0
+PRESENT slot=0 gen=0 result=0 digest=6045a395 bytes=030405060708090a0b0c0d0e0f101112
+BLIT slot=0 gen=0 offset=2 source_slot=1 source_gen=0 result=0
+FILL slot=0 gen=0 offset=4 span=8 pattern=9 result=0
+MIX slot=0 gen=0 offset=1 source_slot=2 source_gen=0 rounds=2 result=0
+DESTROY slot=1 gen=0 result=0
+CREATE slot=1 gen=1 kind=2 size=8 result=0 contents=d0d1d2d3d4d5d6d7
+BLIT slot=0 gen=0 offset=0 source_slot=1 source_gen=1 result=0
+FILL slot=0 gen=0 offset=0 span=4 pattern=2 result=0
+PRESENT slot=0 gen=0 result=0 digest=26dc49d4 bytes=020304054446404e9c0e0f100f101112
+END creates=4 destroys=1 ops=6 effects=13
