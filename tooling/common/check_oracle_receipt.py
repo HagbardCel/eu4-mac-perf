@@ -461,6 +461,30 @@ def _check_corpus_drift(repo_root: Path, payload: dict) -> None:
                 "evaluated against; the committed fixtures are frozen ground truth")
 
 
+def _check_committed_declaration(repo_root: Path, run_id: str, commit: str,
+                                 relative: str) -> str:
+    """The published declaration must be the Git object at the run's commit.
+
+    This re-verifies, from published evidence, that the pre-registration the run
+    bound was a *committed* object at the checkout that ran - not merely a readable
+    file. It is the strongest statement an offline check can make; it does not
+    prove the commit was pushed to a remote before execution.
+    """
+    database = _revision_db(repo_root)
+    if database is None:
+        raise GuardError("no revision database is available to check the declaration commit")
+    blob = _git(database, "cat-file", "blob", f"{commit}:{relative}")
+    run_time_file = repo_root / relative
+    if not run_time_file.is_file() or run_time_file.read_bytes() != blob:
+        raise GuardError(
+            f"the pre-registration at {relative} is not the committed declaration {commit}")
+    published = repo_root / PREREGISTRATION_DIR / f"{run_id}.json"
+    if published.read_bytes() != blob:
+        raise GuardError(
+            f"the published pre-registration {run_id}.json is not the committed declaration")
+    return f"declaration: committed at {commit[:12]} ({relative})"
+
+
 def _check_acceptance(repo_root: Path, run_id: str, payload: dict, prereg: dict,
                       limits: set[str]) -> list[str]:
     """The repair-acceptance evidence, re-checked from what was published.
@@ -491,6 +515,17 @@ def _check_acceptance(repo_root: Path, run_id: str, payload: dict, prereg: dict,
                 "retrospective pin declares that limitation")
         notes.append("acceptance gates: NOT recorded at execution; the retrospective pin "
                      "declares the limitation (the run predates the repair contract)")
+
+    if recorded:
+        source = payload.get("source") or {}
+        declaration_commit = source.get("declaration_commit")
+        preregistration_path = source.get("preregistration_path")
+        if not declaration_commit or not preregistration_path:
+            raise GuardError(
+                "a repair-acceptance receipt must record the commit and path of the "
+                "pre-registration it ran under")
+        notes.append(_check_committed_declaration(
+            repo_root, run_id, declaration_commit, preregistration_path))
 
     journal = (payload.get("agent") or {}).get("journal")
     if isinstance(journal, dict):
@@ -585,6 +620,14 @@ def verify_run(repo_root: Path, prereg_path: Path) -> tuple[str, list[str]]:
     payload = receipt["payload"]
     if payload.get("verdict", {}).get("status") != "certified":
         raise GuardError(f"published receipt {run_id} is not certified")
+    finalization_error = ((payload.get("execution") or {}).get("finalization") or {}).get("error")
+    if finalization_error:
+        # Certification and a finalization fault are mutually exclusive: a run whose
+        # mandatory evidence could not be published is aborted at execution, so a
+        # certified receipt that records one is inconsistent.
+        raise GuardError(
+            f"published receipt {run_id} is certified but records a finalization "
+            f"error: {finalization_error}")
 
     notes: list[str] = []
     _cross_check(receipt, prereg)

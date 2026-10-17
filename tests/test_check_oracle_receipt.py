@@ -129,6 +129,21 @@ def _publish(root: Path) -> dict:
     }
     (root / "docs/oracle/preregistration/run-e2e.json").write_text(
         json.dumps(prereg, indent=2), encoding="utf-8")
+    # In this synthetic publication the declaration is committed *after* the run
+    # (the real driver commits it before and then runs); the commit that publishes
+    # it is what the receipt records as the declaration commit. The receipt is
+    # re-sealed with those two fields so the guard can re-verify the declaration
+    # was a committed object, not merely a readable file.
+    _git(root, "add", "docs/oracle/preregistration/run-e2e.json")
+    _git(root, "commit", "--quiet", "-m", "publish the pre-registration")
+    declaration_commit = _git(root, "rev-parse", "HEAD")
+
+    receipt = json.loads((root / "docs/oracle/receipts/run-e2e.json").read_bytes())
+    receipt["payload"]["source"]["declaration_commit"] = declaration_commit
+    receipt["payload"]["source"]["preregistration_path"] = \
+        "docs/oracle/preregistration/run-e2e.json"
+    receipt["sha256"] = receipts.receipt_digest(receipt["payload"])
+    (root / "docs/oracle/receipts/run-e2e.json").write_bytes(canonical_bytes(receipt))
     return prereg
 
 
@@ -247,6 +262,47 @@ class ReceiptGuardTests(unittest.TestCase):
             summary = json.loads(path.read_text())
             summary["tool_calls"].append({"tool": "hid-000", "status": "completed"})
             path.write_bytes(canonical_bytes(summary) + b"\n")
+            self.assertEqual(guard.main(["--root", str(root)]), 1)
+
+    def test_a_certified_receipt_with_a_finalization_error_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _publish(root)
+            _reseal(root, lambda payload: payload["execution"]["finalization"].__setitem__(
+                "error", "the tool-call journal could not be exported: disk full"))
+            self.assertEqual(guard.main(["--root", str(root)]), 1)
+
+    def test_a_receipt_without_declaration_metadata_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _publish(root)
+
+            def drop(payload):
+                payload["source"]["declaration_commit"] = None
+                payload["source"]["preregistration_path"] = None
+
+            _reseal(root, drop)
+            self.assertEqual(guard.main(["--root", str(root)]), 1)
+
+    def test_a_declaration_that_is_not_the_committed_object_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _publish(root)
+            # A cosmetic change that no content cross-check would notice: the file
+            # is no longer the Git object the receipt recorded.
+            path = root / "docs/oracle/preregistration/run-e2e.json"
+            prereg = json.loads(path.read_text())
+            prereg["declared_at"] = "1970-01-01T00:00:00+00:00"
+            path.write_text(json.dumps(prereg, indent=2), encoding="utf-8")
+            self.assertEqual(guard.main(["--root", str(root)]), 1)
+
+    def test_a_declaration_commit_that_does_not_contain_it_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _publish(root)
+            baseline = _git(root, "rev-parse", "HEAD~1")
+            _reseal(root, lambda payload: payload["source"].__setitem__(
+                "declaration_commit", baseline))
             self.assertEqual(guard.main(["--root", str(root)]), 1)
 
 

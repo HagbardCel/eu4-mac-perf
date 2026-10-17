@@ -135,6 +135,14 @@ It does **not** mean:
   are enforced for runs after P3g, and the negative regressions that show them
   refusing an unchanged candidate, a missing diagnostic and an unreconciled
   census live in `tests/test_oracle_slice_acceptance.py`.
+* **This run predates the committed-declaration, prompt-identity and
+  journal-publication controls.** Those were added by P3h: the driver now requires
+  the pre-registration to be a *committed* Git object at the checkout (so the
+  declaration no longer has to be left uncommitted to satisfy a `HEAD == A`
+  check), refuses an undeclared prompt before the adapter - and therefore the
+  model - is built, and aborts a run whose mandatory journal cannot be published
+  instead of certifying it. Nothing about this run is retrofitted: it predates all
+  three, and its sealed receipt, artifact and summaries are unchanged.
 * **The candidate snapshot is recorded as an absolute path.** Earlier receipts
   recorded `source.snapshot` absolutely; this one does too. Later runs record it
   relative to the staging root, so a committed receipt carries no user-specific

@@ -414,7 +414,7 @@ explicitly.
 | C5 | A real repair: the final candidate differs from the defective one, passes visible **and** held-out, and the certification ran |
 | C6 | The sealed receipt and committed artifact are re-verified by a model-free CI replay, cross-checked against a pre-registration committed **before** the run |
 | C7 | The run is bounded and not aborted |
-| C8 | The pre-registration was pushed before the run |
+| C8 | The pre-registration was **committed and pushed** before the run. The execution-time check proves the declaration is a committed object in the checkout; the push is a recorded process fact, not something an offline Git check can establish |
 | C9 | Honest scope: 22 fixtures are not universal equivalence, certification is not proof of repair, the holdout is spent once, and group termination is containment rather than a sandbox |
 
 ### Evidence and accounting invariants
@@ -454,10 +454,18 @@ explicitly.
   committed and pushed *before* the run; the guard reports a declaration whose
   receipt is not published yet as **pending** rather than failed
   (`--require-receipts` tightens that), so CI stays meaningful across the window
-  between the two commits. An `acceptance` run now requires `--preregistration`
-  and is refused unless the repository matches the declaration: same revision,
-  clean tree, every declared source hash, the declared candidate, the declared
-  interpreter and the declared execution bounds.
+  between the two commits. An `acceptance` run requires `--preregistration` and is
+  refused unless the repository matches the declaration. The declaration names the
+  *source revision* A it was generated on; committing the declaration produces a
+  later commit B, so the run does not require `HEAD == A` (which would force the
+  declaration to be left uncommitted). Instead it requires that A is an ancestor of
+  the checkout, the working tree is clean, every declared source hash matches both
+  A and the tree, the *declaration itself* is the committed object at HEAD
+  (`git cat-file blob HEAD:<path>`) rather than an arbitrary readable file, the
+  candidate is the declared path (inside the repository, not a symlink) with the
+  declared bytes, and the interpreter, prompt and execution bounds are the declared
+  ones. Acceptance has no prompt flexibility: `--prompt pilot` is refused before the
+  adapter - and therefore the model - is ever constructed.
 
 ### Where each guarantee is enforced
 
@@ -475,6 +483,9 @@ means it was reconstructed after the fact and carries no execution-time weight.
 | Admission, rejection and denial are distinguished | one ledger transaction writes the reservation and its journal row | the published journal's digest, then a full per-tool reconciliation | the P3-B run: aggregate only (4 admitted = 4 completed) |
 | The accepted artifact is the frozen bytes | freeze, then certify from the snapshot | committed artifact digest vs `final_candidate_sha256` | - |
 | Source identities | recorded in the receipt and the pre-registration | every pin against `git cat-file blob <rev>:<path>` of the pinned revision | the P3-B baseline revision, and its launch driver, which is unauthenticated |
+| The declaration was committed before the run | the driver requires the declaration to be the Git object at HEAD, refusing an edited or uncommitted one | `git cat-file blob <declaration_commit>:<path>` equals the published pre-registration | the P3-B run, which predates the field |
+| The prompt is the declared one | prompt identity is checked before the adapter is built; acceptance refuses anything but the one declared prompt | `binding.prompt_sha256` vs the pre-registration | - |
+| Mandatory evidence was published | the journal export precedes the terminal status decision, so a failure aborts the run | a certified receipt must record no `execution.finalization.error` | - |
 | Both corpora pass | `certify_candidate`, once, after the gates | replay of both corpora in a fresh interpreter rooted in the pinned revision | - |
 | The corpora are unchanged | - | drift check recomputes both manifests from the tree | - |
 | No held-out material reaches the agent-visible surface | the binding fails closed on a leak in the stream | leak scan of the published summary | - |
@@ -509,6 +520,9 @@ retrospective pin records the committed file at the pinned revision **for
 reference only** and lists it as unauthenticated. Nothing here upgrades the
 original finding: the run's conditions remain the nine in the original
 pre-registration, and the gate contract above is enforced for runs after P3g.
+The committed-declaration, prompt-identity and journal-publication controls were
+added by P3h and are likewise enforced only for runs after it; the P3-B run
+predates them and its sealed evidence is unchanged.
 
 ### Tests
 
@@ -527,7 +541,10 @@ pre-registration, and the gate contract above is enforced for runs after P3g.
 | A pinned run that no longer matches its revision is refused | `tests/test_check_oracle_receipt.py` |
 | The acceptance gates refuse an unchanged candidate, a missing diagnostic and an unreconciled census before any held-out spend | `tests/test_oracle_slice_acceptance.py` |
 | The build attests the materialized source and refuses a mid-compile change | `tests/test_oracle_slice_acceptance.py` |
+| A published journal that cannot be exported aborts the run but keeps its verified verdicts | `tests/test_oracle_slice_acceptance.py` |
 | The test double reaches the tools through a genuine MCP `tools/call` | `tests/test_oracle_slice_opencode.py` |
+| A committed declaration with default bounds is accepted; an edited, uncommitted, non-ancestor, or undeclared-path declaration is refused | `tests/test_oracle_slice_driver.py` |
+| An acceptance run refuses the pilot prompt before the adapter is built | `tests/test_oracle_slice_driver.py` |
 
 The acceptance run itself is published as a sealed receipt under
 `docs/oracle/receipts/`, the committed artifact under `docs/oracle/artifacts/`,
