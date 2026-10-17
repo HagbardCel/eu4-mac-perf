@@ -1,9 +1,13 @@
 # P4 recorder: observation records, evidence store and offline gates
 
 **Status:** in progress. **P4.1** (the record schema, canonicalization and the
-immutable evidence store) and **P4.2** (the portable C11 synthetic target with a
-deterministic golden transcript) are implemented under `oracle/recorder/` with
-offline tests; the recorder core follows (P4.3+). **Nothing here launches EU IV,
+immutable evidence store), **P4.2** (the portable C11 synthetic target with a
+deterministic golden transcript), **P4.3** (the native recorder core's exact
+capture accounting), **P4.4** (the pluggable capture policy), **P4.5** (offline
+finalization: resource identity, aliasing and semantic dedup) and **P4.7**
+(concurrency and bounded capture) are implemented under `oracle/recorder/` with
+offline tests - **P4r-B is complete**. The resource registry/closure (P4.6) and
+R0-M protocol compatibility (P4.8) follow in P4r-C. **Nothing here launches EU IV,
 opens a game process, or attaches to a binary**: the recorder consumes
 already-captured native events, and P4 is proven entirely offline.
 
@@ -150,6 +154,131 @@ the transcript; `tests/test_oracle_recorder_synthetic.py` asserts it reproduces
 the committed `golden.txt` exactly and that the transcript actually exhibits each
 property above.
 
+## The recorder core (P4.3)
+
+`oracle/recorder/native/` is the portable core the harness links the subject
+against. It is function-agnostic: it knows only about hooks, and it counts exactly
+what it intercepted, selected, captured, left incomplete, and lost.
+
+| Counter | Meaning |
+| --- | --- |
+| `intercepted` | hook entries observed |
+| `selected` | entries the policy chose for deep capture |
+| `unselected` | entries counted only (`intercepted - selected`) |
+| `captured` | selected entries with a complete observation |
+| `incomplete` | selected entries whose declared scope was not observable |
+| `lost` | selected entries the bounded capture buffer could not hold |
+| `reentrant` | entries observed while already inside an observation |
+| `rejected` | instrumentation errors (over-deep, or an exit with no matching enter) |
+
+Two identities hold by construction and are asserted after every scenario:
+
+* `intercepted = selected + unselected`
+* `selected = captured + incomplete + lost`
+
+An **incomplete** entry is a selected observation whose declared scope was not
+observable - the call operated on no live resource, so there was no state to
+capture. A **lost** entry is a selected observation the bounded capture buffer
+could not hold. Loss is reported, never silent: there is no unbounded buffer and no
+dropped counter, so the accounting stays exact even when the buffer overflows.
+**Reentrant** observation (a hook's capture entering another hook) is detected, and
+an exit with no matching enter is **rejected** rather than accepted.
+
+The **hook layer** in `driver.c` stands in for real interposition: it calls
+`recorder_enter`, runs the subject, then `recorder_exit`, passing whether the
+observation's scope was fully observable. The synthetic target proves recorder
+*semantics* - accounting, boundedness, reentrancy - and deliberately does **not**
+prove Darwin x86-64 trampoline or calling-convention fidelity, which stays behind
+the separate hook-pack gate before P5.
+
+The driver's transcript is a deterministic golden output, like the subject's:
+fixed-width arithmetic, no pointers, no clock. `tests/test_oracle_recorder_native.py`
+asserts it reproduces byte-for-byte and that the identities hold independently of
+the flag the core reports.
+
+## The capture policy (P4.4)
+
+Which hooks are captured in full, and which are counted only, is a **declared,
+pluggable descriptor** (`oracle/recorder/native/policy.h`), not a hard-coded list
+inside the recorder:
+
+```
+recorder_policy { version, default_rule, rule_count, rules[ {hook_id, rule} ] }
+```
+
+The recorder is function-agnostic, so the policy names hooks rather than functions
+and can be swapped without touching the core. Because two policies qualify the same
+behavior differently, a record must name the policy it was captured under, so the
+descriptor has a **canonical byte encoding**:
+
+* big-endian fields, and rules **sorted by hook id** - so the bytes depend on the
+  policy's meaning, not on the order it was written down;
+* the native core emits those bytes; it does **not** hash.
+
+The policy digest (sha256 over the canonical bytes) is computed **offline** - in
+`oracle/recorder/policy_reference.py`, a differential *reference* model, not a
+second source of truth. The native declaration is authoritative; the reference
+re-derives the bytes so a test fails if the two drift. That digest is exactly the
+`capture_policy_digest` a P4.1 record carries, which is how two records captured
+under different policies are kept distinct even when the observed behavior is
+identical.
+
+## Offline finalization (P4.5)
+
+The recorder counts; it does not decide equality. `oracle/recorder/finalize.py`
+closes the capture/classification split, offline, over the sealed records a run
+produced and the recorder's native counters:
+
+* **resource identity follows the lifetime** (`resource_id@generation`), never the
+  handle an observation happened to use - so two handles onto one resource collapse
+  to one identity, while a reused slot in a new generation is a different resource;
+  the content `version` is kept apart from the lifetime;
+* **fully qualified records are classified** into `unique` and `verified_repeat` by
+  their `semantic_digest` - canonical semantic equality, never a hot-path byte
+  compare. Occurrence metadata (call id, thread, epoch, scenario) is excluded, so
+  the *same* behavior observed twice deduplicates; equal arguments over a
+  *different* pre-state do not, because the pre-state is part of the projection;
+* the **accounting identity** is asserted, not assumed:
+
+  ```
+  intercepted = unique + verified_repeat + incomplete + counted_only + lost
+  ```
+
+  so a run cannot report "nothing new" while quietly dropping observations.
+
+`classify` refuses a `counted-only` record (such observations exist only as a
+counter), refuses a `captured` record that does not qualify for semantic
+comparison, and refuses a materialized record that carries sub-observation loss.
+The native capture that *populates* these records - reading the state of the
+resource an observation addressed - lands in P4.6; P4.5 defines the classification
+the capture must satisfy.
+
+## Concurrency and bounded capture (P4.7)
+
+The core is safe under concurrent observation, with no lock on the hot path:
+
+* every counter is a C11 atomic, and the bounded buffer hands out slots with one
+  atomic fetch-add, so **loss is exact under load** rather than approximate;
+* observation depth, thread identity and sequence are **thread-local**, so one
+  thread's nesting and ordering never corrupt another's;
+* each captured event records the observing **thread** and that thread's own,
+  contiguous **sequence**, plus the declared capture **phase**.
+
+The harness never invents a total order over concurrent events. It declares its
+sync edges explicitly (here, one rendezvous between two phases of four threads:
+`SYNC barrier=1 participants=0,1,2,3 phase=0->1`), and `oracle/recorder/finalize.py`
+reconstructs the **partial** happens-before order those edges and the per-thread
+sequences induce: within a thread, consecutive sequences are ordered; across
+threads, the barrier orders every phase-0 event before every phase-1 event; two
+same-phase events on different threads stay genuinely unordered. The transcript
+stays deterministic because it prints accounting and per-thread
+`(thread, sequence, phase)` records, never the interleaving, and events are printed
+sorted by `(thread, sequence)`.
+
+The thread-safety claim is not asserted from one lucky run: the concurrency
+scenarios are deterministic across repeated runs and the build is clean under
+**ThreadSanitizer** (zero data races) as well as AddressSanitizer and UBSan.
+
 ## Fidelity modes (owned by the reconstruction contract)
 
 The three modes - **faithful**, **GL optimization**, **GPU/backend redesign** -
@@ -188,3 +317,57 @@ See `tests/test_oracle_recorder_schema.py` and
   effect stream, and exact counters.
 
 See `tests/test_oracle_recorder_synthetic.py`.
+
+## P4r-B acceptance (P4.3 - )
+
+**P4.3 - the recorder core**, exact accounting under disabled capture, a bounded
+buffer, and reentrant observation:
+
+* every scenario reports the accounting identity as holding, and the identity is
+  re-derived independently from the counters;
+* disabled capture counts every interception and selects none;
+* enabled capture selects every interception, loses none, and marks as incomplete
+  exactly the calls that operated on no live resource;
+* a capacity below the number of selected events loses exactly the surplus and
+  still balances;
+* reentrant observation is detected, and an unmatched exit is rejected.
+
+See `tests/test_oracle_recorder_native.py`.
+
+**P4.4 - the capture policy**, a declared, pluggable descriptor:
+
+* the native canonical descriptor bytes match the reference encoding, and the
+  digest is independent of rule declaration order;
+* a policy deep-captures exactly the hooks it selects and counts the rest;
+* two policies qualify the same behavior differently, and therefore carry
+  different digests.
+
+See `tests/test_oracle_recorder_native.py`.
+
+**P4.5 - offline finalization**, identity, aliasing and semantic dedup:
+
+* the same behavior observed twice (different call id, thread, epoch, scenario) is
+  one `unique` and one `verified_repeat`;
+* equal arguments over a different pre-state are *not* deduplicated, and a
+  different function is not the same behavior;
+* two handles onto one resource collapse to one identity, a reused slot in a new
+  generation does not, and the content version is preserved apart from the lifetime;
+* the accounting identity is asserted, a `counted-only` record and a
+  sub-observation-lossy record are refused, and a `captured` record that does not
+  qualify for semantic comparison is rejected.
+
+See `tests/test_oracle_recorder_finalize.py`.
+
+**P4.7 - concurrency and bounded capture**:
+
+* four threads observing through one recorder account exactly, and a buffer smaller
+  than the capture loses exactly the surplus while still balancing;
+* every captured event carries a distinct `(thread, sequence)`, and every thread's
+  sequence is contiguous;
+* the reconstructed happens-before order is **partial** - the declared barrier
+  orders phase 0 before phase 1, yet two same-phase events on different threads are
+  unordered - and it is acyclic;
+* the transcript is deterministic across repeated runs and the build is clean under
+  ThreadSanitizer.
+
+See `tests/test_oracle_recorder_native.py`.

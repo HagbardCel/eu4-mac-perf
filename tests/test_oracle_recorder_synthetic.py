@@ -19,8 +19,8 @@ class SyntheticTargetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._tmp = tempfile.mkdtemp(prefix="oracle-p4-synthetic-")
-        cls.exe = harness.build(Path(cls._tmp) / "build")
-        cls.transcript = harness.run_golden(cls.exe)
+        cls.exe = harness.build("synthetic", Path(cls._tmp) / "build")
+        cls.transcript = harness.run_transcript(cls.exe)
         cls.parsed = harness.parse_transcript(cls.transcript)
 
     @classmethod
@@ -28,10 +28,10 @@ class SyntheticTargetTests(unittest.TestCase):
         shutil.rmtree(cls._tmp, ignore_errors=True)
 
     def test_reproduces_the_committed_golden_transcript(self):
-        self.assertEqual(self.transcript, harness.golden_transcript())
+        self.assertEqual(self.transcript, harness.golden_transcript("synthetic"))
 
     def test_output_is_deterministic(self):
-        self.assertEqual(harness.run_golden(self.exe), self.transcript)
+        self.assertEqual(harness.run_transcript(self.exe), self.transcript)
 
     def test_transcript_is_well_formed(self):
         self.assertEqual(self.parsed["version"], "v1")
