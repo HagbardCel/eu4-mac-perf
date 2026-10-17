@@ -1,11 +1,11 @@
 # P4 recorder: observation records, evidence store and offline gates
 
 **Status:** in progress. **P4.1** (the record schema, canonicalization and the
-immutable evidence store) is implemented under `oracle/recorder/` with offline
-adversarial tests. The native synthetic target and the recorder core follow
-(P4.2+). **Nothing here launches EU IV, opens a game process, or attaches to a
-binary**: the recorder consumes already-captured native events, and P4 is proven
-entirely offline.
+immutable evidence store) and **P4.2** (the portable C11 synthetic target with a
+deterministic golden transcript) are implemented under `oracle/recorder/` with
+offline tests; the recorder core follows (P4.3+). **Nothing here launches EU IV,
+opens a game process, or attaches to a binary**: the recorder consumes
+already-captured native events, and P4 is proven entirely offline.
 
 This document is authoritative for P4. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the trust boundary is a refinement of the
@@ -119,6 +119,37 @@ must exist, match its digest and size, and (for records) re-validate against the
 schema. A tampered, truncated or falsely-referenced blob is caught at load time
 rather than trusted.
 
+## The synthetic target (P4.2)
+
+`oracle/recorder/synthetic/` is the *subject*: a small, portable C11 library
+(`synth.h`, `synthetic.c`) with a deterministic scenario driver (`driver.c`). It
+models the observation problems the recorder must handle:
+
+* **two operations sharing mutable state** - `synth_update` and `synth_read` both
+  traverse the same resource table, and a read observes a write made through
+  another handle;
+* **create / update / destroy with handle reuse** - a destroyed slot is reused by
+  the next `synth_create` with an advanced generation, so old handles stay invalid;
+* **aliasing** - `synth_share` copies a live handle, so two handles address one
+  resource;
+* **pre-state dependence** - each byte advances relative to what is already there,
+  so equal `(seed, span)` arguments over different pre-state give a different
+  result (equal arguments are not equal behavior);
+* **a bounded recursive traversal** - `synth_fold`; and
+* **an ordered external-effect stream** - the library calls the trusted sink
+  `synth_effect`, which the driver now - and the recorder in P4.3 - implements.
+
+`driver.c` runs a fixed script and prints one canonical line per step:
+`SYNTH v1`, interleaved `EFF` effects, `CALL` results, `DATA` byte spans, and a
+final `END` line of counters. The transcript is the **native golden output**: it
+depends only on C semantics - fixed-width unsigned arithmetic and explicit byte
+encoding, no pointers, no clock, no locale - so gcc on Linux and clang on macOS
+produce it byte-for-byte. `oracle/recorder/harness.py` copies the trusted sources
+into a private directory, compiles them (`-std=c11`), runs the target and returns
+the transcript; `tests/test_oracle_recorder_synthetic.py` asserts it reproduces
+the committed `golden.txt` exactly and that the transcript actually exhibits each
+property above.
+
 ## Fidelity modes (owned by PR #44)
 
 The three modes - **faithful**, **GL optimization**, **GPU/backend redesign** -
@@ -129,9 +160,10 @@ owned by the reconstruction contract `docs/renderer-reconstruction-and-different
 `main`); the recorder declares them as an opaque, versioned tag and does not fork a
 second taxonomy.
 
-## P4.1 acceptance
+## P4r-A acceptance (P4.1 - P4.2)
 
-Offline, adversarial, and independent of any native code:
+**P4.1 - the record model and store**, offline, adversarial, independent of any
+native code:
 
 * a well-formed record seals and verifies; canonical bytes are key-order
   independent; non-finite values are rejected;
@@ -144,4 +176,15 @@ Offline, adversarial, and independent of any native code:
   not change semantics; and
 * a resource's lifetime and its content version are distinguished.
 
-See `tests/test_oracle_recorder_schema.py` and `tests/test_oracle_recorder_store.py`.
+See `tests/test_oracle_recorder_schema.py` and
+`tests/test_oracle_recorder_store.py`.
+
+**P4.2 - the synthetic target**, deterministic native golden output:
+
+* the committed transcript reproduces byte-for-byte across runs and compilers;
+* the transcript exhibits handle reuse with an advanced generation, a rejected
+  stale handle, aliasing across two handles, equal arguments over different
+  pre-state yielding different bytes, bounded recursion, an ordered and complete
+  effect stream, and exact counters.
+
+See `tests/test_oracle_recorder_synthetic.py`.

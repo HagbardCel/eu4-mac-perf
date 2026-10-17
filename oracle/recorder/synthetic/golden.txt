@@ -1,0 +1,29 @@
+SYNTH v1
+EFF id=1 op=1 slot=0 arg=0
+CALL create rc=ok size=4 slot=0 gen=0
+DATA slot=0 bytes=00000000000000000000000000000000
+EFF id=2 op=2 slot=0 arg=1
+CALL update rc=ok slot=0 gen=0 version=1 seed=5 span=4
+DATA slot=0 bytes=05060708000000000000000000000000
+EFF id=3 op=3 slot=0 arg=0
+CALL read rc=ok slot=0 gen=0 offset=0 value=5
+CALL share rc=ok slot=0 gen=0
+EFF id=4 op=2 slot=0 arg=2
+CALL update rc=ok slot=0 gen=0 version=2 seed=1 span=2
+DATA slot=0 bytes=06080708000000000000000000000000
+EFF id=5 op=3 slot=0 arg=1
+CALL read rc=ok slot=0 gen=0 offset=1 value=8
+CALL fold rc=ok depth=3 value=94305
+EFF id=6 op=4 slot=0 arg=1
+CALL destroy rc=ok slot=0 gen=0
+CALL read rc=stale slot=0 gen=0 offset=0 value=-
+EFF id=7 op=1 slot=0 arg=1
+CALL create rc=ok size=4 slot=0 gen=1
+EFF id=8 op=2 slot=0 arg=1
+CALL update rc=ok slot=0 gen=1 version=1 seed=9 span=4
+DATA slot=0 bytes=090a0b0c000000000000000000000000
+EFF id=9 op=2 slot=0 arg=2
+CALL update rc=ok slot=0 gen=1 version=2 seed=5 span=4
+DATA slot=0 bytes=0e101214000000000000000000000000
+CALL checksum value=445990049
+END creates=2 updates=4 destroys=1 stale_reads=1 effects=9
