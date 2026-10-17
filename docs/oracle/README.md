@@ -20,12 +20,14 @@ consumes. The project's power/heat objective is the downstream consumer of that 
 | [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md) | Authorized P0–P5 execution sequence and gates |
 | [REUSE_MAP.md](REUSE_MAP.md) | REUSE / ADAPT / REPLACE / RETAIN_HISTORICAL decisions over existing assets |
 | [BASELINE_P0.md](BASELINE_P0.md) | Frozen baseline record (revision, checks, pre-existing failures) |
+| [BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md) | Preserved v2 blueprint bytes, hashes and tag (historical reference) |
 | [../repo-map.md](../repo-map.md) | Tracked-path inventory and lifecycle labels (P1 audit) |
 | [../repo-audit-context.json](../repo-audit-context.json) | Audit identity triple (source snapshot, policy, tools); governs `docs/repo-{inventory,edges,lifecycle}.csv` |
-The design bundle that this program refines currently lives at
-`docs/proposals/EU4_Oracle_v2/` (delivered artifact, migrated into `docs/oracle/` and
-`oracle/` in P2, preserving its original bytes first). See
-[PLAN_OF_RECORD.md](PLAN_OF_RECORD.md) for the phase sequence.
+The blueprint that this program refines is preserved verbatim at
+`docs/proposals/EU4_Oracle_v2/` (annotated tag `oracle-v2-blueprint-20261016`, provenance in
+[BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md)). Its executable seed now lives in the
+`oracle/` package (`oracle/core.py`, byte-identical to the preserved prototype) with tests in
+`tests/test_oracle_core.py`. See [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md) for the phase sequence.
 
 ## Ownership model
 
@@ -48,7 +50,8 @@ remains the per-function lifecycle and does not define the recorder.
 2. **Canonical Mission update:** `../eu4_recommended_strategy.md` should name ground-truth
    acquisition + reconstruction as the primary next-phase capability. Coordinated with the
    PR #44 edit to avoid parallel edits to the same file.
-3. **Seed migration (P2):** preserve the original `../proposals/EU4_Oracle_v2/` bytes
-   (hash + manifest + provenance), then relocate design into `docs/oracle/` and prototype
-   code into `oracle/`. PR-0-style cleanup is landing incrementally; see
+3. **Seed migration (P2) — done:** the original `../proposals/EU4_Oracle_v2/` bytes are
+   preserved verbatim and tagged (see [BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md)); the
+   prototype is copied byte-identically into `oracle/` and its tests join `tests/`. The blueprint
+   stays the historical reference while `docs/oracle/` remains authoritative; see
    [REUSE_MAP.md](REUSE_MAP.md).
