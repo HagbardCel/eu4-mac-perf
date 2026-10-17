@@ -1,6 +1,6 @@
 # EU IV macOS performance — active plan
 
-**Updated 2026-10-11.** This is the short project entry point. The **canonical architecture roadmap** is [docs/eu4_recommended_strategy.md](docs/eu4_recommended_strategy.md); the new **source reconstruction and differential validation gates** are [docs/renderer-reconstruction-and-differential-validation.md](docs/renderer-reconstruction-and-differential-validation.md).
+**Updated 2026-10-18.** This is the short project entry point. The **canonical architecture roadmap** is [docs/eu4_recommended_strategy.md](docs/eu4_recommended_strategy.md); the new **source reconstruction and differential validation gates** are [docs/renderer-reconstruction-and-differential-validation.md](docs/renderer-reconstruction-and-differential-validation.md).
 
 ## What the existing evidence supports
 
@@ -13,7 +13,7 @@
 
 | Track | Immediate action | Gate |
 |---|---|---|
-| **R0-M measurement** | Review and merge [PR #43](https://github.com/HagbardCel/eu4-mac-perf/pull/43) if its code/CI/preflight review passes; then **separately** capture approved paused-Venice live evidence in PR B | Full-resolution frame-evolution, per-thread CPU, stack attribution; no timing claims from intrusive traces |
+| **R0-M measurement** | [PR #43](https://github.com/HagbardCel/eu4-mac-perf/pull/43) (measurement infrastructure) is **merged**; next, **separately** capture the approved paused-Venice live evidence in its evidence PR | Full-resolution frame-evolution, per-thread CPU, stack attribution; no timing claims from intrusive traces |
 | **R0-A architecture** | Offline Gfx/OpenGL minimum-cut mapping; shader inventory; render-pass/depth graph | Tractable high-cost **vertical** domain, no assumed clean global backend seam |
 | **RE0–RE3 reconstruction pilot** | **RE0 now:** select one low-level Gfx/OpenGL function with observable state and a recoverable ABI. Then faithful x86-64 C++20 (RE1), differential original-function oracle (RE2), reversible in-game replacement only if offline gates pass (RE3) | Faithful behavior before optimization; captured fixtures have bounded coverage; independent game safety gate |
 | **M0a → M0b → M0c Metal research** | Continue standalone equivalent single-draw probe; then ordered command-stream/state-entropy analysis; then Metal-native resource/caller redesign replay | Do not block these studies on RE3 or a full renderer reconstruction |

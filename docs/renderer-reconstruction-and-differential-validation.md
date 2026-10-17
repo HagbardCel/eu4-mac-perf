@@ -3,7 +3,7 @@
 **Status:** proposed architecture-track workstream (not yet implemented or empirically qualified).  
 **Scope:** pinned GOG EU IV 1.37.5 x86-64, Apple Silicon/Rosetta, initially paused Venice.  
 **Canonical strategy:** [EU IV rendering roadmap](eu4_recommended_strategy.md).  
-**Evidence:** [state of knowledge](eu4_macos_rendering_findings.md). This document proposes work; it does not change the status of existing evidence or reopen the frozen Phase-C diagnostic.
+**Evidence:** [state of knowledge](eu4_macos_rendering_findings.md), the [cost-based alternatives ranking](eu4_rendering_alternatives_ranked.md), and the closed-hypothesis records ([border multi-draw](gfx-border-multidraw-ababa.md), [sub-record](gfx-subrecord-ababa.md)). That corpus is the standing constraint on this workstream: reconstruction must not reopen a closed hypothesis without genuinely new evidence, and must not disturb the frozen Phase-C diagnostic. This document proposes work; it does not change the status of existing evidence.
 
 ## Decision
 
@@ -16,7 +16,7 @@ Do **not** require complete-engine decompilation or perfect understanding of eve
 | Existing workstream | Relationship |
 |---|---|
 | Phase C / R-mode | Preserve sealed evidence and R-mode baseline; no new invasive profiler-qualification loop |
-| R0-M (open PR #43, then its live evidence PR) | Continues independently: full-resolution frame-evolution census, per-thread CPU, sample-based attribution. A future live session may be **co-designed** for reference capture, but do not broaden PR #43 or silently mix diagnostics |
+| R0-M (PR #43 merged; residual evidence PR) | Continues independently: full-resolution frame-evolution census, per-thread CPU, sample-based attribution. A future live session may be **co-designed** for reference capture, but do not silently mix diagnostics with the measurement protocol |
 | R0-A minimum cut, shader and pass graph | Supplies function boundaries, call hierarchy, state dependencies and a domain candidate |
 | M0a standalone GL vs Metal single-draw probe | Proceeds independently; consult RE results when available but **do not block M0a** on reconstructed source or game integration |
 | M0b ordered command-stream census | Provides meaningful, bounded end-to-end fixtures and state-entropy barriers for prioritizing RE beyond the pilot |

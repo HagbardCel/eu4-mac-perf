@@ -4,6 +4,8 @@
 
 Reduce EU IV's rendering cost on Apple Silicon without removing visual content, through layers of improvement that build on each other, ending at a state-aware Metal backend behind the Clausewitz Gfx layer.
 
+A gated **RE0–RE3 renderer source-reconstruction and differential-validation** workstream supports the architecture track: recover a bounded Gfx/OpenGL function faithfully, prove its observable equivalence against the original binary, and only then test optimizations. It is a correctness and maintainability investment that makes the architecture tractable — **not** an independent savings claim and not a mandate to decompile the whole engine.
+
 **This is the canonical roadmap.** It supersedes the earlier `eu4_rendering_strategy_90pct.md` (removed; available in git history). That document's lasting architecture (Gfx seam, shadow state, pipeline caches, complete vertical slices, B→C) is carried over in §3. Its sequencing is replaced: priorities now follow measured cost rather than draw counts.
 
 Related documents:
