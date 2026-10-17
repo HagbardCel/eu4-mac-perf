@@ -55,7 +55,17 @@ match `MANIFEST.json` (kind `eu4_oracle_v2_blueprint`, status `offline design, N
 
 ## Verification
 
-`tooling/common/check_oracle_bundle.py` enforces two independent relationships: current
-bytes match `MANIFEST.json`, **and** current bytes match the Git objects at the pinned
-preservation commit. It fails on missing files, unexpected files, content mismatch and
-symlinks. Run in CI.
+`tooling/common/check_oracle_bundle.py` makes the **pinned preservation commit** (`56207cc`),
+not this editable manifest, the authority for what the bundle contains. It enforces three
+independent conditions:
+
+1. **Historical tree identity** — the current Git index matches the pinned tree on the exact
+   `(path, mode, object id)` tuples, rejecting added, deleted, modified or mode-changed files.
+2. **Worktree integrity** — every pinned path (including this manifest) exists as a regular file
+   with the pinned bytes and executable status; no path traverses a symlink; and no additional
+   file, symlink or special entry exists inside the bundle, so *unstaged* filesystem changes are
+   caught too.
+3. **Manifest consistency** — this manifest lists exactly the pinned payload files (excluding
+   itself), without duplicates, with sizes and SHA-256 values derived from the pinned blobs.
+
+The annotated tag must also resolve to the pinned commit. Runs in CI.

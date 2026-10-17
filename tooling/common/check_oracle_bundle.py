@@ -2,22 +2,33 @@
 """Fail if the preserved EU IV Oracle v2 blueprint is not intact.
 
 The blueprint was a local, untracked handoff; the preservation commit is its
-first Git-backed identity. This checker establishes two *independent*
-relationships so the promise "preserved verbatim" is continuously testable:
+first Git-backed identity. The *pinned commit* - not the editable manifest - is
+the authority for what the bundle contains.
 
-1. Manifest honesty  - current bytes match ``MANIFEST.json`` (path, size, SHA-256).
-2. Immutability      - current bytes match the Git objects at a pinned
-                       preservation commit, which the annotated tag must resolve to.
+Three independent conditions are enforced:
 
-It also rejects missing files, unexpected files, symlinks/non-regular entries and
-any tracked root-level OpenCode activation (untracked local configuration is
-ignored, since OpenCode only loads a repository-root ``.opencode/``).
+1. Historical tree identity - the current Git index equals the pinned tree on
+   the exact ``(path, mode, object id)`` tuples, so committed or staged
+   additions, deletions, content changes and mode changes are all rejected.
+2. Worktree integrity - every pinned path (``MANIFEST.json`` included) exists in
+   the worktree as a regular file with the pinned bytes and executable status, no
+   path or directory component traverses a symlink, and no additional regular
+   file, symlink or special entry exists inside the bundle. This catches
+   *unstaged* filesystem changes that Git status reports but the index does not.
+3. Manifest consistency - ``MANIFEST.json`` lists exactly the pinned payload
+   files (excluding itself), with no duplicates and with sizes and SHA-256 values
+   derived from the pinned blobs. Its own bytes are covered by condition 2.
+
+A tracked root-level OpenCode activation is also rejected; untracked local
+configuration is ignored, since OpenCode only loads a repository-root
+``.opencode/``.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -25,12 +36,13 @@ from pathlib import Path, PurePosixPath
 BUNDLE_DIR = "docs/proposals/EU4_Oracle_v2"
 MANIFEST_NAME = "MANIFEST.json"
 PRESERVATION_TAG = "oracle-v2-blueprint-20261016"
-# Pinned independently of the editable manifest. A branch rebase would change this
-# SHA, which is exactly the kind of drift the check is meant to surface.
+# Pinned independently of the editable manifest, so the manifest cannot redefine
+# the expected historical file set. A branch rebase would change this SHA, which
+# is exactly the kind of drift the check is meant to surface.
 PRESERVATION_COMMIT = "56207cc3a2bfc28e6bb3719c04125ed42f5b0a97"
 
-# Git modes that are not regular blobs within a preserved tree.
-NON_REGULAR_MODES = frozenset({"120000", "160000"})
+# Regular-file modes: value is whether the executable bit is expected.
+REGULAR_MODES = {"100644": False, "100755": True}
 ROOT_ACTIVATION = (".opencode", "opencode.json")
 
 
@@ -52,12 +64,6 @@ def _git(*args: str, cwd: Path) -> bytes:
     return proc.stdout
 
 
-def tracked_paths(prefixes: tuple[str, ...], root: Path) -> set[str]:
-    """Repo-relative posix paths tracked under ``prefixes``."""
-    out = _git("ls-files", "-z", "--", *prefixes, cwd=root)
-    return {p.decode("utf-8", "surrogateescape") for p in out.split(b"\x00") if p}
-
-
 def safe_relpath(value: object) -> bool:
     """True for a relative, in-tree posix path (no absolute, no ``..``)."""
     if not isinstance(value, str) or not value:
@@ -66,6 +72,151 @@ def safe_relpath(value: object) -> bool:
     if p.is_absolute() or ".." in p.parts:
         return False
     return value == p.as_posix()
+
+
+# --- inventory ----------------------------------------------------------------
+
+
+def pinned_entries(root: Path, commit: str = PRESERVATION_COMMIT, bundle_dir: str = BUNDLE_DIR) -> dict[str, tuple[str, str]]:
+    """Authoritative ``{bundle-relative path: (mode, object id)}`` at ``commit``."""
+    out = _git("ls-tree", "-r", "-z", f"{commit}:{bundle_dir}", cwd=root)
+    entries: dict[str, tuple[str, str]] = {}
+    for record in out.split(b"\x00"):
+        if not record:
+            continue
+        meta, _, name = record.partition(b"\t")
+        fields = meta.split()
+        if len(fields) != 3:
+            raise BundleError(f"unexpected ls-tree record: {record!r}")
+        mode, _type, oid = (f.decode("ascii") for f in fields)
+        rel = name.decode("utf-8", "surrogateescape")
+        entries[rel] = (mode, oid)
+    return entries
+
+
+def index_entries(root: Path, bundle_dir: str = BUNDLE_DIR) -> dict[str, tuple[str, str]]:
+    """Current index ``{bundle-relative path: (mode, object id)}``; stage 0 only."""
+    out = _git("ls-files", "-s", "-z", "--", bundle_dir, cwd=root)
+    prefix = bundle_dir + "/"
+    entries: dict[str, tuple[str, str]] = {}
+    for record in out.split(b"\x00"):
+        if not record:
+            continue
+        meta, _, name = record.partition(b"\t")
+        fields = meta.split()
+        if len(fields) != 3:
+            raise BundleError(f"unexpected ls-files record: {record!r}")
+        mode, oid, stage = (f.decode("ascii") for f in fields)
+        path = name.decode("utf-8", "surrogateescape")
+        if stage != "0":
+            raise BundleError(f"unmerged index entry for {path!r} (stage {stage})")
+        if not path.startswith(prefix):
+            raise BundleError(f"index entry outside bundle: {path!r}")
+        rel = path[len(prefix):]
+        if rel in entries:
+            raise BundleError(f"duplicate index entry: {rel}")
+        entries[rel] = (mode, oid)
+    return entries
+
+
+# --- condition 1: historical tree identity ------------------------------------
+
+
+def check_pinned_tree_identity(root: Path, commit: str = PRESERVATION_COMMIT, bundle_dir: str = BUNDLE_DIR) -> list[str]:
+    errors: list[str] = []
+    pinned = pinned_entries(root, commit, bundle_dir)
+    current = index_entries(root, bundle_dir)
+    for rel, (mode, _oid) in sorted(pinned.items()):
+        if mode not in REGULAR_MODES:
+            errors.append(f"non-regular mode ({mode}) in preserved tree: {rel}")
+    for rel in sorted(set(pinned) - set(current)):
+        errors.append(f"historical file missing from index: {rel}")
+    for rel in sorted(set(current) - set(pinned)):
+        errors.append(f"tracked file not in preservation commit: {rel}")
+    for rel in sorted(set(pinned) & set(current)):
+        pinned_mode, pinned_oid = pinned[rel]
+        cur_mode, cur_oid = current[rel]
+        if cur_mode != pinned_mode:
+            errors.append(f"mode changed: {rel} ({pinned_mode} -> {cur_mode})")
+        elif cur_oid != pinned_oid:
+            errors.append(f"content identity changed: {rel}")
+    return errors
+
+
+# --- condition 2: worktree integrity ------------------------------------------
+
+
+def _walk(root: Path) -> list[tuple[str, str]]:
+    """Physical entries under ``root`` as ``(relpath, kind)``.
+
+    Directory entries are inspected directly (not via ``os.walk``), so a symlinked
+    directory is classified as a symlink rather than descended into.
+    """
+    found: list[tuple[str, str]] = []
+    stack: list[tuple[str, Path]] = [("", root)]
+    while stack:
+        rel_dir, directory = stack.pop()
+        try:
+            entries = list(os.scandir(directory))
+        except OSError as exc:
+            raise BundleError(f"cannot read {directory}: {exc}") from exc
+        for entry in entries:
+            rel = f"{rel_dir}/{entry.name}" if rel_dir else entry.name
+            if entry.is_symlink():
+                found.append((rel, "symlink"))
+            elif entry.is_dir(follow_symlinks=False):
+                found.append((rel, "dir"))
+                stack.append((rel, Path(entry.path)))
+            elif entry.is_file(follow_symlinks=False):
+                found.append((rel, "file"))
+            else:
+                found.append((rel, "other"))
+    return sorted(found)
+
+
+def _has_symlink_component(bundle: Path, rel: str) -> bool:
+    current = bundle
+    for part in PurePosixPath(rel).parts:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
+
+
+def check_worktree_integrity(root: Path, commit: str = PRESERVATION_COMMIT, bundle_dir: str = BUNDLE_DIR) -> list[str]:
+    bundle = root / bundle_dir
+    if not bundle.is_dir():
+        return [f"missing preserved bundle directory: {bundle_dir}"]
+    errors: list[str] = []
+    if bundle.is_symlink():
+        errors.append(f"preserved bundle root is a symlink: {bundle_dir}")
+
+    pinned = pinned_entries(root, commit, bundle_dir)
+    for rel, (mode, _oid) in sorted(pinned.items()):
+        target = bundle / rel
+        if _has_symlink_component(bundle, rel):
+            errors.append(f"path traverses a symlink: {rel}")
+            continue
+        if not target.is_file():
+            errors.append(f"missing or non-regular worktree file: {rel}")
+            continue
+        executable = bool(target.stat().st_mode & 0o111)
+        if executable != REGULAR_MODES.get(mode, executable):
+            errors.append(f"executable bit mismatch: {rel}")
+        if target.read_bytes() != _git("show", f"{commit}:{bundle_dir}/{rel}", cwd=root):
+            errors.append(f"worktree bytes differ from preserved commit: {rel}")
+
+    for rel, kind in _walk(bundle):
+        if kind == "symlink":
+            errors.append(f"symlink inside preserved bundle: {rel}")
+        elif kind == "other":
+            errors.append(f"special file inside preserved bundle: {rel}")
+        elif kind == "file" and rel not in pinned:
+            errors.append(f"unexpected file inside preserved bundle: {rel}")
+    return errors
+
+
+# --- condition 3: manifest consistency ----------------------------------------
 
 
 def load_manifest(bundle: Path) -> list[dict]:
@@ -85,110 +236,75 @@ def load_manifest(bundle: Path) -> list[dict]:
     return files
 
 
-def check_no_root_opencode_activation(root: Path) -> list[str]:
+def check_manifest_consistency(root: Path, commit: str = PRESERVATION_COMMIT, bundle_dir: str = BUNDLE_DIR) -> list[str]:
+    bundle = root / bundle_dir
     errors: list[str] = []
-    for path in sorted(tracked_paths(ROOT_ACTIVATION, root)):
-        if path == ".opencode" or path.startswith(".opencode/") or path == "opencode.json":
-            errors.append(f"tracked root OpenCode activation: {path}")
-    return errors
+    try:
+        files = load_manifest(bundle)
+    except BundleError as exc:
+        return [str(exc)]
 
-
-def check_worktree_vs_manifest(root: Path, tracked: set[str] | None = None) -> list[str]:
-    """Manifest honesty: hashes, set equality, safety and regular-file checks."""
-    bundle = root / BUNDLE_DIR
-    if not bundle.is_dir():
-        return [f"missing preserved bundle directory: {BUNDLE_DIR}"]
-    errors: list[str] = []
-    files = load_manifest(bundle)
-
-    manifest_paths: set[str] = set()
+    manifest_paths: list[str] = []
     for entry in files:
         rel = entry.get("path")
         if not safe_relpath(rel):
             errors.append(f"unsafe manifest path: {rel!r}")
             continue
-        manifest_paths.add(rel)
-        target = bundle / rel
-        if target.is_symlink():
-            errors.append(f"manifest entry is a symlink: {rel}")
-            continue
-        if not target.is_file():
-            errors.append(f"manifest entry missing: {rel}")
-            continue
-        blob = target.read_bytes()
-        if len(blob) != entry.get("bytes"):
-            errors.append(f"size mismatch: {rel} ({len(blob)} != {entry.get('bytes')})")
-        if hashlib.sha256(blob).hexdigest() != entry.get("sha256"):
-            errors.append(f"sha256 mismatch: {rel}")
+        manifest_paths.append(rel)
+    if len(manifest_paths) != len(set(manifest_paths)):
+        errors.append("duplicate path in manifest")
 
-    if tracked is None:
-        tracked = tracked_paths((BUNDLE_DIR,), root)
-    prefix = BUNDLE_DIR + "/"
-    present = {p[len(prefix):] for p in tracked if p.startswith(prefix)}
-    expected = manifest_paths | {MANIFEST_NAME}
-    for rel in sorted(expected - present):
-        errors.append(f"manifest-listed but not tracked: {rel}")
-    for rel in sorted(present - expected):
-        errors.append(f"tracked but not in manifest: {rel}")
-    return errors
+    pinned_payload = set(pinned_entries(root, commit, bundle_dir)) - {MANIFEST_NAME}
+    listed = set(manifest_paths)
+    for rel in sorted(pinned_payload - listed):
+        errors.append(f"manifest missing pinned file: {rel}")
+    for rel in sorted(listed - pinned_payload):
+        errors.append(f"manifest lists file not in preservation commit: {rel}")
 
-
-def check_modes(root: Path, commit: str = PRESERVATION_COMMIT) -> list[str]:
-    """Reject non-regular entries (symlinks, gitlinks) in the preserved tree."""
-    out = _git("ls-tree", "-r", "-z", f"{commit}:{BUNDLE_DIR}", cwd=root)
-    errors: list[str] = []
-    for record in out.split(b"\x00"):
-        if not record:
-            continue
-        meta, _, name = record.partition(b"\t")
-        fields = meta.split()
-        mode = fields[0].decode("ascii") if fields else ""
-        if mode in NON_REGULAR_MODES:
-            errors.append(f"non-regular entry ({mode}) in preserved bundle: {name.decode('utf-8', 'replace')}")
-    return errors
-
-
-def check_immutability(root: Path, commit: str = PRESERVATION_COMMIT) -> list[str]:
-    """Immutability: current bytes equal the Git blobs at the pinned commit."""
-    bundle = root / BUNDLE_DIR
-    if not bundle.is_dir():
-        return [f"missing preserved bundle directory: {BUNDLE_DIR}"]
-    errors: list[str] = []
-    for entry in load_manifest(bundle):
+    for entry in files:
         rel = entry.get("path")
-        if not safe_relpath(rel):
+        if not safe_relpath(rel) or rel not in pinned_payload:
             continue
-        target = bundle / rel
-        if target.is_symlink() or not target.is_file():
-            continue  # already reported by check_worktree_vs_manifest
-        current = target.read_bytes()
-        try:
-            pinned = _git("show", f"{commit}:{BUNDLE_DIR}/{rel}", cwd=root)
-        except BundleError as exc:
-            errors.append(f"cannot read pinned blob for {rel}: {exc}")
-            continue
-        if current != pinned:
-            errors.append(f"bytes differ from preserved commit: {rel}")
+        pinned_bytes = _git("show", f"{commit}:{bundle_dir}/{rel}", cwd=root)
+        if entry.get("bytes") != len(pinned_bytes):
+            errors.append(f"manifest size mismatch: {rel}")
+        if entry.get("sha256") != hashlib.sha256(pinned_bytes).hexdigest():
+            errors.append(f"manifest sha256 mismatch: {rel}")
     return errors
+
+
+# --- tag and CI-activation guards ---------------------------------------------
 
 
 def check_tag(root: Path, tag: str = PRESERVATION_TAG, commit: str = PRESERVATION_COMMIT) -> list[str]:
     try:
-        resolved = _git("rev-parse", f"{tag}^{{commit}}", cwd=root).decode("ascii").strip()
+        kind = _git("cat-file", "-t", tag, cwd=root).decode("ascii").strip()
     except BundleError:
         return [f"missing or unresolvable tag: {tag}"]
+    if kind != "tag":
+        return [f"tag {tag} is not annotated (object type {kind})"]
+    resolved = _git("rev-parse", f"{tag}^{{commit}}", cwd=root).decode("ascii").strip()
     if resolved != commit:
         return [f"tag {tag} resolves to {resolved}, expected {commit}"]
     return []
 
 
-def check_all(root: Path) -> list[str]:
+def check_no_root_opencode_activation(root: Path) -> list[str]:
+    out = _git("ls-files", "-z", "--", *ROOT_ACTIVATION, cwd=root)
+    errors: list[str] = []
+    for path in (p.decode("utf-8", "surrogateescape") for p in out.split(b"\x00") if p):
+        if path == ".opencode" or path.startswith(".opencode/") or path == "opencode.json":
+            errors.append(f"tracked root OpenCode activation: {path}")
+    return errors
+
+
+def check_all(root: Path, commit: str = PRESERVATION_COMMIT, tag: str = PRESERVATION_TAG, bundle_dir: str = BUNDLE_DIR) -> list[str]:
     errors: list[str] = []
     errors += check_no_root_opencode_activation(root)
-    errors += check_worktree_vs_manifest(root)
-    errors += check_modes(root)
-    errors += check_immutability(root)
-    errors += check_tag(root)
+    errors += check_pinned_tree_identity(root, commit, bundle_dir)
+    errors += check_worktree_integrity(root, commit, bundle_dir)
+    errors += check_manifest_consistency(root, commit, bundle_dir)
+    errors += check_tag(root, tag, commit)
     return errors
 
 
@@ -204,9 +320,10 @@ def main(argv: list[str] | None = None) -> int:
         for err in errors:
             print(f"  {err}", file=sys.stderr)
         return 1
-    files = load_manifest(root / BUNDLE_DIR)
+    pinned = pinned_entries(root)
+    payload = len(pinned) - (1 if MANIFEST_NAME in pinned else 0)
     print(
-        f"preserved oracle bundle intact: {len(files)} files match {MANIFEST_NAME} "
+        f"preserved oracle bundle intact: {payload} files match {MANIFEST_NAME} "
         f"and {PRESERVATION_COMMIT[:7]} ({PRESERVATION_TAG})"
     )
     return 0
