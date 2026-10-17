@@ -26,10 +26,11 @@ jobs:
             echo "sha=HEAD~1" >> "$GITHUB_OUTPUT"
           fi
       - run: python -m pip install -r benchmark/requirements-test.txt
-      - run: python -m compileall -q benchmark analysis tooling reverse_engineering
+      - run: python -m compileall -q benchmark analysis tooling reverse_engineering oracle
       - run: PYTHONPATH=benchmark:. python -m unittest discover -s tests
       - run: PYTHONPATH=benchmark python benchmark/eu4_frame_model.py verify-evidence results/20261003T210202Z-intrusive-diagnostic --profile intrusive_complete_v1
       - run: python tooling/common/check_forbidden_tracked_paths.py
+      - run: python tooling/common/check_oracle_bundle.py
       - run: >
           python tooling/common/check_doc_links.py --strict
           README.md docs
