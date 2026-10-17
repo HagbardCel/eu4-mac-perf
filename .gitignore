@@ -27,6 +27,12 @@ fixtures/
 # Oracle P3 local run artifacts (receipts are published separately under docs/oracle/)
 oracle/slice/runs/
 
+# Oracle P3-B published artifacts are tracked ground truth: a receipt is not
+# replayable without the candidate it sealed. This narrow re-include overrides
+# the broad ``artifacts/`` rule above, which targets local evidence archives.
+!docs/oracle/artifacts/
+!docs/oracle/artifacts/**
+
 # Cursor/agent scratch at repo root (not part of the benchmark tree)
 /internal/
 

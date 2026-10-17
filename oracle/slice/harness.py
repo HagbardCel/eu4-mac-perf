@@ -31,6 +31,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from hashlib import sha256 as _sha256
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -91,6 +92,15 @@ class Build:
     cc: str
     flags: tuple[str, ...]
     compiler_version: str
+    #: Digest of the **materialized** source inside ``build_dir`` - the bytes the
+    #: compiler read. The candidate is copied into the trusted build directory
+    #: and *that* copy is hashed, which closes the time-of-check/time-of-use gap
+    #: between "the candidate we hashed" and "the candidate we compiled".
+    source_sha256: str = ""
+    #: The same digest recomputed after the compiler ran. It must equal
+    #: ``source_sha256``; a disagreement means the build-directory source changed
+    #: while compiling, which is a trusted-host fault, not a candidate fault.
+    compiled_sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,6 +120,15 @@ class Capture:
     timed_out: bool
     truncated: bool
     duration_s: float
+    #: The bounded capture files themselves. ``stdout``/``stderr`` retain at most
+    #: :data:`MAX_CAPTURE_BYTES` for parsing; a caller that needs *complete*
+    #: bounded evidence (for example an event-stream digest) reads these files,
+    #: which the OS caps at :data:`MAX_OUTPUT_BYTES`. They are ``None`` when no
+    #: process was started.
+    stdout_path: Path | None = None
+    stderr_path: Path | None = None
+    stdout_bytes: int = 0
+    stderr_bytes: int = 0
 
 
 # --- deadlines ----------------------------------------------------------------
@@ -223,6 +242,14 @@ def _read_bounded(path: Path, cap: int = MAX_CAPTURE_BYTES) -> tuple[str, bool]:
     return data.decode("utf-8", errors="replace"), size > cap
 
 
+def _file_size(path: Path) -> int:
+    """Size of a capture file in bytes, or 0 if it cannot be read."""
+    try:
+        return path.stat().st_size
+    except OSError:  # pragma: no cover - defensive
+        return 0
+
+
 def run_bounded(argv: list[str], *, cwd: Path | None, env: dict[str, str] | None,
                 timeout: float, capture_dir: Path, tag: str) -> Capture:
     """Run a command in its own process group with bounded time and output."""
@@ -267,6 +294,10 @@ def run_bounded(argv: list[str], *, cwd: Path | None, env: dict[str, str] | None
         timed_out=timed_out,
         truncated=out_truncated or err_truncated,
         duration_s=time.monotonic() - started,
+        stdout_path=out_path,
+        stderr_path=err_path,
+        stdout_bytes=_file_size(out_path),
+        stderr_bytes=_file_size(err_path),
     )
 
 
@@ -323,6 +354,11 @@ def build(candidate: Path, build_dir: Path, *, cc: str = "cc", deadline: float |
     shutil.copyfile(candidate, build_dir / "candidate.c")
     shutil.copyfile(DRIVER_SOURCE, build_dir / "driver.c")
     shutil.copyfile(HEADER_SOURCE, build_dir / "synth.h")
+    # Hash the *materialized* copy: these are the bytes the compiler reads, and
+    # the build directory is trusted-side, so an edit to the agent's candidate
+    # after this point cannot masquerade as what was compiled.
+    materialized = build_dir / "candidate.c"
+    source_sha256 = _sha256(materialized.read_bytes()).hexdigest()
 
     exe = build_dir / "candidate.bin"
     argv = [cc, *COMPILE_FLAGS, "-I", str(build_dir), str(build_dir / "driver.c"),
@@ -339,8 +375,14 @@ def build(candidate: Path, build_dir: Path, *, cc: str = "cc", deadline: float |
         raise HarnessError("compiler output exceeded the capture cap")
     if capture.returncode != 0 or not exe.exists():
         raise BuildError("candidate failed to compile", stderr)
+    # Re-hash after compilation: the attested digest must describe the bytes that
+    # were actually compiled, not merely the bytes copied a moment earlier.
+    compiled_sha256 = _sha256(materialized.read_bytes()).hexdigest()
+    if compiled_sha256 != source_sha256:
+        raise HarnessError("build-directory source changed during compilation")
     return Build(exe=exe, build_dir=build_dir, cc=cc, flags=COMPILE_FLAGS,
-                 compiler_version=compiler_version(cc, deadline=deadline, capture_dir=build_dir))
+                 compiler_version=compiler_version(cc, deadline=deadline, capture_dir=build_dir),
+                 source_sha256=source_sha256, compiled_sha256=compiled_sha256)
 
 
 def run_fixture(build: Build, fixture: Fixture, *, timeout_s: float = DEFAULT_TIMEOUT_S,

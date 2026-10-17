@@ -1,8 +1,16 @@
 # P3 synthetic OpenCode slice
 
-**Status:** PR-A (deterministic infrastructure) implemented under `oracle/slice/`.
-PR-B (the pinned real OpenCode run) is not yet performed. Nothing here launches
-EU IV, uses a model, or touches the network.
+**Status:** complete. PR-A (deterministic infrastructure) is implemented under
+`oracle/slice/`; PR-B binds the pinned OpenCode binary
+(`oracle/slice/opencode.py`, `oracle/slice/opencode_config/`), drives the pilot,
+the pre-registration and the one declared acceptance run
+(`oracle/slice/opencode_run.py`), and re-verifies publications through a
+model-free guard (`tooling/common/check_oracle_receipt.py`, wired into CI). The
+single declared evaluation, run `p3b-acceptance-20261017`, **certified** - visible
+12/12, held-out 10/10 - with its sealed receipt published under
+`docs/oracle/receipts/` and the narrative in
+[P3B_ACCEPTANCE.md](P3B_ACCEPTANCE.md). Nothing here launches EU IV or implements
+a recorder.
 
 This document is authoritative for the P3 slice. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the preserved blueprint it refines is in
@@ -285,12 +293,289 @@ proves no compilation begins once the trusted deadline has passed.
   usage may arrive only after a response. Only local call, attempt, wall-clock
   and process limits are enforceable here.
 
-## PR-B (next)
+## PR-B: the pinned OpenCode binding
 
-Bound the pinned OpenCode binary (`opencode v2.0.30`), configure the `oracle`
-local stdio MCP server with `codemode: false` and a deny-by-default permission
-set (`shell`, `subagent`, `webfetch`, `websearch`, `external_directory` denied;
-candidate editing and the five Oracle tools allowed), prove a real tool
-invocation in an isolated service/session context, run the real repair with
-`opencode/deepseek-v4.1-flash-free#high` in an isolated candidate directory, and
-publish the sealed receipt and acceptance memo.
+PR-B has two halves: the **binding** (this repository's code, testable offline)
+and the **run** (one declared evaluation against the pinned binary and model).
+The binding is implemented under `oracle/slice/opencode.py` with the tracked
+configuration template in `oracle/slice/opencode_config/`; the run is driven by
+`oracle/slice/opencode_run.py` and re-verified by
+`tooling/common/check_oracle_receipt.py`.
+
+### What was pinned against the installed binary
+
+These were established by probing `opencode v2.0.30` directly, and they supersede
+the preserved blueprint's V1 snippets:
+
+* **Code mode is on by default** and wraps every MCP tool inside a JavaScript
+  `execute` sandbox. The binding sets `codemode: false` both globally and on the
+  server, which exposes the five Oracle tools as direct top-level tools
+  (`oracle_inspect` … `oracle_diff`). This is required: a tool that is only
+  reachable from inside `execute` cannot have its permissions observed at the
+  tool boundary.
+* **Permission precedence is last-match-wins**, and enforcement has two
+  observable shapes. A whole-action `"deny"` removes the tool from the catalog
+  (the model's catalog simply lacks it, and no event is emitted). A
+  pattern-form restriction that leaves *some* invocation allowed keeps the tool
+  present and rejects at call time with `part.state.status == "error"` and the
+  structured refusal prefix `"Permission denied: …"`. The binding denies the
+  dangerous actions outright (`shell`, `subagent`, `webfetch`, `websearch`,
+  `browser`, `question`) and pattern-denies `external_directory`, so the pinned
+  run produces **both** classes of evidence and the acceptance memo can
+  distinguish a genuine denial from an absent tool.
+* **Configuration discovery is explicit.** `OPENCODE_DIR` *et al.* do not
+  redirect discovery, but `OPENCODE_CONFIG=<path>` loads a specific file. The
+  binding therefore renders `opencode.json` **outside** the agent's workspace and
+  passes it through `OPENCODE_CONFIG`, so the agent's own file tools cannot
+  rewrite the permissions that constrain it. User configuration is isolated with
+  per-run `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_CACHE_HOME` /
+  `XDG_STATE_HOME`.
+* **`PWD` decides the project directory.** The server resolves its project root
+  from the `PWD` environment variable rather than from the child's real working
+  directory, and `subprocess` does not update `PWD` when it sets `cwd`. An
+  inherited `PWD` therefore made the **host repository** the agent's project
+  root, which put `oracle/slice/fixtures/held_out/` *inside* the agent's own
+  file-tool scope, where `external_directory` cannot deny it because it is an
+  internal path. The adapter pins `PWD` to the workspace, which makes the project
+  root correct under either reading. The pilot caught this; it is exactly the
+  class of defect a stub can never find.
+
+### Trust boundary
+
+The agent's project root is `run_dir/workspace`, with `run_dir` under an absolute
+staging root **outside the repository** (default
+`~/.local/share/eu4-oracle-p3/<run_id>`). Three things must agree for that to
+hold, and the pilot showed that one of them silently did not:
+
+1. the child's working directory is the workspace;
+2. `PWD` names the workspace, because OpenCode takes its project directory from
+   `PWD` rather than from the real cwd - without this the *host repository*
+   became the project root (see the `PWD` bullet above);
+3. `OPENCODE_CONFIG` names a configuration **outside** the workspace, so the
+   agent's file tools cannot rewrite the permissions that constrain it.
+
+The workspace contains only `candidate.c`, `synth.h`, `fixtures/visible/` and
+`README.md`. The MCP server imports `oracle.slice` from the host repository
+through `PYTHONPATH`, so the repository remains symbolically reachable: this is
+an **application-level** boundary, not an OS sandbox, and descendant containment
+is likewise not a sandbox. Both are PR-F work.
+
+### Pilot evidence
+
+Before the single declared run, the pilot drove the binding against the pinned
+binary and ended in a code-level `gave_up`, so it could not certify and the
+held-out corpus was never spent. What bounded it was the workspace and the mode:
+the workspace contains only `fixtures/visible/`, and `--mode pilot` forces the
+`probe` adapter mode, whose terminal result is `gave_up`, so `certify_candidate`
+is never reached.
+
+The pilot did **not** run against a visible-only fixture *root*. The driver left
+`RunConfig.fixtures_root` at its default, which is the directory that also
+contains `held_out/`; the only thing standing between the run and that directory
+was the bridge's loader, which loads the visible set. The earlier claim in this
+document that the pilot used a visible-only root was wrong, and this paragraph
+corrects it. From P3g the driver materializes a visible-only root for the pilot
+and rehearsal modes, so the held-out directory is outside the run's reachable
+world rather than merely unread.
+
+Machine-observed, the pilot established that:
+
+* the pinned binary (`opencode v2.0.30`, digest recorded) and the pinned model
+  (`opencode/deepseek-v4.1-flash-free#high`) resolve and run;
+* the five Oracle tools are served as **direct top-level tools** - the server log
+  records `mcp connected server=oracle tools=5`, and `tools/list` returns
+  `inspect, fixtures, coverage, test, diff` with `function_id` and
+  `candidate_path` both required;
+* a **structured permission denial** is produced: a direct `read` of an external
+  path returns `status == "error"` with `Permission denied: external_directory`;
+* the other two shapes are distinguishable from a denial - a denied-outright
+  action is *absent* (`No tool named "shell" is currently available`), and a
+  malformed call is an argument error (`path: Missing key`);
+* the held-out corpus is unreachable from the agent's project root:
+  `glob **/held_out/*` returns nothing, and `glob **/*.json` returns only
+  `workspace/fixtures/visible/*`;
+* the full agent-facing path works end to end, model-free and repeatably:
+  `tools/call test` on the workspace candidate compiles it and evaluates all 12
+  visible fixtures (a repaired candidate passes; the defective one fails 4).
+
+The pilot also fixed the `PWD` project-directory defect above and showed that the
+pinned repair prompt must state the tool contract (including `candidate_path`)
+explicitly.
+
+### Acceptance criteria
+
+| # | Criterion |
+| --- | --- |
+| C1 | The pinned binary, model and variant, plus the *effective* configuration, are bound in the sealed receipt |
+| C2 | The pinned OpenCode process enforces its configured restrictions on its **direct** tools, with machine-observed denial evidence distinguishing denial from absent tool, model refusal and unrelated failure |
+| C3 | Held-out fixtures are absent from the agent workspace and are never intentionally exposed through the agent-facing API |
+| C3b | Exfiltration **detection**: no `hid-*` id or held-out expected-value fingerprint appears in any agent-visible surface |
+| C4 | The tool-call count is ledger-authoritative, and the event stream proves a successful `oracle_inspect` and `oracle_test` |
+| C5 | A real repair: the final candidate differs from the defective one, passes visible **and** held-out, and the certification ran |
+| C6 | The sealed receipt and committed artifact are re-verified by a model-free CI replay, cross-checked against a pre-registration committed **before** the run |
+| C7 | The run is bounded and not aborted |
+| C8 | The pre-registration was **committed and pushed** before the run. The execution-time check proves the declaration is a committed object in the checkout; the push is a recorded process fact, not something an offline Git check can establish |
+| C9 | Honest scope: 22 fixtures are not universal equivalence, certification is not proof of repair, the holdout is spent once, and group termination is containment rather than a sandbox |
+
+### Evidence and accounting invariants
+
+* **Ledger-authoritative accounting.** A real agent calls the Oracle through the
+  MCP **server process**, so the controller's in-process counter would read zero.
+  Per-attempt and total counts come from the shared SQLite ledger;
+  `receipts.granted()` is the exact count of agent-initiated calls in either case.
+* **Complete bounded evidence.** Retention caches only 256 KiB of a child's
+  output, but the event stream is a full capture file (OS-capped at 8 MiB). The
+  binding is built from the file and **fails closed** on a missing, empty,
+  malformed or production-capped stream, and records the digest and byte length
+  before teardown.
+* **Binding is validated by the controller.** The adapter reports identities; the
+  controller checks their shape and folds them into `toolchain.opencode` before
+  sealing. A partial or malformed report is a finalization error and the run is
+  not acceptable.
+* **Replay integrity is anchored to the pinned revision.** The guard does not
+  refuse to replay because today's tree has moved. It verifies every recorded
+  identity against the file **at the run's pinned revision**
+  (`git cat-file blob <rev>:<path>`) and evaluates the committed artifact in a
+  fresh interpreter whose import path is rooted in that revision, after checking
+  the module file locations and pinned source digests inside it. A later change
+  to the same sources therefore cannot invalidate a historical claim - nor rescue
+  one - and the guard cannot reject its own remediation. Corpus drift is checked
+  separately and against the tree: a fixture input and its expectation must still
+  recompute to the manifest the run bound.
+* **Every guarantee is labelled by strength.** A property is either enforced at
+  execution (the controller or the bridge refuses the run), re-verified by the
+  guard from published evidence, or only retrospective (reconstructed after the
+  fact and labelled as such). The table under *Where each guarantee is enforced*
+  is the index; the guard prints the same categories per run.
+* **Pre-registration.** `opencode_run.py --mode preregister` emits the pin on the
+  same code path the run binds, so the declared digests cannot drift from what the
+  run records. It fixes the run id and staging root, because the materialized
+  configuration digest depends on the absolute run directory. The declaration is
+  committed and pushed *before* the run; the guard reports a declaration whose
+  receipt is not published yet as **pending** rather than failed
+  (`--require-receipts` tightens that), so CI stays meaningful across the window
+  between the two commits. An `acceptance` run requires `--preregistration` and is
+  refused unless the repository matches the declaration. The declaration names the
+  *source revision* A it was generated on; committing the declaration produces a
+  later commit B, so the run does not require `HEAD == A` (which would force the
+  declaration to be left uncommitted). Instead it requires that A is an ancestor of
+  the checkout, the working tree is clean, every declared source hash matches both
+  A and the tree, the *declaration itself* is the committed object at HEAD
+  (`git cat-file blob HEAD:<path>`) rather than an arbitrary readable file, the
+  candidate is the declared path (inside the repository, not a symlink) with the
+  declared bytes, and the interpreter, prompt and execution bounds are the declared
+  ones. Because a later commit C is permitted by the ancestor policy, the preflight
+  also recomputes the **visible and held-out corpus manifests**, the **configuration
+  template and materialized digests** (from the declared substitution map) and the
+  **effective execution bounds**, and refuses if any differs - so a clean commit C
+  that changes a fixture or the permissions template is caught *before* the agent is
+  built. Bounds must be positive and finite (`budget_calls` a positive integer). The
+  staging root must resolve outside the repository, and the run id must be a single
+  path component (letters, digits, `.`, `_`, `-`; at most 96 characters) whose run
+  directory stays strictly inside the staging root and outside the repository. The
+  run directory must be *fresh*: neither it nor any entry directly under it may be a
+  pre-existing symlink - a `workspace` symlink is exactly how the agent's project
+  directory could be routed back into the repository. `materialize_workspace` and
+  `freeze_candidate` refuse a symlinked destination as well. The adapter additionally
+  refuses to launch unless the configuration it renders is byte-identical to the
+  declared digest. Acceptance has no prompt flexibility: `--prompt pilot` is refused
+  before the adapter - and therefore the model - is ever constructed.
+
+### Where each guarantee is enforced
+
+A property is only as strong as the stage that enforces it. "Enforced at
+execution" means the controller or the bridge refuses the run; "re-verified by
+the guard" means CI recomputes it from published evidence; "retrospective only"
+means it was reconstructed after the fact and carries no execution-time weight.
+
+| Property | Enforced at execution | Re-verified by the guard | Retrospective only |
+| --- | --- | --- | --- |
+| The candidate differs from the defective input | `candidate_changed` gate; certification is skipped | `acceptance.gates.candidate_changed`, and `final != defective` | - |
+| The required diagnostics completed | `required_tools` gate | `acceptance.gates.required_tools` from the sealed binding | - |
+| A trusted test record attests the frozen bytes | `trusted_test_record` gate, on the materialized digest | the sealed gate result | the P3-B supplementary record, whose hash is a **pre-build candidate hash** |
+| The compiled source is the materialized source | `harness.build` re-hashes after compiling and raises on a mismatch | the record's `materialized_sha256` / `compiled_sha256` | - |
+| Admission, rejection and denial are distinguished | one ledger transaction writes the reservation and its journal row | the published journal's digest, then a full per-tool reconciliation | the P3-B run: aggregate only (4 admitted = 4 completed) |
+| The accepted artifact is the frozen bytes | freeze, then certify from the snapshot | committed artifact digest vs `final_candidate_sha256` | - |
+| Source identities | recorded in the receipt and the pre-registration | every pin against `git cat-file blob <rev>:<path>` of the pinned revision | the P3-B baseline revision, and its launch driver, which is unauthenticated |
+| The declaration was committed before the run | the driver requires the declaration to be the Git object at HEAD, refusing an edited or uncommitted one | `git cat-file blob <declaration_commit>:<path>` equals the published pre-registration | the P3-B run, which predates the field |
+| The prompt is the declared one | prompt identity is checked before the adapter is built; acceptance refuses anything but the one declared prompt | `binding.prompt_sha256` vs the pre-registration | - |
+| Mandatory evidence was published | the journal export precedes the terminal status decision, so a failure aborts the run | a certified receipt must record no `execution.finalization.error` | - |
+| The corpus and configuration still match the declaration | the preflight recomputes the visible/held-out manifests and the configuration template and materialized digests before the adapter is built | the same recomputation from the pinned tree | - |
+| The child runs under the validated configuration | `OpenCodeAdapter.prepare` refuses unless the rendered bytes match the declared digests | the sealed `binding.config` digests | - |
+| The execution bounds are usable | positive and finite bounds; `RunConfig` is built from the one validated object, so no later default can apply | `run.*` against the pre-registration | - |
+| The staging root and run directory are outside the repository | symmetric containment on the resolved staging root, and on the resolved run directory - a single-component, fresh, symlink-free child of the staging root - before any workspace is materialized | - | - |
+| The workspace cannot be redirected into the repository | the run directory must contain no pre-existing symlink, and `materialize_workspace` / `freeze_candidate` refuse a symlinked destination | - | - |
+| Both corpora pass | `certify_candidate`, once, after the gates | replay of both corpora in a fresh interpreter rooted in the pinned revision | - |
+| The corpora are unchanged | - | drift check recomputes both manifests from the tree | - |
+| No held-out material reaches the agent-visible surface | the binding fails closed on a leak in the stream | leak scan of the published summary | - |
+| The run is bounded | budget ledger, attempt limit, wall clock, finalization budget | declared bounds vs recorded bounds and observed durations | - |
+
+### Publication policy and historical exceptions
+
+A published receipt records the candidate snapshot **relative to the staging
+root** (`source.snapshot_base: "base_dir"`), so a committed receipt carries no
+user-specific absolute path. The only absolute paths a receipt may contain are
+the system locations named by the compiler probe and the run's own declared
+staging root; the guard fails on any other. The pre-registration does name
+absolute paths (`staging_root`, `repo_root`, the interpreter) because the
+materialized configuration digest depends on them; that is declared, and the
+guard allows exactly those.
+
+Two exceptions apply to the P3-B acceptance run, and both are recorded rather
+than repaired:
+
+* **It pins no revision.** `source.baseline_commit` is `null`, because the run was
+  launched from a working tree that contained an uncommitted
+  `oracle/slice/opencode_run.py`. The revision used to check it comes from a
+  retrospective pin under `docs/oracle/preregistration/retrospective/`, which is
+  a post-run reconstruction and is labelled as one wherever it is reported.
+* **It records no acceptance gates and no call journal**, because it predates
+  them. The guard reports both gaps and requires the retrospective pin to name
+  them; what does survive is the aggregate - the ledger granted 4 calls and the
+  binding recorded 4 completed oracle calls.
+
+The launch driver's identity cannot be authenticated from history at all, so the
+retrospective pin records the committed file at the pinned revision **for
+reference only** and lists it as unauthenticated. Nothing here upgrades the
+original finding: the run's conditions remain the nine in the original
+pre-registration, and the gate contract above is enforced for runs after P3g.
+The committed-declaration, prompt-identity and journal-publication controls were
+added by P3h, the corpus/configuration preflight, the positive-bounds and the
+staging-root checks by P3h4, and the run-id grammar and run-directory containment
+by P3h5; all are likewise enforced only for runs after them, and the P3-B run
+predates them and its sealed evidence is unchanged.
+
+### Tests
+
+| Property | Where |
+| --- | --- |
+| The tracked template renders valid JSON with the pinned restrictions | `tests/test_oracle_slice_opencode.py` |
+| The child's `PWD` is pinned to the workspace and its isolation roots lie outside it | `tests/test_oracle_slice_opencode.py` |
+| The materialized config's server block really lists the five tools and tests the candidate | `tests/test_oracle_slice_opencode.py` |
+| A malformed, empty or non-object event stream is refused | `tests/test_oracle_slice_opencode.py` |
+| A permission denial is normalized, and a refusal or absent tool is not one | `tests/test_oracle_slice_opencode.py` |
+| A real repair through the adapter is certified and bound end to end | `tests/test_oracle_slice_opencode.py` |
+| Held-out material in the stream, or a production-capped stream, prevents acceptance | `tests/test_oracle_slice_opencode.py` |
+| Probe mode is non-accepting and spends no holdout | `tests/test_oracle_slice_opencode.py` |
+| A clean publication verifies; tampered, reordered or pin-inconsistent ones do not | `tests/test_check_oracle_receipt.py` |
+| A change to the *current* sources does not invalidate a pinned run | `tests/test_check_oracle_receipt.py` |
+| A pinned run that no longer matches its revision is refused | `tests/test_check_oracle_receipt.py` |
+| The acceptance gates refuse an unchanged candidate, a missing diagnostic and an unreconciled census before any held-out spend | `tests/test_oracle_slice_acceptance.py` |
+| The build attests the materialized source and refuses a mid-compile change | `tests/test_oracle_slice_acceptance.py` |
+| A published journal that cannot be exported aborts the run but keeps its verified verdicts | `tests/test_oracle_slice_acceptance.py` |
+| The test double reaches the tools through a genuine MCP `tools/call` | `tests/test_oracle_slice_opencode.py` |
+| A committed declaration with default bounds is accepted; an edited, uncommitted, non-ancestor, or undeclared-path declaration is refused | `tests/test_oracle_slice_driver.py` |
+| An acceptance run refuses the pilot prompt before the adapter is built | `tests/test_oracle_slice_driver.py` |
+| A held-out fixture or the configuration template changed in a later clean commit is refused before the adapter is built | `tests/test_oracle_slice_driver.py` |
+| A declared or explicit zero, negative or non-finite bound is refused as invalid | `tests/test_oracle_slice_driver.py` |
+| A staging root inside the repository is refused before launch | `tests/test_oracle_slice_driver.py` |
+| An absolute, traversing, over-long or malformed run id is refused before the adapter is built | `tests/test_oracle_slice_driver.py` |
+| A symlinked run directory, or a `workspace` symlink under a real run directory, is refused before anything is materialized | `tests/test_oracle_slice_driver.py`, `tests/test_oracle_slice_controller.py` |
+| The adapter refuses to launch unless the rendered configuration matches the declared digests | `tests/test_oracle_slice_opencode.py` |
+
+The acceptance run itself is published as a sealed receipt under
+`docs/oracle/receipts/`, the committed artifact under `docs/oracle/artifacts/`,
+the sanitized event summary under `docs/oracle/agents/`, the pre-registration
+under `docs/oracle/preregistration/` and its retrospective pin under
+`docs/oracle/preregistration/retrospective/`, with the narrative in
+[P3B_ACCEPTANCE.md](P3B_ACCEPTANCE.md).

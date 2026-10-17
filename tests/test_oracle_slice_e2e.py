@@ -523,6 +523,137 @@ class ReceiptIdentityTests(unittest.TestCase):
             self.assertEqual(payload["verdict"]["status"], STATUS_CERTIFIED)
             self.assertEqual(len(result.receipt["sha256"]), 64)
 
+    def test_the_stub_has_no_external_binding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run(Path(tmp), StubAdapter("repair"))
+            self.assertNotIn("opencode", result.receipt["payload"]["toolchain"])
+
+
+class LedgerAuthoritativeAccountingTests(unittest.TestCase):
+    """Tool accounting is the ledger's, not the in-process counter's.
+
+    A real agent calls the Oracle through the MCP **server process**, which
+    reserves in the shared SQLite ledger without touching the controller's
+    in-process ``ToolClient``. The recorded per-attempt and total counts must
+    therefore come from the ledger, or a real run would report zero calls.
+    """
+
+    class _ExternalMCPAgent:
+        name = "external-mcp"
+
+        def step(self, ctx):
+            from oracle.slice.budget import RunBudgetLedger
+            ledger_path = ctx.workspace.parent / "budget.sqlite3"
+            ledger = RunBudgetLedger.attach(ledger_path, "run-e2e")
+            try:
+                for _ in range(3):
+                    ledger.reserve(1)
+            finally:
+                ledger.close()
+            return AttemptResult("gave_up", "simulated out-of-process tool calls")
+
+    def test_out_of_process_calls_are_counted_from_the_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run(Path(tmp), self._ExternalMCPAgent(), max_attempts=1)
+            payload = result.receipt["payload"]
+            self.assertEqual(payload["agent"]["in_process_tool_calls"], 0)
+            self.assertEqual(payload["agent"]["tool_calls"], 3)
+            self.assertEqual(payload["agent"]["budget"]["granted"], 3)
+            self.assertEqual(result.attempts[0]["tool_calls"], 3)
+            self.assertEqual(result.attempts[0]["in_process_tool_calls"], 0)
+            receipts.verify(result.receipt)
+
+
+def _valid_binding() -> dict:
+    hex64 = "a" * 64
+    return {
+        "adapter": "opencode",
+        "binary": {"name": "opencode", "sha256": "b" * 64, "version": "v2.0.30"},
+        "model": {"provider": "opencode", "id": "deepseek-v4.1-flash-free", "variant": "high"},
+        "prompt_sha256": hex64,
+        "config": {"template_sha256": "c" * 64, "materialized_sha256": "d" * 64},
+        "events": {
+            "raw_sha256": "e" * 64,
+            "raw_bytes": 4096,
+            "summary_sha256": "f" * 64,
+            "tool_calls": 7,
+            "oracle_invocations": 9,
+            "oracle_by_tool": {"oracle_diff": 1, "oracle_inspect": 1, "oracle_test": 7},
+            "oracle_denials": {"oracle_diff": 1},
+            "completed_tools": ["oracle_inspect", "oracle_test"],
+            "denials": [{"action": "shell", "resource": "*", "decision": "deny"}],
+        },
+    }
+
+
+class _BindingAgent:
+    """A repair adapter that also supplies external-toolchain metadata."""
+
+    name = "binding-agent"
+
+    def __init__(self, binding):
+        self._binding = binding
+        self._stub = StubAdapter("repair")
+
+    def step(self, ctx):
+        return self._stub.step(ctx)
+
+    def receipt_metadata(self):
+        return self._binding
+
+
+class BindingMetadataTests(unittest.TestCase):
+    def test_valid_binding_is_folded_into_the_sealed_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run(Path(tmp), _BindingAgent(_valid_binding()))
+            self.assertEqual(result.status, STATUS_CERTIFIED)
+            folded = result.receipt["payload"]["toolchain"]["opencode"]
+            self.assertEqual(folded["binary"]["version"], "v2.0.30")
+            self.assertEqual(folded["model"]["variant"], "high")
+            self.assertEqual(folded["events"]["tool_calls"], 7)
+            self.assertEqual(folded["events"]["denials"][0]["decision"], "deny")
+            receipts.verify(result.receipt, expected_sha256=result.receipt["sha256"])
+
+    def test_malformed_binding_prevents_acceptance(self):
+        bad = _valid_binding()
+        del bad["prompt_sha256"]
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run(Path(tmp), _BindingAgent(bad))
+            payload = result.receipt["payload"]
+            # The candidate really did verify; only acceptance is withheld.
+            self.assertTrue(payload["verdict"]["candidate_verified"])
+            self.assertNotEqual(result.status, STATUS_CERTIFIED)
+            self.assertEqual(result.status, STATUS_ABORTED)
+            self.assertEqual(payload["execution"]["finalization"]["certification"],
+                             "failed: incomplete binding metadata")
+            self.assertIn("binding metadata invalid", payload["execution"]["finalization"]["error"])
+            self.assertNotIn("opencode", payload["toolchain"])
+            receipts.verify(result.receipt)
+
+    def test_unavailable_binding_prevents_acceptance(self):
+        class _RaisingAgent:
+            name = "raising"
+
+            def __init__(self):
+                self._stub = StubAdapter("repair")
+
+            def step(self, ctx):
+                return self._stub.step(ctx)
+
+            def receipt_metadata(self):
+                raise OSError("simulated binding read failure")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run(Path(tmp), _RaisingAgent())
+            payload = result.receipt["payload"]
+            self.assertEqual(result.status, STATUS_ABORTED)
+            self.assertNotEqual(result.status, STATUS_CERTIFIED)
+            self.assertTrue(payload["verdict"]["candidate_verified"])
+            error = payload["execution"]["finalization"]["error"]
+            self.assertIn("binding metadata unavailable", error)
+            self.assertIn("OSError", error)
+            receipts.verify(result.receipt)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
-from oracle.slice import harness
+from oracle.slice import harness, receipts
 from oracle.slice.bridge import ToolError
 
 KILL_GRACE_S = harness.KILL_GRACE_S
@@ -38,16 +38,40 @@ class BudgetStop(RuntimeError):
     """The run's tool-call budget is exhausted; the controller should stop."""
 
 
+class BindingError(RuntimeError):
+    """An adapter could not supply complete, trustworthy binding metadata."""
+
+
 @dataclass(frozen=True)
 class GroupRun:
     returncode: int
     stdout: str
     stderr: str
     timed_out: bool
+    #: Whether retention (not production) truncated either captured stream.
+    truncated: bool = False
+    #: The bounded capture files. ``stdout``/``stderr`` retain at most
+    #: ``harness.MAX_CAPTURE_BYTES``; evidence that must be *complete* reads these
+    #: files, which the OS caps at ``harness.MAX_OUTPUT_BYTES``.
+    stdout_path: Path | None = None
+    stderr_path: Path | None = None
+    stdout_bytes: int = 0
+    stderr_bytes: int = 0
 
     @property
     def crashed(self) -> bool:
         return self.returncode < 0
+
+    def stream_digest(self) -> str | None:
+        """SHA-256 over the *complete* bounded stdout capture, or ``None``.
+
+        This is the digest a receipt binds; it is computed from the capture file
+        rather than the retained ``stdout`` text, so it covers bytes that were
+        dropped only from retention (not from the stream).
+        """
+        if self.stdout_path is None or not self.stdout_path.is_file():
+            return None
+        return receipts.file_sha256(self.stdout_path)
 
 
 class ProcessSupervisor:
@@ -107,7 +131,10 @@ class ProcessSupervisor:
         if capture.truncated:
             stderr = (stderr + "\n[captured output exceeded the size cap]").strip()
         return GroupRun(returncode=capture.returncode, stdout=capture.stdout,
-                        stderr=stderr, timed_out=capture.timed_out)
+                        stderr=stderr, timed_out=capture.timed_out,
+                        truncated=capture.truncated,
+                        stdout_path=capture.stdout_path, stderr_path=capture.stderr_path,
+                        stdout_bytes=capture.stdout_bytes, stderr_bytes=capture.stderr_bytes)
 
     def terminate_all(self) -> list[int]:
         """Terminate and reap every remaining child process group."""
@@ -162,6 +189,22 @@ class AgentAdapter(Protocol):
     name: str
 
     def step(self, ctx: AttemptContext) -> AttemptResult:  # pragma: no cover - protocol
+        ...
+
+    def receipt_metadata(self) -> dict[str, Any] | None:  # pragma: no cover - protocol
+        """Trusted binding metadata to fold into the receipt before it is sealed.
+
+        The **controller** calls this after the agent's process groups are reaped
+        and before ``receipts.seal()``; the model never supplies it. An adapter
+        that binds an external toolchain returns the pinned executable identity,
+        model and variant, configuration identity, prompt identity and a digest of
+        its finalized tool-event evidence. An adapter with no such identity (the
+        deterministic stub, the generic command adapter) returns ``None``.
+
+        Raising :class:`BindingError` - or returning a malformed object - is a
+        trusted-host fault: the controller records it as a finalization error and
+        the run is not acceptable.
+        """
         ...
 
 

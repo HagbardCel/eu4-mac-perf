@@ -1,9 +1,13 @@
 # EU IV Oracle — ground-truth acquisition and reconstruction
 
-**Status:** next-phase capability, design + audit stage. The deterministic P3
-slice (target, harness, comparator, agent-facing tools, controller, receipts)
-is implemented under `oracle/slice/`; no recorder, runtime capture or real
-OpenCode run is implemented yet. Authoritative for **capture/validation
+**Status:** next-phase capability, design + audit stage. The P3 slice is
+**complete**: the deterministic infrastructure under `oracle/slice/`, the pinned
+OpenCode **binding** (`oracle/slice/opencode.py`) with its guarded, model-free CI
+re-verification (`tooling/common/check_oracle_receipt.py`), and the single
+declared P3-B acceptance run `p3b-acceptance-20261017`, which **certified**
+(visible 12/12, held-out 10/10) and whose sealed receipt is published under
+`docs/oracle/receipts/`. No recorder or runtime capture is implemented yet.
+Authoritative for **capture/validation
 infrastructure** only; the function-level reconstruction lifecycle stays in the
 PR #44 contract `docs/renderer-reconstruction-and-differential-validation.md`
 (see [open PR #44](https://github.com/HagbardCel/eu4-mac-perf/pull/44), not yet
