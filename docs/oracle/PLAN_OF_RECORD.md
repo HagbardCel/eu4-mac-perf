@@ -104,7 +104,7 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 > `oracle-v2-p3b-20261017`, which points at that merge commit. See
 > [P3_SLICE.md](P3_SLICE.md) and [P3B_ACCEPTANCE.md](P3B_ACCEPTANCE.md).
 
-> **P4 status (2026-10-18):** **in progress.** **P4r-A** (P4.1 record schema,
+> **P4 status (2026-10-18):** **complete.** **P4r-A** (P4.1 record schema,
 > canonicalization and immutable evidence store; P4.2 portable C11 synthetic target
 > with a deterministic golden transcript), **P4r-B** (P4.3 native capture accounting;
 > P4.4 declared capture policy; P4.5 offline finalization - resource identity,
@@ -113,7 +113,10 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 > `INCOMPLETE_ORACLE`; P4.8 R0-M epoch protocol compatibility validated offline) are
 > implemented and merged under `oracle/recorder/`, with the recorder transcript
 > deterministic across compilers and clean under ThreadSanitizer, ASan and UBSan.
-> **P4b** (the synthetic graphics replay) follows. See [P4_RECORDER.md](P4_RECORDER.md).
+> **P4b** is complete as well: `oracle/replay/` reconstructs a frame from a sealed
+> capture of a synthetic graphics subject in a fresh process, resolving references by
+> the closure rule P4.6 declares and failing closed on a missing dependency. See
+> [P4_RECORDER.md](P4_RECORDER.md) and [P4B_REPLAY.md](P4B_REPLAY.md).
 
 ## Hard rule
 

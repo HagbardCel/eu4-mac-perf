@@ -12,7 +12,8 @@ function-agnostic, policy-pluggable recorder plus a synthetic target, then a
 synthetic graphics replay harness (**P4b**). The recorder core is implemented and
 merged (**P4r-B**: exact capture accounting, a declared capture policy, offline
 finalization and concurrency); the resource registry/closure and R0-M protocol
-compatibility follow (**P4r-C**). No EU IV launch is authorized until P4/P4b pass.
+compatibility are merged (**P4r-C**); and the independent synthetic graphics replay
+is merged (**P4b**). No EU IV launch is authorized until P4/P4b pass.
 This
 directory is authoritative for **capture/validation infrastructure** only; the
 function-level reconstruction lifecycle stays in the reconstruction contract
@@ -35,6 +36,7 @@ consumes. The project's power/heat objective is the downstream consumer of that 
 | [BASELINE_P0.md](BASELINE_P0.md) | Frozen baseline record (revision, checks, pre-existing failures) |
 | [P3_SLICE.md](P3_SLICE.md) | P3 synthetic slice: trust domains, contracts and PR-A acceptance criteria |
 | [P4_RECORDER.md](P4_RECORDER.md) | P4 recorder: record schema, canonicalization, evidence store and offline gates |
+| [P4B_REPLAY.md](P4B_REPLAY.md) | P4b: independent synthetic graphics replay — sealed frame captures, closure and fail-closed reconstruction |
 | [BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md) | Preserved v2 blueprint bytes, hashes and tag (historical reference) |
 | [../repo-map.md](../repo-map.md) | Tracked-path inventory and lifecycle labels (P1 audit) |
 | [../repo-audit-context.json](../repo-audit-context.json) | Audit identity triple (source snapshot, policy, tools); governs `docs/repo-{inventory,edges,lifecycle}.csv` |

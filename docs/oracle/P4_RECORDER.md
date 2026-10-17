@@ -8,9 +8,11 @@ finalization: resource identity, aliasing and semantic dedup), **P4.6** (the
 resource registry and closure verifier), **P4.7** (concurrency and bounded capture)
 and **P4.8** (R0-M epoch compatibility, validated offline) are implemented under
 `oracle/recorder/` with offline tests - **P4r-B and P4r-C are complete**. **P4b**
-(the synthetic graphics replay) follows. **Nothing here launches EU IV, opens a game
-process, or attaches to a binary**: the recorder consumes already-captured native
-events, and P4 is proven entirely offline.
+(the independent synthetic graphics replay) is complete too: it reconstructs a frame
+from a sealed capture of a synthetic graphics subject, in a fresh process, under
+[P4B_REPLAY.md](P4B_REPLAY.md). **Nothing here launches EU IV, opens a game process,
+or attaches to a binary**: the recorder consumes already-captured native events, and
+P4 is proven entirely offline.
 
 This document is authoritative for P4. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the trust boundary is a refinement of the
@@ -44,7 +46,7 @@ binary or a game process.
 | **P4r-A** (done) | P4.1, P4.2 | versioned schema + evidence store; portable C11 synthetic target | records round-trip; load-time integrity; deterministic native golden output |
 | **P4r-B** (done) | P4.3-P4.5, P4.7 | native capture accounting; policy plugin; identity/aliasing/dedup; reentrancy/concurrency + bounded capture | accounting exact; aliases and semantic dedup correct; overflow/reentrancy/concurrency regressions pass |
 | **P4r-C** (done) | P4.6, P4.8 | resource registry + closure verifier; R0-M protocol compatibility offline | generations + closure verified; synthetic multi-epoch protocol accepted offline |
-| **P4b** | - | independent synthetic graphics replay | a sealed frame replays in a fresh process; missing dependencies fail closed |
+| **P4b** (done) | - | independent synthetic graphics replay | a sealed frame replays in a fresh process; missing dependencies fail closed |
 
 Each commit is append-only and separately revertible. P4.1 passes its own gates
 before P4.2 begins, so a genuine schema defect is corrected before the native
