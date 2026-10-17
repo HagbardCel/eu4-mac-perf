@@ -772,6 +772,19 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
             granted = limit = None
             finalization_error = finalization_error or f"{type(exc).__name__}: {exc}"
 
+        # The journal is mandatory supporting evidence, so its publication is part
+        # of finalization and must succeed *before* the terminal status is decided:
+        # otherwise a run whose evidence could not be published would still be
+        # classified as certified. A failure is an infrastructure fault - the suite
+        # verdicts are preserved, but the run is aborted, not accepted.
+        journal_text, journal_summary = budget.export_calls(journal_rows)
+        try:
+            (run_dir / budget.JOURNAL_EXPORT_FILE).write_text(journal_text, encoding="utf-8")
+        except OSError as exc:  # pragma: no cover - defensive
+            finalization_error = finalization_error or (
+                f"the tool-call journal could not be exported: {exc}")
+            journal_summary = None
+
         # Abort-first, then infrastructure, then the acceptance gates, then the
         # candidate verdicts. A trusted host that cannot complete the evaluation
         # must never be reported as a candidate failure, and it must never be
@@ -808,14 +821,6 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                 snapshot_base = "base_dir"
             except ValueError:  # pragma: no cover - defensive
                 snapshot = str(frozen.path)
-
-        journal_text, journal_summary = budget.export_calls(journal_rows)
-        try:
-            (run_dir / budget.JOURNAL_EXPORT_FILE).write_text(journal_text, encoding="utf-8")
-        except OSError as exc:  # pragma: no cover - defensive
-            finalization_error = finalization_error or (
-                f"the tool-call journal could not be exported: {exc}")
-            journal_summary = None
 
         payload: dict[str, Any] = {
             "phase": PHASE,

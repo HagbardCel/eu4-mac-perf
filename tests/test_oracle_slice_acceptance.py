@@ -24,6 +24,7 @@ from oracle.slice import controller, harness, receipts, workspace
 from oracle.slice.bridge import Bridge
 from oracle.slice.budget import RunBudgetLedger
 from oracle.slice.controller import (
+    STATUS_ABORTED,
     STATUS_ACCEPTANCE_GATE_FAILED,
     STATUS_CERTIFIED,
     STATUS_NOT_REPAIRED,
@@ -96,6 +97,61 @@ class AcceptanceGateTests(unittest.TestCase):
             self.assertEqual(
                 payload["execution"]["finalization"]["certification"],
                 "skipped: acceptance gates failed (candidate_changed)")
+
+    def test_an_unchanged_reference_candidate_is_not_repaired(self):
+        """Isolate the no-op case from a visible failure.
+
+        The input already passes the visible suite, so without the
+        ``candidate_changed`` gate an unchanged result would certify. The gate must
+        still reject it - byte-identical to the defective input - before the
+        held-out corpus is spent.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stub = _write_stub(root, _completed_stream(), write_candidate=False)
+            result = _run_acceptance(root, _adapter(root, stub),
+                                     candidate_src=SLICE_DIR / "reference.c")
+
+            payload = result.receipt["payload"]
+            self.assertEqual(result.status, STATUS_NOT_REPAIRED)
+            self.assertIsNone(payload["verdict"]["held_out"])
+            self.assertFalse(payload["verdict"]["candidate_verified"])
+            self.assertEqual(payload["source"]["defective_candidate_sha256"],
+                             payload["source"]["final_candidate_sha256"])
+            self.assertIn("candidate_changed", payload["acceptance"]["failed"])
+
+    def test_a_failed_journal_export_aborts_the_run_and_prevents_certification(self):
+        """A run whose mandatory evidence cannot be published is not certified.
+
+        Both suites pass, so ``candidate_verified`` stays true - the semantic
+        result is preserved - but the terminal status is ``aborted`` and the
+        failure is recorded on the finalization channel. The receipt is still
+        sealed and reloadable.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stub = _write_stub(root, _completed_stream())
+            adapter = _adapter(root, stub)
+            real_write_text = Path.write_text
+
+            def failing_write_text(self, *args, **kwargs):
+                if self.name == "tool-calls.json":
+                    raise OSError("simulated write failure")
+                return real_write_text(self, *args, **kwargs)
+
+            with mock.patch.object(Path, "write_text", failing_write_text):
+                result = _run_acceptance(root, adapter)
+
+            payload = result.receipt["payload"]
+            self.assertEqual(result.status, STATUS_ABORTED)
+            self.assertTrue(payload["verdict"]["candidate_verified"])
+            self.assertIsNone(payload["agent"]["journal"])
+            self.assertIn("the tool-call journal could not be exported",
+                          payload["execution"]["finalization"]["error"])
+            # The receipt is sealed and verifiable even though the journal was not
+            # published.
+            reloaded = json.loads(result.receipt_path.read_text(encoding="utf-8"))
+            receipts.verify(reloaded, expected_sha256=reloaded["sha256"])
 
     def test_a_missing_required_diagnostic_fails_the_gate_before_certification(self):
         with tempfile.TemporaryDirectory() as tmp:
