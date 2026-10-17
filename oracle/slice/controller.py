@@ -135,21 +135,32 @@ def _manifest(set_name: str, fixtures_root: Path | None) -> dict[str, Any] | Non
 
 
 def _toolchain(cc: str, flags: tuple[str, ...], *, deadline: float | None = None,
-               capture_dir: Path | None = None) -> dict[str, Any]:
+               capture_dir: Path | None = None) -> tuple[dict[str, Any], str | None]:
+    """Toolchain identity for the receipt, plus why any part is unavailable.
+
+    Every trusted read is guarded. A source that cannot be read is recorded as an
+    explicit ``None`` digest and reported back to the caller, so incomplete
+    provenance becomes an infrastructure failure with a terminal receipt rather
+    than an exception that escapes before the receipt is sealed.
+    """
     slice_dir = harness.SLICE_DIR
     try:
         version = harness.compiler_version(cc, deadline=deadline, capture_dir=capture_dir)
     except harness.HarnessError as exc:  # pragma: no cover - defensive
         version = f"unavailable: {exc}"
-    return {
-        "cc": cc,
-        "flags": list(flags),
-        "compiler_version": version,
-        "harness_sha256": receipts.file_sha256(slice_dir / "harness.py"),
-        "comparator_sha256": receipts.file_sha256(slice_dir / "compare.py"),
-        "driver_sha256": receipts.file_sha256(slice_dir / "driver.c"),
-        "interface_sha256": receipts.file_sha256(slice_dir / "synth.h"),
-    }
+    toolchain: dict[str, Any] = {"cc": cc, "flags": list(flags), "compiler_version": version}
+    problem: str | None = None
+    for key, name in (("harness_sha256", "harness.py"),
+                      ("comparator_sha256", "compare.py"),
+                      ("driver_sha256", "driver.c"),
+                      ("interface_sha256", "synth.h")):
+        try:
+            toolchain[key] = receipts.file_sha256(slice_dir / name)
+        except OSError as exc:
+            toolchain[key] = None
+            problem = problem or (
+                f"toolchain metadata unavailable ({name}): {type(exc).__name__}: {exc}")
+    return toolchain, problem
 
 
 def _compiler_identity_known(toolchain: dict[str, Any]) -> bool:
@@ -276,7 +287,15 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
         try:
             frozen = freeze_candidate(workspace.candidate_path, run_dir / "snapshot" / "final")
         except WorkspaceError as exc:
+            # The agent's own doing - it deleted or replaced its candidate - or a
+            # controller-state anomaly: a freeze failure, not a trusted-host
+            # I/O fault.
             freeze_error = str(exc)
+        except OSError as exc:
+            # Trusted-host I/O: the snapshot could not be read, written or made
+            # read-only. Recorded on the common finalization channel too.
+            freeze_error = str(exc)
+            finalization_error = finalization_error or f"{type(exc).__name__}: {exc}"
 
         if frozen is not None:
             # The visible suite is always run for a frozen candidate: it is the
@@ -291,9 +310,10 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                 visible = _failed_verdict(corpus.VISIBLE, compare.STATUS_BUILD_ERROR,
                                           "candidate failed to compile: " + (exc.stderr or "")[-400:],
                                           config.fixtures_root)
-            except (harness.HarnessError, corpus.CorpusError) as exc:
-                # A malformed or missing *visible* corpus is a trusted-host
-                # fault, not a candidate failure.
+            except (harness.HarnessError, corpus.CorpusError, OSError) as exc:
+                # A malformed or missing *visible* corpus - or any trusted-host
+                # I/O fault while building or evaluating it - is an
+                # infrastructure failure, not a candidate failure.
                 visible = _failed_verdict(corpus.VISIBLE, compare.STATUS_HARNESS_ERROR, str(exc),
                                           config.fixtures_root)
                 finalization_error = f"{type(exc).__name__}: {exc}"
@@ -311,7 +331,10 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                                                "candidate failed to compile: " + (exc.stderr or "")[-400:],
                                                config.fixtures_root)
                     certification = "failed: build"
-                except (harness.HarnessError, ToolError, corpus.CorpusError) as exc:
+                except (harness.HarnessError, ToolError, corpus.CorpusError, OSError) as exc:
+                    # A trusted-host fault while spending the holdout - including
+                    # an I/O fault - is an infrastructure failure, never a
+                    # candidate verdict.
                     held_out = _failed_verdict(corpus.HELD_OUT, compare.STATUS_HARNESS_ERROR, str(exc),
                                                config.fixtures_root)
                     certification = f"failed: {type(exc).__name__}"
@@ -325,12 +348,21 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
             and held_out is not None and held_out["status"] == compare.STATUS_PASS
         )
 
-        toolchain = _toolchain(config.cc, harness.COMPILE_FLAGS, deadline=finalize_deadline,
-                               capture_dir=run_dir / "verdict" / "toolchain")
+        toolchain, toolchain_problem = _toolchain(config.cc, harness.COMPILE_FLAGS,
+                                                  deadline=finalize_deadline,
+                                                  capture_dir=run_dir / "verdict" / "toolchain")
+        # Incomplete provenance outranks a merely degraded probe: an unreadable
+        # trusted source cannot be hashed into the receipt at all, so the run is
+        # an infrastructure failure whatever the compiler reports. The verdict
+        # evidence itself is preserved.
+        if toolchain_problem is not None:
+            finalization_error = finalization_error or toolchain_problem
+            if certification == CERTIFICATION_RAN:
+                certification = "failed: incomplete toolchain metadata"
         # An accepted result must identify its toolchain: an unidentifiable
         # compiler would silently weaken the receipt's reproducibility claim, so
-        # it prevents acceptance instead. The verdict evidence itself is kept.
-        if candidate_verified and not _compiler_identity_known(toolchain):
+        # it prevents acceptance instead.
+        elif candidate_verified and not _compiler_identity_known(toolchain):
             finalization_error = finalization_error or (
                 "compiler identity could not be established: "
                 f"{toolchain.get('compiler_version')!r}")

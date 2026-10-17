@@ -366,6 +366,81 @@ class InfrastructureFailureTests(unittest.TestCase):
         self.assertTrue(payload["execution"]["finalization"]["error"])
         receipts.verify(result.receipt)
 
+    def test_unreadable_toolchain_metadata_still_writes_a_terminal_receipt(self):
+        """A trusted-source read failure must not bypass the terminal receipt."""
+        with tempfile.TemporaryDirectory() as tmp:
+            real = receipts.file_sha256
+
+            def flaky(path):
+                if Path(path).name == "harness.py":
+                    raise OSError("simulated metadata I/O failure")
+                return real(Path(path))
+
+            with mock.patch.object(receipts, "file_sha256", flaky):
+                result = _run(Path(tmp), StubAdapter("repair"))
+
+            # run() returned instead of propagating, and a sealed receipt exists.
+            payload = result.receipt["payload"]
+            self.assertIsNone(payload["toolchain"]["harness_sha256"])
+            # Every digest that could be collected is preserved.
+            for key in ("comparator_sha256", "driver_sha256", "interface_sha256"):
+                self.assertTrue(payload["toolchain"][key], key)
+            error = payload["execution"]["finalization"]["error"]
+            self.assertTrue(error.startswith("toolchain metadata unavailable (harness.py)"), error)
+            self.assertIn("OSError", error)
+            self.assertNotEqual(result.status, STATUS_CERTIFIED)
+            self.assertEqual(result.status, STATUS_ABORTED)
+            # The candidate really did pass both suites; only acceptance is withheld.
+            self.assertTrue(payload["verdict"]["candidate_verified"])
+            self.assertEqual(payload["verdict"]["held_out"]["status"], compare.STATUS_PASS)
+            self.assertEqual(payload["execution"]["finalization"]["certification"],
+                             "failed: incomplete toolchain metadata")
+            self.assertTrue(result.receipt_path.is_file())
+            receipts.verify(result.receipt, expected_sha256=result.receipt["sha256"])
+            self.assertEqual(receipts.load(result.receipt_path), result.receipt)
+
+    def test_trusted_host_io_failures_still_write_a_terminal_receipt(self):
+        """Every trusted-host I/O fault in finalization yields a receipt."""
+        # label: (patcher, expected certification, expected visible status,
+        #         expected held-out status, expected source.freeze_error)
+        cases = {
+            "freeze": (
+                mock.patch.object(controller, "freeze_candidate",
+                                  side_effect=OSError("simulated freeze I/O failure")),
+                "not_attempted", None, None, "simulated freeze I/O failure"),
+            "visible": (
+                mock.patch.object(controller, "_suite_verdict",
+                                  side_effect=OSError("simulated visible I/O failure")),
+                "skipped: visible suite did not pass", compare.STATUS_HARNESS_ERROR, None, None),
+            "certification": (
+                mock.patch.object(controller, "certify_candidate",
+                                  side_effect=OSError("simulated certify I/O failure")),
+                "failed: OSError", compare.STATUS_PASS, compare.STATUS_HARNESS_ERROR, None),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, (patcher, certification, visible_status, held_status,
+                        freeze_error) in cases.items():
+                with self.subTest(label), patcher:
+                    result = _run(Path(tmp) / label, StubAdapter("repair"))
+                    payload = result.receipt["payload"]
+                    self.assertEqual(result.status, STATUS_ABORTED)
+                    self.assertNotEqual(result.status, STATUS_CERTIFIED)
+                    self.assertEqual(payload["execution"]["finalization"]["certification"],
+                                     certification)
+                    self.assertEqual(payload["source"]["freeze_error"], freeze_error)
+                    for key, expected in (("visible", visible_status),
+                                          ("held_out", held_status)):
+                        verdict = payload["verdict"][key]
+                        if expected is None:
+                            self.assertIsNone(verdict, key)
+                        else:
+                            self.assertEqual(verdict["status"], expected, key)
+                    error = payload["execution"]["finalization"]["error"]
+                    self.assertIn("OSError", error or "")
+                    self.assertTrue(result.receipt_path.is_file())
+                    receipts.verify(result.receipt, expected_sha256=result.receipt["sha256"])
+                    self.assertEqual(receipts.load(result.receipt_path), result.receipt)
+
 
 class CommandAdapterTests(unittest.TestCase):
     def test_timeout_terminates_process_group_and_writes_receipt(self):

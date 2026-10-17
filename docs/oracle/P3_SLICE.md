@@ -171,13 +171,18 @@ make the server's expiry check meaningless.
 
 ## Receipts
 
-The controller always writes a terminal receipt - including after timeout, crash,
-a missing candidate, a candidate the compiler rejects, or a trusted-harness fault
-during finalization. Every expected fault is converted into an explicit result
+The controller writes a terminal receipt on every path that **begins
+finalization** - including after timeout, crash, a missing candidate, a candidate
+the compiler rejects, or any trusted-host I/O fault during freezing, compilation,
+corpus loading, certification or metadata collection. Setup failures that occur
+*before* the run exists (creating the run directory, opening the budget ledger, or
+materializing the workspace) are outside this guarantee: there is no run state to
+report against yet. Every expected fault is converted into an explicit result
 object *before* the receipt is constructed, so receipt construction cannot fail
-for an expected fault; an unconditional `finally` guarantees the budget ledger is
-closed on every path; and a receipt that cannot be *stored* is reported as an
-explicit `ReceiptError`. The payload binds:
+for an expected fault; the finalization block's unconditional `finally`
+guarantees the budget ledger is **closed** (cleanup, not receipt delivery); and a
+receipt that cannot be *stored* is reported as an explicit `ReceiptError`. The
+payload binds:
 
 | Identity | Data |
 | --- | --- |
@@ -204,15 +209,19 @@ holdout is never spent on an ineligible attempt.
 **Infrastructure failures outrank candidate verdicts.** A candidate may fail a
 comparison, or the trusted host may be unable to *complete* one; the receipt must
 not confuse the two. `execution.finalization.error` is set only for a
-trusted-host fault - a missing or malformed corpus, a harness or toolchain that
-cannot operate, or a compiler whose identity cannot be established - and its
-presence classifies the run as `aborted`, never as a candidate failure.
+trusted-host fault - a missing or malformed corpus, an I/O failure while the host
+freezes, compiles or certifies, a harness or toolchain that cannot operate, or a
+compiler whose identity cannot be established - and its presence classifies the
+run as `aborted`, never as a candidate failure. A fault the *agent* caused (it
+deleted or replaced its own candidate) is recorded as `source.freeze_error`
+alone, so the field still means "the trusted host could not operate".
 
 | Actual outcome | Terminal classification |
 | --- | --- |
 | Candidate fails the visible comparison | `visible_failed` |
 | Candidate fails a completed held-out comparison | `held_out_failed` |
 | Corpus missing or malformed | `aborted` (`finalization.error`) |
+| Trusted-host I/O fault during finalization | `aborted` (`finalization.error`, receipt still sealed) |
 | Compiler or trusted harness cannot operate | `aborted` (`finalization.error`) |
 | Candidate contains invalid C | `visible_failed` with `CANDIDATE_BUILD_ERROR` |
 | Both suites pass **and** every controller gate passes | `certified` |
@@ -220,9 +229,12 @@ presence classifies the run as `aborted`, never as a candidate failure.
 **Provenance gates acceptance.** An accepted result must identify its toolchain.
 If the compiler's version cannot be established within the finalization budget,
 the run is `aborted` with `certification: "failed: unknown compiler identity"`
-rather than silently weakening the receipt's reproducibility claim. The verdict
-evidence itself (`candidate_verified`, the held-out verdict) is preserved; only
-the acceptance claim is withheld.
+rather than silently weakening the receipt's reproducibility claim. If a trusted
+source cannot be *read* at all, its digest is recorded as an explicit `null` and
+the run is `aborted` with `certification: "failed: incomplete toolchain
+metadata"`; digests that could be collected are retained. In both cases the
+verdict evidence itself (`candidate_verified`, the held-out verdict) is preserved;
+only the acceptance claim is withheld.
 
 A receipt is *sealed* when it is content-addressed and verifiable against a
 trusted reference: the digest is computed over the canonical payload, not merely
@@ -245,6 +257,8 @@ gitignored); only the sealed receipt is published.
 | A late `done`, or a late `progress` on the final attempt, is a deadline violation | `tests/test_oracle_slice_e2e.py` |
 | A missing or malformed corpus is an infrastructure failure, not a candidate verdict | `tests/test_oracle_slice_e2e.py` |
 | An unidentifiable compiler prevents acceptance while preserving the verdict evidence | `tests/test_oracle_slice_e2e.py` |
+| Unreadable toolchain metadata yields an explicit `null` digest, preserves the rest, and still seals a terminal receipt | `tests/test_oracle_slice_e2e.py` |
+| A trusted-host I/O fault while freezing, verifying or certifying still yields a sealed terminal receipt | `tests/test_oracle_slice_e2e.py` |
 | Non-finite or overflowed run state is rejected on write and on load | `tests/test_oracle_slice_bridge.py` |
 | The compiler-identity probe is bounded by the caller's deadline | `tests/test_oracle_slice_comparator.py` |
 | The run deadline bounds compilation and fixture evaluation; expired operations do not start | `tests/test_oracle_slice_comparator.py`, `tests/test_oracle_slice_controller.py` |
