@@ -20,6 +20,13 @@ test_build_report_writes_candidates/
 # Local fixtures (not tracked; see results/README.md)
 fixtures/
 
+# Oracle P3 slice fixture corpora are tracked ground truth (see docs/oracle/P3_SLICE.md)
+!oracle/slice/fixtures/
+!oracle/slice/fixtures/**
+
+# Oracle P3 local run artifacts (receipts are published separately under docs/oracle/)
+oracle/slice/runs/
+
 # Cursor/agent scratch at repo root (not part of the benchmark tree)
 /internal/
 
