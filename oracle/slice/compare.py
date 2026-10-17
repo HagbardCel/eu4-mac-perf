@@ -29,6 +29,10 @@ STATUS_INCOMPLETE = "INCOMPLETE_ORACLE"
 STATUS_CRASH = "CANDIDATE_CRASH"
 STATUS_TIMEOUT = "CANDIDATE_TIMEOUT"
 STATUS_HARNESS_ERROR = "HARNESS_ERROR"
+#: The candidate could not be compiled at all. A candidate fault, distinct from a
+#: trusted-harness fault (``HARNESS_ERROR``) and from incomplete evidence
+#: (``INCOMPLETE_ORACLE``).
+STATUS_BUILD_ERROR = "CANDIDATE_BUILD_ERROR"
 
 STATUSES = (
     STATUS_PASS,
@@ -36,6 +40,7 @@ STATUSES = (
     STATUS_INCOMPLETE,
     STATUS_CRASH,
     STATUS_TIMEOUT,
+    STATUS_BUILD_ERROR,
     STATUS_HARNESS_ERROR,
 )
 
@@ -250,6 +255,8 @@ def verdict(results: list[dict[str, Any]]) -> dict[str, Any]:
     statuses = [result["status"] for result in results]
     if all(status == STATUS_PASS for status in statuses):
         aggregate = STATUS_PASS
+    elif STATUS_BUILD_ERROR in statuses:
+        aggregate = STATUS_BUILD_ERROR
     elif STATUS_CRASH in statuses or STATUS_TIMEOUT in statuses:
         aggregate = STATUS_CRASH if STATUS_CRASH in statuses else STATUS_TIMEOUT
     elif STATUS_HARNESS_ERROR in statuses:

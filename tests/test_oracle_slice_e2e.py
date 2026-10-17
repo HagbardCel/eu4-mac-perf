@@ -39,6 +39,51 @@ class _Deleting:
         return AttemptResult("gave_up", "candidate removed")
 
 
+class _InvalidC:
+    """A completed attempt that leaves syntactically invalid C behind."""
+
+    name = "invalid-c"
+
+    def step(self, ctx):
+        ctx.candidate_path.write_text("int this is not valid C\n", encoding="utf-8")
+        return AttemptResult("done", "left invalid C in place")
+
+
+class _RepairThenCrash:
+    """Repairs the candidate, then reports an abnormal agent termination."""
+
+    name = "repair-then-crash"
+
+    def __init__(self):
+        self._stub = StubAdapter("repair")
+        self._patched = False
+
+    def step(self, ctx):
+        if not self._patched:
+            self._stub._patch(ctx)
+            self._patched = True
+            return AttemptResult("progress", "patched mode 0")
+        return AttemptResult("crashed", "agent crashed after repairing")
+
+
+_SLOW_SOURCE = (
+    '#include "synth.h"\n#include <unistd.h>\n'
+    "int synth_apply(struct synth_state *s, int mode, int arg) "
+    "{ (void)s; (void)mode; (void)arg; for (;;) sleep(1); return 0; }\n"
+)
+
+
+class _SlowTest:
+    """Runs a visible test against a candidate that never returns."""
+
+    name = "slow-test"
+
+    def step(self, ctx):
+        ctx.tools.call("test", {"function_id": "synth:apply",
+                                "candidate_path": str(ctx.candidate_path)})
+        return AttemptResult("gave_up", "timed out against the visible suite")
+
+
 def _run(root: Path, adapter, **overrides) -> controller.RunResult:
     params = dict(
         run_id="run-e2e",
@@ -104,7 +149,12 @@ class AbortPathTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             result = _run(Path(tmp), StubAdapter("give_up"), max_attempts=3)
             self.assertEqual(result.abort_reason, "gave_up")
-            self.assertEqual(result.status, STATUS_VISIBLE_FAILED)
+            # An aborted run is never a completed run, even though the candidate
+            # was still evaluated for diagnostic evidence.
+            self.assertEqual(result.status, STATUS_ABORTED)
+            self.assertIsNotNone(result.visible)
+            self.assertIsNone(result.held_out)
+            self.assertTrue(result.certification.startswith("skipped"))
             self.assertTrue(result.receipt_path.is_file())
             receipts.verify(result.receipt)
 
@@ -136,6 +186,65 @@ class AbortPathTests(unittest.TestCase):
             self.assertEqual(result.status, STATUS_ABORTED)
             self.assertIsNotNone(result.receipt["payload"]["source"]["freeze_error"])
             receipts.verify(result.receipt)
+
+
+class FinalizationTests(unittest.TestCase):
+    """Terminal receipts, abort classification and bounded finalization."""
+
+    def test_invalid_candidate_still_produces_a_terminal_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run(Path(tmp), _InvalidC())
+            self.assertEqual(result.status, STATUS_VISIBLE_FAILED)
+            self.assertEqual(result.certification, "skipped: visible suite did not pass")
+            payload = result.receipt["payload"]
+            self.assertIsNotNone(payload["source"]["final_candidate_sha256"])
+            self.assertEqual(payload["verdict"]["visible"]["status"], compare.STATUS_BUILD_ERROR)
+            self.assertFalse(payload["verdict"]["candidate_verified"])
+            self.assertTrue(result.receipt_path.is_file())
+            receipts.verify(result.receipt)
+            self.assertEqual(receipts.load(result.receipt_path), result.receipt)
+
+    def test_repair_then_crash_is_not_certified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run(Path(tmp), _RepairThenCrash())
+            self.assertEqual(result.abort_reason, "crashed")
+            # The candidate itself verifies -- but the run did not complete.
+            self.assertEqual(result.visible["status"], compare.STATUS_PASS)
+            self.assertIsNone(result.held_out)
+            self.assertEqual(result.status, STATUS_ABORTED)
+            self.assertFalse(result.candidate_verified)
+            self.assertTrue(result.certification.startswith("skipped"))
+            payload = result.receipt["payload"]
+            self.assertEqual(payload["verdict"]["visible"]["status"], compare.STATUS_PASS)
+            self.assertFalse(payload["verdict"]["candidate_verified"])
+            self.assertTrue(payload["verdict"]["certification"].startswith("skipped"))
+            receipts.verify(result.receipt)
+
+    def test_finalization_is_bounded_and_the_run_deadline_binds_tools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            slow = root / "slow.c"
+            slow.write_text(_SLOW_SOURCE, encoding="utf-8")
+            started = time.monotonic()
+            result = _run(root, _SlowTest(), wall_seconds=2.0, finalization_seconds=5.0,
+                          timeout_s=30.0, candidate_src=slow, max_attempts=1)
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 2.0 + 5.0 + 8.0,
+                            "a hanging candidate must not outlive the declared budgets")
+            self.assertEqual(result.abort_reason, "gave_up")
+            self.assertEqual(result.status, STATUS_ABORTED)
+            self.assertEqual(result.visible["status"], compare.STATUS_TIMEOUT)
+            payload = result.receipt["payload"]
+            self.assertEqual(payload["execution"]["finalization"]["budget_seconds"], 5.0)
+            receipts.verify(result.receipt)
+
+    def test_certification_is_skipped_when_the_visible_suite_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run(Path(tmp), StubAdapter("give_up"), max_attempts=2)
+            payload = result.receipt["payload"]
+            self.assertEqual(payload["execution"]["finalization"]["certification"],
+                             "skipped: agent aborted: gave_up")
+            self.assertFalse(payload["verdict"]["candidate_verified"])
 
 
 class CommandAdapterTests(unittest.TestCase):

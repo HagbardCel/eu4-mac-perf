@@ -14,7 +14,11 @@ controller's run token. It reads the held-out corpus, which the MCP tools never
 see. The controller invokes it once, after freezing the candidate.
 
 Each accepted MCP call reserves budget in the run ledger *before* executing, so
-restarting the server cannot reset the counter.
+restarting the server cannot reset the counter. The server also loads the run's
+absolute monotonic deadline from trusted, controller-owned run state
+(``oracle.slice.runstate``) and enforces it before admission and throughout
+execution. It never accepts a deadline from tool arguments: the agent cannot
+extend its own clock.
 """
 from __future__ import annotations
 
@@ -30,7 +34,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from oracle.slice import compare, corpus, harness
+from oracle.slice import compare, corpus, harness, runstate
 from oracle.slice.budget import BudgetDenied, BudgetExceeded, RunBudgetLedger
 from oracle.slice.corpus import Fixture
 
@@ -149,7 +153,7 @@ class Bridge:
 
     def __init__(self, *, run_dir: Path, workspace: Path, ledger: RunBudgetLedger,
                  visible_root: Path | None = None, timeout_s: float = harness.DEFAULT_TIMEOUT_S,
-                 cc: str = "cc"):
+                 cc: str = "cc", run_deadline: float | None = None):
         self.run_dir = Path(run_dir)
         self.workspace = Path(workspace).resolve()
         self.ledger = ledger
@@ -157,9 +161,18 @@ class Bridge:
         self.visible_root = Path(visible_root) if visible_root else corpus.FIXTURES_DIR
         self.timeout_s = timeout_s
         self.cc = cc
+        #: Absolute monotonic deadline for the whole run, from trusted run state.
+        #: ``None`` means unbounded (used only by direct in-process tests).
+        self.run_deadline = run_deadline
         self._visible_cache: list[Fixture] | None = None
         (self.run_dir / TEST_DIR).mkdir(parents=True, exist_ok=True)
         (self.run_dir / BUILD_DIR).mkdir(parents=True, exist_ok=True)
+
+    def deadline(self) -> float | None:
+        return self.run_deadline
+
+    def expired(self) -> bool:
+        return self.run_deadline is not None and time.monotonic() >= self.run_deadline
 
     # -- corpus ---------------------------------------------------------------
     def _visible(self) -> list[Fixture]:
@@ -175,10 +188,16 @@ class Bridge:
         handler = _HANDLERS.get(method)
         if handler is None:
             raise ToolError(f"unknown tool: {method!r}")
+        if args is not None and not isinstance(args, dict):
+            raise ToolError("tool arguments must be an object")
+        # The deadline is enforced *before* admission, from trusted run state, so
+        # a call admitted near expiry cannot run on borrowed time.
+        if self.expired():
+            raise ToolError("run deadline expired; tool calls are refused")
         # Admission happens before execution, and the reservation stands even if
         # the tool then fails.
         try:
-            self.ledger.reserve(1)
+            self.ledger.reserve(1, deadline=self.run_deadline)
         except BudgetExceeded as exc:
             raise ToolError(f"tool-call budget exhausted ({exc.granted}/{exc.limit})") from exc
         except BudgetDenied as exc:
@@ -264,11 +283,18 @@ def _tool_test(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     candidate = bridge._resolve_candidate(args.get("candidate_path"))
     test_run_id = f"{bridge.run_id}-{uuid.uuid4().hex[:12]}"
     source_hash = sha256(candidate.read_bytes()).hexdigest()
+    deadline = bridge.deadline()
     try:
-        build = harness.build(candidate, bridge.run_dir / BUILD_DIR / test_run_id, cc=bridge.cc)
+        build = harness.build(candidate, bridge.run_dir / BUILD_DIR / test_run_id, cc=bridge.cc,
+                              deadline=deadline)
+    except harness.DeadlineExpired as exc:
+        raise ToolError("run deadline expired during compilation") from exc
     except harness.BuildError as exc:
         raise ToolError("candidate failed to compile: " + (exc.stderr or "")[-800:]) from exc
-    diagnostics = [harness.evaluate(build, fixture, run_id=test_run_id, timeout_s=bridge.timeout_s)
+    except harness.HarnessError as exc:
+        raise ToolError(f"trusted harness fault: {exc}") from exc
+    diagnostics = [harness.evaluate(build, fixture, run_id=test_run_id, timeout_s=bridge.timeout_s,
+                                    deadline=deadline)
                    for fixture in fixtures]
     summary = compare.verdict(diagnostics)
     bridge._store_test(test_run_id, {
@@ -343,11 +369,12 @@ def require_token(run_dir: Path, token: str | None) -> None:
 
 def certify_candidate(candidate: Path, *, run_dir: Path, run_id: str, token: str | None,
                       timeout_s: float = harness.DEFAULT_TIMEOUT_S, cc: str = "cc",
-                      fixtures_root: Path | None = None) -> dict[str, Any]:
+                      fixtures_root: Path | None = None,
+                      deadline: float | None = None) -> dict[str, Any]:
     """Run the held-out corpus against a frozen candidate. Controller-only.
 
     Returns an outcome-only verdict: never expected bytes, never per-fixture
-    expected values.
+    expected values. ``deadline`` bounds compilation and every fixture run.
     """
     require_token(run_dir, token)
     candidate = Path(candidate)
@@ -357,8 +384,9 @@ def certify_candidate(candidate: Path, *, run_dir: Path, run_id: str, token: str
     fixtures = corpus.load_corpus(corpus.HELD_OUT, root=root)
     snapshot_hash = sha256(candidate.read_bytes()).hexdigest()
     started = time.monotonic()
-    build = harness.build(candidate, Path(run_dir) / "certify" / run_id, cc=cc)
-    diagnostics = [harness.evaluate(build, fixture, run_id=run_id, timeout_s=timeout_s)
+    build = harness.build(candidate, Path(run_dir) / "certify" / run_id, cc=cc, deadline=deadline)
+    diagnostics = [harness.evaluate(build, fixture, run_id=run_id, timeout_s=timeout_s,
+                                    deadline=deadline)
                    for fixture in fixtures]
     summary = compare.verdict(diagnostics)
     return {
@@ -412,6 +440,8 @@ class MCPServer:
             params = message.get("params") or {}
             name = params.get("name") if isinstance(params, dict) else None
             arguments = params.get("arguments") if isinstance(params, dict) else None
+            if arguments is not None and not isinstance(arguments, dict):
+                return _result(request_id, _tool_error("tool arguments must be an object"))
             try:
                 result = self.bridge.call(name, arguments or {})
             except ToolError as exc:
@@ -489,14 +519,23 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     run_dir = Path(args.run_dir)
-    run_id = _load_run_id(run_dir, args.run_id)
 
     if args.command == "serve":
-        ledger = RunBudgetLedger.attach(run_dir / "budget.sqlite3", run_id)
+        # The server loads the run's absolute monotonic deadline from trusted,
+        # controller-owned state. If that state is missing or provably stale the
+        # server fails closed instead of serving without a deadline.
+        try:
+            state = runstate.load_run_state(run_dir)
+        except runstate.RunStateError as exc:
+            print(f"oracle MCP server refused to start: {exc}", file=sys.stderr)
+            return 2
+        ledger = RunBudgetLedger.attach(run_dir / "budget.sqlite3", state.run_id)
         bridge = Bridge(run_dir=run_dir, workspace=Path(args.workspace), ledger=ledger,
-                        timeout_s=args.timeout, cc=args.cc)
+                        timeout_s=args.timeout, cc=args.cc,
+                        run_deadline=state.deadline_monotonic)
         return serve(bridge)
 
+    run_id = _load_run_id(run_dir, args.run_id)
     verdict = certify_candidate(Path(args.candidate), run_dir=run_dir, run_id=run_id,
                                 token=args.token, timeout_s=args.timeout, cc=args.cc)
     print(json.dumps(verdict))

@@ -22,6 +22,11 @@ import time
 from pathlib import Path
 
 LEDGER_FILE = "budget.sqlite3"
+#: Busy timeout for a single ``BEGIN IMMEDIATE`` attempt. Kept short so the retry
+#: loop - not a blocking SQLite call - enforces the run deadline.
+_BUSY_TIMEOUT_S = 0.5
+#: Upper bound on the lock-wait retry loop when no run deadline is supplied.
+_MAX_LOCK_WAIT_S = 30.0
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS runs ("
     " run_id TEXT PRIMARY KEY,"
@@ -63,7 +68,7 @@ class RunBudgetLedger:
     # -- construction ---------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
         try:
-            conn = sqlite3.connect(str(self.path), timeout=30.0, isolation_level=None)
+            conn = sqlite3.connect(str(self.path), timeout=_BUSY_TIMEOUT_S, isolation_level=None)
         except sqlite3.Error as exc:  # pragma: no cover - defensive
             raise BudgetDenied(f"cannot open budget ledger: {exc}") from exc
         try:
@@ -124,16 +129,25 @@ class RunBudgetLedger:
             raise BudgetDenied(f"cannot read budget ledger: {exc}") from exc
         return (int(row[0]), int(row[1])) if row else None
 
-    def reserve(self, cost: int = 1) -> int:
-        """Atomically reserve ``cost`` calls; return the new granted total."""
+    def reserve(self, cost: int = 1, *, deadline: float | None = None) -> int:
+        """Atomically reserve ``cost`` calls; return the new granted total.
+
+        ``deadline`` is an absolute monotonic bound on how long the caller may
+        wait for the write lock. Waiting past it denies rather than blocks, so a
+        contended ledger cannot outlive the run it belongs to.
+        """
         if cost <= 0:
             raise ValueError("cost must be positive")
-        deadline = time.monotonic() + 30.0
+        stop = time.monotonic() + _MAX_LOCK_WAIT_S
+        if deadline is not None:
+            stop = min(stop, deadline)
         while True:
+            if time.monotonic() >= stop:
+                raise BudgetDenied("timed out waiting for the budget lock")
             try:
                 self._conn.execute("BEGIN IMMEDIATE")
             except sqlite3.OperationalError as exc:
-                if "locked" in str(exc).lower() and time.monotonic() < deadline:
+                if "locked" in str(exc).lower() and time.monotonic() < stop:
                     time.sleep(0.01)
                     continue
                 raise BudgetDenied(f"cannot acquire budget lock: {exc}") from exc

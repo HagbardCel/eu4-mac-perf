@@ -7,11 +7,12 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
 from oracle.slice import bridge as bridge_mod
-from oracle.slice import compare, corpus, harness
+from oracle.slice import compare, corpus, harness, runstate
 from oracle.slice.bridge import Bridge, MCPServer, certify_candidate, write_controller_token
 from oracle.slice.budget import (
     BudgetDenied,
@@ -25,7 +26,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_ID = "run-test-0001"
 
 
-def _make_run(root: Path, limit: int = 20, candidate: Path | None = None) -> tuple[Path, Path, str]:
+def _make_run(root: Path, limit: int = 20, candidate: Path | None = None,
+              deadline_s: float = 300.0, budget_s: float = 300.0) -> tuple[Path, Path, str]:
     run_dir = root / "run"
     workspace = root / "workspace"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -36,12 +38,16 @@ def _make_run(root: Path, limit: int = 20, candidate: Path | None = None) -> tup
     )
     RunBudgetLedger.create(run_dir, RUN_ID, limit).close()
     token = write_controller_token(run_dir)
+    # Trusted run state: the absolute monotonic deadline the MCP server enforces.
+    runstate.write_run_state(run_dir, run_id=RUN_ID,
+                             deadline_monotonic=time.monotonic() + deadline_s,
+                             budget_seconds=budget_s)
     return run_dir, workspace, token
 
 
-def _bridge(run_dir: Path, workspace: Path) -> Bridge:
+def _bridge(run_dir: Path, workspace: Path, *, deadline: float | None = None) -> Bridge:
     ledger = RunBudgetLedger.attach(run_dir / "budget.sqlite3", RUN_ID)
-    return Bridge(run_dir=run_dir, workspace=workspace, ledger=ledger)
+    return Bridge(run_dir=run_dir, workspace=workspace, ledger=ledger, run_deadline=deadline)
 
 
 def _call(server: MCPServer, request_id: int, method: str, params: dict | None = None) -> dict:
@@ -250,6 +256,15 @@ class BudgetLedgerTests(unittest.TestCase):
                 ledger.reserve()
             self.assertEqual(ledger.granted(), 3)
 
+    def test_reserve_honours_the_run_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = RunBudgetLedger.create(Path(tmp), "r", 3)
+            started = time.monotonic()
+            with self.assertRaises(BudgetDenied):
+                ledger.reserve(deadline=time.monotonic() - 1.0)
+            self.assertLess(time.monotonic() - started, 1.0)
+            self.assertEqual(ledger.granted(), 0)
+
     def test_concurrent_reservations_never_over_admit(self):
         with tempfile.TemporaryDirectory() as tmp:
             limit = 9
@@ -287,48 +302,121 @@ class MCPProtocolSmokeTest(unittest.TestCase):
     def test_stdio_handshake_and_structured_tool_result(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir, workspace, _ = _make_run(Path(tmp))
-            env = dict(os.environ)
-            env["PYTHONPATH"] = os.pathsep.join([str(REPO_ROOT), str(REPO_ROOT / "benchmark")])
-            proc = subprocess.Popen(
-                [sys.executable, "-m", "oracle.slice.bridge", "serve",
-                 "--run-dir", str(run_dir), "--workspace", str(workspace), "--run-id", RUN_ID],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, cwd=str(REPO_ROOT), env=env,
-            )
+            proc = _start_server(run_dir, workspace)
             try:
-                def rpc(request_id: int, method: str, params: dict | None = None) -> dict:
-                    assert proc.stdin is not None and proc.stdout is not None
-                    proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id,
-                                                 "method": method, "params": params or {}}) + "\n")
-                    proc.stdin.flush()
-                    line = proc.stdout.readline()
-                    self.assertTrue(line, "server closed the stream")
-                    return json.loads(line)
-
-                init = rpc(1, "initialize", {"protocolVersion": "2024-11-05"})
+                init = _rpc(proc, 1, "initialize", {"protocolVersion": "2024-11-05"})
                 self.assertEqual(init["result"]["serverInfo"]["name"], bridge_mod.SERVER_NAME)
 
-                tools = rpc(2, "tools/list")["result"]["tools"]
+                tools = _rpc(proc, 2, "tools/list")["result"]["tools"]
                 self.assertEqual({t["name"] for t in tools},
                                  {"inspect", "fixtures", "coverage", "test", "diff"})
 
-                called = rpc(3, "tools/call", {"name": "inspect", "arguments": {"function_id": "synth:apply"}})
+                called = _rpc(proc, 3, "tools/call",
+                              {"name": "inspect", "arguments": {"function_id": "synth:apply"}})
                 self.assertFalse(called["result"]["isError"])
                 payload = json.loads(called["result"]["content"][0]["text"])
                 self.assertEqual(payload["function_id"], "synth:apply")
 
-                denied = rpc(4, "tools/call", {"name": "certify", "arguments": {}})
+                denied = _rpc(proc, 4, "tools/call", {"name": "certify", "arguments": {}})
                 self.assertTrue(denied["result"]["isError"])
             finally:
-                if proc.stdin:
-                    proc.stdin.close()
+                _stop_server(proc)
+
+
+class DeadlineEnforcementTests(unittest.TestCase):
+    """The deadline comes from trusted run state, never from the agent."""
+
+    def test_expired_deadline_refuses_calls_before_admission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, workspace, _ = _make_run(Path(tmp))
+            bridge = _bridge(run_dir, workspace, deadline=time.monotonic() - 1.0)
+            before = bridge.ledger.granted()
+            with self.assertRaises(bridge_mod.ToolError) as ctx:
+                bridge.call("inspect", {"function_id": "synth:apply"})
+            self.assertIn("deadline", str(ctx.exception))
+            # Refusal happens before admission: no budget is consumed.
+            self.assertEqual(bridge.ledger.granted(), before)
+
+    def test_arguments_must_be_an_object(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, workspace, _ = _make_run(Path(tmp))
+            server = MCPServer(_bridge(run_dir, workspace))
+            for bad in ([1, 2], "inspect", 7):
+                response = _call(server, 1, "tools/call", {"name": "inspect", "arguments": bad})
+                self.assertTrue(response["result"]["isError"], repr(bad))
+                self.assertIn("object", _tool_text(response)["error"])
+
+    def test_stdio_server_refuses_calls_after_expiry_and_does_not_compile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir, workspace, _ = _make_run(root, deadline_s=-5.0)
+            # Two server processes: the deadline is persisted, so a restart still
+            # enforces it rather than granting a fresh budget.
+            for attempt in range(2):
+                proc = _start_server(run_dir, workspace)
                 try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:  # pragma: no cover - defensive
-                    proc.kill()
-                for stream in (proc.stdout, proc.stderr):
-                    if stream:
-                        stream.close()
+                    init = _rpc(proc, 1, "initialize", {"protocolVersion": "2024-11-05"})
+                    self.assertEqual(init["result"]["serverInfo"]["name"], bridge_mod.SERVER_NAME)
+                    refused = _rpc(proc, 2, "tools/call", {
+                        "name": "test",
+                        "arguments": {"function_id": "synth:apply", "candidate_path": "candidate.c",
+                                      # A deadline forged by the agent is ignored.
+                                      "deadline": 1e18, "timeout": 1e18},
+                    })
+                    self.assertTrue(refused["result"]["isError"], f"attempt {attempt}")
+                    self.assertIn("deadline", _tool_text(refused)["error"])
+                finally:
+                    _stop_server(proc)
+            builds = run_dir / bridge_mod.BUILD_DIR
+            self.assertFalse(builds.exists() and any(builds.iterdir()),
+                             "no compilation may begin after the deadline")
+
+    def test_missing_run_state_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir, workspace, _ = _make_run(root)
+            (run_dir / runstate.RUN_STATE_FILE).unlink()
+            proc = _start_server(run_dir, workspace)
+            try:
+                self.assertEqual(proc.wait(timeout=15), 2)
+            finally:
+                _stop_server(proc)
+
+
+def _start_server(run_dir: Path, workspace: Path) -> subprocess.Popen:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join([str(REPO_ROOT), str(REPO_ROOT / "benchmark")])
+    return subprocess.Popen(
+        [sys.executable, "-m", "oracle.slice.bridge", "serve",
+         "--run-dir", str(run_dir), "--workspace", str(workspace), "--run-id", RUN_ID],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, cwd=str(REPO_ROOT), env=env,
+    )
+
+
+def _rpc(proc: subprocess.Popen, request_id: int, method: str,
+         params: dict | None = None) -> dict:
+    assert proc.stdin is not None and proc.stdout is not None
+    proc.stdin.write(json.dumps({"jsonrpc": "2.0", "id": request_id,
+                                 "method": method, "params": params or {}}) + "\n")
+    proc.stdin.flush()
+    line = proc.stdout.readline()
+    if not line:
+        stderr = proc.stderr.read() if proc.stderr else ""
+        raise AssertionError(f"server closed the stream: {stderr}")
+    return json.loads(line)
+
+
+def _stop_server(proc: subprocess.Popen) -> None:
+    if proc.stdin:
+        proc.stdin.close()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+        proc.kill()
+    for stream in (proc.stdout, proc.stderr):
+        if stream:
+            stream.close()
 
 
 if __name__ == "__main__":

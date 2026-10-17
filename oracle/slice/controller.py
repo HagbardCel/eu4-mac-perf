@@ -6,22 +6,32 @@ held-out certification and the terminal receipt.
 
 Sequence for one run:
 
-1. Create the run directory, budget ledger and controller token.
+1. Create the run directory, budget ledger, controller token and trusted run
+   state (the immutable monotonic deadline the MCP server enforces).
 2. Materialize a fresh candidate-only workspace (no held-out, no Oracle source).
 3. Let the adapter take bounded attempts against the five visible tools.
 4. Terminate and reap every remaining child process group.
 5. Freeze the candidate into a read-only snapshot.
-6. Certify **once** from the snapshot, using the controller token.
-7. Seal a terminal receipt - always, including after timeout or crash.
+6. Run the trusted visible suite as a diagnostic, and - only for a completed,
+   non-aborted attempt whose visible suite passes - certify **once** from the
+   snapshot using the controller token.
+7. Seal a terminal receipt - always, including after timeout, crash, a candidate
+   that does not compile, or a trusted-harness fault during finalization.
+
+Two distinct clocks bound the work. The **run deadline** bounds the agent, its
+MCP tools and the visible tests it initiates; a fresh **finalization budget**
+bounds freezing, the trusted visible verification, certification and receipt
+publication. A fresh finalization budget never revives an expired run nor makes
+an aborted run eligible for certification.
 """
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from oracle.slice import compare, corpus, harness, receipts
+from oracle.slice import compare, corpus, harness, receipts, runstate
 from oracle.slice.adapters import (
     AgentAdapter,
     AttemptContext,
@@ -34,6 +44,7 @@ from oracle.slice.adapters import (
 from oracle.slice.bridge import (
     RUN_ID_FILE,
     Bridge,
+    ToolError,
     certify_candidate,
     write_controller_token,
 )
@@ -47,6 +58,8 @@ STATUS_VISIBLE_FAILED = "visible_failed"
 STATUS_HELD_OUT_FAILED = "held_out_failed"
 STATUS_ABORTED = "aborted"
 
+CERTIFICATION_RAN = "ran"
+
 
 @dataclass(frozen=True)
 class RunConfig:
@@ -57,6 +70,7 @@ class RunConfig:
     max_attempts: int = 4
     no_progress_limit: int = 3
     wall_seconds: float = 120.0
+    finalization_seconds: float = 60.0
     timeout_s: float = harness.DEFAULT_TIMEOUT_S
     cc: str = "cc"
     fixtures_root: Path | None = None
@@ -75,24 +89,54 @@ class RunResult:
     receipt: dict[str, Any]
     receipt_path: Path
     run_dir: Path
+    certification: str
+    candidate_verified: bool
+
+
+def _fixture_root(fixtures_root: Path | None) -> Path:
+    return Path(fixtures_root) if fixtures_root else corpus.FIXTURES_DIR
 
 
 def _suite_verdict(candidate: Path, set_name: str, *, build_dir: Path, run_id: str,
-                   timeout_s: float, cc: str, fixtures_root: Path | None) -> dict[str, Any]:
-    root = Path(fixtures_root) if fixtures_root else corpus.FIXTURES_DIR
+                   timeout_s: float, cc: str, fixtures_root: Path | None,
+                   deadline: float | None) -> dict[str, Any]:
+    root = _fixture_root(fixtures_root)
     fixtures = corpus.load_corpus(set_name, root=root)
-    build = harness.build(candidate, build_dir, cc=cc)
-    diagnostics = [harness.evaluate(build, fixture, run_id=run_id, timeout_s=timeout_s)
+    build = harness.build(candidate, build_dir, cc=cc, deadline=deadline)
+    diagnostics = [harness.evaluate(build, fixture, run_id=run_id, timeout_s=timeout_s,
+                                    deadline=deadline)
                    for fixture in fixtures]
     return compare.verdict(diagnostics)
 
 
-def _toolchain(cc: str, flags: tuple[str, ...], compiler_version: str) -> dict[str, Any]:
+def _failed_verdict(set_name: str, status: str, note: str,
+                    fixtures_root: Path | None) -> dict[str, Any]:
+    """A non-PASS verdict for a suite that could not be evaluated at all."""
+    try:
+        total = len(corpus.load_corpus(set_name, root=_fixture_root(fixtures_root)))
+    except Exception:  # pragma: no cover - defensive
+        total = 0
+    return {"status": status, "total": total, "passed": 0, "failures": [], "note": note}
+
+
+def _manifest(set_name: str, fixtures_root: Path | None) -> dict[str, Any] | None:
+    try:
+        return corpus.manifest(corpus.load_corpus(set_name, root=_fixture_root(fixtures_root)),
+                               set_name=set_name)
+    except Exception:  # pragma: no cover - defensive
+        return None
+
+
+def _toolchain(cc: str, flags: tuple[str, ...]) -> dict[str, Any]:
     slice_dir = harness.SLICE_DIR
+    try:
+        version = harness.compiler_version(cc)
+    except harness.HarnessError as exc:  # pragma: no cover - defensive
+        version = f"unavailable: {exc}"
     return {
         "cc": cc,
         "flags": list(flags),
-        "compiler_version": compiler_version,
+        "compiler_version": version,
         "harness_sha256": receipts.file_sha256(slice_dir / "harness.py"),
         "comparator_sha256": receipts.file_sha256(slice_dir / "compare.py"),
         "driver_sha256": receipts.file_sha256(slice_dir / "driver.c"),
@@ -117,13 +161,18 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
 
     started = time.monotonic()
     deadline = started + config.wall_seconds
+    # The MCP server - a separate process - loads this deadline independently.
+    runstate.write_run_state(run_dir, run_id=config.run_id, deadline_monotonic=deadline,
+                             budget_seconds=config.wall_seconds)
     supervisor = ProcessSupervisor(deadline=deadline, log_dir=run_dir / "logs")
     bridge = Bridge(run_dir=run_dir, workspace=workspace.root, ledger=ledger,
-                    visible_root=config.fixtures_root, timeout_s=config.timeout_s, cc=config.cc)
+                    visible_root=config.fixtures_root, timeout_s=config.timeout_s, cc=config.cc,
+                    run_deadline=deadline)
     tools = ToolClient(bridge, deadline=deadline)
 
     attempts: list[dict[str, Any]] = []
     abort_reason: str | None = None
+    controller_error: str | None = None
     last_candidate_sha: str | None = None
     no_progress = 0
     try:
@@ -171,10 +220,18 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                 break
         else:
             abort_reason = "max_attempts"
+    except Exception as exc:  # a trusted-state fault must not lose the receipt
+        abort_reason = abort_reason or "controller_error"
+        controller_error = f"{type(exc).__name__}: {exc}"
     finally:
+        # Terminate and reap every remaining child process group, descendants
+        # included, before anything downstream reads the candidate.
         supervisor.terminate_all()
 
-    # Freeze before certifying: certification must not read a writable path.
+    # --- bounded finalization -------------------------------------------------
+    finalize_started = time.monotonic()
+    finalize_deadline = finalize_started + config.finalization_seconds
+
     frozen: FrozenCandidate | None = None
     freeze_error: str | None = None
     try:
@@ -184,33 +241,74 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
 
     visible: dict[str, Any] | None = None
     held_out: dict[str, Any] | None = None
+    certification = "not_attempted"
+    finalization_error: str | None = None
     if frozen is not None:
-        visible = _suite_verdict(frozen.path, corpus.VISIBLE, build_dir=run_dir / "verdict" / "visible",
-                                 run_id=config.run_id, timeout_s=config.timeout_s, cc=config.cc,
-                                 fixtures_root=config.fixtures_root)
-        held_out = certify_candidate(frozen.path, run_dir=run_dir, run_id=config.run_id, token=token,
-                                     timeout_s=config.timeout_s, cc=config.cc,
-                                     fixtures_root=config.fixtures_root)
+        # The visible suite is always run for a frozen candidate: it is the
+        # diagnostic evidence for an aborted or failed attempt.
+        try:
+            visible = _suite_verdict(frozen.path, corpus.VISIBLE,
+                                     build_dir=run_dir / "verdict" / "visible",
+                                     run_id=config.run_id, timeout_s=config.timeout_s,
+                                     cc=config.cc, fixtures_root=config.fixtures_root,
+                                     deadline=finalize_deadline)
+        except harness.BuildError as exc:
+            visible = _failed_verdict(corpus.VISIBLE, compare.STATUS_BUILD_ERROR,
+                                      "candidate failed to compile: " + (exc.stderr or "")[-400:],
+                                      config.fixtures_root)
+        except harness.HarnessError as exc:
+            visible = _failed_verdict(corpus.VISIBLE, compare.STATUS_HARNESS_ERROR, str(exc),
+                                      config.fixtures_root)
+            finalization_error = f"{type(exc).__name__}: {exc}"
+        # Only a completed, non-aborted attempt whose visible suite passes may
+        # spend the held-out corpus.
+        if abort_reason is None and visible is not None and visible["status"] == compare.STATUS_PASS:
+            certification = CERTIFICATION_RAN
+            try:
+                held_out = certify_candidate(frozen.path, run_dir=run_dir, run_id=config.run_id,
+                                             token=token, timeout_s=config.timeout_s, cc=config.cc,
+                                             fixtures_root=config.fixtures_root,
+                                             deadline=finalize_deadline)
+            except harness.BuildError as exc:
+                held_out = _failed_verdict(corpus.HELD_OUT, compare.STATUS_BUILD_ERROR,
+                                           "candidate failed to compile: " + (exc.stderr or "")[-400:],
+                                           config.fixtures_root)
+                certification = "failed: build"
+            except (harness.HarnessError, ToolError) as exc:
+                held_out = _failed_verdict(corpus.HELD_OUT, compare.STATUS_HARNESS_ERROR, str(exc),
+                                           config.fixtures_root)
+                certification = f"failed: {type(exc).__name__}"
+                finalization_error = f"{type(exc).__name__}: {exc}"
+        else:
+            reason = ("agent aborted: " + abort_reason) if abort_reason else "visible suite did not pass"
+            certification = f"skipped: {reason}"
 
-    if frozen is None:
+    candidate_verified = bool(
+        visible is not None and visible["status"] == compare.STATUS_PASS
+        and held_out is not None and held_out["status"] == compare.STATUS_PASS
+    )
+
+    # Abort-first: a candidate may independently verify, but a run only
+    # *completes* when the agent completed, did not abort and passed both suites.
+    if frozen is None or abort_reason is not None or controller_error is not None:
         status = STATUS_ABORTED
-    elif (visible is not None and visible["status"] == compare.STATUS_PASS
-          and held_out is not None and held_out["status"] == compare.STATUS_PASS):
+    elif candidate_verified:
         status = STATUS_CERTIFIED
     elif visible is None or visible["status"] != compare.STATUS_PASS:
         status = STATUS_VISIBLE_FAILED
     else:
         status = STATUS_HELD_OUT_FAILED
 
-    visible_manifest = corpus.manifest(corpus.load_corpus(
-        corpus.VISIBLE, root=Path(config.fixtures_root) if config.fixtures_root else corpus.FIXTURES_DIR),
-        set_name=corpus.VISIBLE)
-    held_manifest = corpus.manifest(corpus.load_corpus(
-        corpus.HELD_OUT, root=Path(config.fixtures_root) if config.fixtures_root else corpus.FIXTURES_DIR),
-        set_name=corpus.HELD_OUT)
+    visible_manifest = _manifest(corpus.VISIBLE, config.fixtures_root)
+    held_manifest = _manifest(corpus.HELD_OUT, config.fixtures_root)
+    toolchain = _toolchain(config.cc, harness.COMPILE_FLAGS)
+    try:
+        granted = ledger.granted()
+        limit = ledger.limit()
+    except Exception as exc:  # pragma: no cover - defensive
+        granted = limit = None
+        finalization_error = finalization_error or f"{type(exc).__name__}: {exc}"
 
-    toolchain = _toolchain(config.cc, harness.COMPILE_FLAGS,
-                           harness.compiler_version(config.cc))
     payload: dict[str, Any] = {
         "phase": PHASE,
         "run_id": config.run_id,
@@ -227,19 +325,37 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
             "adapter": adapter.name,
             "model": config.model,
             "tool_calls": tools.calls,
-            "budget": {"granted": ledger.granted(), "limit": ledger.limit()},
+            "budget": {"granted": granted, "limit": limit},
         },
         "execution": {
             "attempts": attempts,
             "wall_seconds": round(time.monotonic() - started, 6),
             "abort_reason": abort_reason,
+            "controller_error": controller_error,
+            "finalization": {
+                "budget_seconds": config.finalization_seconds,
+                "duration_s": round(time.monotonic() - finalize_started, 6),
+                "certification": certification,
+                "error": finalization_error,
+            },
         },
-        "verdict": {"visible": visible, "held_out": held_out, "status": status},
+        "verdict": {
+            "visible": visible,
+            "held_out": held_out,
+            "status": status,
+            "candidate_verified": candidate_verified,
+            "certification": certification,
+        },
     }
-    receipt = receipts.seal(payload)
-    receipt_path = receipts.write(run_dir / "receipt.json", receipt)
-    ledger.close()
+    try:
+        receipt = receipts.seal(payload)
+        receipt_path = receipts.write(run_dir / "receipt.json", receipt)
+    except OSError as exc:
+        raise receipts.ReceiptError(f"failed to store the terminal receipt: {exc}") from exc
+    finally:
+        ledger.close()
 
     return RunResult(run_id=config.run_id, status=status, abort_reason=abort_reason,
                      visible=visible, held_out=held_out, attempts=attempts,
-                     receipt=receipt, receipt_path=receipt_path, run_dir=run_dir)
+                     receipt=receipt, receipt_path=receipt_path, run_dir=run_dir,
+                     certification=certification, candidate_verified=candidate_verified)

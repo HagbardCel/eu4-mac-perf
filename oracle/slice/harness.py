@@ -3,12 +3,25 @@
 The harness - never the candidate - constructs the actual observation. For each
 build it assembles a private directory containing the trusted driver and header
 plus the candidate source, so a candidate cannot redefine the ABI or the
-observation protocol. Each fixture runs in its own process group with a bounded
-wall clock; on timeout the whole group is terminated and reaped.
+observation protocol.
+
+Three guarantees are enforced here:
+
+* **Whole-group termination.** Every child starts in its own session, so the
+  child's pid is also its process-group id. On timeout or abort the *group* is
+  signalled and polled to extinction, escalating to ``SIGKILL``; the leader's
+  exit is never taken as evidence that its descendants are gone.
+* **Bounded wall clock.** Compilation and every fixture run are bounded by the
+  smaller of their operation-specific limit and the remaining controller
+  deadline, and a run whose deadline has already passed does not start.
+* **Bounded output.** Child stdout/stderr is redirected to files under an
+  OS-enforced size limit, so a process cannot consume unbounded memory (or fill
+  the disk). Retained text is capped separately; output over the cap is reported
+  as *incomplete*, never as equality.
 
 The line protocol emitted by ``driver.c`` is parsed here into an observation
-envelope. Missing or malformed output is reported as an *incomplete* run, never
-as equality.
+envelope. Missing, malformed or truncated output is reported as an *incomplete*
+run, never as equality.
 """
 from __future__ import annotations
 
@@ -20,6 +33,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+try:  # POSIX-only; the slice already relies on process groups and signals.
+    import resource
+except ImportError:  # pragma: no cover - non-POSIX platform
+    resource = None  # type: ignore[assignment]
 
 from oracle.slice import compare
 from oracle.slice.corpus import Fixture
@@ -34,7 +52,17 @@ COMPILE_FLAGS: tuple[str, ...] = ("-std=c11", "-O0", "-fwrapv", "-fno-strict-ali
 
 STATE_BYTES = 12
 DEFAULT_TIMEOUT_S = 10.0
+COMPILE_TIMEOUT_S = 120.0
 KILL_GRACE_S = 0.5
+
+#: Hard cap on bytes any single child may write (OS-enforced via RLIMIT_FSIZE).
+#: A writer that exceeds it is signalled, so output *production* is bounded - not
+#: merely output retention. It must stay comfortably above the linked binary.
+MAX_OUTPUT_BYTES = 8 * 1024 * 1024
+#: Bytes of each stream retained for parsing and diagnostics.
+MAX_CAPTURE_BYTES = 256 * 1024
+#: Polling interval while waiting for a process group to disappear.
+PROBE_INTERVAL_S = 0.01
 
 
 class HarnessError(RuntimeError):
@@ -47,6 +75,10 @@ class BuildError(HarnessError):
     def __init__(self, message: str, stderr: str):
         super().__init__(message)
         self.stderr = stderr
+
+
+class DeadlineExpired(HarnessError):
+    """A blocking operation was refused because the deadline had passed."""
 
 
 @dataclass(frozen=True)
@@ -67,64 +99,89 @@ class RawRun:
     duration_s: float
 
 
-def compiler_version(cc: str = "cc") -> str:
+@dataclass(frozen=True)
+class Capture:
+    returncode: int
+    stdout: str
+    stderr: str
+    timed_out: bool
+    truncated: bool
+    duration_s: float
+
+
+# --- deadlines ----------------------------------------------------------------
+
+
+def remaining(deadline: float | None) -> float:
+    """Seconds left until ``deadline``, or ``inf`` when unbounded."""
+    if deadline is None:
+        return float("inf")
+    return deadline - time.monotonic()
+
+
+def _effective_timeout(limit: float, deadline: float | None) -> float:
+    """The smaller of an operation-specific limit and the remaining deadline."""
+    return min(limit, remaining(deadline))
+
+
+# --- process-group termination ------------------------------------------------
+
+
+def _signal_group(pgid: int, signum: int) -> None:
     try:
-        completed = subprocess.run([cc, "--version"], capture_output=True, text=True, timeout=20)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HarnessError(f"cannot run compiler {cc!r}: {exc}") from exc
-    first = (completed.stdout or completed.stderr).strip().splitlines()
-    return first[0].strip() if first else "unknown"
-
-
-def build(candidate: Path, build_dir: Path, *, cc: str = "cc") -> Build:
-    """Compile the trusted driver together with ``candidate`` in ``build_dir``."""
-    candidate = Path(candidate)
-    if not candidate.is_file():
-        raise BuildError(f"candidate source is not a regular file: {candidate}", "")
-    if candidate.is_symlink():
-        raise BuildError(f"candidate source must not be a symlink: {candidate}", "")
-
-    shutil.rmtree(build_dir, ignore_errors=True)
-    build_dir.mkdir(parents=True, exist_ok=True)
-    # Trusted assets are copied last, so a candidate-supplied driver.c/synth.h
-    # cannot survive into the build directory.
-    shutil.copyfile(candidate, build_dir / "candidate.c")
-    shutil.copyfile(DRIVER_SOURCE, build_dir / "driver.c")
-    shutil.copyfile(HEADER_SOURCE, build_dir / "synth.h")
-
-    exe = build_dir / "candidate.bin"
-    argv = [cc, *COMPILE_FLAGS, "-I", str(build_dir), str(build_dir / "driver.c"),
-            str(build_dir / "candidate.c"), "-o", str(exe)]
-    try:
-        completed = subprocess.run(argv, capture_output=True, text=True, timeout=120)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HarnessError(f"compiler invocation failed: {exc}") from exc
-    if completed.returncode != 0 or not exe.exists():
-        raise BuildError("candidate failed to compile", completed.stderr)
-    return Build(exe=exe, build_dir=build_dir, cc=cc, flags=COMPILE_FLAGS,
-                 compiler_version=compiler_version(cc))
-
-
-def terminate_process_group(proc: subprocess.Popen) -> None:
-    """Terminate a process group, then reap it, escalating to SIGKILL."""
-    if proc.poll() is not None:
-        proc.wait()
-        return
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        os.killpg(pgid, signum)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+def _group_alive(pgid: int) -> bool:
+    """Whether any member of the process group still exists.
+
+    ``killpg(pgid, 0)`` reports group existence; it cannot prove that only
+    *runnable* members remain (a zombie keeps a group visible). Escalation is
+    therefore bounded in time rather than driven by this probe alone.
+    """
     try:
-        proc.wait(timeout=KILL_GRACE_S)
-        return
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:  # pragma: no cover - defensive
+        return True
+    return True
+
+
+def _await_group_exit(pgid: int, grace: float) -> None:
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if not _group_alive(pgid):
+            return
+        time.sleep(PROBE_INTERVAL_S)
+
+
+def terminate_process_group(proc: subprocess.Popen, *, grace: float = KILL_GRACE_S,
+                            pgid: int | None = None) -> None:
+    """Terminate a whole process group, then reap the leader.
+
+    The group id is the leader's pid, because children are started with
+    ``start_new_session=True``. It is passed in (or read from the live pid) but
+    never recovered with ``getpgid`` *after* the leader may have exited.
+    """
+    group = pgid if pgid is not None else proc.pid
+    _signal_group(group, signal.SIGTERM)
+    # Reap the leader promptly: an unreaped zombie still counts as a member of
+    # its process group, so it would otherwise masquerade as a live group.
+    try:
+        proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         pass
+    if not _group_alive(group):
+        return
+    _signal_group(group, signal.SIGKILL)
+    _await_group_exit(group, grace)
+    # The controller owns its direct children and can reap them; orphaned
+    # grandchildren are terminated but not waitable by us.
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
-    try:
-        proc.wait(timeout=KILL_GRACE_S)
+        proc.wait(timeout=grace)
     except subprocess.TimeoutExpired:  # pragma: no cover - defensive
         pass
 
@@ -142,52 +199,166 @@ def close_pipes(proc: subprocess.Popen) -> None:
 _terminate_group = terminate_process_group
 
 
-def run_fixture(build: Build, fixture: Fixture, *, timeout_s: float = DEFAULT_TIMEOUT_S,
-                cwd: Path | None = None) -> RawRun:
-    """Run one fixture in its own process group with a bounded wall clock."""
-    argv = [str(build.exe), *fixture.driver_argv()]
-    started = time.monotonic()
-    proc = subprocess.Popen(
-        argv,
-        cwd=str(cwd or build.build_dir),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
+# --- bounded subprocess execution ---------------------------------------------
+
+
+def _limit_output() -> None:  # pragma: no cover - runs in the forked child
+    if resource is not None:
+        resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_OUTPUT_BYTES, MAX_OUTPUT_BYTES))
+
+
+def _read_bounded(path: Path, cap: int = MAX_CAPTURE_BYTES) -> tuple[str, bool]:
     try:
-        stdout, stderr = proc.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        _terminate_group(proc)
+        size = path.stat().st_size
+    except OSError:  # pragma: no cover - defensive
+        return "", False
+    try:
+        with Path(path).open("rb") as handle:
+            data = handle.read(cap)
+    except OSError:  # pragma: no cover - defensive
+        return "", False
+    return data.decode("utf-8", errors="replace"), size > cap
+
+
+def run_bounded(argv: list[str], *, cwd: Path | None, env: dict[str, str] | None,
+                timeout: float, capture_dir: Path, tag: str) -> Capture:
+    """Run a command in its own process group with bounded time and output."""
+    if timeout <= 0:
+        return Capture(returncode=-1, stdout="", timed_out=True, truncated=False,
+                       stderr="deadline expired before the process started", duration_s=0.0)
+    capture_dir = Path(capture_dir)
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    safe_tag = "".join(c if c.isalnum() or c in "-_." else "_" for c in tag)
+    out_path = capture_dir / f"{safe_tag}.out"
+    err_path = capture_dir / f"{safe_tag}.err"
+    started = time.monotonic()
+    timed_out = False
+    with out_path.open("wb") as out_file, err_path.open("wb") as err_file:
+        proc = subprocess.Popen(
+            argv,
+            cwd=str(cwd) if cwd else None,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=out_file,
+            stderr=err_file,
+            start_new_session=True,
+            preexec_fn=_limit_output,
+        )
         try:
-            stdout, stderr = proc.communicate(timeout=KILL_GRACE_S)
-        except subprocess.TimeoutExpired:  # pragma: no cover - defensive
-            stdout, stderr = "", ""
-        return RawRun("timeout", proc.returncode if proc.returncode is not None else -1,
-                      stdout or "", stderr or "", time.monotonic() - started)
-    duration = time.monotonic() - started
-    code = proc.returncode if proc.returncode is not None else -1
-    if code != 0:
-        return RawRun("crash", code, stdout or "", stderr or "", duration)
-    return RawRun("normal", code, stdout or "", stderr or "", duration)
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            terminate_process_group(proc, pgid=proc.pid)
+    stdout, out_truncated = _read_bounded(out_path)
+    stderr, err_truncated = _read_bounded(err_path)
+    return Capture(
+        returncode=proc.returncode if proc.returncode is not None else -1,
+        stdout=stdout,
+        stderr=stderr,
+        timed_out=timed_out,
+        truncated=out_truncated or err_truncated,
+        duration_s=time.monotonic() - started,
+    )
+
+
+def compiler_version(cc: str = "cc") -> str:
+    try:
+        completed = subprocess.run([cc, "--version"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HarnessError(f"cannot run compiler {cc!r}: {exc}") from exc
+    first = (completed.stdout or completed.stderr).strip().splitlines()
+    return first[0].strip() if first else "unknown"
+
+
+def build(candidate: Path, build_dir: Path, *, cc: str = "cc", deadline: float | None = None,
+          timeout_s: float = COMPILE_TIMEOUT_S) -> Build:
+    """Compile the trusted driver together with ``candidate`` in ``build_dir``."""
+    candidate = Path(candidate)
+    if not candidate.is_file():
+        raise BuildError(f"candidate source is not a regular file: {candidate}", "")
+    if candidate.is_symlink():
+        raise BuildError(f"candidate source must not be a symlink: {candidate}", "")
+
+    budget = _effective_timeout(timeout_s, deadline)
+    if budget <= 0:
+        raise DeadlineExpired("run deadline expired before compilation")
+
+    shutil.rmtree(build_dir, ignore_errors=True)
+    build_dir.mkdir(parents=True, exist_ok=True)
+    # Trusted assets are copied last, so a candidate-supplied driver.c/synth.h
+    # cannot survive into the build directory.
+    shutil.copyfile(candidate, build_dir / "candidate.c")
+    shutil.copyfile(DRIVER_SOURCE, build_dir / "driver.c")
+    shutil.copyfile(HEADER_SOURCE, build_dir / "synth.h")
+
+    exe = build_dir / "candidate.bin"
+    argv = [cc, *COMPILE_FLAGS, "-I", str(build_dir), str(build_dir / "driver.c"),
+            str(build_dir / "candidate.c"), "-o", str(exe)]
+    try:
+        capture = run_bounded(argv, cwd=build_dir, env=None, timeout=budget,
+                              capture_dir=build_dir, tag="compile")
+    except OSError as exc:
+        raise HarnessError(f"compiler invocation failed: {exc}") from exc
+    stderr = capture.stdout + capture.stderr
+    if capture.timed_out:
+        raise HarnessError(f"compiler exceeded its {budget:.3f}s budget")
+    if capture.truncated:
+        raise HarnessError("compiler output exceeded the capture cap")
+    if capture.returncode != 0 or not exe.exists():
+        raise BuildError("candidate failed to compile", stderr)
+    return Build(exe=exe, build_dir=build_dir, cc=cc, flags=COMPILE_FLAGS,
+                 compiler_version=compiler_version(cc))
+
+
+def run_fixture(build: Build, fixture: Fixture, *, timeout_s: float = DEFAULT_TIMEOUT_S,
+                cwd: Path | None = None, deadline: float | None = None) -> RawRun:
+    """Run one fixture in its own process group with a bounded wall clock."""
+    budget = _effective_timeout(timeout_s, deadline)
+    if budget <= 0:
+        return RawRun("timeout", -1, "", "run deadline expired before the fixture started", 0.0)
+    try:
+        capture = run_bounded(
+            [str(build.exe), *fixture.driver_argv()],
+            cwd=cwd or build.build_dir,
+            env=None,
+            timeout=budget,
+            capture_dir=build.build_dir,
+            tag=f"fixture-{fixture.fixture_id}",
+        )
+    except OSError as exc:  # pragma: no cover - defensive
+        return RawRun("crash", -1, "", str(exc), 0.0)
+    if capture.timed_out:
+        return RawRun("timeout", capture.returncode, capture.stdout, capture.stderr, capture.duration_s)
+    if capture.truncated:
+        note = "candidate output exceeded the capture cap"
+        return RawRun("incomplete", capture.returncode, capture.stdout, note, capture.duration_s)
+    if capture.returncode != 0:
+        return RawRun("crash", capture.returncode, capture.stdout, capture.stderr, capture.duration_s)
+    return RawRun("normal", capture.returncode, capture.stdout, capture.stderr, capture.duration_s)
 
 
 def parse_observation(stdout: str) -> tuple[dict[str, Any] | None, list[str]]:
     """Parse the driver's line protocol into an observation envelope.
 
-    The parser is strict: each of RET, MEM and END must appear exactly once. A
-    candidate that prints its own protocol lines therefore yields duplicates and
-    is reported as incomplete, rather than being able to spoof the observation.
+    The parser is strict: RET, MEM and END must each appear exactly once, the END
+    count must be a non-negative integer that equals the number of EFF records,
+    and no output may follow the terminator. A candidate that prints its own
+    protocol lines therefore yields duplicates, and is reported as incomplete,
+    rather than being able to spoof the observation or the completeness marker.
     """
     problems: list[str] = []
     return_hex: str | None = None
     post_memory: str | None = None
     effects: list[dict[str, int]] = []
     terminated = False
+    declared_count: int | None = None
 
     for line in stdout.splitlines():
         parts = line.split()
         if not parts:
+            continue
+        if terminated:
+            problems.append(f"output after the END terminator: {line!r}")
             continue
         tag = parts[0]
         if tag == "RET" and len(parts) == 2:
@@ -203,15 +374,29 @@ def parse_observation(stdout: str) -> tuple[dict[str, Any] | None, list[str]]:
                 effects.append({"field": int(parts[1]), "value": int(parts[2])})
             except ValueError:
                 problems.append(f"malformed effect line: {line!r}")
-        elif tag == "END" and len(parts) == 2:
-            if terminated:
-                problems.append("duplicate END line")
+        elif tag == "END":
             terminated = True
+            if len(parts) != 2:
+                problems.append(f"malformed END line: {line!r}")
+                continue
+            try:
+                value = int(parts[1])
+            except ValueError:
+                problems.append(f"malformed END count: {parts[1]!r}")
+                continue
+            if value < 0:
+                problems.append(f"negative END count: {value}")
+                continue
+            declared_count = value
         else:
             problems.append(f"unexpected driver line: {line!r}")
 
     if not terminated:
         problems.append("driver did not emit the END terminator")
+    elif declared_count is not None and declared_count != len(effects):
+        problems.append(
+            f"END count {declared_count} does not match {len(effects)} effect records"
+        )
 
     if return_hex is None or post_memory is None:
         return None, problems
@@ -230,9 +415,10 @@ def parse_observation(stdout: str) -> tuple[dict[str, Any] | None, list[str]]:
 
 
 def observe(build: Build, fixture: Fixture, *, timeout_s: float = DEFAULT_TIMEOUT_S,
-            cwd: Path | None = None) -> tuple[RawRun, dict[str, Any] | None, list[str]]:
+            cwd: Path | None = None, deadline: float | None = None
+            ) -> tuple[RawRun, dict[str, Any] | None, list[str]]:
     """Run a fixture and parse its observation, refining the exit classification."""
-    raw = run_fixture(build, fixture, timeout_s=timeout_s, cwd=cwd)
+    raw = run_fixture(build, fixture, timeout_s=timeout_s, cwd=cwd, deadline=deadline)
     if raw.exit_kind != "normal":
         return raw, None, []
     observation, problems = parse_observation(raw.stdout)
@@ -243,9 +429,9 @@ def observe(build: Build, fixture: Fixture, *, timeout_s: float = DEFAULT_TIMEOU
 
 
 def evaluate(build: Build, fixture: Fixture, *, run_id: str,
-             timeout_s: float = DEFAULT_TIMEOUT_S) -> dict[str, Any]:
+             timeout_s: float = DEFAULT_TIMEOUT_S, deadline: float | None = None) -> dict[str, Any]:
     """Run one fixture and produce a completeness-checked diagnostic."""
-    raw, observation, problems = observe(build, fixture, timeout_s=timeout_s)
+    raw, observation, problems = observe(build, fixture, timeout_s=timeout_s, deadline=deadline)
     note = "; ".join(problems[:3]) if problems else None
     return compare.compare(
         fixture.expected,

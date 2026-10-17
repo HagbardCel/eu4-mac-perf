@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -13,6 +14,18 @@ SLICE_DIR = Path(__file__).resolve().parents[1] / "oracle" / "slice"
 _TMP = None
 _REF = None
 _TARGET = None
+
+_HANGING = (
+    '#include "synth.h"\n#include <unistd.h>\n'
+    "int synth_apply(struct synth_state *s, int mode, int arg) "
+    "{ (void)s; (void)mode; (void)arg; for (;;) sleep(1); return 0; }\n"
+)
+
+_NOISY = (
+    '#include "synth.h"\n#include <stdio.h>\n'
+    "int synth_apply(struct synth_state *s, int mode, int arg) "
+    "{ (void)s; (void)mode; (void)arg; for (long i = 0; i < (1L << 26); i++) putchar('x'); return 0; }\n"
+)
 
 
 def setUpModule() -> None:
@@ -156,6 +169,73 @@ class HarnessTests(unittest.TestCase):
             "RET 00000000\nMEM 00\nEND 0\n"
         )
         self.assertTrue(any("hex chars" in p for p in problems))
+
+    def test_parse_rejects_malformed_end_count(self):
+        _, problems = harness.parse_observation(
+            "RET 00000000\nMEM 000000000000000000000000\nEND nonsense\n")
+        self.assertTrue(any("END count" in p for p in problems))
+
+    def test_parse_rejects_end_count_mismatch(self):
+        _, problems = harness.parse_observation(
+            "RET 00000000\nMEM 000000000000000000000000\nEFF 1 1\nEND 5\n")
+        self.assertTrue(any("does not match" in p for p in problems))
+
+    def test_parse_rejects_negative_end_count(self):
+        _, problems = harness.parse_observation(
+            "RET 00000000\nMEM 000000000000000000000000\nEND -1\n")
+        self.assertTrue(any("negative END count" in p for p in problems))
+
+    def test_parse_rejects_records_after_the_terminator(self):
+        _, problems = harness.parse_observation(
+            "RET 00000000\nMEM 000000000000000000000000\nEND 0\nEFF 1 1\n")
+        self.assertTrue(any("after the END terminator" in p for p in problems))
+
+    def test_malformed_terminator_is_never_complete_evidence(self):
+        """vis-006 expects no effects; the old parser accepted ``END nonsense``."""
+        fixture = next(f for f in corpus.load_corpus(corpus.VISIBLE) if f.fixture_id == "vis-006")
+        transcript = "RET ffffffff\nMEM 000000000000000000000000\nEND nonsense\n"
+        observation, problems = harness.parse_observation(transcript)
+        self.assertTrue(problems, "a malformed terminator must be reported")
+        # The semantic fields match vis-006 exactly, so only the completeness
+        # marker stands between this transcript and a false PASS.
+        diagnostic = compare.compare(
+            fixture.expected, observation,
+            function_id=fixture.function_id, fixture_id=fixture.fixture_id,
+            run_id="t", exit_kind="incomplete", note="; ".join(problems),
+        )
+        self.assertEqual(diagnostic["status"], compare.STATUS_INCOMPLETE)
+
+    def test_build_refuses_an_expired_deadline(self):
+        assert _TMP is not None
+        with self.assertRaises(harness.DeadlineExpired):
+            harness.build(SLICE_DIR / "reference.c", Path(_TMP.name) / "build_expired",
+                          deadline=time.monotonic() - 1.0)
+
+    def test_fixture_budget_is_capped_by_the_remaining_deadline(self):
+        build = _build_source(_HANGING, "hang_deadline")
+        fixture = corpus.load_corpus(corpus.VISIBLE)[0]
+        started = time.monotonic()
+        raw = harness.run_fixture(build, fixture, timeout_s=30.0,
+                                  deadline=time.monotonic() + 0.5)
+        self.assertEqual(raw.exit_kind, "timeout")
+        self.assertLess(time.monotonic() - started, 5.0,
+                        "the remaining deadline, not the per-fixture limit, must bound the run")
+
+    def test_fixture_does_not_start_after_the_deadline(self):
+        build = _build_source((SLICE_DIR / "reference.c").read_text(encoding="utf-8"), "nodl")
+        fixture = corpus.load_corpus(corpus.VISIBLE)[0]
+        raw = harness.run_fixture(build, fixture, deadline=time.monotonic() - 1.0)
+        self.assertEqual(raw.exit_kind, "timeout")
+        self.assertIn("deadline", raw.stderr)
+
+    def test_noisy_candidate_output_is_bounded(self):
+        """Retention *and* production are capped: over-cap output is never normal."""
+        build = _build_source(_NOISY, "noisy")
+        fixture = corpus.load_corpus(corpus.VISIBLE)[0]
+        raw = harness.run_fixture(build, fixture, timeout_s=20.0)
+        self.assertLessEqual(len(raw.stdout), harness.MAX_CAPTURE_BYTES)
+        self.assertNotEqual(raw.exit_kind, "normal")
+        self.assertIn(raw.exit_kind, ("incomplete", "crash", "timeout"))
 
     def test_crashing_candidate_is_classified_as_crash(self):
         build = _build_source(

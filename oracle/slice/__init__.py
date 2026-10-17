@@ -7,7 +7,9 @@ Trust domain layout (see ``docs/oracle/P3_SLICE.md``):
 * **Agent workspace** - a candidate-only directory materialized by the
   controller. It never contains held-out expectations or Oracle source.
 * **Controller** - ``oracle.slice.controller``. Sole owner of budget, attempt
-  limits, candidate freezing and the terminal held-out verdict.
+  limits, the wall clock, candidate freezing and the terminal held-out verdict.
+  It persists the run's absolute monotonic deadlines in trusted run state
+  (``oracle.slice.runstate``) so the MCP server can enforce them independently.
 
 Isolation between the agent workspace and the held-out corpus is an
 application-level boundary, **not** an OS sandbox; that protection is deferred

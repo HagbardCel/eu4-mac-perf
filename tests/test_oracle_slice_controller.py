@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import stat
 import subprocess
 import sys
@@ -37,6 +38,28 @@ def _spawner_script() -> str:
         "subprocess.Popen([sys.executable, '-c',\n"
         "    'import os,sys,time; open(sys.argv[1],\"w\").write(str(os.getpid())); time.sleep(300)',\n"
         "    sys.argv[2]])\n"
+        "time.sleep(300)\n"
+    )
+
+
+def _sigterm_ignoring_script() -> str:
+    """A leader that forks a descendant which *ignores* SIGTERM, then sleeps.
+
+    The leader dies on SIGTERM; the descendant only dies on SIGKILL. Terminating
+    just the leader therefore leaves it running, which is exactly the defect the
+    group-wide escalation must fix.
+    """
+    child = (
+        "import os, signal, sys, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "open(sys.argv[1], 'w').write(str(os.getpid())); "
+        "time.sleep(300)"
+    )
+    return (
+        "import os, subprocess, sys, time\n"
+        "open(sys.argv[1], 'w').write(str(os.getpid()))\n"
+        f"child = {child!r}\n"
+        "subprocess.Popen([sys.executable, '-c', child, sys.argv[2]])\n"
         "time.sleep(300)\n"
     )
 
@@ -191,6 +214,45 @@ class ProcessSupervisorTests(unittest.TestCase):
             self.assertTrue(killed)
             self.assertFalse(_pid_alive(int(parent_pid_file.read_text())))
             self.assertFalse(_pid_alive(int(child_pid_file.read_text())))
+
+    def test_group_termination_kills_a_sigterm_ignoring_descendant(self):
+        """The leader's exit is not evidence that its descendants are gone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            parent_pid_file = root / "parent.pid"
+            child_pid_file = root / "child.pid"
+            supervisor = ProcessSupervisor(deadline=time.monotonic() + 60.0, log_dir=root / "logs")
+            supervisor.spawn(
+                [sys.executable, "-c", _sigterm_ignoring_script(),
+                 str(parent_pid_file), str(child_pid_file)]
+            )
+            deadline = time.monotonic() + 5.0
+            while not child_pid_file.is_file() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(child_pid_file.is_file(), "descendant never started")
+            child_pid = int(child_pid_file.read_text())
+            # Control: prove the descendant really ignores SIGTERM.
+            os.kill(child_pid, signal.SIGTERM)
+            time.sleep(0.3)
+            self.assertTrue(_pid_alive(child_pid), "control: descendant must ignore SIGTERM")
+
+            supervisor.terminate_all()
+            self.assertFalse(_pid_alive(int(parent_pid_file.read_text())))
+            self.assertFalse(_pid_alive(child_pid),
+                             "a SIGTERM-ignoring descendant survived group termination")
+
+    def test_run_group_does_not_spawn_after_the_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pid_file = root / "never.pid"
+            supervisor = ProcessSupervisor(deadline=time.monotonic() - 1.0, log_dir=root / "logs")
+            run = supervisor.run_group(
+                [sys.executable, "-c", "import sys; open(sys.argv[1], 'w').write('x')", str(pid_file)]
+            )
+            self.assertTrue(run.timed_out)
+            self.assertEqual(supervisor._procs, [])
+            self.assertIn("deadline", run.stderr)
+            self.assertFalse(pid_file.exists(), "the process must not have been started")
 
 
 if __name__ == "__main__":

@@ -58,6 +58,7 @@ class ProcessSupervisor:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._procs: list[subprocess.Popen] = []
+        self._group_count = 0
 
     def expired(self) -> bool:
         return time.monotonic() >= self.deadline
@@ -81,26 +82,29 @@ class ProcessSupervisor:
 
     def run_group(self, argv: list[str], *, cwd: Path | None = None,
                   env: dict[str, str] | None = None) -> GroupRun:
-        """Run a command to completion or until the run deadline, then reap it."""
-        proc = self.spawn(argv, cwd=cwd, env=env)
+        """Run a command to completion or until the run deadline, then reap it.
+
+        If the deadline has already expired the command is *not* started: there
+        is no borrowed time to spend. Output is captured under the harness's
+        OS-enforced size limit, so a noisy agent cannot exhaust memory.
+        """
         budget = self.remaining()
-        timed_out = False
+        if budget <= 0:
+            return GroupRun(returncode=-1, stdout="",
+                            stderr="run deadline expired before the process started",
+                            timed_out=True)
+        self._group_count += 1
         try:
-            stdout, stderr = proc.communicate(timeout=budget if budget > 0 else None)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            harness.terminate_process_group(proc)
-            try:
-                stdout, stderr = proc.communicate(timeout=KILL_GRACE_S)
-            except subprocess.TimeoutExpired:  # pragma: no cover - defensive
-                stdout, stderr = "", ""
-        harness.close_pipes(proc)
-        return GroupRun(
-            returncode=proc.returncode if proc.returncode is not None else -1,
-            stdout=stdout or "",
-            stderr=stderr or "",
-            timed_out=timed_out,
-        )
+            capture = harness.run_bounded(argv, cwd=cwd or self.log_dir, env=env, timeout=budget,
+                                          capture_dir=self.log_dir,
+                                          tag=f"group-{self._group_count:03d}")
+        except OSError as exc:  # pragma: no cover - defensive
+            return GroupRun(returncode=-1, stdout="", stderr=str(exc), timed_out=False)
+        stderr = capture.stderr
+        if capture.truncated:
+            stderr = (stderr + "\n[captured output exceeded the size cap]").strip()
+        return GroupRun(returncode=capture.returncode, stdout=capture.stdout,
+                        stderr=stderr, timed_out=capture.timed_out)
 
     def terminate_all(self) -> list[int]:
         """Terminate and reap every remaining child process group."""
