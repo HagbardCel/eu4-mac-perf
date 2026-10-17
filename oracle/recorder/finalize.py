@@ -30,7 +30,6 @@ LEDGER_SCHEMA_VERSION = "eu4-oracle-ledger/v1"
 #: The native recorder counters the identity is asserted against.
 REQUIRED_COUNTERS = ("intercepted", "unselected", "captured", "incomplete", "lost")
 
-
 class FinalizeError(ValueError):
     """A capture could not be finalized consistently."""
 
@@ -132,3 +131,57 @@ def classify(records: list[dict[str, Any]],
         "lost": clean["lost"],
         "groups": {digest: sorted(call_ids) for digest, call_ids in sorted(groups.items())},
     }
+
+
+# --- concurrent capture order ---------------------------------------------------
+
+def partial_order(events: list[dict[str, Any]],
+                  syncs: list[dict[str, Any]]) -> dict[int, set[int]]:
+    """The happens-before relation that per-thread sequences and sync edges induce.
+
+    ``events`` are ``{"thread_id", "sequence", "phase"}`` records. Within a thread,
+    consecutive sequences are ordered. Across threads, a declared barrier orders
+    every participating thread's ``phase_before`` events before every participating
+    thread's ``phase_after`` events. The result is a map from event index to the set
+    of its predecessors - a partial order, deliberately not a total one, because two
+    events in the same phase on different threads are genuinely unordered.
+    """
+    preds: dict[int, set[int]] = {index: set() for index in range(len(events))}
+    by_thread: dict[int, list[int]] = {}
+    for index, event in enumerate(events):
+        by_thread.setdefault(event["thread_id"], []).append(index)
+    for indices in by_thread.values():
+        ordered = sorted(indices, key=lambda index: events[index]["sequence"])
+        for earlier, later in zip(ordered, ordered[1:]):
+            preds[later].add(earlier)
+    for sync in syncs:
+        participants = set(sync["participants"])
+        before = [index for index, event in enumerate(events)
+                  if event["thread_id"] in participants
+                  and event["phase"] == sync["phase_before"]]
+        after = [index for index, event in enumerate(events)
+                 if event["thread_id"] in participants
+                 and event["phase"] == sync["phase_after"]]
+        for index in before:
+            for later in after:
+                preds[later].add(index)
+    return preds
+
+
+def is_acyclic(preds: dict[int, set[int]]) -> bool:
+    """Whether the relation admits a topological order, i.e. is a partial order."""
+    parents = {node: set(predecessors) for node, predecessors in preds.items()}
+    successors: dict[int, set[int]] = {node: set() for node in parents}
+    for node, node_parents in parents.items():
+        for parent in node_parents:
+            successors.setdefault(parent, set()).add(node)
+    ready = [node for node, node_parents in parents.items() if not node_parents]
+    seen = 0
+    while ready:
+        node = ready.pop()
+        seen += 1
+        for child in sorted(successors[node]):
+            parents[child].discard(node)
+            if not parents[child]:
+                ready.append(child)
+    return seen == len(parents)

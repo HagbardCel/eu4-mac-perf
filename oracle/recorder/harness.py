@@ -45,6 +45,7 @@ TARGETS: dict[str, dict[str, Any]] = {
         "headers": (NATIVE_DIR / "recorder.h", NATIVE_DIR / "policy.h",
                     SYNTHETIC_DIR / "synth.h"),
         "golden": NATIVE_DIR / "golden.txt",
+        "cflags": ("-pthread",),
     },
 }
 
@@ -68,7 +69,8 @@ def build(target: str, build_dir: Path, *, cc: str = "cc", timeout_s: float = 12
     for path in tuple(spec["sources"]) + tuple(spec["headers"]):
         shutil.copyfile(path, build_dir / Path(path).name)
     exe = build_dir / spec["exe"]
-    command = [cc, *COMPILE_FLAGS, *[Path(p).name for p in spec["sources"]], "-o", exe.name]
+    command = [cc, *COMPILE_FLAGS, *[Path(p).name for p in spec["sources"]],
+               *spec.get("cflags", ()), "-o", exe.name]
     try:
         proc = subprocess.run(command, cwd=str(build_dir), capture_output=True, timeout=timeout_s)
     except FileNotFoundError as exc:
@@ -152,14 +154,32 @@ def parse_transcript(text: str) -> dict[str, Any]:
     return parsed
 
 
+def _sync(parts: list[str]) -> dict[str, Any]:
+    fields = _fields(parts)
+    participants = [int(part) for part in fields["participants"].split(",") if part]
+    before, _, after = fields["phase"].partition("->")
+    return {"barrier": int(fields["barrier"]), "participants": participants,
+            "phase_before": int(before), "phase_after": int(after)}
+
+
+def _event(parts: list[str]) -> dict[str, int]:
+    fields = _fields(parts)
+    return {"thread_id": int(fields["thread"]), "sequence": int(fields["seq"]),
+            "phase": int(fields["phase"]), "hook_id": int(fields["hook"]),
+            "result": int(fields["result"]), "complete": int(fields["complete"])}
+
+
 def parse_recorder_transcript(text: str) -> dict[str, Any]:
     """Parse a native-recorder transcript into scenarios and their counters.
 
-    Keys: ``version``, ``policies`` (each with ``name``, ``version``, ``default``,
-    ``rules`` and ``canonical`` hex), ``scenarios`` (each with ``name``,
-    ``counters`` and ``accounting``), and ``end``.
+    Scenario counters stay as strings (callers coerce); captured events and declared
+    sync edges are typed, since they describe the observed order. Each scenario
+    carries its own ``events``, ``event_count`` and ``syncs``.
+
+    Keys: ``version``, ``policies``, ``scenarios``, ``syncs``, ``events``, ``end``.
     """
-    parsed: dict[str, Any] = {"version": None, "policies": [], "scenarios": [], "end": None}
+    parsed: dict[str, Any] = {"version": None, "policies": [], "scenarios": [],
+                              "syncs": [], "events": [], "end": None}
     current: dict[str, Any] | None = None
     for raw in text.splitlines():
         line = raw.strip()
@@ -175,7 +195,7 @@ def parse_recorder_transcript(text: str) -> dict[str, Any]:
             parsed["policies"].append(policy)
         elif tag == "SCENARIO":
             current = {"name": parts[1] if len(parts) > 1 else "", "counters": {},
-                       "accounting": None}
+                       "accounting": None, "events": [], "event_count": None, "syncs": []}
             parsed["scenarios"].append(current)
         elif tag == "COUNTERS":
             if current is None:
@@ -185,6 +205,22 @@ def parse_recorder_transcript(text: str) -> dict[str, Any]:
             if current is None:
                 raise HarnessError("ACCOUNTING before any SCENARIO")
             current["accounting"] = parts[1] if len(parts) > 1 else ""
+        elif tag == "SYNC":
+            if current is None:
+                raise HarnessError("SYNC before any SCENARIO")
+            sync = _sync(parts[1:])
+            current["syncs"].append(sync)
+            parsed["syncs"].append(sync)
+        elif tag == "EVENTS":
+            if current is None:
+                raise HarnessError("EVENTS before any SCENARIO")
+            current["event_count"] = int(_fields(parts[1:])["count"])
+        elif tag == "EV":
+            if current is None:
+                raise HarnessError("EV before any SCENARIO")
+            event = _event(parts[1:])
+            current["events"].append(event)
+            parsed["events"].append(event)
         elif tag == "END":
             parsed["end"] = _fields(parts[1:])
         else:

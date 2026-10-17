@@ -22,4 +22,88 @@ ACCOUNTING ok
 SCENARIO misuse
 COUNTERS intercepted=0 selected=0 unselected=0 captured=0 incomplete=0 lost=0 reentrant=0 rejected=1
 ACCOUNTING ok
-END effects=35
+SCENARIO concurrent-ample
+COUNTERS intercepted=32 selected=32 unselected=0 captured=32 incomplete=0 lost=0 reentrant=0 rejected=0
+ACCOUNTING ok
+SYNC barrier=1 participants=0,1,2,3 phase=0->1
+EVENTS count=32
+EV thread=0 seq=1 phase=0 hook=1 result=0 complete=1
+EV thread=0 seq=2 phase=0 hook=2 result=0 complete=1
+EV thread=0 seq=3 phase=0 hook=3 result=0 complete=1
+EV thread=0 seq=4 phase=0 hook=4 result=0 complete=1
+EV thread=0 seq=5 phase=1 hook=2 result=0 complete=1
+EV thread=0 seq=6 phase=1 hook=3 result=0 complete=1
+EV thread=0 seq=7 phase=1 hook=2 result=0 complete=1
+EV thread=0 seq=8 phase=1 hook=5 result=0 complete=1
+EV thread=1 seq=1 phase=0 hook=1 result=0 complete=1
+EV thread=1 seq=2 phase=0 hook=2 result=0 complete=1
+EV thread=1 seq=3 phase=0 hook=3 result=0 complete=1
+EV thread=1 seq=4 phase=0 hook=4 result=0 complete=1
+EV thread=1 seq=5 phase=1 hook=2 result=0 complete=1
+EV thread=1 seq=6 phase=1 hook=3 result=0 complete=1
+EV thread=1 seq=7 phase=1 hook=2 result=0 complete=1
+EV thread=1 seq=8 phase=1 hook=5 result=0 complete=1
+EV thread=2 seq=1 phase=0 hook=1 result=0 complete=1
+EV thread=2 seq=2 phase=0 hook=2 result=0 complete=1
+EV thread=2 seq=3 phase=0 hook=3 result=0 complete=1
+EV thread=2 seq=4 phase=0 hook=4 result=0 complete=1
+EV thread=2 seq=5 phase=1 hook=2 result=0 complete=1
+EV thread=2 seq=6 phase=1 hook=3 result=0 complete=1
+EV thread=2 seq=7 phase=1 hook=2 result=0 complete=1
+EV thread=2 seq=8 phase=1 hook=5 result=0 complete=1
+EV thread=3 seq=1 phase=0 hook=1 result=0 complete=1
+EV thread=3 seq=2 phase=0 hook=2 result=0 complete=1
+EV thread=3 seq=3 phase=0 hook=3 result=0 complete=1
+EV thread=3 seq=4 phase=0 hook=4 result=0 complete=1
+EV thread=3 seq=5 phase=1 hook=2 result=0 complete=1
+EV thread=3 seq=6 phase=1 hook=3 result=0 complete=1
+EV thread=3 seq=7 phase=1 hook=2 result=0 complete=1
+EV thread=3 seq=8 phase=1 hook=5 result=0 complete=1
+SCENARIO concurrent-bounded
+COUNTERS intercepted=32 selected=32 unselected=0 captured=12 incomplete=0 lost=20 reentrant=0 rejected=0
+ACCOUNTING ok
+SCENARIO concurrent-mixed
+COUNTERS intercepted=40 selected=40 unselected=0 captured=32 incomplete=8 lost=0 reentrant=0 rejected=0
+ACCOUNTING ok
+EVENTS count=40
+EV thread=0 seq=1 phase=0 hook=1 result=0 complete=1
+EV thread=0 seq=2 phase=0 hook=2 result=0 complete=1
+EV thread=0 seq=3 phase=0 hook=3 result=0 complete=1
+EV thread=0 seq=4 phase=0 hook=4 result=0 complete=1
+EV thread=0 seq=5 phase=0 hook=2 result=0 complete=1
+EV thread=0 seq=6 phase=1 hook=5 result=0 complete=1
+EV thread=0 seq=7 phase=1 hook=3 result=1 complete=0
+EV thread=0 seq=8 phase=1 hook=1 result=3 complete=0
+EV thread=0 seq=9 phase=1 hook=1 result=0 complete=1
+EV thread=0 seq=10 phase=1 hook=2 result=0 complete=1
+EV thread=1 seq=1 phase=0 hook=1 result=0 complete=1
+EV thread=1 seq=2 phase=0 hook=2 result=0 complete=1
+EV thread=1 seq=3 phase=0 hook=3 result=0 complete=1
+EV thread=1 seq=4 phase=0 hook=4 result=0 complete=1
+EV thread=1 seq=5 phase=0 hook=2 result=0 complete=1
+EV thread=1 seq=6 phase=1 hook=5 result=0 complete=1
+EV thread=1 seq=7 phase=1 hook=3 result=1 complete=0
+EV thread=1 seq=8 phase=1 hook=1 result=3 complete=0
+EV thread=1 seq=9 phase=1 hook=1 result=0 complete=1
+EV thread=1 seq=10 phase=1 hook=2 result=0 complete=1
+EV thread=2 seq=1 phase=0 hook=1 result=0 complete=1
+EV thread=2 seq=2 phase=0 hook=2 result=0 complete=1
+EV thread=2 seq=3 phase=0 hook=3 result=0 complete=1
+EV thread=2 seq=4 phase=0 hook=4 result=0 complete=1
+EV thread=2 seq=5 phase=0 hook=2 result=0 complete=1
+EV thread=2 seq=6 phase=1 hook=5 result=0 complete=1
+EV thread=2 seq=7 phase=1 hook=3 result=1 complete=0
+EV thread=2 seq=8 phase=1 hook=1 result=3 complete=0
+EV thread=2 seq=9 phase=1 hook=1 result=0 complete=1
+EV thread=2 seq=10 phase=1 hook=2 result=0 complete=1
+EV thread=3 seq=1 phase=0 hook=1 result=0 complete=1
+EV thread=3 seq=2 phase=0 hook=2 result=0 complete=1
+EV thread=3 seq=3 phase=0 hook=3 result=0 complete=1
+EV thread=3 seq=4 phase=0 hook=4 result=0 complete=1
+EV thread=3 seq=5 phase=0 hook=2 result=0 complete=1
+EV thread=3 seq=6 phase=1 hook=5 result=0 complete=1
+EV thread=3 seq=7 phase=1 hook=3 result=1 complete=0
+EV thread=3 seq=8 phase=1 hook=1 result=3 complete=0
+EV thread=3 seq=9 phase=1 hook=1 result=0 complete=1
+EV thread=3 seq=10 phase=1 hook=2 result=0 complete=1
+END effects=119

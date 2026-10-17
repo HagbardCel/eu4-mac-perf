@@ -3,12 +3,13 @@
 **Status:** in progress. **P4.1** (the record schema, canonicalization and the
 immutable evidence store), **P4.2** (the portable C11 synthetic target with a
 deterministic golden transcript), **P4.3** (the native recorder core's exact
-capture accounting), **P4.4** (the pluggable capture policy) and **P4.5** (offline
-finalization: resource identity, aliasing and semantic dedup) are implemented
-under `oracle/recorder/` with offline tests; concurrency and bounded capture under
-load follow (P4.7). **Nothing here launches EU IV, opens a game process, or
-attaches to a binary**: the recorder consumes already-captured native events, and
-P4 is proven entirely offline.
+capture accounting), **P4.4** (the pluggable capture policy), **P4.5** (offline
+finalization: resource identity, aliasing and semantic dedup) and **P4.7**
+(concurrency and bounded capture) are implemented under `oracle/recorder/` with
+offline tests - **P4r-B is complete**. The resource registry/closure (P4.6) and
+R0-M protocol compatibility (P4.8) follow in P4r-C. **Nothing here launches EU IV,
+opens a game process, or attaches to a binary**: the recorder consumes
+already-captured native events, and P4 is proven entirely offline.
 
 This document is authoritative for P4. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the trust boundary is a refinement of the
@@ -252,6 +253,32 @@ The native capture that *populates* these records - reading the state of the
 resource an observation addressed - lands in P4.6; P4.5 defines the classification
 the capture must satisfy.
 
+## Concurrency and bounded capture (P4.7)
+
+The core is safe under concurrent observation, with no lock on the hot path:
+
+* every counter is a C11 atomic, and the bounded buffer hands out slots with one
+  atomic fetch-add, so **loss is exact under load** rather than approximate;
+* observation depth, thread identity and sequence are **thread-local**, so one
+  thread's nesting and ordering never corrupt another's;
+* each captured event records the observing **thread** and that thread's own,
+  contiguous **sequence**, plus the declared capture **phase**.
+
+The harness never invents a total order over concurrent events. It declares its
+sync edges explicitly (here, one rendezvous between two phases of four threads:
+`SYNC barrier=1 participants=0,1,2,3 phase=0->1`), and `oracle/recorder/finalize.py`
+reconstructs the **partial** happens-before order those edges and the per-thread
+sequences induce: within a thread, consecutive sequences are ordered; across
+threads, the barrier orders every phase-0 event before every phase-1 event; two
+same-phase events on different threads stay genuinely unordered. The transcript
+stays deterministic because it prints accounting and per-thread
+`(thread, sequence, phase)` records, never the interleaving, and events are printed
+sorted by `(thread, sequence)`.
+
+The thread-safety claim is not asserted from one lucky run: the concurrency
+scenarios are deterministic across repeated runs and the build is clean under
+**ThreadSanitizer** (zero data races) as well as AddressSanitizer and UBSan.
+
 ## Fidelity modes (owned by the reconstruction contract)
 
 The three modes - **faithful**, **GL optimization**, **GPU/backend redesign** -
@@ -330,3 +357,17 @@ See `tests/test_oracle_recorder_native.py`.
   qualify for semantic comparison is rejected.
 
 See `tests/test_oracle_recorder_finalize.py`.
+
+**P4.7 - concurrency and bounded capture**:
+
+* four threads observing through one recorder account exactly, and a buffer smaller
+  than the capture loses exactly the surplus while still balancing;
+* every captured event carries a distinct `(thread, sequence)`, and every thread's
+  sequence is contiguous;
+* the reconstructed happens-before order is **partial** - the declared barrier
+  orders phase 0 before phase 1, yet two same-phase events on different threads are
+  unordered - and it is acyclic;
+* the transcript is deterministic across repeated runs and the build is clean under
+  ThreadSanitizer.
+
+See `tests/test_oracle_recorder_native.py`.

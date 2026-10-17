@@ -1,4 +1,4 @@
-/* Oracle P4 native recorder core: exact capture accounting.
+/* Oracle P4 native recorder core: exact, thread-safe capture accounting.
  *
  * Function-agnostic: it knows nothing about the subject, only about hooks. It
  * counts exactly what it intercepted, what its policy selected for deep capture,
@@ -6,9 +6,15 @@
  * capture buffer. It never silently drops an event, and it detects reentrant
  * observation rather than assuming it away.
  *
- * This is the portable core the P4r-B harness links against. It performs no
- * hashing, relocation or deep comparison on the hot path - those are offline
- * (P4.5). It never launches EU IV, opens a game process or attaches to a binary.
+ * It is safe under concurrent observation. Every counter is atomic, the bounded
+ * buffer hands out slots with one atomic fetch-add, and each captured event
+ * records the observing thread and that thread's own sequence number - so the
+ * offline side can reconstruct a partial happens-before order instead of
+ * inventing a total one. No lock is taken on the hot path.
+ *
+ * It performs no hashing, relocation or deep comparison on the hot path - those
+ * are offline (P4.5). It never launches EU IV, opens a game process or attaches to
+ * a binary.
  */
 #ifndef EU4_ORACLE_RECORDER_NATIVE_RECORDER_H
 #define EU4_ORACLE_RECORDER_NATIVE_RECORDER_H
@@ -45,6 +51,9 @@ typedef struct {
 } recorder_counters;
 
 typedef struct {
+    uint32_t thread_id; /* the observing thread, as declared by the driver */
+    uint64_t sequence;  /* that thread's own, contiguous sequence number */
+    uint32_t phase;     /* declared capture phase, split by an explicit sync edge */
     uint32_t hook_id;
     uint32_t nargs;
     uint64_t args[RECORDER_MAX_ARGS];
@@ -57,6 +66,12 @@ int recorder_init(const recorder_config *config);
 void recorder_shutdown(void);
 void recorder_reset(void);
 
+/* Declare the calling thread's identity and reset its sequence. Threads that never
+ * call this are thread 0. */
+void recorder_thread_begin(uint32_t thread_id);
+/* Declare the calling thread's current capture phase. */
+void recorder_set_phase(uint32_t phase);
+
 /* Observe one hook entry. Returns a token for the matching `recorder_exit`; a
  * negative token means no frame was pushed (over-deep or uninitialised). */
 int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs);
@@ -64,7 +79,9 @@ int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs);
  * scope was not fully observable, e.g. a call that operated on no live resource. */
 void recorder_exit(int64_t token, uint64_t result, int complete);
 
-const recorder_counters *recorder_counters_view(void);
+/* Copy the counters out atomically. Call only once all observing threads have
+ * stopped. */
+void recorder_snapshot(recorder_counters *out);
 const recorder_event *recorder_event_at(uint32_t index);
 uint32_t recorder_event_count(void);
 
