@@ -1,0 +1,17 @@
+RECORDER v1
+SCENARIO disabled
+COUNTERS intercepted=10 selected=0 unselected=10 captured=0 incomplete=0 lost=0 reentrant=0 rejected=0
+ACCOUNTING ok
+SCENARIO enabled
+COUNTERS intercepted=10 selected=10 unselected=0 captured=8 incomplete=2 lost=0 reentrant=0 rejected=0
+ACCOUNTING ok
+SCENARIO bounded
+COUNTERS intercepted=10 selected=10 unselected=0 captured=4 incomplete=0 lost=6 reentrant=0 rejected=0
+ACCOUNTING ok
+SCENARIO reentrant
+COUNTERS intercepted=2 selected=2 unselected=0 captured=2 incomplete=0 lost=0 reentrant=1 rejected=0
+ACCOUNTING ok
+SCENARIO misuse
+COUNTERS intercepted=0 selected=0 unselected=0 captured=0 incomplete=0 lost=0 reentrant=0 rejected=1
+ACCOUNTING ok
+END effects=21

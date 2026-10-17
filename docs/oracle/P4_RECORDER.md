@@ -1,11 +1,12 @@
 # P4 recorder: observation records, evidence store and offline gates
 
 **Status:** in progress. **P4.1** (the record schema, canonicalization and the
-immutable evidence store) and **P4.2** (the portable C11 synthetic target with a
-deterministic golden transcript) are implemented under `oracle/recorder/` with
-offline tests; the recorder core follows (P4.3+). **Nothing here launches EU IV,
-opens a game process, or attaches to a binary**: the recorder consumes
-already-captured native events, and P4 is proven entirely offline.
+immutable evidence store), **P4.2** (the portable C11 synthetic target with a
+deterministic golden transcript) and **P4.3** (the native recorder core's exact
+capture accounting) are implemented under `oracle/recorder/` with offline tests;
+the policy plugin, offline finalization and concurrency follow. **Nothing here
+launches EU IV, opens a game process, or attaches to a binary**: the recorder
+consumes already-captured native events, and P4 is proven entirely offline.
 
 This document is authoritative for P4. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the trust boundary is a refinement of the
@@ -150,6 +151,48 @@ the transcript; `tests/test_oracle_recorder_synthetic.py` asserts it reproduces
 the committed `golden.txt` exactly and that the transcript actually exhibits each
 property above.
 
+## The recorder core (P4.3)
+
+`oracle/recorder/native/` is the portable core the harness links the subject
+against. It is function-agnostic: it knows only about hooks, and it counts exactly
+what it intercepted, selected, captured, left incomplete, and lost.
+
+| Counter | Meaning |
+| --- | --- |
+| `intercepted` | hook entries observed |
+| `selected` | entries the policy chose for deep capture |
+| `unselected` | entries counted only (`intercepted - selected`) |
+| `captured` | selected entries with a complete observation |
+| `incomplete` | selected entries whose declared scope was not observable |
+| `lost` | selected entries the bounded capture buffer could not hold |
+| `reentrant` | entries observed while already inside an observation |
+| `rejected` | instrumentation errors (over-deep, or an exit with no matching enter) |
+
+Two identities hold by construction and are asserted after every scenario:
+
+* `intercepted = selected + unselected`
+* `selected = captured + incomplete + lost`
+
+An **incomplete** entry is a selected observation whose declared scope was not
+observable - the call operated on no live resource, so there was no state to
+capture. A **lost** entry is a selected observation the bounded capture buffer
+could not hold. Loss is reported, never silent: there is no unbounded buffer and no
+dropped counter, so the accounting stays exact even when the buffer overflows.
+**Reentrant** observation (a hook's capture entering another hook) is detected, and
+an exit with no matching enter is **rejected** rather than accepted.
+
+The **hook layer** in `driver.c` stands in for real interposition: it calls
+`recorder_enter`, runs the subject, then `recorder_exit`, passing whether the
+observation's scope was fully observable. The synthetic target proves recorder
+*semantics* - accounting, boundedness, reentrancy - and deliberately does **not**
+prove Darwin x86-64 trampoline or calling-convention fidelity, which stays behind
+the separate hook-pack gate before P5.
+
+The driver's transcript is a deterministic golden output, like the subject's:
+fixed-width arithmetic, no pointers, no clock. `tests/test_oracle_recorder_native.py`
+asserts it reproduces byte-for-byte and that the identities hold independently of
+the flag the core reports.
+
 ## Fidelity modes (owned by the reconstruction contract)
 
 The three modes - **faithful**, **GL optimization**, **GPU/backend redesign** -
@@ -188,3 +231,19 @@ See `tests/test_oracle_recorder_schema.py` and
   effect stream, and exact counters.
 
 See `tests/test_oracle_recorder_synthetic.py`.
+
+## P4r-B acceptance (P4.3 - )
+
+**P4.3 - the recorder core**, exact accounting under disabled capture, a bounded
+buffer, and reentrant observation:
+
+* every scenario reports the accounting identity as holding, and the identity is
+  re-derived independently from the counters;
+* disabled capture counts every interception and selects none;
+* enabled capture selects every interception, loses none, and marks as incomplete
+  exactly the calls that operated on no live resource;
+* a capacity below the number of selected events loses exactly the surplus and
+  still balances;
+* reentrant observation is detected, and an unmatched exit is rejected.
+
+See `tests/test_oracle_recorder_native.py`.
