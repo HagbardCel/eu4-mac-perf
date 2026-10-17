@@ -150,15 +150,15 @@ the transcript; `tests/test_oracle_recorder_synthetic.py` asserts it reproduces
 the committed `golden.txt` exactly and that the transcript actually exhibits each
 property above.
 
-## Fidelity modes (owned by PR #44)
+## Fidelity modes (owned by the reconstruction contract)
 
 The three modes - **faithful**, **GL optimization**, **GPU/backend redesign** -
 change what counts as an observable difference, so P4 records *which* policy a
 fixture is qualified under without implementing any comparator. The modes are
-owned by the reconstruction contract `docs/renderer-reconstruction-and-differential-validation.md`
-(see [open PR #44](https://github.com/HagbardCel/eu4-mac-perf/pull/44), not yet on
-`main`); the recorder declares them as an opaque, versioned tag and does not fork a
-second taxonomy.
+owned by the reconstruction contract
+[`../renderer-reconstruction-and-differential-validation.md`](../renderer-reconstruction-and-differential-validation.md)
+(merged in PR #44); the recorder declares them as an opaque, versioned tag and does
+not fork a second taxonomy.
 
 ## P4r-A acceptance (P4.1 - P4.2)
 

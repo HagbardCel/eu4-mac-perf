@@ -33,7 +33,7 @@ maintain). No code is moved by this document; it records ownership before P2 mig
 
 ## Ownership boundary: Oracle infrastructure vs RE0–RE3
 
-| Oracle infrastructure (this tree) | Function lifecycle (PR #44 doc) |
+| Oracle infrastructure (this tree) | Function lifecycle (reconstruction contract) |
 | --- | --- |
 | Recorder, counters, dedup, capture store, CAS, service, epochs | RE0 select/characterize, RE1 faithful C++ reconstruction, RE2 differential validation |
 | Produces fixtures + comparator | Consumes them in RE2 |
