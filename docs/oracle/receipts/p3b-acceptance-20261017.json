@@ -1,0 +1,316 @@
+{
+  "payload": {
+    "agent": {
+      "adapter": "opencode",
+      "budget": {
+        "granted": 4,
+        "limit": 40
+      },
+      "in_process_tool_calls": 0,
+      "model": {
+        "id": "deepseek-v4.1-flash-free",
+        "provider": "opencode",
+        "variant": "high"
+      },
+      "tool_calls": 4
+    },
+    "corpus": {
+      "held_out": {
+        "count": 10,
+        "fixtures": [
+          {
+            "bytes": 616,
+            "fixture_id": "hid-000",
+            "sha256": "fb5ad460b9166bb13a0f015e2195a9d8827421880cfcd6b745d65f88ea67fae2"
+          },
+          {
+            "bytes": 626,
+            "fixture_id": "hid-001",
+            "sha256": "487c77208d0f6ea11ab206afa9384ce434fdb1a002832690892362976b49296a"
+          },
+          {
+            "bytes": 624,
+            "fixture_id": "hid-002",
+            "sha256": "31da3ca819645592945b79b70b90b52ef35d00739ddda5daedd75778d8dabc2b"
+          },
+          {
+            "bytes": 569,
+            "fixture_id": "hid-003",
+            "sha256": "60831674a46877304e17e4c398d0ae72b24ba02996aba001061e7439f560d6b8"
+          },
+          {
+            "bytes": 570,
+            "fixture_id": "hid-004",
+            "sha256": "411f7d211f1c7cf10bd9dab3e688c35bdc68446765692df4835ebf629d5f8341"
+          },
+          {
+            "bytes": 570,
+            "fixture_id": "hid-005",
+            "sha256": "9c211c99becd39bf9da7d20aeeb028e28753f3f035517fd5cf2b44517472ef9b"
+          },
+          {
+            "bytes": 490,
+            "fixture_id": "hid-006",
+            "sha256": "1b16602818382da8954018c35b8583b9585a33a88fc89377d15d9b850a63f84b"
+          },
+          {
+            "bytes": 606,
+            "fixture_id": "hid-007",
+            "sha256": "58225e774bc817c6e681e42a63f0afdfb8f17d08cd0db273014f2bbb711bf9dc"
+          },
+          {
+            "bytes": 552,
+            "fixture_id": "hid-008",
+            "sha256": "3d1b65cc550456b1373a8c8aa7608ca5b4773e2d9aeadea15cb2a2575a40552a"
+          },
+          {
+            "bytes": 586,
+            "fixture_id": "hid-009",
+            "sha256": "b93425f6cba5cefa85eafe36c8782ad8952dc3c9782139311665ee0445b2043d"
+          }
+        ],
+        "function_ids": [
+          "synth:apply"
+        ],
+        "schema_version": "eu4-oracle-fixture/v1",
+        "set": "held_out",
+        "sha256": "3eee5fa4e9ec307a418f92cb9968f72f648b4313e1a546cf67928ace70a155b8"
+      },
+      "visible": {
+        "count": 12,
+        "fixtures": [
+          {
+            "bytes": 605,
+            "fixture_id": "vis-000",
+            "sha256": "39a1f9edd0e222cae538c002cfc9b1d4c6bedb5e201a709b5403f3f0cfa5f36f"
+          },
+          {
+            "bytes": 605,
+            "fixture_id": "vis-001",
+            "sha256": "dac73f9f80b5420546941fcdc256ee50a99e60ff3bac58f3acee18cd8196ccac"
+          },
+          {
+            "bytes": 551,
+            "fixture_id": "vis-002",
+            "sha256": "04ad896f4539da84364a89cf4c7646442ba3ec75a309cc524395b0230f8d4c5e"
+          },
+          {
+            "bytes": 551,
+            "fixture_id": "vis-003",
+            "sha256": "3757314c86170ed5fc141184f521e54f24f2702a1336c5675157b66a347004cb"
+          },
+          {
+            "bytes": 551,
+            "fixture_id": "vis-004",
+            "sha256": "e436f5e2bea577314887d373f09b8ebc4475181931f6d4218b9c39c00fdcd93b"
+          },
+          {
+            "bytes": 551,
+            "fixture_id": "vis-005",
+            "sha256": "2a436365f4b2ce77fad3f030798b21d0a8609fea50477b128731eb7f92791835"
+          },
+          {
+            "bytes": 489,
+            "fixture_id": "vis-006",
+            "sha256": "08e22a5d1711550033fd5856e76c20774982b024d0f5f4ba9cdc449bdea014bf"
+          },
+          {
+            "bytes": 549,
+            "fixture_id": "vis-007",
+            "sha256": "901383e69f336505a15192c256e9e72a82c6593304c4ebd9036f5fbaf7a4582d"
+          },
+          {
+            "bytes": 609,
+            "fixture_id": "vis-008",
+            "sha256": "a70f85f11273518d5d2bf6c57d368a0143561b8197885627779c7969717740f1"
+          },
+          {
+            "bytes": 490,
+            "fixture_id": "vis-009",
+            "sha256": "04a3781ae3927801c0f9d7104f8726a20f556de19be7134b271f1ff46c93c461"
+          },
+          {
+            "bytes": 607,
+            "fixture_id": "vis-010",
+            "sha256": "8c85427d6c6605a6547c26a8d9a3ec43d224a364c3c2336cadd7c3c3d4aef9b6"
+          },
+          {
+            "bytes": 549,
+            "fixture_id": "vis-011",
+            "sha256": "a65417e38f2580a3c7856aa66683fc0afb0ccd6cf5c27ee728f484840fc90d47"
+          }
+        ],
+        "function_ids": [
+          "synth:apply"
+        ],
+        "schema_version": "eu4-oracle-fixture/v1",
+        "set": "visible",
+        "sha256": "06d84f3fb0c4ae948656ff9cac5443d6a0ffc90e60b5acbb348c7270c3669d41"
+      }
+    },
+    "execution": {
+      "abort_reason": null,
+      "attempts": [
+        {
+          "attempt": 1,
+          "candidate_sha256": "ebc277593a225c0d67d2541eef99ca3b24aa5bdb69ed23bcc845c3c4f1853cee",
+          "duration_s": 26.654693,
+          "in_process_tool_calls": 0,
+          "note": "opencode run completed",
+          "status": "done",
+          "tool_calls": 4
+        }
+      ],
+      "controller_error": null,
+      "finalization": {
+        "budget_seconds": 300.0,
+        "certification": "ran",
+        "duration_s": 0.757094,
+        "error": null
+      },
+      "wall_seconds": 27.434025
+    },
+    "phase": "P3-A",
+    "run_id": "p3b-acceptance-20261017",
+    "source": {
+      "baseline_commit": null,
+      "defective_candidate_sha256": "252ab6e8c0c5d9564204960428692afc088a369b1c4b91d0dae656770b357cb8",
+      "final_candidate_sha256": "ebc277593a225c0d67d2541eef99ca3b24aa5bdb69ed23bcc845c3c4f1853cee",
+      "freeze_error": null,
+      "snapshot": "/Users/fabian/.local/share/eu4-oracle-p3/p3b-acceptance-20261017/snapshot/final/candidate.c"
+    },
+    "toolchain": {
+      "cc": "cc",
+      "comparator_sha256": "90fb4fa8b5ccd7d7930114b7dd15b48d5ecf7b5b08e155f81fc18a0d0d7bea33",
+      "compiler_version": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+      "driver_sha256": "07b311adfc9912436196e742a185d399502b4332c5be5a27045487c0ad148e9f",
+      "flags": [
+        "-std=c11",
+        "-O0",
+        "-fwrapv",
+        "-fno-strict-aliasing"
+      ],
+      "harness_sha256": "9bca1b223050be5f01c8f5b159e03f8f4a8473c21a0df558f9a10632f87ac488",
+      "interface_sha256": "ba785d568e000f907f43cafa988e6d67201a9c3831780f52aa0dedf622a1e98a",
+      "opencode": {
+        "adapter": "opencode",
+        "binary": {
+          "name": "opencode",
+          "sha256": "75617e69c0f347fc080cfc5b8f919aded11d8083a0bf4ed9bed375c9f9709efc",
+          "version": "opencode v2.0.30"
+        },
+        "config": {
+          "materialized_sha256": "cc4be7af33ffdd9add86794a36c3c70faf5eac12a0b1558aa2be129267669c1f",
+          "template_sha256": "88c8688e12fe28f7e03d477667291258aefa8a380832e261a0b049e3132f0d09"
+        },
+        "events": {
+          "denials": [],
+          "raw_bytes": 61052,
+          "raw_sha256": "4146fb4e9ee538a3452248af6739a23e16e3633478eb9a42a5dcb3a62539cc1b",
+          "summary_sha256": "2f58d71571a8fd68691a2f9f8dd813dc67c76241623c2f8b893f8e7c239f1f9d",
+          "tool_calls": 4
+        },
+        "model": {
+          "id": "deepseek-v4.1-flash-free",
+          "provider": "opencode",
+          "variant": "high"
+        },
+        "prompt_sha256": "4c907986360287d4f4072831c1e92c29b30f9317cf670eb4555ffb99a70e43a7"
+      }
+    },
+    "verdict": {
+      "candidate_verified": true,
+      "certification": "ran",
+      "held_out": {
+        "candidate_sha256": "ebc277593a225c0d67d2541eef99ca3b24aa5bdb69ed23bcc845c3c4f1853cee",
+        "corpus": {
+          "count": 10,
+          "fixtures": [
+            {
+              "bytes": 616,
+              "fixture_id": "hid-000",
+              "sha256": "fb5ad460b9166bb13a0f015e2195a9d8827421880cfcd6b745d65f88ea67fae2"
+            },
+            {
+              "bytes": 626,
+              "fixture_id": "hid-001",
+              "sha256": "487c77208d0f6ea11ab206afa9384ce434fdb1a002832690892362976b49296a"
+            },
+            {
+              "bytes": 624,
+              "fixture_id": "hid-002",
+              "sha256": "31da3ca819645592945b79b70b90b52ef35d00739ddda5daedd75778d8dabc2b"
+            },
+            {
+              "bytes": 569,
+              "fixture_id": "hid-003",
+              "sha256": "60831674a46877304e17e4c398d0ae72b24ba02996aba001061e7439f560d6b8"
+            },
+            {
+              "bytes": 570,
+              "fixture_id": "hid-004",
+              "sha256": "411f7d211f1c7cf10bd9dab3e688c35bdc68446765692df4835ebf629d5f8341"
+            },
+            {
+              "bytes": 570,
+              "fixture_id": "hid-005",
+              "sha256": "9c211c99becd39bf9da7d20aeeb028e28753f3f035517fd5cf2b44517472ef9b"
+            },
+            {
+              "bytes": 490,
+              "fixture_id": "hid-006",
+              "sha256": "1b16602818382da8954018c35b8583b9585a33a88fc89377d15d9b850a63f84b"
+            },
+            {
+              "bytes": 606,
+              "fixture_id": "hid-007",
+              "sha256": "58225e774bc817c6e681e42a63f0afdfb8f17d08cd0db273014f2bbb711bf9dc"
+            },
+            {
+              "bytes": 552,
+              "fixture_id": "hid-008",
+              "sha256": "3d1b65cc550456b1373a8c8aa7608ca5b4773e2d9aeadea15cb2a2575a40552a"
+            },
+            {
+              "bytes": 586,
+              "fixture_id": "hid-009",
+              "sha256": "b93425f6cba5cefa85eafe36c8782ad8952dc3c9782139311665ee0445b2043d"
+            }
+          ],
+          "function_ids": [
+            "synth:apply"
+          ],
+          "schema_version": "eu4-oracle-fixture/v1",
+          "set": "held_out",
+          "sha256": "3eee5fa4e9ec307a418f92cb9968f72f648b4313e1a546cf67928ace70a155b8"
+        },
+        "duration_s": 0.355114,
+        "failures": [],
+        "passed": 10,
+        "run_id": "p3b-acceptance-20261017",
+        "schema_version": "eu4-oracle-diagnostic/v2",
+        "status": "PASS",
+        "toolchain": {
+          "cc": "cc",
+          "compiler_version": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+          "flags": [
+            "-std=c11",
+            "-O0",
+            "-fwrapv",
+            "-fno-strict-aliasing"
+          ]
+        },
+        "total": 10
+      },
+      "status": "certified",
+      "visible": {
+        "failures": [],
+        "passed": 12,
+        "status": "PASS",
+        "total": 12
+      }
+    }
+  },
+  "schema_version": "eu4-oracle-receipt/v1",
+  "sha256": "39ed383b56d8e7f204fac973a75813cf47da73b9cabc3968837784f4f83af0c2"
+}

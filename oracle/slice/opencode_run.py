@@ -37,9 +37,10 @@ import hashlib
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-from oracle.slice import controller, corpus, opencode, receipts
+from oracle.slice import compare, controller, corpus, harness, opencode, receipts
 from oracle.slice.controller import RunConfig
 from oracle.slice.opencode import OpenCodeAdapter, OpenCodeRun
 
@@ -84,6 +85,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--preregistration", default=None,
                         help="a committed pre-registration the run must conform to")
     parser.add_argument("--out", default=None, help="where preregister writes its JSON")
+    parser.add_argument("--prompt", choices=("auto", "repair", "pilot"), default="auto",
+                        help="which task prompt the agent runs; 'auto' follows the mode")
     parser.add_argument("--candidate", default=str(REPO_ROOT / "oracle" / "slice" / "target.c"))
     return parser
 
@@ -98,6 +101,24 @@ def _parse_model(text: str) -> tuple[str, str, str | None]:
 
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _visible_verdict(candidate: Path, run_id: str) -> dict:
+    """Compile and evaluate the agent's candidate against the visible corpus.
+
+    Used only by the non-accepting modes, to record whether the agent really
+    changed the candidate into something that matches the visible behaviour -
+    without touching the held-out corpus.
+    """
+    if not Path(candidate).is_file():
+        return {"status": "no_candidate"}
+    fixtures = corpus.load_corpus(corpus.VISIBLE)
+    with tempfile.TemporaryDirectory() as tmp:
+        build = harness.build(Path(candidate), Path(tmp) / "build", cc="cc")
+        diagnostics = [harness.evaluate(build, fixture, run_id=run_id,
+                                       timeout_s=harness.DEFAULT_TIMEOUT_S)
+                       for fixture in fixtures]
+    return compare.verdict(diagnostics)
 
 
 def _preregistration(*, run_id: str, staging_root: Path, args, provider: str, model_id: str,
@@ -223,6 +244,12 @@ def main(argv: list[str] | None = None) -> int:
         _enforce_preregistration(Path(args.preregistration), run_id=run_id,
                                  staging_root=staging_root, model=model, args=args)
 
+    prompt_choice = args.prompt
+    if prompt_choice == "auto":
+        prompt_choice = "pilot" if args.mode == "pilot" else "repair"
+    prompt_path = CONFIG_DIR / (opencode.PILOT_PROMPT if prompt_choice == "pilot"
+                                else opencode.REPAIR_PROMPT)
+
     adapter = OpenCodeAdapter(OpenCodeRun(
         run_id=run_id,
         run_dir=run_dir,
@@ -233,6 +260,10 @@ def main(argv: list[str] | None = None) -> int:
         provider=provider,
         model_id=model_id,
         variant=variant,
+        prompt_path=prompt_path,
+        # A non-accepting mode ends with a code-level ``gave_up`` so the controller
+        # can never certify and the held-out corpus is never spent. Pairing it with
+        # the repair prompt is a visible-only rehearsal of the real task.
         mode="probe" if args.mode == "pilot" else "repair",
         expected_binary_sha256=args.expected_binary_sha256,
         expected_version=args.expected_version,
@@ -252,6 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"staging_root={staging_root}")
     print(f"model={args.model}")
     print(f"binary={args.binary}")
+    print(f"prompt={prompt_path.name}")
     result = controller.run(config, adapter)
 
     payload = result.receipt["payload"]
@@ -282,6 +314,11 @@ def main(argv: list[str] | None = None) -> int:
         "visible": (payload["verdict"].get("visible") or {}).get("status"),
         "held_out": (payload["verdict"].get("held_out") or {}).get("status"),
     }
+    if args.mode != "acceptance":
+        # Non-accepting modes never certify, so record the visible verdict of the
+        # candidate the agent actually left behind.
+        report["visible_after_attempt"] = _visible_verdict(
+            run_dir / "workspace" / "candidate.c", run_id)
     print(json.dumps(report, indent=2, sort_keys=True))
     print(f"receipt={run_dir / 'receipt.json'}")
     receipts.verify(result.receipt, expected_sha256=result.receipt["sha256"])

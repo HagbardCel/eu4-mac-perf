@@ -1,0 +1,123 @@
+{
+  "denials": [],
+  "event_types": {
+    "step_finish": 7,
+    "step_start": 8,
+    "text": 3,
+    "tool_use": 22
+  },
+  "oracle_tool_calls": [
+    {
+      "status": "completed",
+      "tool": "oracle_inspect"
+    },
+    {
+      "status": "completed",
+      "tool": "oracle_fixtures"
+    },
+    {
+      "status": "completed",
+      "tool": "oracle_coverage"
+    },
+    {
+      "status": "completed",
+      "tool": "oracle_test"
+    }
+  ],
+  "run_id": "p3b-acceptance-20261017",
+  "schema": "eu4-oracle-opencode-events/v1",
+  "stream": {
+    "bytes": 61052,
+    "sha256": "4146fb4e9ee538a3452248af6739a23e16e3633478eb9a42a5dcb3a62539cc1b"
+  },
+  "tool_calls": [
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "oracle_inspect"
+    },
+    {
+      "status": "completed",
+      "tool": "oracle_fixtures"
+    },
+    {
+      "status": "completed",
+      "tool": "oracle_coverage"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "read"
+    },
+    {
+      "status": "completed",
+      "tool": "edit"
+    },
+    {
+      "status": "completed",
+      "tool": "oracle_test"
+    }
+  ]
+}
