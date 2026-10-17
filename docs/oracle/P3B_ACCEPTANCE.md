@@ -38,10 +38,17 @@ model-free guard over the published artifact rather than trusted from the run.
 [receipts/p3b-acceptance-20261017.json](receipts/p3b-acceptance-20261017.json)
 (next to its [artifact](artifacts/ebc277593a225c0d67d2541eef99ca3b24aa5bdb69ed23bcc845c3c4f1853cee.c),
 [sanitized event summary](agents/p3b-acceptance-20261017.events.json) and
-[pre-registration](preregistration/p3b-acceptance-20261017.json)), and re-verified
-- seal, pre-registration cross-check, deterministic configuration
-re-materialization, integrity-gated replay of both corpora - by
-`tooling/common/check_oracle_receipt.py`.
+[pre-registration](preregistration/p3b-acceptance-20261017.json)), alongside a
+[supplementary trusted-side test record](agents/p3b-acceptance-20261017.tests.json)
+and a
+[retrospective identity pin](preregistration/retrospective/p3b-acceptance-20261017.json).
+`tooling/common/check_oracle_receipt.py` re-verifies the seal, cross-checks the
+pre-registration, re-materializes the configuration, checks every recorded source
+identity against the file at the **pinned revision**, checks the corpora against
+the tree, and replays both corpora in a fresh interpreter rooted in that
+revision. Which guarantees are enforced at execution, which the guard re-verifies
+and which are retrospective only is indexed in
+[P3_SLICE.md](P3_SLICE.md#where-each-guarantee-is-enforced).
 
 | Binding | Value |
 | --- | --- |
@@ -105,7 +112,39 @@ It does **not** mean:
   a code-level `gave_up` and therefore cannot certify and cannot spend the
   holdout. It reached visible PASS (12/12). The declared run is an independent
   session; its held-out corpus was spent exactly once, by it, and no fresh corpus
-  was introduced and no other model was tried.
+  was introduced and no other model was tried. That rehearsal did **not** use a
+  visible-only fixture *root*: the driver left the root at its default, and the
+  held-out directory was kept out of reach by the workspace and by the adapter
+  mode, not by the root. Pilot and rehearsal now materialize a visible-only root;
+  the declared run above predates that and is unchanged.
+* **This run pins no revision, so its provenance is partly retrospective.** The
+  receipt records `baseline_commit: null`, because it was launched from a working
+  tree that contained an uncommitted `oracle/slice/opencode_run.py`. The revision
+  used to check its identities comes from a retrospective pin
+  (`preregistration/retrospective/p3b-acceptance-20261017.json`), which is a
+  post-run reconstruction, not a pre-registration and not an execution-time
+  attestation. The launch driver's own bytes cannot be recovered from history at
+  all, so the pin records the committed file at that revision **for reference
+  only** and lists it as unauthenticated.
+* **This run predates the repair-acceptance gates and the call journal.** It
+  records no `acceptance` block and no per-tool journal, so per-tool admissions,
+  pre-admission bridge rejections and permission denials cannot be separately
+  re-verified for it - only the aggregate (the ledger granted 4 calls; the
+  binding recorded 4 completed oracle calls) survives. The guard reports both
+  gaps and requires the retrospective pin to name them; the gates and the journal
+  are enforced for runs after P3g, and the negative regressions that show them
+  refusing an unchanged candidate, a missing diagnostic and an unreconciled
+  census live in `tests/test_oracle_slice_acceptance.py`.
+* **The candidate snapshot is recorded as an absolute path.** Earlier receipts
+  recorded `source.snapshot` absolutely; this one does too. Later runs record it
+  relative to the staging root, so a committed receipt carries no user-specific
+  path, and the guard fails on any absolute path outside the compiler's system
+  locations and the run's own declared staging root.
+* **The supplementary test record is corroboration, not attestation.** It is a
+  verbatim copy of the trusted-side record the bridge wrote during the run
+  (12/12 visible PASS), published afterwards. Its `candidate_sha256` is a
+  **pre-build candidate hash**, so it corroborates the sealed final identity; it
+  is not the post-compilation attestation that later runs record.
 * **A real isolation defect was found and fixed before the run.** The pilot showed
   that OpenCode resolved its project directory from `PWD`, which `subprocess` does
   not update, so the agent's project root had been this repository - placing the

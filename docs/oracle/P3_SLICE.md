@@ -362,9 +362,23 @@ is likewise not a sandbox. Both are PR-F work.
 
 ### Pilot evidence
 
-Before the single declared run, the pilot drives the binding against the pinned
-binary with a **visible-only** fixture root and ends in a code-level `gave_up`,
-so it cannot spend the holdout. Machine-observed, it established that:
+Before the single declared run, the pilot drove the binding against the pinned
+binary and ended in a code-level `gave_up`, so it could not certify and the
+held-out corpus was never spent. What bounded it was the workspace and the mode:
+the workspace contains only `fixtures/visible/`, and `--mode pilot` forces the
+`probe` adapter mode, whose terminal result is `gave_up`, so `certify_candidate`
+is never reached.
+
+The pilot did **not** run against a visible-only fixture *root*. The driver left
+`RunConfig.fixtures_root` at its default, which is the directory that also
+contains `held_out/`; the only thing standing between the run and that directory
+was the bridge's loader, which loads the visible set. The earlier claim in this
+document that the pilot used a visible-only root was wrong, and this paragraph
+corrects it. From P3g the driver materializes a visible-only root for the pilot
+and rehearsal modes, so the held-out directory is outside the run's reachable
+world rather than merely unread.
+
+Machine-observed, the pilot established that:
 
 * the pinned binary (`opencode v2.0.30`, digest recorded) and the pinned model
   (`opencode/deepseek-v4.1-flash-free#high`) resolve and run;
@@ -418,9 +432,21 @@ explicitly.
   controller checks their shape and folds them into `toolchain.opencode` before
   sealing. A partial or malformed report is a finalization error and the run is
   not acceptable.
-* **Replay integrity.** The guard refuses to replay a published receipt unless
-  the current harness, comparator, driver, interface and bridge still hash to the
-  pinned identities, because replaying against a changed oracle proves nothing.
+* **Replay integrity is anchored to the pinned revision.** The guard does not
+  refuse to replay because today's tree has moved. It verifies every recorded
+  identity against the file **at the run's pinned revision**
+  (`git cat-file blob <rev>:<path>`) and evaluates the committed artifact in a
+  fresh interpreter whose import path is rooted in that revision, after checking
+  the module file locations and pinned source digests inside it. A later change
+  to the same sources therefore cannot invalidate a historical claim - nor rescue
+  one - and the guard cannot reject its own remediation. Corpus drift is checked
+  separately and against the tree: a fixture input and its expectation must still
+  recompute to the manifest the run bound.
+* **Every guarantee is labelled by strength.** A property is either enforced at
+  execution (the controller or the bridge refuses the run), re-verified by the
+  guard from published evidence, or only retrospective (reconstructed after the
+  fact and labelled as such). The table under *Where each guarantee is enforced*
+  is the index; the guard prints the same categories per run.
 * **Pre-registration.** `opencode_run.py --mode preregister` emits the pin on the
   same code path the run binds, so the declared digests cannot drift from what the
   run records. It fixes the run id and staging root, because the materialized
@@ -428,7 +454,61 @@ explicitly.
   committed and pushed *before* the run; the guard reports a declaration whose
   receipt is not published yet as **pending** rather than failed
   (`--require-receipts` tightens that), so CI stays meaningful across the window
-  between the two commits.
+  between the two commits. An `acceptance` run now requires `--preregistration`
+  and is refused unless the repository matches the declaration: same revision,
+  clean tree, every declared source hash, the declared candidate, the declared
+  interpreter and the declared execution bounds.
+
+### Where each guarantee is enforced
+
+A property is only as strong as the stage that enforces it. "Enforced at
+execution" means the controller or the bridge refuses the run; "re-verified by
+the guard" means CI recomputes it from published evidence; "retrospective only"
+means it was reconstructed after the fact and carries no execution-time weight.
+
+| Property | Enforced at execution | Re-verified by the guard | Retrospective only |
+| --- | --- | --- | --- |
+| The candidate differs from the defective input | `candidate_changed` gate; certification is skipped | `acceptance.gates.candidate_changed`, and `final != defective` | - |
+| The required diagnostics completed | `required_tools` gate | `acceptance.gates.required_tools` from the sealed binding | - |
+| A trusted test record attests the frozen bytes | `trusted_test_record` gate, on the materialized digest | the sealed gate result | the P3-B supplementary record, whose hash is a **pre-build candidate hash** |
+| The compiled source is the materialized source | `harness.build` re-hashes after compiling and raises on a mismatch | the record's `materialized_sha256` / `compiled_sha256` | - |
+| Admission, rejection and denial are distinguished | one ledger transaction writes the reservation and its journal row | the published journal's digest, then a full per-tool reconciliation | the P3-B run: aggregate only (4 admitted = 4 completed) |
+| The accepted artifact is the frozen bytes | freeze, then certify from the snapshot | committed artifact digest vs `final_candidate_sha256` | - |
+| Source identities | recorded in the receipt and the pre-registration | every pin against `git cat-file blob <rev>:<path>` of the pinned revision | the P3-B baseline revision, and its launch driver, which is unauthenticated |
+| Both corpora pass | `certify_candidate`, once, after the gates | replay of both corpora in a fresh interpreter rooted in the pinned revision | - |
+| The corpora are unchanged | - | drift check recomputes both manifests from the tree | - |
+| No held-out material reaches the agent-visible surface | the binding fails closed on a leak in the stream | leak scan of the published summary | - |
+| The run is bounded | budget ledger, attempt limit, wall clock, finalization budget | declared bounds vs recorded bounds and observed durations | - |
+
+### Publication policy and historical exceptions
+
+A published receipt records the candidate snapshot **relative to the staging
+root** (`source.snapshot_base: "base_dir"`), so a committed receipt carries no
+user-specific absolute path. The only absolute paths a receipt may contain are
+the system locations named by the compiler probe and the run's own declared
+staging root; the guard fails on any other. The pre-registration does name
+absolute paths (`staging_root`, `repo_root`, the interpreter) because the
+materialized configuration digest depends on them; that is declared, and the
+guard allows exactly those.
+
+Two exceptions apply to the P3-B acceptance run, and both are recorded rather
+than repaired:
+
+* **It pins no revision.** `source.baseline_commit` is `null`, because the run was
+  launched from a working tree that contained an uncommitted
+  `oracle/slice/opencode_run.py`. The revision used to check it comes from a
+  retrospective pin under `docs/oracle/preregistration/retrospective/`, which is
+  a post-run reconstruction and is labelled as one wherever it is reported.
+* **It records no acceptance gates and no call journal**, because it predates
+  them. The guard reports both gaps and requires the retrospective pin to name
+  them; what does survive is the aggregate - the ledger granted 4 calls and the
+  binding recorded 4 completed oracle calls.
+
+The launch driver's identity cannot be authenticated from history at all, so the
+retrospective pin records the committed file at the pinned revision **for
+reference only** and lists it as unauthenticated. Nothing here upgrades the
+original finding: the run's conditions remain the nine in the original
+pre-registration, and the gate contract above is enforced for runs after P3g.
 
 ### Tests
 
@@ -442,10 +522,16 @@ explicitly.
 | A real repair through the adapter is certified and bound end to end | `tests/test_oracle_slice_opencode.py` |
 | Held-out material in the stream, or a production-capped stream, prevents acceptance | `tests/test_oracle_slice_opencode.py` |
 | Probe mode is non-accepting and spends no holdout | `tests/test_oracle_slice_opencode.py` |
-| A clean publication verifies; tampered, reordered or replay-incompatible ones do not | `tests/test_check_oracle_receipt.py` |
+| A clean publication verifies; tampered, reordered or pin-inconsistent ones do not | `tests/test_check_oracle_receipt.py` |
+| A change to the *current* sources does not invalidate a pinned run | `tests/test_check_oracle_receipt.py` |
+| A pinned run that no longer matches its revision is refused | `tests/test_check_oracle_receipt.py` |
+| The acceptance gates refuse an unchanged candidate, a missing diagnostic and an unreconciled census before any held-out spend | `tests/test_oracle_slice_acceptance.py` |
+| The build attests the materialized source and refuses a mid-compile change | `tests/test_oracle_slice_acceptance.py` |
+| The test double reaches the tools through a genuine MCP `tools/call` | `tests/test_oracle_slice_opencode.py` |
 
 The acceptance run itself is published as a sealed receipt under
 `docs/oracle/receipts/`, the committed artifact under `docs/oracle/artifacts/`,
-the sanitized event summary under `docs/oracle/agents/`, and the pre-registration
-under `docs/oracle/preregistration/`, with the narrative in
+the sanitized event summary under `docs/oracle/agents/`, the pre-registration
+under `docs/oracle/preregistration/` and its retrospective pin under
+`docs/oracle/preregistration/retrospective/`, with the narrative in
 [P3B_ACCEPTANCE.md](P3B_ACCEPTANCE.md).
