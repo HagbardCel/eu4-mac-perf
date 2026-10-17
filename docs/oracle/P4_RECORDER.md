@@ -40,8 +40,8 @@ binary or a game process.
 
 | PR | Commits | Scope | Exit criterion |
 | --- | --- | --- | --- |
-| **P4r-A** | P4.1, P4.2 | versioned schema + evidence store; portable C11 synthetic target | records round-trip; load-time integrity; deterministic native golden output |
-| **P4r-B** | P4.3-P4.5, P4.7 | native capture accounting; policy plugin; identity/aliasing/dedup; reentrancy/concurrency + bounded capture | accounting exact; aliases and semantic dedup correct; overflow/reentrancy/concurrency regressions pass |
+| **P4r-A** (done) | P4.1, P4.2 | versioned schema + evidence store; portable C11 synthetic target | records round-trip; load-time integrity; deterministic native golden output |
+| **P4r-B** (done) | P4.3-P4.5, P4.7 | native capture accounting; policy plugin; identity/aliasing/dedup; reentrancy/concurrency + bounded capture | accounting exact; aliases and semantic dedup correct; overflow/reentrancy/concurrency regressions pass |
 | **P4r-C** | P4.6, P4.8 | resource registry + closure verifier; R0-M protocol compatibility offline | generations + closure verified; synthetic multi-epoch protocol accepted offline |
 | **P4b** | - | independent synthetic graphics replay | a sealed frame replays in a fresh process; missing dependencies fail closed |
 
