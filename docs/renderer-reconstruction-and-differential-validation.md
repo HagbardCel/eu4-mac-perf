@@ -1,9 +1,9 @@
 # Renderer reconstruction and differential validation — RE0–RE3
 
-**Status:** proposed architecture-track workstream (not yet implemented or empirically qualified).  
-**Scope:** pinned GOG EU IV 1.37.5 x86-64, Apple Silicon/Rosetta, initially paused Venice.  
-**Canonical strategy:** [EU IV rendering roadmap](eu4_recommended_strategy.md).  
-**Evidence:** [state of knowledge](eu4_macos_rendering_findings.md), the [cost-based alternatives ranking](eu4_rendering_alternatives_ranked.md), and the closed-hypothesis records ([border multi-draw](gfx-border-multidraw-ababa.md), [sub-record](gfx-subrecord-ababa.md)). That corpus is the standing constraint on this workstream: reconstruction must not reopen a closed hypothesis without genuinely new evidence, and must not disturb the frozen Phase-C diagnostic. This document proposes work; it does not change the status of existing evidence.
+- **Status:** proposed architecture-track workstream (not yet implemented or empirically qualified).
+- **Scope:** pinned GOG EU IV 1.37.5 x86-64, Apple Silicon/Rosetta, initially paused Venice.
+- **Canonical strategy:** [EU IV rendering roadmap](eu4_recommended_strategy.md).
+- **Evidence:** [state of knowledge](eu4_macos_rendering_findings.md), the [cost-based alternatives ranking](eu4_rendering_alternatives_ranked.md), and the closed-hypothesis records ([border multi-draw](gfx-border-multidraw-ababa.md), [sub-record](gfx-subrecord-ababa.md)). That corpus is the standing constraint on this workstream: reconstruction must not reopen a closed hypothesis without genuinely new evidence, and must not disturb the frozen Phase-C diagnostic. This document proposes work; it does not change the status of existing evidence.
 
 ## Decision
 
