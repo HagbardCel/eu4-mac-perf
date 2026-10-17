@@ -434,8 +434,12 @@ class OpenCodeAdapter:
                             stream_sha256=self._raw_sha256, stream_bytes=self._raw_bytes)
         self._summary = summary
         denials = summary["denials"]
-        completed_oracle = [c for c in summary["oracle_tool_calls"]
-                            if c["status"] == "completed"]
+        oracle_invocations = summary["oracle_tool_calls"]
+        completed_oracle = [c for c in oracle_invocations if c["status"] == "completed"]
+        oracle_by_tool = Counter(str(c["tool"]) for c in oracle_invocations)
+        oracle_denials = Counter(d["action"] for d in denials
+                                 if isinstance(d.get("action"), str)
+                                 and d["action"].startswith("oracle_"))
         return {
             "adapter": "opencode",
             "binary": dict(self._identity),
@@ -448,7 +452,16 @@ class OpenCodeAdapter:
                 "raw_sha256": self._raw_sha256,
                 "raw_bytes": self._raw_bytes,
                 "summary_sha256": _sha256(canonical_bytes(summary)),
+                #: Completed oracle calls. ``oracle_invocations`` counts every
+                #: oracle tool_use the stream recorded, whatever its status, and
+                #: ``oracle_denials`` the permission refusals among them (which
+                #: never reach the bridge). Together they let the controller
+                #: reconcile bridge admissions against the agent-visible census.
                 "tool_calls": len(completed_oracle),
+                "oracle_invocations": len(oracle_invocations),
+                "oracle_by_tool": dict(sorted(oracle_by_tool.items())),
+                "oracle_denials": dict(sorted(oracle_denials.items())),
+                "completed_tools": sorted({str(c["tool"]) for c in completed_oracle}),
                 "denials": denials,
             },
         }

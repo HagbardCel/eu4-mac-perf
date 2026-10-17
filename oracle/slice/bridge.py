@@ -35,7 +35,20 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from oracle.slice import compare, corpus, harness, runstate
-from oracle.slice.budget import BudgetDenied, BudgetExceeded, RunBudgetLedger
+from oracle.slice.budget import (
+    BudgetDenied,
+    BudgetExceeded,
+    RunBudgetLedger,
+    REASON_BAD_ARGUMENTS,
+    REASON_BUDGET_DENIED,
+    REASON_BUDGET_EXHAUSTED,
+    REASON_DEADLINE_EXPIRED,
+    REASON_UNANSWERABLE,
+    REASON_UNKNOWN_TOOL,
+    OUTCOME_COMPLETED,
+    OUTCOME_FAILED,
+    call_label,
+)
 from oracle.slice.corpus import Fixture
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
@@ -184,27 +197,59 @@ class Bridge:
         return [f for f in self._visible() if f.function_id == function_id]
 
     # -- dispatch -------------------------------------------------------------
-    def call(self, method: str, args: dict[str, Any] | None) -> dict[str, Any]:
+    def note_rejection(self, tool: Any, reason: str, invocation: Any = None) -> None:
+        """Journal a refused call. Never raises.
+
+        The call is refused whatever happens here, so an accounting failure is
+        degraded to a ``budget_denied`` row, then to a stderr note - never to an
+        admission.
+        """
+        try:
+            self.ledger.record_rejection(tool=tool, reason=reason, invocation=invocation)
+        except BudgetDenied:
+            try:
+                self.ledger.record_rejection(tool=tool, reason=REASON_BUDGET_DENIED,
+                                             invocation=invocation)
+            except BudgetDenied:  # pragma: no cover - defensive
+                print(f"oracle-bridge: cannot journal rejection of {call_label(tool)}",
+                      file=sys.stderr)
+
+    def call(self, method: str, args: dict[str, Any] | None, *,
+             invocation: Any = None) -> dict[str, Any]:
         handler = _HANDLERS.get(method)
         if handler is None:
+            self.note_rejection(method, REASON_UNKNOWN_TOOL, invocation)
             raise ToolError(f"unknown tool: {method!r}")
         if args is not None and not isinstance(args, dict):
+            self.note_rejection(method, REASON_BAD_ARGUMENTS, invocation)
             raise ToolError("tool arguments must be an object")
         # The deadline is enforced *before* admission, from trusted run state, so
         # a call admitted near expiry cannot run on borrowed time.
         if self.expired():
+            self.note_rejection(method, REASON_DEADLINE_EXPIRED, invocation)
             raise ToolError("run deadline expired; tool calls are refused")
         # Admission happens before execution, and the reservation stands even if
-        # the tool then fails.
+        # the tool then fails. The reservation and its journal row share one
+        # transaction, so a journalling failure denies the call outright.
         try:
-            self.ledger.reserve(1, deadline=self.run_deadline)
+            admission = self.ledger.reserve_call(tool=method, invocation=invocation,
+                                                 deadline=self.run_deadline)
         except BudgetExceeded as exc:
+            self.note_rejection(method, REASON_BUDGET_EXHAUSTED, invocation)
             raise ToolError(f"tool-call budget exhausted ({exc.granted}/{exc.limit})") from exc
         except BudgetDenied as exc:
+            self.note_rejection(method, REASON_BUDGET_DENIED, invocation)
             raise ToolError(f"tool calls are denied: {exc}") from exc
-        result = handler(self, args or {})
-        if len(json.dumps(result)) > MAX_TOOL_CHARS:
-            raise ToolError("tool response exceeded the model-facing size limit")
+        try:
+            result = handler(self, args or {})
+            if len(json.dumps(result)) > MAX_TOOL_CHARS:
+                raise ToolError("tool response exceeded the model-facing size limit")
+        except Exception:
+            # The reservation stands: this call was admitted and failed *after*
+            # admission. It is never reclassified as a pre-admission rejection.
+            self.ledger.finish_call(admission.seq, OUTCOME_FAILED)
+            raise
+        self.ledger.finish_call(admission.seq, OUTCOME_COMPLETED)
         return result
 
     # -- candidate path -------------------------------------------------------
@@ -282,7 +327,9 @@ def _tool_test(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
     fixtures = bridge._for_function(function_id)
     candidate = bridge._resolve_candidate(args.get("candidate_path"))
     test_run_id = f"{bridge.run_id}-{uuid.uuid4().hex[:12]}"
-    source_hash = sha256(candidate.read_bytes()).hexdigest()
+    # The pre-build hash names the file the agent asked us to test. It is *not*
+    # an attestation of the compiled bytes - see ``materialized_sha256`` below.
+    prebuild_hash = sha256(candidate.read_bytes()).hexdigest()
     deadline = bridge.deadline()
     try:
         build = harness.build(candidate, bridge.run_dir / BUILD_DIR / test_run_id, cc=bridge.cc,
@@ -293,17 +340,32 @@ def _tool_test(bridge: Bridge, args: dict[str, Any]) -> dict[str, Any]:
         raise ToolError("candidate failed to compile: " + (exc.stderr or "")[-800:]) from exc
     except harness.HarnessError as exc:
         raise ToolError(f"trusted harness fault: {exc}") from exc
+    # The build directory is trusted-side: its copy is what the compiler read, so
+    # hashing it (not the agent-writable original) is the attestation. A
+    # disagreement with the pre-build hash means the source changed between the
+    # agent's file and the trusted copy.
+    identity_mismatch = build.source_sha256 != prebuild_hash
     diagnostics = [harness.evaluate(build, fixture, run_id=test_run_id, timeout_s=bridge.timeout_s,
                                     deadline=deadline)
                    for fixture in fixtures]
     summary = compare.verdict(diagnostics)
+    if identity_mismatch:
+        # This was discovered *after* admission, so it is an admitted failure, not
+        # a rejection - but it must never be reported as a PASS: the diagnostics
+        # do not describe the candidate the agent believes it submitted.
+        summary = dict(summary, status=compare.STATUS_HARNESS_ERROR,
+                       source_identity_mismatch=True)
     bridge._store_test(test_run_id, {
         "test_run_id": test_run_id,
         "function_id": function_id,
-        "candidate_sha256": source_hash,
+        "candidate_sha256": prebuild_hash,
+        "materialized_sha256": build.source_sha256,
+        "compiled_sha256": build.compiled_sha256,
+        "source_identity": "mismatch" if identity_mismatch else "attested",
         "summary": summary,
         "diagnostics": diagnostics,
-        "toolchain": {"cc": build.cc, "flags": list(build.flags), "compiler_version": build.compiler_version},
+        "toolchain": {"cc": build.cc, "flags": list(build.flags),
+                      "compiler_version": build.compiler_version},
     })
     return {
         "test_run_id": test_run_id,
@@ -422,6 +484,13 @@ class MCPServer:
         request_id = message.get("id")
         method = message.get("method")
         if request_id is None:
+            # A tools/call with no id can never have a response, so it can never
+            # appear as an agent-visible invocation. Journal it anyway so the
+            # trusted side accounts for the reach, marked as unanswerable.
+            if method == "tools/call":
+                params = message.get("params") or {}
+                name = params.get("name") if isinstance(params, dict) else None
+                self.bridge.note_rejection(name, REASON_UNANSWERABLE, None)
             return None  # notification
         if method == "initialize":
             params = message.get("params") or {}
@@ -441,9 +510,12 @@ class MCPServer:
             name = params.get("name") if isinstance(params, dict) else None
             arguments = params.get("arguments") if isinstance(params, dict) else None
             if arguments is not None and not isinstance(arguments, dict):
+                # Rejected at the dispatch boundary, before ``Bridge.call`` ever
+                # sees it: the journal must record it here or not at all.
+                self.bridge.note_rejection(name, REASON_BAD_ARGUMENTS, request_id)
                 return _result(request_id, _tool_error("tool arguments must be an object"))
             try:
-                result = self.bridge.call(name, arguments or {})
+                result = self.bridge.call(name, arguments or {}, invocation=request_id)
             except ToolError as exc:
                 return _result(request_id, _tool_error(str(exc)))
             return _result(request_id, _tool_ok(result))

@@ -35,12 +35,13 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from oracle.slice import compare, controller, corpus, harness, opencode, receipts
+from oracle.slice import budget, compare, controller, corpus, harness, opencode, receipts
 from oracle.slice.controller import RunConfig
 from oracle.slice.opencode import OpenCodeAdapter, OpenCodeRun
 
@@ -59,6 +60,13 @@ SOURCE_PATHS = {
     "interface_sha256": "oracle/slice/synth.h",
     "bridge_sha256": "oracle/slice/bridge.py",
     "opencode_sha256": "oracle/slice/opencode.py",
+    # The semantic closure the guard replays with, plus the launch driver: if any
+    # of these is not pinned, a replay could be computed by code the run was never
+    # evaluated with.
+    "core_sha256": "oracle/core.py",
+    "corpus_sha256": "oracle/slice/corpus.py",
+    "receipts_sha256": "oracle/slice/receipts.py",
+    "launch_driver_sha256": "oracle/slice/opencode_run.py",
 }
 
 
@@ -101,6 +109,15 @@ def _parse_model(text: str) -> tuple[str, str, str | None]:
 
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _repo_relative(path: Path) -> str:
+    """A repository-relative path when possible, so pins avoid machine paths."""
+    resolved = Path(path).resolve()
+    try:
+        return str(resolved.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(resolved)
 
 
 def _visible_verdict(candidate: Path, run_id: str) -> dict:
@@ -174,6 +191,11 @@ def _preregistration(*, run_id: str, staging_root: Path, args, provider: str, mo
         },
         "substitutions": substitutions,
         "corpus": corpus_manifests,
+        "source": {
+            "candidate_path": _repo_relative(Path(args.candidate)),
+            "defective_candidate_sha256": _sha256_file(Path(args.candidate)),
+            "baseline_commit": _git("rev-parse", "HEAD"),
+        },
         "source_hashes": {key: _sha256_file(REPO_ROOT / rel)
                           for key, rel in SOURCE_PATHS.items()},
         "run": {
@@ -202,8 +224,74 @@ def _preregistration(*, run_id: str, staging_root: Path, args, provider: str, mo
     }
 
 
+def _visible_only_root(run_dir: Path) -> Path:
+    """A fixture root that contains the visible set and nothing else.
+
+    The pilot and rehearsal modes must not even be able to *name* the held-out
+    corpus. The bridge and the workspace loader resolve fixtures under the root
+    they are given, so a visible-only root removes the held-out directory from the
+    run's reachable world instead of merely declining to read it.
+    """
+    root = Path(run_dir) / "visible-only"
+    target = root / corpus.VISIBLE
+    if not target.is_dir():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(corpus.FIXTURES_DIR / corpus.VISIBLE, target)
+    return root
+
+
+def _git(*arguments: str) -> str:
+    probe = subprocess.run(["git", "-C", str(REPO_ROOT), *arguments],
+                           capture_output=True, text=True, check=False)
+    if probe.returncode != 0:
+        raise SystemExit(f"git {' '.join(arguments)} failed: {probe.stderr.strip()}")
+    return probe.stdout.strip()
+
+
+def _contract_problems(declared: dict, args) -> list[str]:
+    """Why the working tree does not match the declaration, if it does not.
+
+    The declaration is checked against the *repository as it is now*: the pinned
+    revision must be ``HEAD``, the tree must be clean, every declared source hash
+    must match, the candidate must be the declared defective input and the
+    interpreter must be the declared one. A declaration that predates the
+    source-revision pin cannot be enforced and is refused rather than assumed.
+    """
+    source = declared.get("source")
+    if not isinstance(source, dict):
+        return ["the declaration predates the source-revision pin (no 'source' block)"]
+    problems: list[str] = []
+    head = _git("rev-parse", "HEAD")
+    if source.get("baseline_commit") != head:
+        problems.append(
+            f"HEAD {head!r} is not the declared baseline_commit "
+            f"{source.get('baseline_commit')!r}")
+    dirty = _git("status", "--porcelain")
+    if dirty:
+        problems.append("the working tree is not clean: " + dirty.replace("\n", "; "))
+    if source.get("defective_candidate_sha256") != _sha256_file(Path(args.candidate)):
+        problems.append("the candidate source differs from the declaration")
+    if declared.get("python") != str(Path(args.python)):
+        problems.append("the interpreter differs from the declaration")
+    hashes = declared.get("source_hashes") or {}
+    for key, relative in SOURCE_PATHS.items():
+        wanted = hashes.get(key)
+        if wanted is None:
+            problems.append(f"the declaration does not pin {relative}")
+        elif wanted != _sha256_file(REPO_ROOT / relative):
+            problems.append(f"{relative} differs from the declaration")
+    run = declared.get("run") or {}
+    for key in ("budget_calls", "wall_seconds", "finalization_seconds"):
+        value = args.budget_calls if key == "budget_calls" and args.budget_calls is not None \
+            else args.wall_seconds if key == "wall_seconds" and args.wall_seconds is not None \
+            else getattr(args, key)
+        if run.get(key) != value:
+            problems.append(f"run.{key}={value!r} differs from the declared {run.get(key)!r}")
+    return problems
+
+
 def _enforce_preregistration(path: Path, *, run_id: str, staging_root: Path,
-                             model: dict, args) -> None:
+                             model: dict, args, strict: bool) -> dict:
     """Refuse to run under anything other than the declared pin."""
     declared = json.loads(Path(path).read_text(encoding="utf-8"))
     problems = []
@@ -213,11 +301,19 @@ def _enforce_preregistration(path: Path, *, run_id: str, staging_root: Path,
         problems.append("staging root differs from the declaration")
     if declared.get("model") != model:
         problems.append("model differs from the declaration")
+    if strict:
+        problems.extend(_contract_problems(declared, args))
     if problems:
         raise SystemExit("run does not conform to the pre-registration: " + "; ".join(problems))
     args.expected_binary_sha256 = declared["binary"]["sha256"]
     args.expected_version = declared["binary"]["version"]
+    # The declaration is authoritative for the bounds the receipt will record.
+    run = declared.get("run") or {}
+    for key in ("budget_calls", "wall_seconds", "finalization_seconds"):
+        if isinstance(run.get(key), (int, float)) and not isinstance(run.get(key), bool):
+            setattr(args, key, run[key])
     print(f"conforms to pre-registration {path}")
+    return declared
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -240,9 +336,15 @@ def main(argv: list[str] | None = None) -> int:
         print(text)
         return 0
 
+    declared: dict | None = None
     if args.preregistration:
-        _enforce_preregistration(Path(args.preregistration), run_id=run_id,
-                                 staging_root=staging_root, model=model, args=args)
+        declared = _enforce_preregistration(Path(args.preregistration), run_id=run_id,
+                                            staging_root=staging_root, model=model, args=args,
+                                            strict=(args.mode == "acceptance"))
+    if args.mode == "acceptance" and declared is None:
+        # The declaration comes first, by construction: an acceptance run without
+        # one would be evaluated against conditions nobody committed to.
+        raise SystemExit("acceptance runs require --preregistration")
 
     prompt_choice = args.prompt
     if prompt_choice == "auto":
@@ -268,6 +370,9 @@ def main(argv: list[str] | None = None) -> int:
         expected_binary_sha256=args.expected_binary_sha256,
         expected_version=args.expected_version,
     ))
+    # Only the acceptance mode may resolve the held-out corpus at all; the pilot
+    # and rehearsal modes get a visible-only fixture root.
+    fixtures_root = None if args.mode == "acceptance" else _visible_only_root(run_dir)
     config = RunConfig(
         run_id=run_id,
         candidate_src=Path(args.candidate),
@@ -277,6 +382,10 @@ def main(argv: list[str] | None = None) -> int:
         wall_seconds=args.wall_seconds or (900.0 if args.mode == "pilot" else 3600.0),
         finalization_seconds=args.finalization_seconds,
         model=model,
+        fixtures_root=fixtures_root,
+        baseline_commit=(declared or {}).get("source", {}).get("baseline_commit")
+        if declared else None,
+        require_repair_acceptance=(args.mode == "acceptance"),
     )
 
     print(f"mode={args.mode} run_id={run_id}")
@@ -308,6 +417,8 @@ def main(argv: list[str] | None = None) -> int:
         "finalization_error": payload["execution"]["finalization"]["error"],
         "receipt_sha256": result.receipt["sha256"],
         "binding": binding,
+        "journal": payload["agent"].get("journal"),
+        "acceptance": payload.get("acceptance"),
         "oracle_tool_calls": (summary or {}).get("oracle_tool_calls"),
         "denials": (summary or {}).get("denials"),
         "event_types": (summary or {}).get("event_types"),

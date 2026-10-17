@@ -39,6 +39,116 @@ def _tool_event(tool, status, arguments, error=None):
     return {"type": "tool_use", "part": {"tool": tool, "state": state}}
 
 
+#: A minimal, real MCP stdio client. The double uses it to talk to the *actual*
+#: trusted bridge over the pinned newline-delimited JSON-RPC transport, so its
+#: oracle calls produce genuine ledger reservations and genuine trusted records.
+_MCP_CLIENT_SOURCE = '''
+import json
+import subprocess
+
+
+class MCPClient:
+    def __init__(self, command, environment):
+        self._proc = subprocess.Popen(
+            command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, text=True, env=environment, bufsize=1)
+        self._next_id = 0
+
+    def _request(self, method, params=None):
+        self._next_id += 1
+        request_id = self._next_id
+        message = {"jsonrpc": "2.0", "id": request_id, "method": method}
+        if params is not None:
+            message["params"] = params
+        self._proc.stdin.write(json.dumps(message) + "\\n")
+        self._proc.stdin.flush()
+        while True:
+            line = self._proc.stdout.readline()
+            if not line:
+                raise RuntimeError("the trusted bridge closed its stream")
+            reply = json.loads(line)
+            if isinstance(reply, dict) and reply.get("id") == request_id:
+                if "error" in reply:
+                    raise RuntimeError(f"{method} failed: {reply['error']}")
+                return reply.get("result")
+
+    def initialize(self):
+        return self._request("initialize", {
+            "protocolVersion": "2024-11-05", "capabilities": {},
+            "clientInfo": {"name": "opencode-stub", "version": "1"}})
+
+    def close(self):
+        try:
+            self._proc.stdin.close()
+            self._proc.wait(timeout=30)
+        except Exception:
+            self._proc.kill()
+
+    def tool(self, name, arguments):
+        result = self._request("tools/call", {"name": name, "arguments": arguments})
+        if not isinstance(result, dict):
+            return {"status": "error", "error": "malformed tool result"}
+        if result.get("isError"):
+            text = "".join(block.get("text", "") for block in (result.get("content") or [])
+                           if isinstance(block, dict) and block.get("type") == "text")
+            return {"status": "error", "error": text}
+        return {"status": "completed"}
+'''
+
+_STUB_SOURCE = '''
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+here = Path(__file__).resolve().parent
+if "--version" in sys.argv:
+    print("opencode v9.9.9-stub")
+    sys.exit(0)
+
+sys.path.insert(0, str(here))
+import mcp_stub_client  # noqa: E402
+
+workspace = Path.cwd()
+config = json.loads(Path(os.environ["OPENCODE_CONFIG"]).read_text(encoding="utf-8"))
+server = config["mcp"]["servers"]["oracle"]
+skeleton = [event for event in json.loads((here / "events.json").read_text(encoding="utf-8"))
+            if not (isinstance(event, dict) and event.get("type") == "tool_use"
+                    and isinstance(event.get("part"), dict)
+                    and str(event["part"].get("tool", "")).startswith("oracle_"))]
+mcp_calls = json.loads((here / "mcp_calls.json").read_text(encoding="utf-8"))
+write_candidate = json.loads((here / "write_candidate.json").read_text(encoding="utf-8"))
+
+
+def emit(event):
+    sys.stdout.write(json.dumps(event) + "\\n")
+    sys.stdout.flush()
+
+
+if write_candidate:
+    shutil.copyfile(here / "repair.c", workspace / "candidate.c")
+
+emit({"type": "step_start", "part": {}})
+emit({"type": "text", "part": {"text": "Inspect the declared evidence, then test the repair."}})
+
+client = mcp_stub_client.MCPClient(server["command"], {**os.environ, **server["environment"]})
+client.initialize()
+try:
+    for call in mcp_calls:
+        outcome = client.tool(call["tool"], call["arguments"])
+        state = {"status": outcome["status"], "input": call["arguments"]}
+        if outcome["status"] == "error":
+            state["error"] = outcome["error"]
+        emit({"type": "tool_use", "part": {"tool": "oracle_" + call["tool"], "state": state}})
+finally:
+    client.close()
+
+for event in skeleton:
+    emit(event)
+'''
+
+
 def _completed_stream(deny_shell=True, leak=None):
     events = [
         {"type": "step_start", "part": {}},
@@ -54,24 +164,30 @@ def _completed_stream(deny_shell=True, leak=None):
     return events
 
 
-def _write_stub(root: Path, events, *, write_candidate=True) -> Path:
-    """A stand-in for the pinned binary: same argv surface, deterministic output."""
+def _write_stub(root: Path, events, *, write_candidate=True, repair="reference.c",
+                mcp_calls=None) -> Path:
+    """A stand-in for the pinned binary: same argv surface, *real* MCP calls.
+
+    The double does not fabricate trusted state. It launches exactly the MCP
+    server the materialized configuration declares and performs a genuine
+    ``tools/call`` for every oracle tool it reports, so the events it emits
+    describe calls that really happened: real reservations in the ledger and real
+    records on the trusted side. Only the pinned process's *other* behaviour
+    (a denied direct tool, model text) is emulated from ``events``.
+    """
+    if mcp_calls is None:
+        mcp_calls = [
+            {"tool": "inspect", "arguments": {"function_id": "synth:apply"}},
+            {"tool": "test", "arguments": {"function_id": "synth:apply",
+                                           "candidate_path": "candidate.c"}},
+        ]
     (root / "events.json").write_text(json.dumps(events), encoding="utf-8")
-    (root / "repair.c").write_text((SLICE_DIR / "reference.c").read_text(), encoding="utf-8")
+    (root / "mcp_calls.json").write_text(json.dumps(mcp_calls), encoding="utf-8")
+    (root / "write_candidate.json").write_text(json.dumps(write_candidate), encoding="utf-8")
+    (root / "repair.c").write_text((SLICE_DIR / repair).read_text(), encoding="utf-8")
+    (root / "mcp_stub_client.py").write_text(_MCP_CLIENT_SOURCE, encoding="utf-8")
     stub = root / "opencode-stub"
-    stub.write_text(
-        f"#!{sys.executable}\n"
-        "import json, shutil, sys\n"
-        "from pathlib import Path\n"
-        "here = Path(__file__).resolve().parent\n"
-        "if '--version' in sys.argv:\n"
-        "    print('opencode v9.9.9-stub')\n"
-        "    sys.exit(0)\n"
-        "for event in json.loads((here / 'events.json').read_text()):\n"
-        "    sys.stdout.write(json.dumps(event) + '\\n')\n"
-        f"if {write_candidate!r}:\n"
-        "    shutil.copyfile(here / 'repair.c', Path.cwd() / 'candidate.c')\n",
-        encoding="utf-8")
+    stub.write_text(f"#!{sys.executable}\n" + _STUB_SOURCE, encoding="utf-8")
     stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return stub
 

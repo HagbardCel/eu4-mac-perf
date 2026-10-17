@@ -33,13 +33,15 @@ not fail the comparison; the Oracle could not complete it.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from oracle.slice import compare, corpus, harness, receipts, runstate
+from oracle.slice import budget, compare, corpus, harness, receipts, runstate
 from oracle.slice.adapters import (
     AgentAdapter,
     AttemptContext,
@@ -52,6 +54,7 @@ from oracle.slice.adapters import (
 )
 from oracle.slice.bridge import (
     RUN_ID_FILE,
+    TEST_DIR,
     Bridge,
     ToolError,
     certify_candidate,
@@ -66,6 +69,14 @@ STATUS_CERTIFIED = "certified"
 STATUS_VISIBLE_FAILED = "visible_failed"
 STATUS_HELD_OUT_FAILED = "held_out_failed"
 STATUS_ABORTED = "aborted"
+#: Repair acceptance only: the gates ran and the final candidate is byte-identical
+#: to the defective input. Not a visible failure - the candidate was never
+#: repaired at all - and never certified.
+STATUS_NOT_REPAIRED = "not_repaired"
+#: Repair acceptance only: the candidate changed, but a repair gate (required
+#: diagnostics, trusted test evidence, call reconciliation) was not satisfied, so
+#: the held-out corpus was never spent.
+STATUS_ACCEPTANCE_GATE_FAILED = "acceptance_gate_failed"
 
 CERTIFICATION_RAN = "ran"
 
@@ -85,6 +96,13 @@ class RunConfig:
     fixtures_root: Path | None = None
     baseline_commit: str | None = None
     model: dict[str, Any] | None = None
+    #: Repair acceptance (P3-B). When set, the controller enforces the repair
+    #: contract *before* the held-out corpus may be spent: the candidate must have
+    #: changed, the adapter must have completed the required diagnostics, a
+    #: trusted test record must attest the frozen bytes, and the call census must
+    #: reconcile. Generic P3-A runs leave this off, so a deterministic adapter is
+    #: never asked for an OpenCode event stream.
+    require_repair_acceptance: bool = False
 
 
 @dataclass
@@ -202,6 +220,17 @@ def _require_int(value: Any, what: str) -> int:
     return value
 
 
+def _require_counts(value: Any, what: str) -> dict[str, int]:
+    """Validate a ``{name: count}`` census: string keys, non-negative integers."""
+    mapping = _require_mapping(value, what)
+    counts: dict[str, int] = {}
+    for key, count in mapping.items():
+        if not isinstance(key, str) or not key:
+            raise BindingError(f"{what} keys must be non-empty strings")
+        counts[key] = _require_int(count, f"{what}.{key}")
+    return dict(sorted(counts.items()))
+
+
 def _validate_binding(raw: Any) -> dict[str, Any]:
     """Validate an adapter's binding metadata against a fixed schema.
 
@@ -237,6 +266,15 @@ def _validate_binding(raw: Any) -> dict[str, Any]:
             "decision": "deny",
             "reason": reason,
         })
+    completed = events.get("completed_tools")
+    if not isinstance(completed, list):
+        raise BindingError("binding.events.completed_tools must be a list")
+    validated_tools: list[str] = []
+    for index, tool in enumerate(completed):
+        if not isinstance(tool, str) or not tool:
+            raise BindingError(
+                f"binding.events.completed_tools[{index}] must be a non-empty string")
+        validated_tools.append(tool)
     return {
         "adapter": adapter,
         "binary": {
@@ -262,6 +300,13 @@ def _validate_binding(raw: Any) -> dict[str, Any]:
             "summary_sha256": _require_sha256(
                 events.get("summary_sha256"), "binding.events.summary_sha256"),
             "tool_calls": _require_int(events.get("tool_calls"), "binding.events.tool_calls"),
+            "oracle_invocations": _require_int(events.get("oracle_invocations"),
+                                               "binding.events.oracle_invocations"),
+            "oracle_by_tool": _require_counts(events.get("oracle_by_tool"),
+                                              "binding.events.oracle_by_tool"),
+            "oracle_denials": _require_counts(events.get("oracle_denials"),
+                                              "binding.events.oracle_denials"),
+            "completed_tools": validated_tools,
             "denials": validated_denials,
         },
     }
@@ -292,6 +337,175 @@ def _ledger_granted(ledger: Any) -> int | None:
         return int(ledger.granted())
     except Exception:  # pragma: no cover - defensive
         return None
+
+
+# --- repair-acceptance gates ---------------------------------------------------
+
+#: The diagnostics a repair agent must have *completed* before its candidate may
+#: be certified: one to consult the declared evidence, one to test what it wrote.
+REQUIRED_TOOLS = ("oracle_inspect", "oracle_test")
+
+
+def _test_records(run_dir: Path) -> list[dict[str, Any]]:
+    """Every trusted ``oracle_test`` record stored in the run directory."""
+    records: list[dict[str, Any]] = []
+    for path in sorted((Path(run_dir) / TEST_DIR).glob("*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):  # pragma: no cover - defensive
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
+def _reconcile_calls(binding: dict[str, Any] | None, journal: list[dict[str, Any]],
+                     granted: int | None, invocation_count: int | None) -> dict[str, Any]:
+    """Reconcile the trusted journal against the agent-visible event census.
+
+    The identity is ``N_invocations = N_admitted + N_rejected_before_admission +
+    N_denied``, where a *denied* call is an OpenCode permission refusal (it never
+    reaches the bridge) and a *rejected* call is a bridge refusal before
+    admission (it does, and consumes no reservation). An admitted call that then
+    fails stays admitted - it is never re-counted as a pre-admission rejection.
+    An invocation that fits no class fails the gate: the accounting must close.
+    """
+    problems: list[str] = []
+    admitted = [r for r in journal if r.get("decision") == budget.DECISION_ADMITTED]
+    rejected = [r for r in journal if r.get("decision") == budget.DECISION_REJECTED]
+    answerable = [r for r in rejected if r.get("reason") != budget.REASON_UNANSWERABLE]
+    unanswerable = [r for r in rejected if r.get("reason") == budget.REASON_UNANSWERABLE]
+
+    if granted is None:
+        problems.append("the ledger's granted total could not be read")
+    elif len(admitted) != granted:
+        problems.append(
+            f"the journal admits {len(admitted)} call(s) but the ledger granted {granted}")
+
+    if binding is None:
+        problems.append(
+            "no adapter event census is available, so invocations cannot be classified")
+        denied_total: int | None = None
+        oracle_by_tool: dict[str, Any] = {}
+        oracle_denials: dict[str, Any] = {}
+        binding_invocations = None
+    else:
+        events = binding["events"]
+        oracle_by_tool = dict(events.get("oracle_by_tool") or {})
+        oracle_denials = dict(events.get("oracle_denials") or {})
+        binding_invocations = events.get("oracle_invocations")
+        denied_total = sum(int(v) for v in oracle_denials.values())
+        if isinstance(binding_invocations, int) and \
+                sum(int(v) for v in oracle_by_tool.values()) != binding_invocations:
+            problems.append(
+                f"the per-tool census sums to {sum(int(v) for v in oracle_by_tool.values())} "
+                f"but the binding reports {binding_invocations} invocation(s)")
+        reached = len(admitted) + len(answerable)
+        if isinstance(binding_invocations, int) and reached + denied_total != binding_invocations:
+            problems.append(
+                f"bridge-reached calls ({reached}) plus permission denials "
+                f"({denied_total}) do not account for {binding_invocations} oracle invocation(s)")
+        if isinstance(invocation_count, int) and isinstance(binding_invocations, int) \
+                and invocation_count != binding_invocations:
+            problems.append(
+                f"the sealed event census records {invocation_count} invocation(s) but the "
+                f"binding reports {binding_invocations}")
+        journal_by_tool = Counter(f"oracle_{r.get('tool')}" for r in admitted + answerable)
+        stream_by_tool = Counter({str(k): int(v) for k, v in oracle_by_tool.items()})
+        stream_by_tool.subtract({str(k): int(v) for k, v in oracle_denials.items()})
+        expected = Counter({k: v for k, v in stream_by_tool.items() if v})
+        if journal_by_tool != expected:
+            problems.append(
+                "per-tool reconciliation failed: the journal shows "
+                f"{dict(sorted(journal_by_tool.items()))} but the event stream implies "
+                f"{dict(sorted(expected.items()))}")
+
+    return {
+        "ok": not problems,
+        "admitted": len(admitted),
+        "rejected_before_admission": len(answerable),
+        "denied": denied_total,
+        "unanswerable": len(unanswerable),
+        "reached": len(admitted) + len(answerable),
+        "invocations": binding_invocations,
+        "oracle_by_tool": dict(sorted(oracle_by_tool.items())),
+        "oracle_denials": dict(sorted(oracle_denials.items())),
+        "problems": problems,
+    }
+
+
+def _acceptance_gates(*, config: RunConfig, run_dir: Path, frozen: FrozenCandidate,
+                      defective_sha: str, binding: dict[str, Any] | None,
+                      binding_problem: str | None, journal: list[dict[str, Any]],
+                      granted: int | None) -> dict[str, Any]:
+    """Every precondition of a repair acceptance, evaluated *before* the holdout.
+
+    Each gate is recorded whether it passes or fails, so the receipt shows what
+    was checked rather than only what went wrong.
+    """
+    gates: dict[str, dict[str, Any]] = {}
+
+    changed = frozen.sha256 != defective_sha
+    gates["candidate_changed"] = {
+        "ok": changed,
+        "defective_sha256": defective_sha,
+        "final_sha256": frozen.sha256,
+        "detail": "" if changed else
+                  "the final candidate is byte-identical to the defective input",
+    }
+
+    gates["binding"] = {
+        "ok": binding is not None,
+        "detail": "" if binding is not None else (binding_problem or "no binding metadata"),
+    }
+
+    completed = sorted(binding["events"]["completed_tools"]) if binding else []
+    missing = [tool for tool in REQUIRED_TOOLS if tool not in completed]
+    gates["required_tools"] = {
+        "ok": not missing,
+        "required": list(REQUIRED_TOOLS),
+        "completed": completed,
+        "detail": "" if not missing else "never completed: " + ", ".join(missing),
+    }
+
+    records = _test_records(run_dir)
+    matching = [r for r in records if r.get("candidate_sha256") == frozen.sha256]
+    attested = [r for r in matching if r.get("source_identity") == "attested"]
+    if attested:
+        detail = ""
+    elif matching:
+        detail = ("a test record names the frozen candidate but its source identity is "
+                  "not attested")
+    elif records:
+        detail = "no trusted test record names the frozen candidate"
+    else:
+        detail = "the agent stored no trusted test record for this run"
+    gates["trusted_test_record"] = {
+        "ok": bool(attested),
+        "records": len(records),
+        "matching_records": len(matching),
+        "attested_records": len(attested),
+        "final_sha256": frozen.sha256,
+        "detail": detail,
+    }
+
+    invocation_count = None if binding is None else binding["events"].get("oracle_invocations")
+    gates["reconciliation"] = _reconcile_calls(binding, journal, granted, invocation_count)
+
+    failed = [name for name, gate in gates.items() if not gate["ok"]]
+    if not failed:
+        outcome = "passed"
+    elif "candidate_changed" in failed:
+        # An unchanged candidate dominates: there was nothing to accept, whatever
+        # else was also missing.
+        outcome = "not_repaired"
+    else:
+        outcome = "gate_failed"
+    return {"required": True, "gates": gates, "failed": failed, "outcome": outcome}
+
+
+def _acceptance_not_required() -> dict[str, Any]:
+    return {"required": False, "gates": {}, "failed": [], "outcome": "not_required"}
 
 
 def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
@@ -416,7 +630,20 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
     held_out: dict[str, Any] | None = None
     certification = "not_attempted"
     finalization_error: str | None = None
+    journal_rows: list[dict[str, Any]] = []
+    acceptance: dict[str, Any] = _acceptance_not_required()
     try:
+        # No call can be in flight once every child group is reaped, so the journal
+        # can be sealed and read as the run's complete trusted call record, and the
+        # adapter's event census can be collected. Both feed the repair gates, which
+        # run before any held-out spend.
+        try:
+            ledger.seal_pending()
+            journal_rows = ledger.tool_calls()
+        except Exception as exc:  # pragma: no cover - defensive
+            finalization_error = f"{type(exc).__name__}: {exc}"
+        binding, binding_problem = _binding_metadata(adapter)
+
         try:
             frozen = freeze_candidate(workspace.candidate_path, run_dir / "snapshot" / "final")
         except WorkspaceError as exc:
@@ -450,9 +677,29 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                 visible = _failed_verdict(corpus.VISIBLE, compare.STATUS_HARNESS_ERROR, str(exc),
                                           config.fixtures_root)
                 finalization_error = f"{type(exc).__name__}: {exc}"
-            # Only a completed, non-aborted attempt whose visible suite passes may
-            # spend the held-out corpus.
-            if abort_reason is None and visible is not None and visible["status"] == compare.STATUS_PASS:
+            # Repair-acceptance gates. They are evaluated *after* the visible-only
+            # diagnostic suite and *before* certification, so a run that fails a
+            # gate never spends the held-out corpus - and an unchanged candidate is
+            # reported as its own non-accepting outcome, not as a visible failure.
+            if config.require_repair_acceptance:
+                acceptance = _acceptance_gates(
+                    config=config, run_dir=run_dir, frozen=frozen, defective_sha=defective_sha,
+                    binding=binding, binding_problem=binding_problem, journal=journal_rows,
+                    granted=_ledger_granted(ledger))
+            gates_ok = not config.require_repair_acceptance or not acceptance["failed"]
+
+            # Only a completed, non-aborted attempt whose repair gates are satisfied
+            # and whose visible suite passes may spend the held-out corpus. The
+            # gates are named first so a rejected run reports *why* the holdout was
+            # withheld rather than being masked by a downstream visible failure.
+            if abort_reason is not None:
+                certification = f"skipped: agent aborted: {abort_reason}"
+            elif not gates_ok:
+                certification = ("skipped: acceptance gates failed ("
+                                 + ", ".join(acceptance["failed"]) + ")")
+            elif visible is None or visible["status"] != compare.STATUS_PASS:
+                certification = "skipped: visible suite did not pass"
+            else:
                 certification = CERTIFICATION_RAN
                 try:
                     held_out = certify_candidate(frozen.path, run_dir=run_dir, run_id=config.run_id,
@@ -472,9 +719,6 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                                                config.fixtures_root)
                     certification = f"failed: {type(exc).__name__}"
                     finalization_error = f"{type(exc).__name__}: {exc}"
-            else:
-                reason = ("agent aborted: " + abort_reason) if abort_reason else "visible suite did not pass"
-                certification = f"skipped: {reason}"
 
         candidate_verified = bool(
             visible is not None and visible["status"] == compare.STATUS_PASS
@@ -503,9 +747,9 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
 
         # The agent's external toolchain - if the adapter binds one - supplies the
         # pinned executable, model, configuration, prompt and event-evidence
-        # identities. The controller validates and folds them here, before the
-        # receipt is sealed; a partial or malformed binding prevents acceptance.
-        binding, binding_problem = _binding_metadata(adapter)
+        # identities. It was collected before any held-out spend (the repair gates
+        # need its census); it is validated and folded here, before the receipt is
+        # sealed, so a partial or malformed binding prevents acceptance.
         if binding is not None:
             toolchain["opencode"] = binding
         if binding_problem is not None:
@@ -520,13 +764,19 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
             granted = limit = None
             finalization_error = finalization_error or f"{type(exc).__name__}: {exc}"
 
-        # Abort-first, then infrastructure, then the candidate verdicts. A trusted
-        # host that cannot complete the evaluation must never be reported as a
-        # candidate failure, and it must never be reported as acceptance.
+        # Abort-first, then infrastructure, then the acceptance gates, then the
+        # candidate verdicts. A trusted host that cannot complete the evaluation
+        # must never be reported as a candidate failure, and it must never be
+        # reported as acceptance. An unchanged candidate gets its own outcome
+        # rather than masquerading as a visible failure.
         if frozen is None or abort_reason is not None or controller_error is not None:
             status = STATUS_ABORTED
         elif finalization_error is not None:
             status = STATUS_ABORTED
+        elif acceptance["outcome"] == "not_repaired":
+            status = STATUS_NOT_REPAIRED
+        elif acceptance["failed"]:
+            status = STATUS_ACCEPTANCE_GATE_FAILED
         elif candidate_verified:
             status = STATUS_CERTIFIED
         elif visible is None or visible["status"] != compare.STATUS_PASS:
@@ -539,6 +789,26 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
         if held_manifest is None:
             held_manifest = _manifest(corpus.HELD_OUT, config.fixtures_root)
 
+        # The snapshot is recorded relative to the staging root so a published
+        # receipt carries no user-specific absolute path. Older receipts recorded
+        # an absolute path; those stay as they were sealed.
+        snapshot: str | None = None
+        snapshot_base: str | None = None
+        if frozen is not None:
+            try:
+                snapshot = str(frozen.path.relative_to(Path(config.base_dir)))
+                snapshot_base = "base_dir"
+            except ValueError:  # pragma: no cover - defensive
+                snapshot = str(frozen.path)
+
+        journal_text, journal_summary = budget.export_calls(journal_rows)
+        try:
+            (run_dir / budget.JOURNAL_EXPORT_FILE).write_text(journal_text, encoding="utf-8")
+        except OSError as exc:  # pragma: no cover - defensive
+            finalization_error = finalization_error or (
+                f"the tool-call journal could not be exported: {exc}")
+            journal_summary = None
+
         payload: dict[str, Any] = {
             "phase": PHASE,
             "run_id": config.run_id,
@@ -546,7 +816,8 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                 "baseline_commit": config.baseline_commit,
                 "defective_candidate_sha256": defective_sha,
                 "final_candidate_sha256": frozen.sha256 if frozen else None,
-                "snapshot": str(frozen.path) if frozen else None,
+                "snapshot": snapshot,
+                "snapshot_base": snapshot_base,
                 "freeze_error": freeze_error,
             },
             "corpus": {"visible": visible_manifest, "held_out": held_manifest},
@@ -557,8 +828,15 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                 "tool_calls": granted,
                 "in_process_tool_calls": tools.calls,
                 "budget": {"granted": granted, "limit": limit},
+                "journal": journal_summary,
             },
             "execution": {
+                "limits": {
+                    "budget_calls": config.budget_calls,
+                    "max_attempts": config.max_attempts,
+                    "wall_seconds": config.wall_seconds,
+                    "finalization_seconds": config.finalization_seconds,
+                },
                 "attempts": attempts,
                 "wall_seconds": round(time.monotonic() - started, 6),
                 "abort_reason": abort_reason,
@@ -570,6 +848,7 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                     "error": finalization_error,
                 },
             },
+            "acceptance": acceptance,
             "verdict": {
                 "visible": visible,
                 "held_out": held_out,

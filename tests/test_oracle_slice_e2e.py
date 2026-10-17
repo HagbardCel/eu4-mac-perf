@@ -577,6 +577,10 @@ def _valid_binding() -> dict:
             "raw_bytes": 4096,
             "summary_sha256": "f" * 64,
             "tool_calls": 7,
+            "oracle_invocations": 9,
+            "oracle_by_tool": {"oracle_diff": 1, "oracle_inspect": 1, "oracle_test": 7},
+            "oracle_denials": {"oracle_diff": 1},
+            "completed_tools": ["oracle_inspect", "oracle_test"],
             "denials": [{"action": "shell", "resource": "*", "decision": "deny"}],
         },
     }
