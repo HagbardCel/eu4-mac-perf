@@ -27,7 +27,7 @@ Future **targeted** measurements (including further R0-M work) remain possible w
 ## Current technical direction
 
 - Renderer **reconstruction**, **differential validation**, and **elimination of unnecessary rendering work** per the canonical [rendering strategy](eu4_recommended_strategy.md) ([navigation](roadmap.md)).
-- **Next phase (primary capability):** ground-truth acquisition + agent-driven C++ reconstruction of the graphics stack, per the [Oracle plan of record](oracle/PLAN_OF_RECORD.md) ([program index](oracle/README.md)). No EU IV launch until its P3/P4 gates pass.
+- **Next phase (primary capability):** ground-truth acquisition + agent-driven C++ reconstruction of the graphics stack, per the [Oracle plan of record](oracle/PLAN_OF_RECORD.md) ([program index](oracle/README.md)). The Oracle **P3** slice is complete and released (`oracle-v2-p3b-20261017`); the program is now in **P4** (offline recorder + synthetic target), then **P4b** (synthetic graphics replay). No EU IV launch until P4/P4b pass.
 - Consolidated rendering knowledge: [macOS rendering findings](eu4_macos_rendering_findings.md), [alternatives ranking](eu4_rendering_alternatives_ranked.md).
 
 ## Reverse engineering (PR D tooling)

@@ -93,13 +93,15 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 | **P5** | One co-designed authorized acquisition; first real function (`_GfxSetConstantBuffer`) | Pre-registered frame target + closure predicate met (see *Frame replayability and resource closure*): ≥1 qualified replayable function fixture **and** ≥1 complete independently replayable frame. Seal partial as partial; document gaps; **go/no-go** before reconstruction claims |
 | **Subsequent** | RE0–RE2 reconstruction loops | RE3 binary integration optional, separately gated |
 
-> **P3 status (2026-10-17):** **complete.** PR-A - the deterministic slice
-> (synthetic target, harness, completeness comparator, five-tool MCP bridge,
+> **P3 status (2026-10-17):** **complete and released.** PR-A - the deterministic
+> slice (synthetic target, harness, completeness comparator, five-tool MCP bridge,
 > restart-safe budget ledger, controller with process-group abort and immutable
 > candidate snapshots, sealed receipts) - is implemented under `oracle/slice/`.
 > PR-B pins the OpenCode binary and performed the single declared acceptance run
 > `p3b-acceptance-20261017`, which **certified** (visible 12/12, held-out 10/10);
-> the sealed receipt is published and re-verified model-free in CI. See
+> the sealed receipt is published and re-verified model-free in CI. Merged to
+> `main` at `f751555` (PR #59) and released as the annotated tag
+> `oracle-v2-p3b-20261017`, which points at that merge commit. See
 > [P3_SLICE.md](P3_SLICE.md) and [P3B_ACCEPTANCE.md](P3B_ACCEPTANCE.md).
 
 ## Hard rule

@@ -1,7 +1,7 @@
 # P3 synthetic OpenCode slice
 
-**Status:** complete. PR-A (deterministic infrastructure) is implemented under
-`oracle/slice/`; PR-B binds the pinned OpenCode binary
+**Status:** complete and released. PR-A (deterministic infrastructure) is
+implemented under `oracle/slice/`; PR-B binds the pinned OpenCode binary
 (`oracle/slice/opencode.py`, `oracle/slice/opencode_config/`), drives the pilot,
 the pre-registration and the one declared acceptance run
 (`oracle/slice/opencode_run.py`), and re-verifies publications through a
@@ -9,8 +9,9 @@ model-free guard (`tooling/common/check_oracle_receipt.py`, wired into CI). The
 single declared evaluation, run `p3b-acceptance-20261017`, **certified** - visible
 12/12, held-out 10/10 - with its sealed receipt published under
 `docs/oracle/receipts/` and the narrative in
-[P3B_ACCEPTANCE.md](P3B_ACCEPTANCE.md). Nothing here launches EU IV or implements
-a recorder.
+[P3B_ACCEPTANCE.md](P3B_ACCEPTANCE.md). Merged to `main` at `f751555` (PR #59) and
+released as the annotated tag **`oracle-v2-p3b-20261017`**, which points at that
+merge commit. Nothing here launches EU IV or implements a recorder.
 
 This document is authoritative for the P3 slice. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the preserved blueprint it refines is in
