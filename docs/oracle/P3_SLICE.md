@@ -469,8 +469,14 @@ explicitly.
   template and materialized digests** (from the declared substitution map) and the
   **effective execution bounds**, and refuses if any differs - so a clean commit C
   that changes a fixture or the permissions template is caught *before* the agent is
-  built. Bounds must be positive and finite (`budget_calls` a positive integer), and
-  the staging root must resolve outside the repository. The adapter additionally
+  built. Bounds must be positive and finite (`budget_calls` a positive integer). The
+  staging root must resolve outside the repository, and the run id must be a single
+  path component (letters, digits, `.`, `_`, `-`; at most 96 characters) whose run
+  directory stays strictly inside the staging root and outside the repository. The
+  run directory must be *fresh*: neither it nor any entry directly under it may be a
+  pre-existing symlink - a `workspace` symlink is exactly how the agent's project
+  directory could be routed back into the repository. `materialize_workspace` and
+  `freeze_candidate` refuse a symlinked destination as well. The adapter additionally
   refuses to launch unless the configuration it renders is byte-identical to the
   declared digest. Acceptance has no prompt flexibility: `--prompt pilot` is refused
   before the adapter - and therefore the model - is ever constructed.
@@ -497,7 +503,8 @@ means it was reconstructed after the fact and carries no execution-time weight.
 | The corpus and configuration still match the declaration | the preflight recomputes the visible/held-out manifests and the configuration template and materialized digests before the adapter is built | the same recomputation from the pinned tree | - |
 | The child runs under the validated configuration | `OpenCodeAdapter.prepare` refuses unless the rendered bytes match the declared digests | the sealed `binding.config` digests | - |
 | The execution bounds are usable | positive and finite bounds; `RunConfig` is built from the one validated object, so no later default can apply | `run.*` against the pre-registration | - |
-| The staging root is outside the repository | symmetric containment check, before any workspace is materialized | - | - |
+| The staging root and run directory are outside the repository | symmetric containment on the resolved staging root, and on the resolved run directory - a single-component, fresh, symlink-free child of the staging root - before any workspace is materialized | - | - |
+| The workspace cannot be redirected into the repository | the run directory must contain no pre-existing symlink, and `materialize_workspace` / `freeze_candidate` refuse a symlinked destination | - | - |
 | Both corpora pass | `certify_candidate`, once, after the gates | replay of both corpora in a fresh interpreter rooted in the pinned revision | - |
 | The corpora are unchanged | - | drift check recomputes both manifests from the tree | - |
 | No held-out material reaches the agent-visible surface | the binding fails closed on a leak in the stream | leak scan of the published summary | - |
@@ -533,9 +540,10 @@ reference only** and lists it as unauthenticated. Nothing here upgrades the
 original finding: the run's conditions remain the nine in the original
 pre-registration, and the gate contract above is enforced for runs after P3g.
 The committed-declaration, prompt-identity and journal-publication controls were
-added by P3h, and the corpus/configuration preflight, the positive-bounds and the
-staging-root checks by P3h4; all are likewise enforced only for runs after them,
-and the P3-B run predates them and its sealed evidence is unchanged.
+added by P3h, the corpus/configuration preflight, the positive-bounds and the
+staging-root checks by P3h4, and the run-id grammar and run-directory containment
+by P3h5; all are likewise enforced only for runs after them, and the P3-B run
+predates them and its sealed evidence is unchanged.
 
 ### Tests
 
@@ -561,6 +569,8 @@ and the P3-B run predates them and its sealed evidence is unchanged.
 | A held-out fixture or the configuration template changed in a later clean commit is refused before the adapter is built | `tests/test_oracle_slice_driver.py` |
 | A declared or explicit zero, negative or non-finite bound is refused as invalid | `tests/test_oracle_slice_driver.py` |
 | A staging root inside the repository is refused before launch | `tests/test_oracle_slice_driver.py` |
+| An absolute, traversing, over-long or malformed run id is refused before the adapter is built | `tests/test_oracle_slice_driver.py` |
+| A symlinked run directory, or a `workspace` symlink under a real run directory, is refused before anything is materialized | `tests/test_oracle_slice_driver.py`, `tests/test_oracle_slice_controller.py` |
 | The adapter refuses to launch unless the rendered configuration matches the declared digests | `tests/test_oracle_slice_opencode.py` |
 
 The acceptance run itself is published as a sealed receipt under

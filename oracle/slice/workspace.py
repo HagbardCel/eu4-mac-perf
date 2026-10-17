@@ -67,6 +67,11 @@ def materialize_workspace(dest: Path, *, candidate_src: Path, header_src: Path,
                           visible_root: Path | None = None) -> Workspace:
     """Create a fresh candidate-only workspace at ``dest``."""
     dest = Path(dest)
+    # A symlink here would make ``mkdir(exist_ok=True)`` succeed and route every
+    # write below through the link - the defect the run-directory check guards at
+    # the boundary. Refusing it here too closes the race between the two.
+    if dest.is_symlink():
+        raise WorkspaceError(f"workspace destination must not be a symlink: {dest}")
     if dest.exists() and any(dest.iterdir()):
         raise WorkspaceError(f"workspace destination is not empty: {dest}")
     dest.mkdir(parents=True, exist_ok=True)
@@ -101,6 +106,8 @@ def freeze_candidate(src: Path, dest_dir: Path) -> FrozenCandidate:
     if src.suffix != ".c":
         raise WorkspaceError(f"candidate to freeze must be a .c file: {src}")
     dest_dir = Path(dest_dir)
+    if dest_dir.is_symlink():
+        raise WorkspaceError(f"snapshot destination must not be a symlink: {dest_dir}")
     if dest_dir.exists() and any(dest_dir.iterdir()):
         raise WorkspaceError(f"snapshot destination is not empty: {dest_dir}")
     dest_dir.mkdir(parents=True, exist_ok=True)

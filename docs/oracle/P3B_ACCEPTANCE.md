@@ -142,17 +142,19 @@ It does **not** mean:
   check), refuses an undeclared prompt before the adapter - and therefore the
   model - is built, and aborts a run whose mandatory journal cannot be published
   instead of certifying it.
-* **This run also predates the corpus/configuration preflight, the positive-bounds
-  and the staging-root checks.** P3h4 added them: because the ancestor-based
-  revision policy permits a later commit C, the preflight now recomputes the
-  visible and held-out corpus manifests and the configuration template and
-  materialized digests and refuses any drift, refuses zero, negative or non-finite
-  execution bounds (building `RunConfig` from the one validated object, so a
-  declared zero can never become a default), refuses a staging root inside the
-  repository, and has the adapter refuse to launch unless the bytes it renders are
-  byte-identical to the declared digests. Nothing about this run is retrofitted: it
-  predates all of these, and its sealed receipt, artifact and summaries are
-  unchanged.
+* **This run also predates the corpus/configuration preflight, the positive-bounds,
+  the staging-root and the run-directory checks.** P3h4/P3h5 added them: because the
+  ancestor-based revision policy permits a later commit C, the preflight now
+  recomputes the visible and held-out corpus manifests and the configuration template
+  and materialized digests and refuses any drift, refuses zero, negative or non-finite
+  execution bounds (building `RunConfig` from the one validated object, so a declared
+  zero can never become a default), and requires the run id to be a single path
+  component whose run directory stays strictly inside the staging root and outside the
+  repository with no pre-existing symlink - so a `workspace` symlink cannot route the
+  agent's project directory back into the repository. It also has the adapter refuse
+  to launch unless the bytes it renders are byte-identical to the declared digests.
+  Nothing about this run is retrofitted: it predates all of these, and its sealed
+  receipt, artifact and summaries are unchanged.
 * **The candidate snapshot is recorded as an absolute path.** Earlier receipts
   recorded `source.snapshot` absolutely; this one does too. Later runs record it
   relative to the staging root, so a committed receipt carries no user-specific

@@ -229,18 +229,38 @@ def _corpus_identity(fixtures_root: Path | None = None) -> dict:
     }
 
 
-def _staging_problems(staging_root: Path) -> list[str]:
-    """A staging root inside the repository would put the workspace inside it.
+def _outside_repo_problems(path: Path, *, what: str) -> list[str]:
+    """A write location inside the repository would expose held-out material.
 
     Symmetric containment, both paths resolved first so a symlink cannot route
-    around the check: the staging root must not be a child of the repository, and
-    the repository must not be a child of the staging root.
+    around the check: the location must not be a child of the repository, and the
+    repository must not be a child of the location.
     """
-    staging = Path(staging_root).resolve()
+    target = Path(path).resolve()
     repo = REPO_ROOT.resolve()
-    if staging.is_relative_to(repo) or repo.is_relative_to(staging):
-        return [f"the staging root {staging} must lie outside the repository {repo}"]
+    if target.is_relative_to(repo) or repo.is_relative_to(target):
+        return [f"the {what} {target} must lie outside the repository {repo}"]
     return []
+
+
+def _staging_problems(staging_root: Path) -> list[str]:
+    """The staging root must lie outside the repository."""
+    return _outside_repo_problems(staging_root, what="staging root")
+
+
+def _run_dir_problems(staging_root: Path, run_id: str) -> list[str]:
+    """The run directory must be a fresh, contained, symlink-free child.
+
+    Reuses the controller's structural check - so the run-id grammar and the
+    "no symlink under the run directory" rule have one definition - and adds
+    repository containment on the resolved run directory, so the agent's workspace
+    can never be materialized inside the repository.
+    """
+    problems = controller.run_directory_problems(staging_root, run_id)
+    if problems:
+        return problems
+    return _outside_repo_problems(Path(staging_root).resolve() / run_id,
+                                  what="run directory")
 
 
 def _visible_verdict(candidate: Path, run_id: str) -> dict:
@@ -556,8 +576,9 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = staging_root / run_id
 
     staging_problems = _staging_problems(staging_root)
-    if staging_problems:
-        raise SystemExit("; ".join(staging_problems))
+    run_dir_problems = _run_dir_problems(staging_root, run_id)
+    if staging_problems or run_dir_problems:
+        raise SystemExit("; ".join(staging_problems + run_dir_problems))
 
     if args.mode == "preregister":
         declaration = _preregistration(run_id=run_id, staging_root=staging_root, args=args,

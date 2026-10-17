@@ -15,7 +15,8 @@ They cover every prospective defect the reviews found:
   fixture or the OpenCode configuration while leaving the pinned Python sources
   untouched;
 * explicit, declared or non-finite execution bounds; and
-* a staging root inside the repository.
+* a staging root, or a run directory, inside the repository - including an
+  absolute/traversing/over-long run id and a pre-existing ``workspace`` symlink.
 """
 from __future__ import annotations
 
@@ -389,6 +390,90 @@ class StagingRootTests(unittest.TestCase):
                         opencode_run.main(["--mode", "acceptance", "--run-id", "r",
                                            "--staging-root", str(root / "staging")])
             self.assertIn("must lie outside the repository", str(ctx.exception))
+
+
+class RunIdentityTests(unittest.TestCase):
+    """The run id names one path component under the staging root.
+
+    Validating the staging root alone is not enough: ``/`` discards it, ``..``
+    escapes it, and a pre-existing symlink - the run directory itself or a child
+    such as ``workspace`` - routes the agent's project directory back into the
+    repository. Each case must be refused before the adapter is ever constructed.
+    """
+
+    def test_valid_run_ids_are_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging = root / "staging"
+            staging.mkdir()
+            for run_id in ("run-driver", "p3b-acceptance-20261017", "a.b_c-1"):
+                self.assertEqual(opencode_run._run_dir_problems(staging, run_id), [])
+            self.assertEqual(opencode_run._run_dir_problems(
+                staging, opencode_run._default_run_id("acceptance")), [])
+
+    def test_malformed_run_ids_are_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            staging = Path(tmp) / "staging"
+            staging.mkdir()
+            for run_id in ("", " ", ".", "..", "a/b", ".hidden", "/tmp/evil", "../escape",
+                           "a" * 97):
+                self.assertTrue(opencode_run._run_dir_problems(staging, run_id), run_id)
+
+    def test_main_refuses_a_traversal_run_id_before_the_adapter_is_built(self):
+        outside = str(Path(tempfile.gettempdir()) / "p3h5-driver-staging")
+        with mock.patch.object(opencode_run.OpenCodeAdapter, "__init__",
+                               side_effect=AssertionError("adapter was built")) as built:
+            with self.assertRaises(SystemExit) as ctx:
+                opencode_run.main(["--mode", "acceptance", "--run-id", "../escape",
+                                   "--staging-root", outside])
+        self.assertIn("single path component", str(ctx.exception))
+        built.assert_not_called()
+
+    def test_an_overlong_run_id_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            staging = Path(tmp) / "staging"
+            staging.mkdir()
+            problems = opencode_run._run_dir_problems(staging, "r" * 97)
+        self.assertTrue(any("longer than 96" in problem for problem in problems), problems)
+
+    def test_a_symlinked_run_directory_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            staging = root / "staging"
+            staging.mkdir()
+            (root / "target").mkdir()
+            (staging / "run-x").symlink_to(root / "target")
+            problems = opencode_run._run_dir_problems(staging, "run-x")
+        self.assertTrue(any("must not be a symlink" in problem for problem in problems), problems)
+
+    def test_a_workspace_symlink_is_refused_before_materialization(self):
+        """A real run directory whose ``workspace`` escapes into the repository.
+
+        ``materialize_workspace`` would follow the link, write ``candidate.c`` into
+        the repository, and hand the agent a project directory inside it - the class
+        of isolation failure the pilot exposed. It must be refused first.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = _setup(root)
+            staging = data["staging"]
+            target = root / "empty-target"
+            target.mkdir()
+            run_dir = staging / "run-x"
+            run_dir.mkdir()
+            (run_dir / "workspace").symlink_to(target)
+
+            with _patched(root):
+                self.assertTrue(opencode_run._run_dir_problems(staging, "run-x"))
+                with mock.patch.object(opencode_run.OpenCodeAdapter, "__init__",
+                                       side_effect=AssertionError("adapter was built")) as built:
+                    with self.assertRaises(SystemExit) as ctx:
+                        opencode_run.main(["--mode", "acceptance", "--run-id", "run-x",
+                                           "--staging-root", str(staging)])
+
+            self.assertIn("must not be a symlink", str(ctx.exception))
+            built.assert_not_called()
+            self.assertFalse((target / "candidate.c").exists())
 
 
 if __name__ == "__main__":  # pragma: no cover

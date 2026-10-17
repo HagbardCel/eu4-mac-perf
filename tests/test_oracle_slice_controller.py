@@ -13,8 +13,8 @@ import time
 import unittest
 from pathlib import Path
 
-from oracle.slice import compare, corpus, harness, receipts, workspace
-from oracle.slice.adapters import ProcessSupervisor
+from oracle.slice import compare, controller, corpus, harness, receipts, workspace
+from oracle.slice.adapters import BindingError, ProcessSupervisor
 from oracle.slice.bridge import certify_candidate, write_controller_token
 from oracle.slice.budget import RunBudgetLedger
 
@@ -323,6 +323,77 @@ class ProcessSupervisorTests(unittest.TestCase):
             self.assertTrue(run.timed_out)
             self.assertIsNone(run.stdout_path)
             self.assertIsNone(run.stream_digest())
+
+
+class RunDirectoryTests(unittest.TestCase):
+    """The run directory must be a fresh, contained child of the staging root.
+
+    The controller materializes the agent workspace under it, so a run id that
+    escapes the staging root - or a pre-existing symlink anywhere under the run
+    directory - must be refused before anything is written. A malformed run identity
+    is a precondition failure, not a failed evaluation: none has begun.
+    """
+
+    def _config(self, base_dir: Path, run_id: str) -> controller.RunConfig:
+        return controller.RunConfig(run_id=run_id, candidate_src=SLICE_DIR / "target.c",
+                                    base_dir=base_dir, budget_calls=10)
+
+    def test_run_id_problems_reject_escapes_and_over_length(self):
+        for good in ("run-driver", "p3b-acceptance-20261017", "a.b_c-1"):
+            self.assertEqual(controller.run_id_problems(good), [])
+        for bad in ("", " ", ".", "..", "a/b", ".hidden", "/tmp/evil", "../escape", "a" * 97):
+            self.assertTrue(controller.run_id_problems(bad), bad)
+
+    def test_run_refuses_a_malformed_run_id_before_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "staging"
+            base.mkdir()
+            with self.assertRaises(BindingError):
+                controller.run(self._config(base, "../escape"), None)
+            self.assertEqual(list(base.iterdir()), [])
+
+    def test_run_refuses_a_workspace_symlink_before_materialization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "staging"
+            base.mkdir()
+            target = root / "target"
+            target.mkdir()
+            run_dir = base / "run-x"
+            run_dir.mkdir()
+            (run_dir / "workspace").symlink_to(target)
+            with self.assertRaises(BindingError):
+                controller.run(self._config(base, "run-x"), None)
+            self.assertFalse((target / "candidate.c").exists())
+
+    def test_run_directory_problems_accept_a_fresh_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "staging"
+            base.mkdir()
+            self.assertEqual(controller.run_directory_problems(base, "run-x"), [])
+
+    def test_materialize_workspace_refuses_a_symlinked_destination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            target.mkdir()
+            dest = root / "workspace"
+            dest.symlink_to(target)
+            with self.assertRaises(workspace.WorkspaceError):
+                workspace.materialize_workspace(dest, candidate_src=SLICE_DIR / "reference.c",
+                                                header_src=SLICE_DIR / "synth.h")
+            self.assertFalse((target / "candidate.c").exists())
+
+    def test_freeze_candidate_refuses_a_symlinked_destination(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target"
+            target.mkdir()
+            dest = root / "snapshot"
+            dest.symlink_to(target)
+            with self.assertRaises(workspace.WorkspaceError):
+                workspace.freeze_candidate(SLICE_DIR / "reference.c", dest)
+            self.assertFalse((target / "candidate.c").exists())
 
 
 if __name__ == "__main__":

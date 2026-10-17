@@ -516,7 +516,65 @@ def _acceptance_not_required() -> dict[str, Any]:
     return {"required": False, "gates": {}, "failed": [], "outcome": "not_required"}
 
 
+#: A run id is exactly one path component. The grammar is deliberately narrow: an
+#: absolute id, a separator, or a ``.``/``..`` component would move the run
+#: directory out from under the staging root, and the run directory is where the
+#: agent's workspace is materialized.
+RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+#: The bridge generates an ``oracle_diff`` test id as ``f"{run_id}-{12 hex}"`` and
+#: the tool schema/regex reject any id longer than 128 characters, so a run id much
+#: over 96 would produce test ids the agent could never use. It also keeps the
+#: derived directory and file names well within the 255-byte component limit.
+RUN_ID_MAX_LENGTH = 96
+
+
+def run_id_problems(run_id: Any) -> list[str]:
+    """Why ``run_id`` is not a usable single path component, if it is not."""
+    if not isinstance(run_id, str) or not RUN_ID_PATTERN.match(run_id):
+        return [f"run id {run_id!r} must be a non-empty single path component "
+                "(letters, digits, '.', '_', '-')"]
+    if len(run_id) > RUN_ID_MAX_LENGTH:
+        return [f"run id {run_id!r} is longer than {RUN_ID_MAX_LENGTH} characters"]
+    return []
+
+
+def run_directory_problems(base_dir: Path, run_id: Any) -> list[str]:
+    """Why the run directory is not a safe, fresh location, if it is not.
+
+    The agent's workspace is materialized under the run directory, so the run
+    directory must be a *fresh* child of the staging root: it must stay strictly
+    inside the resolved base directory, it must not itself be a symlink, and a
+    pre-existing run directory must not contain a symlink either. A ``workspace``
+    symlink pointing back into the repository would otherwise defeat the isolation
+    the staging check establishes, because ``materialize_workspace`` follows the
+    link when it writes ``candidate.c``. The run never creates a symlink under its
+    own directory, so refusing one costs nothing.
+    """
+    problems = run_id_problems(run_id)
+    if problems:
+        return problems
+    base = Path(base_dir).resolve()
+    candidate = base / run_id
+    if candidate.is_symlink():
+        return [f"the run directory {candidate} must not be a symlink"]
+    resolved = candidate.resolve()
+    if resolved == base or not resolved.is_relative_to(base):
+        return [f"the run directory {resolved} must lie strictly inside {base}"]
+    if candidate.is_dir():
+        for child in sorted(candidate.iterdir()):
+            if child.is_symlink():
+                problems.append(
+                    f"the run directory child {child.name!r} must not be a symlink")
+    return problems
+
+
 def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
+    problems = run_directory_problems(config.base_dir, config.run_id)
+    if problems:
+        # A malformed run identity is not a failed evaluation - none has begun - so
+        # this is a precondition failure, raised before a receipt can exist.
+        raise BindingError("invalid run directory: " + "; ".join(problems))
     run_dir = Path(config.base_dir) / config.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / RUN_ID_FILE).write_text(config.run_id, encoding="utf-8")
