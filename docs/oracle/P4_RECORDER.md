@@ -3,11 +3,12 @@
 **Status:** in progress. **P4.1** (the record schema, canonicalization and the
 immutable evidence store), **P4.2** (the portable C11 synthetic target with a
 deterministic golden transcript), **P4.3** (the native recorder core's exact
-capture accounting) and **P4.4** (the pluggable capture policy) are implemented
-under `oracle/recorder/` with offline tests; offline finalization and concurrency
-follow. **Nothing here launches EU IV, opens a game process, or attaches to a
-binary**: the recorder consumes already-captured native events, and P4 is proven
-entirely offline.
+capture accounting), **P4.4** (the pluggable capture policy) and **P4.5** (offline
+finalization: resource identity, aliasing and semantic dedup) are implemented
+under `oracle/recorder/` with offline tests; concurrency and bounded capture under
+load follow (P4.7). **Nothing here launches EU IV, opens a game process, or
+attaches to a binary**: the recorder consumes already-captured native events, and
+P4 is proven entirely offline.
 
 This document is authoritative for P4. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the trust boundary is a refinement of the
@@ -221,6 +222,36 @@ re-derives the bytes so a test fails if the two drift. That digest is exactly th
 under different policies are kept distinct even when the observed behavior is
 identical.
 
+## Offline finalization (P4.5)
+
+The recorder counts; it does not decide equality. `oracle/recorder/finalize.py`
+closes the capture/classification split, offline, over the sealed records a run
+produced and the recorder's native counters:
+
+* **resource identity follows the lifetime** (`resource_id@generation`), never the
+  handle an observation happened to use - so two handles onto one resource collapse
+  to one identity, while a reused slot in a new generation is a different resource;
+  the content `version` is kept apart from the lifetime;
+* **fully qualified records are classified** into `unique` and `verified_repeat` by
+  their `semantic_digest` - canonical semantic equality, never a hot-path byte
+  compare. Occurrence metadata (call id, thread, epoch, scenario) is excluded, so
+  the *same* behavior observed twice deduplicates; equal arguments over a
+  *different* pre-state do not, because the pre-state is part of the projection;
+* the **accounting identity** is asserted, not assumed:
+
+  ```
+  intercepted = unique + verified_repeat + incomplete + counted_only + lost
+  ```
+
+  so a run cannot report "nothing new" while quietly dropping observations.
+
+`classify` refuses a `counted-only` record (such observations exist only as a
+counter), refuses a `captured` record that does not qualify for semantic
+comparison, and refuses a materialized record that carries sub-observation loss.
+The native capture that *populates* these records - reading the state of the
+resource an observation addressed - lands in P4.6; P4.5 defines the classification
+the capture must satisfy.
+
 ## Fidelity modes (owned by the reconstruction contract)
 
 The three modes - **faithful**, **GL optimization**, **GPU/backend redesign** -
@@ -285,3 +316,17 @@ See `tests/test_oracle_recorder_native.py`.
   different digests.
 
 See `tests/test_oracle_recorder_native.py`.
+
+**P4.5 - offline finalization**, identity, aliasing and semantic dedup:
+
+* the same behavior observed twice (different call id, thread, epoch, scenario) is
+  one `unique` and one `verified_repeat`;
+* equal arguments over a different pre-state are *not* deduplicated, and a
+  different function is not the same behavior;
+* two handles onto one resource collapse to one identity, a reused slot in a new
+  generation does not, and the content version is preserved apart from the lifetime;
+* the accounting identity is asserted, a `counted-only` record and a
+  sub-observation-lossy record are refused, and a `captured` record that does not
+  qualify for semantic comparison is rejected.
+
+See `tests/test_oracle_recorder_finalize.py`.
