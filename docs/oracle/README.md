@@ -1,15 +1,19 @@
 # EU IV Oracle — ground-truth acquisition and reconstruction
 
-**Status:** next-phase capability, design + audit stage. The P3 slice is
-**complete**: the deterministic infrastructure under `oracle/slice/`, the pinned
-OpenCode **binding** (`oracle/slice/opencode.py`) with its guarded, model-free CI
-re-verification (`tooling/common/check_oracle_receipt.py`), and the single
-declared P3-B acceptance run `p3b-acceptance-20261017`, which **certified**
-(visible 12/12, held-out 10/10) and whose sealed receipt is published under
-`docs/oracle/receipts/`. No recorder or runtime capture is implemented yet.
-Authoritative for **capture/validation
-infrastructure** only; the function-level reconstruction lifecycle stays in the
-PR #44 contract `docs/renderer-reconstruction-and-differential-validation.md`
+**Status:** the P3 slice is **complete and on `main`**, released as annotated tag
+`oracle-v2-p3b-20261017` (merge `f751555`, PR #59): the deterministic
+infrastructure under `oracle/slice/`, the pinned OpenCode **binding**
+(`oracle/slice/opencode.py`) with its guarded, model-free CI re-verification
+(`tooling/common/check_oracle_receipt.py`), and the single declared P3-B
+acceptance run `p3b-acceptance-20261017`, which **certified** (visible 12/12,
+held-out 10/10) and whose sealed receipt is published under
+`docs/oracle/receipts/`. The program is now in the **P4** stage: a
+function-agnostic, policy-pluggable recorder plus a synthetic target, then a
+synthetic graphics replay harness (**P4b**). **No recorder or runtime capture is
+implemented yet**, and no EU IV launch is authorized until P4/P4b pass. This
+directory is authoritative for **capture/validation infrastructure** only; the
+function-level reconstruction lifecycle stays in the PR #44 contract
+`docs/renderer-reconstruction-and-differential-validation.md`
 (see [open PR #44](https://github.com/HagbardCel/eu4-mac-perf/pull/44), not yet
 on `main`).
 
