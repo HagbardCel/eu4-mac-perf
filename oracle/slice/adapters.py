@@ -4,7 +4,7 @@ An adapter performs one *attempt* at a time. The controller owns attempts,
 budget and the wall clock; the process supervisor owns the process tree, so a
 stalled or crashed agent cannot leave a compiler, test binary or MCP server
 running. Every child is started in its own session (process group) and the whole
-group is terminated and reaped on timeout or abort.
+group is terminated and reaped - after every exit, timed out or not.
 
 Two adapters ship in PR-A:
 
@@ -86,7 +86,10 @@ class ProcessSupervisor:
 
         If the deadline has already expired the command is *not* started: there
         is no borrowed time to spend. Output is captured under the harness's
-        OS-enforced size limit, so a noisy agent cannot exhaust memory.
+        OS-enforced size limit, so a noisy agent cannot exhaust memory. The
+        whole process group is cleaned up after *every* exit - a successful exit
+        by the leader does not exempt its descendants. This is why the
+        supervisor never has to learn about a group to be able to kill it.
         """
         budget = self.remaining()
         if budget <= 0:

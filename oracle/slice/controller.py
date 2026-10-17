@@ -23,6 +23,13 @@ MCP tools and the visible tests it initiates; a fresh **finalization budget**
 bounds freezing, the trusted visible verification, certification and receipt
 publication. A fresh finalization budget never revives an expired run nor makes
 an aborted run eligible for certification.
+
+Classification is abort-first, then infrastructure, then the candidate verdicts.
+A trusted-host fault (a missing or malformed corpus, a harness or toolchain that
+cannot operate, a compiler whose identity cannot be established) is recorded in
+``execution.finalization.error`` and classified ``aborted`` - it is never
+reported as ``visible_failed`` or ``held_out_failed``, because the candidate did
+not fail the comparison; the Oracle could not complete it.
 """
 from __future__ import annotations
 
@@ -127,10 +134,11 @@ def _manifest(set_name: str, fixtures_root: Path | None) -> dict[str, Any] | Non
         return None
 
 
-def _toolchain(cc: str, flags: tuple[str, ...]) -> dict[str, Any]:
+def _toolchain(cc: str, flags: tuple[str, ...], *, deadline: float | None = None,
+               capture_dir: Path | None = None) -> dict[str, Any]:
     slice_dir = harness.SLICE_DIR
     try:
-        version = harness.compiler_version(cc)
+        version = harness.compiler_version(cc, deadline=deadline, capture_dir=capture_dir)
     except harness.HarnessError as exc:  # pragma: no cover - defensive
         version = f"unavailable: {exc}"
     return {
@@ -142,6 +150,14 @@ def _toolchain(cc: str, flags: tuple[str, ...]) -> dict[str, Any]:
         "driver_sha256": receipts.file_sha256(slice_dir / "driver.c"),
         "interface_sha256": receipts.file_sha256(slice_dir / "synth.h"),
     }
+
+
+def _compiler_identity_known(toolchain: dict[str, Any]) -> bool:
+    """Whether the recorded toolchain identifies its compiler unambiguously."""
+    version = toolchain.get("compiler_version")
+    if not isinstance(version, str) or not version:
+        return False
+    return version != "unknown" and not version.startswith("unavailable")
 
 
 def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
@@ -198,8 +214,22 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
                 result = AttemptResult("timeout", str(exc))
             except Exception as exc:  # an adapter fault is not a controller fault
                 result = AttemptResult("crashed", f"{type(exc).__name__}: {exc}")
+            # The wall clock belongs to the controller, not to the adapter: the
+            # deadline is re-asserted for *every* result, not only for ``done``.
+            # This matters most on the final permitted attempt, where a late
+            # ``progress`` would otherwise be misreported as an attempt-limit
+            # exhaustion instead of a deadline violation.
+            if supervisor.expired():
+                result = AttemptResult(
+                    "timeout",
+                    f"run deadline exceeded during the agent attempt ({result.status})")
             candidate_sha = (receipts.file_sha256(workspace.candidate_path)
                              if workspace.candidate_path.is_file() else None)
+            # Hashing the candidate is outside the adapter's execution time, so
+            # the deadline is re-checked before a ``done`` result may be accepted.
+            if result.status == "done" and supervisor.expired():
+                result = AttemptResult(
+                    "timeout", "run deadline exceeded before the candidate was accepted")
             attempts.append({
                 "attempt": attempt,
                 "status": result.status,
@@ -232,126 +262,149 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
     finalize_started = time.monotonic()
     finalize_deadline = finalize_started + config.finalization_seconds
 
+    # Every expected trusted-host fault below is converted into an explicit
+    # result object *before* the receipt is constructed, so receipt construction
+    # cannot fail for an expected fault. The ``finally`` guarantees the ledger is
+    # closed on every path, including an unexpected one.
     frozen: FrozenCandidate | None = None
     freeze_error: str | None = None
-    try:
-        frozen = freeze_candidate(workspace.candidate_path, run_dir / "snapshot" / "final")
-    except WorkspaceError as exc:
-        freeze_error = str(exc)
-
     visible: dict[str, Any] | None = None
     held_out: dict[str, Any] | None = None
     certification = "not_attempted"
     finalization_error: str | None = None
-    if frozen is not None:
-        # The visible suite is always run for a frozen candidate: it is the
-        # diagnostic evidence for an aborted or failed attempt.
+    try:
         try:
-            visible = _suite_verdict(frozen.path, corpus.VISIBLE,
-                                     build_dir=run_dir / "verdict" / "visible",
-                                     run_id=config.run_id, timeout_s=config.timeout_s,
-                                     cc=config.cc, fixtures_root=config.fixtures_root,
-                                     deadline=finalize_deadline)
-        except harness.BuildError as exc:
-            visible = _failed_verdict(corpus.VISIBLE, compare.STATUS_BUILD_ERROR,
-                                      "candidate failed to compile: " + (exc.stderr or "")[-400:],
-                                      config.fixtures_root)
-        except harness.HarnessError as exc:
-            visible = _failed_verdict(corpus.VISIBLE, compare.STATUS_HARNESS_ERROR, str(exc),
-                                      config.fixtures_root)
-            finalization_error = f"{type(exc).__name__}: {exc}"
-        # Only a completed, non-aborted attempt whose visible suite passes may
-        # spend the held-out corpus.
-        if abort_reason is None and visible is not None and visible["status"] == compare.STATUS_PASS:
-            certification = CERTIFICATION_RAN
+            frozen = freeze_candidate(workspace.candidate_path, run_dir / "snapshot" / "final")
+        except WorkspaceError as exc:
+            freeze_error = str(exc)
+
+        if frozen is not None:
+            # The visible suite is always run for a frozen candidate: it is the
+            # diagnostic evidence for an aborted or failed attempt.
             try:
-                held_out = certify_candidate(frozen.path, run_dir=run_dir, run_id=config.run_id,
-                                             token=token, timeout_s=config.timeout_s, cc=config.cc,
-                                             fixtures_root=config.fixtures_root,
-                                             deadline=finalize_deadline)
+                visible = _suite_verdict(frozen.path, corpus.VISIBLE,
+                                         build_dir=run_dir / "verdict" / "visible",
+                                         run_id=config.run_id, timeout_s=config.timeout_s,
+                                         cc=config.cc, fixtures_root=config.fixtures_root,
+                                         deadline=finalize_deadline)
             except harness.BuildError as exc:
-                held_out = _failed_verdict(corpus.HELD_OUT, compare.STATUS_BUILD_ERROR,
-                                           "candidate failed to compile: " + (exc.stderr or "")[-400:],
-                                           config.fixtures_root)
-                certification = "failed: build"
-            except (harness.HarnessError, ToolError) as exc:
-                held_out = _failed_verdict(corpus.HELD_OUT, compare.STATUS_HARNESS_ERROR, str(exc),
-                                           config.fixtures_root)
-                certification = f"failed: {type(exc).__name__}"
+                visible = _failed_verdict(corpus.VISIBLE, compare.STATUS_BUILD_ERROR,
+                                          "candidate failed to compile: " + (exc.stderr or "")[-400:],
+                                          config.fixtures_root)
+            except (harness.HarnessError, corpus.CorpusError) as exc:
+                # A malformed or missing *visible* corpus is a trusted-host
+                # fault, not a candidate failure.
+                visible = _failed_verdict(corpus.VISIBLE, compare.STATUS_HARNESS_ERROR, str(exc),
+                                          config.fixtures_root)
                 finalization_error = f"{type(exc).__name__}: {exc}"
+            # Only a completed, non-aborted attempt whose visible suite passes may
+            # spend the held-out corpus.
+            if abort_reason is None and visible is not None and visible["status"] == compare.STATUS_PASS:
+                certification = CERTIFICATION_RAN
+                try:
+                    held_out = certify_candidate(frozen.path, run_dir=run_dir, run_id=config.run_id,
+                                                 token=token, timeout_s=config.timeout_s, cc=config.cc,
+                                                 fixtures_root=config.fixtures_root,
+                                                 deadline=finalize_deadline)
+                except harness.BuildError as exc:
+                    held_out = _failed_verdict(corpus.HELD_OUT, compare.STATUS_BUILD_ERROR,
+                                               "candidate failed to compile: " + (exc.stderr or "")[-400:],
+                                               config.fixtures_root)
+                    certification = "failed: build"
+                except (harness.HarnessError, ToolError, corpus.CorpusError) as exc:
+                    held_out = _failed_verdict(corpus.HELD_OUT, compare.STATUS_HARNESS_ERROR, str(exc),
+                                               config.fixtures_root)
+                    certification = f"failed: {type(exc).__name__}"
+                    finalization_error = f"{type(exc).__name__}: {exc}"
+            else:
+                reason = ("agent aborted: " + abort_reason) if abort_reason else "visible suite did not pass"
+                certification = f"skipped: {reason}"
+
+        candidate_verified = bool(
+            visible is not None and visible["status"] == compare.STATUS_PASS
+            and held_out is not None and held_out["status"] == compare.STATUS_PASS
+        )
+
+        toolchain = _toolchain(config.cc, harness.COMPILE_FLAGS, deadline=finalize_deadline,
+                               capture_dir=run_dir / "verdict" / "toolchain")
+        # An accepted result must identify its toolchain: an unidentifiable
+        # compiler would silently weaken the receipt's reproducibility claim, so
+        # it prevents acceptance instead. The verdict evidence itself is kept.
+        if candidate_verified and not _compiler_identity_known(toolchain):
+            finalization_error = finalization_error or (
+                "compiler identity could not be established: "
+                f"{toolchain.get('compiler_version')!r}")
+            certification = "failed: unknown compiler identity"
+
+        try:
+            granted: int | None = ledger.granted()
+            limit: int | None = ledger.limit()
+        except Exception as exc:  # pragma: no cover - defensive
+            granted = limit = None
+            finalization_error = finalization_error or f"{type(exc).__name__}: {exc}"
+
+        # Abort-first, then infrastructure, then the candidate verdicts. A trusted
+        # host that cannot complete the evaluation must never be reported as a
+        # candidate failure, and it must never be reported as acceptance.
+        if frozen is None or abort_reason is not None or controller_error is not None:
+            status = STATUS_ABORTED
+        elif finalization_error is not None:
+            status = STATUS_ABORTED
+        elif candidate_verified:
+            status = STATUS_CERTIFIED
+        elif visible is None or visible["status"] != compare.STATUS_PASS:
+            status = STATUS_VISIBLE_FAILED
         else:
-            reason = ("agent aborted: " + abort_reason) if abort_reason else "visible suite did not pass"
-            certification = f"skipped: {reason}"
+            status = STATUS_HELD_OUT_FAILED
 
-    candidate_verified = bool(
-        visible is not None and visible["status"] == compare.STATUS_PASS
-        and held_out is not None and held_out["status"] == compare.STATUS_PASS
-    )
+        visible_manifest = _manifest(corpus.VISIBLE, config.fixtures_root)
+        held_manifest = held_out.get("corpus") if isinstance(held_out, dict) else None
+        if held_manifest is None:
+            held_manifest = _manifest(corpus.HELD_OUT, config.fixtures_root)
 
-    # Abort-first: a candidate may independently verify, but a run only
-    # *completes* when the agent completed, did not abort and passed both suites.
-    if frozen is None or abort_reason is not None or controller_error is not None:
-        status = STATUS_ABORTED
-    elif candidate_verified:
-        status = STATUS_CERTIFIED
-    elif visible is None or visible["status"] != compare.STATUS_PASS:
-        status = STATUS_VISIBLE_FAILED
-    else:
-        status = STATUS_HELD_OUT_FAILED
-
-    visible_manifest = _manifest(corpus.VISIBLE, config.fixtures_root)
-    held_manifest = _manifest(corpus.HELD_OUT, config.fixtures_root)
-    toolchain = _toolchain(config.cc, harness.COMPILE_FLAGS)
-    try:
-        granted = ledger.granted()
-        limit = ledger.limit()
-    except Exception as exc:  # pragma: no cover - defensive
-        granted = limit = None
-        finalization_error = finalization_error or f"{type(exc).__name__}: {exc}"
-
-    payload: dict[str, Any] = {
-        "phase": PHASE,
-        "run_id": config.run_id,
-        "source": {
-            "baseline_commit": config.baseline_commit,
-            "defective_candidate_sha256": defective_sha,
-            "final_candidate_sha256": frozen.sha256 if frozen else None,
-            "snapshot": str(frozen.path) if frozen else None,
-            "freeze_error": freeze_error,
-        },
-        "corpus": {"visible": visible_manifest, "held_out": held_manifest},
-        "toolchain": toolchain,
-        "agent": {
-            "adapter": adapter.name,
-            "model": config.model,
-            "tool_calls": tools.calls,
-            "budget": {"granted": granted, "limit": limit},
-        },
-        "execution": {
-            "attempts": attempts,
-            "wall_seconds": round(time.monotonic() - started, 6),
-            "abort_reason": abort_reason,
-            "controller_error": controller_error,
-            "finalization": {
-                "budget_seconds": config.finalization_seconds,
-                "duration_s": round(time.monotonic() - finalize_started, 6),
-                "certification": certification,
-                "error": finalization_error,
+        payload: dict[str, Any] = {
+            "phase": PHASE,
+            "run_id": config.run_id,
+            "source": {
+                "baseline_commit": config.baseline_commit,
+                "defective_candidate_sha256": defective_sha,
+                "final_candidate_sha256": frozen.sha256 if frozen else None,
+                "snapshot": str(frozen.path) if frozen else None,
+                "freeze_error": freeze_error,
             },
-        },
-        "verdict": {
-            "visible": visible,
-            "held_out": held_out,
-            "status": status,
-            "candidate_verified": candidate_verified,
-            "certification": certification,
-        },
-    }
-    try:
-        receipt = receipts.seal(payload)
-        receipt_path = receipts.write(run_dir / "receipt.json", receipt)
-    except OSError as exc:
-        raise receipts.ReceiptError(f"failed to store the terminal receipt: {exc}") from exc
+            "corpus": {"visible": visible_manifest, "held_out": held_manifest},
+            "toolchain": toolchain,
+            "agent": {
+                "adapter": adapter.name,
+                "model": config.model,
+                "tool_calls": tools.calls,
+                "budget": {"granted": granted, "limit": limit},
+            },
+            "execution": {
+                "attempts": attempts,
+                "wall_seconds": round(time.monotonic() - started, 6),
+                "abort_reason": abort_reason,
+                "controller_error": controller_error,
+                "finalization": {
+                    "budget_seconds": config.finalization_seconds,
+                    "duration_s": round(time.monotonic() - finalize_started, 6),
+                    "certification": certification,
+                    "error": finalization_error,
+                },
+            },
+            "verdict": {
+                "visible": visible,
+                "held_out": held_out,
+                "status": status,
+                "candidate_verified": candidate_verified,
+                "certification": certification,
+            },
+        }
+        try:
+            receipt = receipts.seal(payload)
+            receipt_path = receipts.write(run_dir / "receipt.json", receipt)
+        except OSError as exc:
+            raise receipts.ReceiptError(f"failed to store the terminal receipt: {exc}") from exc
     finally:
         ledger.close()
 

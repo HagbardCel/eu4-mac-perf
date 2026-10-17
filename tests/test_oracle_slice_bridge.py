@@ -382,6 +382,40 @@ class DeadlineEnforcementTests(unittest.TestCase):
             finally:
                 _stop_server(proc)
 
+    def test_write_run_state_refuses_non_finite_values(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            for bad in (float("nan"), float("inf"), float("-inf")):
+                with self.assertRaises(runstate.RunStateError):
+                    runstate.write_run_state(run_dir, run_id=RUN_ID,
+                                             deadline_monotonic=bad, budget_seconds=60.0)
+                with self.assertRaises(runstate.RunStateError):
+                    runstate.write_run_state(run_dir, run_id=RUN_ID,
+                                             deadline_monotonic=time.monotonic() + 60.0,
+                                             budget_seconds=bad)
+            self.assertFalse((run_dir / runstate.RUN_STATE_FILE).exists())
+
+    def test_load_run_state_rejects_non_finite_and_overflowed_values(self):
+        """``NaN``/``Infinity``/an overflowed literal must fail closed.
+
+        ``time.monotonic() >= nan`` is always false, so a non-finite deadline
+        would make the server's expiry check meaningless.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir, _, _ = _make_run(Path(tmp))
+            path = run_dir / runstate.RUN_STATE_FILE
+            base = json.loads(path.read_text(encoding="utf-8"))
+            base["deadline_monotonic"] = 1.0
+            base["budget_seconds"] = 60.0
+            for key in ("deadline_monotonic", "budget_seconds"):
+                for literal in ("NaN", "Infinity", "-Infinity", "1" + "0" * 400):
+                    text = json.dumps(base).replace(f'"{key}": 1.0', f'"{key}": {literal}')
+                    text = text.replace(f'"{key}": 60.0', f'"{key}": {literal}')
+                    path.write_text(text, encoding="utf-8")
+                    with self.assertRaises(runstate.RunStateError, msg=f"{key}={literal}"):
+                        runstate.load_run_state(run_dir)
+
 
 def _start_server(run_dir: Path, workspace: Path) -> subprocess.Popen:
     env = dict(os.environ)

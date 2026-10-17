@@ -8,9 +8,9 @@ observation protocol.
 Three guarantees are enforced here:
 
 * **Whole-group termination.** Every child starts in its own session, so the
-  child's pid is also its process-group id. On timeout or abort the *group* is
-  signalled and polled to extinction, escalating to ``SIGKILL``; the leader's
-  exit is never taken as evidence that its descendants are gone.
+  child's pid is also its process-group id. The *group* is signalled after every
+  exit - timed out or not - and polled to extinction, escalating to ``SIGKILL``;
+  the leader's exit is never taken as evidence that its descendants are gone.
 * **Bounded wall clock.** Compilation and every fixture run are bounded by the
   smaller of their operation-specific limit and the remaining controller
   deadline, and a run whose deadline has already passed does not start.
@@ -29,6 +29,7 @@ import os
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -53,6 +54,8 @@ COMPILE_FLAGS: tuple[str, ...] = ("-std=c11", "-O0", "-fwrapv", "-fno-strict-ali
 STATE_BYTES = 12
 DEFAULT_TIMEOUT_S = 10.0
 COMPILE_TIMEOUT_S = 120.0
+#: Best-effort bound on the compiler-identity probe (``cc --version``).
+COMPILER_PROBE_TIMEOUT_S = 20.0
 KILL_GRACE_S = 0.5
 
 #: Hard cap on bytes any single child may write (OS-enforced via RLIMIT_FSIZE).
@@ -248,7 +251,13 @@ def run_bounded(argv: list[str], *, cwd: Path | None, env: dict[str, str] | None
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            terminate_process_group(proc, pgid=proc.pid)
+        # Clean the group up after *every* exit, not only after a timeout: a
+        # leader that exits - even successfully - must not leave a descendant
+        # running, and a supervisor that only tracks its own children would
+        # never learn about such a descendant. The original ``pgid`` (the
+        # leader's pid) is retained from creation. On the common path the group
+        # is already empty and this is a no-op.
+        terminate_process_group(proc, pgid=proc.pid)
     stdout, out_truncated = _read_bounded(out_path)
     stderr, err_truncated = _read_bounded(err_path)
     return Capture(
@@ -261,13 +270,37 @@ def run_bounded(argv: list[str], *, cwd: Path | None, env: dict[str, str] | None
     )
 
 
-def compiler_version(cc: str = "cc") -> str:
+def compiler_version(cc: str = "cc", *, deadline: float | None = None,
+                     capture_dir: Path | None = None) -> str:
+    """Best-effort compiler identity, bounded by the caller's ``deadline``.
+
+    The probe is an ordinary bounded child: it may not outlive the run, and its
+    output is capped like any other. A probe that cannot *complete* - an expired
+    budget, a timeout or output over the cap - or that exits non-zero reports
+    ``"unknown"`` rather than asserting an identity it could not establish. A
+    failure to launch the compiler at all is still a trusted-harness fault.
+    """
+    budget = _effective_timeout(COMPILER_PROBE_TIMEOUT_S, deadline)
+    if budget <= 0:
+        return "unknown"
+    scratch: Path | None = None
+    if capture_dir is not None:
+        directory = Path(capture_dir)
+    else:
+        directory = scratch = Path(tempfile.mkdtemp(prefix="oracle-cc-probe-"))
     try:
-        completed = subprocess.run([cc, "--version"], capture_output=True, text=True, timeout=20)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HarnessError(f"cannot run compiler {cc!r}: {exc}") from exc
-    first = (completed.stdout or completed.stderr).strip().splitlines()
-    return first[0].strip() if first else "unknown"
+        try:
+            capture = run_bounded([cc, "--version"], cwd=directory, env=None, timeout=budget,
+                                  capture_dir=directory, tag="cc-version")
+        except OSError as exc:
+            raise HarnessError(f"cannot run compiler {cc!r}: {exc}") from exc
+        if capture.timed_out or capture.truncated or capture.returncode != 0:
+            return "unknown"
+        lines = (capture.stdout or capture.stderr).strip().splitlines()
+        return lines[0].strip() if lines else "unknown"
+    finally:
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 def build(candidate: Path, build_dir: Path, *, cc: str = "cc", deadline: float | None = None,
@@ -307,7 +340,7 @@ def build(candidate: Path, build_dir: Path, *, cc: str = "cc", deadline: float |
     if capture.returncode != 0 or not exe.exists():
         raise BuildError("candidate failed to compile", stderr)
     return Build(exe=exe, build_dir=build_dir, cc=cc, flags=COMPILE_FLAGS,
-                 compiler_version=compiler_version(cc))
+                 compiler_version=compiler_version(cc, deadline=deadline, capture_dir=build_dir))
 
 
 def run_fixture(build: Build, fixture: Fixture, *, timeout_s: float = DEFAULT_TIMEOUT_S,

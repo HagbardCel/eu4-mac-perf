@@ -84,16 +84,21 @@ directory, so a candidate that ships its own `synth.h` or `driver.c` cannot
 change the ABI or the observation protocol.
 
 * **Whole-group termination.** Every child starts in its own session, so its pid
-  is also its process-group id. On timeout or abort the *group* is signalled and
-  polled to extinction, escalating to `SIGKILL`; the group leader's exit is never
-  treated as evidence that its descendants are gone. Escalation is bounded in
-  time, so a persistently-visible group (for example one containing a zombie)
-  cannot loop. The guarantee is: descendants are terminated, and the
-  controller's own children are reaped (orphaned grandchildren are not
-  `waitpid`-able by it).
-* **Bounded wall clock.** Compilation and every fixture run are bounded by the
-  smaller of their operation-specific limit and the remaining run deadline, and
-  an operation whose deadline has already passed does not start at all.
+  is also its process-group id, and that id is retained from creation. The
+  *group* is signalled after **every** exit - timed out or not - and polled to
+  extinction, escalating to `SIGKILL`; the group leader's exit is never treated
+  as evidence that its descendants are gone. A leader that exits `0` while a
+  background descendant is still alive therefore cannot leave it running, and
+  the supervisor never needs to have "learned about" a group in order to kill
+  it. On the common path the group is already empty and the cleanup is a no-op.
+  Escalation is bounded in time, so a persistently-visible group (for example
+  one containing a zombie) cannot loop. The guarantee is: descendants are
+  terminated, and the controller's own children are reaped (orphaned
+  grandchildren are not `waitpid`-able by it).
+* **Bounded wall clock.** Compilation, the compiler-identity probe and every
+  fixture run are bounded by the smaller of their operation-specific limit and
+  the remaining run deadline, and an operation whose deadline has already passed
+  does not start at all.
 * **Bounded output.** Child stdout/stderr is redirected to files under an
   OS-enforced size limit (`RLIMIT_FSIZE`), so a process cannot consume unbounded
   memory or fill the disk; the writer is signalled when it exceeds the cap.
@@ -142,6 +147,14 @@ The finalization budget is separately declared and freshly started; it never
 revives an expired run nor makes an aborted run eligible for certification.
 (`RunConfig.finalization_seconds`; recorded in the receipt.)
 
+The controller - never the adapter - owns the wall clock. The deadline is
+re-asserted immediately after **every** attempt result, whatever its status, and
+again after the candidate is hashed but before a `done` result may be accepted.
+An adapter that returns `done`, `progress`, `gave_up` or `crashed` after the
+deadline is therefore classified as a deadline violation; on the final permitted
+attempt a late `progress` would otherwise be misreported as an attempt-limit
+exhaustion.
+
 The MCP server is a *separate process* and cannot ask the controller for its
 remaining time. So the controller persists the run's identity and the absolute
 monotonic deadline in trusted, controller-owned state
@@ -151,15 +164,20 @@ accepts a deadline from tool arguments. Because a monotonic timestamp is only
 meaningful within one boot, the state also records a boot token where the
 platform provides one and the declared budget; if the clock appears to have been
 reset, loading fails closed, and a server whose state is missing or provably
-stale refuses to start rather than serving without a deadline.
+stale refuses to start rather than serving without a deadline. A non-finite
+(`NaN`/`Infinity`) or overflowed deadline or budget is refused both when written
+and when loaded: `time.monotonic() >= nan` is always false, so such a value would
+make the server's expiry check meaningless.
 
 ## Receipts
 
 The controller always writes a terminal receipt - including after timeout, crash,
 a missing candidate, a candidate the compiler rejects, or a trusted-harness fault
-during finalization. Sealing and ledger cleanup are on the terminal path; if the
-receipt cannot be *stored*, that is reported as an explicit sealing failure. The
-payload binds:
+during finalization. Every expected fault is converted into an explicit result
+object *before* the receipt is constructed, so receipt construction cannot fail
+for an expected fault; an unconditional `finally` guarantees the budget ledger is
+closed on every path; and a receipt that cannot be *stored* is reported as an
+explicit `ReceiptError`. The payload binds:
 
 | Identity | Data |
 | --- | --- |
@@ -183,6 +201,29 @@ an eligible run: a completed, non-aborted attempt whose visible suite passed.
 Otherwise the receipt records `certification: "skipped: <reason>"`, so the
 holdout is never spent on an ineligible attempt.
 
+**Infrastructure failures outrank candidate verdicts.** A candidate may fail a
+comparison, or the trusted host may be unable to *complete* one; the receipt must
+not confuse the two. `execution.finalization.error` is set only for a
+trusted-host fault - a missing or malformed corpus, a harness or toolchain that
+cannot operate, or a compiler whose identity cannot be established - and its
+presence classifies the run as `aborted`, never as a candidate failure.
+
+| Actual outcome | Terminal classification |
+| --- | --- |
+| Candidate fails the visible comparison | `visible_failed` |
+| Candidate fails a completed held-out comparison | `held_out_failed` |
+| Corpus missing or malformed | `aborted` (`finalization.error`) |
+| Compiler or trusted harness cannot operate | `aborted` (`finalization.error`) |
+| Candidate contains invalid C | `visible_failed` with `CANDIDATE_BUILD_ERROR` |
+| Both suites pass **and** every controller gate passes | `certified` |
+
+**Provenance gates acceptance.** An accepted result must identify its toolchain.
+If the compiler's version cannot be established within the finalization budget,
+the run is `aborted` with `certification: "failed: unknown compiler identity"`
+rather than silently weakening the receipt's reproducibility claim. The verdict
+evidence itself (`candidate_verified`, the held-out verdict) is preserved; only
+the acceptance claim is withheld.
+
 A receipt is *sealed* when it is content-addressed and verifiable against a
 trusted reference: the digest is computed over the canonical payload, not merely
 stored next to it. Receipt verification is reproducible; the model trajectory is
@@ -200,6 +241,12 @@ gitignored); only the sealed receipt is published.
 | Missing, incomplete or malformed observations cannot pass | `tests/test_oracle_slice_comparator.py` |
 | Reservations hold across concurrent calls and MCP restarts; lock waits honour the deadline | `tests/test_oracle_slice_bridge.py` |
 | Timeouts terminate the whole process group, including a `SIGTERM`-ignoring descendant, and still emit receipts | `tests/test_oracle_slice_controller.py`, `tests/test_oracle_slice_e2e.py` |
+| A leader that exits successfully cannot leave a live descendant behind | `tests/test_oracle_slice_controller.py` |
+| A late `done`, or a late `progress` on the final attempt, is a deadline violation | `tests/test_oracle_slice_e2e.py` |
+| A missing or malformed corpus is an infrastructure failure, not a candidate verdict | `tests/test_oracle_slice_e2e.py` |
+| An unidentifiable compiler prevents acceptance while preserving the verdict evidence | `tests/test_oracle_slice_e2e.py` |
+| Non-finite or overflowed run state is rejected on write and on load | `tests/test_oracle_slice_bridge.py` |
+| The compiler-identity probe is bounded by the caller's deadline | `tests/test_oracle_slice_comparator.py` |
 | The run deadline bounds compilation and fixture evaluation; expired operations do not start | `tests/test_oracle_slice_comparator.py`, `tests/test_oracle_slice_controller.py` |
 | Over-cap output is bounded in production and retention, and is never a normal run | `tests/test_oracle_slice_comparator.py` |
 | The MCP server enforces the deadline independently and fails closed without run state | `tests/test_oracle_slice_bridge.py` |

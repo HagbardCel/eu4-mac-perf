@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -210,6 +211,28 @@ class HarnessTests(unittest.TestCase):
         with self.assertRaises(harness.DeadlineExpired):
             harness.build(SLICE_DIR / "reference.c", Path(_TMP.name) / "build_expired",
                           deadline=time.monotonic() - 1.0)
+
+    def test_build_records_a_compiler_identity(self):
+        assert _REF is not None
+        self.assertTrue(_REF.compiler_version.strip())
+
+    def test_compiler_version_probe_is_bounded_by_the_deadline(self):
+        assert _TMP is not None
+        root = Path(_TMP.name) / "slow_cc"
+        root.mkdir(parents=True, exist_ok=True)
+        fake = root / "cc"
+        fake.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+        os.chmod(fake, 0o755)
+        started = time.monotonic()
+        version = harness.compiler_version(str(fake), deadline=time.monotonic() + 0.5,
+                                          capture_dir=root / "cap")
+        self.assertEqual(version, "unknown")
+        self.assertLess(time.monotonic() - started, 5.0,
+                        "the probe must not outlive the caller's deadline")
+
+    def test_compiler_version_without_budget_is_unknown_not_an_error(self):
+        self.assertEqual(harness.compiler_version("cc", deadline=time.monotonic() - 1.0),
+                         "unknown")
 
     def test_fixture_budget_is_capped_by_the_remaining_deadline(self):
         build = _build_source(_HANGING, "hang_deadline")

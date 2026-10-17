@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -10,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from oracle.slice import compare, controller, corpus, receipts
+from oracle.slice import compare, controller, corpus, harness, receipts
 from oracle.slice.adapters import AttemptResult, CommandAdapter, StubAdapter
 from oracle.slice.controller import (
     STATUS_ABORTED,
@@ -82,6 +83,48 @@ class _SlowTest:
         ctx.tools.call("test", {"function_id": "synth:apply",
                                 "candidate_path": str(ctx.candidate_path)})
         return AttemptResult("gave_up", "timed out against the visible suite")
+
+
+class _LateDone:
+    """Repairs the candidate, overruns the wall clock, then claims completion."""
+
+    name = "late-done"
+
+    def __init__(self, seconds: float):
+        self.seconds = seconds
+        self._stub = StubAdapter("repair")
+        self._patched = False
+
+    def step(self, ctx):
+        if not self._patched:
+            self._stub._patch(ctx)
+            self._patched = True
+        time.sleep(self.seconds)
+        return AttemptResult("done", "claimed completion after the deadline")
+
+
+class _LateProgress:
+    """Repairs nothing and reports progress only after the deadline."""
+
+    name = "late-progress"
+
+    def __init__(self, seconds: float):
+        self.seconds = seconds
+
+    def step(self, ctx):
+        time.sleep(self.seconds)
+        return AttemptResult("progress", "reported progress after the deadline")
+
+
+def _fixtures_root(root: Path, *, held_out: str) -> Path:
+    """A fixtures root with a real visible set and a deliberately broken holdout."""
+    fixtures = root / "fixtures"
+    shutil.copytree(corpus.FIXTURES_DIR / corpus.VISIBLE, fixtures / corpus.VISIBLE)
+    if held_out == "malformed":
+        directory = fixtures / corpus.HELD_OUT
+        directory.mkdir(parents=True)
+        (directory / "hid-000.json").write_text("{ this is not json", encoding="utf-8")
+    return fixtures
 
 
 def _run(root: Path, adapter, **overrides) -> controller.RunResult:
@@ -231,7 +274,10 @@ class FinalizationTests(unittest.TestCase):
             elapsed = time.monotonic() - started
             self.assertLess(elapsed, 2.0 + 5.0 + 8.0,
                             "a hanging candidate must not outlive the declared budgets")
-            self.assertEqual(result.abort_reason, "gave_up")
+            # The agent's own ``gave_up`` is not the controller's verdict: its
+            # tool call consumed the whole run deadline, so the controller
+            # classifies the attempt as a deadline violation.
+            self.assertEqual(result.abort_reason, "timeout")
             self.assertEqual(result.status, STATUS_ABORTED)
             self.assertEqual(result.visible["status"], compare.STATUS_TIMEOUT)
             payload = result.receipt["payload"]
@@ -245,6 +291,80 @@ class FinalizationTests(unittest.TestCase):
             self.assertEqual(payload["execution"]["finalization"]["certification"],
                              "skipped: agent aborted: gave_up")
             self.assertFalse(payload["verdict"]["candidate_verified"])
+
+    def test_a_done_after_the_wall_deadline_is_aborted_as_a_timeout(self):
+        """The controller, not the adapter, owns the wall clock."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run(Path(tmp), _LateDone(3.0), wall_seconds=1.0, max_attempts=1)
+            self.assertEqual(result.abort_reason, "timeout")
+            self.assertEqual(result.status, STATUS_ABORTED)
+            self.assertFalse(result.candidate_verified)
+            self.assertIsNone(result.held_out)
+            self.assertTrue(result.certification.startswith("skipped"))
+            self.assertEqual(result.attempts[-1]["status"], "timeout")
+            receipts.verify(result.receipt)
+
+    def test_a_final_attempt_overrun_is_a_timeout_not_an_attempt_limit(self):
+        """A late ``progress`` on the last attempt is a deadline violation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run(Path(tmp), _LateProgress(3.0), wall_seconds=1.0, max_attempts=1)
+            self.assertEqual(result.abort_reason, "timeout")
+            self.assertNotEqual(result.abort_reason, "max_attempts")
+            self.assertEqual(len(result.attempts), 1)
+            self.assertEqual(result.attempts[0]["status"], "timeout")
+            self.assertEqual(result.status, STATUS_ABORTED)
+            receipts.verify(result.receipt)
+
+
+class InfrastructureFailureTests(unittest.TestCase):
+    """A trusted host that cannot complete the evaluation is not a verdict."""
+
+    def test_malformed_held_out_corpus_is_an_infrastructure_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = _run(root, StubAdapter("repair"),
+                          fixtures_root=_fixtures_root(root, held_out="malformed"))
+            payload = result.receipt["payload"]
+            # The candidate is fine: the Oracle could not complete the test.
+            self.assertEqual(payload["verdict"]["visible"]["status"], compare.STATUS_PASS)
+            self.assertEqual(payload["verdict"]["held_out"]["status"], compare.STATUS_HARNESS_ERROR)
+            self.assertNotEqual(result.status, STATUS_HELD_OUT_FAILED)
+            self.assertEqual(result.status, STATUS_ABORTED)
+            self.assertEqual(result.certification, "failed: CorpusError")
+            self.assertTrue(payload["execution"]["finalization"]["error"].startswith("CorpusError"))
+            self.assertFalse(payload["verdict"]["candidate_verified"])
+            receipts.verify(result.receipt, expected_sha256=result.receipt["sha256"])
+            self.assertEqual(receipts.load(result.receipt_path), result.receipt)
+
+    def test_missing_held_out_corpus_is_an_infrastructure_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = _run(root, StubAdapter("repair"),
+                          fixtures_root=_fixtures_root(root, held_out="missing"))
+            payload = result.receipt["payload"]
+            self.assertEqual(payload["verdict"]["held_out"]["status"], compare.STATUS_HARNESS_ERROR)
+            self.assertNotEqual(result.status, STATUS_HELD_OUT_FAILED)
+            self.assertEqual(result.status, STATUS_ABORTED)
+            self.assertEqual(result.certification, "failed: CorpusError")
+            self.assertTrue(payload["execution"]["finalization"]["error"].startswith("CorpusError"))
+            receipts.verify(result.receipt)
+
+    def test_an_unidentifiable_compiler_prevents_acceptance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(harness, "compiler_version", return_value="unknown"):
+                result = _run(Path(tmp), StubAdapter("repair"))
+        payload = result.receipt["payload"]
+        self.assertEqual(payload["toolchain"]["compiler_version"], "unknown")
+        # Both suites really did pass, so the verdict evidence is preserved ...
+        self.assertTrue(payload["verdict"]["candidate_verified"])
+        self.assertEqual(payload["verdict"]["held_out"]["status"], compare.STATUS_PASS)
+        # ... but acceptance is not claimed on an unidentifiable toolchain.
+        self.assertNotEqual(result.status, STATUS_CERTIFIED)
+        self.assertEqual(result.status, STATUS_ABORTED)
+        self.assertEqual(payload["execution"]["finalization"]["certification"],
+                         "failed: unknown compiler identity")
+        self.assertTrue(payload["execution"]["finalization"]["error"])
+        receipts.verify(result.receipt)
 
 
 class CommandAdapterTests(unittest.TestCase):

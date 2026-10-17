@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import re
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 RUN_STATE_FILE = "run-state.json"
 SCHEMA_VERSION = "eu4-oracle-runstate/v1"
@@ -31,6 +33,22 @@ _CLOCK_RESET_SLACK_S = 1.0
 
 class RunStateError(RuntimeError):
     """Trusted run state is missing, malformed or provably stale."""
+
+
+def _is_finite_number(value: Any) -> bool:
+    """Whether ``value`` is a real, finite number.
+
+    ``NaN`` and the infinities are excluded because comparisons against them are
+    always false - ``time.monotonic() >= nan`` never expires a run. JSON admits
+    ``NaN``/``Infinity``, and a very large integer literal can overflow the
+    conversion to float, so both are rejected here rather than downstream.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except (OverflowError, ValueError):
+        return False
 
 
 @dataclass(frozen=True)
@@ -74,11 +92,17 @@ def boot_token() -> str | None:
 
 def write_run_state(run_dir: Path, *, run_id: str, deadline_monotonic: float,
                     budget_seconds: float) -> Path:
-    """Persist the controller-owned run state. Controller-only."""
+    """Persist the controller-owned run state. Controller-only.
+
+    A non-finite or overflowed deadline or budget is refused rather than
+    written: it could only make the MCP server's expiry check meaningless.
+    """
     if not isinstance(run_id, str) or not run_id:
         raise RunStateError("run_id is required")
-    if budget_seconds <= 0:
-        raise RunStateError("budget_seconds must be positive")
+    if not _is_finite_number(deadline_monotonic):
+        raise RunStateError("deadline_monotonic must be a finite number")
+    if not _is_finite_number(budget_seconds) or float(budget_seconds) <= 0:
+        raise RunStateError("budget_seconds must be positive and finite")
     payload = {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -112,8 +136,12 @@ def load_run_state(run_dir: Path) -> RunState:
         raise RunStateError("run state has no run_id")
     if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
         raise RunStateError("run state has no numeric deadline")
-    if isinstance(budget, bool) or not isinstance(budget, (int, float)) or float(budget) <= 0:
-        raise RunStateError("run state has no positive budget")
+    if not _is_finite_number(deadline):
+        raise RunStateError("run state has a non-finite deadline")
+    if isinstance(budget, bool) or not isinstance(budget, (int, float)):
+        raise RunStateError("run state has no numeric budget")
+    if not _is_finite_number(budget) or float(budget) <= 0:
+        raise RunStateError("run state has no finite positive budget")
 
     recorded_boot = data.get("boot_token")
     current_boot = boot_token()

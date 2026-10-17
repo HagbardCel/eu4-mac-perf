@@ -64,6 +64,28 @@ def _sigterm_ignoring_script() -> str:
     )
 
 
+def _exiting_leader_script() -> str:
+    """A leader that forks a long-lived descendant, waits for it, then exits 0.
+
+    Nothing here times out: the leader finishes successfully while its
+    descendant is still alive, which is the case a timeout-only cleanup misses.
+    """
+    child = (
+        "import os, sys, time; "
+        "open(sys.argv[1], 'w').write(str(os.getpid())); "
+        "time.sleep(300)"
+    )
+    return (
+        "import os, subprocess, sys, time\n"
+        f"child = {child!r}\n"
+        "subprocess.Popen([sys.executable, '-c', child, sys.argv[1]])\n"
+        "limit = time.time() + 10.0\n"
+        "while not os.path.exists(sys.argv[1]) and time.time() < limit:\n"
+        "    time.sleep(0.01)\n"
+        "sys.exit(0)\n"
+    )
+
+
 class WorkspaceTests(unittest.TestCase):
     def test_materialized_workspace_is_candidate_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -197,6 +219,22 @@ class ProcessSupervisorTests(unittest.TestCase):
             child_pid = int(child_pid_file.read_text())
             self.assertFalse(_pid_alive(parent_pid), "parent group survived the timeout")
             self.assertFalse(_pid_alive(child_pid), "grandchild survived the timeout")
+
+    def test_run_group_cleans_up_descendants_after_a_successful_exit(self):
+        """A leader that exits 0 must not leave a live descendant behind."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            child_pid_file = root / "child.pid"
+            supervisor = ProcessSupervisor(deadline=time.monotonic() + 30.0, log_dir=root / "logs")
+            run = supervisor.run_group(
+                [sys.executable, "-c", _exiting_leader_script(), str(child_pid_file)]
+            )
+            self.assertFalse(run.timed_out, "the leader exits normally")
+            self.assertEqual(run.returncode, 0)
+            self.assertTrue(child_pid_file.is_file(), "descendant never started")
+            child_pid = int(child_pid_file.read_text())
+            self.assertFalse(_pid_alive(child_pid),
+                             "a descendant of a successfully-exited leader survived the run")
 
     def test_terminate_all_reaps_remaining_children(self):
         with tempfile.TemporaryDirectory() as tmp:
