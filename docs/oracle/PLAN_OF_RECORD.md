@@ -106,13 +106,14 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 
 > **P4 status (2026-10-18):** **in progress.** **P4r-A** (P4.1 record schema,
 > canonicalization and immutable evidence store; P4.2 portable C11 synthetic target
-> with a deterministic golden transcript) and **P4r-B** (P4.3 native capture
-> accounting; P4.4 declared capture policy; P4.5 offline finalization - resource
-> identity, aliasing and semantic dedup; P4.7 concurrency and bounded capture) are
+> with a deterministic golden transcript), **P4r-B** (P4.3 native capture accounting;
+> P4.4 declared capture policy; P4.5 offline finalization - resource identity,
+> aliasing and semantic dedup; P4.7 concurrency and bounded capture) and **P4r-C**
+> (P4.6 resource registry and closure verifier, so a missing resource yields
+> `INCOMPLETE_ORACLE`; P4.8 R0-M epoch protocol compatibility validated offline) are
 > implemented and merged under `oracle/recorder/`, with the recorder transcript
 > deterministic across compilers and clean under ThreadSanitizer, ASan and UBSan.
-> **P4r-C** (P4.6 resource registry + closure; P4.8 R0-M protocol compatibility)
-> and **P4b** follow. See [P4_RECORDER.md](P4_RECORDER.md).
+> **P4b** (the synthetic graphics replay) follows. See [P4_RECORDER.md](P4_RECORDER.md).
 
 ## Hard rule
 

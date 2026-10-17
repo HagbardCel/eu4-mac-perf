@@ -26,6 +26,7 @@
 #define RECORDER_MAX_EVENTS 64u
 #define RECORDER_MAX_ARGS 8u
 #define RECORDER_MAX_DEPTH 32u
+#define RECORDER_MAX_CONTEXT 8u
 
 enum {
     RECORDER_MODE_DISABLED = 0, /* count interceptions only; select nothing */
@@ -57,6 +58,12 @@ typedef struct {
     uint32_t hook_id;
     uint32_t nargs;
     uint64_t args[RECORDER_MAX_ARGS];
+    /* Opaque observation context, declared by the hook layer at exit. The core
+     * never interprets it - it is how a subject-specific host states which resource
+     * an observation addressed, without teaching the function-agnostic core what a
+     * resource is. */
+    uint32_t ncontext;
+    uint64_t context[RECORDER_MAX_CONTEXT];
     uint64_t result;
     int complete;
 } recorder_event;
@@ -76,8 +83,11 @@ void recorder_set_phase(uint32_t phase);
  * negative token means no frame was pushed (over-deep or uninitialised). */
 int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs);
 /* End observation of `token`. `complete` is 0 when the observation's declared
- * scope was not fully observable, e.g. a call that operated on no live resource. */
-void recorder_exit(int64_t token, uint64_t result, int complete);
+ * scope was not fully observable, e.g. a call that operated on no live resource.
+ * `context`/`ncontext` are an opaque, hook-declared record of what the observation
+ * addressed; the core stores them verbatim and never interprets them. */
+void recorder_exit(int64_t token, uint64_t result, int complete,
+                   const uint64_t *context, uint32_t ncontext);
 
 /* Copy the counters out atomically. Call only once all observing threads have
  * stopped. */

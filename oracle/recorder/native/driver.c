@@ -61,67 +61,150 @@ void synth_effect(uint32_t op, uint32_t a, uint32_t b)
 
 /* Hook layer: enter, call the subject, exit. `complete` is 0 when the call
  * operated on no live resource, so the observation's declared scope was not
- * observable. */
+ * observable.
+ *
+ * Each exit also declares the observation's *context* - the resource it addressed.
+ * The recorder core stores this verbatim and never interprets it; keeping it here,
+ * in the trusted host, is what lets the core stay function-agnostic. Layout:
+ *
+ *   [0] ref_valid  [1] ref_slot  [2] ref_gen
+ *   [3] live       [4] slot_gen  [5] version
+ *
+ * `(ref_slot, ref_gen)` is the referenced resource's lifetime; `(live, slot_gen,
+ * version)` is that slot's state as the observation saw it - at entry for the
+ * handle-addressing calls (so a destroy's resource is still live, and a stale
+ * handle's is not), and after creation for create. */
+static void slot_state(const synth_world *w, uint32_t slot, uint32_t *live,
+                       uint32_t *generation, uint32_t *version)
+{
+    if (slot < SYNTH_SLOTS) {
+        *live = w->slots[slot].live;
+        *generation = w->slots[slot].generation;
+        *version = w->slots[slot].version;
+    } else {
+        *live = 0u;
+        *generation = 0u;
+        *version = 0u;
+    }
+}
+
+static uint32_t reference_context(uint32_t valid, uint32_t slot, uint32_t generation,
+                                  uint32_t live, uint32_t slot_generation, uint32_t version,
+                                  uint64_t *context)
+{
+    context[0] = valid ? 1u : 0u;
+    context[1] = valid ? slot : 0u;
+    context[2] = valid ? generation : 0u;
+    context[3] = live;
+    context[4] = slot_generation;
+    context[5] = version;
+    return 6u;
+}
+
 static int hook_create(synth_world *w, uint32_t size, synth_handle *out)
 {
     uint64_t args[1];
+    uint64_t context[6];
+    uint32_t live = 0u;
+    uint32_t generation = 0u;
+    uint32_t version = 0u;
+    synth_handle produced = {0u, 0u};
     int64_t token;
     int rc;
+
     args[0] = size;
     token = recorder_enter(HOOK_CREATE, args, 1);
     rc = synth_create(w, size, out);
-    recorder_exit(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK);
+    if (rc == SYNTH_OK && out != 0) {
+        produced = *out;
+        slot_state(w, produced.slot, &live, &generation, &version); /* after creation */
+    }
+    recorder_exit(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK, context,
+                  reference_context(rc == SYNTH_OK ? 1u : 0u, produced.slot, produced.generation,
+                                    live, generation, version, context));
     return rc;
 }
 
 static int hook_update(synth_world *w, synth_handle handle, uint32_t seed, uint32_t span)
 {
     uint64_t args[3];
+    uint64_t context[6];
+    uint32_t live = 0u;
+    uint32_t generation = 0u;
+    uint32_t version = 0u;
     int64_t token;
     int rc;
+
+    slot_state(w, handle.slot, &live, &generation, &version); /* at entry */
     args[0] = handle.slot;
     args[1] = seed;
     args[2] = span;
     token = recorder_enter(HOOK_UPDATE, args, 3);
     rc = synth_update(w, handle, seed, span);
-    recorder_exit(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK);
+    recorder_exit(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK, context,
+                  reference_context(1u, handle.slot, handle.generation, live, generation,
+                                    version, context));
     return rc;
 }
 
 static int hook_read(const synth_world *w, synth_handle handle, uint32_t offset, uint32_t *out)
 {
     uint64_t args[2];
+    uint64_t context[6];
+    uint32_t live = 0u;
+    uint32_t generation = 0u;
+    uint32_t version = 0u;
     int64_t token;
     int rc;
+
+    slot_state(w, handle.slot, &live, &generation, &version); /* at entry */
     args[0] = handle.slot;
     args[1] = offset;
     token = recorder_enter(HOOK_READ, args, 2);
     rc = synth_read(w, handle, offset, out);
-    recorder_exit(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK);
+    recorder_exit(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK, context,
+                  reference_context(1u, handle.slot, handle.generation, live, generation,
+                                    version, context));
     return rc;
 }
 
 static int hook_share(const synth_world *w, synth_handle handle, synth_handle *out)
 {
     uint64_t args[1];
+    uint64_t context[6];
+    uint32_t live = 0u;
+    uint32_t generation = 0u;
+    uint32_t version = 0u;
     int64_t token;
     int rc;
+
+    slot_state(w, handle.slot, &live, &generation, &version); /* at entry */
     args[0] = handle.slot;
     token = recorder_enter(HOOK_SHARE, args, 1);
     rc = synth_share(w, handle, out);
-    recorder_exit(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK);
+    recorder_exit(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK, context,
+                  reference_context(1u, handle.slot, handle.generation, live, generation,
+                                    version, context));
     return rc;
 }
 
 static int hook_destroy(synth_world *w, synth_handle handle)
 {
     uint64_t args[1];
+    uint64_t context[6];
+    uint32_t live = 0u;
+    uint32_t generation = 0u;
+    uint32_t version = 0u;
     int64_t token;
     int rc;
+
+    slot_state(w, handle.slot, &live, &generation, &version); /* at entry */
     args[0] = handle.slot;
     token = recorder_enter(HOOK_DESTROY, args, 1);
     rc = synth_destroy(w, handle);
-    recorder_exit(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK);
+    recorder_exit(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK, context,
+                  reference_context(1u, handle.slot, handle.generation, live, generation,
+                                    version, context));
     return rc;
 }
 
@@ -324,10 +407,15 @@ static void print_events(void)
     printf("EVENTS count=%u\n", (unsigned)count);
     for (i = 0; i < count; i++) {
         const recorder_event *e = recorder_event_at(order[i]);
+        uint32_t c;
         printf("EV thread=%u seq=%" PRIu64 " phase=%u hook=%u result=%" PRIu64
-               " complete=%d\n",
+               " complete=%d context=",
                (unsigned)e->thread_id, e->sequence, (unsigned)e->phase,
                (unsigned)e->hook_id, e->result, e->complete);
+        for (c = 0; c < e->ncontext; c++) {
+            printf("%s%" PRIu64, c == 0u ? "" : ",", e->context[c]);
+        }
+        printf("\n");
     }
 }
 
@@ -387,14 +475,14 @@ int main(void)
         args[0] = 1;
         outer = recorder_enter(HOOK_UPDATE, args, 1);
         inner = recorder_enter(HOOK_READ, args, 1);
-        recorder_exit(inner, 0u, 1);
-        recorder_exit(outer, 0u, 1);
+        recorder_exit(inner, 0u, 1, 0, 0u);
+        recorder_exit(outer, 0u, 1, 0, 0u);
     }
     print_counters("reentrant");
 
     /* Misuse: an exit with no matching enter is rejected, never silently accepted. */
     (void)configure(RECORDER_MODE_ENABLED, 16, 0);
-    recorder_exit(0, 0u, 1);
+    recorder_exit(0, 0u, 1, 0, 0u);
     print_counters("misuse");
 
     /* Four threads, one rendezvous, ample capacity: every event is captured. */

@@ -4,12 +4,13 @@
 immutable evidence store), **P4.2** (the portable C11 synthetic target with a
 deterministic golden transcript), **P4.3** (the native recorder core's exact
 capture accounting), **P4.4** (the pluggable capture policy), **P4.5** (offline
-finalization: resource identity, aliasing and semantic dedup) and **P4.7**
-(concurrency and bounded capture) are implemented under `oracle/recorder/` with
-offline tests - **P4r-B is complete**. The resource registry/closure (P4.6) and
-R0-M protocol compatibility (P4.8) follow in P4r-C. **Nothing here launches EU IV,
-opens a game process, or attaches to a binary**: the recorder consumes
-already-captured native events, and P4 is proven entirely offline.
+finalization: resource identity, aliasing and semantic dedup), **P4.6** (the
+resource registry and closure verifier), **P4.7** (concurrency and bounded capture)
+and **P4.8** (R0-M epoch compatibility, validated offline) are implemented under
+`oracle/recorder/` with offline tests - **P4r-B and P4r-C are complete**. **P4b**
+(the synthetic graphics replay) follows. **Nothing here launches EU IV, opens a game
+process, or attaches to a binary**: the recorder consumes already-captured native
+events, and P4 is proven entirely offline.
 
 This document is authoritative for P4. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the trust boundary is a refinement of the
@@ -42,7 +43,7 @@ binary or a game process.
 | --- | --- | --- | --- |
 | **P4r-A** (done) | P4.1, P4.2 | versioned schema + evidence store; portable C11 synthetic target | records round-trip; load-time integrity; deterministic native golden output |
 | **P4r-B** (done) | P4.3-P4.5, P4.7 | native capture accounting; policy plugin; identity/aliasing/dedup; reentrancy/concurrency + bounded capture | accounting exact; aliases and semantic dedup correct; overflow/reentrancy/concurrency regressions pass |
-| **P4r-C** | P4.6, P4.8 | resource registry + closure verifier; R0-M protocol compatibility offline | generations + closure verified; synthetic multi-epoch protocol accepted offline |
+| **P4r-C** (done) | P4.6, P4.8 | resource registry + closure verifier; R0-M protocol compatibility offline | generations + closure verified; synthetic multi-epoch protocol accepted offline |
 | **P4b** | - | independent synthetic graphics replay | a sealed frame replays in a fresh process; missing dependencies fail closed |
 
 Each commit is append-only and separately revertible. P4.1 passes its own gates
@@ -279,6 +280,55 @@ The thread-safety claim is not asserted from one lucky run: the concurrency
 scenarios are deterministic across repeated runs and the build is clean under
 **ThreadSanitizer** (zero data races) as well as AddressSanitizer and UBSan.
 
+## Resource closure (P4.6)
+
+The recorder core is function-agnostic, so it cannot know what a resource is. Each
+exit therefore carries an **opaque observation context** - declared by the hook layer,
+stored verbatim by the core and never interpreted there. For this subject the context
+names the resource the call addressed and the slot state that resolves it:
+
+```
+[0] ref_valid  [1] ref_slot  [2] ref_gen  [3] live  [4] slot_gen  [5] version
+```
+
+`(ref_slot, ref_gen)` is the referenced resource's **lifetime**; `(live, slot_gen,
+version)` is that slot as the observation saw it - **at entry** for the
+handle-addressing calls, so a destroy's resource is still live and a stale handle's
+is not, and after creation for create. `oracle/recorder/registry.py` reads that
+context and decides closure:
+
+* a resource is named by its lifetime, `slot:<slot>@<generation>`, never by a bare
+  handle;
+* a handle whose generation no longer lives in its slot names a resource that is
+  **gone**: the observation yields **`INCOMPLETE_ORACLE`** instead of being attributed
+  to whatever now occupies the slot. A reused slot never leaks into the observation
+  that used the old handle;
+* an observation is **closed** when its reference resolves. The lifetimes it could
+  not resolve become its `unavailable_dependencies` - exactly the field P4.1 already
+  uses to disqualify a record from semantic comparison.
+
+One direction is enforced, not assumed: a **complete** observation must address a
+live resource. The converse does not hold - a bad argument on a live resource is
+incomplete yet perfectly resolvable.
+
+## R0-M epoch compatibility (P4.8)
+
+Every observation is attributed to the R0-M **epoch** it was captured under.
+`oracle/recorder/epoch.py` decodes the R0-M control word (version, mode, scenario id,
+generation) **itself**, derives the `provenance.epoch` and `provenance.scenario`
+tokens a record must carry, and verifies a multi-epoch capture offline:
+
+* every control word is decodable and generations strictly increase - a word the
+  protocol's own reader rejects is never attributed;
+* no record is attributed to a **passive** epoch, because passive observes nothing;
+* a record's scenario must be the one its epoch declares.
+
+`benchmark/eu4_r0_control.py` is the protocol's implementation, and a test
+cross-checks this decoder against it **field by field** over a corpus spanning every
+mode and the boundary values, so compatibility is a checked claim rather than a
+copied constant. This is the REUSE_MAP's "ADAPT (co-design)" entry made concrete: the
+Oracle validates the protocol offline and does not touch R0-M's measurement path.
+
 ## Fidelity modes (owned by the reconstruction contract)
 
 The three modes - **faithful**, **GL optimization**, **GPU/backend redesign** -
@@ -318,7 +368,7 @@ See `tests/test_oracle_recorder_schema.py` and
 
 See `tests/test_oracle_recorder_synthetic.py`.
 
-## P4r-B acceptance (P4.3 - )
+## Acceptance (P4r-B and P4r-C: P4.3 - P4.8)
 
 **P4.3 - the recorder core**, exact accounting under disabled capture, a bounded
 buffer, and reentrant observation:
@@ -358,6 +408,20 @@ See `tests/test_oracle_recorder_native.py`.
 
 See `tests/test_oracle_recorder_finalize.py`.
 
+**P4.6 - resource closure**, the resource registry and closure verifier:
+
+* a live reference resolves to its lifetime, and two aliases of one resource share
+  one;
+* a reference to a destroyed lifetime, and to a slot reused in a new generation, both
+  yield `INCOMPLETE_ORACLE`; an invalid reference names nothing at all;
+* a complete observation must address a live resource, while an incomplete one may
+  still resolve;
+* end-to-end over the recorder's own capture: a fully captured scenario is closed,
+  and a scenario with a gone resource plus a reused slot marks `slot:0@0` unavailable
+  and `slot:0@1` as a distinct, closing lifetime.
+
+See `tests/test_oracle_recorder_registry.py`.
+
 **P4.7 - concurrency and bounded capture**:
 
 * four threads observing through one recorder account exactly, and a buffer smaller
@@ -371,3 +435,16 @@ See `tests/test_oracle_recorder_finalize.py`.
   ThreadSanitizer.
 
 See `tests/test_oracle_recorder_native.py`.
+
+**P4.8 - R0-M epoch compatibility**, validated offline:
+
+* the decoder agrees with the R0-M mirror on every word tested, including the modes
+  and the words the mirror rejects;
+* generations must strictly increase, and an invalid word is rejected, not
+  attributed;
+* a valid multi-epoch capture is attributed per epoch; a record in a passive epoch,
+  naming an unknown epoch, or with the wrong scenario is rejected;
+* the epoch tokens are valid record provenance, so the attribution is enforceable
+  against the P4.1 schema.
+
+See `tests/test_oracle_recorder_epoch.py`.
