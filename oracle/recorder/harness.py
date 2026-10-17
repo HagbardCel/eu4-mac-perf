@@ -61,9 +61,9 @@ def _spec(target: str) -> dict[str, Any]:
         raise HarnessError(f"unknown target {target!r}; known: {sorted(TARGETS)}") from exc
 
 
-def build(target: str, build_dir: Path, *, cc: str = "cc", timeout_s: float = 120.0) -> Path:
-    """Compile the trusted target into ``build_dir`` and return the executable path."""
-    spec = _spec(target)
+def build_spec(spec: dict[str, Any], build_dir: Path, *, cc: str = "cc",
+               timeout_s: float = 120.0) -> Path:
+    """Compile a trusted target spec into ``build_dir`` and return the executable path."""
     build_dir = Path(build_dir)
     build_dir.mkdir(parents=True, exist_ok=True)
     for path in tuple(spec["sources"]) + tuple(spec["headers"]):
@@ -81,6 +81,11 @@ def build(target: str, build_dir: Path, *, cc: str = "cc", timeout_s: float = 12
         detail = proc.stderr.decode("utf-8", "replace").strip()
         raise HarnessError(f"compilation failed ({proc.returncode}): {detail}")
     return exe
+
+
+def build(target: str, build_dir: Path, *, cc: str = "cc", timeout_s: float = 120.0) -> Path:
+    """Compile the named trusted target into ``build_dir`` and return the executable."""
+    return build_spec(_spec(target), build_dir, cc=cc, timeout_s=timeout_s)
 
 
 def run_transcript(exe: Path, *, timeout_s: float = 30.0) -> str:

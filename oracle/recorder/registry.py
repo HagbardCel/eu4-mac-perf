@@ -35,6 +35,15 @@ class RegistryError(ValueError):
     """A capture's resource closure could not be verified."""
 
 
+def lifetime_name(slot: int, generation: int) -> str:
+    """The lifetime key of a resource: its slot and generation, never a bare handle.
+
+    The one place the naming rule lives, so the frame replay (P4b) resolves
+    references by exactly the rule P4.6 declares rather than a lookalike.
+    """
+    return f"slot:{slot}@{generation}"
+
+
 class Reference(NamedTuple):
     """The resource an observation addressed, and the slot state that resolves it."""
 
@@ -53,7 +62,7 @@ class Reference(NamedTuple):
     @property
     def named(self) -> str:
         """The lifetime the reference names, whether or not it resolves."""
-        return f"slot:{self.slot}@{self.generation}"
+        return lifetime_name(self.slot, self.generation)
 
 
 def reference_from_context(context: Sequence[int]) -> Reference:
