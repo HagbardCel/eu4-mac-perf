@@ -343,7 +343,7 @@ def require_token(run_dir: Path, token: str | None) -> None:
 
 def certify_candidate(candidate: Path, *, run_dir: Path, run_id: str, token: str | None,
                       timeout_s: float = harness.DEFAULT_TIMEOUT_S, cc: str = "cc",
-                      visible_root: Path | None = None) -> dict[str, Any]:
+                      fixtures_root: Path | None = None) -> dict[str, Any]:
     """Run the held-out corpus against a frozen candidate. Controller-only.
 
     Returns an outcome-only verdict: never expected bytes, never per-fixture
@@ -353,7 +353,7 @@ def certify_candidate(candidate: Path, *, run_dir: Path, run_id: str, token: str
     candidate = Path(candidate)
     if not candidate.is_file() or candidate.is_symlink():
         raise ToolError(f"candidate snapshot is not a regular file: {candidate}")
-    root = Path(visible_root) if visible_root else corpus.FIXTURES_DIR
+    root = Path(fixtures_root) if fixtures_root else corpus.FIXTURES_DIR
     fixtures = corpus.load_corpus(corpus.HELD_OUT, root=root)
     snapshot_hash = sha256(candidate.read_bytes()).hexdigest()
     started = time.monotonic()

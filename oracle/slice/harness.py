@@ -105,7 +105,7 @@ def build(candidate: Path, build_dir: Path, *, cc: str = "cc") -> Build:
                  compiler_version=compiler_version(cc))
 
 
-def _terminate_group(proc: subprocess.Popen) -> None:
+def terminate_process_group(proc: subprocess.Popen) -> None:
     """Terminate a process group, then reap it, escalating to SIGKILL."""
     if proc.poll() is not None:
         proc.wait()
@@ -127,6 +127,19 @@ def _terminate_group(proc: subprocess.Popen) -> None:
         proc.wait(timeout=KILL_GRACE_S)
     except subprocess.TimeoutExpired:  # pragma: no cover - defensive
         pass
+
+
+def close_pipes(proc: subprocess.Popen) -> None:
+    """Close a process's stdio pipes after it has been reaped."""
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:  # pragma: no cover - defensive
+                pass
+
+
+_terminate_group = terminate_process_group
 
 
 def run_fixture(build: Build, fixture: Fixture, *, timeout_s: float = DEFAULT_TIMEOUT_S,

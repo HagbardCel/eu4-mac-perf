@@ -1,0 +1,165 @@
+# P3 synthetic OpenCode slice
+
+**Status:** PR-A (deterministic infrastructure) implemented under `oracle/slice/`.
+PR-B (the pinned real OpenCode run) is not yet performed. Nothing here launches
+EU IV, uses a model, or touches the network.
+
+This document is authoritative for the P3 slice. The phase contract is in
+[PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the preserved blueprint it refines is in
+[BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md).
+
+## Purpose
+
+The P3 gate states that a **real OpenCode agent must repair a supplied defective
+candidate using Oracle diagnostics, then pass a held-out verdict**, under
+controller-enforced abort, budget and receipts. PR-A builds and proves the
+deterministic half of that: the target, harness, comparator, agent-facing tools,
+controller and receipt chain. PR-B binds the pinned OpenCode binary and performs
+the real repair.
+
+## Trust domains
+
+| Domain | Owns | Never receives |
+| --- | --- | --- |
+| **Trusted Oracle host** (`oracle/slice/`) | visible **and** held-out corpus, build/run harness, comparator, controller, receipts | — |
+| **Agent workspace** (fresh, per run) | the defective `candidate.c`, the public interface `synth.h`, `fixtures/visible/` | held-out fixtures, Oracle source, controller token |
+| **Controller** | budget, attempts, wall clock, process tree, candidate freezing, the single held-out verdict, receipt sealing | — |
+
+The agent-facing surface is exactly five MCP tools: `oracle_inspect`,
+`oracle_fixtures`, `oracle_coverage`, `oracle_test`, `oracle_diff`. OpenCode
+prefixes each raw MCP tool name with its server name, so the bridge declares the
+bare names `inspect`/`fixtures`/`coverage`/`test`/`diff` under the `oracle`
+server.
+
+**Certification is controller-only.** `certify` is not in the MCP catalog; it is
+an internal function reachable only through a privileged CLI guarded by the
+controller's run token, and it returns an outcome-only verdict. The controller
+invokes it **once**, after the candidate is frozen. A failed certification ends
+that evaluation; repairing again against the same held-out suite would require a
+separately declared evaluation with fresh material, because the old holdout would
+no longer be independent.
+
+**Boundary, not sandbox.** Held-out isolation is an *application-level* boundary.
+It is not a security guarantee against arbitrary malicious process access;
+OS-level sandboxing is deferred to a later phase (see the preserved blueprint's
+PR-F).
+
+## The synthetic target
+
+`oracle/slice/{target.c,reference.c}` implement one portable C11 function with
+two observable domains:
+
+```c
+int synth_apply(struct synth_state *s, int mode, int arg);  /* struct: dirty, value, counter */
+void synth_emit(int field, int value);                      /* ordered effect transcript */
+```
+
+`target.c` is defective in mode 0: it sets `dirty` but never writes `value`, so
+both the raw post-state bytes and the effect transcript diverge. `reference.c` is
+the trusted baseline.
+
+Compilation flags are fixed and recorded: `-std=c11 -O0 -fwrapv
+-fno-strict-aliasing`. `-fwrapv` makes the counter-overflow fixtures defined
+behaviour rather than UB.
+
+## Corpus
+
+Fixtures are frozen ground truth under `oracle/slice/fixtures/`:
+
+* `visible/` (12) — agent-accessible; exercises the defect and the neighbouring
+  modes.
+* `held_out/` (10) — trusted-host only; same contract, disjoint inputs, including
+  integer extremes and wraparound.
+
+`oracle/slice/gen_fixtures.py --check` is the **baseline qualification**: before
+any agent is invoked, the reference must pass both sets byte-for-byte. Tests
+report this, plus the fact that the defective target fails both.
+
+## Harness and comparator
+
+The harness — never the candidate — constructs the actual observation. Each
+build copies the trusted driver and header plus the candidate into a private
+directory, so a candidate that ships its own `synth.h` or `driver.c` cannot
+change the ABI or the observation protocol. Each fixture runs in its own process
+group with a bounded wall clock.
+
+`oracle/slice/compare.py` validates the actual observation envelope before
+delegating to the prototype comparator in [core.py](../../oracle/core.py):
+
+* missing domains, malformed hex or an incomplete transcript → `INCOMPLETE_ORACLE`;
+* abnormal termination → `CANDIDATE_CRASH` or `CANDIDATE_TIMEOUT`, never `MISMATCH`;
+* only a complete actual observation against complete expected evidence can `PASS`.
+
+## Budget, process tree and freezing
+
+* **Budget** (`oracle/slice/budget.py`): a run-scoped SQLite ledger. Admission and
+  reservation are atomic; the run id is immutable; an MCP restart cannot reset
+  counters; missing or corrupted state denies rather than resets. Accepted calls
+  consume budget even when the call then fails.
+* **Process tree** (`oracle/slice/adapters.py`): children start in their own
+  session; on timeout or abort the whole group is terminated and reaped, so a
+  stalled or crashed agent cannot leave a compiler, test binary or MCP server
+  running.
+* **Freezing** (`oracle/slice/workspace.py`): after the agent stops, its remaining
+  processes are reaped and the candidate is copied into a read-only attempt
+  snapshot. The controller compiles and certifies **only** from that snapshot, so
+  a late writer cannot change the artifact that received the verdict.
+
+## Receipts
+
+The controller always writes a terminal receipt, including after timeout, crash
+or a missing candidate. The payload binds:
+
+| Identity | Data |
+| --- | --- |
+| Source | baseline commit, defective and final candidate hashes, snapshot path |
+| Corpus | visible and held-out manifest hashes, counts, schema version |
+| Toolchain | compiler version, flags, harness/comparator/driver/interface hashes |
+| Agent | adapter, model (filled in PR-B), tool calls, budget granted/limit |
+| Execution | attempt sequence, timings, abort reason |
+| Verdict | visible-suite outcome, one controller-owned held-out verdict |
+
+A receipt is *sealed* when it is content-addressed and verifiable against a
+trusted reference: the digest is computed over the canonical payload, not merely
+stored next to it. Receipt verification is reproducible; the model trajectory is
+not — rerunning an LLM at identical settings is not expected to reproduce the
+same edits. Bulky logs and run directories stay local (`oracle/slice/runs/` is
+gitignored); only the sealed receipt is published.
+
+## PR-A acceptance criteria
+
+| Criterion | Where it is proven |
+| --- | --- |
+| Reference passes visible and held-out; the defective target fails visible | `tests/test_oracle_slice_comparator.py` |
+| Exactly five tools via MCP; `certify` undiscoverable and uncallable | `tests/test_oracle_slice_bridge.py` |
+| Held-out never enters the workspace or any tool response | `tests/test_oracle_slice_controller.py`, `tests/test_oracle_slice_e2e.py` |
+| Missing or incomplete observations cannot pass | `tests/test_oracle_slice_comparator.py` |
+| Reservations hold across concurrent calls and MCP restarts | `tests/test_oracle_slice_bridge.py` |
+| Timeouts terminate the process group, including descendants, and still emit receipts | `tests/test_oracle_slice_controller.py`, `tests/test_oracle_slice_e2e.py` |
+| Certification uses immutable snapshots | `tests/test_oracle_slice_controller.py` |
+| Stub repair succeeds in budget; give-up, crash, timeout and no-progress terminate cleanly | `tests/test_oracle_slice_e2e.py` |
+
+PR-A contains a genuine MCP protocol smoke test — a real stdio subprocess doing
+`initialize` → `tools/list` → `tools/call` — not only direct calls into the
+Python bridge.
+
+## Non-goals and boundaries
+
+* No EU IV launch, no recorder, no runtime capture. P4 is the first phase that
+  implements generalized capture machinery; nothing here implies a recorder
+  exists.
+* The `StubAdapter` is a deterministic stand-in for the agent. It proves the
+  infrastructure, not model capability; PR-B proves the latter.
+* Token and cost limits are not claimed as absolute billing guarantees: provider
+  usage may arrive only after a response. Only local call, attempt, wall-clock
+  and process limits are enforceable here.
+
+## PR-B (next)
+
+Bound the pinned OpenCode binary (`opencode v2.0.30`), configure the `oracle`
+local stdio MCP server with `codemode: false` and a deny-by-default permission
+set (`shell`, `subagent`, `webfetch`, `websearch`, `external_directory` denied;
+candidate editing and the five Oracle tools allowed), prove a real tool
+invocation in an isolated service/session context, run the real repair with
+`opencode/deepseek-v4.1-flash-free#high` in an isolated candidate directory, and
+publish the sealed receipt and acceptance memo.
