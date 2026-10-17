@@ -13,7 +13,7 @@
   },
   "policy": {
     "path": "tooling/common/repo_lifecycle.json",
-    "sha256": "ef689db712cb2f90659afe06a1a2bec60b1275a37cc9703a5ae3c3cc545476bc"
+    "sha256": "f63ecfdfe74e390218991e5ee91f91e9b0df32badecc8efd3ec02b6119ddd1c9"
   },
   "policy_version": "1",
   "source": {

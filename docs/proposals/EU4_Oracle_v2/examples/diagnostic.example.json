@@ -1,0 +1,20 @@
+{
+  "schema_version": "eu4-oracle-diagnostic/v2",
+  "function_id": "gfx:0x15ec36a",
+  "fixture_id": "fx-024",
+  "run_id": "run-example-1",
+  "status": "MISMATCH",
+  "first_divergence": {
+    "domain": "memory",
+    "object_id": "GfxContext:1@g0",
+    "byte_offset": 296,
+    "field_name": "dirty_flag",
+    "field_confidence": "inferred",
+    "expected_hex": "01",
+    "actual_hex": "00",
+    "comparison_policy": "exact_bytes"
+  },
+  "capture": { "complete": true, "lost_events": 0, "unknown_dependencies": [] },
+  "causal_context_ref": "sha256:EXAMPLE-NOT-A-REAL-HASH",
+  "note": "Illustrative data; NOT an observation from EU IV"
+}
