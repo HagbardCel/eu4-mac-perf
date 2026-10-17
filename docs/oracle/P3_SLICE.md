@@ -417,6 +417,14 @@ explicitly.
 * **Replay integrity.** The guard refuses to replay a published receipt unless
   the current harness, comparator, driver, interface and bridge still hash to the
   pinned identities, because replaying against a changed oracle proves nothing.
+* **Pre-registration.** `opencode_run.py --mode preregister` emits the pin on the
+  same code path the run binds, so the declared digests cannot drift from what the
+  run records. It fixes the run id and staging root, because the materialized
+  configuration digest depends on the absolute run directory. The declaration is
+  committed and pushed *before* the run; the guard reports a declaration whose
+  receipt is not published yet as **pending** rather than failed
+  (`--require-receipts` tightens that), so CI stays meaningful across the window
+  between the two commits.
 
 ### Tests
 

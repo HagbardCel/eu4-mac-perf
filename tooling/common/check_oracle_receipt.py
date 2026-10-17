@@ -16,12 +16,19 @@ and without the agent's cooperation. For every sealed receipt under
    integrity gate refuses to replay when the current harness, comparator, driver,
    interface or corpus no longer match the pinned identities, because replaying
    against a changed oracle would prove nothing;
-5. **scans the serialized receipt for absolute paths** outside an allowlist (error
-   strings can embed paths, so the whole document is scanned, not a field list);
+5. **scans the harness-authored identities for undeclared absolute paths** - the
+   bound toolchain, agent, corpus, source and verdict objects must not name a
+   machine path the declaration does not account for. Free-form strings the child
+   produced (attempt notes, denial resources, error text) are necessarily
+   arbitrary and are excluded, since flagging them would fail a run for an agent
+   merely naming a path; the denials are separately required to be structured;
 6. **scans the published, sanitized event summary** for held-out fingerprints.
 
 With no published receipts it is a no-op, so it can land before the run it
-guards. It exits non-zero on the first violation.
+guards. A pre-registration whose receipt is not published yet is reported as
+**pending** rather than failed, because the declaration is deliberately committed
+before the run; ``--require-receipts`` turns that into a failure. It exits
+non-zero on the first violation.
 """
 from __future__ import annotations
 
@@ -66,6 +73,15 @@ def _absolute_regex():
 
 class GuardError(RuntimeError):
     """A published receipt does not survive independent re-verification."""
+
+
+class PendingReceipt(RuntimeError):
+    """A pre-registration is committed but its receipt is not published yet.
+
+    The declaration is deliberately committed *before* the run, so this is a
+    normal intermediate state, not a violation - unless ``--require-receipts``
+    says otherwise.
+    """
 
 
 def _load(path: Path) -> dict:
@@ -170,6 +186,8 @@ def verify_run(repo_root: Path, prereg_path: Path) -> str:
         raise GuardError(f"{prereg_path} has no run_id")
 
     receipt_path = repo_root / RECEIPTS_DIR / f"{run_id}.json"
+    if not receipt_path.is_file():
+        raise PendingReceipt(f"no published receipt for {run_id}")
     receipt = _load(receipt_path)
     receipts.verify(receipt, expected_sha256=receipt.get("sha256"))
 
@@ -180,12 +198,21 @@ def verify_run(repo_root: Path, prereg_path: Path) -> str:
     _cross_check(receipt, prereg)
     _rematerialize(repo_root, prereg, payload["toolchain"]["opencode"])
 
-    # Absolute paths: the declared staging root, plus system prefixes.
-    staging = str(prereg.get("staging_root", ""))
-    allow = SYSTEM_PREFIXES + ((staging,) if staging else ())
-    stray = check_absolute_paths(json.dumps(receipt, sort_keys=True), allow)
+    # Undeclared absolute paths: scope the scan to the identities the *harness*
+    # authors. Free-form strings the child produced (attempt notes, denial
+    # resources, error text) are necessarily arbitrary, and flagging them would
+    # fail a run merely for an agent naming a path; the denials are separately
+    # required to be structured. Everything here is built by the controller, the
+    # adapter or the corpus loader.
+    declared = tuple(str(prereg[key]).rstrip("/") + "/"
+                     for key in ("staging_root", "repo_root") if prereg.get(key))
+    allow = SYSTEM_PREFIXES + declared
+    harness_authored = {key: payload.get(key)
+                        for key in ("toolchain", "agent", "corpus", "source", "verdict")}
+    stray = check_absolute_paths(json.dumps(harness_authored, sort_keys=True), allow)
     if stray:
-        raise GuardError("absolute paths outside the allowlist: " + ", ".join(stray))
+        raise GuardError("undeclared absolute paths in the bound identities: "
+                         + ", ".join(stray))
 
     # Leak scan over the *published* summary only; the receipt legitimately names
     # held-out fixtures in its corpus manifest.
@@ -221,22 +248,25 @@ def verify_run(repo_root: Path, prereg_path: Path) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="check_oracle_receipt")
     parser.add_argument("--root", default=str(_REPO_ROOT))
+    parser.add_argument("--require-receipts", action="store_true",
+                        help="fail when a pre-registration has no published receipt")
     args = parser.parse_args(argv)
     repo_root = Path(args.root).resolve()
 
     prereg_dir = repo_root / PREREGISTRATION_DIR
-    if not prereg_dir.is_dir():
-        print("oracle receipts: no published pre-registration yet (nothing to verify)")
-        return 0
-    prereg_files = sorted(prereg_dir.glob("*.json"))
+    prereg_files = sorted(prereg_dir.glob("*.json")) if prereg_dir.is_dir() else []
     if not prereg_files:
         print("oracle receipts: no published pre-registration yet (nothing to verify)")
         return 0
 
-    verified = []
+    verified: list[str] = []
+    pending: list[str] = []
     for prereg_path in prereg_files:
         try:
             verified.append(verify_run(repo_root, prereg_path))
+        except PendingReceipt as exc:
+            pending.append(prereg_path.stem)
+            print(f"oracle receipts: PENDING {prereg_path.name}: {exc}")
         except GuardError as exc:
             print(f"oracle receipts: FAILED {prereg_path.name}: {exc}", file=sys.stderr)
             return 1
@@ -244,7 +274,17 @@ def main(argv: list[str] | None = None) -> int:
             print(f"oracle receipts: FAILED {prereg_path.name}: {type(exc).__name__}: {exc}",
                   file=sys.stderr)
             return 1
-    print(f"oracle receipts: verified {len(verified)} published run(s): {', '.join(verified)}")
+
+    if pending and args.require_receipts:
+        print(f"oracle receipts: {len(pending)} pre-registration(s) without a receipt",
+              file=sys.stderr)
+        return 1
+    summary = f"oracle receipts: verified {len(verified)} published run(s)"
+    if verified:
+        summary += f": {', '.join(verified)}"
+    if pending:
+        summary += f"; {len(pending)} declared and pending: {', '.join(pending)}"
+    print(summary)
     return 0
 
 

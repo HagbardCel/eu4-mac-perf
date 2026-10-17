@@ -101,6 +101,14 @@ class ReceiptGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(guard.main(["--root", tmp]), 0)
 
+    def test_a_declaration_without_a_receipt_is_pending_not_failed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _publish(root)
+            (root / "docs/oracle/receipts/run-e2e.json").unlink()
+            self.assertEqual(guard.main(["--root", str(root)]), 0)
+            self.assertEqual(guard.main(["--root", str(root), "--require-receipts"]), 1)
+
     def test_a_tampered_receipt_fails_its_seal(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1,44 +1,64 @@
-"""Driver for the P3-B OpenCode pilot and the single declared acceptance run.
+"""Driver for the P3-B OpenCode pilot, pre-registration and acceptance run.
 
 This is the *only* entry point that launches the pinned binary. It is deliberately
 boring: it resolves the declared layout, constructs the adapter, hands control to
-the controller, and reports what happened. It never touches EU IV, never
-certifies by itself, and never edits a receipt.
+the controller, and reports what happened. It never touches EU IV, never certifies
+by itself, and never edits a sealed receipt.
 
-Two modes:
+Three modes:
+
+``preregister``
+    Emit the pre-registration - the identities and parameters that must be
+    committed **before** the run. It is computed on the same code path the run
+    uses, so the pinned digests cannot drift from what the run actually binds. No
+    agent, no model, no network.
 
 ``pilot``
-    Exercises the binding end to end against a **visible-only** fixture root and
-    ends with a code-level ``gave_up``, so the controller can never spend the
+    Exercise the binding end to end against a **visible-only** fixture root,
+    ending in a code-level ``gave_up`` so the controller can never spend the
     held-out corpus. It establishes connectivity, the tool catalog, a real
-    permission denial and the observed identities that the pre-registration must
-    pin. **Non-accepting by construction.**
+    permission denial and the observed identities. **Non-accepting by
+    construction.**
 
 ``acceptance``
-    The one declared evaluation: the repair prompt, a bounded wall clock, and a
-    single attempt. It spends the holdout exactly once (only after the visible
-    suite passes) and seals the terminal receipt.
+    The one declared evaluation: the repair prompt, a bounded wall clock, a single
+    attempt. It spends the holdout exactly once (only after the visible suite
+    passes) and seals the terminal receipt.
 
 Layout: ``--staging-root`` is absolute and outside the repository;
 ``run_dir = <staging-root>/<run-id>`` and the agent's workspace is its
-``workspace/`` child, so OpenCode cannot walk up into the repository's own
-configuration.
+``workspace/`` child.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
-from oracle.slice import controller, receipts
+from oracle.slice import controller, corpus, opencode, receipts
 from oracle.slice.controller import RunConfig
 from oracle.slice.opencode import OpenCodeAdapter, OpenCodeRun
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_DIR = Path(__file__).resolve().parent / "opencode_config"
 DEFAULT_STAGING = Path.home() / ".local" / "share" / "eu4-oracle-p3"
 DEFAULT_MODEL = {"provider": "opencode", "id": "deepseek-v4.1-flash-free", "variant": "high"}
+PREREGISTRATION_SCHEMA = "eu4-oracle-preregistration/v1"
+
+SOURCE_PATHS = {
+    "controller_sha256": "oracle/slice/controller.py",
+    "adapters_sha256": "oracle/slice/adapters.py",
+    "harness_sha256": "oracle/slice/harness.py",
+    "comparator_sha256": "oracle/slice/compare.py",
+    "driver_sha256": "oracle/slice/driver.c",
+    "interface_sha256": "oracle/slice/synth.h",
+    "bridge_sha256": "oracle/slice/bridge.py",
+    "opencode_sha256": "oracle/slice/opencode.py",
+}
 
 
 def _default_run_id(mode: str) -> str:
@@ -48,7 +68,8 @@ def _default_run_id(mode: str) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="oracle.slice.opencode_run")
-    parser.add_argument("--mode", choices=("pilot", "acceptance"), required=True)
+    parser.add_argument("--mode", choices=("preregister", "pilot", "acceptance"),
+                        required=True)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--staging-root", default=str(DEFAULT_STAGING))
     parser.add_argument("--model", default=f"{DEFAULT_MODEL['provider']}/{DEFAULT_MODEL['id']}"
@@ -60,6 +81,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--finalization-seconds", type=float, default=300.0)
     parser.add_argument("--expected-binary-sha256", default=None)
     parser.add_argument("--expected-version", default=None)
+    parser.add_argument("--preregistration", default=None,
+                        help="a committed pre-registration the run must conform to")
+    parser.add_argument("--out", default=None, help="where preregister writes its JSON")
     parser.add_argument("--candidate", default=str(REPO_ROOT / "oracle" / "slice" / "target.c"))
     return parser
 
@@ -72,12 +96,132 @@ def _parse_model(text: str) -> tuple[str, str, str | None]:
     return provider, model_id, (variant or None)
 
 
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _preregistration(*, run_id: str, staging_root: Path, args, provider: str, model_id: str,
+                     variant: str) -> dict:
+    """Compute the pin on the same code path the run binds.
+
+    The materialized configuration digest depends on the absolute run directory,
+    so the run id and staging root are part of the declaration - which is why the
+    staging base is preallocated at a stable path rather than chosen at run time.
+    """
+    run_dir = staging_root / run_id
+    model = f"{provider}/{model_id}" + (f"#{variant}" if variant else "")
+    template_path = CONFIG_DIR / opencode.CONFIG_TEMPLATE
+    template = template_path.read_text(encoding="utf-8")
+    substitutions = {
+        "@MODEL@": model,
+        "@PYTHON@": str(Path(args.python)),
+        "@REPO_ROOT@": str(REPO_ROOT),
+        "@RUN_DIR@": str(run_dir),
+        "@WORKSPACE@": str(run_dir / "workspace"),
+    }
+    materialized = opencode.materialize(template, substitutions)
+
+    binary = Path(args.binary)
+    probe = subprocess.run([str(binary), "--version"], capture_output=True, text=True,
+                           timeout=120, check=False)
+    version = next((line.strip() for line in f"{probe.stdout}\n{probe.stderr}".splitlines()
+                    if line.strip()), "")
+    if probe.returncode != 0 or not version:
+        raise SystemExit(f"cannot establish the OpenCode version from {binary}")
+
+    corpus_manifests = {}
+    for set_name in (corpus.VISIBLE, corpus.HELD_OUT):
+        corpus_manifests[set_name] = corpus.manifest(corpus.load_corpus(set_name),
+                                                     set_name=set_name)
+
+    return {
+        "schema": PREREGISTRATION_SCHEMA,
+        "declared_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "mode": "acceptance",
+        "run_id": run_id,
+        "staging_root": str(staging_root),
+        "repo_root": str(REPO_ROOT),
+        "python": str(Path(args.python)),
+        "binary": {"path": str(binary), "sha256": _sha256_file(binary), "version": version},
+        "model": {"provider": provider, "id": model_id, "variant": variant},
+        "prompt_path": "oracle/slice/opencode_config/prompt.txt",
+        "prompt_sha256": _sha256_file(CONFIG_DIR / opencode.REPAIR_PROMPT),
+        "config": {
+            "template_path": "oracle/slice/opencode_config/opencode.json.template",
+            "template_sha256": _sha256_file(template_path),
+            "materialized_sha256": hashlib.sha256(materialized.encode("utf-8")).hexdigest(),
+        },
+        "substitutions": substitutions,
+        "corpus": corpus_manifests,
+        "source_hashes": {key: _sha256_file(REPO_ROOT / rel)
+                          for key, rel in SOURCE_PATHS.items()},
+        "run": {
+            "mode": "acceptance",
+            "attempts": 1,
+            "budget_calls": args.budget_calls or 40,
+            "wall_seconds": args.wall_seconds or 3600.0,
+            "finalization_seconds": args.finalization_seconds,
+        },
+        "conditions": [
+            "C1 the pinned binary, model, variant and effective configuration are bound",
+            "C2 the pinned process enforces its restrictions on its direct tools, with a "
+            "structured denial distinguishable from absence, refusal and failure",
+            "C3 held-out fixtures are absent from the workspace and never intentionally "
+            "exposed through the agent-facing API",
+            "C3b no held-out identifier or fingerprint appears in any agent-visible surface",
+            "C4 ledger-authoritative accounting plus event-level proof of a successful "
+            "oracle_inspect and oracle_test",
+            "C5 the final candidate differs, passes visible and held-out, certification ran",
+            "C6 the sealed receipt and committed artifact replay under the model-free guard",
+            "C7 the run is bounded and not aborted",
+            "C8 this pre-registration was committed before the run",
+            "C9 scope is stated honestly",
+        ],
+        "acceptance_memo": "docs/oracle/P3B_ACCEPTANCE.md",
+    }
+
+
+def _enforce_preregistration(path: Path, *, run_id: str, staging_root: Path,
+                             model: dict, args) -> None:
+    """Refuse to run under anything other than the declared pin."""
+    declared = json.loads(Path(path).read_text(encoding="utf-8"))
+    problems = []
+    if declared.get("run_id") != run_id:
+        problems.append(f"run_id {run_id!r} != declared {declared.get('run_id')!r}")
+    if declared.get("staging_root") != str(staging_root):
+        problems.append("staging root differs from the declaration")
+    if declared.get("model") != model:
+        problems.append("model differs from the declaration")
+    if problems:
+        raise SystemExit("run does not conform to the pre-registration: " + "; ".join(problems))
+    args.expected_binary_sha256 = declared["binary"]["sha256"]
+    args.expected_version = declared["binary"]["version"]
+    print(f"conforms to pre-registration {path}")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     provider, model_id, variant = _parse_model(args.model)
+    model = {"provider": provider, "id": model_id, "variant": variant}
     run_id = args.run_id or _default_run_id(args.mode)
     staging_root = Path(args.staging_root).expanduser().resolve()
     run_dir = staging_root / run_id
+
+    if args.mode == "preregister":
+        declaration = _preregistration(run_id=run_id, staging_root=staging_root, args=args,
+                                       provider=provider, model_id=model_id, variant=variant)
+        text = json.dumps(declaration, indent=2, sort_keys=True) + "\n"
+        if args.out:
+            out = Path(args.out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(text, encoding="utf-8")
+            print(f"wrote {out}")
+        print(text)
+        return 0
+
+    if args.preregistration:
+        _enforce_preregistration(Path(args.preregistration), run_id=run_id,
+                                 staging_root=staging_root, model=model, args=args)
 
     adapter = OpenCodeAdapter(OpenCodeRun(
         run_id=run_id,
@@ -101,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         max_attempts=1,
         wall_seconds=args.wall_seconds or (900.0 if args.mode == "pilot" else 3600.0),
         finalization_seconds=args.finalization_seconds,
-        model={"provider": provider, "id": model_id, "variant": variant},
+        model=model,
     )
 
     print(f"mode={args.mode} run_id={run_id}")
