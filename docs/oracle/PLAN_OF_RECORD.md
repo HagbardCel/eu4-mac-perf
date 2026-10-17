@@ -104,6 +104,16 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 > `oracle-v2-p3b-20261017`, which points at that merge commit. See
 > [P3_SLICE.md](P3_SLICE.md) and [P3B_ACCEPTANCE.md](P3B_ACCEPTANCE.md).
 
+> **P4 status (2026-10-18):** **in progress.** **P4r-A** (P4.1 record schema,
+> canonicalization and immutable evidence store; P4.2 portable C11 synthetic target
+> with a deterministic golden transcript) and **P4r-B** (P4.3 native capture
+> accounting; P4.4 declared capture policy; P4.5 offline finalization - resource
+> identity, aliasing and semantic dedup; P4.7 concurrency and bounded capture) are
+> implemented and merged under `oracle/recorder/`, with the recorder transcript
+> deterministic across compilers and clean under ThreadSanitizer, ASan and UBSan.
+> **P4r-C** (P4.6 resource registry + closure; P4.8 R0-M protocol compatibility)
+> and **P4b** follow. See [P4_RECORDER.md](P4_RECORDER.md).
+
 ## Hard rule
 
 No further EU IV launch until **P3** and **P4/P4b** pass acceptance.
