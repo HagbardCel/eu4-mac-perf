@@ -1,0 +1,31 @@
+{
+  "schema_version": "eu4-oracle-fixture/v1",
+  "fixture_id": "vis-004",
+  "function_id": "synth:apply",
+  "set": "visible",
+  "input": {
+    "mode": 2,
+    "arg": 42,
+    "dirty": 0,
+    "value": 1,
+    "counter": 1
+  },
+  "expected": {
+    "capture": {
+      "complete": true,
+      "lost_events": 0,
+      "unknown_dependencies": []
+    },
+    "return_hex": "0000002a",
+    "exit": "normal",
+    "post_memory": {
+      "state": "000000002a00000001000000"
+    },
+    "effects": [
+      {
+        "field": 2,
+        "value": 42
+      }
+    ]
+  }
+}

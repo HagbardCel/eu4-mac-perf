@@ -1,10 +1,13 @@
 # EU IV Oracle — ground-truth acquisition and reconstruction
 
-**Status:** next-phase capability, design + audit stage. No recorder, runtime capture,
-or OpenCode integration is implemented yet. Authoritative for **capture/validation
-infrastructure** only; the function-level reconstruction lifecycle stays in the PR #44
-contract `docs/renderer-reconstruction-and-differential-validation.md` (see
-[open PR #44](https://github.com/HagbardCel/eu4-mac-perf/pull/44), not yet on `main`).
+**Status:** next-phase capability, design + audit stage. The deterministic P3
+slice (target, harness, comparator, agent-facing tools, controller, receipts)
+is implemented under `oracle/slice/`; no recorder, runtime capture or real
+OpenCode run is implemented yet. Authoritative for **capture/validation
+infrastructure** only; the function-level reconstruction lifecycle stays in the
+PR #44 contract `docs/renderer-reconstruction-and-differential-validation.md`
+(see [open PR #44](https://github.com/HagbardCel/eu4-mac-perf/pull/44), not yet
+on `main`).
 
 ## Purpose
 
@@ -20,6 +23,7 @@ consumes. The project's power/heat objective is the downstream consumer of that 
 | [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md) | Authorized P0–P5 execution sequence and gates |
 | [REUSE_MAP.md](REUSE_MAP.md) | REUSE / ADAPT / REPLACE / RETAIN_HISTORICAL decisions over existing assets |
 | [BASELINE_P0.md](BASELINE_P0.md) | Frozen baseline record (revision, checks, pre-existing failures) |
+| [P3_SLICE.md](P3_SLICE.md) | P3 synthetic slice: trust domains, contracts and PR-A acceptance criteria |
 | [BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md) | Preserved v2 blueprint bytes, hashes and tag (historical reference) |
 | [../repo-map.md](../repo-map.md) | Tracked-path inventory and lifecycle labels (P1 audit) |
 | [../repo-audit-context.json](../repo-audit-context.json) | Audit identity triple (source snapshot, policy, tools); governs `docs/repo-{inventory,edges,lifecycle}.csv` |
