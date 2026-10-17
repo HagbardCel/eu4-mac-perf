@@ -2,11 +2,12 @@
 
 **Status:** in progress. **P4.1** (the record schema, canonicalization and the
 immutable evidence store), **P4.2** (the portable C11 synthetic target with a
-deterministic golden transcript) and **P4.3** (the native recorder core's exact
-capture accounting) are implemented under `oracle/recorder/` with offline tests;
-the policy plugin, offline finalization and concurrency follow. **Nothing here
-launches EU IV, opens a game process, or attaches to a binary**: the recorder
-consumes already-captured native events, and P4 is proven entirely offline.
+deterministic golden transcript), **P4.3** (the native recorder core's exact
+capture accounting) and **P4.4** (the pluggable capture policy) are implemented
+under `oracle/recorder/` with offline tests; offline finalization and concurrency
+follow. **Nothing here launches EU IV, opens a game process, or attaches to a
+binary**: the recorder consumes already-captured native events, and P4 is proven
+entirely offline.
 
 This document is authoritative for P4. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the trust boundary is a refinement of the
@@ -193,6 +194,33 @@ fixed-width arithmetic, no pointers, no clock. `tests/test_oracle_recorder_nativ
 asserts it reproduces byte-for-byte and that the identities hold independently of
 the flag the core reports.
 
+## The capture policy (P4.4)
+
+Which hooks are captured in full, and which are counted only, is a **declared,
+pluggable descriptor** (`oracle/recorder/native/policy.h`), not a hard-coded list
+inside the recorder:
+
+```
+recorder_policy { version, default_rule, rule_count, rules[ {hook_id, rule} ] }
+```
+
+The recorder is function-agnostic, so the policy names hooks rather than functions
+and can be swapped without touching the core. Because two policies qualify the same
+behavior differently, a record must name the policy it was captured under, so the
+descriptor has a **canonical byte encoding**:
+
+* big-endian fields, and rules **sorted by hook id** - so the bytes depend on the
+  policy's meaning, not on the order it was written down;
+* the native core emits those bytes; it does **not** hash.
+
+The policy digest (sha256 over the canonical bytes) is computed **offline** - in
+`oracle/recorder/policy_reference.py`, a differential *reference* model, not a
+second source of truth. The native declaration is authoritative; the reference
+re-derives the bytes so a test fails if the two drift. That digest is exactly the
+`capture_policy_digest` a P4.1 record carries, which is how two records captured
+under different policies are kept distinct even when the observed behavior is
+identical.
+
 ## Fidelity modes (owned by the reconstruction contract)
 
 The three modes - **faithful**, **GL optimization**, **GPU/backend redesign** -
@@ -245,5 +273,15 @@ buffer, and reentrant observation:
 * a capacity below the number of selected events loses exactly the surplus and
   still balances;
 * reentrant observation is detected, and an unmatched exit is rejected.
+
+See `tests/test_oracle_recorder_native.py`.
+
+**P4.4 - the capture policy**, a declared, pluggable descriptor:
+
+* the native canonical descriptor bytes match the reference encoding, and the
+  digest is independent of rule declaration order;
+* a policy deep-captures exactly the hooks it selects and counts the rest;
+* two policies qualify the same behavior differently, and therefore carry
+  different digests.
 
 See `tests/test_oracle_recorder_native.py`.

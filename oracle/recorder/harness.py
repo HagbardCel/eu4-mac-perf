@@ -41,8 +41,9 @@ TARGETS: dict[str, dict[str, Any]] = {
     "recorder": {
         "exe": "recorder",
         "sources": (NATIVE_DIR / "driver.c", NATIVE_DIR / "recorder.c",
-                    SYNTHETIC_DIR / "synthetic.c"),
-        "headers": (NATIVE_DIR / "recorder.h", SYNTHETIC_DIR / "synth.h"),
+                    NATIVE_DIR / "policy.c", SYNTHETIC_DIR / "synthetic.c"),
+        "headers": (NATIVE_DIR / "recorder.h", NATIVE_DIR / "policy.h",
+                    SYNTHETIC_DIR / "synth.h"),
         "golden": NATIVE_DIR / "golden.txt",
     },
 }
@@ -154,10 +155,11 @@ def parse_transcript(text: str) -> dict[str, Any]:
 def parse_recorder_transcript(text: str) -> dict[str, Any]:
     """Parse a native-recorder transcript into scenarios and their counters.
 
-    Keys: ``version``, ``scenarios`` (each with ``name``, ``counters`` and
-    ``accounting``), and ``end``.
+    Keys: ``version``, ``policies`` (each with ``name``, ``version``, ``default``,
+    ``rules`` and ``canonical`` hex), ``scenarios`` (each with ``name``,
+    ``counters`` and ``accounting``), and ``end``.
     """
-    parsed: dict[str, Any] = {"version": None, "scenarios": [], "end": None}
+    parsed: dict[str, Any] = {"version": None, "policies": [], "scenarios": [], "end": None}
     current: dict[str, Any] | None = None
     for raw in text.splitlines():
         line = raw.strip()
@@ -167,6 +169,10 @@ def parse_recorder_transcript(text: str) -> dict[str, Any]:
         tag = parts[0]
         if tag == "RECORDER":
             parsed["version"] = parts[1] if len(parts) > 1 else ""
+        elif tag == "POLICY":
+            policy = _fields(parts[2:])
+            policy["name"] = parts[1] if len(parts) > 1 else ""
+            parsed["policies"].append(policy)
         elif tag == "SCENARIO":
             current = {"name": parts[1] if len(parts) > 1 else "", "counters": {},
                        "accounting": None}

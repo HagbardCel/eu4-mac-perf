@@ -12,7 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from oracle.recorder import harness
+from oracle.recorder import harness, policy_reference
 
 
 def _counters(scenario: dict) -> dict[str, int]:
@@ -40,8 +40,9 @@ class NativeRecorderAccountingTests(unittest.TestCase):
 
     def test_transcript_is_well_formed(self):
         self.assertEqual(self.parsed["version"], "v1")
-        self.assertEqual(sorted(self.scenarios), ["bounded", "disabled", "enabled",
-                                                  "misuse", "reentrant"])
+        self.assertEqual(sorted(self.scenarios), ["bounded", "disabled", "enabled", "misuse",
+                                                  "policy-observe-data", "policy-observe-flow",
+                                                  "reentrant"])
 
     def test_every_scenario_reports_the_accounting_as_holding(self):
         for scenario in self.parsed["scenarios"]:
@@ -90,8 +91,41 @@ class NativeRecorderAccountingTests(unittest.TestCase):
         self.assertEqual(counters["intercepted"], 0)
         self.assertEqual(counters["rejected"], 1)
 
-    def test_the_subject_ran_three_full_scripts(self):
-        self.assertEqual(int(self.parsed["end"]["effects"]), 21)
+    def test_the_subject_ran_five_full_scripts(self):
+        self.assertEqual(int(self.parsed["end"]["effects"]), 35)
+
+    # --- P4.4: the capture policy -------------------------------------------------
+
+    def test_policy_canonical_bytes_match_the_reference_encoding(self):
+        policies = {p["name"]: p for p in self.parsed["policies"]}
+        self.assertEqual(sorted(policies), ["observe-data", "observe-flow"])
+        for name, policy in policies.items():
+            descriptor = policy_reference.DECLARED_POLICIES[name]
+            with self.subTest(policy=name):
+                self.assertEqual(bytes.fromhex(policy["canonical"]),
+                                 policy_reference.canonical_bytes(descriptor))
+
+    def test_policy_digest_is_order_independent(self):
+        descriptor = policy_reference.DECLARED_POLICIES["observe-data"]
+        reordered = dict(descriptor, rules=list(reversed(descriptor["rules"])))
+        self.assertEqual(policy_reference.digest(reordered),
+                         policy_reference.digest(descriptor))
+
+    def test_policy_deep_captures_only_its_selected_hooks(self):
+        data = _counters(self.scenarios["policy-observe-data"])
+        # Deep: the five update/read calls. Counted only: three creates, share, destroy.
+        self.assertEqual(data["selected"], 5)
+        self.assertEqual(data["unselected"], 5)
+        self.assertEqual(data["captured"] + data["incomplete"], data["selected"])
+
+    def test_two_policies_qualify_the_same_behavior_differently(self):
+        data = _counters(self.scenarios["policy-observe-data"])
+        flow = _counters(self.scenarios["policy-observe-flow"])
+        # Same behavior, different selection - and therefore different digests.
+        self.assertEqual(data["intercepted"], flow["intercepted"])
+        self.assertNotEqual(data["selected"], flow["selected"])
+        self.assertNotEqual(policy_reference.digest(policy_reference.DECLARED_POLICIES["observe-data"]),
+                            policy_reference.digest(policy_reference.DECLARED_POLICIES["observe-flow"]))
 
 
 if __name__ == "__main__":  # pragma: no cover

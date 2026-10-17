@@ -89,7 +89,7 @@ int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs)
     if (g_config.mode == RECORDER_MODE_DISABLED) {
         frame->selected = 0;
         g_counters.unselected += 1;
-    } else {
+    } else if (policy_rule_for(g_config.policy, hook_id) == RECORDER_RULE_DEEP) {
         frame->selected = 1;
         g_counters.selected += 1;
         if (g_event_count < g_config.capacity) {
@@ -97,6 +97,9 @@ int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs)
         } else {
             g_counters.lost += 1; /* bounded capture: reported, never silent */
         }
+    } else {
+        frame->selected = 0;
+        g_counters.unselected += 1;
     }
 
     token = (int64_t)g_depth;

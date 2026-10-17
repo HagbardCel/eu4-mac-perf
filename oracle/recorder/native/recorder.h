@@ -15,6 +15,8 @@
 
 #include <stdint.h>
 
+#include "policy.h"
+
 #define RECORDER_MAX_EVENTS 64u
 #define RECORDER_MAX_ARGS 8u
 #define RECORDER_MAX_DEPTH 32u
@@ -28,6 +30,7 @@ typedef struct {
     uint32_t mode;
     uint32_t capacity; /* capture slots; must be <= RECORDER_MAX_EVENTS */
     uint32_t max_args; /* argument slots a hook may record; <= RECORDER_MAX_ARGS */
+    const recorder_policy *policy; /* NULL selects every hook for deep capture */
 } recorder_config;
 
 typedef struct {

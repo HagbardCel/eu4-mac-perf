@@ -1,4 +1,6 @@
 RECORDER v1
+POLICY observe-data version=1 default=0 rules=2 canonical=00000001000000000000000200000002000000010000000300000001
+POLICY observe-flow version=1 default=1 rules=2 canonical=00000001000000010000000200000001000000000000000500000000
 SCENARIO disabled
 COUNTERS intercepted=10 selected=0 unselected=10 captured=0 incomplete=0 lost=0 reentrant=0 rejected=0
 ACCOUNTING ok
@@ -8,10 +10,16 @@ ACCOUNTING ok
 SCENARIO bounded
 COUNTERS intercepted=10 selected=10 unselected=0 captured=4 incomplete=0 lost=6 reentrant=0 rejected=0
 ACCOUNTING ok
+SCENARIO policy-observe-data
+COUNTERS intercepted=10 selected=5 unselected=5 captured=4 incomplete=1 lost=0 reentrant=0 rejected=0
+ACCOUNTING ok
+SCENARIO policy-observe-flow
+COUNTERS intercepted=10 selected=6 unselected=4 captured=5 incomplete=1 lost=0 reentrant=0 rejected=0
+ACCOUNTING ok
 SCENARIO reentrant
 COUNTERS intercepted=2 selected=2 unselected=0 captured=2 incomplete=0 lost=0 reentrant=1 rejected=0
 ACCOUNTING ok
 SCENARIO misuse
 COUNTERS intercepted=0 selected=0 unselected=0 captured=0 incomplete=0 lost=0 reentrant=0 rejected=1
 ACCOUNTING ok
-END effects=21
+END effects=35
