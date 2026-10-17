@@ -120,6 +120,30 @@ def _repo_relative(path: Path) -> str:
         return str(resolved)
 
 
+def _repo_path(path: Path) -> str | None:
+    """The repository-relative posix path, or None if it escapes the repository."""
+    try:
+        return Path(path).resolve().relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return None
+
+
+def _effective_limits(args, mode: str) -> dict:
+    """The run bounds as the driver will actually resolve them.
+
+    A declaration records *resolved* numbers, so the same resolution must check
+    it: an omitted optional flag means the mode default, not ``None``. Generation
+    and enforcement must agree exactly, or a normal invocation is refused.
+    """
+    return {
+        "budget_calls": args.budget_calls if args.budget_calls is not None
+        else (24 if mode == "pilot" else 40),
+        "wall_seconds": args.wall_seconds if args.wall_seconds is not None
+        else (900.0 if mode == "pilot" else 3600.0),
+        "finalization_seconds": args.finalization_seconds,
+    }
+
+
 def _visible_verdict(candidate: Path, run_id: str) -> dict:
     """Compile and evaluate the agent's candidate against the visible corpus.
 
@@ -201,9 +225,7 @@ def _preregistration(*, run_id: str, staging_root: Path, args, provider: str, mo
         "run": {
             "mode": "acceptance",
             "attempts": 1,
-            "budget_calls": args.budget_calls or 40,
-            "wall_seconds": args.wall_seconds or 3600.0,
-            "finalization_seconds": args.finalization_seconds,
+            **_effective_limits(args, "acceptance"),
         },
         "conditions": [
             "C1 the pinned binary, model, variant and effective configuration are bound",
@@ -248,50 +270,112 @@ def _git(*arguments: str) -> str:
     return probe.stdout.strip()
 
 
-def _contract_problems(declared: dict, args) -> list[str]:
+def _git_bytes(*arguments: str) -> bytes | None:
+    """Raw ``git`` stdout, or None when the command fails.
+
+    The bytes are deliberately not stripped: they are compared against committed
+    blobs, where a trailing newline matters.
+    """
+    probe = subprocess.run(["git", "-C", str(REPO_ROOT), *arguments],
+                           capture_output=True, check=False)
+    return probe.stdout if probe.returncode == 0 else None
+
+
+def _git_ok(*arguments: str) -> bool:
+    return subprocess.run(["git", "-C", str(REPO_ROOT), *arguments],
+                          capture_output=True, check=False).returncode == 0
+
+
+def _contract_problems(declared: dict, args, *, prereg_path: Path) -> list[str]:
     """Why the working tree does not match the declaration, if it does not.
 
-    The declaration is checked against the *repository as it is now*: the pinned
-    revision must be ``HEAD``, the tree must be clean, every declared source hash
-    must match, the candidate must be the declared defective input and the
-    interpreter must be the declared one. A declaration that predates the
-    source-revision pin cannot be enforced and is refused rather than assumed.
+    ``baseline_commit`` names the *source revision* the declaration was generated
+    on. Committing the declaration afterwards necessarily advances ``HEAD``, so the
+    contract is not "HEAD equals A" (which would force the declaration to be left
+    uncommitted) but:
+
+    * A is an ancestor of the checkout, and every pinned source hashes to the
+      declared value both at A and in the working tree;
+    * the working tree is clean;
+    * the declaration is a *committed* object at HEAD - byte-identical to
+      ``git cat-file blob HEAD:<path>`` - rather than an arbitrary readable file;
+    * the candidate is the declared path (inside the repository, not a symlink)
+      with the declared content, and the interpreter and bounds are the declared
+      ones.
     """
     source = declared.get("source")
     if not isinstance(source, dict):
         return ["the declaration predates the source-revision pin (no 'source' block)"]
     problems: list[str] = []
     head = _git("rev-parse", "HEAD")
-    if source.get("baseline_commit") != head:
+    baseline = source.get("baseline_commit")
+    if not isinstance(baseline, str) or not baseline:
+        problems.append("the declaration records no baseline_commit")
+    elif not _git_ok("merge-base", "--is-ancestor", baseline, "HEAD"):
         problems.append(
-            f"HEAD {head!r} is not the declared baseline_commit "
-            f"{source.get('baseline_commit')!r}")
+            f"the declared baseline_commit {baseline!r} is not an ancestor of HEAD {head!r}")
+
     dirty = _git("status", "--porcelain")
     if dirty:
         problems.append("the working tree is not clean: " + dirty.replace("\n", "; "))
-    if source.get("defective_candidate_sha256") != _sha256_file(Path(args.candidate)):
-        problems.append("the candidate source differs from the declaration")
+
+    # The declaration itself must be committed. This is the strongest statement an
+    # offline check can make: that the file is a Git object in this checkout. It
+    # does *not* prove the commit was pushed before the run; that remains a
+    # documented process fact.
+    relative = _repo_path(prereg_path)
+    if relative is None:
+        problems.append("the pre-registration is not inside the repository")
+    else:
+        committed = _git_bytes("cat-file", "blob", f"HEAD:{relative}")
+        if committed is None:
+            problems.append(f"the pre-registration {relative} is not committed at HEAD")
+        elif committed != Path(prereg_path).read_bytes():
+            problems.append("the pre-registration differs from its committed blob")
+
+    candidate = Path(args.candidate)
+    actual_path = _repo_path(candidate)
+    if actual_path is None:
+        problems.append("the candidate source is not inside the repository")
+    elif actual_path != source.get("candidate_path"):
+        problems.append(
+            f"the candidate source path {actual_path!r} is not the declared "
+            f"{source.get('candidate_path')!r}")
+    if candidate.is_symlink():
+        problems.append("the candidate source is a symlink")
+    if source.get("defective_candidate_sha256") != _sha256_file(candidate):
+        problems.append("the candidate source content differs from the declaration")
+
     if declared.get("python") != str(Path(args.python)):
         problems.append("the interpreter differs from the declaration")
-    hashes = declared.get("source_hashes") or {}
-    for key, relative in SOURCE_PATHS.items():
-        wanted = hashes.get(key)
+
+    source_hashes = declared.get("source_hashes") or {}
+    for key, rel in SOURCE_PATHS.items():
+        wanted = source_hashes.get(key)
         if wanted is None:
-            problems.append(f"the declaration does not pin {relative}")
-        elif wanted != _sha256_file(REPO_ROOT / relative):
-            problems.append(f"{relative} differs from the declaration")
+            problems.append(f"the declaration does not pin {rel}")
+            continue
+        if wanted != _sha256_file(REPO_ROOT / rel):
+            problems.append(f"{rel} differs from the declaration in the working tree")
+        if isinstance(baseline, str) and baseline:
+            blob = _git_bytes("cat-file", "blob", f"{baseline}:{rel}")
+            if blob is None:
+                problems.append(f"{rel} is not present at the declared baseline_commit")
+            elif hashlib.sha256(blob).hexdigest() != wanted:
+                problems.append(f"{rel} differs from the declaration at the baseline_commit")
+
+    limits = _effective_limits(args, args.mode)
     run = declared.get("run") or {}
     for key in ("budget_calls", "wall_seconds", "finalization_seconds"):
-        value = args.budget_calls if key == "budget_calls" and args.budget_calls is not None \
-            else args.wall_seconds if key == "wall_seconds" and args.wall_seconds is not None \
-            else getattr(args, key)
-        if run.get(key) != value:
-            problems.append(f"run.{key}={value!r} differs from the declared {run.get(key)!r}")
+        if run.get(key) != limits[key]:
+            problems.append(
+                f"run.{key}={limits[key]!r} differs from the declared {run.get(key)!r}")
     return problems
 
 
 def _enforce_preregistration(path: Path, *, run_id: str, staging_root: Path,
-                             model: dict, args, strict: bool) -> dict:
+                             model: dict, args, strict: bool,
+                             prompt_path: Path) -> dict:
     """Refuse to run under anything other than the declared pin."""
     declared = json.loads(Path(path).read_text(encoding="utf-8"))
     problems = []
@@ -302,7 +386,17 @@ def _enforce_preregistration(path: Path, *, run_id: str, staging_root: Path,
     if declared.get("model") != model:
         problems.append("model differs from the declaration")
     if strict:
-        problems.extend(_contract_problems(declared, args))
+        # The prompt is part of the execution contract: the run must not launch
+        # with a prompt the declaration did not name. This is checked before the
+        # adapter is built, so a mismatched prompt never reaches the model.
+        actual_prompt = _repo_relative(prompt_path)
+        if actual_prompt != declared.get("prompt_path"):
+            problems.append(
+                f"the prompt {actual_prompt!r} is not the declared "
+                f"{declared.get('prompt_path')!r}")
+        elif declared.get("prompt_sha256") != _sha256_file(prompt_path):
+            problems.append("the prompt content differs from the declaration")
+        problems.extend(_contract_problems(declared, args, prereg_path=Path(path)))
     if problems:
         raise SystemExit("run does not conform to the pre-registration: " + "; ".join(problems))
     args.expected_binary_sha256 = declared["binary"]["sha256"]
@@ -336,21 +430,38 @@ def main(argv: list[str] | None = None) -> int:
         print(text)
         return 0
 
+    # The prompt is resolved *before* enforcement so its identity can be checked
+    # against the declaration. Acceptance has no prompt flexibility: it runs the
+    # one declared repair prompt, so substituting the pilot prompt is refused here,
+    # before the adapter (and therefore the model) is ever constructed.
+    prompt_choice = args.prompt
+    if prompt_choice == "auto":
+        prompt_choice = "pilot" if args.mode == "pilot" else "repair"
+    if args.mode == "acceptance" and prompt_choice != "repair":
+        raise SystemExit(
+            "acceptance runs use the declared repair prompt; --prompt pilot is refused")
+    prompt_path = CONFIG_DIR / (opencode.PILOT_PROMPT if prompt_choice == "pilot"
+                                else opencode.REPAIR_PROMPT)
+
     declared: dict | None = None
     if args.preregistration:
         declared = _enforce_preregistration(Path(args.preregistration), run_id=run_id,
                                             staging_root=staging_root, model=model, args=args,
-                                            strict=(args.mode == "acceptance"))
+                                            strict=(args.mode == "acceptance"),
+                                            prompt_path=prompt_path)
     if args.mode == "acceptance" and declared is None:
         # The declaration comes first, by construction: an acceptance run without
         # one would be evaluated against conditions nobody committed to.
         raise SystemExit("acceptance runs require --preregistration")
 
-    prompt_choice = args.prompt
-    if prompt_choice == "auto":
-        prompt_choice = "pilot" if args.mode == "pilot" else "repair"
-    prompt_path = CONFIG_DIR / (opencode.PILOT_PROMPT if prompt_choice == "pilot"
-                                else opencode.REPAIR_PROMPT)
+    # Record the commit that published the declaration (B) and its path, so a later
+    # offline check can re-verify the committed pre-registration. A is the source
+    # revision, recorded separately as ``baseline_commit``.
+    declaration_commit: str | None = None
+    preregistration_path: str | None = None
+    if declared is not None and args.mode == "acceptance":
+        declaration_commit = _git("rev-parse", "HEAD")
+        preregistration_path = _repo_relative(Path(args.preregistration))
 
     adapter = OpenCodeAdapter(OpenCodeRun(
         run_id=run_id,
@@ -385,6 +496,8 @@ def main(argv: list[str] | None = None) -> int:
         fixtures_root=fixtures_root,
         baseline_commit=(declared or {}).get("source", {}).get("baseline_commit")
         if declared else None,
+        declaration_commit=declaration_commit,
+        preregistration_path=preregistration_path,
         require_repair_acceptance=(args.mode == "acceptance"),
     )
 

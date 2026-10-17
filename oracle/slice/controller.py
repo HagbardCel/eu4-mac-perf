@@ -94,7 +94,15 @@ class RunConfig:
     timeout_s: float = harness.DEFAULT_TIMEOUT_S
     cc: str = "cc"
     fixtures_root: Path | None = None
+    #: The source revision the pre-registration pinned (its ``baseline_commit``).
+    #: The pins and the replay are checked against this revision.
     baseline_commit: str | None = None
+    #: The commit that published the pre-registration, and its repository-relative
+    #: path. Recorded so a later, offline check can re-verify that the declaration
+    #: was a committed object - not merely a readable file - before the run. See
+    #: ``opencode_run.py``; generic P3-A runs leave both ``None``.
+    declaration_commit: str | None = None
+    preregistration_path: str | None = None
     model: dict[str, Any] | None = None
     #: Repair acceptance (P3-B). When set, the controller enforces the repair
     #: contract *before* the held-out corpus may be spent: the candidate must have
@@ -814,6 +822,8 @@ def run(config: RunConfig, adapter: AgentAdapter) -> RunResult:
             "run_id": config.run_id,
             "source": {
                 "baseline_commit": config.baseline_commit,
+                "declaration_commit": config.declaration_commit,
+                "preregistration_path": config.preregistration_path,
                 "defective_candidate_sha256": defective_sha,
                 "final_candidate_sha256": frozen.sha256 if frozen else None,
                 "snapshot": snapshot,
