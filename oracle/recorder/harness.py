@@ -162,11 +162,14 @@ def _sync(parts: list[str]) -> dict[str, Any]:
             "phase_before": int(before), "phase_after": int(after)}
 
 
-def _event(parts: list[str]) -> dict[str, int]:
+def _event(parts: list[str]) -> dict[str, Any]:
     fields = _fields(parts)
+    context = ([int(word) for word in fields["context"].split(",")]
+               if fields.get("context") else [])
     return {"thread_id": int(fields["thread"]), "sequence": int(fields["seq"]),
             "phase": int(fields["phase"]), "hook_id": int(fields["hook"]),
-            "result": int(fields["result"]), "complete": int(fields["complete"])}
+            "result": int(fields["result"]), "complete": int(fields["complete"]),
+            "context": context}
 
 
 def parse_recorder_transcript(text: str) -> dict[str, Any]:

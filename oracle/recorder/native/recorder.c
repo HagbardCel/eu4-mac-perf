@@ -150,7 +150,8 @@ int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs)
     return token;
 }
 
-void recorder_exit(int64_t token, uint64_t result, int complete)
+void recorder_exit(int64_t token, uint64_t result, int complete,
+                   const uint64_t *context, uint32_t ncontext)
 {
     recorder_frame *frame;
     uint32_t index;
@@ -181,6 +182,7 @@ void recorder_exit(int64_t token, uint64_t result, int complete)
     {
         recorder_event *event = &g_events[frame->slot];
         uint32_t i;
+        uint32_t stored = 0u;
         event->thread_id = frame->thread_id;
         event->sequence = frame->sequence;
         event->phase = frame->phase;
@@ -188,6 +190,18 @@ void recorder_exit(int64_t token, uint64_t result, int complete)
         event->nargs = frame->nargs;
         for (i = 0; i < RECORDER_MAX_ARGS; i++) {
             event->args[i] = frame->args[i];
+        }
+        if (context != 0 && ncontext <= RECORDER_MAX_CONTEXT) {
+            stored = ncontext;
+            for (i = 0; i < stored; i++) {
+                event->context[i] = context[i];
+            }
+        } else if (context != 0) {
+            bump(&g_rejected); /* more context than the recorder can record */
+        }
+        event->ncontext = stored;
+        for (i = stored; i < RECORDER_MAX_CONTEXT; i++) {
+            event->context[i] = 0u;
         }
         event->result = result;
         event->complete = complete ? 1 : 0;
