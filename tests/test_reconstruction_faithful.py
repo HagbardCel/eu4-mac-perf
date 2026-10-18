@@ -233,20 +233,34 @@ def setUpModule() -> None:
         # environment that cannot test. Fail rather than skip.
         raise RuntimeError(f"reconstruction did not build with {compiler}: {BUILD_NOTE}")
 
+    # A native x86-64 host is expected to build and run the probe; only a cross-built probe
+    # (Apple Silicon through `-arch x86_64`) may be unrunnable here because of a missing x86-64
+    # runtime. Anything that runs and fails is a failure on any host.
+    native = platform.machine().lower() in ("x86_64", "amd64")
     abi_command = _abi_command(compiler, WORKDIR)
     if abi_command is None:
         BUILD_NOTE += "; no x86-64 ABI probe build for this host"
         return
     ok, error = _compile(abi_command)
     if not ok:
-        if platform.machine().lower() in ("x86_64", "amd64"):
-            # Native x86-64: the probe should build; a failure here is a defect too.
+        if native:
             raise RuntimeError(f"x86-64 ABI probe did not build: {error}")
         BUILD_NOTE += f"; x86-64 ABI probe build failed: {_first_line(error)}"
         return
-    probe = subprocess.run([str(WORKDIR / "abi_check")], capture_output=True, text=True)
+    try:
+        probe = subprocess.run([str(WORKDIR / "abi_check")], capture_output=True, text=True,
+                               timeout=120)
+    except OSError as exec_error:
+        if native:
+            message = f"x86-64 ABI probe could not be executed: {exec_error}"
+            raise RuntimeError(message) from exec_error
+        BUILD_NOTE += "; x86-64 ABI probe could not be executed here (no x86-64 runtime)"
+        return
     if probe.returncode != 0:
-        BUILD_NOTE += "; x86-64 ABI probe could not be executed on this host"
+        if native or "check=" in probe.stdout:
+            # It ran and failed its own checks, or this host is expected to be able to run it.
+            raise RuntimeError(f"x86-64 ABI probe failed: {probe.stdout}{probe.stderr}")
+        BUILD_NOTE += "; x86-64 ABI probe did not run here (no x86-64 runtime)"
         return
     ABI_BINARY = WORKDIR / "abi_check"
     BUILD_NOTE += "; x86-64 ABI probe built and executed"
