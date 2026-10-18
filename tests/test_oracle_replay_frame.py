@@ -205,5 +205,206 @@ class FreshProcessTests(unittest.TestCase):
             self.assertNotIn("FRAME", finished.stdout)
 
 
+def _with_timeline(capture_document: dict, mutate) -> dict:
+    """A copy of the capture whose timeline has been edited, then re-sealed."""
+    edited = copy.deepcopy(capture_document)
+    mutate(edited["timeline"])
+    return capture.seal(edited)
+
+
+def _transcript(*, drop: int | None = None, replace: tuple[int, str] | None = None,
+                insert: tuple[int, str] | None = None, append: str | None = None) -> str:
+    """The golden transcript, edited at the line level: the wire-format tests need it."""
+    lines = harness.golden_transcript().splitlines()
+    if drop is not None:
+        del lines[drop]
+    if replace is not None:
+        lines[replace[0]] = replace[1]
+    if insert is not None:
+        lines.insert(insert[0], insert[1])
+    if append is not None:
+        lines.append(append)
+    return "\n".join(lines) + "\n"
+
+
+def _line_index(prefix: str) -> int:
+    """The first golden transcript line beginning with ``prefix``."""
+    return next(index for index, line in enumerate(harness.golden_transcript().splitlines())
+                if line.startswith(prefix))
+
+
+class TerminalAccountingTests(unittest.TestCase):
+    """A capture that lost records must not read as a complete one (P1)."""
+
+    def test_a_transcript_that_lost_records_but_kept_its_end_is_rejected(self):
+        # Everything after the first PRESENT is gone; the terminal record still claims
+        # the full 13-effect run. Without terminal accounting this replays as 6045a395.
+        lines = harness.golden_transcript().splitlines()
+        truncated = lines[:_line_index("PRESENT") + 1] + [lines[_line_index("END")]]
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.parse_frame_transcript("\n".join(truncated) + "\n")
+        message = str(raised.exception)
+        self.assertIn("accounting does not match", message)
+        self.assertIn("'effects': 13", message)   # declared
+        self.assertIn("'effects': 5", message)    # recomputed
+
+    def test_each_declared_counter_is_checked(self):
+        for key, declaration in (("creates", "3"), ("destroys", "0"), ("ops", "5"),
+                                 ("effects", "12")):
+            end = {"creates": "4", "destroys": "1", "ops": "6", "effects": "13"}
+            end[key] = declaration
+            record = "END " + " ".join(f"{field}={value}" for field, value in end.items())
+            with self.subTest(field=key):
+                with self.assertRaises(capture.CaptureError):
+                    capture.parse_frame_transcript(_transcript(replace=(_line_index("END"), record)))
+
+    def test_a_record_after_the_end_is_rejected(self):
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.parse_frame_transcript(
+                _transcript(append="FILL slot=0 gen=0 offset=0 span=4 pattern=1 result=0"))
+        self.assertIn("continues after its END record", str(raised.exception))
+
+    def test_a_second_end_record_is_rejected(self):
+        # The first END closes the transcript, so a second one is content after it.
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.parse_frame_transcript(
+                _transcript(append="END creates=4 destroys=1 ops=6 effects=13"))
+        self.assertIn("continues after its END record", str(raised.exception))
+
+    def test_a_missing_end_is_rejected(self):
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.parse_frame_transcript(_transcript(drop=_line_index("END")))
+        self.assertIn("no END record", str(raised.exception))
+
+    def test_the_end_record_must_declare_exactly_its_fields(self):
+        cases = {
+            "unexpected field": "END creates=4 destroys=1 ops=6 effects=13 locus=2",
+            "missing field": "END creates=4 destroys=1 ops=6",
+            "duplicate field": "END creates=4 creates=4 destroys=1 ops=6 effects=13",
+        }
+        for label, record in cases.items():
+            with self.subTest(case=label):
+                with self.assertRaises(capture.CaptureError):
+                    capture.parse_frame_transcript(_transcript(replace=(_line_index("END"), record)))
+
+    def test_end_counters_must_be_canonical_non_negative_decimals(self):
+        for value in ("04", "+4", "-4", "4.0", "0x4"):
+            with self.subTest(value=value):
+                with self.assertRaises(capture.CaptureError):
+                    capture.parse_frame_transcript(_transcript(
+                        replace=(_line_index("END"),
+                                 f"END creates={value} destroys=1 ops=6 effects=13")))
+
+    def test_the_golden_transcript_passes_terminal_accounting(self):
+        self.assertEqual(capture.parse_frame_transcript(harness.golden_transcript()),
+                         _golden_capture())
+
+    def test_a_truncated_capture_that_re_accounts_is_consistent_but_is_not_the_original(self):
+        # The honest limit of terminal accounting, kept executable rather than prose:
+        # loss that is *also* re-accounted is internally consistent, so only the seal
+        # and the upstream admission gate can catch it.
+        lines = harness.golden_transcript().splitlines()
+        truncated = lines[:_line_index("PRESENT") + 1] + ["END creates=3 destroys=0 ops=1 effects=5"]
+        replayable = capture.parse_frame_transcript("\n".join(truncated) + "\n")
+        self.assertEqual(capture.replay(replayable)["frame"]["digest"], "6045a395")
+        self.assertNotEqual(capture.replay(replayable)["frame"]["digest"],
+                            EXPECTED_FRAME["digest"])
+
+
+class TranscriptStructureTests(unittest.TestCase):
+    """The transcript is a wire format; ambiguity in it is a defect, not a tolerance."""
+
+    def test_the_header_must_be_the_first_line(self):
+        lines = harness.golden_transcript().splitlines()
+        reordered = [lines[1], lines[0], *lines[2:]]
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.parse_frame_transcript("\n".join(reordered) + "\n")
+        self.assertIn("must begin with its GFX header", str(raised.exception))
+
+    def test_a_missing_header_is_rejected(self):
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.parse_frame_transcript(_transcript(drop=0))
+        self.assertIn("GFX header", str(raised.exception))
+
+    def test_a_duplicate_header_is_rejected(self):
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.parse_frame_transcript(_transcript(insert=(_line_index("END"), "GFX v1")))
+        self.assertIn("more than once", str(raised.exception))
+
+    def test_an_unknown_header_version_is_rejected(self):
+        with self.assertRaises(capture.CaptureError):
+            capture.parse_frame_transcript(_transcript(replace=(0, "GFX v2")))
+
+    def test_a_duplicate_field_is_rejected(self):
+        fill = _line_index("FILL")
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.parse_frame_transcript(_transcript(
+                replace=(fill, "FILL slot=0 gen=0 offset=0 span=16 span=16 pattern=3 result=0")))
+        self.assertIn("duplicate field", str(raised.exception))
+
+    def test_a_non_canonical_integer_is_rejected(self):
+        fill = _line_index("FILL")
+        with self.assertRaises(capture.CaptureError):
+            capture.parse_frame_transcript(_transcript(
+                replace=(fill, "FILL slot=0 gen=0 offset=00 span=16 pattern=3 result=0")))
+
+    def test_an_unrecognized_record_is_rejected(self):
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.parse_frame_transcript(
+                _transcript(insert=(_line_index("END"), "RESIZE slot=0 gen=0 result=0")))
+        self.assertIn("unrecognized", str(raised.exception))
+
+
+class PresentationTests(unittest.TestCase):
+    """Every presentation is verified where it happens, not only the last one (P2)."""
+
+    def test_an_earlier_presentation_with_a_wrong_digest_is_rejected(self):
+        document = _golden_capture()
+        document["timeline"][4]["digest"] = "00000000"  # the first of two PRESENTs
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.replay(document)
+        self.assertIn("timeline index 4 digests to 6045a395", str(raised.exception))
+
+    def test_an_earlier_presentation_with_wrong_bytes_is_rejected(self):
+        document = _golden_capture()
+        document["timeline"][4]["bytes_hex"] = "ff" * 16
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.replay(document)
+        self.assertIn("timeline index 4 differs from the capture", str(raised.exception))
+
+    def test_the_reported_frame_is_the_last_presentation(self):
+        document = _golden_capture()
+        self.assertEqual(document["timeline"][-1]["op"], "present")
+        self.assertEqual(document["timeline"][-1]["digest"], EXPECTED_FRAME["digest"])
+        self.assertEqual(capture.replay(document)["frame"], EXPECTED_FRAME)
+
+
+class DirectSealValidationTests(unittest.TestCase):
+    """`replay()` protects the seal for callers that bypass `read_sealed()`."""
+
+    def test_a_sealed_wrapper_with_a_tampered_payload_is_rejected(self):
+        sealed = capture.seal(_golden_capture())
+        sealed["payload"]["timeline"][0]["contents_hex"] = "ff" * 16
+        with self.assertRaises(capture.CaptureError) as raised:
+            capture.replay(sealed)
+        self.assertIn("does not match its digest", str(raised.exception))
+
+    def test_a_sealed_wrapper_with_a_forged_digest_is_rejected(self):
+        sealed = capture.seal(_golden_capture())
+        sealed["capture_sha256"] = "0" * 64
+        with self.assertRaises(capture.CaptureError):
+            capture.replay(sealed)
+
+    def test_an_intact_sealed_wrapper_still_replays(self):
+        sealed = capture.seal(_golden_capture())
+        self.assertEqual(capture.replay(sealed)["frame"], EXPECTED_FRAME)
+
+    def test_a_non_object_capture_is_rejected(self):
+        for value in (None, [], "frame.json", 4):
+            with self.subTest(value=value):
+                with self.assertRaises(capture.CaptureError):
+                    capture.replay(value)
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

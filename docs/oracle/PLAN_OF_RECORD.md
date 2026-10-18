@@ -118,6 +118,32 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 > the closure rule P4.6 declares and failing closed on a missing dependency. See
 > [P4_RECORDER.md](P4_RECORDER.md) and [P4B_REPLAY.md](P4B_REPLAY.md).
 
+## Pre-P5 offline integration gate
+
+P4b's synthetic replay is **not** this gate and does not satisfy it. P4b's subject
+emits its own operation transcript through its own hook layer and supplies resource
+contents itself, so a passing P4b shows that a complete transcript can be replayed —
+not that the **generic P4 recorder** can produce an independently replayable frame.
+The P4 recorder captures resource references and lifetimes, not resource contents.
+
+This gate must pass, entirely offline, before the first EU IV acquisition is
+authorized. It need not establish closure for the real game's frame in advance — that
+is exactly what P5 must attempt to capture. It must establish that the recording and
+replay pipeline works end to end on a sufficiently representative synthetic workload.
+
+| Requirement | Necessary demonstration |
+| --- | --- |
+| Resource-content capture | The native recorder records initial contents and relevant mutations, not just IDs |
+| Identity and versioning | Reused handles resolve to the correct generation and resource version |
+| Complete command stream | Native event accounting reconciles with the captured operations |
+| Resource/state closure | No unresolved dependencies for the declared synthetic frame boundary |
+| Independent replay | A fresh process reconstructs the frame from the native recorder's sealed output |
+| Negative admission | Removing content, a mutation or a required event prevents qualification |
+
+The recorder-to-replay integration is not to be marked complete merely because the
+standalone synthetic P4b replay passes.
+
 ## Hard rule
 
-No further EU IV launch until **P3** and **P4/P4b** pass acceptance.
+No further EU IV launch until **P3** and **P4/P4b** pass acceptance, and until the
+pre-P5 offline integration gate above passes.

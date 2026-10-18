@@ -65,9 +65,30 @@ END creates=4 destroys=1 ops=6 effects=13
 ```
 
 It contains no pointer, no address, no clock and no process identity, so a frame can
-be reconstructed elsewhere. `parse_frame_transcript` turns it into the capture
-document; a capture that recorded a **failed** operation is rejected rather than
-replayed.
+be reconstructed elsewhere.
+
+`parse_frame_transcript` turns it into the capture document and is a **state machine**
+over the transcript, not a line reader:
+
+* exactly one `GFX v1` header, on the first non-blank line — an unknown header version
+  is rejected rather than parsed as if it were this one;
+* records after the header and exactly one `END`, which must be last: anything after
+  it is rejected;
+* fields must be unique `key=value` pairs — a repeated key is an error, not a silent
+  overwrite;
+* integers must be **canonical** non-negative decimals (no sign, no leading zeros, no
+  surrounding space) and hex must be lowercase and even-length, because every
+  ambiguity is a way for two different captures to look alike;
+* the terminal counts are **recomputed from the parsed timeline** and compared against
+  the declared ones, so a transcript that lost records — but kept its `END` — is
+  rejected instead of replaying as a plausible, shorter frame;
+* a capture that recorded a **failed** operation is rejected rather than replayed.
+
+The accounting is a check, not evidence: it is consumed at parse time and never enters
+the capture document, so the sealed bytes are unaffected. It catches loss that did not
+re-account itself; loss that *also* rewrote the terminal counts is internally
+consistent, and only the seal and the upstream admission gate can catch that. That
+limit is kept executable in the tests rather than left to prose.
 
 ## Sealing
 
@@ -78,15 +99,18 @@ A capture is sealed before it is trusted:
 * `write_sealed` publishes it with the create-only discipline the evidence store
   adapted, so a sealed capture is never silently overwritten with different content;
 * `read_sealed` verifies the structure, the digest **and** that the file is
-  byte-for-byte the canonical form, so tampering is detected at load.
+  byte-for-byte the canonical form, so tampering is detected at load;
+* `replay` verifies the seal of a sealed wrapper **even when it is handed one
+  directly**, so a caller that bypasses `read_sealed` does not bypass the digest.
 
 ## The replay
 
 `replay` walks the timeline once, maintaining the registry itself: it resolves each
-reference against the lifetimes it has reconstructed, applies the operation, and at
-`present` compares the reconstructed frame to the captured one **byte-for-byte**. A
-frame that digests differently is a failure, not a pass — the replay refuses to
-return a plausible wrong frame.
+reference against the lifetimes it has reconstructed, applies the operation, and
+verifies **every** presentation as it happens — bytes *and* digest, not only the last
+one, so an inconsistent earlier frame cannot hide behind a correct final one. A frame
+that digests differently is a failure, not a pass — the replay refuses to return a
+plausible wrong frame.
 
 Because the replay reimplements the declared semantics of each operation instead of
 calling the subject, the match is evidence about the *capture*, not about the code
@@ -102,12 +126,18 @@ that produced it: the frame survives leaving its process.
   `020304054446404e9c0e0f100f101112` — and is deterministic;
 * a destroyed generation and a reused slot are **distinct** lifetimes, and the reused
   one closes;
+* **a transcript that lost records but kept its `END` is rejected**: each declared
+  counter is checked against the timeline, a record after `END`, a second `END`, a
+  missing `END` and a malformed `END` are all rejected, and the header must be the
+  first line and appear once;
+* **every presentation is verified where it happens**: a wrong digest *or* wrong bytes
+  on an earlier `PRESENT` is rejected even when the final frame is correct;
 * every removal of a dependency the frame needs yields `INCOMPLETE_ORACLE`: a missing
   `create`, a stale reference to the destroyed generation, and a reference to a
   lifetime that was never created. None of them yields a different frame;
 * a sealed capture round-trips, re-publication refuses different content, and a
   tampered payload, a tampered digest and a non-canonical file are each detected at
-  load;
+  load — including when the wrapper is passed **directly** to `replay`;
 * the replay reproduces the frame in a **fresh process** from the sealed file alone,
   and exits non-zero with an `INCOMPLETE_ORACLE` diagnostic when a dependency is
   missing.
@@ -117,6 +147,14 @@ See `tests/test_oracle_replay_frame.py`.
 ## What P4b is not
 
 The subject is a model, so P4b proves the **capture and replay discipline** — closure,
-lifetime identity, sealing, fail-closed reconstruction — not the behaviour of EU IV's
-engine or of any GPU API. Darwin x86-64 interposition fidelity remains behind the
-separate hook-pack gate before P5.
+lifetime identity, sealing, terminal accounting, fail-closed reconstruction — not the
+behaviour of EU IV's engine or of any GPU API. Darwin x86-64 interposition fidelity
+remains behind the separate hook-pack gate before P5.
+
+P4b also does **not** establish that the generic P4 recorder can produce an
+independently replayable frame. The synthetic driver emits its own operation
+transcript and supplies resource contents itself; the recorder's event-emission
+pipeline is not in this path, and the P4 recorder does not capture resource
+**contents** at all — only references and lifetimes. Closing that is the
+[pre-P5 offline integration gate](PLAN_OF_RECORD.md#pre-p5-offline-integration-gate),
+and the standalone synthetic success above does not satisfy it.
