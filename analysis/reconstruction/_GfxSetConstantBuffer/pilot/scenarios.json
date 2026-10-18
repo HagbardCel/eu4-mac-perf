@@ -1,0 +1,161 @@
+{
+  "schema": "eu4-re0-pilot-scenarios/v1",
+  "function": "_GfxSetConstantBuffer",
+  "entry_rva": "0x15ec36a",
+  "end_rva": "0x15ec3b5",
+  "image_base": 4294967296,
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "inventory": "analysis/reconstruction/_GfxSetConstantBuffer/instructions.json",
+  "frozen_before_execution": true,
+  "derivation": "The two path sequences are derived from the reviewed inventory (instructions.json) by walking it from entry_rva: advance sequentially; for JZ take the operand target if the condition holds, else fall through to the next instruction; JMP is unconditional; stop after RET. Inventory jump operands are VAs (entry_rva + image_base), so image_base is subtracted before lookup. instruction_bytes and the sequence length are consequences of the sequence, not independently maintained numbers. The per-scenario expectations (expected_words, expected_r9, expected_rdx) are hand-derived from the contract's stated arithmetic and were frozen before any execution code existed.",
+  "path_selection": {
+    "length_from_buffer": "the buffer's first dword is the byte length: words = (*(int32*)buffer + 3) >> 2, logical/unsigned shift",
+    "explicit_length": "words = ((int32)(R9D + 3) >= 0 ? (R9D + 3) : (R9D + 6)) >> 2, arithmetic shift"
+  },
+  "paths": {
+    "length_from_buffer": {
+      "condition": "R9D == -1",
+      "length": 15,
+      "instruction_bytes": 55,
+      "rvas": [
+        "0x15ec36a", "0x15ec36b", "0x15ec36e", "0x15ec371", "0x15ec373",
+        "0x15ec377", "0x15ec38d", "0x15ec390", "0x15ec394", "0x15ec398",
+        "0x15ec39c", "0x15ec3a4", "0x15ec3ac", "0x15ec3b3", "0x15ec3b4"
+      ]
+    },
+    "explicit_length": {
+      "condition": "R9D != -1",
+      "length": 18,
+      "instruction_bytes": 64,
+      "rvas": [
+        "0x15ec36a", "0x15ec36b", "0x15ec36e", "0x15ec371", "0x15ec373",
+        "0x15ec377", "0x15ec379", "0x15ec37d", "0x15ec381", "0x15ec383",
+        "0x15ec387", "0x15ec38b", "0x15ec398", "0x15ec39c", "0x15ec3a4",
+        "0x15ec3ac", "0x15ec3b3", "0x15ec3b4"
+      ]
+    }
+  },
+  "expected_loads": {
+    "length_from_buffer": [
+      {"base": "handle", "width": 8},
+      {"base": "buffer", "width": 4},
+      {"base": "stack_minus_8", "width": 8},
+      {"base": "stack", "width": 8}
+    ],
+    "explicit_length": [
+      {"base": "handle", "width": 8},
+      {"base": "stack_minus_8", "width": 8},
+      {"base": "stack", "width": 8}
+    ]
+  },
+  "expected_stores": [
+    {"base": "stack_minus_8", "width": 8, "value": "rbp_initial"},
+    {"base": "ctx_words", "width": 4, "value": "words"},
+    {"base": "ctx_pointer", "width": 8, "value": "buffer_pointer"},
+    {"base": "ctx_dirty", "width": 1, "value": "0x01"}
+  ],
+  "layout": {
+    "word_count_base": "0xc8",
+    "pointer_base": "0xd0",
+    "dirty": "0x128",
+    "slot_stride": 16,
+    "observation_start": "0xc8",
+    "observation_end": "0x129",
+    "canary_before_start": "0xb8",
+    "canary_after_end": "0x139",
+    "stack_window_before": "0x20",
+    "stack_window_after": "0x10"
+  },
+  "memory": {
+    "ctx": "0x200000000",
+    "handle": "0x200010000",
+    "buffer": "0x300000000",
+    "stack_base": "0x400000000",
+    "stack_size": "0x200",
+    "rsp0": "0x400000100",
+    "ctx_size": "0x140",
+    "fill_pattern": {
+      "kind": "linear_byte_pattern",
+      "multiplier": 55,
+      "increment": 17,
+      "note": "byte i of the context and stack regions, i relative to the region base, before any constructed contents"
+    }
+  },
+  "constants": {
+    "rbp_initial": "0x4d5d5c5b5a595857",
+    "return_sentinel": "0x2f2e2d2c2b2a2928"
+  },
+  "initial_registers": {
+    "RAX": "0x0",
+    "RBX": "0x0",
+    "RCX": "slot",
+    "RDX": "0x0",
+    "RSI": "buffer",
+    "RDI": "handle",
+    "RBP": "rbp_initial",
+    "R8": "0x0",
+    "R9": "r9d_zero_extended",
+    "R10": "0x0",
+    "R11": "0x0",
+    "R12": "0x0",
+    "R13": "0x0",
+    "R14": "0x0",
+    "R15": "0x0",
+    "RSP": "rsp0"
+  },
+  "initial_register_note": "R9 is the scenario's r9d value zero-extended to 64 bits: its upper 32 bits start at zero and its low 32 bits are the frozen r9d, which is nonzero for every scenario that does not take the length_from_buffer path. RDX starts at zero. Neither value depends on how the emulator models a 32-bit sub-register write. Everything the function does not write is expected to be preserved. The closed symbol vocabulary is slot, buffer, handle, rbp_initial, rsp0, r9d_zero_extended, or a 0x literal; an unknown symbol is rejected rather than treated as zero.",
+  "expected_final_registers": {
+    "RAX": "ctx",
+    "RCX": "slot_times_stride",
+    "RDX": "expected_rdx",
+    "R9": "expected_r9",
+    "RSP": "rsp0_plus_8",
+    "RBP": "rbp_initial",
+    "preserved": ["RDI", "RSI", "RBX", "R8", "R10", "R11", "R12", "R13", "R14", "R15"],
+    "not_asserted": ["RFLAGS"]
+  },
+  "expected_final_register_note": "Every entry other than preserved and not_asserted is a register expectation, resolved from the closed vocabulary ctx, slot_times_stride, expected_rdx, expected_r9, rsp0_plus_8, rbp_initial, or a 0x literal. preserved lists registers that must still hold their frozen initial value; not_asserted lists registers the freeze deliberately does not assert. asserted plus preserved plus not_asserted must cover every general-purpose register plus RFLAGS.",
+  "return_boundary": {
+    "last_executed_rva": "0x15ec3b4",
+    "last_mnemonic": "RET",
+    "pc": "return_sentinel",
+    "requires_executing_ret": true,
+    "stack_after": {
+      "stack_minus_8": "rbp_initial",
+      "stack": "return_sentinel"
+    }
+  },
+  "scenarios": [
+    {"id": "s01", "slot": 0, "path": "length_from_buffer", "r9d": "0xffffffff", "buffer_first_dword": "0x0000000d", "expected_words": "0x00000004", "expected_r9": "0x0000000000000004", "expected_rdx": "0x0"},
+    {"id": "s02", "slot": 1, "path": "length_from_buffer", "r9d": "0xffffffff", "buffer_first_dword": "0x0000000d", "expected_words": "0x00000004", "expected_r9": "0x0000000000000004", "expected_rdx": "0x0"},
+    {"id": "s03", "slot": 2, "path": "length_from_buffer", "r9d": "0xffffffff", "buffer_first_dword": "0x0000000d", "expected_words": "0x00000004", "expected_r9": "0x0000000000000004", "expected_rdx": "0x0"},
+    {"id": "s04", "slot": 3, "path": "length_from_buffer", "r9d": "0xffffffff", "buffer_first_dword": "0x0000000d", "expected_words": "0x00000004", "expected_r9": "0x0000000000000004", "expected_rdx": "0x0"},
+    {"id": "s05", "slot": 4, "path": "length_from_buffer", "r9d": "0xffffffff", "buffer_first_dword": "0x0000000d", "expected_words": "0x00000004", "expected_r9": "0x0000000000000004", "expected_rdx": "0x0"},
+    {"id": "s06", "slot": 5, "path": "length_from_buffer", "r9d": "0xffffffff", "buffer_first_dword": "0x0000000d", "expected_words": "0x00000004", "expected_r9": "0x0000000000000004", "expected_rdx": "0x0"},
+    {"id": "s07", "slot": 3, "path": "length_from_buffer", "r9d": "0xffffffff", "buffer_first_dword": "0x00000000", "expected_words": "0x00000000", "expected_r9": "0x0000000000000000", "expected_rdx": "0x0"},
+    {"id": "s08", "slot": 3, "path": "length_from_buffer", "r9d": "0xffffffff", "buffer_first_dword": "0xfffffffc", "expected_words": "0x3fffffff", "expected_r9": "0x000000003fffffff", "expected_rdx": "0x0"},
+    {"id": "s09", "slot": 3, "path": "length_from_buffer", "r9d": "0xffffffff", "buffer_first_dword": "0x7ffffffd", "expected_words": "0x20000000", "expected_r9": "0x0000000020000000", "expected_rdx": "0x0"},
+    {"id": "s10", "slot": 3, "path": "explicit_length", "r9d": "0x0000000d", "buffer_first_dword": null, "expected_words": "0x00000004", "expected_r9": "0x0000000000000004", "expected_rdx": "0x00000010"},
+    {"id": "s11", "slot": 3, "path": "explicit_length", "r9d": "0x7fffffff", "buffer_first_dword": null, "expected_words": "0xe0000001", "expected_r9": "0x00000000e0000001", "expected_rdx": "0x80000002"},
+    {"id": "s12", "slot": 3, "path": "explicit_length", "r9d": "0xfffffff8", "buffer_first_dword": null, "expected_words": "0xffffffff", "expected_r9": "0x00000000ffffffff", "expected_rdx": "0xfffffffb"},
+    {"id": "s13", "slot": 3, "path": "explicit_length", "r9d": "0x00000000", "buffer_first_dword": null, "expected_words": "0x00000000", "expected_r9": "0x0000000000000000", "expected_rdx": "0x00000003"}
+  ],
+  "scenario_field_semantics": {
+    "buffer_first_dword": "the buffer region is constructed to hold this little-endian dword; when it is null the buffer region is not initialized at all, so a read of [RSI] is an access to uninitialized constructed state and must not happen on the scenario's path"
+  },
+  "scenario_notes": {
+    "s01-s06": "one per declared slot, same length, to exercise the 16-byte stride and the closure of the observation region for every slot in [0, 6)",
+    "s08": "buffer length 0xfffffffc: ADD 3 wraps to 0xffffffff, then the logical SHR (path length_from_buffer) gives 0x3fffffff",
+    "s09": "buffer length 0x7ffffffd: ADD 3 carries into the sign bit, logical SHR gives 0x20000000",
+    "s11": "R9D+3 overflows negative, so CMOVNS does not select it; R9D+6 remains negative and the arithmetic SAR gives 0xe0000001",
+    "s12": "negative selector: R9D+3 is negative, CMOVNS keeps R9D+6 = -2, arithmetic SAR gives 0xffffffff",
+    "s13": "no buffer region is initialized: the explicit-length path must not read [RSI], so this run qualifies only if RSI is never read"
+  },
+  "limits": [
+    "The constructed state is a harness construction; it is not evidence that this state occurs inside EU IV.",
+    "Only slot in [0, 6) is tested; slot >= 6 is an open caller invariant.",
+    "RAX is recorded as an observed register outcome, not as a declared return type.",
+    "This establishes the behaviour of the decoded instructions in a P-code emulator, not hardware-level execution of x86 machine code.",
+    "No claim is made about _GfxSetConstantBuffer's importance as a rendering bottleneck."
+  ]
+}

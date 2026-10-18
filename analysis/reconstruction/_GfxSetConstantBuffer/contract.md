@@ -1,9 +1,10 @@
 # RE0 — `_GfxSetConstantBuffer` function contract
 
-**Status:** RE0 complete for this target. This is a *contract*, not reconstructed source:
-it records what the original machine code does to declared, observable memory, so that a
-reconstruction and a differential test can be built against it. It makes no performance
-claim and establishes no runtime behaviour.
+**Status:** RE0 complete for this target, including the bounded offline execution pilot
+([`pilot/pilot.md`](pilot/pilot.md), receipt [`pilot/observations-2026-10-18.json`](pilot/observations-2026-10-18.json)).
+This is a *contract*, not reconstructed source: it records what the original machine code does to
+declared, observable memory, so that a reconstruction and a differential test can be built
+against it. It makes no performance claim and establishes no runtime behaviour.
 
 **Scope:** offline, static. Nothing here launches EU IV, opens a game process or attaches
 to a binary.
@@ -176,7 +177,15 @@ reconstruction chain, not an optimisation claim.
 
 ## Next
 
-A bounded offline execution pilot (Ghidra P-code) must show the original instructions
-executing under an explicitly constructed state and producing the three declared writes
-**and the recorded register outcomes (`RAX`)**, for `slot ∈ [0, 6)`, with results checked
-against this contract — not solely against the decompiler or a reconstruction.
+The bounded offline execution pilot **has been done** for this contract:
+[`pilot/pilot.md`](pilot/pilot.md) records the original instructions executing in Ghidra's
+P-code emulator under an explicitly constructed state — both frozen paths, the three declared
+writes and the recorded register outcome (`RAX`), `slot ∈ [0, 6)`, every memory operation
+asserted as an exact expected sequence and two runs byte-identical. Its receipt is
+[`pilot/observations-2026-10-18.json`](pilot/observations-2026-10-18.json); the limits it
+carries (constructed state, `slot ∈ [0, 6)`, no reconstruction validated, no performance
+claim) travel with it.
+
+Remaining for this function: a faithful C++ reconstruction (RE1) checked against this contract
+and against the pilot's recorded outcomes, then the RE2 differential comparison. Neither is
+authorized by the pilot alone.
