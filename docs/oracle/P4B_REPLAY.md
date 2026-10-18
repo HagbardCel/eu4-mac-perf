@@ -1,10 +1,11 @@
 # P4b: independent synthetic graphics replay
 
-**Status:** complete. **P4b** replays a *sealed capture* of a synthetic graphics
-subject — a small portable C11 library under `oracle/replay/synthetic/` — in a fresh
-process, and reconstructs the frame the subject presented. Nothing here launches
-EU IV, opens a game process, or attaches to a binary; the replay's only input is a
-file.
+**Status:** complete and on `main`, released as annotated tag
+`oracle-v2-p4b-20261018` (merge `fdf0820`, PR #66). **P4b** replays a *sealed
+capture* of a synthetic graphics subject — a small portable C11 library under
+`oracle/replay/synthetic/` — in a fresh process, and reconstructs the frame the
+subject presented. Nothing here launches EU IV, opens a game process, or attaches to
+a binary; the replay's only input is a file.
 
 This document is authoritative for P4b. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the capture/closure machinery it consumes is

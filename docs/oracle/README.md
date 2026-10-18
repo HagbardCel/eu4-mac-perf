@@ -7,13 +7,15 @@ infrastructure under `oracle/slice/`, the pinned OpenCode **binding**
 (`tooling/common/check_oracle_receipt.py`), and the single declared P3-B
 acceptance run `p3b-acceptance-20261017`, which **certified** (visible 12/12,
 held-out 10/10) and whose sealed receipt is published under
-`docs/oracle/receipts/`. The program is now in the **P4** stage: a
-function-agnostic, policy-pluggable recorder plus a synthetic target, then a
-synthetic graphics replay harness (**P4b**). The recorder core is implemented and
-merged (**P4r-B**: exact capture accounting, a declared capture policy, offline
-finalization and concurrency); the resource registry/closure and R0-M protocol
-compatibility are merged (**P4r-C**); and the independent synthetic graphics replay
-is merged (**P4b**). No EU IV launch is authorized until P4/P4b pass.
+`docs/oracle/receipts/`. The program's **P4/P4b** stage is **complete and on
+`main`**, released as annotated tag `oracle-v2-p4b-20261018` (merge `fdf0820`,
+PR #66): the function-agnostic, policy-pluggable recorder plus a synthetic target
+(**P4r-A**, **P4r-B**, **P4r-C** — the record schema and immutable evidence store;
+exact capture accounting, a declared capture policy, offline finalization,
+concurrency and bounded capture; and the resource registry/closure verifier with
+offline R0-M protocol compatibility), and the independent synthetic graphics replay
+harness (**P4b**). No EU IV launch is authorized until P4/P4b pass **and the pre-P5
+offline integration gate passes** — the synthetic replay alone does not satisfy it.
 This
 directory is authoritative for **capture/validation infrastructure** only; the
 function-level reconstruction lifecycle stays in the reconstruction contract
