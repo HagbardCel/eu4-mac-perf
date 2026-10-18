@@ -1,0 +1,2462 @@
+{
+  "schema": "eu4-re0-pilot-receipt/v1",
+  "environment": {
+    "script_version": "EmulateGfxSetConstantBuffer/v1",
+    "ghidra_version": "12.1.4",
+    "java_version": "21.0.12.1",
+    "program_name": "eu4",
+    "program_path": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+    "image_base": "0x100000000"
+  },
+  "determinism": {
+    "runs": 2,
+    "canonical_sha256": [
+      "2508fcf5817302b36f1b04ee095018ca86d0169fab550bd6c1fc80f977ad3dfe",
+      "2508fcf5817302b36f1b04ee095018ca86d0169fab550bd6c1fc80f977ad3dfe"
+    ],
+    "identical": true
+  },
+  "canonical": {
+    "function": "_GfxSetConstantBuffer",
+    "entry_rva": "0x15ec36a",
+    "end_rva": "0x15ec3b5",
+    "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "scenarios_sha256": "fdfb8ff2f1f89fa115d6d3ccd020fbafd8ecc1a398e19225de7d6044a71fe820",
+    "code_window_sha256": "39e4133fd37314845b0dea612fab8049177f7d024463c87e75065e8d8f02e3a0",
+    "results": [
+      {
+        "id": "s01",
+        "path": "length_from_buffer",
+        "slot": 0,
+        "r9d": "0xffffffff",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec38d",
+            "448b0e",
+            "MOV R9D,dword ptr [RSI]"
+          ],
+          [
+            "0x15ec390",
+            "4183c103",
+            "ADD R9D,0x3"
+          ],
+          [
+            "0x15ec394",
+            "41c1e902",
+            "SHR R9D,0x2"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x300000000",
+            "4"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000c8",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x2000000d0",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000c8",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x2000000d0",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x0",
+          "RDX": "0x0",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x4",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd204000000e51c538a000000000300000079b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s02",
+        "path": "length_from_buffer",
+        "slot": 1,
+        "r9d": "0xffffffff",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec38d",
+            "448b0e",
+            "MOV R9D,dword ptr [RSI]"
+          ],
+          [
+            "0x15ec390",
+            "4183c103",
+            "ADD R9D,0x3"
+          ],
+          [
+            "0x15ec394",
+            "41c1e902",
+            "SHR R9D,0x2"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x300000000",
+            "4"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000d8",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x2000000e0",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000d8",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x2000000e0",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x10",
+          "RDX": "0x0",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x4",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4204000000558cc3fa0000000003000000e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s03",
+        "path": "length_from_buffer",
+        "slot": 2,
+        "r9d": "0xffffffff",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec38d",
+            "448b0e",
+            "MOV R9D,dword ptr [RSI]"
+          ],
+          [
+            "0x15ec390",
+            "4183c103",
+            "ADD R9D,0x3"
+          ],
+          [
+            "0x15ec394",
+            "41c1e902",
+            "SHR R9D,0x2"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x300000000",
+            "4"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000e8",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x2000000f0",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000e8",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x2000000f0",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x20",
+          "RDX": "0x0",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x4",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb204000000c5fc336a00000000030000005990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s04",
+        "path": "length_from_buffer",
+        "slot": 3,
+        "r9d": "0xffffffff",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec38d",
+            "448b0e",
+            "MOV R9D,dword ptr [RSI]"
+          ],
+          [
+            "0x15ec390",
+            "4183c103",
+            "ADD R9D,0x3"
+          ],
+          [
+            "0x15ec394",
+            "41c1e902",
+            "SHR R9D,0x2"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x300000000",
+            "4"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x30",
+          "RDX": "0x0",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x4",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb2204000000356ca3da0000000003000000c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s05",
+        "path": "length_from_buffer",
+        "slot": 4,
+        "r9d": "0xffffffff",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec38d",
+            "448b0e",
+            "MOV R9D,dword ptr [RSI]"
+          ],
+          [
+            "0x15ec390",
+            "4183c103",
+            "ADD R9D,0x3"
+          ],
+          [
+            "0x15ec394",
+            "41c1e902",
+            "SHR R9D,0x2"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x300000000",
+            "4"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x200000108",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x200000110",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x200000108",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x200000110",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x40",
+          "RDX": "0x0",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x4",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b9204000000a5dc134a00000000030000003970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s06",
+        "path": "length_from_buffer",
+        "slot": 5,
+        "r9d": "0xffffffff",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec38d",
+            "448b0e",
+            "MOV R9D,dword ptr [RSI]"
+          ],
+          [
+            "0x15ec390",
+            "4183c103",
+            "ADD R9D,0x3"
+          ],
+          [
+            "0x15ec394",
+            "41c1e902",
+            "SHR R9D,0x2"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x300000000",
+            "4"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x200000118",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x200000120",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x200000118",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x200000120",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x50",
+          "RDX": "0x0",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x4",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb0204000000154c83ba000000000300000001e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s07",
+        "path": "length_from_buffer",
+        "slot": 3,
+        "r9d": "0xffffffff",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec38d",
+            "448b0e",
+            "MOV R9D,dword ptr [RSI]"
+          ],
+          [
+            "0x15ec390",
+            "4183c103",
+            "ADD R9D,0x3"
+          ],
+          [
+            "0x15ec394",
+            "41c1e902",
+            "SHR R9D,0x2"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x300000000",
+            "4"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "00000000"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "00000000"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x30",
+          "RDX": "0x0",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x0",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb2200000000356ca3da0000000003000000c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s08",
+        "path": "length_from_buffer",
+        "slot": 3,
+        "r9d": "0xffffffff",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec38d",
+            "448b0e",
+            "MOV R9D,dword ptr [RSI]"
+          ],
+          [
+            "0x15ec390",
+            "4183c103",
+            "ADD R9D,0x3"
+          ],
+          [
+            "0x15ec394",
+            "41c1e902",
+            "SHR R9D,0x2"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x300000000",
+            "4"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "ffffff3f"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "ffffff3f"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x30",
+          "RDX": "0x0",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x3fffffff",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb22ffffff3f356ca3da0000000003000000c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s09",
+        "path": "length_from_buffer",
+        "slot": 3,
+        "r9d": "0xffffffff",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec38d",
+            "448b0e",
+            "MOV R9D,dword ptr [RSI]"
+          ],
+          [
+            "0x15ec390",
+            "4183c103",
+            "ADD R9D,0x3"
+          ],
+          [
+            "0x15ec394",
+            "41c1e902",
+            "SHR R9D,0x2"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x300000000",
+            "4"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "00000020"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "00000020"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x30",
+          "RDX": "0x0",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x20000000",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb2200000020356ca3da0000000003000000c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s10",
+        "path": "explicit_length",
+        "slot": 3,
+        "r9d": "0xd",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec379",
+            "418d5103",
+            "LEA EDX,[R9 + 0x3]"
+          ],
+          [
+            "0x15ec37d",
+            "4183c106",
+            "ADD R9D,0x6"
+          ],
+          [
+            "0x15ec381",
+            "85d2",
+            "TEST EDX,EDX"
+          ],
+          [
+            "0x15ec383",
+            "440f49ca",
+            "CMOVNS R9D,EDX"
+          ],
+          [
+            "0x15ec387",
+            "41c1f902",
+            "SAR R9D,0x2"
+          ],
+          [
+            "0x15ec38b",
+            "eb0b",
+            "JMP 0x1015ec398"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "04000000"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x30",
+          "RDX": "0x10",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x4",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb2204000000356ca3da0000000003000000c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s11",
+        "path": "explicit_length",
+        "slot": 3,
+        "r9d": "0x7fffffff",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec379",
+            "418d5103",
+            "LEA EDX,[R9 + 0x3]"
+          ],
+          [
+            "0x15ec37d",
+            "4183c106",
+            "ADD R9D,0x6"
+          ],
+          [
+            "0x15ec381",
+            "85d2",
+            "TEST EDX,EDX"
+          ],
+          [
+            "0x15ec383",
+            "440f49ca",
+            "CMOVNS R9D,EDX"
+          ],
+          [
+            "0x15ec387",
+            "41c1f902",
+            "SAR R9D,0x2"
+          ],
+          [
+            "0x15ec38b",
+            "eb0b",
+            "JMP 0x1015ec398"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "010000e0"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "010000e0"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x30",
+          "RDX": "0x80000002",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0xe0000001",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb22010000e0356ca3da0000000003000000c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s12",
+        "path": "explicit_length",
+        "slot": 3,
+        "r9d": "0xfffffff8",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec379",
+            "418d5103",
+            "LEA EDX,[R9 + 0x3]"
+          ],
+          [
+            "0x15ec37d",
+            "4183c106",
+            "ADD R9D,0x6"
+          ],
+          [
+            "0x15ec381",
+            "85d2",
+            "TEST EDX,EDX"
+          ],
+          [
+            "0x15ec383",
+            "440f49ca",
+            "CMOVNS R9D,EDX"
+          ],
+          [
+            "0x15ec387",
+            "41c1f902",
+            "SAR R9D,0x2"
+          ],
+          [
+            "0x15ec38b",
+            "eb0b",
+            "JMP 0x1015ec398"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "ffffffff"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "ffffffff"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x30",
+          "RDX": "0xfffffffb",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0xffffffff",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb22ffffffff356ca3da0000000003000000c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      },
+      {
+        "id": "s13",
+        "path": "explicit_length",
+        "slot": 3,
+        "r9d": "0x0",
+        "executed": [
+          [
+            "0x15ec36a",
+            "55",
+            "PUSH RBP"
+          ],
+          [
+            "0x15ec36b",
+            "4889e5",
+            "MOV RBP,RSP"
+          ],
+          [
+            "0x15ec36e",
+            "488b07",
+            "MOV RAX,qword ptr [RDI]"
+          ],
+          [
+            "0x15ec371",
+            "89c9",
+            "MOV ECX,ECX"
+          ],
+          [
+            "0x15ec373",
+            "4183f9ff",
+            "CMP R9D,-0x1"
+          ],
+          [
+            "0x15ec377",
+            "7414",
+            "JZ 0x1015ec38d"
+          ],
+          [
+            "0x15ec379",
+            "418d5103",
+            "LEA EDX,[R9 + 0x3]"
+          ],
+          [
+            "0x15ec37d",
+            "4183c106",
+            "ADD R9D,0x6"
+          ],
+          [
+            "0x15ec381",
+            "85d2",
+            "TEST EDX,EDX"
+          ],
+          [
+            "0x15ec383",
+            "440f49ca",
+            "CMOVNS R9D,EDX"
+          ],
+          [
+            "0x15ec387",
+            "41c1f902",
+            "SAR R9D,0x2"
+          ],
+          [
+            "0x15ec38b",
+            "eb0b",
+            "JMP 0x1015ec398"
+          ],
+          [
+            "0x15ec398",
+            "48c1e104",
+            "SHL RCX,0x4"
+          ],
+          [
+            "0x15ec39c",
+            "44898c08c8000000",
+            "MOV dword ptr [RAX + RCX*0x1 + 0xc8],R9D"
+          ],
+          [
+            "0x15ec3a4",
+            "4889b408d0000000",
+            "MOV qword ptr [RAX + RCX*0x1 + 0xd0],RSI"
+          ],
+          [
+            "0x15ec3ac",
+            "c6802801000001",
+            "MOV byte ptr [RAX + 0x128],0x1"
+          ],
+          [
+            "0x15ec3b3",
+            "5d",
+            "POP RBP"
+          ],
+          [
+            "0x15ec3b4",
+            "c3",
+            "RET"
+          ]
+        ],
+        "loads": [
+          [
+            "ram",
+            "0x200010000",
+            "8"
+          ],
+          [
+            "ram",
+            "0x4000000f8",
+            "8"
+          ],
+          [
+            "ram",
+            "0x400000100",
+            "8"
+          ]
+        ],
+        "stores": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "00000000"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "data_written": [
+          [
+            "ram",
+            "0x4000000f8",
+            "8",
+            "5758595a5b5c5d4d"
+          ],
+          [
+            "ram",
+            "0x2000000f8",
+            "4",
+            "00000000"
+          ],
+          [
+            "ram",
+            "0x200000100",
+            "8",
+            "0000000003000000"
+          ],
+          [
+            "ram",
+            "0x200000128",
+            "1",
+            "01"
+          ]
+        ],
+        "uninitialized_reads": [],
+        "final_registers": {
+          "RAX": "0x200000000",
+          "RBX": "0x0",
+          "RCX": "0x30",
+          "RDX": "0x3",
+          "RSI": "0x300000000",
+          "RDI": "0x200010000",
+          "RBP": "0x4d5d5c5b5a595857",
+          "RSP": "0x400000108",
+          "R8": "0x0",
+          "R9": "0x0",
+          "R10": "0x0",
+          "R11": "0x0",
+          "R12": "0x0",
+          "R13": "0x0",
+          "R14": "0x0",
+          "R15": "0x0"
+        },
+        "ctx_window_base": "0x2000000b8",
+        "stack_window_base": "0x4000000e0",
+        "ctx_window_before": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9e0174e85bcf32a6198cf063d74abe219",
+        "ctx_window_after": "99d0073e75ace31a5188bff62d649bd2094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb2200000000356ca3da0000000003000000c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201e0174e85bcf32a6198cf063d74abe219",
+        "stack_window_before": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da28292a2b2c2d2e2fc900376ea5dc134a",
+        "stack_window_after": "31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225758595a5b5c5d4d28292a2b2c2d2e2fc900376ea5dc134a",
+        "qualified": true,
+        "reasons": []
+      }
+    ]
+  }
+}

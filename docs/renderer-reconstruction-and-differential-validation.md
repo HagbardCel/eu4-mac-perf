@@ -43,10 +43,18 @@ RE0–RE2 are **offline and function-scoped**: they require no frame replay, no 
    performance payoff. RE0 characterizes *that* function. Reselect only if the RE0 → RE1 gate
    below fails, and then only among candidates ranked by the same test
    (`InternalSetTextureAndSamplerState`, `GfxDrawIndexed`, or a nearby Gfx setter).
+5. **Offline execution pilot** (done for the pilot function, 2026-10-18): the reviewed
+   instructions were executed in Ghidra's P-code emulator under an explicitly constructed
+   state, on two frozen paths, with every expected memory operation asserted as an exact
+   sequence and two runs byte-identical. Receipt and limits:
+   `analysis/reconstruction/_GfxSetConstantBuffer/pilot/`. This establishes the behaviour of
+   those **decoded instructions inside that emulator** — not hardware-level execution of x86
+   machine code, and not runtime behaviour in the game — and is RE0 evidence. It does not
+   substitute for the RE1 reconstruction or the RE2 differential.
 
 **Gate RE0 → RE1:** identified callable boundary; finite, recoverable input/side-effect surface; credible strategy for calling or observing the original; no unresolved ownership/context requirements likely to make a faithful replacement unsafe. Otherwise pick a different function.
 
-**Artifacts:** `analysis/reconstruction/<function>/contract.md`, source-address inventory, object-layout table and a dependency map. Prefer adding these after the pilot target is selected.
+**Artifacts:** `analysis/reconstruction/<function>/contract.md`, source-address inventory, object-layout table, dependency map, and (for the pilot function) the offline execution pilot's frozen scenarios, receipts and runner under `analysis/reconstruction/<function>/pilot/`. Prefer adding these after the pilot target is selected.
 
 ## RE1 — Faithful, unoptimized source reconstruction
 
@@ -114,6 +122,7 @@ If RE3 is prohibitively difficult due to object ownership, exception/ABI couplin
 | PR | Content | Live EU4 launch? |
 |---|---|---|
 | **RE-PR1** | RE0 inventory, candidate decision, function contract and frozen reference schema | No |
+| **RE-PR1b** | RE0 offline execution pilot: frozen paths/scenarios, P-code emulator script, runner, receipt and fail-closed checks — original instructions executed under constructed state. RE0 evidence, not RE1/RE2 | No |
 | **RE-PR2** | RE1 faithful C++ reconstruction; mock GL; tests; ABI checks; harness skeleton | No |
 | **RE-PR3** | RE2 differential fixture capture/replay, semantic comparator, oracle-strength labeling | **Only if** a qualified bounded reference capture is necessary; batch with an already-approved session when possible |
 | **RE-PR4** | RE3 reversible binary hook and game integration with fallback; correctness evidence | One controlled launch **only after offline gates pass** |
