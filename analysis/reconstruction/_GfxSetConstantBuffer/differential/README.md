@@ -58,9 +58,10 @@ byte-level reconciliation is meaningful. It is:
 - **byte-exact** for the word count (`ctx+0xc8+16·slot`, 4 bytes) and the dirty byte
   (`ctx+0x128`, 1 byte);
 - **a role** for the stored buffer pointer (`ctx+0xd0+16·slot`, 8 bytes): the emulator stores the
-  constructed buffer address and the reconstruction a host pointer, so the field is masked on both
-  sides and each side must independently show the pointer *is* the buffer argument (the store trace
-  for the original, the harness's `buffer=ARG` for the reconstruction);
+  constructed buffer address and the reconstruction a host pointer, so the field is not compared
+  across sides. Each side is instead validated against what the role means: the recorded original
+  must hold the corpus's declared buffer address, and the reconstruction must report its own buffer
+  argument (`buffer=ARG`);
 - **contained** on both sides: neither may change a byte outside those three fields, and outside the
   masked pointer field the two traces must change exactly the same bytes;
 - **extended to the whole common region**: the compared bytes are `[ctx+0xb8, ctx+0x130)` — the
@@ -83,16 +84,31 @@ corpus freezes **inputs only**: there is nothing here to fit, and nothing to fit
 the reference evidence is therefore different, and `reconstruction_diff.validate_reference` checks
 exactly that:
 
-- the record was produced from *this* corpus (`scenarios_sha256` over the corpus bytes) and from the
-  pinned binary (`binary_sha256`, checked against `reverse_engineering/target.json`);
+- the record was produced from *this* corpus (`scenarios_sha256` over the corpus bytes), from the
+  pinned binary (`binary_sha256`, checked against `reverse_engineering/target.json`) and by the
+  executable Ghidra loaded for it (`executable_sha256`, the digest of the analysable image, so a
+  record cannot name a different program);
 - two independent runs produced the same canonical block, which hashes to its own recorded digest;
 - every row is the corpus's own input in the corpus's own order, carries the path label its input
-  selects, is qualified with no reasons, read no uninitialized state, and shows the three declared
-  writes in its store trace.
+  selects, is qualified with no reasons, and read no uninitialized state;
+- every row started from the state the corpus constructs: the recorded initial registers, register
+  by register, and the recorded context and stack pre-state, canary bands included;
+- every row executed exactly the frozen instruction path for its branch — the ordered RVAs, the
+  instruction count and byte count, and each instruction's decoded text checked against the reviewed
+  listing — and touched only the declared memory: the frozen load sequence for that path, and
+  exactly the stack save and the three declared context stores, in the original's order;
+- those stores agree with the record's own post-state wherever it is recorded, and the store trace
+  agrees with the emulator's independent state-level write trace;
+- only the declared writes changed any byte of the observation window, and only the saved frame word
+  changed on the stack (the restored `RBP` and the return sentinel are checked).
 
-It deliberately does **not** compare a recorded byte value with a frozen one — it has none. A
-byte-level forgery of a recorded window is caught by the *comparison* instead, which is why the
-controls below include both kinds.
+It deliberately does **not** compare a recorded **outcome** value with a frozen one — it has none.
+The word count is read out of the record's own post-state and the reconstruction is compared with
+it, so the arithmetic result always comes from Ghidra's execution and never from a second
+hand-written model. Verifying the *initial* state is not an outcome expectation: the initial memory
+and registers are frozen inputs, so checking them is part of qualifying the record. A byte-level
+forgery of an outcome window is caught by the *comparison* instead, which is why the controls below
+include both kinds.
 
 ## Controls
 
@@ -105,13 +121,17 @@ None of these is a claim that the miss cannot occur; each is a check that the ga
   path (168 of 414 rows). The faithful build passing the same comparison is what makes these
   non-vacuous.
 - **A perturbed reference row.** The recorded original is the reference, so altering it must break
-  the comparison: a flipped byte in the recorded word count, and a flipped canary byte the original
-  never wrote, are both reported.
+  the comparison: a flipped byte in the recorded word count, a flipped canary byte the original
+  never wrote, a byte changed identically before and after (which leaves the write set untouched and
+  is caught only by the pre-state check), and a pointer field replaced with an unrelated nonzero
+  address are each reported.
 - **A refused reference row.** A row marked unqualified, or missing from the record, is reported and
   never compared.
-- **A forged record.** Records from another corpus or another binary, dropped or reordered rows, a
-  changed recorded selector, a wrong path label, a missing declared store, a changed label and a
-  changed limits list are each rejected for the reason under test (the forgeries are re-signed, so
+- **A forged record.** Records from another corpus, another binary or another executable, dropped or
+  reordered rows, a changed recorded selector, a wrong path label, a changed initial register, an
+  altered executed instruction sequence, a dropped load, a changed decoded instruction text, an
+  extra or reordered store, a store trace that disagrees with the state write trace, and a changed
+  label or limits list are each rejected for the reason under test (the forgeries are re-signed, so
   the digest check cannot be what catches them).
 - **A withheld required input (a real run).** A buffer-path row with its buffer removed is re-run
   through the emulator: the load is recorded as an uninitialized dependency, the run marks itself
@@ -134,8 +154,8 @@ It does **not** establish any of the following, and these limits travel with the
    callers consume `RAX`.
 3. Agreement on these 414 inputs is not a proof of equivalence on every input. The input sets are
    the paths' sign and wrap boundaries, not an exhaustive enumeration.
-4. The pointer field is compared as a role; the two stored pointer *values* are not comparable and
-   are not compared.
+4. The pointer field is compared as a role: the two stored pointer *values* are not comparable and
+   are not compared with each other, only each against what the role means.
 5. The original's stack traffic and its exact instruction-level write ordering are outside this
    comparison (see RE1's own limits).
 6. No claim is made about `_GfxSetConstantBuffer`'s importance as a rendering bottleneck.

@@ -11,7 +11,8 @@ reconstruction_pilot.py`). This module reconciles the two on the differential co
 * it compares the result with the emulator's recorded observation of the original for that row,
 
 for the context bytes both sides describe, and as a *role* where the value cannot be one: the
-emulator stores the constructed buffer address, the reconstruction a host pointer.
+emulator stores the constructed buffer address, the reconstruction a host pointer. Each side's role
+is validated independently, so a nonzero-but-foreign pointer is refused on either side.
 
 The corpus freezes **inputs, not reference outputs**. Nothing here compares the reconstruction
 with a hand-written expectation, and nothing derives an expectation from the reconstruction: the
@@ -20,6 +21,12 @@ by `canonical.scenarios_sha256`. That is why this qualification mode differs fro
 there, expectations were hand-derived and frozen before execution; here, the reference is the
 original's executed behaviour and the comparison itself is the evidence.
 
+Because the comparison is the evidence, the reference is qualified first and structurally: that it
+came from this corpus and the pinned executable, that it is the same on a repeat run, and that every
+row began from the declared constructed state (canaries included), executed the frozen instruction
+path, touched only the declared memory, and wrote exactly the declared values - with the word count
+read from the execution rather than from a second arithmetic model.
+
 Strictly offline: nothing launches, attaches to or reads the game.
 """
 
@@ -27,9 +34,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from reverse_engineering import paths
 from reverse_engineering import reconstruction_pilot as pilot
@@ -56,6 +64,50 @@ BUFFER_MARKER = 0xFFFFFFFF
 #: prefix is comparable, and only from the corpus's observation window onward.
 CONTEXT_SIZE = 0x130
 HARNESS_TIMEOUT = 60
+
+
+def sanitizer_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """The reconstruction subprocess environment: ASan's exit code made authoritative.
+
+    The fatal compile flag covers UBSan; an ambient `ASAN_OPTIONS` could still soften ASan's
+    default, and the reconstruction is built with sanitizers, so its runs are given the same
+    environment the RE1 gate enforces for its own harness runs: the ambient options with
+    `halt_on_error=1` appended, so unrelated settings survive.
+    """
+    env = dict(os.environ if environ is None else environ)
+    previous = env.get("ASAN_OPTIONS", "")
+    env["ASAN_OPTIONS"] = (f"{previous}:" if previous else "") + "halt_on_error=1"
+    return env
+
+
+def frozen_structure() -> dict[str, Any]:
+    """RE0's frozen corpus, read for the execution structure it owns.
+
+    The path walks, the load shapes and the store list are properties of the pinned binary and the
+    constructed state, and RE0 qualified them; this corpus declares the same constructed state (a
+    test asserts it), so the addresses RE0 derives are the addresses this corpus constructs. What is
+    *not* reused is anything per-input that this corpus deliberately does not freeze: the word count
+    and the non-RAX caller-saved register outcomes.
+    """
+    return pilot.load_scenarios()
+
+
+def _declared_stores(row: dict[str, Any], corpus: dict[str, Any],
+                     reference: dict[str, Any]) -> list[tuple[str, int, int, str]]:
+    """`(space, address, width, value role)` of the original's stores, in its frozen order."""
+    layout = corpus["layout"]
+    stride = layout["slot_stride"]
+    slot = row["slot"] * stride
+    ctx = pilot.hexint(corpus["memory"]["ctx"])
+    rsp0 = pilot.hexint(corpus["memory"]["rsp0"])
+    addresses = {
+        "stack_minus_8": rsp0 - 8,
+        "ctx_words": ctx + pilot.hexint(layout["word_count_base"]) + slot,
+        "ctx_pointer": ctx + pilot.hexint(layout["pointer_base"]) + slot,
+        "ctx_dirty": ctx + pilot.hexint(layout["dirty"]),
+    }
+    return [(pilot.DATA_SPACE, addresses[item["base"]], item["width"], item["value"])
+            for item in reference["expected_stores"]]
 
 
 def load_corpus(path: Path | None = None) -> dict[str, Any]:
@@ -102,14 +154,16 @@ def prestate_bytes(corpus: dict[str, Any]) -> bytes:
     return pilot.fill_pattern(corpus["memory"], CONTEXT_SIZE)
 
 
-def run_reconstruction(harness: Path, row: dict[str, Any], corpus: dict[str, Any]) -> dict[str, str]:
+def run_reconstruction(harness: Path, row: dict[str, Any], corpus: dict[str, Any],
+                       env: dict[str, str] | None = None) -> dict[str, str]:
     """One corpus row through the compiled reconstruction's `scenario` harness mode."""
     dword = row["buffer_first_dword"]
     argument = "absent" if dword is None else f"{pilot.hexint(dword):08x}"
     command = [str(harness), "scenario", str(row["slot"]), f"{pilot.hexint(row['r9d']):x}",
                argument]
     result = subprocess.run(command, input=prestate_bytes(corpus).hex() + "\n",
-                            capture_output=True, text=True, timeout=HARNESS_TIMEOUT)
+                            capture_output=True, text=True, timeout=HARNESS_TIMEOUT,
+                            env=sanitizer_env() if env is None else env)
     fields: dict[str, str] = {}
     for line in result.stdout.splitlines():
         key, _, value = line.partition("=")
@@ -174,6 +228,14 @@ def compare_row(row: dict[str, Any], oracle: dict[str, Any], recon: dict[str, st
     recon_before = prestate_bytes(corpus)[start:end]
     recon_after = post[start:end]
 
+    # The initial context is a frozen input, not an observation, so it is qualified rather than
+    # compared: a record of a run that began from anything else is not a record of this corpus, and
+    # agreement after it would be agreement about different memory.
+    check(oracle_before == recon_before,
+          f"the recorded original began from a different pre-state than the declared constructed "
+          f"state ({sum(a != b for a, b in zip(oracle_before, recon_before))} of {length} bytes "
+          f"differ)")
+
     fields = declared_fields(corpus, row["slot"])
     declared: set[int] = set()
     for offset, width in fields.values():
@@ -197,11 +259,16 @@ def compare_row(row: dict[str, Any], oracle: dict[str, Any], recon: dict[str, st
           f"original {sorted(changed['original'] - pointer)}, "
           f"reconstruction {sorted(changed['reconstruction'] - pointer)}")
 
-    # Byte-exact reconciliation of the declared fields; the pointer is compared as a role.
+    # Byte-exact reconciliation of the declared fields; the pointer is compared as a role, but each
+    # side's role is checked independently against the value that role means.
     for name, (offset, width) in fields.items():
         window = slice(offset - start, offset - start + width)
         if name == "buffer":
-            check(any(oracle_after[window]), "the original did not store a buffer pointer")
+            recorded = int.from_bytes(oracle_after[window], "little")
+            declared_pointer = pilot.hexint(corpus["memory"]["buffer"])
+            check(recorded == declared_pointer,
+                  f"the original stored {recorded:#x}, not the constructed buffer address "
+                  f"{declared_pointer:#x}")
             check(recon.get("buffer") == "ARG",
                   f"the reconstruction stored {recon.get('buffer')!r}, not its buffer argument")
             continue
@@ -249,15 +316,179 @@ def compare_corpus(harness: Path, corpus: dict[str, Any] | None = None,
     return failures
 
 
+def _validate_row(check: Callable[[bool, str], None], row: dict[str, Any], result: dict[str, Any],
+                  corpus: dict[str, Any], reference: dict[str, Any],
+                  texts: dict[int, str]) -> None:
+    """Qualify one recorded original against the frozen corpus, structurally.
+
+    This is RE0's per-scenario qualification with the two things this corpus deliberately does not
+    freeze left out: the word count, which must come from the execution and is compared with the
+    reconstruction rather than with a model, and the non-RAX caller-saved register outcomes, which
+    are diagnostic only here. Everything else is required exactly: the declared initial registers,
+    the ordered instruction path, the decoded text and width, the load sequence, the store sequence
+    and its values, both independent write traces, the constructed pre-state and the canaries.
+    """
+    tag = row["id"]
+    layout = corpus["layout"]
+    memory = corpus["memory"]
+    constants = corpus["constants"]
+    ctx = pilot.hexint(memory["ctx"])
+    rsp0 = pilot.hexint(memory["rsp0"])
+    r9d = pilot.hexint(row["r9d"])
+
+    check(result.get("slot") == row["slot"], f"{tag}: the recorded slot is not the input's")
+    check(pilot.hexint(result.get("r9d", "0xdeadbeef")) == r9d,
+          f"{tag}: the recorded r9d is not the input's")
+    check(result.get("path") == path_label(r9d),
+          f"{tag}: the recorded path label is not what the input selects")
+    check(result.get("qualified") is True,
+          f"{tag}: the recorded run is not qualified: {result.get('reasons')}")
+    check(result.get("reasons") == [], f"{tag}: the recorded run carried reasons")
+    check(result.get("uninitialized_reads") == [],
+          f"{tag}: the recorded run read uninitialized constructed state")
+
+    # The declared initial register file, register by register.
+    initial = pilot.initial_registers(row, corpus)
+    recorded_initial = result.get("initial_registers", {})
+    for name, value in initial.items():
+        check(pilot.hexint(recorded_initial.get(name, "0xdeadbeef")) == value,
+              f"{tag}: initial {name} is {recorded_initial.get(name)}, the corpus declares "
+              f"{value:#x}")
+    check(set(recorded_initial) == set(pilot.GENERAL_PURPOSE),
+          f"{tag}: the record does not carry every general-purpose initial register")
+
+    # The exact ordered instruction path, from RE0's frozen listing walk, every instruction decoded
+    # and cross-checked against the reviewed inventory.
+    path = reference["paths"][row["path"]]
+    executed = result.get("executed", [])
+    check([pilot.hexint(item[0]) for item in executed]
+          == [pilot.hexint(rva) for rva in path["rvas"]],
+          f"{tag}: the executed instruction sequence is not the frozen {row['path']} path")
+    check(len(executed) == path["length"],
+          f"{tag}: executed {len(executed)} instructions, the path is {path['length']}")
+    total_bytes = 0
+    for item in executed:
+        rva = pilot.hexint(item[0])
+        raw = bytes.fromhex(item[1])
+        total_bytes += len(raw)
+        check(texts.get(rva) == item[2],
+              f"{tag}: the decoded text at 0x{rva:x} is {item[2]!r}, the reviewed listing says "
+              f"{texts.get(rva)!r}")
+    check(total_bytes == path["instruction_bytes"],
+          f"{tag}: executed {total_bytes} instruction bytes, the path is {path['instruction_bytes']}")
+
+    # The frozen structural load sequence for this path: nothing extra, nothing missing, no
+    # reordering. The loaded values are the declared inputs, so they are not frozen here either.
+    check(pilot._rows(result.get("loads", []), False) == pilot.expected_loads(row, reference),
+          f"{tag}: the data load sequence differs from the frozen structure: {result.get('loads')}")
+
+    # The two memory windows, pre-state first: the recorded initial bytes must be the state this
+    # corpus constructs, canary bands included, or the record is not of this corpus.
+    window_base = ctx + pilot.hexint(layout["canary_before_start"])
+    window_length = (pilot.hexint(layout["canary_after_end"])
+                     - pilot.hexint(layout["canary_before_start"]))
+    before = bytes.fromhex(result.get("ctx_window_before", ""))
+    after = bytes.fromhex(result.get("ctx_window_after", ""))
+    frozen_ctx, frozen_stack = pilot.expected_windows(corpus)
+    check(pilot.hexint(result.get("ctx_window_base", "0x0")) == window_base,
+          f"{tag}: the recorded context window is not the declared observation window")
+    if len(before) != window_length or len(after) != window_length:
+        check(False, f"{tag}: the recorded context window has the wrong length")
+        return
+    check(before == frozen_ctx,
+          f"{tag}: the recorded context pre-state is not the declared constructed state "
+          f"({sum(a != b for a, b in zip(before, frozen_ctx))} of {window_length} bytes differ)")
+
+    # The stack window: the same constructed state, only the saved frame word may change, RBP is
+    # restored and the return sentinel slot is untouched.
+    stack_base = rsp0 - pilot.hexint(layout["stack_window_before"])
+    stack_length = (pilot.hexint(layout["stack_window_before"])
+                    + pilot.hexint(layout["stack_window_after"]))
+    stack_before = bytes.fromhex(result.get("stack_window_before", ""))
+    stack_after = bytes.fromhex(result.get("stack_window_after", ""))
+    check(pilot.hexint(result.get("stack_window_base", "0x0")) == stack_base,
+          f"{tag}: the recorded stack window is not the declared frame window")
+    if len(stack_before) != stack_length or len(stack_after) != stack_length:
+        check(False, f"{tag}: the recorded stack window has the wrong length")
+        return
+    check(stack_before == frozen_stack,
+          f"{tag}: the recorded stack pre-state is not the declared constructed state "
+          f"({sum(a != b for a, b in zip(stack_before, frozen_stack))} of {stack_length} bytes "
+          f"differ)")
+    saved = rsp0 - stack_base - 8
+    stack_changed = {index for index in range(stack_length)
+                     if stack_before[index] != stack_after[index]}
+    check(stack_changed == set(range(saved, saved + 8)),
+          f"{tag}: the stack changed outside the saved frame word: "
+          f"{sorted(hex(stack_base + index) for index in stack_changed ^ set(range(saved, saved + 8)))}")
+
+    # The stores: exactly the stack save and the three declared context stores, in the original's
+    # order. The word count is read back from this record's own post-state - it is the original's
+    # arithmetic result, frozen nowhere - and the other values are the declared input roles.
+    roles = {
+        "rbp_initial": pilot.little_endian(pilot.hexint(constants["rbp_initial"]), 8),
+        "buffer_pointer": pilot.little_endian(pilot.hexint(memory["buffer"]), 8),
+        "0x01": pilot.little_endian(1, 1),
+    }
+    declared = []
+    for space, address, width, role in _declared_stores(row, corpus, reference):
+        if role == "words":
+            offset = address - window_base
+            value = after[offset:offset + width].hex()
+        else:
+            value = roles[role]
+        declared.append((space, address, width, value))
+    stores = pilot._rows(result.get("stores", []), True)
+    check(stores == declared,
+          f"{tag}: the executed store sequence differs from the declared operations: "
+          f"{result.get('stores')}")
+    check(pilot._rows(result.get("data_written", []), True) == stores,
+          f"{tag}: the state-level write trace differs from the executed store sequence: "
+          f"{result.get('data_written')}")
+
+    # ... and every declared value must agree with the reported post-state, wherever that state is
+    # recorded: the store trace and the memory windows are independent emulator outputs, and a
+    # record whose two traces disagree is not a record of one execution.
+    for _, address, width, value in declared:
+        for label, base, window in (("context", window_base, after),
+                                    ("stack", stack_base, stack_after)):
+            if base <= address and address + width <= base + len(window):
+                offset = address - base
+                check(window[offset:offset + width] == bytes.fromhex(value),
+                      f"{tag}: the recorded {label} window does not show the stored value at "
+                      f"0x{address:x}")
+
+    # Only the declared writes may have changed anything, canaries included.
+    declared_changes: set[int] = set()
+    for _, address, width, _ in declared:
+        if window_base <= address and address + width <= window_base + window_length:
+            start = address - window_base
+            declared_changes.update(range(start, start + width))
+    changed = {index for index in range(window_length) if before[index] != after[index]}
+    check(changed <= declared_changes,
+          f"{tag}: context bytes changed outside the declared writes: "
+          f"{sorted(hex(window_base + index) for index in changed - declared_changes)}")
+
+    # The saved frame word is the caller's RBP, and the sentinel above the frame is intact.
+    check(stack_after[saved:saved + 8] == bytes.fromhex(roles["rbp_initial"]),
+          f"{tag}: the saved frame word is not the caller's RBP")
+    sentinel = pilot.hexint(constants["return_sentinel"])
+    check(stack_after[rsp0 - stack_base:rsp0 - stack_base + 8]
+          == bytes.fromhex(pilot.little_endian(sentinel, 8)),
+          f"{tag}: the return sentinel slot was disturbed")
+
+
 def validate_reference(reference: dict[str, Any],
                        corpus: dict[str, Any] | None = None) -> list[str]:
     """Validate the committed reference record against the frozen corpus.
 
-    This is RE2's qualification mode, and it is deliberately narrower than the RE0 pilot's
-    receipt validation: the corpus freezes no expected words, so there is nothing here to compare
-    an outcome *value* against. What is checked is that the record was produced from this corpus,
-    from the pinned binary, that it is the same on a repeat run, and that every row is a
-    well-formed execution of the original that wrote the three declared fields.
+    This is RE2's qualification mode, and it is deliberately narrower than the RE0 pilot's receipt
+    validation in exactly one respect: the corpus freezes no expected word counts, so there is
+    nothing here to compare an arithmetic *result* against. A record is qualified when it was
+    produced from this corpus and from the pinned binary, is the same on a repeat run, and every row
+    is a well-formed execution of the original that began from the declared constructed state,
+    followed the frozen path, touched only the declared memory and wrote exactly the declared
+    values.
     """
     corpus = corpus or load_corpus()
     failures: list[str] = []
@@ -289,31 +520,25 @@ def validate_reference(reference: dict[str, Any],
     for key in ("function", "entry_rva", "end_rva", "binary_sha256"):
         check(canonical.get(key) == corpus[key],
               f"the reference was not produced from this corpus's {key}")
-    check(canonical.get("binary_sha256") == paths.binary_sha256(),
+    pinned = paths.binary_sha256()
+    check(canonical.get("binary_sha256") == pinned,
           "the reference was not produced from the pinned target binary")
+    # The declaration is copied from the corpus; this is the digest of the program the emulator
+    # actually loaded, and it is what makes the record evidence about the pinned binary rather than
+    # about whatever was installed next to it.
+    check(canonical.get("executable_sha256") == pinned,
+          "the reference does not identify the pinned executable that was emulated")
     check(canonical.get("scenarios_sha256") == corpus_sha256(),
           "the reference did not consume the frozen corpus byte-for-byte")
 
     results = canonical.get("results", [])
     check([result.get("id") for result in results] == [row["id"] for row in corpus["scenarios"]],
           "the reference's scenario ids or their order differ from the frozen corpus")
-    ctx = pilot.hexint(corpus["memory"]["ctx"])
+
+    reference_structure = frozen_structure()
+    texts = pilot.inventory_text_by_rva()
     for row, result in zip(corpus["scenarios"], results):
-        tag = row["id"]
-        check(result.get("slot") == row["slot"], f"{tag}: the recorded slot is not the input's")
-        check(pilot.hexint(result.get("r9d", "0xdeadbeef")) == pilot.hexint(row["r9d"]),
-              f"{tag}: the recorded r9d is not the input's")
-        check(result.get("path") == path_label(pilot.hexint(row["r9d"])),
-              f"{tag}: the recorded path label is not what the input selects")
-        check(result.get("qualified") is True,
-              f"{tag}: the recorded run is not qualified: {result.get('reasons')}")
-        check(result.get("reasons") == [], f"{tag}: the recorded run carried reasons")
-        check(result.get("uninitialized_reads") == [],
-              f"{tag}: the recorded run read uninitialized constructed state")
-        stored = _store_set(result)
-        for name, (offset, width) in declared_fields(corpus, row["slot"]).items():
-            check((ctx + offset, width) in stored,
-                  f"{tag}: the recorded run has no {name} store at ctx+{offset:#x}")
+        _validate_row(check, row, result, corpus, reference_structure, texts)
     return failures
 
 

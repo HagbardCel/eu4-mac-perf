@@ -104,19 +104,26 @@ reference record of the original over them, and a README recording what is estab
 not. The record carries its statement and limits verbatim, so the evidence cannot be read as more
 than it is.
 
-**Status (2026-10-18):** the differential for `_GfxSetConstantBuffer` is tracked at
+**Status (2026-10-19):** the differential for `_GfxSetConstantBuffer` is tracked at
 `analysis/reconstruction/_GfxSetConstantBuffer/differential/`. It is acquisition option 3 above, not
 a callable oracle: 414 frozen inputs — the cross product of the six declared slots with both paths'
 sign and wrap boundaries, containing every RE0 pilot scenario at the same constructed state — were
 executed through RE0's P-code emulator, and the reference record is what it observed. The RE1
 reconstruction, compiled fresh, is reconciled with it byte-for-byte on the region both sides
-describe, with the stored buffer pointer compared as a role. Both RE1 arithmetic alternatives
-(a signed division on the buffer path, the missing `+3` wrap on the selector path) are compiled as
-deliberately wrong reconstructions and rejected, each on its own path; a record from another corpus
-or binary, a perturbed or unqualified row, a dropped row and a withheld required input are all
-rejected too. It proves equivalence **on those inputs and no further** — the README states the
-limits, including that P-code emulation is not hardware execution and that the input sets are the
-paths' boundaries rather than an exhaustive enumeration.
+describe, both sides starting from the same declared pre-state, with the stored buffer pointer
+compared as a role and each side validated against what that role means. The reference is qualified
+structurally before it is used as evidence: it is bound to the corpus, to the pinned binary and to
+the executable Ghidra loaded; every row's initial registers and constructed pre-state (canaries
+included) are the corpus's, its executed path, decoded instructions, loads and ordered stores match
+the frozen path structure, and its store values agree with its own post-state — while the word count
+itself comes from the execution, never from a second arithmetic model. Both RE1 arithmetic
+alternatives (a signed division on the buffer path, the missing `+3` wrap on the selector path) are
+compiled as deliberately wrong reconstructions and rejected, each on its own path; a record from
+another corpus, binary or executable, a perturbed, reordered or unqualified row, an altered
+instruction path, an extra store and a withheld required input are all rejected too. It proves
+equivalence **on those inputs and no further** — the README states the limits, including that P-code
+emulation is not hardware execution and that the input sets are the paths' boundaries rather than an
+exhaustive enumeration.
 
 ## RE3 — Narrow in-process integration (one controlled game validation)
 

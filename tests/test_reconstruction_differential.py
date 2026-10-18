@@ -2,9 +2,11 @@
 
 Always (CI, no Ghidra): the frozen corpus is the declared cross product of the six slots with the
 two frozen input sets and contains every RE0 pilot row; the committed reference record validates
-against that corpus; forged records and perturbed reference rows are rejected for the reason under
-test; and the compiled reconstruction matches the recorded original on every corpus row, with the
-stored buffer pointer compared as a role.
+against that corpus - identity, determinism, the declared initial registers, the exact instruction
+path, the load and store traces, the constructed pre-state and its canaries - and forged records and
+perturbed reference rows are rejected for the reason under test; and the compiled reconstruction
+matches the recorded original on every corpus row, both sides starting from the same declared
+pre-state and both storing their buffer argument.
 
 Deliberately incorrect reconstructions - a signed division on the buffer path, and the missing
 `+3` wrap on the selector path - are compiled from mutated copies of the tracked sources and must
@@ -41,8 +43,10 @@ BINARY_PRESENT = paths.executable_path().is_file()
 PROJECT_PRESENT = pilot.default_project_dir().is_dir()
 
 COMPILER_FALLBACKS = ("c++", "clang++", "g++")
-# The RE1 gate owns the sanitizer policy (fatal findings, and enforcement on the supported CI
-# runner). This module only needs a build of the same reconstruction to compare.
+# The RE1 gate owns the sanitizer policy: the fatal compile flags, the enforcement on the supported
+# CI runner, and the runtime environment, which the comparator's runner applies to every
+# reconstruction subprocess (see `diff.sanitizer_env`). This module only needs a build of the same
+# reconstruction to compare.
 SANITIZER_FLAGS = ("-fsanitize=address,undefined", "-fno-sanitize-recover=all")
 
 #: The declared rule the frozen corpus must equal, so editing the corpus (or the rule) without
@@ -244,6 +248,15 @@ class FrozenCorpusTests(unittest.TestCase):
         self.assertIn("P-code", limits)
         self.assertIn("0xb8", limits)
 
+    def test_the_two_corpora_declare_the_same_constructed_state(self) -> None:
+        """The validator reuses RE0's path walks, load sequence and store list by address, which is
+        only sound because both files construct identical state. If these ever diverge, rows would
+        be qualified against addresses this corpus does not construct."""
+        reference = pilot.load_scenarios()
+        for key in ("function", "image_base", "entry_rva", "end_rva", "binary_sha256",
+                    "memory", "constants", "layout", "initial_registers"):
+            self.assertEqual(self.corpus[key], reference[key], key)
+
 
 @unittest.skipUnless(REFERENCE_PRESENT, "committed RE2 reference not present")
 class ReferenceRecordTests(unittest.TestCase):
@@ -291,12 +304,15 @@ class ForgedReferenceTests(unittest.TestCase):
     """Mutations a record could carry while still hashing to its own digests.
 
     These are the checks the record's *validator* owns: that it describes this corpus, this
-    binary, and a well-formed execution. A byte-level forgery of a recorded window is not one of
-    them - this corpus freezes no expected values, so nothing in the validator can contradict a
-    recorded byte - and `ComparatorSensitivityTests` is where that forgery is caught.
+    binary, and a well-formed execution - the declared initial registers, the exact instruction
+    path, the load and store traces, the constructed pre-state and the canaries. A byte-level
+    forgery of a recorded *outcome* is not one of them - this corpus freezes no expected values, so
+    nothing in the validator can contradict a recorded arithmetic result - and
+    `ComparatorSensitivityTests` is where that forgery is caught.
     """
 
     def setUp(self) -> None:
+        self.corpus = diff.load_corpus()
         self.reference = diff.load_reference()
 
     def failures(self, mutate) -> list[str]:
@@ -356,7 +372,89 @@ class ForgedReferenceTests(unittest.TestCase):
         def mutate(reference: dict) -> None:
             reference["canonical"]["results"][0]["stores"].pop()
 
-        self.assert_rejected(self.failures(mutate), "store at ctx+")
+        self.assert_rejected(self.failures(mutate), "store sequence")
+
+    def test_an_extra_recorded_store_is_rejected(self) -> None:
+        """Every declared store, in order, plus one the function never performed."""
+        def mutate(reference: dict) -> None:
+            reference["canonical"]["results"][0]["stores"].append(
+                ["ram", "0x200000000", "4", "00000000"])
+
+        self.assert_rejected(self.failures(mutate), "store sequence")
+
+    def test_a_reordered_store_sequence_is_rejected(self) -> None:
+        """The declared operations happen in a fixed order; a permutation is a different trace."""
+        def mutate(reference: dict) -> None:
+            stores = reference["canonical"]["results"][0]["stores"]
+            stores[1], stores[2] = stores[2], stores[1]
+
+        self.assert_rejected(self.failures(mutate), "store sequence")
+
+    def test_a_disagreeing_state_write_trace_is_rejected(self) -> None:
+        """Two independent emulator outputs record the writes; a record where they disagree is
+        not a record of one execution."""
+        def mutate(reference: dict) -> None:
+            reference["canonical"]["results"][0]["data_written"].pop()
+
+        self.assert_rejected(self.failures(mutate), "state-level write trace")
+
+    def test_a_disturbed_canary_in_both_windows_is_rejected(self) -> None:
+        """The review's counterexample: a byte changed identically before and after leaves the
+        write set untouched. The initial bytes are a frozen input, so this is now a refusal."""
+        def mutate(reference: dict) -> None:
+            result = reference["canonical"]["results"][0]
+            result["ctx_window_before"] = _flip_byte(result["ctx_window_before"], 0)
+            result["ctx_window_after"] = _flip_byte(result["ctx_window_after"], 0)
+
+        self.assert_rejected(self.failures(mutate), "pre-state")
+
+    def test_a_foreign_pointer_in_the_recorded_window_is_rejected(self) -> None:
+        """The recorded state and the recorded store trace must agree about the pointer."""
+        def mutate(reference: dict) -> None:
+            result = reference["canonical"]["results"][0]
+            index = _window_index(self.corpus, 0, "buffer")
+            raw = bytearray.fromhex(result["ctx_window_after"])
+            raw[index:index + 8] = (0xDEADBEEF).to_bytes(8, "little")
+            result["ctx_window_after"] = raw.hex()
+
+        self.assert_rejected(self.failures(mutate), "does not show the stored value")
+
+    def test_an_altered_executed_sequence_is_rejected(self) -> None:
+        def mutate(reference: dict) -> None:
+            executed = reference["canonical"]["results"][0]["executed"]
+            executed[0], executed[1] = executed[1], executed[0]
+
+        self.assert_rejected(self.failures(mutate), "instruction sequence")
+
+    def test_a_changed_decoded_instruction_is_rejected(self) -> None:
+        """The executed rows are cross-checked against the reviewed listing, not just counted."""
+        def mutate(reference: dict) -> None:
+            item = reference["canonical"]["results"][0]["executed"][0]
+            item[2] = item[2] + " ; forged"
+
+        self.assert_rejected(self.failures(mutate), "decoded text")
+
+    def test_a_dropped_recorded_load_is_rejected(self) -> None:
+        def mutate(reference: dict) -> None:
+            reference["canonical"]["results"][0]["loads"].pop()
+
+        self.assert_rejected(self.failures(mutate), "load sequence")
+
+    def test_a_changed_initial_register_is_rejected(self) -> None:
+        """The reference must have been loaded with the register state the corpus declares."""
+        def mutate(reference: dict) -> None:
+            declared = pilot.initial_registers(self.corpus["scenarios"][0], self.corpus)
+            result = reference["canonical"]["results"][0]
+            result["initial_registers"]["RCX"] = f"{declared['RCX'] ^ 1:#x}"
+
+        self.assert_rejected(self.failures(mutate), "initial RCX")
+
+    def test_a_reference_from_another_executable_is_rejected(self) -> None:
+        """`binary_sha256` is copied from the corpus; this one names the program Ghidra loaded."""
+        def mutate(reference: dict) -> None:
+            reference["canonical"]["executable_sha256"] = "0" * 64
+
+        self.assert_rejected(self.failures(mutate), "executable")
 
     def test_an_unqualified_row_is_rejected(self) -> None:
         def mutate(reference: dict) -> None:
@@ -385,6 +483,35 @@ class ForgedReferenceTests(unittest.TestCase):
             reference["limits"] = reference["limits"][:-1]
 
         self.assert_rejected(self.failures(mutate), "limits")
+
+
+class SanitizerEnvironmentTests(unittest.TestCase):
+    """The reconstruction runs under the sanitizer policy the RE1 gate owns.
+
+    A sanitized build whose findings can be downgraded to warnings by an ambient variable is not
+    evidence, so the reconstruction subprocess is given the same environment RE1 enforces for its
+    harness runs. The policy is not re-implemented here: it is applied by the runner and checked.
+    """
+
+    def test_ambient_options_survive_and_halt_on_error_is_appended(self) -> None:
+        env = diff.sanitizer_env({"PATH": "/bin", "ASAN_OPTIONS": "detect_leaks=0"})
+        self.assertEqual(env["PATH"], "/bin")
+        self.assertEqual(env["ASAN_OPTIONS"], "detect_leaks=0:halt_on_error=1")
+        self.assertEqual(diff.sanitizer_env({}), {"ASAN_OPTIONS": "halt_on_error=1"})
+
+    @unittest.skipUnless(Path("/bin/sh").exists(), "/bin/sh is not present")
+    def test_the_reconstruction_subprocess_receives_that_environment(self) -> None:
+        # A shell probe stands in for the compiled harness: it prints its own environment as
+        # `key=value` lines, which is the shape the harness protocol is read in, and ignores the
+        # harness arguments. This checks the wiring, not a second copy of the policy.
+        corpus = diff.load_corpus()
+        with tempfile.TemporaryDirectory() as work:
+            probe = Path(work) / "environment-probe"
+            probe.write_text("#!/bin/sh\n/usr/bin/env\n")
+            probe.chmod(0o755)
+            fields = diff.run_reconstruction(probe, corpus["scenarios"][0], corpus)
+        self.assertEqual(fields["returncode"], "0", fields.get("stderr"))
+        self.assertIn("halt_on_error=1", fields.get("ASAN_OPTIONS", ""))
 
 
 @unittest.skipUnless(REFERENCE_PRESENT, "committed RE2 reference not present")
@@ -424,6 +551,30 @@ class ComparatorTests(NeedsHarness):
         failures = self.row_failures(mutate)
         self.assertTrue(failures)
         self.assertIn("outside the declared fields", " ".join(failures))
+
+    def test_a_reference_that_began_from_a_different_state_is_rejected(self) -> None:
+        """The review's counterexample on the differential side: the same byte changed before and
+        after leaves the write set identical, so only the pre-state check can refuse it. Agreement
+        after different starting memory is agreement about nothing."""
+        def mutate(result: dict) -> None:
+            result["ctx_window_before"] = _flip_byte(result["ctx_window_before"], 0)
+            result["ctx_window_after"] = _flip_byte(result["ctx_window_after"], 0)
+
+        failures = self.row_failures(mutate)
+        self.assertTrue(failures)
+        self.assertIn("pre-state", " ".join(failures))
+
+    def test_a_foreign_pointer_value_in_the_recorded_original_is_rejected(self) -> None:
+        """Nonzero is not enough: the field must be the buffer *argument* on both sides."""
+        def mutate(result: dict) -> None:
+            index = _window_index(self.corpus, 0, "buffer")
+            raw = bytearray.fromhex(result["ctx_window_after"])
+            raw[index:index + 8] = (0xDEADBEEF).to_bytes(8, "little")
+            result["ctx_window_after"] = raw.hex()
+
+        failures = self.row_failures(mutate)
+        self.assertTrue(failures)
+        self.assertIn("constructed buffer address", " ".join(failures))
 
     def test_a_reference_row_that_is_not_qualified_is_refused(self) -> None:
         def mutate(result: dict) -> None:
