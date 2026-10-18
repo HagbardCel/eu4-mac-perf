@@ -74,7 +74,12 @@
     "stack_size": "0x200",
     "rsp0": "0x400000100",
     "ctx_size": "0x140",
-    "ctx_fill": "byte i = ((i * 0x37) + 0x11) & 0xff, i relative to the region base"
+    "fill_pattern": {
+      "kind": "linear_byte_pattern",
+      "multiplier": 55,
+      "increment": 17,
+      "note": "byte i of the context and stack regions, i relative to the region base, before any constructed contents"
+    }
   },
   "constants": {
     "rbp_initial": "0x4d5d5c5b5a595857",
@@ -89,7 +94,7 @@
     "RDI": "handle",
     "RBP": "rbp_initial",
     "R8": "0x0",
-    "R9": "0x0",
+    "R9": "r9d_zero_extended",
     "R10": "0x0",
     "R11": "0x0",
     "R12": "0x0",
@@ -98,16 +103,18 @@
     "R15": "0x0",
     "RSP": "rsp0"
   },
-  "initial_register_note": "R9 and RDX start at zero so that the frozen register expectations hold regardless of how the emulator models a 32-bit sub-register write (zero-extending or preserving the upper half). Everything the function does not write is expected to be preserved.",
+  "initial_register_note": "R9 is the scenario's r9d value zero-extended to 64 bits: its upper 32 bits start at zero and its low 32 bits are the frozen r9d, which is nonzero for every scenario that does not take the length_from_buffer path. RDX starts at zero. Neither value depends on how the emulator models a 32-bit sub-register write. Everything the function does not write is expected to be preserved. The closed symbol vocabulary is slot, buffer, handle, rbp_initial, rsp0, r9d_zero_extended, or a 0x literal; an unknown symbol is rejected rather than treated as zero.",
   "expected_final_registers": {
     "RAX": "ctx",
     "RCX": "slot_times_stride",
+    "RDX": "expected_rdx",
     "R9": "expected_r9",
     "RSP": "rsp0_plus_8",
     "RBP": "rbp_initial",
     "preserved": ["RDI", "RSI", "RBX", "R8", "R10", "R11", "R12", "R13", "R14", "R15"],
     "not_asserted": ["RFLAGS"]
   },
+  "expected_final_register_note": "Every entry other than preserved and not_asserted is a register expectation, resolved from the closed vocabulary ctx, slot_times_stride, expected_rdx, expected_r9, rsp0_plus_8, rbp_initial, or a 0x literal. preserved lists registers that must still hold their frozen initial value; not_asserted lists registers the freeze deliberately does not assert. asserted plus preserved plus not_asserted must cover every general-purpose register plus RFLAGS.",
   "return_boundary": {
     "last_executed_rva": "0x15ec3b4",
     "last_mnemonic": "RET",
@@ -131,8 +138,11 @@
     {"id": "s10", "slot": 3, "path": "explicit_length", "r9d": "0x0000000d", "buffer_first_dword": null, "expected_words": "0x00000004", "expected_r9": "0x0000000000000004", "expected_rdx": "0x00000010"},
     {"id": "s11", "slot": 3, "path": "explicit_length", "r9d": "0x7fffffff", "buffer_first_dword": null, "expected_words": "0xe0000001", "expected_r9": "0x00000000e0000001", "expected_rdx": "0x80000002"},
     {"id": "s12", "slot": 3, "path": "explicit_length", "r9d": "0xfffffff8", "buffer_first_dword": null, "expected_words": "0xffffffff", "expected_r9": "0x00000000ffffffff", "expected_rdx": "0xfffffffb"},
-    {"id": "s13", "slot": 3, "path": "explicit_length", "r9d": "0x00000000", "buffer_first_dword": null, "rsi_mapped": false, "expected_words": "0x00000000", "expected_r9": "0x0000000000000000", "expected_rdx": "0x00000003"}
+    {"id": "s13", "slot": 3, "path": "explicit_length", "r9d": "0x00000000", "buffer_first_dword": null, "expected_words": "0x00000000", "expected_r9": "0x0000000000000000", "expected_rdx": "0x00000003"}
   ],
+  "scenario_field_semantics": {
+    "buffer_first_dword": "the buffer region is constructed to hold this little-endian dword; when it is null the buffer region is not initialized at all, so a read of [RSI] is an access to uninitialized constructed state and must not happen on the scenario's path"
+  },
   "scenario_notes": {
     "s01-s06": "one per declared slot, same length, to exercise the 16-byte stride and the closure of the observation region for every slot in [0, 6)",
     "s08": "buffer length 0xfffffffc: ADD 3 wraps to 0xffffffff, then the logical SHR (path length_from_buffer) gives 0x3fffffff",
