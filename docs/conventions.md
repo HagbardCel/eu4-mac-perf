@@ -28,3 +28,5 @@ Write each conclusion in **one** place. Other documents **link** to it—do not 
 ## Local-only artifacts
 
 Game binaries, Ghidra projects, full decompiled pseudocode, and searchable corpora belong under `.local/eu4/<binary-sha256>/` (gitignored). The public repository tracks extraction tooling, aggregate metrics, and original analysis—not reconstructed game source.
+
+One exception: a **narrow, handwritten functional reimplementation of documented behaviour** may be tracked under `analysis/reconstruction/<function>/` so that it is reviewable, buildable and testable against the reconstruction workstream's differential validation. It must be written from the documented contract (offsets, widths, arithmetic, control flow) and must not copy decompiler output or pseudocode. Original binaries, decompiled source dumps and bulk reconstructed game source remain local-only.
