@@ -11,6 +11,11 @@ agent-driven C++ reconstruction of large parts of the graphics stack.** The Orac
 (capture + validation infrastructure) and RE0–RE3 reconstruction are primary; the
 power/heat objective is the downstream consumer.
 
+The reconstruction workstream is **function-first**: the first real target is a single
+bounded Gfx function (`_GfxSetConstantBuffer`), reconstructed and validated offline before
+any further Oracle infrastructure is built. Acquisition splits into **P5a** (function-level)
+and **P5b** (frame-level), each separately gated (see *Pre-P5 offline integration gate*).
+
 ## Invocation accounting (P4)
 
 Per successfully qualified hook, per epoch, the categories are **mutually exclusive**:
@@ -38,10 +43,15 @@ Per successfully qualified hook, per epoch, the categories are **mutually exclus
 
 ## Certification (P5)
 
-Levels: **acquisition** (evidence container valid) → **fixture** (complete + replayable)
-→ **observable domain** (adequate for the specific claim) → **candidate** (passes
-qualified tests for that domain). Two axes: fixture adequacy × candidate result. No
-corpus-wide boolean.
+Levels: **acquisition** (evidence container valid) → **fixture** (complete + replayable
+for the declared domain) → **observable domain** (adequate for the specific claim) →
+**candidate** (passes qualified tests for that domain). Two axes: fixture adequacy ×
+candidate result. No corpus-wide boolean.
+
+Acquisition splits into two **separately gated** scopes: **P5a** (function-level - a fixture
+complete for a declared function observable domain) and **P5b** (frame-level - a fixture
+complete and independently replayable for a declared frame boundary). A P5a qualification
+confers no P5b, graphics-API-equivalence or RE3 authorization.
 
 ## Epochs / shared launch
 
@@ -90,8 +100,15 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 | **P3** | Synthetic OpenCode slice, isolated worktree | Real OpenCode repairs a **supplied defective** candidate via oracle diagnostics + held-out verdict; controller abort/budget/receipt + negative-path tests pass |
 | **P4** | Function-agnostic, policy-pluggable recorder + synthetic target | Two functions sharing mutable state; resource create/update/destroy + handle reuse; aliasing across serialize/replay; equal-args-different-pre-state not deduped; missing resource → `INCOMPLETE_ORACLE`; counters exact under disabled capture/overflow; reentrancy/concurrency safe; loss reported. R0-M **protocol** compatibility validated offline |
 | **P4b** | Synthetic graphics **replay** harness | Reconstruct a frame from recorded synthetic resources incl. resource closure + handle reuse, using the declared closure method |
-| **P5** | One co-designed authorized acquisition; first real function (`_GfxSetConstantBuffer`) | Pre-registered frame target + closure predicate met (see *Frame replayability and resource closure*): ≥1 qualified replayable function fixture **and** ≥1 complete independently replayable frame. Seal partial as partial; document gaps; **go/no-go** before reconstruction claims |
-| **Subsequent** | RE0–RE2 reconstruction loops | RE3 binary integration optional, separately gated |
+| **P5a** | First authorized real-function acquisition | ≥1 live-grounded, **closed** function fixture with a declared observable domain and independently validated entry/exit evidence. Seal partial as partial; frame replayability is **not** required |
+| **P5b** | Frame-level acquisition and qualification | ≥1 independently replayable frame with verified resource/state closure and a declared comparison boundary. Seal partial as partial; the **go/no-go** here governs **frame-level replayability claims only** |
+
+**RE0–RE2 run in parallel, not after P5.** The function-first reconstruction workstream — RE0's
+contract, the bounded offline original-code execution pilot, and offline RE1/RE2 reconstruction
+with differential comparison — is **independent of P5a/P5b** and is **not** subsequent to frame
+qualification; it precedes or parallels **P5a**. **RE3** (narrow in-process replacement) remains
+optional and is separately gated by RE2 qualification plus detour, ABI, fallback and
+runtime-safety requirements.
 
 > **P3 status (2026-10-17):** **complete and released.** PR-A - the deterministic
 > slice (synthetic target, harness, completeness comparator, five-tool MCP bridge,
@@ -120,6 +137,13 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 > `oracle-v2-p4b-20261018`, which points at that merge commit. See
 > [P4_RECORDER.md](P4_RECORDER.md) and [P4B_REPLAY.md](P4B_REPLAY.md).
 
+> **P5 status (2026-10-18):** the single **P5** phase is split into **P5a** (first
+> real-function acquisition) and **P5b** (frame-level acquisition and qualification), with
+> separate offline half-gates (see below). The reconstruction workstream is re-sequenced
+> **function-first**: RE0 on `_GfxSetConstantBuffer` and an offline original-code execution
+> pilot precede the function-oriented **P4.10**; frame-level **P4.11** gates **P5b** only and
+> does not block **P5a**. This amendment authorizes no EU IV launch.
+
 ## Pre-P5 offline integration gate
 
 P4b's synthetic replay is **not** this gate and does not satisfy it. P4b's subject
@@ -134,20 +158,36 @@ observation's arguments, declared content, that content's origin and its
 instrumentation fault, with a per-scenario admission verdict. **P4.10** and **P4.11**
 remain.
 
-This gate must pass, entirely offline, before the first EU IV acquisition is
-authorized. It need not establish closure for the real game's frame in advance — that
-is exactly what P5 must attempt to capture. It must establish that the recording and
-replay pipeline works end to end on a sufficiently representative synthetic workload.
+The gate splits by acquisition scope. Each half must pass **entirely offline** before the
+matching acquisition is authorized:
 
-| Requirement | Necessary demonstration | Slice |
-| --- | --- | --- |
-| Resource-content capture | The native recorder records initial contents and relevant mutations, not just IDs | P4.9 |
-| Whole-version content | Exported content is a complete resource version, not a fragment, and is attributable to it | P4.9 |
-| Identity and versioning | Reused handles resolve to the correct generation and resource version | P4.9 / P4.10 |
-| Complete command stream | Native event accounting reconciles with the captured operations | P4.10 |
-| Resource/state closure | No unresolved dependencies for the declared synthetic frame boundary | P4.11 |
-| Independent replay | A fresh process reconstructs the frame from the native recorder's sealed output | P4.11 |
-| Negative admission | Removing content, a mutation or a required event prevents qualification | P4.11 |
+* **Function gate (authorizes P5a):** **P4.9** + the **function-oriented** part of
+  **P4.10** - materialization to schema-valid observations, immutable content blobs,
+  record-to-blob closure relative to the declared function observable domain, collision-safe
+  classification, and domain-specific **negative admission** - plus the static hook-site and
+  ABI checks. It need not establish frame replayability.
+* **Frame gate (authorizes P5b):** the frame-oriented part of **P4.10** (complete
+  command-stream accounting) + **P4.11** (declared `gfx-v2` translation, state-dependent
+  replay, resource/state closure and negative frame admission), or a qualified alternative
+  such as a vetted Apitrace-based trace path.
+
+A passing half-gate makes the matching acquisition *eligible for authorization*; it does not
+authorize a launch. Neither half-gate establishes closure for the real game in advance - that
+is exactly what P5a/P5b must attempt to capture. Each must establish that its slice of the
+pipeline works end to end on a sufficiently representative synthetic workload.
+
+| Requirement | Necessary demonstration | Slice | Gate |
+| --- | --- | --- | --- |
+| Resource-content capture | The native recorder records initial contents and relevant mutations, not just IDs | P4.9 | function + frame |
+| Whole-version content | Exported content is a complete resource version, not a fragment, and is attributable to it | P4.9 | function + frame |
+| Identity and versioning | Reused handles resolve to the correct generation and resource version | P4.9 / P4.10 | function + frame |
+| Complete command stream | Native event accounting reconciles with the captured operations | P4.10 | function + frame |
+| Materialization and blob closure | Observations materialize to schema-valid records and immutable blobs; every declared reference resolves over the whole store | P4.10 | function + frame |
+| Collision-safe classification | Canonical equality is decided within hash buckets; collisions are counted and observable | P4.10 | function + frame |
+| Function negative admission | Removing content, a mutation or a required observation prevents qualification of the declared function domain | P4.10 | function |
+| Resource/state closure | No unresolved dependencies for the declared synthetic frame boundary | P4.11 | frame |
+| Independent replay | A fresh process reconstructs the frame from the native recorder's sealed output | P4.11 | frame |
+| Frame negative admission | Removing content, a mutation or a required event prevents frame qualification | P4.11 | frame |
 
 The recorder-to-replay integration is not to be marked complete merely because the
 standalone synthetic P4b replay passes.
@@ -163,22 +203,40 @@ Its interfaces and acceptance are in [P4_INTEGRATION.md](P4_INTEGRATION.md).
 The hook-pack requirement splits in two, and conflating the halves would make the gate
 circular:
 
-* **Offline, before P5:** the synthetic recorder-to-replay pipeline above, plus the
+* **Offline, before P5a/P5b:** the matching half-gate pipeline above, plus the
   *static* hook-pack checks - executable-byte identity against the pinned EU IV
   identity in `reverse_engineering/target.json`, and site validation. These read files
   and need no game process.
-* **In P5:** whether the instrumentation actually behaves safely inside EU IV, and
+* **In P5a/P5b:** whether the instrumentation actually behaves safely inside EU IV, and
   whether the intended real evidence can be acquired. This is a bounded,
   operator-authorized runtime admission experiment with fail-closed abort conditions.
   It cannot be a precondition for the first authorized launch, because only that
   launch can answer it.
 
-P5 therefore begins without assuming that the live hooks or frame closure are already
-qualified.
+P5a and P5b therefore begin without assuming that the live hooks, the function fixture or
+frame closure are already qualified.
+
+## Engineering policy and progress measure
+
+Each PR must name the real-function capability it advances; reuse existing evidence,
+interfaces and tests before adding infrastructure; implement only what the declared
+acceptance test requires; treat upstream invariants as documented rather than re-defended in
+every downstream consumer; and stop when an experiment grows substantially beyond its initial
+scope.
+
+Progress is measured by **qualified real EU IV functions** - live-grounded closed fixtures;
+original code executing offline under constructed state; reconstructions passing independent
+differential tests - not by synthetic infrastructure volume. Test count and infrastructure size
+are diagnostic metrics.
 
 ## Hard rule
 
-No further EU IV launch until **P3** and **P4/P4b** pass acceptance, and until the
-**offline** half of the pre-P5 integration gate above passes - the synthetic
-recorder-to-replay pipeline and the static hook-pack checks. Live behavioural
-qualification is a P5 activity under fail-closed abort, not a precondition for P5.
+No EU IV launch until **P3** and **P4/P4b** pass acceptance, and until the **applicable**
+offline half-gate above passes: the **function gate** for any P5a function acquisition, the
+**frame gate** for P5b. **P4b's synthetic replay alone does not satisfy either gate.** A
+passing half-gate makes the matching acquisition *eligible for authorization*; it does not
+authorize a launch. Live behavioural qualification is a P5a/P5b activity under fail-closed
+abort, not a precondition for either. **P5a qualification is strictly limited to the declared
+function-level observable domain** and confers no frame replayability, graphics-API-equivalence
+or RE3 authorization. **RE3** remains separately gated by RE2 qualification plus detour, ABI,
+fallback and runtime-safety requirements.

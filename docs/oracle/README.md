@@ -14,11 +14,15 @@ PR #66): the function-agnostic, policy-pluggable recorder plus a synthetic targe
 exact capture accounting, a declared capture policy, offline finalization,
 concurrency and bounded capture; and the resource registry/closure verifier with
 offline R0-M protocol compatibility), and the independent synthetic graphics replay
-harness (**P4b**). No EU IV launch is authorized until P4/P4b pass **and the pre-P5
-offline integration gate passes** — the synthetic replay alone does not satisfy it. The
+harness (**P4b**). No EU IV launch is authorized until P4/P4b pass **and the applicable
+offline half-gate passes** — the synthetic replay alone does not satisfy it. The
 gate is sliced **P4.9-P4.11** and specified in [P4_INTEGRATION.md](P4_INTEGRATION.md);
 **P4.9** (bounded resource-content capture and the versioned observation export) is
-implemented, and P4.10/P4.11 remain. This
+implemented. The remaining gate is **split by acquisition scope** (2026-10-18): the
+**function gate** (function-oriented **P4.10**) authorizes **P5a** — the first
+real-function acquisition — and the **frame gate** (**P4.11**, or a qualified
+alternative) authorizes **P5b**. The workstream is **function-first**; P4.11 does not
+block P5a. This
 directory is authoritative for **capture/validation infrastructure** only; the
 function-level reconstruction lifecycle stays in the reconstruction contract
 [`../renderer-reconstruction-and-differential-validation.md`](../renderer-reconstruction-and-differential-validation.md)

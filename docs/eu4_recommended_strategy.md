@@ -6,6 +6,8 @@ Reduce EU IV's rendering cost on Apple Silicon without removing visual content, 
 
 A gated **RE0–RE3 renderer source-reconstruction and differential-validation** workstream supports the architecture track: recover a bounded Gfx/OpenGL function faithfully, prove its observable equivalence against the original binary, and only then test optimizations. It is a correctness and maintainability investment that makes the architecture tractable — **not** an independent savings claim and not a mandate to decompile the whole engine.
 
+The workstream is **function-first**: the first target is the 21-instruction, 0-callee `_GfxSetConstantBuffer`, reconstructed and validated offline before further Oracle infrastructure is built. The acquisition gate is split — **P5a** (function-level) is gated by the Oracle's offline **function** gate alone, and **P5b** (frame-level) by the frame gate; full-frame replay is not a prerequisite for function-level work. Near-term progress is measured by **qualified real EU IV functions** (live-grounded fixtures, offline original-code execution, independently validated reconstructions), not by synthetic infrastructure volume. See the [Oracle plan of record](oracle/PLAN_OF_RECORD.md).
+
 **This is the canonical roadmap.** It supersedes the earlier `eu4_rendering_strategy_90pct.md` (removed; available in git history). That document's lasting architecture (Gfx seam, shadow state, pipeline caches, complete vertical slices, B→C) is carried over in §3. Its sequencing is replaced: priorities now follow measured cost rather than draw counts.
 
 Related documents:

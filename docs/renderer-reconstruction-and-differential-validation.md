@@ -11,6 +11,8 @@ Reconstruct a **small, high-value vertical slice of the Clausewitz Gfx/OpenGL pa
 
 Do **not** require complete-engine decompilation or perfect understanding of every path before beginning bounded experiments. Reconstruction is a correctness and maintainability investment, **not an optimization by itself**. The goal of roughly 80–90% less static render work remains conditional on actual frame-evolution evidence; active-scene improvement comes from measured work elimination, backend cost reduction and caller/command redesign, not from source-language choice.
 
+RE0–RE2 are **offline and function-scoped**: they require no frame replay, no graphics-API equivalence and no in-process replacement. The **first target** is `_GfxSetConstantBuffer` (entry RVA `0x15ec36a` in the pinned image: 21 instructions, 75 bytes, 0 selected direct callees), chosen for tractability and observability rather than performance payoff. The matching live acquisition is **P5a**; frame-level work (**P5b**) is gated separately and does not block RE0–RE2 ([Oracle plan of record](oracle/PLAN_OF_RECORD.md)).
+
 ## How this fits the existing work
 
 | Existing workstream | Relationship |
@@ -36,7 +38,11 @@ Do **not** require complete-engine decompilation or perfect understanding of eve
 1. Pin binary hash/build/architecture and address ranges; inventory function entry/exit, cross-references, direct/virtual callers, callees, thread/context assumptions, original GL calls and bypass paths.
 2. Recover the minimum required object layout: field offsets, pointer ownership, buffers, texture/sampler IDs, context state, global and TLS accesses, alias relationships, exceptional paths.
 3. Document a function **contract** with preconditions, postconditions, modified memory, external calls, ordering constraints and unobserved/uncertain cases. Record address and disassembly/P-code provenance separately from hypothesized source semantics.
-4. Choose the pilot based on **tractability and observability**, not alleged performance payoff. `InternalSetTextureAndSamplerState` is a candidate; `GfxDrawIndexed` or a nearby Gfx setter is an alternative if the former has a diffuse hidden-state dependency. Neither candidate is yet approved without the audit.
+4. The pilot is **selected**: `_GfxSetConstantBuffer` (entry RVA `0x15ec36a`; 21 instructions,
+   0 selected direct callees), chosen for **tractability and observability**, not alleged
+   performance payoff. RE0 characterizes *that* function. Reselect only if the RE0 → RE1 gate
+   below fails, and then only among candidates ranked by the same test
+   (`InternalSetTextureAndSamplerState`, `GfxDrawIndexed`, or a nearby Gfx setter).
 
 **Gate RE0 → RE1:** identified callable boundary; finite, recoverable input/side-effect surface; credible strategy for calling or observing the original; no unresolved ownership/context requirements likely to make a faithful replacement unsafe. Otherwise pick a different function.
 

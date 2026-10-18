@@ -9,10 +9,13 @@ translation, `gfx-v2` stateful replay and negative admission) remain. **Nothing 
 launches EU IV, opens a game process, or attaches to a binary**: every input is a file
 this repository's own drivers wrote.
 
-This document is authoritative for the pre-P5 offline integration gate. The phase
-contract is in [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the recorder it builds on is in
-[P4_RECORDER.md](P4_RECORDER.md); the synthetic replay it must generalize is in
-[P4B_REPLAY.md](P4B_REPLAY.md).
+This document is authoritative for the pre-P5 offline integration gate. The gate now
+splits by acquisition scope (2026-10-18): the **function** half (**P4.9** +
+function-oriented **P4.10** + domain-specific negative admission) authorizes **P5a**, and
+the **frame** half (frame-oriented **P4.10** + **P4.11**, or a qualified alternative)
+authorizes **P5b**; the phase contract is in [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md). The
+recorder it builds on is in [P4_RECORDER.md](P4_RECORDER.md); the synthetic replay it must
+generalize is in [P4B_REPLAY.md](P4B_REPLAY.md).
 
 ## Why this gate exists
 
@@ -28,37 +31,48 @@ Both gaps are closed by P4.9, and both are prerequisites for the rest of the gat
 
 ## The gate
 
-> Establish that the recording and replay pipeline works end to end on a sufficiently
-> representative synthetic workload, entirely offline.
+> Establish, entirely offline, that the recording and materialization pipeline works end to
+> end on a sufficiently representative synthetic workload — **at the scope of the acquisition
+> it authorizes**.
 
-| Requirement | Necessary demonstration | Slice |
-| --- | --- | --- |
-| Resource-content capture | The native recorder records initial contents and relevant mutations, not just IDs | P4.9 |
-| Identity and versioning | Reused handles resolve to the correct generation and resource version | P4.9 / P4.10 |
-| Complete command stream | Native event accounting reconciles with the captured operations | P4.10 |
-| Resource/state closure | No unresolved dependencies for the declared synthetic frame boundary | P4.11 |
-| Independent replay | A fresh process reconstructs the frame from the native recorder's sealed output | P4.11 |
-| Negative admission | Removing content, a mutation or a required event prevents qualification | P4.11 |
+The gate splits by acquisition scope; [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md) is authoritative
+for the phase names and the launch authorization. The **function gate** authorizes **P5a**;
+the **frame gate** authorizes **P5b**. Frame replay, `gfx-v2` translation and frame-scoped
+resource/state closure belong to the **frame gate only** — the function gate never requires
+them.
 
-## Two gates, and why P5 cannot be circular
+| Requirement | Necessary demonstration | Slice | Gate |
+| --- | --- | --- | --- |
+| Resource-content capture | The native recorder records initial contents and relevant mutations, not just IDs | P4.9 | function + frame |
+| Identity and versioning | Reused handles resolve to the correct generation and resource version | P4.9 / P4.10 | function + frame |
+| Complete command stream | Native event accounting reconciles with the captured operations | P4.10 | function + frame |
+| Materialization and blob closure | Observations materialize to schema-valid records and immutable blobs; every declared reference resolves over the whole store | P4.10 | function + frame |
+| Collision-safe classification | Canonical equality is decided within hash buckets; collisions are counted and observable | P4.10 | function + frame |
+| Function-scoped closure and negative admission | Missing required inputs, snapshots or state prevent qualification of the declared **function** observable domain; removing content, a mutation or a required observation prevents it too | P4.10 | **function** |
+| Resource/state closure | No unresolved dependencies for the declared synthetic **frame** boundary | P4.11 | frame |
+| Independent replay | A fresh process reconstructs the frame from the native recorder's sealed output | P4.11 | frame |
+| Frame negative admission | Removing content, a mutation or a required event prevents **frame** qualification | P4.11 | frame |
 
-The hook-pack requirement splits, and conflating the halves would create a circular
-gate:
+## Two gates, and why P5 is not circular
 
-* **Before P5 — offline, provable now:** the synthetic recorder-to-replay pipeline
-  above, plus the *static* half of the hook-pack checks — executable-byte identity
-  against the pinned EU IV identity in `reverse_engineering/target.json`, and site
-  validation. These read files and need no game process.
-* **In P5 — a runtime admission experiment:** whether the instrumentation actually
-  behaves safely inside EU IV, and whether the intended real evidence can be
-  acquired. This is a carefully bounded, operator-authorized experiment with
-  fail-closed abort conditions. It cannot be a precondition for the first authorized
-  launch, because it can only be answered *by* one.
+The hook-pack requirement splits, and conflating the halves would create a circular gate:
 
-So `Hard rule` below bars a launch until the offline pipeline and the static hook
-checks pass; it does not demand successful live behavioural qualification before the
-launch that would produce it. P5 begins without assuming that the live hooks or frame
-closure are already qualified.
+* **Offline, before the matching acquisition:** the scope's half of the pipeline above, plus
+  the *static* half of the hook-pack checks — executable-byte identity against the pinned EU
+  IV identity in `reverse_engineering/target.json`, and site validation. These read files and
+  need no game process. The **function gate** needs only function-scoped materialization,
+  closure, accounting and negative admission; frame replay and `gfx-v2` are the **frame
+  gate**'s business.
+* **In P5a/P5b — a runtime admission experiment:** whether the instrumentation actually
+  behaves safely inside EU IV, and whether the intended real evidence can be acquired. This
+  is a carefully bounded, operator-authorized experiment with fail-closed abort conditions. It
+  cannot be a precondition for the first authorized launch, because it can only be answered
+  *by* one.
+
+So `Hard rule` bars a launch until the **applicable** offline half-gate and the static hook
+checks pass; it does not demand successful live behavioural qualification before the launch
+that would produce it. P5a and P5b begin without assuming that the live hooks, the function
+fixture or frame closure are already qualified.
 
 ## Frozen interfaces (P4.9)
 
@@ -297,8 +311,8 @@ The interpreter, the subject and the replay land in P4.11.
 | Slice | Responsibility |
 | --- | --- |
 | **P4.9** | Native span-capture API, content provenance, safe bounded arena, whole-version content semantics, fail-closed malformed declarations, correct completeness accounting, versioned export contract and its strict reader, synthetic tests |
-| **P4.10** | Materialization, content-blob closure over the whole store, whole-version length verification against the resource size, incomplete-evidence representation, collision-safe deduplication, independent reconciliation of records against native counters |
-| **P4.11** | Versioned `gfx-v2` translation, state-consuming replay, end-to-end closure, and negative admission |
+| **P4.10** | **Function gate:** materialization, content-blob closure over the whole store, whole-version length verification against the resource size, incomplete-evidence representation, collision-safe deduplication, independent reconciliation of records against native counters, and the function-fixture adapter. **Frame gate:** complete command-stream accounting |
+| **P4.11** | **Frame gate only:** versioned `gfx-v2` translation, state-consuming replay, end-to-end closure, and negative frame admission |
 
 Each is a separately reviewable, separately revertible PR. P4.9's interfaces were
 designed together with P4.10 and P4.11; their implementations and acceptances are
