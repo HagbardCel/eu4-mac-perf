@@ -46,7 +46,7 @@ def _sha256_bytes(data: bytes) -> str:
     return sha256(data).hexdigest()
 
 
-def _write_create_only(path: Path, payload: bytes) -> str:
+def write_create_only(path: Path, payload: bytes) -> str:
     """Publish ``payload`` at ``path`` atomically, refusing to overwrite a name.
 
     Returns ``"created"`` or ``"unchanged"`` (an identical file already exists). A
@@ -99,7 +99,7 @@ class EvidenceStore:
         return digest
 
     def _put_blob_with_digest(self, digest: str, data: bytes) -> None:
-        _write_create_only(self.blob_path(digest), data)
+        write_create_only(self.blob_path(digest), data)
         self._blobs[digest] = len(data)
 
     def get_blob(self, digest: str) -> bytes:
