@@ -25,10 +25,15 @@ to a binary.
 **Evidence chain.** The pinned binary bytes → the sealed `static.jsonl` row (whose
 instruction bytes the snapshot receipt recomputes from the binary) → the instruction
 listing → this contract. The listing's own columns were additionally hand-decoded from the
-raw bytes as an independent cross-check of the decode (`verify` below). `tests/test_reconstruction_contract.py`
-re-derives the listing from the snapshot and verifies every instruction's bytes against the
-binary when the local corpus is present; in CI (no corpus) it checks the listing's internal
-consistency only.
+raw bytes as a decode-independent cross-check (see *Behaviour*).
+
+`tests/test_reconstruction_contract.py` re-derives the listing from the snapshot and verifies
+every instruction's bytes against the pinned binary via the repository's `MachOMapper` when the
+local corpus is present; in CI (no corpus) it checks the listing's internal consistency only.
+**Local verification (2026-10-18):** with the corpus present, all six tests passed, including
+both `MachOMapper` byte checks against the pinned binary at
+`/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4`. That local result is not
+reproduced in CI and is recorded here as the qualification for it.
 
 ## ABI
 
@@ -43,10 +48,14 @@ System V x86-64. Only four of the argument registers are read:
 | `R8` | — | no |
 | `R9` (`R9D`) | signed length selector: `-1` means "read the length from `[RSI]`" | yes |
 
-Return: none. `RAX` holds the context base at `RET`, so the function is `void` as far as any
-caller contract is concerned. `RBP` is saved and restored; no stack frame other than the
-saved `RBP`. `RDX` and `R8` are unused by this body — whether they are genuinely absent from
-the prototype or merely dead here is **unresolved** (see *Uncertainties*).
+Return value: **unresolved.** The instructions establish only that `RAX` holds the context base
+when the function returns; they do **not** show that callers ignore it — a `void` function may
+leave anything in `RAX`. Whether the real return type is `void`, or a value the 37 callers
+consume, needs a caller-liveness audit that RE0 has not done. Until then the differential
+contract treats `RAX` as an **observed register outcome to record**, not a declared return.
+`RBP` is saved and restored; no stack frame other than the saved `RBP`. `RDX` and `R8` are
+unused by this body — whether they are genuinely absent from the prototype or merely dead here
+is likewise **unresolved** (see *Uncertainties*).
 
 ## Behaviour, from the instructions
 
@@ -91,19 +100,40 @@ The pad is not written. The field *names* are hypotheses; the offsets, widths an
 
 ## Observable domain (the differential contract)
 
-A correct reconstruction must reproduce, for the same inputs and the same initial `ctx`:
+**Initial test domain: `slot ∈ [0, 6)`** — see *Slot range* below for why 6, and for what
+happens outside it. For those inputs a correct reconstruction must reproduce, from the same
+inputs and the same initial `ctx`:
 
 1. `*(uint32 *)(ctx + 0xc8 + slot*16)` after the call;
 2. `*(void **)(ctx + 0xd0 + slot*16)` after the call;
 3. `*(uint8  *)(ctx + 0x128)` after the call;
-4. **preservation** — no other byte of the declared observation region changes.
+4. **preservation** — no other byte of the declared observation region changes;
+5. the register outcome — `RAX` (see the ABI section: recorded, not a declared return).
 
-Declared observation region: the whole `slot`-indexed arrays and the dirty byte — i.e.
-`[ctx, ctx + 0x129)` at minimum, extended with canary bytes around the arrays in the
-differential harness. The stack (the saved `RBP`) is excluded: it is restored before `RET`
-and is not part of the contract.
+**Declared observation region:** `[ctx + 0xc8, ctx + 0x129)` — the two adjacent arrays and the
+dirty byte. For `slot ∈ [0, 6)` every indexed write falls inside `[ctx + 0xc8, ctx + 0x128)`,
+and the flag write is `ctx + 0x128`, so the region is closed under the declared domain. The
+differential harness extends it with canary bytes on both sides. The stack (the saved `RBP`) is
+excluded: it is restored before `RET`.
 
-Return value carries no meaning.
+### Slot range
+
+`slot` is not bounds-checked by the function, so the region is **not** closed for every value.
+The recovered offsets give the bound directly:
+
+    0xc8 + 6 * 0x10 = 0x128        (six 16-byte slots, then the dirty byte)
+
+`slot = 6` makes the first indexed write land **on** the dirty byte and the second extend past
+the region entirely. That arithmetic is consistent with a six-entry slot array immediately
+followed by the flag — `struct { Slot slots[6]; uint8 dirty; }` with `Slot` =
+`{ uint32 words; uint32 pad; void *buffer; }` — but the array's declared length is **not**
+established here; it is a caller invariant.
+
+- The pilot tests `slot ∈ [0, 6)`. Those are the values for which the three fields are
+  independent, which is what makes the differential contract well posed.
+- `slot ≥ 6` is **not** tested and must **not** be treated as impossible. The aliasing is
+  recorded, and the valid range is an open question for a caller-side audit (the array length,
+  and whether any of the 37 callers passes ≥ 6).
 
 ## Dependency map
 
@@ -122,13 +152,15 @@ offline-execution target.
 
 ## Uncertainties
 
+- **Return register.** `RAX` holds `ctx` at `RET`; whether callers consume it — i.e. the true
+  return type — is unresolved pending a caller-liveness audit, and is treated as a recorded
+  outcome rather than a declared return.
 - **`RDX`/`R8` are unused.** The prototype may have more parameters (e.g. a shader stage or a
   byte-stride) that this particular implementation ignores, or the scope's caller set may
   pass fewer. Recorded; not needed for the declared observable domain.
 - **Field names and the `+0x128` flag's meaning** are inferred from use, not proven.
-- **`slot` is unbounded** by this function; the valid range is a caller invariant, not
-  checkable here. The differential harness should test in-range slots and record, not
-  "require", out-of-range behaviour the original was never contracted to accept.
+- **The slot array's length.** Six is inferred from `0xc8 + 6*0x10 = 0x128`, not established by
+  the function, which does not check it (see *Slot range*).
 - **The length arithmetic** is stated at the instruction level (above); a C++ reconstruction
   must match the truncation/rounding exactly rather than the decompiler's rendering of it.
 
@@ -145,6 +177,6 @@ reconstruction chain, not an optimisation claim.
 ## Next
 
 A bounded offline execution pilot (Ghidra P-code) must show the original instructions
-executing under an explicitly constructed state and producing the three declared writes,
-with results checked against this contract — not solely against the decompiler or a
-reconstruction.
+executing under an explicitly constructed state and producing the three declared writes
+**and the recorded register outcomes (`RAX`)**, for `slot ∈ [0, 6)`, with results checked
+against this contract — not solely against the decompiler or a reconstruction.
