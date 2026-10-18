@@ -12,9 +12,12 @@ and **P4.8** (R0-M epoch compatibility, validated offline) are implemented under
 `oracle/recorder/` with offline tests - **P4r-B and P4r-C are complete**. **P4b**
 (the independent synthetic graphics replay) is complete too: it reconstructs a frame
 from a sealed capture of a synthetic graphics subject, in a fresh process, under
-[P4B_REPLAY.md](P4B_REPLAY.md). **Nothing here launches EU IV, opens a game process,
-or attaches to a binary**: the recorder consumes already-captured native events, and
-P4 is proven entirely offline.
+[P4B_REPLAY.md](P4B_REPLAY.md). **P4.9** - bounded resource-content capture and the
+versioned observation export - is the recorder's contribution to the pre-P5 offline
+integration gate, and is described below and in
+[P4_INTEGRATION.md](P4_INTEGRATION.md). **Nothing here launches EU IV, opens a game
+process, or attaches to a binary**: the recorder consumes already-captured native
+events, and P4 is proven entirely offline.
 
 This document is authoritative for P4. The phase contract is in
 [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the trust boundary is a refinement of the
@@ -175,11 +178,16 @@ what it intercepted, selected, captured, left incomplete, and lost.
 | `lost` | selected entries the bounded capture buffer could not hold |
 | `reentrant` | entries observed while already inside an observation |
 | `rejected` | instrumentation errors (over-deep, or an exit with no matching enter) |
+| `content_bytes_declared` | content bytes a captured observation declared (P4.9; zero when content capture is off) |
+| `content_bytes_captured` | of those, the bytes copied into the arena |
+| `content_bytes_lost` | of those, the bytes lost whole for want of arena |
+| `content_spans_lost` | the number of spans that did not fit |
 
-Two identities hold by construction and are asserted after every scenario:
+Three identities hold by construction and are asserted after every scenario:
 
 * `intercepted = selected + unselected`
 * `selected = captured + incomplete + lost`
+* `content_bytes_declared = content_bytes_captured + content_bytes_lost`
 
 An **incomplete** entry is a selected observation whose declared scope was not
 observable - the call operated on no live resource, so there was no state to
@@ -343,6 +351,47 @@ owned by the reconstruction contract
 (merged in PR #44); the recorder declares them as an opaque, versioned tag and does
 not fork a second taxonomy.
 
+## Resource-content capture and the observation export (P4.9)
+
+The recorder as shipped through P4.8 captured resource *references* and lifetimes but
+never their **contents**, and its transcript never carried a hook's ABI **arguments**.
+Neither is recoverable offline, so no translator could reconstruct an operation's
+parameters. P4.9 closes both gaps - see
+[P4_INTEGRATION.md](P4_INTEGRATION.md) for the gate they serve and the contracts they
+freeze.
+
+`recorder_exit_content` lets a hook declare up to `RECORDER_MAX_SPANS` byte spans,
+copied into the recorder's own arena at the moment of exit, and declares *when* those
+bytes were valid (`RECORDER_POINT_ENTRY` as the call was entered, or
+`RECORDER_POINT_EXIT` after it returned). `recorder_exit` is unchanged and equivalent
+to declaring no spans.
+
+* **Off by default.** `recorder_config.content_capacity` bounds the arena and defaults
+  to zero, which means content is *undeclared*, not *lost*: a hook may name spans and
+  the recorder counts and copies none of them. Every golden predating P4.9 is
+  therefore byte-identical, and a test asserts it.
+* **Whole-span or nothing.** A span that does not fit is lost in full and the
+  observation is downgraded from complete to **incomplete** - completeness is decided
+  in the core, not by a reader of the export. Partial capture never happens.
+* **A failed span wastes no capacity.** `content_reserve` compares-and-swaps a
+  monotone high-water mark, and a span that does not fit reserves nothing. The
+  arithmetic is provably safe: the mark only advances towards the configured capacity,
+  so the sum cannot overflow.
+* **A policy choice is not a loss.** Content declared on a hook the policy did not
+  select is neither counted nor copied, so it is never misrepresented as a missing
+  required span.
+
+The importable artefact is a **versioned observation export** (`RECORDER-EXPORT v1`),
+written by `oracle/recorder/native/content_driver.c`: per observation, the hook, its
+arguments, its opaque resource context, its declared capture point and its content
+inventory. Because the export is a *driver-level* contract, the released accounting
+transcript is untouched by construction rather than by a compatibility mode.
+`harness.parse_export_transcript` reads it.
+
+One latent defect was corrected in passing: the accounting driver's `recorder_config`
+was written field by field from an uninitialised local, which the new field would have
+exposed. It is now fully initialised.
+
 ## P4r-A acceptance (P4.1 - P4.2)
 
 **P4.1 - the record model and store**, offline, adversarial, independent of any
@@ -452,3 +501,21 @@ See `tests/test_oracle_recorder_native.py`.
   against the P4.1 schema.
 
 See `tests/test_oracle_recorder_epoch.py`.
+
+**P4.9 - content capture and the observation export**, bounded, whole-span and
+default-off:
+
+* the export reproduces its committed golden byte-for-byte and deterministically, and
+  the released `synthetic` and `recorder` goldens are unchanged;
+* every observation carries its hook, arguments, context, capture point and content;
+* a span that does not fit is lost whole, partial evidence survives, the observation
+  becomes incomplete, and the byte identity reconciles independently of the event
+  identity - including one event that accounts for several lost spans;
+* two calls sharing a resource context are distinguished by their arguments and by
+  their observed bytes;
+* a zero-length span declares nothing, `content_capacity == 0` declares nothing, and
+  an over-large capacity is rejected rather than truncated;
+* no two captured spans share an arena byte under a four-thread race, which fills an
+  eight-byte arena exactly.
+
+See `tests/test_oracle_recorder_content.py`.
