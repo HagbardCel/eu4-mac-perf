@@ -30,6 +30,13 @@ OBSERVATIONS_SCHEMA = "eu4-re0-pilot-observations/v1"
 RECEIPT_SCHEMA = "eu4-re0-pilot-receipt/v1"
 PROCESS_TIMEOUT = 1800
 
+# What the receipt says about itself, so the evidence cannot be read as more than it is.
+STATEMENT = (
+    "Ghidra P-code execution of the original pinned x86-64 instructions under constructed "
+    "state - not hardware-level execution of x86 machine code and not runtime behaviour in "
+    "the game."
+)
+
 # The emulator's default data space; every declared region lives here.
 DATA_SPACE = "ram"
 
@@ -133,6 +140,15 @@ def validate_receipt(receipt: dict[str, Any], *, mapper: Any = None) -> list[str
             failures.append(message)
 
     check(receipt.get("schema") == RECEIPT_SCHEMA, f"receipt schema is {receipt.get('schema')!r}")
+    statement = receipt.get("statement")
+    check(
+        isinstance(statement, str) and "P-code" in statement,
+        "receipt does not state that the evidence is P-code emulation of the original instructions",
+    )
+    check(
+        receipt.get("limits") == load_scenarios()["limits"],
+        "receipt does not carry the frozen limits verbatim",
+    )
     determinism = receipt.get("determinism", {})
     digests = determinism.get("canonical_sha256", [])
     check(determinism.get("runs") == 2, "receipt does not record two runs")
@@ -396,6 +412,8 @@ def build_receipt(first: dict[str, Any], second: dict[str, Any]) -> dict[str, An
     repeat = canonical_digest(second["canonical"])
     return {
         "schema": RECEIPT_SCHEMA,
+        "statement": STATEMENT,
+        "limits": load_scenarios()["limits"],
         "environment": first["environment"],
         "determinism": {
             "runs": 2,

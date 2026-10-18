@@ -1,5 +1,13 @@
 {
   "schema": "eu4-re0-pilot-receipt/v1",
+  "statement": "Ghidra P-code execution of the original pinned x86-64 instructions under constructed state - not hardware-level execution of x86 machine code and not runtime behaviour in the game.",
+  "limits": [
+    "The constructed state is a harness construction; it is not evidence that this state occurs inside EU IV.",
+    "Only slot in [0, 6) is tested; slot >= 6 is an open caller invariant.",
+    "RAX is recorded as an observed register outcome, not as a declared return type.",
+    "This establishes the behaviour of the decoded instructions in a P-code emulator, not hardware-level execution of x86 machine code.",
+    "No claim is made about _GfxSetConstantBuffer's importance as a rendering bottleneck."
+  ],
   "environment": {
     "script_version": "EmulateGfxSetConstantBuffer/v1",
     "ghidra_version": "12.1.4",

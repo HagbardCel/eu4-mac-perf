@@ -78,8 +78,9 @@ while the store traces assert equality.
 
 It establishes the behaviour of the **decoded original instructions inside a Ghidra P-code
 emulator** under constructed state: which path executes, which memory is read and written, in
-what order, and what the registers hold at the return. The receipt should be read that way — it
-is not an independent hardware-level execution of x86 machine code.
+what order, and what the registers hold at the return. The receipt says so itself — it carries
+this statement and the frozen limits list verbatim, so the evidence cannot be read as more than
+it is — and it is not an independent hardware-level execution of x86 machine code.
 
 It does **not** establish any of the following, and these limits travel with the evidence:
 
