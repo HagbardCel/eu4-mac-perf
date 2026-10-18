@@ -157,6 +157,16 @@ behaviour does not):
   and the declaration is now consumed by the emulator instead of duplicated as a hardcoded
   constant, so the two cannot drift again.
 
+One further, purely explanatory error in that same note is **known and deliberately left in
+place for now**: it says the low 32 bits of `R9` are nonzero "for every scenario that does not
+take the `length_from_buffer` path", but `s13` takes the explicit path with `r9d = 0`. The
+declaration it describes (`R9: r9d_zero_extended`) and everything that consumes it are correct —
+the validator resolves the symbol and checks the result against the scenario's own `r9d`,
+whatever that value is — and only the sentence is wrong. Correcting one sentence would change the
+scenario file's bytes and therefore the receipt's canonical digest, forcing another execution
+cycle for wording alone, so the erratum is recorded here and the sentence is corrected at the
+next revision that touches the evidence for a substantive reason.
+
 Everything else about the run (constructed addresses, fill pattern, window sizes) is declared in
 the same file, and the receipt records what was actually observed; the two are compared in CI by
 `tests/test_reconstruction_pilot.py`, which needs neither Ghidra nor the corpus to validate the
