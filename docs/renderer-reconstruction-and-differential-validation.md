@@ -65,6 +65,17 @@ RE0–RE2 are **offline and function-scoped**: they require no frame replay, no 
 
 **Gate RE1 → RE2:** clean x86-64 build, deterministic offline tests, documented ABI/object-layout checks and explicit list of remaining unknowns.
 
+**Artifacts:** `analysis/reconstruction/<function>/reconstruction/` — the handwritten
+reimplementation, its ABI adapter and probe, the harness and a README recording what is proved and
+what is not. Only narrow, handwritten functional reimplementations of documented behaviour are
+tracked there (see [conventions](conventions.md)); decompiled source, original binaries and bulk
+reconstructed source stay local.
+
+**Status (2026-10-18):** the first reconstruction, for `_GfxSetConstantBuffer`, is tracked at
+`analysis/reconstruction/_GfxSetConstantBuffer/reconstruction/`. Its semantics are checked against
+the RE0 instruction model and the frozen pilot scenarios; agreement with the original's *executed*
+instructions is still RE2's job, not this one's.
+
 ## RE2 — Differential oracle and semantic comparison
 
 Build a replayable harness that records and compares **observable behavior**, not just decompiler text.
@@ -123,7 +134,7 @@ If RE3 is prohibitively difficult due to object ownership, exception/ABI couplin
 |---|---|---|
 | **RE-PR1** | RE0 inventory, candidate decision, function contract and frozen reference schema | No |
 | **RE-PR1b** | RE0 offline execution pilot: frozen paths/scenarios, P-code emulator script, runner, receipt and fail-closed checks — original instructions executed under constructed state. RE0 evidence, not RE1/RE2 | No |
-| **RE-PR2** | RE1 faithful C++ reconstruction; mock GL; tests; ABI checks; harness skeleton | No |
+| **RE-PR2** | RE1 faithful C++20 reconstruction written from the documented contract: six-position ABI adapter and probe, object-layout assertions, exact modular arithmetic with bounded verification, harness and tests. No GL mock at this stage (nothing in this function touches GL) and no claim of assembly-level reproduction | No |
 | **RE-PR3** | RE2 differential fixture capture/replay, semantic comparator, oracle-strength labeling | **Only if** a qualified bounded reference capture is necessary; batch with an already-approved session when possible |
 | **RE-PR4** | RE3 reversible binary hook and game integration with fallback; correctness evidence | One controlled launch **only after offline gates pass** |
 
