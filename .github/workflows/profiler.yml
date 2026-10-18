@@ -35,6 +35,7 @@ jobs:
       - run: >
           python tooling/common/check_doc_links.py --strict
           README.md docs
+          analysis/reconstruction
           results/README.md
           reverse_engineering/README.md
           experiments/README.md
