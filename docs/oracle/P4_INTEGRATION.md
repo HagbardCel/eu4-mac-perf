@@ -151,11 +151,16 @@ carrier must never be read as an observed zero, and an unavailable context must 
 be read as absent-but-fine. The complement is deliberate — an *absent* array with a
 zero declared count is the legitimate empty case and does not fault.
 
-A declaration is judged **before** any of its carriers are read. The declared count says
-nothing about how many elements the array actually holds, so an over-long or undersized
-array is never dereferenced — reading one would be the very memory error the fault
-exists to record. A malformed declaration's diagnostic argument slots are zero, and it
-remains a fault, not evidence.
+A malformed declaration is judged **before** any of its carriers are read: its declared
+count is not trustworthy, so an over-long count never reads past the array the hook
+supplied, its diagnostic argument slots are zero, and it remains a fault, not evidence.
+
+A *valid* count is different, and the distinction is the trusted hook's contract. The
+core copies exactly the declared `nargs` elements, so those elements must be readable —
+the core cannot know an allocation's length from a pointer, exactly as it cannot for a
+`context` or a content span. Supplying memory valid for a declared, permitted count is
+the hook layer's responsibility, and no runtime pointer check exists that could make it
+the core's.
 
 Precedence is the order above. The fault is resolved **before** the policy's selection
 is consulted, so a malformed declaration is counted whether or not the policy chose to
@@ -222,8 +227,8 @@ or empty key is refused; integers must be canonical non-negative decimals; every
 scenario must declare its `COUNTERS`, `ACCOUNTING`, `ADMISSION`, `ARENA` and
 `OBSERVATIONS` records **at most once** — a second would silently overwrite the first;
 `OBSERVATIONS count` must equal the observations printed when `listed=1`, and none may
-appear when `listed=0`; the native counter identities are recomputed and must agree
-with the declared `ACCOUNTING` verdict
+appear when `listed=0`; the native counter identities are recomputed and must hold,
+and the declared `ACCOUNTING` must be `ok`
 (`intercepted == selected + unselected`, `selected == captured + incomplete + lost`,
 `content_bytes_declared == content_bytes_captured + content_bytes_lost`); the count must
 reconcile with the event counters (`count == captured + incomplete`) for a withheld
@@ -328,10 +333,11 @@ be confused with the capture buffer's.
 * Every named instrumentation fault occurs at least once; each malformed declaration
   is one rejection however many symptoms it shows; a faulted observation declares no
   content and is never complete; a declared count with no array faults rather than
-  fabricating zeros; a declaration is judged before its array is read, so an over-long
-  or undersized array is never dereferenced, even under AddressSanitizer; an absent
-  array with a zero count stays valid; and scenario `ADMISSION` is `REJECTED` exactly
-  when `rejected > 0`.
+  fabricating zeros; a malformed declaration is judged before its array is read, so an
+  over-long count never dereferences it, even under AddressSanitizer, while a valid
+  count's array must be readable for its declared length (the hook's contract); an
+  absent array with a zero count stays valid; and scenario `ADMISSION` is `REJECTED`
+  exactly when `rejected > 0`.
 * A well-formed declaration whose origin names a stale generation is exported complete
   by the core and **rejected by the offline closure verifier**.
 * Two calls sharing a resource context are distinguished by their arguments, and the
@@ -343,9 +349,10 @@ be confused with the capture buffer's.
   field, a non-canonical integer, an observation count that disagrees with the
   observations or with the event counters, a duplicated scenario control record, an
   observation split that disagrees with the counters, more listed faults than
-  rejections, an accounting verdict that contradicts its own recomputed identities, an
-  admission verdict that contradicts the rejections or that is `ok` beside a listed
-  fault, a missing or duplicated terminal `END`, and any record after it.
+  rejections, counters that fail a native identity however the accounting verdict is
+  labelled (and a `VIOLATED` verdict whose identities hold), an admission verdict that
+  contradicts the rejections or that is `ok` beside a listed fault, a missing or
+  duplicated terminal `END`, and any record after it.
 * No two captured spans share an arena byte, under a four-thread race; with an
   eight-byte arena the race ends exactly full.
 * The targets are deterministic across 25 runs, identical at `-O0/-O2/-O3`, clean

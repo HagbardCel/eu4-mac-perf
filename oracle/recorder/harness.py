@@ -375,8 +375,8 @@ def parse_export_transcript(text: str) -> dict[str, Any]:
     (`count == captured + incomplete`, `complete == captured`, `incomplete == incomplete`);
     when it deliberately withheld them, none may appear, though its count is still
     reconciled from the aggregates. The native counter identities are recomputed and
-    must agree with the declared `ACCOUNTING` verdict, and a faulted observation can
-    never coexist with `ADMISSION ok`. A transcript with no
+    must hold, the declared `ACCOUNTING` verdict must be `ok`, and a faulted observation
+    can never coexist with `ADMISSION ok`. A transcript with no
     version line, no terminal END, more than one END, or any record after END is refused
     rather than partially understood.
 
@@ -523,9 +523,11 @@ def _reconcile(name: str, scenario: dict[str, Any]) -> None:
     bytes_captured = _counter(scenario, "content_bytes_captured")
     bytes_lost = _counter(scenario, "content_bytes_lost")
 
-    # The native counter identities, recomputed here rather than trusted from the
-    # declared verdict: arithmetically consistent counters beside an `ACCOUNTING
-    # VIOLATED`, or violated identities beside an `ACCOUNTING ok`, are both refused.
+    # The native counter identities are recomputed here, not trusted from the declared
+    # verdict. A capture whose identities fail is refused however it labels itself, and
+    # a scenario that declares `ACCOUNTING VIOLATED` is refused when its identities
+    # hold: this reader is the entry point for materializable evidence, so a broken
+    # acquisition must never parse into an apparently usable observation set.
     violations = []
     if intercepted != selected + unselected:
         violations.append("intercepted != selected + unselected")
@@ -533,11 +535,14 @@ def _reconcile(name: str, scenario: dict[str, Any]) -> None:
         violations.append("selected != captured + incomplete + lost")
     if declared != bytes_captured + bytes_lost:
         violations.append("content_bytes_declared != captured + lost")
-    expected_accounting = "VIOLATED" if violations else "ok"
-    if scenario["accounting"] != expected_accounting:
+    if violations:
         raise HarnessError(
-            f"scenario {name!r} declares ACCOUNTING {scenario['accounting']!r} but "
-            + ("; ".join(violations) if violations else "its counter identities hold"))
+            f"scenario {name!r}: native accounting identity violated: "
+            + "; ".join(violations))
+    if scenario["accounting"] != "ok":
+        raise HarnessError(
+            f"scenario {name!r} declares ACCOUNTING {scenario['accounting']!r} but its "
+            "counter identities hold")
 
     expected = "ok" if rejected == 0 else "REJECTED"
     if scenario["admission"] != expected:

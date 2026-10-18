@@ -161,10 +161,13 @@ void recorder_thread_begin(uint32_t thread_id);
 void recorder_set_phase(uint32_t phase);
 
 /* Observe one hook entry. Returns a token for the matching `recorder_exit`; a
- * negative token means no frame was pushed (over-deep or uninitialised). The
- * declaration is validated before `args` is read, so a count the policy disallows - or
- * a positive count with no array - is a fault and never dereferences the array, however
- * few elements it actually holds. */
+ * negative token means no frame was pushed (over-deep or uninitialised). A malformed
+ * declaration - a count the policy disallows, or a positive count with no array - is a
+ * fault refused before `args` is read, so it never dereferences the array. A
+ * well-formed declaration is different: `args` must be readable for `nargs` elements,
+ * and the core cannot know an allocation's length from a pointer, exactly as for
+ * `context` and a content span. Supplying readable memory is the trusted hook layer's
+ * contract, not something the core can check. */
 int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs);
 /* End observation of `token`. `complete` is 0 when the observation's declared
  * scope was not fully observable, e.g. a call that operated on no live resource.

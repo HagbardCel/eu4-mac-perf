@@ -751,6 +751,19 @@ class ExportParserStrictnessTests(unittest.TestCase):
         with self.assertRaises(harness.HarnessError):
             harness.parse_export_transcript(text)
 
+    def test_inconsistent_counters_beside_a_declared_violation_are_refused(self):
+        # The adversarial pair: the counters genuinely fail an identity *and* the
+        # verdict honestly says so. Broken accounting must not parse into usable
+        # evidence, however candidly it is labelled.
+        text = self._replaced_once(
+            "COUNTERS intercepted=8 selected=8 unselected=0 captured=6 incomplete=2"
+            " lost=0 reentrant=0 rejected=0 content_bytes_declared=0",
+            "COUNTERS intercepted=9 selected=8 unselected=0 captured=6 incomplete=2"
+            " lost=0 reentrant=0 rejected=0 content_bytes_declared=0")
+        text = text.replace("ACCOUNTING ok", "ACCOUNTING VIOLATED", 1)
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(text)
+
     def test_counters_that_violate_their_own_identities_are_refused(self):
         # The native identities are re-checked here, not merely trusted from the
         # ACCOUNTING verdict: intercepted == selected + unselected and
