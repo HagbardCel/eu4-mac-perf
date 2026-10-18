@@ -88,11 +88,11 @@ OBSERVATIONS count=2 listed=1
 OBS thread=0 seq=2 phase=0 hook=2 point=0 result=0 complete=1 fault=none nargs=3 args=0,5,4 ncontext=6 context=1,0,0,1,0,0 nspans=1 content=c:4:05060708 norigin=6 origin=1,0,0,1,0,1
 OBS thread=0 seq=5 phase=0 hook=2 point=0 result=0 complete=1 fault=none nargs=3 args=0,1,2 ncontext=6 context=1,0,0,1,0,1 nspans=1 content=c:4:06080708 norigin=6 origin=1,0,0,1,0,2
 SCENARIO content-malformed
-COUNTERS intercepted=11 selected=11 unselected=0 captured=2 incomplete=9 lost=0 reentrant=0 rejected=9 content_bytes_declared=8 content_bytes_captured=8 content_bytes_lost=0 content_spans_lost=0
+COUNTERS intercepted=13 selected=13 unselected=0 captured=2 incomplete=11 lost=0 reentrant=0 rejected=11 content_bytes_declared=8 content_bytes_captured=8 content_bytes_lost=0 content_spans_lost=0
 ACCOUNTING ok
 ADMISSION REJECTED
 ARENA capacity=64 used=8 intervals=2 overlaps=0 out_of_range=0
-OBSERVATIONS count=11 listed=1
+OBSERVATIONS count=13 listed=1
 OBS thread=0 seq=1 phase=0 hook=1 point=0 result=0 complete=1 fault=none nargs=1 args=4 ncontext=6 context=1,0,0,1,0,0 nspans=1 content=c:4:00000000 norigin=6 origin=1,0,0,1,0,0
 OBS thread=0 seq=2 phase=0 hook=2 point=0 result=0 complete=1 fault=none nargs=3 args=0,7,4 ncontext=6 context=1,0,0,1,0,0 nspans=1 content=c:4:0708090a norigin=6 origin=1,0,0,1,0,1
 OBS thread=0 seq=3 phase=0 hook=2 point=0 result=0 complete=0 fault=args nargs=8 args=0,1,2,3,4,5,6,7 ncontext=6 context=1,0,0,1,0,1 nspans=0 content= norigin=0 origin=
@@ -104,6 +104,8 @@ OBS thread=0 seq=8 phase=0 hook=2 point=0 result=0 complete=0 fault=bytes nargs=
 OBS thread=0 seq=9 phase=0 hook=2 point=0 result=0 complete=0 fault=origin nargs=0 args= ncontext=0 context= nspans=0 content= norigin=0 origin=
 OBS thread=0 seq=10 phase=0 hook=2 point=7 result=0 complete=0 fault=point nargs=0 args= ncontext=6 context=1,0,0,1,0,1 nspans=0 content= norigin=0 origin=
 OBS thread=0 seq=11 phase=0 hook=2 point=0 result=0 complete=0 fault=origin nargs=0 args= ncontext=6 context=1,0,0,1,0,1 nspans=0 content= norigin=0 origin=
+OBS thread=0 seq=12 phase=0 hook=2 point=0 result=0 complete=0 fault=args nargs=2 args=0,0 ncontext=6 context=1,0,0,1,0,1 nspans=0 content= norigin=0 origin=
+OBS thread=0 seq=13 phase=0 hook=2 point=0 result=0 complete=0 fault=context nargs=1 args=0 ncontext=0 context= nspans=0 content= norigin=0 origin=
 SCENARIO content-stale-origin
 COUNTERS intercepted=4 selected=4 unselected=0 captured=4 incomplete=0 lost=0 reentrant=0 rejected=0 content_bytes_declared=12 content_bytes_captured=12 content_bytes_lost=0 content_spans_lost=0
 ACCOUNTING ok

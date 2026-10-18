@@ -369,10 +369,15 @@ def parse_export_transcript(text: str) -> dict[str, Any]:
 
     The shape is enforced, not merely read: a scenario must declare its counters, its
     accounting verdict, its arena report, its admission verdict and how many
-    observations it has, and whether it printed them. When it did, that count must
-    match the observations that followed; when it deliberately withheld them, none may
-    appear. A transcript with no version line, no terminal END, more than one END, or
-    any record after END is refused rather than partially understood.
+    observations it has, and whether it printed them; each of those control records may
+    appear at most once. When a scenario listed its observations, that count must match
+    the observations that followed and be reconciled with the native event counters
+    (`count == captured + incomplete`, `complete == captured`, `incomplete == incomplete`);
+    when it deliberately withheld them, none may appear, though its count is still
+    reconciled from the aggregates. The native counter identities must hold, and a
+    faulted observation can never coexist with `ADMISSION ok`. A transcript with no
+    version line, no terminal END, more than one END, or any record after END is refused
+    rather than partially understood.
 
     Keys: ``version``, ``scenarios``, ``observations``, ``config``, ``end``.
     """
@@ -400,10 +405,14 @@ def parse_export_transcript(text: str) -> dict[str, Any]:
         elif tag == "COUNTERS":
             if current is None:
                 raise HarnessError("COUNTERS before any SCENARIO")
+            if current["counters"]:
+                raise HarnessError(f"scenario {current['name']!r} declares COUNTERS twice")
             current["counters"] = _fields(parts[1:])
         elif tag == "ACCOUNTING":
             if current is None:
                 raise HarnessError("ACCOUNTING before any SCENARIO")
+            if current["accounting"] is not None:
+                raise HarnessError(f"scenario {current['name']!r} declares ACCOUNTING twice")
             verdict = parts[1] if len(parts) > 1 else ""
             if verdict not in ("ok", "VIOLATED"):
                 raise HarnessError(f"unknown accounting verdict: {verdict!r}")
@@ -411,6 +420,8 @@ def parse_export_transcript(text: str) -> dict[str, Any]:
         elif tag == "ADMISSION":
             if current is None:
                 raise HarnessError("ADMISSION before any SCENARIO")
+            if current["admission"] is not None:
+                raise HarnessError(f"scenario {current['name']!r} declares ADMISSION twice")
             verdict = parts[1] if len(parts) > 1 else ""
             if verdict not in ("ok", "REJECTED"):
                 raise HarnessError(f"unknown admission verdict: {verdict!r}")
@@ -418,12 +429,17 @@ def parse_export_transcript(text: str) -> dict[str, Any]:
         elif tag == "ARENA":
             if current is None:
                 raise HarnessError("ARENA before any SCENARIO")
+            if current["arena"] is not None:
+                raise HarnessError(f"scenario {current['name']!r} declares ARENA twice")
             fields = _fields(parts[1:])
             _require(fields, "capacity", "used", "intervals", "overlaps", "out_of_range")
             current["arena"] = {key: _decimal(key, value) for key, value in fields.items()}
         elif tag == "OBSERVATIONS":
             if current is None:
                 raise HarnessError("OBSERVATIONS before any SCENARIO")
+            if current["observation_count"] is not None:
+                raise HarnessError(
+                    f"scenario {current['name']!r} declares OBSERVATIONS twice")
             fields = _fields(parts[1:])
             _require(fields, "count", "listed")
             current["observation_count"] = _decimal("count", fields["count"])
@@ -474,9 +490,78 @@ def parse_export_transcript(text: str) -> dict[str, Any]:
             raise HarnessError(
                 f"scenario {name!r} declares {scenario['observation_count']} observations "
                 f"but printed {len(scenario['observations'])}")
-        rejected = _decimal("rejected", scenario["counters"]["rejected"])
-        expected = "ok" if rejected == 0 else "REJECTED"
-        if scenario["admission"] != expected:
-            raise HarnessError(
-                f"scenario {name!r} admits {scenario['admission']!r} with rejected={rejected}")
+        _reconcile(name, scenario)
     return parsed
+
+
+def _counter(scenario: dict[str, Any], field: str) -> int:
+    """A named native counter, refused if the record does not carry it."""
+    values = scenario["counters"]
+    if field not in values:
+        raise HarnessError(f"scenario {scenario['name']!r} is missing the {field!r} counter")
+    return _decimal(field, values[field])
+
+
+def _reconcile(name: str, scenario: dict[str, Any]) -> None:
+    """Cross-check a scenario's declarations against each other and its observations.
+
+    The native counters are an independent statement of what was intercepted and how
+    it resolved; the records the reader parsed are a second. Where both are available
+    they must agree - a capture whose two accounts disagree is not a capture. For a
+    listed scenario the parsed observations are reconciled with the event counters,
+    and a faulted observation can never coexist with `ADMISSION ok`.
+    """
+    intercepted = _counter(scenario, "intercepted")
+    selected = _counter(scenario, "selected")
+    unselected = _counter(scenario, "unselected")
+    captured = _counter(scenario, "captured")
+    incomplete = _counter(scenario, "incomplete")
+    lost = _counter(scenario, "lost")
+    rejected = _counter(scenario, "rejected")
+    declared = _counter(scenario, "content_bytes_declared")
+    bytes_captured = _counter(scenario, "content_bytes_captured")
+    bytes_lost = _counter(scenario, "content_bytes_lost")
+
+    # The native counter identities, as the reader's own consistency check.
+    if intercepted != selected + unselected:
+        raise HarnessError(
+            f"scenario {name!r}: intercepted != selected + unselected")
+    if selected != captured + incomplete + lost:
+        raise HarnessError(
+            f"scenario {name!r}: selected != captured + incomplete + lost")
+    if declared != bytes_captured + bytes_lost:
+        raise HarnessError(
+            f"scenario {name!r}: content_bytes_declared != captured + lost")
+
+    expected = "ok" if rejected == 0 else "REJECTED"
+    if scenario["admission"] != expected:
+        raise HarnessError(
+            f"scenario {name!r} admits {scenario['admission']!r} with rejected={rejected}")
+
+    # Every stored event is exactly one captured or incomplete observation, whatever
+    # was printed: this holds for a withheld scenario too, from its aggregates alone.
+    if scenario["observation_count"] != captured + incomplete:
+        raise HarnessError(
+            f"scenario {name!r} declares {scenario['observation_count']} observations but "
+            f"its counters account for {captured + incomplete}")
+    if not scenario["listed"]:
+        # Detail withheld as a race outcome: the aggregates are the whole statement,
+        # so no per-observation claim can be checked beyond the count.
+        return
+
+    complete = sum(1 for obs in scenario["observations"] if obs["complete"] == 1)
+    incomplete_listed = len(scenario["observations"]) - complete
+    faulted = sum(1 for obs in scenario["observations"] if obs["fault"] != "none")
+    if complete != captured:
+        raise HarnessError(
+            f"scenario {name!r} printed {complete} complete observations but captured={captured}")
+    if incomplete_listed != incomplete:
+        raise HarnessError(
+            f"scenario {name!r} printed {incomplete_listed} incomplete observations but "
+            f"incomplete={incomplete}")
+    if faulted > rejected:
+        raise HarnessError(
+            f"scenario {name!r} printed {faulted} faulted observations but rejected={rejected}")
+    if scenario["admission"] == "ok" and faulted:
+        raise HarnessError(
+            f"scenario {name!r} admits ok with {faulted} faulted observations")

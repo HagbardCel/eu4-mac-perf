@@ -16,10 +16,11 @@
  * state those bytes were copied from, which is not always the state the call
  * addressed (an update reads version N and produces version N+1).
  *
- * A malformed declaration - too many spans, an absent span list, unaddressable
- * bytes, an invalid capture point, an over-long context, or content with no
- * usable origin - is exported as a fault: counted once, declaring no content, and
- * never complete. `ADMISSION` states whether an acquisition may be admitted at all.
+ * A malformed declaration - an argument or context count with no array to read, too
+ * many spans, an absent span list, unaddressable bytes, an invalid capture point, an
+ * over-long context, or content with no usable origin - is exported as a fault:
+ * counted once, declaring no content, and never complete. `ADMISSION` states whether
+ * an acquisition may be admitted at all.
  *
  * The export is a *driver-level* contract. The released accounting transcript is
  * untouched by construction, because a different driver authors it: adding a field
@@ -385,6 +386,16 @@ static void run_malformed_script(void)
     token = recorder_enter(HOOK_UPDATE, 0, 0u);
     recorder_exit_content(token, 0u, 1, context, 6u, spans, 1u, RECORDER_POINT_EXIT,
                           0, SYNTH_CONTEXT_WORDS);
+
+    /* (10) an argument count declared with no array: the missing carriers are not
+     * observed zeros, so this is malformed rather than a complete observation. */
+    token = recorder_enter(HOOK_UPDATE, 0, 2u);
+    recorder_exit_content(token, 0u, 1, context, 6u, 0, 0u, RECORDER_POINT_EXIT, 0, 0u);
+
+    /* (11) a context count declared with no array: the unavailable context is not
+     * absent-but-fine, so the observation is incomplete and faulted. */
+    token = recorder_enter(HOOK_UPDATE, words, 1u);
+    recorder_exit_content(token, 0u, 1, 0, 6u, 0, 0u, RECORDER_POINT_EXIT, 0, 0u);
 }
 
 /* A well-formed declaration whose explicit origin names the right slot but the wrong

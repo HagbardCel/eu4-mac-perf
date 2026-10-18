@@ -139,12 +139,17 @@ declaration for the whole, and `content_bytes_lost` keeps meaning *budget* loss 
 | `fault=` | Meaning |
 | --- | --- |
 | `none` | well formed |
-| `args` | more arguments declared than the policy allows |
-| `context` | more context words than the recorder can record |
+| `args` | an argument count declared with no array, or more arguments than the policy allows |
+| `context` | a context count declared with no array, or more context words than the recorder can record |
 | `point` | a capture point that is neither entry nor exit |
 | `spans` | a malformed span list: too many, or absent while spans are declared |
 | `bytes` | a span declares bytes that are not addressable |
 | `origin` | content declared with no usable origin |
+
+A declared count with **no array** is malformed, not an empty one: a missing ABI
+carrier must never be read as an observed zero, and an unavailable context must never
+be read as absent-but-fine. The complement is deliberate — an *absent* array with a
+zero declared count is the legitimate empty case and does not fault.
 
 Precedence is the order above. The fault is resolved **before** the policy's selection
 is consulted, so a malformed declaration is counted whether or not the policy chose to
@@ -209,10 +214,17 @@ match the items that follow (`len(args) == nargs`, `len(context) == ncontext`,
 `len(content) == nspans` *including* lost spans, `len(origin) == norigin`); a repeated
 or empty key is refused; integers must be canonical non-negative decimals; every
 scenario must declare its `COUNTERS`, `ACCOUNTING`, `ADMISSION`, `ARENA` and
-`OBSERVATIONS` records; `OBSERVATIONS count` must equal the observations printed when
-`listed=1`, and none may appear when `listed=0`; `ADMISSION` must agree with `rejected`;
-the version line must be first; and there must be exactly one terminal `END`, last,
-with no record after it.
+`OBSERVATIONS` records **at most once** — a second would silently overwrite the first;
+`OBSERVATIONS count` must equal the observations printed when `listed=1`, and none may
+appear when `listed=0`; the native counter identities must hold
+(`intercepted == selected + unselected`, `selected == captured + incomplete + lost`,
+`content_bytes_declared == content_bytes_captured + content_bytes_lost`); the count must
+reconcile with the event counters (`count == captured + incomplete`) for a withheld
+scenario too; for a `listed=1` scenario the printed split must agree with them
+(`complete == captured`, `incomplete == incomplete`), the faulted observations may not
+exceed `rejected`, and no faulted observation may coexist with `ADMISSION ok`;
+`ADMISSION` must agree with `rejected`; the version line must be first; and there must
+be exactly one terminal `END`, last, with no record after it.
 
 `listed=0` exists because under a *bounded* concurrent arena race, which observation
 won which region is not a property of the capture. The aggregate `ARENA` and `COUNTERS`
@@ -308,8 +320,9 @@ be confused with the capture buffer's.
   reconciles independently of the event accounting.
 * Every named instrumentation fault occurs at least once; each malformed declaration
   is one rejection however many symptoms it shows; a faulted observation declares no
-  content and is never complete; and scenario `ADMISSION` is `REJECTED` exactly when
-  `rejected > 0`.
+  content and is never complete; a declared count with no array faults rather than
+  fabricating zeros; an absent array with a zero count stays valid; and scenario
+  `ADMISSION` is `REJECTED` exactly when `rejected > 0`.
 * A well-formed declaration whose origin names a stale generation is exported complete
   by the core and **rejected by the offline closure verifier**.
 * Two calls sharing a resource context are distinguished by their arguments, and the
@@ -319,8 +332,11 @@ be confused with the capture buffer's.
 * The export parser refuses a deleted content item, a truncated argument list, content
   with no origin, a faulted observation that claims completeness, a repeated or missing
   field, a non-canonical integer, an observation count that disagrees with the
-  observations, an admission verdict that contradicts the rejections, a missing or
-  duplicated terminal `END`, and any record after it.
+  observations or with the event counters, a duplicated scenario control record, an
+  observation split that disagrees with the counters, more listed faults than
+  rejections, an admission verdict that contradicts the rejections or that is `ok`
+  beside a listed fault, a missing or duplicated terminal `END`, and any record after
+  it.
 * No two captured spans share an arena byte, under a four-thread race; with an
   eight-byte arena the race ends exactly full.
 * The targets are deterministic across 25 runs, identical at `-O0/-O2/-O3`, clean

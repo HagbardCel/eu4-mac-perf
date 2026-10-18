@@ -167,9 +167,12 @@ int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs)
     for (i = 0; i < RECORDER_MAX_ARGS; i++) {
         frame->args[i] = (args != 0 && i < nargs) ? args[i] : 0u;
     }
-    if (nargs > g_config.max_args || nargs > RECORDER_MAX_ARGS) {
-        /* Recorded, not yet counted: one malformed observation is one fault, and the
-         * exit side resolves it against every other symptom before counting it. */
+    if (nargs > g_config.max_args || nargs > RECORDER_MAX_ARGS
+        || (nargs > 0u && args == 0)) {
+        /* A declared count with no array is malformed: the missing carriers must never
+         * be read as observed zeros. Recorded, not yet counted: one malformed
+         * observation is one fault, and the exit side resolves it against every other
+         * symptom before counting it. */
         frame->fault = RECORDER_FAULT_ARGS;
     }
 
@@ -241,7 +244,10 @@ void recorder_exit_content(int64_t token, uint64_t result, int complete,
      * is resolved here, before the policy's selection is consulted, so a malformed
      * declaration is counted whether or not the policy chose to observe it. */
     fault = frame->fault;
-    if (fault == RECORDER_FAULT_NONE && context != 0 && ncontext > RECORDER_MAX_CONTEXT) {
+    if (fault == RECORDER_FAULT_NONE && ncontext > 0u
+        && (context == 0 || ncontext > RECORDER_MAX_CONTEXT)) {
+        /* Declared context words with no array are as malformed as too many: the
+         * unavailable context is never read as absent-but-fine. */
         fault = RECORDER_FAULT_CONTEXT;
     }
     if (fault == RECORDER_FAULT_NONE && point != RECORDER_POINT_ENTRY

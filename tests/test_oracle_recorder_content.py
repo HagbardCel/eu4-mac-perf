@@ -329,19 +329,51 @@ class ContentCaptureTests(unittest.TestCase):
 
     # --- malformed declarations fail closed ---------------------------------------
 
-    def test_every_named_fault_appears_exactly_once_in_the_vocabulary(self):
+    def test_every_named_fault_appears_in_the_malformed_script(self):
         faults = [obs["fault"] for obs in self.scenarios["content-malformed"]["observations"]]
         named = set(faults) - {"none"}
         self.assertEqual(named, {"args", "context", "point", "spans", "bytes", "origin"})
 
     def test_one_malformed_observation_is_one_rejection(self):
-        # Nine malformed declarations, one of them showing two symptoms at once: the
-        # count is per observation, never per symptom, so it is exactly nine.
+        # Eleven malformed declarations, one of them showing two symptoms at once: the
+        # count is per observation, never per symptom, so it is exactly eleven.
         counters = _counters(self.scenarios["content-malformed"])
         malformed = [o for o in self.scenarios["content-malformed"]["observations"]
                      if o["fault"] != "none"]
-        self.assertEqual(len(malformed), 9)
-        self.assertEqual(counters["rejected"], 9)
+        self.assertEqual(len(malformed), 11)
+        self.assertEqual(counters["rejected"], 11)
+
+    def test_a_declared_count_with_no_array_is_malformed_and_never_complete(self):
+        # A positive argument or context count with a NULL array is a missing ABI
+        # input, not a zero carrier: it must fault, declare no content, and stay
+        # incomplete, so no consumer can read invented zeros as observed values.
+        args = self._observation("content-malformed", hook=2, sequence=12)
+        self.assertEqual(args["fault"], "args")
+        self.assertEqual(args["complete"], 0)
+        self.assertEqual(args["nargs"], 2)
+        self.assertEqual(args["args"], [0, 0])
+        self.assertEqual(args["nspans"], 0)
+        context = self._observation("content-malformed", hook=2, sequence=13)
+        self.assertEqual(context["fault"], "context")
+        self.assertEqual(context["complete"], 0)
+        self.assertEqual(context["ncontext"], 0)
+        self.assertEqual(context["nspans"], 0)
+
+    def test_a_zero_count_with_no_array_remains_valid(self):
+        # The complement: an *absent* array with a zero declared count is the legitimate
+        # empty case, and must not fault - otherwise every content-free hook would be
+        # rejected. A read declares no arguments here.
+        zero = self._observation("content-zero-length", hook=3, sequence=2)
+        self.assertEqual(zero["nargs"], 0)
+        self.assertEqual(zero["args"], [])
+        self.assertEqual(zero["fault"], "none")
+        self.assertEqual(zero["complete"], 1)
+        # A zero context count with a NULL context does not itself fault either: this
+        # observation is malformed for another, named reason (content no origin can name).
+        absent_context = self._observation("content-malformed", hook=2, sequence=9)
+        self.assertEqual(absent_context["ncontext"], 0)
+        self.assertEqual(absent_context["context"], [])
+        self.assertEqual(absent_context["fault"], "origin")
 
     def test_a_malformed_observation_is_never_complete_and_declares_no_content(self):
         for obs in self.scenarios["content-malformed"]["observations"]:
@@ -358,11 +390,11 @@ class ContentCaptureTests(unittest.TestCase):
         counters = _counters(scenario)
         self.assertEqual(scenario["admission"], "REJECTED")
         self.assertEqual(scenario["accounting"], "ok")
-        # The two well-formed observations are unaffected by the nine malformed ones,
+        # The two well-formed observations are unaffected by the eleven malformed ones,
         # and the malformed declarations contribute nothing to the content counters.
-        self.assertEqual(counters["intercepted"], 11)
+        self.assertEqual(counters["intercepted"], 13)
         self.assertEqual(counters["captured"], 2)
-        self.assertEqual(counters["incomplete"], 9)
+        self.assertEqual(counters["incomplete"], 11)
         self.assertEqual(counters["content_bytes_declared"], 8)
         self.assertEqual(counters["content_bytes_captured"], 8)
 
@@ -524,6 +556,18 @@ class ExportParserStrictnessTests(unittest.TestCase):
                 return "\n".join(lines) + "\n"
         raise AssertionError(f"no transcript line starts with {line!r}")
 
+    def _duplicated(self, line: str) -> str:
+        lines = self.transcript.splitlines()
+        for index, candidate in enumerate(lines):
+            if candidate.startswith(line):
+                lines.insert(index + 1, candidate)
+                return "\n".join(lines) + "\n"
+        raise AssertionError(f"no transcript line starts with {line!r}")
+
+    def _replaced_once(self, old: str, new: str) -> str:
+        self.assertIn(old, self.transcript)
+        return self.transcript.replace(old, new, 1)
+
     def test_the_golden_export_parses(self):
         self.assertEqual(harness.parse_export_transcript(self.transcript)["version"], "v1")
 
@@ -624,6 +668,53 @@ class ExportParserStrictnessTests(unittest.TestCase):
         self.assertEqual(lines[0], "RECORDER-EXPORT v1")
         with self.assertRaises(harness.HarnessError):
             harness.parse_export_transcript("\n".join(lines[1:]) + "\n")
+
+    def test_a_duplicated_control_record_is_refused(self):
+        # A second COUNTERS/ACCOUNTING/ADMISSION/ARENA/OBSERVATIONS would silently
+        # overwrite the first, which is how a contradicted scenario control passes.
+        for line in ("COUNTERS intercepted=8", "ACCOUNTING ok", "ADMISSION ok",
+                     "ARENA capacity=0", "OBSERVATIONS count=8"):
+            with self.subTest(record=line):
+                with self.assertRaises(harness.HarnessError):
+                    harness.parse_export_transcript(self._duplicated(line))
+
+    def test_admission_ok_with_a_listed_fault_is_refused(self):
+        # The review's case: rewrite the malformed scenario to declare rejected=0 and
+        # ADMISSION ok while retaining eleven faulted observations.
+        text = self._replaced_once("rejected=11", "rejected=0")
+        text = text.replace("ADMISSION REJECTED", "ADMISSION ok", 1)
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(text)
+
+    def test_more_listed_faults_than_rejections_is_refused(self):
+        # rejected=5 keeps ADMISSION REJECTED and every identity intact, but cannot
+        # account for the eleven faulted observations the scenario printed.
+        text = self._replaced_once("rejected=11", "rejected=5")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(text)
+
+    def test_a_listed_observation_split_disagreeing_with_the_counters_is_refused(self):
+        # Flip one complete observation to incomplete: the count still matches, but the
+        # complete/incomplete split no longer agrees with the native counters.
+        text = self._replaced_once(
+            "OBS thread=0 seq=1 phase=0 hook=1 point=0 result=0 complete=1 fault=none"
+            " nargs=1 args=4 ncontext=6 context=1,0,0,1,0,0 nspans=1 content=c:4:00000000"
+            " norigin=6 origin=1,0,0,1,0,0",
+            "OBS thread=0 seq=1 phase=0 hook=1 point=0 result=0 complete=0 fault=none"
+            " nargs=1 args=4 ncontext=6 context=1,0,0,1,0,0 nspans=1 content=c:4:00000000"
+            " norigin=6 origin=1,0,0,1,0,0")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(text)
+
+    def test_counters_that_violate_their_own_identities_are_refused(self):
+        # The native identities are re-checked here, not merely trusted from the
+        # ACCOUNTING verdict: intercepted == selected + unselected and
+        # selected == captured + incomplete + lost must both hold.
+        text = self._replaced_once(
+            "COUNTERS intercepted=8 selected=8 unselected=0 captured=6 incomplete=2 lost=0",
+            "COUNTERS intercepted=8 selected=7 unselected=0 captured=6 incomplete=2 lost=0")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(text)
 
 
 if __name__ == "__main__":  # pragma: no cover

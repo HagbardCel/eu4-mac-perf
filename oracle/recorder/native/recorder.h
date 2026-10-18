@@ -71,8 +71,8 @@ enum {
  * shows, and it can never be complete. */
 enum {
     RECORDER_FAULT_NONE = 0, /* well formed */
-    RECORDER_FAULT_ARGS,     /* more arguments declared than the policy allows */
-    RECORDER_FAULT_CONTEXT,  /* more context words than the recorder can record */
+    RECORDER_FAULT_ARGS,     /* arguments declared but absent, or more than allowed */
+    RECORDER_FAULT_CONTEXT,  /* context words declared but absent, or more than recordable */
     RECORDER_FAULT_POINT,    /* a capture point that is neither ENTRY nor EXIT */
     RECORDER_FAULT_SPANS,    /* a malformed span list: too many, or absent */
     RECORDER_FAULT_BYTES,    /* a span declares bytes that are not addressable */
@@ -194,11 +194,12 @@ void recorder_exit(int64_t token, uint64_t result, int complete,
  * trusted hook layer's contract, and it does not make copying arbitrary process
  * pointers safe.
  *
- * A malformed declaration - too many spans, an absent span list, unaddressable bytes,
- * an invalid point, an over-long context, or content with no usable origin - fails
- * closed: it is one instrumentation fault (`RECORDER_FAULT_*`, counted once however
- * many symptoms it shows), it declares no content at all, and the observation can
- * never be complete. `recorder_event.fault` names the cause. */
+ * A malformed declaration - a declared argument or context count with no array to
+ * read, too many spans, an absent span list, unaddressable bytes, an invalid point, an
+ * over-long context, or content with no usable origin - fails closed: it is one
+ * instrumentation fault (`RECORDER_FAULT_*`, counted once however many symptoms it
+ * shows), it declares no content at all, and the observation can never be complete.
+ * `recorder_event.fault` names the cause. */
 void recorder_exit_content(int64_t token, uint64_t result, int complete,
                            const uint64_t *context, uint32_t ncontext,
                            const recorder_span *spans, uint32_t nspans,
