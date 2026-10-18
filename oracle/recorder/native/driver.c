@@ -20,7 +20,9 @@
 #include <stdio.h>
 
 #include "recorder.h"
+#include "spin_barrier.h"
 #include "synth.h"
+#include "synth_context.h"
 
 enum {
     HOOK_CREATE = 1,
@@ -64,42 +66,9 @@ void synth_effect(uint32_t op, uint32_t a, uint32_t b)
  * observable.
  *
  * Each exit also declares the observation's *context* - the resource it addressed.
- * The recorder core stores this verbatim and never interprets it; keeping it here,
- * in the trusted host, is what lets the core stay function-agnostic. Layout:
- *
- *   [0] ref_valid  [1] ref_slot  [2] ref_gen
- *   [3] live       [4] slot_gen  [5] version
- *
- * `(ref_slot, ref_gen)` is the referenced resource's lifetime; `(live, slot_gen,
- * version)` is that slot's state as the observation saw it - at entry for the
- * handle-addressing calls (so a destroy's resource is still live, and a stale
- * handle's is not), and after creation for create. */
-static void slot_state(const synth_world *w, uint32_t slot, uint32_t *live,
-                       uint32_t *generation, uint32_t *version)
-{
-    if (slot < SYNTH_SLOTS) {
-        *live = w->slots[slot].live;
-        *generation = w->slots[slot].generation;
-        *version = w->slots[slot].version;
-    } else {
-        *live = 0u;
-        *generation = 0u;
-        *version = 0u;
-    }
-}
-
-static uint32_t reference_context(uint32_t valid, uint32_t slot, uint32_t generation,
-                                  uint32_t live, uint32_t slot_generation, uint32_t version,
-                                  uint64_t *context)
-{
-    context[0] = valid ? 1u : 0u;
-    context[1] = valid ? slot : 0u;
-    context[2] = valid ? generation : 0u;
-    context[3] = live;
-    context[4] = slot_generation;
-    context[5] = version;
-    return 6u;
-}
+ * The recorder core stores this verbatim and never interprets it; the layout is
+ * declared once in synth_context.h, because the offline side resolves lifetimes
+ * against it too. */
 
 static int hook_create(synth_world *w, uint32_t size, synth_handle *out)
 {
@@ -239,20 +208,6 @@ typedef struct {
     uint32_t value;
 } subject_state;
 
-/* A tiny portable rendezvous: macOS has no pthread_barrier_t. */
-typedef struct {
-    _Atomic uint32_t arrived;
-    uint32_t expected;
-} spin_barrier;
-
-static void barrier_wait(spin_barrier *barrier)
-{
-    atomic_fetch_add_explicit(&barrier->arrived, 1u, memory_order_acq_rel);
-    while (atomic_load_explicit(&barrier->arrived, memory_order_acquire) < barrier->expected) {
-        /* spin: the rendezvous is short and the thread count is fixed */
-    }
-}
-
 /* Phase 0: four calls, all on a live resource. */
 static void subject_phase0(subject_state *s)
 {
@@ -326,10 +281,13 @@ static void *worker(void *arg)
 
 static int configure(uint32_t mode, uint32_t capacity, const recorder_policy *policy)
 {
-    recorder_config config;
+    /* Fully initialized, not assigned field by field: a partially written config
+     * would leave the next field to whatever the frame happened to hold. */
+    recorder_config config = {0};
     config.mode = mode;
     config.capacity = capacity;
     config.max_args = 4;
+    config.content_capacity = 0u; /* the released recorder captures events, not content */
     config.policy = policy;
     return recorder_init(&config);
 }

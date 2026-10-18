@@ -1,5 +1,6 @@
 /* Implementation of the Oracle P4 native recorder core. See recorder.h. */
 #include <stdatomic.h>
+#include <string.h>
 
 #include "recorder.h"
 
@@ -31,6 +32,17 @@ static _Atomic uint64_t g_rejected;
 static _Atomic uint32_t g_event_slot;
 static recorder_event g_events[RECORDER_MAX_EVENTS];
 
+/* The content arena, separate from the event buffer so the two budgets and the
+ * two loss accounts never conflate. `g_content_next` is a monotone high-water mark
+ * handed out by compare-and-swap, so a failed span reserves nothing and no
+ * capacity is wasted. */
+static uint8_t g_content[RECORDER_MAX_CONTENT_BYTES];
+static _Atomic uint64_t g_content_next;
+static _Atomic uint64_t g_content_declared;
+static _Atomic uint64_t g_content_captured;
+static _Atomic uint64_t g_content_lost;
+static _Atomic uint64_t g_content_spans_lost;
+
 /* Observation state is per thread, so one thread's nesting and sequence never
  * corrupt another's. The counters above are the single shared surface. */
 static _Thread_local recorder_frame g_stack[RECORDER_MAX_DEPTH];
@@ -44,6 +56,27 @@ static void bump(_Atomic uint64_t *counter)
     atomic_fetch_add_explicit(counter, 1u, memory_order_relaxed);
 }
 
+/* Reserve `length` bytes from the content arena and return their offset, or -1
+ * when the span does not fit - in which case nothing is reserved. The high-water
+ * mark only ever advances towards the configured capacity, so `next + length`
+ * cannot overflow: next <= RECORDER_MAX_CONTENT_BYTES (2^10) and length is 32-bit.
+ * That is what makes the bound a proof rather than a hope. */
+static int64_t content_reserve(uint32_t length)
+{
+    uint64_t next = atomic_load_explicit(&g_content_next, memory_order_relaxed);
+    for (;;) {
+        uint64_t end = next + (uint64_t)length;
+        if (end > (uint64_t)g_config.content_capacity) {
+            return -1;
+        }
+        if (atomic_compare_exchange_weak_explicit(&g_content_next, &next, end,
+                                                  memory_order_acq_rel,
+                                                  memory_order_relaxed)) {
+            return (int64_t)next;
+        }
+    }
+}
+
 int recorder_init(const recorder_config *config)
 {
     if (config == 0) {
@@ -53,6 +86,9 @@ int recorder_init(const recorder_config *config)
         return -1;
     }
     if (config->max_args > RECORDER_MAX_ARGS) {
+        return -1;
+    }
+    if (config->content_capacity > RECORDER_MAX_CONTENT_BYTES) {
         return -1;
     }
     g_config = *config;
@@ -78,6 +114,11 @@ void recorder_reset(void)
     atomic_store_explicit(&g_reentrant, 0u, memory_order_relaxed);
     atomic_store_explicit(&g_rejected, 0u, memory_order_relaxed);
     atomic_store_explicit(&g_event_slot, 0u, memory_order_relaxed);
+    atomic_store_explicit(&g_content_next, 0u, memory_order_relaxed);
+    atomic_store_explicit(&g_content_declared, 0u, memory_order_relaxed);
+    atomic_store_explicit(&g_content_captured, 0u, memory_order_relaxed);
+    atomic_store_explicit(&g_content_lost, 0u, memory_order_relaxed);
+    atomic_store_explicit(&g_content_spans_lost, 0u, memory_order_relaxed);
     g_depth = 0u;
 }
 
@@ -153,6 +194,15 @@ int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs)
 void recorder_exit(int64_t token, uint64_t result, int complete,
                    const uint64_t *context, uint32_t ncontext)
 {
+    recorder_exit_content(token, result, complete, context, ncontext, 0, 0u,
+                          RECORDER_POINT_EXIT);
+}
+
+void recorder_exit_content(int64_t token, uint64_t result, int complete,
+                           const uint64_t *context, uint32_t ncontext,
+                           const recorder_span *spans, uint32_t nspans,
+                           uint32_t point)
+{
     recorder_frame *frame;
     uint32_t index;
 
@@ -176,13 +226,22 @@ void recorder_exit(int64_t token, uint64_t result, int complete,
     }
     frame->active = 0;
     if (!frame->selected || !frame->slot_ok) {
-        return; /* already accounted as unselected or lost at entry */
+        /* already accounted as unselected or lost at entry; its content is not
+         * declared, counted or copied - the policy chose not to observe it */
+        return;
     }
 
     {
         recorder_event *event = &g_events[frame->slot];
-        uint32_t i;
+        uint64_t declared = 0u;
+        uint64_t captured = 0u;
+        uint64_t lost = 0u;
+        uint64_t spans_lost = 0u;
         uint32_t stored = 0u;
+        uint32_t spans_stored = 0u;
+        uint32_t i;
+        uint32_t s;
+
         event->thread_id = frame->thread_id;
         event->sequence = frame->sequence;
         event->phase = frame->phase;
@@ -204,6 +263,65 @@ void recorder_exit(int64_t token, uint64_t result, int complete,
             event->context[i] = 0u;
         }
         event->result = result;
+        event->point = point;
+        event->nspans = 0u;
+        for (i = 0; i < RECORDER_MAX_SPANS; i++) {
+            event->span_offset[i] = 0u;
+            event->span_length[i] = 0u;
+            event->span_lost[i] = 0u;
+        }
+
+        if (nspans > RECORDER_MAX_SPANS) {
+            bump(&g_rejected); /* more declared spans than the recorder can record */
+        }
+        /* Content capture off (content_capacity == 0) means undeclared, not lost: a
+         * hook may name spans, and the recorder counts and copies none of them. This
+         * is what keeps the default behaviour - and every existing golden - exact. */
+        if (g_config.content_capacity > 0u) {
+            uint32_t limit = nspans < RECORDER_MAX_SPANS ? nspans : RECORDER_MAX_SPANS;
+            if (nspans > RECORDER_MAX_SPANS) {
+                bump(&g_rejected); /* more declared spans than the recorder can record */
+            }
+            for (s = 0; s < limit; s++) {
+                uint32_t length = (spans != 0) ? spans[s].length : 0u;
+                int64_t at;
+                if (length == 0u) {
+                    continue; /* nothing declared: never a loss */
+                }
+                declared += (uint64_t)length;
+                if (spans[s].bytes == 0) {
+                    bump(&g_rejected); /* declared bytes that are not addressable */
+                    lost += (uint64_t)length;
+                    spans_lost += 1u;
+                    event->span_lost[spans_stored] = length;
+                    spans_stored += 1u;
+                    continue;
+                }
+                at = content_reserve(length);
+                if (at < 0) {
+                    /* whole-span loss, never a partial capture */
+                    lost += (uint64_t)length;
+                    spans_lost += 1u;
+                    event->span_lost[spans_stored] = length;
+                } else {
+                    memcpy(&g_content[(uint32_t)at], spans[s].bytes, length);
+                    captured += (uint64_t)length;
+                    event->span_offset[spans_stored] = (uint32_t)at;
+                    event->span_length[spans_stored] = length;
+                }
+                spans_stored += 1u;
+            }
+            /* A required span that was not captured means the observation's declared
+             * scope was not observable: it is incomplete, whatever the call returned. */
+            if (lost > 0u) {
+                complete = 0;
+            }
+            atomic_fetch_add_explicit(&g_content_declared, declared, memory_order_relaxed);
+            atomic_fetch_add_explicit(&g_content_captured, captured, memory_order_relaxed);
+            atomic_fetch_add_explicit(&g_content_lost, lost, memory_order_relaxed);
+            atomic_fetch_add_explicit(&g_content_spans_lost, spans_lost, memory_order_relaxed);
+        }
+        event->nspans = spans_stored;
         event->complete = complete ? 1 : 0;
     }
     if (complete) {
@@ -226,6 +344,10 @@ void recorder_snapshot(recorder_counters *out)
     out->lost = atomic_load_explicit(&g_lost, memory_order_relaxed);
     out->reentrant = atomic_load_explicit(&g_reentrant, memory_order_relaxed);
     out->rejected = atomic_load_explicit(&g_rejected, memory_order_relaxed);
+    out->content_bytes_declared = atomic_load_explicit(&g_content_declared, memory_order_relaxed);
+    out->content_bytes_captured = atomic_load_explicit(&g_content_captured, memory_order_relaxed);
+    out->content_bytes_lost = atomic_load_explicit(&g_content_lost, memory_order_relaxed);
+    out->content_spans_lost = atomic_load_explicit(&g_content_spans_lost, memory_order_relaxed);
 }
 
 const recorder_event *recorder_event_at(uint32_t index)
@@ -234,6 +356,14 @@ const recorder_event *recorder_event_at(uint32_t index)
         return 0;
     }
     return &g_events[index];
+}
+
+const uint8_t *recorder_content_at(uint32_t offset, uint32_t length)
+{
+    if ((uint64_t)offset + (uint64_t)length > (uint64_t)g_config.content_capacity) {
+        return 0;
+    }
+    return &g_content[offset];
 }
 
 uint32_t recorder_event_count(void)
@@ -251,6 +381,10 @@ int recorder_accounting_holds(const recorder_counters *counters)
         return 0;
     }
     if (counters->selected != counters->captured + counters->incomplete + counters->lost) {
+        return 0;
+    }
+    if (counters->content_bytes_declared
+        != counters->content_bytes_captured + counters->content_bytes_lost) {
         return 0;
     }
     return 1;

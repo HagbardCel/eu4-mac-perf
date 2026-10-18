@@ -11,7 +11,10 @@ Two targets exist:
   is the deterministic golden output of the *subject*;
 * ``recorder`` - the P4.3 native recorder core linked against the same subject
   through a hook layer, whose transcript is the deterministic golden output of the
-  recorder's *accounting*.
+  recorder's *accounting*;
+* ``content`` - the P4.9 content-capture driver, whose versioned observation export
+  is the deterministic golden output of the recorder's *content* accounting and the
+  contract the offline materializer consumes.
 
 This is a scaffold for golden-output gates, not the P3 controller: there is no
 process-group escalation, no budget ledger and no candidate workspace, because the
@@ -43,8 +46,19 @@ TARGETS: dict[str, dict[str, Any]] = {
         "sources": (NATIVE_DIR / "driver.c", NATIVE_DIR / "recorder.c",
                     NATIVE_DIR / "policy.c", SYNTHETIC_DIR / "synthetic.c"),
         "headers": (NATIVE_DIR / "recorder.h", NATIVE_DIR / "policy.h",
+                    NATIVE_DIR / "spin_barrier.h", NATIVE_DIR / "synth_context.h",
                     SYNTHETIC_DIR / "synth.h"),
         "golden": NATIVE_DIR / "golden.txt",
+        "cflags": ("-pthread",),
+    },
+    "content": {
+        "exe": "content",
+        "sources": (NATIVE_DIR / "content_driver.c", NATIVE_DIR / "recorder.c",
+                    NATIVE_DIR / "policy.c", SYNTHETIC_DIR / "synthetic.c"),
+        "headers": (NATIVE_DIR / "recorder.h", NATIVE_DIR / "policy.h",
+                    NATIVE_DIR / "spin_barrier.h", NATIVE_DIR / "synth_context.h",
+                    SYNTHETIC_DIR / "synth.h"),
+        "golden": NATIVE_DIR / "content_golden.txt",
         "cflags": ("-pthread",),
     },
 }
@@ -233,4 +247,96 @@ def parse_recorder_transcript(text: str) -> dict[str, Any]:
             parsed["end"] = _fields(parts[1:])
         else:
             raise HarnessError(f"unrecognized recorder transcript line: {raw!r}")
+    return parsed
+
+
+# --- the versioned observation export (P4.9) -----------------------------------
+
+
+def _span_list(value: str) -> list[dict[str, Any]]:
+    """Decode a content inventory: `c:<length>:<hex>` captured, `l:<length>` lost."""
+    spans: list[dict[str, Any]] = []
+    for item in value.split(","):
+        if not item:
+            continue
+        parts = item.split(":")
+        if parts[0] == "c" and len(parts) == 3:
+            length = int(parts[1])
+            hexed = parts[2]
+            if len(hexed) != length * 2:
+                raise HarnessError(f"content span length disagrees with its bytes: {item!r}")
+            spans.append({"status": "captured", "length": length,
+                          "bytes": bytes.fromhex(hexed)})
+        elif parts[0] == "l" and len(parts) == 2:
+            spans.append({"status": "lost", "length": int(parts[1]), "bytes": None})
+        else:
+            raise HarnessError(f"malformed content span: {item!r}")
+    return spans
+
+
+def _observation(parts: list[str]) -> dict[str, Any]:
+    fields = _fields(parts)
+    args = [int(word) for word in fields["args"].split(",") if word]
+    context = [int(word) for word in fields["context"].split(",") if word]
+    return {"thread_id": int(fields["thread"]), "sequence": int(fields["seq"]),
+            "phase": int(fields["phase"]), "hook_id": int(fields["hook"]),
+            "point": int(fields["point"]), "result": int(fields["result"]),
+            "complete": int(fields["complete"]), "nargs": int(fields["nargs"]),
+            "args": args, "ncontext": int(fields["ncontext"]), "context": context,
+            "content": _span_list(fields["content"])}
+
+
+def parse_export_transcript(text: str) -> dict[str, Any]:
+    """Parse a versioned observation export into scenarios and observations.
+
+    Unlike the accounting transcript, this export carries each observation's ABI
+    arguments, its declared capture point, and its declared content. Counters stay as
+    strings (callers coerce); observations, arena reports and CONFIG lines are typed.
+
+    Keys: ``version``, ``scenarios``, ``observations``, ``config``, ``end``.
+    """
+    parsed: dict[str, Any] = {"version": None, "scenarios": [], "observations": [],
+                              "config": [], "end": None}
+    current: dict[str, Any] | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split()
+        tag = parts[0]
+        if tag == "RECORDER-EXPORT":
+            parsed["version"] = parts[1] if len(parts) > 1 else ""
+        elif tag == "SCENARIO":
+            current = {"name": parts[1] if len(parts) > 1 else "", "counters": {},
+                       "accounting": None, "arena": None, "observations": [],
+                       "observation_count": None}
+            parsed["scenarios"].append(current)
+        elif tag == "COUNTERS":
+            if current is None:
+                raise HarnessError("COUNTERS before any SCENARIO")
+            current["counters"] = _fields(parts[1:])
+        elif tag == "ACCOUNTING":
+            if current is None:
+                raise HarnessError("ACCOUNTING before any SCENARIO")
+            current["accounting"] = parts[1] if len(parts) > 1 else ""
+        elif tag == "ARENA":
+            if current is None:
+                raise HarnessError("ARENA before any SCENARIO")
+            current["arena"] = {key: int(value) for key, value in _fields(parts[1:]).items()}
+        elif tag == "OBSERVATIONS":
+            if current is None:
+                raise HarnessError("OBSERVATIONS before any SCENARIO")
+            current["observation_count"] = int(_fields(parts[1:])["count"])
+        elif tag == "OBS":
+            if current is None:
+                raise HarnessError("OBS before any SCENARIO")
+            observation = _observation(parts[1:])
+            current["observations"].append(observation)
+            parsed["observations"].append(observation)
+        elif tag == "CONFIG":
+            parsed["config"].append(_fields(parts[1:]))
+        elif tag == "END":
+            parsed["end"] = _fields(parts[1:])
+        else:
+            raise HarnessError(f"unrecognized observation export line: {raw!r}")
     return parsed
