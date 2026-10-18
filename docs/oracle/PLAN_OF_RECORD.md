@@ -128,24 +128,57 @@ contents itself, so a passing P4b shows that a complete transcript can be replay
 not that the **generic P4 recorder** can produce an independently replayable frame.
 The P4 recorder captures resource references and lifetimes, not resource contents.
 
+**Progress (2026-10-18):** **P4.9** is implemented - bounded resource-content capture
+in the native recorder core, and a versioned observation export carrying each
+observation's arguments, declared content, that content's origin and its
+instrumentation fault, with a per-scenario admission verdict. **P4.10** and **P4.11**
+remain.
+
 This gate must pass, entirely offline, before the first EU IV acquisition is
 authorized. It need not establish closure for the real game's frame in advance — that
 is exactly what P5 must attempt to capture. It must establish that the recording and
 replay pipeline works end to end on a sufficiently representative synthetic workload.
 
-| Requirement | Necessary demonstration |
-| --- | --- |
-| Resource-content capture | The native recorder records initial contents and relevant mutations, not just IDs |
-| Identity and versioning | Reused handles resolve to the correct generation and resource version |
-| Complete command stream | Native event accounting reconciles with the captured operations |
-| Resource/state closure | No unresolved dependencies for the declared synthetic frame boundary |
-| Independent replay | A fresh process reconstructs the frame from the native recorder's sealed output |
-| Negative admission | Removing content, a mutation or a required event prevents qualification |
+| Requirement | Necessary demonstration | Slice |
+| --- | --- | --- |
+| Resource-content capture | The native recorder records initial contents and relevant mutations, not just IDs | P4.9 |
+| Whole-version content | Exported content is a complete resource version, not a fragment, and is attributable to it | P4.9 |
+| Identity and versioning | Reused handles resolve to the correct generation and resource version | P4.9 / P4.10 |
+| Complete command stream | Native event accounting reconciles with the captured operations | P4.10 |
+| Resource/state closure | No unresolved dependencies for the declared synthetic frame boundary | P4.11 |
+| Independent replay | A fresh process reconstructs the frame from the native recorder's sealed output | P4.11 |
+| Negative admission | Removing content, a mutation or a required event prevents qualification | P4.11 |
 
 The recorder-to-replay integration is not to be marked complete merely because the
 standalone synthetic P4b replay passes.
 
+The gate is sliced **P4.9** (bounded resource-content capture and the versioned
+observation export), **P4.10** (offline materialization, content-blob closure and
+collision-safe deduplication) and **P4.11** (declared `gfx-v2` translation, stateful
+replay and negative admission), each separately reviewable and separately revertible.
+Its interfaces and acceptance are in [P4_INTEGRATION.md](P4_INTEGRATION.md).
+
+### Two gates, and why P5 is not circular
+
+The hook-pack requirement splits in two, and conflating the halves would make the gate
+circular:
+
+* **Offline, before P5:** the synthetic recorder-to-replay pipeline above, plus the
+  *static* hook-pack checks - executable-byte identity against the pinned EU IV
+  identity in `reverse_engineering/target.json`, and site validation. These read files
+  and need no game process.
+* **In P5:** whether the instrumentation actually behaves safely inside EU IV, and
+  whether the intended real evidence can be acquired. This is a bounded,
+  operator-authorized runtime admission experiment with fail-closed abort conditions.
+  It cannot be a precondition for the first authorized launch, because only that
+  launch can answer it.
+
+P5 therefore begins without assuming that the live hooks or frame closure are already
+qualified.
+
 ## Hard rule
 
 No further EU IV launch until **P3** and **P4/P4b** pass acceptance, and until the
-pre-P5 offline integration gate above passes.
+**offline** half of the pre-P5 integration gate above passes - the synthetic
+recorder-to-replay pipeline and the static hook-pack checks. Live behavioural
+qualification is a P5 activity under fail-closed abort, not a precondition for P5.

@@ -15,8 +15,10 @@ exact capture accounting, a declared capture policy, offline finalization,
 concurrency and bounded capture; and the resource registry/closure verifier with
 offline R0-M protocol compatibility), and the independent synthetic graphics replay
 harness (**P4b**). No EU IV launch is authorized until P4/P4b pass **and the pre-P5
-offline integration gate passes** — the synthetic replay alone does not satisfy it.
-This
+offline integration gate passes** — the synthetic replay alone does not satisfy it. The
+gate is sliced **P4.9-P4.11** and specified in [P4_INTEGRATION.md](P4_INTEGRATION.md);
+**P4.9** (bounded resource-content capture and the versioned observation export) is
+implemented, and P4.10/P4.11 remain. This
 directory is authoritative for **capture/validation infrastructure** only; the
 function-level reconstruction lifecycle stays in the reconstruction contract
 [`../renderer-reconstruction-and-differential-validation.md`](../renderer-reconstruction-and-differential-validation.md)
@@ -39,6 +41,7 @@ consumes. The project's power/heat objective is the downstream consumer of that 
 | [P3_SLICE.md](P3_SLICE.md) | P3 synthetic slice: trust domains, contracts and PR-A acceptance criteria |
 | [P4_RECORDER.md](P4_RECORDER.md) | P4 recorder: record schema, canonicalization, evidence store and offline gates |
 | [P4B_REPLAY.md](P4B_REPLAY.md) | P4b: independent synthetic graphics replay — sealed frame captures, closure and fail-closed reconstruction |
+| [P4_INTEGRATION.md](P4_INTEGRATION.md) | Pre-P5 offline integration gate: resource-content capture, the versioned observation export, materialization and declared `gfx-v2` translation |
 | [BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md) | Preserved v2 blueprint bytes, hashes and tag (historical reference) |
 | [../repo-map.md](../repo-map.md) | Tracked-path inventory and lifecycle labels (P1 audit) |
 | [../repo-audit-context.json](../repo-audit-context.json) | Audit identity triple (source snapshot, policy, tools); governs `docs/repo-{inventory,edges,lifecycle}.csv` |
