@@ -4,7 +4,7 @@
   "entry_rva": "0x15ec36a",
   "end_rva": "0x15ec3b5",
   "image_base": 4294967296,
-  "binary_sha256": "b3d38876abf4e61cdae57509186d7cbdcb03bfeaca4c95c10c713794715141d",
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
   "inventory": "analysis/reconstruction/_GfxSetConstantBuffer/instructions.json",
   "frozen_before_execution": true,
   "derivation": "The two path sequences are derived from the reviewed inventory (instructions.json) by walking it from entry_rva: advance sequentially; for JZ take the operand target if the condition holds, else fall through to the next instruction; JMP is unconditional; stop after RET. Inventory jump operands are VAs (entry_rva + image_base), so image_base is subtracted before lookup. instruction_bytes and the sequence length are consequences of the sequence, not independently maintained numbers. The per-scenario expectations (expected_words, expected_r9, expected_rdx) are hand-derived from the contract's stated arithmetic and were frozen before any execution code existed.",
@@ -60,7 +60,11 @@
     "dirty": "0x128",
     "slot_stride": 16,
     "observation_start": "0xc8",
-    "observation_end": "0x129"
+    "observation_end": "0x129",
+    "canary_before_start": "0xb8",
+    "canary_after_end": "0x139",
+    "stack_window_before": "0x20",
+    "stack_window_after": "0x10"
   },
   "memory": {
     "ctx": "0x200000000",
