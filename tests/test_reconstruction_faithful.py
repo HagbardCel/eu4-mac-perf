@@ -14,6 +14,12 @@ With a C++ compiler present the reconstruction is also built with ASan/UBSan and
 host; with an x86-64 build that can be executed, the six-position ABI adapter is probed through
 a register-level trampoline. Neither CI nor these tests launch, attach to, or read the game.
 
+A capability the environment lacks is reported as a skip; a capability the environment *has* is
+enforced. Each skip is justified by a capability probe - a trivial program built and run with the
+same toolchain and flags - rather than by the outcome of the real check, so a build or run that
+fails can never be downgraded to a skip. On the supported CI runner (GitHub, Linux, x86-64) the
+capabilities are required outright, and the run prints what it enforced.
+
 Passing here proves the reconstruction implements the documented contract on the tested inputs.
 It does not prove hardware-level equivalence with the original, does not establish the true
 return type, and does not validate anything outside `slot in [0, 6)`.
@@ -28,6 +34,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from reverse_engineering import reconstruction_pilot as pilot
 
@@ -50,6 +57,11 @@ SLOT_COUNT = 6
 COMPILER_FALLBACKS = ("c++", "clang++", "g++")
 EXHAUSTIVE_ENV = "EU4_RE1_EXHAUSTIVE"
 
+# UBSan recovers by default: a finding would print a diagnostic and still exit zero, so a green
+# run would not mean a clean one. `-fno-sanitize-recover=all` makes the finding fatal; see
+# `test_undefined_behaviour_is_fatal_under_the_gate_flags`, which pins that behaviour.
+SANITIZER_FLAGS = ("-fsanitize=address,undefined", "-fno-sanitize-recover=all")
+
 # Values chosen around every wrap and sign boundary of both paths, plus the pilot's own cases.
 BOUNDARY_VALUES = (
     0x00000000, 0x00000001, 0x00000002, 0x00000003, 0x00000004, 0x00000005,
@@ -61,8 +73,11 @@ BOUNDARY_VALUES = (
 )
 
 WORKDIR: Path | None = None
+COMPILER: str | None = None
 HARNESS: Path | None = None
+HARNESS_ENV: dict[str, str] | None = None
 ABI_BINARY: Path | None = None
+SANITIZERS_AVAILABLE = False
 BUILD_NOTE = "build not attempted"
 
 
@@ -177,93 +192,171 @@ def _compile(command: list[str]) -> tuple[bool, str]:
     return result.returncode == 0, (result.stderr or "").strip()
 
 
-def _build_harness(workdir: Path, compiler: str) -> tuple[Path | None, str]:
-    """Return (binary, note). Falls back to a plain build if the sanitizer build or the
-    sanitized binary does not work in this environment, and says so in the note."""
+def _first_line(text: str) -> str:
+    return "; ".join(text.splitlines()[:1]) or "no diagnostic"
+
+
+def _sanitizer_env() -> dict[str, str]:
+    """The ambient environment with ASan's exit code made authoritative.
+
+    The fatal compile flag covers UBSan; an ambient `ASAN_OPTIONS` could still soften ASan's
+    default. This appends rather than replaces, so unrelated settings survive.
+    """
+    env = os.environ.copy()
+    previous = env.get("ASAN_OPTIONS", "")
+    env["ASAN_OPTIONS"] = (f"{previous}:" if previous else "") + "halt_on_error=1"
+    return env
+
+
+def _supported_ci_runner() -> bool:
+    """The runner this gate is *required* to cover: GitHub's Linux x86-64 job.
+
+    There every capability the gate claims to qualify - a C++ toolchain, working sanitizers, a
+    native x86-64 ABI probe - must be present, so its absence fails instead of skipping. On a
+    contributor's machine the same situations are legitimate, reported skips.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return False
+    return platform.system() == "Linux" and platform.machine().lower() in ("x86_64", "amd64")
+
+
+def _capability_probe(workdir: Path, compiler: str, flags: list[str], label: str,
+                      env: dict[str, str] | None = None) -> tuple[bool, str]:
+    """Can this toolchain build *and run* a trivial program with `flags`?
+
+    The probe program cannot itself be defective, so a failure means the environment lacks the
+    capability, never that the reconstruction failed it. That separation is what lets an absent
+    capability be a reported skip while a failure of the real build or run never is.
+    """
+    source = workdir / f"capability_{label}.cpp"
+    source.write_text("int main() { return 0; }\n")
+    binary = workdir / f"capability_{label}"
+    ok, error = _compile([compiler, "-std=c++20", *flags, str(source), "-o", str(binary)])
+    if not ok:
+        return False, f"cannot build for the target: {_first_line(error)}"
+    try:
+        run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=120, env=env)
+    except OSError as run_error:
+        return False, f"cannot run here: {run_error}"
+    if run.returncode != 0:
+        return False, f"probe exited {run.returncode}: {_first_line(run.stderr or run.stdout)}"
+    return True, ""
+
+
+def _build_harness(workdir: Path, compiler: str,
+                   require_sanitizers: bool) -> tuple[Path | None, bool, str]:
+    """Return (binary, sanitized, note).
+
+    Sanitizers are dropped only when this environment demonstrably cannot run them, and never on
+    the supported CI runner. A sanitized build that merely fails is a defect, so it raises
+    instead of falling back to an unsanitized run.
+    """
     sources = [str(IMPLEMENTATION), str(HARNESS_SOURCE), str(ARITH_LITERALS)]
-    sanitized = workdir / "harness_san"
-    ok, error = _compile([
-        compiler, "-std=c++20", "-O0", "-g", "-Wall", "-Wextra", "-Werror",
-        "-fsanitize=address,undefined", *sources, "-o", str(sanitized),
-    ])
-    if ok:
-        probe = subprocess.run([str(sanitized), "words", "selector"], input="0000000d\n",
-                               capture_output=True, text=True)
-        if probe.returncode == 0:
-            return sanitized, "host build with ASan/UBSan (-O0)"
-        error = f"sanitized binary failed to run: {probe.stdout}{probe.stderr}"
+    capable, reason = _capability_probe(workdir, compiler, list(SANITIZER_FLAGS), "sanitizers",
+                                        _sanitizer_env())
+    if capable:
+        binary = workdir / "harness_san"
+        ok, error = _compile([
+            compiler, "-std=c++20", "-O0", "-g", "-Wall", "-Wextra", "-Werror",
+            *SANITIZER_FLAGS, *sources, "-o", str(binary),
+        ])
+        if not ok:
+            raise RuntimeError(f"the sanitized reconstruction did not build: {error}")
+        return binary, True, "host build with ASan/UBSan (-O0), fatal on any finding"
+    if require_sanitizers:
+        raise RuntimeError(f"this runner must run the sanitized tests, but {reason}")
     plain = workdir / "harness"
     ok, plain_error = _compile([
         compiler, "-std=c++20", "-O0", "-g", "-Wall", "-Wextra", "-Werror",
         *sources, "-o", str(plain),
     ])
     if ok:
-        return plain, f"host build without sanitizers ({_first_line(error)})"
-    return None, f"build failed: {plain_error or error}"
+        return plain, False, f"host build without sanitizers ({reason})"
+    return None, False, f"build failed: {_first_line(plain_error)}"
 
 
-def _first_line(text: str) -> str:
-    return "; ".join(text.splitlines()[:1]) or "no diagnostic"
-
-
-def _abi_command(compiler: str, workdir: Path) -> list[str] | None:
-    """The x86-64 ABI probe build, or None when this host cannot produce one."""
+def _abi_flags() -> list[str] | None:
+    """Extra flags needed to build and run an x86-64 ABI probe, or None when this host cannot."""
     machine = platform.machine().lower()
-    base = [
-        compiler, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
-        str(IMPLEMENTATION), str(ABI_SOURCE), str(ABI_ASM), "-o", str(workdir / "abi_check"),
-    ]
     if machine in ("x86_64", "amd64"):
-        return base
+        return []
     if platform.system() == "Darwin" and machine in ("arm64", "aarch64"):
-        return [compiler, "-arch", "x86_64", *base[1:]]
+        return ["-arch", "x86_64"]
     return None
 
 
-def setUpModule() -> None:
-    global WORKDIR, HARNESS, ABI_BINARY, BUILD_NOTE
-    compiler = _find_compiler()
-    if compiler is None:
+def _run_abi_probe(binary: Path, native: bool) -> str:
+    """Run the ABI probe, classify the outcome, and raise when it failed.
+
+    A process that starts and exits non-zero is a failure on any host, with or without output: a
+    crash before the first `check=` line is what a mis-wired register position looks like. Only a
+    binary that cannot be started at all - a cross-built probe with no x86-64 runtime - is an
+    environment skip, and only off a native x86-64 host.
+    """
+    try:
+        probe = subprocess.run([str(binary)], capture_output=True, text=True, timeout=120)
+    except OSError as start_error:
+        if native:
+            message = f"x86-64 ABI probe could not be executed: {start_error}"
+            raise RuntimeError(message) from start_error
+        return "; x86-64 ABI probe not executed here (no x86-64 runtime)"
+    if probe.returncode != 0:
+        raise RuntimeError(
+            f"x86-64 ABI probe exited {probe.returncode}: {probe.stdout}{probe.stderr}")
+    return "; x86-64 ABI probe built and executed"
+
+
+def _prepare_gates() -> None:
+    global WORKDIR, COMPILER, HARNESS, HARNESS_ENV, ABI_BINARY, SANITIZERS_AVAILABLE, BUILD_NOTE
+    required = _supported_ci_runner()
+    COMPILER = _find_compiler()
+    if COMPILER is None:
+        if required:
+            raise RuntimeError("no C++ compiler on PATH on the supported CI runner")
         BUILD_NOTE = "no C++ compiler on PATH"
         return
     WORKDIR = Path(tempfile.mkdtemp(prefix="eu4-re1-"))
-    HARNESS, BUILD_NOTE = _build_harness(WORKDIR, compiler)
+    HARNESS, SANITIZERS_AVAILABLE, BUILD_NOTE = _build_harness(WORKDIR, COMPILER, required)
     if HARNESS is None:
         # A compiler exists and the tracked sources do not build: that is a defect here, not an
         # environment that cannot test. Fail rather than skip.
-        raise RuntimeError(f"reconstruction did not build with {compiler}: {BUILD_NOTE}")
+        raise RuntimeError(f"reconstruction did not build with {COMPILER}: {BUILD_NOTE}")
+    if SANITIZERS_AVAILABLE:
+        HARNESS_ENV = _sanitizer_env()
 
-    # A native x86-64 host is expected to build and run the probe; only a cross-built probe
-    # (Apple Silicon through `-arch x86_64`) may be unrunnable here because of a missing x86-64
-    # runtime. Anything that runs and fails is a failure on any host.
+    # A native x86-64 host is expected to build and run the probe; a cross-built probe (Apple
+    # Silicon through `-arch x86_64`) may be unrunnable for want of Rosetta. The capability probe
+    # draws that line, not the outcome of the real probe - which must never be a skip.
     native = platform.machine().lower() in ("x86_64", "amd64")
-    abi_command = _abi_command(compiler, WORKDIR)
-    if abi_command is None:
-        BUILD_NOTE += "; no x86-64 ABI probe build for this host"
-        return
-    ok, error = _compile(abi_command)
-    if not ok:
-        if native:
-            raise RuntimeError(f"x86-64 ABI probe did not build: {error}")
-        BUILD_NOTE += f"; x86-64 ABI probe build failed: {_first_line(error)}"
-        return
+    flags = _abi_flags()
+    if flags is None:
+        note = "; no x86-64 ABI probe build for this host"
+    else:
+        capable, reason = _capability_probe(WORKDIR, COMPILER, flags, "x86-64")
+        if not capable:
+            if required or native:
+                raise RuntimeError(f"the x86-64 ABI probe cannot be qualified here: {reason}")
+            note = f"; x86-64 ABI probe not qualified here ({reason})"
+        else:
+            binary = WORKDIR / "abi_check"
+            ok, error = _compile([
+                COMPILER, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror", *flags,
+                str(IMPLEMENTATION), str(ABI_SOURCE), str(ABI_ASM), "-o", str(binary),
+            ])
+            if not ok:
+                raise RuntimeError(f"x86-64 ABI probe did not build: {error}")
+            note = _run_abi_probe(binary, native)
+            ABI_BINARY = binary
+    BUILD_NOTE += note
+
+
+def setUpModule() -> None:
     try:
-        probe = subprocess.run([str(WORKDIR / "abi_check")], capture_output=True, text=True,
-                               timeout=120)
-    except OSError as exec_error:
-        if native:
-            message = f"x86-64 ABI probe could not be executed: {exec_error}"
-            raise RuntimeError(message) from exec_error
-        BUILD_NOTE += "; x86-64 ABI probe could not be executed here (no x86-64 runtime)"
-        return
-    if probe.returncode != 0:
-        if native or "check=" in probe.stdout:
-            # It ran and failed its own checks, or this host is expected to be able to run it.
-            raise RuntimeError(f"x86-64 ABI probe failed: {probe.stdout}{probe.stderr}")
-        BUILD_NOTE += "; x86-64 ABI probe did not run here (no x86-64 runtime)"
-        return
-    ABI_BINARY = WORKDIR / "abi_check"
-    BUILD_NOTE += "; x86-64 ABI probe built and executed"
+        _prepare_gates()
+    finally:
+        # Always state what this run actually enforced: a green run that silently dropped the
+        # sanitizer or ABI coverage must not look like one that did not.
+        print(f"RE1 gate: {BUILD_NOTE}", flush=True)
 
 
 def tearDownModule() -> None:
@@ -293,7 +386,7 @@ class NeedsAbiProbe(unittest.TestCase):
 def run_words(path: str, values: list[int]) -> list[int]:
     stdin = "".join(f"{value:08x}\n" for value in values)
     result = subprocess.run([str(HARNESS), "words", path], input=stdin, capture_output=True,
-                            text=True, timeout=60)
+                            text=True, timeout=60, env=HARNESS_ENV)
     if result.returncode != 0:
         raise AssertionError(f"harness words {path} failed: {result.stdout}{result.stderr}")
     return [int(line, 16) for line in result.stdout.split()]
@@ -304,7 +397,7 @@ def run_scenario(slot: int, selector: int, buffer_dword: int | None, prestate: b
     argument = "absent" if buffer_dword is None else f"{buffer_dword:08x}"
     command = [str(HARNESS), "scenario", str(slot), f"{selector:x}", argument]
     result = subprocess.run(command, input=prestate.hex() + "\n", capture_output=True,
-                            text=True, timeout=60)
+                            text=True, timeout=60, env=HARNESS_ENV)
     fields: dict[str, str] = {}
     for line in result.stdout.splitlines():
         key, _, value = line.partition("=")
@@ -486,13 +579,12 @@ class ExhaustiveSweepTests(NeedsHarness):
         os.environ.get(EXHAUSTIVE_ENV) == "1",
         f"set {EXHAUSTIVE_ENV}=1 to sweep all 2^32 inputs (slow, and not a CI gate)")
     def test_whole_domain_agrees_with_the_literal_encodings(self) -> None:
-        compiler = _find_compiler()
-        assert compiler is not None  # NeedsHarness implies a compiler was found
+        assert COMPILER is not None  # NeedsHarness implies a compiler was found
         binary = WORKDIR / "harness_fast"  # type: ignore[union-attr]
         # Three translation units, no LTO: the sweep cannot see the reconstruction and the
         # literal encodings at once, so it cannot fold the comparison away.
         ok, error = _compile([
-            compiler, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
+            COMPILER, "-std=c++20", "-O2", "-Wall", "-Wextra", "-Werror",
             str(IMPLEMENTATION), str(HARNESS_SOURCE), str(ARITH_LITERALS),
             "-o", str(binary),
         ])
@@ -506,6 +598,104 @@ class ExhaustiveSweepTests(NeedsHarness):
         # closed-form model above.
         digest = int(result.stdout.strip().split("digest=")[1], 16)
         self.assertEqual(digest, modelled_exhaustive_digest())
+
+
+def _build_small_program(name: str, body: str, flags: tuple[str, ...] = ()) -> Path:
+    """Compile a throwaway program into the test work directory. Tracked files stay untouched."""
+    assert COMPILER is not None and WORKDIR is not None  # NeedsHarness implies both
+    source = WORKDIR / f"{name}.cpp"
+    source.write_text(body)
+    binary = WORKDIR / name
+    ok, error = _compile([COMPILER, "-std=c++20", "-O0", *flags, str(source), "-o", str(binary)])
+    if not ok:
+        raise AssertionError(f"{name} did not build: {error}")
+    return binary
+
+
+class BuildGateTests(NeedsHarness):
+    """The gates' own failure modes, which a green run would otherwise hide.
+
+    The policy being pinned: a capability the environment lacks is *reported*, a capability it
+    has is *enforced*, and an unavailable capability is fatal wherever the gate claims to cover
+    it (the supported CI runner). Every check compiles a throwaway program into the test work
+    directory; nothing tracked is modified and no working tree is left dirty.
+    """
+
+    def test_undefined_behaviour_is_fatal_under_the_gate_flags(self) -> None:
+        """Pins the sanitizer policy, not the reconstruction."""
+        if not SANITIZERS_AVAILABLE:
+            # Read here, not at import time: the capability is only known once the gates ran.
+            self.skipTest("sanitizer capability unavailable here")
+        assert COMPILER is not None
+        source = (
+            "int main() {\n"
+            "    volatile int base = 2147483647;\n"
+            "    int value = base;  // not a constant, so the overflow happens at run time\n"
+            "    return value + 1;\n"
+            "}\n"
+        )
+        recovered = _build_small_program("gate_ub_recovering", source,
+                                         ("-fsanitize=address,undefined",))
+        baseline = subprocess.run([str(recovered)], capture_output=True, text=True)
+        # The program really does have undefined behaviour, so the check below means something.
+        self.assertIn("runtime error", baseline.stderr)
+        fatal = _build_small_program("gate_ub_fatal", source, SANITIZER_FLAGS)
+        result = subprocess.run([str(fatal)], capture_output=True, text=True, env=_sanitizer_env())
+        # ... and under the gate's own flags it cannot pass: recovering sanitizers would print
+        # the diagnostic and still exit zero.
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("runtime error", result.stderr)
+
+    def test_a_probe_that_starts_and_exits_nonzero_is_a_failure(self) -> None:
+        """The regression guard for the removed `check=` heuristic: a mis-wired register can make
+        the probe exit non-zero before printing anything, which is not 'no x86-64 runtime'."""
+        binary = _build_small_program("gate_exit3", "int main() { return 3; }\n")
+        for native in (True, False):
+            with self.subTest(native=native):
+                with self.assertRaises(RuntimeError):
+                    _run_abi_probe(binary, native)
+
+    def test_an_unstartable_probe_skips_only_off_a_native_host(self) -> None:
+        binary = _build_small_program("gate_noexec", "int main() { return 0; }\n")
+        binary.chmod(0o644)  # a cross-built probe with no x86-64 runtime looks like this
+        with self.assertRaises(RuntimeError):
+            _run_abi_probe(binary, True)
+        self.assertIn("no x86-64 runtime", _run_abi_probe(binary, False))
+
+    def test_a_missing_capability_is_reported_rather_than_raised(self) -> None:
+        """What separates an environment skip from a failure: an impossible build is reported."""
+        assert WORKDIR is not None
+        capable, reason = _capability_probe(WORKDIR, str(WORKDIR / "no-such-compiler"), [],
+                                           "absent")
+        self.assertFalse(capable)
+        self.assertTrue(reason)
+
+    def test_unavailable_sanitizers_fail_only_where_they_are_required(self) -> None:
+        """The policy switch: on the supported runner `_build_harness` is asked to require them."""
+        assert COMPILER is not None and WORKDIR is not None
+        target = f"{__name__}._capability_probe"
+        with mock.patch(target, return_value=(False, "no sanitizer runtime")):
+            with self.assertRaises(RuntimeError):
+                _build_harness(WORKDIR, COMPILER, require_sanitizers=True)
+        with mock.patch(target, return_value=(False, "no sanitizer runtime")):
+            binary, sanitized, note = _build_harness(WORKDIR, COMPILER, require_sanitizers=False)
+        self.assertIsNotNone(binary)
+        self.assertFalse(sanitized)
+        self.assertIn("no sanitizer runtime", note)
+
+    def test_the_supported_runner_is_recognised(self) -> None:
+        """The switch that makes an unavailable capability fatal on CI, where it must be."""
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+            with mock.patch.object(platform, "system", return_value="Linux"), \
+                    mock.patch.object(platform, "machine", return_value="x86_64"):
+                self.assertTrue(_supported_ci_runner())
+            with mock.patch.object(platform, "system", return_value="Darwin"), \
+                    mock.patch.object(platform, "machine", return_value="arm64"):
+                self.assertFalse(_supported_ci_runner())
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}):
+            with mock.patch.object(platform, "system", return_value="Linux"), \
+                    mock.patch.object(platform, "machine", return_value="x86_64"):
+                self.assertFalse(_supported_ci_runner())
 
 
 class AbiAdapterTests(NeedsAbiProbe):

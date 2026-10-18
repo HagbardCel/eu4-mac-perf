@@ -94,9 +94,28 @@ available — builds the reconstruction and:
 * checks the refusals: a slot outside `[0, 6)`, a buffer-reading selector with no buffer contents,
   a mis-sized context. All of these exit non-zero with an `error=` line rather than proceeding.
 
-The default host build uses `-O0 -g -Wall -Wextra -Werror -fsanitize=address,undefined`; the test
-falls back to a plain build only if the sanitized build or binary cannot run here, and reports
-which one it used.
+The host build is `-O0 -g -Wall -Wextra -Werror -fsanitize=address,undefined` **with
+`-fno-sanitize-recover=all`**: UBSan recovers by default, so without that flag a finding would print
+a diagnostic and still exit zero, and a green suite would not mean a clean one. For the sanitized
+runs `ASAN_OPTIONS` is appended to (never replaced) with `halt_on_error=1`, preserving ambient
+settings. Sanitizers are dropped only when a *capability probe* — a trivial program built and run
+with the same toolchain and flags — shows this environment cannot run them, and never on the
+supported CI runner (GitHub, Linux, x86-64), where an absent compiler, absent sanitizers or an
+unqualifiable x86-64 probe fail the module. The module prints one line stating which build and
+which probe this run enforced, so a run that quietly lost coverage cannot look like one that did
+not.
+
+The same rule governs the ABI probe: a probe that starts and exits non-zero is a failure on any
+host, with or without output; only a binary that cannot be started at all (a cross-built probe with
+no x86-64 runtime) skips, and only off a native x86-64 host.
+
+`BuildGateTests` pins those gates themselves, compiling throwaway programs in the test's temporary
+directory (nothing tracked is modified): that a run-time signed overflow under the gate flags exits
+non-zero while the same program under the default flags only prints; that a probe exiting non-zero
+is a failure on a native and a non-native host alike; that an unstartable probe is a skip only off a
+native host; that an impossible build is reported rather than raised; that requiring sanitizers
+turns an unavailable capability into an error; and that the supported-runner switch recognises
+GitHub's Linux x86-64 job.
 
 ### The exhaustive sweep
 
@@ -110,13 +129,17 @@ test (a whole-domain modular sum, hence order- and platform-independent).
 
 ## Verification record
 
-**Local (2026-10-18),** Apple Silicon macOS with `clang++`: 16 tests, none failed, one skipped by
+**Local (2026-10-18),** Apple Silicon macOS with `clang++`: 23 tests, none failed, one skipped by
 default (the exhaustive sweep; run separately with `EU4_RE1_EXHAUSTIVE=1` and passed, digest
-`6000000360000000`). The x86-64 ABI probe built as Mach-O `x86_64` and executed under Rosetta:
-all ten checks `ok`, `abi=ok`. The sanitized host build was used.
+`6000000360000000`). The gate line read `host build with ASan/UBSan (-O0), fatal on any finding;
+x86-64 ABI probe built and executed`, and the probe's ten checks were `ok` as Mach-O `x86_64` under
+Rosetta. Injected-UB check: a copy of the tracked sources with a run-time signed overflow added to
+the reconstructed body exits `134` under the gate flags and `0` under the previous, recovering
+flags.
 
-In CI the tests run on Linux with whatever C++20 compiler is present; if there is none, they
-skip and report the reason rather than passing silently.
+In CI the tests run on Linux with whatever C++20 compiler is present. There, a missing compiler,
+unusable sanitizers or an x86-64 probe that cannot be qualified is a failure, not a skip; skips are
+reserved for capabilities a probe shows the environment genuinely lacks off CI.
 
 ## Limits
 
@@ -128,6 +151,10 @@ skip and report the reason rather than passing silently.
   is meaningful.
 * The arithmetic, not the code generation. This does not reproduce the original's instruction
   bytes, register traffic or stack frame, and does not claim to — `-O0` code is not even a leaf.
+* The three stores are a *final-state* contract. Writing them in source order does not by itself
+  guarantee that an optimized build emits the original's write sequence; any stronger ordering
+  requirement (an in-process replacement, say) must be qualified separately. Nothing here forces an
+  order: no `volatile`, no barriers, no instrumentation.
 * No hardware-level claim: RE0's reference is a P-code emulator, so RE2 will compare a
   reconstruction with an emulated original, not with the machine code running on a CPU.
 * No GL, no game state, no performance claim. This function's three memory writes are all that is
