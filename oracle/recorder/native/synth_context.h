@@ -12,6 +12,13 @@
  * version)` is that slot's state as the observation saw it - at entry for the
  * handle-addressing calls (so a destroy's resource is still live and a stale
  * handle's is not), and after creation for create.
+ *
+ * The *same layout* names a captured observation's content origin: the resource
+ * state whose bytes were actually copied. The two are deliberately distinct,
+ * because a call can address one state and leave another behind: an update reads
+ * version N and produces version N+1, so its observation context names the state it
+ * addressed while its origin names the state its contents were copied from. A hook
+ * declares an origin only when it differs from the observation context.
  */
 #ifndef EU4_ORACLE_RECORDER_NATIVE_SYNTH_CONTEXT_H
 #define EU4_ORACLE_RECORDER_NATIVE_SYNTH_CONTEXT_H
@@ -19,6 +26,9 @@
 #include <stdint.h>
 
 #include "synth.h"
+
+/* The words in one context or origin, as this subject declares them. */
+#define SYNTH_CONTEXT_WORDS 6u
 
 static void slot_state(const synth_world *w, uint32_t slot, uint32_t *live,
                        uint32_t *generation, uint32_t *version)
@@ -44,7 +54,7 @@ static uint32_t reference_context(uint32_t valid, uint32_t slot, uint32_t genera
     context[3] = live;
     context[4] = slot_generation;
     context[5] = version;
-    return 6u;
+    return SYNTH_CONTEXT_WORDS;
 }
 
 #endif /* EU4_ORACLE_RECORDER_NATIVE_SYNTH_CONTEXT_H */

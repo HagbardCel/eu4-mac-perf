@@ -130,7 +130,9 @@ The P4 recorder captures resource references and lifetimes, not resource content
 
 **Progress (2026-10-18):** **P4.9** is implemented - bounded resource-content capture
 in the native recorder core, and a versioned observation export carrying each
-observation's arguments and declared content. **P4.10** and **P4.11** remain.
+observation's arguments, declared content, that content's origin and its
+instrumentation fault, with a per-scenario admission verdict. **P4.10** and **P4.11**
+remain.
 
 This gate must pass, entirely offline, before the first EU IV acquisition is
 authorized. It need not establish closure for the real game's frame in advance — that
@@ -140,6 +142,7 @@ replay pipeline works end to end on a sufficiently representative synthetic work
 | Requirement | Necessary demonstration | Slice |
 | --- | --- | --- |
 | Resource-content capture | The native recorder records initial contents and relevant mutations, not just IDs | P4.9 |
+| Whole-version content | Exported content is a complete resource version, not a fragment, and is attributable to it | P4.9 |
 | Identity and versioning | Reused handles resolve to the correct generation and resource version | P4.9 / P4.10 |
 | Complete command stream | Native event accounting reconciles with the captured operations | P4.10 |
 | Resource/state closure | No unresolved dependencies for the declared synthetic frame boundary | P4.11 |

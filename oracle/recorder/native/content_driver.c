@@ -8,6 +8,19 @@
  * the declared capture point, and its declared content - each span either captured
  * whole or reported by its exact lost byte count.
  *
+ * Content here is one thing only: the *complete* contents of one resource state,
+ * never a fragment of one. A hook that would only have a fragment to offer declares
+ * no content at all - `hook_read` is the case in point, since the single byte it
+ * observed is reconstructible from the resource version its context names and the
+ * offset in its arguments. Every captured blob carries its *origin*: the resource
+ * state those bytes were copied from, which is not always the state the call
+ * addressed (an update reads version N and produces version N+1).
+ *
+ * A malformed declaration - too many spans, an absent span list, unaddressable
+ * bytes, an invalid capture point, an over-long context, or content with no
+ * usable origin - is exported as a fault: counted once, declaring no content, and
+ * never complete. `ADMISSION` states whether an acquisition may be admitted at all.
+ *
  * The export is a *driver-level* contract. The released accounting transcript is
  * untouched by construction, because a different driver authors it: adding a field
  * to the recorder core cannot change bytes this driver does not print.
@@ -91,19 +104,26 @@ static int hook_create(synth_world *w, uint32_t size, synth_handle *out)
                           reference_context(rc == SYNTH_OK ? 1u : 0u, produced.slot,
                                             produced.generation, live, generation,
                                             version, context),
-                          spans, 1u, RECORDER_POINT_EXIT);
+                          spans, 1u, RECORDER_POINT_EXIT, 0, 0u);
     return rc;
 }
 
-/* Declares the mutated span, after the update. */
+/* Declares the complete post-update contents, after the update: content is a whole
+ * resource version, never the mutated prefix. The update reads version N and leaves
+ * version N+1 behind, so the observation context keeps naming the state the call
+ * addressed while the origin names the state the bytes were copied from. */
 static int hook_update(synth_world *w, synth_handle handle, uint32_t seed, uint32_t span)
 {
     uint64_t args[3];
     uint64_t context[6];
+    uint64_t origin[6];
     recorder_span spans[1];
     uint32_t live = 0u;
     uint32_t generation = 0u;
     uint32_t version = 0u;
+    uint32_t after_live = 0u;
+    uint32_t after_generation = 0u;
+    uint32_t after_version = 0u;
     int64_t token;
     int rc;
 
@@ -116,52 +136,50 @@ static int hook_update(synth_world *w, synth_handle handle, uint32_t seed, uint3
     spans[0].bytes = 0;
     spans[0].length = 0u;
     if (rc == SYNTH_OK) {
+        /* The state the bytes are copied from is the one the call left behind. */
+        slot_state(w, handle.slot, &after_live, &after_generation, &after_version);
         spans[0].bytes = w->slots[handle.slot].data;
-        spans[0].length = span;
+        spans[0].length = w->slots[handle.slot].size;
+        (void)reference_context(1u, handle.slot, handle.generation, after_live,
+                                after_generation, after_version, origin);
     }
     recorder_exit_content(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK, context,
                           reference_context(1u, handle.slot, handle.generation, live,
                                             generation, version, context),
-                          spans, 1u, RECORDER_POINT_EXIT);
+                          spans, 1u, RECORDER_POINT_EXIT, origin,
+                          rc == SYNTH_OK ? SYNTH_CONTEXT_WORDS : 0u);
     return rc;
 }
 
-/* Declares the single byte the read observed, as the call was entered. Reading a
- * byte out of the resource is the observation's declared scope. */
+/* Declares no content: the single byte a read observes is not a resource version.
+ * Its offset and its resource context are captured, and the value is recoverable
+ * from the published contents of that version - so recording it again here would
+ * publish a one-byte fragment under a whole-version contract. */
 static int hook_read(const synth_world *w, synth_handle handle, uint32_t offset, uint32_t *out)
 {
     uint64_t args[2];
     uint64_t context[6];
-    recorder_span spans[1];
     uint32_t live = 0u;
     uint32_t generation = 0u;
     uint32_t version = 0u;
-    uint8_t observed = 0u;
-    int have = 0;
     int64_t token;
     int rc;
 
     slot_state(w, handle.slot, &live, &generation, &version); /* at entry */
-    if (handle.slot < SYNTH_SLOTS && w->slots[handle.slot].live
-        && w->slots[handle.slot].generation == handle.generation
-        && offset < w->slots[handle.slot].size) {
-        observed = w->slots[handle.slot].data[offset];
-        have = 1;
-    }
     args[0] = handle.slot;
     args[1] = offset;
     token = recorder_enter(HOOK_READ, args, 2);
     rc = synth_read(w, handle, offset, out);
-    spans[0].bytes = have ? &observed : 0;
-    spans[0].length = have ? 1u : 0u;
     recorder_exit_content(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK, context,
                           reference_context(1u, handle.slot, handle.generation, live,
                                             generation, version, context),
-                          spans, 1u, RECORDER_POINT_ENTRY);
+                          0, 0u, RECORDER_POINT_ENTRY, 0, 0u);
     return rc;
 }
 
-/* One observation that declares two spans: the resource's low and high halves. The
+/* One observation that declares two spans: the resource's low and high halves.
+ * Concatenated in declaration order they are the complete contents of the entry
+ * version - the reason a split snapshot is still a whole-version snapshot. The
  * first can be captured while the second is lost, so partial evidence stays
  * inspectable and the observation is still incomplete. */
 static int hook_pair(const synth_world *w, synth_handle handle)
@@ -195,7 +213,7 @@ static int hook_pair(const synth_world *w, synth_handle handle)
     recorder_exit_content(token, (uint64_t)(uint32_t)rc, rc == SYNTH_OK, context,
                           reference_context(1u, handle.slot, handle.generation, live,
                                             generation, version, context),
-                          spans, 2u, RECORDER_POINT_ENTRY);
+                          spans, 2u, RECORDER_POINT_ENTRY, 0, 0u);
     return rc;
 }
 
@@ -223,9 +241,11 @@ static int hook_destroy(synth_world *w, synth_handle handle)
 /* --- scripts ------------------------------------------------------------------ */
 
 /* Eight observations over one resource, twelve declared content bytes:
- * create 4, update 4, read 1, read 1, update 2, then a failed create, a destroy
- * and a stale read that declare nothing. The two reads share a context and differ
- * only in their arguments - the case a translation table must keep distinct. */
+ * create 4, update 4, update 4, then a failed create, a destroy and two reads that
+ * declare nothing - a read's single observed byte is not a resource version, so the
+ * value stays recoverable from the version its context names and the offset in its
+ * arguments. The two reads share a context and differ only in their arguments, the
+ * case a translation table must keep distinct. */
 static void run_script(void)
 {
     synth_world world;
@@ -235,9 +255,9 @@ static void run_script(void)
     synth_world_init(&world);
     (void)hook_create(&world, 4u, &handle);      /* 4 bytes  */
     (void)hook_update(&world, handle, 5u, 4u);   /* 4 bytes  */
-    (void)hook_read(&world, handle, 0u, &value); /* 1 byte   */
-    (void)hook_read(&world, handle, 3u, &value); /* 1 byte   */
-    (void)hook_update(&world, handle, 1u, 2u);   /* 2 bytes  */
+    (void)hook_read(&world, handle, 0u, &value); /* no content */
+    (void)hook_read(&world, handle, 3u, &value); /* no content */
+    (void)hook_update(&world, handle, 1u, 2u);   /* 4 bytes  */
     (void)hook_create(&world, 0u, &handle);      /* bad arg -> incomplete */
     (void)hook_destroy(&world, handle);
     (void)hook_read(&world, handle, 0u, &value); /* stale -> incomplete */
@@ -256,23 +276,150 @@ static void run_pair_script(void)
 }
 
 /* An observation that declares a zero-length span twice: nothing is declared, so
- * nothing is counted and nothing can be lost. */
+ * nothing is counted and nothing can be lost. It still names the resource it
+ * addressed, like every other observation. */
 static void run_zero_script(void)
 {
     synth_world world;
     synth_handle handle = {0u, 0u};
     recorder_span spans[2];
+    uint64_t context[6];
+    uint32_t live = 0u;
+    uint32_t generation = 0u;
+    uint32_t version = 0u;
     uint32_t nothing = 0u;
     int64_t token;
 
     synth_world_init(&world);
     (void)hook_create(&world, 4u, &handle);
+    slot_state(&world, handle.slot, &live, &generation, &version);
     spans[0].bytes = &nothing;
     spans[0].length = 0u;
     spans[1].bytes = 0;
     spans[1].length = 0u;
     token = recorder_enter(HOOK_READ, 0, 0u);
-    recorder_exit_content(token, 0u, 1, 0, 0u, spans, 2u, RECORDER_POINT_ENTRY);
+    recorder_exit_content(token, 0u, 1, context,
+                          reference_context(1u, handle.slot, handle.generation, live,
+                                            generation, version, context),
+                          spans, 2u, RECORDER_POINT_ENTRY, 0, 0u);
+}
+
+/* Every instrumentation fault the core can name: one observation each, plus one that
+ * shows several symptoms at once. Each is counted once, declares no content, and is
+ * never complete - the well-formed observations that bracket them are unaffected. */
+static void run_malformed_script(void)
+{
+    synth_world world;
+    synth_handle handle = {0u, 0u};
+    uint64_t context[6];
+    uint64_t big_context[RECORDER_MAX_CONTEXT + 1u];
+    uint64_t many_args[RECORDER_MAX_ARGS + 1u];
+    uint64_t words[1];
+    recorder_span spans[1];
+    recorder_span oversize[RECORDER_MAX_SPANS];
+    int64_t token;
+    uint32_t i;
+
+    synth_world_init(&world);
+    (void)hook_create(&world, 4u, &handle);      /* well formed: 4 bytes */
+    (void)hook_update(&world, handle, 7u, 4u);   /* well formed: 4 bytes */
+
+    words[0] = 0u;
+    spans[0].bytes = words;
+    spans[0].length = 4u;
+    for (i = 0; i < RECORDER_MAX_SPANS; i++) {
+        oversize[i].bytes = words;
+        oversize[i].length = 1u;
+    }
+    for (i = 0; i < RECORDER_MAX_ARGS + 1u; i++) {
+        many_args[i] = i;
+    }
+    for (i = 0; i < RECORDER_MAX_CONTEXT + 1u; i++) {
+        big_context[i] = 0u;
+    }
+    (void)reference_context(1u, handle.slot, handle.generation, 1u, handle.generation,
+                            1u, context);
+
+    /* (1) more arguments declared than the policy allows */
+    token = recorder_enter(HOOK_UPDATE, many_args, RECORDER_MAX_ARGS + 1u);
+    recorder_exit_content(token, 0u, 1, context, 6u, 0, 0u, RECORDER_POINT_EXIT, 0, 0u);
+
+    /* (2) more context words than the recorder can record */
+    token = recorder_enter(HOOK_UPDATE, 0, 0u);
+    recorder_exit_content(token, 0u, 1, big_context, RECORDER_MAX_CONTEXT + 1u, 0, 0u,
+                          RECORDER_POINT_EXIT, 0, 0u);
+
+    /* (3) a capture point that is neither entry nor exit */
+    token = recorder_enter(HOOK_UPDATE, 0, 0u);
+    recorder_exit_content(token, 0u, 1, context, 6u, 0, 0u, 7u, 0, 0u);
+
+    /* (4) more spans declared than the recorder can record */
+    token = recorder_enter(HOOK_UPDATE, 0, 0u);
+    recorder_exit_content(token, 0u, 1, context, 6u, oversize, RECORDER_MAX_SPANS + 1u,
+                          RECORDER_POINT_EXIT, 0, 0u);
+
+    /* (5) spans declared, none supplied */
+    token = recorder_enter(HOOK_UPDATE, 0, 0u);
+    recorder_exit_content(token, 0u, 1, context, 6u, 0, 2u, RECORDER_POINT_EXIT, 0, 0u);
+
+    /* (6) declared bytes that are not addressable */
+    {
+        recorder_span nowhere[1];
+        nowhere[0].bytes = 0;
+        nowhere[0].length = 4u;
+        token = recorder_enter(HOOK_UPDATE, 0, 0u);
+        recorder_exit_content(token, 0u, 1, context, 6u, nowhere, 1u, RECORDER_POINT_EXIT,
+                              0, 0u);
+    }
+
+    /* (7) content declared that no origin can name */
+    token = recorder_enter(HOOK_UPDATE, 0, 0u);
+    recorder_exit_content(token, 0u, 1, 0, 0u, spans, 1u, RECORDER_POINT_EXIT, 0, 0u);
+
+    /* (8) several symptoms at once: still one fault, still one rejection */
+    token = recorder_enter(HOOK_UPDATE, 0, 0u);
+    recorder_exit_content(token, 0u, 1, context, 6u, oversize, RECORDER_MAX_SPANS + 1u,
+                          7u, 0, 0u);
+
+    /* (9) origin words declared with no array to read them from */
+    token = recorder_enter(HOOK_UPDATE, 0, 0u);
+    recorder_exit_content(token, 0u, 1, context, 6u, spans, 1u, RECORDER_POINT_EXIT,
+                          0, SYNTH_CONTEXT_WORDS);
+}
+
+/* A well-formed declaration whose explicit origin names the right slot but the wrong
+ * generation. Nothing is malformed, so the core records it as complete - attribution
+ * is a semantic property the offline closure verifier decides, not the core. */
+static void run_stale_origin_script(void)
+{
+    synth_world world;
+    synth_handle first = {0u, 0u};
+    synth_handle second = {0u, 0u};
+    uint64_t context[6];
+    uint64_t origin[6];
+    recorder_span spans[1];
+    uint32_t live = 0u;
+    uint32_t generation = 0u;
+    uint32_t version = 0u;
+    int64_t token;
+
+    synth_world_init(&world);
+    (void)hook_create(&world, 4u, &first);   /* slot 0, generation 0 */
+    (void)hook_destroy(&world, first);
+    (void)hook_create(&world, 4u, &second);  /* slot 0 reused, generation 1 */
+
+    slot_state(&world, second.slot, &live, &generation, &version);
+    spans[0].bytes = world.slots[second.slot].data;
+    spans[0].length = world.slots[second.slot].size;
+    /* The origin names slot 0 at *generation 0*, which was destroyed and reused: the
+     * observation addresses a live resource, the origin does not. */
+    (void)reference_context(1u, first.slot, first.generation, live, generation,
+                            version, origin);
+    token = recorder_enter(HOOK_UPDATE, 0, 0u);
+    recorder_exit_content(token, 0u, 1, context,
+                          reference_context(1u, second.slot, second.generation, live,
+                                            generation, version, context),
+                          spans, 1u, RECORDER_POINT_EXIT, origin, SYNTH_CONTEXT_WORDS);
 }
 
 /* --- concurrent observation --------------------------------------------------- */
@@ -401,7 +548,21 @@ static void print_arena(void)
  * arena placement under concurrency are arbitrary, so neither is printed - only the
  * per-thread records the events themselves define. Arena placement is reported
  * structurally by ARENA instead. */
-static void print_observations(void)
+static const char *fault_name(uint32_t fault)
+{
+    switch (fault) {
+    case RECORDER_FAULT_NONE: return "none";
+    case RECORDER_FAULT_ARGS: return "args";
+    case RECORDER_FAULT_CONTEXT: return "context";
+    case RECORDER_FAULT_POINT: return "point";
+    case RECORDER_FAULT_SPANS: return "spans";
+    case RECORDER_FAULT_BYTES: return "bytes";
+    case RECORDER_FAULT_ORIGIN: return "origin";
+    default: return "unknown";
+    }
+}
+
+static void print_observations(int listed)
 {
     uint32_t count = recorder_event_count();
     uint32_t order[RECORDER_MAX_EVENTS];
@@ -427,19 +588,27 @@ static void print_observations(void)
         order[j] = key;
     }
 
-    printf("OBSERVATIONS count=%u\n", (unsigned)count);
+    printf("OBSERVATIONS count=%u listed=%d\n", (unsigned)count, listed);
+    if (!listed) {
+        /* Which observation won a bounded arena race is not a property of the
+         * capture, so it is not printed: the aggregate ARENA report is the exact,
+         * deterministic statement. The count is still declared, so a consumer never
+         * has to guess whether detail was withheld. */
+        return;
+    }
     for (i = 0; i < count; i++) {
         const recorder_event *e = recorder_event_at(order[i]);
         uint32_t nargs = e->nargs < RECORDER_MAX_ARGS ? e->nargs : RECORDER_MAX_ARGS;
         uint32_t a;
         uint32_t c;
+        uint32_t o;
         uint32_t s;
 
         printf("OBS thread=%u seq=%" PRIu64 " phase=%u hook=%u point=%u result=%" PRIu64
-               " complete=%d nargs=%u args=",
+               " complete=%d fault=%s nargs=%u args=",
                (unsigned)e->thread_id, e->sequence, (unsigned)e->phase,
                (unsigned)e->hook_id, (unsigned)e->point, e->result, e->complete,
-               (unsigned)nargs);
+               fault_name(e->fault), (unsigned)nargs);
         for (a = 0; a < nargs; a++) {
             printf("%s%" PRIu64, a == 0u ? "" : ",", e->args[a]);
         }
@@ -460,11 +629,15 @@ static void print_observations(void)
                 printf("%sl:%u", s == 0u ? "" : ",", (unsigned)e->span_lost[s]);
             }
         }
+        printf(" norigin=%u origin=", (unsigned)e->norigin);
+        for (o = 0; o < e->norigin; o++) {
+            printf("%s%" PRIu64, o == 0u ? "" : ",", e->origin[o]);
+        }
         printf("\n");
     }
 }
 
-static void print_counters(const char *name, int with_observations)
+static void print_counters(const char *name, int listed)
 {
     recorder_counters counters;
     recorder_snapshot(&counters);
@@ -479,10 +652,13 @@ static void print_counters(const char *name, int with_observations)
            counters.content_bytes_declared, counters.content_bytes_captured,
            counters.content_bytes_lost, counters.content_spans_lost);
     printf("ACCOUNTING %s\n", recorder_accounting_holds(&counters) ? "ok" : "VIOLATED");
+    /* The acquisition-level verdict P4.10's admission gate consumes: an unresolved
+     * instrumentation fault disqualifies the whole acquisition. Bounded loss is not a
+     * fault - it leaves its observation incomplete, which is what frame qualification
+     * (P4.10/P4.11) refuses on, and it keeps its exact byte account. */
+    printf("ADMISSION %s\n", counters.rejected == 0u ? "ok" : "REJECTED");
     print_arena();
-    if (with_observations) {
-        print_observations();
-    }
+    print_observations(listed);
 }
 
 static int configure_content(uint32_t capacity, uint32_t content_capacity,
@@ -552,6 +728,19 @@ int main(void)
     run_script();
     print_counters("content-policy", 1);
 
+    /* One observation per instrumentation fault, plus one with several symptoms at
+     * once: each is one fault, counted once, declaring no content, never complete. */
+    (void)configure_content(16u, 64u, 0);
+    run_malformed_script();
+    print_counters("content-malformed", 1);
+
+    /* Well formed in every structural sense, but its explicit origin names a stale
+     * generation: the core records it complete, and the offline closure verifier is
+     * what rejects it. Attribution is semantics, not structural bounds. */
+    (void)configure_content(16u, 64u, 0);
+    run_stale_origin_script();
+    print_counters("content-stale-origin", 1);
+
     /* More content than the recorder can own is rejected, never truncated. */
     {
         recorder_config config = {0};
@@ -571,7 +760,9 @@ int main(void)
     print_counters("content-concurrent", 1);
 
     /* Four threads into eight arena bytes: the arena ends exactly full, loss is
-     * exact, and no two spans share a byte. */
+     * exact, and no two spans share a byte. Which observation won the race is not a
+     * property of the capture, so the per-observation detail is withheld here: the
+     * aggregate ARENA and COUNTERS reports are the exact statement. */
     if (run_concurrent(64u, 8u) != 0) {
         return 3;
     }

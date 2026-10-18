@@ -5,10 +5,20 @@ their contents, and its transcript never carried a hook's ABI arguments - so no
 downstream translator could recover an operation's parameters. P4.9 adds both, in a
 versioned observation export that leaves the released accounting transcript alone.
 
-The properties under test: content is whole-span or nothing; the arena is bounded,
-reserved by compare-and-swap, and never over-committed; default-off captures no
-content at all and preserves the historical goldens byte-for-byte; and an
-observation that declared content it did not get is *incomplete*, never complete.
+The properties under test:
+
+* content is whole-span or nothing, and the arena is bounded, reserved by
+  compare-and-swap, and never over-committed;
+* declared content is the *complete* contents of one resource version, never a
+  fragment of one - so a digest of it can be published as that version's digest;
+* every captured blob is attributable to the resource version it came from, which
+  is not always the state the call addressed;
+* default-off captures no content at all and preserves the historical goldens
+  byte-for-byte;
+* a malformed declaration fails closed: one instrumentation fault, counted once,
+  declaring no content, never complete;
+* an observation that declared content it did not get is *incomplete*, never
+  complete.
 """
 from __future__ import annotations
 
@@ -17,7 +27,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from oracle.recorder import harness
+from oracle.recorder import harness, registry
 
 
 def _counters(scenario: dict) -> dict[str, int]:
@@ -31,6 +41,10 @@ def _captured_spans(scenario: dict) -> list[dict]:
             if span["status"] == "captured":
                 spans.append(span)
     return spans
+
+
+def _origin(reference_like: list[int]) -> registry.Reference:
+    return registry.reference_from_context(reference_like)
 
 
 class ContentCaptureTests(unittest.TestCase):
@@ -59,8 +73,10 @@ class ContentCaptureTests(unittest.TestCase):
         self.assertEqual(
             sorted(self.scenarios),
             ["content-ample", "content-concurrent", "content-concurrent-bounded",
-             "content-exact", "content-off", "content-policy", "content-short",
-             "content-two-spans", "content-two-spans-lost", "content-zero-length"])
+             "content-exact", "content-malformed", "content-off", "content-policy",
+             "content-short", "content-stale-origin", "content-two-spans",
+             "content-two-spans-lost", "content-zero-length"])
+        self.assertIsNotNone(self.parsed["end"])
 
     def test_the_export_carries_the_abi_arguments_the_translator_needs(self):
         # The released accounting transcript omits args; this export must not. A
@@ -75,6 +91,8 @@ class ContentCaptureTests(unittest.TestCase):
                 with self.subTest(scenario=scenario["name"], seq=obs["sequence"]):
                     self.assertEqual(len(obs["args"]), obs["nargs"])
                     self.assertEqual(len(obs["context"]), obs["ncontext"])
+                    self.assertEqual(len(obs["content"]), obs["nspans"])
+                    self.assertEqual(len(obs["origin"]), obs["norigin"])
 
     def test_the_declared_capture_point_distinguishes_pre_state_from_post_state(self):
         # Reads observe the state the call was entered with; creates and updates
@@ -98,6 +116,7 @@ class ContentCaptureTests(unittest.TestCase):
         for obs in self.scenarios["content-off"]["observations"]:
             with self.subTest(seq=obs["sequence"]):
                 self.assertEqual(obs["content"], [])
+                self.assertEqual(obs["origin"], [])
 
     def test_content_capture_does_not_change_completeness_when_it_is_off(self):
         # Completeness must be driven by the call, never by the un-configured arena:
@@ -132,16 +151,17 @@ class ContentCaptureTests(unittest.TestCase):
 
     def test_one_byte_short_loses_the_last_span_whole(self):
         counters = _counters(self.scenarios["content-short"])
-        self.assertEqual(counters["content_bytes_captured"], 10)
-        self.assertEqual(counters["content_bytes_lost"], 2)
+        self.assertEqual(counters["content_bytes_captured"], 8)
+        self.assertEqual(counters["content_bytes_lost"], 4)
         self.assertEqual(counters["content_spans_lost"], 1)
-        # The declaring observation keeps its partial evidence and its loss is exact.
+        # The declaring observation keeps its declared origin and its loss is exact.
         last = self._observation("content-short", hook=2, sequence=5)
         self.assertEqual(last["complete"], 0)
-        self.assertEqual(last["content"], [{"status": "lost", "length": 2, "bytes": None}])
+        self.assertEqual(last["content"], [{"status": "lost", "length": 4, "bytes": None}])
+        self.assertEqual(_origin(last["origin"]).version, 2)
         # No span was partially captured.
         self.assertEqual([s["length"] for s in _captured_spans(self.scenarios["content-short"])],
-                         [4, 4, 1, 1])
+                         [4, 4])
 
     def test_missing_content_downgrades_an_otherwise_identical_observation(self):
         # Same hook, same arguments, same context - the only difference is whether
@@ -152,8 +172,8 @@ class ContentCaptureTests(unittest.TestCase):
         self.assertEqual(ample["context"], short["context"])
         self.assertEqual(ample["complete"], 1)
         self.assertEqual(short["complete"], 0)
-        self.assertEqual(ample["content"], [{"status": "captured", "length": 2,
-                                             "bytes": bytes.fromhex("0608")}])
+        self.assertEqual(ample["content"], [{"status": "captured", "length": 4,
+                                             "bytes": bytes.fromhex("06080708")}])
 
     def test_one_observation_two_spans_keeps_the_first_and_loses_the_second(self):
         # The declared span that fit stays inspectable; the one that did not is lost
@@ -181,6 +201,7 @@ class ContentCaptureTests(unittest.TestCase):
         observing = self._observation("content-zero-length", hook=3, sequence=2)
         self.assertEqual(observing["complete"], 1)
         self.assertEqual(observing["content"], [])
+        self.assertEqual(observing["fault"], "none")
 
     def test_policy_excluded_content_is_not_a_budget_loss(self):
         # The updates are deep-captured; the creates and reads are counted only, so
@@ -189,8 +210,8 @@ class ContentCaptureTests(unittest.TestCase):
         counters = _counters(self.scenarios["content-policy"])
         self.assertEqual(counters["selected"], 2)
         self.assertEqual(counters["unselected"], 6)
-        self.assertEqual(counters["content_bytes_declared"], 6)
-        self.assertEqual(counters["content_bytes_captured"], 6)
+        self.assertEqual(counters["content_bytes_declared"], 8)
+        self.assertEqual(counters["content_bytes_captured"], 8)
         self.assertEqual(counters["content_bytes_lost"], 0)
         self.assertEqual(counters["content_spans_lost"], 0)
         self.assertEqual({o["hook_id"] for o in self.scenarios["content-policy"]["observations"]},
@@ -201,6 +222,172 @@ class ContentCaptureTests(unittest.TestCase):
         for line in self.parsed["config"]:
             config.update(line)
         self.assertEqual(config["oversize_content_rejected"], "1")
+
+    # --- content is a complete resource version -----------------------------------
+
+    def test_content_is_the_complete_post_update_contents_not_the_mutated_prefix(self):
+        # update(seed 1, span 2) mutates the first two bytes and leaves the last two
+        # alone. A two-byte fragment would be a digest of something no resource ever
+        # held, so the whole four-byte version is what is declared.
+        update = self._observation("content-ample", hook=2, sequence=5)
+        self.assertEqual(update["args"], [0, 1, 2])
+        self.assertEqual(update["content"],
+                         [{"status": "captured", "length": 4,
+                           "bytes": bytes.fromhex("06080708")}])
+
+    def test_a_read_declares_no_content_because_a_byte_is_not_a_version(self):
+        # The observed byte stays recoverable from the version the read's context
+        # names and the offset in its arguments; publishing one byte under a
+        # whole-version contract is exactly what must not happen.
+        read = self._observation("content-ample", hook=3, sequence=3)
+        self.assertEqual(read["content"], [])
+        self.assertEqual(read["origin"], [])
+        self.assertEqual(read["complete"], 1)
+
+    def test_concatenated_spans_are_the_whole_version(self):
+        # Two spans of one observation are consecutive regions of one version, so
+        # their concatenation is that version's complete contents.
+        pair = self._observation("content-two-spans", hook=6, sequence=2)
+        create = self._observation("content-two-spans", hook=1, sequence=1)
+        self.assertEqual(_origin(pair["origin"]), _origin(create["origin"]))
+        declared = sum(span["length"] for span in pair["content"])
+        self.assertEqual(declared, len(create["content"][0]["bytes"]))
+
+    def test_the_captured_bytes_are_the_subject_state(self):
+        # create(4) zeroes the resource, update(seed 5, span 4) adds 5,6,7,8, then
+        # update(seed 1, span 2) adds 1,2 - the export must carry those whole
+        # versions exactly.
+        self.assertEqual(
+            [s["bytes"] for s in _captured_spans(self.scenarios["content-ample"])],
+            [bytes.fromhex("00000000"), bytes.fromhex("05060708"),
+             bytes.fromhex("06080708")])
+
+    # --- content provenance -------------------------------------------------------
+
+    def test_an_update_declares_the_version_it_produced(self):
+        # The first update runs against version 0 and leaves version 1: the
+        # observation context names the state the call addressed, the origin names
+        # the state its bytes were copied from.
+        first = self._observation("content-ample", hook=2, sequence=2)
+        second = self._observation("content-ample", hook=2, sequence=5)
+        self.assertEqual(_origin(first["context"]).version, 0)
+        self.assertEqual(_origin(first["origin"]).version, 1)
+        self.assertEqual(_origin(second["context"]).version, 1)
+        self.assertEqual(_origin(second["origin"]).version, 2)
+
+    def test_the_origin_resolves_to_the_lifetime_the_bytes_came_from(self):
+        for name in ("content-ample", "content-exact", "content-short"):
+            for obs in self.scenarios[name]["observations"]:
+                if not obs["content"]:
+                    continue
+                with self.subTest(scenario=name, seq=obs["sequence"]):
+                    origin = _origin(obs["origin"])
+                    self.assertTrue(origin.resolved)
+                    self.assertEqual(origin.named, _origin(obs["context"]).named)
+
+    def test_content_is_never_declared_without_an_origin(self):
+        for scenario in self.scenarios.values():
+            for obs in scenario["observations"]:
+                with self.subTest(scenario=scenario["name"], seq=obs["sequence"]):
+                    self.assertEqual(bool(obs["content"]), obs["norigin"] > 0)
+                    if not obs["content"]:
+                        self.assertEqual(obs["origin"], [])
+
+    def test_a_stale_origin_is_recorded_complete_and_rejected_offline(self):
+        # The declaration is structurally sound - the core has no way to know which
+        # resource a subject's origin words mean - so attribution is the offline
+        # closure verifier's decision, and it refuses the capture.
+        scenario = self.scenarios["content-stale-origin"]
+        stale = self._observation("content-stale-origin", hook=2, sequence=4)
+        self.assertEqual(stale["complete"], 1)
+        self.assertEqual(stale["fault"], "none")
+        self.assertTrue(_origin(stale["context"]).resolved)
+        self.assertFalse(_origin(stale["origin"]).resolved)
+        with self.assertRaises(registry.RegistryError):
+            registry.verify_closure(scenario["observations"])
+
+    def test_a_well_formed_capture_passes_closure(self):
+        for name in ("content-ample", "content-exact", "content-short",
+                     "content-two-spans", "content-two-spans-lost",
+                     "content-zero-length", "content-policy", "content-off",
+                     "content-concurrent"):
+            observations = self.scenarios[name]["observations"]
+            with self.subTest(scenario=name):
+                summary = registry.verify_closure(observations)
+                self.assertIn("slot:0@0", summary["lifetimes"])
+                # The unavailable set is exactly the lifetimes some declared reference
+                # or origin names and cannot resolve - no more, no less.
+                expected = set()
+                for obs in observations:
+                    for words in (obs["context"], obs["origin"]):
+                        if not words:
+                            continue
+                        ref = _origin(words)
+                        if ref.valid and not ref.resolved:
+                            expected.add(ref.named)
+                self.assertEqual(summary["unavailable_dependencies"], sorted(expected))
+
+    # --- malformed declarations fail closed ---------------------------------------
+
+    def test_every_named_fault_appears_exactly_once_in_the_vocabulary(self):
+        faults = [obs["fault"] for obs in self.scenarios["content-malformed"]["observations"]]
+        named = set(faults) - {"none"}
+        self.assertEqual(named, {"args", "context", "point", "spans", "bytes", "origin"})
+
+    def test_one_malformed_observation_is_one_rejection(self):
+        # Nine malformed declarations, one of them showing two symptoms at once: the
+        # count is per observation, never per symptom, so it is exactly nine.
+        counters = _counters(self.scenarios["content-malformed"])
+        malformed = [o for o in self.scenarios["content-malformed"]["observations"]
+                     if o["fault"] != "none"]
+        self.assertEqual(len(malformed), 9)
+        self.assertEqual(counters["rejected"], 9)
+
+    def test_a_malformed_observation_is_never_complete_and_declares_no_content(self):
+        for obs in self.scenarios["content-malformed"]["observations"]:
+            if obs["fault"] == "none":
+                continue
+            with self.subTest(seq=obs["sequence"], fault=obs["fault"]):
+                self.assertEqual(obs["complete"], 0)
+                self.assertEqual(obs["nspans"], 0)
+                self.assertEqual(obs["content"], [])
+                self.assertEqual(obs["norigin"], 0)
+
+    def test_the_malformed_script_rejects_admission_but_still_reconciles(self):
+        scenario = self.scenarios["content-malformed"]
+        counters = _counters(scenario)
+        self.assertEqual(scenario["admission"], "REJECTED")
+        self.assertEqual(scenario["accounting"], "ok")
+        # The two well-formed observations are unaffected by the nine malformed ones,
+        # and the malformed declarations contribute nothing to the content counters.
+        self.assertEqual(counters["intercepted"], 11)
+        self.assertEqual(counters["captured"], 2)
+        self.assertEqual(counters["incomplete"], 9)
+        self.assertEqual(counters["content_bytes_declared"], 8)
+        self.assertEqual(counters["content_bytes_captured"], 8)
+
+    def test_every_admissible_acquisition_says_so(self):
+        for name, scenario in self.scenarios.items():
+            with self.subTest(scenario=name):
+                expected = "ok" if _counters(scenario)["rejected"] == 0 else "REJECTED"
+                self.assertEqual(scenario["admission"], expected)
+
+    def test_a_bounded_loss_is_not_a_fault(self):
+        # Losing declared content to the arena is expected bounded behaviour, not
+        # misinstrumentation: it leaves its observation incomplete, exactly.
+        for name in ("content-short", "content-two-spans", "content-two-spans-lost"):
+            scenario = self.scenarios[name]
+            with self.subTest(scenario=name):
+                self.assertEqual(scenario["admission"], "ok")
+                self.assertEqual(_counters(scenario)["rejected"], 0)
+                self.assertEqual({o["fault"] for o in scenario["observations"]}, {"none"})
+        # The bounded concurrent acquisition loses content too, and says so in its
+        # aggregates even though the per-observation race outcome is withheld.
+        bounded = self.scenarios["content-concurrent-bounded"]
+        self.assertEqual(bounded["admission"], "ok")
+        self.assertFalse(bounded["listed"])
+        self.assertEqual(_counters(bounded)["rejected"], 0)
+        self.assertGreater(_counters(bounded)["content_bytes_lost"], 0)
 
     # --- the two independent identities -------------------------------------------
 
@@ -239,7 +426,7 @@ class ContentCaptureTests(unittest.TestCase):
                          counters["content_bytes_captured"] + counters["content_bytes_lost"])
         self.assertEqual(counters["selected"],
                          counters["captured"] + counters["incomplete"] + counters["lost"])
-        self.assertEqual(counters["content_bytes_lost"], 28)
+        self.assertEqual(counters["content_bytes_lost"], 24)
         self.assertEqual(counters["lost"], 0)
         self.assertNotEqual(counters["content_bytes_lost"], counters["lost"])
 
@@ -257,17 +444,21 @@ class ContentCaptureTests(unittest.TestCase):
             with self.subTest(scenario=name):
                 self.assertEqual(scenario["arena"]["used"], counters["content_bytes_captured"])
                 self.assertLessEqual(scenario["arena"]["used"], scenario["arena"]["capacity"])
-                if scenario["observation_count"] is not None:
+                if scenario["listed"]:
                     self.assertEqual(scenario["arena"]["intervals"],
                                      len(_captured_spans(scenario)))
+                else:
+                    # Detail withheld as a race outcome: the count of captured spans is
+                    # still bounded by the declared spans the arena could have held.
+                    self.assertGreaterEqual(scenario["arena"]["intervals"], 1)
 
     # --- concurrency --------------------------------------------------------------
 
     def test_concurrent_content_capture_is_exact(self):
         counters = _counters(self.scenarios["content-concurrent"])
         self.assertEqual(counters["intercepted"], 12)
-        self.assertEqual(counters["content_bytes_declared"], 36)
-        self.assertEqual(counters["content_bytes_captured"], 36)
+        self.assertEqual(counters["content_bytes_declared"], 32)
+        self.assertEqual(counters["content_bytes_captured"], 32)
         self.assertEqual(counters["content_bytes_lost"], 0)
         self.assertEqual(counters["rejected"], 0)
         # Each thread declared bytes derived from its own seed, so no two threads'
@@ -283,34 +474,31 @@ class ContentCaptureTests(unittest.TestCase):
         arena = self.scenarios["content-concurrent-bounded"]["arena"]
         self.assertEqual(arena["capacity"], 8)
         self.assertEqual(counters["content_bytes_captured"], 8)
-        self.assertEqual(counters["content_bytes_declared"], 36)
-        self.assertEqual(counters["content_bytes_lost"], 28)
-        self.assertEqual(counters["content_spans_lost"], 10)
-        self.assertEqual(counters["captured"], 2)
-        self.assertEqual(counters["incomplete"], 10)
+        self.assertEqual(counters["content_bytes_declared"], 32)
+        self.assertEqual(counters["content_bytes_lost"], 24)
+        self.assertEqual(counters["content_spans_lost"], 6)
+        self.assertEqual(counters["captured"], 6)
+        self.assertEqual(counters["incomplete"], 6)
         self.assertEqual(arena["used"], arena["capacity"])
         self.assertEqual(arena["overlaps"], 0)
 
     # --- the arguments are what distinguishes two calls ---------------------------
 
     def test_calls_sharing_a_context_are_distinguished_by_their_arguments(self):
-        # Two reads of one resource version: identical context, different offsets and
-        # therefore different observed bytes. A translation table must not merge them.
+        # Two reads of one resource version: identical context, different offsets. A
+        # translation table must not merge them, and the values they observed stay
+        # recoverable from that version's published contents.
         first = self._observation("content-ample", hook=3, sequence=3)
         second = self._observation("content-ample", hook=3, sequence=4)
         self.assertEqual(first["context"], second["context"])
         self.assertNotEqual(first["args"], second["args"])
-        self.assertNotEqual(first["content"][0]["bytes"], second["content"][0]["bytes"])
-        self.assertEqual(first["content"][0]["bytes"], bytes.fromhex("05"))
-        self.assertEqual(second["content"][0]["bytes"], bytes.fromhex("08"))
-
-    def test_the_captured_bytes_are_the_subject_state(self):
-        # create(4) zeroes the resource, update(seed 5, span 4) adds 5,6,7,8, then
-        # update(seed 1, span 2) adds 1,2 - the export must carry those bytes exactly.
-        self.assertEqual(
-            [s["bytes"] for s in _captured_spans(self.scenarios["content-ample"])],
-            [bytes.fromhex("00000000"), bytes.fromhex("05060708"), bytes.fromhex("05"),
-             bytes.fromhex("08"), bytes.fromhex("0608")])
+        self.assertEqual(first["content"], [])
+        version = self._observation("content-ample", hook=2, sequence=2)
+        self.assertEqual(_origin(first["context"]).version,
+                         _origin(version["origin"]).version)
+        bytes_of_version = version["content"][0]["bytes"]
+        self.assertEqual(bytes_of_version[first["args"][1]], 0x05)
+        self.assertEqual(bytes_of_version[second["args"][1]], 0x08)
 
     # --- helpers ------------------------------------------------------------------
 
@@ -319,6 +507,123 @@ class ContentCaptureTests(unittest.TestCase):
             if obs["hook_id"] == hook and obs["sequence"] == sequence:
                 return obs
         raise AssertionError(f"no {scenario} observation hook={hook} seq={sequence}")
+
+
+class ExportParserStrictnessTests(unittest.TestCase):
+    """The export is a wire format: a contradicted declaration is refused, not read."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.transcript = harness.golden_transcript("content")
+
+    def _mangled(self, line: str, replacement: str) -> str:
+        lines = self.transcript.splitlines()
+        for index, candidate in enumerate(lines):
+            if candidate.startswith(line):
+                lines[index] = replacement
+                return "\n".join(lines) + "\n"
+        raise AssertionError(f"no transcript line starts with {line!r}")
+
+    def test_the_golden_export_parses(self):
+        self.assertEqual(harness.parse_export_transcript(self.transcript)["version"], "v1")
+
+    def test_a_content_item_deleted_while_nspans_still_claims_it_is_refused(self):
+        mangled = self._mangled(
+            "OBS thread=0 seq=2 phase=0 hook=6",
+            "OBS thread=0 seq=2 phase=0 hook=6 point=1 result=0 complete=0 fault=none"
+            " nargs=1 args=0 ncontext=6 context=1,0,0,1,0,0 nspans=2 content=c:2:0000"
+            " norigin=6 origin=1,0,0,1,0,0")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(mangled)
+
+    def test_an_argument_list_truncated_below_nargs_is_refused(self):
+        mangled = self._mangled(
+            "OBS thread=0 seq=2 phase=0 hook=2",
+            "OBS thread=0 seq=2 phase=0 hook=2 point=0 result=0 complete=1 fault=none"
+            " nargs=3 args=0 ncontext=6 context=1,0,0,1,0,0 nspans=1 content=c:4:05060708"
+            " norigin=6 origin=1,0,0,1,0,1")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(mangled)
+
+    def test_content_with_no_origin_is_refused(self):
+        mangled = self._mangled(
+            "OBS thread=0 seq=1 phase=0 hook=1",
+            "OBS thread=0 seq=1 phase=0 hook=1 point=0 result=0 complete=1 fault=none"
+            " nargs=1 args=4 ncontext=6 context=1,0,0,1,0,0 nspans=1 content=c:4:00000000"
+            " norigin=0 origin=")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(mangled)
+
+    def test_a_faulted_observation_that_claims_completeness_is_refused(self):
+        mangled = self._mangled(
+            "OBS thread=0 seq=3 phase=0 hook=2",
+            "OBS thread=0 seq=3 phase=0 hook=2 point=0 result=0 complete=1 fault=args"
+            " nargs=8 args=0,1,2,3,4,5,6,7 ncontext=6 context=1,0,0,1,0,1 nspans=0 content="
+            " norigin=0 origin=")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(mangled)
+
+    def test_a_repeated_field_is_refused(self):
+        mangled = self._mangled(
+            "OBS thread=0 seq=1 phase=0 hook=1",
+            "OBS thread=0 seq=1 phase=0 hook=1 point=0 result=0 complete=1 complete=0"
+            " fault=none nargs=1 args=4 ncontext=6 context=1,0,0,1,0,0 nspans=1"
+            " content=c:4:00000000 norigin=6 origin=1,0,0,1,0,0")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(mangled)
+
+    def test_a_non_canonical_number_is_refused(self):
+        mangled = self._mangled(
+            "OBS thread=0 seq=1 phase=0 hook=1",
+            "OBS thread=0 seq=01 phase=0 hook=1 point=0 result=0 complete=1 fault=none"
+            " nargs=1 args=4 ncontext=6 context=1,0,0,1,0,0 nspans=1 content=c:4:00000000"
+            " norigin=6 origin=1,0,0,1,0,0")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(mangled)
+
+    def test_a_scenario_declaring_the_wrong_observation_count_is_refused(self):
+        mangled = self._mangled("OBSERVATIONS count=8", "OBSERVATIONS count=7 listed=1")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(mangled)
+
+    def test_a_scenario_claiming_not_to_list_observations_it_printed_is_refused(self):
+        mangled = self._mangled("OBSERVATIONS count=8", "OBSERVATIONS count=8 listed=0")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(mangled)
+
+    def test_a_record_missing_a_field_its_shape_promises_is_refused(self):
+        # Dropping `norigin` entirely (not emptying it) must not read as "no origin".
+        mangled = self._mangled(
+            "OBS thread=0 seq=1 phase=0 hook=1",
+            "OBS thread=0 seq=1 phase=0 hook=1 point=0 result=0 complete=1 fault=none"
+            " nargs=1 args=4 ncontext=6 context=1,0,0,1,0,0 nspans=1 content=c:4:00000000")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(mangled)
+
+    def test_an_admission_verdict_contradicting_the_rejections_is_refused(self):
+        lines = self.transcript.splitlines()
+        # The malformed scenario is REJECTED; claiming it admissible is a contradiction.
+        index = next(i for i, line in enumerate(lines)
+                     if line == "ADMISSION REJECTED")
+        lines[index] = "ADMISSION ok"
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript("\n".join(lines) + "\n")
+
+    def test_a_record_after_the_terminal_end_is_refused(self):
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(self.transcript + "SCENARIO extra\n")
+
+    def test_a_missing_terminal_end_is_refused(self):
+        lines = [line for line in self.transcript.splitlines()
+                 if not line.startswith("END ")]
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript("\n".join(lines) + "\n")
+
+    def test_a_missing_version_line_is_refused(self):
+        lines = self.transcript.splitlines()
+        self.assertEqual(lines[0], "RECORDER-EXPORT v1")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript("\n".join(lines[1:]) + "\n")
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -13,6 +13,21 @@
  * does not fit is lost in full and the observation is downgraded to incomplete,
  * never partially captured. Byte and event accounting are independent identities.
  *
+ * Two rules make captured content trustworthy to the offline side:
+ *
+ *   - An observation's declared spans, concatenated in declaration order, are the
+ *     *complete* contents of exactly one resource state - never a fragment of one.
+ *     A partial mutation prefix is not content.
+ *   - Every captured byte is attributable. An observation that declares content
+ *     must also declare an *origin* - opaque words, the hook layer's statement of
+ *     which resource state those bytes were copied from. When the hook declares no
+ *     origin, the observation's own context is used as the origin. An observation
+ *     that declares content with no usable origin declares no content at all.
+ *
+ * A malformed declaration fails closed: it is one instrumentation fault, counted
+ * once however many symptoms it shows, it declares no content, and the observation
+ * can never be complete. `recorder_event.fault` names the cause.
+ *
  * It is safe under concurrent observation. Every counter is atomic, the bounded
  * buffer hands out slots with one atomic fetch-add, and each captured event
  * records the observing thread and that thread's own sequence number - so the
@@ -50,6 +65,20 @@ enum {
     RECORDER_POINT_ENTRY = 1 /* as the call was entered */
 };
 
+/* Why an observation is malformed, in the fixed precedence the recorder resolves a
+ * declaration by: the first cause it finds is the one it names and counts. One
+ * malformed observation is one instrumentation fault, however many symptoms it
+ * shows, and it can never be complete. */
+enum {
+    RECORDER_FAULT_NONE = 0, /* well formed */
+    RECORDER_FAULT_ARGS,     /* more arguments declared than the policy allows */
+    RECORDER_FAULT_CONTEXT,  /* more context words than the recorder can record */
+    RECORDER_FAULT_POINT,    /* a capture point that is neither ENTRY nor EXIT */
+    RECORDER_FAULT_SPANS,    /* a malformed span list: too many, or absent */
+    RECORDER_FAULT_BYTES,    /* a span declares bytes that are not addressable */
+    RECORDER_FAULT_ORIGIN    /* content declared without a usable origin */
+};
+
 /* One declared content span. `length == 0` declares nothing. `bytes` is only read
  * while `length > 0` and only when the observation is selected for deep capture;
  * the core copies it into its own arena and never retains the pointer. */
@@ -75,10 +104,12 @@ typedef struct {
     uint64_t incomplete;  /* selected entries whose declared scope was not observable */
     uint64_t lost;        /* selected entries dropped by the bounded buffer */
     uint64_t reentrant;   /* entries observed while already inside an observation */
-    uint64_t rejected;    /* instrumentation errors (over-deep, mismatched exit) */
+    uint64_t rejected;    /* instrumentation errors: over-deep, mismatched exit, and
+                           * malformed declarations (exactly one per observation) */
     /* Content bytes, scoped to selected entries that earned an event slot. A span
      * is captured whole or lost whole; a single incomplete event may account for
-     * several lost spans. declared == captured + lost. */
+     * several lost spans. declared == captured + lost. A malformed declaration
+     * declares no content, so it appears in none of these counters. */
     uint64_t content_bytes_declared;
     uint64_t content_bytes_captured;
     uint64_t content_bytes_lost;
@@ -108,6 +139,14 @@ typedef struct {
     uint32_t span_offset[RECORDER_MAX_SPANS];
     uint32_t span_length[RECORDER_MAX_SPANS];
     uint32_t span_lost[RECORDER_MAX_SPANS];
+    /* The resource state the declared spans were copied from, as the hook layer
+     * declared it - opaque to the core. Empty when the observation declares no
+     * content: an observation that declares no content need not invent an origin. */
+    uint32_t norigin;
+    uint64_t origin[RECORDER_MAX_CONTEXT];
+    /* RECORDER_FAULT_*: non-zero exactly when this observation's declaration was
+     * malformed. A fault always implies `complete == 0` and `nspans == 0`. */
+    uint32_t fault;
 } recorder_event;
 
 /* Returns 0 on success, -1 on an invalid configuration. */
@@ -128,7 +167,7 @@ int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs);
  * scope was not fully observable, e.g. a call that operated on no live resource.
  * `context`/`ncontext` are an opaque, hook-declared record of what the observation
  * addressed; the core stores them verbatim and never interprets them. Declares no
- * content and assumes the post-call point. */
+ * content and no origin, and assumes the post-call point. */
 void recorder_exit(int64_t token, uint64_t result, int complete,
                    const uint64_t *context, uint32_t ncontext);
 
@@ -140,14 +179,31 @@ void recorder_exit(int64_t token, uint64_t result, int complete,
  * lost in full, never partially captured, and downgrades the observation from
  * complete to incomplete. `point` is a RECORDER_POINT_* value.
  *
+ * The declared spans, concatenated in declaration order, are the *complete*
+ * contents of one resource state. `origin`/`norigin` names that state: opaque words
+ * the core stores verbatim and never interprets, exactly like `context`. An
+ * explicit origin wins; when `norigin == 0` there is no explicit origin and the
+ * observation's own context is used instead, so a hook that captured the state it
+ * already named need not repeat it. The declared count is authoritative, exactly as
+ * `nargs` is: `norigin == 0` means no explicit origin whatever the pointer is. An
+ * observation that declares content but has no usable origin declares no content at
+ * all and is malformed (`RECORDER_FAULT_ORIGIN`).
+ *
  * `spans`/`bytes` need only be valid for the duration of this call. The caller
  * states a point in its own lifetime at which those bytes are valid: this is the
  * trusted hook layer's contract, and it does not make copying arbitrary process
- * pointers safe. */
+ * pointers safe.
+ *
+ * A malformed declaration - too many spans, an absent span list, unaddressable bytes,
+ * an invalid point, an over-long context, or content with no usable origin - fails
+ * closed: it is one instrumentation fault (`RECORDER_FAULT_*`, counted once however
+ * many symptoms it shows), it declares no content at all, and the observation can
+ * never be complete. `recorder_event.fault` names the cause. */
 void recorder_exit_content(int64_t token, uint64_t result, int complete,
                            const uint64_t *context, uint32_t ncontext,
                            const recorder_span *spans, uint32_t nspans,
-                           uint32_t point);
+                           uint32_t point,
+                           const uint64_t *origin, uint32_t norigin);
 
 /* Copy the counters out atomically. Call only once all observing threads have
  * stopped. */

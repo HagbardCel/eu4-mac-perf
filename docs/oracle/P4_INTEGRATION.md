@@ -2,10 +2,12 @@
 
 **Status:** in progress. **P4.9** (bounded resource-content capture in the native
 recorder core, and the versioned observation export) is implemented and on the P4.9
-branch. **P4.10** (offline materialization, content-blob publication and identity) and
-**P4.11** (declared translation, `gfx-v2` stateful replay and negative admission)
-remain. **Nothing here launches EU IV, opens a game process, or attaches to a
-binary**: every input is a file this repository's own drivers wrote.
+branch, revised by one corrective commit that made every exported blob a *complete*
+resource version and every captured byte attributable. **P4.10** (offline
+materialization, content-blob publication and identity) and **P4.11** (declared
+translation, `gfx-v2` stateful replay and negative admission) remain. **Nothing here
+launches EU IV, opens a game process, or attaches to a binary**: every input is a file
+this repository's own drivers wrote.
 
 This document is authoritative for the pre-P5 offline integration gate. The phase
 contract is in [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the recorder it builds on is in
@@ -64,18 +66,58 @@ These are the contracts P4.10 and P4.11 build on. P4.9 freezes the *interfaces*;
 deliberately does not implement the materializer, the translator or the `gfx-v2`
 interpreter.
 
-### 1. The native content-span API
+### 1. What captured content *is*
+
+Two rules make captured content trustworthy to anything downstream, and both are
+frozen here:
+
+1. **An observation's declared spans, concatenated in declaration order, are the
+   complete contents of exactly one resource state.** Never a fragment of one: a
+   partial mutation prefix is not content. A digest of an exported blob is therefore a
+   digest of a whole resource version, which is what P4.10 publishes as that version's
+   `contents_sha256`.
+2. **Every captured byte is attributable.** An observation that declares content also
+   declares an **origin**: opaque words naming the resource state those bytes were
+   copied from. An observation that declares no content need not invent one.
+
+Consequently a hook that only ever holds a *fragment* declares no content at all.
+`hook_read` is the case in point: the single byte it observed is not a resource
+version, and its value stays recoverable from the version its context names and the
+offset in its arguments. Recording that byte as content would publish a one-byte
+fragment under a whole-version contract. Under the synthetic subject's hooks:
+
+| Hook | Declared content | Origin |
+| --- | --- | --- |
+| create | the whole initial contents | defaults to the post-create context |
+| update | the whole **post-update** contents | explicit: the version it produced |
+| pair | two ordered halves covering the whole version | defaults to the entry context |
+| read | **none** | none |
+| destroy | **none** | none |
+
+"Declares no explicit origin" is not "declares no content". Only `read` and `destroy`
+declare zero resource-content spans; `create` and `pair` declare a complete version and
+let their context supply the provenance.
+
+### 2. The native content-span API
 
 ```
 void recorder_exit_content(token, result, complete, context, ncontext,
-                           const recorder_span *spans, uint32_t nspans, uint32_t point)
-void recorder_exit(...)   /* unchanged; equivalent to nspans == 0, point == EXIT */
+                           const recorder_span *spans, uint32_t nspans,
+                           uint32_t point,
+                           const uint64_t *origin, uint32_t norigin)
+void recorder_exit(...)   /* unchanged; equivalent to no content and no origin */
 ```
 
 * `point` ∈ {`RECORDER_POINT_ENTRY`, `RECORDER_POINT_EXIT`} declares whether the bytes
   are the state the call **saw on entry** or the state it **left behind**. The hook
   layer owns this declaration; it is the *trusted hook's* contract, and it does not
   make copying arbitrary process pointers safe.
+* `origin`/`norigin` uses the same word layout as `context` (the subject's
+  `SYNTH_CONTEXT_WORDS`, 6 words here). The core stores it verbatim and never
+  interprets it; it validates only the array's structural bounds. An explicit origin
+  wins; when `norigin == 0` the observation's own context is stored as the effective
+  origin. The core is function-agnostic, so the *meaning* of those six words — and
+  whether they name a live resource — is the offline verifier's check, not the core's.
 * A span of `length == 0` declares nothing. A span that does not fit is lost **whole**,
   never partially captured.
 * Spans are copied into the recorder's **own** arena, bounded by
@@ -85,7 +127,46 @@ void recorder_exit(...)   /* unchanged; equivalent to nspans == 0, point == EXIT
   existing golden exact.
 * At most `RECORDER_MAX_SPANS` (4) spans per observation.
 
-### 2. Two independent identities
+### 3. Malformed declarations fail closed
+
+A hook can misdeclare itself. The core resolves one malformed declaration to exactly
+one instrumentation fault — **counted once, however many symptoms it shows**, named by
+the first cause in a fixed precedence — and such an observation **declares no content
+at all and is never complete**. Voiding the declaration is deliberate: nothing is
+counted and nothing is copied, so no consumer can mistake a prefix of a malformed
+declaration for the whole, and `content_bytes_lost` keeps meaning *budget* loss only.
+
+| `fault=` | Meaning |
+| --- | --- |
+| `none` | well formed |
+| `args` | more arguments declared than the policy allows |
+| `context` | more context words than the recorder can record |
+| `point` | a capture point that is neither entry nor exit |
+| `spans` | a malformed span list: too many, or absent while spans are declared |
+| `bytes` | a span declares bytes that are not addressable |
+| `origin` | content declared with no usable origin |
+
+Precedence is the order above. The fault is resolved **before** the policy's selection
+is consulted, so a malformed declaration is counted whether or not the policy chose to
+observe it — instrumentation misuse is not a policy outcome.
+
+A *well-formed* declaration whose origin is structurally valid but semantically wrong
+(a stale generation naming a reused slot) is **not** a core fault: the core cannot know
+which resource a subject's origin words mean. It is exported `complete=1` and rejected
+by the offline closure verifier, which is the fail-closed direction for it.
+
+### 4. Admission
+
+`ADMISSION ok|REJECTED` is exported per scenario and is the explicit signal P4.10's
+admission gate consumes. It is `REJECTED` exactly when unresolved instrumentation
+faults were counted (`rejected > 0`).
+
+Bounded loss is **not** a fault. It leaves its observation incomplete, with its exact
+byte account — which is what *frame qualification* refuses on, a different and weaker
+test than admission. Policy exclusion is likewise not a fault; a frame that requires an
+excluded observation simply cannot qualify as complete.
+
+### 5. Two independent identities
 
 ```
 N_selected = N_captured + N_incomplete + N_lost          /* events  */
@@ -104,22 +185,39 @@ Policy interaction is a third, distinct case. Content declared on a hook the pol
 did **not** select is neither counted nor copied, so a **policy choice is never
 misrepresented as a missing required span**.
 
-### 3. The versioned observation export
+### 6. The versioned observation export
 
 ```
 RECORDER-EXPORT v1
 SCENARIO <name>
 COUNTERS … content_bytes_declared=… content_bytes_captured=… content_bytes_lost=… content_spans_lost=…
 ACCOUNTING ok|VIOLATED
+ADMISSION ok|REJECTED
 ARENA capacity=… used=… intervals=… overlaps=… out_of_range=…
-OBSERVATIONS count=…
-OBS thread=… seq=… phase=… hook=… point=… result=… complete=… nargs=… args=… ncontext=… context=… nspans=… content=…
+OBSERVATIONS count=N listed=0|1
+OBS thread=… seq=… phase=… hook=… point=… result=… complete=… fault=… nargs=… args=… ncontext=… context=… nspans=… content=… norigin=… origin=…
 CONFIG …
 END effects=…
 ```
 
 `content=` is a comma-separated inventory: `c:<length>:<hex>` for a captured span and
-`l:<declared-length>` for a lost one.
+`l:<declared-length>` for a lost one. `origin=` uses the same comma-separated form as
+`context=`.
+
+The reader enforces the shape rather than merely parsing it. Every declared count must
+match the items that follow (`len(args) == nargs`, `len(context) == ncontext`,
+`len(content) == nspans` *including* lost spans, `len(origin) == norigin`); a repeated
+or empty key is refused; integers must be canonical non-negative decimals; every
+scenario must declare its `COUNTERS`, `ACCOUNTING`, `ADMISSION`, `ARENA` and
+`OBSERVATIONS` records; `OBSERVATIONS count` must equal the observations printed when
+`listed=1`, and none may appear when `listed=0`; `ADMISSION` must agree with `rejected`;
+the version line must be first; and there must be exactly one terminal `END`, last,
+with no record after it.
+
+`listed=0` exists because under a *bounded* concurrent arena race, which observation
+won which region is not a property of the capture. The aggregate `ARENA` and `COUNTERS`
+reports are the exact, deterministic statement; the count is still declared, so no
+consumer has to guess whether detail was withheld.
 
 This is a **driver-level** contract. The released `RECORDER v1` accounting transcript
 is untouched *by construction*, because a different driver authors it — adding a field
@@ -130,7 +228,7 @@ mode is needed, and none exists. `harness.parse_export_transcript` is the reader
 overlaps — rather than by printing placement, because under concurrency which thread
 wins which region is arbitrary and must not leak into a golden transcript.
 
-### 4. Content loss in a materialized record (implemented in P4.10)
+### 7. Content loss, and content publication, in a materialized record (P4.10)
 
 `completeness.losses` keeps its existing meaning: **event-level** sub-observation
 loss, and it remains zero for any materialized record. Content loss is carried
@@ -145,8 +243,16 @@ refuses on. The two equations above must not be conflated in the record model ei
 | Event slot unavailable | `lost` | Counted only; no fabricated event |
 | Event excluded by policy | `unselected` | Counted only |
 | Content not selected by the declared policy | as the policy defines | Never reported as required missing content |
+| Malformed declaration | one `fault`, `rejected += 1` | Admission is `REJECTED`; no record is materialized from it |
+| Content whose origin does not resolve | exported `complete=1` | Rejected by closure verification, before the record model |
 
-### 5. The `gfx-v2` vocabulary (declared here, implemented in P4.11)
+P4.10 additionally verifies, per content-bearing observation, that the **concatenated
+snapshot's length equals the independently established resource size for that lifetime
+and version**. The native origin names the resource version but does not by itself
+prove that all of its bytes were supplied, so the length check is the offline half of
+the attributability rule and is part of P4.10's acceptance, not P4.9's.
+
+### 8. The `gfx-v2` vocabulary (declared here, implemented in P4.11)
 
 `gfx-v1` is unchanged and accepts nothing new. `gfx-v2` is a versioned subject
 protocol that declares:
@@ -166,8 +272,8 @@ The interpreter, the subject and the replay land in P4.11.
 
 | Slice | Responsibility |
 | --- | --- |
-| **P4.9** | Native span-capture API, safe bounded arena, correct completeness accounting, versioned export contract, synthetic tests |
-| **P4.10** | Materialization, content-blob closure over the whole store, incomplete-evidence representation, collision-safe deduplication, independent reconciliation of records against native counters |
+| **P4.9** | Native span-capture API, content provenance, safe bounded arena, whole-version content semantics, fail-closed malformed declarations, correct completeness accounting, versioned export contract and its strict reader, synthetic tests |
+| **P4.10** | Materialization, content-blob closure over the whole store, whole-version length verification against the resource size, incomplete-evidence representation, collision-safe deduplication, independent reconciliation of records against native counters |
 | **P4.11** | Versioned `gfx-v2` translation, state-consuming replay, end-to-end closure, and negative admission |
 
 Each is a separately reviewable, separately revertible PR. P4.9's interfaces were
@@ -190,13 +296,31 @@ be confused with the capture buffer's.
 * The export reproduces its committed golden byte-for-byte, deterministically; the
   released `synthetic` and `recorder` goldens are **unchanged**.
 * The export carries each observation's hook, arguments, resource context, declared
-  capture point and content — the information a translation rule needs.
+  capture point, content and content origin — the information a translation rule needs.
+* Captured content is the **complete** contents of one resource version: the
+  post-update state for an update (not the mutated prefix), the whole version for a
+  split pair, and **nothing** for a read.
+* Every captured blob is attributable: content is never exported without an origin, and
+  the origin resolves to the lifetime the bytes came from. An update's origin names the
+  version it produced, not the version it addressed.
 * A declared span that does not fit is lost whole; the observation becomes
   `incomplete`; its partial evidence stays inspectable; and its byte accounting
   reconciles independently of the event accounting.
-* Two calls sharing a resource context are distinguished by their arguments.
+* Every named instrumentation fault occurs at least once; each malformed declaration
+  is one rejection however many symptoms it shows; a faulted observation declares no
+  content and is never complete; and scenario `ADMISSION` is `REJECTED` exactly when
+  `rejected > 0`.
+* A well-formed declaration whose origin names a stale generation is exported complete
+  by the core and **rejected by the offline closure verifier**.
+* Two calls sharing a resource context are distinguished by their arguments, and the
+  values they observed stay recoverable from the published contents of that version.
 * `content_capacity == 0` declares no bytes and changes no completeness.
 * An over-large content capacity is **rejected**, never truncated.
+* The export parser refuses a deleted content item, a truncated argument list, content
+  with no origin, a faulted observation that claims completeness, a repeated or missing
+  field, a non-canonical integer, an observation count that disagrees with the
+  observations, an admission verdict that contradicts the rejections, a missing or
+  duplicated terminal `END`, and any record after it.
 * No two captured spans share an arena byte, under a four-thread race; with an
   eight-byte arena the race ends exactly full.
 * The targets are deterministic across 25 runs, identical at `-O0/-O2/-O3`, clean

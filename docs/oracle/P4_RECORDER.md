@@ -177,8 +177,8 @@ what it intercepted, selected, captured, left incomplete, and lost.
 | `incomplete` | selected entries whose declared scope was not observable |
 | `lost` | selected entries the bounded capture buffer could not hold |
 | `reentrant` | entries observed while already inside an observation |
-| `rejected` | instrumentation errors (over-deep, or an exit with no matching enter) |
-| `content_bytes_declared` | content bytes a captured observation declared (P4.9; zero when content capture is off) |
+| `rejected` | instrumentation errors: over-deep, an exit with no matching enter, and malformed declarations (one per observation) |
+| `content_bytes_declared` | content bytes a well-formed captured observation declared (P4.9; zero when content capture is off) |
 | `content_bytes_captured` | of those, the bytes copied into the arena |
 | `content_bytes_lost` | of those, the bytes lost whole for want of arena |
 | `content_spans_lost` | the number of spans that did not fit |
@@ -364,8 +364,22 @@ freeze.
 copied into the recorder's own arena at the moment of exit, and declares *when* those
 bytes were valid (`RECORDER_POINT_ENTRY` as the call was entered, or
 `RECORDER_POINT_EXIT` after it returned). `recorder_exit` is unchanged and equivalent
-to declaring no spans.
+to declaring no content and no origin.
 
+* **Whole version, not a fragment.** An observation's spans, concatenated in
+  declaration order, are the *complete* contents of one resource state. A partial
+  mutation prefix is not content, and a hook that only ever holds a fragment - a read's
+  single byte - declares nothing.
+* **Every captured byte is attributable.** An observation declaring content also
+  declares an **origin**: opaque words naming the state those bytes came from. An
+  explicit origin wins; with `norigin == 0` the observation's own context is stored as
+  the effective origin. A hook that captured the state it already named need not repeat
+  it. Content declared with no usable origin declares no content at all.
+* **Malformed declarations fail closed.** One malformed declaration is one
+  instrumentation fault, counted once however many symptoms it shows and named by
+  `RECORDER_FAULT_*` in a fixed precedence; it declares no content and is never
+  complete. The fault is resolved before the policy is consulted, so misuse is counted
+  even for an unselected hook.
 * **Off by default.** `recorder_config.content_capacity` bounds the arena and defaults
   to zero, which means content is *undeclared*, not *lost*: a hook may name spans and
   the recorder counts and copies none of them. Every golden predating P4.9 is
@@ -383,10 +397,12 @@ to declaring no spans.
 
 The importable artefact is a **versioned observation export** (`RECORDER-EXPORT v1`),
 written by `oracle/recorder/native/content_driver.c`: per observation, the hook, its
-arguments, its opaque resource context, its declared capture point and its content
-inventory. Because the export is a *driver-level* contract, the released accounting
-transcript is untouched by construction rather than by a compatibility mode.
-`harness.parse_export_transcript` reads it.
+arguments, its opaque resource context, its declared capture point, its content
+inventory, that content's origin and its instrumentation fault, plus a per-scenario
+`ADMISSION ok|REJECTED` verdict. Because the export is a *driver-level* contract, the
+released accounting transcript is untouched by construction rather than by a
+compatibility mode. `harness.parse_export_transcript` reads it, and enforces every
+declared cardinality rather than trusting the rendering.
 
 One latent defect was corrected in passing: the accounting driver's `recorder_config`
 was written field by field from an uninitialised local, which the new field would have
@@ -502,17 +518,28 @@ See `tests/test_oracle_recorder_native.py`.
 
 See `tests/test_oracle_recorder_epoch.py`.
 
-**P4.9 - content capture and the observation export**, bounded, whole-span and
-default-off:
+**P4.9 - content capture and the observation export**, whole-version, attributable,
+fail-closed and default-off:
 
 * the export reproduces its committed golden byte-for-byte and deterministically, and
   the released `synthetic` and `recorder` goldens are unchanged;
-* every observation carries its hook, arguments, context, capture point and content;
+* every observation carries its hook, arguments, context, capture point, content and
+  content origin, and every scenario an `ADMISSION` verdict;
+* captured content is the complete contents of one resource version - the post-update
+  state, not the mutated prefix - and nothing at all for a read, whose value stays
+  recoverable from the version its context names and its argument offset;
+* content is never declared without an origin, and an update's origin names the version
+  it produced while its context names the version it addressed;
+* every instrumentation fault is exercised; each malformed declaration is exactly one
+  rejection, declares no content and is never complete; a well-formed declaration with
+  a stale origin is exported complete and rejected by the closure verifier;
+* the export parser refuses every contradicted cardinality, a repeated or missing
+  field, a non-canonical integer, a wrong observation count, an admission verdict that
+  contradicts the rejections, and a missing, duplicated or non-terminal `END`;
 * a span that does not fit is lost whole, partial evidence survives, the observation
   becomes incomplete, and the byte identity reconciles independently of the event
   identity - including one event that accounts for several lost spans;
-* two calls sharing a resource context are distinguished by their arguments and by
-  their observed bytes;
+* two calls sharing a resource context are distinguished by their arguments;
 * a zero-length span declares nothing, `content_capacity == 0` declares nothing, and
   an over-large capacity is rejected rather than truncated;
 * no two captured spans share an arena byte under a four-thread race, which fills an

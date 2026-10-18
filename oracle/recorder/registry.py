@@ -17,6 +17,12 @@ Closure is then simply: an observation is closed when its reference resolves. Th
 lifetimes it could not resolve become its ``unavailable_dependencies`` - the field
 P4.1 already uses to disqualify a record from semantic comparison.
 
+An observation that declares captured content must also be attributable: its content
+*origin* names the resource state whose bytes were copied, and that origin must
+resolve too. The origin is deliberately separate from the observation context - an
+update addresses version N and its bytes are version N+1 - so attributing content by
+the context would publish one version's bytes under another version's name.
+
 It touches no process and never opens EU IV.
 """
 from __future__ import annotations
@@ -79,6 +85,37 @@ def lifetime_of(reference: Reference) -> str:
     return reference.named if reference.resolved else INCOMPLETE_ORACLE
 
 
+def _reference(context: Sequence[int] | None, what: str, index: int,
+               required: bool) -> Reference | None:
+    """Decode a declared context, insisting on one only when the observation claims to be complete.
+
+    An incomplete observation claims nothing, so it may name nothing - a faulted
+    declaration stores no context at all by design. A complete observation must name
+    its resource with the subject's declared layout, or the capture is not verifiable.
+    """
+    if context:
+        return reference_from_context(context)
+    if required:
+        raise RegistryError(f"observation {index} is complete but declares no {what}")
+    return None
+
+
+def content_origin(event: dict[str, Any]) -> Reference | None:
+    """The resource state an observation's content was copied from, if it declares any.
+
+    ``None`` means the observation declares no content - which is not a defect: an
+    observation that never claimed to hold a resource version has nothing to attribute.
+    Declaring content with no origin, or an origin that is not the subject's declared
+    layout, is a defect: a captured blob must always be attributable.
+    """
+    if not event.get("content"):
+        return None
+    origin = event.get("origin")
+    if not origin:
+        raise RegistryError("an observation declares content with no content origin")
+    return reference_from_context(origin)
+
+
 def verdicts(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """One closure verdict per observation: its lifetime and any named dependency."""
     resolved: list[dict[str, Any]] = []
@@ -99,8 +136,10 @@ def verify_closure(events: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """Verify the capture's resource closure and summarize it.
 
     Raises when an observation claims to be complete while addressing no live
-    resource - the one direction that must never hold, since a complete observation
-    is exactly one that operated on a resource the capture can replay.
+    resource, or while holding content whose origin names no live resource - the
+    directions that must never hold, since a complete observation is exactly one that
+    operated on a resource the capture can replay, and captured bytes are exactly the
+    ones whose version the capture can name.
     """
     lifetimes: set[str] = set()
     unavailable: set[str] = set()
@@ -108,18 +147,28 @@ def verify_closure(events: Sequence[dict[str, Any]]) -> dict[str, Any]:
     unreferenced = 0
 
     for index, event in enumerate(events):
-        reference = reference_from_context(event["context"])
         complete = bool(event["complete"])
-        if complete and not reference.resolved:
+        reference = _reference(event.get("context"), "resource reference", index, complete)
+        if reference is not None and complete and not reference.resolved:
             raise RegistryError(
                 f"observation {index} is complete but its resource reference "
                 f"({reference.named}) does not resolve")
-        if reference.resolved:
+        if reference is not None and reference.resolved:
             lifetimes.add(reference.named)
-        elif reference.valid:
+        elif reference is not None and reference.valid:
             unavailable.add(reference.named)
         else:
             unreferenced += 1
+        origin = content_origin(event)
+        if origin is not None:
+            if complete and not origin.resolved:
+                raise RegistryError(
+                    f"observation {index} is complete but the origin of its content "
+                    f"({origin.named}) does not resolve")
+            if origin.resolved:
+                lifetimes.add(origin.named)
+            elif origin.valid:
+                unavailable.add(origin.named)
         if not complete:
             incomplete += 1
 
