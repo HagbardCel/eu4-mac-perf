@@ -64,6 +64,7 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
         private boolean armed = false;
         private long imageBase = 0;
         private String dataSpaceName = "";
+        private long[][] constructed = new long[0][];
 
         private final List<String[]> executed = new ArrayList<>();
         private final List<String[]> loads = new ArrayList<>();
@@ -100,6 +101,33 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
             loads.add(new String[] {
                 space.getName(), hexOf(asLong(offset)), Integer.toString(size)
             });
+            // The load reads bytes the constructed state must actually provide. The emulator's
+            // readUninitialized callback does not fire for bytes that were merely never written
+            // (verified: a load from an unconstructed address returns zeros silently), so the
+            // check that a required input is missing happens here, on the load itself.
+            if (!isConstructed(space, offset, size)) {
+                uninitializedReads.add(new String[] {
+                    space.getName(), hexOf(asLong(offset)), Integer.toString(size),
+                    "not in the constructed state"
+                });
+            }
+        }
+
+        /** True when the whole loaded range lies inside a region the constructed state provides. */
+        private boolean isConstructed(AddressSpace space, byte[] offset, int size) {
+            if (space == null || !space.getName().equals(dataSpaceName)) {
+                return false;
+            }
+            Long address = asLong(offset);
+            if (address == null) {
+                return false;
+            }
+            for (long[] region : constructed) {
+                if (address >= region[0] && address + size <= region[1]) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         @Override
@@ -134,10 +162,14 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
         public <A, U> int readUninitialized(PcodeThread<byte[]> thread,
                 PcodeExecutorStatePiece<A, U> piece, AddressSpace space, A offset, int length,
                 Reason reason) {
-            if (space.isUniqueSpace() || space.isRegisterSpace() || space.isConstantSpace()) {
-                // Ghidra-internal temporary state, not an original-function memory effect.
+            if (!armed) {
+                // Setup and read-back are this harness's own work, not execution.
                 return 0;
             }
+            // The defensive hook for state the emulator itself reports as uninitialized. It does
+            // not fire for bytes that were merely never written in this state configuration, which
+            // is why the load check in beforeLoad is the load-bearing one. Kept honest anyway: it
+            // honours the same arming boundary and records every space, not just the data space.
             uninitializedReads.add(new String[] {
                 space.getName(), hexOf(asLong(offset)), Integer.toString(length),
                 reason.name()
@@ -235,12 +267,12 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
         return object;
     }
 
-    private static byte[] fillPattern(int size) {
-        byte[] out = new byte[size];
-        for (int i = 0; i < size; i++) {
-            out[i] = (byte) (((i * 0x37) + 0x11) & 0xff);
+    private static JsonObject hexes(Map<String, Long> map) {
+        JsonObject object = new JsonObject();
+        for (Map.Entry<String, Long> entry : map.entrySet()) {
+            object.addProperty(entry.getKey(), hexOf(entry.getValue()));
         }
-        return out;
+        return object;
     }
 
     private static void put(byte[] region, long base, long address, byte[] value) {
@@ -258,12 +290,13 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
     @Override
     public void run() throws Exception {
         String[] args = getScriptArgs();
-        if (args.length < 2) {
+        if (args.length < 3) {
             throw new IllegalArgumentException(
-                "usage: EmulateGfxSetConstantBuffer.java <scenariosJson> <outputJson>");
+                "usage: EmulateGfxSetConstantBuffer.java <scenariosJson> <outputJson> <pinnedSha256>");
         }
         File scenariosFile = new File(args[0]);
         File outputFile = new File(args[1]);
+        String pinnedSha = args[2].trim();
 
         byte[] scenariosBytes = Files.readAllBytes(scenariosFile.toPath());
         String scenariosSha = sha256(scenariosBytes);
@@ -277,6 +310,7 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
 
         Language language = currentProgram.getLanguage();
         AddressSpace space = language.getDefaultSpace();
+        requirePinnedTarget(pinnedSha, scenarios, imageBase, language);
         Address entry = currentProgram.getAddressFactory().getDefaultAddressSpace()
                 .getAddress(entryVa);
 
@@ -305,6 +339,10 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
         environment.addProperty("program_name", currentProgram.getName());
         environment.addProperty("program_path", currentProgram.getExecutablePath());
         environment.addProperty("image_base", hexOf(imageBase));
+        environment.addProperty("loaded_image_base",
+            hexOf(currentProgram.getImageBase().getOffset()));
+        environment.addProperty("language_id", language.getLanguageID().getIdAsString());
+        environment.addProperty("pinned_sha256", pinnedSha);
 
         JsonObject canonical = new JsonObject();
         canonical.addProperty("function", scenarios.get("function").getAsString());
@@ -325,6 +363,83 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
         Files.writeString(outputFile.toPath(), gson.toJson(root) + "\n");
         println("wrote " + outputFile.getAbsolutePath());
+    }
+
+    /**
+     * Refuse to execute unless the loaded program is the independently pinned target.
+     *
+     * The pinned digest arrives from the caller (reverse_engineering/target.json), not from the
+     * scenario file, so the scenario declaration and the loaded program cannot agree with each
+     * other while both being wrong about which executable this is. Image base and architecture
+     * are read from the loaded program, not echoed from the scenario file.
+     */
+    private void requirePinnedTarget(String pinnedSha, JsonObject scenarios, long imageBase,
+            Language language) {
+        String declared = scenarios.get("binary_sha256").getAsString();
+        if (!pinnedSha.equalsIgnoreCase(declared)) {
+            throw new IllegalStateException("the scenario file pins " + declared
+                + " but the pinned target is " + pinnedSha);
+        }
+        String loaded = currentProgram.getExecutableSHA256();
+        if (loaded == null || !pinnedSha.equalsIgnoreCase(loaded)) {
+            throw new IllegalStateException("the loaded program is not the pinned target: " + loaded);
+        }
+        long loadedBase = currentProgram.getImageBase().getOffset();
+        if (loadedBase != imageBase) {
+            throw new IllegalStateException("the loaded program has image base 0x"
+                + Long.toHexString(loadedBase) + ", the freeze declares 0x"
+                + Long.toHexString(imageBase));
+        }
+        String languageId = language.getLanguageID().getIdAsString();
+        if (!languageId.startsWith("x86:LE:64")) {
+            throw new IllegalStateException("the loaded program is not x86-64: " + languageId);
+        }
+    }
+
+    /**
+     * The declared byte pattern for the context and stack regions. The freeze owns the formula;
+     * this only interprets the declared kind.
+     */
+    private static byte[] fillPattern(JsonObject memory, int size) {
+        JsonObject fill = memory.getAsJsonObject("fill_pattern");
+        String kind = fill.get("kind").getAsString();
+        if (!"linear_byte_pattern".equals(kind)) {
+            throw new IllegalStateException("unknown fill pattern kind " + kind);
+        }
+        int multiplier = fill.get("multiplier").getAsInt();
+        int increment = fill.get("increment").getAsInt();
+        byte[] out = new byte[size];
+        for (int i = 0; i < size; i++) {
+            out[i] = (byte) (((i * multiplier) + increment) & 0xff);
+        }
+        return out;
+    }
+
+    /**
+     * The closed vocabulary of frozen initial-register symbols. An unknown symbol is an error,
+     * never a silent zero.
+     */
+    private static long resolveRegisterSymbol(String symbol, long slot, long bufferVa,
+            long handleVa, long rbpInitial, long rsp0, long r9d) {
+        switch (symbol) {
+            case "slot":
+                return slot;
+            case "buffer":
+                return bufferVa;
+            case "handle":
+                return handleVa;
+            case "rbp_initial":
+                return rbpInitial;
+            case "rsp0":
+                return rsp0;
+            case "r9d_zero_extended":
+                return r9d;
+            default:
+                if (symbol.startsWith("0x")) {
+                    return parseHex(symbol);
+                }
+                throw new IllegalStateException("unknown initial register symbol " + symbol);
+        }
     }
 
     private JsonObject runScenario(JsonObject scenario, JsonObject scenarios, Language language,
@@ -358,9 +473,9 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
 
         // Constructed memory. The buffer region exists only where a scenario declares a
         // length for it; elsewhere a read of [RSI] must not happen at all.
-        byte[] ctx = fillPattern(ctxSize);
+        byte[] ctx = fillPattern(memory, ctxSize);
         byte[] handle = le(ctxVa, 8);
-        byte[] stack = fillPattern(stackSize);
+        byte[] stack = fillPattern(memory, stackSize);
         put(stack, stackBase, rsp0, le(sentinel, 8));
         byte[] buffer = hasBufferValue
             ? le(parseHex(scenario.get("buffer_first_dword").getAsString()), 4) : null;
@@ -380,16 +495,19 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
         thread.overrideContextWithDefault();
         ThreadPcodeExecutorState<byte[]> state = thread.getState();
 
+        // The initial register file comes from the freeze, not from constants in this script, so
+        // the declared initial state and the executed one cannot drift apart. The freeze declares
+        // every general-purpose register.
+        JsonObject declaredInitial = scenarios.getAsJsonObject("initial_registers");
         Map<String, Long> registers = new LinkedHashMap<>();
         for (String name : GENERAL_PURPOSE) {
-            registers.put(name, 0L);
+            JsonElement declared = declaredInitial.get(name);
+            if (declared == null || !declared.isJsonPrimitive()) {
+                throw new IllegalStateException("initial_registers does not declare " + name);
+            }
+            registers.put(name, resolveRegisterSymbol(declared.getAsString(), slot, bufferVa,
+                handleVa, rbpInitial, rsp0, r9d));
         }
-        registers.put("RCX", slot);
-        registers.put("R9", r9d);
-        registers.put("RSI", bufferVa);
-        registers.put("RDI", handleVa);
-        registers.put("RBP", rbpInitial);
-        registers.put("RSP", rsp0);
         for (Map.Entry<String, Long> entryRegister : registers.entrySet()) {
             Register register = language.getRegister(entryRegister.getKey());
             if (register == null) {
@@ -414,6 +532,15 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
 
         trace.imageBase = imageBase;
         trace.dataSpaceName = space.getName();
+        // The regions the constructed state actually provides. A load outside all of them is a
+        // missing input and makes the run unqualified. An absent buffer is an empty region, so a
+        // read of [RSI] on a path that needs it is caught.
+        trace.constructed = new long[][] {
+            {ctxVa, ctxVa + ctxSize},
+            {handleVa, handleVa + handle.length},
+            {bufferVa, bufferVa + (buffer == null ? 0 : buffer.length)},
+            {stackBase, stackBase + stackSize},
+        };
         trace.armed = true;
         try {
             for (steps = 0; steps < STEP_BUDGET; steps++) {
@@ -448,7 +575,10 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
             reasons.add("missing userop(s): " + String.join(",", trace.missingUserops));
         }
         if (!trace.uninitializedReads.isEmpty()) {
-            reasons.add("uninitialized read from the constructed state");
+            String[] first = trace.uninitializedReads.get(0);
+            reasons.add("read uninitialized constructed state: " + first[0] + " at " + first[1]
+                + " width " + first[2] + " (" + first[3] + "), "
+                + trace.uninitializedReads.size() + " in total");
         }
 
         Map<String, String> finalRegisters = new LinkedHashMap<>();
@@ -466,6 +596,7 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
         result.addProperty("path", scenario.get("path").getAsString());
         result.addProperty("slot", slot);
         result.addProperty("r9d", hexOf(r9d));
+        result.add("initial_registers", hexes(registers));
         result.add("executed", rows(trace.executed));
         result.add("loads", rows(trace.loads));
         result.add("stores", rows(trace.stores));

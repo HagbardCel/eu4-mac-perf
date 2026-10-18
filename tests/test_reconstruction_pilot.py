@@ -1,18 +1,21 @@
 """RE0 offline execution pilot (`_GfxSetConstantBuffer`, entry RVA 0x15ec36a).
 
 Always (CI, no corpus): the frozen scenarios are internally consistent, both declared execution
-paths are the reviewed listing walked from the entry, the declared observation windows cover
-every write target, and the committed receipt validates against the frozen expectations.
+paths are the reviewed listing walked from the entry, the declared constructed state is complete
+and resolvable, the committed receipt validates against the frozen expectations, and forged
+receipts are rejected for the reason under test.
 
 With the local corpus present: executed instruction bytes are re-checked against the pinned
 binary. With Ghidra and the analysed project present: the pilot is re-run twice and must
-reproduce the committed receipt's canonical block.
+reproduce the committed receipt's canonical block, and a deliberately unavailable required input
+must fail qualification.
 
 Nothing here launches or attaches to the game.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -170,6 +173,70 @@ class FrozenScenarioTests(unittest.TestCase):
             ],
         )
 
+    # ------------------------------------------------ declarations that must be authoritative
+
+    def test_fill_pattern_is_declared_and_reconstructs_literal_bytes(self) -> None:
+        pattern = self.scenarios["memory"]["fill_pattern"]
+        self.assertEqual(pattern["kind"], "linear_byte_pattern")
+        # Hand-computed bytes of ((i * 55) + 17) & 0xff - not derived from the implementation.
+        self.assertEqual(
+            pilot.fill_pattern(self.scenarios["memory"], 6),
+            bytes([0x11, 0x48, 0x7F, 0xB6, 0xED, 0x24]),
+        )
+        # The context and stack pre-state are both reconstructible from the freeze.
+        ctx_window, stack_window = pilot.expected_windows(self.scenarios)
+        self.assertEqual(len(ctx_window), 0x139 - 0xB8)
+        self.assertEqual(len(stack_window), 0x20 + 0x10)
+        # The stack pre-state carries the return sentinel at the return address (0x20 into the
+        # window: the eight bytes before rsp0 are the saved frame word, the eight after are past
+        # the return slot).
+        self.assertEqual(
+            stack_window[0x20:0x28],
+            pilot.hexint(self.scenarios["constants"]["return_sentinel"]).to_bytes(8, "little"),
+        )
+
+    def test_initial_registers_are_declared_for_every_register(self) -> None:
+        self.assertEqual(set(self.scenarios["initial_registers"]), set(pilot.GENERAL_PURPOSE))
+        for scenario in self.scenarios["scenarios"]:
+            resolved = pilot.initial_registers(scenario, self.scenarios)
+            self.assertEqual(set(resolved), set(pilot.GENERAL_PURPOSE))
+
+    def test_r9_starts_at_the_frozen_r9d_zero_extended(self) -> None:
+        """The corrected declaration: only the upper half of R9 starts at zero."""
+        for scenario in self.scenarios["scenarios"]:
+            resolved = pilot.initial_registers(scenario, self.scenarios)
+            self.assertEqual(resolved["R9"], pilot.hexint(scenario["r9d"]))
+            self.assertLessEqual(resolved["R9"], 0xFFFFFFFF)
+            self.assertEqual(resolved["RDX"], 0)
+        s01 = self.scenarios["scenarios"][0]
+        self.assertEqual(pilot.initial_registers(s01, self.scenarios)["R9"], 0xFFFFFFFF)
+
+    def test_unknown_register_symbols_are_rejected(self) -> None:
+        self.assertEqual(pilot.resolve_register("0x10", {}), 0x10)
+        self.assertEqual(pilot.resolve_register("slot", {"slot": 3}), 3)
+        with self.assertRaises(ValueError):
+            pilot.resolve_register("not_a_declared_symbol", {})
+
+    def test_expected_final_registers_close_over_every_register(self) -> None:
+        asserted, preserved, not_asserted = pilot.expected_final_registers(
+            self.scenarios["scenarios"][0], self.scenarios
+        )
+        self.assertEqual(
+            set(asserted) | set(preserved) | set(not_asserted),
+            set(pilot.GENERAL_PURPOSE) | {"RFLAGS"},
+        )
+        self.assertEqual(len(asserted) + len(preserved) + len(not_asserted), 17)
+        self.assertFalse(set(asserted) & set(preserved))
+        self.assertFalse(set(asserted) & set(not_asserted))
+
+    def test_buffer_absence_semantics_are_declared(self) -> None:
+        self.assertIn("buffer_first_dword", self.scenarios["scenario_field_semantics"])
+        for scenario in self.scenarios["scenarios"]:
+            self.assertNotIn("rsi_mapped", scenario, "redundant field was reintroduced")
+        s13 = self.scenarios["scenarios"][-1]
+        self.assertIsNone(s13["buffer_first_dword"])
+        self.assertEqual(s13["path"], "explicit_length")
+
 
 @unittest.skipUnless(RECEIPT_PRESENT, "committed pilot receipt not present")
 class ReceiptTests(unittest.TestCase):
@@ -189,6 +256,120 @@ class ReceiptTests(unittest.TestCase):
         self.assertEqual(digests[0], digests[1])
         self.assertTrue(determinism["identical"])
         self.assertEqual(pilot.canonical_digest(self.receipt["canonical"]), digests[0])
+
+
+def _resign(receipt: dict) -> dict:
+    """Re-record the canonical digest after a mutation.
+
+    A forged receipt is self-consistent: it hashes what it carries. That is the point of these
+    tests - the mutation must be caught by the semantic checks, not by a stale digest.
+    """
+    digest = pilot.canonical_digest(receipt["canonical"])
+    receipt["determinism"]["canonical_sha256"] = [digest, digest]
+    return receipt
+
+
+def _flip_byte(hex_text: str, index: int) -> str:
+    raw = bytearray.fromhex(hex_text)
+    raw[index] ^= 0xFF
+    return raw.hex()
+
+
+@unittest.skipUnless(RECEIPT_PRESENT, "committed pilot receipt not present")
+class ForgedReceiptTests(unittest.TestCase):
+    """Mutations a receipt could carry while still hashing to its own digests."""
+
+    def setUp(self) -> None:
+        self.receipt = json.loads(RECEIPT_PATH.read_text())
+
+    def failures(self, mutate) -> list[str]:
+        receipt = copy.deepcopy(self.receipt)
+        mutate(receipt)
+        return pilot.validate_receipt(_resign(receipt))
+
+    def assert_rejected(self, failures: list[str], keyword: str) -> None:
+        self.assertTrue(failures, "the mutation was accepted")
+        self.assertTrue(
+            any(keyword in message for message in failures),
+            f"rejected, but not for {keyword!r}: {failures[:5]}",
+        )
+
+    def test_resigning_an_unmutated_receipt_still_validates(self) -> None:
+        # Guards the helper: only the mutation may cause a rejection.
+        receipt = copy.deepcopy(self.receipt)
+        self.assertEqual(pilot.validate_receipt(_resign(receipt)), [])
+
+    def test_canary_byte_changed_in_both_context_windows_is_rejected(self) -> None:
+        """The case that motivated reconstructing the pre-state.
+
+        Index 0 of the context window is inside the leading canary band, so nothing is allowed to
+        write it; changing it in both the recorded before and after windows leaves the before/after
+        comparison and the write containment untouched. Only comparison against the frozen
+        pre-state catches it.
+        """
+
+        def mutate(receipt: dict) -> None:
+            result = receipt["canonical"]["results"][0]
+            for key in ("ctx_window_before", "ctx_window_after"):
+                result[key] = _flip_byte(result[key], 0)
+
+        self.assert_rejected(self.failures(mutate), "context pre-state")
+
+    def test_canary_byte_changed_in_both_stack_windows_is_rejected(self) -> None:
+        def mutate(receipt: dict) -> None:
+            result = receipt["canonical"]["results"][0]
+            for key in ("stack_window_before", "stack_window_after"):
+                result[key] = _flip_byte(result[key], 0)
+
+        self.assert_rejected(self.failures(mutate), "stack pre-state")
+
+    def test_changed_recorded_r9d_is_rejected(self) -> None:
+        def mutate(receipt: dict) -> None:
+            receipt["canonical"]["results"][0]["r9d"] = "0x00000000"
+
+        self.assert_rejected(self.failures(mutate), "r9d")
+
+    def test_changed_initial_register_is_rejected(self) -> None:
+        """The historical defect: recording R9 as initially zero must not validate."""
+
+        def mutate(receipt: dict) -> None:
+            receipt["canonical"]["results"][0]["initial_registers"]["R9"] = "0x0"
+
+        self.assert_rejected(self.failures(mutate), "initial R9")
+
+    def test_dropped_initial_register_is_rejected(self) -> None:
+        def mutate(receipt: dict) -> None:
+            del receipt["canonical"]["results"][0]["initial_registers"]["R9"]
+
+        self.assert_rejected(self.failures(mutate), "initial R9")
+
+    def test_uninitialized_read_is_rejected(self) -> None:
+        def mutate(receipt: dict) -> None:
+            receipt["canonical"]["results"][4]["uninitialized_reads"] = [
+                ["ram", "0x300000000", "4", "EXECUTE_READ"]
+            ]
+
+        self.assert_rejected(self.failures(mutate), "uninitialized")
+
+    def test_changed_store_trace_is_rejected(self) -> None:
+        def mutate(receipt: dict) -> None:
+            receipt["canonical"]["results"][0]["stores"].pop(0)
+
+        self.assert_rejected(self.failures(mutate), "store sequence")
+
+    def test_divergent_state_write_trace_is_rejected(self) -> None:
+        def mutate(receipt: dict) -> None:
+            receipt["canonical"]["results"][0]["data_written"].pop()
+
+        self.assert_rejected(self.failures(mutate), "state-level write trace")
+
+    def test_unqualified_result_is_rejected(self) -> None:
+        def mutate(receipt: dict) -> None:
+            result = receipt["canonical"]["results"][0]
+            result["qualified"] = False
+            result["reasons"] = ["forged"]
+
+        self.assert_rejected(self.failures(mutate), "not qualified")
 
 
 @unittest.skipUnless(RECEIPT_PRESENT and BINARY_PRESENT, "pinned binary or receipt not present")
@@ -220,6 +401,40 @@ class PilotExecutionTests(unittest.TestCase):
             "re-run does not reproduce the committed canonical block",
         )
         self.assertEqual(pilot.validate_receipt(receipt), [])
+
+
+@unittest.skipUnless(
+    ghidra_available() and PROJECT_PRESENT and BINARY_PRESENT,
+    "GHIDRA_INSTALL, the analysed project or the pinned binary not present",
+)
+class NegativeControlTests(unittest.TestCase):
+    """s13 proves an absent buffer is not read on the explicit path.
+
+    This is the converse: on the buffer path an absent buffer is a required input, so the run
+    must record the uninitialized dependency, mark itself unqualified, and be rejected by the
+    validator. Both cases together show the check is not vacuous.
+    """
+
+    def test_withheld_buffer_input_fails_qualification(self) -> None:
+        broken = copy.deepcopy(pilot.load_scenarios())
+        target = next(s for s in broken["scenarios"] if s["path"] == "length_from_buffer")
+        target["buffer_first_dword"] = None
+
+        with tempfile.TemporaryDirectory() as work:
+            scenarios_path = Path(work) / "scenarios.json"
+            scenarios_path.write_text(json.dumps(broken, indent=2) + "\n")
+            observations = json.loads(
+                pilot.run_pilot(Path(work) / "run.json", scenarios_path=scenarios_path).read_text()
+            )
+            failures = pilot.validate_observations(observations, scenarios_path=scenarios_path)
+
+        result = observations["canonical"]["results"][0]
+        self.assertEqual(result["id"], target["id"])
+        self.assertTrue(result["uninitialized_reads"],
+                        "the withheld buffer produced no uninitialized dependency")
+        self.assertIn("uninitialized", " ".join(result["reasons"]))
+        self.assertIs(result["qualified"], False)
+        self.assertTrue(failures, "the validator accepted a run with an unavailable required input")
 
 
 if __name__ == "__main__":

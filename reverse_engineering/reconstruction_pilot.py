@@ -128,10 +128,109 @@ def _rows(rows: list[list[str]], with_value: bool) -> list[tuple]:
     return out
 
 
+# ---------------------------------------------------- the frozen constructed state
+
+#: Every general-purpose register the freeze declares, plus the one it declines to assert.
+GENERAL_PURPOSE = (
+    "RAX", "RBX", "RCX", "RDX", "RSI", "RDI", "RBP", "RSP",
+    "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15",
+)
+
+
+def fill_pattern(memory: dict[str, Any], size: int) -> bytes:
+    """The declared byte pattern for the context and stack regions.
+
+    The freeze owns the formula; this only interprets the declared kind, so the reconstruction
+    cannot drift from what the emulator constructs.
+    """
+    pattern = memory["fill_pattern"]
+    if pattern["kind"] != "linear_byte_pattern":
+        raise ValueError(f"unknown fill pattern kind {pattern['kind']!r}")
+    multiplier = pattern["multiplier"]
+    increment = pattern["increment"]
+    return bytes(((index * multiplier) + increment) & 0xFF for index in range(size))
+
+
+def resolve_register(symbol: str, names: dict[str, int]) -> int:
+    """Resolve one frozen register symbol. An unknown symbol is an error, never a zero."""
+    if symbol in names:
+        return names[symbol]
+    if symbol.startswith("0x"):
+        return hexint(symbol)
+    raise ValueError(f"unknown register symbol {symbol!r}")
+
+
+def initial_registers(scenario: dict[str, Any], scenarios: dict[str, Any]) -> dict[str, int]:
+    """The frozen initial register file for one scenario."""
+    bases = _bases(scenarios)
+    names = {
+        "slot": scenario["slot"],
+        "buffer": bases["buffer"],
+        "handle": bases["handle"],
+        "rbp_initial": bases["rbp_initial"],
+        "rsp0": bases["rsp0"],
+        "r9d_zero_extended": hexint(scenario["r9d"]),
+    }
+    declared = scenarios["initial_registers"]
+    return {name: resolve_register(declared[name], names) for name in GENERAL_PURPOSE}
+
+
+def expected_final_registers(
+    scenario: dict[str, Any], scenarios: dict[str, Any]
+) -> tuple[dict[str, int], dict[str, int], list[str]]:
+    """The frozen final register expectations: (asserted, must be preserved, not asserted).
+
+    Only the declared table decides which registers are asserted; nothing here adds one.
+    """
+    bases = _bases(scenarios)
+    declared = scenarios["expected_final_registers"]
+    preserved_names = list(declared["preserved"])
+    not_asserted = list(declared["not_asserted"])
+    initial = initial_registers(scenario, scenarios)
+    names = {
+        "ctx": bases["ctx"],
+        "slot_times_stride": scenario["slot"] * scenarios["layout"]["slot_stride"],
+        "expected_rdx": hexint(scenario["expected_rdx"]),
+        "expected_r9": hexint(scenario["expected_r9"]),
+        "rsp0_plus_8": bases["rsp0"] + 8,
+        "rbp_initial": bases["rbp_initial"],
+    }
+    asserted = {
+        name: resolve_register(value, names)
+        for name, value in declared.items()
+        if name not in ("preserved", "not_asserted")
+    }
+    return asserted, {name: initial[name] for name in preserved_names}, not_asserted
+
+
+def expected_windows(scenarios: dict[str, Any]) -> tuple[bytes, bytes]:
+    """(context, stack) window bytes exactly as the freeze constructs them, before execution."""
+    memory = scenarios["memory"]
+    layout = scenarios["layout"]
+    constants = scenarios["constants"]
+
+    ctx_base = hexint(memory["ctx"])
+    ctx = fill_pattern(memory, hexint(memory["ctx_size"]))
+    ctx_start = hexint(layout["canary_before_start"])
+    ctx_length = hexint(layout["canary_after_end"]) - ctx_start
+    ctx_window = ctx[ctx_start:ctx_start + ctx_length]
+
+    stack_base = hexint(memory["stack_base"])
+    stack = bytearray(fill_pattern(memory, hexint(memory["stack_size"])))
+    sentinel_at = hexint(memory["rsp0"]) - stack_base
+    stack[sentinel_at:sentinel_at + 8] = hexint(constants["return_sentinel"]).to_bytes(8, "little")
+    stack_start = hexint(memory["rsp0"]) - hexint(layout["stack_window_before"])
+    stack_length = hexint(layout["stack_window_before"]) + hexint(layout["stack_window_after"])
+    offset = stack_start - stack_base
+    return ctx_window, bytes(stack[offset:offset + stack_length])
+
+
 # ---------------------------------------------------------------- validation
 
 
-def validate_receipt(receipt: dict[str, Any], *, mapper: Any = None) -> list[str]:
+def validate_receipt(
+    receipt: dict[str, Any], *, scenarios_path: Path | None = None, mapper: Any = None
+) -> list[str]:
     """Validate a committed receipt, including its determinism block."""
     failures: list[str] = []
 
@@ -139,6 +238,7 @@ def validate_receipt(receipt: dict[str, Any], *, mapper: Any = None) -> list[str
         if not condition:
             failures.append(message)
 
+    scenarios = load_scenarios(scenarios_path)
     check(receipt.get("schema") == RECEIPT_SCHEMA, f"receipt schema is {receipt.get('schema')!r}")
     statement = receipt.get("statement")
     check(
@@ -146,7 +246,7 @@ def validate_receipt(receipt: dict[str, Any], *, mapper: Any = None) -> list[str
         "receipt does not state that the evidence is P-code emulation of the original instructions",
     )
     check(
-        receipt.get("limits") == load_scenarios()["limits"],
+        receipt.get("limits") == scenarios["limits"],
         "receipt does not carry the frozen limits verbatim",
     )
     determinism = receipt.get("determinism", {})
@@ -165,7 +265,9 @@ def validate_receipt(receipt: dict[str, Any], *, mapper: Any = None) -> list[str
         "canonical block does not hash to its recorded digest",
     )
     failures += validate_observations(
-        {"schema": OBSERVATIONS_SCHEMA, "canonical": canonical}, mapper=mapper
+        {"schema": OBSERVATIONS_SCHEMA, "canonical": canonical},
+        scenarios_path=scenarios_path,
+        mapper=mapper,
     )
     return failures
 
@@ -173,16 +275,19 @@ def validate_receipt(receipt: dict[str, Any], *, mapper: Any = None) -> list[str
 def validate_observations(
     observations: dict[str, Any],
     *,
-    scenarios: dict[str, Any] | None = None,
+    scenarios_path: Path | None = None,
     inventory_text: dict[int, str] | None = None,
     mapper: Any = None,
 ) -> list[str]:
     """Compare one run's observation record against the frozen scenarios.
 
+    The frozen file is identified by its own bytes: `scenarios_path` selects it, and the digest
+    the run recorded is compared against the digest of those bytes, never of a re-serialisation.
     `mapper` is an optional open MachOMapper used for the independent check of executed
     instruction bytes against the pinned binary.
     """
-    scenarios = scenarios or load_scenarios()
+    path = Path(scenarios_path) if scenarios_path is not None else SCENARIOS_PATH
+    scenarios = load_scenarios(path)
     texts = inventory_text if inventory_text is not None else inventory_text_by_rva()
     failures: list[str] = []
 
@@ -203,7 +308,7 @@ def validate_observations(
           "the run recorded a pinned binary digest that is not the repo's target digest")
     check(canonical.get("executable_sha256") == pinned,
           "the emulated program identity is not the pinned binary")
-    check(canonical.get("scenarios_sha256") == scenarios_sha256(),
+    check(canonical.get("scenarios_sha256") == scenarios_sha256(path),
           "run did not consume the frozen scenarios byte-for-byte")
 
     results = canonical.get("results", [])
@@ -228,10 +333,23 @@ def _validate_scenario(
 
     check(result.get("path") == scenario["path"], f"{tag}: path differs from the frozen scenario")
     check(result.get("slot") == scenario["slot"], f"{tag}: slot differs from the frozen scenario")
+    check(hexint(result.get("r9d", "0xdeadbeef")) == hexint(scenario["r9d"]),
+          f"{tag}: recorded r9d {result.get('r9d')} is not the frozen {scenario['r9d']}")
     check(result.get("qualified") is True, f"{tag}: run not qualified: {result.get('reasons')}")
     check(result.get("reasons") == [], f"{tag}: run carried reasons: {result.get('reasons')}")
     check(result.get("uninitialized_reads") == [],
           f"{tag}: the constructed state was read uninitialized: {result.get('uninitialized_reads')}")
+
+    # The initial register file: what was loaded must be what the freeze declares, register by
+    # register. A run that deviates from any declared initial register is not the frozen run.
+    initial = initial_registers(scenario, scenarios)
+    recorded_initial = result.get("initial_registers", {})
+    for name, value in initial.items():
+        check(hexint(recorded_initial.get(name, "0xdeadbeef")) == value,
+              f"{tag}: initial {name} is {recorded_initial.get(name)}, "
+              f"the freeze declares {value:#x}")
+    check(set(recorded_initial) == set(GENERAL_PURPOSE),
+          f"{tag}: the run did not record every general-purpose initial register")
 
     # Execution: the exact ordered PC sequence, each decoded instruction, and its bytes.
     path = scenarios["paths"][scenario["path"]]
@@ -264,29 +382,22 @@ def _validate_scenario(
           f"{tag}: state-level write trace differs from the executed store sequence: "
           f"{result.get('data_written')}")
 
-    # Return boundary and register outcome.
+    # Return boundary and register outcome, from the freeze's own declared expectations: the
+    # asserted registers, and the registers that must still hold their frozen initial value.
     registers = result.get("final_registers", {})
-    expected_registers = {
-        "RAX": bases["ctx"],
-        "RCX": scenario["slot"] * scenarios["layout"]["slot_stride"],
-        "R9": hexint(scenario["expected_r9"]),
-        "RDX": hexint(scenario["expected_rdx"]),
-        "RSP": bases["rsp0"] + 8,
-        "RBP": bases["rbp_initial"],
-        "RDI": bases["handle"],
-        "RSI": bases["buffer"],
-        "RBX": 0,
-        "R8": 0,
-        "R10": 0,
-        "R11": 0,
-        "R12": 0,
-        "R13": 0,
-        "R14": 0,
-        "R15": 0,
-    }
-    for name, value in expected_registers.items():
+    asserted, preserved, not_asserted = expected_final_registers(scenario, scenarios)
+    check(not (set(asserted) & set(preserved)) and not (set(asserted) & set(not_asserted))
+          and not (set(preserved) & set(not_asserted)),
+          f"{tag}: the frozen register table declares a register more than once")
+    for name, value in asserted.items():
         check(hexint(registers.get(name, "0xdeadbeef")) == value,
-              f"{tag}: final {name} is {registers.get(name)}, expected {value:#x}")
+              f"{tag}: final {name} is {registers.get(name)}, the freeze expects {value:#x}")
+    for name, value in preserved.items():
+        check(hexint(registers.get(name, "0xdeadbeef")) == value,
+              f"{tag}: final {name} is {registers.get(name)}, the freeze requires it to hold "
+              f"its initial {value:#x}")
+    check(all(name in GENERAL_PURPOSE or name == "RFLAGS" for name in not_asserted),
+          f"{tag}: the freeze declines to assert something that is not a register: {not_asserted}")
 
     _validate_windows(check, tag, result, scenarios, bases)
 
@@ -298,8 +409,10 @@ def _validate_windows(
     scenarios: dict[str, Any],
     bases: dict[str, int],
 ) -> None:
-    """Context memory: only the declared writes changed, canaries and pads included."""
+    """Context memory: the recorded pre-state is the frozen one, only the declared writes
+    changed, and canaries and pads included."""
     layout = scenarios["layout"]
+    frozen_ctx, frozen_stack = expected_windows(scenarios)
     window_base = bases["ctx"] + hexint(layout["canary_before_start"])
     window_length = hexint(layout["canary_after_end"]) - hexint(layout["canary_before_start"])
     check(hexint(result.get("ctx_window_base", "0x0")) == window_base,
@@ -309,6 +422,11 @@ def _validate_windows(
     if len(before) != window_length or len(after) != window_length:
         check(False, f"{tag}: recorded context window has the wrong length")
         return
+    # The recorded pre-state must be the state the freeze declares, independently reconstructed
+    # here. Without this, before/after agreement only shows the record is self-consistent.
+    check(before == frozen_ctx,
+          f"{tag}: recorded context pre-state is not the frozen constructed state "
+          f"({sum(a != b for a, b in zip(before, frozen_ctx))} of {window_length} bytes differ)")
     changed = {index for index in range(window_length) if before[index] != after[index]}
     declared_changes: set[int] = set()
     for _, address, width, value in expected_stores(result_scenario(result, scenarios), scenarios):
@@ -324,7 +442,8 @@ def _validate_windows(
           f"{tag}: context bytes changed outside the declared writes: "
           f"{sorted(hex(window_base + index) for index in changed - declared_changes)}")
 
-    # Stack: exactly the eight saved bytes changed, and the return sentinel is intact.
+    # Stack: the recorded pre-state is the frozen one, exactly the eight saved bytes changed,
+    # and the return sentinel is intact.
     stack_base = bases["rsp0"] - hexint(layout["stack_window_before"])
     stack_length = hexint(layout["stack_window_before"]) + hexint(layout["stack_window_after"])
     check(hexint(result.get("stack_window_base", "0x0")) == stack_base,
@@ -334,6 +453,9 @@ def _validate_windows(
     if len(stack_before) != stack_length or len(stack_after) != stack_length:
         check(False, f"{tag}: recorded stack window has the wrong length")
         return
+    check(stack_before == frozen_stack,
+          f"{tag}: recorded stack pre-state is not the frozen constructed state "
+          f"({sum(a != b for a, b in zip(stack_before, frozen_stack))} of {stack_length} bytes differ)")
     saved_start = bases["rsp0"] - stack_base - 8
     saved = set(range(saved_start, saved_start + 8))
     stack_changed = {
@@ -382,7 +504,12 @@ def run_pilot(
     program_name: str | None = None,
     process_timeout: int = PROCESS_TIMEOUT,
 ) -> Path:
-    """Run every frozen scenario through the emulator and write the observation record."""
+    """Run every frozen scenario through the emulator and write the observation record.
+
+    The pinned digest handed to the script comes from `reverse_engineering/target.json`, not from
+    the scenario file, so the script can refuse to execute unless the loaded program is the pinned
+    target even if the scenario file has been altered.
+    """
     corpus.analyze_headless(
         project_dir or default_project_dir(),
         project_name or default_project_name(),
@@ -394,6 +521,7 @@ def run_pilot(
         GHIDRA_SCRIPT,
         str(scenarios_path),
         str(output_path),
+        paths.binary_sha256(),
         process_timeout=process_timeout,
     )
     return Path(output_path)
