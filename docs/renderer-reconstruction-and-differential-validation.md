@@ -11,6 +11,8 @@ Reconstruct a **small, high-value vertical slice of the Clausewitz Gfx/OpenGL pa
 
 Do **not** require complete-engine decompilation or perfect understanding of every path before beginning bounded experiments. Reconstruction is a correctness and maintainability investment, **not an optimization by itself**. The goal of roughly 80–90% less static render work remains conditional on actual frame-evolution evidence; active-scene improvement comes from measured work elimination, backend cost reduction and caller/command redesign, not from source-language choice.
 
+RE0–RE2 are **offline and function-scoped**: they require no frame replay, no graphics-API equivalence and no in-process replacement. The **first target** is `_GfxSetConstantBuffer` (entry RVA `0x15ec36a` in the pinned image: 21 instructions, 75 bytes, 0 selected direct callees), chosen for tractability and observability rather than performance payoff. The matching live acquisition is **P5a**; frame-level work (**P5b**) is gated separately and does not block RE0–RE2 ([Oracle plan of record](oracle/PLAN_OF_RECORD.md)).
+
 ## How this fits the existing work
 
 | Existing workstream | Relationship |

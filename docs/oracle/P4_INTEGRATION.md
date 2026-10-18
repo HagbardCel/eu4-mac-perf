@@ -9,10 +9,13 @@ translation, `gfx-v2` stateful replay and negative admission) remain. **Nothing 
 launches EU IV, opens a game process, or attaches to a binary**: every input is a file
 this repository's own drivers wrote.
 
-This document is authoritative for the pre-P5 offline integration gate. The phase
-contract is in [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md); the recorder it builds on is in
-[P4_RECORDER.md](P4_RECORDER.md); the synthetic replay it must generalize is in
-[P4B_REPLAY.md](P4B_REPLAY.md).
+This document is authoritative for the pre-P5 offline integration gate. The gate now
+splits by acquisition scope (2026-10-18): the **function** half (**P4.9** +
+function-oriented **P4.10** + domain-specific negative admission) authorizes **P5a**, and
+the **frame** half (frame-oriented **P4.10** + **P4.11**, or a qualified alternative)
+authorizes **P5b**; the phase contract is in [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md). The
+recorder it builds on is in [P4_RECORDER.md](P4_RECORDER.md); the synthetic replay it must
+generalize is in [P4B_REPLAY.md](P4B_REPLAY.md).
 
 ## Why this gate exists
 
