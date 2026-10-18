@@ -151,6 +151,12 @@ carrier must never be read as an observed zero, and an unavailable context must 
 be read as absent-but-fine. The complement is deliberate — an *absent* array with a
 zero declared count is the legitimate empty case and does not fault.
 
+A declaration is judged **before** any of its carriers are read. The declared count says
+nothing about how many elements the array actually holds, so an over-long or undersized
+array is never dereferenced — reading one would be the very memory error the fault
+exists to record. A malformed declaration's diagnostic argument slots are zero, and it
+remains a fault, not evidence.
+
 Precedence is the order above. The fault is resolved **before** the policy's selection
 is consulted, so a malformed declaration is counted whether or not the policy chose to
 observe it — instrumentation misuse is not a policy outcome.
@@ -216,7 +222,8 @@ or empty key is refused; integers must be canonical non-negative decimals; every
 scenario must declare its `COUNTERS`, `ACCOUNTING`, `ADMISSION`, `ARENA` and
 `OBSERVATIONS` records **at most once** — a second would silently overwrite the first;
 `OBSERVATIONS count` must equal the observations printed when `listed=1`, and none may
-appear when `listed=0`; the native counter identities must hold
+appear when `listed=0`; the native counter identities are recomputed and must agree
+with the declared `ACCOUNTING` verdict
 (`intercepted == selected + unselected`, `selected == captured + incomplete + lost`,
 `content_bytes_declared == content_bytes_captured + content_bytes_lost`); the count must
 reconcile with the event counters (`count == captured + incomplete`) for a withheld
@@ -321,8 +328,10 @@ be confused with the capture buffer's.
 * Every named instrumentation fault occurs at least once; each malformed declaration
   is one rejection however many symptoms it shows; a faulted observation declares no
   content and is never complete; a declared count with no array faults rather than
-  fabricating zeros; an absent array with a zero count stays valid; and scenario
-  `ADMISSION` is `REJECTED` exactly when `rejected > 0`.
+  fabricating zeros; a declaration is judged before its array is read, so an over-long
+  or undersized array is never dereferenced, even under AddressSanitizer; an absent
+  array with a zero count stays valid; and scenario `ADMISSION` is `REJECTED` exactly
+  when `rejected > 0`.
 * A well-formed declaration whose origin names a stale generation is exported complete
   by the core and **rejected by the offline closure verifier**.
 * Two calls sharing a resource context are distinguished by their arguments, and the
@@ -334,9 +343,9 @@ be confused with the capture buffer's.
   field, a non-canonical integer, an observation count that disagrees with the
   observations or with the event counters, a duplicated scenario control record, an
   observation split that disagrees with the counters, more listed faults than
-  rejections, an admission verdict that contradicts the rejections or that is `ok`
-  beside a listed fault, a missing or duplicated terminal `END`, and any record after
-  it.
+  rejections, an accounting verdict that contradicts its own recomputed identities, an
+  admission verdict that contradicts the rejections or that is `ok` beside a listed
+  fault, a missing or duplicated terminal `END`, and any record after it.
 * No two captured spans share an arena byte, under a four-thread race; with an
   eight-byte arena the race ends exactly full.
 * The targets are deterministic across 25 runs, identical at `-O0/-O2/-O3`, clean

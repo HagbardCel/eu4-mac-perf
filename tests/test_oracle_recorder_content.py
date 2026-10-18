@@ -16,7 +16,7 @@ The properties under test:
 * default-off captures no content at all and preserves the historical goldens
   byte-for-byte;
 * a malformed declaration fails closed: one instrumentation fault, counted once,
-  declaring no content, never complete;
+  declaring no content, never complete, and never read past its own array;
 * an observation that declared content it did not get is *incomplete*, never
   complete.
 """
@@ -335,13 +335,13 @@ class ContentCaptureTests(unittest.TestCase):
         self.assertEqual(named, {"args", "context", "point", "spans", "bytes", "origin"})
 
     def test_one_malformed_observation_is_one_rejection(self):
-        # Eleven malformed declarations, one of them showing two symptoms at once: the
-        # count is per observation, never per symptom, so it is exactly eleven.
+        # Twelve malformed declarations, one of them showing two symptoms at once: the
+        # count is per observation, never per symptom, so it is exactly twelve.
         counters = _counters(self.scenarios["content-malformed"])
         malformed = [o for o in self.scenarios["content-malformed"]["observations"]
                      if o["fault"] != "none"]
-        self.assertEqual(len(malformed), 11)
-        self.assertEqual(counters["rejected"], 11)
+        self.assertEqual(len(malformed), 12)
+        self.assertEqual(counters["rejected"], 12)
 
     def test_a_declared_count_with_no_array_is_malformed_and_never_complete(self):
         # A positive argument or context count with a NULL array is a missing ABI
@@ -358,6 +358,18 @@ class ContentCaptureTests(unittest.TestCase):
         self.assertEqual(context["complete"], 0)
         self.assertEqual(context["ncontext"], 0)
         self.assertEqual(context["nspans"], 0)
+
+    def test_an_oversized_declaration_is_never_read_from_its_array(self):
+        # The declaration is judged before any carrier is read, so neither an over-long
+        # nor an undersized array is dereferenced: the diagnostic slots are all zero.
+        over_long = self._observation("content-malformed", hook=2, sequence=3)
+        self.assertEqual(over_long["fault"], "args")
+        self.assertEqual(over_long["nargs"], 8)
+        self.assertEqual(set(over_long["args"]), {0})
+        undersized = self._observation("content-malformed", hook=2, sequence=14)
+        self.assertEqual(undersized["fault"], "args")
+        self.assertEqual(undersized["nargs"], 5)
+        self.assertEqual(undersized["args"], [0, 0, 0, 0, 0])
 
     def test_a_zero_count_with_no_array_remains_valid(self):
         # The complement: an *absent* array with a zero declared count is the legitimate
@@ -390,11 +402,11 @@ class ContentCaptureTests(unittest.TestCase):
         counters = _counters(scenario)
         self.assertEqual(scenario["admission"], "REJECTED")
         self.assertEqual(scenario["accounting"], "ok")
-        # The two well-formed observations are unaffected by the eleven malformed ones,
+        # The two well-formed observations are unaffected by the twelve malformed ones,
         # and the malformed declarations contribute nothing to the content counters.
-        self.assertEqual(counters["intercepted"], 13)
+        self.assertEqual(counters["intercepted"], 14)
         self.assertEqual(counters["captured"], 2)
-        self.assertEqual(counters["incomplete"], 11)
+        self.assertEqual(counters["incomplete"], 12)
         self.assertEqual(counters["content_bytes_declared"], 8)
         self.assertEqual(counters["content_bytes_captured"], 8)
 
@@ -541,6 +553,32 @@ class ContentCaptureTests(unittest.TestCase):
         raise AssertionError(f"no {scenario} observation hook={hook} seq={sequence}")
 
 
+class ContentSanitizerTests(unittest.TestCase):
+    """The fail-closed path must not read past a declaration's array.
+
+    The `content-malformed` script declares more arguments than the array it names
+    actually holds; a recorder that copies before validating would over-read it. Built
+    under AddressSanitizer and UBSan, the transscript must stay byte-identical to the
+    committed golden and the run must stay clean.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.mkdtemp(prefix="oracle-p4-content-asan-")
+        spec = dict(harness.TARGETS["content"])
+        spec["cflags"] = (*spec["cflags"], "-fsanitize=address,undefined",
+                          "-fno-omit-frame-pointer")
+        cls.exe = harness.build_spec(spec, Path(cls._tmp) / "build")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls._tmp, ignore_errors=True)
+
+    def test_the_malformed_path_is_memory_clean(self):
+        self.assertEqual(harness.run_transcript(self.exe),
+                         harness.golden_transcript("content"))
+
+
 class ExportParserStrictnessTests(unittest.TestCase):
     """The export is a wire format: a contradicted declaration is refused, not read."""
 
@@ -680,16 +718,16 @@ class ExportParserStrictnessTests(unittest.TestCase):
 
     def test_admission_ok_with_a_listed_fault_is_refused(self):
         # The review's case: rewrite the malformed scenario to declare rejected=0 and
-        # ADMISSION ok while retaining eleven faulted observations.
-        text = self._replaced_once("rejected=11", "rejected=0")
+        # ADMISSION ok while retaining twelve faulted observations.
+        text = self._replaced_once("rejected=12", "rejected=0")
         text = text.replace("ADMISSION REJECTED", "ADMISSION ok", 1)
         with self.assertRaises(harness.HarnessError):
             harness.parse_export_transcript(text)
 
     def test_more_listed_faults_than_rejections_is_refused(self):
         # rejected=5 keeps ADMISSION REJECTED and every identity intact, but cannot
-        # account for the eleven faulted observations the scenario printed.
-        text = self._replaced_once("rejected=11", "rejected=5")
+        # account for the twelve faulted observations the scenario printed.
+        text = self._replaced_once("rejected=12", "rejected=5")
         with self.assertRaises(harness.HarnessError):
             harness.parse_export_transcript(text)
 
@@ -703,6 +741,13 @@ class ExportParserStrictnessTests(unittest.TestCase):
             "OBS thread=0 seq=1 phase=0 hook=1 point=0 result=0 complete=0 fault=none"
             " nargs=1 args=4 ncontext=6 context=1,0,0,1,0,0 nspans=1 content=c:4:00000000"
             " norigin=6 origin=1,0,0,1,0,0")
+        with self.assertRaises(harness.HarnessError):
+            harness.parse_export_transcript(text)
+
+    def test_an_accounting_verdict_contradicting_the_counters_is_refused(self):
+        # The identities are recomputed: consistent counters beside `ACCOUNTING
+        # VIOLATED` is a contradiction like its converse.
+        text = self._replaced_once("ACCOUNTING ok", "ACCOUNTING VIOLATED")
         with self.assertRaises(harness.HarnessError):
             harness.parse_export_transcript(text)
 

@@ -305,9 +305,10 @@ static void run_zero_script(void)
                           spans, 2u, RECORDER_POINT_ENTRY, 0, 0u);
 }
 
-/* Every instrumentation fault the core can name: one observation each, plus one that
- * shows several symptoms at once. Each is counted once, declares no content, and is
- * never complete - the well-formed observations that bracket them are unaffected. */
+/* Every instrumentation fault the core can name, including the absent- and
+ * undersized-array boundaries, plus one observation that shows several symptoms at
+ * once. Each is counted once, declares no content, and is never complete - the
+ * well-formed observations that bracket them are unaffected. */
 static void run_malformed_script(void)
 {
     synth_world world;
@@ -396,6 +397,16 @@ static void run_malformed_script(void)
      * absent-but-fine, so the observation is incomplete and faulted. */
     token = recorder_enter(HOOK_UPDATE, words, 1u);
     recorder_exit_content(token, 0u, 1, 0, 6u, 0, 0u, RECORDER_POINT_EXIT, 0, 0u);
+
+    /* (12) an undersized argument array with an oversized declared count: the
+     * declaration is rejected before any carrier is read, so nothing past the array
+     * is ever touched. This is the case a sanitizer build exercises. */
+    {
+        uint64_t tiny[1];
+        tiny[0] = 9u;
+        token = recorder_enter(HOOK_UPDATE, tiny, 5u);
+        recorder_exit_content(token, 0u, 1, context, 6u, 0, 0u, RECORDER_POINT_EXIT, 0, 0u);
+    }
 }
 
 /* A well-formed declaration whose explicit origin names the right slot but the wrong

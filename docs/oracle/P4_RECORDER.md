@@ -380,8 +380,9 @@ to declaring no content and no origin.
   `RECORDER_FAULT_*` in a fixed precedence; it declares no content and is never
   complete. A declared argument or context count with **no array** is malformed - a
   missing ABI carrier is never read as an observed zero - while an absent array with a
-  zero count stays valid. The fault is resolved before the policy is consulted, so
-  misuse is counted even for an unselected hook.
+  zero count stays valid. A declaration is judged *before* its carriers are read, so an
+  over-long or undersized argument array is never dereferenced. The fault is resolved
+  before the policy is consulted, so misuse is counted even for an unselected hook.
 * **Off by default.** `recorder_config.content_capacity` bounds the arena and defaults
   to zero, which means content is *undeclared*, not *lost*: a hook may name spans and
   the recorder counts and copies none of them. Every golden predating P4.9 is
@@ -534,14 +535,16 @@ fail-closed and default-off:
   it produced while its context names the version it addressed;
 * every instrumentation fault is exercised; each malformed declaration is exactly one
   rejection, declares no content and is never complete; a declared count with no array
-  faults rather than fabricating zeros, while an absent array with a zero count stays
-  valid; a well-formed declaration with a stale origin is exported complete and
-  rejected by the closure verifier;
+  faults rather than fabricating zeros, a declaration is judged before its array is read
+  (an undersized or over-long array is never dereferenced, even under AddressSanitizer),
+  while an absent array with a zero count stays valid; a well-formed declaration with a
+  stale origin is exported complete and rejected by the closure verifier;
 * the export parser refuses every contradicted cardinality, a repeated or missing
   field, a non-canonical integer, a wrong observation count, a split that disagrees
   with the counters, a duplicated scenario control record, more listed faults than
-  rejections, an admission verdict that contradicts the rejections or sits `ok` beside
-  a listed fault, and a missing, duplicated or non-terminal `END`;
+  rejections, an accounting verdict that contradicts its recomputed identities, an
+  admission verdict that contradicts the rejections or sits `ok` beside a listed fault,
+  and a missing, duplicated or non-terminal `END`;
 * a span that does not fit is lost whole, partial evidence survives, the observation
   becomes incomplete, and the byte identity reconciles independently of the event
   identity - including one event that accounts for several lost spans;

@@ -164,16 +164,24 @@ int64_t recorder_enter(uint32_t hook_id, const uint64_t *args, uint32_t nargs)
     frame->sequence = tls_sequence;
     frame->phase = tls_phase;
     frame->fault = RECORDER_FAULT_NONE;
-    for (i = 0; i < RECORDER_MAX_ARGS; i++) {
-        frame->args[i] = (args != 0 && i < nargs) ? args[i] : 0u;
-    }
     if (nargs > g_config.max_args || nargs > RECORDER_MAX_ARGS
         || (nargs > 0u && args == 0)) {
-        /* A declared count with no array is malformed: the missing carriers must never
-         * be read as observed zeros. Recorded, not yet counted: one malformed
-         * observation is one fault, and the exit side resolves it against every other
-         * symptom before counting it. */
+        /* A declaration is judged before any of its carriers are read: the declared
+         * count says nothing about how many the array actually holds, so a malformed
+         * one is never dereferenced - reading an undersized array would be the very
+         * memory error the fault exists to record. The diagnostic slots stay zero;
+         * the exit side resolves and counts the single fault. */
         frame->fault = RECORDER_FAULT_ARGS;
+        for (i = 0; i < RECORDER_MAX_ARGS; i++) {
+            frame->args[i] = 0u;
+        }
+    } else {
+        for (i = 0; i < nargs; i++) {
+            frame->args[i] = args[i];
+        }
+        for (; i < RECORDER_MAX_ARGS; i++) {
+            frame->args[i] = 0u;
+        }
     }
 
     if (g_config.mode == RECORDER_MODE_DISABLED) {
