@@ -527,21 +527,30 @@ def run_pilot(
     return Path(output_path)
 
 
-def run_twice(work_dir: Path) -> dict[str, Any]:
-    """Two independent runs; the receipt carries the second only as a digest."""
+def run_twice(work_dir: Path, *, scenarios_path: Path = SCENARIOS_PATH,
+              schema: str = RECEIPT_SCHEMA, statement: str = STATEMENT) -> dict[str, Any]:
+    """Two independent runs of one frozen corpus; the receipt carries the second only as a digest.
+
+    The corpus is a parameter so a later freeze (RE2's differential corpus) can reuse this runner
+    without touching the emulator script, which reads the corpus file it is handed.
+    """
     work_dir.mkdir(parents=True, exist_ok=True)
-    first = json.loads(run_pilot(work_dir / "run1.json").read_text())
-    second = json.loads(run_pilot(work_dir / "run2.json").read_text())
-    return build_receipt(first, second)
+    first = json.loads(run_pilot(work_dir / "run1.json", scenarios_path=scenarios_path).read_text())
+    second = json.loads(run_pilot(work_dir / "run2.json", scenarios_path=scenarios_path).read_text())
+    return build_receipt(first, second, scenarios_path=scenarios_path, schema=schema,
+                         statement=statement)
 
 
-def build_receipt(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+def build_receipt(first: dict[str, Any], second: dict[str, Any], *,
+                  scenarios_path: Path = SCENARIOS_PATH, schema: str = RECEIPT_SCHEMA,
+                  statement: str = STATEMENT) -> dict[str, Any]:
+    """The receipt for one corpus: the limits come from the corpus, the label from the caller."""
     digest = canonical_digest(first["canonical"])
     repeat = canonical_digest(second["canonical"])
     return {
-        "schema": RECEIPT_SCHEMA,
-        "statement": STATEMENT,
-        "limits": load_scenarios()["limits"],
+        "schema": schema,
+        "statement": statement,
+        "limits": load_scenarios(scenarios_path)["limits"],
         "environment": first["environment"],
         "determinism": {
             "runs": 2,

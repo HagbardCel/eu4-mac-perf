@@ -7,7 +7,7 @@ here launches EU IV.
 
 | Function | Entry RVA | Status |
 | --- | --- | --- |
-| `_GfxSetConstantBuffer` | `0x15ec36a` | RE1 reconstruction complete ([reconstruction](_GfxSetConstantBuffer/reconstruction/README.md)); RE0 contract ([contract.md](_GfxSetConstantBuffer/contract.md)) and offline execution pilot ([pilot.md](_GfxSetConstantBuffer/pilot/pilot.md), [receipt](_GfxSetConstantBuffer/pilot/observations-2026-10-18.json), [frozen scenarios](_GfxSetConstantBuffer/pilot/scenarios.json)) complete |
+| `_GfxSetConstantBuffer` | `0x15ec36a` | RE1 reconstruction complete ([reconstruction](_GfxSetConstantBuffer/reconstruction/README.md)); RE0 contract ([contract.md](_GfxSetConstantBuffer/contract.md)) and offline execution pilot ([pilot.md](_GfxSetConstantBuffer/pilot/pilot.md), [receipt](_GfxSetConstantBuffer/pilot/observations-2026-10-18.json), [frozen scenarios](_GfxSetConstantBuffer/pilot/scenarios.json)) complete; RE2 differential ([README](_GfxSetConstantBuffer/differential/README.md), [frozen corpus](_GfxSetConstantBuffer/differential/scenarios.json), [reference](_GfxSetConstantBuffer/differential/reference.json)) complete |
 
 Raw binaries, decompiled pseudocode and the searchable corpus stay under `.local/` (see
 [conventions](../../docs/conventions.md)); the files here are the tracked analysis.
