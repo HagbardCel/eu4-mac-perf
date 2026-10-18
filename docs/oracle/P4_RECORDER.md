@@ -1,6 +1,8 @@
 # P4 recorder: observation records, evidence store and offline gates
 
-**Status:** in progress. **P4.1** (the record schema, canonicalization and the
+**Status:** complete, merged on `main` as **P4r-A** (PR #61), **P4r-B** (PR #63) and
+**P4r-C** (PR #65); the phase's replay release is tagged
+`oracle-v2-p4b-20261018`. **P4.1** (the record schema, canonicalization and the
 immutable evidence store), **P4.2** (the portable C11 synthetic target with a
 deterministic golden transcript), **P4.3** (the native recorder core's exact
 capture accounting), **P4.4** (the pluggable capture policy), **P4.5** (offline

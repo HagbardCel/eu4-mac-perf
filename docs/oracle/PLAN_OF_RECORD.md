@@ -115,7 +115,9 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 > deterministic across compilers and clean under ThreadSanitizer, ASan and UBSan.
 > **P4b** is complete as well: `oracle/replay/` reconstructs a frame from a sealed
 > capture of a synthetic graphics subject in a fresh process, resolving references by
-> the closure rule P4.6 declares and failing closed on a missing dependency. See
+> the closure rule P4.6 declares and failing closed on a missing dependency. Merged
+> to `main` at `fdf0820` (PR #66) and released as the annotated tag
+> `oracle-v2-p4b-20261018`, which points at that merge commit. See
 > [P4_RECORDER.md](P4_RECORDER.md) and [P4B_REPLAY.md](P4B_REPLAY.md).
 
 ## Pre-P5 offline integration gate
