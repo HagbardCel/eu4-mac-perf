@@ -38,7 +38,11 @@ RE0–RE2 are **offline and function-scoped**: they require no frame replay, no 
 1. Pin binary hash/build/architecture and address ranges; inventory function entry/exit, cross-references, direct/virtual callers, callees, thread/context assumptions, original GL calls and bypass paths.
 2. Recover the minimum required object layout: field offsets, pointer ownership, buffers, texture/sampler IDs, context state, global and TLS accesses, alias relationships, exceptional paths.
 3. Document a function **contract** with preconditions, postconditions, modified memory, external calls, ordering constraints and unobserved/uncertain cases. Record address and disassembly/P-code provenance separately from hypothesized source semantics.
-4. Choose the pilot based on **tractability and observability**, not alleged performance payoff. `InternalSetTextureAndSamplerState` is a candidate; `GfxDrawIndexed` or a nearby Gfx setter is an alternative if the former has a diffuse hidden-state dependency. Neither candidate is yet approved without the audit.
+4. The pilot is **selected**: `_GfxSetConstantBuffer` (entry RVA `0x15ec36a`; 21 instructions,
+   0 selected direct callees), chosen for **tractability and observability**, not alleged
+   performance payoff. RE0 characterizes *that* function. Reselect only if the RE0 → RE1 gate
+   below fails, and then only among candidates ranked by the same test
+   (`InternalSetTextureAndSamplerState`, `GfxDrawIndexed`, or a nearby Gfx setter).
 
 **Gate RE0 → RE1:** identified callable boundary; finite, recoverable input/side-effect surface; credible strategy for calling or observing the original; no unresolved ownership/context requirements likely to make a faithful replacement unsafe. Otherwise pick a different function.
 

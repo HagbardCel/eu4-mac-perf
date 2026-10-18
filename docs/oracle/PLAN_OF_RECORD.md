@@ -101,8 +101,14 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 | **P4** | Function-agnostic, policy-pluggable recorder + synthetic target | Two functions sharing mutable state; resource create/update/destroy + handle reuse; aliasing across serialize/replay; equal-args-different-pre-state not deduped; missing resource → `INCOMPLETE_ORACLE`; counters exact under disabled capture/overflow; reentrancy/concurrency safe; loss reported. R0-M **protocol** compatibility validated offline |
 | **P4b** | Synthetic graphics **replay** harness | Reconstruct a frame from recorded synthetic resources incl. resource closure + handle reuse, using the declared closure method |
 | **P5a** | First authorized real-function acquisition | ≥1 live-grounded, **closed** function fixture with a declared observable domain and independently validated entry/exit evidence. Seal partial as partial; frame replayability is **not** required |
-| **P5b** | Frame-level acquisition and qualification | ≥1 independently replayable frame with verified resource/state closure and a declared comparison boundary. Seal partial as partial; **go/no-go** before reconstruction claims |
-| **Subsequent** | RE0–RE2 reconstruction loops | RE3 binary integration optional, separately gated |
+| **P5b** | Frame-level acquisition and qualification | ≥1 independently replayable frame with verified resource/state closure and a declared comparison boundary. Seal partial as partial; the **go/no-go** here governs **frame-level replayability claims only** |
+
+**RE0–RE2 run in parallel, not after P5.** The function-first reconstruction workstream — RE0's
+contract, the bounded offline original-code execution pilot, and offline RE1/RE2 reconstruction
+with differential comparison — is **independent of P5a/P5b** and is **not** subsequent to frame
+qualification; it precedes or parallels **P5a**. **RE3** (narrow in-process replacement) remains
+optional and is separately gated by RE2 qualification plus detour, ABI, fallback and
+runtime-safety requirements.
 
 > **P3 status (2026-10-17):** **complete and released.** PR-A - the deterministic
 > slice (synthetic target, harness, completeness comparator, five-tool MCP bridge,
