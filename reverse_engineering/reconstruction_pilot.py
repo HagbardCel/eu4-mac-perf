@@ -506,10 +506,12 @@ def run_pilot(
 ) -> Path:
     """Run every frozen scenario through the emulator and write the observation record.
 
-    The pinned digest handed to the script comes from `reverse_engineering/target.json`, not from
+    The pinned digests handed to the script come from `reverse_engineering/target.json`, not from
     the scenario file, so the script can refuse to execute unless the loaded program is the pinned
-    target even if the scenario file has been altered.
+    target - both its executable identity and the instruction bytes actually present in the loaded
+    program's memory - even if the scenario file has been altered.
     """
+    function = load_scenarios(scenarios_path)["function"]
     corpus.analyze_headless(
         project_dir or default_project_dir(),
         project_name or default_project_name(),
@@ -522,26 +524,36 @@ def run_pilot(
         str(scenarios_path),
         str(output_path),
         paths.binary_sha256(),
+        paths.code_window(function)["sha256"],
         process_timeout=process_timeout,
     )
     return Path(output_path)
 
 
-def run_twice(work_dir: Path) -> dict[str, Any]:
-    """Two independent runs; the receipt carries the second only as a digest."""
+def run_twice(work_dir: Path, *, scenarios_path: Path = SCENARIOS_PATH,
+              schema: str = RECEIPT_SCHEMA, statement: str = STATEMENT) -> dict[str, Any]:
+    """Two independent runs of one frozen corpus; the receipt carries the second only as a digest.
+
+    The corpus is a parameter so a later freeze (RE2's differential corpus) can reuse this runner
+    without touching the emulator script, which reads the corpus file it is handed.
+    """
     work_dir.mkdir(parents=True, exist_ok=True)
-    first = json.loads(run_pilot(work_dir / "run1.json").read_text())
-    second = json.loads(run_pilot(work_dir / "run2.json").read_text())
-    return build_receipt(first, second)
+    first = json.loads(run_pilot(work_dir / "run1.json", scenarios_path=scenarios_path).read_text())
+    second = json.loads(run_pilot(work_dir / "run2.json", scenarios_path=scenarios_path).read_text())
+    return build_receipt(first, second, scenarios_path=scenarios_path, schema=schema,
+                         statement=statement)
 
 
-def build_receipt(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+def build_receipt(first: dict[str, Any], second: dict[str, Any], *,
+                  scenarios_path: Path = SCENARIOS_PATH, schema: str = RECEIPT_SCHEMA,
+                  statement: str = STATEMENT) -> dict[str, Any]:
+    """The receipt for one corpus: the limits come from the corpus, the label from the caller."""
     digest = canonical_digest(first["canonical"])
     repeat = canonical_digest(second["canonical"])
     return {
-        "schema": RECEIPT_SCHEMA,
-        "statement": STATEMENT,
-        "limits": load_scenarios()["limits"],
+        "schema": schema,
+        "statement": statement,
+        "limits": load_scenarios(scenarios_path)["limits"],
         "environment": first["environment"],
         "determinism": {
             "runs": 2,

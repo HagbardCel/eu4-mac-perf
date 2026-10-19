@@ -31,6 +31,19 @@ def binary_sha256() -> str:
     return load_target()["sha256"]
 
 
+def code_window(function: str) -> dict:
+    """The pinned instruction bytes of one reconstructed function's body.
+
+    `entry_rva`/`end_rva` are the half-open body range and `sha256` is the digest of exactly those
+    bytes in the pinned binary, read with the repository's own Mach-O mapping
+    (`reverse_engineering/macho_rva.py`). It is the anchor a recorded execution's instruction bytes
+    are held to: `sha256` of the receipt is a digest the receipt carries, so it cannot authenticate
+    the receipt itself, and the loaded program's executable digest is import metadata rather than
+    the bytes being emulated.
+    """
+    return load_target()["code_windows"][function]
+
+
 def local_binary_root(digest: str | None = None) -> Path:
     digest = digest or binary_sha256()
     override = os.environ.get("EU4_RE_EXPORT")

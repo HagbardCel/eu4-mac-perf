@@ -99,6 +99,39 @@ For identical deterministic GL renders, compare exact full-resolution hashes whe
 
 **Gate RE2 → RE3:** faithful path passes **all qualified reference fixtures** with no unexplained deviations; independent tests cover the identified control-flow and state classes; limitations and untested states are documented. Do not equate 100% fixture pass with mathematical proof of global equivalence.
 
+**Artifacts:** `analysis/reconstruction/<function>/differential/` — the frozen input corpus, the
+reference record of the original over them, and a README recording what is established and what is
+not. The record carries its statement and limits verbatim, so the evidence cannot be read as more
+than it is.
+
+**Status (2026-10-19):** the differential for `_GfxSetConstantBuffer` is tracked at
+`analysis/reconstruction/_GfxSetConstantBuffer/differential/`. It is acquisition option 3 above, not
+a callable oracle: 414 frozen inputs — the cross product of the six declared slots with both paths'
+sign and wrap boundaries, containing every RE0 pilot scenario at the same constructed state — were
+executed through RE0's P-code emulator, and the reference record is what it observed. The RE1
+reconstruction, compiled fresh, is reconciled with it byte-for-byte on the region both sides
+describe, both sides starting from the same declared pre-state, with the stored buffer pointer
+compared as a role and each side validated against what that role means. The reference is qualified
+structurally before it is used as evidence, and the comparison refuses to run at all against one that
+fails: it is bound to the corpus, to the pinned binary and to the executable Ghidra loaded — RE2 has one
+frozen corpus, so a corpus supplied to the validator has to be that corpus, not a dictionary the
+record's file digest does not describe; only an omitted argument means the committed artifact, so an
+empty one is refused rather than replaced by the default; every
+row's initial registers and constructed pre-state (canaries included) are the corpus's, its executed
+path, decoded instructions, lengths, loads and ordered stores match the frozen path structure, and
+its store values agree with its own post-state — while the word count itself comes from the
+execution, never from a second arithmetic model. The instruction bytes every row records are held to
+the pinned code window in `reverse_engineering/target.json`, derived from the pinned binary by the
+repository's own Mach-O mapping, and the emulator script refuses to step an instruction unless the
+bytes it is about to execute hash to the same pin. Both RE1 arithmetic
+alternatives (a signed division on the buffer path, the missing `+3` wrap on the selector path) are
+compiled as deliberately wrong reconstructions and rejected, each on its own path; a record from
+another corpus, binary or executable, a perturbed, reordered or unqualified row, an altered
+instruction path, an extra store and a withheld required input are all rejected too. It proves
+equivalence **on those inputs and no further** — the README states the limits, including that P-code
+emulation is not hardware execution and that the input sets are the paths' boundaries rather than an
+exhaustive enumeration.
+
 ## RE3 — Narrow in-process integration (one controlled game validation)
 
 - Compile an x86-64 replacement; implement minimal, reversible redirection with a **verified ABI**, original trampoline/fallback and a hard runtime switch. Address ASLR, Mach-O relocation, instruction boundaries, thread safety, executable protection/signing and failure cleanup.

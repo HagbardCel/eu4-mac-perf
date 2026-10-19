@@ -1,0 +1,239 @@
+# RE2 differential validation — `_GfxSetConstantBuffer`
+
+**Status:** complete (2026-10-18). Frozen inputs: [`scenarios.json`](scenarios.json). Reference
+record: [`reference.json`](reference.json). Comparator and reference validator:
+`reverse_engineering/reconstruction_diff.py`; guards: `tests/test_reconstruction_differential.py`;
+runner and emulator script: RE0's, extended only with the pinned code-window check (see
+[The two qualification modes](#the-two-qualification-modes))
+([`pilot.md`](../pilot/pilot.md), `reverse_engineering/reconstruction_pilot.py`,
+`reverse_engineering/ghidra/EmulateGfxSetConstantBuffer.java`).
+
+**Scope:** offline only. Nothing here launches EU IV, opens a game process or attaches to a binary.
+Read [What this establishes](#what-this-establishes-and-what-it-does-not) before citing it.
+
+## What it compares
+
+Two descriptions of the same 21 original instructions (entry RVA `0x15ec36a`, pinned image
+`b3d38876…141d`):
+
+| Side | What it is | How it is driven |
+| --- | --- | --- |
+| **Original** | RE0's P-code emulator executing the pinned binary's own decoded instructions under constructed state | `scenarios.json` row → `reference.json` row |
+| **Reconstruction** | RE1's C++20 reimplementation ([`../reconstruction/`](../reconstruction/README.md)) | `harness scenario <slot> <selector> <dword\|absent>`, pre-state on stdin |
+
+The reference record is the emulator's own observation of the original on these inputs, two
+independent runs byte-identical (canonical SHA-256 `e46855dc…`). The reconstruction is compiled
+fresh by the test module (sanitized, `-O0`) and reconciled with it row by row.
+
+## The corpus
+
+414 rows: the cross product of the six declared slots with two frozen input sets, so every
+identified state class (both control-flow paths, all six slot positions and the 16-byte stride) meets
+every input class.
+
+| Set | Values | Rows per slot |
+| --- | --- | --- |
+| Buffer-supplied length (`R9D == -1`) | `0x00000000..0x00000010`, `0x7ffffffc..0x80000003`, `0xfffffffc..0xffffffff` | 29 |
+| Explicit selector (`R9D != -1`) | `0x00000000..0x00000010` (signed `-16..16`), `0x7ffffffc..0x80000003`, `0xfffffff0..0xffffffff` | 40 |
+
+The boundaries are the sign and wrap boundaries of both arithmetic paths. `0x7ffffffd` as a buffer
+length is where a signed division on the buffer path departs from the original's logical shift, and
+every selector whose `+3` sum changes the truncating division (`0x00000001`, `0x00000005`,
+`0x7ffffffd`, the negative band) is where the missing `+3` wrap departs. The explicit-selector rows
+declare no buffer, as RE0's `s13` did: that path must never read `[RSI]`, so a stray read would be
+caught as an uninitialized dependency.
+
+The RE0 pilot's 13 frozen scenarios are a subset of this corpus, at the same constructed state
+(a test asserts it). Their expectations were hand-derived and frozen before any execution code
+existed, so that part of this corpus is anchored to something the emulator did not produce — the
+rest is anchored to the emulator alone.
+
+`path` on a row is a label the emulator echoes for its own result; it is derived from the input and
+re-derived by the validator rather than trusted.
+
+## What is compared, and how
+
+Row inputs are identical on both sides, and both sides start from the same byte pattern, so a
+byte-level reconciliation is meaningful. It is:
+
+- **byte-exact** for the word count (`ctx+0xc8+16·slot`, 4 bytes) and the dirty byte
+  (`ctx+0x128`, 1 byte);
+- **a role** for the stored buffer pointer (`ctx+0xd0+16·slot`, 8 bytes): the emulator stores the
+  constructed buffer address and the reconstruction a host pointer, so the field is not compared
+  across sides. Each side is instead validated against what the role means: the recorded original
+  must hold the corpus's declared buffer address, and the reconstruction must report its own buffer
+  argument (`buffer=ARG`);
+- **contained** on both sides: neither may change a byte outside those three fields, and outside the
+  masked pointer field the two traces must change exactly the same bytes;
+- **extended to the whole common region**: the compared bytes are `[ctx+0xb8, ctx+0x130)` — the
+  emulator's observation window `[ctx+0xb8, ctx+0x139)` intersected with the reconstruction's
+  `0x130`-byte object. A test asserts every declared field lies inside that region, so a layout
+  change cannot silently drop one;
+- **RAX** as an observed outcome on both sides (the context base), not a declared return type;
+- **fail-closed**: a row whose recorded original is not qualified, or whose recorded run read
+  uninitialized constructed state, is refused rather than compared — agreement with a broken
+  reference would be evidence of nothing.
+
+Not compared: the original's stack frame (`PUSH RBP`/`RET`) and its frame-pointer traffic, which the
+reconstruction does not model; the emulator's constructed bytes beyond `ctx+0x130`; and incidental
+register traffic other than `RAX`.
+
+## The two qualification modes
+
+RE0's pilot froze **expectations** before execution and its validator asserts them exactly. This
+corpus freezes **inputs only**: there is nothing here to fit, and nothing to fit it to. What makes
+the reference evidence is therefore different, and `reconstruction_diff.validate_reference` checks
+exactly that:
+
+- the record was produced from *this* corpus (`scenarios_sha256` over the corpus bytes), from the
+  pinned binary (`binary_sha256`, checked against `reverse_engineering/target.json`) and by the
+  executable Ghidra loaded for it (`executable_sha256`, the digest of the analysable image, so a
+  record cannot name a different program). RE2 has one frozen corpus, so a corpus *supplied* to the
+  validator has to be that corpus: the digest is over the committed file's bytes, so a dictionary a
+  caller assembled is not described by it. An input changed in memory can leave every structural
+  check standing — a `d002` buffer of `0x00000002` instead of `0x00000001` yields the same word
+  count, pre-state and stores — while the two sides are no longer running the same input, so a
+  supplied corpus that is not the frozen one is refused outright, before any field of it is read.
+  Only an *omitted* argument means the committed artifact: an empty dictionary is falsy but it is
+  still what the caller passed, and it is refused rather than quietly replaced by the default;
+- two independent runs produced the same canonical block, which hashes to its own recorded digest;
+- every row is the corpus's own input in the corpus's own order, carries the path label its input
+  selects, is qualified with no reasons, and read no uninitialized state;
+- every row started from the state the corpus constructs: the recorded initial registers, register
+  by register, and the recorded context and stack pre-state, canary bands included;
+- every row executed exactly the frozen instruction path for its branch — the ordered RVAs, the
+  instruction count and byte count, each instruction's length and decoded text checked against the
+  reviewed listing — and touched only the declared memory: the frozen load sequence for that path,
+  and exactly the stack save and the three declared context stores, in the original's order;
+- the instruction **bytes** every row records are the pinned binary's own bytes. The anchor is the
+  `code_windows` entry in `reverse_engineering/target.json`: the half-open body range and the SHA-256
+  of exactly those bytes, read from the pinned binary with the repository's own Mach-O mapping
+  (`reverse_engineering/macho_rva.py`). The rows must agree with each other byte for byte, tile the
+  pinned range exactly, and hash to that digest. The receipt's own `code_window_sha256` is not the
+  anchor — a digest a record carries cannot authenticate that record — and neither is the loaded
+  program's executable digest, which is import metadata about the originally imported file rather
+  than the bytes in memory now. The emulator script refuses to step a single instruction unless the
+  bytes it is about to execute hash to the same pin, so a project whose memory was replaced cannot
+  produce a record at all;
+- those stores agree with the record's own post-state wherever it is recorded, and the store trace
+  agrees with the emulator's independent state-level write trace;
+- only the declared writes changed any byte of the observation window, and only the saved frame word
+  changed on the stack (the restored `RBP` and the return sentinel are checked).
+
+It deliberately does **not** compare a recorded **outcome** value with a frozen one — it has none.
+The word count is read out of the record's own post-state and the reconstruction is compared with
+it, so the arithmetic result always comes from Ghidra's execution and never from a second
+hand-written model. Verifying the *initial* state is not an outcome expectation: the initial memory
+and registers are frozen inputs, so checking them is part of qualifying the record. A byte-level
+forgery of an outcome window is caught by the *comparison* instead, which is why the controls below
+include both kinds.
+
+## Controls
+
+None of these is a claim that the miss cannot occur; each is a check that the gate bites.
+
+- **Near misses (both RE1 arithmetic alternatives).** Two deliberately wrong reconstructions are
+  built from mutated copies of the tracked header — nothing tracked is edited, and the mutation
+  anchor must be present or the test fails — and must be rejected, each only on its own path:
+  a signed division on the buffer path (48 of 414 rows) and the missing `+3` wrap on the selector
+  path (168 of 414 rows). The faithful build passing the same comparison is what makes these
+  non-vacuous.
+- **A perturbed reference row.** The recorded original is the reference, so altering it must break
+  the comparison: a flipped byte in the recorded word count, a flipped canary byte the original
+  never wrote, a byte changed identically before and after (which leaves the write set untouched and
+  is caught only by the pre-state check), and a pointer field replaced with an unrelated nonzero
+  address are each reported.
+- **A refused reference row.** A row marked unqualified, or missing from the record, is reported and
+  never compared.
+- **A forged record.** Records from another corpus, another binary or another executable, dropped or
+  reordered rows, a changed recorded selector, a wrong path label, a changed initial register, an
+  altered executed instruction sequence, a changed decoded instruction, a changed instruction
+  length, instruction bytes that disagree between rows, instruction bytes that are not the pinned
+  code window (the review's `55`→`90` with the text kept, applied to every row), instruction bytes
+  that do not tile the pinned range, a dropped load, an extra or reordered store, a store trace that
+  disagrees with the state write trace, and a changed label or limits list are each rejected for the
+  reason under test (the forgeries are re-signed, so the digest check cannot be what catches them).
+- **A reference that is not qualified at all.** The comparison refuses to run against a reference
+  that fails qualification, returning the qualification failures instead: a test passes a bad
+  reference and a harness path that does not exist, so a comparison that launched anything would
+  raise rather than report.
+- **A corpus that is not the frozen one.** `d002`'s buffer changed from `0x00000001` to
+  `0x00000002` in a copy of the corpus is refused for exactly that reason and no other: the word
+  count, the pre-state and the stores are all unchanged and the digest still names the untouched
+  file, so nothing else in the qualification notices — which is the point of binding the corpus
+  itself.
+- **An empty argument.** An explicitly supplied empty corpus or reference is refused as not the
+  committed artifact, rather than being replaced by it because a falsy value looks like "not
+  given"; the comparison is exercised with an empty corpus, an empty reference and both, each
+  against a harness path that does not exist, so a comparison that launched anything would raise
+  rather than report.
+- **A withheld required input (a real run).** A buffer-path row with its buffer removed is re-run
+  through the emulator: the load is recorded as an uninitialized dependency, the run marks itself
+  unqualified with a reason, and the validator rejects the record. The explicit-path rows, which
+  declare no buffer and qualify, are the complementary positive case.
+
+## What this establishes, and what it does not
+
+It establishes that, on 414 frozen inputs, RE1's reconstruction produces **the same observable
+effect on the context object** — the same three writes with the same values, the same absence of any
+other change, the same `RAX` — as the original's decoded instructions do inside a Ghidra P-code
+emulator, and that those instructions are the pinned binary's own bytes. The reference record
+carries this statement and the frozen limits verbatim, so the evidence cannot be read as more than
+it is.
+
+It does **not** establish any of the following, and these limits travel with the evidence:
+
+1. P-code emulation is not hardware-level execution of x86 machine code, and this is not runtime
+   behaviour inside EU IV.
+2. Only `slot ∈ [0, 6)` is covered; `slot ≥ 6` remains an open caller invariant, as does whether
+   callers consume `RAX`.
+3. Agreement on these 414 inputs is not a proof of equivalence on every input. The input sets are
+   the paths' sign and wrap boundaries, not an exhaustive enumeration.
+4. The pointer field is compared as a role: the two stored pointer *values* are not comparable and
+   are not compared with each other, only each against what the role means.
+5. The original's stack traffic and its exact instruction-level write ordering are outside this
+   comparison (see RE1's own limits).
+6. Only the context object and `RAX` are observed. A reconstruction that wrote to the handle
+   (`*RDI`) or to the input buffer after computing the word count would satisfy every check here, so
+   this is not a general-purpose runtime equivalence test: before certifying a larger function for
+   actual replacement, every declared input region it can write to has to be observed before and
+   after its execution, not just the context object.
+7. No claim is made about `_GfxSetConstantBuffer`'s importance as a rendering bottleneck.
+
+## Reproducing
+
+The corpus run needs Ghidra and the analysed project; the comparison needs a C++20 compiler. The
+committed reference is validated by CI with neither.
+
+```sh
+export EU4_GHIDRA_WORK=~/GhidraEU4   # project location, as reverse_engineering.paths resolves it
+GHIDRA_INSTALL=/opt/homebrew/opt/ghidra/libexec \
+  PYTHONPATH=benchmark:. .venv/bin/python -m unittest tests.test_reconstruction_differential -v
+```
+
+That module re-runs the corpus twice and asserts the committed canonical block is reproduced, runs
+the 414-row comparison against the sanitized build of the reconstruction, builds and rejects the two
+near misses, and exercises the controls above. The reference itself is captured with:
+
+```python
+from pathlib import Path
+from reverse_engineering import reconstruction_diff as diff
+reference = diff.run_twice(Path("/tmp/re2"))   # diff.SCENARIOS_PATH through RE0's runner, twice
+```
+
+## Provenance
+
+`scenarios.json` declares inputs and paths, never outcomes, so no expectation could be fitted to an
+observed run. `reference.json` records what the emulator observed on those exact bytes; the two are
+bound by `canonical.scenarios_sha256`, and a test fails if the corpus is edited without re-running
+the oracle. A mismatch between the two sides is to be resolved by amending the contract or the
+corpus in a separate, reviewed commit — never by editing a recorded observation to match the
+reconstruction, and never by relaxing the comparison to fit.
+
+The emulator script, the runner and the constructed state are RE0's, extended only with the corpus as
+a parameter and with the pinned code-window check: before any scenario runs, the script hashes the
+bytes it is about to execute and refuses unless they are the `code_windows` entry in
+`reverse_engineering/target.json`. The observations themselves are unchanged — a re-run of this
+corpus with the extended script reproduces the committed canonical block byte for byte
+(`tests/test_reconstruction_differential.py::ReferenceRunTests`), which is what makes that claim
+checkable rather than asserted.
