@@ -571,13 +571,23 @@ def validate_reference(reference: dict[str, Any],
     is a well-formed execution of the original that began from the declared constructed state,
     followed the frozen path, touched only the declared memory and wrote exactly the declared
     values; and when the instruction bytes every row records are the pinned binary's own bytes.
+
+    RE2 is restricted to that one frozen corpus, so a *supplied* corpus has to be it: the record's
+    `scenarios_sha256` is the digest of the committed file's bytes, which says nothing about a
+    dictionary a caller assembled, and a row changed in memory can leave the digest check intact
+    while the two sides are no longer running the same input. Supplying anything else is refused
+    rather than qualified against a digest that does not describe it.
     """
-    corpus = corpus or load_corpus()
+    frozen = load_corpus()
+    corpus = corpus or frozen
     failures: list[str] = []
 
     def check(condition: bool, message: str) -> None:
         if not condition:
             failures.append(message)
+
+    check(corpus == frozen,
+          "the supplied corpus is not the committed frozen corpus this reference was produced from")
 
     check(reference.get("schema") == REFERENCE_SCHEMA,
           f"reference schema is {reference.get('schema')!r}")

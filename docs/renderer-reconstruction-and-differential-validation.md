@@ -113,7 +113,9 @@ reconstruction, compiled fresh, is reconciled with it byte-for-byte on the regio
 describe, both sides starting from the same declared pre-state, with the stored buffer pointer
 compared as a role and each side validated against what that role means. The reference is qualified
 structurally before it is used as evidence, and the comparison refuses to run at all against one that
-fails: it is bound to the corpus, to the pinned binary and to the executable Ghidra loaded; every
+fails: it is bound to the corpus, to the pinned binary and to the executable Ghidra loaded — RE2 has one
+frozen corpus, so a corpus supplied to the validator has to be that corpus, not a dictionary the
+record's file digest does not describe; every
 row's initial registers and constructed pre-state (canaries included) are the corpus's, its executed
 path, decoded instructions, lengths, loads and ordered stores match the frozen path structure, and
 its store values agree with its own post-state — while the word count itself comes from the

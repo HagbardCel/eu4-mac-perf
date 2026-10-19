@@ -88,7 +88,12 @@ exactly that:
 - the record was produced from *this* corpus (`scenarios_sha256` over the corpus bytes), from the
   pinned binary (`binary_sha256`, checked against `reverse_engineering/target.json`) and by the
   executable Ghidra loaded for it (`executable_sha256`, the digest of the analysable image, so a
-  record cannot name a different program);
+  record cannot name a different program). RE2 has one frozen corpus, so a corpus *supplied* to the
+  validator has to be that corpus: the digest is over the committed file's bytes, so a dictionary a
+  caller assembled is not described by it. An input changed in memory can leave every structural
+  check standing — a `d002` buffer of `0x00000002` instead of `0x00000001` yields the same word
+  count, pre-state and stores — while the two sides are no longer running the same input, so the
+  supplied corpus is refused instead of qualified against a digest that does not describe it;
 - two independent runs produced the same canonical block, which hashes to its own recorded digest;
 - every row is the corpus's own input in the corpus's own order, carries the path label its input
   selects, is qualified with no reasons, and read no uninitialized state;
@@ -150,6 +155,11 @@ None of these is a claim that the miss cannot occur; each is a check that the ga
   that fails qualification, returning the qualification failures instead: a test passes a bad
   reference and a harness path that does not exist, so a comparison that launched anything would
   raise rather than report.
+- **A corpus that is not the frozen one.** `d002`'s buffer changed from `0x00000001` to
+  `0x00000002` in a copy of the corpus is refused for exactly that reason and no other: the word
+  count, the pre-state and the stores are all unchanged and the digest still names the untouched
+  file, so nothing else in the qualification notices — which is the point of binding the corpus
+  itself.
 - **A withheld required input (a real run).** A buffer-path row with its buffer removed is re-run
   through the emulator: the load is recorded as an uninitialized dependency, the run marks itself
   unqualified with a reason, and the validator rejects the record. The explicit-path rows, which

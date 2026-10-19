@@ -286,6 +286,24 @@ class ReferenceRecordTests(unittest.TestCase):
     def test_the_reference_binds_the_frozen_corpus_digest(self) -> None:
         self.assertEqual(self.reference["canonical"]["scenarios_sha256"], diff.corpus_sha256())
 
+    def test_a_supplied_corpus_that_is_not_the_frozen_one_is_rejected(self) -> None:
+        """The review's counterexample: `d002`'s buffer changed in memory.
+
+        `(1 + 3) >> 2` and `(2 + 3) >> 2` are both 1, so the word count, the pre-state and the
+        stores are unchanged, the recorded load is compared as a shape rather than a value, and the
+        digest still names the untouched file. Only binding the corpus itself catches it, and this
+        asserts that it is the *only* thing that does: the failure list is exactly that refusal.
+        """
+        corpus = copy.deepcopy(diff.load_corpus())
+        row = next(row for row in corpus["scenarios"] if row["id"] == "d002")
+        self.assertEqual(row["buffer_first_dword"], "0x00000001")
+        row["buffer_first_dword"] = "0x00000002"
+
+        failures = diff.validate_reference(self.reference, corpus)
+        self.assertEqual(failures, [
+            "the supplied corpus is not the committed frozen corpus this reference was produced "
+            "from"])
+
     def test_both_paths_are_recorded_qualified(self) -> None:
         results = self.reference["canonical"]["results"]
         self.assertEqual(len(results), len(diff.load_corpus()["scenarios"]))

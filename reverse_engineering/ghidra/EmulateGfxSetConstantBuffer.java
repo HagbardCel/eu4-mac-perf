@@ -302,9 +302,10 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
     @Override
     public void run() throws Exception {
         String[] args = getScriptArgs();
-        if (args.length < 3) {
+        if (args.length < 4) {
             throw new IllegalArgumentException(
-                "usage: EmulateGfxSetConstantBuffer.java <scenariosJson> <outputJson> <pinnedSha256>");
+                "usage: EmulateGfxSetConstantBuffer.java <scenariosJson> <outputJson> <pinnedSha256> "
+                + "<pinnedCodeWindowSha256>");
         }
         File scenariosFile = new File(args[0]);
         File outputFile = new File(args[1]);
