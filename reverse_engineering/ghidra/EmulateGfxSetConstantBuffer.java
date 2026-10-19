@@ -44,7 +44,7 @@ import ghidra.program.model.pcode.PcodeOp;
 
 public class EmulateGfxSetConstantBuffer extends GhidraScript {
 
-    private static final String SCRIPT_VERSION = "EmulateGfxSetConstantBuffer/v1";
+    private static final String SCRIPT_VERSION = "EmulateGfxSetConstantBuffer/v2";
     private static final String SCHEMA = "eu4-re0-pilot-observations/v1";
 
     /** Hard ceiling on stepped instructions; the longest frozen path is 18. */
@@ -247,6 +247,18 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
         return sb.toString();
     }
 
+    /** Digest of the first `length` bytes, for a window read with a margin beyond its end. */
+    private static String sha256(byte[] data, int length) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        digest.update(data, 0, length);
+        byte[] hash = digest.digest();
+        StringBuilder sb = new StringBuilder();
+        for (byte b : hash) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
+    }
+
     private static JsonArray rows(List<String[]> source) {
         JsonArray array = new JsonArray();
         for (String[] row : source) {
@@ -297,6 +309,7 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
         File scenariosFile = new File(args[0]);
         File outputFile = new File(args[1]);
         String pinnedSha = args[2].trim();
+        String pinnedCodeSha = args[3].trim();
 
         byte[] scenariosBytes = Files.readAllBytes(scenariosFile.toPath());
         String scenariosSha = sha256(scenariosBytes);
@@ -324,6 +337,19 @@ public class EmulateGfxSetConstantBuffer extends GhidraScript {
             currentProgram.getMemory().getBytes(entry, exact);
             code = new byte[codeLength];
             System.arraycopy(exact, 0, code, 0, exact.length);
+        }
+
+        // The bytes about to be emulated, against a digest pinned in reverse_engineering/target.json
+        // and derived from the pinned binary by the repository's own Mach-O mapping. The executable
+        // digest checked above is import metadata about the originally imported file, not the bytes
+        // in this program's memory now, so it cannot by itself establish that the instructions read
+        // here are the pinned ones. Nothing is stepped before this agrees.
+        int bodyLength = (int) (endVa - entryVa);
+        String bodySha = sha256(code, bodyLength);
+        if (!pinnedCodeSha.equalsIgnoreCase(bodySha)) {
+            throw new IllegalStateException("the loaded program's bytes for "
+                + scenarios.get("function").getAsString() + " are not the pinned code window "
+                + pinnedCodeSha + ": " + bodySha);
         }
 
         JsonArray results = new JsonArray();

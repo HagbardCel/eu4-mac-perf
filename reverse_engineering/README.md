@@ -22,7 +22,10 @@ Recover and understand the original EU IV macOS implementation. Phase 1 (PR D) p
   ghidra-project/
 ```
 
-Pin identity: [`target.json`](target.json) (SHA-256, default GOG executable path). Tooling does **not** import `benchmark/` at runtime; CI cross-checks the SHA against `benchmark/eu4_engine_inventory.py`.
+Pin identity: [`target.json`](target.json) (SHA-256, default GOG executable path, and the
+`code_windows` digest of each reconstructed function's body, read from the pinned binary with
+[`macho_rva.py`](macho_rva.py) and used to authenticate recorded executions against the bytes
+actually in the emulated program). Tooling does **not** import `benchmark/` at runtime; CI cross-checks the SHA against `benchmark/eu4_engine_inventory.py`.
 
 ## Requirements
 

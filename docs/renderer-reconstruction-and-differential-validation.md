@@ -112,11 +112,15 @@ executed through RE0's P-code emulator, and the reference record is what it obse
 reconstruction, compiled fresh, is reconciled with it byte-for-byte on the region both sides
 describe, both sides starting from the same declared pre-state, with the stored buffer pointer
 compared as a role and each side validated against what that role means. The reference is qualified
-structurally before it is used as evidence: it is bound to the corpus, to the pinned binary and to
-the executable Ghidra loaded; every row's initial registers and constructed pre-state (canaries
-included) are the corpus's, its executed path, decoded instructions, loads and ordered stores match
-the frozen path structure, and its store values agree with its own post-state — while the word count
-itself comes from the execution, never from a second arithmetic model. Both RE1 arithmetic
+structurally before it is used as evidence, and the comparison refuses to run at all against one that
+fails: it is bound to the corpus, to the pinned binary and to the executable Ghidra loaded; every
+row's initial registers and constructed pre-state (canaries included) are the corpus's, its executed
+path, decoded instructions, lengths, loads and ordered stores match the frozen path structure, and
+its store values agree with its own post-state — while the word count itself comes from the
+execution, never from a second arithmetic model. The instruction bytes every row records are held to
+the pinned code window in `reverse_engineering/target.json`, derived from the pinned binary by the
+repository's own Mach-O mapping, and the emulator script refuses to step an instruction unless the
+bytes it is about to execute hash to the same pin. Both RE1 arithmetic
 alternatives (a signed division on the buffer path, the missing `+3` wrap on the selector path) are
 compiled as deliberately wrong reconstructions and rejected, each on its own path; a record from
 another corpus, binary or executable, a perturbed, reordered or unqualified row, an altered

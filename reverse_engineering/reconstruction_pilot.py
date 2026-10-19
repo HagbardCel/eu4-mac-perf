@@ -506,10 +506,12 @@ def run_pilot(
 ) -> Path:
     """Run every frozen scenario through the emulator and write the observation record.
 
-    The pinned digest handed to the script comes from `reverse_engineering/target.json`, not from
+    The pinned digests handed to the script come from `reverse_engineering/target.json`, not from
     the scenario file, so the script can refuse to execute unless the loaded program is the pinned
-    target even if the scenario file has been altered.
+    target - both its executable identity and the instruction bytes actually present in the loaded
+    program's memory - even if the scenario file has been altered.
     """
+    function = load_scenarios(scenarios_path)["function"]
     corpus.analyze_headless(
         project_dir or default_project_dir(),
         project_name or default_project_name(),
@@ -522,6 +524,7 @@ def run_pilot(
         str(scenarios_path),
         str(output_path),
         paths.binary_sha256(),
+        paths.code_window(function)["sha256"],
         process_timeout=process_timeout,
     )
     return Path(output_path)

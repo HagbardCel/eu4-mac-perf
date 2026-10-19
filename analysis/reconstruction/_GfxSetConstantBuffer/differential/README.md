@@ -3,7 +3,8 @@
 **Status:** complete (2026-10-18). Frozen inputs: [`scenarios.json`](scenarios.json). Reference
 record: [`reference.json`](reference.json). Comparator and reference validator:
 `reverse_engineering/reconstruction_diff.py`; guards: `tests/test_reconstruction_differential.py`;
-runner and emulator script: RE0's, unchanged
+runner and emulator script: RE0's, extended only with the pinned code-window check (see
+[The two qualification modes](#the-two-qualification-modes))
 ([`pilot.md`](../pilot/pilot.md), `reverse_engineering/reconstruction_pilot.py`,
 `reverse_engineering/ghidra/EmulateGfxSetConstantBuffer.java`).
 
@@ -94,9 +95,19 @@ exactly that:
 - every row started from the state the corpus constructs: the recorded initial registers, register
   by register, and the recorded context and stack pre-state, canary bands included;
 - every row executed exactly the frozen instruction path for its branch — the ordered RVAs, the
-  instruction count and byte count, and each instruction's decoded text checked against the reviewed
-  listing — and touched only the declared memory: the frozen load sequence for that path, and
-  exactly the stack save and the three declared context stores, in the original's order;
+  instruction count and byte count, each instruction's length and decoded text checked against the
+  reviewed listing — and touched only the declared memory: the frozen load sequence for that path,
+  and exactly the stack save and the three declared context stores, in the original's order;
+- the instruction **bytes** every row records are the pinned binary's own bytes. The anchor is the
+  `code_windows` entry in `reverse_engineering/target.json`: the half-open body range and the SHA-256
+  of exactly those bytes, read from the pinned binary with the repository's own Mach-O mapping
+  (`reverse_engineering/macho_rva.py`). The rows must agree with each other byte for byte, tile the
+  pinned range exactly, and hash to that digest. The receipt's own `code_window_sha256` is not the
+  anchor — a digest a record carries cannot authenticate that record — and neither is the loaded
+  program's executable digest, which is import metadata about the originally imported file rather
+  than the bytes in memory now. The emulator script refuses to step a single instruction unless the
+  bytes it is about to execute hash to the same pin, so a project whose memory was replaced cannot
+  produce a record at all;
 - those stores agree with the record's own post-state wherever it is recorded, and the store trace
   agrees with the emulator's independent state-level write trace;
 - only the declared writes changed any byte of the observation window, and only the saved frame word
@@ -129,10 +140,16 @@ None of these is a claim that the miss cannot occur; each is a check that the ga
   never compared.
 - **A forged record.** Records from another corpus, another binary or another executable, dropped or
   reordered rows, a changed recorded selector, a wrong path label, a changed initial register, an
-  altered executed instruction sequence, a dropped load, a changed decoded instruction text, an
-  extra or reordered store, a store trace that disagrees with the state write trace, and a changed
-  label or limits list are each rejected for the reason under test (the forgeries are re-signed, so
-  the digest check cannot be what catches them).
+  altered executed instruction sequence, a changed decoded instruction, a changed instruction
+  length, instruction bytes that disagree between rows, instruction bytes that are not the pinned
+  code window (the review's `55`→`90` with the text kept, applied to every row), instruction bytes
+  that do not tile the pinned range, a dropped load, an extra or reordered store, a store trace that
+  disagrees with the state write trace, and a changed label or limits list are each rejected for the
+  reason under test (the forgeries are re-signed, so the digest check cannot be what catches them).
+- **A reference that is not qualified at all.** The comparison refuses to run against a reference
+  that fails qualification, returning the qualification failures instead: a test passes a bad
+  reference and a harness path that does not exist, so a comparison that launched anything would
+  raise rather than report.
 - **A withheld required input (a real run).** A buffer-path row with its buffer removed is re-run
   through the emulator: the load is recorded as an uninitialized dependency, the run marks itself
   unqualified with a reason, and the validator rejects the record. The explicit-path rows, which
@@ -143,8 +160,9 @@ None of these is a claim that the miss cannot occur; each is a check that the ga
 It establishes that, on 414 frozen inputs, RE1's reconstruction produces **the same observable
 effect on the context object** — the same three writes with the same values, the same absence of any
 other change, the same `RAX` — as the original's decoded instructions do inside a Ghidra P-code
-emulator. The reference record carries this statement and the frozen limits verbatim, so the
-evidence cannot be read as more than it is.
+emulator, and that those instructions are the pinned binary's own bytes. The reference record
+carries this statement and the frozen limits verbatim, so the evidence cannot be read as more than
+it is.
 
 It does **not** establish any of the following, and these limits travel with the evidence:
 
@@ -158,7 +176,12 @@ It does **not** establish any of the following, and these limits travel with the
    are not compared with each other, only each against what the role means.
 5. The original's stack traffic and its exact instruction-level write ordering are outside this
    comparison (see RE1's own limits).
-6. No claim is made about `_GfxSetConstantBuffer`'s importance as a rendering bottleneck.
+6. Only the context object and `RAX` are observed. A reconstruction that wrote to the handle
+   (`*RDI`) or to the input buffer after computing the word count would satisfy every check here, so
+   this is not a general-purpose runtime equivalence test: before certifying a larger function for
+   actual replacement, every declared input region it can write to has to be observed before and
+   after its execution, not just the context object.
+7. No claim is made about `_GfxSetConstantBuffer`'s importance as a rendering bottleneck.
 
 ## Reproducing
 
@@ -190,6 +213,10 @@ the oracle. A mismatch between the two sides is to be resolved by amending the c
 corpus in a separate, reviewed commit — never by editing a recorded observation to match the
 reconstruction, and never by relaxing the comparison to fit.
 
-The emulator script, the runner and the constructed state are RE0's, unchanged: this corpus was run
-by the code that produced [the RE0 receipt](../pilot/observations-2026-10-18.json), extended only
-with the corpus path as a parameter.
+The emulator script, the runner and the constructed state are RE0's, extended only with the corpus as
+a parameter and with the pinned code-window check: before any scenario runs, the script hashes the
+bytes it is about to execute and refuses unless they are the `code_windows` entry in
+`reverse_engineering/target.json`. The observations themselves are unchanged — a re-run of this
+corpus with the extended script reproduces the committed canonical block byte for byte
+(`tests/test_reconstruction_differential.py::ReferenceRunTests`), which is what makes that claim
+checkable rather than asserted.

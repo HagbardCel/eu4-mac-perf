@@ -22,10 +22,12 @@ there, expectations were hand-derived and frozen before execution; here, the ref
 original's executed behaviour and the comparison itself is the evidence.
 
 Because the comparison is the evidence, the reference is qualified first and structurally: that it
-came from this corpus and the pinned executable, that it is the same on a repeat run, and that every
-row began from the declared constructed state (canaries included), executed the frozen instruction
-path, touched only the declared memory, and wrote exactly the declared values - with the word count
-read from the execution rather than from a second arithmetic model.
+came from this corpus, the pinned binary and the pinned executable, that it is the same on a repeat
+run, that every row began from the declared constructed state (canaries included), executed the
+frozen instruction path, touched only the declared memory, and wrote exactly the declared values -
+with the word count read from the execution rather than from a second arithmetic model - and that the
+instruction bytes it records are the pinned binary's own bytes. `compare_corpus` refuses to compare
+anything until that holds, so a verdict cannot come from a record this corpus cannot place.
 
 Strictly offline: nothing launches, attaches to or reads the game.
 """
@@ -90,6 +92,18 @@ def frozen_structure() -> dict[str, Any]:
     and the non-RAX caller-saved register outcomes.
     """
     return pilot.load_scenarios()
+
+
+def inventory_by_rva() -> dict[int, tuple[int, str]]:
+    """The reviewed listing: `rva -> (length, decoded text)`.
+
+    RE0's inventory, which the repository checks against the pinned binary's own bytes where the
+    local corpus is present. Used here as the independent statement of where each instruction
+    starts and how long it is.
+    """
+    inventory = json.loads(pilot.INVENTORY_PATH.read_text())
+    return {pilot.hexint(item["rva"]): (item["length"], item["operands"])
+            for item in inventory["instructions"]}
 
 
 def _declared_stores(row: dict[str, Any], corpus: dict[str, Any],
@@ -182,6 +196,11 @@ def _store_set(oracle: dict[str, Any]) -> set[tuple[int, int]]:
 def compare_row(row: dict[str, Any], oracle: dict[str, Any], recon: dict[str, str],
                 corpus: dict[str, Any]) -> list[str]:
     """Reconcile one row's recorded original with the reconstruction's own report.
+
+    A per-row unit, not the gate: it is given a single recorded row and cannot qualify the record it
+    came from (the instruction bytes, the corpus binding and the determinism of the whole record are
+    corpus-level facts). `compare_corpus` qualifies the reference first and is the entry point that
+    produces a verdict.
 
     Fails closed: a row whose recorded original is not well formed is never compared, because
     agreement with a broken reference would be evidence of nothing.
@@ -302,11 +321,19 @@ def compare_row(row: dict[str, Any], oracle: dict[str, Any], recon: dict[str, st
 
 def compare_corpus(harness: Path, corpus: dict[str, Any] | None = None,
                    reference: dict[str, Any] | None = None) -> list[str]:
-    """Reconcile every frozen corpus row; returns one message per disagreement."""
+    """Reconcile every frozen corpus row; returns one message per disagreement.
+
+    The reference is qualified first, and a reference that fails qualification is returned as the
+    result without a single reconstruction subprocess being launched: comparing a reconstruction
+    against a record this corpus cannot place is agreement about nothing, so the comparison is
+    not allowed to produce a verdict from one.
+    """
     corpus = corpus or load_corpus()
     reference = reference or load_reference()
+    failures = validate_reference(reference, corpus)
+    if failures:
+        return failures
     recorded = {result.get("id"): result for result in reference["canonical"]["results"]}
-    failures: list[str] = []
     for row in corpus["scenarios"]:
         oracle = recorded.get(row["id"])
         if oracle is None:
@@ -318,7 +345,7 @@ def compare_corpus(harness: Path, corpus: dict[str, Any] | None = None,
 
 def _validate_row(check: Callable[[bool, str], None], row: dict[str, Any], result: dict[str, Any],
                   corpus: dict[str, Any], reference: dict[str, Any],
-                  texts: dict[int, str]) -> None:
+                  inventory: dict[int, tuple[int, str]]) -> None:
     """Qualify one recorded original against the frozen corpus, structurally.
 
     This is RE0's per-scenario qualification with the two things this corpus deliberately does not
@@ -358,7 +385,7 @@ def _validate_row(check: Callable[[bool, str], None], row: dict[str, Any], resul
           f"{tag}: the record does not carry every general-purpose initial register")
 
     # The exact ordered instruction path, from RE0's frozen listing walk, every instruction decoded
-    # and cross-checked against the reviewed inventory.
+    # and its bytes, length and text cross-checked against the reviewed listing.
     path = reference["paths"][row["path"]]
     executed = result.get("executed", [])
     check([pilot.hexint(item[0]) for item in executed]
@@ -371,9 +398,13 @@ def _validate_row(check: Callable[[bool, str], None], row: dict[str, Any], resul
         rva = pilot.hexint(item[0])
         raw = bytes.fromhex(item[1])
         total_bytes += len(raw)
-        check(texts.get(rva) == item[2],
+        length, text = inventory.get(rva, (None, None))
+        check(text == item[2],
               f"{tag}: the decoded text at 0x{rva:x} is {item[2]!r}, the reviewed listing says "
-              f"{texts.get(rva)!r}")
+              f"{text!r}")
+        check(len(raw) == length,
+              f"{tag}: the instruction at 0x{rva:x} is {len(raw)} bytes, the reviewed listing says "
+              f"{length}")
     check(total_bytes == path["instruction_bytes"],
           f"{tag}: executed {total_bytes} instruction bytes, the path is {path['instruction_bytes']}")
 
@@ -478,6 +509,57 @@ def _validate_row(check: Callable[[bool, str], None], row: dict[str, Any], resul
           f"{tag}: the return sentinel slot was disturbed")
 
 
+def _validate_code_window(check: Callable[[bool, str], None], results: list[dict[str, Any]],
+                          corpus: dict[str, Any]) -> None:
+    """Authenticate every recorded instruction's bytes against the pinned code window.
+
+    The anchor is `reverse_engineering/target.json`'s `code_windows` entry, derived from the pinned
+    binary by the repository's own Mach-O mapping - not the receipt's own `code_window_sha256` (a
+    digest a record carries cannot authenticate that record) and not the loaded program's executable
+    digest (import metadata, not the bytes being emulated). A recorded byte no execution receipt can
+    contradict is a byte no evidence rests on; this is the check that contradicts one.
+
+    Cross-row agreement comes first, so a single row cannot disagree with the rest about what the
+    original's instructions are, and the recovered instructions must tile the pinned range exactly.
+    The arithmetic result is untouched by any of this: the word count still comes from the execution.
+    """
+    window = paths.code_window(corpus["function"])
+    entry = pilot.hexint(window["entry_rva"])
+    end = pilot.hexint(window["end_rva"])
+    check(pilot.hexint(corpus["entry_rva"]) == entry and pilot.hexint(corpus["end_rva"]) == end,
+          "the pinned code window is not this corpus's function range")
+
+    inventory = inventory_by_rva()
+    recorded: dict[int, str] = {}
+    for result in results:
+        tag = result.get("id")
+        for item in result.get("executed", []):
+            rva = pilot.hexint(item[0])
+            if rva in recorded:
+                check(recorded[rva] == item[1],
+                      f"{tag}: the recorded bytes at 0x{rva:x} differ from the other rows'")
+                continue
+            recorded[rva] = item[1]
+
+    body = bytearray()
+    cursor = entry
+    for rva in sorted(recorded):
+        raw = recorded[rva]
+        length, _ = inventory.get(rva, (None, None))
+        check(len(raw) // 2 == length,
+              f"the recorded instruction at 0x{rva:x} is {len(raw) // 2} bytes, the reviewed "
+              f"listing says {length}")
+        check(rva == cursor,
+              f"the recorded instructions do not cover the pinned window: 0x{rva:x} follows "
+              f"0x{cursor:x}")
+        body += bytes.fromhex(raw)
+        cursor = rva + len(raw) // 2
+    check(cursor == end,
+          f"the recorded instructions end at 0x{cursor:x}, the pinned window ends at 0x{end:x}")
+    check(hashlib.sha256(bytes(body)).hexdigest() == window["sha256"],
+          "the recorded instruction bytes are not the pinned code window")
+
+
 def validate_reference(reference: dict[str, Any],
                        corpus: dict[str, Any] | None = None) -> list[str]:
     """Validate the committed reference record against the frozen corpus.
@@ -488,7 +570,7 @@ def validate_reference(reference: dict[str, Any],
     produced from this corpus and from the pinned binary, is the same on a repeat run, and every row
     is a well-formed execution of the original that began from the declared constructed state,
     followed the frozen path, touched only the declared memory and wrote exactly the declared
-    values.
+    values; and when the instruction bytes every row records are the pinned binary's own bytes.
     """
     corpus = corpus or load_corpus()
     failures: list[str] = []
@@ -536,9 +618,10 @@ def validate_reference(reference: dict[str, Any],
           "the reference's scenario ids or their order differ from the frozen corpus")
 
     reference_structure = frozen_structure()
-    texts = pilot.inventory_text_by_rva()
+    _validate_code_window(check, results, corpus)
+    inventory = inventory_by_rva()
     for row, result in zip(corpus["scenarios"], results):
-        _validate_row(check, row, result, corpus, reference_structure, texts)
+        _validate_row(check, row, result, corpus, reference_structure, inventory)
     return failures
 
 

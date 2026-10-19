@@ -3,10 +3,11 @@
 Always (CI, no Ghidra): the frozen corpus is the declared cross product of the six slots with the
 two frozen input sets and contains every RE0 pilot row; the committed reference record validates
 against that corpus - identity, determinism, the declared initial registers, the exact instruction
-path, the load and store traces, the constructed pre-state and its canaries - and forged records and
-perturbed reference rows are rejected for the reason under test; and the compiled reconstruction
-matches the recorded original on every corpus row, both sides starting from the same declared
-pre-state and both storing their buffer argument.
+path, the recorded instruction bytes against the independently pinned code window, the load and store
+traces, the constructed pre-state and its canaries - and forged records and perturbed reference rows
+are rejected for the reason under test; the comparison refuses to run at all against a reference that
+fails qualification; and the compiled reconstruction matches the recorded original on every corpus
+row, both sides starting from the same declared pre-state and both storing their buffer argument.
 
 Deliberately incorrect reconstructions - a signed division on the buffer path, and the missing
 `+3` wrap on the selector path - are compiled from mutated copies of the tracked sources and must
@@ -24,6 +25,7 @@ attaches to or reads the game.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import shutil
@@ -35,10 +37,10 @@ from pathlib import Path
 from reverse_engineering import paths
 from reverse_engineering import reconstruction_diff as diff
 from reverse_engineering import reconstruction_pilot as pilot
+from reverse_engineering.macho_rva import MachOMapper
 
 RECON_DIR = diff.FUNCTION_DIR / "reconstruction"
 HEADER = RECON_DIR / "gfx_set_constant_buffer.hpp"
-REFERENCE_PRESENT = diff.REFERENCE_PATH.is_file()
 BINARY_PRESENT = paths.executable_path().is_file()
 PROJECT_PRESENT = pilot.default_project_dir().is_dir()
 
@@ -144,10 +146,15 @@ def _mutated_source_dir(name: str, mutation: tuple[str, str]) -> Path:
 
 def setUpModule() -> None:
     global WORKDIR, COMPILER, HARNESS, BUILD_NOTE
+    # The reference is committed evidence, not an optional facility: without it this module's
+    # subject - the comparison and what it qualifies - does not exist, so its absence fails the
+    # module instead of quietly skipping it. A missing compiler is different: the RE1 gate fails the
+    # supported CI runner for that, so here it is only reported.
+    if not diff.REFERENCE_PATH.is_file():
+        raise AssertionError(
+            f"the committed RE2 reference is required and is missing: {diff.REFERENCE_PATH}")
     COMPILER = _find_compiler()
     if COMPILER is None:
-        # Not enforced here: the RE1 gate already fails the supported CI runner when no compiler
-        # is present, so this module cannot be the one that silently skips.
         BUILD_NOTE = "no C++ compiler on PATH"
     else:
         WORKDIR = Path(tempfile.mkdtemp(prefix="eu4-re2-"))
@@ -258,7 +265,6 @@ class FrozenCorpusTests(unittest.TestCase):
             self.assertEqual(self.corpus[key], reference[key], key)
 
 
-@unittest.skipUnless(REFERENCE_PRESENT, "committed RE2 reference not present")
 class ReferenceRecordTests(unittest.TestCase):
     """The committed reference is validated in CI without Ghidra, a project or the binary."""
 
@@ -299,7 +305,6 @@ def _resign(reference: dict) -> dict:
     return reference
 
 
-@unittest.skipUnless(REFERENCE_PRESENT, "committed RE2 reference not present")
 class ForgedReferenceTests(unittest.TestCase):
     """Mutations a record could carry while still hashing to its own digests.
 
@@ -456,6 +461,38 @@ class ForgedReferenceTests(unittest.TestCase):
 
         self.assert_rejected(self.failures(mutate), "executable")
 
+    def test_recorded_instruction_bytes_that_are_not_the_pinned_code_window_are_rejected(
+            self) -> None:
+        """The review's counterexample: `55` replaced by `90` with the text and length kept, in
+        every row, so nothing disagrees between rows. Only the pinned bytes can refuse it."""
+        def mutate(reference: dict) -> None:
+            for result in reference["canonical"]["results"]:
+                result["executed"][0][1] = "90"
+
+        self.assert_rejected(self.failures(mutate), "pinned code window")
+
+    def test_recorded_instruction_bytes_that_differ_between_rows_are_rejected(self) -> None:
+        """One row cannot disagree with the rest about what the original's instructions are."""
+        def mutate(reference: dict) -> None:
+            reference["canonical"]["results"][0]["executed"][0][1] = "90"
+
+        self.assert_rejected(self.failures(mutate), "differ from the other rows")
+
+    def test_an_instruction_whose_length_contradicts_the_listing_is_rejected(self) -> None:
+        def mutate(reference: dict) -> None:
+            for result in reference["canonical"]["results"]:
+                result["executed"][0][1] = "90c3"
+
+        self.assert_rejected(self.failures(mutate), "the reviewed listing says")
+
+    def test_a_reference_of_the_right_bytes_for_another_range_is_rejected(self) -> None:
+        """The anchor is a range too: bytes that do not tile the pinned window are not the window."""
+        def mutate(reference: dict) -> None:
+            for result in reference["canonical"]["results"]:
+                result["executed"] = result["executed"][1:]
+
+        self.assert_rejected(self.failures(mutate), "do not cover the pinned window")
+
     def test_an_unqualified_row_is_rejected(self) -> None:
         def mutate(reference: dict) -> None:
             result = reference["canonical"]["results"][0]
@@ -514,7 +551,6 @@ class SanitizerEnvironmentTests(unittest.TestCase):
         self.assertIn("halt_on_error=1", fields.get("ASAN_OPTIONS", ""))
 
 
-@unittest.skipUnless(REFERENCE_PRESENT, "committed RE2 reference not present")
 class ComparatorTests(NeedsHarness):
     """What the comparison itself must catch: this is the gate that carries the evidence."""
 
@@ -591,10 +627,19 @@ class ComparatorTests(NeedsHarness):
         reference["canonical"]["results"].pop()
         failures = diff.compare_corpus(HARNESS, self.corpus, reference)
         self.assertTrue(failures)
-        self.assertTrue(any("no row for this corpus input" in message for message in failures))
+        self.assertTrue(any("ids or their order" in message for message in failures))
+
+    def test_a_reference_that_fails_qualification_is_refused_before_any_run(self) -> None:
+        """The comparison cannot produce a verdict from a record this corpus cannot place, and it
+        must say so without launching anything. The harness path does not exist: if the reference
+        were qualified first, running it would raise instead of returning."""
+        reference = copy.deepcopy(self.reference)
+        reference["canonical"]["executable_sha256"] = "0" * 64
+        failures = diff.compare_corpus(Path("/nonexistent/harness"), self.corpus, reference)
+        self.assertTrue(failures)
+        self.assertTrue(any("executable" in message for message in failures))
 
 
-@unittest.skipUnless(REFERENCE_PRESENT, "committed RE2 reference not present")
 class DifferentialTests(NeedsHarness):
     def test_the_reconstruction_matches_the_recorded_original_on_every_row(self) -> None:
         corpus = diff.load_corpus()
@@ -604,7 +649,6 @@ class DifferentialTests(NeedsHarness):
         self.assertGreater(len(corpus["scenarios"]), 400)
 
 
-@unittest.skipUnless(REFERENCE_PRESENT, "committed RE2 reference not present")
 class NearMissTests(NeedsHarness):
     """The controls: a deliberately wrong reconstruction must be caught, on its own path only."""
 
@@ -632,9 +676,29 @@ class NearMissTests(NeedsHarness):
         # everything: the positive case is exercised in DifferentialTests.
 
 
+@unittest.skipUnless(BINARY_PRESENT, "pinned binary not present")
+class CodeWindowPinTests(unittest.TestCase):
+    """The anchor is the pinned binary's own bytes, not a value asserted about them.
+
+    `validate_reference` holds the recorded instruction bytes to this pin; this holds the pin to the
+    binary, with the repository's own Mach-O mapping, the same way RE0 holds its receipt to it.
+    """
+
+    def test_the_pinned_code_window_is_the_pinned_binary(self) -> None:
+        window = paths.code_window("_GfxSetConstantBuffer")
+        entry = pilot.hexint(window["entry_rva"])
+        body_length = pilot.hexint(window["end_rva"]) - entry
+        with MachOMapper(paths.executable_path()) as mapper:
+            body = mapper.read_bytes_at_rva(paths.load_target()["image_base"], entry, body_length)
+        self.assertEqual(hashlib.sha256(body).hexdigest(), window["sha256"])
+        # ... and the pin is the corpus's own function, so the reference is held to its bytes.
+        corpus = diff.load_corpus()
+        self.assertEqual(corpus["function"], "_GfxSetConstantBuffer")
+
+
 @unittest.skipUnless(
-    ghidra_available() and PROJECT_PRESENT and BINARY_PRESENT and REFERENCE_PRESENT,
-    "GHIDRA_INSTALL, the analysed project, the pinned binary or the reference not present",
+    ghidra_available() and PROJECT_PRESENT and BINARY_PRESENT,
+    "GHIDRA_INSTALL, the analysed project or the pinned binary not present",
 )
 class ReferenceRunTests(unittest.TestCase):
     """Re-runs the frozen corpus and must reproduce the committed canonical block."""
