@@ -304,6 +304,21 @@ class ReferenceRecordTests(unittest.TestCase):
             "the supplied corpus is not the committed frozen corpus this reference was produced "
             "from"])
 
+    def test_empty_supplied_arguments_are_refused_not_replaced_by_defaults(self) -> None:
+        """`{}` is falsy, so a truthiness default would have quietly substituted the committed
+        artifacts and reported agreement. An argument that is passed is the argument that is used,
+        and an unusable one is a refusal - before any field of it is read, so a malformed one
+        cannot raise instead."""
+        binding = ("the supplied corpus is not the committed frozen corpus this reference was "
+                   "produced from")
+        self.assertEqual(diff.validate_reference(self.reference, {}), [binding])
+        self.assertEqual(diff.validate_reference({}, {}), [binding])
+        self.assertEqual(diff.compare_corpus(Path("/nonexistent/harness"), {}, self.reference),
+                         [binding])
+        self.assertTrue(diff.compare_corpus(Path("/nonexistent/harness"), {}, {}))
+        self.assertIn("the reference has no canonical block",
+                      diff.compare_corpus(Path("/nonexistent/harness"), diff.load_corpus(), {}))
+
     def test_both_paths_are_recorded_qualified(self) -> None:
         results = self.reference["canonical"]["results"]
         self.assertEqual(len(results), len(diff.load_corpus()["scenarios"]))
@@ -741,7 +756,10 @@ class ReferenceNegativeControlTests(unittest.TestCase):
 
     The explicit-path rows of the corpus also have no buffer, and those qualify: the difference is
     that the buffer path reads [RSI]. Both cases together show the qualification check is not
-    vacuous.
+    vacuous. The record produced from the altered corpus is validated against the committed
+    corpus, which refuses it for that row *and* for not being a record of the committed inputs -
+    the altered corpus itself is refused outright, and a test in `ReferenceRecordTests` covers
+    that.
     """
 
     def test_withheld_required_input_fails_qualification(self) -> None:
@@ -757,7 +775,7 @@ class ReferenceNegativeControlTests(unittest.TestCase):
                     for index in (1, 2)]
             reference = pilot.build_receipt(runs[0], runs[1], scenarios_path=corpus_path,
                                             schema=diff.REFERENCE_SCHEMA, statement=diff.STATEMENT)
-            failures = diff.validate_reference(reference, broken)
+            failures = diff.validate_reference(reference)
 
         result = next(row for row in reference["canonical"]["results"] if row["id"] == target["id"])
         self.assertTrue(result["uninitialized_reads"], "the withheld input was not noticed")

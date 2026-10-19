@@ -327,9 +327,13 @@ def compare_corpus(harness: Path, corpus: dict[str, Any] | None = None,
     result without a single reconstruction subprocess being launched: comparing a reconstruction
     against a record this corpus cannot place is agreement about nothing, so the comparison is
     not allowed to produce a verdict from one.
+
+    Omitted arguments mean the committed artifacts. Passing them explicitly - including an empty
+    dictionary, which is falsy - means those exact objects, so an unusable one is refused by that
+    qualification rather than swapped for the artifact it is not.
     """
-    corpus = corpus or load_corpus()
-    reference = reference or load_reference()
+    corpus = load_corpus() if corpus is None else corpus
+    reference = load_reference() if reference is None else reference
     failures = validate_reference(reference, corpus)
     if failures:
         return failures
@@ -575,19 +579,21 @@ def validate_reference(reference: dict[str, Any],
     RE2 is restricted to that one frozen corpus, so a *supplied* corpus has to be it: the record's
     `scenarios_sha256` is the digest of the committed file's bytes, which says nothing about a
     dictionary a caller assembled, and a row changed in memory can leave the digest check intact
-    while the two sides are no longer running the same input. Supplying anything else is refused
-    rather than qualified against a digest that does not describe it.
+    while the two sides are no longer running the same input. Supplying anything else - an empty
+    dictionary included, which is falsy - is refused here, before any field of it or of the record
+    is touched, so a malformed argument is a refusal rather than an exception.
     """
     frozen = load_corpus()
-    corpus = corpus or frozen
+    if corpus is not None and corpus != frozen:
+        return ["the supplied corpus is not the committed frozen corpus this reference was produced "
+                "from"]
+    corpus = frozen if corpus is None else corpus
     failures: list[str] = []
 
     def check(condition: bool, message: str) -> None:
         if not condition:
             failures.append(message)
 
-    check(corpus == frozen,
-          "the supplied corpus is not the committed frozen corpus this reference was produced from")
 
     check(reference.get("schema") == REFERENCE_SCHEMA,
           f"reference schema is {reference.get('schema')!r}")

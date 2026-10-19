@@ -115,7 +115,8 @@ compared as a role and each side validated against what that role means. The ref
 structurally before it is used as evidence, and the comparison refuses to run at all against one that
 fails: it is bound to the corpus, to the pinned binary and to the executable Ghidra loaded — RE2 has one
 frozen corpus, so a corpus supplied to the validator has to be that corpus, not a dictionary the
-record's file digest does not describe; every
+record's file digest does not describe; only an omitted argument means the committed artifact, so an
+empty one is refused rather than replaced by the default; every
 row's initial registers and constructed pre-state (canaries included) are the corpus's, its executed
 path, decoded instructions, lengths, loads and ordered stores match the frozen path structure, and
 its store values agree with its own post-state — while the word count itself comes from the

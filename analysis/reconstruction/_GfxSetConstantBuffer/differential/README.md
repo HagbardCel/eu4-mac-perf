@@ -92,8 +92,10 @@ exactly that:
   validator has to be that corpus: the digest is over the committed file's bytes, so a dictionary a
   caller assembled is not described by it. An input changed in memory can leave every structural
   check standing — a `d002` buffer of `0x00000002` instead of `0x00000001` yields the same word
-  count, pre-state and stores — while the two sides are no longer running the same input, so the
-  supplied corpus is refused instead of qualified against a digest that does not describe it;
+  count, pre-state and stores — while the two sides are no longer running the same input, so a
+  supplied corpus that is not the frozen one is refused outright, before any field of it is read.
+  Only an *omitted* argument means the committed artifact: an empty dictionary is falsy but it is
+  still what the caller passed, and it is refused rather than quietly replaced by the default;
 - two independent runs produced the same canonical block, which hashes to its own recorded digest;
 - every row is the corpus's own input in the corpus's own order, carries the path label its input
   selects, is qualified with no reasons, and read no uninitialized state;
@@ -160,6 +162,11 @@ None of these is a claim that the miss cannot occur; each is a check that the ga
   count, the pre-state and the stores are all unchanged and the digest still names the untouched
   file, so nothing else in the qualification notices — which is the point of binding the corpus
   itself.
+- **An empty argument.** An explicitly supplied empty corpus or reference is refused as not the
+  committed artifact, rather than being replaced by it because a falsy value looks like "not
+  given"; the comparison is exercised with an empty corpus, an empty reference and both, each
+  against a harness path that does not exist, so a comparison that launched anything would raise
+  rather than report.
 - **A withheld required input (a real run).** A buffer-path row with its buffer removed is re-run
   through the emulator: the load is recorded as an uninitialized dependency, the run marks itself
   unqualified with a reason, and the validator rejects the record. The explicit-path rows, which
