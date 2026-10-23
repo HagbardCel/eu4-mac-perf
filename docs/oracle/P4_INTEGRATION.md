@@ -339,11 +339,14 @@ rather than silently overwriting the first.
 **Only source-bound verification is admission.** With both the export and the
 declaration, `verify_binding` re-derives the whole binding from them, requires exact
 equality, then proves every derived record and blob is present and byte-identical in
-the store. That is `mode: "source-bound"`, `admitted: true`, and the only result
-`materialize_export` accepts. Without both sources it performs `mode: "structural"`
-checks (manifest, provenance, resource association, counters, ledger) and reports
-`admitted: false`: integrity inspection, never proof of correct materialization.
-Supplying only one source is refused.
+the store. Admission loads the persisted manifest fresh and requires it to verify and
+register every expected record and content blob; correct bytes that were never
+persisted and registered in that manifest are not admitted. That is
+`mode: "source-bound"`, `admitted: true`, and the only result `materialize_export`
+accepts. Without both sources it performs `mode: "structural"` checks (manifest,
+provenance, resource association, counters, ledger) and reports `admitted: false`:
+integrity inspection, never proof of correct materialization. Supplying only one
+source is refused.
 
 **Arity and unexpected arguments.** Every declared hook has an `arity`, and its
 carriers must cover every argument `0..arity-1`. A missing argument is unknown, not

@@ -541,6 +541,35 @@ class FrozenExportTests(unittest.TestCase):
         self.assertEqual(entry["records"], [])
         self.assertEqual(store.records, [])
 
+    def test_source_bound_admission_requires_a_persisted_registered_manifest(self):
+        text = _export([_create(4)], name="content-exact")
+        with tempfile.TemporaryDirectory() as source_dir, \
+                tempfile.TemporaryDirectory() as copy_dir:
+            source = EvidenceStore(Path(source_dir))
+            binding = materialize.materialize_export(text, self.declaration, source)
+            copy = EvidenceStore(Path(copy_dir))
+            for digest in source.manifest()["payload"]["blobs"]:
+                copy.put_blob(source.get_blob(digest))
+
+            # Correct bytes, but neither a persisted manifest nor record registrations.
+            with self.assertRaises(materialize.MaterializeError):
+                materialize.verify_binding(copy, binding, export_text=text,
+                                           declaration=self.declaration)
+
+            # A manifest that registers the blobs but no records is still not evidence.
+            copy.write_manifest()
+            with self.assertRaises(materialize.MaterializeError):
+                materialize.verify_binding(copy, binding, export_text=text,
+                                           declaration=self.declaration)
+
+            for meta in _scenario(binding, "content-exact")["records"]:
+                copy.add_record(source.get_record(meta["digest"]))
+            copy.write_manifest()
+            verification = materialize.verify_binding(
+                copy, binding, export_text=text, declaration=self.declaration)
+            self.assertEqual(verification["mode"], "source-bound")
+            self.assertTrue(verification["admitted"])
+
 
 class DeclarationTests(unittest.TestCase):
     @classmethod

@@ -714,26 +714,44 @@ def verify_binding(store: EvidenceStore, binding: dict[str, Any], *,
         raise MaterializeError("not a capture binding")
     data = schema.canonical_bytes(binding)
     digest = sha256(data).hexdigest()
-    if digest not in store.manifest()["payload"]["blobs"]:
-        raise MaterializeError("capture binding is not sealed in the store manifest")
-    if store.get_blob(digest) != data:
-        raise MaterializeError("sealed capture binding does not match its store blob")
 
     if export_text is not None and declaration is not None:
         plan = _plan_export(export_text, declaration)
         expected = _build_binding(plan, declaration, export_text)
         if binding != expected:
             raise MaterializeError("capture binding does not re-derive from the source export")
+        # Admission reads the persisted manifest fresh: a correct collection of blob
+        # bytes is not evidence until the store registers it.
+        persisted = EvidenceStore(store.root)
+        if not persisted.manifest_path.is_file():
+            raise MaterializeError("capture binding has no persisted evidence manifest")
+        persisted.verify()
+        manifest = persisted.manifest()["payload"]
+        if digest not in manifest["blobs"]:
+            raise MaterializeError(
+                "capture binding is not registered in the persisted manifest")
+        if persisted.get_blob(digest) != data:
+            raise MaterializeError("sealed capture binding does not match its store blob")
         for payload in plan["payloads"]:
             record = schema.record_digest(payload)
-            if store.get_record(record) != payload:
+            if record not in manifest["records"]:
+                raise MaterializeError(
+                    f"bound record {record} is not registered in the persisted manifest")
+            if persisted.get_record(record) != payload:
                 raise MaterializeError(f"bound record {record} does not match the export")
         for blob, content in plan["blobs"].items():
-            if store.get_blob(blob) != content:
+            if blob not in manifest["blobs"]:
+                raise MaterializeError(
+                    f"bound content {blob} is not registered in the persisted manifest")
+            if persisted.get_blob(blob) != content:
                 raise MaterializeError(f"bound content {blob} does not match the export")
         return {"binding_sha256": digest, "mode": VERIFICATION_SOURCE_BOUND,
                 "admitted": True}
 
+    if digest not in store.manifest()["payload"]["blobs"]:
+        raise MaterializeError("capture binding is not sealed in the store manifest")
+    if store.get_blob(digest) != data:
+        raise MaterializeError("sealed capture binding does not match its store blob")
     _verify_structure(store, binding)
     return {"binding_sha256": digest, "mode": VERIFICATION_STRUCTURAL,
             "admitted": False}
