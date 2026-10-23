@@ -112,8 +112,11 @@ class FrozenExportTests(unittest.TestCase):
         cls._tmp.cleanup()
 
     def test_the_frozen_export_materializes_into_verified_evidence(self):
-        digest = materialize.verify_binding(
+        verification = materialize.verify_binding(
             self.store, self.binding, export_text=self.text, declaration=self.declaration)
+        self.assertEqual(verification["mode"], "source-bound")
+        self.assertTrue(verification["admitted"])
+        digest = verification["binding_sha256"]
         self.assertEqual(digest, materialize.binding_digest(self.binding))
         self.store.verify()
         self.assertIn(digest, self.store.manifest()["payload"]["blobs"])
@@ -180,6 +183,48 @@ class FrozenExportTests(unittest.TestCase):
                                  span["sha256"])
                 offset += span["length"]
 
+    def test_each_concurrent_world_owns_a_distinct_resource(self):
+        # Four worker threads initialize independent worlds and reuse slot 0 and
+        # generation 0. Their local identifiers coincide; their resources do not.
+        entry = _scenario(self.binding, "content-concurrent")
+        resource_ids = {meta["resources"][0]["resource_id"]
+                        for meta in entry["records"] if meta["resources"]}
+        self.assertEqual(resource_ids, {
+            f"world:content-golden/content-concurrent/{thread}:slot:0"
+            for thread in range(4)})
+
+        # A scoped version maps to exactly one content across the whole binding.
+        contents: dict[tuple[str, int, int], str] = {}
+        for scenario in self.binding["scenarios"]:
+            for meta in scenario["records"]:
+                for resource in meta["resources"]:
+                    key = (resource["resource_id"], resource["generation"],
+                           resource["version"])
+                    previous = contents.setdefault(key, resource["contents_sha256"])
+                    self.assertEqual(previous, resource["contents_sha256"], key)
+
+    def test_scenarios_do_not_collide_on_the_same_local_resource_version(self):
+        # `content-ample` and `content-concurrent` thread 0 both have slot 0,
+        # generation 0, version 1 -- and different bytes (seed 5 vs seed 1).
+        def version_one(scenario: str, thread: int) -> dict:
+            for meta in _scenario(self.binding, scenario)["records"]:
+                payload = self.store.get_record(meta["digest"])
+                if payload["provenance"]["thread"] != thread:
+                    continue
+                for resource in meta["resources"]:
+                    if resource["generation"] == 0 and resource["version"] == 1:
+                        return resource
+            raise AssertionError(f"{scenario}/{thread} has no version 1")
+
+        ample = version_one("content-ample", 0)
+        concurrent = version_one("content-concurrent", 0)
+        self.assertEqual((ample["generation"], ample["version"]), (0, 1))
+        self.assertEqual((concurrent["generation"], concurrent["version"]), (0, 1))
+        self.assertNotEqual(ample["resource_id"], concurrent["resource_id"])
+        self.assertNotEqual(ample["contents_sha256"], concurrent["contents_sha256"])
+        self.assertNotEqual(self.store.get_blob(ample["contents_sha256"]),
+                            self.store.get_blob(concurrent["contents_sha256"]))
+
     def test_a_complete_two_span_version_assembles_in_declaration_order(self):
         observations = [_create(4),
                         _observation(2, 6, args=(0,), context=(1, 0, 0, 1, 0, 1),
@@ -213,7 +258,12 @@ class FrozenExportTests(unittest.TestCase):
         self.assertEqual(entry["outcome"], "rejected")
         self.assertIn("declared size", entry["reason"])
         self.assertEqual(entry["records"], [])
+        # Nothing from a rejected scenario is published, including the create blob
+        # it produced before the bad version was derived.
         self.assertEqual(store.records, [])
+        orphan = sha256(b"\x00" * 4).hexdigest()
+        self.assertNotIn(orphan, store.manifest()["payload"]["blobs"])
+        self.assertFalse(store.blob_path(orphan).exists())
 
     def test_a_complete_observation_that_declares_a_lost_span_is_rejected(self):
         observations = [_create(4),
@@ -289,7 +339,7 @@ class FrozenExportTests(unittest.TestCase):
 
             tampered = json.loads(json.dumps(binding))
             tampered["export_sha256"] = "0" * 64
-            with self.assertRaises(StoreError):
+            with self.assertRaises(materialize.MaterializeError):
                 materialize.verify_binding(store, tampered)
 
             tampered = json.loads(json.dumps(binding))
@@ -306,6 +356,29 @@ class FrozenExportTests(unittest.TestCase):
             with self.assertRaises(StoreError):
                 materialize.verify_binding(store, binding)
 
+    def test_structural_verification_is_inspection_not_admission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = EvidenceStore(Path(directory))
+            binding = materialize.materialize_export(self.text, self.declaration, store)
+            entry = _scenario(binding, "content-exact")
+            meta = next(m for m in entry["records"] if m["native_state"] == "captured")
+            payload = json.loads(json.dumps(store.get_record(meta["digest"])))
+            payload["abi"]["carriers"][0]["value_hex"] = "ff" * 8
+            meta["digest"] = store.add_record(payload)
+            store.put_blob(schema.canonical_bytes(binding))
+
+            # The tampered record is internally consistent, so inspection passes ...
+            inspection = materialize.verify_binding(store, binding)
+            self.assertEqual(inspection["mode"], "structural")
+            self.assertFalse(inspection["admitted"])
+
+            # ... but it cannot be re-derived from the export, so it is not admitted.
+            with self.assertRaises(materialize.MaterializeError):
+                materialize.verify_binding(store, binding, export_text=self.text,
+                                           declaration=self.declaration)
+            with self.assertRaises(materialize.MaterializeError):
+                materialize.verify_binding(store, binding, export_text=self.text)
+
     def test_a_ledger_that_does_not_rederive_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             store = EvidenceStore(Path(directory))
@@ -321,7 +394,16 @@ class FrozenExportTests(unittest.TestCase):
             store = EvidenceStore(Path(directory))
             binding = materialize.materialize_export(
                 self.text, _effects_free(self.declaration), store)
-            materialize.verify_binding(store, binding, export_text=self.text)
+            materialize.verify_binding(store, binding, export_text=self.text,
+                                       declaration=_effects_free(self.declaration))
+            # Two scenarios' identical creates observe different worlds; their
+            # scoped resources must keep them from collapsing into one behavior.
+            semantic = {}
+            for name in ("content-ample", "content-exact"):
+                meta = next(m for m in _scenario(binding, name)["records"]
+                            if store.get_record(m["digest"])["raw"]["hook_id"] == 1)
+                semantic[name] = schema.semantic_digest(store.get_record(meta["digest"]))
+            self.assertNotEqual(semantic["content-ample"], semantic["content-exact"])
         ledger = binding["ledger"]
         self.assertGreater(ledger["unique"], 0)
         self.assertGreater(ledger["verified_repeat"], 0)
@@ -336,6 +418,24 @@ class FrozenExportTests(unittest.TestCase):
         self.assertEqual(ledger["unique"] + ledger["verified_repeat"],
                          ledger["intercepted"] - ledger["incomplete"]
                          - ledger["counted_only"] - ledger["lost"] - 1)
+
+    def test_duplicate_reads_in_one_world_still_deduplicate(self):
+        observations = [_create(4),
+                        _observation(2, 3, args=(0, 3), context=(1, 0, 0, 1, 0, 1)),
+                        _observation(3, 3, args=(0, 3), context=(1, 0, 0, 1, 0, 1))]
+        text = _export(observations, name="content-exact")
+        with tempfile.TemporaryDirectory() as directory:
+            store = EvidenceStore(Path(directory))
+            declaration = _effects_free(self.declaration)
+            binding = materialize.materialize_export(text, declaration, store)
+            materialize.verify_binding(store, binding, export_text=text,
+                                       declaration=declaration)
+        ledger = binding["ledger"]
+        # The create and one read are unique; the second identical read repeats.
+        self.assertEqual(ledger["unique"], 2)
+        self.assertEqual(ledger["verified_repeat"], 1)
+        self.assertEqual(ledger["domain_incomplete"], 0)
+        self.assertEqual(len(ledger["groups"]), 2)
 
 
 class DeclarationTests(unittest.TestCase):
@@ -383,6 +483,63 @@ class DeclarationTests(unittest.TestCase):
         broken["scenarios"]["content-ample"]["policy"]["deep_hooks"].append(99)
         with self.assertRaises(materialize.MaterializeError):
             materialize.validate_declaration(broken)
+
+    def test_a_loaded_module_identity_is_refused_by_a1(self):
+        broken = json.loads(json.dumps(self.declaration))
+        broken["module_identity"] = "loaded-module"
+        with self.assertRaises(materialize.MaterializeError):
+            materialize.validate_declaration(broken)
+
+    def test_the_resource_scope_must_be_declared_and_known(self):
+        for scope in (None, "thread"):
+            broken = json.loads(json.dumps(self.declaration))
+            if scope is None:
+                del broken["resource_scope"]
+            else:
+                broken["resource_scope"] = scope
+            with self.assertRaises(materialize.MaterializeError):
+                materialize.validate_declaration(broken)
+
+    def test_every_hook_must_declare_its_arity(self):
+        broken = json.loads(json.dumps(self.declaration))
+        del broken["hooks"]["1"]["arity"]
+        with self.assertRaises(materialize.MaterializeError):
+            materialize.validate_declaration(broken)
+
+    def test_a_carrier_may_not_exceed_the_declared_arity(self):
+        broken = json.loads(json.dumps(self.declaration))
+        broken["hooks"]["2"]["carriers"][0]["arg"] = 3
+        with self.assertRaises(materialize.MaterializeError):
+            materialize.validate_declaration(broken)
+
+    def test_carriers_must_cover_every_declared_argument(self):
+        broken = json.loads(json.dumps(self.declaration))
+        broken["hooks"]["2"]["carriers"] = [
+            carrier for carrier in broken["hooks"]["2"]["carriers"]
+            if carrier["arg"] != 1]
+        with self.assertRaises(materialize.MaterializeError):
+            materialize.validate_declaration(broken)
+
+    def test_an_extra_observed_argument_is_preserved_as_unknown_input(self):
+        # A producer that passes more than the declared arity is not silently
+        # truncated: the record stays stored, the bytes stay in `raw`, and the
+        # observation is disqualified rather than given a narrow ABI.
+        observations = [_observation(1, 1, args=(4, 99), spans=[b"\x00" * 4])]
+        text = _export(observations, name="content-exact")
+        with tempfile.TemporaryDirectory() as directory:
+            store = EvidenceStore(Path(directory))
+            declaration = _effects_free(self.declaration)
+            binding = materialize.materialize_export(text, declaration, store)
+            entry = _scenario(binding, "content-exact")
+            self.assertEqual(entry["outcome"], "materialized")
+            meta = entry["records"][0]
+            self.assertEqual(meta["semantic_state"], "domain-incomplete")
+            self.assertIn("unknown-input:args:unexpected:create:1", meta["gaps"])
+            payload = store.get_record(meta["digest"])
+            self.assertEqual(payload["raw"]["args"], [4, 99])
+            self.assertEqual(payload["state"]["unknown_dependencies"],
+                             ["args:unexpected:create:1"])
+            self.assertEqual(payload["abi"]["confidence"], "unknown")
 
 
 if __name__ == "__main__":  # pragma: no cover

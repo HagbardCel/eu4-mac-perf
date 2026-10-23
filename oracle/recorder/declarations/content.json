@@ -4,6 +4,7 @@
   "epoch": "synthetic-1",
   "module_sha256": "5f309d620e440762feb3da084760ddc45dd6d72f4ad1e2ee53a3930b9f2bcf88",
   "module_identity": "producer-source-bundle",
+  "resource_scope": "scenario-thread",
   "calling_convention": "sysv-amd64",
   "fidelity": {
     "mode": "faithful",
@@ -16,7 +17,8 @@
       "name": "create",
       "carriers": [
         {"name": "size", "kind": "int", "bits": 64, "arg": 0}
-      ]
+      ],
+      "arity": 1
     },
     "2": {
       "name": "update",
@@ -24,32 +26,37 @@
         {"name": "slot", "kind": "int", "bits": 64, "arg": 0},
         {"name": "seed", "kind": "int", "bits": 64, "arg": 1},
         {"name": "span", "kind": "int", "bits": 64, "arg": 2}
-      ]
+      ],
+      "arity": 3
     },
     "3": {
       "name": "read",
       "carriers": [
         {"name": "slot", "kind": "int", "bits": 64, "arg": 0},
         {"name": "offset", "kind": "int", "bits": 64, "arg": 1}
-      ]
+      ],
+      "arity": 2
     },
     "4": {
       "name": "share",
       "carriers": [
         {"name": "slot", "kind": "int", "bits": 64, "arg": 0}
-      ]
+      ],
+      "arity": 1
     },
     "5": {
       "name": "destroy",
       "carriers": [
         {"name": "slot", "kind": "int", "bits": 64, "arg": 0}
-      ]
+      ],
+      "arity": 1
     },
     "6": {
       "name": "pair",
       "carriers": [
         {"name": "slot", "kind": "int", "bits": 64, "arg": 0}
-      ]
+      ],
+      "arity": 1
     }
   },
   "scenarios": {
