@@ -1,13 +1,16 @@
 # The pre-P5 offline integration gate: content capture, materialization and declared translation
 
 **Status:** in progress. **P4.9** (bounded resource-content capture in the native
-recorder core, and the versioned observation export) is implemented and on the P4.9
-branch, revised by one corrective commit that made every exported blob a *complete*
-resource version and every captured byte attributable. **P4.10** (offline
-materialization, content-blob publication and identity) and **P4.11** (declared
-translation, `gfx-v2` stateful replay and negative admission) remain. **Nothing here
-launches EU IV, opens a game process, or attaches to a binary**: every input is a file
-this repository's own drivers wrote.
+recorder core, and the versioned observation export) is implemented and merged. The
+**function** half of **P4.10** is split into **A1** (export → sealed records and
+immutable whole-version blobs, native/semantic completeness reconciliation,
+collision-safe classification and a verified capture binding) and **A2** (the
+`_GfxSetConstantBuffer` observable-domain descriptor, descriptor-driven raw-memory
+closure, the versioned `FUNCTION-CAPTURE v1` transcript and a synthetic paired-state
+producer). **P4.11** (declared translation, `gfx-v2` stateful replay and negative
+admission) and the frame half of P4.10 remain. **Nothing here launches EU IV, opens a
+game process, or attaches to a binary**: every input is a file this repository's own
+drivers wrote.
 
 This document is authoritative for the pre-P5 offline integration gate. The gate now
 splits by acquisition scope (2026-10-18): the **function** half (**P4.9** +
@@ -290,6 +293,56 @@ and version**. The native origin names the resource version but does not by itse
 prove that all of its bytes were supplied, so the length check is the offline half of
 the attributability rule and is part of P4.10's acceptance, not P4.9's.
 
+### 7a. The function half, split for review (2026-10-23)
+
+**A1 — resource materialization.** Reads one P4.9 export plus a reviewed *capture
+declaration* (module identity, hook/ABI map, effective policy per scenario, fidelity,
+and the producer's effect-coverage statement) and publishes:
+
+* one schema-valid observation record per exported observation, with the export's
+  `point` deciding which of `state.pre`/`state.post` the observation's snapshot (if
+  any) occupies;
+* **one blob per complete resource version**, assembled from its spans in declaration
+  order, length-checked against an *independent* declared size (the creating call's
+  argument, else the reviewed producer configuration) and hashed into
+  `resources[].contents_sha256`; per-span digests remain diagnostic;
+* a sealed capture binding that references the declaration digest, the export digest
+  and every record digest, and whose verifier (not `EvidenceStore.verify`) checks the
+  blob→record association, record provenance and accounting.
+
+**Native completeness is not semantic qualification.** A fully captured observation
+whose declared semantic domain is incomplete (for the P4.9 producer: external effects
+are exported only as an aggregate counter) is stored and accounted for, but receives
+no semantic digest and never becomes `verified_repeat`:
+
+    N_native_captured = N_qualified + N_domain_incomplete
+
+with native-incomplete and lost observations accounted for separately. Native counters
+are never rewritten to make finalization pass.
+
+A scenario is **withheld** when the producer deliberately printed no observations, and
+**rejected** when admission is `REJECTED`, closure fails (for example a stale origin),
+a declared policy excludes a printed hook, or a complete observation's content cannot
+be sized or attributed. Rejected and withheld scenarios contribute no records; their
+counters and the reason remain in the binding.
+
+**A2 — function fixture contract.** Defines the versioned `FUNCTION-CAPTURE v1`
+transcript (entry and exit owned snapshots, invocation identity
+`capture:scenario:thread:sequence`, explicit per-invocation effects, loss accounting),
+a synthetic paired-state producer, the static `_GfxSetConstantBuffer` domain descriptor
+(`RDI` vs `*RDI`, ignored carriers, branch-conditional buffer read, three writes, guard
+extents) and descriptor-driven **raw-memory** closure. A1's synthetic resource registry
+is not reused as a pointer-graph verifier. The fixture is a digest manifest
+`(record_digest, domain_digest, verdict, coverage)` with a deterministic projection —
+not a second record schema.
+
+Guard pages detect out-of-domain accesses that cross a protected boundary; they do not
+fault an undeclared write inside an otherwise writable object. Tier 1 therefore
+compares the complete declared observation region (including unchanged bytes and
+canaries) and treats a transient write-and-restore inside a declared write region as
+outside its guarantee, unless access tracing is added for a function that makes it
+material.
+
 ### 8. The `gfx-v2` vocabulary (declared here, implemented in P4.11)
 
 `gfx-v1` is unchanged and accepts nothing new. `gfx-v2` is a versioned subject
@@ -311,7 +364,7 @@ The interpreter, the subject and the replay land in P4.11.
 | Slice | Responsibility |
 | --- | --- |
 | **P4.9** | Native span-capture API, content provenance, safe bounded arena, whole-version content semantics, fail-closed malformed declarations, correct completeness accounting, versioned export contract and its strict reader, synthetic tests |
-| **P4.10** | **Function gate:** materialization, content-blob closure over the whole store, whole-version length verification against the resource size, incomplete-evidence representation, collision-safe deduplication, independent reconciliation of records against native counters, and the function-fixture adapter. **Frame gate:** complete command-stream accounting |
+| **P4.10** | **Function gate (A1 + A2):** materialization, whole-version content blobs, capture binding and closure, length verification against an independent resource size, native/semantic completeness reconciliation, collision-safe deduplication, function-domain descriptor, raw-memory closure and negative admission. **Frame gate:** complete command-stream accounting |
 | **P4.11** | **Frame gate only:** versioned `gfx-v2` translation, state-consuming replay, end-to-end closure, and negative frame admission |
 
 Each is a separately reviewable, separately revertible PR. P4.9's interfaces were
