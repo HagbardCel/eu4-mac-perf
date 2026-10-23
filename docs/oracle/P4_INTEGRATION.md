@@ -392,15 +392,48 @@ can leave unreferenced artifacts; a retry is deterministic and re-publishes them
 that actually ran. `loaded-module` is rejected, not silently downgraded; verified
 runtime identity is a later slice's obligation.
 
-**A2 — function fixture contract.** Defines the versioned `FUNCTION-CAPTURE v1`
-transcript (entry and exit owned snapshots, invocation identity
-`capture:scenario:thread:sequence`, explicit per-invocation effects, loss accounting),
-a synthetic paired-state producer, the static `_GfxSetConstantBuffer` domain descriptor
-(`RDI` vs `*RDI`, ignored carriers, branch-conditional buffer read, three writes, guard
-extents) and descriptor-driven **raw-memory** closure. A1's synthetic resource registry
-is not reused as a pointer-graph verifier. The fixture is a digest manifest
-`(record_digest, domain_digest, verdict, coverage)` with a deterministic projection —
-not a second record schema.
+**A2 — function fixture contract.** Offline only. `FUNCTION-CAPTURE v1` is a strict
+text transcript for one paired-state invocation: capture identity, four ABI carriers,
+entry/exit owned snapshots, one outcome and loss accounting. There is **no ordered
+write-effect log**. The reviewed contract has no calls, globals or externally ordered
+effects, so `effects.ordered=[]` and `effects.complete=true`; the three stores are
+declared in the descriptor and checked as final state plus preservation. `EFFECT`
+lines, write-event matching and an effect counter are not part of A2.
+
+**Closure controls qualification.** The descriptor declares binary pins, layout, ABI
+carriers, required reads, post-state fields and the three write extents. It is not a
+descriptor interpreter: one explicit rule handles `R9D == 0xffffffff` requiring the
+buffer read. Materialization assesses the draft record before sealing and writes every
+missing carrier, input region, post-state field, preservation check, outcome or domain
+relation into `completeness.unavailable_dependencies`. `close` recomputes closure and
+requires the record's fields to agree, so a qualified fixture is both schema-qualified
+and descriptor-closed. Missing evidence is stored as unqualified evidence; malformed
+transcripts, `END` accounting mismatches and foreign binary/descriptor pins are
+rejected. A violated preservation constraint is unqualified evidence, not a malformed
+transcript.
+
+**Declared domain.** Complete pre/post state is required: 8 bytes at `RDI`, the full
+observation `[ctx+0xc8, ctx+0x129)`, both canary bands, and the first 4 bytes at `RSI`
+on the buffer path. `RDI` names the handle region; its 8 bytes name `ctx`; `RSI` names
+the buffer input only when the selector reads it. Captured physical regions must be
+pairwise disjoint; overlap is outside A2 and remains unqualified (`domain:disjoint`).
+Handle and buffer input bytes must be unchanged. The post-state requires a present
+word count (no expected value), a buffer pointer equal to `RSI`, and `dirty=1`.
+`RAX` remains an observed outcome in `raw`, not a return type: `abi.return_carrier`
+is `None` and closure requires `RAX == *RDI`. No schema change.
+
+**A2 acceptance and limits.** A2 accepts one complete synthetic paired-state capture
+of `_GfxSetConstantBuffer`, converts it to the established observation schema, and
+qualifies it only when the declared input/output memory domain is closed; malformed
+input is rejected and incomplete or violating evidence is stored unqualified. It
+independently reproduces the fixture manifest by reparsing the transcript and rerunning
+closure. It does **not** validate the word-count arithmetic (a wrong word count can
+still close; RE2/PR C own behavior), canonicalize pointers (absolute addresses remain
+in the semantic digest), or claim live EU IV behavior. `confidence="observed"`
+describes what the producer captured; the committed capture is synthetic, and the
+record it produces says so in `raw.synthetic`. A2 is not a general descriptor
+framework: a second function may add its own small closure branch rather than
+generalize this one.
 
 Guard pages detect out-of-domain accesses that cross a protected boundary; they do not
 fault an undeclared write inside an otherwise writable object. Tier 1 therefore
