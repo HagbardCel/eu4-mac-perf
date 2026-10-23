@@ -268,6 +268,28 @@ def record_digest(payload: dict[str, Any]) -> str:
     return sha256(canonical_bytes(payload)).hexdigest()
 
 
+def qualification_gaps(payload: dict[str, Any]) -> tuple[str, ...]:
+    """Why a well-formed observation is *not* semantically comparable, in a fixed order.
+
+    A gap is a category, optionally followed by the named dependency it is about, so a
+    ledger can account for an observation without inventing a finer model. Native
+    capture completeness (``completeness.state``) is deliberately not folded into a
+    single boolean here: an observation may be completely captured yet lie outside the
+    declared semantic domain (for example, its external effects were not recorded).
+    """
+    gaps: list[str] = []
+    comp = payload["completeness"]
+    if comp["state"] != "captured":
+        gaps.append("not-captured")
+    if comp["losses"] != 0:
+        gaps.append("transport-loss")
+    gaps.extend(f"unavailable-dependency:{dep}" for dep in comp["unavailable_dependencies"])
+    gaps.extend(f"unknown-input:{dep}" for dep in payload["state"]["unknown_dependencies"])
+    if not payload["effects"]["complete"]:
+        gaps.append("effects-incomplete")
+    return tuple(gaps)
+
+
 def qualifies_for_semantic(payload: dict[str, Any]) -> bool:
     """Whether an observation is complete and canonical enough to compare semantically.
 
@@ -275,17 +297,12 @@ def qualifies_for_semantic(payload: dict[str, Any]) -> bool:
     loss, no unavailable dependency, no declared unknown input, and a complete
     effect log. A ``counted-only`` or ``incomplete`` observation never qualifies: it
     may be counted and integrity-checked, but it cannot prove or disprove
-    observable equality, so it must never enter semantic deduplication. The caller
-    is responsible for ``validate_payload``; this function assumes a valid payload.
+    observable equality, so it must never enter semantic deduplication. A *captured*
+    observation that fails only a domain-specific requirement is still fully stored
+    evidence; ``qualification_gaps`` says why it is not comparable. The caller is
+    responsible for ``validate_payload``; this function assumes a valid payload.
     """
-    comp = payload["completeness"]
-    if comp["state"] != "captured" or comp["losses"] != 0 or comp["unavailable_dependencies"]:
-        return False
-    if payload["state"]["unknown_dependencies"]:
-        return False
-    if not payload["effects"]["complete"]:
-        return False
-    return True
+    return not qualification_gaps(payload)
 
 
 def _project_span(span: dict[str, Any]) -> dict[str, Any]:

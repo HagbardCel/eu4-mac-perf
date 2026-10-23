@@ -77,25 +77,44 @@ def classify(records: list[dict[str, Any]],
     ``records`` are the materialized observations - the ``captured`` and
     ``incomplete`` ones. ``counted-only`` observations are never materialized: they
     exist only as the ``unselected`` counter.
+
+    Native capture completeness and semantic qualification are two different
+    statements and are reconciled, never conflated. A record the native recorder
+    counted as ``captured`` is stored and accounted for even when its declared
+    semantic domain is incomplete; it simply receives no semantic digest and never
+    becomes ``verified_repeat``. The identity is therefore
+
+        intercepted = unique + verified_repeat + domain_incomplete
+                      + incomplete + counted_only + lost
+
+    where ``domain_incomplete`` is the part of the native ``captured`` count that is
+    not semantically comparable. Native counters are never rewritten to make this
+    pass.
     """
     clean = _counters(counters)
 
     captured: list[dict[str, Any]] = []
+    qualified: list[dict[str, Any]] = []
     incomplete = 0
+    gap_counts: dict[str, int] = {}
     for sealed in records:
         schema.verify(sealed)
-        state = sealed["payload"]["completeness"]["state"]
+        payload = sealed["payload"]
+        state = payload["completeness"]["state"]
         if state == "captured":
-            if not schema.qualifies_for_semantic(sealed["payload"]):
-                raise FinalizeError(
-                    "a captured record does not qualify for semantic comparison; it must "
-                    "be finalized as incomplete instead")
             captured.append(sealed)
+            gaps = schema.qualification_gaps(payload)
+            if gaps:
+                for gap in gaps:
+                    category = gap.split(":", 1)[0]
+                    gap_counts[category] = gap_counts.get(category, 0) + 1
+            else:
+                qualified.append(sealed)
         elif state == "incomplete":
             incomplete += 1
         else:
             raise FinalizeError(f"a {state!r} record must not be materialized")
-        if sealed["payload"]["completeness"]["losses"] != 0:
+        if payload["completeness"]["losses"] != 0:
             raise FinalizeError("a materialized record must not carry sub-observation loss")
 
     if len(captured) != clean["captured"]:
@@ -108,14 +127,27 @@ def classify(records: list[dict[str, Any]],
             "records were materialized")
 
     groups: dict[str, list[str]] = {}
-    for sealed in captured:
-        digest = schema.semantic_digest(sealed["payload"])
-        groups.setdefault(digest, []).append(sealed["payload"]["invocation"]["call_id"])
+    projections: dict[str, bytes] = {}
+    for sealed in qualified:
+        payload = sealed["payload"]
+        digest = schema.semantic_digest(payload)
+        projection = schema.canonical_bytes(schema.semantic_projection(payload))
+        seen = projections.get(digest)
+        if seen is None:
+            projections[digest] = projection
+        elif seen != projection:
+            # A digest is an index, never the decision: equal hashes over unequal
+            # canonical projections are a collision, and the bucket fails closed
+            # rather than merging two different behaviours.
+            raise FinalizeError(
+                f"semantic digest collision: unequal canonical projections share {digest}")
+        groups.setdefault(digest, []).append(payload["invocation"]["call_id"])
     unique = len(groups)
-    verified_repeat = len(captured) - unique
+    verified_repeat = len(qualified) - unique
+    domain_incomplete = len(captured) - len(qualified)
 
-    total = (unique + verified_repeat + clean["incomplete"] + clean["unselected"]
-             + clean["lost"])
+    total = (unique + verified_repeat + domain_incomplete + clean["incomplete"]
+             + clean["unselected"] + clean["lost"])
     if total != clean["intercepted"]:
         raise FinalizeError(
             f"capture accounting violated: {total} observations accounted for against "
@@ -126,6 +158,8 @@ def classify(records: list[dict[str, Any]],
         "intercepted": clean["intercepted"],
         "unique": unique,
         "verified_repeat": verified_repeat,
+        "domain_incomplete": domain_incomplete,
+        "domain_incomplete_gaps": dict(sorted(gap_counts.items())),
         "incomplete": clean["incomplete"],
         "counted_only": clean["unselected"],
         "lost": clean["lost"],

@@ -9,6 +9,7 @@ identity is asserted rather than assumed.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from oracle.recorder import finalize, schema
 
@@ -88,10 +89,31 @@ class DeduplicationTests(unittest.TestCase):
         ledger = finalize.classify([first, second], _counters(intercepted=2, captured=2))
         self.assertEqual(ledger["unique"], 2)
 
-    def test_an_unknown_input_disqualifies_a_record(self):
-        record = _record(unknown=("dep:missing",))
-        with self.assertRaises(finalize.FinalizeError):
-            finalize.classify([record], _counters(intercepted=1, captured=1))
+    def test_an_unknown_input_disqualifies_from_semantics_but_stays_accounted(self):
+        # A complete native capture with a declared semantic gap is evidence, not a
+        # finalization error: it is stored, counted, and never deduplicated.
+        ledger = finalize.classify([_record(unknown=("dep:missing",))],
+                                   _counters(intercepted=1, captured=1))
+        self.assertEqual(ledger["unique"], 0)
+        self.assertEqual(ledger["verified_repeat"], 0)
+        self.assertEqual(ledger["domain_incomplete"], 1)
+        self.assertEqual(ledger["domain_incomplete_gaps"], {"unknown-input": 1})
+
+    def test_incomplete_external_effects_keep_native_capture_but_block_semantics(self):
+        ledger = finalize.classify([_record(effects_complete=False)],
+                                   _counters(intercepted=1, captured=1))
+        self.assertEqual(ledger["unique"], 0)
+        self.assertEqual(ledger["verified_repeat"], 0)
+        self.assertEqual(ledger["domain_incomplete"], 1)
+        self.assertEqual(ledger["domain_incomplete_gaps"], {"effects-incomplete": 1})
+        self.assertEqual(ledger["groups"], {})
+
+    def test_a_semantic_digest_collision_fails_the_bucket_closed(self):
+        records = [_record(call_id="call:1", pre="01"),
+                   _record(call_id="call:2", pre="ff")]
+        with mock.patch.object(schema, "semantic_digest", return_value="0" * 64):
+            with self.assertRaises(finalize.FinalizeError):
+                finalize.classify(records, _counters(intercepted=2, captured=2))
 
 
 class ResourceIdentityTests(unittest.TestCase):
