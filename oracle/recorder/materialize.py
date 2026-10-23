@@ -716,6 +716,9 @@ def verify_binding(store: EvidenceStore, binding: dict[str, Any], *,
     digest = sha256(data).hexdigest()
 
     if export_text is not None and declaration is not None:
+        # A standalone verifier is an admission interface too: it must not accept a
+        # declaration that materialization itself would refuse.
+        validate_declaration(declaration)
         plan = _plan_export(export_text, declaration)
         expected = _build_binding(plan, declaration, export_text)
         if binding != expected:

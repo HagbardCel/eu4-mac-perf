@@ -633,6 +633,28 @@ class DeclarationTests(unittest.TestCase):
             with self.assertRaises(materialize.MaterializeError):
                 materialize.validate_declaration(broken)
 
+    def test_standalone_verification_refuses_declarations_a1_forbids(self):
+        # Build a binding that is internally consistent with a forbidden declaration,
+        # so only the verification path's own validation can reject it.
+        text = _export([_create(4)], name="content-exact")
+        for key, value in (("module_identity", "loaded-module"),
+                           ("resource_scope", "thread")):
+            broken = json.loads(json.dumps(self.declaration))
+            broken[key] = value
+            with tempfile.TemporaryDirectory() as directory:
+                store = EvidenceStore(Path(directory))
+                plan = materialize._plan_export(text, broken)
+                binding = materialize._build_binding(plan, broken, text)
+                for content in plan["blobs"].values():
+                    store.put_blob(content)
+                for payload in plan["payloads"]:
+                    store.add_record(payload)
+                store.put_blob(schema.canonical_bytes(binding))
+                store.write_manifest()
+                with self.assertRaises(materialize.MaterializeError):
+                    materialize.verify_binding(store, binding, export_text=text,
+                                               declaration=broken)
+
     def test_every_hook_must_declare_its_arity(self):
         broken = json.loads(json.dumps(self.declaration))
         del broken["hooks"]["1"]["arity"]
