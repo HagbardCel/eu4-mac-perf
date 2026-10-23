@@ -1,13 +1,16 @@
 # The pre-P5 offline integration gate: content capture, materialization and declared translation
 
 **Status:** in progress. **P4.9** (bounded resource-content capture in the native
-recorder core, and the versioned observation export) is implemented and on the P4.9
-branch, revised by one corrective commit that made every exported blob a *complete*
-resource version and every captured byte attributable. **P4.10** (offline
-materialization, content-blob publication and identity) and **P4.11** (declared
-translation, `gfx-v2` stateful replay and negative admission) remain. **Nothing here
-launches EU IV, opens a game process, or attaches to a binary**: every input is a file
-this repository's own drivers wrote.
+recorder core, and the versioned observation export) is implemented and merged. The
+**function** half of **P4.10** is split into **A1** (export → sealed records and
+immutable whole-version blobs, native/semantic completeness reconciliation,
+collision-safe classification and a verified capture binding) and **A2** (the
+`_GfxSetConstantBuffer` observable-domain descriptor, descriptor-driven raw-memory
+closure, the versioned `FUNCTION-CAPTURE v1` transcript and a synthetic paired-state
+producer). **P4.11** (declared translation, `gfx-v2` stateful replay and negative
+admission) and the frame half of P4.10 remain. **Nothing here launches EU IV, opens a
+game process, or attaches to a binary**: every input is a file this repository's own
+drivers wrote.
 
 This document is authoritative for the pre-P5 offline integration gate. The gate now
 splits by acquisition scope (2026-10-18): the **function** half (**P4.9** +
@@ -290,6 +293,122 @@ and version**. The native origin names the resource version but does not by itse
 prove that all of its bytes were supplied, so the length check is the offline half of
 the attributability rule and is part of P4.10's acceptance, not P4.9's.
 
+### 7a. The function half, split for review (2026-10-23)
+
+**A1 — resource materialization.** Reads one P4.9 export plus a reviewed *capture
+declaration* (module identity, hook/ABI map, effective policy per scenario, fidelity,
+and the producer's effect-coverage statement) and publishes:
+
+* one schema-valid observation record per exported observation, with the export's
+  `point` deciding which of `state.pre`/`state.post` the observation's snapshot (if
+  any) occupies;
+* **one blob per complete resource version**, assembled from its spans in declaration
+  order, length-checked against an *independent* declared size (the creating call's
+  argument, else the reviewed producer configuration) and hashed into
+  `resources[].contents_sha256`; per-span digests remain diagnostic;
+* a sealed capture binding that references the declaration digest, the export digest
+  and every record digest, and whose verifier (not `EvidenceStore.verify`) checks the
+  blob→record association, record provenance and accounting.
+
+**Resource identity is owned by a world.** A P4.9 scenario initializes independent
+worlds, at most one per declared thread, so a resource version is identified by
+`(capture_id, scenario, thread, slot, generation)` — the declared
+`resource_scope: "scenario-thread"` — and its ID is
+`world:<capture>/<scenario>/<thread>:slot:<slot>`. Size lookup, lifetime checks and
+the version→content uniqueness invariant use the same scope. Two scenarios may both
+contain thread 0, slot 0, generation 0, version 1 with different bytes without
+contradicting each other; they are different resources. Cross-scenario semantic
+deduplication is not restored by pretending otherwise — A1 accepts the reduced
+deduplication, and if canonical resource roles are needed later they must be declared
+explicitly.
+
+**Context references bind the version they address.** A `read`, `share` or `destroy`
+publishes no new version; it addresses an existing resource state. When the capture
+materialized that version, the observation binds the scoped resource identity,
+generation, version and content digest in `resources[]`, so the state enters its
+semantic projection. If the version was not materialized — for example, because the
+updating observation lost its spans — the observation is still stored and accounted
+for, but is named `unavailable-dependency:slot:<slot>@<generation>:v<version>` and
+cannot deduplicate. A complete observation is not rejected merely because it
+references an unavailable version. A content-bearing hook (`create`, `update`, `pair`)
+that exports no content is not a reference: its produced state is unknown and is named
+`unavailable-dependency:content-unavailable:<hook>`. Version-map construction rejects
+a second complete observation that binds the same scoped version to different bytes
+rather than silently overwriting the first.
+
+**Only source-bound verification is admission.** With both the export and the
+declaration, `verify_binding` re-derives the whole binding from them, requires exact
+equality, then proves every derived record and blob is present and byte-identical in
+the store. Admission loads the persisted manifest fresh and requires it to verify and
+register every expected record and content blob; correct bytes that were never
+persisted and registered in that manifest are not admitted. That is
+`mode: "source-bound"`, `admitted: true`, and the only result `materialize_export`
+accepts. Without both sources it performs `mode: "structural"` checks (manifest,
+provenance, resource association, counters, ledger) and reports `admitted: false`:
+integrity inspection, never proof of correct materialization. Supplying only one
+source is refused.
+
+**Arity and unexpected arguments.** Every declared hook has an `arity`, and its
+carriers must cover every argument `0..arity-1`. A missing argument is unknown, not
+zero. An observed argument beyond the declared arity is not discarded: it stays in
+`raw.args` and is named `args:unexpected:<hook>:<index>` in
+`state.unknown_dependencies`, which disqualifies the observation while the record
+remains stored and accounted for.
+
+**Native completeness is not semantic qualification.** A fully captured observation
+whose declared semantic domain is incomplete (for the P4.9 producer: external effects
+are exported only as an aggregate counter) is stored and accounted for, but receives
+no semantic digest and never becomes `verified_repeat`:
+
+    N_native_captured = N_qualified + N_domain_incomplete
+
+with native-incomplete and lost observations accounted for separately. Native counters
+are never rewritten to make finalization pass.
+
+**Context references are not complete input/output semantics.** A bound reference
+names the state an observation addressed; it does not bind the observation's complete
+inputs or its result. `raw.result` is not in the semantic projection while
+`abi.return_carrier` is `None`, and an update binds the version it produced but not its
+full pre-state. Deduplication under the test-only `effects: "none"` override is
+therefore a mechanism check (scoped identity, collision-safe references), not
+behavioral certification. The shipped producer declares `effects: "aggregate-only"`,
+so its captured observations remain semantically unqualified. Complete function-level
+input/output transitions belong to A2.
+
+A scenario is **withheld** when the producer deliberately printed no observations, and
+**rejected** when admission is `REJECTED`, closure fails (for example a stale origin),
+a declared policy excludes a printed hook, or a complete observation's content cannot
+be sized or attributed. Rejected and withheld scenarios contribute no records; their
+counters and the reason remain in the binding.
+
+**Publication is transactional per scenario.** Derivation is pure; blobs, then records,
+then the sealed binding are published only for accepted scenarios, so a rejected
+scenario cannot leave an orphaned record or blob. A crash between publication steps
+can leave unreferenced artifacts; a retry is deterministic and re-publishes them.
+
+**Module identity is producer-bound in A1.** The declaration admits only
+`module_identity: "producer-source-bundle"` and the binding records
+`attested: false`: it names the reviewed producer sources and cannot attest the module
+that actually ran. `loaded-module` is rejected, not silently downgraded; verified
+runtime identity is a later slice's obligation.
+
+**A2 — function fixture contract.** Defines the versioned `FUNCTION-CAPTURE v1`
+transcript (entry and exit owned snapshots, invocation identity
+`capture:scenario:thread:sequence`, explicit per-invocation effects, loss accounting),
+a synthetic paired-state producer, the static `_GfxSetConstantBuffer` domain descriptor
+(`RDI` vs `*RDI`, ignored carriers, branch-conditional buffer read, three writes, guard
+extents) and descriptor-driven **raw-memory** closure. A1's synthetic resource registry
+is not reused as a pointer-graph verifier. The fixture is a digest manifest
+`(record_digest, domain_digest, verdict, coverage)` with a deterministic projection —
+not a second record schema.
+
+Guard pages detect out-of-domain accesses that cross a protected boundary; they do not
+fault an undeclared write inside an otherwise writable object. Tier 1 therefore
+compares the complete declared observation region (including unchanged bytes and
+canaries) and treats a transient write-and-restore inside a declared write region as
+outside its guarantee, unless access tracing is added for a function that makes it
+material.
+
 ### 8. The `gfx-v2` vocabulary (declared here, implemented in P4.11)
 
 `gfx-v1` is unchanged and accepts nothing new. `gfx-v2` is a versioned subject
@@ -311,7 +430,7 @@ The interpreter, the subject and the replay land in P4.11.
 | Slice | Responsibility |
 | --- | --- |
 | **P4.9** | Native span-capture API, content provenance, safe bounded arena, whole-version content semantics, fail-closed malformed declarations, correct completeness accounting, versioned export contract and its strict reader, synthetic tests |
-| **P4.10** | **Function gate:** materialization, content-blob closure over the whole store, whole-version length verification against the resource size, incomplete-evidence representation, collision-safe deduplication, independent reconciliation of records against native counters, and the function-fixture adapter. **Frame gate:** complete command-stream accounting |
+| **P4.10** | **Function gate (A1 + A2):** materialization, whole-version content blobs, capture binding and closure, length verification against an independent resource size, native/semantic completeness reconciliation, collision-safe deduplication, function-domain descriptor, raw-memory closure and negative admission. **Frame gate:** complete command-stream accounting |
 | **P4.11** | **Frame gate only:** versioned `gfx-v2` translation, state-consuming replay, end-to-end closure, and negative frame admission |
 
 Each is a separately reviewable, separately revertible PR. P4.9's interfaces were

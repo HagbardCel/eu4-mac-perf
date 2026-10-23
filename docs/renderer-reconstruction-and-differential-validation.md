@@ -132,7 +132,21 @@ equivalence **on those inputs and no further** — the README states the limits,
 emulation is not hardware execution and that the input sets are the paths' boundaries rather than an
 exhaustive enumeration.
 
-## RE3 — Narrow in-process integration (one controlled game validation)
+**Two-tier validation (2026-10-23).** The same method now has two tiers, both consuming one fixture
+projection rather than separate formats. **Tier 1 (offline):** qualified fixtures → isolated replay →
+exact differential comparison; the fixture is a digest manifest over the existing observation record
+plus a per-function observable-domain descriptor, and its qualification is decided by
+descriptor-driven checks (required regions, pointer aliases, ordered effects), never by the
+candidate's output. **Tier 2 (live shadow):** real invocations are captured into owned snapshots and
+replayed asynchronously in an isolated worker while the original remains authoritative; the worker
+never holds live game pointers. Tier 2 is enabled only after Tier 1 succeeds. Neither tier authorizes
+replacement.
+
+## RE3 — Narrow in-process integration (deferred)
+
+**Status: deferred (2026-10-23).** RE3 is not the next step. It is authorized only after Tier 1 and
+Tier 2 both succeed *and* replacement has its own reversible integration tests; the hook that comes
+next is observation-only. The requirements below remain the bar for whenever RE3 is resumed.
 
 - Compile an x86-64 replacement; implement minimal, reversible redirection with a **verified ABI**, original trampoline/fallback and a hard runtime switch. Address ASLR, Mach-O relocation, instruction boundaries, thread safety, executable protection/signing and failure cleanup.
 - Start in **observation/original mode**. Run static/offline preflight and integration harnesses first.

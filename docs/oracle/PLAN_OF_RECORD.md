@@ -16,6 +16,35 @@ bounded Gfx function (`_GfxSetConstantBuffer`), reconstructed and validated offl
 any further Oracle infrastructure is built. Acquisition splits into **P5a** (function-level)
 and **P5b** (frame-level), each separately gated (see *Pre-P5 offline integration gate*).
 
+## Amended implementation plan (2026-10-23): capture once, replay repeatedly
+
+The reconstruction workflow is **two-tier**. **Tier 1 (offline):** qualified live
+fixtures → isolated replay → exact differential comparison. **Tier 2 (live shadow):**
+actual invocations → asynchronous replay in an isolated worker, with the original
+always authoritative. Both tiers consume the same fixture projection. Neither
+authorizes replacing game code.
+
+| Stage | Deliverable | Live EU IV? |
+| --- | --- | --- |
+| 0 | Scope contract (this section and the acceptance in [P4_INTEGRATION.md](P4_INTEGRATION.md)) | no |
+| 1 | **PR A1** resource materialization; **PR A2** function-fixture contract | no |
+| 2 | **PR B** passive x86-64 entry/exit hook; **PR C** generic offline replay and comparator | no |
+| 3 | **PR D** P5a first live acquisition (~50 qualified fixtures) | one bounded session |
+| 4 | **PR E** Tier 1 offline certification | no |
+| 5 | **PR F** Tier 2 shadow validation (≥1,000 sampled comparisons) | controlled session |
+| 6 | **PR G** second-function scaling and agent pilot | conditional |
+
+A1 and A2 must pass before the first instrumented run; Tier 2 is enabled only after
+Tier 1. **RE3** (automatic in-game replacement) is deferred until both tiers succeed
+*and* replacement has its own reversible integration tests; the hook introduced by
+PR B is observation-only. **P4.11/P5b do not block P5a.**
+
+Every added abstraction must map to a demonstrated false-positive risk or an
+essential scaling requirement. Deliberately deferred: automatic memory-graph
+discovery, general dynamic access tracing, frame-level replay/P4.11, live shadow
+against real game objects, automatic in-game replacement/RE3, multi-function
+campaigns, and new agent frameworks.
+
 ## Invocation accounting (P4)
 
 Per successfully qualified hook, per epoch, the categories are **mutually exclusive**:
@@ -106,9 +135,11 @@ entry. Incomplete closure ⇒ `INCOMPLETE_ORACLE`; seal partial as partial.
 **RE0–RE2 run in parallel, not after P5.** The function-first reconstruction workstream — RE0's
 contract, the bounded offline original-code execution pilot, and offline RE1/RE2 reconstruction
 with differential comparison — is **independent of P5a/P5b** and is **not** subsequent to frame
-qualification; it precedes or parallels **P5a**. **RE3** (narrow in-process replacement) remains
-optional and is separately gated by RE2 qualification plus detour, ABI, fallback and
-runtime-safety requirements.
+qualification; it precedes or parallels **P5a**. **RE3** (narrow in-process replacement) is
+**deferred** by the two-tier amendment above: it is authorized only after both validation
+tiers succeed *and* replacement has its own reversible integration tests, and it remains
+separately gated by detour, ABI, fallback and runtime-safety requirements. The next hook
+(PR B) is observation-only.
 
 > **P3 status (2026-10-17):** **complete and released.** PR-A - the deterministic
 > slice (synthetic target, harness, completeness comparator, five-tool MCP bridge,
@@ -152,11 +183,13 @@ contents itself, so a passing P4b shows that a complete transcript can be replay
 not that the **generic P4 recorder** can produce an independently replayable frame.
 The P4 recorder captures resource references and lifetimes, not resource contents.
 
-**Progress (2026-10-18):** **P4.9** is implemented - bounded resource-content capture
-in the native recorder core, and a versioned observation export carrying each
-observation's arguments, declared content, that content's origin and its
-instrumentation fault, with a per-scenario admission verdict. **P4.10** and **P4.11**
-remain.
+**Progress (2026-10-23):** **P4.9** is implemented and merged. The **function** half of
+**P4.10** is split into two reviewable PRs: **A1** — P4.9 export → sealed schema records
+and immutable whole-version blobs, with native capture completeness kept distinct from
+semantic qualification, collision-safe classification and an independently verified
+capture binding; **A2** — the static `_GfxSetConstantBuffer` observable-domain descriptor,
+descriptor-driven raw-memory closure, the versioned `FUNCTION-CAPTURE v1` transcript and
+a synthetic paired-state producer. **P4.11** and the frame half remain.
 
 The gate splits by acquisition scope. Each half must pass **entirely offline** before the
 matching acquisition is authorized:

@@ -1,0 +1,76 @@
+{
+  "schema_version": "eu4-oracle-capture-declaration/v1",
+  "capture_id": "content-golden",
+  "epoch": "synthetic-1",
+  "module_sha256": "5f309d620e440762feb3da084760ddc45dd6d72f4ad1e2ee53a3930b9f2bcf88",
+  "module_identity": "producer-source-bundle",
+  "resource_scope": "scenario-thread",
+  "calling_convention": "sysv-amd64",
+  "fidelity": {
+    "mode": "faithful",
+    "policy_version": "p4-fid-v1"
+  },
+  "effects": "aggregate-only",
+  "resource_size": 4,
+  "hooks": {
+    "1": {
+      "name": "create",
+      "carriers": [
+        {"name": "size", "kind": "int", "bits": 64, "arg": 0}
+      ],
+      "arity": 1
+    },
+    "2": {
+      "name": "update",
+      "carriers": [
+        {"name": "slot", "kind": "int", "bits": 64, "arg": 0},
+        {"name": "seed", "kind": "int", "bits": 64, "arg": 1},
+        {"name": "span", "kind": "int", "bits": 64, "arg": 2}
+      ],
+      "arity": 3
+    },
+    "3": {
+      "name": "read",
+      "carriers": [
+        {"name": "slot", "kind": "int", "bits": 64, "arg": 0},
+        {"name": "offset", "kind": "int", "bits": 64, "arg": 1}
+      ],
+      "arity": 2
+    },
+    "4": {
+      "name": "share",
+      "carriers": [
+        {"name": "slot", "kind": "int", "bits": 64, "arg": 0}
+      ],
+      "arity": 1
+    },
+    "5": {
+      "name": "destroy",
+      "carriers": [
+        {"name": "slot", "kind": "int", "bits": 64, "arg": 0}
+      ],
+      "arity": 1
+    },
+    "6": {
+      "name": "pair",
+      "carriers": [
+        {"name": "slot", "kind": "int", "bits": 64, "arg": 0}
+      ],
+      "arity": 1
+    }
+  },
+  "scenarios": {
+    "content-off": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}},
+    "content-ample": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}},
+    "content-exact": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}},
+    "content-short": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}},
+    "content-two-spans": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}},
+    "content-two-spans-lost": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}},
+    "content-zero-length": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}},
+    "content-policy": {"policy": {"name": "updates-only", "deep_hooks": [2]}},
+    "content-stale-origin": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}},
+    "content-malformed": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}},
+    "content-concurrent": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}},
+    "content-concurrent-bounded": {"policy": {"name": "deep", "deep_hooks": [1, 2, 3, 5, 6]}}
+  }
+}
