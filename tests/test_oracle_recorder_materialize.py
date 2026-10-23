@@ -148,7 +148,8 @@ class FrozenExportTests(unittest.TestCase):
         self.assertEqual(ledger["groups"], {})
         self.assertEqual(ledger["domain_incomplete"], captured)
         self.assertEqual(ledger["domain_incomplete_gaps"],
-                         {"effects-incomplete": captured, "unknown-input": 2})
+                         {"effects-incomplete": captured, "unavailable-dependency": 7,
+                          "unknown-input": 2})
         self.assertEqual(ledger["incomplete"], incomplete)
         self.assertEqual(ledger["counted_only"] + captured + incomplete + ledger["lost"],
                          ledger["intercepted"])
@@ -172,10 +173,16 @@ class FrozenExportTests(unittest.TestCase):
             for entry in meta["resources"]:
                 versions[entry["contents_sha256"]] = entry
         self.assertEqual(len(versions), 3)
+        produced = [entry for entry in versions.values() if "size" in entry]
+        self.assertTrue(produced)
         for digest, entry in versions.items():
             blob = self.store.get_blob(digest)
-            self.assertEqual(len(blob), entry["size"])
             self.assertEqual(sha256(blob).hexdigest(), digest)
+            if "size" not in entry:
+                # A read/destroy reference carries the version's digest, not bytes.
+                self.assertEqual(entry["spans"], [])
+                continue
+            self.assertEqual(len(blob), entry["size"])
             self.assertEqual(sum(span["length"] for span in entry["spans"]), entry["size"])
             offset = 0
             for span in entry["spans"]:
@@ -404,12 +411,24 @@ class FrozenExportTests(unittest.TestCase):
                             if store.get_record(m["digest"])["raw"]["hook_id"] == 1)
                 semantic[name] = schema.semantic_digest(store.get_record(meta["digest"]))
             self.assertNotEqual(semantic["content-ample"], semantic["content-exact"])
+
+            # Reads carry identical arguments but address different worlds, so the
+            # version reference keeps their semantic projections apart.
+            reads = {}
+            for name in ("content-ample", "content-concurrent"):
+                meta = next(m for m in _scenario(binding, name)["records"]
+                            if store.get_record(m["digest"])["raw"]["hook_id"] == 3
+                            and store.get_record(m["digest"])["raw"]["args"] == [0, 0])
+                reads[name] = schema.semantic_digest(store.get_record(meta["digest"]))
+            self.assertNotEqual(reads["content-ample"], reads["content-concurrent"])
         ledger = binding["ledger"]
-        self.assertGreater(ledger["unique"], 0)
-        self.assertGreater(ledger["verified_repeat"], 0)
-        self.assertEqual(ledger["domain_incomplete"], 1)
-        self.assertEqual(ledger["domain_incomplete_gaps"], {"unknown-input": 2})
-        self.assertTrue(any(len(ids) > 1 for ids in ledger["groups"].values()))
+        self.assertEqual(ledger["verified_repeat"], 0)
+        # Cross-world reads/destroys no longer collapse, and the content-off
+        # scenario's missing produced states are named rather than qualified.
+        self.assertEqual(ledger["domain_incomplete"], 8)
+        self.assertEqual(ledger["domain_incomplete_gaps"],
+                         {"unavailable-dependency": 7, "unknown-input": 2})
+        self.assertEqual(len(ledger["groups"]), ledger["unique"])
 
         # The counter statement is unchanged by qualification: the only difference is
         # where the captured observations are classified.
@@ -417,12 +436,13 @@ class FrozenExportTests(unittest.TestCase):
         self.assertEqual(_scenario(binding, "content-ample")["counters"], native)
         self.assertEqual(ledger["unique"] + ledger["verified_repeat"],
                          ledger["intercepted"] - ledger["incomplete"]
-                         - ledger["counted_only"] - ledger["lost"] - 1)
+                         - ledger["counted_only"] - ledger["lost"]
+                         - ledger["domain_incomplete"])
 
     def test_duplicate_reads_in_one_world_still_deduplicate(self):
         observations = [_create(4),
-                        _observation(2, 3, args=(0, 3), context=(1, 0, 0, 1, 0, 1)),
-                        _observation(3, 3, args=(0, 3), context=(1, 0, 0, 1, 0, 1))]
+                        _observation(2, 3, args=(0, 3), context=(1, 0, 0, 1, 0, 0)),
+                        _observation(3, 3, args=(0, 3), context=(1, 0, 0, 1, 0, 0))]
         text = _export(observations, name="content-exact")
         with tempfile.TemporaryDirectory() as directory:
             store = EvidenceStore(Path(directory))
@@ -436,6 +456,90 @@ class FrozenExportTests(unittest.TestCase):
         self.assertEqual(ledger["verified_repeat"], 1)
         self.assertEqual(ledger["domain_incomplete"], 0)
         self.assertEqual(len(ledger["groups"]), 2)
+
+    def test_reads_on_different_versions_do_not_become_repeats(self):
+        observations = [
+            _create(4),
+            _observation(2, 2, args=(0, 5, 4), context=(1, 0, 0, 1, 0, 0),
+                        spans=[b"\x05\x06\x07\x08"], origin=(1, 0, 0, 1, 0, 1)),
+            _observation(3, 3, args=(0, 0), context=(1, 0, 0, 1, 0, 1)),
+            _observation(4, 2, args=(0, 1, 2), context=(1, 0, 0, 1, 0, 1),
+                        spans=[b"\x06\x07\x08\x09"], origin=(1, 0, 0, 1, 0, 2)),
+            _observation(5, 3, args=(0, 0), context=(1, 0, 0, 1, 0, 2)),
+        ]
+        text = _export(observations, name="content-exact")
+        with tempfile.TemporaryDirectory() as directory:
+            store = EvidenceStore(Path(directory))
+            declaration = _effects_free(self.declaration)
+            binding = materialize.materialize_export(text, declaration, store)
+            materialize.verify_binding(store, binding, export_text=text,
+                                       declaration=declaration)
+            digests = []
+            versions = []
+            for meta in _scenario(binding, "content-exact")["records"]:
+                payload = store.get_record(meta["digest"])
+                if payload["raw"]["hook_id"] != 3:
+                    continue
+                digests.append(schema.semantic_digest(payload))
+                versions.append(payload["resources"][0]["version"])
+        # Identical arguments, different referenced versions: distinct behavior.
+        self.assertEqual(versions, [1, 2])
+        self.assertEqual(len(set(digests)), 2)
+        self.assertEqual(binding["ledger"]["verified_repeat"], 0)
+
+    def test_a_context_reference_to_an_uncaptured_version_is_unqualified(self):
+        observations = [_create(4),
+                        _observation(2, 3, args=(0, 0), context=(1, 0, 0, 1, 0, 1))]
+        text = _export(observations, name="content-exact")
+        with tempfile.TemporaryDirectory() as directory:
+            store = EvidenceStore(Path(directory))
+            declaration = _effects_free(self.declaration)
+            binding = materialize.materialize_export(text, declaration, store)
+            entry = _scenario(binding, "content-exact")
+            self.assertEqual(entry["outcome"], "materialized")
+            meta = next(m for m in entry["records"]
+                        if store.get_record(m["digest"])["raw"]["hook_id"] == 3)
+            self.assertEqual(meta["semantic_state"], "domain-incomplete")
+            self.assertIn("unavailable-dependency:slot:0@0:v1", meta["gaps"])
+            self.assertEqual(meta["resources"], [])
+            payload = store.get_record(meta["digest"])
+            self.assertFalse(schema.qualifies_for_semantic(payload))
+
+    def test_a_content_bearing_hook_without_content_is_unqualified(self):
+        # The pre-state exists, but the update exported no produced version: binding
+        # its context as a reference would falsely qualify the observation.
+        observations = [_create(4),
+                        _observation(2, 2, args=(0, 5, 4), context=(1, 0, 0, 1, 0, 0))]
+        text = _export(observations, name="content-exact")
+        with tempfile.TemporaryDirectory() as directory:
+            store = EvidenceStore(Path(directory))
+            declaration = _effects_free(self.declaration)
+            binding = materialize.materialize_export(text, declaration, store)
+            entry = _scenario(binding, "content-exact")
+            meta = next(m for m in entry["records"]
+                        if store.get_record(m["digest"])["raw"]["hook_id"] == 2)
+            self.assertEqual(meta["semantic_state"], "domain-incomplete")
+            self.assertIn("unavailable-dependency:content-unavailable:update",
+                          meta["gaps"])
+            self.assertEqual(meta["resources"], [])
+
+    def test_contradictory_versions_are_rejected_before_publication(self):
+        # Two complete observations claim the same scoped version with different
+        # bytes. The map must not silently keep the last snapshot.
+        observations = [
+            _create(4),
+            _observation(2, 2, args=(0, 5, 4), context=(1, 0, 0, 1, 0, 0),
+                        spans=[b"\x05\x06\x07\x08"], origin=(1, 0, 0, 1, 0, 0)),
+        ]
+        text = _export(observations, name="content-exact")
+        with tempfile.TemporaryDirectory() as directory:
+            store = EvidenceStore(Path(directory))
+            binding = materialize.materialize_export(text, self.declaration, store)
+            entry = _scenario(binding, "content-exact")
+        self.assertEqual(entry["outcome"], "rejected")
+        self.assertIn("two different contents", entry["reason"])
+        self.assertEqual(entry["records"], [])
+        self.assertEqual(store.records, [])
 
 
 class DeclarationTests(unittest.TestCase):

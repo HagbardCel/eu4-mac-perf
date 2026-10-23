@@ -322,6 +322,20 @@ deduplication is not restored by pretending otherwise — A1 accepts the reduced
 deduplication, and if canonical resource roles are needed later they must be declared
 explicitly.
 
+**Context references bind the version they address.** A `read`, `share` or `destroy`
+publishes no new version; it addresses an existing resource state. When the capture
+materialized that version, the observation binds the scoped resource identity,
+generation, version and content digest in `resources[]`, so the state enters its
+semantic projection. If the version was not materialized — for example, because the
+updating observation lost its spans — the observation is still stored and accounted
+for, but is named `unavailable-dependency:slot:<slot>@<generation>:v<version>` and
+cannot deduplicate. A complete observation is not rejected merely because it
+references an unavailable version. A content-bearing hook (`create`, `update`, `pair`)
+that exports no content is not a reference: its produced state is unknown and is named
+`unavailable-dependency:content-unavailable:<hook>`. Version-map construction rejects
+a second complete observation that binds the same scoped version to different bytes
+rather than silently overwriting the first.
+
 **Only source-bound verification is admission.** With both the export and the
 declaration, `verify_binding` re-derives the whole binding from them, requires exact
 equality, then proves every derived record and blob is present and byte-identical in
@@ -347,6 +361,16 @@ no semantic digest and never becomes `verified_repeat`:
 
 with native-incomplete and lost observations accounted for separately. Native counters
 are never rewritten to make finalization pass.
+
+**Context references are not complete input/output semantics.** A bound reference
+names the state an observation addressed; it does not bind the observation's complete
+inputs or its result. `raw.result` is not in the semantic projection while
+`abi.return_carrier` is `None`, and an update binds the version it produced but not its
+full pre-state. Deduplication under the test-only `effects: "none"` override is
+therefore a mechanism check (scoped identity, collision-safe references), not
+behavioral certification. The shipped producer declares `effects: "aggregate-only"`,
+so its captured observations remain semantically unqualified. Complete function-level
+input/output transitions belong to A2.
 
 A scenario is **withheld** when the producer deliberately printed no observations, and
 **rejected** when admission is `REJECTED`, closure fails (for example a stale origin),

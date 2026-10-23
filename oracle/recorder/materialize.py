@@ -64,6 +64,11 @@ CARRIER_BITS = (8, 16, 32, 64)
 VERIFICATION_SOURCE_BOUND = "source-bound"
 VERIFICATION_STRUCTURAL = "structural"
 
+#: Hooks whose observation addresses an existing resource state without producing a
+#: new version. A content-bearing hook that exports no content is not a reference: its
+#: produced state is unknown and must be named as unavailable instead.
+CONTEXT_ONLY_HOOKS = ("read", "share", "destroy")
+
 _SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 _HOOK_KEY = re.compile(r"\A[0-9]+\Z")
 
@@ -189,6 +194,27 @@ def validate_declaration(declaration: Any) -> None:
                 f"scenario {name!r} selects undeclared hooks {sorted(unknown)}")
 
 
+# --- scoped resource identity ---------------------------------------------------
+
+def _resource_id(capture_id: str, scenario: str, thread: int, slot: int) -> str:
+    """The world-scoped identity of a resource lifetime.
+
+    One implementation for produced versions, context references, size/version
+    lookups and verification, so the ownership scope cannot drift between them.
+    """
+    return f"world:{capture_id}/{scenario}/{thread}:slot:{slot}"
+
+
+def _lifetime_key(capture_id: str, scenario: str, thread: int, slot: int,
+                  generation: int) -> tuple[str, int]:
+    return _resource_id(capture_id, scenario, thread, slot), generation
+
+
+def _version_key(capture_id: str, scenario: str, thread: int, slot: int,
+                 generation: int, version: int) -> tuple[str, int, int]:
+    return (*_lifetime_key(capture_id, scenario, thread, slot, generation), version)
+
+
 # --- derivation (pure: reads no store, writes nothing) --------------------------
 
 def _plan_export(export_text: str, declaration: dict[str, Any]) -> dict[str, Any]:
@@ -264,9 +290,12 @@ def _plan_scenario(scenario: dict[str, Any], declaration: dict[str, Any]
     payloads: list[dict[str, Any]] = []
     blobs: dict[str, bytes] = {}
     try:
+        versions = _content_versions(observations, capture_id, scenario["name"],
+                                     sizes, default_size)
         for observation in observations:
             payload, content = _payload(observation, scenario["name"], declaration,
-                                        entry["policy"], capture_id, sizes, default_size)
+                                        entry["policy"], capture_id, sizes, default_size,
+                                        versions)
             payloads.append(payload)
             if content is not None:
                 blobs[sha256(content).hexdigest()] = content
@@ -317,19 +346,50 @@ def _creating_sizes(observations: Iterable[dict[str, Any]], declaration: dict[st
             origin = registry.reference_from_context(observation["origin"])
         except registry.RegistryError:
             continue
-        sizes[(capture_id, scenario, int(observation["thread_id"]),
-               origin.slot, origin.generation)] = int(observation["args"][0])
+        sizes[_lifetime_key(capture_id, scenario, int(observation["thread_id"]),
+                            origin.slot, origin.generation)] = int(observation["args"][0])
     return sizes
+
+
+def _content_versions(observations: Iterable[dict[str, Any]], capture_id: str,
+                      scenario: str, sizes: dict[tuple[Any, ...], int],
+                      default_size: int | None) -> dict[tuple[str, int, int], bytes]:
+    """Captured version bytes, keyed by scoped version identity.
+
+    Two complete observations may establish the same version, but they must agree.
+    Rejecting a contradictory snapshot here keeps a dictionary assignment from
+    silently replacing the version a later context-only observation will bind to.
+    """
+    versions: dict[tuple[str, int, int], bytes] = {}
+    for observation in observations:
+        if observation["complete"] != 1:
+            continue
+        version, _, content = _version(observation, scenario, capture_id, sizes, default_size)
+        if content is None:
+            continue
+        key = (version["resource_id"], version["generation"], version["version"])
+        previous = versions.get(key)
+        if previous is not None and previous != content:
+            raise MaterializeError(
+                f"resource version {key[0]}@{key[1]} v{key[2]} is bound to two "
+                "different contents")
+        versions[key] = content
+    return versions
 
 
 def _payload(observation: dict[str, Any], scenario: str, declaration: dict[str, Any],
              policy: dict[str, Any], capture_id: str, sizes: dict[tuple[Any, ...], int],
-             default_size: int | None) -> tuple[dict[str, Any], bytes | None]:
+             default_size: int | None, versions: dict[tuple[str, int, int], bytes]
+             ) -> tuple[dict[str, Any], bytes | None]:
     hook = declaration["hooks"][str(observation["hook_id"])]
     carriers, missing, unexpected, abi_confidence = _carriers(hook, observation)
     version, span_meta, content = _version(
         observation, scenario, capture_id, sizes, default_size)
+    native = "captured" if observation["complete"] == 1 else "incomplete"
+    thread = int(observation["thread_id"])
     resources = []
+    is_reference = False
+    unavailable = _dependencies(observation)
     if version is not None:
         resources.append({
             "resource_id": version["resource_id"],
@@ -338,8 +398,31 @@ def _payload(observation: dict[str, Any], scenario: str, declaration: dict[str, 
             "contents_sha256": version["contents_sha256"],
             "aliases": [],
         })
-    native = "captured" if observation["complete"] == 1 else "incomplete"
-    thread = int(observation["thread_id"])
+    elif native == "captured" and hook["name"] in CONTEXT_ONLY_HOOKS:
+        # A read, share or destroy addresses an existing resource state. Bind the
+        # materialized version so the state enters the semantic projection; if the
+        # capture did not materialize it, keep the observation but name the missing
+        # state so it cannot compare as equal to another world.
+        ref = registry.reference_from_context(observation["context"])
+        if ref.resolved:
+            key = _version_key(capture_id, scenario, thread, ref.slot,
+                               ref.generation, ref.version)
+            if key in versions:
+                resources.append({
+                    "resource_id": _resource_id(capture_id, scenario, thread, ref.slot),
+                    "generation": ref.generation,
+                    "version": ref.version,
+                    "contents_sha256": sha256(versions[key]).hexdigest(),
+                    "aliases": [],
+                })
+                is_reference = True
+            else:
+                unavailable.append(
+                    f"slot:{ref.slot}@{ref.generation}:v{ref.version}")
+    elif native == "captured":
+        # A content-bearing hook exported no content; the version it produced is
+        # unknown, so the observation cannot be compared semantically.
+        unavailable.append(f"content-unavailable:{hook['name']}")
     return {
         "record_type": "observation",
         "provenance": {
@@ -382,7 +465,7 @@ def _payload(observation: dict[str, Any], scenario: str, declaration: dict[str, 
         "completeness": {
             "state": native,
             "losses": 0,
-            "unavailable_dependencies": _dependencies(observation),
+            "unavailable_dependencies": sorted(unavailable),
         },
         "fidelity": {
             "mode": declaration["fidelity"]["mode"],
@@ -399,6 +482,7 @@ def _payload(observation: dict[str, Any], scenario: str, declaration: dict[str, 
             "context": list(observation["context"]),
             "origin": list(observation["origin"]),
             "content": span_meta,
+            "reference": is_reference,
         },
     }, content
 
@@ -459,7 +543,7 @@ def _version(observation: dict[str, Any], scenario: str, capture_id: str,
     except registry.RegistryError as exc:
         raise MaterializeError(f"content has no usable origin: {exc}") from exc
     thread = int(observation["thread_id"])
-    key = (capture_id, scenario, thread, origin.slot, origin.generation)
+    key = _lifetime_key(capture_id, scenario, thread, origin.slot, origin.generation)
     size = sizes.get(key, default_size)
     if size is None:
         raise MaterializeError(
@@ -471,7 +555,7 @@ def _version(observation: dict[str, Any], scenario: str, capture_id: str,
             f"resource version {scenario}/{thread} {origin.named} v{origin.version} is "
             f"{len(data)} bytes but its declared size is {size}")
     return {
-        "resource_id": f"world:{capture_id}/{scenario}/{thread}:slot:{origin.slot}",
+        "resource_id": _resource_id(capture_id, scenario, thread, origin.slot),
         "generation": origin.generation,
         "version": origin.version,
         "contents_sha256": sha256(data).hexdigest(),
@@ -498,18 +582,25 @@ def _dependencies(observation: dict[str, Any]) -> list[str]:
 
 
 def _bound_resources(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    """The binding's view of a record's whole versions (sizes and span slices)."""
+    """The binding's view of a record's resources.
+
+    A record that publishes content binds the whole version it produced (size and
+    span slices). A context-only record binds a reference to an already-materialized
+    version: no size or spans, because it produced none.
+    """
     bound: list[dict[str, Any]] = []
-    raw = payload["raw"]["content"]
+    raw = payload["raw"]
     for resource in payload["resources"]:
-        bound.append({
+        entry = {
             "resource_id": resource["resource_id"],
             "generation": resource["generation"],
             "version": resource["version"],
             "contents_sha256": resource["contents_sha256"],
-            "size": sum(span["length"] for span in raw),
-            "spans": [dict(span) for span in raw],
-        })
+            "spans": [] if raw.get("reference") else [dict(span) for span in raw["content"]],
+        }
+        if not raw.get("reference"):
+            entry["size"] = sum(span["length"] for span in raw["content"])
+        bound.append(entry)
     return bound
 
 
@@ -689,7 +780,7 @@ def _verify_structure(store: EvidenceStore, binding: dict[str, Any]) -> None:
                         else "domain-incomplete" if gaps else "qualified")
             if meta["semantic_state"] != semantic or list(meta["gaps"]) != list(gaps):
                 raise MaterializeError("record qualification does not re-derive")
-            _verify_resources(store, payload, meta)
+            _verify_resources(store, payload, meta, binding["capture_id"])
             sealed_records.append(schema.seal(payload))
         for key, value in counters.items():
             accounted[key] = accounted.get(key, 0) + int(value)
@@ -703,27 +794,50 @@ def _verify_structure(store: EvidenceStore, binding: dict[str, Any]) -> None:
 
 
 def _verify_resources(store: EvidenceStore, payload: dict[str, Any],
-                      meta: dict[str, Any]) -> None:
-    """Bind one record's resource versions to stored whole-version blobs."""
+                      meta: dict[str, Any], capture_id: str) -> None:
+    """Bind one record's resources to stored versions or the state it references."""
     declared = payload["resources"]
     bound = meta.get("resources") or []
     if len(declared) != len(bound):
         raise MaterializeError("record resources do not match the binding")
+    raw = payload["raw"]
+    produced = bool(declared) and not raw.get("reference")
+    if produced and len(declared) != 1:
+        raise MaterializeError("a content-bearing observation must bind one version")
+    scenario = payload["provenance"]["scenario"]
+    thread = payload["provenance"]["thread"]
     for resource, entry in zip(declared, bound):
         for key in ("resource_id", "generation", "version", "contents_sha256"):
             if resource[key] != entry[key]:
                 raise MaterializeError(f"resource {key} does not match the record")
         blob = store.get_blob(entry["contents_sha256"])
-        if len(blob) != entry["size"]:
-            raise MaterializeError("whole-version blob has an unexpected length")
-        spans = entry.get("spans") or []
-        if sum(span["length"] for span in spans) != entry["size"]:
-            raise MaterializeError("span lengths do not reconstruct the version length")
-        offset = 0
-        for span in spans:
-            if span.get("sha256") is None:
-                raise MaterializeError("a complete version has a lost span")
-            chunk = blob[offset:offset + span["length"]]
-            if sha256(chunk).hexdigest() != span["sha256"]:
-                raise MaterializeError("span does not match its place in the version")
-            offset += span["length"]
+        if produced:
+            origin = registry.reference_from_context(raw["origin"])
+            if (resource["resource_id"]
+                    != _resource_id(capture_id, scenario, thread, origin.slot)
+                    or resource["generation"] != origin.generation
+                    or resource["version"] != origin.version):
+                raise MaterializeError("resource does not match its content origin")
+            if len(blob) != entry["size"]:
+                raise MaterializeError("whole-version blob has an unexpected length")
+            spans = entry.get("spans") or []
+            if sum(span["length"] for span in spans) != entry["size"]:
+                raise MaterializeError("span lengths do not reconstruct the version length")
+            offset = 0
+            for span in spans:
+                if span.get("sha256") is None:
+                    raise MaterializeError("a complete version has a lost span")
+                chunk = blob[offset:offset + span["length"]]
+                if sha256(chunk).hexdigest() != span["sha256"]:
+                    raise MaterializeError("span does not match its place in the version")
+                offset += span["length"]
+        else:
+            reference = registry.reference_from_context(raw["context"])
+            if (not reference.resolved
+                    or resource["resource_id"]
+                    != _resource_id(capture_id, scenario, thread, reference.slot)
+                    or resource["generation"] != reference.generation
+                    or resource["version"] != reference.version):
+                raise MaterializeError("resource reference does not match the observation")
+            if entry.get("spans"):
+                raise MaterializeError("a context reference must not claim produced spans")
