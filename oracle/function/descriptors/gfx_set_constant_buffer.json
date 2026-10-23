@@ -1,0 +1,57 @@
+{
+  "schema_version": "eu4-oracle-function-descriptor/v1",
+  "function_id": "gfx:set-constant-buffer",
+  "symbol": "_GfxSetConstantBuffer",
+  "hook_id": "hook:gfx-set-constant-buffer",
+  "binary": {
+    "sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "entry_rva": "0x15ec36a",
+    "end_rva": "0x15ec3b5",
+    "code_sha256": "8e5f94bf3f132cbf17397928c72df44b7fb6d24bcc95575702c457fb48e32943",
+    "image_base": "0x100000000"
+  },
+  "abi": {
+    "calling_convention": "sysv-amd64",
+    "required_carriers": [
+      {"name": "RDI", "kind": "int", "bits": 64, "role": "handle-pointer"},
+      {"name": "RSI", "kind": "int", "bits": 64, "role": "buffer-pointer"},
+      {"name": "RCX", "kind": "int", "bits": 64, "role": "slot"},
+      {"name": "R9", "kind": "int", "bits": 64, "role": "length-selector"}
+    ],
+    "ignored_carriers": ["RDX", "R8"],
+    "outcome": {"register": "RAX", "role": "ctx-base"}
+  },
+  "layout": {
+    "word_count_base": 200,
+    "pointer_base": 208,
+    "dirty": 296,
+    "slot_stride": 16,
+    "slot_min": 0,
+    "slot_max": 6,
+    "observation_start": 200,
+    "observation_end": 297,
+    "canary_before_start": 184,
+    "canary_before_end": 200,
+    "canary_after_start": 297,
+    "canary_after_end": 313
+  },
+  "input_regions": {
+    "handle": {"carrier": "RDI", "width": 8},
+    "buffer": {"carrier": "RSI", "width": 4, "selector_carrier": "R9",
+               "selector_value": 4294967295}
+  },
+  "required_reads": ["handle", "ctx", "canary-before", "canary-after"],
+  "post_state": {
+    "word_count": {"base": 200, "stride": 16, "width": 4},
+    "buffer": {"base": 208, "stride": 16, "width": 8, "equals_carrier": "RSI"},
+    "dirty": {"offset": 296, "width": 1, "equals": 1}
+  },
+  "preservation": {
+    "observation_region": "ctx",
+    "canary_regions": ["canary-before", "canary-after"],
+    "input_regions": ["handle", "buffer"]
+  },
+  "effects": {"external": [], "complete": true},
+  "fidelity": {"mode": "faithful", "policy_version": "p4-fid-v1"},
+  "capture_policy": {"name": "function-paired-state", "version": "a2-v1"}
+}

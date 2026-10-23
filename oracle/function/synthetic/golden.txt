@@ -1,0 +1,18 @@
+FUNCTION-CAPTURE v1
+CAPTURE capture=re0-pilot scenario=s03:length-from-buffer epoch=synthetic-a2 thread=0 sequence=3 function=gfx:set-constant-buffer callsite=rva:0x15ec36a module=b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d policy=ea68e8e75bc8e293e77e3683a9b543d3e9ad61f6624de1dd718d284ba0c2cf31 fidelity=faithful policy_version=p4-fid-v1 synthetic=1
+ENTRY name=handle address=0x200010000 bytes=0000000002000000
+ENTRY name=ctx address=0x2000000c8 bytes=094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb2e920578ec5fc336aa1d80f467db4eb225990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b72a9
+ENTRY name=canary-before address=0x2000000b8 bytes=99d0073e75ace31a5188bff62d649bd2
+ENTRY name=canary-after address=0x200000129 bytes=e0174e85bcf32a6198cf063d74abe219
+ENTRY name=buffer address=0x300000000 bytes=0d000000
+EXIT name=handle address=0x200010000 bytes=0000000002000000
+EXIT name=ctx address=0x2000000c8 bytes=094077aee51c538ac1f82f669dd40b4279b0e71e558cc3fa31689fd60d447bb204000000c5fc336a00000000030000005990c7fe356ca3da11487fb6ed245b92c900376ea5dc134a81b8ef265d94cb023970a7de154c83baf1285f96cd043b7201
+EXIT name=canary-before address=0x2000000b8 bytes=99d0073e75ace31a5188bff62d649bd2
+EXIT name=canary-after address=0x200000129 bytes=e0174e85bcf32a6198cf063d74abe219
+EXIT name=buffer address=0x300000000 bytes=0d000000
+CARRIER name=RDI kind=int bits=64 value=0x200010000 confidence=observed
+CARRIER name=RSI kind=int bits=64 value=0x300000000 confidence=observed
+CARRIER name=RCX kind=int bits=64 value=0x2 confidence=observed
+CARRIER name=R9 kind=int bits=64 value=0xffffffff confidence=observed
+OUTCOME register=RAX value=0x200000000 confidence=observed
+END regions=10 carriers=4 outcomes=1 losses=0
