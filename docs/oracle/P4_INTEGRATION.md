@@ -310,6 +310,34 @@ and the producer's effect-coverage statement) and publishes:
   and every record digest, and whose verifier (not `EvidenceStore.verify`) checks the
   blob→record association, record provenance and accounting.
 
+**Resource identity is owned by a world.** A P4.9 scenario initializes independent
+worlds, at most one per declared thread, so a resource version is identified by
+`(capture_id, scenario, thread, slot, generation)` — the declared
+`resource_scope: "scenario-thread"` — and its ID is
+`world:<capture>/<scenario>/<thread>:slot:<slot>`. Size lookup, lifetime checks and
+the version→content uniqueness invariant use the same scope. Two scenarios may both
+contain thread 0, slot 0, generation 0, version 1 with different bytes without
+contradicting each other; they are different resources. Cross-scenario semantic
+deduplication is not restored by pretending otherwise — A1 accepts the reduced
+deduplication, and if canonical resource roles are needed later they must be declared
+explicitly.
+
+**Only source-bound verification is admission.** With both the export and the
+declaration, `verify_binding` re-derives the whole binding from them, requires exact
+equality, then proves every derived record and blob is present and byte-identical in
+the store. That is `mode: "source-bound"`, `admitted: true`, and the only result
+`materialize_export` accepts. Without both sources it performs `mode: "structural"`
+checks (manifest, provenance, resource association, counters, ledger) and reports
+`admitted: false`: integrity inspection, never proof of correct materialization.
+Supplying only one source is refused.
+
+**Arity and unexpected arguments.** Every declared hook has an `arity`, and its
+carriers must cover every argument `0..arity-1`. A missing argument is unknown, not
+zero. An observed argument beyond the declared arity is not discarded: it stays in
+`raw.args` and is named `args:unexpected:<hook>:<index>` in
+`state.unknown_dependencies`, which disqualifies the observation while the record
+remains stored and accounted for.
+
 **Native completeness is not semantic qualification.** A fully captured observation
 whose declared semantic domain is incomplete (for the P4.9 producer: external effects
 are exported only as an aggregate counter) is stored and accounted for, but receives
@@ -325,6 +353,17 @@ A scenario is **withheld** when the producer deliberately printed no observation
 a declared policy excludes a printed hook, or a complete observation's content cannot
 be sized or attributed. Rejected and withheld scenarios contribute no records; their
 counters and the reason remain in the binding.
+
+**Publication is transactional per scenario.** Derivation is pure; blobs, then records,
+then the sealed binding are published only for accepted scenarios, so a rejected
+scenario cannot leave an orphaned record or blob. A crash between publication steps
+can leave unreferenced artifacts; a retry is deterministic and re-publishes them.
+
+**Module identity is producer-bound in A1.** The declaration admits only
+`module_identity: "producer-source-bundle"` and the binding records
+`attested: false`: it names the reviewed producer sources and cannot attest the module
+that actually ran. `loaded-module` is rejected, not silently downgraded; verified
+runtime identity is a later slice's obligation.
 
 **A2 — function fixture contract.** Defines the versioned `FUNCTION-CAPTURE v1`
 transcript (entry and exit owned snapshots, invocation identity
