@@ -1,0 +1,5 @@
+# SHA-256 of independent F1 acceptance sources (update when editing).
+# tests/test_oracle_shadow_acceptance.py
+# tests/oracle_shadow_acceptance/contract.py
+# tests/oracle_shadow_acceptance/flood_harness.py
+aa20bba59206db4c32aebd3029f337518caebca48d155240e641d052423aff89
