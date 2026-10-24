@@ -197,7 +197,8 @@ It does **not** establish any of the following, and these limits travel with the
    (`*RDI`) or to the input buffer after computing the word count would satisfy every check here, so
    this is not a general-purpose runtime equivalence test: before certifying a larger function for
    actual replacement, every declared input region it can write to has to be observed before and
-   after its execution, not just the context object.
+   after its execution, not just the context object. PR C's A2 replay bridge adds those two
+   preservation observations for its fixtures; RE2 itself still does not check them.
 7. No claim is made about `_GfxSetConstantBuffer`'s importance as a rendering bottleneck.
 
 ## Reproducing

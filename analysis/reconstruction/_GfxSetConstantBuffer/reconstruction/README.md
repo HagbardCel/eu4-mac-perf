@@ -49,6 +49,27 @@ Post-call values in caller-saved registers other than `RAX` are **diagnostic evi
 ordinary compiled C++ does not promise them, so a differential comparison must not treat a
 difference in `RDX`, `RCX` or `R9` as a failure.
 
+### Harness output and preservation
+
+A `scenario` run prints `size`, `post`, `rax`, `word_count`, `buffer`, `dirty`,
+`handle_preserved` and `buffer_preserved`. The last two extend the harness from "what changed
+in the context" to the two declared input regions: before the call it snapshots the local
+handle value (`ctx_pointer`, the bytes `*RDI`) and, when a buffer is supplied, the buffer's
+first dword; after the call it reports whether each changed. `buffer_preserved` is
+`unchanged` or `changed` on the buffer path and `absent` on the explicit-length path.
+
+On the explicit-length path the harness still supplies a non-null buffer pointer, but maps one
+`PROT_NONE` page for it. The path must not read `[RSI]`; an accidental read faults rather than
+returning a readable zero, while the pointer value remains available for the stored-pointer
+role check. A failure to create that mapping is the setup refusal
+`error=absent-buffer-unavailable`.
+
+PR C (`oracle/function/replay.py`) uses this output as a strict protocol: it requires exactly
+these fields, checks `size=0x130`, the `post` length and the internal consistency of
+`word_count`/`dirty`, and treats `buffer=ARG` and `rax=ctx` as roles computed by the harness.
+See [P4_INTEGRATION.md](../../../../docs/oracle/P4_INTEGRATION.md) for the replay verdicts and
+the `[ctx+0xb8, ctx+0x130)` candidate-domain limit.
+
 The x86-64 probe (`abi_check.cpp` + `abi_call6.S`) loads the six registers directly and calls the
 adapter, asserting that the slot came from `RCX`, the selector from `R9D`, the buffer from `RSI`,
 the dirty write happened and `RAX` came back as the context — and that a value sitting in `RDX` or
@@ -93,6 +114,10 @@ available — builds the reconstruction and:
   declared fields changed;
 * checks the refusals: a slot outside `[0, 6)`, a buffer-reading selector with no buffer contents,
   a mis-sized context. All of these exit non-zero with an `error=` line rather than proceeding.
+
+PR C's `tests/test_function_replay.py` builds the same reconstruction and replays the committed
+A2 `s03` and `s10` fixtures through it, including the preservation fields above. It is the
+offline bridge between the captured fixture and this candidate; it is not a second capture path.
 
 The host build is `-O0 -g -Wall -Wextra -Werror -fsanitize=address,undefined` **with
 `-fno-sanitize-recover=all`**: UBSan recovers by default, so without that flag a finding would print
