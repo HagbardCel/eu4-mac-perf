@@ -52,6 +52,9 @@ def transcript_for_thread(thread: int, *, synthetic_flag: int = 0) -> str:
 
 
 def rewrite_exit_ctx_word_count(text: str, slot: int, word_count: int) -> str:
+    layout = fixture.load_descriptor()["layout"]
+    rel = (layout["word_count_base"] + slot * layout["slot_stride"]
+           - layout["observation_start"])
     lines = text.splitlines()
     for index, line in enumerate(lines):
         if not line.startswith("EXIT name=ctx "):
@@ -59,8 +62,7 @@ def rewrite_exit_ctx_word_count(text: str, slot: int, word_count: int) -> str:
         parts = line.split()[1:]
         fields = dict(part.split("=", 1) for part in parts)
         data = bytearray.fromhex(fields["bytes"])
-        start = slot * 16 + 0x0C
-        data[start:start + 4] = word_count.to_bytes(4, "little")
+        data[rel:rel + 4] = word_count.to_bytes(4, "little")
         fields["bytes"] = data.hex()
         lines[index] = "EXIT " + " ".join(f"{key}={value}"
                                           for key, value in fields.items())

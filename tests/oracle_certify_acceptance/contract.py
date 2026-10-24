@@ -29,9 +29,12 @@ def assert_certificate_shape(cert: Mapping[str, Any]) -> None:
         raise AssertionError(f"candidate missing frozen keys: {sorted(missing)}")
 
 
-def assert_build_binding_honest(cert: Mapping[str, Any],
-                                executable_path: Path) -> None:
-    """Frozen candidate fields must match the executable E1 actually evaluated."""
+def assert_build_binding_honest(
+        cert: Mapping[str, Any],
+        executable_path: Path,
+        *,
+        expected_source_sha256: str | None = None) -> None:
+    """Certificate candidate identities must match supplied artifact bytes (consistency only)."""
     assert_certificate_shape(cert)
     candidate = cert["candidate"]
     if not executable_path.is_file():
@@ -40,9 +43,10 @@ def assert_build_binding_honest(cert: Mapping[str, Any],
     if on_disk != candidate["executable_sha256"]:
         raise AssertionError(
             "executable_sha256 does not match the evaluated executable bytes")
-    if candidate["executed_matches_build"] and on_disk != candidate[
-            "executable_sha256"]:
-        raise AssertionError("executed_matches_build is inconsistent with bytes")
+    if expected_source_sha256 is not None:
+        if candidate["source_sha256"] != expected_source_sha256:
+            raise AssertionError(
+                "source_sha256 does not match the canonical RE1 source digest")
 
 
 def assert_promotion(cert: Mapping[str, Any], expected: str) -> None:
