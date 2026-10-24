@@ -168,14 +168,18 @@ def prestate_bytes(corpus: dict[str, Any]) -> bytes:
     return pilot.fill_pattern(corpus["memory"], CONTEXT_SIZE)
 
 
-def run_reconstruction(harness: Path, row: dict[str, Any], corpus: dict[str, Any],
-                       env: dict[str, str] | None = None) -> dict[str, str]:
-    """One corpus row through the compiled reconstruction's `scenario` harness mode."""
-    dword = row["buffer_first_dword"]
-    argument = "absent" if dword is None else f"{pilot.hexint(dword):08x}"
-    command = [str(harness), "scenario", str(row["slot"]), f"{pilot.hexint(row['r9d']):x}",
-               argument]
-    result = subprocess.run(command, input=prestate_bytes(corpus).hex() + "\n",
+def run_harness(harness: Path, slot: int, selector: int, buffer_dword: int | None,
+                prestate: bytes, env: dict[str, str] | None = None) -> dict[str, str]:
+    """Run one reconstruction scenario with an explicit context pre-state.
+
+    The caller owns the pre-state and the interpretation of the output. This only preserves the
+    established subprocess mechanics: the sanitizer environment when no custom environment is
+    supplied, the harness timeout, and the raw stdout for callers that need a strict protocol
+    check rather than the permissive ``key=value`` projection below.
+    """
+    argument = "absent" if buffer_dword is None else f"{buffer_dword:08x}"
+    command = [str(harness), "scenario", str(slot), f"{selector:x}", argument]
+    result = subprocess.run(command, input=prestate.hex() + "\n",
                             capture_output=True, text=True, timeout=HARNESS_TIMEOUT,
                             env=sanitizer_env() if env is None else env)
     fields: dict[str, str] = {}
@@ -183,8 +187,18 @@ def run_reconstruction(harness: Path, row: dict[str, Any], corpus: dict[str, Any
         key, _, value = line.partition("=")
         fields[key] = value
     fields["returncode"] = str(result.returncode)
+    fields["stdout"] = result.stdout
     fields["stderr"] = result.stderr.strip()
     return fields
+
+
+def run_reconstruction(harness: Path, row: dict[str, Any], corpus: dict[str, Any],
+                       env: dict[str, str] | None = None) -> dict[str, str]:
+    """One corpus row through the compiled reconstruction's `scenario` harness mode."""
+    dword = row["buffer_first_dword"]
+    return run_harness(harness, row["slot"], pilot.hexint(row["r9d"]),
+                       None if dword is None else pilot.hexint(dword),
+                       prestate_bytes(corpus), env)
 
 
 def _store_set(oracle: dict[str, Any]) -> set[tuple[int, int]]:

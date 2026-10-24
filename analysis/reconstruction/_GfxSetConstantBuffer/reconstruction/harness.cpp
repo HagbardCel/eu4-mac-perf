@@ -9,7 +9,8 @@
 //   words buffer              stdin: one hex dword per line       stdout: hex words per line
 //   scenario <slot> <selector-hex> <first-dword-hex|absent>
 //                             stdin: the context bytes as hex; runs the function and prints
-//                             the resulting context plus the declared role values
+//                             the resulting context, the declared role values and whether the
+//                             handle and buffer input regions were preserved
 //   exhaustive                sweep all 2^32 inputs of both arithmetic paths against the
 //                             literal CMOVNS/SAR and ADD/SHR encodings (opt-in, see README)
 //
@@ -25,6 +26,13 @@
 #include <iostream>
 #include <string>
 #include <vector>
+
+#include <sys/mman.h>
+#include <unistd.h>
+
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
 
 // Defined in `arith_literals.cpp`; declared here only. Used by the exhaustive sweep.
 namespace eu4::re::test_support {
@@ -175,7 +183,20 @@ int run_scenario(int argc, char **argv) {
     std::memcpy(&ctx, bytes.data(), kContextSize);
 
     std::uint32_t buffer_dword = 0;
-    if (!buffer_absent) {
+    const void *buffer = nullptr;
+    void *guard = nullptr;
+    std::size_t guard_size = 0;
+    if (buffer_absent) {
+        // `absent` means genuinely unreadable contents, not a readable zero: the explicit-length
+        // path must not depend on bytes the capture never declared. The pointer remains non-null
+        // so the stored-pointer role is still observable.
+        const long page_size = sysconf(_SC_PAGESIZE);
+        if (page_size <= 0) return fail("absent-buffer-unavailable");
+        guard_size = static_cast<std::size_t>(page_size);
+        guard = mmap(nullptr, guard_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (guard == MAP_FAILED || guard == nullptr) return fail("absent-buffer-unavailable");
+        buffer = guard;
+    } else {
         std::vector<std::uint8_t> dword_bytes;
         if (!parse_hex(argv[4], dword_bytes) || dword_bytes.empty() || dword_bytes.size() > 4) {
             return fail("bad-buffer-dword");
@@ -184,18 +205,26 @@ int run_scenario(int argc, char **argv) {
         for (std::uint8_t byte : dword_bytes) {
             buffer_dword = (buffer_dword << 8) | byte;
         }
+        buffer = &buffer_dword;
     }
-    // The buffer argument is always a real pointer here; `absent` means its contents are not
-    // part of the constructed state, which the explicit-length path must never read.
-    const void *buffer = &buffer_dword;
+
     void *ctx_pointer = &ctx;
     void **handle = &ctx_pointer;
+    const std::uint64_t handle_before = reinterpret_cast<std::uint64_t>(ctx_pointer);
+    const std::uint32_t buffer_before = buffer_dword;
 
     // Call the six-position adapter, with garbage in the two positions the original ignores:
     // the same call shape an RE3 redirection will use, and every run re-checks that the unused
     // positions are not consumed.
     void *returned = eu4::re::gfx::gfx_set_constant_buffer_abi(
         handle, buffer, 0xDEADBEEFDEADBEEFull, slot, 0xFEEDFACEFEEDFACEull, selector);
+
+    const bool handle_unchanged =
+        reinterpret_cast<std::uint64_t>(ctx_pointer) == handle_before;
+    const bool buffer_unchanged = buffer_absent || buffer_dword == buffer_before;
+    if (guard != nullptr) {
+        (void)munmap(guard, guard_size);
+    }
 
     std::uint8_t post[kContextSize];
     std::memcpy(post, &ctx, kContextSize);
@@ -221,6 +250,13 @@ int run_scenario(int argc, char **argv) {
         std::cout << hex_u64(stored_pointer) << '\n';
     }
     std::cout << "dirty=" << hex_u32(read_u32(post, kDirtyOffset) & 0xFFu) << '\n';
+    std::cout << "handle_preserved=" << (handle_unchanged ? "unchanged" : "changed") << '\n';
+    std::cout << "buffer_preserved=";
+    if (buffer_absent) {
+        std::cout << "absent\n";
+    } else {
+        std::cout << (buffer_unchanged ? "unchanged\n" : "changed\n");
+    }
     return 0;
 }
 

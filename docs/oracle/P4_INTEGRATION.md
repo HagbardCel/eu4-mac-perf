@@ -7,10 +7,11 @@ immutable whole-version blobs, native/semantic completeness reconciliation,
 collision-safe classification and a verified capture binding) and **A2** (the
 `_GfxSetConstantBuffer` observable-domain descriptor, descriptor-driven raw-memory
 closure, the versioned `FUNCTION-CAPTURE v1` transcript and a synthetic paired-state
-producer). **P4.11** (declared translation, `gfx-v2` stateful replay and negative
-admission) and the frame half of P4.10 remain. **Nothing here launches EU IV, opens a
-game process, or attaches to a binary**: every input is a file this repository's own
-drivers wrote.
+producer). **PR B** (the passive observation-only hook) and **PR C** (the offline
+replay and differential bridge) are implemented. **P4.11** (declared translation,
+`gfx-v2` stateful replay and negative admission) and the frame half of P4.10 remain.
+**Nothing here launches EU IV, opens a game process, or attaches to a binary**: every
+input is a file this repository's own drivers wrote.
 
 This document is authoritative for the pre-P5 offline integration gate. The gate now
 splits by acquisition scope (2026-10-18): the **function** half (**P4.9** +
@@ -475,6 +476,83 @@ compares the complete declared observation region (including unchanged bytes and
 canaries) and treats a transient write-and-restore inside a declared write region as
 outside its guarantee, unless access tracing is added for a function that makes it
 material.
+
+**PR C — offline replay and differential bridge.** PR C consumes an existing
+`FUNCTION-CAPTURE v1` transcript, admits it only through the existing A2 materializer
+and closure, replays its captured pre-state through the existing RE1 `scenario`
+harness, and compares the candidate with the captured post-state. It adds no capture
+path, launches no game, attaches to nothing, and does not expand A2's descriptor,
+schema or closure rules. The entry point is `oracle.function.replay.replay_capture`;
+the CLI is:
+
+```sh
+.venv/bin/python -m oracle.function.replay <capture> <re1-harness>
+```
+
+The result vocabulary is fixed: `verdict`, `record_digest`, `domain_digest`,
+`synthetic`, `failures`, `candidate_domain` and `reference_domain`. The verdicts are:
+
+| Verdict | Meaning |
+| --- | --- |
+| `refused` | The A2 reference is unqualified, malformed, foreign or unsupported, or the harness is unavailable, or a recognized pre-invocation setup error occurred. No behavioral claim is made. |
+| `mismatch` | A qualified reference was available and the candidate failed: nonzero exit, crash, sanitizer finding, timeout, malformed report, or any observable difference. |
+| `match` | Every candidate-observable observation agrees; this is not a whole-program claim. |
+
+Candidate-side equivalence is claimed only over `[ctx+0xb8, ctx+0x130)`. A2's
+reference extends to `ctx+0x139`, but the final nine canary bytes lie outside RE1's
+`Context` and are not candidate-observed. The uncaptured prefix `[ctx, ctx+0xb8)` is
+initialized from a fixed sentinel, not from captured original state: a candidate write
+to it is detectable, but a candidate read from it is not observable. Those limits are
+reported with every result rather than silently widening the claim.
+
+The bridge compares every byte of the reconstructed `Context`, excluding only the
+stored buffer-pointer field from raw cross-process equality. The sentinel prefix is
+compared against its sentinel too, which detects a write but not a read. The pointer is
+checked as a role on both sides (the reference must equal captured `RSI`; the candidate
+must report its own buffer argument). The A2 reference must also carry `RAX` equal to
+the context base.
+The harness report is parsed strictly: exactly the fields `size`, `post`, `rax`,
+`word_count`, `buffer`, `dirty`, `handle_preserved` and `buffer_preserved`, with no
+duplicates or unknowns; `size=0x130`; `post` exactly `0x130` bytes; `word_count` and
+`dirty` internally consistent with `post`; and `buffer=ARG` / `rax=ctx` required as
+role observations. A report is never trusted merely because individual fields look
+right.
+
+RE1's harness now reports `handle_preserved=unchanged|changed` by snapshotting the
+handle value across the call, and `buffer_preserved=unchanged|changed|absent` by
+snapshotting the buffer's first dword. On the explicit-length path the absent buffer is
+a non-null `PROT_NONE` mapping, so an undeclared read faults instead of reading a
+plausible zero; the pointer itself remains a role observation. The harness's existing
+`error=` refusals are a closed setup set (`usage`, `slot-out-of-domain`,
+`missing-buffer-input`, `bad-hex-input`, `prestate-size`, `bad-buffer-dword`,
+`absent-buffer-unavailable`). They map to `refused` only when the process exits with the
+harness's setup status (`2`), stderr is empty, and stdout is exactly one recognized
+`error=...` line. A setup-looking line with any other status, additional stdout, or
+stderr diagnostics is candidate output and maps to `mismatch`. An arbitrary candidate
+that imitates that exact signature is indistinguishable from a harness refusal; PR C
+accepts that limit rather than adding a trusted/candidate separation. A crash,
+sanitizer finding, unexpected nonzero exit or timeout also maps to `mismatch`; a
+candidate that emits invalid UTF-8 is `candidate:malformed-output`. Invalid UTF-8 input
+to the CLI is an error and exit `2`. The shared RE2 subprocess runner is reused with its
+timeout and sanitizer environment preserved; a caller-supplied environment is passed
+through unchanged, so the caller owns sanitizer enforcement in that case.
+
+`tests/test_function_replay.py` covers the committed `s03` and `s10` fixtures, a
+changed word count that A2 deliberately does not validate, unqualified/foreign/missing
+harness refusals, malformed and internally inconsistent reports, pointer and `RAX` role
+failures, preserved-context-byte failures, nonzero exits, timeouts, setup refusals,
+setup-looking lines on malformed exits, invalid UTF-8 candidate output and transcript
+input, and three source-mutation controls (corrupted handle, modified buffer, and an
+undeclared buffer read on the explicit path). The mutation controls compile copies of
+the tracked reconstruction; nothing tracked is edited by the tests.
+
+PR C does **not** add live readability, game-thread registration, queue/drain,
+nonlocal-unwinding support, a generic replay framework, a descriptor/schema change or a
+second capture path. Those remain PR D or later work. The original-code-window
+integration receipt is a manual macOS run: PR B's existing harness produces the
+transcript, and the command above replays it. The automated tests establish the capture
+mechanism and the replay/comparison mechanism separately; the receipt demonstrates the
+two together without adding another native capture test.
 
 ### 8. The `gfx-v2` vocabulary (declared here, implemented in P4.11)
 
