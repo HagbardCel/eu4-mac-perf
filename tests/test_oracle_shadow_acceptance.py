@@ -1,7 +1,7 @@
 """Independent F1 acceptance tests. Implementation agents must not edit this file."""
 from __future__ import annotations
 
-import importlib
+import importlib.util
 import tempfile
 import time
 import unittest
@@ -21,16 +21,15 @@ from tests.oracle_shadow_acceptance.contract import (
     read_observed_output_bytes,
     weak_supervisor_stand_in,
 )
+from tests.oracle_shadow_acceptance.import_gate import (
+    load_run_owned,
+    run_owned_import_status,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FLOOD_SOURCE = ROOT / "tests" / "oracle_shadow_acceptance" / "flood_harness.py"
 OUTPUT_CAP = 65536
 DEADLINE = 5.0
-
-try:
-    run_owned = importlib.import_module("oracle.shadow").run_owned
-except (ImportError, AttributeError):
-    run_owned = None
 
 
 def _snapshot() -> str:
@@ -59,8 +58,27 @@ class ContractShapeTests(unittest.TestCase):
             assert_accounting_partition(result, 1)
 
 
-@unittest.skipIf(run_owned is None, "oracle.shadow.run_owned not implemented")
+class RunOwnedImportGateTests(unittest.TestCase):
+    def test_broken_oracle_shadow_package_fails_when_present(self):
+        if importlib.util.find_spec("oracle.shadow") is None:
+            self.skipTest("oracle.shadow absent on this tree")
+        status, detail = run_owned_import_status()
+        if status == "broken":
+            self.fail(f"oracle.shadow is broken: {detail}")
+        self.assertEqual(status, "ready")
+
+
+@unittest.skipIf(run_owned_import_status()[0] == "absent",
+                 "oracle.shadow absent — F1 preparation only")
 class RunOwnedImplementationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        status, detail = run_owned_import_status()
+        if status == "broken":
+            raise AssertionError(f"oracle.shadow broken: {detail}")
+        cls.run_owned = load_run_owned()
+        assert cls.run_owned is not None
+
     def test_flood_fixture_within_process_group(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
@@ -72,7 +90,7 @@ class RunOwnedImplementationTests(unittest.TestCase):
                 "harness_path": str(owned),
             }
             started = time.monotonic()
-            result = run_owned(
+            result = self.run_owned(
                 [_snapshot()],
                 candidate,
                 work,
@@ -102,7 +120,7 @@ class RunOwnedImplementationTests(unittest.TestCase):
                 "executable_sha256": sha256(owned.read_bytes()).hexdigest(),
                 "harness_path": str(wrong),
             }
-            result = run_owned(
+            result = self.run_owned(
                 [_snapshot()],
                 candidate,
                 work,

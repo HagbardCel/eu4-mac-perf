@@ -2,4 +2,5 @@
 # tests/test_oracle_shadow_acceptance.py
 # tests/oracle_shadow_acceptance/contract.py
 # tests/oracle_shadow_acceptance/flood_harness.py
-bf4d460b884d695c9fe64fba20bd0c295ef0af7adcfb38be69535fb9b45e2d2c
+# tests/oracle_shadow_acceptance/import_gate.py
+b6314bf2d35805274e13418c539790c724b6c4089e1917e8b08fbd9be21596d5
