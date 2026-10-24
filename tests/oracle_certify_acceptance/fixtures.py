@@ -33,6 +33,23 @@ def _scenario_for_thread(thread: int) -> str:
     return "s03" if thread % 2 == 0 else "s10"
 
 
+def _rewrite_capture_identity(text: str, thread: int) -> str:
+    out: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("CAPTURE "):
+            tokens = dict(part.split("=", 1) for part in line.split()[1:])
+            tokens["thread"] = str(thread)
+            tokens["sequence"] = "1"
+            out.append(
+                "CAPTURE " + " ".join(f"{key}={tokens[key]}" for key in fixture.CAPTURE_FIELDS))
+        else:
+            out.append(line)
+    body = "\n".join(out)
+    if not body.endswith("\n"):
+        body += "\n"
+    return body
+
+
 def transcript_for_thread(thread: int, *, synthetic_flag: int = 0) -> str:
     scenario = _scenario_for_thread(thread)
     text = synthetic.capture_text(fixture.load_descriptor(), scenario)
@@ -46,9 +63,29 @@ def transcript_for_thread(thread: int, *, synthetic_flag: int = 0) -> str:
             "capture=re0-pilot scenario=s10:explicit-length epoch=synthetic-a2",
             f"capture={SESSION} scenario=live:explicit-length epoch=p5a-live",
         )
-    text = text.replace("thread=0 sequence=3", f"thread={thread} sequence=1")
+    text = _rewrite_capture_identity(text, thread)
     text = text.replace("synthetic=1", f"synthetic={synthetic_flag}")
     return text
+
+
+def assert_mock_session_capture_identities(root: Path) -> None:
+    """Each mock capture must have a unique (thread, sequence) CAPTURE identity."""
+    seen: set[tuple[int, int]] = set()
+    for index, path in enumerate(capture_paths(root)):
+        record = fixture.parse_capture(path.read_text(encoding="utf-8"))
+        capture = record["capture"]
+        thread = int(capture["thread"])
+        sequence = int(capture["sequence"])
+        if thread != index:
+            raise AssertionError(
+                f"{path.name}: expected thread={index}, got thread={thread}")
+        if sequence != 1:
+            raise AssertionError(
+                f"{path.name}: expected sequence=1, got sequence={sequence}")
+        key = (thread, sequence)
+        if key in seen:
+            raise AssertionError(f"duplicate CAPTURE identity {key}")
+        seen.add(key)
 
 
 def rewrite_exit_ctx_word_count(text: str, slot: int, word_count: int) -> str:
@@ -240,4 +277,9 @@ def build_forty_nine_one_mismatch_session() -> Path:
 
 
 def capture_paths(root: Path) -> list[Path]:
-    return sorted((root / "captures").glob("*.capture"))
+    paths = list((root / "captures").glob("*.capture"))
+
+    def thread_index(path: Path) -> int:
+        return int(path.stem.rsplit(".", 1)[-1])
+
+    return sorted(paths, key=thread_index)

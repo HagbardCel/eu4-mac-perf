@@ -75,6 +75,55 @@ def assert_rejects_false_certification(cert: Mapping[str, Any]) -> None:
             f"{cert['promotion'].get('reasons')}")
 
 
+def _diversity_floor_met(cert: Mapping[str, Any], min_distinct_behaviors: int) -> bool:
+    return int(cert["coverage"]["distinct_behaviors"]) >= min_distinct_behaviors
+
+
+def assert_promotion_certified(
+        cert: Mapping[str, Any], *, min_distinct_behaviors: int) -> None:
+    assert_certificate_shape(cert)
+    assert_promotion(cert, "certified")
+    assert_evaluation_counts(cert, match=50, mismatch=0)
+    coverage = cert["coverage"]
+    if coverage.get("missing_required"):
+        raise AssertionError(
+            f"certified promotion requires no missing required cells: "
+            f"{coverage['missing_required']}")
+    if not _diversity_floor_met(cert, min_distinct_behaviors):
+        raise AssertionError(
+            "certified promotion requires distinct_behaviors >= "
+            f"{min_distinct_behaviors}, got {coverage['distinct_behaviors']}")
+
+
+def assert_promotion_scoped_for_diversity(
+        cert: Mapping[str, Any], *, min_distinct_behaviors: int) -> None:
+    assert_certificate_shape(cert)
+    assert_promotion(cert, "scoped")
+    assert_evaluation_counts(cert, match=50, mismatch=0)
+    coverage = cert["coverage"]
+    if coverage.get("missing_required"):
+        raise AssertionError(
+            "scoped diversity test requires required cells satisfied, got "
+            f"missing {coverage['missing_required']}")
+    if _diversity_floor_met(cert, min_distinct_behaviors):
+        raise AssertionError(
+            "scoped promotion expected diversity floor not met")
+
+
+def assert_candidate_binding_failure(cert: Mapping[str, Any]) -> None:
+    assert_certificate_shape(cert)
+    if cert["reference_admission"]["session"]["verdict"] == "ineligible":
+        raise AssertionError(
+            "expected candidate binding failure, not session ineligible")
+    assert_promotion(cert, "failed")
+    blob = " ".join(cert["promotion"].get("reasons", [])).lower()
+    blob += " " + str(cert.get("candidate", {})).lower()
+    if not any(token in blob for token in (
+            "executable", "source", "binding", "candidate", "build", "digest", "hash")):
+        raise AssertionError(
+            "promotion failure does not appear to be a candidate identity issue")
+
+
 def assert_evaluation_counts(cert: Mapping[str, Any], *,
                              match: int, mismatch: int,
                              infrastructure_refusal: int = 0,
