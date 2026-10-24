@@ -304,11 +304,20 @@ def compare_replay(record: dict[str, Any], descriptor: dict[str, Any],
     return failures
 
 
-def _setup_error(stdout: str) -> str | None:
-    for line in stdout.splitlines():
-        key, separator, value = line.partition("=")
-        if separator and key == "error" and value in SETUP_ERRORS:
-            return value
+def _setup_error(recon: dict[str, str]) -> str | None:
+    """Recognise the harness's closed setup refusal, not candidate mimicry.
+
+    The harness prints exactly one ``error=...`` line and exits 2 before invoking the
+    candidate. Anything else on stdout/stderr, or any other status, is candidate output.
+    """
+    if recon.get("returncode") != "2" or recon.get("stderr", "").strip():
+        return None
+    lines = recon.get("stdout", "").splitlines()
+    if len(lines) != 1:
+        return None
+    key, separator, value = lines[0].partition("=")
+    if separator and key == "error" and value in SETUP_ERRORS:
+        return value
     return None
 
 
@@ -363,9 +372,12 @@ def replay_capture(text: str, harness: str | Path,
     except OSError as error:
         return _result(descriptor, "refused", **common,
                        failures=[f"infrastructure:harness-unavailable: {error}"])
+    except UnicodeError as error:
+        return _result(descriptor, "mismatch", **common,
+                       failures=[f"candidate:malformed-output: {error}"])
 
     if recon["returncode"] != "0":
-        setup = _setup_error(recon.get("stdout", ""))
+        setup = _setup_error(recon)
         if setup is not None:
             return _result(descriptor, "refused", **common,
                            failures=[f"infrastructure:{setup}"])
@@ -398,7 +410,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         text = Path(arguments[0]).read_text(encoding="utf-8")
-    except OSError as error:
+    except (OSError, UnicodeError) as error:
         print(f"error={error}", file=sys.stderr)
         return 2
     result = replay_capture(text, arguments[1])

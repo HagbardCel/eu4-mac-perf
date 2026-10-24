@@ -7,6 +7,8 @@ failure, the strict harness protocol, and candidate-side preservation.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import shutil
 import subprocess
 import tempfile
@@ -217,6 +219,18 @@ class ReferenceRefusalTests(NeedsHarness):
                             for failure in result["failures"]), result["failures"])
 
 
+class CliTests(unittest.TestCase):
+    def test_an_invalid_utf8_transcript_is_a_cli_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            capture = Path(tmp) / "capture"
+            capture.write_bytes(b"\xff")
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = replay.main([str(capture), "unused"])
+        self.assertEqual(code, 2)
+        self.assertIn("error=", stderr.getvalue())
+
+
 class CandidateFailureTests(NeedsHarness):
     def test_invalid_hex_is_malformed(self) -> None:
         stdout, record, prestate, slot, selector, ctx_base = _candidate_report()
@@ -290,6 +304,44 @@ class CandidateFailureTests(NeedsHarness):
         self.assertEqual(result["verdict"], "mismatch")
         self.assertTrue(any("candidate:malformed-output" in failure
                             for failure in result["failures"]), result["failures"])
+
+    @unittest.skipUnless(Path("/bin/sh").exists(), "/bin/sh is not present")
+    def test_invalid_utf8_candidate_output_is_a_mismatch(self) -> None:
+        for redirect in ("", " >&2"):
+            with self.subTest(stream="stderr" if redirect else "stdout"):
+                with tempfile.TemporaryDirectory() as tmp:
+                    probe = Path(tmp) / "invalid-utf8"
+                    probe.write_text("#!/bin/sh\nprintf '\\377'" + redirect + "\n")
+                    probe.chmod(0o755)
+                    result = replay.replay_capture(_golden(), probe)
+                self.assertEqual(result["verdict"], "mismatch")
+                self.assertIs(result["synthetic"], True)
+                self.assertTrue(any("candidate:malformed-output" in failure
+                                    for failure in result["failures"]),
+                                result["failures"])
+
+    @unittest.skipUnless(Path("/bin/sh").exists(), "/bin/sh is not present")
+    def test_a_setup_looking_line_on_a_malformed_exit_is_a_mismatch(self) -> None:
+        cases = (
+            ("unexpected status", "printf 'error=usage\\n'\nexit 1\n"),
+            ("extra stdout", "printf 'error=usage\\ncandidate:failed\\n'\nexit 2\n"),
+            ("stderr diagnostic",
+             "printf 'error=usage\\n'\nprintf 'candidate:failed\\n' >&2\nexit 2\n"),
+        )
+        for name, body in cases:
+            with self.subTest(case=name):
+                with tempfile.TemporaryDirectory() as tmp:
+                    probe = Path(tmp) / "fake-setup"
+                    probe.write_text("#!/bin/sh\n" + body)
+                    probe.chmod(0o755)
+                    result = replay.replay_capture(_golden(), probe)
+                self.assertEqual(result["verdict"], "mismatch")
+                self.assertTrue(any("candidate:nonzero-exit" in failure
+                                    for failure in result["failures"]),
+                                result["failures"])
+                self.assertFalse(any("infrastructure:usage" in failure
+                                     for failure in result["failures"]),
+                                 result["failures"])
 
     @unittest.skipUnless(Path("/bin/sh").exists(), "/bin/sh is not present")
     def test_nonzero_exit_is_a_candidate_mismatch(self) -> None:
