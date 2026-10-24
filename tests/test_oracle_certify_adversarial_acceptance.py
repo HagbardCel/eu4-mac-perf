@@ -8,6 +8,10 @@ from pathlib import Path
 
 from oracle.function import replay
 
+from tests.oracle_certify_acceptance.acceptance_candidate import (
+    prepare_acceptance_candidate,
+    re1_canonical_source_sha256,
+)
 from tests.oracle_certify_acceptance.contract import (
     assert_build_binding_honest,
     assert_evidence_not_live_grounded,
@@ -36,11 +40,37 @@ from tests.oracle_certify_acceptance.integration import (
     call_certify,
     tree_sha256,
 )
+from tests.oracle_certify_acceptance.re1_harness import (
+    oracle_certify_present,
+    require_re1_harness_for_integration,
+    require_re1_harness_for_preflight,
+)
 
-try:
-    from tests.test_function_replay import HARNESS
-except ImportError:
-    HARNESS = None
+
+def _tally_replay(root: Path, harness: Path) -> tuple[int, int, int]:
+    matches = mismatches = refused = 0
+    for path in capture_paths(root):
+        result = replay.replay_capture(path.read_text(encoding="utf-8"), harness)
+        verdict = result["verdict"]
+        if verdict == "match":
+            matches += 1
+        elif verdict == "mismatch":
+            mismatches += 1
+        elif verdict == "refused":
+            refused += 1
+        else:
+            raise AssertionError(f"unexpected replay verdict: {verdict}")
+    return matches, mismatches, refused
+
+
+def _assert_forty_nine_one_preflight(root: Path, harness: Path) -> None:
+    matches, mismatches, refused = _tally_replay(root, harness)
+    if refused:
+        raise AssertionError(f"preflight saw {refused} refused replays")
+    if matches != 49 or mismatches != 1:
+        raise AssertionError(
+            f"preflight expected 49 match and 1 mismatch, got "
+            f"{matches} match and {mismatches} mismatch")
 
 
 class NegativeControlTests(unittest.TestCase):
@@ -54,7 +84,8 @@ class NegativeControlTests(unittest.TestCase):
             path = Path(tmp.name)
             path.write_bytes(b"not-the-declared-executable")
             with self.assertRaises(AssertionError):
-                assert_build_binding_honest(cert, path)
+                assert_build_binding_honest(
+                    cert, path, expected_source_sha256=re1_canonical_source_sha256())
 
 
 class ExplicitSyntheticEvidenceTests(unittest.TestCase):
@@ -67,18 +98,10 @@ class ExplicitSyntheticEvidenceTests(unittest.TestCase):
 
 
 class FortyNineOnePreflightTests(unittest.TestCase):
-    @unittest.skipIf(HARNESS is None, "RE1 harness not built")
     def test_replay_capture_sees_one_mismatch_among_fifty(self):
+        harness = require_re1_harness_for_preflight()
         root = build_forty_nine_one_mismatch_session()
-        matches = mismatches = 0
-        for path in capture_paths(root):
-            result = replay.replay_capture(path.read_text(encoding="utf-8"), HARNESS)
-            if result["verdict"] == "match":
-                matches += 1
-            elif result["verdict"] == "mismatch":
-                mismatches += 1
-        self.assertEqual(matches, 49)
-        self.assertEqual(mismatches, 1)
+        _assert_forty_nine_one_preflight(root, harness)
 
 
 class MockSessionFixtureTests(unittest.TestCase):
@@ -115,68 +138,66 @@ class CertifySessionImplementationTests(unittest.TestCase):
             raise AssertionError(f"oracle.certify broken: {detail}")
         cls.certify_session = load_certify_session()
         assert cls.certify_session is not None
+        if oracle_certify_present():
+            cls.harness = require_re1_harness_for_integration()
+        else:
+            cls.harness = None
+
+    def _candidate(self, tmp: Path) -> dict:
+        return prepare_acceptance_candidate(tmp / "candidate")
 
     def test_case_a_missing_capture_fails_session_admission(self):
-        root = build_mock_live_session()
-        before = tree_sha256(root)
-        case_a_delete_one_capture(root)
-        cert = call_certify(self.certify_session, root, _placeholder_candidate())
-        assert_session_immutable(before, tree_sha256(root))
-        self.assertEqual(cert["reference_admission"]["session"]["verdict"],
-                         "ineligible")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_mock_live_session()
+            case_a_delete_one_capture(root)
+            before = tree_sha256(root)
+            cert = call_certify(
+                self.certify_session, root, self._candidate(Path(tmp)))
+            assert_session_immutable(before, tree_sha256(root))
+            self.assertEqual(cert["reference_admission"]["session"]["verdict"],
+                             "ineligible")
 
     def test_case_b_descriptor_pin_mismatch_fails_admission(self):
-        root = build_mock_live_session()
-        case_b_descriptor_pin_mismatch(root)
-        cert = call_certify(self.certify_session, root, _placeholder_candidate())
-        self.assertEqual(cert["reference_admission"]["session"]["verdict"],
-                         "ineligible")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_mock_live_session()
+            case_b_descriptor_pin_mismatch(root)
+            cert = call_certify(
+                self.certify_session, root, self._candidate(Path(tmp)))
+            self.assertEqual(cert["reference_admission"]["session"]["verdict"],
+                             "ineligible")
 
     def test_case_b_pid_disagreement_fails_admission(self):
-        root = build_mock_live_session()
-        case_b_pid_disagreement(root)
-        cert = call_certify(self.certify_session, root, _placeholder_candidate())
-        self.assertEqual(cert["reference_admission"]["session"]["verdict"],
-                         "ineligible")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_mock_live_session()
+            case_b_pid_disagreement(root)
+            cert = call_certify(
+                self.certify_session, root, self._candidate(Path(tmp)))
+            self.assertEqual(cert["reference_admission"]["session"]["verdict"],
+                             "ineligible")
 
     def test_explicitly_synthetic_session_is_not_certified(self):
-        root = build_mock_live_session(synthetic_flag=1)
-        cert = call_certify(self.certify_session, root, _placeholder_candidate())
-        assert_promotion(cert, "failed")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_mock_live_session(synthetic_flag=1)
+            cert = call_certify(
+                self.certify_session, root, self._candidate(Path(tmp)))
+            assert_promotion(cert, "failed")
 
-    @unittest.skipIf(HARNESS is None, "RE1 harness not built")
     def test_forty_nine_one_mismatch_preflight_and_certify_failed(self):
+        harness = require_re1_harness_for_integration()
         root = build_forty_nine_one_mismatch_session()
-        matches = mismatches = 0
-        for path in capture_paths(root):
-            result = replay.replay_capture(path.read_text(encoding="utf-8"), HARNESS)
-            if result["verdict"] == "match":
-                matches += 1
-            elif result["verdict"] == "mismatch":
-                mismatches += 1
-        self.assertEqual(matches, 49)
-        self.assertEqual(mismatches, 1)
-        cert = call_certify(self.certify_session, root, _placeholder_candidate())
-        assert_promotion(cert, "failed")
-        assert_evaluation_counts(cert, match=49, mismatch=1)
+        _assert_forty_nine_one_preflight(root, harness)
+        with tempfile.TemporaryDirectory() as tmp:
+            cert = call_certify(
+                self.certify_session, root, self._candidate(Path(tmp)))
+            assert_promotion(cert, "failed")
+            assert_evaluation_counts(cert, match=49, mismatch=1)
 
     def test_sealed_evidence_bytes_unchanged(self):
-        root = build_mock_live_session()
-        before = tree_sha256(root)
-        call_certify(self.certify_session, root, _placeholder_candidate())
-        assert_session_immutable(before, tree_sha256(root))
-
-
-def _placeholder_candidate() -> dict:
-    """Minimal candidate mapping; E1 must validate and establish binding."""
-    return {
-        "source_sha256": "0" * 64,
-        "executable_sha256": "0" * 64,
-        "build_identity": "acceptance-placeholder",
-        "build_flags": [],
-        "executed_matches_build": False,
-        "harness_path": str(HARNESS or ""),
-    }
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_mock_live_session()
+            before = tree_sha256(root)
+            call_certify(self.certify_session, root, self._candidate(Path(tmp)))
+            assert_session_immutable(before, tree_sha256(root))
 
 
 if __name__ == "__main__":
