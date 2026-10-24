@@ -22,7 +22,9 @@ implemented. The remaining gate is **split by acquisition scope** (2026-10-18): 
 **function gate** (function-oriented **P4.10**) authorizes **P5a** — the first
 real-function acquisition — and the **frame gate** (**P4.11**, or a qualified
 alternative) authorizes **P5b**. The workstream is **function-first**; P4.11 does not
-block P5a. This
+block P5a. The post-D work is organized as parallel offline packages **E1**, **F1**,
+**G1** and **G3a** (with **E2** audit preparation), while **F2**, **G2**, **G3b**,
+**G4** and **H1** remain gated; see [PLAN_OF_RECORD.md](PLAN_OF_RECORD.md). This
 directory is authoritative for **capture/validation infrastructure** only; the
 function-level reconstruction lifecycle stays in the reconstruction contract
 [`../renderer-reconstruction-and-differential-validation.md`](../renderer-reconstruction-and-differential-validation.md)
@@ -61,6 +63,7 @@ The blueprint that this program refines is preserved verbatim at
 | --- | --- | --- |
 | Overall strategy | [`../eu4_recommended_strategy.md`](../eu4_recommended_strategy.md) | Mission and priorities |
 | Function lifecycle | [`../renderer-reconstruction-and-differential-validation.md`](../renderer-reconstruction-and-differential-validation.md) (merged, PR #44) | RE0–RE3 per-function reconstruction and oracle-strength comparison modes; RE3 optional |
+| Tier 1 certification | [`P4_INTEGRATION.md`](P4_INTEGRATION.md) | Sealed-session admission, certification result axes, coverage and promotion boundary |
 | Capture/validation infrastructure | this directory (`docs/oracle/`) | Recorder, deduplication, fixtures, comparator, service, epochs |
 
 Oracle infrastructure produces fixtures and a comparator that **RE2** consumes; RE0–RE3

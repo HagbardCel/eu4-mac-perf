@@ -54,6 +54,21 @@ It is not a security guarantee against arbitrary malicious process access;
 OS-level sandboxing is deferred to a later phase (see the preserved blueprint's
 PR-F).
 
+### G3a: function-agent adapter seam (proposed, 2026-10-24)
+
+G3a reuses the controller's primitives — budget accounting, process supervision,
+workspace isolation, receipts and the pinned OpenCode binding — by import. It must
+not modify the certified P3 implementation. Its first conformance target is the
+existing `synth:apply` package, which proves the adapter seam but does not establish
+support for an arbitrary reconstructed C++ function.
+
+`oracle/slice/workspace.py` is specialized to `candidate.c` and `synth.h`; importing
+it for synthetic conformance is appropriate, but G3a must not claim it is a general
+C++ function workspace. That adaptation belongs to G3b and is driven by its actual
+package requirements. The five-tool surface, controller-only certification,
+held-out restrictions and receipt chain are unchanged. Do not build a generic agent
+SDK.
+
 ## The synthetic target
 
 `oracle/slice/{target.c,reference.c}` implement one portable C11 function with

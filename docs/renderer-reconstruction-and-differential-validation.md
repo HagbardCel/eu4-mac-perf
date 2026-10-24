@@ -56,6 +56,29 @@ RE0–RE2 are **offline and function-scoped**: they require no frame replay, no 
 
 **Artifacts:** `analysis/reconstruction/<function>/contract.md`, source-address inventory, object-layout table, dependency map, and (for the pilot function) the offline execution pilot's frozen scenarios, receipts and runner under `analysis/reconstruction/<function>/pilot/`. Prefer adding these after the pilot target is selected.
 
+### Function package (G1 deliverable boundary)
+
+A **function package** is the documented hand-off from RE0/RE2 to the agent and
+replay adapters. Its boundary is named by G1; it is not a generic schema for
+unknown future functions. A package records:
+
+- the pinned function identity and binary/build pins;
+- the RE0 contract, object layout and dependency map;
+- the fixture plan and the declared evidence tier;
+- the harness and per-function replay-adapter plan;
+- the package's explicit limits and unobserved cases.
+
+G1 freezes this boundary; G2 fills the reconstruction and replay adapter, and G3b
+consumes it. A second function may add its own small closure branch and replay
+adapter rather than generalizing A2 or PR C. `oracle.function.replay` is
+single-function (`_GfxSetConstantBuffer`) and returns `refused: unsupported-function`
+for any other target until that adapter exists.
+
+**The RE0→RE1 gate applies to every function, including the second.** A function
+that cannot establish a callable boundary, a finite recoverable input/side-effect
+surface, a credible independent-reference strategy, or unresolved
+ownership/context safety does not proceed to RE1.
+
 ## RE1 — Faithful, unoptimized source reconstruction
 
 - Write readable C++ with explicit low-level adapter boundaries and isolated GL calls.
