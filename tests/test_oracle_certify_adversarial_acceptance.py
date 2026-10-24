@@ -14,15 +14,19 @@ from tests.oracle_certify_acceptance.acceptance_candidate import (
 )
 from tests.oracle_certify_acceptance.contract import (
     assert_build_binding_honest,
+    assert_candidate_binding_failure,
     assert_evidence_not_live_grounded,
     assert_evaluation_counts,
     assert_promotion,
+    assert_promotion_certified,
+    assert_promotion_scoped_for_diversity,
     assert_rejects_false_certification,
     false_certifier_stand_in,
     forged_executable_binding_stand_in,
 )
 from tests.oracle_certify_acceptance.fixtures import (
     ACCEPTANCE,
+    assert_mock_session_capture_identities,
     build_forty_nine_one_mismatch_session,
     build_mock_live_session,
     case_a_delete_one_capture,
@@ -36,9 +40,12 @@ from tests.oracle_certify_acceptance.import_gate import (
     load_certify_session,
 )
 from tests.oracle_certify_acceptance.integration import (
+    MOCK_CERTIFIED_DIVERSITY_FLOOR,
+    MOCK_SCOPED_DIVERSITY_FLOOR,
     assert_session_immutable,
     call_certify,
     tree_sha256,
+    write_test_policy,
 )
 from tests.oracle_certify_acceptance.re1_harness import (
     oracle_certify_present,
@@ -61,6 +68,15 @@ def _tally_replay(root: Path, harness: Path) -> tuple[int, int, int]:
         else:
             raise AssertionError(f"unexpected replay verdict: {verdict}")
     return matches, mismatches, refused
+
+
+def _assert_fifty_match_preflight(root: Path, harness: Path) -> None:
+    matches, mismatches, refused = _tally_replay(root, harness)
+    if refused:
+        raise AssertionError(f"preflight saw {refused} refused replays")
+    if matches != 50 or mismatches != 0:
+        raise AssertionError(
+            f"preflight expected 50 match, got {matches} match and {mismatches} mismatch")
 
 
 def _assert_forty_nine_one_preflight(root: Path, harness: Path) -> None:
@@ -110,6 +126,7 @@ class MockSessionFixtureTests(unittest.TestCase):
         self.assertTrue((root / "manifest.json").is_file())
         self.assertEqual(len(capture_paths(root)), ACCEPTANCE)
         verify_manifest_matches_files(root)
+        assert_mock_session_capture_identities(root)
 
     def test_case_a_tamper_breaks_manifest_consistency(self):
         root = build_mock_live_session()
@@ -198,6 +215,53 @@ class CertifySessionImplementationTests(unittest.TestCase):
             before = tree_sha256(root)
             call_certify(self.certify_session, root, self._candidate(Path(tmp)))
             assert_session_immutable(before, tree_sha256(root))
+
+    def test_fifty_matching_observations_certified(self):
+        harness = require_re1_harness_for_integration()
+        root = build_mock_live_session()
+        _assert_fifty_match_preflight(root, harness)
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            policy = write_test_policy(
+                work / "policy.json",
+                min_distinct_behaviors=MOCK_CERTIFIED_DIVERSITY_FLOOR,
+            )
+            cert = call_certify(
+                self.certify_session,
+                root,
+                self._candidate(work),
+                policy_path=policy,
+            )
+            assert_promotion_certified(
+                cert, min_distinct_behaviors=MOCK_CERTIFIED_DIVERSITY_FLOOR)
+
+    def test_diversity_floor_not_met_yields_scoped(self):
+        harness = require_re1_harness_for_integration()
+        root = build_mock_live_session()
+        _assert_fifty_match_preflight(root, harness)
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            policy = write_test_policy(
+                work / "policy.json",
+                min_distinct_behaviors=MOCK_SCOPED_DIVERSITY_FLOOR,
+            )
+            cert = call_certify(
+                self.certify_session,
+                root,
+                self._candidate(work),
+                policy_path=policy,
+            )
+            assert_promotion_scoped_for_diversity(
+                cert, min_distinct_behaviors=MOCK_SCOPED_DIVERSITY_FLOOR)
+
+    def test_forged_executable_identity_fails_certification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            root = build_mock_live_session()
+            candidate = self._candidate(work)
+            candidate["executable_sha256"] = "f" * 64
+            cert = call_certify(self.certify_session, root, candidate)
+            assert_candidate_binding_failure(cert)
 
 
 if __name__ == "__main__":

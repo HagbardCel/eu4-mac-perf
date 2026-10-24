@@ -29,6 +29,12 @@ def assert_session_immutable(before: dict[str, str], after: dict[str, str]) -> N
         raise AssertionError("certify_session modified sealed evidence bytes")
 
 
+# Mock fixtures alternate s03 (nonzero buffer) and s10 (absent buffer): two behaviors.
+MOCK_OBSERVED_DISTINCT_BEHAVIORS = 2
+MOCK_CERTIFIED_DIVERSITY_FLOOR = 2
+MOCK_SCOPED_DIVERSITY_FLOOR = 3
+
+
 def write_test_policy(path: Path, *, min_distinct_behaviors: int = 2) -> Path:
     descriptor = fixture.load_descriptor()
     policy = {
@@ -39,12 +45,15 @@ def write_test_policy(path: Path, *, min_distinct_behaviors: int = 2) -> Path:
         "scope": {
             "slots": [2, 3],
             "selectors": ["fixed-length", "length-from-buffer"],
-            "input_classes": ["absent", "nonzero", "zero"],
+            "input_classes": ["absent", "nonzero"],
         },
         "required_cells": [
             "slot:2",
+            "slot:3",
             "selector:length-from-buffer",
+            "selector:fixed-length",
             "input:nonzero",
+            "input:absent",
         ],
         "optional_cells": [],
         "diversity": {"min_distinct_behaviors": min_distinct_behaviors},
