@@ -253,6 +253,9 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
         installer = (BENCH / "eu4_gfx_capture_detour.c").read_text()
         gateway = (BENCH / "eu4_gfx_capture_gateway.S").read_text()
         adapter = (BENCH / "eu4_gfx_set_constant_buffer_capture.c").read_text()
+        adapter_header = (
+            BENCH / "eu4_gfx_set_constant_buffer_capture.h"
+        ).read_text()
         descriptor = fixture.load_descriptor()
         self.assertIn("0xe9", installer)
         self.assertIn("memset(patch + 5, 0x90, 8)", installer)
@@ -262,10 +265,10 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
         self.assertIn("callq _eu4_gfx_set_constant_buffer_capture_entry", gateway)
         self.assertIn("callq _eu4_gfx_set_constant_buffer_capture_exit", gateway)
         self.assertIn("callq *_eu4_gfx_capture_trampoline_ptr(%rip)", gateway)
-        self.assertIn("OBSERVATION_LENGTH 97u", adapter)
-        self.assertIn("CANARY_AFTER_START 297u", adapter)
-        self.assertIn("synthetic=1", adapter)
-        self.assertNotIn("synthetic=0", adapter)
+        self.assertIn("OBSERVATION_LENGTH 97u", adapter_header)
+        self.assertIn("CANARY_AFTER_START 297u", adapter_header)
+        self.assertIn("metadata->synthetic ? 1 : 0", adapter)
+        self.assertIn('"prb-offline"', adapter)
         self.assertIn("EU4_GFX_CAPTURE_PATH", adapter)
         self.assertIn("eu4_gfx_set_constant_buffer_capture_thread_init",
                       adapter)
@@ -277,7 +280,7 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
         for forbidden in ("fopen", "fprintf", "getenv", "write_capture",
                           "atomic_fetch_add"):
             self.assertNotIn(forbidden, callbacks)
-        self.assertIn("if (!thread_ready)", callbacks)
+        self.assertIn("if (!tls_thread_ready)", callbacks)
         self.assertIn(descriptor["binary"]["sha256"], adapter)
         self.assertIn(fixture.capture_policy_digest(descriptor), adapter)
 

@@ -1,24 +1,27 @@
 #include "eu4_gfx_set_constant_buffer_capture.h"
 
 #include <assert.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define HANDLE_LENGTH 8u
-#define OBSERVATION_START 200u
-#define OBSERVATION_LENGTH 97u
-#define CANARY_BEFORE_START 184u
-#define CANARY_AFTER_START 297u
-#define CANARY_LENGTH 16u
-#define BUFFER_LENGTH 4u
-
-_Static_assert(CANARY_BEFORE_START + CANARY_LENGTH == OBSERVATION_START,
+_Static_assert(EU4_GFX_CAPTURE_CANARY_BEFORE_START +
+                       EU4_GFX_CAPTURE_CANARY_LENGTH ==
+                   EU4_GFX_CAPTURE_OBSERVATION_START,
                "context observation layout");
-_Static_assert(OBSERVATION_START + OBSERVATION_LENGTH == CANARY_AFTER_START,
+_Static_assert(EU4_GFX_CAPTURE_OBSERVATION_START +
+                       EU4_GFX_CAPTURE_OBSERVATION_LENGTH ==
+                   EU4_GFX_CAPTURE_CANARY_AFTER_START,
                "context observation layout");
+_Static_assert(EU4_GFX_CAPTURE_EXTENT_START +
+                       EU4_GFX_CAPTURE_EXTENT_LENGTH ==
+                   EU4_GFX_CAPTURE_CANARY_AFTER_START +
+                       EU4_GFX_CAPTURE_CANARY_LENGTH,
+               "context extent layout");
 
 static const uint8_t capture_site[EU4_GFX_CAPTURE_PATCH_SIZE] = {
     0x55, 0x48, 0x89, 0xe5, 0x48, 0x8b, 0x07,
@@ -33,44 +36,62 @@ static const char function_id[] = "gfx:set-constant-buffer";
 static const char fidelity[] = "faithful";
 static const char policy_version[] = "p4-fid-v1";
 
-enum {
-    SLOT_IDLE = 0,
-    SLOT_ACTIVE,
-    SLOT_COMPLETE,
+static const eu4_gfx_capture_metadata prb_metadata = {
+    "prb-offline",
+    "s03:length-from-buffer",
+    "s10:explicit-length",
+    "prb-offline",
+    "unavailable",
+    true,
 };
 
-typedef struct {
-    int state;
-    unsigned depth;
-    unsigned capture_depth;
-    unsigned refusals;
-    unsigned thread;
-    unsigned long sequence;
-    uint64_t rdi;
-    uint64_t rsi;
-    uint64_t rcx;
-    uint64_t r9;
-    uintptr_t handle_address;
-    uint8_t handle[HANDLE_LENGTH];
-    uintptr_t ctx_address;
-    uint8_t ctx[OBSERVATION_LENGTH];
-    uint8_t canary_before[CANARY_LENGTH];
-    uint8_t canary_after[CANARY_LENGTH];
-    int buffer_path;
-    uintptr_t buffer_address;
-    uint8_t buffer[BUFFER_LENGTH];
-    uint8_t post_handle[HANDLE_LENGTH];
-    uint8_t post_ctx[OBSERVATION_LENGTH];
-    uint8_t post_canary_before[CANARY_LENGTH];
-    uint8_t post_canary_after[CANARY_LENGTH];
-    uint8_t post_buffer[BUFFER_LENGTH];
-    uint64_t outcome;
-} capture_slot;
-
-static _Thread_local capture_slot slot;
-static _Thread_local unsigned thread_number;
-static _Thread_local int thread_ready;
+static _Thread_local eu4_gfx_capture_record tls_record;
+static _Thread_local unsigned tls_thread_number;
+static _Thread_local int tls_thread_ready;
 static _Atomic unsigned next_thread_number = 0;
+static const eu4_gfx_capture_live_ops *live;
+
+static bool read_bytes(void *destination, const void *source, size_t length) {
+    if (destination == NULL || source == NULL || length == 0) {
+        return false;
+    }
+    uintptr_t address = (uintptr_t)source;
+    if (address > UINTPTR_MAX - (length - 1)) {
+        return false;
+    }
+    if (live == NULL || !live->safe_read) {
+        memcpy(destination, source, length);
+        return true;
+    }
+    mach_vm_size_t got = 0;
+    kern_return_t result = mach_vm_read_overwrite(
+        mach_task_self(), (mach_vm_address_t)address, (mach_vm_size_t)length,
+        (mach_vm_address_t)(uintptr_t)destination, &got);
+    return result == KERN_SUCCESS && got == length;
+}
+
+static void refuse_capture(eu4_gfx_capture_record *record,
+                           eu4_gfx_capture_refusal reason) {
+    if (record != NULL) {
+        record->refusals++;
+    }
+    if (live != NULL && live->refuse != NULL) {
+        live->refuse(reason);
+    }
+}
+
+static void incomplete_capture(unsigned ticket) {
+    if (live != NULL && live->incomplete != NULL) {
+        live->incomplete(ticket);
+    }
+}
+
+static void fail_capture(eu4_gfx_capture_record *record, unsigned ticket) {
+    incomplete_capture(ticket);
+    if (record != NULL) {
+        record->refusals++;
+    }
+}
 
 static void emit_region(FILE *file, const char *tag, const char *name,
                         uintptr_t address, const uint8_t *bytes,
@@ -90,13 +111,75 @@ static void emit_carrier(FILE *file, const char *name, uint64_t value) {
             name, (unsigned long long)value);
 }
 
+bool eu4_gfx_set_constant_buffer_capture_write(
+    FILE *file, const eu4_gfx_capture_record *record,
+    const eu4_gfx_capture_metadata *metadata) {
+    if (file == NULL || record == NULL || metadata == NULL) {
+        return false;
+    }
+
+    fprintf(file, "FUNCTION-CAPTURE v1\n");
+    fprintf(file,
+            "CAPTURE capture=%s scenario=%s epoch=%s thread=%u sequence=%lu "
+            "function=%s callsite=%s module=%s policy=%s fidelity=%s "
+            "policy_version=%s synthetic=%d\n",
+            metadata->capture,
+            record->buffer_path ? metadata->scenario_buffer
+                                : metadata->scenario_explicit,
+            metadata->epoch, record->thread, record->sequence, function_id,
+            metadata->callsite, module_sha, policy_sha, fidelity,
+            policy_version, metadata->synthetic ? 1 : 0);
+
+    emit_region(file, "ENTRY", "handle", record->handle_address, record->handle,
+                EU4_GFX_CAPTURE_HANDLE_LENGTH);
+    emit_region(file, "ENTRY", "ctx",
+                record->ctx_address + EU4_GFX_CAPTURE_OBSERVATION_START,
+                record->ctx, EU4_GFX_CAPTURE_OBSERVATION_LENGTH);
+    emit_region(file, "ENTRY", "canary-before",
+                record->ctx_address + EU4_GFX_CAPTURE_CANARY_BEFORE_START,
+                record->canary_before, EU4_GFX_CAPTURE_CANARY_LENGTH);
+    emit_region(file, "ENTRY", "canary-after",
+                record->ctx_address + EU4_GFX_CAPTURE_CANARY_AFTER_START,
+                record->canary_after, EU4_GFX_CAPTURE_CANARY_LENGTH);
+    if (record->buffer_path) {
+        emit_region(file, "ENTRY", "buffer", record->buffer_address,
+                    record->buffer, EU4_GFX_CAPTURE_BUFFER_LENGTH);
+    }
+
+    emit_region(file, "EXIT", "handle", record->handle_address,
+                record->post_handle, EU4_GFX_CAPTURE_HANDLE_LENGTH);
+    emit_region(file, "EXIT", "ctx",
+                record->ctx_address + EU4_GFX_CAPTURE_OBSERVATION_START,
+                record->post_ctx, EU4_GFX_CAPTURE_OBSERVATION_LENGTH);
+    emit_region(file, "EXIT", "canary-before",
+                record->ctx_address + EU4_GFX_CAPTURE_CANARY_BEFORE_START,
+                record->post_canary_before, EU4_GFX_CAPTURE_CANARY_LENGTH);
+    emit_region(file, "EXIT", "canary-after",
+                record->ctx_address + EU4_GFX_CAPTURE_CANARY_AFTER_START,
+                record->post_canary_after, EU4_GFX_CAPTURE_CANARY_LENGTH);
+    if (record->buffer_path) {
+        emit_region(file, "EXIT", "buffer", record->buffer_address,
+                    record->post_buffer, EU4_GFX_CAPTURE_BUFFER_LENGTH);
+    }
+
+    emit_carrier(file, "RDI", record->rdi);
+    emit_carrier(file, "RSI", record->rsi);
+    emit_carrier(file, "RCX", record->rcx);
+    emit_carrier(file, "R9", record->r9);
+    fprintf(file, "OUTCOME register=RAX value=0x%llx confidence=observed\n",
+            (unsigned long long)record->outcome);
+    fprintf(file, "END regions=%u carriers=4 outcomes=1 losses=0\n",
+            record->buffer_path ? 10u : 8u);
+    return ferror(file) == 0;
+}
+
 static bool write_capture(void) {
     const char *base = getenv("EU4_GFX_CAPTURE_PATH");
     if (base == NULL || base[0] == '\0') {
         return false;
     }
     char path[1024];
-    int written = snprintf(path, sizeof(path), "%s.%u", base, slot.thread);
+    int written = snprintf(path, sizeof(path), "%s.%u", base, tls_record.thread);
     if (written < 0 || (size_t)written >= sizeof(path)) {
         return false;
     }
@@ -104,169 +187,248 @@ static bool write_capture(void) {
     if (file == NULL) {
         return false;
     }
-
-    fprintf(file, "FUNCTION-CAPTURE v1\n");
-    fprintf(file,
-            "CAPTURE capture=prb-offline scenario=%s epoch=prb-offline "
-            "thread=%u sequence=%lu function=%s callsite=unavailable "
-            "module=%s policy=%s fidelity=%s policy_version=%s synthetic=1\n",
-            slot.buffer_path ? "s03:length-from-buffer"
-                             : "s10:explicit-length",
-            slot.thread, slot.sequence, function_id, module_sha, policy_sha,
-            fidelity, policy_version);
-
-    emit_region(file, "ENTRY", "handle", slot.handle_address, slot.handle,
-                HANDLE_LENGTH);
-    emit_region(file, "ENTRY", "ctx", slot.ctx_address + OBSERVATION_START,
-                slot.ctx, OBSERVATION_LENGTH);
-    emit_region(file, "ENTRY", "canary-before",
-                slot.ctx_address + CANARY_BEFORE_START, slot.canary_before,
-                CANARY_LENGTH);
-    emit_region(file, "ENTRY", "canary-after",
-                slot.ctx_address + CANARY_AFTER_START, slot.canary_after,
-                CANARY_LENGTH);
-    if (slot.buffer_path) {
-        emit_region(file, "ENTRY", "buffer", slot.buffer_address, slot.buffer,
-                    BUFFER_LENGTH);
-    }
-
-    emit_region(file, "EXIT", "handle", slot.handle_address, slot.post_handle,
-                HANDLE_LENGTH);
-    emit_region(file, "EXIT", "ctx", slot.ctx_address + OBSERVATION_START,
-                slot.post_ctx, OBSERVATION_LENGTH);
-    emit_region(file, "EXIT", "canary-before",
-                slot.ctx_address + CANARY_BEFORE_START,
-                slot.post_canary_before, CANARY_LENGTH);
-    emit_region(file, "EXIT", "canary-after",
-                slot.ctx_address + CANARY_AFTER_START, slot.post_canary_after,
-                CANARY_LENGTH);
-    if (slot.buffer_path) {
-        emit_region(file, "EXIT", "buffer", slot.buffer_address,
-                    slot.post_buffer, BUFFER_LENGTH);
-    }
-
-    emit_carrier(file, "RDI", slot.rdi);
-    emit_carrier(file, "RSI", slot.rsi);
-    emit_carrier(file, "RCX", slot.rcx);
-    emit_carrier(file, "R9", slot.r9);
-    fprintf(file, "OUTCOME register=RAX value=0x%llx confidence=observed\n",
-            (unsigned long long)slot.outcome);
-    fprintf(file, "END regions=%u carriers=4 outcomes=1 losses=0\n",
-            slot.buffer_path ? 10u : 8u);
-    if (ferror(file)) {
-        (void)fclose(file);
-        return false;
-    }
-    return fclose(file) == 0;
+    bool ok = eu4_gfx_set_constant_buffer_capture_write(
+        file, &tls_record, &prb_metadata);
+    int closed = fclose(file);
+    return ok && closed == 0;
 }
 
 void eu4_gfx_set_constant_buffer_capture_thread_init(void) {
-    if (thread_ready) {
+    if (live != NULL && live->thread_claim != NULL) {
+        (void)live->thread_claim();
         return;
     }
-    thread_number = atomic_fetch_add_explicit(
+    if (tls_thread_ready) {
+        return;
+    }
+    tls_thread_number = atomic_fetch_add_explicit(
         &next_thread_number, 1, memory_order_relaxed);
-    thread_ready = 1;
+    tls_thread_ready = 1;
+}
+
+void eu4_gfx_set_constant_buffer_capture_set_live(
+    const eu4_gfx_capture_live_ops *ops) {
+    live = ops;
 }
 
 void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame) {
     assert(frame != NULL);
     assert(((uintptr_t)frame & 15u) == 0);
-    slot.depth++;
-    if (!thread_ready) {
-        slot.refusals++;
-        return;
+
+    eu4_gfx_capture_record *record = NULL;
+    bool guarded = false;
+    if (live != NULL) {
+        if (live->begin == NULL) {
+            return;
+        }
+        if (!live->begin()) {
+            /* Preserve nesting for an outstanding capture after CLOSING. */
+            record = live->thread_lookup != NULL ? live->thread_lookup() : NULL;
+            if (record != NULL) {
+                record->depth++;
+            }
+            return;
+        }
+        guarded = true;
+        record = live->thread_claim != NULL ? live->thread_claim() : NULL;
+        if (record == NULL) {
+            live->end();
+            return;
+        }
+    } else {
+        record = &tls_record;
+        if (!tls_thread_ready) {
+            record->refusals++;
+            return;
+        }
     }
-    if (slot.state != SLOT_IDLE) {
-        slot.refusals++;
-        return;
+    record->depth++;
+
+    if (record->state != EU4_GFX_CAPTURE_SLOT_IDLE) {
+        refuse_capture(record, EU4_GFX_CAPTURE_REFUSE_BUSY);
+        goto done;
+    }
+
+    uint32_t slot = (uint32_t)frame->rcx;
+    if (slot >= EU4_GFX_CAPTURE_SLOT_MAX) {
+        refuse_capture(record, EU4_GFX_CAPTURE_REFUSE_SLOT);
+        goto done;
     }
 
     uintptr_t handle = (uintptr_t)frame->rdi;
     if (handle == 0) {
-        slot.refusals++;
-        return;
+        refuse_capture(record, EU4_GFX_CAPTURE_REFUSE_POINTER);
+        goto done;
     }
-    uint64_t ctx_address = 0;
-    memcpy(&ctx_address, (const void *)handle, sizeof(ctx_address));
+    if (handle > UINTPTR_MAX - EU4_GFX_CAPTURE_HANDLE_LENGTH) {
+        refuse_capture(record, EU4_GFX_CAPTURE_REFUSE_ADDRESS);
+        goto done;
+    }
     int buffer_path = ((uint32_t)frame->r9 == 0xffffffffu);
     uintptr_t buffer_address = (uintptr_t)frame->rsi;
-    if (ctx_address == 0 || (buffer_path && buffer_address == 0)) {
-        slot.refusals++;
-        return;
+    if (buffer_path && buffer_address == 0) {
+        refuse_capture(record, EU4_GFX_CAPTURE_REFUSE_POINTER);
+        goto done;
+    }
+    if (buffer_path &&
+        buffer_address > UINTPTR_MAX - EU4_GFX_CAPTURE_BUFFER_LENGTH) {
+        refuse_capture(record, EU4_GFX_CAPTURE_REFUSE_ADDRESS);
+        goto done;
     }
 
-    slot.state = SLOT_ACTIVE;
-    slot.capture_depth = slot.depth;
-    slot.thread = thread_number;
-    slot.sequence++;
-    slot.rdi = frame->rdi;
-    slot.rsi = frame->rsi;
-    slot.rcx = frame->rcx;
-    slot.r9 = frame->r9;
-    slot.handle_address = handle;
-    slot.ctx_address = (uintptr_t)ctx_address;
-    slot.buffer_path = buffer_path;
-    slot.buffer_address = buffer_address;
-
-    memcpy(slot.handle, (const void *)handle, HANDLE_LENGTH);
-    memcpy(slot.ctx, (const void *)(slot.ctx_address + OBSERVATION_START),
-           OBSERVATION_LENGTH);
-    memcpy(slot.canary_before,
-           (const void *)(slot.ctx_address + CANARY_BEFORE_START),
-           CANARY_LENGTH);
-    memcpy(slot.canary_after,
-           (const void *)(slot.ctx_address + CANARY_AFTER_START),
-           CANARY_LENGTH);
-    if (buffer_path) {
-        memcpy(slot.buffer, (const void *)buffer_address, BUFFER_LENGTH);
+    unsigned ticket = 0;
+    if (live != NULL && live->admit != NULL) {
+        int admitted = live->admit(frame);
+        if (admitted < 0) {
+            goto done;
+        }
+        ticket = (unsigned)admitted;
     }
+
+    record->ticket = ticket;
+    if (live == NULL) {
+        record->thread = tls_thread_number;
+    }
+    record->sequence++;
+    record->rdi = frame->rdi;
+    record->rsi = frame->rsi;
+    record->rcx = frame->rcx;
+    record->r9 = frame->r9;
+    record->handle_address = handle;
+    record->buffer_path = buffer_path;
+    record->buffer_address = buffer_address;
+
+    if (!read_bytes(record->handle, (const void *)handle,
+                    EU4_GFX_CAPTURE_HANDLE_LENGTH)) {
+        fail_capture(record, ticket);
+        goto done;
+    }
+    uint64_t ctx_address = 0;
+    memcpy(&ctx_address, record->handle, sizeof(ctx_address));
+    if (ctx_address == 0 ||
+        ctx_address > UINTPTR_MAX -
+                          (EU4_GFX_CAPTURE_CANARY_AFTER_START +
+                           EU4_GFX_CAPTURE_CANARY_LENGTH)) {
+        fail_capture(record, ticket);
+        goto done;
+    }
+    record->ctx_address = (uintptr_t)ctx_address;
+
+    uint8_t extent[EU4_GFX_CAPTURE_EXTENT_LENGTH];
+    if (!read_bytes(extent,
+                    (const void *)(record->ctx_address +
+                                   EU4_GFX_CAPTURE_EXTENT_START),
+                    sizeof(extent))) {
+        fail_capture(record, ticket);
+        goto done;
+    }
+    memcpy(record->canary_before, extent,
+           EU4_GFX_CAPTURE_CANARY_LENGTH);
+    memcpy(record->ctx, extent + EU4_GFX_CAPTURE_CANARY_LENGTH,
+           EU4_GFX_CAPTURE_OBSERVATION_LENGTH);
+    memcpy(record->canary_after,
+           extent + EU4_GFX_CAPTURE_CANARY_LENGTH +
+               EU4_GFX_CAPTURE_OBSERVATION_LENGTH,
+           EU4_GFX_CAPTURE_CANARY_LENGTH);
+
+    if (buffer_path &&
+        !read_bytes(record->buffer, (const void *)buffer_address,
+                    EU4_GFX_CAPTURE_BUFFER_LENGTH)) {
+        fail_capture(record, ticket);
+        goto done;
+    }
+
+    record->capture_depth = record->depth;
+    record->state = EU4_GFX_CAPTURE_SLOT_ACTIVE;
+
+done:
+    if (guarded) {
+        live->end();
+    }
+}
+
+static bool read_exit(eu4_gfx_capture_record *record) {
+    if (!read_bytes(record->post_handle,
+                    (const void *)record->handle_address,
+                    EU4_GFX_CAPTURE_HANDLE_LENGTH)) {
+        return false;
+    }
+    uint8_t extent[EU4_GFX_CAPTURE_EXTENT_LENGTH];
+    if (!read_bytes(extent,
+                    (const void *)(record->ctx_address +
+                                   EU4_GFX_CAPTURE_EXTENT_START),
+                    sizeof(extent))) {
+        return false;
+    }
+    memcpy(record->post_canary_before, extent,
+           EU4_GFX_CAPTURE_CANARY_LENGTH);
+    memcpy(record->post_ctx, extent + EU4_GFX_CAPTURE_CANARY_LENGTH,
+           EU4_GFX_CAPTURE_OBSERVATION_LENGTH);
+    memcpy(record->post_canary_after,
+           extent + EU4_GFX_CAPTURE_CANARY_LENGTH +
+               EU4_GFX_CAPTURE_OBSERVATION_LENGTH,
+           EU4_GFX_CAPTURE_CANARY_LENGTH);
+    if (record->buffer_path &&
+        !read_bytes(record->post_buffer,
+                    (const void *)record->buffer_address,
+                    EU4_GFX_CAPTURE_BUFFER_LENGTH)) {
+        return false;
+    }
+    return true;
 }
 
 void eu4_gfx_set_constant_buffer_capture_exit(eu4_gfx_capture_frame *frame) {
     assert(frame != NULL);
     assert(((uintptr_t)frame & 15u) == 0);
-    if (slot.depth == 0) {
+
+    eu4_gfx_capture_record *record =
+        live != NULL
+            ? (live->thread_lookup != NULL ? live->thread_lookup() : NULL)
+            : &tls_record;
+    if (record == NULL || record->depth == 0) {
         return;
     }
 
-    unsigned exiting_depth = slot.depth;
-    slot.depth = exiting_depth - 1;
-    if (slot.state != SLOT_ACTIVE || exiting_depth != slot.capture_depth) {
+    unsigned exiting_depth = record->depth;
+    record->depth = exiting_depth - 1;
+    if (record->state != EU4_GFX_CAPTURE_SLOT_ACTIVE ||
+        exiting_depth != record->capture_depth) {
         return;
     }
 
-    memcpy(slot.post_handle, (const void *)slot.handle_address, HANDLE_LENGTH);
-    memcpy(slot.post_ctx,
-           (const void *)(slot.ctx_address + OBSERVATION_START),
-           OBSERVATION_LENGTH);
-    memcpy(slot.post_canary_before,
-           (const void *)(slot.ctx_address + CANARY_BEFORE_START),
-           CANARY_LENGTH);
-    memcpy(slot.post_canary_after,
-           (const void *)(slot.ctx_address + CANARY_AFTER_START),
-           CANARY_LENGTH);
-    if (slot.buffer_path) {
-        memcpy(slot.post_buffer, (const void *)slot.buffer_address,
-               BUFFER_LENGTH);
+    if (!read_exit(record)) {
+        fail_capture(record, record->ticket);
+        record->state = EU4_GFX_CAPTURE_SLOT_IDLE;
+        return;
     }
-    slot.outcome = frame->rax;
-    slot.state = SLOT_COMPLETE;
+    record->outcome = frame->rax;
+    record->state = EU4_GFX_CAPTURE_SLOT_COMPLETE;
+
+    if (live != NULL) {
+        if (live->publish != NULL) {
+            (void)live->publish(record->ticket, record);
+        }
+        record->state = EU4_GFX_CAPTURE_SLOT_IDLE;
+    }
 }
 
 bool eu4_gfx_set_constant_buffer_capture_flush(void) {
-    if (slot.state != SLOT_COMPLETE) {
+    if (live != NULL || tls_record.state != EU4_GFX_CAPTURE_SLOT_COMPLETE) {
         return false;
     }
     if (!write_capture()) {
         return false;
     }
-    slot.state = SLOT_IDLE;
+    tls_record.state = EU4_GFX_CAPTURE_SLOT_IDLE;
     return true;
 }
 
 unsigned eu4_gfx_set_constant_buffer_capture_refusals(void) {
-    return slot.refusals;
+    eu4_gfx_capture_record *record =
+        live != NULL
+            ? (live->thread_lookup != NULL ? live->thread_lookup() : NULL)
+            : &tls_record;
+    return record != NULL ? record->refusals : 0;
 }
 
 bool eu4_gfx_set_constant_buffer_capture_install(void *site) {

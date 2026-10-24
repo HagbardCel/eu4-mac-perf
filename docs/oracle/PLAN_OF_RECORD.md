@@ -29,7 +29,7 @@ authorizes replacing game code.
 | 0 | Scope contract (this section and the acceptance in [P4_INTEGRATION.md](P4_INTEGRATION.md)) | no |
 | 1 | **PR A1** resource materialization; **PR A2** function-fixture contract | no |
 | 2 | **PR B** passive x86-64 entry/exit hook; **PR C** generic offline replay and comparator | no |
-| 3 | **PR D** P5a first live acquisition (~50 qualified fixtures) | one bounded session |
+| 3 | **PR D** P5a first live acquisition (~50 qualified fixtures) — implemented, live acceptance pending authorization | one bounded session |
 | 4 | **PR E** Tier 1 offline certification | no |
 | 5 | **PR F** Tier 2 shadow validation (≥1,000 sampled comparisons) | controlled session |
 | 6 | **PR G** second-function scaling and agent pilot | conditional |
@@ -190,6 +190,20 @@ semantic qualification, collision-safe classification and an independently verif
 capture binding; **A2** — the static `_GfxSetConstantBuffer` observable-domain descriptor,
 descriptor-driven raw-memory closure, the versioned `FUNCTION-CAPTURE v1` transcript and
 a synthetic paired-state producer. **P4.11** and the frame half remain.
+
+**Progress (2026-10-24):** **PR D** is implemented as the operator-gated live path for
+**P5a**, preserving PR B's offline TLS behavior and the A2 descriptor/schema and PR C
+replay contract. It provides startup attestation (expected executable, x86-64 main
+image, site within main text, patch bytes), a bounded live thread table with entry-side
+registration inside the armed-epoch guard, 64 tickets reserved with a saturating atomic
+CAS before the first expensive read, one `DISARMED -> ARMED -> CLOSING -> SEALED` epoch,
+close waiting for active/reserved captures, one coordinator/drain writer, exact
+intercepted/admitted/completed accounting, strict loss-free acceptance, and verified
+session manifests.
+The native harness and portable report-contract tests pass, and preflight succeeds
+against the local pinned GOG build. **No live EU IV session has been run.** The single
+bounded acceptance session is pending separate operator authorization; no CI job
+launches the game.
 
 The gate splits by acquisition scope. Each half must pass **entirely offline** before the
 matching acquisition is authorized:

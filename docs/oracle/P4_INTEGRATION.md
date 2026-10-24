@@ -7,11 +7,15 @@ immutable whole-version blobs, native/semantic completeness reconciliation,
 collision-safe classification and a verified capture binding) and **A2** (the
 `_GfxSetConstantBuffer` observable-domain descriptor, descriptor-driven raw-memory
 closure, the versioned `FUNCTION-CAPTURE v1` transcript and a synthetic paired-state
-producer). **PR B** (the passive observation-only hook) and **PR C** (the offline
-replay and differential bridge) are implemented. **P4.11** (declared translation,
+producer). **PR B** (the passive observation-only hook), **PR C** (the offline
+replay and differential bridge) and the **PR D** live-acquisition path are
+implemented. PR D's one bounded live session has **not** been run; it requires the
+separate operator authorization described below. **P4.11** (declared translation,
 `gfx-v2` stateful replay and negative admission) and the frame half of P4.10 remain.
-**Nothing here launches EU IV, opens a game process, or attaches to a binary**: every
-input is a file this repository's own drivers wrote.
+The offline gate's tests launch no game and attach to no binary. PR D adds one
+operator-gated `run` path that launches EU IV; it is behind an explicit flag and a
+prompt, and the automated tests exercise only a local harness. Existing benchmark
+commands are unchanged.
 
 This document is authoritative for the pre-P5 offline integration gate. The gate now
 splits by acquisition scope (2026-10-18): the **function** half (**P4.9** +
@@ -553,6 +557,123 @@ integration receipt is a manual macOS run: PR B's existing harness produces the
 transcript, and the command above replays it. The automated tests establish the capture
 mechanism and the replay/comparison mechanism separately; the receipt demonstrates the
 two together without adding another native capture test.
+
+**PR D — bounded live acquisition (operator-gated).** PR D is the first live
+acquisition slice. It consumes the unchanged A2 descriptor, PR B hook/gateway and PR C
+replay contract, and adds one bounded session that can produce approximately 50
+qualified live `_GfxSetConstantBuffer` fixtures. It does **not** change the A2 schema,
+descriptor, PR C replay, detour/gateway or offline TLS path. It does not add general
+queueing/reclamation, pointer discovery, allocator introspection, Tier 1 certification,
+frame replay, Tier 2 or RE3. Running it against EU IV requires explicit operator
+authorization; the automated tests use a local x86-64 harness and never launch the game.
+
+*Startup attestation.* The injected library receives a run directory, a session ID and
+the expected executable. Its constructor resolves the expected path, finds the
+`MH_EXECUTE` x86-64 main image by path rather than assuming dyld image index 0 (an
+inserted library can occupy that slot under Rosetta), requires the target to lie in
+that image's `__TEXT,__text`, and delegates to the PR B installer, which validates the
+13 pinned patch-site bytes before installing the relay. It writes
+`startup.status` atomically with `state=installed|error`, the session ID, PID,
+executable path, image base, site, module pin and error. Missing status, a startup
+error, a stale session ID or PID, a non-x86-64/site failure, or a failed detour
+installation fails the run. A zero-capture seal is never accepted.
+
+*What a live read proves.* For each admitted invocation the hook reads the 8-byte
+handle at `RDI`, then the full 129-byte context extent `[ctx+0xb8, ctx+0x139)` with
+`mach_vm_read_overwrite`, including the canary-after band, and the 4-byte buffer dword
+at `RSI` only when the low 32 bits of `R9` are `UINT32_MAX`. The slot is the low 32
+bits of `RCX`; because `slot_max=6` is exclusive, slots `0..5` are valid and slot `6`
+is refused. A failed read makes that invocation `INCOMPLETE`; it is not retried with
+signal recovery, probing or access tracing. This establishes **VM readability of the
+declared extent**, not object ownership, snapshot consistency under concurrent
+mutation, or full function semantics. The canary bands detect change over the
+observation window; they do not make the read atomic. A transient write-and-restore
+inside the window remains outside the guarantee.
+
+*Admission and accounting.* Live mode uses a bounded table of 64 `pthread_self`
+entries and 64 admission tickets. The table names capturing threads only for the
+session; it does not claim lifetime-unique pthread identity under thread churn. Cheap
+shape checks happen before admission; the live backend reserves a ticket with a
+saturating atomic compare-and-swap before the first expensive memory read, and a failed
+read consumes that ticket. Tickets are never reused within the epoch. Thread
+registration and every pre-admission refusal-count mutation happen inside the
+armed-epoch guard: the entry callback enters the guard before claiming a thread record,
+and an exit or an
+entry that cannot enter the guard only looks up an existing record. The constructor's
+explicit initial registration happens before arming. A claimed-but-not-ready thread
+record is refused immediately rather than waited on, and a full table produces one
+thread-limit refusal per invocation. Pre-admission refusals (busy slot, bad slot, bad
+pointer or address, quota, thread limit, closed) are counted by reason. The accounting
+is exact:
+
+    intercepted = not_admitted + admitted
+    admitted    = incomplete + completed
+    completed   = written + write_failed + undrained
+
+`INCOMPLETE` covers entry or exit read failure and an invocation still executing at
+the close deadline. `UNDRAINED` is fully captured but not persisted before the drain
+deadline. `write_failed` and `undrained` are reported loss; they do not rewrite the
+counts or turn a partial diagnostic into an accepted seal.
+
+*One epoch and one writer.* The state machine is
+`DISARMED -> ARMED -> CLOSING -> SEALED`, driven by a control page (`1` arm, `2`
+close) and finite deadline/quota checks. There is no rearm, reset or record reuse.
+The successful second `ARMED` check is the epoch boundary: an entry that passes it may
+claim a thread record and finish reservation, and close waits for active and reserved
+entries before cutting off new admission. If that wait exceeds the quiescence bound,
+the result is `partial`. Entry/exit nesting is preserved for a thread with an
+outstanding capture even after `CLOSING` by lookup-only behavior; a new thread is not
+registered after `CLOSING`, and exit callbacks never register or increment
+pre-admission refusal counters. One coordinator thread owns the drain and persistence.
+A ticket moves
+`READY -> WRITTEN | WRITE_FAILED | UNDRAINED`; there is no `WRITING` state.
+Transcripts and summary/done markers are
+written to partial files, fsynced and renamed into place. The coordinator writes the
+summary and `session.done` before `SEALED`; the report treats a quiescence timeout as
+`partial`, never `accepted`. Native tables and the loaded library remain for process
+lifetime; there is no reclamation, forced cancellation or dylib unload.
+
+*Report and artifacts.* `preflight` builds the x86-64 library, checks the pinned GOG
+executable/code window/patch bytes, the descriptor and target pins, the disposable
+Venice save, and that EU IV is closed. `run --authorize-live` launches one session,
+checks startup/session/PID, waits for a confirmed paused save, arms capture, bounds the
+wait, closes, verifies the save hash, and then reports. `report --run-dir` is offline
+and writes `session.json` and `summary.md`; it creates `manifest.json` on the first
+report and, on every later report, verifies the existing manifest rather than
+overwriting it. The manifest binds the native summary, startup status, done marker,
+metadata and every `.capture` file, including exact current hashes; a mismatch fails
+the report and leaves the original manifest in place. The report also rejects negative
+counters, `admitted > quota`, and ticket filenames that are not
+`<session>.<0..63>.capture` (gaps are allowed because loss is legitimate). Hard gates
+require the native formula and transcript counts to reconcile, the startup/session/PID
+and epoch to match, the done marker to be sealed, at least 50 A2-qualified live
+transcripts, no malformed transcript, and no `write_failed` or `undrained` loss;
+`accepted` means all of those gates pass. Loss is reported, never hidden: a sealed
+session with storage loss fails strict acceptance. A quiescence timeout reports
+`partial`; fewer than 50 qualified transcripts reports `insufficient`; a malformed
+transcript, stale startup, bad metadata, loss, or accounting failure reports `failed`.
+
+Raw transcripts are **not committed by default**. Inspect the sealed session and the
+transcript bytes first; commit the summary and hash manifest, and commit raw
+transcripts only after explicit inspection/approval.
+
+The portable reporter establishes A2 structural qualification and consistency of the
+evidence it reads. It does not cryptographically prove that a transcript labelled
+`synthetic=0` originated in the real game; the startup attestation and the
+operator-controlled launch are operational evidence, and stronger native-to-offline
+provenance remains PR E work.
+
+The native PR D tests cover admission/refusal accounting, live A2 qualification,
+guard-page read failure, extent crossing into a protected page, unreadable required
+buffer, unreadable exit state, post-close nesting, late-publication loss, quota
+exhaustion and the 65th refusal, thread-table exhaustion with one refusal, thread
+identity, write failure, detour-install failure and startup attestation failures. The
+portable report tests cover strict reconciliation, partial quiescence, stale
+startup/session/PID, synthetic transcripts, strict loss rejection, numeric and ticket
+filename invariants, manifest verification/tamper retention, fewer-than-50 and
+zero-capture seals. These tests establish the mechanism; they do not establish live EU
+IV behavior, VM readability in the game process, or the acceptance target. That
+requires the single authorized live session.
 
 ### 8. The `gfx-v2` vocabulary (declared here, implemented in P4.11)
 
