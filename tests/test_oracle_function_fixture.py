@@ -87,6 +87,19 @@ class GoldenFixtureTests(unittest.TestCase):
         self.assertEqual(fixture.verify_fixture(self.golden, self.descriptor,
                                                 self.manifest), self.manifest)
 
+    def test_semantic_identity_is_scoped_by_the_domain_descriptor(self):
+        scoped = copy.deepcopy(self.descriptor)
+        scoped["layout"]["slot_max"] = 5
+        other = fixture.materialize_capture(self.golden, scoped)
+        self.assertEqual(other["manifest"]["verdict"], "qualified")
+        self.assertNotEqual(fixture.descriptor_digest(self.descriptor),
+                            fixture.descriptor_digest(scoped))
+        self.assertEqual(self.record["state"], other["record"]["state"])
+        self.assertNotEqual(schema.semantic_digest(self.record),
+                            schema.semantic_digest(other["record"]))
+        self.assertEqual(other["record"]["provenance"]["capture_policy_digest"],
+                         fixture.descriptor_digest(scoped))
+
     def test_the_explicit_path_does_not_require_a_buffer_read(self):
         text = synthetic.capture_text(self.descriptor, "s10")
         materialized = fixture.materialize_capture(text, self.descriptor)
@@ -109,6 +122,9 @@ class GoldenFixtureTests(unittest.TestCase):
                          synthetic.CTX)
         self.assertEqual(record["provenance"]["function_id"],
                          "gfx:set-constant-buffer")
+        self.assertEqual(record["provenance"]["callsite"], "unavailable")
+        self.assertEqual(record["provenance"]["capture_policy_digest"],
+                         fixture.descriptor_digest(self.descriptor))
         self.assertNotIn("return", record["raw"])
 
     def test_closure_does_not_recompute_the_word_count(self):
@@ -207,7 +223,9 @@ def _span(record: dict, phase: str, name: str) -> dict:
 
 
 def _set_span(record: dict, phase: str, name: str, data: bytes) -> None:
-    _span(record, phase, name)["value_hex"] = data.hex()
+    span = _span(record, phase, name)
+    span["value_hex"] = data.hex()
+    span["valid_mask"] = "ff" * len(data)
 
 
 def _set_byte(record: dict, phase: str, name: str, index: int, value: int) -> None:
@@ -362,6 +380,31 @@ class ClosureFailureTests(unittest.TestCase):
         for name, (mutate, expected) in cases.items():
             with self.subTest(name=name):
                 self.assertIn(expected, self._missing(mutate))
+
+    def test_span_location_and_length_are_required(self):
+        def wrong_offset(record):
+            _span(record, "pre", "ctx")["offset"] = 0
+            _span(record, "post", "ctx")["offset"] = 0
+
+        def short_post(record):
+            data = bytes.fromhex(_span(record, "post", "ctx")["value_hex"])
+            _set_span(record, "post", "ctx", data[:-1])
+
+        cases = {
+            "offset": (wrong_offset, "read:ctx"),
+            "length": (short_post, "post:dirty"),
+        }
+        for name, (mutate, expected) in cases.items():
+            with self.subTest(name=name):
+                record = copy.deepcopy(self.record)
+                mutate(record)
+                assessment = fixture.assess(record, self.descriptor)
+                self.assertIn(expected, assessment["missing"])
+                self.assertIn("preserve:ctx", assessment["missing"])
+                record["completeness"]["unavailable_dependencies"] = assessment["missing"]
+                record["completeness"]["state"] = "incomplete"
+                self.assertEqual(fixture.close(record, self.descriptor)["verdict"],
+                                 "unqualified")
 
     def test_overlapping_captured_regions_are_unqualified(self):
         missing = self._missing(lambda r: _overlap_buffer(r, self.descriptor))

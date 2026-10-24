@@ -420,7 +420,10 @@ pairwise disjoint; overlap is outside A2 and remains unqualified (`domain:disjoi
 Handle and buffer input bytes must be unchanged. The post-state requires a present
 word count (no expected value), a buffer pointer equal to `RSI`, and `dirty=1`.
 `RAX` remains an observed outcome in `raw`, not a return type: `abi.return_carrier`
-is `None` and closure requires `RAX == *RDI`. No schema change.
+is `None` and closure requires `RAX == *RDI`. No schema change. The record's
+`provenance.capture_policy_digest` is the full descriptor digest, so semantic
+equality is scoped by the accepted domain; the transcript's `policy` field remains
+a producer-configuration check.
 
 **A2 acceptance and limits.** A2 accepts one complete synthetic paired-state capture
 of `_GfxSetConstantBuffer`, converts it to the established observation schema, and

@@ -88,7 +88,7 @@ def capture_text(descriptor: dict, scenario_name: str = "s03") -> str:
         f"capture=re0-pilot scenario={scenario['scenario']} epoch=synthetic-a2 "
         f"thread=0 sequence={scenario['sequence']} "
         f"function={descriptor['function_id']} "
-        f"callsite=rva:{descriptor['binary']['entry_rva']} "
+        f"callsite=unavailable "
         f"module={descriptor['binary']['sha256']} "
         f"policy={fixture.capture_policy_digest(descriptor)} "
         f"fidelity={descriptor['fidelity']['mode']} "

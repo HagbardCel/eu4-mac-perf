@@ -446,10 +446,11 @@ def _build_record(capture: dict[str, Any], descriptor: dict[str, Any]) -> dict[s
     buffer_region = regions.get(("pre", "buffer")) or regions.get(("post", "buffer"))
 
     outcome = capture["outcome"]
+    domain_digest = descriptor_digest(descriptor)
     raw = {
         "synthetic": meta["synthetic"],
         "symbol": descriptor["symbol"],
-        "descriptor_sha256": descriptor_digest(descriptor),
+        "descriptor_sha256": domain_digest,
         "regions": raw_regions,
         "addresses": {
             "handle": hex(handle_region["address"]) if handle_region is not None else None,
@@ -468,7 +469,8 @@ def _build_record(capture: dict[str, Any], descriptor: dict[str, Any]) -> dict[s
             "module_sha256": descriptor["binary"]["sha256"],
             "function_id": descriptor["function_id"],
             "callsite": meta["callsite"],
-            "capture_policy_digest": meta["policy"],
+            # semantic_projection includes this, so bind equality to the whole domain.
+            "capture_policy_digest": domain_digest,
             "scenario": meta["scenario"],
             "epoch": meta["epoch"],
             "thread": meta["thread"],
@@ -506,11 +508,23 @@ def _build_record(capture: dict[str, Any], descriptor: dict[str, Any]) -> dict[s
 
 # --- closure --------------------------------------------------------------------
 
-def _span_data(record: dict[str, Any], phase: str, name: str) -> bytes | None:
+def _span_data(record: dict[str, Any], phase: str, name: str,
+               descriptor: dict[str, Any]) -> bytes | None:
     space = f"heap:{name}"
+    if name == "ctx":
+        offset = _region_offset(descriptor, name)
+        width = descriptor["layout"]["observation_end"] - offset
+    elif name in ("canary-before", "canary-after"):
+        offset, width = _band(descriptor, name)
+    else:
+        offset = _region_offset(descriptor, name)
+        width = descriptor["input_regions"][name]["width"]
     for span in record["state"][phase]:
         if span["space"] != space:
             continue
+        if (span["offset"] != offset or len(span["value_hex"]) != 2 * width
+                or len(span["valid_mask"]) != 2 * width):
+            return None
         if any(span["valid_mask"][i:i + 2] != "ff"
                for i in range(0, len(span["valid_mask"]), 2)):
             return None
@@ -554,13 +568,13 @@ def _write_indices(descriptor: dict[str, Any], slot: int | None) -> set[int]:
     return allowed
 
 
-def _regions_disjoint(record: dict[str, Any]) -> bool:
+def _regions_disjoint(record: dict[str, Any], descriptor: dict[str, Any]) -> bool:
     intervals: list[tuple[int, int]] = []
     for name in REGION_ORDER:
-        data = _span_data(record, "pre", name)
+        data = _span_data(record, "pre", name, descriptor)
         address = _region_address(record, "pre", name)
         if data is None:
-            data = _span_data(record, "post", name)
+            data = _span_data(record, "post", name, descriptor)
             address = _region_address(record, "post", name)
         if data is not None and address is not None:
             intervals.append((address, address + len(data)))
@@ -631,8 +645,8 @@ def assess(record: dict[str, Any], descriptor: dict[str, Any]) -> dict[str, Any]
     for carrier in descriptor["abi"]["required_carriers"]:
         check(f"carrier:{carrier['name']}", _carrier(record, carrier["name"]) is not None)
 
-    handle_pre = _span_data(record, "pre", "handle")
-    handle_post = _span_data(record, "post", "handle")
+    handle_pre = _span_data(record, "pre", "handle", descriptor)
+    handle_post = _span_data(record, "post", "handle", descriptor)
     handle_pre_address = _region_address(record, "pre", "handle")
     handle_post_address = _region_address(record, "post", "handle")
     ctx_base = (int.from_bytes(handle_pre[:handle_width], "little")
@@ -642,8 +656,8 @@ def assess(record: dict[str, Any], descriptor: dict[str, Any]) -> dict[str, Any]
           handle_pre is not None and len(handle_pre) >= handle_width
           and rdi is not None and handle_pre_address == rdi)
 
-    ctx_pre = _span_data(record, "pre", "ctx")
-    ctx_post = _span_data(record, "post", "ctx")
+    ctx_pre = _span_data(record, "pre", "ctx", descriptor)
+    ctx_post = _span_data(record, "post", "ctx", descriptor)
     ctx_pre_address = _region_address(record, "pre", "ctx")
     ctx_post_address = _region_address(record, "post", "ctx")
     check("read:ctx",
@@ -652,14 +666,14 @@ def assess(record: dict[str, Any], descriptor: dict[str, Any]) -> dict[str, Any]
 
     for name in descriptor["preservation"]["canary_regions"]:
         start, width = _band(descriptor, name)
-        data = _span_data(record, "pre", name)
+        data = _span_data(record, "pre", name, descriptor)
         address = _region_address(record, "pre", name)
         check(f"read:{name}",
               data is not None and len(data) >= width
               and ctx_base is not None and address == ctx_base + start)
 
     if buffer_path:
-        buffer_pre = _span_data(record, "pre", "buffer")
+        buffer_pre = _span_data(record, "pre", "buffer", descriptor)
         buffer_pre_address = _region_address(record, "pre", "buffer")
         check("read:buffer",
               buffer_pre is not None and len(buffer_pre) >= buffer_width
@@ -693,8 +707,8 @@ def assess(record: dict[str, Any], descriptor: dict[str, Any]) -> dict[str, Any]
 
     for name in descriptor["preservation"]["canary_regions"]:
         _, width = _band(descriptor, name)
-        pre = _span_data(record, "pre", name)
-        post = _span_data(record, "post", name)
+        pre = _span_data(record, "pre", name, descriptor)
+        post = _span_data(record, "post", name, descriptor)
         check(f"preserve:{name}",
               pre is not None and post is not None
               and len(pre) >= width and len(post) >= width
@@ -713,8 +727,8 @@ def assess(record: dict[str, Any], descriptor: dict[str, Any]) -> dict[str, Any]
               changed <= allowed)
 
     if buffer_path:
-        buffer_pre = _span_data(record, "pre", "buffer")
-        buffer_post = _span_data(record, "post", "buffer")
+        buffer_pre = _span_data(record, "pre", "buffer", descriptor)
+        buffer_post = _span_data(record, "post", "buffer", descriptor)
         check("preserve:buffer",
               buffer_pre is not None and buffer_post is not None
               and len(buffer_pre) >= buffer_width and len(buffer_post) >= buffer_width
@@ -730,7 +744,7 @@ def assess(record: dict[str, Any], descriptor: dict[str, Any]) -> dict[str, Any]
 
     check("domain:slot",
           slot is not None and layout["slot_min"] <= slot < layout["slot_max"])
-    check("domain:disjoint", _regions_disjoint(record))
+    check("domain:disjoint", _regions_disjoint(record, descriptor))
 
     return {"coverage": sorted(satisfied & required),
             "missing": sorted(required - satisfied),
