@@ -675,7 +675,111 @@ zero-capture seals. These tests establish the mechanism; they do not establish l
 IV behavior, VM readability in the game process, or the acceptance target. That
 requires the single authorized live session.
 
-### 8. The `gfx-v2` vocabulary (declared here, implemented in P4.11)
+### 8. Tier 1 certification (E)
+
+E is a post-D, offline stage. It consumes a **sealed PR D session** as immutable
+evidence and evaluates an exact frozen candidate. It does not launch EU IV, attach
+to a process, rebuild the native library or modify the acquisition format.
+
+**Session admission.** E1 requires an existing `manifest.json`; it never creates
+acquisition provenance. It verifies the manifest's hash commitment against the
+current artifacts, the session identity across startup/session/metadata/done, PID
+consensus, the native accounting equations, the transcript set and each
+transcript's A2 materialization. It does not trust `session.json.status`; it
+recomputes admission. A session can be admitted while containing unqualified
+transcripts; those are accounted for and excluded at fixture level under the
+pre-registered policy. E1 evaluates **every eligible fixture** from the admitted
+session; it must not select a favorable subset.
+
+**Portability and provenance limit.** E1 must not require the original GOG
+installation, the local native library, or the host layout that produced the
+session. Checking recorded executable/binary hashes against the descriptor proves
+consistency of the recorded identity claim, not that those exact bytes were loaded.
+Verifying the manifest proves consistency of the current artifact set with its
+existing hash commitment, not that a trusted recorder produced it. Stronger
+provenance remains deferred; E1 is a read-only validator of sealed evidence and its
+declared operational provenance, not another acquisition or attestation system.
+
+**Candidate binding.** A certificate names the frozen candidate source digest, the
+exact evaluated executable digest, the trusted build identity and its relevant
+compilation flags, and asserts that the executed artifact is the recorded build
+artifact. The existing reconstruction harness and hashing mechanisms supply this;
+no reproducible-build system or artifact-signing infrastructure is added. A later
+edit produces a different candidate and invalidates the certificate.
+
+**Result.** The result preserves independent axes and derives a promotion decision:
+
+```text
+schema: eu4-oracle-tier1-certificate/v1
+function_id / evidence_tier
+
+evidence:
+  session_id, manifest_sha256, descriptor_sha256, policy_sha256
+  transcript_count, eligible, ineligible, malformed, loss
+
+reference_admission:
+  session: eligible | ineligible, reasons[]
+  fixtures: eligible | ineligible, reasons[]
+
+candidate:
+  source_sha256, executable_sha256, build_identity, build_flags,
+  executed_matches_build
+
+evaluation:
+  match, mismatch, infrastructure_refusal, evidence_refusal
+  failures[]
+
+coverage:
+  policy_sha256
+  required_cells, observed_required, missing_required
+  observed_optional, missing_optional
+  distinct_behaviors, duplicate_count
+
+promotion:
+  status: certified | scoped | failed
+  reasons[]
+
+limitations[]
+```
+
+| Condition | Promotion |
+| --- | --- |
+| Session or required reference admission ineligible, any eligible mismatch, or any eligible infrastructure refusal | `failed` |
+| Reference eligible, zero mismatches/refusals, all required coverage cells observed and the diversity floor met | `certified` |
+| Reference eligible, zero mismatches/refusals, but some required cells or the diversity floor are missing | `scoped` — a narrower declared claim, not a pass |
+| Only optional cells missing | `certified`, with limitations recorded |
+
+A session-level refusal and a fixture-level refusal are different decisions. A
+sealed session may be admitted while some transcripts are unqualified; those are
+excluded and counted. An **eligible** mismatch or an **eligible** infrastructure
+refusal blocks certification. An infrastructure refusal is attributed as
+infrastructure, not as evidence that the candidate behaved incorrectly. An eligible
+evidence refusal is an admission inconsistency and fails.
+
+**Coverage is a declared scope, not unrestricted equivalence.** `certified` means
+the candidate passed the pre-registered policy within a precisely declared,
+evidenced scope. Missing valid slots or input classes outside that scope appear as
+explicit limitations. Certification must not be described as unrestricted
+equivalence over the full A2 descriptor unless the coverage policy supports that
+claim. The policy declares required and optional cells and a pre-registered
+quantitative behavioral-diversity floor; fifty nearly identical captures cannot
+establish a strong result merely by count.
+
+Coverage uses a function-specific normalized behavior key, not `record_digest` or
+`semantic_digest`. Keep those digests unchanged. For `_GfxSetConstantBuffer` the key
+preserves pointer roles and alias relationships, the slot, selector path, buffer
+input class, word count, dirty and preservation outcomes; it excludes raw addresses,
+canary contents and irrelevant allocation bytes. Replacing every pointer with zero
+is not sufficient.
+
+**Tier separation.** Tier 1 live-grounded certification is specific to the sealed
+live session. G3b's offline reconstruction pilot is validated by G2's independently
+qualified original-code oracle and RE2 comparator; it carries a distinct evidence
+tier and is not an E certificate. G3b may test E's result contract with mocked or
+synthetic responses only when labelled. Genuine E certification of a second
+function waits for evidence at E's supported tier, normally G4.
+
+### 9. The `gfx-v2` vocabulary (declared here, implemented in P4.11)
 
 `gfx-v1` is unchanged and accepts nothing new. `gfx-v2` is a versioned subject
 protocol that declares:

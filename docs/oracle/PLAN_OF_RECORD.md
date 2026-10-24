@@ -29,10 +29,11 @@ authorizes replacing game code.
 | 0 | Scope contract (this section and the acceptance in [P4_INTEGRATION.md](P4_INTEGRATION.md)) | no |
 | 1 | **PR A1** resource materialization; **PR A2** function-fixture contract | no |
 | 2 | **PR B** passive x86-64 entry/exit hook; **PR C** generic offline replay and comparator | no |
-| 3 | **PR D** P5a first live acquisition (~50 qualified fixtures) — implemented, live acceptance pending authorization | one bounded session |
-| 4 | **PR E** Tier 1 offline certification | no |
-| 5 | **PR F** Tier 2 shadow validation (≥1,000 sampled comparisons) | controlled session |
-| 6 | **PR G** second-function scaling and agent pilot | conditional |
+| 3 | **PR D** P5a first live acquisition (~50 qualified fixtures) — implementation merged at `09223f8`; live acceptance pending authorization | one bounded session |
+| 4 | **PR E** Tier 1 live-grounded certification (E1 certifier, E2 independent audit) | no |
+| 5 | **PR F** Tier 2 shadow validation (≥1,000 sampled comparisons; F1 offline worker now, F2 gated) | controlled sessions |
+| 6 | **PR G** second-function scaling and agent pilot (G1 now; G2–G4 gated) | conditional |
+| 7 | **PR H** repeatable multi-function campaigns — proposed only, not authorized | proposed |
 
 A1 and A2 must pass before the first instrumented run; Tier 2 is enabled only after
 Tier 1. **RE3** (automatic in-game replacement) is deferred until both tiers succeed
@@ -43,7 +44,83 @@ Every added abstraction must map to a demonstrated false-positive risk or an
 essential scaling requirement. Deliberately deferred: automatic memory-graph
 discovery, general dynamic access tracing, frame-level replay/P4.11, live shadow
 against real game objects, automatic in-game replacement/RE3, multi-function
-campaigns, and new agent frameworks.
+campaigns before the G pilot (**PR H is proposed only**), and new agent frameworks.
+
+## Parallel development (2026-10-24)
+
+PR D's implementation is complete and merged at `09223f8`; its one bounded live
+session remains pending separate operator authorization. **This section authorizes
+no EU IV launch and no live transcript.**
+
+Implementation readiness and certification readiness are separate. Offline
+components may be implemented and merged in parallel; a result earns a gate only
+when its named evidence exists. Passing a package's own tests does not certify
+another package's evidence, and a synthetic or mocked downstream input never earns
+the downstream gate.
+
+### Initial parallel set
+
+Start **E1**, **F1**, **G1** and **G3a** from the amendment merge commit. **E2** may
+prepare adversarial fixtures once the E result and admission contracts are frozen;
+its final audit waits for E1. Do not start F2, G2, G3b, G4 or H1 until the gates
+below are met. The five initial work orders are under
+[`work-orders/`](work-orders/).
+
+| Package | Deliverable | Implementation may start | Result counts when |
+| --- | --- | --- | --- |
+| **D-live** | One authorized live session, ≥50 A2-qualified fixtures | Operator authorization | Accepted, sealed live evidence |
+| **E1** | Portable sealed-session admission and Tier 1 certifier | Now | Real session admission, qualified replay and pre-registered coverage policy |
+| **E2** | Independent adversarial certification audit | E result and admission contracts frozen | Audit of E1's implementation and results |
+| **F1** | Offline shadow worker | Now | Owned snapshot contract, bounded execution and correct accounting |
+| **F2** | Live shadow integration and ≥1,000 sampled comparisons | Design constraints now; live code after E and F1 | Approved sampling plan and separate live authorization |
+| **G1** | Second-function RE0 and package boundary | Now | RE0 characterization and RE0→RE1 gate |
+| **G2** | RE1/RE2, per-function replay adapter | After G1's RE0→RE1 gate | Faithful reconstruction, harness and independently qualified reference |
+| **G3a** | Agent adapter seam on `synth:apply` | Now | Adapter reuses P3 primitives without modifying certified P3 |
+| **G3b** | Real-function agent pilot | Interface after E schema + G1 boundary | Offline pilot after G2 and qualified reference evidence |
+| **G4** | Second-function live qualification | After the per-function offline half-gate | New function-specific authorized live acquisition |
+| **H1** | Repeatable campaign orchestration | After the G pilot | Proposed only; demonstrated orchestration need |
+
+**G3b is an offline reconstruction pilot, not an E1 certificate.** G3b uses G2's
+independently qualified original-code oracle and per-function RE2 comparator. Its
+result carries a distinct evidence tier — Ghidra P-code execution, native
+original-code execution and live game observations are not interchangeable.
+G3b may exercise E's result contract with mocked or synthetic responses only when
+the test is labelled as such. Genuine E certification of a second function waits
+for evidence at E's supported tier, normally G4.
+
+**E1 remains specific to the sealed PR D live session.** It must not become a
+multi-tier certification framework now. A future separately qualified
+emulator-evidence tier requires its own explicit admission policy.
+
+F2's ≥1,000 comparisons are an experimental requirement, not only an accounting
+target. Multiple 64-ticket sessions are the conservative baseline; the aggregate
+campaign is decided after F1 is working and the operational cost of one session is
+measured. Do not silently raise PR D's quota. Replaying files after their sessions
+have ended is offline validation, not live shadow validation.
+
+### Minimum frozen contracts
+
+| Contract | Freeze now | Defer |
+| --- | --- | --- |
+| Capture evidence | Sealed session admission, hash integrity and immutability | New acquisition format |
+| Certification result | Identity, session/fixture admission, candidate evaluation, coverage and promotion | Function-specific extensions |
+| Shadow invocation | Owned snapshot handoff, identity, result and failure vocabulary | Live throughput architecture |
+| Function package | G1's documented deliverable boundary | Generic schema for future functions |
+
+### Branch and merge discipline
+
+- Branch from the amendment merge commit, not `09223f8`, so every agent sees the
+  same frozen contracts and work order.
+- A work order owns its paths. Frozen contracts and certified P3 components are
+  read-only; a required change is a focused contract amendment, not a branch-local
+  edit.
+- A PR may merge with synthetic fixtures or a mocked downstream dependency only if
+  its description labels that evidence and claims no downstream gate.
+- Each work order carries three stopping rules: **contract conflict** (propose an
+  amendment, do not silently change shared behaviour), **scope expansion** (obtain
+  an architectural decision before adding a subsystem) and **evidence limitation**
+  (finish the independently testable part and report the blocked acceptance
+  honestly).
 
 ## Invocation accounting (P4)
 
@@ -286,4 +363,5 @@ authorize a launch. Live behavioural qualification is a P5a/P5b activity under f
 abort, not a precondition for either. **P5a qualification is strictly limited to the declared
 function-level observable domain** and confers no frame replayability, graphics-API-equivalence
 or RE3 authorization. **RE3** remains separately gated by RE2 qualification plus detour, ABI,
-fallback and runtime-safety requirements.
+fallback and runtime-safety requirements. No package in the parallel-development section
+authorizes a launch.
