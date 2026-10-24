@@ -157,6 +157,52 @@ class GfxLiveCaptureTests(unittest.TestCase):
         self.assertEqual(summary["undrained"], "0")
         self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
 
+    def test_extent_crossing_protected_page_is_incomplete(self) -> None:
+        root, result = self._run("extent-cross")
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["admitted"], "1")
+        self.assertEqual(summary["incomplete"], "1")
+        self.assertEqual(summary["completed"], "0")
+        self.assertEqual(summary["written"], "0")
+        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+
+    def test_unreadable_required_buffer_is_incomplete(self) -> None:
+        root, result = self._run("buffer-guard")
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["admitted"], "1")
+        self.assertEqual(summary["incomplete"], "1")
+        self.assertEqual(summary["completed"], "0")
+        self.assertEqual(summary["written"], "0")
+        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+
+    def test_unreadable_exit_state_is_incomplete(self) -> None:
+        root, result = self._run("exit-guard")
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["admitted"], "1")
+        self.assertEqual(summary["incomplete"], "1")
+        self.assertEqual(summary["completed"], "0")
+        self.assertEqual(summary["written"], "0")
+        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+
+    def test_thread_table_exhaustion_refuses_once(self) -> None:
+        root, result = self._run("thread-full")
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["threads"], "64")
+        self.assertEqual(summary["not_admitted_slot"], "63")
+        self.assertEqual(summary["not_admitted_thread_limit"], "1")
+        self.assertEqual(summary["not_admitted"], "64")
+        self.assertEqual(summary["admitted"], "0")
+        self.assertEqual(summary["written"], "0")
+        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+
     def test_close_waits_for_reserved_capture_and_nested_exit(self) -> None:
         root, result = self._run("nested")
         self.assertEqual(result.returncode, 0,
@@ -183,6 +229,33 @@ class GfxLiveCaptureTests(unittest.TestCase):
         self.assertEqual(len(list((root / "captures").glob("*.capture"))), 64)
         names = {path.name for path in (root / "captures").glob("*.capture")}
         self.assertEqual(len(names), 64)
+
+    def test_quota_overflow_refuses_the_65th_invocation(self) -> None:
+        root, result = self._run("quota-overflow")
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["quota"], "64")
+        self.assertEqual(summary["admitted"], "64")
+        self.assertEqual(summary["written"], "64")
+        self.assertEqual(summary["not_admitted_quota"], "1")
+        self.assertEqual(summary["intercepted"], "65")
+        self.assertEqual(summary["reserved"], "0")
+        self.assertEqual(summary["ready"], "0")
+        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 64)
+
+    def test_late_publication_loses_to_terminalization(self) -> None:
+        root, result = self._run("late-publish")
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["state"], "partial")
+        self.assertEqual(summary["quiescence"], "timeout")
+        self.assertEqual(summary["admitted"], "1")
+        self.assertEqual(summary["incomplete"], "1")
+        self.assertEqual(summary["completed"], "0")
+        self.assertEqual(summary["written"], "0")
+        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
 
     def test_thread_table_names_capturing_threads(self) -> None:
         root, result = self._run("threads")

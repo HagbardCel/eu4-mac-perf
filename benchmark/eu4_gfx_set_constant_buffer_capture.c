@@ -70,13 +70,6 @@ static bool read_bytes(void *destination, const void *source, size_t length) {
     return result == KERN_SUCCESS && got == length;
 }
 
-static eu4_gfx_capture_record *current_record(void) {
-    if (live != NULL && live->thread_record != NULL) {
-        return live->thread_record();
-    }
-    return &tls_record;
-}
-
 static void refuse_capture(eu4_gfx_capture_record *record,
                            eu4_gfx_capture_refusal reason) {
     if (record != NULL) {
@@ -201,8 +194,8 @@ static bool write_capture(void) {
 }
 
 void eu4_gfx_set_constant_buffer_capture_thread_init(void) {
-    if (live != NULL && live->thread_record != NULL) {
-        (void)live->thread_record();
+    if (live != NULL && live->thread_claim != NULL) {
+        (void)live->thread_claim();
         return;
     }
     if (tls_thread_ready) {
@@ -222,21 +215,34 @@ void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame) {
     assert(frame != NULL);
     assert(((uintptr_t)frame & 15u) == 0);
 
-    eu4_gfx_capture_record *record = current_record();
-    if (record == NULL) {
-        return;
-    }
-    record->depth++;
+    eu4_gfx_capture_record *record = NULL;
     bool guarded = false;
-    if (live != NULL && live->begin != NULL) {
+    if (live != NULL) {
+        if (live->begin == NULL) {
+            return;
+        }
         if (!live->begin()) {
+            /* Preserve nesting for an outstanding capture after CLOSING. */
+            record = live->thread_lookup != NULL ? live->thread_lookup() : NULL;
+            if (record != NULL) {
+                record->depth++;
+            }
             return;
         }
         guarded = true;
-    } else if (!tls_thread_ready) {
-        record->refusals++;
-        return;
+        record = live->thread_claim != NULL ? live->thread_claim() : NULL;
+        if (record == NULL) {
+            live->end();
+            return;
+        }
+    } else {
+        record = &tls_record;
+        if (!tls_thread_ready) {
+            record->refusals++;
+            return;
+        }
     }
+    record->depth++;
 
     if (record->state != EU4_GFX_CAPTURE_SLOT_IDLE) {
         refuse_capture(record, EU4_GFX_CAPTURE_REFUSE_BUSY);
@@ -375,7 +381,10 @@ void eu4_gfx_set_constant_buffer_capture_exit(eu4_gfx_capture_frame *frame) {
     assert(frame != NULL);
     assert(((uintptr_t)frame & 15u) == 0);
 
-    eu4_gfx_capture_record *record = current_record();
+    eu4_gfx_capture_record *record =
+        live != NULL
+            ? (live->thread_lookup != NULL ? live->thread_lookup() : NULL)
+            : &tls_record;
     if (record == NULL || record->depth == 0) {
         return;
     }
@@ -415,7 +424,10 @@ bool eu4_gfx_set_constant_buffer_capture_flush(void) {
 }
 
 unsigned eu4_gfx_set_constant_buffer_capture_refusals(void) {
-    eu4_gfx_capture_record *record = current_record();
+    eu4_gfx_capture_record *record =
+        live != NULL
+            ? (live->thread_lookup != NULL ? live->thread_lookup() : NULL)
+            : &tls_record;
     return record != NULL ? record->refusals : 0;
 }
 

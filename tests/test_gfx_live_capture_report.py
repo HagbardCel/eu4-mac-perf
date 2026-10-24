@@ -149,11 +149,81 @@ class GfxLiveReportTests(unittest.TestCase):
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(len(manifest["files"]), 64 + 4)
 
+    def test_manifest_is_created_once_and_verified(self) -> None:
+        root = self._run(file_count=50)
+        first = live.report(root)
+        self.assertEqual(first["status"], "accepted")
+        manifest_bytes = (root / "manifest.json").read_bytes()
+
+        second = live.report(root)
+        self.assertEqual(second["status"], "accepted")
+        self.assertEqual((root / "manifest.json").read_bytes(), manifest_bytes)
+
+    def test_tampered_evidence_is_refused_and_manifest_is_kept(self) -> None:
+        root = self._run(file_count=50)
+        first = live.report(root)
+        self.assertEqual(first["status"], "accepted")
+        manifest_bytes = (root / "manifest.json").read_bytes()
+
+        capture = sorted((root / "captures").glob("*.capture"))[0]
+        text = capture.read_text(encoding="utf-8")
+        capture.write_text(
+            text.replace("thread=0 sequence=1", "thread=0 sequence=2", 1),
+            encoding="utf-8")
+
+        second = live.report(root)
+        self.assertEqual(second["status"], "failed")
+        self.assertEqual(second["qualified"], 50)
+        self.assertTrue(any("Existing manifest" in problem
+                            for problem in second["problems"]))
+        self.assertEqual((root / "manifest.json").read_bytes(), manifest_bytes)
+
     def test_native_formula_mismatch_is_failed(self) -> None:
         root = self._run(summary_overrides={"completed": "63"})
         result = live.report(root)
         self.assertEqual(result["status"], "failed")
         self.assertTrue(any("completed" in problem for problem in result["problems"]))
+
+    def test_admitted_over_quota_is_failed(self) -> None:
+        root = self._run(
+            file_count=64,
+            summary_overrides={
+                "admitted": "65",
+                "incomplete": "1",
+                "intercepted": "65",
+            },
+        )
+        result = live.report(root)
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["gates"]["numeric_invariants"])
+        self.assertTrue(any("admitted exceeds quota" in problem
+                            for problem in result["problems"]))
+
+    def test_negative_counter_is_failed(self) -> None:
+        root = self._run(
+            file_count=64,
+            summary_overrides={
+                "not_admitted": "-1",
+                "not_admitted_thread_limit": "-1",
+                "intercepted": "63",
+            },
+        )
+        result = live.report(root)
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["gates"]["numeric_invariants"])
+        self.assertTrue(any("is negative" in problem
+                            for problem in result["problems"]))
+
+    def test_ticket_filename_outside_quota_is_malformed(self) -> None:
+        root = self._run(file_count=50)
+        capture = sorted((root / "captures").glob("*.capture"))[0]
+        capture.rename(capture.with_name(f"{SESSION}.64.capture"))
+
+        result = live.report(root)
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(len(result["malformed"]), 1)
+        self.assertTrue(any("outside 0..63" in item["error"]
+                            for item in result["malformed"]))
 
     def test_quiescence_timeout_is_partial_not_accepted(self) -> None:
         root = self._run(state="partial", quiescence="timeout")
@@ -178,13 +248,15 @@ class GfxLiveReportTests(unittest.TestCase):
         self.assertEqual(result["qualified"], 49)
         self.assertFalse(result["gates"]["at_least_50"])
 
-    def test_reported_write_loss_is_not_hidden(self) -> None:
+    def test_reported_write_loss_is_not_accepted(self) -> None:
         root = self._run(file_count=50, write_failed=14, admitted=64)
         result = live.report(root)
-        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(result["status"], "failed")
         self.assertFalse(result["clean"])
         self.assertEqual(result["loss"]["write_failed"], 14)
         self.assertFalse(result["gates"]["no_loss"])
+        self.assertTrue(any("lost persisted captures" in problem
+                            for problem in result["problems"]))
 
     def test_stale_startup_session_is_failed(self) -> None:
         root = self._run(startup_session="gfx-live-other")

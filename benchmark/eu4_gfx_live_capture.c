@@ -60,7 +60,6 @@ static _Atomic unsigned not_admitted_address;
 static _Atomic unsigned not_admitted_quota;
 static _Atomic unsigned not_admitted_closed;
 static _Atomic unsigned not_admitted_thread_limit;
-static pthread_mutex_t admission_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t coordinator_thread;
 static bool coordinator_started;
 static bool started;
@@ -136,9 +135,25 @@ static bool valid_session_id(const char *value) {
     return true;
 }
 
-static eu4_gfx_capture_record *live_thread_record(void) {
+static void count_thread_limit_refusal(void) {
+    if (atomic_load_explicit(&active_entries, memory_order_acquire) != 0) {
+        atomic_fetch_add_explicit(&not_admitted_thread_limit, 1,
+                                  memory_order_relaxed);
+    }
+}
+
+/* Registration is allowed only before arming (thread_init) or after a
+ * successful epoch guard (entry). The ready flag is published before a
+ * caller can observe a usable record; a claimed-but-not-ready match is a
+ * stale slot and is refused, never waited on. */
+static eu4_gfx_capture_record *live_thread_claim(void) {
     uintptr_t key = (uintptr_t)pthread_self();
     if (key == 0) {
+        return NULL;
+    }
+    if (atomic_load_explicit(&session_state, memory_order_acquire) !=
+            LIVE_STATE_DISARMED &&
+        atomic_load_explicit(&active_entries, memory_order_acquire) == 0) {
         return NULL;
     }
     unsigned start = (unsigned)((key >> 4) % EU4_GFX_LIVE_CAPTURE_THREADS);
@@ -149,20 +164,14 @@ static eu4_gfx_capture_record *live_thread_record(void) {
         uintptr_t current =
             atomic_load_explicit(&slot->key, memory_order_acquire);
         if (current == key) {
-            while (!atomic_load_explicit(&slot->ready,
-                                         memory_order_acquire)) {
-                sleep_ms(1);
+            if (!atomic_load_explicit(&slot->ready, memory_order_acquire)) {
+                count_thread_limit_refusal();
+                return NULL;
             }
             return &slot->record;
         }
         if (current != 0) {
             continue;
-        }
-        if (atomic_load_explicit(&session_state, memory_order_acquire) ==
-                LIVE_STATE_CLOSING ||
-            atomic_load_explicit(&session_state, memory_order_acquire) ==
-                LIVE_STATE_SEALED) {
-            return NULL;
         }
         uintptr_t expected = 0;
         if (atomic_compare_exchange_strong_explicit(
@@ -176,17 +185,30 @@ static eu4_gfx_capture_record *live_thread_record(void) {
             return &slot->record;
         }
         if (expected == key) {
-            while (!atomic_load_explicit(&slot->ready,
-                                         memory_order_acquire)) {
-                sleep_ms(1);
+            if (!atomic_load_explicit(&slot->ready, memory_order_acquire)) {
+                count_thread_limit_refusal();
+                return NULL;
             }
             return &slot->record;
         }
     }
-    if (atomic_load_explicit(&session_state, memory_order_acquire) ==
-        LIVE_STATE_ARMED) {
-        atomic_fetch_add_explicit(&not_admitted_thread_limit, 1,
-                                  memory_order_relaxed);
+    count_thread_limit_refusal();
+    return NULL;
+}
+
+static eu4_gfx_capture_record *live_thread_lookup(void) {
+    uintptr_t key = (uintptr_t)pthread_self();
+    if (key == 0) {
+        return NULL;
+    }
+    for (unsigned i = 0; i < EU4_GFX_LIVE_CAPTURE_THREADS; i++) {
+        live_thread *slot = &threads[i];
+        if (atomic_load_explicit(&slot->key, memory_order_acquire) == key) {
+            if (!atomic_load_explicit(&slot->ready, memory_order_acquire)) {
+                return NULL;
+            }
+            return &slot->record;
+        }
     }
     return NULL;
 }
@@ -211,25 +233,23 @@ static void live_end(void) {
 
 static int live_admit(const eu4_gfx_capture_frame *frame) {
     (void)frame;
-    pthread_mutex_lock(&admission_lock);
     if (!atomic_load_explicit(&accepting, memory_order_acquire)) {
         atomic_fetch_add_explicit(&not_admitted_closed, 1,
                                   memory_order_relaxed);
-        pthread_mutex_unlock(&admission_lock);
         return -1;
     }
-    unsigned ticket = atomic_fetch_add_explicit(
-        &next_ticket, 1, memory_order_relaxed);
-    if (ticket >= EU4_GFX_LIVE_CAPTURE_QUOTA) {
-        atomic_fetch_add_explicit(&not_admitted_quota, 1,
-                                  memory_order_relaxed);
-        pthread_mutex_unlock(&admission_lock);
-        return -1;
+    unsigned ticket = atomic_load_explicit(&next_ticket, memory_order_acquire);
+    while (ticket < EU4_GFX_LIVE_CAPTURE_QUOTA) {
+        if (atomic_compare_exchange_weak_explicit(
+                &next_ticket, &ticket, ticket + 1, memory_order_acq_rel,
+                memory_order_acquire)) {
+            atomic_store_explicit(&tickets[ticket].state,
+                                  LIVE_TICKET_RESERVED, memory_order_release);
+            return (int)ticket;
+        }
     }
-    atomic_store_explicit(&tickets[ticket].state, LIVE_TICKET_RESERVED,
-                          memory_order_release);
-    pthread_mutex_unlock(&admission_lock);
-    return (int)ticket;
+    atomic_fetch_add_explicit(&not_admitted_quota, 1, memory_order_relaxed);
+    return -1;
 }
 
 static bool live_publish(unsigned ticket,
@@ -285,7 +305,8 @@ static void live_refuse(eu4_gfx_capture_refusal reason) {
 }
 
 static const eu4_gfx_capture_live_ops live_ops = {
-    .thread_record = live_thread_record,
+    .thread_claim = live_thread_claim,
+    .thread_lookup = live_thread_lookup,
     .begin = live_begin,
     .end = live_end,
     .admit = live_admit,
@@ -598,9 +619,7 @@ static void close_session(const char *reason) {
         quiescence_timeout = true;
     }
 
-    pthread_mutex_lock(&admission_lock);
     atomic_store_explicit(&accepting, false, memory_order_release);
-    pthread_mutex_unlock(&admission_lock);
 
     terminalize_reserved();
     uint64_t drain_deadline = now_ns() + LIVE_DRAIN_NS;
@@ -629,9 +648,7 @@ static void *coordinator_main(void *argument) {
         if (state == LIVE_STATE_DISARMED && mode == 1) {
             arm_time = now_ns();
             armed_ns = arm_time;
-            pthread_mutex_lock(&admission_lock);
             atomic_store_explicit(&accepting, true, memory_order_release);
-            pthread_mutex_unlock(&admission_lock);
             atomic_store_explicit(&session_state, LIVE_STATE_ARMED,
                                   memory_order_release);
             state = LIVE_STATE_ARMED;

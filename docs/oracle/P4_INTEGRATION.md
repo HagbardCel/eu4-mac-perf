@@ -593,10 +593,18 @@ inside the window remains outside the guarantee.
 *Admission and accounting.* Live mode uses a bounded table of 64 `pthread_self`
 entries and 64 admission tickets. The table names capturing threads only for the
 session; it does not claim lifetime-unique pthread identity under thread churn. Cheap
-shape checks happen before admission; the live backend reserves a ticket before the
-first expensive memory read, and a failed read consumes that ticket. Tickets are never
-reused within the epoch. Pre-admission refusals (busy slot, bad slot, bad pointer or
-address, quota, thread limit, closed) are counted by reason. The accounting is exact:
+shape checks happen before admission; the live backend reserves a ticket with a
+saturating atomic compare-and-swap before the first expensive memory read, and a failed
+read consumes that ticket. Tickets are never reused within the epoch. Thread
+registration and every pre-admission refusal-count mutation happen inside the
+armed-epoch guard: the entry callback enters the guard before claiming a thread record,
+and an exit or an
+entry that cannot enter the guard only looks up an existing record. The constructor's
+explicit initial registration happens before arming. A claimed-but-not-ready thread
+record is refused immediately rather than waited on, and a full table produces one
+thread-limit refusal per invocation. Pre-admission refusals (busy slot, bad slot, bad
+pointer or address, quota, thread limit, closed) are counted by reason. The accounting
+is exact:
 
     intercepted = not_admitted + admitted
     admitted    = incomplete + completed
@@ -611,12 +619,15 @@ counts or turn a partial diagnostic into an accepted seal.
 `DISARMED -> ARMED -> CLOSING -> SEALED`, driven by a control page (`1` arm, `2`
 close) and finite deadline/quota checks. There is no rearm, reset or record reuse.
 The successful second `ARMED` check is the epoch boundary: an entry that passes it may
-finish reservation, and close waits for active and reserved entries before cutting off
-new admission. If that wait exceeds the quiescence bound, the result is `partial`.
-Entry/exit nesting is preserved for a thread with an outstanding capture even after
-`CLOSING`; a new thread is not registered after `CLOSING`. One coordinator thread owns
-the drain and persistence. A ticket moves `READY -> WRITTEN | WRITE_FAILED |
-UNDRAINED`; there is no `WRITING` state. Transcripts and summary/done markers are
+claim a thread record and finish reservation, and close waits for active and reserved
+entries before cutting off new admission. If that wait exceeds the quiescence bound,
+the result is `partial`. Entry/exit nesting is preserved for a thread with an
+outstanding capture even after `CLOSING` by lookup-only behavior; a new thread is not
+registered after `CLOSING`, and exit callbacks never register or increment
+pre-admission refusal counters. One coordinator thread owns the drain and persistence.
+A ticket moves
+`READY -> WRITTEN | WRITE_FAILED | UNDRAINED`; there is no `WRITING` state.
+Transcripts and summary/done markers are
 written to partial files, fsynced and renamed into place. The coordinator writes the
 summary and `session.done` before `SEALED`; the report treats a quiescence timeout as
 `partial`, never `accepted`. Native tables and the loaded library remain for process
@@ -627,28 +638,42 @@ executable/code window/patch bytes, the descriptor and target pins, the disposab
 Venice save, and that EU IV is closed. `run --authorize-live` launches one session,
 checks startup/session/PID, waits for a confirmed paused save, arms capture, bounds the
 wait, closes, verifies the save hash, and then reports. `report --run-dir` is offline
-and writes `session.json`, `manifest.json` and `summary.md`. Hard gates require the
-native formula and transcript counts to reconcile, the startup/session/PID and epoch
-to match, the done marker to be sealed, at least 50 A2-qualified live transcripts, and
-no malformed transcript; `accepted` means those gates pass. `clean` additionally
-requires zero `write_failed` and `undrained` loss. Unqualified transcripts and loss
-remain visible. A quiescence timeout reports `partial`; fewer than 50 qualified
-transcripts reports `insufficient`; a malformed transcript, stale startup, bad metadata
-or accounting failure reports `failed`.
+and writes `session.json` and `summary.md`; it creates `manifest.json` on the first
+report and, on every later report, verifies the existing manifest rather than
+overwriting it. The manifest binds the native summary, startup status, done marker,
+metadata and every `.capture` file, including exact current hashes; a mismatch fails
+the report and leaves the original manifest in place. The report also rejects negative
+counters, `admitted > quota`, and ticket filenames that are not
+`<session>.<0..63>.capture` (gaps are allowed because loss is legitimate). Hard gates
+require the native formula and transcript counts to reconcile, the startup/session/PID
+and epoch to match, the done marker to be sealed, at least 50 A2-qualified live
+transcripts, no malformed transcript, and no `write_failed` or `undrained` loss;
+`accepted` means all of those gates pass. Loss is reported, never hidden: a sealed
+session with storage loss fails strict acceptance. A quiescence timeout reports
+`partial`; fewer than 50 qualified transcripts reports `insufficient`; a malformed
+transcript, stale startup, bad metadata, loss, or accounting failure reports `failed`.
 
 Raw transcripts are **not committed by default**. Inspect the sealed session and the
 transcript bytes first; commit the summary and hash manifest, and commit raw
-transcripts only after explicit inspection/approval. The manifest binds the native
-summary, startup status, done marker, metadata and every `.capture` file.
+transcripts only after explicit inspection/approval.
+
+The portable reporter establishes A2 structural qualification and consistency of the
+evidence it reads. It does not cryptographically prove that a transcript labelled
+`synthetic=0` originated in the real game; the startup attestation and the
+operator-controlled launch are operational evidence, and stronger native-to-offline
+provenance remains PR E work.
 
 The native PR D tests cover admission/refusal accounting, live A2 qualification,
-guard-page read failure, post-close nesting, quota exhaustion, thread identity, write
-failure, detour-install failure and startup attestation failures. The portable report
-tests cover strict reconciliation, partial quiescence, stale startup/session/PID,
-synthetic transcripts, loss reporting, fewer-than-50 and zero-capture seals. These
-tests establish the mechanism; they do not establish live EU IV behavior, VM
-readability in the game process, or the acceptance target. That requires the single
-authorized live session.
+guard-page read failure, extent crossing into a protected page, unreadable required
+buffer, unreadable exit state, post-close nesting, late-publication loss, quota
+exhaustion and the 65th refusal, thread-table exhaustion with one refusal, thread
+identity, write failure, detour-install failure and startup attestation failures. The
+portable report tests cover strict reconciliation, partial quiescence, stale
+startup/session/PID, synthetic transcripts, strict loss rejection, numeric and ticket
+filename invariants, manifest verification/tamper retention, fewer-than-50 and
+zero-capture seals. These tests establish the mechanism; they do not establish live EU
+IV behavior, VM readability in the game process, or the acceptance target. That
+requires the single authorized live session.
 
 ### 8. The `gfx-v2` vocabulary (declared here, implemented in P4.11)
 

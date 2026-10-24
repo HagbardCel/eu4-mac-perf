@@ -370,9 +370,37 @@ def report(run_dir: Path) -> dict:
     descriptor = fixture.load_descriptor()
     descriptor_sha = descriptor["binary"]["sha256"]
     unique_calls: set[tuple[int, int]] = set()
+    ticket_numbers: set[int] = set()
     capture_files = sorted((run_dir / "captures").glob("*.capture")) \
         if (run_dir / "captures").is_dir() else []
     for path in capture_files:
+        if session is None:
+            malformed.append({"file": _relpath(path, run_dir),
+                              "error": "Native session is unavailable"})
+            continue
+        prefix = f"{session}."
+        suffix = ".capture"
+        name = path.name
+        ticket_text = (
+            name[len(prefix):-len(suffix)]
+            if name.startswith(prefix) and name.endswith(suffix) else ""
+        )
+        if (not ticket_text or not ticket_text.isascii() or
+                not ticket_text.isdigit() or
+                str(int(ticket_text)) != ticket_text):
+            malformed.append({"file": _relpath(path, run_dir),
+                              "error": "Unexpected ticket filename"})
+            continue
+        ticket = int(ticket_text)
+        if ticket < 0 or ticket >= QUOTA:
+            malformed.append({"file": _relpath(path, run_dir),
+                              "error": "Ticket number outside 0..63"})
+            continue
+        if ticket in ticket_numbers:
+            malformed.append({"file": _relpath(path, run_dir),
+                              "error": "Duplicate ticket filename"})
+            continue
+        ticket_numbers.add(ticket)
         try:
             text = path.read_text(encoding="utf-8")
             parsed = fixture.parse_capture(text)
@@ -423,53 +451,69 @@ def report(run_dir: Path) -> dict:
 
     if summary is not None:
         try:
-            for key in ("intercepted", "not_admitted", "admitted", "incomplete",
-                        "completed", "written", "write_failed", "undrained",
-                        "reserved", "ready", "quota", "threads", "pid",
-                        "started_ns", "armed_ns", "closed_ns"):
-                _integer(summary, key)
-            started_ns = _integer(summary, "started_ns")
-            armed_ns = _integer(summary, "armed_ns")
-            closed_ns = _integer(summary, "closed_ns")
+            numeric_keys = (
+                "intercepted", "not_admitted", "admitted", "incomplete",
+                "completed", "written", "write_failed", "undrained",
+                "reserved", "ready", "quota", "threads", "pid", "started_ns",
+                "armed_ns", "closed_ns", "not_admitted_busy",
+                "not_admitted_slot", "not_admitted_pointer",
+                "not_admitted_address", "not_admitted_quota",
+                "not_admitted_closed", "not_admitted_thread_limit")
+            values = {key: _integer(summary, key) for key in numeric_keys}
+            for key, value in values.items():
+                if value < 0:
+                    add_problem(f"Native counter {key} is negative")
+            if values["pid"] <= 0:
+                add_problem("Native PID is not positive")
+            if values["admitted"] > values["quota"]:
+                add_problem("Native admitted exceeds quota")
+            gates["numeric_invariants"] = (
+                all(value >= 0 for value in values.values()) and
+                values["pid"] > 0 and values["admitted"] <= values["quota"]
+            )
+
+            started_ns = values["started_ns"]
+            armed_ns = values["armed_ns"]
+            closed_ns = values["closed_ns"]
             gates["epoch"] = (
                 started_ns > 0 and armed_ns >= started_ns and closed_ns >= armed_ns
             )
             if not gates["epoch"]:
                 add_problem("Native epoch timestamps are not monotonic and armed")
-            reasons = sum(_integer(summary, key) for key in (
+            reasons = sum(values[key] for key in (
                 "not_admitted_busy", "not_admitted_slot",
                 "not_admitted_pointer", "not_admitted_address",
                 "not_admitted_quota", "not_admitted_closed",
                 "not_admitted_thread_limit"))
-            admitted = _integer(summary, "admitted")
-            incomplete = _integer(summary, "incomplete")
-            completed = _integer(summary, "completed")
-            written = _integer(summary, "written")
-            failed = _integer(summary, "write_failed")
-            undrained = _integer(summary, "undrained")
-            if _integer(summary, "not_admitted") != reasons:
+            admitted = values["admitted"]
+            incomplete = values["incomplete"]
+            completed = values["completed"]
+            written = values["written"]
+            failed = values["write_failed"]
+            undrained = values["undrained"]
+            if values["not_admitted"] != reasons:
                 add_problem("Native not-admitted total is inconsistent")
             if admitted != incomplete + completed:
                 add_problem("Native admitted != incomplete + completed")
             if completed != written + failed + undrained:
                 add_problem("Native completed != written + write_failed + undrained")
-            if _integer(summary, "intercepted") != admitted + reasons:
+            if values["intercepted"] != admitted + reasons:
                 add_problem("Native intercepted != admitted + not_admitted")
-            if _integer(summary, "ready") != 0 or _integer(summary, "reserved") != 0:
+            if values["ready"] != 0 or values["reserved"] != 0:
                 add_problem("Native session retained READY or RESERVED tickets")
             if written != len(capture_files):
                 add_problem("Native written count does not match transcript files")
-            if len({entry["thread"] for entry in transcripts}) > _integer(
-                    summary, "threads"):
+            if len({entry["thread"] for entry in transcripts}) > values["threads"]:
                 add_problem("Distinct transcript threads exceed the native thread table")
             if metadata.get("game_pid") is not None and \
-                    _integer(summary, "pid") != int(metadata["game_pid"]):
+                    values["pid"] != int(metadata["game_pid"]):
                 add_problem("Native PID does not match captured metadata")
             gates["native_reconciled"] = not any(
                 "Native " in problem for problem in problems)
         except LiveError as exc:
             add_problem(str(exc))
             gates["native_reconciled"] = False
+            gates["numeric_invariants"] = False
             gates["epoch"] = False
 
         state = summary.get("state")
@@ -551,18 +595,11 @@ def report(run_dir: Path) -> dict:
         loss["write_failed"] == 0 and loss["undrained"] == 0
         if summary else False
     )
-
-    hard_gates = {key: value for key, value in gates.items() if key != "no_loss"}
-    if any(problem for problem in problems
-           if "partial diagnostic" not in problem):
-        status = "failed"
-    elif summary is not None and summary.get("state") == "partial":
-        status = "partial"
-    elif len(qualified) >= ACCEPTANCE and all(hard_gates.values()):
-        status = "accepted"
-    else:
-        status = "insufficient"
-    clean = status == "accepted" and all(gates.values())
+    if summary is not None and (loss["write_failed"] or loss["undrained"]):
+        add_problem(
+            "Native session lost persisted captures; strict acceptance "
+            "requires zero write_failed and undrained"
+        )
 
     for path in (summary_path, startup_path, metadata_path,
                  run_dir / "session.done"):
@@ -570,6 +607,44 @@ def report(run_dir: Path) -> dict:
             file_hashes[_relpath(path, run_dir)] = base.sha256(path)
     for path in capture_files:
         file_hashes[_relpath(path, run_dir)] = base.sha256(path)
+
+    if any(problem for problem in problems
+           if "partial diagnostic" not in problem):
+        status = "failed"
+    elif summary is not None and summary.get("state") == "partial":
+        status = "partial"
+    elif len(qualified) >= ACCEPTANCE and all(gates.values()):
+        status = "accepted"
+    else:
+        status = "insufficient"
+
+    manifest = {
+        "schema": "eu4-gfx-live-manifest/v1",
+        "session": session,
+        "status": status,
+        "files": file_hashes,
+        "descriptor_sha256": base.sha256(
+            ROOT / "oracle/function/descriptors/gfx_set_constant_buffer.json"),
+        "library_sha256": base.sha256(LIBRARY) if LIBRARY.is_file() else None,
+    }
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.is_file():
+        try:
+            existing_manifest = json.loads(
+                manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            add_problem(f"Existing manifest is unreadable: {exc}")
+            status = "failed"
+        else:
+            if existing_manifest != manifest:
+                add_problem(
+                    "Existing manifest does not match the current evidence")
+                status = "failed"
+    else:
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8")
+    clean = status == "accepted" and all(gates.values())
 
     result = {
         "schema": "eu4-gfx-live-session/v1",
@@ -591,18 +666,6 @@ def report(run_dir: Path) -> dict:
     }
     (run_dir / "session.json").write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-    manifest = {
-        "schema": "eu4-gfx-live-manifest/v1",
-        "session": session,
-        "status": status,
-        "files": file_hashes,
-        "descriptor_sha256": base.sha256(
-            ROOT / "oracle/function/descriptors/gfx_set_constant_buffer.json"),
-        "library_sha256": base.sha256(LIBRARY) if LIBRARY.is_file() else None,
-    }
-    (run_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     lines = [
         "# Live _GfxSetConstantBuffer capture",

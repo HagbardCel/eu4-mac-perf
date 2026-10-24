@@ -31,6 +31,20 @@ typedef struct {
     uint8_t buffer[BUFFER_LENGTH];
 } fixture;
 
+typedef struct {
+    fixture value;
+    _Alignas(16) eu4_gfx_capture_frame frame;
+    _Atomic int entered;
+    _Atomic int release;
+} held_capture;
+
+typedef struct {
+    fixture value;
+    _Alignas(16) eu4_gfx_capture_frame frame;
+    _Atomic int ready;
+    _Atomic int release;
+} held_refusal;
+
 static int control_fd = -1;
 static _Atomic uint64_t *control;
 static size_t control_size;
@@ -72,6 +86,31 @@ static void set_control(uint64_t value) {
     atomic_store_explicit(control, value, memory_order_release);
 }
 
+static void wait_flag(_Atomic int *flag) {
+    while (!atomic_load_explicit(flag, memory_order_acquire)) {
+        sleep_ms(1);
+    }
+}
+
+static void open_gate(_Atomic int *gate) {
+    atomic_store_explicit(gate, 1, memory_order_release);
+}
+
+static bool wait_done_marker(const char *run_dir, unsigned timeout_ms) {
+    char path[1024];
+    int length = snprintf(path, sizeof(path), "%s/session.done", run_dir);
+    if (length < 0 || (size_t)length >= sizeof(path)) {
+        return false;
+    }
+    for (unsigned elapsed = 0; elapsed < timeout_ms; elapsed += 10) {
+        if (access(path, F_OK) == 0) {
+            return true;
+        }
+        sleep_ms(10);
+    }
+    return access(path, F_OK) == 0;
+}
+
 static void fill_fixture(fixture *value) {
     memset(value, 0, sizeof(*value));
     for (size_t i = 0; i < CTX_SPAN; i++) {
@@ -96,7 +135,6 @@ static void frame_for(eu4_gfx_capture_frame *frame, fixture *value,
 static void direct_capture(fixture *value, unsigned slot, int buffer_path) {
     _Alignas(16) eu4_gfx_capture_frame frame;
     frame_for(&frame, value, slot, buffer_path);
-    eu4_gfx_set_constant_buffer_capture_thread_init();
     eu4_gfx_set_constant_buffer_capture_entry(&frame);
     eu4_gfx_set_constant_buffer_capture_exit(&frame);
 }
@@ -110,7 +148,6 @@ static void direct_failure(fixture *value, uintptr_t handle_address,
     frame.rcx = 0xdeadbeef00000000ull | 3u;
     frame.r9 = 0xfeedface00000000ull | 13u;
     frame.rax = ctx_address;
-    eu4_gfx_set_constant_buffer_capture_thread_init();
     eu4_gfx_set_constant_buffer_capture_entry(&frame);
     eu4_gfx_set_constant_buffer_capture_exit(&frame);
 }
@@ -118,6 +155,24 @@ static void direct_failure(fixture *value, uintptr_t handle_address,
 static void *worker(void *argument) {
     fixture *value = (fixture *)argument;
     direct_capture(value, 3, 0);
+    return NULL;
+}
+
+static void *held_capture_worker(void *argument) {
+    held_capture *held = (held_capture *)argument;
+    eu4_gfx_set_constant_buffer_capture_entry(&held->frame);
+    atomic_store_explicit(&held->entered, 1, memory_order_release);
+    wait_flag(&held->release);
+    eu4_gfx_set_constant_buffer_capture_exit(&held->frame);
+    return NULL;
+}
+
+static void *thread_fill_worker(void *argument) {
+    held_refusal *held = (held_refusal *)argument;
+    eu4_gfx_set_constant_buffer_capture_entry(&held->frame);
+    eu4_gfx_set_constant_buffer_capture_exit(&held->frame);
+    atomic_store_explicit(&held->ready, 1, memory_order_release);
+    wait_flag(&held->release);
     return NULL;
 }
 
@@ -212,7 +267,6 @@ static int run_mode(const char *mode, const char *run_dir,
         _Alignas(16) eu4_gfx_capture_frame refused;
         frame_for(&accepted, &first, 2, 1);
         frame_for(&refused, &second, 3, 0);
-        eu4_gfx_set_constant_buffer_capture_thread_init();
         eu4_gfx_set_constant_buffer_capture_entry(&accepted);
         set_control(2);
         sleep_ms(100);
@@ -241,6 +295,157 @@ static int run_mode(const char *mode, const char *run_dir,
         }
         for (unsigned i = 0; i < 2; i++) {
             (void)pthread_join(workers[i], NULL);
+        }
+    } else if (strcmp(mode, "extent-cross") == 0) {
+        set_control(1);
+        sleep_ms(100);
+        long page = sysconf(_SC_PAGESIZE);
+        if (page <= 0) {
+            return fail("page size is unavailable");
+        }
+        uint8_t *pages = mmap(NULL, (size_t)page * 2,
+                              PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (pages == MAP_FAILED) {
+            return fail("cannot map crossing extent");
+        }
+        if (mprotect(pages + page, (size_t)page, PROT_NONE) != 0) {
+            return fail("cannot protect crossing extent");
+        }
+        uint8_t *ctx = pages + page - 0x100;
+        memset(ctx, 0x5a, 0x100);
+        fixture value;
+        fill_fixture(&value);
+        value.handle = (uint64_t)(uintptr_t)ctx;
+        direct_failure(&value, (uintptr_t)&value.handle,
+                       (uint64_t)(uintptr_t)ctx);
+        (void)munmap(pages, (size_t)page * 2);
+    } else if (strcmp(mode, "buffer-guard") == 0) {
+        set_control(1);
+        sleep_ms(100);
+        long page = sysconf(_SC_PAGESIZE);
+        if (page <= 0) {
+            return fail("page size is unavailable");
+        }
+        uint8_t *guard = mmap(NULL, (size_t)page, PROT_NONE,
+                              MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (guard == MAP_FAILED) {
+            return fail("cannot map buffer guard");
+        }
+        fixture value;
+        fill_fixture(&value);
+        _Alignas(16) eu4_gfx_capture_frame frame;
+        memset(&frame, 0, sizeof(frame));
+        frame.rdi = (uint64_t)(uintptr_t)&value.handle;
+        frame.rsi = (uint64_t)(uintptr_t)guard;
+        frame.rcx = 0xdeadbeef00000000ull | 3u;
+        frame.r9 = 0xfeedface00000000ull | 0xffffffffu;
+        frame.rax = (uint64_t)(uintptr_t)value.ctx;
+        eu4_gfx_set_constant_buffer_capture_entry(&frame);
+        eu4_gfx_set_constant_buffer_capture_exit(&frame);
+        (void)munmap(guard, (size_t)page);
+    } else if (strcmp(mode, "exit-guard") == 0) {
+        set_control(1);
+        sleep_ms(100);
+        long page = sysconf(_SC_PAGESIZE);
+        if (page <= 0) {
+            return fail("page size is unavailable");
+        }
+        uint8_t *ctx = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE,
+                            MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (ctx == MAP_FAILED) {
+            return fail("cannot map exit context");
+        }
+        memset(ctx, 0x5a, (size_t)page);
+        fixture value;
+        fill_fixture(&value);
+        value.handle = (uint64_t)(uintptr_t)ctx;
+        _Alignas(16) eu4_gfx_capture_frame frame;
+        frame_for(&frame, &value, 3, 0);
+        eu4_gfx_set_constant_buffer_capture_entry(&frame);
+        if (mprotect(ctx, (size_t)page, PROT_NONE) != 0) {
+            return fail("cannot protect exit context");
+        }
+        eu4_gfx_set_constant_buffer_capture_exit(&frame);
+        (void)munmap(ctx, (size_t)page);
+    } else if (strcmp(mode, "thread-full") == 0) {
+        set_control(1);
+        sleep_ms(100);
+        enum { FILLERS = 63 };
+        held_refusal *fillers = calloc(FILLERS, sizeof(*fillers));
+        if (fillers == NULL) {
+            return fail("cannot allocate thread fillers");
+        }
+        pthread_t threads[FILLERS];
+        for (unsigned i = 0; i < FILLERS; i++) {
+            fill_fixture(&fillers[i].value);
+            frame_for(&fillers[i].frame, &fillers[i].value, 7, 0);
+            if (pthread_create(&threads[i], NULL, thread_fill_worker,
+                               &fillers[i]) != 0) {
+                return fail("cannot create thread filler");
+            }
+        }
+        for (unsigned i = 0; i < FILLERS; i++) {
+            wait_flag(&fillers[i].ready);
+        }
+        fixture extra;
+        fill_fixture(&extra);
+        pthread_t refused;
+        if (pthread_create(&refused, NULL, worker, &extra) != 0) {
+            return fail("cannot create refused worker");
+        }
+        (void)pthread_join(refused, NULL);
+        for (unsigned i = 0; i < FILLERS; i++) {
+            open_gate(&fillers[i].release);
+        }
+        for (unsigned i = 0; i < FILLERS; i++) {
+            (void)pthread_join(threads[i], NULL);
+        }
+        free(fillers);
+    } else if (strcmp(mode, "quota-overflow") == 0) {
+        set_control(1);
+        sleep_ms(100);
+        held_capture *held = calloc(1, sizeof(*held));
+        if (held == NULL) {
+            return fail("cannot allocate held capture");
+        }
+        fill_fixture(&held->value);
+        frame_for(&held->frame, &held->value, 3, 0);
+        pthread_t producer;
+        if (pthread_create(&producer, NULL, held_capture_worker, held) != 0) {
+            return fail("cannot create held capture");
+        }
+        wait_flag(&held->entered);
+        fixture value;
+        fill_fixture(&value);
+        for (unsigned i = 0; i < 63; i++) {
+            direct_capture(&value, 3, 0);
+        }
+        direct_capture(&value, 3, 0);
+        open_gate(&held->release);
+        (void)pthread_join(producer, NULL);
+        free(held);
+    } else if (strcmp(mode, "late-publish") == 0) {
+        set_control(1);
+        sleep_ms(100);
+        held_capture *held = calloc(1, sizeof(*held));
+        if (held == NULL) {
+            return fail("cannot allocate held capture");
+        }
+        fill_fixture(&held->value);
+        frame_for(&held->frame, &held->value, 3, 0);
+        pthread_t producer;
+        if (pthread_create(&producer, NULL, held_capture_worker, held) != 0) {
+            return fail("cannot create held capture");
+        }
+        wait_flag(&held->entered);
+        set_control(2);
+        bool sealed = wait_done_marker(run_dir, 12000);
+        open_gate(&held->release);
+        (void)pthread_join(producer, NULL);
+        free(held);
+        if (!sealed) {
+            return fail("late publish session did not seal");
         }
     } else {
         return fail("unknown mode");

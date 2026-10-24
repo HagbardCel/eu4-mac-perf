@@ -75,7 +75,10 @@ typedef enum {
 } eu4_gfx_capture_refusal;
 
 typedef struct {
-    eu4_gfx_capture_record *(*thread_record)(void);
+    /* thread_claim registers outside the hook (constructor) or inside the
+     * armed-epoch guard; thread_lookup never registers. */
+    eu4_gfx_capture_record *(*thread_claim)(void);
+    eu4_gfx_capture_record *(*thread_lookup)(void);
     bool (*begin)(void);
     void (*end)(void);
     int (*admit)(const eu4_gfx_capture_frame *frame);
