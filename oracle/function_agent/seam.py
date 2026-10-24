@@ -153,8 +153,11 @@ def run_function_package(function_id: str, *, run_id: str, base_dir: Path, inner
     run = controller.run(config, adapter)
     isolation = catalog.held_out_report(run.run_dir / "workspace",
                                         fixtures_root=package.fixtures_root)
+    status = run.status
+    if status == controller.STATUS_CERTIFIED and not isolation["ok"]:
+        status = controller.STATUS_ACCEPTANCE_GATE_FAILED
     return SeamResult(
-        status=run.status,
+        status=status,
         claim=_claim(function_id, downstream=downstream, synthetic=synthetic,
                      evidence_tier=package.evidence_tier),
         package=package,

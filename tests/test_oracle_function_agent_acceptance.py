@@ -4,6 +4,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from oracle.function_agent import catalog, seam
 from oracle.slice import controller, receipts
@@ -118,6 +119,24 @@ class DefectiveSeamStandIn:
             },
             run=None,
         )
+
+
+class G3aIsolationFailClosedTests(unittest.TestCase):
+    def test_isolation_failure_downgrades_seam_certification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch(
+                "oracle.function_agent.seam.catalog.held_out_report",
+                return_value={
+                    "ok": False,
+                    "problems": ["held-out fixture detected"],
+                },
+            ):
+                result = _run_package(root, StubAdapter("repair"))
+            self.assertEqual(result.status, controller.STATUS_ACCEPTANCE_GATE_FAILED)
+            self.assertFalse(result.certified)
+            self.assertEqual(result.run.status, controller.STATUS_CERTIFIED)
+            receipts.verify(result.receipt, expected_sha256=result.receipt["sha256"])
 
 
 class G3aNegativeControlTests(unittest.TestCase):
