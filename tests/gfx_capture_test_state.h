@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 /* Offsets are used by tests/gfx_capture_observation.S. */
 typedef struct {
@@ -35,6 +36,19 @@ _Static_assert(offsetof(gfx_capture_test_state, xmm) == 136,
                "observation xmm offset");
 _Static_assert(sizeof(gfx_capture_test_state) == 392,
                "observation state size");
+
+static inline int gfx_capture_test_state_equal(
+    const gfx_capture_test_state *a, const gfx_capture_test_state *b) {
+    if (a->rax != b->rax || a->rbx != b->rbx || a->rcx != b->rcx ||
+        a->rdx != b->rdx || a->rsi != b->rsi || a->rdi != b->rdi ||
+        a->rbp != b->rbp || a->r8 != b->r8 || a->r9 != b->r9 ||
+        a->r10 != b->r10 || a->r11 != b->r11 || a->r12 != b->r12 ||
+        a->r13 != b->r13 || a->r14 != b->r14 || a->r15 != b->r15 ||
+        a->flags != b->flags || a->mxcsr != b->mxcsr) {
+        return 0;
+    }
+    return memcmp(a->xmm, b->xmm, sizeof(a->xmm)) == 0;
+}
 
 extern gfx_capture_test_state gfx_capture_test_seed;
 extern gfx_capture_test_state gfx_capture_test_capture;

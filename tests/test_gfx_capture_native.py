@@ -14,6 +14,7 @@ TESTS = ROOT / "tests"
 
 class GfxCaptureNativeTests(unittest.TestCase):
     def _clang(self, out: Path, *sources: str) -> None:
+        out.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [
                 "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra",

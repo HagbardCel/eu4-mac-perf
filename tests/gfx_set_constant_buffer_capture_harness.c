@@ -44,6 +44,13 @@ typedef struct {
     uint8_t buffer[BUFFER_LENGTH];
 } thread_fixture;
 
+typedef struct {
+    uint8_t ctx[CTX_SPAN];
+    uint8_t handle[HANDLE_LENGTH];
+    uint8_t buffer[BUFFER_LENGTH];
+    int buffer_path;
+} memory_snapshot;
+
 static int fail(const char *message) {
     fprintf(stderr, "%s\n", message);
     return 1;
@@ -57,6 +64,37 @@ static void fill_ctx(uint8_t *ctx) {
     for (size_t i = 0; i < CTX_SPAN; i++) {
         ctx[i] = pattern(i);
     }
+}
+
+static void reset_memory(fixture_memory *memory) {
+    fill_ctx(memory->ctx);
+    uint64_t ctx_value = (uint64_t)(uintptr_t)memory->ctx;
+    memcpy(memory->handle, &ctx_value, HANDLE_LENGTH);
+    if (memory->buffer_path) {
+        uint32_t length = 13;
+        memcpy(memory->buffer, &length, BUFFER_LENGTH);
+    }
+}
+
+static void snapshot_memory(const fixture_memory *memory,
+                            memory_snapshot *snapshot) {
+    memset(snapshot, 0, sizeof(*snapshot));
+    memcpy(snapshot->ctx, memory->ctx, CTX_SPAN);
+    memcpy(snapshot->handle, memory->handle, HANDLE_LENGTH);
+    snapshot->buffer_path = memory->buffer_path;
+    if (memory->buffer_path) {
+        memcpy(snapshot->buffer, memory->buffer, BUFFER_LENGTH);
+    }
+}
+
+static int memory_equal(const memory_snapshot *a, const memory_snapshot *b) {
+    if (a->buffer_path != b->buffer_path ||
+        memcmp(a->ctx, b->ctx, CTX_SPAN) != 0 ||
+        memcmp(a->handle, b->handle, HANDLE_LENGTH) != 0) {
+        return 0;
+    }
+    return !a->buffer_path ||
+           memcmp(a->buffer, b->buffer, BUFFER_LENGTH) == 0;
 }
 
 static void release_memory(fixture_memory *memory) {
@@ -291,8 +329,27 @@ static int run_hook(const char *subject, const char *scenario,
         target = code_map;
     }
 
+    eu4_gfx_set_constant_buffer_capture_thread_init();
+
+    reset_memory(&memory);
     seed_for(&memory, slot, buffer_path);
     gfx_capture_test_target = target;
+    gfx_capture_test_call_target();
+    gfx_capture_test_state unhooked = gfx_capture_test_capture;
+    uint64_t unhooked_pre = gfx_capture_test_pre_call_rsp;
+    uint64_t unhooked_post = gfx_capture_test_capture_rsp;
+    memory_snapshot unhooked_memory;
+    snapshot_memory(&memory, &unhooked_memory);
+    if (check_post(&memory, slot, buffer_path) != 0) {
+        if (code_map != NULL) {
+            (void)munmap(code_map, memory.page);
+        }
+        release_memory(&memory);
+        return 1;
+    }
+
+    reset_memory(&memory);
+    seed_for(&memory, slot, buffer_path);
     if (!eu4_gfx_set_constant_buffer_capture_install(target)) {
         if (code_map != NULL) {
             (void)munmap(code_map, memory.page);
@@ -300,16 +357,60 @@ static int run_hook(const char *subject, const char *scenario,
         release_memory(&memory);
         return fail("capture install failed");
     }
+    gfx_capture_test_target = target;
     gfx_capture_test_call_target();
     if (!eu4_gfx_capture_restore()) {
+        if (code_map != NULL) {
+            (void)munmap(code_map, memory.page);
+        }
+        release_memory(&memory);
         return fail("capture restore failed");
     }
-    if (check_post(&memory, slot, buffer_path) != 0) {
-        return 1;
+    if (!eu4_gfx_set_constant_buffer_capture_flush()) {
+        if (code_map != NULL) {
+            (void)munmap(code_map, memory.page);
+        }
+        release_memory(&memory);
+        return fail("capture flush failed");
+    }
+    if (eu4_gfx_set_constant_buffer_capture_refusals() != 0) {
+        if (code_map != NULL) {
+            (void)munmap(code_map, memory.page);
+        }
+        release_memory(&memory);
+        return fail("capture refused an invocation");
     }
 
-    printf("PRB-RECEIPT subject=%s scenario=%s synthetic=1\n", subject,
-           scenario);
+    gfx_capture_test_state hooked = gfx_capture_test_capture;
+    uint64_t hooked_pre = gfx_capture_test_pre_call_rsp;
+    uint64_t hooked_post = gfx_capture_test_capture_rsp;
+    memory_snapshot hooked_memory;
+    snapshot_memory(&memory, &hooked_memory);
+    if (check_post(&memory, slot, buffer_path) != 0) {
+        if (code_map != NULL) {
+            (void)munmap(code_map, memory.page);
+        }
+        release_memory(&memory);
+        return 1;
+    }
+    if (!gfx_capture_test_state_equal(&unhooked, &hooked) ||
+        unhooked_pre != hooked_pre || unhooked_post != hooked_post) {
+        if (code_map != NULL) {
+            (void)munmap(code_map, memory.page);
+        }
+        release_memory(&memory);
+        return fail("hooked and unhooked machine state differ");
+    }
+    if (!memory_equal(&unhooked_memory, &hooked_memory)) {
+        if (code_map != NULL) {
+            (void)munmap(code_map, memory.page);
+        }
+        release_memory(&memory);
+        return fail("hooked and unhooked declared memory differ");
+    }
+
+    printf("PRB-RECEIPT subject=%s scenario=%s synthetic=1 refusals=0\n",
+           subject, scenario);
     if (code_map != NULL) {
         (void)munmap(code_map, memory.page);
     }
@@ -334,8 +435,12 @@ static void *tls_thread(void *argument) {
     frame.rcx = 0xdeadbeef00000000ull | 3u;
     frame.r9 = 0xfeedface00000000ull | 13u;
     frame.rax = (uint64_t)(uintptr_t)fixture->ctx;
+    eu4_gfx_set_constant_buffer_capture_thread_init();
     eu4_gfx_set_constant_buffer_capture_entry(&frame);
     eu4_gfx_set_constant_buffer_capture_exit(&frame);
+    if (!eu4_gfx_set_constant_buffer_capture_flush()) {
+        return (void *)(uintptr_t)1;
+    }
     return NULL;
 }
 
@@ -350,8 +455,12 @@ static int run_tls(void) {
         }
     }
     for (int i = 0; i < 2; i++) {
-        if (pthread_join(threads[i], NULL) != 0) {
+        void *result = NULL;
+        if (pthread_join(threads[i], &result) != 0) {
             return fail("cannot join TLS thread");
+        }
+        if (result != NULL) {
+            return fail("TLS capture flush failed");
         }
     }
     printf("PRB-TLS synthetic=1\n");
@@ -379,17 +488,26 @@ static int run_busy(void) {
     make_direct_frame(&accepted_frame, &accepted);
     make_direct_frame(&refused_frame, &refused);
 
+    eu4_gfx_set_constant_buffer_capture_thread_init();
+    /* LIFO: B's refused exit must not finalize A's active capture. */
     eu4_gfx_set_constant_buffer_capture_entry(&accepted_frame);
     eu4_gfx_set_constant_buffer_capture_entry(&refused_frame);
-    eu4_gfx_set_constant_buffer_capture_exit(&accepted_frame);
     eu4_gfx_set_constant_buffer_capture_exit(&refused_frame);
+    eu4_gfx_set_constant_buffer_capture_exit(&accepted_frame);
+    if (!eu4_gfx_set_constant_buffer_capture_flush()) {
+        return fail("busy capture flush failed");
+    }
+    unsigned refusals = eu4_gfx_set_constant_buffer_capture_refusals();
+    if (refusals != 1) {
+        return fail("nested refusal was not counted once");
+    }
 
     printf("PRB-BUSY accepted_handle=0x%llx refused_handle=0x%llx "
-           "accepted_ctx=0x%llx refused_ctx=0x%llx\n",
+           "accepted_ctx=0x%llx refused_ctx=0x%llx refusals=%u\n",
            (unsigned long long)(uintptr_t)&accepted.handle,
            (unsigned long long)(uintptr_t)&refused.handle,
            (unsigned long long)(uintptr_t)accepted.ctx,
-           (unsigned long long)(uintptr_t)refused.ctx);
+           (unsigned long long)(uintptr_t)refused.ctx, refusals);
     return 0;
 }
 
@@ -401,6 +519,7 @@ static int run_refusal(void) {
     uint8_t buffer[BUFFER_LENGTH] = {13, 0, 0, 0};
     _Alignas(16) eu4_gfx_capture_frame frame;
 
+    eu4_gfx_set_constant_buffer_capture_thread_init();
     memset(&frame, 0, sizeof(frame));
     frame.rdi = 0;
     frame.rsi = (uint64_t)(uintptr_t)buffer;
@@ -425,7 +544,14 @@ static int run_refusal(void) {
     eu4_gfx_set_constant_buffer_capture_entry(&frame);
     eu4_gfx_set_constant_buffer_capture_exit(&frame);
 
-    printf("PRB-REFUSAL synthetic=1\n");
+    if (eu4_gfx_set_constant_buffer_capture_flush()) {
+        return fail("refused invocations produced a capture");
+    }
+    unsigned refusals = eu4_gfx_set_constant_buffer_capture_refusals();
+    if (refusals != 3) {
+        return fail("refusals were not counted");
+    }
+    printf("PRB-REFUSAL synthetic=1 refusals=%u flush=0\n", refusals);
     return 0;
 }
 

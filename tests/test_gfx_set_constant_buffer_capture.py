@@ -29,6 +29,7 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
         if platform.system() != "Darwin":
             raise unittest.SkipTest("requires macOS")
         cls.out = BENCH / ".build" / "gfx_set_constant_buffer_capture_harness"
+        cls.out.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [
                 "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra",
@@ -72,7 +73,8 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0,
                                  msg=result.stderr or result.stdout)
                 self.assertIn(
-                    f"PRB-RECEIPT subject=contract-stub scenario={scenario} synthetic=1",
+                    f"PRB-RECEIPT subject=contract-stub scenario={scenario} "
+                    "synthetic=1 refusals=0",
                     result.stdout)
 
                 text = self._capture(prefix)
@@ -138,21 +140,32 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
             code = mapper.read_bytes_at_rva(image_base, entry, end - entry)
         self.assertEqual(hashlib.sha256(code).hexdigest(), window["sha256"])
 
+        descriptor = fixture.load_descriptor()
         with tempfile.TemporaryDirectory() as tmp:
             code_path = Path(tmp) / "code.bin"
             code_path.write_bytes(code)
-            prefix = Path(tmp) / "capture"
-            result = self._run("hook", "original-code-window", "s03",
-                               str(code_path), prefix=prefix)
-            self.assertEqual(result.returncode, 0,
-                             msg=result.stderr or result.stdout)
-            self.assertIn(
-                "PRB-RECEIPT subject=original-code-window scenario=s03 synthetic=1",
-                result.stdout)
-            materialized = fixture.materialize_capture(
-                self._capture(prefix), fixture.load_descriptor())
-            self.assertEqual(materialized["manifest"]["verdict"], "qualified")
-            self.assertIs(materialized["record"]["raw"]["synthetic"], True)
+            for scenario in ("s03", "s10"):
+                with self.subTest(scenario=scenario):
+                    prefix = Path(tmp) / f"capture-{scenario}"
+                    result = self._run(
+                        "hook", "original-code-window", scenario,
+                        str(code_path), prefix=prefix)
+                    self.assertEqual(result.returncode, 0,
+                                     msg=result.stderr or result.stdout)
+                    self.assertIn(
+                        f"PRB-RECEIPT subject=original-code-window "
+                        f"scenario={scenario} synthetic=1 refusals=0",
+                        result.stdout)
+                    materialized = fixture.materialize_capture(
+                        self._capture(prefix), descriptor)
+                    self.assertEqual(materialized["manifest"]["verdict"],
+                                     "qualified")
+                    self.assertIs(
+                        materialized["record"]["raw"]["synthetic"], True)
+                    if scenario == "s10":
+                        self.assertNotIn(
+                            "read:buffer",
+                            materialized["manifest"]["coverage"])
 
     def test_tls_isolation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -186,7 +199,7 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
             self.assertEqual(int.from_bytes(handle0, "little"), ctx0 - 200)
             self.assertEqual(int.from_bytes(handle1, "little"), ctx1 - 200)
 
-    def test_busy_slot_refuses_second_entry(self) -> None:
+    def test_nested_refusal_keeps_outer_capture(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             prefix = Path(tmp) / "capture"
             result = self._run("busy", prefix=prefix)
@@ -196,13 +209,14 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
                 r"PRB-BUSY accepted_handle=(0x[0-9a-f]+) "
                 r"refused_handle=(0x[0-9a-f]+) "
                 r"accepted_ctx=(0x[0-9a-f]+) "
-                r"refused_ctx=(0x[0-9a-f]+)",
+                r"refused_ctx=(0x[0-9a-f]+) refusals=([0-9]+)",
                 result.stdout)
             self.assertIsNotNone(match, msg=result.stdout)
             accepted_handle = int(match.group(1), 16)
             refused_handle = int(match.group(2), 16)
             accepted_ctx = int(match.group(3), 16)
             refused_ctx = int(match.group(4), 16)
+            self.assertEqual(int(match.group(5)), 1)
 
             parsed = fixture.parse_capture(self._capture(prefix))
             self.assertEqual(parsed["capture"]["sequence"], 1)
@@ -212,6 +226,7 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
                               if region["phase"] == "pre" and region["name"] == "ctx")
             self.assertEqual(ctx_region["address"], accepted_ctx + 200)
             self.assertNotEqual(ctx_region["address"], refused_ctx + 200)
+            self.assertEqual(parsed["outcome"]["value"], accepted_ctx)
             self.assertFalse(Path(f"{prefix}.1").exists())
 
     def test_null_refusal_creates_no_capture(self) -> None:
@@ -220,7 +235,8 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
             result = self._run("refusal", prefix=prefix)
             self.assertEqual(result.returncode, 0,
                              msg=result.stderr or result.stdout)
-            self.assertIn("PRB-REFUSAL synthetic=1", result.stdout)
+            self.assertIn("PRB-REFUSAL synthetic=1 refusals=3 flush=0",
+                          result.stdout)
             self.assertFalse(Path(f"{prefix}.0").exists())
 
     def test_source_encoding_and_pins(self) -> None:
@@ -241,6 +257,16 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
         self.assertIn("synthetic=1", adapter)
         self.assertNotIn("synthetic=0", adapter)
         self.assertIn("EU4_GFX_CAPTURE_PATH", adapter)
+        self.assertIn("eu4_gfx_set_constant_buffer_capture_thread_init",
+                      adapter)
+        self.assertIn("eu4_gfx_set_constant_buffer_capture_flush", adapter)
+        self.assertIn("eu4_gfx_set_constant_buffer_capture_refusals", adapter)
+        callbacks = adapter[
+            adapter.index("void eu4_gfx_set_constant_buffer_capture_entry"):
+            adapter.index("bool eu4_gfx_set_constant_buffer_capture_flush")]
+        for forbidden in ("fopen", "fprintf", "getenv", "write_capture",
+                          "atomic_fetch_add"):
+            self.assertNotIn(forbidden, callbacks)
         self.assertIn(descriptor["binary"]["sha256"], adapter)
         self.assertIn(fixture.capture_policy_digest(descriptor), adapter)
 

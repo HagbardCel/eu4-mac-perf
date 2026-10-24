@@ -1,7 +1,6 @@
 #include "eu4_gfx_set_constant_buffer_capture.h"
 
 #include <assert.h>
-#include <limits.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -34,8 +33,17 @@ static const char function_id[] = "gfx:set-constant-buffer";
 static const char fidelity[] = "faithful";
 static const char policy_version[] = "p4-fid-v1";
 
+enum {
+    SLOT_IDLE = 0,
+    SLOT_ACTIVE,
+    SLOT_COMPLETE,
+};
+
 typedef struct {
-    int active;
+    int state;
+    unsigned depth;
+    unsigned capture_depth;
+    unsigned refusals;
     unsigned thread;
     unsigned long sequence;
     uint64_t rdi;
@@ -51,10 +59,17 @@ typedef struct {
     int buffer_path;
     uintptr_t buffer_address;
     uint8_t buffer[BUFFER_LENGTH];
+    uint8_t post_handle[HANDLE_LENGTH];
+    uint8_t post_ctx[OBSERVATION_LENGTH];
+    uint8_t post_canary_before[CANARY_LENGTH];
+    uint8_t post_canary_after[CANARY_LENGTH];
+    uint8_t post_buffer[BUFFER_LENGTH];
+    uint64_t outcome;
 } capture_slot;
 
 static _Thread_local capture_slot slot;
-static _Thread_local unsigned thread_number = UINT_MAX;
+static _Thread_local unsigned thread_number;
+static _Thread_local int thread_ready;
 static _Atomic unsigned next_thread_number = 0;
 
 static void emit_region(FILE *file, const char *tag, const char *name,
@@ -75,24 +90,19 @@ static void emit_carrier(FILE *file, const char *name, uint64_t value) {
             name, (unsigned long long)value);
 }
 
-static void write_capture(const uint8_t *handle,
-                          const uint8_t *ctx,
-                          const uint8_t *canary_before,
-                          const uint8_t *canary_after,
-                          const uint8_t *buffer,
-                          uint64_t outcome) {
+static bool write_capture(void) {
     const char *base = getenv("EU4_GFX_CAPTURE_PATH");
     if (base == NULL || base[0] == '\0') {
-        return;
+        return false;
     }
     char path[1024];
     int written = snprintf(path, sizeof(path), "%s.%u", base, slot.thread);
     if (written < 0 || (size_t)written >= sizeof(path)) {
-        return;
+        return false;
     }
     FILE *file = fopen(path, "w");
     if (file == NULL) {
-        return;
+        return false;
     }
 
     fprintf(file, "FUNCTION-CAPTURE v1\n");
@@ -120,19 +130,19 @@ static void write_capture(const uint8_t *handle,
                     BUFFER_LENGTH);
     }
 
-    emit_region(file, "EXIT", "handle", slot.handle_address, handle,
+    emit_region(file, "EXIT", "handle", slot.handle_address, slot.post_handle,
                 HANDLE_LENGTH);
-    emit_region(file, "EXIT", "ctx", slot.ctx_address + OBSERVATION_START, ctx,
-                OBSERVATION_LENGTH);
+    emit_region(file, "EXIT", "ctx", slot.ctx_address + OBSERVATION_START,
+                slot.post_ctx, OBSERVATION_LENGTH);
     emit_region(file, "EXIT", "canary-before",
-                slot.ctx_address + CANARY_BEFORE_START, canary_before,
-                CANARY_LENGTH);
+                slot.ctx_address + CANARY_BEFORE_START,
+                slot.post_canary_before, CANARY_LENGTH);
     emit_region(file, "EXIT", "canary-after",
-                slot.ctx_address + CANARY_AFTER_START, canary_after,
+                slot.ctx_address + CANARY_AFTER_START, slot.post_canary_after,
                 CANARY_LENGTH);
     if (slot.buffer_path) {
-        emit_region(file, "EXIT", "buffer", slot.buffer_address, buffer,
-                    BUFFER_LENGTH);
+        emit_region(file, "EXIT", "buffer", slot.buffer_address,
+                    slot.post_buffer, BUFFER_LENGTH);
     }
 
     emit_carrier(file, "RDI", slot.rdi);
@@ -140,21 +150,37 @@ static void write_capture(const uint8_t *handle,
     emit_carrier(file, "RCX", slot.rcx);
     emit_carrier(file, "R9", slot.r9);
     fprintf(file, "OUTCOME register=RAX value=0x%llx confidence=observed\n",
-            (unsigned long long)outcome);
+            (unsigned long long)slot.outcome);
     fprintf(file, "END regions=%u carriers=4 outcomes=1 losses=0\n",
             slot.buffer_path ? 10u : 8u);
-    fclose(file);
+    if (ferror(file)) {
+        (void)fclose(file);
+        return false;
+    }
+    return fclose(file) == 0;
+}
+
+void eu4_gfx_set_constant_buffer_capture_thread_init(void) {
+    if (thread_ready) {
+        return;
+    }
+    thread_number = atomic_fetch_add_explicit(
+        &next_thread_number, 1, memory_order_relaxed);
+    thread_ready = 1;
 }
 
 void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame) {
     assert(frame != NULL);
     assert(((uintptr_t)frame & 15u) == 0);
-    if (slot.active) {
+    slot.depth++;
+    if (slot.state != SLOT_IDLE) {
+        slot.refusals++;
         return;
     }
 
     uintptr_t handle = (uintptr_t)frame->rdi;
     if (handle == 0) {
+        slot.refusals++;
         return;
     }
     uint64_t ctx_address = 0;
@@ -162,15 +188,12 @@ void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame) {
     int buffer_path = ((uint32_t)frame->r9 == 0xffffffffu);
     uintptr_t buffer_address = (uintptr_t)frame->rsi;
     if (ctx_address == 0 || (buffer_path && buffer_address == 0)) {
+        slot.refusals++;
         return;
     }
 
-    if (thread_number == UINT_MAX) {
-        thread_number = atomic_fetch_add_explicit(
-            &next_thread_number, 1, memory_order_relaxed);
-    }
-
-    slot.active = 1;
+    slot.state = SLOT_ACTIVE;
+    slot.capture_depth = slot.depth;
     slot.thread = thread_number;
     slot.sequence++;
     slot.rdi = frame->rdi;
@@ -199,31 +222,47 @@ void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame) {
 void eu4_gfx_set_constant_buffer_capture_exit(eu4_gfx_capture_frame *frame) {
     assert(frame != NULL);
     assert(((uintptr_t)frame & 15u) == 0);
-    if (!slot.active) {
+    if (slot.depth == 0) {
         return;
     }
 
-    uint8_t handle[HANDLE_LENGTH];
-    uint8_t ctx[OBSERVATION_LENGTH];
-    uint8_t canary_before[CANARY_LENGTH];
-    uint8_t canary_after[CANARY_LENGTH];
-    uint8_t buffer[BUFFER_LENGTH] = {0};
+    unsigned exiting_depth = slot.depth;
+    slot.depth = exiting_depth - 1;
+    if (slot.state != SLOT_ACTIVE || exiting_depth != slot.capture_depth) {
+        return;
+    }
 
-    memcpy(handle, (const void *)slot.handle_address, HANDLE_LENGTH);
-    memcpy(ctx, (const void *)(slot.ctx_address + OBSERVATION_START),
+    memcpy(slot.post_handle, (const void *)slot.handle_address, HANDLE_LENGTH);
+    memcpy(slot.post_ctx,
+           (const void *)(slot.ctx_address + OBSERVATION_START),
            OBSERVATION_LENGTH);
-    memcpy(canary_before,
+    memcpy(slot.post_canary_before,
            (const void *)(slot.ctx_address + CANARY_BEFORE_START),
            CANARY_LENGTH);
-    memcpy(canary_after,
+    memcpy(slot.post_canary_after,
            (const void *)(slot.ctx_address + CANARY_AFTER_START),
            CANARY_LENGTH);
     if (slot.buffer_path) {
-        memcpy(buffer, (const void *)slot.buffer_address, BUFFER_LENGTH);
+        memcpy(slot.post_buffer, (const void *)slot.buffer_address,
+               BUFFER_LENGTH);
     }
+    slot.outcome = frame->rax;
+    slot.state = SLOT_COMPLETE;
+}
 
-    write_capture(handle, ctx, canary_before, canary_after, buffer, frame->rax);
-    slot.active = 0;
+bool eu4_gfx_set_constant_buffer_capture_flush(void) {
+    if (slot.state != SLOT_COMPLETE) {
+        return false;
+    }
+    if (!write_capture()) {
+        return false;
+    }
+    slot.state = SLOT_IDLE;
+    return true;
+}
+
+unsigned eu4_gfx_set_constant_buffer_capture_refusals(void) {
+    return slot.refusals;
 }
 
 bool eu4_gfx_set_constant_buffer_capture_install(void *site) {
