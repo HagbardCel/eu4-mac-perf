@@ -1,27 +1,25 @@
-"""Independent E1 acceptance contract (E2-owned).
-
-Implementation agents must not edit this package. Assertions treat
-``oracle.certify.certify_session`` as a black box.
-"""
+"""Independent E1 acceptance contract (E2-owned)."""
 
 from .contract import (
     CERTIFICATE_SCHEMA,
+    assert_build_binding_honest,
     assert_certificate_shape,
     assert_evidence_not_live_grounded,
+    assert_evaluation_counts,
     assert_promotion,
     assert_rejects_false_certification,
-    assert_trusted_build_required,
     false_certifier_stand_in,
-    self_declared_build_stand_in,
+    forged_executable_binding_stand_in,
 )
 
 __all__ = [
     "CERTIFICATE_SCHEMA",
+    "assert_build_binding_honest",
     "assert_certificate_shape",
     "assert_evidence_not_live_grounded",
+    "assert_evaluation_counts",
     "assert_promotion",
     "assert_rejects_false_certification",
-    "assert_trusted_build_required",
     "false_certifier_stand_in",
-    "self_declared_build_stand_in",
+    "forged_executable_binding_stand_in",
 ]
