@@ -477,6 +477,44 @@ static void make_direct_frame(eu4_gfx_capture_frame *frame,
     frame->rax = (uint64_t)(uintptr_t)fixture->ctx;
 }
 
+typedef struct {
+    int flushed;
+    unsigned refusals;
+} unregistered_result;
+
+static void *unregistered_thread(void *argument) {
+    unregistered_result *result = (unregistered_result *)argument;
+    thread_fixture fixture;
+    fill_thread_fixture(&fixture);
+    _Alignas(16) eu4_gfx_capture_frame frame;
+    make_direct_frame(&frame, &fixture);
+    eu4_gfx_set_constant_buffer_capture_entry(&frame);
+    eu4_gfx_set_constant_buffer_capture_exit(&frame);
+    result->flushed = eu4_gfx_set_constant_buffer_capture_flush();
+    result->refusals = eu4_gfx_set_constant_buffer_capture_refusals();
+    return NULL;
+}
+
+static int run_unregistered(void) {
+    unregistered_result result = {0, 0};
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, unregistered_thread, &result) != 0) {
+        return fail("cannot create unregistered thread");
+    }
+    if (pthread_join(thread, NULL) != 0) {
+        return fail("cannot join unregistered thread");
+    }
+    if (result.flushed) {
+        return fail("unregistered thread produced a capture");
+    }
+    if (result.refusals != 1) {
+        return fail("unregistered thread refusal was not counted");
+    }
+    printf("PRB-UNREGISTERED synthetic=1 refusals=%u flush=0\n",
+           result.refusals);
+    return 0;
+}
+
 static int run_busy(void) {
     thread_fixture accepted;
     thread_fixture refused;
@@ -558,7 +596,7 @@ static int run_refusal(void) {
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "usage: %s hook <subject> <scenario> [code] | "
-                        "tls | busy | refusal\n",
+                        "tls | busy | refusal | unregistered\n",
                 argv[0]);
         return 2;
     }
@@ -586,6 +624,12 @@ int main(int argc, char **argv) {
             return fail("refusal takes no arguments");
         }
         return run_refusal();
+    }
+    if (strcmp(argv[1], "unregistered") == 0) {
+        if (argc != 2) {
+            return fail("unregistered takes no arguments");
+        }
+        return run_unregistered();
     }
     return fail("unknown mode");
 }

@@ -448,9 +448,11 @@ identity remains the pre-PR-D admission preflight.
 The entry and exit callbacks only copy the constructed pre/post state and outcome into
 a per-thread slot and update its nesting and refusal counters. They perform no
 filesystem I/O, allocation, locking or game calls.
-Thread ids are assigned once by an explicit `thread_init` outside the hook. The harness
-calls `flush_capture` after the target returns and the hook is restored; a completed
-record remains in TLS until then, and a second capture before that flush is refused.
+Thread ids are assigned once by an explicit `thread_init` outside the hook. A thread
+that has not registered is refused and counted rather than silently recorded as thread
+0; PR D must establish which game threads register. The harness calls `flush_capture`
+after the target returns and the hook is restored; a completed record remains in TLS
+until then, and a second capture before that flush is refused.
 A per-thread refusal counter distinguishes a successful capture from one skipped
 because the slot was busy or required input was absent. That counter is not an A2 loss
 and does not change the transcript schema.

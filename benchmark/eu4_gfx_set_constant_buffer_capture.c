@@ -173,6 +173,10 @@ void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame) {
     assert(frame != NULL);
     assert(((uintptr_t)frame & 15u) == 0);
     slot.depth++;
+    if (!thread_ready) {
+        slot.refusals++;
+        return;
+    }
     if (slot.state != SLOT_IDLE) {
         slot.refusals++;
         return;

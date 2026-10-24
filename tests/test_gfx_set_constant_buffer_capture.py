@@ -239,6 +239,16 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
                           result.stdout)
             self.assertFalse(Path(f"{prefix}.0").exists())
 
+    def test_unregistered_thread_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp) / "capture"
+            result = self._run("unregistered", prefix=prefix)
+            self.assertEqual(result.returncode, 0,
+                             msg=result.stderr or result.stdout)
+            self.assertIn("PRB-UNREGISTERED synthetic=1 refusals=1 flush=0",
+                          result.stdout)
+            self.assertFalse(Path(f"{prefix}.0").exists())
+
     def test_source_encoding_and_pins(self) -> None:
         installer = (BENCH / "eu4_gfx_capture_detour.c").read_text()
         gateway = (BENCH / "eu4_gfx_capture_gateway.S").read_text()
@@ -267,6 +277,7 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
         for forbidden in ("fopen", "fprintf", "getenv", "write_capture",
                           "atomic_fetch_add"):
             self.assertNotIn(forbidden, callbacks)
+        self.assertIn("if (!thread_ready)", callbacks)
         self.assertIn(descriptor["binary"]["sha256"], adapter)
         self.assertIn(fixture.capture_policy_digest(descriptor), adapter)
 
