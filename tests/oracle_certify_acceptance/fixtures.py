@@ -6,6 +6,7 @@ import sys
 import tempfile
 from hashlib import sha256
 from pathlib import Path
+from typing import Callable
 
 ROOT = Path(__file__).resolve().parents[2]
 BENCH = ROOT / "benchmark"
@@ -17,53 +18,110 @@ from oracle.function import fixture, synthetic  # noqa: E402
 
 SESSION = "gfx-e1-acceptance"
 ACCEPTANCE = 50
+DESCRIPTOR_PATH = ROOT / "oracle/function/descriptors/gfx_set_constant_buffer.json"
+
+
+def descriptor_sha256() -> str:
+    return base.sha256(DESCRIPTOR_PATH)
 
 
 def _file_hash(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
 
 
-def _transcript(thread: int, *, synthetic_flag: int) -> str:
-    text = synthetic.capture_text(fixture.load_descriptor(), "s03")
-    text = text.replace(
-        "capture=re0-pilot scenario=s03:length-from-buffer epoch=synthetic-a2",
-        f"capture={SESSION} scenario=live:length-from-buffer epoch=p5a-live",
-    )
+def _scenario_for_thread(thread: int) -> str:
+    return "s03" if thread % 2 == 0 else "s10"
+
+
+def transcript_for_thread(thread: int, *, synthetic_flag: int = 0) -> str:
+    scenario = _scenario_for_thread(thread)
+    text = synthetic.capture_text(fixture.load_descriptor(), scenario)
+    if scenario == "s03":
+        text = text.replace(
+            "capture=re0-pilot scenario=s03:length-from-buffer epoch=synthetic-a2",
+            f"capture={SESSION} scenario=live:length-from-buffer epoch=p5a-live",
+        )
+    else:
+        text = text.replace(
+            "capture=re0-pilot scenario=s10:explicit-length epoch=synthetic-a2",
+            f"capture={SESSION} scenario=live:explicit-length epoch=p5a-live",
+        )
     text = text.replace("thread=0 sequence=3", f"thread={thread} sequence=1")
     text = text.replace("synthetic=1", f"synthetic={synthetic_flag}")
     return text
 
 
-def build_mock_live_session(
-        *,
-        file_count: int = ACCEPTANCE,
-        synthetic_flag: int = 0,
-        omit_capture: int | None = None,
-) -> Path:
-    """Structurally valid mock live session with a pre-existing manifest."""
-    root = Path(tempfile.mkdtemp(prefix="e1-accept-"))
-    descriptor = fixture.load_descriptor()
-    descriptor_sha = base.sha256(
-        ROOT / "oracle/function/descriptors/gfx_set_constant_buffer.json")
-    binary_sha = descriptor["binary"]["sha256"]
-    library_sha = base.sha256(live.LIBRARY) if live.LIBRARY.is_file() else None
-
-    captures = root / "captures"
-    captures.mkdir()
-    names: list[str] = []
-    for thread in range(file_count):
-        if omit_capture is not None and thread == omit_capture:
+def rewrite_exit_ctx_word_count(text: str, slot: int, word_count: int) -> str:
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if not line.startswith("EXIT name=ctx "):
             continue
-        name = f"{SESSION}.{thread}.capture"
-        (captures / name).write_text(
-            _transcript(thread, synthetic_flag=synthetic_flag), encoding="utf-8")
-        names.append(name)
+        parts = line.split()[1:]
+        fields = dict(part.split("=", 1) for part in parts)
+        data = bytearray.fromhex(fields["bytes"])
+        start = slot * 16 + 0x0C
+        data[start:start + 4] = word_count.to_bytes(4, "little")
+        fields["bytes"] = data.hex()
+        lines[index] = "EXIT " + " ".join(f"{key}={value}"
+                                          for key, value in fields.items())
+        return "\n".join(lines) + "\n"
+    raise AssertionError("the transcript has no EXIT ctx region")
 
+
+def _write_tables(root: Path, capture_names: list[str],
+                  summary: dict[str, str], startup: dict[str, str],
+                  metadata: dict) -> None:
     def table(header: str, values: dict[str, str]) -> str:
         return "\n".join([header, *(f"{k}={v}" for k, v in values.items()),
                           "END"]) + "\n"
 
-    summary = {
+    (root / "summary.native").write_text(
+        table(live.SUMMARY_HEADER, summary), encoding="utf-8")
+    (root / "startup.status").write_text(
+        table(live.STARTUP_HEADER, startup), encoding="utf-8")
+    (root / "session.done").write_text(
+        table(live.DONE_HEADER, {"session": SESSION, "state": "sealed"}),
+        encoding="utf-8")
+    (root / "metadata.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def reseal_manifest(root: Path, *, status: str = "accepted") -> None:
+    """Recompute manifest file hashes (synthetic test fixtures only)."""
+    descriptor = fixture.load_descriptor()
+    descriptor_sha = descriptor_sha256()
+    library_sha = base.sha256(live.LIBRARY) if live.LIBRARY.is_file() else None
+    file_hashes: dict[str, str] = {}
+    for rel in ("summary.native", "startup.status", "session.done", "metadata.json"):
+        file_hashes[rel] = _file_hash(root / rel)
+    captures = root / "captures"
+    for path in sorted(captures.glob("*.capture")):
+        file_hashes[f"captures/{path.name}"] = _file_hash(path)
+    manifest = {
+        "schema": "eu4-gfx-live-manifest/v1",
+        "session": SESSION,
+        "status": status,
+        "files": file_hashes,
+        "descriptor_sha256": descriptor_sha,
+        "library_sha256": library_sha,
+    }
+    (root / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def verify_manifest_matches_files(root: Path) -> None:
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    for rel, expected in manifest["files"].items():
+        path = root / rel
+        if not path.is_file():
+            raise AssertionError(f"manifest lists missing file: {rel}")
+        actual = _file_hash(path)
+        if actual != expected:
+            raise AssertionError(f"manifest digest mismatch for {rel}")
+
+
+def _default_summary(file_count: int, written: int) -> dict[str, str]:
+    return {
         "session": SESSION,
         "pid": "123",
         "state": "sealed",
@@ -86,12 +144,36 @@ def build_mock_live_session(
         "admitted": str(file_count),
         "incomplete": "0",
         "completed": str(file_count),
-        "written": str(len(names)),
+        "written": str(written),
         "write_failed": "0",
         "undrained": "0",
         "reserved": "0",
         "ready": "0",
     }
+
+
+def build_mock_live_session(
+        *,
+        file_count: int = ACCEPTANCE,
+        synthetic_flag: int = 0,
+        transcript_mutator: Callable[[int, str], str] | None = None,
+) -> Path:
+    root = Path(tempfile.mkdtemp(prefix="e1-accept-"))
+    descriptor = fixture.load_descriptor()
+    binary_sha = descriptor["binary"]["sha256"]
+    library_sha = base.sha256(live.LIBRARY) if live.LIBRARY.is_file() else None
+
+    captures = root / "captures"
+    captures.mkdir()
+    names: list[str] = []
+    for thread in range(file_count):
+        name = f"{SESSION}.{thread}.capture"
+        text = transcript_for_thread(thread, synthetic_flag=synthetic_flag)
+        if transcript_mutator is not None:
+            text = transcript_mutator(thread, text)
+        (captures / name).write_text(text, encoding="utf-8")
+        names.append(name)
+
     startup = {
         "state": "installed",
         "session": SESSION,
@@ -110,32 +192,50 @@ def build_mock_live_session(
         "capture_files": len(names),
         "save_sha256": "a" * 64,
         "save_after_sha256": "a" * 64,
-        "descriptor_sha256": descriptor_sha,
+        "descriptor_sha256": descriptor_sha256(),
         "library_sha256": library_sha,
     }
-    (root / "summary.native").write_text(
-        table(live.SUMMARY_HEADER, summary), encoding="utf-8")
-    (root / "startup.status").write_text(
-        table(live.STARTUP_HEADER, startup), encoding="utf-8")
-    (root / "session.done").write_text(
-        table(live.DONE_HEADER, {"session": SESSION, "state": "sealed"}),
-        encoding="utf-8")
-    (root / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
-
-    file_hashes: dict[str, str] = {}
-    for rel in ("summary.native", "startup.status", "session.done", "metadata.json"):
-        file_hashes[rel] = _file_hash(root / rel)
-    for name in names:
-        file_hashes[f"captures/{name}"] = _file_hash(captures / name)
-
-    manifest = {
-        "schema": "eu4-gfx-live-manifest/v1",
-        "session": SESSION,
-        "status": "accepted" if len(names) >= ACCEPTANCE else "insufficient",
-        "files": file_hashes,
-        "descriptor_sha256": descriptor_sha,
-        "library_sha256": library_sha,
-    }
-    (root / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_tables(root, names, _default_summary(file_count, len(names)),
+                  startup, metadata)
+    reseal_manifest(root)
+    verify_manifest_matches_files(root)
     return root
+
+
+def case_a_delete_one_capture(root: Path) -> None:
+    """Post-seal tamper: remove one capture without updating manifest."""
+    verify_manifest_matches_files(root)
+    first = next((root / "captures").glob("*.capture"))
+    first.unlink()
+
+
+def case_b_descriptor_pin_mismatch(root: Path) -> None:
+    metadata = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
+    metadata["descriptor_sha256"] = "f" * 64
+    (root / "metadata.json").write_text(
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    reseal_manifest(root)
+    verify_manifest_matches_files(root)
+
+
+def case_b_pid_disagreement(root: Path) -> None:
+    summary = (root / "summary.native").read_text(encoding="utf-8")
+    summary = summary.replace("pid=123", "pid=999")
+    (root / "summary.native").write_text(summary, encoding="utf-8")
+    reseal_manifest(root)
+    verify_manifest_matches_files(root)
+
+
+def build_forty_nine_one_mismatch_session() -> Path:
+    """One observation has a mismatched but structurally valid EXIT ctx word count."""
+
+    def mutator(thread: int, text: str) -> str:
+        if thread != 0:
+            return text
+        return rewrite_exit_ctx_word_count(text, slot=2, word_count=99)
+
+    return build_mock_live_session(transcript_mutator=mutator)
+
+
+def capture_paths(root: Path) -> list[Path]:
+    return sorted((root / "captures").glob("*.capture"))
