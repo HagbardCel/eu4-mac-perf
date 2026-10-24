@@ -149,6 +149,66 @@ class GfxLiveReportTests(unittest.TestCase):
         manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(len(manifest["files"]), 64 + 4)
 
+    def test_pid_consensus_is_required(self) -> None:
+        def metadata_file(root: Path) -> Path:
+            return root / "metadata.json"
+
+        def load(root: Path) -> dict:
+            return json.loads(metadata_file(root).read_text(encoding="utf-8"))
+
+        def save(root: Path, value: object) -> None:
+            metadata_file(root).write_text(json.dumps(value), encoding="utf-8")
+
+        def set_pid(root: Path, value: object) -> None:
+            metadata = load(root)
+            metadata["game_pid"] = value
+            save(root, metadata)
+
+        def remove_pid(root: Path) -> None:
+            metadata = load(root)
+            del metadata["game_pid"]
+            save(root, metadata)
+
+        cases = (
+            ("missing", {}, remove_pid, "game_pid"),
+            ("null", {}, lambda root: set_pid(root, None), "game_pid"),
+            ("non-integer", {}, lambda root: set_pid(root, "not-a-pid"),
+             "game_pid"),
+            ("boolean", {}, lambda root: set_pid(root, True), "game_pid"),
+            ("non-object", {}, lambda root: save(root, []), "JSON object"),
+            ("launch mismatch", {}, lambda root: set_pid(root, 999),
+             "PIDs do not match"),
+            ("startup mismatch", {"startup_overrides": {"pid": "999"}},
+             lambda root: None, "PIDs do not match"),
+            ("native mismatch", {"summary_overrides": {"pid": "999"}},
+             lambda root: None, "PIDs do not match"),
+        )
+        for name, kwargs, mutate, expected in cases:
+            with self.subTest(case=name):
+                root = self._run(**kwargs)
+                mutate(root)
+                result = live.report(root)
+                self.assertEqual(result["status"], "failed")
+                self.assertFalse(result["gates"]["pids"])
+                self.assertTrue(
+                    any(expected in problem for problem in result["problems"]),
+                    result["problems"])
+
+    def test_thread_table_capacity_is_enforced(self) -> None:
+        cases = (
+            ("zero", "0", "no registered threads"),
+            ("over", "65", "exceeds the thread table"),
+        )
+        for name, threads, expected in cases:
+            with self.subTest(case=name):
+                root = self._run(summary_overrides={"threads": threads})
+                result = live.report(root)
+                self.assertEqual(result["status"], "failed")
+                self.assertFalse(result["gates"]["numeric_invariants"])
+                self.assertTrue(
+                    any(expected in problem for problem in result["problems"]),
+                    result["problems"])
+
     def test_manifest_is_created_once_and_verified(self) -> None:
         root = self._run(file_count=50)
         first = live.report(root)

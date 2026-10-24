@@ -33,6 +33,7 @@ LIBRARY = BUILD / "libeu4_gfx_live_capture.dylib"
 TARGET_RVA = 0x15EC36A
 PATCH_BYTES = bytes.fromhex("554889e5488b0789c94183f9ff")
 QUOTA = 64
+THREADS = 64
 ACCEPTANCE = 50
 CONTROL_BYTES = 4096
 SOURCES = (
@@ -328,10 +329,13 @@ def _relpath(path: Path, root: Path) -> str:
 def report(run_dir: Path) -> dict:
     run_dir = run_dir.expanduser().resolve()
     problems: list[str] = []
-    gates: dict[str, bool] = {}
+    gates: dict[str, bool] = {"pids": False}
     summary: dict[str, str] | None = None
     startup: dict[str, str] | None = None
     metadata: dict = {}
+    metadata_pid: int | None = None
+    startup_pid: int | None = None
+    native_pid: int | None = None
     transcripts: list[dict] = []
     qualified: list[dict] = []
     unqualified: list[dict] = []
@@ -360,9 +364,20 @@ def report(run_dir: Path) -> dict:
         add_problem(str(exc))
     if metadata_path.is_file():
         try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            parsed_metadata = json.loads(
+                metadata_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             add_problem(f"Malformed metadata.json: {exc}")
+        else:
+            if isinstance(parsed_metadata, dict):
+                metadata = parsed_metadata
+                game_pid = metadata.get("game_pid")
+                if type(game_pid) is int and game_pid > 0:
+                    metadata_pid = game_pid
+                else:
+                    add_problem("Launch metadata game_pid is missing or invalid")
+            else:
+                add_problem("Malformed metadata.json: expected a JSON object")
     else:
         add_problem("Missing metadata.json")
 
@@ -460,6 +475,7 @@ def report(run_dir: Path) -> dict:
                 "not_admitted_address", "not_admitted_quota",
                 "not_admitted_closed", "not_admitted_thread_limit")
             values = {key: _integer(summary, key) for key in numeric_keys}
+            native_pid = values["pid"]
             for key, value in values.items():
                 if value < 0:
                     add_problem(f"Native counter {key} is negative")
@@ -467,9 +483,16 @@ def report(run_dir: Path) -> dict:
                 add_problem("Native PID is not positive")
             if values["admitted"] > values["quota"]:
                 add_problem("Native admitted exceeds quota")
+            if values["threads"] > THREADS:
+                add_problem("Native thread count exceeds the thread table")
+            if values["armed_ns"] > 0 and values["threads"] == 0:
+                add_problem("Native armed session has no registered threads")
             gates["numeric_invariants"] = (
                 all(value >= 0 for value in values.values()) and
-                values["pid"] > 0 and values["admitted"] <= values["quota"]
+                values["pid"] > 0 and
+                values["admitted"] <= values["quota"] and
+                values["threads"] <= THREADS and
+                (values["armed_ns"] == 0 or values["threads"] > 0)
             )
 
             started_ns = values["started_ns"]
@@ -505,9 +528,6 @@ def report(run_dir: Path) -> dict:
                 add_problem("Native written count does not match transcript files")
             if len({entry["thread"] for entry in transcripts}) > values["threads"]:
                 add_problem("Distinct transcript threads exceed the native thread table")
-            if metadata.get("game_pid") is not None and \
-                    values["pid"] != int(metadata["game_pid"]):
-                add_problem("Native PID does not match captured metadata")
             gates["native_reconciled"] = not any(
                 "Native " in problem for problem in problems)
         except LiveError as exc:
@@ -551,9 +571,9 @@ def report(run_dir: Path) -> dict:
             site = _integer(startup, "site", hexadecimal=True)
             if site != image_base + TARGET_RVA:
                 add_problem("Startup site is not image_base + pinned RVA")
-            if metadata.get("game_pid") is not None and \
-                    _integer(startup, "pid") != int(metadata["game_pid"]):
-                add_problem("Startup PID does not match captured metadata")
+            startup_pid = _integer(startup, "pid")
+            if startup_pid <= 0:
+                add_problem("Startup PID is not positive")
         except (LiveError, TypeError, ValueError) as exc:
             add_problem(f"Startup address/PID check failed: {exc}")
         executable = startup.get("executable")
@@ -561,6 +581,14 @@ def report(run_dir: Path) -> dict:
             add_problem("Startup executable does not match the GOG executable")
     else:
         gates["startup_installed"] = False
+
+    if (metadata_pid is not None and startup_pid is not None and
+            native_pid is not None and
+            metadata_pid > 0 and startup_pid > 0 and native_pid > 0):
+        if metadata_pid == startup_pid == native_pid:
+            gates["pids"] = True
+        else:
+            add_problem("Launch, startup and native PIDs do not match")
 
     if metadata:
         if metadata.get("error"):
