@@ -438,6 +438,37 @@ record it produces says so in `raw.synthetic`. A2 is not a general descriptor
 framework: a second function may add its own small closure branch rather than
 generalize this one.
 
+**PR B — passive hook boundary.** PR B adds the first observation-only call-through
+hook for `_GfxSetConstantBuffer` at `loaded_image_base + 0x15ec36a`; it writes the
+existing A2 transcript and does not replay, compare or launch EU IV. The native
+installer validates only the 13 patch-site bytes (`55 48 89 e5 48 8b 07 89 c9 41 83
+f9 ff`) and installs a register-neutral near relay and trampoline; full binary
+identity remains the pre-PR-D admission preflight.
+
+The entry and exit callbacks only copy the constructed pre/post state and outcome into
+a per-thread slot and update its nesting and refusal counters. They perform no
+filesystem I/O, allocation, locking or game calls.
+Thread ids are assigned once by an explicit `thread_init` outside the hook. A thread
+that has not registered is refused and counted rather than silently recorded as thread
+0; PR D must establish which game threads register. The harness calls `flush_capture`
+after the target returns and the hook is restored; a completed record remains in TLS
+until then, and a second capture before that flush is refused.
+A per-thread refusal counter distinguishes a successful capture from one skipped
+because the slot was busy or required input was absent. That counter is not an A2 loss
+and does not change the transcript schema.
+
+The offline tests run each `s03`/`s10` scenario unhooked and hooked from identical
+constructed state, compare the complete caller-boundary register snapshot and declared
+memory, and exercise both the contract stub and the copied pinned code window, both
+with `synthetic=1`; the receipt distinguishes `subject=contract-stub` from
+`subject=original-code-window`.
+
+Live readability is not established by PR B. The declared observation is 97 bytes at
+`[ctx+0xc8, ctx+0x129)` plus 16-byte canary bands at `[ctx+0xb8, ctx+0xc8)` and
+`[ctx+0x129, ctx+0x139)`. Constructed-state tests map and guard the whole extent; a
+live capture must first establish that the extent, especially the canary-after band,
+is readable, and must fail or skip otherwise. PR B does no signal recovery or probing.
+
 Guard pages detect out-of-domain accesses that cross a protected boundary; they do not
 fault an undeclared write inside an otherwise writable object. Tier 1 therefore
 compares the complete declared observation region (including unchanged bytes and
