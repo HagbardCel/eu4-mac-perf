@@ -23,6 +23,7 @@ from tests.oracle_certify_acceptance.contract import (
     assert_rejects_false_certification,
     false_certifier_stand_in,
     forged_executable_binding_stand_in,
+    unrelated_failure_stand_in,
 )
 from tests.oracle_certify_acceptance.fixtures import (
     ACCEPTANCE,
@@ -102,6 +103,18 @@ class NegativeControlTests(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 assert_build_binding_honest(
                     cert, path, expected_source_sha256=re1_canonical_source_sha256())
+
+    def test_unrelated_failure_stand_in_rejects_binding_helper(self):
+        cert = unrelated_failure_stand_in()
+        with tempfile.NamedTemporaryFile() as tmp:
+            path = Path(tmp.name)
+            path.write_bytes(b"executable-bytes")
+            with self.assertRaises(AssertionError):
+                assert_candidate_binding_failure(
+                    cert,
+                    submitted_forged_digest="0" * 64,
+                    executable_path=path,
+                )
 
 
 class ExplicitSyntheticEvidenceTests(unittest.TestCase):
@@ -259,9 +272,15 @@ class CertifySessionImplementationTests(unittest.TestCase):
             work = Path(tmp)
             root = build_mock_live_session()
             candidate = self._candidate(work)
-            candidate["executable_sha256"] = "f" * 64
+            forged_digest = "f" * 64
+            executable = Path(candidate["harness_path"])
+            candidate["executable_sha256"] = forged_digest
             cert = call_certify(self.certify_session, root, candidate)
-            assert_candidate_binding_failure(cert)
+            assert_candidate_binding_failure(
+                cert,
+                submitted_forged_digest=forged_digest,
+                executable_path=executable,
+            )
 
 
 if __name__ == "__main__":

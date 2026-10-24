@@ -79,9 +79,43 @@ def _diversity_floor_met(cert: Mapping[str, Any], min_distinct_behaviors: int) -
     return int(cert["coverage"]["distinct_behaviors"]) >= min_distinct_behaviors
 
 
+# Acceptance convention for binding-failure integration tests (not a schema extension).
+_BINDING_FAILURE_PHRASES = (
+    "executable_sha256",
+    "executable digest",
+    "source_sha256",
+    "executed_matches_build",
+    "build binding",
+    "candidate binding",
+    "identity mismatch",
+)
+
+
+def _failure_diagnostics(cert: Mapping[str, Any]) -> str:
+    parts = list(cert["promotion"].get("reasons", []))
+    parts.extend(str(item) for item in cert["evaluation"].get("failures", []))
+    return " ".join(parts).lower()
+
+
+def _has_binding_diagnostic(diagnostics: str) -> bool:
+    return any(phrase in diagnostics for phrase in _BINDING_FAILURE_PHRASES)
+
+
+def _assert_reference_admission_eligible(cert: Mapping[str, Any]) -> None:
+    admission = cert["reference_admission"]
+    if admission["session"]["verdict"] != "eligible":
+        raise AssertionError(
+            f"session admission must be eligible, got {admission['session']}")
+    fixtures = admission.get("fixtures", {})
+    if fixtures.get("verdict") != "eligible":
+        raise AssertionError(
+            f"fixture admission must be eligible, got {fixtures}")
+
+
 def assert_promotion_certified(
         cert: Mapping[str, Any], *, min_distinct_behaviors: int) -> None:
     assert_certificate_shape(cert)
+    _assert_reference_admission_eligible(cert)
     assert_promotion(cert, "certified")
     assert_evaluation_counts(cert, match=50, mismatch=0)
     coverage = cert["coverage"]
@@ -98,6 +132,7 @@ def assert_promotion_certified(
 def assert_promotion_scoped_for_diversity(
         cert: Mapping[str, Any], *, min_distinct_behaviors: int) -> None:
     assert_certificate_shape(cert)
+    _assert_reference_admission_eligible(cert)
     assert_promotion(cert, "scoped")
     assert_evaluation_counts(cert, match=50, mismatch=0)
     coverage = cert["coverage"]
@@ -110,18 +145,29 @@ def assert_promotion_scoped_for_diversity(
             "scoped promotion expected diversity floor not met")
 
 
-def assert_candidate_binding_failure(cert: Mapping[str, Any]) -> None:
+def assert_candidate_binding_failure(
+        cert: Mapping[str, Any],
+        *,
+        submitted_forged_digest: str,
+        executable_path: Path) -> None:
+    """E1 must fail with a binding diagnostic when the submitted digest is forged."""
+    if not executable_path.is_file():
+        raise AssertionError("executable path does not exist")
+    actual_digest = sha256(executable_path.read_bytes()).hexdigest()
+    if submitted_forged_digest == actual_digest:
+        raise AssertionError(
+            "binding negative fixture must submit a digest that differs from the executable")
     assert_certificate_shape(cert)
-    if cert["reference_admission"]["session"]["verdict"] == "ineligible":
-        raise AssertionError(
-            "expected candidate binding failure, not session ineligible")
+    _assert_reference_admission_eligible(cert)
     assert_promotion(cert, "failed")
-    blob = " ".join(cert["promotion"].get("reasons", [])).lower()
-    blob += " " + str(cert.get("candidate", {})).lower()
-    if not any(token in blob for token in (
-            "executable", "source", "binding", "candidate", "build", "digest", "hash")):
+    diagnostics = _failure_diagnostics(cert)
+    if not _has_binding_diagnostic(diagnostics):
         raise AssertionError(
-            "promotion failure does not appear to be a candidate identity issue")
+            "promotion failure lacks a binding-specific diagnostic in reasons/failures")
+    recorded = cert["candidate"]["executable_sha256"]
+    if recorded == submitted_forged_digest and cert["candidate"]["executed_matches_build"]:
+        raise AssertionError(
+            "certificate must not claim executed_matches_build for a forged digest")
 
 
 def assert_evaluation_counts(cert: Mapping[str, Any], *,
@@ -213,3 +259,13 @@ def forged_executable_binding_stand_in(**_kwargs: Any) -> dict[str, Any]:
     cert = _base_certificate(promotion={"status": "certified", "reasons": []})
     cert["candidate"]["executable_sha256"] = "0" * 64
     return cert
+
+
+def unrelated_failure_stand_in(**_kwargs: Any) -> dict[str, Any]:
+    """Eligible admission with a failed promotion unrelated to candidate binding."""
+    return _base_certificate(
+        promotion={
+            "status": "failed",
+            "reasons": ["required coverage cells missing"],
+        },
+    )
