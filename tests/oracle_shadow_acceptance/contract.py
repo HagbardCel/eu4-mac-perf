@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from collections import Counter
 from pathlib import Path
@@ -81,14 +82,25 @@ def read_observed_output_bytes(work_dir: Path) -> int:
     return total
 
 
-def pid_running(pid: int) -> bool:
+def pid_process_state(pid: int) -> str:
+    """Return running, zombie, gone, or unknown (inconclusive)."""
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+        proc = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "state="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    if proc.returncode != 0:
+        return "gone"
+    state = proc.stdout.strip()
+    if not state:
+        return "unknown"
+    if state[0] == "Z":
+        return "zombie"
+    return "running"
 
 
 def assert_no_running_pids(pid_file: Path, *, timeout: float = 2.0) -> None:
@@ -97,11 +109,29 @@ def assert_no_running_pids(pid_file: Path, *, timeout: float = 2.0) -> None:
     pids = [int(line) for line in pid_file.read_text().split() if line.strip()]
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if not any(pid_running(pid) for pid in pids):
+        states = [pid_process_state(pid) for pid in pids]
+        if all(state in ("gone", "zombie") for state in states):
             return
+        if any(state == "unknown" for state in states):
+            break
         time.sleep(0.05)
-    still = [pid for pid in pids if pid_running(pid)]
-    raise AssertionError(f"supervised PIDs still running: {still}")
+    running = [pid for pid in pids if pid_process_state(pid) == "running"]
+    if running:
+        raise AssertionError(f"supervised PIDs still running: {running}")
+    unknown = [pid for pid in pids if pid_process_state(pid) == "unknown"]
+    if unknown:
+        raise AssertionError(
+            f"cannot verify supervised process cleanup for PIDs: {unknown}")
+
+
+def assert_flood_stage_markers(work_dir: Path) -> None:
+    for name in (
+            "flood.child.started",
+            "flood.grandchild.started",
+            "flood.output.started",
+    ):
+        if not (work_dir / name).is_file():
+            raise AssertionError(f"flood fixture missing stage marker: {name}")
 
 
 def assert_flood_supervised(

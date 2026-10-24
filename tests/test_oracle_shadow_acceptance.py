@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import importlib
-import os
 import tempfile
 import time
 import unittest
@@ -15,6 +14,7 @@ from oracle.function.fixture import load_descriptor
 from tests.oracle_shadow_acceptance.contract import (
     assert_accounting_partition,
     assert_executable_identity_enforced,
+    assert_flood_stage_markers,
     assert_flood_supervised,
     assert_result_shape,
     prepare_owned_executable,
@@ -41,6 +41,7 @@ class ContractShapeTests(unittest.TestCase):
     def test_weak_stand_in_fails_flood_supervision(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
+            (work / "flood.started").write_text("1\n", encoding="utf-8")
             result = weak_supervisor_stand_in([_snapshot()])
             assert_result_shape(result, 1)
             assert_accounting_partition(result, 1)
@@ -64,14 +65,11 @@ class RunOwnedImplementationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             owned = prepare_owned_executable(FLOOD_SOURCE, work)
-            env = os.environ.copy()
-            env["F1_FLOOD_WORK_DIR"] = str(work)
             candidate = {
                 "function_id": "gfx:set-constant-buffer",
                 "source_sha256": "0" * 64,
                 "executable_sha256": sha256(owned.read_bytes()).hexdigest(),
                 "harness_path": str(owned),
-                "env": env,
             }
             started = time.monotonic()
             result = run_owned(
@@ -85,6 +83,7 @@ class RunOwnedImplementationTests(unittest.TestCase):
             observed = read_observed_output_bytes(work)
             assert_result_shape(result, 1)
             assert_accounting_partition(result, 1)
+            assert_flood_stage_markers(work)
             assert_flood_supervised(
                 work, result, deadline_seconds=DEADLINE,
                 output_limit_bytes=OUTPUT_CAP, started=started,
