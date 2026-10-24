@@ -42,7 +42,35 @@ class G1ProvenanceCheckerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             errors = check_package_contract(contract, ROOT)
-            self.assertTrue(any("census" in e for e in errors))
+            self.assertIn("no census row matches function_mangled + entry_rva", errors)
+
+    def test_duplicate_census_rows_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            census = Path(tmp) / "dup.jsonl"
+            row = {
+                "name_mangled": "_GfxDrawIndexed",
+                "entry_rva": "0x00000000015eaa77",
+            }
+            census.write_text(
+                json.dumps(row) + "\n" + json.dumps(row) + "\n",
+                encoding="utf-8",
+            )
+            contract = Path(tmp) / "contract.md"
+            contract.write_text(
+                "---\n"
+                "function_mangled: _GfxDrawIndexed\n"
+                "entry_rva: 0x00000000015eaa77\n"
+                "gate_verdict: PASS\n"
+                "blockers: []\n"
+                "---\n\n"
+                "## Preconditions\n## Postconditions\n## Modified state\n"
+                "## Dependencies\n## Unobserved\n",
+                encoding="utf-8",
+            )
+            errors = check_package_contract(
+                contract, ROOT, census_path=census)
+            self.assertIn(
+                "multiple census rows match function_mangled + entry_rva", errors)
 
     def test_decision_record_fail_is_valid(self):
         with tempfile.TemporaryDirectory() as tmp:

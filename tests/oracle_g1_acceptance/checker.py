@@ -1,4 +1,9 @@
-"""G1 function-package provenance checker (reviewer-owned)."""
+"""G1 function-package provenance checker (reviewer-owned).
+
+Automated checks cover YAML front matter, census uniqueness, manifest pin,
+required headings, and sibling ``instructions.json`` when cited. Other evidence
+paths cited in the contract require independent human review.
+"""
 from __future__ import annotations
 
 import json
@@ -10,6 +15,11 @@ FRONT_MATTER_RE = re.compile(
 FIELD_RE = re.compile(r"^([a-z_]+):\s*(.+)$", re.MULTILINE)
 HEADING_RE = re.compile(r"^##\s+(.+)$", re.MULTILINE)
 PASS_FAIL = frozenset({"PASS", "FAIL"})
+
+DEFAULT_CENSUS = (
+    Path(__file__).resolve().parents[2]
+    / "analysis/renderer-corpus/scope/v1/renderer-functions.jsonl"
+)
 
 
 def _parse_front_matter(text: str) -> dict[str, str]:
@@ -28,20 +38,49 @@ def _headings(text: str) -> set[str]:
     return {m.group(1).strip().lower() for m in HEADING_RE.finditer(text)}
 
 
-def load_census_row(function_mangled: str, entry_rva: str) -> dict | None:
-    census_path = Path(__file__).resolve().parents[2] / (
-        "analysis/renderer-corpus/scope/v1/renderer-functions.jsonl")
-    for line in census_path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if (row.get("name_mangled") == function_mangled
-                and row.get("entry_rva", "").lower() == entry_rva.lower()):
-            return row
-    return None
+def _parse_census_lines(text: str) -> list[dict]:
+    rows: list[dict] = []
+    for line in text.splitlines():
+        if line.strip():
+            rows.append(json.loads(line))
+    return rows
 
 
-def check_package_contract(path: Path, root: Path) -> list[str]:
+def unique_census_row(
+        rows: list[dict],
+        function_mangled: str,
+        entry_rva: str) -> tuple[dict | None, str | None]:
+    """Return (row, problem) where problem is 'missing' or 'duplicate'."""
+    matches = [
+        row for row in rows
+        if row.get("name_mangled") == function_mangled
+        and row.get("entry_rva", "").lower() == entry_rva.lower()
+    ]
+    if len(matches) == 1:
+        return matches[0], None
+    if not matches:
+        return None, "missing"
+    return None, "duplicate"
+
+
+def load_census_row(
+        function_mangled: str,
+        entry_rva: str,
+        *,
+        census_path: Path | None = None) -> dict | None:
+    path = census_path or DEFAULT_CENSUS
+    rows = _parse_census_lines(path.read_text(encoding="utf-8"))
+    row, problem = unique_census_row(rows, function_mangled, entry_rva)
+    if problem:
+        return None
+    return row
+
+
+def check_package_contract(
+        path: Path,
+        root: Path,
+        *,
+        census_path: Path | None = None) -> list[str]:
     errors: list[str] = []
     if not path.is_file():
         return ["missing contract.md"]
@@ -60,9 +99,14 @@ def check_package_contract(path: Path, root: Path) -> list[str]:
     if verdict == "PASS" and meta["blockers"] not in ("[]", ""):
         errors.append("PASS requires empty blockers")
 
-    row = load_census_row(meta["function_mangled"], meta["entry_rva"])
-    if row is None:
-        errors.append("no unique census row for function_mangled + entry_rva")
+    census_file = census_path or DEFAULT_CENSUS
+    rows = _parse_census_lines(census_file.read_text(encoding="utf-8"))
+    _, problem = unique_census_row(
+        rows, meta["function_mangled"], meta["entry_rva"])
+    if problem == "missing":
+        errors.append("no census row matches function_mangled + entry_rva")
+    elif problem == "duplicate":
+        errors.append("multiple census rows match function_mangled + entry_rva")
 
     target = json.loads((root / "reverse_engineering/target.json").read_text())
     summary = json.loads((root / "analysis/renderer-corpus/scope/v1"
