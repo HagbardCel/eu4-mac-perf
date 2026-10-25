@@ -246,11 +246,12 @@ def venice_log_probe_ready(predicates: dict[str, bool | int]) -> bool:
 def _observe_focus_state(
     focus_bin: Path, pid: int, deadline: float,
 ) -> tuple[bool, bool]:
-    timeout = _focus_timeout_for(deadline)
-    frontmost = _focus_command(focus_bin, "check", pid, timeout)
+    frontmost = _focus_command(
+        focus_bin, "check", pid, _focus_timeout_for(deadline))
     interior = False
     if frontmost:
-        interior = _focus_command(focus_bin, "interior", pid, timeout)
+        interior = _focus_command(
+            focus_bin, "interior", pid, _focus_timeout_for(deadline))
     return frontmost, interior
 
 
@@ -417,9 +418,6 @@ def wait_for_venice_ready(
         if selected_ready and time.monotonic() < deadline:
             if game.poll() is not None:
                 raise LiveError("GOG EU IV exited before Venice became ready")
-            if diagnostics is not None:
-                _record_focus_snapshot(
-                    diagnostics, focus_bin, game.pid, deadline, reason="success")
             return {
                 "ready_ns": now_ns,
                 "predicates": predicates,
@@ -432,10 +430,9 @@ def wait_for_venice_ready(
         time.sleep(1)
     if diagnostics is not None:
         diagnostics["timed_out"] = True
+        diagnostics["timed_out_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
         diagnostics.setdefault("last_predicates", last_predicates or {})
         diagnostics.setdefault("counters", dict(counters))
-        _record_focus_snapshot(
-            diagnostics, focus_bin, game.pid, deadline, reason="timeout")
     raise LiveError(
         f"{VENICE_READY_TIMEOUT_MSG}: {last_predicates or {}}")
 

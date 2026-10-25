@@ -124,6 +124,19 @@ class WaitForVeniceReadyDeadlineTests(unittest.TestCase):
         self.assertTrue(diagnostics.get("timed_out"))
 
 
+class _ReadinessFakeClock:
+    """Advances past the readiness deadline when the loop sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, _seconds: float) -> None:
+        self.now += _seconds + live.READY_TIMEOUT_S
+
+
 class WaitForVeniceReadyGateTests(unittest.TestCase):
     def _wait(
         self,
@@ -134,10 +147,15 @@ class WaitForVeniceReadyGateTests(unittest.TestCase):
         logged: bool = True,
         rows: list[dict] | None = None,
         poll_result=None,
+        diagnostics: dict | None = None,
+        advance_on_sleep: bool = False,
+        record_snapshots: bool = False,
     ):
         now_ns = 10_000_000_000
         if rows is None:
             rows = _paused_rows(now_ns)
+        if diagnostics is None:
+            diagnostics = {}
 
         class FakeGame:
             pid = 42
@@ -145,11 +163,9 @@ class WaitForVeniceReadyGateTests(unittest.TestCase):
             def poll(self):
                 return poll_result
 
+        clock = _ReadinessFakeClock()
         patches = [
-            patch.object(live.time, "sleep"),
             patch.object(live.time, "monotonic_ns", return_value=now_ns),
-            patch.object(live, "_record_focus_snapshot"),
-            patch.object(live, "_maybe_record_focus_snapshot"),
             patch.object(live, "_bounded_focus_state",
                           return_value=(frontmost, interior)),
             patch.object(live, "_observe_focus_state",
@@ -158,12 +174,24 @@ class WaitForVeniceReadyGateTests(unittest.TestCase):
                          return_value=VENICE_LOG if logged else ""),
             patch.object(auto, "probe_rows", return_value=rows),
         ]
+        if advance_on_sleep:
+            patches.extend([
+                patch.object(live.time, "monotonic", clock.monotonic),
+                patch.object(live.time, "sleep", clock.sleep),
+            ])
+        else:
+            patches.append(patch.object(live.time, "sleep"))
+        if not record_snapshots:
+            patches.extend([
+                patch.object(live, "_record_focus_snapshot"),
+                patch.object(live, "_maybe_record_focus_snapshot"),
+            ])
         for item in patches:
             item.start()
         try:
             return live.wait_for_venice_ready(
                 FakeGame(), live.FOCUS, Path("/tmp/probe.csv"),
-                {}, Path("/tmp/game.log"), b"", diagnostics={},
+                {}, Path("/tmp/game.log"), b"", diagnostics=diagnostics,
                 require_focus=require_focus)
         finally:
             for item in reversed(patches):
@@ -176,9 +204,16 @@ class WaitForVeniceReadyGateTests(unittest.TestCase):
         self.assertTrue(result["strict_ready"])
 
     def test_strict_not_ready_when_focus_false(self) -> None:
-        with patch.object(live, "READY_TIMEOUT_S", 0):
+        diagnostics: dict = {}
+        with patch.object(
+            live, "evaluate_venice_readiness",
+            wraps=live.evaluate_venice_readiness) as evaluate:
             with self.assertRaises(live.LiveError):
-                self._wait(require_focus=True, frontmost=False, interior=False)
+                self._wait(require_focus=True, frontmost=False, interior=False,
+                           diagnostics=diagnostics, advance_on_sleep=True)
+        evaluate.assert_called()
+        self.assertFalse(diagnostics["selected_gate_ready"])
+        self.assertFalse(diagnostics["strict_ready"])
 
     def test_unfocused_ready_when_log_probe_ok_without_focus(self) -> None:
         result = self._wait(
@@ -188,28 +223,73 @@ class WaitForVeniceReadyGateTests(unittest.TestCase):
         self.assertTrue(result["venice_log_probe_ready"])
 
     def test_unfocused_not_ready_without_log_markers(self) -> None:
-        with patch.object(live, "READY_TIMEOUT_S", 0):
+        diagnostics: dict = {}
+        with patch.object(
+            live, "evaluate_venice_readiness",
+            wraps=live.evaluate_venice_readiness) as evaluate:
             with self.assertRaises(live.LiveError):
                 self._wait(require_focus=False, frontmost=False, interior=False,
-                           logged=False)
+                           logged=False, diagnostics=diagnostics,
+                           advance_on_sleep=True)
+        evaluate.assert_called()
+        self.assertFalse(diagnostics["selected_gate_ready"])
+        self.assertFalse(diagnostics["venice_log_probe_ready"])
 
     def test_unfocused_not_ready_with_bad_probe(self) -> None:
         rows = _paused_rows(10_000_000_000)
         rows[-1]["paused_swaps"] = 0
-        with patch.object(live, "READY_TIMEOUT_S", 0):
+        diagnostics: dict = {}
+        with patch.object(
+            live, "evaluate_venice_readiness",
+            wraps=live.evaluate_venice_readiness) as evaluate:
             with self.assertRaises(live.LiveError):
                 self._wait(require_focus=False, frontmost=False, interior=False,
-                           rows=rows)
+                           rows=rows, diagnostics=diagnostics,
+                           advance_on_sleep=True)
+        evaluate.assert_called()
+        self.assertFalse(diagnostics["selected_gate_ready"])
+        self.assertFalse(diagnostics["venice_log_probe_ready"])
+
+    def test_timeout_preserves_initial_focus_snapshot(self) -> None:
+        initial_snapshot = {
+            "frontmost_bundle_id": "com.apple.Terminal",
+            "check_rc": 4,
+        }
+        diagnostics: dict = {}
+        inspect_calls = 0
+
+        def fake_inspect(_focus_bin, _pid, _timeout):
+            nonlocal inspect_calls
+            inspect_calls += 1
+            if inspect_calls == 1:
+                return initial_snapshot, None
+            return None, "should not run after deadline"
+
+        with patch.object(live, "_focus_inspect", side_effect=fake_inspect):
+            with self.assertRaises(live.LiveError):
+                self._wait(require_focus=False, frontmost=False, interior=False,
+                           logged=False, diagnostics=diagnostics,
+                           advance_on_sleep=True, record_snapshots=True)
+        self.assertTrue(diagnostics.get("timed_out"))
+        self.assertEqual(
+            diagnostics["last_focus_snapshot"]["snapshot"],
+            initial_snapshot)
+        self.assertEqual(inspect_calls, 1)
 
     def test_unfocused_uses_observe_not_bounded(self) -> None:
-        with patch.object(live, "_observe_focus_state",
-                          return_value=(False, False)) as observe, \
-             patch.object(live, "_bounded_focus_state") as bounded, \
+        focus_actions: list[str] = []
+
+        def track_focus_command(_focus_bin, action, _pid, _timeout):
+            focus_actions.append(action)
+            return False
+
+        with patch.object(live, "_bounded_focus_state") as bounded, \
              patch.object(live.time, "sleep"), \
              patch.object(live.time, "monotonic_ns",
                           return_value=10_000_000_000), \
              patch.object(live, "_record_focus_snapshot"), \
              patch.object(live, "_maybe_record_focus_snapshot"), \
+             patch.object(live, "_focus_command", side_effect=track_focus_command), \
              patch.object(auto, "fresh_game_log", return_value=VENICE_LOG), \
              patch.object(auto, "probe_rows",
                           return_value=_paused_rows(10_000_000_000)):
@@ -223,8 +303,9 @@ class WaitForVeniceReadyGateTests(unittest.TestCase):
             live.wait_for_venice_ready(
                 FakeGame(), live.FOCUS, Path("/tmp/p"), {}, Path("/tmp/g"), b"",
                 require_focus=False)
-        observe.assert_called()
         bounded.assert_not_called()
+        self.assertIn("check", focus_actions)
+        self.assertFalse(any(a in ("activate", "park") for a in focus_actions))
 
 
 class GfxLiveAutoCliTests(unittest.TestCase):
