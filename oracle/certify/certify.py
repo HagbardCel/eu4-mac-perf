@@ -176,6 +176,10 @@ def _bind_candidate(candidate: dict[str, Any]) -> _Binding:
                 "candidate binding: executable digest does not match the production "
                 "build record")
 
+    if record is not None:
+        identity = record["build_identity"]
+        flag_tuple = tuple(record["build_flags"])
+
     return _Binding(
         ok=not failures,
         failures=tuple(failures),
