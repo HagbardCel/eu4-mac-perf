@@ -7,7 +7,9 @@ import shutil
 import sys
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
+
+BindingAction = Literal["skip", "ok", "fail"]
 
 from tests.oracle_certify_acceptance.acceptance_candidate import BUILD_FLAGS
 from tests.oracle_certify_acceptance.re1_harness import BUILD_FLAGS as HARNESS_BUILD_FLAGS
@@ -47,7 +49,13 @@ def test_local_build_record(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def production_binding_compatible() -> tuple[bool, str]:
+def approved_harness_digest() -> str:
+    if not APPROVED_HARNESS.is_file():
+        raise FileNotFoundError("approved harness fixture is missing")
+    return sha256(APPROVED_HARNESS.read_bytes()).hexdigest()
+
+
+def host_compatible() -> tuple[bool, str]:
     """True when this host can execute the pinned approved harness bytes."""
     if not APPROVED_HARNESS.is_file():
         return False, "approved harness fixture is missing"
@@ -69,24 +77,56 @@ def production_binding_compatible() -> tuple[bool, str]:
             False,
             f"approved harness targets {system}/{machine}; host is {host_system}/{host_machine}",
         )
+    return True, "compatible host"
+
+
+def assert_fixture_integrity() -> tuple[bool, str]:
+    """True when fixture bytes and flags match committed metadata and production record."""
+    if not APPROVED_HARNESS.is_file():
+        return False, "approved harness fixture is missing"
+    meta = approved_harness_meta()
+    if meta is None:
+        return False, "approved harness metadata is missing"
+    actual = approved_harness_digest()
+    meta_expected = meta.get("executable_sha256")
+    if isinstance(meta_expected, str) and len(meta_expected) == 64:
+        if actual != meta_expected:
+            return (
+                False,
+                "fixture executable_sha256 does not match "
+                f"fixtures/re1-approved-harness.meta.json ({actual} != {meta_expected})",
+            )
     record = production_record()
     if record is not None:
-        expected = record.get("executable_sha256")
-        if isinstance(expected, str) and len(expected) == 64:
-            actual = sha256(APPROVED_HARNESS.read_bytes()).hexdigest()
-            if actual != expected:
+        record_expected = record.get("executable_sha256")
+        if isinstance(record_expected, str) and len(record_expected) == 64:
+            if actual != record_expected:
                 return (
                     False,
                     "fixture executable_sha256 does not match the production build record "
-                    f"({actual} != {expected})",
+                    f"({actual} != {record_expected})",
                 )
-    elif meta.get("executable_sha256"):
-        actual = sha256(APPROVED_HARNESS.read_bytes()).hexdigest()
-        if actual != meta["executable_sha256"]:
-            return False, "fixture bytes do not match fixtures/re1-approved-harness.meta.json"
+        if isinstance(meta_expected, str) and isinstance(record_expected, str):
+            if meta_expected != record_expected:
+                return (
+                    False,
+                    "fixtures/re1-approved-harness.meta.json executable_sha256 does not "
+                    f"match the production build record ({meta_expected} != {record_expected})",
+                )
     if HARNESS_BUILD_FLAGS != BUILD_FLAGS:
         return False, "harness build flags drifted from acceptance BUILD_FLAGS"
-    return True, "compatible"
+    return True, "fixture integrity ok"
+
+
+def production_binding_compatible() -> tuple[BindingAction, str]:
+    """Classify host readiness vs artifact integrity for production binding gates."""
+    host_ok, host_reason = host_compatible()
+    if not host_ok:
+        return "skip", host_reason
+    integrity_ok, integrity_reason = assert_fixture_integrity()
+    if not integrity_ok:
+        return "fail", integrity_reason
+    return "ok", "compatible"
 
 
 def copy_approved_harness(dest: Path) -> Path:
