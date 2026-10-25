@@ -182,6 +182,32 @@ class HeldOutIsolationTests(unittest.TestCase):
             with self.assertRaises(catalog.HeldOutLeak):
                 catalog.assert_isolated(workspace)
 
+    def test_missing_workspace_is_not_treated_as_isolated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+
+            report = catalog.held_out_report(workspace)
+            self.assertFalse(report["ok"])
+            self.assertTrue(any("does not exist" in problem
+                                for problem in report["problems"]))
+            with self.assertRaises(catalog.HeldOutLeak):
+                catalog.assert_isolated(workspace)
+
+    def test_workspace_root_symlink_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp) / "real"
+            real.mkdir()
+            (real / "candidate.c").write_text("int main() { return 0; }\n", encoding="utf-8")
+            workspace = Path(tmp) / "workspace"
+            workspace.symlink_to(real, target_is_directory=True)
+
+            report = catalog.held_out_report(workspace)
+            self.assertFalse(report["ok"])
+            self.assertTrue(any("must not be a symlink" in problem
+                                for problem in report["problems"]))
+            with self.assertRaises(catalog.HeldOutLeak):
+                catalog.assert_isolated(workspace)
+
 
 class FrozenSliceTests(unittest.TestCase):
     """G3a reuses certified P3 by import; it does not edit it."""

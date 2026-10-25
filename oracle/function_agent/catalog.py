@@ -148,19 +148,28 @@ def held_out_report(workspace: Path, *, fixtures_root: Path | None = None) -> di
     never echoed into the report - only the workspace-relative path that carried a
     fingerprint - so the check itself cannot become a leak.
     """
-    workspace = Path(workspace).resolve()
+    root = Path(workspace)
+    workspace = root.absolute()
     held_root = (Path(fixtures_root) if fixtures_root else corpus.FIXTURES_DIR) / corpus.HELD_OUT
     held_root = held_root.resolve()
     problems: list[str] = []
     files: list[Path] = []
-    for path in sorted(workspace.rglob("*")):
-        name = path.relative_to(workspace).as_posix()
-        if path.is_symlink():
-            problems.append(f"{name}: symlinks are not allowed in the workspace")
-            continue
-        if not path.is_file():
-            continue
-        files.append(path)
+    if root.is_symlink():
+        problems.append("workspace path must not be a symlink")
+    elif not root.exists():
+        problems.append("workspace does not exist")
+    elif not root.is_dir():
+        problems.append("workspace is not a directory")
+    else:
+        workspace = root.resolve()
+        for path in sorted(workspace.rglob("*")):
+            name = path.relative_to(workspace).as_posix()
+            if path.is_symlink():
+                problems.append(f"{name}: symlinks are not allowed in the workspace")
+                continue
+            if not path.is_file():
+                continue
+            files.append(path)
 
     relative = [path.relative_to(workspace).as_posix() for path in files]
 
