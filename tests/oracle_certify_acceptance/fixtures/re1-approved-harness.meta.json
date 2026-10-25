@@ -1,0 +1,21 @@
+{
+  "build_flags": [
+    "-std=c++20",
+    "-O0",
+    "-g",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-fsanitize=address,undefined",
+    "-fno-sanitize-recover=all"
+  ],
+  "build_identity": "re1-gfx-set-constant-buffer-acceptance",
+  "executable_sha256": "61a20732d7ee91375567de9d9f764d769829bc196ad02e1edabc050739bb0560",
+  "note": "E2-owned bytes; must match E1 production record executable_sha256 after #86 approval",
+  "platform": {
+    "machine": "arm64",
+    "system": "darwin"
+  },
+  "schema": "eu4-oracle-e2-approved-harness/v1",
+  "source_sha256": "ea5b50c049e8596365f65e1407e903ae12be98a50aca539e1adeb19bab31ad75"
+}
