@@ -1,0 +1,93 @@
+{
+  "promotion_status": "scoped",
+  "promotion_reasons": [
+    "required coverage cells are missing",
+    "diversity floor is not met"
+  ],
+  "evidence_manifest_sha256": "e8914fb1f71ec8feda8cce2f6407d9a7e846c4203ca6743fb3ba9ec9476ea437",
+  "candidate_evaluation": {
+    "build_flags": [
+      "-std=c++20",
+      "-O0",
+      "-g",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-fsanitize=address,undefined",
+      "-fno-sanitize-recover=all"
+    ],
+    "build_identity": "re1-gfx-set-constant-buffer-acceptance",
+    "executable_sha256": "61a20732d7ee91375567de9d9f764d769829bc196ad02e1edabc050739bb0560",
+    "executed_matches_build": true,
+    "source_sha256": "ea5b50c049e8596365f65e1407e903ae12be98a50aca539e1adeb19bab31ad75"
+  },
+  "coverage": {
+    "claim": "gfx-set-constant-buffer-tier1",
+    "distinct_behaviors": 10,
+    "diversity_floor": 12,
+    "diversity_met": false,
+    "duplicate_count": 54,
+    "missing_optional": [],
+    "missing_required": [
+      "input:zero",
+      "slot:3",
+      "slot:4",
+      "slot:5"
+    ],
+    "observed_optional": [
+      "alias:distinct",
+      "canary:preserved",
+      "pointer:rsi",
+      "rax:ctx"
+    ],
+    "observed_required": [
+      "input:absent",
+      "input:nonzero",
+      "selector:fixed-length",
+      "selector:length-from-buffer",
+      "slot:0",
+      "slot:1",
+      "slot:2"
+    ],
+    "optional_cells": [
+      "alias:distinct",
+      "canary:preserved",
+      "pointer:rsi",
+      "rax:ctx"
+    ],
+    "policy_sha256": "45b2846a61fdce5c7ce2e5db143aea6c534a04f965cf0578d12130a251fa56b2",
+    "required_cells": [
+      "input:absent",
+      "input:nonzero",
+      "input:zero",
+      "selector:fixed-length",
+      "selector:length-from-buffer",
+      "slot:0",
+      "slot:1",
+      "slot:2",
+      "slot:3",
+      "slot:4",
+      "slot:5"
+    ],
+    "scope": {
+      "input_classes": [
+        "absent",
+        "nonzero",
+        "zero"
+      ],
+      "selectors": [
+        "fixed-length",
+        "length-from-buffer"
+      ],
+      "slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    "unrestricted": true
+  }
+}

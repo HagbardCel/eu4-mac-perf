@@ -1,0 +1,1101 @@
+{
+  "clean": true,
+  "gates": {
+    "at_least_50": true,
+    "done_sealed": true,
+    "epoch": true,
+    "live_metadata": true,
+    "native_reconciled": true,
+    "no_loss": true,
+    "no_malformed": true,
+    "numeric_invariants": true,
+    "pids": true,
+    "quota": true,
+    "save_unchanged": true,
+    "startup_installed": true,
+    "transcript_count": true,
+    "transcripts_parse": true
+  },
+  "loss": {
+    "incomplete": 0,
+    "undrained": 0,
+    "write_failed": 0
+  },
+  "malformed": [],
+  "native": {
+    "admitted": "64",
+    "armed_ns": "1963170650070000",
+    "closed_ns": "1963170671596000",
+    "closed_reason": "quota",
+    "completed": "64",
+    "incomplete": "0",
+    "intercepted": "864",
+    "not_admitted": "800",
+    "not_admitted_address": "0",
+    "not_admitted_busy": "0",
+    "not_admitted_closed": "0",
+    "not_admitted_pointer": "0",
+    "not_admitted_quota": "800",
+    "not_admitted_slot": "0",
+    "not_admitted_thread_limit": "0",
+    "pid": "97134",
+    "quiescence": "ok",
+    "quota": "64",
+    "ready": "0",
+    "reserved": "0",
+    "session": "gfx-live-20261025T155406Z",
+    "started_ns": "1963124524193000",
+    "state": "sealed",
+    "threads": "1",
+    "undrained": "0",
+    "write_failed": "0",
+    "written": "64"
+  },
+  "problems": [],
+  "qualified": 64,
+  "qualified_transcripts": [
+    {
+      "file": "captures/gfx-live-20261025T155406Z.0.capture",
+      "record_digest": "d538c65f0406dc31837226eccb93f3127f4fb3d92c8ea38ef1102c0079c9c63c",
+      "scenario": "live:length-from-buffer",
+      "sequence": 1,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.1.capture",
+      "record_digest": "059978b1e129139844eae234b921f3373a6a9a107cf7a1d9984adbfd784537f4",
+      "scenario": "live:length-from-buffer",
+      "sequence": 2,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.10.capture",
+      "record_digest": "1f7fdc3a5db7af20fcaf7b6ce7a13de87895f37c6988fb77022096f360e8db49",
+      "scenario": "live:length-from-buffer",
+      "sequence": 11,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.11.capture",
+      "record_digest": "1f3b3493fa973e864702bee748c3b5f4c8a28e5a01b65e2220a6408c8a172b11",
+      "scenario": "live:length-from-buffer",
+      "sequence": 12,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.12.capture",
+      "record_digest": "7f7ac2768101c2800790a8d43dd3d1c05608fd7e18352f14a12389f94fe716a3",
+      "scenario": "live:length-from-buffer",
+      "sequence": 13,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.13.capture",
+      "record_digest": "9fb7e49a1360878849a6e3961038b87f8f2b08001af437a7aa9b29eef026e649",
+      "scenario": "live:explicit-length",
+      "sequence": 14,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.14.capture",
+      "record_digest": "fd994963fc35ca35b35738caf70def9955228f911520487e15248d18cf42ce91",
+      "scenario": "live:length-from-buffer",
+      "sequence": 15,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.15.capture",
+      "record_digest": "4851a0bbc68ca1f92f7214766b5edbc188f95fa255bb03200071cac197e73714",
+      "scenario": "live:length-from-buffer",
+      "sequence": 16,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.16.capture",
+      "record_digest": "0c9fc27a6e8efbc3f6d2b5659e3c49a36e3e6983ba72d732fdf6a6d98e38ca0e",
+      "scenario": "live:length-from-buffer",
+      "sequence": 17,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.17.capture",
+      "record_digest": "bad03a4adc345e675e09917bbf96e3e78cd3d86ffad006f9b64ef5b05db183d1",
+      "scenario": "live:length-from-buffer",
+      "sequence": 18,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.18.capture",
+      "record_digest": "d5c082d19face8078bb38fab86cff29c42e9fa91b1baa5d6de17bed704c709b2",
+      "scenario": "live:length-from-buffer",
+      "sequence": 19,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.19.capture",
+      "record_digest": "bd5c8ca473ff5f8dac25edca8de8819b36202f805825e4faaa31a2618b2a681c",
+      "scenario": "live:length-from-buffer",
+      "sequence": 20,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.2.capture",
+      "record_digest": "58e56011890cf8ca0ac7726e12dd49448c4f04d9be7becc7cae42d3b13d0016c",
+      "scenario": "live:length-from-buffer",
+      "sequence": 3,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.20.capture",
+      "record_digest": "ad54cd21efe39ce6787e0fbc367d3872d81cbdf903da4bd4534ae354c8fd0f42",
+      "scenario": "live:explicit-length",
+      "sequence": 21,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.21.capture",
+      "record_digest": "4d2ec6661b271085047cf439a27c4fc0e1ad9d0b6af5ce3600d9227ceccdc467",
+      "scenario": "live:length-from-buffer",
+      "sequence": 22,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.22.capture",
+      "record_digest": "5c8d78d960de68e6abd5f57c70241bbdda77a9c0fbc7166392db324c898fd0a5",
+      "scenario": "live:explicit-length",
+      "sequence": 23,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.23.capture",
+      "record_digest": "b277d6369b1e760d1674578fcf0c2b7416df14905cc513ff8ac00d13cad751a6",
+      "scenario": "live:length-from-buffer",
+      "sequence": 24,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.24.capture",
+      "record_digest": "570f496ee40d9d4f9faadc279a8a920ba972d9311f3a2b73100a1419fd6552e1",
+      "scenario": "live:length-from-buffer",
+      "sequence": 25,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.25.capture",
+      "record_digest": "9eb283940e53ddfd3b7e4179dcc931ea8cbc611eab14c3495840e9afe76586d7",
+      "scenario": "live:length-from-buffer",
+      "sequence": 26,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.26.capture",
+      "record_digest": "aeed0be927406d73fbd5bad744bba8d0fde25813147db5589090433d3d0b1dc0",
+      "scenario": "live:length-from-buffer",
+      "sequence": 27,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.27.capture",
+      "record_digest": "bb1afc6c00299a171761313bf5f16ecd5539104e9f2bb872da7fc545decfe7d1",
+      "scenario": "live:length-from-buffer",
+      "sequence": 28,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.28.capture",
+      "record_digest": "8dadd93f5352582a30946e992e8d2cf4e0d7071e3960da41384b7741bbd7846d",
+      "scenario": "live:length-from-buffer",
+      "sequence": 29,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.29.capture",
+      "record_digest": "bd89eb6996cf2eec79d835f3aafd9571c4afe15d44366222fcb61fa9d64c5fc4",
+      "scenario": "live:length-from-buffer",
+      "sequence": 30,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.3.capture",
+      "record_digest": "137025e56078bbff9cc788fc4cf71c29fe39b3f96fa8bfeb7d0d6573f9045841",
+      "scenario": "live:length-from-buffer",
+      "sequence": 4,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.30.capture",
+      "record_digest": "f6d9b772dd9eed109e2ddeec7a285c707e6ddbada95f71335de2119ddd5f6302",
+      "scenario": "live:length-from-buffer",
+      "sequence": 31,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.31.capture",
+      "record_digest": "ce19aa0b0f73e87d27717af72dec5a8bcf6c5d0c115e682674aceb8c423284d3",
+      "scenario": "live:length-from-buffer",
+      "sequence": 32,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.32.capture",
+      "record_digest": "ea7305fa3444082414c82a91c88b1ae35c88c7c488917060a4248b17db8780ca",
+      "scenario": "live:length-from-buffer",
+      "sequence": 33,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.33.capture",
+      "record_digest": "4267fb2453d7d5a7262e8d4867edbd3b36b6978d1bbcdedec3fc1ce0df4aa9a4",
+      "scenario": "live:length-from-buffer",
+      "sequence": 34,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.34.capture",
+      "record_digest": "711981ba99cf75d90740c6ca86f1d5d2da13595c526736233ca1bb4da476b492",
+      "scenario": "live:length-from-buffer",
+      "sequence": 35,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.35.capture",
+      "record_digest": "4ee7b78b39a41b303aa384b00d7bed0ea911fdd2b73f1c0483a35be40a6da3f1",
+      "scenario": "live:length-from-buffer",
+      "sequence": 36,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.36.capture",
+      "record_digest": "25c3a61e2633488114c154746d5be8f37b943bf1554a2bcb60d95077ca04716d",
+      "scenario": "live:length-from-buffer",
+      "sequence": 37,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.37.capture",
+      "record_digest": "ac6ec0edb20bf85feaefbf9675ca70299551a708c28cc21c3b8a1ed2e3a016b6",
+      "scenario": "live:length-from-buffer",
+      "sequence": 38,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.38.capture",
+      "record_digest": "96f9c3917ec80b3c2a478d89c890b1b1ef2136cec25a439b51ede090d94fbe07",
+      "scenario": "live:length-from-buffer",
+      "sequence": 39,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.39.capture",
+      "record_digest": "626a8626bd03b98bd7a407f16c81f57985fc6c29ce6bbd2e7461e845010e9e9d",
+      "scenario": "live:length-from-buffer",
+      "sequence": 40,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.4.capture",
+      "record_digest": "9c070562965a4f5b63946009c551144709e8fa1d9eaf449ad201ee59ef0caf78",
+      "scenario": "live:length-from-buffer",
+      "sequence": 5,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.40.capture",
+      "record_digest": "ecea232d15942a965550e2e84c4500c9c23f2076c09ba813cecfb76bddc91fa4",
+      "scenario": "live:length-from-buffer",
+      "sequence": 41,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.41.capture",
+      "record_digest": "89a7a0118817b5757e33a263a0d654466f18f2615858a4e6c32e983bf1c6ef3d",
+      "scenario": "live:length-from-buffer",
+      "sequence": 42,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.42.capture",
+      "record_digest": "0c737c8295d293af5110814460a53d742b8f6aa0a23a4a388c440a1a56e96da7",
+      "scenario": "live:length-from-buffer",
+      "sequence": 43,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.43.capture",
+      "record_digest": "f158578f0d9855c9537e30a968f5e473bbb4e856b3dcf0e01f135f69e25ab7ad",
+      "scenario": "live:length-from-buffer",
+      "sequence": 44,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.44.capture",
+      "record_digest": "ba08dac157e12637f245c6201df3aebacda86184e8942d4d8fab1f3a480514c6",
+      "scenario": "live:length-from-buffer",
+      "sequence": 45,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.45.capture",
+      "record_digest": "d80b7eb570d6d7e10144a8e57970fac33cee454f0393d9dd81951795d76a3c31",
+      "scenario": "live:length-from-buffer",
+      "sequence": 46,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.46.capture",
+      "record_digest": "7cbb176263aeccc0bae67130262c4a18534475da0ec4b2596ef527ef3f2541c0",
+      "scenario": "live:length-from-buffer",
+      "sequence": 47,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.47.capture",
+      "record_digest": "3446c0cbc109c9a2354ccb46b6c59ea0a9436b6e5ad47192d1c5e9c6ba63942e",
+      "scenario": "live:length-from-buffer",
+      "sequence": 48,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.48.capture",
+      "record_digest": "c9e1b14294836848460c0f55e2d0dbe69cc048fe4c2ab13828cbaf6709403533",
+      "scenario": "live:length-from-buffer",
+      "sequence": 49,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.49.capture",
+      "record_digest": "1249f4b2d79668e72eaf589d2577fc0e92234ddc3264a338078518171cbbb64e",
+      "scenario": "live:length-from-buffer",
+      "sequence": 50,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.5.capture",
+      "record_digest": "19b79611782c303d12f787b85d0082bfa5bd2377de351a111d8887fccf48f696",
+      "scenario": "live:length-from-buffer",
+      "sequence": 6,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.50.capture",
+      "record_digest": "1c6fb1950e99d783943d25e9b1464bf371fdd5c4ba5577e82b39b10734b80f64",
+      "scenario": "live:length-from-buffer",
+      "sequence": 51,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.51.capture",
+      "record_digest": "7bbe3c3fb85721260f07b9cb938ec21f7217cf4c968ae2021b7abe1172f045c1",
+      "scenario": "live:length-from-buffer",
+      "sequence": 52,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.52.capture",
+      "record_digest": "6cf587ffd5a2c8618d538444a03a8b89b07d0b4905a50123bf7aab860a97c6a3",
+      "scenario": "live:length-from-buffer",
+      "sequence": 53,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.53.capture",
+      "record_digest": "31137c42276124f8c44308a28a6b71a906c8d67d1162a3722a8e1fbca41b0b5b",
+      "scenario": "live:length-from-buffer",
+      "sequence": 54,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.54.capture",
+      "record_digest": "b8bb4b2cfa949ab5c8eac451b04428ac746009082e1ee772a455efcbdd49bf34",
+      "scenario": "live:length-from-buffer",
+      "sequence": 55,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.55.capture",
+      "record_digest": "b618427f81b06ed27ba8890e432edbad42e40c34008c66a8ea531bbe0772934c",
+      "scenario": "live:length-from-buffer",
+      "sequence": 56,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.56.capture",
+      "record_digest": "445b4ac8864e57529e29961aa329a4e24f34cb948354577117ff2a8e9d36d8ea",
+      "scenario": "live:length-from-buffer",
+      "sequence": 57,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.57.capture",
+      "record_digest": "851c40ed303411ab02e2bba3db625174075c4132636de8287739144115641341",
+      "scenario": "live:length-from-buffer",
+      "sequence": 58,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.58.capture",
+      "record_digest": "ef858d1ddd631583fa1b14397a34529292b1719f6afd2ad18bb459fb0e4633ec",
+      "scenario": "live:length-from-buffer",
+      "sequence": 59,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.59.capture",
+      "record_digest": "8b0132bb1896c5db72eff836ceb340df093cae9d95d07bee5aeb8670f89521f3",
+      "scenario": "live:length-from-buffer",
+      "sequence": 60,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.6.capture",
+      "record_digest": "037fec3fa2d5d1846e11760e6dcc8dddd14b8d0e5352d89b3ed857a63a96de2a",
+      "scenario": "live:length-from-buffer",
+      "sequence": 7,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.60.capture",
+      "record_digest": "b5f7f99193ed236dd09350dd7fc16ed33890fda877f7d1d7ffac0a92b8c1b605",
+      "scenario": "live:length-from-buffer",
+      "sequence": 61,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.61.capture",
+      "record_digest": "f7a65be9fc8851a54ca2dbf972d9439a150327465647c8caf2f165b4f7672d2b",
+      "scenario": "live:length-from-buffer",
+      "sequence": 62,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.62.capture",
+      "record_digest": "9f61fe60087f01bd7510a0a33bf48f702a74c925e8892329359ec6979aecdb40",
+      "scenario": "live:length-from-buffer",
+      "sequence": 63,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.63.capture",
+      "record_digest": "df27441857c77c2c0c68f1fb8f07eb248797ac763b137e466033c50f29baf522",
+      "scenario": "live:length-from-buffer",
+      "sequence": 64,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.7.capture",
+      "record_digest": "0ad770350c8016dfbf1b490ce64cd8fa51f00bf7962ded034eb274910eaa3be2",
+      "scenario": "live:length-from-buffer",
+      "sequence": 8,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.8.capture",
+      "record_digest": "cc1bbf61abe9ab7c5ac51eef0b40460f8863efadf32507d497d8cf990d2838c2",
+      "scenario": "live:length-from-buffer",
+      "sequence": 9,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.9.capture",
+      "record_digest": "2cf419b9f7b7a280f2a6990ac97439bcd174c729198ebf85ddd1e75d5ac96f6e",
+      "scenario": "live:length-from-buffer",
+      "sequence": 10,
+      "thread": 0,
+      "verdict": "qualified"
+    }
+  ],
+  "run_dir": "results/20261025T155406Z-gfx-live",
+  "schema": "eu4-gfx-live-session/v1",
+  "session": "gfx-live-20261025T155406Z",
+  "startup": {
+    "arch": "x86_64",
+    "error": "",
+    "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+    "image_base": "0x100000000",
+    "module": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "pid": "97134",
+    "session": "gfx-live-20261025T155406Z",
+    "site": "0x1015ec36a",
+    "state": "installed"
+  },
+  "status": "accepted",
+  "transcripts": [
+    {
+      "file": "captures/gfx-live-20261025T155406Z.0.capture",
+      "record_digest": "d538c65f0406dc31837226eccb93f3127f4fb3d92c8ea38ef1102c0079c9c63c",
+      "scenario": "live:length-from-buffer",
+      "sequence": 1,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.1.capture",
+      "record_digest": "059978b1e129139844eae234b921f3373a6a9a107cf7a1d9984adbfd784537f4",
+      "scenario": "live:length-from-buffer",
+      "sequence": 2,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.10.capture",
+      "record_digest": "1f7fdc3a5db7af20fcaf7b6ce7a13de87895f37c6988fb77022096f360e8db49",
+      "scenario": "live:length-from-buffer",
+      "sequence": 11,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.11.capture",
+      "record_digest": "1f3b3493fa973e864702bee748c3b5f4c8a28e5a01b65e2220a6408c8a172b11",
+      "scenario": "live:length-from-buffer",
+      "sequence": 12,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.12.capture",
+      "record_digest": "7f7ac2768101c2800790a8d43dd3d1c05608fd7e18352f14a12389f94fe716a3",
+      "scenario": "live:length-from-buffer",
+      "sequence": 13,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.13.capture",
+      "record_digest": "9fb7e49a1360878849a6e3961038b87f8f2b08001af437a7aa9b29eef026e649",
+      "scenario": "live:explicit-length",
+      "sequence": 14,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.14.capture",
+      "record_digest": "fd994963fc35ca35b35738caf70def9955228f911520487e15248d18cf42ce91",
+      "scenario": "live:length-from-buffer",
+      "sequence": 15,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.15.capture",
+      "record_digest": "4851a0bbc68ca1f92f7214766b5edbc188f95fa255bb03200071cac197e73714",
+      "scenario": "live:length-from-buffer",
+      "sequence": 16,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.16.capture",
+      "record_digest": "0c9fc27a6e8efbc3f6d2b5659e3c49a36e3e6983ba72d732fdf6a6d98e38ca0e",
+      "scenario": "live:length-from-buffer",
+      "sequence": 17,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.17.capture",
+      "record_digest": "bad03a4adc345e675e09917bbf96e3e78cd3d86ffad006f9b64ef5b05db183d1",
+      "scenario": "live:length-from-buffer",
+      "sequence": 18,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.18.capture",
+      "record_digest": "d5c082d19face8078bb38fab86cff29c42e9fa91b1baa5d6de17bed704c709b2",
+      "scenario": "live:length-from-buffer",
+      "sequence": 19,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.19.capture",
+      "record_digest": "bd5c8ca473ff5f8dac25edca8de8819b36202f805825e4faaa31a2618b2a681c",
+      "scenario": "live:length-from-buffer",
+      "sequence": 20,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.2.capture",
+      "record_digest": "58e56011890cf8ca0ac7726e12dd49448c4f04d9be7becc7cae42d3b13d0016c",
+      "scenario": "live:length-from-buffer",
+      "sequence": 3,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.20.capture",
+      "record_digest": "ad54cd21efe39ce6787e0fbc367d3872d81cbdf903da4bd4534ae354c8fd0f42",
+      "scenario": "live:explicit-length",
+      "sequence": 21,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.21.capture",
+      "record_digest": "4d2ec6661b271085047cf439a27c4fc0e1ad9d0b6af5ce3600d9227ceccdc467",
+      "scenario": "live:length-from-buffer",
+      "sequence": 22,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.22.capture",
+      "record_digest": "5c8d78d960de68e6abd5f57c70241bbdda77a9c0fbc7166392db324c898fd0a5",
+      "scenario": "live:explicit-length",
+      "sequence": 23,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.23.capture",
+      "record_digest": "b277d6369b1e760d1674578fcf0c2b7416df14905cc513ff8ac00d13cad751a6",
+      "scenario": "live:length-from-buffer",
+      "sequence": 24,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.24.capture",
+      "record_digest": "570f496ee40d9d4f9faadc279a8a920ba972d9311f3a2b73100a1419fd6552e1",
+      "scenario": "live:length-from-buffer",
+      "sequence": 25,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.25.capture",
+      "record_digest": "9eb283940e53ddfd3b7e4179dcc931ea8cbc611eab14c3495840e9afe76586d7",
+      "scenario": "live:length-from-buffer",
+      "sequence": 26,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.26.capture",
+      "record_digest": "aeed0be927406d73fbd5bad744bba8d0fde25813147db5589090433d3d0b1dc0",
+      "scenario": "live:length-from-buffer",
+      "sequence": 27,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.27.capture",
+      "record_digest": "bb1afc6c00299a171761313bf5f16ecd5539104e9f2bb872da7fc545decfe7d1",
+      "scenario": "live:length-from-buffer",
+      "sequence": 28,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.28.capture",
+      "record_digest": "8dadd93f5352582a30946e992e8d2cf4e0d7071e3960da41384b7741bbd7846d",
+      "scenario": "live:length-from-buffer",
+      "sequence": 29,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.29.capture",
+      "record_digest": "bd89eb6996cf2eec79d835f3aafd9571c4afe15d44366222fcb61fa9d64c5fc4",
+      "scenario": "live:length-from-buffer",
+      "sequence": 30,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.3.capture",
+      "record_digest": "137025e56078bbff9cc788fc4cf71c29fe39b3f96fa8bfeb7d0d6573f9045841",
+      "scenario": "live:length-from-buffer",
+      "sequence": 4,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.30.capture",
+      "record_digest": "f6d9b772dd9eed109e2ddeec7a285c707e6ddbada95f71335de2119ddd5f6302",
+      "scenario": "live:length-from-buffer",
+      "sequence": 31,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.31.capture",
+      "record_digest": "ce19aa0b0f73e87d27717af72dec5a8bcf6c5d0c115e682674aceb8c423284d3",
+      "scenario": "live:length-from-buffer",
+      "sequence": 32,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.32.capture",
+      "record_digest": "ea7305fa3444082414c82a91c88b1ae35c88c7c488917060a4248b17db8780ca",
+      "scenario": "live:length-from-buffer",
+      "sequence": 33,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.33.capture",
+      "record_digest": "4267fb2453d7d5a7262e8d4867edbd3b36b6978d1bbcdedec3fc1ce0df4aa9a4",
+      "scenario": "live:length-from-buffer",
+      "sequence": 34,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.34.capture",
+      "record_digest": "711981ba99cf75d90740c6ca86f1d5d2da13595c526736233ca1bb4da476b492",
+      "scenario": "live:length-from-buffer",
+      "sequence": 35,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.35.capture",
+      "record_digest": "4ee7b78b39a41b303aa384b00d7bed0ea911fdd2b73f1c0483a35be40a6da3f1",
+      "scenario": "live:length-from-buffer",
+      "sequence": 36,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.36.capture",
+      "record_digest": "25c3a61e2633488114c154746d5be8f37b943bf1554a2bcb60d95077ca04716d",
+      "scenario": "live:length-from-buffer",
+      "sequence": 37,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.37.capture",
+      "record_digest": "ac6ec0edb20bf85feaefbf9675ca70299551a708c28cc21c3b8a1ed2e3a016b6",
+      "scenario": "live:length-from-buffer",
+      "sequence": 38,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.38.capture",
+      "record_digest": "96f9c3917ec80b3c2a478d89c890b1b1ef2136cec25a439b51ede090d94fbe07",
+      "scenario": "live:length-from-buffer",
+      "sequence": 39,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.39.capture",
+      "record_digest": "626a8626bd03b98bd7a407f16c81f57985fc6c29ce6bbd2e7461e845010e9e9d",
+      "scenario": "live:length-from-buffer",
+      "sequence": 40,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.4.capture",
+      "record_digest": "9c070562965a4f5b63946009c551144709e8fa1d9eaf449ad201ee59ef0caf78",
+      "scenario": "live:length-from-buffer",
+      "sequence": 5,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.40.capture",
+      "record_digest": "ecea232d15942a965550e2e84c4500c9c23f2076c09ba813cecfb76bddc91fa4",
+      "scenario": "live:length-from-buffer",
+      "sequence": 41,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.41.capture",
+      "record_digest": "89a7a0118817b5757e33a263a0d654466f18f2615858a4e6c32e983bf1c6ef3d",
+      "scenario": "live:length-from-buffer",
+      "sequence": 42,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.42.capture",
+      "record_digest": "0c737c8295d293af5110814460a53d742b8f6aa0a23a4a388c440a1a56e96da7",
+      "scenario": "live:length-from-buffer",
+      "sequence": 43,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.43.capture",
+      "record_digest": "f158578f0d9855c9537e30a968f5e473bbb4e856b3dcf0e01f135f69e25ab7ad",
+      "scenario": "live:length-from-buffer",
+      "sequence": 44,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.44.capture",
+      "record_digest": "ba08dac157e12637f245c6201df3aebacda86184e8942d4d8fab1f3a480514c6",
+      "scenario": "live:length-from-buffer",
+      "sequence": 45,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.45.capture",
+      "record_digest": "d80b7eb570d6d7e10144a8e57970fac33cee454f0393d9dd81951795d76a3c31",
+      "scenario": "live:length-from-buffer",
+      "sequence": 46,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.46.capture",
+      "record_digest": "7cbb176263aeccc0bae67130262c4a18534475da0ec4b2596ef527ef3f2541c0",
+      "scenario": "live:length-from-buffer",
+      "sequence": 47,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.47.capture",
+      "record_digest": "3446c0cbc109c9a2354ccb46b6c59ea0a9436b6e5ad47192d1c5e9c6ba63942e",
+      "scenario": "live:length-from-buffer",
+      "sequence": 48,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.48.capture",
+      "record_digest": "c9e1b14294836848460c0f55e2d0dbe69cc048fe4c2ab13828cbaf6709403533",
+      "scenario": "live:length-from-buffer",
+      "sequence": 49,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.49.capture",
+      "record_digest": "1249f4b2d79668e72eaf589d2577fc0e92234ddc3264a338078518171cbbb64e",
+      "scenario": "live:length-from-buffer",
+      "sequence": 50,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.5.capture",
+      "record_digest": "19b79611782c303d12f787b85d0082bfa5bd2377de351a111d8887fccf48f696",
+      "scenario": "live:length-from-buffer",
+      "sequence": 6,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.50.capture",
+      "record_digest": "1c6fb1950e99d783943d25e9b1464bf371fdd5c4ba5577e82b39b10734b80f64",
+      "scenario": "live:length-from-buffer",
+      "sequence": 51,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.51.capture",
+      "record_digest": "7bbe3c3fb85721260f07b9cb938ec21f7217cf4c968ae2021b7abe1172f045c1",
+      "scenario": "live:length-from-buffer",
+      "sequence": 52,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.52.capture",
+      "record_digest": "6cf587ffd5a2c8618d538444a03a8b89b07d0b4905a50123bf7aab860a97c6a3",
+      "scenario": "live:length-from-buffer",
+      "sequence": 53,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.53.capture",
+      "record_digest": "31137c42276124f8c44308a28a6b71a906c8d67d1162a3722a8e1fbca41b0b5b",
+      "scenario": "live:length-from-buffer",
+      "sequence": 54,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.54.capture",
+      "record_digest": "b8bb4b2cfa949ab5c8eac451b04428ac746009082e1ee772a455efcbdd49bf34",
+      "scenario": "live:length-from-buffer",
+      "sequence": 55,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.55.capture",
+      "record_digest": "b618427f81b06ed27ba8890e432edbad42e40c34008c66a8ea531bbe0772934c",
+      "scenario": "live:length-from-buffer",
+      "sequence": 56,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.56.capture",
+      "record_digest": "445b4ac8864e57529e29961aa329a4e24f34cb948354577117ff2a8e9d36d8ea",
+      "scenario": "live:length-from-buffer",
+      "sequence": 57,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.57.capture",
+      "record_digest": "851c40ed303411ab02e2bba3db625174075c4132636de8287739144115641341",
+      "scenario": "live:length-from-buffer",
+      "sequence": 58,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.58.capture",
+      "record_digest": "ef858d1ddd631583fa1b14397a34529292b1719f6afd2ad18bb459fb0e4633ec",
+      "scenario": "live:length-from-buffer",
+      "sequence": 59,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.59.capture",
+      "record_digest": "8b0132bb1896c5db72eff836ceb340df093cae9d95d07bee5aeb8670f89521f3",
+      "scenario": "live:length-from-buffer",
+      "sequence": 60,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.6.capture",
+      "record_digest": "037fec3fa2d5d1846e11760e6dcc8dddd14b8d0e5352d89b3ed857a63a96de2a",
+      "scenario": "live:length-from-buffer",
+      "sequence": 7,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.60.capture",
+      "record_digest": "b5f7f99193ed236dd09350dd7fc16ed33890fda877f7d1d7ffac0a92b8c1b605",
+      "scenario": "live:length-from-buffer",
+      "sequence": 61,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.61.capture",
+      "record_digest": "f7a65be9fc8851a54ca2dbf972d9439a150327465647c8caf2f165b4f7672d2b",
+      "scenario": "live:length-from-buffer",
+      "sequence": 62,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.62.capture",
+      "record_digest": "9f61fe60087f01bd7510a0a33bf48f702a74c925e8892329359ec6979aecdb40",
+      "scenario": "live:length-from-buffer",
+      "sequence": 63,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.63.capture",
+      "record_digest": "df27441857c77c2c0c68f1fb8f07eb248797ac763b137e466033c50f29baf522",
+      "scenario": "live:length-from-buffer",
+      "sequence": 64,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.7.capture",
+      "record_digest": "0ad770350c8016dfbf1b490ce64cd8fa51f00bf7962ded034eb274910eaa3be2",
+      "scenario": "live:length-from-buffer",
+      "sequence": 8,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.8.capture",
+      "record_digest": "cc1bbf61abe9ab7c5ac51eef0b40460f8863efadf32507d497d8cf990d2838c2",
+      "scenario": "live:length-from-buffer",
+      "sequence": 9,
+      "thread": 0,
+      "verdict": "qualified"
+    },
+    {
+      "file": "captures/gfx-live-20261025T155406Z.9.capture",
+      "record_digest": "2cf419b9f7b7a280f2a6990ac97439bcd174c729198ebf85ddd1e75d5ac96f6e",
+      "scenario": "live:length-from-buffer",
+      "sequence": 10,
+      "thread": 0,
+      "verdict": "qualified"
+    }
+  ],
+  "unqualified": 0,
+  "unqualified_transcripts": []
+}
