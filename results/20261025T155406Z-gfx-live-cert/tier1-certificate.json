@@ -1,0 +1,135 @@
+{
+  "candidate": {
+    "build_flags": [
+      "-std=c++20",
+      "-O0",
+      "-g",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-fsanitize=address,undefined",
+      "-fno-sanitize-recover=all"
+    ],
+    "build_identity": "re1-gfx-set-constant-buffer-acceptance",
+    "executable_sha256": "61a20732d7ee91375567de9d9f764d769829bc196ad02e1edabc050739bb0560",
+    "executed_matches_build": true,
+    "source_sha256": "ea5b50c049e8596365f65e1407e903ae12be98a50aca539e1adeb19bab31ad75"
+  },
+  "coverage": {
+    "claim": "gfx-set-constant-buffer-tier1",
+    "distinct_behaviors": 10,
+    "diversity_floor": 12,
+    "diversity_met": false,
+    "duplicate_count": 54,
+    "missing_optional": [],
+    "missing_required": [
+      "input:zero",
+      "slot:3",
+      "slot:4",
+      "slot:5"
+    ],
+    "observed_optional": [
+      "alias:distinct",
+      "canary:preserved",
+      "pointer:rsi",
+      "rax:ctx"
+    ],
+    "observed_required": [
+      "input:absent",
+      "input:nonzero",
+      "selector:fixed-length",
+      "selector:length-from-buffer",
+      "slot:0",
+      "slot:1",
+      "slot:2"
+    ],
+    "optional_cells": [
+      "alias:distinct",
+      "canary:preserved",
+      "pointer:rsi",
+      "rax:ctx"
+    ],
+    "policy_sha256": "45b2846a61fdce5c7ce2e5db143aea6c534a04f965cf0578d12130a251fa56b2",
+    "required_cells": [
+      "input:absent",
+      "input:nonzero",
+      "input:zero",
+      "selector:fixed-length",
+      "selector:length-from-buffer",
+      "slot:0",
+      "slot:1",
+      "slot:2",
+      "slot:3",
+      "slot:4",
+      "slot:5"
+    ],
+    "scope": {
+      "input_classes": [
+        "absent",
+        "nonzero",
+        "zero"
+      ],
+      "selectors": [
+        "fixed-length",
+        "length-from-buffer"
+      ],
+      "slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    },
+    "unrestricted": true
+  },
+  "evaluation": {
+    "evidence_refusal": 0,
+    "failures": [],
+    "infrastructure_refusal": 0,
+    "match": 64,
+    "mismatch": 0
+  },
+  "evidence": {
+    "descriptor_sha256": "22e1c92427c9bf30dd4d748a65e3a416d9354450c840a7811efe1d07f45e545e",
+    "eligible": 64,
+    "evidence_label": "unverified",
+    "explicitly_synthetic": false,
+    "ineligible": 0,
+    "live_grounded": false,
+    "loss": {
+      "incomplete": 0,
+      "undrained": 0,
+      "write_failed": 0
+    },
+    "malformed": 0,
+    "manifest_sha256": "e8914fb1f71ec8feda8cce2f6407d9a7e846c4203ca6743fb3ba9ec9476ea437",
+    "policy_sha256": "45b2846a61fdce5c7ce2e5db143aea6c534a04f965cf0578d12130a251fa56b2",
+    "session_id": "gfx-live-20261025T155406Z",
+    "transcript_count": 64
+  },
+  "evidence_tier": "sealed-session-unverified",
+  "function_id": "gfx:set-constant-buffer",
+  "limitations": [
+    "live grounding is not established; the certifier checks recorded identity and hash consistency only"
+  ],
+  "promotion": {
+    "reasons": [
+      "required coverage cells are missing",
+      "diversity floor is not met"
+    ],
+    "status": "scoped"
+  },
+  "reference_admission": {
+    "fixtures": {
+      "reasons": [],
+      "verdict": "eligible"
+    },
+    "session": {
+      "reasons": [],
+      "verdict": "eligible"
+    }
+  },
+  "schema": "eu4-oracle-tier1-certificate/v1"
+}

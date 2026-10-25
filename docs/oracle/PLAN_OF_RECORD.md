@@ -29,7 +29,7 @@ authorizes replacing game code.
 | 0 | Scope contract (this section and the acceptance in [P4_INTEGRATION.md](P4_INTEGRATION.md)) | no |
 | 1 | **PR A1** resource materialization; **PR A2** function-fixture contract | no |
 | 2 | **PR B** passive x86-64 entry/exit hook; **PR C** generic offline replay and comparator | no |
-| 3 | **PR D** P5a first live acquisition (~50 qualified fixtures) — implementation merged at `09223f8`; live acceptance pending authorization | one bounded session |
+| 3 | **PR D** P5a first live acquisition — **accepted 2026-10-25** (`gfx-live-20261025T155406Z`, 64 qualified, manifest `e8914fb1…ea437`; implementation merged at `09223f8`) | one bounded session |
 | 4 | **PR E** Tier 1 live-grounded certification (E1 certifier, E2 independent audit) | no |
 | 5 | **PR F** Tier 2 shadow validation (≥1,000 sampled comparisons; F1 offline worker now, F2 gated) | controlled sessions |
 | 6 | **PR G** second-function scaling and agent pilot (G1 now; G2–G4 gated) | conditional |
@@ -48,9 +48,11 @@ campaigns before the G pilot (**PR H is proposed only**), and new agent framewor
 
 ## Parallel development (2026-10-24)
 
-PR D's implementation is complete and merged at `09223f8`; its one bounded live
-session remains pending separate operator authorization. **This section authorizes
-no EU IV launch and no live transcript.**
+PR D's implementation is complete and merged at `09223f8`. **D-live evidence (2026-10-25):**
+one operator-authorized bounded session (`gfx-live-20261025T155406Z`) with reporter
+`accepted` and 64 A2-qualified fixtures; transcripts are operator-local. **This section
+authorizes no further EU IV launch and no additional live transcript without separate
+operator authorization.**
 
 Implementation readiness and certification readiness are separate. Offline
 components may be implemented and merged in parallel; a result earns a gate only
@@ -278,9 +280,9 @@ close waiting for active/reserved captures, one coordinator/drain writer, exact
 intercepted/admitted/completed accounting, strict loss-free acceptance, and verified
 session manifests.
 The native harness and portable report-contract tests pass, and preflight succeeds
-against the local pinned GOG build. **No live EU IV session has been run.** The single
-bounded acceptance session is pending separate operator authorization; no CI job
-launches the game.
+against the local pinned GOG build. **One bounded P5a acceptance session has been run**
+(2026-10-25, `gfx-live-20261025T155406Z`). Further live sessions require separate
+operator authorization; no CI job launches the game.
 
 The gate splits by acquisition scope. Each half must pass **entirely offline** before the
 matching acquisition is authorized:
