@@ -6,6 +6,7 @@ transcripts and stand-in harnesses. Nothing here launches EU IV.
 """
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import time
@@ -174,6 +175,26 @@ class ShadowWorkerTests(unittest.TestCase):
             self.assertEqual(result["outcomes"], ["refused"])
             self.assertEqual(result["comparisons"], ["infrastructure"])
             self.assertTrue(any(item == "infrastructure:usage" for item in result["failures"][0]))
+
+    def test_relative_work_dir_and_harness_path_replay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = Path(tmp)
+            harness = _script(parent / "harness.py", "print('not-a-report')\n")
+            candidate = _candidate(harness)
+            candidate["harness_path"] = "harness.py"
+            previous = os.getcwd()
+            os.chdir(parent)
+            try:
+                result = run_owned(
+                    [_snapshot()], candidate, "shadow",
+                    deadline_seconds=2, output_limit_bytes=4096, queue_limit=2,
+                )
+            finally:
+                os.chdir(previous)
+            self._assert_accounted(result, 1)
+            self.assertEqual(result["outcomes"], ["completed"])
+            self.assertEqual(result["comparisons"], ["mismatch"])
+            self.assertTrue((parent / "shadow" / "jobs" / "0" / "report.json").is_file())
 
     def test_candidate_mismatch_is_not_infrastructure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

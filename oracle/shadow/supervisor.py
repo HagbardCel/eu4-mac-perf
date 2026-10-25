@@ -24,7 +24,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, MutableMapping, Sequence
 
 from oracle.function.replay import replay_capture
 from oracle.slice.harness import close_pipes, terminate_process_group
@@ -58,6 +58,38 @@ class Containment(Exception):
         self.kind = kind
         self.output_bytes = output_bytes
         super().__init__(kind)
+
+
+def _require_nonempty_path(value: str | Path, label: str) -> Path:
+    if isinstance(value, str) and value == "":
+        raise SnapshotError(f"{label} must be a non-empty path")
+    return Path(value)
+
+
+def _resolve_handoff_path(path: Path, caller_cwd: Path) -> Path:
+    expanded = path.expanduser()
+    if not expanded.is_absolute():
+        expanded = caller_cwd / expanded
+    return expanded.resolve()
+
+
+def _normalize_work_dir(work_dir: str | Path) -> Path:
+    caller_cwd = Path.cwd()
+    return _resolve_handoff_path(
+        _require_nonempty_path(work_dir, "work directory"), caller_cwd)
+
+
+def _normalize_candidate(candidate: Mapping[str, Any]) -> Mapping[str, Any]:
+    harness = candidate.get("harness_path")
+    if not isinstance(harness, str) or harness == "":
+        return candidate
+    caller_cwd = Path.cwd()
+    resolved = str(_resolve_handoff_path(Path(harness), caller_cwd))
+    if resolved == harness:
+        return candidate
+    merged: MutableMapping[str, Any] = dict(candidate)
+    merged["harness_path"] = resolved
+    return merged
 
 
 def _fsync_write(path: Path, data: bytes) -> None:
@@ -262,7 +294,7 @@ def _stream_bounded(proc: subprocess.Popen[bytes], *, deadline: float,
 
 
 def _worker_argv(job_dir: Path) -> list[str]:
-    return [sys.executable, "-m", "oracle.shadow.worker", str(job_dir)]
+    return [sys.executable, "-m", "oracle.shadow.worker", str(job_dir.resolve())]
 
 
 def _worker_env() -> dict[str, str]:
@@ -312,9 +344,10 @@ def _read_report(job_dir: Path) -> dict[str, Any] | None:
 def _supervise(job_dir: Path, deadline_seconds: float) -> dict[str, Any]:
     """Run one worker in its own session and always reap both process groups."""
     pgid_path = job_dir / "pgid"
+    job = job_dir.resolve()
     proc = subprocess.Popen(
-        _worker_argv(job_dir),
-        cwd=str(job_dir),
+        _worker_argv(job),
+        cwd=str(job),
         env=_worker_env(),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -346,7 +379,7 @@ def _prepare_job(work: Path, index: int, transcript: str,
     request = {
         "schema": SNAPSHOT_SCHEMA,
         "work_dir": str(work.resolve()),
-        "harness_path": candidate.harness_path,
+        "harness_path": str(Path(candidate.harness_path).resolve()),
         "executable_sha256": candidate.executable_sha256,
         "source_sha256": candidate.source_sha256,
         "function_id": candidate.function_id,
@@ -400,13 +433,13 @@ def _run_owned(snapshots: Sequence[str], candidate: Mapping[str, Any],
     _check_limits(deadline_seconds, output_limit_bytes, queue_limit)
     if isinstance(snapshots, (str, bytes)) or not isinstance(snapshots, Sequence):
         raise SnapshotError("snapshots must be a sequence of transcript strings")
-    work = Path(work_dir)
+    work = _normalize_work_dir(work_dir)
     if work.exists() and not work.is_dir():
         raise SnapshotError("work directory is not a directory")
     work.mkdir(parents=True, exist_ok=True)
 
     try:
-        identity = parse_candidate(candidate)
+        identity = parse_candidate(_normalize_candidate(candidate))
         identity_error = None
     except SnapshotError as error:
         identity = None
