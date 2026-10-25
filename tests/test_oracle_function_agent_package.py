@@ -152,6 +152,36 @@ class HeldOutIsolationTests(unittest.TestCase):
             with self.assertRaises(catalog.HeldOutLeak):
                 catalog.assert_isolated(workspace)
 
+    def test_a_directory_symlink_into_held_out_is_rejected(self):
+        held_root = corpus.corpus_dir(corpus.HELD_OUT)
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            (workspace / "candidate.c").write_text("int main() { return 0; }\n",
+                                                    encoding="utf-8")
+            (workspace / "shortcuts").symlink_to(held_root, target_is_directory=True)
+
+            report = catalog.held_out_report(workspace)
+            self.assertFalse(report["ok"])
+            self.assertTrue(any("symlinks are not allowed" in problem
+                                for problem in report["problems"]))
+            with self.assertRaises(catalog.HeldOutLeak):
+                catalog.assert_isolated(workspace)
+
+    def test_an_oversized_text_file_is_not_treated_as_clean(self):
+        cap = catalog._MAX_SCAN_BYTES
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            workspace.mkdir()
+            (workspace / "large.txt").write_bytes(b"x" * (cap + 1))
+
+            report = catalog.held_out_report(workspace)
+            self.assertFalse(report["ok"])
+            self.assertTrue(any("scan incomplete" in problem
+                                for problem in report["problems"]))
+            with self.assertRaises(catalog.HeldOutLeak):
+                catalog.assert_isolated(workspace)
+
 
 class FrozenSliceTests(unittest.TestCase):
     """G3a reuses certified P3 by import; it does not edit it."""

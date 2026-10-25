@@ -124,16 +124,21 @@ class CatalogBoundTools:
         return self._tools.call(method, args or {})
 
 
-def _workspace_files(workspace: Path) -> list[Path]:
-    return sorted(path for path in workspace.rglob("*") if path.is_file())
-
-
-def _text_of(path: Path) -> str:
+def _fingerprint_scan_problems(
+        path: Path, name: str, fingerprints: list[str]) -> list[str]:
+    if not fingerprints or path.suffix not in _TEXT_SUFFIXES:
+        return []
     try:
-        data = path.read_bytes()[:_MAX_SCAN_BYTES]
-    except OSError:  # pragma: no cover - the report records the failure instead
-        return ""
-    return data.decode("utf-8", "ignore")
+        with path.open("rb") as handle:
+            data = handle.read(_MAX_SCAN_BYTES + 1)
+    except OSError:
+        return [f"{name}: unreadable"]
+    if len(data) > _MAX_SCAN_BYTES:
+        return [f"{name}: scan incomplete"]
+    leaks = scan_for_leaks(data.decode("utf-8", "ignore"), fingerprints)
+    if leaks:
+        return [f"{name}: {len(leaks)} held-out fingerprint(s) present"]
+    return []
 
 
 def held_out_report(workspace: Path, *, fixtures_root: Path | None = None) -> dict[str, Any]:
@@ -147,7 +152,16 @@ def held_out_report(workspace: Path, *, fixtures_root: Path | None = None) -> di
     held_root = (Path(fixtures_root) if fixtures_root else corpus.FIXTURES_DIR) / corpus.HELD_OUT
     held_root = held_root.resolve()
     problems: list[str] = []
-    files = _workspace_files(workspace)
+    files: list[Path] = []
+    for path in sorted(workspace.rglob("*")):
+        name = path.relative_to(workspace).as_posix()
+        if path.is_symlink():
+            problems.append(f"{name}: symlinks are not allowed in the workspace")
+            continue
+        if not path.is_file():
+            continue
+        files.append(path)
+
     relative = [path.relative_to(workspace).as_posix() for path in files]
 
     if workspace == held_root or held_root.is_relative_to(workspace):
@@ -164,9 +178,6 @@ def held_out_report(workspace: Path, *, fixtures_root: Path | None = None) -> di
                         f"{type(exc).__name__}")
 
     for path, name in zip(files, relative):
-        if path.is_symlink():
-            problems.append(f"{name}: symlinks are not allowed in the workspace")
-            continue
         if path.resolve().is_relative_to(held_root):
             problems.append(f"{name}: resolves into the held-out corpus")
         if "held_out" in path.parts:
@@ -175,10 +186,7 @@ def held_out_report(workspace: Path, *, fixtures_root: Path | None = None) -> di
             problems.append(f"{name}: controller-only file is present")
         if path.suffix == ".py":
             problems.append(f"{name}: Oracle source is present")
-        if fingerprints and path.suffix in _TEXT_SUFFIXES:
-            leaks = scan_for_leaks(_text_of(path), fingerprints)
-            if leaks:
-                problems.append(f"{name}: {len(leaks)} held-out fingerprint(s) present")
+        problems.extend(_fingerprint_scan_problems(path, name, fingerprints))
 
     return {
         "ok": not problems,
