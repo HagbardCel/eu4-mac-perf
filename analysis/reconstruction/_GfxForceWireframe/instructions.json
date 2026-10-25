@@ -1,0 +1,52 @@
+{
+  "schema": "eu4-re0-instruction-inventory/v1",
+  "function": "_GfxForceWireframe",
+  "name_mangled": "_GfxForceWireframe",
+  "entry_rva": "0x15ed175",
+  "end_rva": "0x15ed182",
+  "image_base": 4294967296,
+  "binary_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "body_sha256": "45957994d8a114d2be65e430e66d98c04f4efa818180cbc1fe274fb75b3b3dae",
+  "baseline_revision": "auto-v1-20261013",
+  "source": "renderer_snapshot/v1/batches/gfx-batch-00044.zip:static.jsonl",
+  "decoded_status": "success",
+  "instruction_count": 5,
+  "decoded_instruction_bytes": 13,
+  "instructions": [
+    {
+      "rva": "0x15ed175",
+      "length": 1,
+      "mnemonic": "PUSH",
+      "operands": "PUSH RBP",
+      "call": false
+    },
+    {
+      "rva": "0x15ed176",
+      "length": 3,
+      "mnemonic": "MOV",
+      "operands": "MOV RBP,RSP",
+      "call": false
+    },
+    {
+      "rva": "0x15ed179",
+      "length": 7,
+      "mnemonic": "MOV",
+      "operands": "MOV byte ptr [RDI + 0x194],SIL",
+      "call": false
+    },
+    {
+      "rva": "0x15ed180",
+      "length": 1,
+      "mnemonic": "POP",
+      "operands": "POP RBP",
+      "call": false
+    },
+    {
+      "rva": "0x15ed181",
+      "length": 1,
+      "mnemonic": "RET",
+      "operands": "RET",
+      "call": false
+    }
+  ]
+}
