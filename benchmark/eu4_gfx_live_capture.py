@@ -19,7 +19,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import autonomous_runner as auto  # noqa: E402
 import eu4_benchmark as base  # noqa: E402
+from fixture_manager import FixtureManager  # noqa: E402
 from oracle.function import fixture  # noqa: E402
 from reverse_engineering import paths  # noqa: E402
 from reverse_engineering.macho_rva import (  # noqa: E402
@@ -57,6 +59,13 @@ EPOCH = "p5a-live"
 SUMMARY_HEADER = "EU4-GFX-LIVE-SUMMARY v1"
 STARTUP_HEADER = "EU4-GFX-LIVE-STARTUP v1"
 DONE_HEADER = "EU4-GFX-LIVE-DONE v1"
+VENICE_FIXTURE = ROOT / "fixtures/venice_paused.eu4"
+VENICE_MANIFEST = ROOT / "fixtures/venice_paused.json"
+PROBE = auto.PROBE
+PROBE_SOURCE = auto.PROBE_SOURCE
+READY_TIMEOUT_S = auto.READY_TIMEOUT_S
+VENICE_READY_TIMEOUT_MSG = auto.VENICE_READY_TIMEOUT_MSG
+FOCUS_REPAIR_INTERVAL_S = 2.0
 
 
 class LiveError(base.BenchmarkError):
@@ -141,7 +150,171 @@ def _request_focus_activation(focus_bin: Path, pid: int) -> tuple[bool, bool, st
     return True, True, None
 
 
-def preflight(save: Path | None = None) -> dict:
+def _venice_fixture_authority() -> dict:
+    if not VENICE_MANIFEST.is_file():
+        raise LiveError(f"Venice fixture manifest is missing: {VENICE_MANIFEST}")
+    manifest = json.loads(VENICE_MANIFEST.read_text(encoding="utf-8"))
+    digest = manifest.get("save_sha256")
+    if not isinstance(digest, str) or not digest:
+        raise LiveError("Venice fixture manifest has no save_sha256")
+    if not VENICE_FIXTURE.is_file():
+        raise LiveError(
+            f"Pinned Venice fixture is missing locally: {VENICE_FIXTURE}")
+    observed = base.sha256(VENICE_FIXTURE)
+    if observed != digest:
+        raise LiveError("Venice fixture digest differs from the pinned manifest")
+    return {"fixture_sha256": digest, "fixture_manifest": manifest}
+
+
+def _build_probe_dylib() -> None:
+    BUILD.mkdir(parents=True, exist_ok=True)
+    command = [
+        "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-Werror",
+        "-dynamiclib", "-framework", "OpenGL", "-o", str(PROBE), str(PROBE_SOURCE),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise LiveError(
+            f"Could not build readiness probe: "
+            f"{result.stderr.strip() or result.stdout.strip()}")
+    if base.command("lipo", "-archs", str(PROBE)).strip() != "x86_64":
+        raise LiveError("Readiness probe is not x86_64")
+
+
+def _require_focus_helper() -> Path:
+    focus_bin, error = _try_build_focus_helper()
+    if focus_bin is None:
+        raise LiveError(
+            f"Auto Venice capture requires mac_game_focus: {error or 'unavailable'}")
+    return focus_bin
+
+
+def _focus_command(focus_bin: Path, action: str, pid: int, timeout: float) -> bool:
+    try:
+        result = subprocess.run(
+            [str(focus_bin), action, str(pid)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
+def _bounded_focus_state(
+    focus_bin: Path,
+    pid: int,
+    deadline: float,
+    counters: dict[str, int],
+    repair_clock: list[float],
+) -> tuple[bool, bool]:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return False, False
+    timeout = min(FOCUS_ACTIVATE_TIMEOUT_S, remaining)
+    now = time.monotonic()
+    frontmost = _focus_command(focus_bin, "check", pid, timeout)
+    if not frontmost and now - repair_clock[0] >= FOCUS_REPAIR_INTERVAL_S:
+        counters["activation_attempts"] += 1
+        if _focus_command(focus_bin, "activate", pid, timeout):
+            frontmost = _focus_command(focus_bin, "check", pid, timeout)
+        repair_clock[0] = time.monotonic()
+    interior = False
+    if frontmost:
+        interior = _focus_command(focus_bin, "interior", pid, timeout)
+        now = time.monotonic()
+        if not interior and now - repair_clock[0] >= FOCUS_REPAIR_INTERVAL_S:
+            counters["pointer_reparks"] += 1
+            if _focus_command(focus_bin, "park", pid, timeout):
+                interior = _focus_command(focus_bin, "interior", pid, timeout)
+            repair_clock[0] = time.monotonic()
+    if not frontmost:
+        counters["frontmost_false_iterations"] += 1
+    elif not interior:
+        counters["pointer_noninterior_iterations"] += 1
+    return frontmost, interior
+
+
+def evaluate_venice_readiness(
+    *,
+    logged: bool,
+    frontmost: bool,
+    pointer_interior: bool,
+    rows: list[dict],
+    now_ns: int,
+) -> dict[str, bool | int]:
+    return auto.readiness_predicates(
+        logged=logged,
+        frontmost=frontmost,
+        pointer_interior=pointer_interior,
+        rows=rows,
+        now_ns=now_ns,
+        power=[],
+    )
+
+
+def wait_for_venice_ready(
+    game: subprocess.Popen,
+    focus_bin: Path,
+    probe_path: Path,
+    anchor: dict,
+    game_log: Path,
+    old_log: bytes,
+) -> dict:
+    deadline = time.monotonic() + READY_TIMEOUT_S
+    counters = {
+        "activation_attempts": 0,
+        "pointer_reparks": 0,
+        "frontmost_false_iterations": 0,
+        "pointer_noninterior_iterations": 0,
+    }
+    repair_clock = [0.0]
+    last_predicates: dict[str, bool | int] | None = None
+    while time.monotonic() < deadline:
+        if game.poll() is not None:
+            raise LiveError("GOG EU IV exited before Venice became ready")
+        frontmost, interior = _bounded_focus_state(
+            focus_bin, game.pid, deadline, counters, repair_clock)
+        now_ns = time.monotonic_ns()
+        log_text = auto.fresh_game_log(game_log, old_log)
+        logged = auto.game_log_ready(log_text)
+        rows = auto.probe_rows(probe_path, anchor)[-10:]
+        predicates = evaluate_venice_readiness(
+            logged=logged,
+            frontmost=frontmost,
+            pointer_interior=interior,
+            rows=rows,
+            now_ns=now_ns,
+        )
+        last_predicates = predicates
+        if predicates["ready_to_pass"]:
+            return {
+                "ready_ns": now_ns,
+                "predicates": predicates,
+                "counters": counters,
+            }
+        time.sleep(1)
+    raise LiveError(
+        f"{VENICE_READY_TIMEOUT_MSG}: {last_predicates or {}}")
+
+
+def _terminate_owned_game(game: subprocess.Popen | None, focus_bin: Path) -> bool:
+    if game is None or game.poll() is not None:
+        return game is None or game.poll() is not None
+    _focus_command(focus_bin, "terminate", game.pid, FOCUS_ACTIVATE_TIMEOUT_S)
+    auto.stop_process(game, 10)
+    return game.poll() is not None
+
+
+def _fixture_cleanup_state(
+    fixture: FixtureManager, working_save: Path,
+) -> tuple[bool, bool]:
+    journal = fixture.journal
+    continue_restored = not journal.is_file()
+    cleanup_completed = continue_restored and not working_save.exists()
+    return continue_restored, cleanup_completed
+
+
+def preflight(save: Path | None = None, auto_venice: bool = False) -> dict:
     build()
     identity = base.gog_identity()
     if base.command("lipo", "-archs", str(base.GOG_EXE)).strip() != "x86_64":
@@ -171,10 +344,24 @@ def preflight(save: Path | None = None) -> dict:
     if code[: len(PATCH_BYTES)] != PATCH_BYTES:
         raise LiveError("Pinned patch-site bytes do not match")
 
-    chosen_save = (save or base.DEFAULT_SAVE).expanduser()
-    if not chosen_save.is_file():
-        raise LiveError(f"Disposable Venice save is missing: {chosen_save}")
+    if auto_venice:
+        fixture_info = _venice_fixture_authority()
+        _build_probe_dylib()
+        _require_focus_helper()
+        save_path = VENICE_FIXTURE
+        save_hash = fixture_info["fixture_sha256"]
+        acquisition_mode = "auto_venice"
+    else:
+        chosen_save = (save or base.DEFAULT_SAVE).expanduser()
+        if not chosen_save.is_file():
+            raise LiveError(f"Disposable Venice save is missing: {chosen_save}")
+        save_path = chosen_save
+        save_hash = base.sha256(chosen_save)
+        acquisition_mode = "manual"
+        fixture_info = None
     return {
+        "acquisition_mode": acquisition_mode,
+        "fixture_sha256": fixture_info["fixture_sha256"] if fixture_info else None,
         "gog": identity,
         "descriptor_sha256": base.sha256(
             ROOT / "oracle/function/descriptors/gfx_set_constant_buffer.json"
@@ -187,8 +374,10 @@ def preflight(save: Path | None = None) -> dict:
         "source_sha256": {
             path.name: base.sha256(path) for path in (*SOURCES, *HEADERS)
         },
-        "save": str(chosen_save),
-        "save_sha256": base.sha256(chosen_save),
+        "save": str(save_path),
+        "save_sha256": save_hash,
+        "probe_library": str(PROBE) if auto_venice else None,
+        "probe_library_sha256": base.sha256(PROBE) if auto_venice else None,
     }
 
 
@@ -246,11 +435,221 @@ def _wait_for(path: Path, seconds: float, game: subprocess.Popen) -> bool:
     return path.is_file()
 
 
+def _verify_startup_attestation(
+    startup_path: Path, session_id: str, game: subprocess.Popen,
+) -> dict[str, str]:
+    startup = _parse_table(startup_path, STARTUP_HEADER)
+    if startup.get("state") != "installed":
+        raise LiveError(
+            f"Live dylib startup failed: {startup.get('error') or 'unknown'}")
+    if startup.get("session") != session_id:
+        raise LiveError("Startup session ID does not match this run")
+    if _integer(startup, "pid") != game.pid:
+        raise LiveError("Startup PID does not match the launched process")
+    if _integer(startup, "site", hexadecimal=True) != (
+            _integer(startup, "image_base", hexadecimal=True) + TARGET_RVA):
+        raise LiveError("Startup site address is not the pinned RVA")
+    if Path(startup.get("executable", "")).resolve() != base.GOG_EXE.resolve():
+        raise LiveError("Startup executable path does not match the pinned GOG build")
+    return startup
+
+
+def _arm_and_seal_capture(
+    control: Path,
+    game: subprocess.Popen,
+    run_dir: Path,
+    captures: Path,
+    wait_seconds: int,
+    deadline_seconds: int,
+) -> None:
+    _write_control(control, 1)
+    print("Capture is armed. Quota is 64; the session closes on quota or deadline.")
+    done = run_dir / "session.done"
+    wait_limit = max(1, min(wait_seconds, deadline_seconds - 10))
+    end = time.monotonic() + wait_limit
+    while time.monotonic() < end:
+        if done.is_file():
+            break
+        if len(list(captures.glob("*.capture"))) >= QUOTA:
+            break
+        if game.poll() is not None:
+            break
+        time.sleep(0.25)
+    _write_control(control, 2)
+    if not _wait_for(done, 15, game):
+        raise LiveError("The live session did not seal before the drain deadline")
+    if game.poll() is not None:
+        raise LiveError("The game exited before the session was confirmed")
+
+
+def _run_auto_venice(
+    output: Path,
+    evidence: dict,
+    deadline_seconds: int,
+    wait_seconds: int,
+) -> dict:
+    output_root = output.expanduser().resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+    focus_bin = _require_focus_helper()
+    fixture_digest = evidence["fixture_sha256"]
+    assert fixture_digest is not None
+    launcher = json.loads(base.GOG_LAUNCHER.read_text())
+    if (launcher.get("exePath") != "./eu4.app/Contents/MacOS/eu4" or
+            not isinstance(launcher.get("exeArgs"), list) or
+            not all(isinstance(item, str) for item in launcher["exeArgs"])):
+        raise LiveError("Unexpected GOG launcher executable or arguments")
+
+    now = dt.datetime.now(dt.timezone.utc)
+    run_dir = output_root / f"{now:%Y%m%dT%H%M%SZ}-gfx-live"
+    run_dir.mkdir(parents=True, exist_ok=False)
+    captures = run_dir / "captures"
+    captures.mkdir()
+    control = run_dir / "control.bin"
+    control.write_bytes(bytes(CONTROL_BYTES))
+    session_id = f"gfx-live-{now:%Y%m%dT%H%M%SZ}"
+    probe_path = run_dir / "auto-probe.csv"
+    metadata_path = run_dir / "metadata.json"
+    metadata: dict = {
+        "status": "launching",
+        "acquisition_mode": "auto_venice",
+        "started_utc": now.isoformat(),
+        "session_id": session_id,
+        "fixture_sha256": fixture_digest,
+        "save_path": None,
+        "save_sha256": fixture_digest,
+        "capture_dir": str(run_dir),
+        "control": str(control),
+        "deadline_seconds": deadline_seconds,
+        "wait_seconds": wait_seconds,
+        "quota": QUOTA,
+        "acceptance_qualified": ACCEPTANCE,
+        "gog": evidence["gog"],
+        "descriptor_sha256": evidence["descriptor_sha256"],
+        "descriptor_policy": evidence["descriptor_policy"],
+        "code_window_sha256": evidence["code_window_sha256"],
+        "patch_site_sha256": evidence["patch_site_sha256"],
+        "library": evidence["library"],
+        "library_sha256": evidence["library_sha256"],
+        "source_sha256": evidence["source_sha256"],
+        "probe_library": evidence["probe_library"],
+        "probe_library_sha256": evidence["probe_library_sha256"],
+        "focus_helper": str(focus_bin),
+    }
+    game: subprocess.Popen | None = None
+    working_save: Path | None = None
+    fixture_installed = False
+    sealed = False
+    save_mismatch = False
+    report_result: dict | None = None
+    with FixtureManager(output_root, base.USER_DATA, VENICE_FIXTURE,
+                        fixture_digest) as fixture:
+        fixture.recover()
+        try:
+            working_save = fixture.install()
+            fixture_installed = True
+            metadata["save_path"] = str(working_save)
+            metadata["working_save"] = str(working_save)
+            game_log = base.USER_DATA / "logs/game.log"
+            old_log = game_log.read_bytes() if game_log.is_file() else b""
+            anchor = {"monotonic_ns": time.monotonic_ns(), "wall_ns": time.time_ns()}
+            metadata["readiness_anchor"] = anchor
+            env = os.environ.copy()
+            env.update({
+                "DYLD_INSERT_LIBRARIES": f"{PROBE}:{LIBRARY}",
+                "EU4_AUTO_PROBE_LOG": str(probe_path),
+                "EU4_GFX_CAPTURE_DIR": str(run_dir),
+                "EU4_GFX_CAPTURE_CONTROL": str(control),
+                "EU4_GFX_CAPTURE_ID": session_id,
+                "EU4_GFX_EXPECTED_EXE": str(base.GOG_EXE),
+                "EU4_GFX_CAPTURE_DEADLINE_S": str(deadline_seconds),
+            })
+            with (run_dir / "game.stdout").open("wb") as stdout, (
+                    run_dir / "game.stderr").open("wb") as stderr:
+                game = subprocess.Popen(
+                    ["./eu4", *launcher["exeArgs"], "--continuelastsave"],
+                    cwd=base.GOG_EXE.parent, env=env, stdin=subprocess.DEVNULL,
+                    stdout=stdout, stderr=stderr)
+            metadata["game_pid"] = game.pid
+            startup_path = run_dir / "startup.status"
+            if not _wait_for(startup_path, 30, game):
+                raise LiveError("The live dylib did not write startup attestation")
+            _verify_startup_attestation(startup_path, session_id, game)
+            readiness = wait_for_venice_ready(
+                game, focus_bin, probe_path, anchor, game_log, old_log)
+            metadata["readiness"] = readiness
+            metadata["game_settings"] = base.game_settings()
+            metadata["display_mode"] = base.display_mode()
+            if game.poll() is not None or base.running_game_pid("paused") != game.pid:
+                raise LiveError("The expected GOG EU IV process is not running")
+            metadata["armed_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            _arm_and_seal_capture(control, game, run_dir, captures,
+                                  wait_seconds, deadline_seconds)
+            sealed = True
+        except (LiveError, base.BenchmarkError, OSError, KeyboardInterrupt) as exc:
+            metadata["status"] = "incomplete"
+            metadata["error"] = str(exc)
+            try:
+                _write_control(control, 2)
+            except OSError:
+                pass
+        finally:
+            exited = _terminate_owned_game(game, focus_bin)
+            metadata["game_exited"] = exited
+            if working_save is not None and working_save.is_file():
+                after_hash = base.sha256(working_save)
+                metadata["save_after_sha256"] = after_hash
+                save_mismatch = after_hash != fixture_digest
+                if save_mismatch:
+                    metadata["save_mismatch"] = True
+            metadata["continue_game_restored"] = False
+            metadata["fixture_cleanup_completed"] = False
+            metadata["working_save_changed"] = False
+            if exited and fixture_installed and working_save is not None:
+                try:
+                    metadata["working_save_changed"] = fixture.finish(run_dir)
+                    restored, completed = _fixture_cleanup_state(
+                        fixture, working_save)
+                    metadata["continue_game_restored"] = restored
+                    metadata["fixture_cleanup_completed"] = completed
+                except BaseException as cleanup_exc:
+                    metadata["cleanup_error"] = str(cleanup_exc)
+                    metadata["status"] = "incomplete"
+            elif not exited:
+                metadata["cleanup_error"] = (
+                    "EU IV remained running; recovery journal was retained")
+                metadata["status"] = "incomplete"
+            metadata["ended_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            metadata["capture_files"] = len(list(captures.glob("*.capture")))
+            if sealed and not save_mismatch and metadata.get("status") != "incomplete":
+                metadata["status"] = "captured"
+            elif metadata.get("status") != "incomplete":
+                metadata["status"] = "incomplete"
+            if save_mismatch:
+                metadata["status"] = "incomplete"
+                metadata.setdefault(
+                    "error", "Working save digest differs from fixture")
+            metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
+            if sealed and not save_mismatch and exited:
+                print(f"Sealed session: {run_dir}")
+                report_result = report(run_dir)
+                print(json.dumps(report_result, indent=2))
+    if report_result is None:
+        if metadata.get("error"):
+            raise LiveError(str(metadata["error"]))
+        raise LiveError("Auto Venice capture did not produce an accepted report")
+    return report_result
+
+
 def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
-        wait_seconds: int = 90, authorized: bool = False) -> dict:
+        wait_seconds: int = 90, authorized: bool = False,
+        auto_venice: bool = False) -> dict:
     if not authorized:
         raise LiveError("Live launch requires the explicit --authorize-live flag")
-    evidence = preflight(save)
+    if auto_venice and save is not None:
+        raise LiveError("--auto-venice cannot be combined with --save")
+    evidence = preflight(save, auto_venice=auto_venice)
+    if auto_venice:
+        return _run_auto_venice(output, evidence, deadline_seconds, wait_seconds)
     focus_bin, focus_build_error = _try_build_focus_helper()
     save_path = Path(evidence["save"])
     save_hash = evidence["save_sha256"]
@@ -271,6 +670,7 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
     metadata_path = run_dir / "metadata.json"
     metadata = {
         "status": "launching",
+        "acquisition_mode": "manual",
         "started_utc": now.isoformat(),
         "session_id": session_id,
         "save_path": str(save_path),
@@ -315,19 +715,7 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
         startup_path = run_dir / "startup.status"
         if not _wait_for(startup_path, 30, game):
             raise LiveError("The live dylib did not write startup attestation")
-        startup = _parse_table(startup_path, STARTUP_HEADER)
-        if startup.get("state") != "installed":
-            raise LiveError(
-                f"Live dylib startup failed: {startup.get('error') or 'unknown'}")
-        if startup.get("session") != session_id:
-            raise LiveError("Startup session ID does not match this run")
-        if _integer(startup, "pid") != game.pid:
-            raise LiveError("Startup PID does not match the launched process")
-        if _integer(startup, "site", hexadecimal=True) != (
-                _integer(startup, "image_base", hexadecimal=True) + TARGET_RVA):
-            raise LiveError("Startup site address is not the pinned RVA")
-        if Path(startup.get("executable", "")).resolve() != base.GOG_EXE.resolve():
-            raise LiveError("Startup executable path does not match the pinned GOG build")
+        _verify_startup_attestation(startup_path, session_id, game)
 
         print("The live hook is installed and the process is attested.", flush=True)
         print(
@@ -360,27 +748,10 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
             raise LiveError("Game state was not confirmed; no live capture was made")
         if game.poll() is not None or base.running_game_pid("paused") != game.pid:
             raise LiveError("The expected GOG EU IV process is not running")
-        _write_control(control, 1)
         metadata["armed_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
         metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
-        print("Capture is armed. Quota is 64; the session closes on quota or deadline.")
-
-        done = run_dir / "session.done"
-        wait_limit = max(1, min(wait_seconds, deadline_seconds - 10))
-        end = time.monotonic() + wait_limit
-        while time.monotonic() < end:
-            if done.is_file():
-                break
-            if len(list(captures.glob("*.capture"))) >= QUOTA:
-                break
-            if game.poll() is not None:
-                break
-            time.sleep(0.25)
-        _write_control(control, 2)
-        if not _wait_for(done, 15, game):
-            raise LiveError("The live session did not seal before the drain deadline")
-        if game.poll() is not None:
-            raise LiveError("The game exited before the session was confirmed")
+        _arm_and_seal_capture(control, game, run_dir, captures,
+                              wait_seconds, deadline_seconds)
 
         after_hash = base.sha256(save_path)
         metadata["save_after_sha256"] = after_hash
@@ -821,6 +1192,7 @@ def main(argv: list[str] | None = None) -> int:
 
     preflight_parser = commands.add_parser("preflight")
     preflight_parser.add_argument("--save", type=Path, default=None)
+    preflight_parser.add_argument("--auto-venice", action="store_true")
 
     run_parser = commands.add_parser("run")
     run_parser.add_argument("--output", type=Path, required=True)
@@ -828,6 +1200,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--deadline", type=int, default=120)
     run_parser.add_argument("--wait", type=int, default=90)
     run_parser.add_argument("--authorize-live", action="store_true")
+    run_parser.add_argument("--auto-venice", action="store_true")
 
     report_parser = commands.add_parser("report")
     report_parser.add_argument("--run-dir", type=Path, required=True)
@@ -835,11 +1208,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "preflight":
-            print(json.dumps(preflight(args.save), indent=2))
+            print(json.dumps(preflight(args.save, auto_venice=args.auto_venice),
+                             indent=2))
             return 0
         if args.command == "run":
             result = run(args.output, args.save, args.deadline, args.wait,
-                         args.authorize_live)
+                         args.authorize_live, args.auto_venice)
             return 0 if result["status"] == "accepted" else 1
         result = report(args.run_dir)
         print(json.dumps({

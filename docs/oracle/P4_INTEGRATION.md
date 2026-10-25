@@ -635,12 +635,25 @@ lifetime; there is no reclamation, forced cancellation or dylib unload.
 
 *Report and artifacts.* `preflight` builds the x86-64 library, checks the pinned GOG
 executable/code window/patch bytes, the descriptor and target pins, the disposable
-Venice save, and that EU IV is closed. `run --authorize-live` launches one session
-with EU IV stdin detached from the terminal, checks startup/session/PID, prints
-operator instructions, optionally requests EU IV foreground activation through the
-existing `mac_game_focus` helper (nonfatal; recorded in metadata), waits for a
-confirmed paused save, arms capture, bounds the wait, closes, verifies the save hash,
-and then reports. Time before arming does not consume the native capture deadline. `report --run-dir` is offline
+Venice save (manual mode), and that EU IV is closed. `run --authorize-live` launches
+one session with EU IV stdin detached from the terminal, checks startup/session/PID,
+prints operator instructions, optionally requests EU IV foreground activation through
+the existing `mac_game_focus` helper (nonfatal in manual mode; recorded in metadata),
+waits for a confirmed paused save, arms capture, bounds the wait, closes, verifies the
+save hash, and then reports. Time before arming does not consume the native capture
+deadline.
+
+*Auto Venice (`--auto-venice`).* Requires `--authorize-live` and rejects `--save`.
+Preflight validates the pinned `fixtures/venice_paused` digest (not `DEFAULT_SAVE`),
+builds the readiness probe and requires `mac_game_focus`. `FixtureManager` stages
+`continue_game.json` and launches with `--continuelastsave` plus dual
+`DYLD_INSERT_LIBRARIES` (`auto_probe` then gfx live). A bounded readiness gate
+(game-log markers, paused probe rows, timed focus repair) must pass before arming.
+After sealing, the launcher terminates EU IV, hashes the working save, restores
+continuation state, writes final metadata, and calls `report()` once. Display and
+fullscreen settings are recorded for live acceptance; they are not enforced at
+preflight. A save digest mismatch or cleanup failure marks the run incomplete but
+still restores user state when the process has exited. `report --run-dir` is offline
 and writes `session.json` and `summary.md`; it creates `manifest.json` on the first
 report and, on every later report, verifies the existing manifest rather than
 overwriting it. The manifest binds the native summary, startup status, done marker,
