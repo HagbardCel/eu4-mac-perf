@@ -124,6 +124,22 @@ class ShadowWorkerTests(unittest.TestCase):
             self.assertEqual(result["comparisons"], ["none"])
             self.assertIn("missing descriptor input", result["failures"][0][0])
 
+    def test_none_candidate_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            result = run_owned(
+                [_snapshot()],
+                None,
+                work,
+                deadline_seconds=2,
+                output_limit_bytes=4096,
+                queue_limit=2,
+            )
+            self._assert_accounted(result, 1)
+            self.assertEqual(result["outcomes"], ["refused"])
+            self.assertEqual(result["comparisons"], ["none"])
+            self.assertIn("candidate identity", result["failures"][0][0])
+
     def test_unsupported_function_does_not_execute(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)

@@ -79,7 +79,9 @@ def _normalize_work_dir(work_dir: str | Path) -> Path:
         _require_nonempty_path(work_dir, "work directory"), caller_cwd)
 
 
-def _normalize_candidate(candidate: Mapping[str, Any]) -> Mapping[str, Any]:
+def _normalize_candidate(candidate: Any) -> Any:
+    if not isinstance(candidate, Mapping):
+        return candidate
     harness = candidate.get("harness_path")
     if not isinstance(harness, str) or harness == "":
         return candidate
