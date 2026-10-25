@@ -995,6 +995,15 @@ def _relpath(path: Path, root: Path) -> str:
 
 def report(run_dir: Path) -> dict:
     run_dir = run_dir.expanduser().resolve()
+    summary_path = run_dir / "summary.native"
+    try:
+        header = summary_path.read_text(encoding="utf-8").splitlines()[0]
+    except (OSError, IndexError, UnicodeError):
+        header = ""
+    if header == "EU4-GFX-LIVE-SUMMARY v2":
+        # v1 parsing below rejects this header; keep that path unchanged.
+        from acq_diversity_v1 import report_v2
+        return report_v2(run_dir)
     problems: list[str] = []
     gates: dict[str, bool] = {"pids": False}
     summary: dict[str, str] | None = None
