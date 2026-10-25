@@ -261,31 +261,80 @@ the depth/rasterizer setters) have selected-callee or callsite counts above this
 leaf in `renderer-functions.tsv`. Their bodies were not characterized. They are
 not the next candidate once this leaf passes.
 
-### Verdict — PASS
+### Written gate, criterion by criterion
 
-`_GfxForceWireframe` meets the gate:
+The gate is this sentence, unchanged:
 
-- **Callable boundary.** Entry, half-open end, and 13 bytes are pinned and match
-  the sealed row. The next listed function starts at the end RVA.
-- **Finite surface.** One byte in, one byte stored, no call, no global, no
-  second address.
-- **Credible reference strategy.** Constructed state with `RDI` aimed at a
-  writable byte, `SIL` set, and the byte plus adjacent canaries compared. That
-  is the same kind of constructed-state observation used for
-  `_GfxSetConstantBuffer`. The strategy is credible because the memory operand
-  is a fixed one-byte store. The strategy has not been executed. The fixture
-  plan in [`package.md`](package.md) says how G2 would acquire it, and it
-  labels that future evidence as still synthetic until a P-code or stronger
-  reference exists.
-- **Ownership.** The function does not allocate, free, lock, or call. The
-  pointer is caller-supplied. The only alias question inside the body would be
-  a second access to the same byte; there is none. Unknown object type does not
-  add a hidden write. Caller-side stores (`SetWireframe` at `+0x4bc`, caller
-  globals) stay in the callers.
+> **Gate RE0 → RE1:** identified callable boundary; finite, recoverable
+> input/side-effect surface; credible strategy for calling or observing the
+> original; no unresolved ownership/context requirements likely to make a
+> faithful replacement unsafe.
 
-**RE0→RE1: PASS.** Authorization for G2 is this gate only. G2 is not started.
-RE1 source, the offline P-code pilot, the replay adapter, and the per-function
-A2 closure branch are not in this package.
+It is the sentence that applied to `_GfxSetConstantBuffer` at
+`5fdc728` ("RE0: instruction-level contract for `_GfxSetConstantBuffer`").
+That commit's `target.json` held the image SHA-256, the default executable,
+and the image base. It had no `code_windows` key. That key arrived in
+`f4fce9c` ("RE2: authenticate the reference's instruction bytes and its use").
+The original contract's *Next* section still named the P-code pilot as future
+work. The four criteria below are met on the same kind of static evidence.
+Nothing in *Not established* is promoted to a P-code, native, or live tier.
+
+1. **Identified callable boundary.** Sealed row in `gfx-batch-00044.zip`,
+   status `success`, entry `0x15ed175`, `body_ranges` end `0x15ed182`.
+   [`instructions.json`](instructions.json) tiles that half-open range with 5
+   instructions and 13 bytes. On 2026-10-25, `assert_pinned_executable` then
+   `verify_static_row_bytes` against the executable named in `target.json`
+   returned `(5, 13)`; the body SHA-256 is
+   `45957994d8a114d2be65e430e66d98c04f4efa818180cbc1fe274fb75b3b3dae`. The
+   image pin is the SHA-256 already in `target.json`, the same pin the first
+   RE0 contract cited. The address range lives in this contract and in
+   `instructions.json`, which is where `5fdc728` put
+   `_GfxSetConstantBuffer`'s range. The next scope row, `_GfxGetCaps`, starts
+   at `0x15ed182`.
+2. **Finite, recoverable input/side-effect surface.** The body reads `RDI`
+   and `SIL`. The only memory operand is `0x15ed179` `MOV byte ptr [RDI +
+   0x194],SIL`. Every sealed instruction has the call flags false,
+   `pcode_kind` `none`, and `references_from` empty. The declared region
+   `[RDI + 0x194, RDI + 0x195)` is closed for every `SIL` because the offset
+   is a constant.
+3. **Credible strategy for calling or observing the original.** The observable
+   is that one byte plus adjacent canaries under constructed state, with `RDI`
+   aimed at a writable object and `SIL` set. That is the constructed-state
+   strategy the first RE0 contract named before its pilot existed. The
+   strategy is credible because the memory operand is one fixed store and the
+   body has no callee to stub. It has not been executed. The plan is in
+   [`package.md`](package.md). Executing it would be new evidence, and this
+   reconciliation does not add any.
+4. **No unresolved ownership or context requirement that makes a faithful
+   replacement unsafe.** The body does not allocate, free, lock, or call, and
+   it has no global and no TLS access. It writes one byte and reads nothing
+   else, so the body contains no second access that could alias that byte.
+   The seven caller sites load `RDI` from `[base + 0x80]`. `SetWireframe`'s
+   store at `[RDI + 0x4bc]` is at `0x149ec22`, in the caller, before it
+   replaces `RDI`. The precondition matches the shape of the first contract's
+   external-state line: the caller-supplied pointer must be writable at the
+   declared offset. Unknown object type, unknown thread, and the absence of a
+   GL call stay in *Not established*. The first RE0 contract likewise left
+   field names unproven, left its callers ununderstood, and stated that it
+   does not establish OpenGL state. Those gaps did not add a hidden write,
+   and neither do these.
+
+`tests/test_reconstruction_contract.py` checks `_GfxSetConstantBuffer` only.
+Its 6 passing tests are not evidence for any criterion above. The byte
+evidence for criterion 1 is the `verify_static_row_bytes` result in this
+section.
+
+A `code_windows` entry is not one of the four criteria. `target.json` stays
+as it was at the first function's RE0 admission, plus the later
+`_GfxSetConstantBuffer` window this package does not touch. Leaving this
+function out of `code_windows` is recorded under *Not established*. It is not
+a contract conflict: the function is expressed by the same RE0 package shape
+`5fdc728` used (contract, instruction inventory, image SHA-256 already in
+`target.json`).
+
+**RE0→RE1: PASS.** G2 is not started. RE1 source, the P-code pilot, the
+replay adapter, and the per-function A2 closure branch are not in this
+package.
 
 ## Not established
 
@@ -296,5 +345,7 @@ A2 closure branch are not in this package.
 - Thread identity, or a proof that `SIL` is only `0` or `1` in the program.
 - A GL wireframe effect. The body does not call GL.
 - A return type.
-- A `code_windows` entry in `reverse_engineering/target.json`.
+- A `code_windows` entry in `reverse_engineering/target.json`. That key is
+  the RE2 authenticator added in `f4fce9c`. It is outside the four-part
+  RE0→RE1 gate. This package does not add it.
 - Behaviour of the rejected functions beyond the defects cited above.

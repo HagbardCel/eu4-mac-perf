@@ -9,7 +9,8 @@ function.
 The behavioural contract, the gate verdict, and the rejected candidates are in
 [`contract.md`](contract.md). This file does not restate them.
 
-**RE0→RE1: PASS**, on static evidence, for the reasons in the contract.
+**RE0→RE1: PASS.** The four written criteria and the evidence for each are in
+the contract section *Written gate, criterion by criterion*.
 **G2 has not started.** There is no RE1 source, no P-code pilot, no harness,
 and no replay adapter in this directory.
 
@@ -125,10 +126,13 @@ G2 is not started. The work it has to finish:
 5. **Replay adapter.** A per-function adapter that consumes a capture closed by
    that branch and compares the subject byte and the canaries. It does not
    change the constant-buffer comparison window `[ctx+0xb8, ctx+0x130)`.
-6. **Code-window pin.** `reverse_engineering/target.json` `code_windows` has no
-   entry for this function. The digest lives in `instructions.json`. If G2's
-   existing helper can only read `target.json`, adding the window is a
-   contract amendment to propose, not an edit this package makes.
+6. **RE2 code-window pin, later.** `code_windows` is not an RE0→RE1 criterion.
+   `target.json` at the first function's RE0 commit (`5fdc728`) had no such
+   key; `f4fce9c` added it so RE2 can authenticate emulated instruction bytes.
+   This package pins the image with the existing SHA-256 and pins the body in
+   `instructions.json`. It does not edit `target.json`. A later stage that
+   needs `code_window("_GfxForceWireframe")` has to propose that amendment on
+   its own.
 
 ## Limits
 
@@ -151,15 +155,15 @@ Ran:
 python3 -m unittest tests.test_reconstruction_contract -v
 ```
 
-Result: 6 tests, OK. That is the existing RE0 checker, and it covers
-`_GfxSetConstantBuffer` only. The local sealed snapshot and the pinned binary
-were both present, so the byte-check tests ran rather than skipping.
+Result: 6 tests, OK. Those tests read
+`analysis/reconstruction/_GfxSetConstantBuffer/` only. They meet none of the
+four RE0→RE1 criteria for `_GfxForceWireframe`. The local snapshot and the
+pinned binary were present, so that checker's own byte tests ran.
 
-Separate local check for this function, using
-`reverse_engineering.macho_rva.assert_pinned_executable` and
-`verify_static_row_bytes` on the `gfx-batch-00044.zip` row at entry
-`0x15ed175`: result `(5, 13)`, body SHA-256
-`45957994d8a114d2be65e430e66d98c04f4efa818180cbc1fe274fb75b3b3dae`.
+The byte evidence for this function's callable-boundary criterion is a
+separate local check: `assert_pinned_executable` and `verify_static_row_bytes`
+on the `gfx-batch-00044.zip` row at entry `0x15ed175`, result `(5, 13)`, body
+SHA-256 `45957994d8a114d2be65e430e66d98c04f4efa818180cbc1fe274fb75b3b3dae`.
 That check is not a committed test. `tests/` is outside this package.
 
 Skipped, because they belong to the first function's later stages and do not
