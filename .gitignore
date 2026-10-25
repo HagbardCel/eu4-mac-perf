@@ -20,6 +20,10 @@ test_build_report_writes_candidates/
 # Local fixtures (not tracked; see results/README.md)
 fixtures/
 
+# E2 pinned RE1 production harness (see docs/oracle/audits/E2.md)
+!tests/oracle_certify_acceptance/fixtures/
+!tests/oracle_certify_acceptance/fixtures/**
+
 # Oracle P3 slice fixture corpora are tracked ground truth (see docs/oracle/P3_SLICE.md)
 !oracle/slice/fixtures/
 !oracle/slice/fixtures/**

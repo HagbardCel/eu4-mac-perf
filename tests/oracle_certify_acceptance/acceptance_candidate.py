@@ -17,9 +17,10 @@ from tests.oracle_certify_acceptance.re1_harness import (
 )
 
 RE1_SOURCE_FILES = (
-    "gfx_set_constant_buffer.cpp",
-    "harness.cpp",
     "arith_literals.cpp",
+    "gfx_set_constant_buffer.cpp",
+    "gfx_set_constant_buffer.hpp",
+    "harness.cpp",
 )
 BUILD_IDENTITY = "re1-gfx-set-constant-buffer-acceptance"
 
