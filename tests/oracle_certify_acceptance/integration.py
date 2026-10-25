@@ -74,8 +74,7 @@ def portable_production_record_patch(
     record = test_local_build_record(candidate)
     with patch(
             "oracle.certify.certify.load_production_build_record",
-            return_value=record,
-            create=True):
+            return_value=record):
         yield
 
 
