@@ -66,6 +66,7 @@ PROBE_SOURCE = auto.PROBE_SOURCE
 READY_TIMEOUT_S = auto.READY_TIMEOUT_S
 VENICE_READY_TIMEOUT_MSG = auto.VENICE_READY_TIMEOUT_MSG
 FOCUS_REPAIR_INTERVAL_S = 2.0
+TERMINATE_GRACE_S = 15
 
 
 class LiveError(base.BenchmarkError):
@@ -189,7 +190,16 @@ def _require_focus_helper() -> Path:
     return focus_bin
 
 
+def _focus_timeout_for(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return 0.0
+    return min(FOCUS_ACTIVATE_TIMEOUT_S, remaining)
+
+
 def _focus_command(focus_bin: Path, action: str, pid: int, timeout: float) -> bool:
+    if timeout <= 0:
+        return False
     try:
         result = subprocess.run(
             [str(focus_bin), action, str(pid)],
@@ -207,25 +217,27 @@ def _bounded_focus_state(
     counters: dict[str, int],
     repair_clock: list[float],
 ) -> tuple[bool, bool]:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
+    if time.monotonic() >= deadline:
         return False, False
-    timeout = min(FOCUS_ACTIVATE_TIMEOUT_S, remaining)
     now = time.monotonic()
-    frontmost = _focus_command(focus_bin, "check", pid, timeout)
+    frontmost = _focus_command(
+        focus_bin, "check", pid, _focus_timeout_for(deadline))
     if not frontmost and now - repair_clock[0] >= FOCUS_REPAIR_INTERVAL_S:
         counters["activation_attempts"] += 1
-        if _focus_command(focus_bin, "activate", pid, timeout):
-            frontmost = _focus_command(focus_bin, "check", pid, timeout)
+        if _focus_command(focus_bin, "activate", pid, _focus_timeout_for(deadline)):
+            frontmost = _focus_command(
+                focus_bin, "check", pid, _focus_timeout_for(deadline))
         repair_clock[0] = time.monotonic()
     interior = False
     if frontmost:
-        interior = _focus_command(focus_bin, "interior", pid, timeout)
+        interior = _focus_command(
+            focus_bin, "interior", pid, _focus_timeout_for(deadline))
         now = time.monotonic()
         if not interior and now - repair_clock[0] >= FOCUS_REPAIR_INTERVAL_S:
             counters["pointer_reparks"] += 1
-            if _focus_command(focus_bin, "park", pid, timeout):
-                interior = _focus_command(focus_bin, "interior", pid, timeout)
+            if _focus_command(focus_bin, "park", pid, _focus_timeout_for(deadline)):
+                interior = _focus_command(
+                    focus_bin, "interior", pid, _focus_timeout_for(deadline))
             repair_clock[0] = time.monotonic()
     if not frontmost:
         counters["frontmost_false_iterations"] += 1
@@ -259,6 +271,7 @@ def wait_for_venice_ready(
     anchor: dict,
     game_log: Path,
     old_log: bytes,
+    diagnostics: dict | None = None,
 ) -> dict:
     deadline = time.monotonic() + READY_TIMEOUT_S
     counters = {
@@ -272,6 +285,8 @@ def wait_for_venice_ready(
     while time.monotonic() < deadline:
         if game.poll() is not None:
             raise LiveError("GOG EU IV exited before Venice became ready")
+        if time.monotonic() >= deadline:
+            break
         frontmost, interior = _bounded_focus_state(
             focus_bin, game.pid, deadline, counters, repair_clock)
         now_ns = time.monotonic_ns()
@@ -286,6 +301,13 @@ def wait_for_venice_ready(
             now_ns=now_ns,
         )
         last_predicates = predicates
+        if diagnostics is not None:
+            diagnostics.update({
+                "last_predicates": predicates,
+                "counters": dict(counters),
+                "ready_to_pass": predicates["ready_to_pass"],
+                "observed_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            })
         if predicates["ready_to_pass"]:
             return {
                 "ready_ns": now_ns,
@@ -293,16 +315,27 @@ def wait_for_venice_ready(
                 "counters": counters,
             }
         time.sleep(1)
+    if diagnostics is not None:
+        diagnostics["timed_out"] = True
+        diagnostics.setdefault("last_predicates", last_predicates or {})
+        diagnostics.setdefault("counters", dict(counters))
     raise LiveError(
         f"{VENICE_READY_TIMEOUT_MSG}: {last_predicates or {}}")
 
 
-def _terminate_owned_game(game: subprocess.Popen | None, focus_bin: Path) -> bool:
+def _terminate_owned_game(game: subprocess.Popen | None, focus_bin: Path) -> None:
     if game is None or game.poll() is not None:
-        return game is None or game.poll() is not None
+        return
     _focus_command(focus_bin, "terminate", game.pid, FOCUS_ACTIVATE_TIMEOUT_S)
-    auto.stop_process(game, 10)
-    return game.poll() is not None
+    grace_deadline = time.monotonic() + TERMINATE_GRACE_S
+    while time.monotonic() < grace_deadline:
+        if game.poll() is not None:
+            return
+        time.sleep(0.25)
+    try:
+        auto.stop_process(game, 10)
+    except (OSError, subprocess.TimeoutExpired):
+        return
 
 
 def _fixture_cleanup_state(
@@ -312,6 +345,19 @@ def _fixture_cleanup_state(
     continue_restored = not journal.is_file()
     cleanup_completed = continue_restored and not working_save.exists()
     return continue_restored, cleanup_completed
+
+
+def _auto_venice_failure_message(metadata: dict) -> str:
+    parts: list[str] = []
+    if metadata.get("error"):
+        parts.append(str(metadata["error"]))
+    for key in ("cleanup_error", "save_hash_error", "terminate_error"):
+        value = metadata.get(key)
+        if value:
+            parts.append(f"{key}: {value}")
+    if parts:
+        return "; ".join(parts)
+    return "Auto Venice capture did not produce an accepted report"
 
 
 def preflight(save: Path | None = None, auto_venice: bool = False) -> dict:
@@ -539,8 +585,8 @@ def _run_auto_venice(
     working_save: Path | None = None
     fixture_installed = False
     sealed = False
-    save_mismatch = False
     report_result: dict | None = None
+    readiness_diag: dict = {}
     with FixtureManager(output_root, base.USER_DATA, VENICE_FIXTURE,
                         fixture_digest) as fixture:
         fixture.recover()
@@ -575,8 +621,10 @@ def _run_auto_venice(
                 raise LiveError("The live dylib did not write startup attestation")
             _verify_startup_attestation(startup_path, session_id, game)
             readiness = wait_for_venice_ready(
-                game, focus_bin, probe_path, anchor, game_log, old_log)
+                game, focus_bin, probe_path, anchor, game_log, old_log,
+                diagnostics=readiness_diag)
             metadata["readiness"] = readiness
+            metadata["readiness_diagnostics"] = readiness_diag
             metadata["game_settings"] = base.game_settings()
             metadata["display_mode"] = base.display_mode()
             if game.poll() is not None or base.running_game_pid("paused") != game.pid:
@@ -588,23 +636,40 @@ def _run_auto_venice(
         except (LiveError, base.BenchmarkError, OSError, KeyboardInterrupt) as exc:
             metadata["status"] = "incomplete"
             metadata["error"] = str(exc)
+            if readiness_diag:
+                metadata["readiness_diagnostics"] = readiness_diag
             try:
                 _write_control(control, 2)
             except OSError:
                 pass
         finally:
-            exited = _terminate_owned_game(game, focus_bin)
-            metadata["game_exited"] = exited
+            metadata["game_launched"] = game is not None
+            try:
+                _terminate_owned_game(game, focus_bin)
+            except BaseException as term_exc:
+                metadata["terminate_error"] = str(term_exc)
+
+            launched_exited = game is not None and game.poll() is not None
+            metadata["game_exited"] = launched_exited
+            safe_to_restore = game is None or launched_exited
+
+            save_verified = False
             if working_save is not None and working_save.is_file():
-                after_hash = base.sha256(working_save)
-                metadata["save_after_sha256"] = after_hash
-                save_mismatch = after_hash != fixture_digest
-                if save_mismatch:
-                    metadata["save_mismatch"] = True
+                try:
+                    after_hash = base.sha256(working_save)
+                    metadata["save_after_sha256"] = after_hash
+                    save_verified = after_hash == fixture_digest
+                    if not save_verified:
+                        metadata["save_mismatch"] = True
+                except OSError as exc:
+                    metadata["save_hash_error"] = str(exc)
+            elif working_save is not None and safe_to_restore:
+                metadata["save_hash_error"] = "working save missing before verification"
+
             metadata["continue_game_restored"] = False
             metadata["fixture_cleanup_completed"] = False
             metadata["working_save_changed"] = False
-            if exited and fixture_installed and working_save is not None:
+            if safe_to_restore and fixture_installed and working_save is not None:
                 try:
                     metadata["working_save_changed"] = fixture.finish(run_dir)
                     restored, completed = _fixture_cleanup_state(
@@ -613,30 +678,38 @@ def _run_auto_venice(
                     metadata["fixture_cleanup_completed"] = completed
                 except BaseException as cleanup_exc:
                     metadata["cleanup_error"] = str(cleanup_exc)
-                    metadata["status"] = "incomplete"
-            elif not exited:
+            elif not safe_to_restore:
                 metadata["cleanup_error"] = (
                     "EU IV remained running; recovery journal was retained")
-                metadata["status"] = "incomplete"
+
+            cleanup_ok = (
+                metadata.get("continue_game_restored") is True
+                and metadata.get("fixture_cleanup_completed") is True
+            )
+            success = (
+                sealed
+                and launched_exited
+                and cleanup_ok
+                and save_verified
+                and not metadata.get("working_save_changed", False)
+            )
             metadata["ended_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
             metadata["capture_files"] = len(list(captures.glob("*.capture")))
-            if sealed and not save_mismatch and metadata.get("status") != "incomplete":
-                metadata["status"] = "captured"
-            elif metadata.get("status") != "incomplete":
-                metadata["status"] = "incomplete"
-            if save_mismatch:
-                metadata["status"] = "incomplete"
-                metadata.setdefault(
-                    "error", "Working save digest differs from fixture")
+            metadata["status"] = "captured" if success else "incomplete"
+            if not success and not metadata.get("error"):
+                if not save_verified:
+                    metadata.setdefault(
+                        "error", "Working save was not verified against fixture")
+                elif not cleanup_ok:
+                    metadata.setdefault(
+                        "error", "Fixture cleanup did not complete")
             metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
-            if sealed and not save_mismatch and exited:
+            if success:
                 print(f"Sealed session: {run_dir}")
                 report_result = report(run_dir)
                 print(json.dumps(report_result, indent=2))
     if report_result is None:
-        if metadata.get("error"):
-            raise LiveError(str(metadata["error"]))
-        raise LiveError("Auto Venice capture did not produce an accepted report")
+        raise LiveError(_auto_venice_failure_message(metadata))
     return report_result
 
 
