@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import platform
+import re
 import shutil
 import sys
 from hashlib import sha256
@@ -18,6 +19,9 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 APPROVED_HARNESS = FIXTURES / "re1-approved-harness"
 APPROVED_META = FIXTURES / "re1-approved-harness.meta.json"
+# Must match fixtures/re1-approved-harness.meta.json platform (approved pin).
+APPROVED_PLATFORM_SYSTEM = "darwin"
+APPROVED_PLATFORM_MACHINE = "arm64"
 PRODUCTION_RECORD = (
     ROOT / "docs/oracle/policies/re1-gfx-set-constant-buffer-trusted-build.json")
 
@@ -50,11 +54,7 @@ def test_local_build_record(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sha256_hex(value: Any) -> str | None:
-    if not isinstance(value, str) or len(value) != 64:
-        return None
-    try:
-        int(value, 16)
-    except ValueError:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-fA-F]{64}", value) is None:
         return None
     return value.lower()
 
@@ -185,6 +185,21 @@ def assert_fixture_integrity() -> tuple[bool, str]:
             )
     if HARNESS_BUILD_FLAGS != BUILD_FLAGS:
         return False, "harness build flags drifted from acceptance BUILD_FLAGS"
+    plat = meta.get("platform")
+    if not isinstance(plat, dict):
+        return (
+            False,
+            "fixtures/re1-approved-harness.meta.json platform is missing or invalid",
+        )
+    system = str(plat.get("system", "")).lower()
+    machine = str(plat.get("machine", "")).lower()
+    if system != APPROVED_PLATFORM_SYSTEM or machine != APPROVED_PLATFORM_MACHINE:
+        return (
+            False,
+            "fixtures/re1-approved-harness.meta.json platform does not match "
+            f"the approved pin ({system}/{machine} != "
+            f"{APPROVED_PLATFORM_SYSTEM}/{APPROVED_PLATFORM_MACHINE})",
+        )
     return True, "fixture integrity ok"
 
 
