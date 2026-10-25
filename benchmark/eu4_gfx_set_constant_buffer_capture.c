@@ -87,6 +87,12 @@ static void incomplete_capture(unsigned ticket) {
 }
 
 static void fail_capture(eu4_gfx_capture_record *record, unsigned ticket) {
+    if (record != NULL && record->diversity && live != NULL &&
+        live->publish != NULL) {
+        record->phase_b_failed = 1;
+        (void)live->publish(ticket, record);
+        return;
+    }
     incomplete_capture(ticket);
     if (record != NULL) {
         record->refusals++;
@@ -248,6 +254,12 @@ void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame) {
         refuse_capture(record, EU4_GFX_CAPTURE_REFUSE_BUSY);
         goto done;
     }
+    record->buffer_snapshotted = 0;
+    record->diversity = 0;
+    record->phase_b_failed = 0;
+    record->snapshot_mismatch = 0;
+    record->coverage_designated = 0;
+    record->sig_index = -1;
 
     uint32_t slot = (uint32_t)frame->rcx;
     if (slot >= EU4_GFX_CAPTURE_SLOT_MAX) {
@@ -277,7 +289,13 @@ void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame) {
     }
 
     unsigned ticket = 0;
-    if (live != NULL && live->admit != NULL) {
+    if (live != NULL && live->select != NULL) {
+        int selected = live->select(record, frame);
+        if (selected < 0) {
+            goto done;
+        }
+        ticket = (unsigned)selected;
+    } else if (live != NULL && live->admit != NULL) {
         int admitted = live->admit(frame);
         if (admitted < 0) {
             goto done;
@@ -331,7 +349,7 @@ void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame) {
                EU4_GFX_CAPTURE_OBSERVATION_LENGTH,
            EU4_GFX_CAPTURE_CANARY_LENGTH);
 
-    if (buffer_path &&
+    if (buffer_path && !record->buffer_snapshotted &&
         !read_bytes(record->buffer, (const void *)buffer_address,
                     EU4_GFX_CAPTURE_BUFFER_LENGTH)) {
         fail_capture(record, ticket);
@@ -410,6 +428,242 @@ void eu4_gfx_set_constant_buffer_capture_exit(eu4_gfx_capture_frame *frame) {
         }
         record->state = EU4_GFX_CAPTURE_SLOT_IDLE;
     }
+}
+
+bool eu4_gfx_set_constant_buffer_capture_read(void *destination,
+                                              const void *source,
+                                              size_t length) {
+    return read_bytes(destination, source, length);
+}
+
+static uint32_t load_u32(const uint8_t *bytes) {
+    uint32_t value;
+    memcpy(&value, bytes, sizeof(value));
+    return value;
+}
+
+static uint64_t load_u64(const uint8_t *bytes) {
+    uint64_t value;
+    memcpy(&value, bytes, sizeof(value));
+    return value;
+}
+
+static int interval_less(const void *left, const void *right) {
+    const uintptr_t *a = left;
+    const uintptr_t *b = right;
+    if (a[0] < b[0]) {
+        return -1;
+    }
+    if (a[0] > b[0]) {
+        return 1;
+    }
+    return 0;
+}
+
+static void missing_add(const char **names, unsigned *count, const char *name) {
+    if (*count < 24) {
+        names[(*count)++] = name;
+    }
+}
+
+static int name_less(const void *left, const void *right) {
+    return strcmp(*(const char *const *)left, *(const char *const *)right);
+}
+
+unsigned eu4_gfx_set_constant_buffer_capture_assess(
+    const eu4_gfx_capture_record *record, eu4_gfx_behavior *behavior,
+    char *missing_text, size_t missing_length) {
+    const char *names[24];
+    unsigned count = 0;
+    unsigned i;
+    int buffer_path = record->buffer_path;
+    uint32_t slot = (uint32_t)record->rcx;
+    uint64_t ctx_base = load_u64(record->handle);
+
+    if (record->handle_address == 0 ||
+        record->handle_address != (uintptr_t)record->rdi) {
+        missing_add(names, &count, "read:handle");
+    }
+    if (ctx_base == 0 || record->ctx_address != (uintptr_t)ctx_base) {
+        missing_add(names, &count, "read:ctx");
+        missing_add(names, &count, "read:canary-before");
+        missing_add(names, &count, "read:canary-after");
+    }
+    if (buffer_path && record->buffer_address != (uintptr_t)record->rsi) {
+        missing_add(names, &count, "read:buffer");
+    }
+
+    {
+        int fields_ok = slot < EU4_GFX_CAPTURE_SLOT_MAX && ctx_base != 0 &&
+                        record->ctx_address == (uintptr_t)ctx_base;
+        uint32_t word_rel = slot * 16u;
+        uint32_t pointer_rel = 8u + slot * 16u;
+        int word_ok = 0;
+        int pointer_ok = 0;
+        int dirty_ok = 0;
+        if (fields_ok && word_rel + 4u <= EU4_GFX_CAPTURE_OBSERVATION_LENGTH &&
+            pointer_rel + 8u <= EU4_GFX_CAPTURE_OBSERVATION_LENGTH) {
+            word_ok = 1;
+            pointer_ok = load_u64(record->post_ctx + pointer_rel) == record->rsi;
+            dirty_ok = record->post_ctx[96] == 1;
+        }
+        if (!word_ok) {
+            missing_add(names, &count, "post:word_count");
+        }
+        if (!pointer_ok) {
+            missing_add(names, &count, "post:buffer");
+        }
+        if (!dirty_ok) {
+            missing_add(names, &count, "post:dirty");
+        }
+    }
+
+    if (!(load_u64(record->handle) == load_u64(record->post_handle) &&
+          record->handle_address != 0)) {
+        missing_add(names, &count, "preserve:handle");
+    }
+    if (memcmp(record->canary_before, record->post_canary_before,
+               EU4_GFX_CAPTURE_CANARY_LENGTH) != 0) {
+        missing_add(names, &count, "preserve:canary-before");
+    }
+    if (memcmp(record->canary_after, record->post_canary_after,
+               EU4_GFX_CAPTURE_CANARY_LENGTH) != 0) {
+        missing_add(names, &count, "preserve:canary-after");
+    }
+    if (slot < EU4_GFX_CAPTURE_SLOT_MAX) {
+        uint8_t allowed[EU4_GFX_CAPTURE_OBSERVATION_LENGTH];
+        memset(allowed, 0, sizeof(allowed));
+        uint32_t word_rel = slot * 16u;
+        uint32_t pointer_rel = 8u + slot * 16u;
+        if (word_rel + 4u <= EU4_GFX_CAPTURE_OBSERVATION_LENGTH) {
+            memset(allowed + word_rel, 1, 4);
+        }
+        if (pointer_rel + 8u <= EU4_GFX_CAPTURE_OBSERVATION_LENGTH) {
+            memset(allowed + pointer_rel, 1, 8);
+        }
+        allowed[96] = 1;
+        for (i = 0; i < EU4_GFX_CAPTURE_OBSERVATION_LENGTH; i++) {
+            if (record->ctx[i] != record->post_ctx[i] && !allowed[i]) {
+                missing_add(names, &count, "preserve:ctx");
+                break;
+            }
+        }
+    } else {
+        missing_add(names, &count, "preserve:ctx");
+    }
+    if (buffer_path && memcmp(record->buffer, record->post_buffer,
+                              EU4_GFX_CAPTURE_BUFFER_LENGTH) != 0) {
+        missing_add(names, &count, "preserve:buffer");
+    }
+    if (ctx_base == 0 || record->outcome != ctx_base) {
+        missing_add(names, &count, "outcome:RAX");
+    }
+    if (slot >= EU4_GFX_CAPTURE_SLOT_MAX) {
+        missing_add(names, &count, "domain:slot");
+    }
+    {
+        uintptr_t spans[5][2];
+        unsigned n = 0;
+        spans[n][0] = record->handle_address;
+        spans[n][1] = record->handle_address + EU4_GFX_CAPTURE_HANDLE_LENGTH;
+        n++;
+        if (record->ctx_address != 0) {
+            spans[n][0] = record->ctx_address + EU4_GFX_CAPTURE_CANARY_BEFORE_START;
+            spans[n][1] = spans[n][0] + EU4_GFX_CAPTURE_CANARY_LENGTH;
+            n++;
+            spans[n][0] = record->ctx_address + EU4_GFX_CAPTURE_OBSERVATION_START;
+            spans[n][1] = spans[n][0] + EU4_GFX_CAPTURE_OBSERVATION_LENGTH;
+            n++;
+            spans[n][0] = record->ctx_address + EU4_GFX_CAPTURE_CANARY_AFTER_START;
+            spans[n][1] = spans[n][0] + EU4_GFX_CAPTURE_CANARY_LENGTH;
+            n++;
+        }
+        if (buffer_path) {
+            spans[n][0] = record->buffer_address;
+            spans[n][1] = record->buffer_address + EU4_GFX_CAPTURE_BUFFER_LENGTH;
+            n++;
+        }
+        qsort(spans, n, sizeof(spans[0]), interval_less);
+        for (i = 0; i + 1 < n; i++) {
+            if (spans[i][1] > spans[i + 1][0]) {
+                missing_add(names, &count, "domain:disjoint");
+                break;
+            }
+        }
+    }
+
+    if (count > 1) {
+        qsort(names, count, sizeof(names[0]), name_less);
+    }
+    if (missing_text != NULL && missing_length > 0) {
+        size_t used = 0;
+        missing_text[0] = '\0';
+        for (i = 0; i < count; i++) {
+            int wrote = snprintf(missing_text + used, missing_length - used,
+                                 "%s%s", i == 0 ? "" : ",", names[i]);
+            if (wrote < 0 || (size_t)wrote >= missing_length - used) {
+                break;
+            }
+            used += (size_t)wrote;
+        }
+    }
+
+    if (behavior != NULL) {
+        memset(behavior, 0, sizeof(*behavior));
+        behavior->slot = slot;
+        behavior->input_value = record->screen_input;
+        behavior->ok = count == 0;
+        if (slot < EU4_GFX_CAPTURE_SLOT_MAX &&
+            slot * 16u + 4u <= EU4_GFX_CAPTURE_OBSERVATION_LENGTH) {
+            behavior->word_count = load_u32(record->post_ctx + slot * 16u);
+            behavior->dirty = record->post_ctx[96];
+        }
+        if (buffer_path) {
+            uint32_t dword = load_u32(record->buffer);
+            behavior->selector_buffer = 1;
+            behavior->input_class = dword == 0 ? 1 : 2;
+            behavior->buffer_state =
+                memcmp(record->buffer, record->post_buffer,
+                       EU4_GFX_CAPTURE_BUFFER_LENGTH) == 0
+                    ? 1
+                    : 2;
+            if (record->buffer_address == record->handle_address) {
+                behavior->alias = 1;
+            } else if (record->buffer_address == (uintptr_t)ctx_base) {
+                behavior->alias = 2;
+            } else {
+                behavior->alias = 3;
+            }
+        } else {
+            behavior->input_class = 0;
+            behavior->buffer_state = 0;
+            behavior->alias = 0;
+        }
+        behavior->handle_state =
+            memcmp(record->handle, record->post_handle,
+                   EU4_GFX_CAPTURE_HANDLE_LENGTH) == 0
+                ? 0
+                : 1;
+        if (slot < EU4_GFX_CAPTURE_SLOT_MAX &&
+            8u + slot * 16u + 8u <= EU4_GFX_CAPTURE_OBSERVATION_LENGTH) {
+            behavior->pointer_role =
+                load_u64(record->post_ctx + 8u + slot * 16u) == record->rsi ? 0
+                                                                           : 1;
+        } else {
+            behavior->pointer_role = 1;
+            behavior->ok = 0;
+        }
+        behavior->rax_class =
+            record->outcome == ctx_base && ctx_base != 0 ? 0 : 1;
+        behavior->canary =
+            memcmp(record->canary_before, record->post_canary_before,
+                   EU4_GFX_CAPTURE_CANARY_LENGTH) == 0 &&
+                    memcmp(record->canary_after, record->post_canary_after,
+                           EU4_GFX_CAPTURE_CANARY_LENGTH) == 0
+                ? 0
+                : 1;
+    }
+    return count;
 }
 
 bool eu4_gfx_set_constant_buffer_capture_flush(void) {

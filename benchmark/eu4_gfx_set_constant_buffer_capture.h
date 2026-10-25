@@ -54,7 +54,36 @@ typedef struct {
     uint8_t post_canary_after[EU4_GFX_CAPTURE_CANARY_LENGTH];
     uint8_t post_buffer[EU4_GFX_CAPTURE_BUFFER_LENGTH];
     uint64_t outcome;
+    /* v2 screening. Zero on the v1 path. */
+    int diversity;
+    int buffer_snapshotted;
+    int phase_b_failed;
+    int snapshot_mismatch;
+    int coverage_designated;
+    int sig_index;
+    int sample_kind; /* 0 first, 1 anchored verify, 2 unanchored reprobe */
+    uint32_t screen_slot;
+    uint32_t screen_selector;
+    uint32_t screen_input;
+    uint32_t reserved_mask;
+    uint64_t bound_generation;
 } eu4_gfx_capture_record;
+
+typedef struct {
+    int ok;
+    uint32_t slot;
+    uint32_t word_count;
+    uint32_t input_value;
+    uint8_t selector_buffer;
+    uint8_t input_class; /* 0 absent, 1 zero, 2 nonzero */
+    uint8_t dirty;
+    uint8_t buffer_state; /* 0 absent, 1 unchanged, 2 changed */
+    uint8_t handle_state; /* 0 unchanged, 1 changed */
+    uint8_t alias; /* 0 absent, 1 handle, 2 ctx, 3 distinct */
+    uint8_t pointer_role; /* 0 rsi, 1 other */
+    uint8_t rax_class; /* 0 ctx, 1 other */
+    uint8_t canary; /* 0 preserved, 1 changed */
+} eu4_gfx_behavior;
 
 typedef struct {
     const char *capture;
@@ -82,6 +111,9 @@ typedef struct {
     bool (*begin)(void);
     void (*end)(void);
     int (*admit)(const eu4_gfx_capture_frame *frame);
+    /* Diversity Phase A+B. NULL keeps the v1 admit path. */
+    int (*select)(eu4_gfx_capture_record *record,
+                  const eu4_gfx_capture_frame *frame);
     bool (*publish)(unsigned ticket, const eu4_gfx_capture_record *record);
     void (*incomplete)(unsigned ticket);
     void (*refuse)(eu4_gfx_capture_refusal reason);
@@ -103,5 +135,15 @@ void eu4_gfx_set_constant_buffer_capture_set_live(
 bool eu4_gfx_set_constant_buffer_capture_write(
     FILE *file, const eu4_gfx_capture_record *record,
     const eu4_gfx_capture_metadata *metadata);
+
+bool eu4_gfx_set_constant_buffer_capture_read(void *destination,
+                                              const void *source,
+                                              size_t length);
+
+/* Native fixture.assess / policy.behavior on this record's bytes.
+ * missing_text is the sorted comma-separated Python missing list. */
+unsigned eu4_gfx_set_constant_buffer_capture_assess(
+    const eu4_gfx_capture_record *record, eu4_gfx_behavior *behavior,
+    char *missing_text, size_t missing_length);
 
 #endif
