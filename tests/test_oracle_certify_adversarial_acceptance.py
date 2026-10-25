@@ -52,7 +52,8 @@ from tests.oracle_certify_acceptance.integration import (
     write_test_policy,
 )
 from tests.oracle_certify_acceptance.production_binding import (
-    production_binding_compatible,
+    assert_fixture_integrity,
+    host_compatible,
     production_candidate,
     production_record,
 )
@@ -318,14 +319,25 @@ class CertifySessionImplementationTests(unittest.TestCase):
             assert_session_immutable(before, tree_sha256(root))
 
 
+class ProductionFixtureIntegrityTests(unittest.TestCase):
+    """Cross-platform: committed fixture bytes vs meta and E1 production record."""
+
+    def test_committed_fixture_digest_matches_metadata_and_production_record(self):
+        ok, reason = assert_fixture_integrity()
+        self.assertTrue(ok, reason)
+
+
 @unittest.skipIf(importlib.util.find_spec("oracle.certify") is None,
                  "oracle.certify absent — E2 preparation only")
 class ProductionBindingTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        ok, reason = production_binding_compatible()
-        if not ok:
-            raise unittest.SkipTest(reason)
+        host_ok, host_reason = host_compatible()
+        if not host_ok:
+            raise unittest.SkipTest(host_reason)
+        integrity_ok, integrity_reason = assert_fixture_integrity()
+        if not integrity_ok:
+            raise AssertionError(integrity_reason)
         if production_record() is None:
             raise unittest.SkipTest(
                 "production build record absent (merge E1 #86 trusted-build JSON)")
@@ -361,9 +373,12 @@ class ProductionBindingTests(unittest.TestCase):
 class ProductionBindingNegativeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        ok, reason = production_binding_compatible()
-        if not ok:
-            raise unittest.SkipTest(reason)
+        host_ok, host_reason = host_compatible()
+        if not host_ok:
+            raise unittest.SkipTest(host_reason)
+        integrity_ok, integrity_reason = assert_fixture_integrity()
+        if not integrity_ok:
+            raise AssertionError(integrity_reason)
         if production_record() is None:
             raise unittest.SkipTest(
                 "production build record absent (merge E1 #86 trusted-build JSON)")
