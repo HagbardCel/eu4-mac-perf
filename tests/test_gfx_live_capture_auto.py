@@ -82,6 +82,46 @@ class VeniceReadinessEvaluatorTests(unittest.TestCase):
         self.assertFalse(auto.game_log_ready("Venice only"))
 
 
+class WaitForVeniceReadyDeadlineTests(unittest.TestCase):
+    class _FakeMonotonic:
+        """Advances past the readiness deadline before the success decision."""
+
+        def __init__(self, timeout_s: float) -> None:
+            self._start = 100.0
+            self._deadline = self._start + timeout_s
+            self._calls = 0
+
+        def __call__(self) -> float:
+            self._calls += 1
+            if self._calls <= 3:
+                return self._start
+            return self._deadline
+
+    def test_ready_predicates_after_deadline_raise_timeout(self) -> None:
+        clock = self._FakeMonotonic(live.READY_TIMEOUT_S)
+        diagnostics: dict = {}
+        ready = {"ready_to_pass": True}
+
+        class FakeGame:
+            pid = 42
+
+            def poll(self):
+                return None
+
+        with patch.object(live.time, "monotonic", clock), \
+             patch.object(live.time, "sleep"), \
+             patch.object(live, "_bounded_focus_state", return_value=(True, True)), \
+             patch.object(auto, "fresh_game_log", return_value=""), \
+             patch.object(auto, "probe_rows", return_value=[]), \
+             patch.object(live, "evaluate_venice_readiness", return_value=ready):
+            with self.assertRaises(live.LiveError) as ctx:
+                live.wait_for_venice_ready(
+                    FakeGame(), live.FOCUS, Path("/tmp/probe.csv"),
+                    {}, Path("/tmp/game.log"), b"", diagnostics=diagnostics)
+        self.assertIn(live.VENICE_READY_TIMEOUT_MSG, str(ctx.exception))
+        self.assertTrue(diagnostics.get("timed_out"))
+
+
 class GfxLiveAutoCliTests(unittest.TestCase):
     def test_auto_venice_rejects_save_combination(self) -> None:
         with self.assertRaises(live.LiveError):
@@ -91,6 +131,11 @@ class GfxLiveAutoCliTests(unittest.TestCase):
     def test_auto_venice_requires_authorization(self) -> None:
         with self.assertRaises(live.LiveError):
             live.run(Path("/tmp/out"), authorized=False, auto_venice=True)
+
+    def test_preflight_rejects_save_with_auto_venice(self) -> None:
+        with self.assertRaises(live.LiveError) as ctx:
+            live.preflight(save=Path("/tmp/x.eu4"), auto_venice=True)
+        self.assertIn("--auto-venice cannot be combined with --save", str(ctx.exception))
 
 
 class GfxLiveAutoOrchestrationTests(unittest.TestCase):
@@ -139,6 +184,8 @@ class GfxLiveAutoOrchestrationTests(unittest.TestCase):
         popen_side_effect=None,
         sha256_side_effect=None,
         finish_side_effect=None,
+        wait_side_effect=None,
+        terminate_side_effect=None,
     ):
         env_holder: dict = {}
         argv_holder: list = []
@@ -154,9 +201,17 @@ class GfxLiveAutoOrchestrationTests(unittest.TestCase):
             env_holder.update(kwargs.get("env", {}))
             return fake_game
 
-        def terminate_side_effect(game, focus_bin):
+        def default_terminate(game, focus_bin):
             if game is not None:
                 game.mark_exited()
+
+        terminate_effect = (
+            terminate_side_effect if terminate_side_effect is not None
+            else default_terminate)
+
+        def fake_install():
+            journal.write_text("staged", encoding="utf-8")
+            return working
 
         popen_effect = popen_side_effect or capture_popen
         sha_effect = sha256_side_effect or (lambda _path: "abc")
@@ -177,20 +232,24 @@ class GfxLiveAutoOrchestrationTests(unittest.TestCase):
             stack.enter_context(patch.object(live, "_wait_for", return_value=True))
             stack.enter_context(patch.object(
                 live, "_verify_startup_attestation", return_value={}))
-            stack.enter_context(patch.object(
-                live, "wait_for_venice_ready",
-                return_value={"predicates": {}, "counters": {}}))
+            if wait_side_effect is None:
+                stack.enter_context(patch.object(
+                    live, "wait_for_venice_ready",
+                    return_value={"predicates": {}, "counters": {}}))
+            else:
+                stack.enter_context(patch.object(
+                    live, "wait_for_venice_ready", side_effect=wait_side_effect))
             stack.enter_context(patch.object(base, "running_game_pid", return_value=99))
             stack.enter_context(patch.object(base, "sha256", side_effect=sha_effect))
-            stack.enter_context(patch.object(live, "_arm_and_seal_capture"))
+            arm = stack.enter_context(patch.object(live, "_arm_and_seal_capture"))
             stack.enter_context(patch.object(
-                live, "_terminate_owned_game", side_effect=terminate_side_effect))
+                live, "_terminate_owned_game", side_effect=terminate_effect))
             stack.enter_context(patch.object(base, "GOG_LAUNCHER", self.launcher_path))
             report = stack.enter_context(report_mock)
 
             fixture = fixture_cls.return_value.__enter__.return_value
             fixture.recover.return_value = False
-            fixture.install.return_value = working
+            fixture.install.side_effect = fake_install
             fixture.journal = journal
             fixture.finish.side_effect = finish_side_effect
 
@@ -213,6 +272,9 @@ class GfxLiveAutoOrchestrationTests(unittest.TestCase):
             "env": env_holder,
             "metadata": metadata,
             "report_calls": report.call_count,
+            "finish_call_count": fixture.finish.call_count,
+            "arm_call_count": arm.call_count,
+            "journal": journal,
         }
 
     def test_dual_injection_and_continuelastsave(self) -> None:
@@ -263,9 +325,6 @@ class GfxLiveAutoOrchestrationTests(unittest.TestCase):
         self.assertEqual(outcome["report_calls"], 0)
 
     def test_cleanup_incomplete_skips_report(self) -> None:
-        journal = self.root / "journal-cleanup"
-        journal.write_text("keep", encoding="utf-8")
-
         def finish_leave_journal(_run_dir):
             return False
 
@@ -277,6 +336,48 @@ class GfxLiveAutoOrchestrationTests(unittest.TestCase):
         meta = outcome["metadata"]
         self.assertEqual(meta["status"], "incomplete")
         self.assertFalse(meta["fixture_cleanup_completed"])
+        self.assertTrue(outcome["journal"].is_file())
+        self.assertEqual(outcome["finish_call_count"], 1)
+        self.assertEqual(outcome["report_calls"], 0)
+
+    def test_game_never_exits_retains_journal_without_finish(self) -> None:
+        outcome = self._run_auto(
+            output_name="out-stuck",
+            expect_report=False,
+            terminate_side_effect=lambda _game, _focus: None,
+        )
+        meta = outcome["metadata"]
+        self.assertEqual(outcome["finish_call_count"], 0)
+        self.assertTrue(outcome["journal"].is_file())
+        self.assertIn("cleanup_error", meta)
+        self.assertFalse(meta["game_exited"])
+        self.assertEqual(meta["status"], "incomplete")
+        self.assertEqual(outcome["report_calls"], 0)
+
+    def test_readiness_timeout_skips_arm_and_persists_diagnostics(self) -> None:
+        def wait_timeout(
+            _game, _focus, _probe, _anchor, _log, _old, diagnostics=None,
+        ):
+            if diagnostics is not None:
+                diagnostics.update({
+                    "timed_out": True,
+                    "last_predicates": {"ready_to_pass": False},
+                    "counters": {"activation_attempts": 2},
+                })
+            raise live.LiveError(
+                f"{live.VENICE_READY_TIMEOUT_MSG}: {{'ready_to_pass': False}}")
+
+        outcome = self._run_auto(
+            output_name="out-ready-timeout",
+            expect_report=False,
+            wait_side_effect=wait_timeout,
+        )
+        meta = outcome["metadata"]
+        self.assertEqual(outcome["arm_call_count"], 0)
+        self.assertEqual(outcome["finish_call_count"], 1)
+        self.assertFalse(outcome["journal"].is_file())
+        self.assertIn("readiness_diagnostics", meta)
+        self.assertTrue(meta["readiness_diagnostics"].get("timed_out"))
         self.assertEqual(outcome["report_calls"], 0)
 
 

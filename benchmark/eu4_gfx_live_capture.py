@@ -308,7 +308,7 @@ def wait_for_venice_ready(
                 "ready_to_pass": predicates["ready_to_pass"],
                 "observed_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             })
-        if predicates["ready_to_pass"]:
+        if predicates["ready_to_pass"] and time.monotonic() < deadline:
             return {
                 "ready_ns": now_ns,
                 "predicates": predicates,
@@ -361,6 +361,8 @@ def _auto_venice_failure_message(metadata: dict) -> str:
 
 
 def preflight(save: Path | None = None, auto_venice: bool = False) -> dict:
+    if auto_venice and save is not None:
+        raise LiveError("--auto-venice cannot be combined with --save")
     build()
     identity = base.gog_identity()
     if base.command("lipo", "-archs", str(base.GOG_EXE)).strip() != "x86_64":
