@@ -265,6 +265,14 @@ def case_b_pid_disagreement(root: Path) -> None:
     verify_manifest_matches_files(root)
 
 
+def case_empty_metadata_resealed(root: Path) -> None:
+    """Resealed empty metadata object (adversarial; requires E1 metadata fix)."""
+    verify_manifest_matches_files(root)
+    (root / "metadata.json").write_text("{}\n", encoding="utf-8")
+    reseal_manifest(root)
+    verify_manifest_matches_files(root)
+
+
 def build_forty_nine_one_mismatch_session() -> Path:
     """One observation has a mismatched but structurally valid EXIT ctx word count."""
 

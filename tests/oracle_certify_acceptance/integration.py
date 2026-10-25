@@ -3,15 +3,20 @@ from __future__ import annotations
 
 import json
 import tempfile
+from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
+from unittest.mock import patch
 
 from oracle.function import fixture
 
 from tests.oracle_certify_acceptance.fixtures import DESCRIPTOR_PATH, descriptor_sha256
+from tests.oracle_certify_acceptance.production_binding import test_local_build_record
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# Portable gate patches where E1 imports the loader: oracle.certify.certify.load_production_build_record
 
 
 def tree_sha256(root: Path) -> dict[str, str]:
@@ -63,9 +68,42 @@ def write_test_policy(path: Path, *, min_distinct_behaviors: int = 2) -> Path:
     return path
 
 
+@contextmanager
+def portable_production_record_patch(
+        candidate: dict[str, Any]) -> Iterator[None]:
+    record = test_local_build_record(candidate)
+    with patch(
+            "oracle.certify.certify.load_production_build_record",
+            return_value=record):
+        yield
+
+
 def call_certify(certify_session, session_dir: Path, candidate: dict[str, Any],
                  *, policy_path: Path | None = None,
                  output_dir: Path | None = None) -> dict[str, Any]:
+    descriptor = fixture.load_descriptor()
+    with tempfile.TemporaryDirectory() as tmp:
+        policy = policy_path or write_test_policy(Path(tmp) / "policy.json")
+        out = output_dir or Path(tmp) / "out"
+        out.mkdir(parents=True, exist_ok=True)
+        with portable_production_record_patch(candidate):
+            return certify_session(
+                session_dir,
+                descriptor,
+                policy,
+                candidate,
+                certificate_dir=out,
+            )
+
+
+def call_certify_production_binding(
+        certify_session,
+        session_dir: Path,
+        candidate: dict[str, Any],
+        *,
+        policy_path: Path | None = None,
+        output_dir: Path | None = None) -> dict[str, Any]:
+    """Production-artifact gate: unpatched loader and production build record."""
     descriptor = fixture.load_descriptor()
     with tempfile.TemporaryDirectory() as tmp:
         policy = policy_path or write_test_policy(Path(tmp) / "policy.json")

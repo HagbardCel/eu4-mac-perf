@@ -89,6 +89,12 @@ _BINDING_FAILURE_PHRASES = (
     "candidate binding",
     "identity mismatch",
 )
+_BUILD_IDENTITY_PHRASES = (
+    "build_identity",
+    "build identity",
+    "trusted build",
+    "production build",
+)
 
 
 def _failure_diagnostics(cert: Mapping[str, Any]) -> str:
@@ -143,6 +149,26 @@ def assert_promotion_scoped_for_diversity(
     if _diversity_floor_met(cert, min_distinct_behaviors):
         raise AssertionError(
             "scoped promotion expected diversity floor not met")
+
+
+def assert_build_identity_binding_failure(
+        cert: Mapping[str, Any],
+        *,
+        submitted_forged_identity: str) -> None:
+    """E1 must fail with a build-identity diagnostic (not the forged-digest helper)."""
+    if not submitted_forged_identity:
+        raise AssertionError("forged build_identity must be non-empty")
+    assert_certificate_shape(cert)
+    _assert_reference_admission_eligible(cert)
+    assert_promotion(cert, "failed")
+    diagnostics = _failure_diagnostics(cert)
+    if not any(phrase in diagnostics for phrase in _BUILD_IDENTITY_PHRASES):
+        raise AssertionError(
+            "promotion failure lacks a build-identity diagnostic in reasons/failures")
+    recorded = cert["candidate"]["build_identity"]
+    if recorded == submitted_forged_identity:
+        raise AssertionError(
+            "certificate must not echo the forged build_identity as trusted")
 
 
 def assert_candidate_binding_failure(

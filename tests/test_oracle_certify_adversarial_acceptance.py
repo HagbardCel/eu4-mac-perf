@@ -14,6 +14,7 @@ from tests.oracle_certify_acceptance.acceptance_candidate import (
 )
 from tests.oracle_certify_acceptance.contract import (
     assert_build_binding_honest,
+    assert_build_identity_binding_failure,
     assert_candidate_binding_failure,
     assert_evidence_not_live_grounded,
     assert_evaluation_counts,
@@ -33,6 +34,7 @@ from tests.oracle_certify_acceptance.fixtures import (
     case_a_delete_one_capture,
     case_b_descriptor_pin_mismatch,
     case_b_pid_disagreement,
+    case_empty_metadata_resealed,
     capture_paths,
     verify_manifest_matches_files,
 )
@@ -45,8 +47,14 @@ from tests.oracle_certify_acceptance.integration import (
     MOCK_SCOPED_DIVERSITY_FLOOR,
     assert_session_immutable,
     call_certify,
+    call_certify_production_binding,
     tree_sha256,
     write_test_policy,
+)
+from tests.oracle_certify_acceptance.production_binding import (
+    production_binding_compatible,
+    production_candidate,
+    production_record,
 )
 from tests.oracle_certify_acceptance.re1_harness import (
     oracle_certify_present,
@@ -281,6 +289,101 @@ class CertifySessionImplementationTests(unittest.TestCase):
                 submitted_forged_digest=forged_digest,
                 executable_path=executable,
             )
+
+    def test_empty_metadata_resealed_fails_session_admission(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = build_mock_live_session()
+            case_empty_metadata_resealed(root)
+            before = tree_sha256(root)
+            cert = call_certify(
+                self.certify_session, root, self._candidate(Path(tmp)))
+            assert_session_immutable(before, tree_sha256(root))
+            self.assertEqual(cert["reference_admission"]["session"]["verdict"],
+                             "ineligible")
+
+    def test_certificate_symlink_into_seal_does_not_modify_seal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            root = build_mock_live_session()
+            before = tree_sha256(root)
+            cert_dir = work / "cert-out"
+            cert_dir.mkdir()
+            (cert_dir / "tier1-certificate.json").symlink_to(root / "manifest.json")
+            call_certify(
+                self.certify_session,
+                root,
+                self._candidate(work),
+                output_dir=cert_dir,
+            )
+            assert_session_immutable(before, tree_sha256(root))
+
+
+@unittest.skipIf(importlib.util.find_spec("oracle.certify") is None,
+                 "oracle.certify absent — E2 preparation only")
+class ProductionBindingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        ok, reason = production_binding_compatible()
+        if not ok:
+            raise unittest.SkipTest(reason)
+        if production_record() is None:
+            raise unittest.SkipTest(
+                "production build record absent (merge E1 #86 trusted-build JSON)")
+        status, detail = certify_import_status()
+        if status == "broken":
+            raise AssertionError(f"oracle.certify broken: {detail}")
+        cls.certify_session = load_certify_session()
+        assert cls.certify_session is not None
+
+    def test_approved_harness_matches_production_record(self):
+        harness = require_re1_harness_for_integration()
+        root = build_mock_live_session()
+        _assert_fifty_match_preflight(root, harness)
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            policy = write_test_policy(
+                work / "policy.json",
+                min_distinct_behaviors=MOCK_CERTIFIED_DIVERSITY_FLOOR,
+            )
+            candidate = production_candidate(work / "candidate")
+            cert = call_certify_production_binding(
+                self.certify_session,
+                root,
+                candidate,
+                policy_path=policy,
+            )
+            assert_promotion_certified(
+                cert, min_distinct_behaviors=MOCK_CERTIFIED_DIVERSITY_FLOOR)
+
+
+@unittest.skipIf(importlib.util.find_spec("oracle.certify") is None,
+                 "oracle.certify absent — E2 preparation only")
+class ProductionBindingNegativeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        ok, reason = production_binding_compatible()
+        if not ok:
+            raise unittest.SkipTest(reason)
+        if production_record() is None:
+            raise unittest.SkipTest(
+                "production build record absent (merge E1 #86 trusted-build JSON)")
+        status, detail = certify_import_status()
+        if status == "broken":
+            raise AssertionError(f"oracle.certify broken: {detail}")
+        cls.certify_session = load_certify_session()
+        assert cls.certify_session is not None
+
+    def test_forged_build_identity_fails_with_production_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            root = build_mock_live_session()
+            candidate = production_candidate(work / "candidate")
+            forged_identity = "forged-production-build-identity"
+            candidate["build_identity"] = forged_identity
+            cert = call_certify_production_binding(
+                self.certify_session, root, candidate)
+            assert_build_identity_binding_failure(
+                cert, submitted_forged_identity=forged_identity)
 
 
 if __name__ == "__main__":
