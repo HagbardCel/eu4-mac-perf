@@ -49,6 +49,16 @@ def test_local_build_record(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _sha256_hex(value: Any) -> str | None:
+    if not isinstance(value, str) or len(value) != 64:
+        return None
+    try:
+        int(value, 16)
+    except ValueError:
+        return None
+    return value.lower()
+
+
 def approved_harness_digest() -> str:
     if not APPROVED_HARNESS.is_file():
         raise FileNotFoundError("approved harness fixture is missing")
@@ -88,31 +98,91 @@ def assert_fixture_integrity() -> tuple[bool, str]:
     if meta is None:
         return False, "approved harness metadata is missing"
     actual = approved_harness_digest()
-    meta_expected = meta.get("executable_sha256")
-    if isinstance(meta_expected, str) and len(meta_expected) == 64:
-        if actual != meta_expected:
-            return (
-                False,
-                "fixture executable_sha256 does not match "
-                f"fixtures/re1-approved-harness.meta.json ({actual} != {meta_expected})",
-            )
+    meta_executable = _sha256_hex(meta.get("executable_sha256"))
+    if meta_executable is None:
+        return (
+            False,
+            "fixtures/re1-approved-harness.meta.json executable_sha256 is missing or invalid",
+        )
+    if actual != meta_executable:
+        return (
+            False,
+            "fixture executable_sha256 does not match "
+            f"fixtures/re1-approved-harness.meta.json ({actual} != {meta_executable})",
+        )
     record = production_record()
     if record is not None:
-        record_expected = record.get("executable_sha256")
-        if isinstance(record_expected, str) and len(record_expected) == 64:
-            if actual != record_expected:
-                return (
-                    False,
-                    "fixture executable_sha256 does not match the production build record "
-                    f"({actual} != {record_expected})",
-                )
-        if isinstance(meta_expected, str) and isinstance(record_expected, str):
-            if meta_expected != record_expected:
-                return (
-                    False,
-                    "fixtures/re1-approved-harness.meta.json executable_sha256 does not "
-                    f"match the production build record ({meta_expected} != {record_expected})",
-                )
+        record_executable = _sha256_hex(record.get("executable_sha256"))
+        if record_executable is None:
+            return (
+                False,
+                "production build record executable_sha256 is missing or invalid",
+            )
+        if actual != record_executable:
+            return (
+                False,
+                "fixture executable_sha256 does not match the production build record "
+                f"({actual} != {record_executable})",
+            )
+        if meta_executable != record_executable:
+            return (
+                False,
+                "fixtures/re1-approved-harness.meta.json executable_sha256 does not "
+                f"match the production build record ({meta_executable} != {record_executable})",
+            )
+        meta_source = _sha256_hex(meta.get("source_sha256"))
+        record_source = _sha256_hex(record.get("source_sha256"))
+        if meta_source is None or record_source is None:
+            return (
+                False,
+                "fixture or production build record source_sha256 is missing or invalid",
+            )
+        if meta_source != record_source:
+            return (
+                False,
+                "fixtures/re1-approved-harness.meta.json source_sha256 does not "
+                f"match the production build record ({meta_source} != {record_source})",
+            )
+        meta_identity = meta.get("build_identity")
+        record_identity = record.get("build_identity")
+        if not isinstance(meta_identity, str) or not meta_identity:
+            return (
+                False,
+                "fixtures/re1-approved-harness.meta.json build_identity is missing or invalid",
+            )
+        if not isinstance(record_identity, str) or not record_identity:
+            return (
+                False,
+                "production build record build_identity is missing or invalid",
+            )
+        if meta_identity != record_identity:
+            return (
+                False,
+                "fixtures/re1-approved-harness.meta.json build_identity does not "
+                f"match the production build record ({meta_identity} != {record_identity})",
+            )
+        meta_flags = meta.get("build_flags")
+        record_flags = record.get("build_flags")
+        if not isinstance(meta_flags, list) or not all(
+            isinstance(flag, str) for flag in meta_flags
+        ):
+            return (
+                False,
+                "fixtures/re1-approved-harness.meta.json build_flags is missing or invalid",
+            )
+        if not isinstance(record_flags, list) or not all(
+            isinstance(flag, str) for flag in record_flags
+        ):
+            return (
+                False,
+                "production build record build_flags is missing or invalid",
+            )
+        if meta_flags != record_flags:
+            return (
+                False,
+                "fixtures/re1-approved-harness.meta.json build_flags do not "
+                "match the production build record",
+            )
     if HARNESS_BUILD_FLAGS != BUILD_FLAGS:
         return False, "harness build flags drifted from acceptance BUILD_FLAGS"
     return True, "fixture integrity ok"
