@@ -392,9 +392,16 @@ def _publish_certificate_atomically(certificate_dir: Path, target: Path,
         suffix=".tmp",
     )
     try:
-        os.write(fd, text.encode("utf-8"))
-    finally:
-        os.close(fd)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(text.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError:
+        try:
+            os.unlink(staging)
+        except OSError:
+            pass
+        raise
     try:
         os.replace(staging, target)
     except OSError as error:
