@@ -1,0 +1,47 @@
+{
+  "claim": "gfx-set-constant-buffer-tier1",
+  "descriptor_sha256": "22e1c92427c9bf30dd4d748a65e3a416d9354450c840a7811efe1d07f45e545e",
+  "diversity": {
+    "min_distinct_behaviors": 12
+  },
+  "function_id": "gfx:set-constant-buffer",
+  "optional_cells": [
+    "alias:distinct",
+    "canary:preserved",
+    "pointer:rsi",
+    "rax:ctx"
+  ],
+  "required_cells": [
+    "input:absent",
+    "input:nonzero",
+    "input:zero",
+    "selector:fixed-length",
+    "selector:length-from-buffer",
+    "slot:0",
+    "slot:1",
+    "slot:2",
+    "slot:3",
+    "slot:4",
+    "slot:5"
+  ],
+  "schema": "eu4-oracle-coverage-policy/v1",
+  "scope": {
+    "input_classes": [
+      "absent",
+      "nonzero",
+      "zero"
+    ],
+    "selectors": [
+      "fixed-length",
+      "length-from-buffer"
+    ],
+    "slots": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  }
+}
