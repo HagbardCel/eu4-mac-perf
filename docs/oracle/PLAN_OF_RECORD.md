@@ -100,11 +100,32 @@ campaign is decided after F1 is working and the operational cost of one session 
 measured. Do not silently raise PR D's quota. Replaying files after their sessions
 have ended is offline validation, not live shadow validation.
 
+### ACQ diversity-aware P5a capture (2026-10-25)
+
+**ACQ-0** freezes [ACQ_DIVERSITY_V1.md](ACQ_DIVERSITY_V1.md): diversity-aware admission
+for `_GfxSetConstantBuffer` under `EU4-GFX-LIVE-SUMMARY v2` (`acq-diversity/v1`).
+Screening is not equivalence; the 64-record quota is a feasibility invariant; anchors
+and coverage cells commit only after durable write and native closure predicate pass.
+
+**ACQ-1** and **ACQ-2** may start in parallel from the ACQ-0 merge commit
+([work-orders/ACQ-1.md](work-orders/ACQ-1.md),
+[work-orders/ACQ-2.md](work-orders/ACQ-2.md)). Neither authorizes a EU IV launch.
+The **E1-v2 adapter** (ACQ-2) must pass its tests before the next operator-authorized
+live session. Historical PR D sessions, v1 summaries, and E1 v1 admission stay
+immutable.
+
+PR D’s **64 tickets reserved before the first expensive read** is **v1 behavior only**;
+v2 retains up to 64 **diverse retained** `FUNCTION-CAPTURE v1` transcripts, not the
+first 64 invocations. P4 invocation-ledger names are not reused for v2 counters.
+
+Integrated offline gate after both merge: native capture vs ACQ-2’s Python model
+(contention, failure injection, counter reconciliation, v1 regression).
+
 ### Minimum frozen contracts
 
 | Contract | Freeze now | Defer |
 | --- | --- | --- |
-| Capture evidence | Sealed session admission, hash integrity and immutability | New acquisition format |
+| Capture evidence | Sealed session admission, hash integrity and immutability; v1 PR D sessions immutable; v2 per ACQ_DIVERSITY_V1 | Further acquisition formats |
 | Certification result | Identity, session/fixture admission, candidate evaluation, coverage and promotion | Function-specific extensions |
 | Shadow invocation | Owned snapshot handoff, identity, result and failure vocabulary | Live throughput architecture |
 | Function package | G1's documented deliverable boundary | Generic schema for future functions |
