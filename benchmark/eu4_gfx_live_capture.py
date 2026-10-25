@@ -30,6 +30,10 @@ from reverse_engineering.macho_rva import (  # noqa: E402
 BENCH = ROOT / "benchmark"
 BUILD = BENCH / ".build"
 LIBRARY = BUILD / "libeu4_gfx_live_capture.dylib"
+FOCUS_SOURCE = BENCH / "mac_game_focus.m"
+FOCUS = BUILD / "mac_game_focus"
+FOCUS_BUILD_TIMEOUT_S = 15
+FOCUS_ACTIVATE_TIMEOUT_S = 3
 TARGET_RVA = 0x15EC36A
 PATCH_BYTES = bytes.fromhex("554889e5488b0789c94183f9ff")
 QUOTA = 64
@@ -74,6 +78,57 @@ def build() -> None:
         )
     if base.command("lipo", "-archs", str(LIBRARY)).strip() != "x86_64":
         raise LiveError("Live capture library is not x86_64")
+
+
+def _try_build_focus_helper() -> tuple[Path | None, str | None]:
+    if not FOCUS_SOURCE.is_file():
+        return None, "focus source missing"
+    BUILD.mkdir(parents=True, exist_ok=True)
+    partial = BUILD / f".mac_game_focus.partial-{os.getpid()}"
+    try:
+        partial.unlink(missing_ok=True)
+    except OSError as exc:
+        return None, f"focus build staging failed: {exc}"
+    command = [
+        "clang", "-O2", "-Wall", "-Wextra", "-Werror",
+        "-Wno-deprecated-declarations", "-fobjc-arc", "-framework", "AppKit",
+        "-framework", "CoreGraphics", "-o", str(partial), str(FOCUS_SOURCE),
+    ]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=False,
+            timeout=FOCUS_BUILD_TIMEOUT_S)
+    except OSError as exc:
+        partial.unlink(missing_ok=True)
+        return None, f"focus build launch failed: {exc}"
+    except subprocess.TimeoutExpired:
+        partial.unlink(missing_ok=True)
+        return None, "focus build timed out"
+    if result.returncode:
+        partial.unlink(missing_ok=True)
+        detail = result.stderr.strip() or result.stdout.strip() or "nonzero exit"
+        return None, f"focus build failed: {detail}"
+    try:
+        partial.replace(FOCUS)
+    except OSError as exc:
+        partial.unlink(missing_ok=True)
+        return None, f"focus install failed: {exc}"
+    return FOCUS, None
+
+
+def _request_focus_activation(focus_bin: Path, pid: int) -> tuple[bool, bool, str | None]:
+    try:
+        result = subprocess.run(
+            [str(focus_bin), "activate", str(pid)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+            timeout=FOCUS_ACTIVATE_TIMEOUT_S)
+    except OSError as exc:
+        return True, False, f"activate launch failed: {exc}"
+    except subprocess.TimeoutExpired:
+        return True, False, "activate timed out"
+    if result.returncode:
+        return True, False, f"activate exit {result.returncode}"
+    return True, True, None
 
 
 def preflight(save: Path | None = None) -> dict:
@@ -186,6 +241,7 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
     if not authorized:
         raise LiveError("Live launch requires the explicit --authorize-live flag")
     evidence = preflight(save)
+    focus_bin, focus_build_error = _try_build_focus_helper()
     save_path = Path(evidence["save"])
     save_hash = evidence["save_sha256"]
     launcher = json.loads(base.GOG_LAUNCHER.read_text())
@@ -243,7 +299,7 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
                 run_dir / "game.stderr").open("wb") as stderr:
             game = subprocess.Popen(
                 ["./eu4", *launcher["exeArgs"]], cwd=base.GOG_EXE.parent,
-                env=env, stdout=stdout, stderr=stderr)
+                env=env, stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr)
         metadata["game_pid"] = game.pid
         metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
         startup_path = run_dir / "startup.status"
@@ -263,8 +319,32 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
         if Path(startup.get("executable", "")).resolve() != base.GOG_EXE.resolve():
             raise LiveError("Startup executable path does not match the pinned GOG build")
 
-        print("The live hook is installed and the process is attested.")
-        print("Load the disposable Venice save, keep the game paused, and return here.")
+        print("The live hook is installed and the process is attested.", flush=True)
+        print(
+            "Load the disposable Venice save and leave the game paused. "
+            "Capture remains DISARMED until you return and enter yes.",
+            flush=True,
+        )
+        print(
+            "If EU IV is not visible, use the Dock or Mission Control; "
+            "Terminal.app may work better than an integrated terminal.",
+            flush=True,
+        )
+        focus_attempted = False
+        focus_ok = False
+        focus_activate_error: str | None = None
+        if focus_bin is not None:
+            focus_attempted, focus_ok, focus_activate_error = _request_focus_activation(
+                focus_bin, game.pid)
+            if focus_ok:
+                print("EU IV foreground activation requested.", flush=True)
+        metadata["focus_activate_attempted"] = focus_attempted
+        metadata["focus_activate_ok"] = focus_ok
+        if focus_build_error:
+            metadata["focus_helper_build_error"] = focus_build_error
+        if focus_activate_error:
+            metadata["focus_activate_error"] = focus_activate_error
+        metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
         if base.prompt("Confirm the expected Venice save is loaded and paused (yes/no): ",
                        True).lower() != "yes":
             raise LiveError("Game state was not confirmed; no live capture was made")
