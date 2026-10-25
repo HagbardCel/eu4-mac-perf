@@ -80,10 +80,20 @@ def build() -> None:
         raise LiveError("Live capture library is not x86_64")
 
 
+def _discard_partial(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _try_build_focus_helper() -> tuple[Path | None, str | None]:
     if not FOCUS_SOURCE.is_file():
         return None, "focus source missing"
-    BUILD.mkdir(parents=True, exist_ok=True)
+    try:
+        BUILD.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return None, f"focus build staging failed: {exc}"
     partial = BUILD / f".mac_game_focus.partial-{os.getpid()}"
     try:
         partial.unlink(missing_ok=True)
@@ -99,19 +109,19 @@ def _try_build_focus_helper() -> tuple[Path | None, str | None]:
             command, capture_output=True, text=True, check=False,
             timeout=FOCUS_BUILD_TIMEOUT_S)
     except OSError as exc:
-        partial.unlink(missing_ok=True)
+        _discard_partial(partial)
         return None, f"focus build launch failed: {exc}"
     except subprocess.TimeoutExpired:
-        partial.unlink(missing_ok=True)
+        _discard_partial(partial)
         return None, "focus build timed out"
     if result.returncode:
-        partial.unlink(missing_ok=True)
+        _discard_partial(partial)
         detail = result.stderr.strip() or result.stdout.strip() or "nonzero exit"
         return None, f"focus build failed: {detail}"
     try:
         partial.replace(FOCUS)
     except OSError as exc:
-        partial.unlink(missing_ok=True)
+        _discard_partial(partial)
         return None, f"focus install failed: {exc}"
     return FOCUS, None
 
