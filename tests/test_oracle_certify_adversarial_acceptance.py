@@ -1,10 +1,12 @@
 """E2: independent E1 acceptance tests (contract + negative controls + integration)."""
 from __future__ import annotations
 
+import copy
 import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from oracle.function import replay
 
@@ -52,6 +54,7 @@ from tests.oracle_certify_acceptance.integration import (
     write_test_policy,
 )
 from tests.oracle_certify_acceptance.production_binding import (
+    approved_harness_meta,
     assert_fixture_integrity,
     host_compatible,
     production_candidate,
@@ -325,6 +328,53 @@ class ProductionFixtureIntegrityTests(unittest.TestCase):
     def test_committed_fixture_digest_matches_metadata_and_production_record(self):
         ok, reason = assert_fixture_integrity()
         self.assertTrue(ok, reason)
+
+    def test_invalid_meta_executable_sha256_fails_integrity(self):
+        real = approved_harness_meta()
+        self.assertIsNotNone(real)
+        base = copy.deepcopy(real)
+
+        def missing_key(meta: dict) -> None:
+            del meta["executable_sha256"]
+
+        cases = (
+            ("missing key", missing_key),
+            ("none", lambda meta: meta.update({"executable_sha256": None})),
+            (
+                "not-a-digest",
+                lambda meta: meta.update({"executable_sha256": "not-a-digest"}),
+            ),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label):
+                meta = copy.deepcopy(base)
+                mutate(meta)
+                with mock.patch(
+                    "tests.oracle_certify_acceptance.production_binding.approved_harness_meta",
+                    return_value=meta,
+                ):
+                    ok, reason = assert_fixture_integrity()
+                self.assertFalse(ok, reason)
+
+    def test_meta_executable_mismatch_with_production_record_fails_integrity(self):
+        record = production_record()
+        if record is None:
+            self.skipTest(
+                "production build record absent (merge E1 #86 trusted-build JSON)")
+        real = approved_harness_meta()
+        self.assertIsNotNone(real)
+        meta = copy.deepcopy(real)
+        record_executable = record.get("executable_sha256")
+        self.assertIsInstance(record_executable, str)
+        meta["executable_sha256"] = (
+            "0" * 63 + ("1" if record_executable[-1] == "0" else "0")
+        )
+        with mock.patch(
+            "tests.oracle_certify_acceptance.production_binding.approved_harness_meta",
+            return_value=meta,
+        ):
+            ok, reason = assert_fixture_integrity()
+        self.assertFalse(ok, reason)
 
 
 @unittest.skipIf(importlib.util.find_spec("oracle.certify") is None,
