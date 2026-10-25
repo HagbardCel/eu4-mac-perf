@@ -381,7 +381,11 @@ def admit_session(session_dir: Path, descriptor: dict[str, Any],
                           reasons, "startup.status")
     done = _read_table(session_dir / "session.done", DONE_HEADER,
                        reasons, "session.done")
-    metadata = _read_json(session_dir / "metadata.json", reasons, "metadata.json") or {}
+    metadata = _read_json(session_dir / "metadata.json", reasons, "metadata.json")
+    if metadata is None:
+        metadata = {}
+    elif not metadata:
+        reasons.append("metadata is empty")
 
     domain_sha = fixture.descriptor_digest(descriptor)
     transcripts, capture_names, malformed, ineligible = _parse_captures(

@@ -17,6 +17,7 @@ from tests.test_oracle_certify_fixtures import (
     SESSION,
     build_session,
     candidate_for,
+    certify_with_test_record,
     evidence_refusal_transcript,
     flip_exit_canary,
     live_transcript,
@@ -29,10 +30,8 @@ from tests.test_oracle_certify_fixtures import (
 
 def _certify(root: Path, executable: Path, policy: Path, out: Path, **candidate_kwargs):
     before = tree_sha256(root)
-    certificate = certify_session(
-        root, fixture.load_descriptor(), policy,
-        candidate_for(executable, **candidate_kwargs),
-        certificate_dir=out)
+    certificate = certify_with_test_record(
+        certify_session, root, policy, executable, out, **candidate_kwargs)
     after = tree_sha256(root)
     if before != after:
         raise AssertionError("certify_session modified the sealed evidence directory")
@@ -192,6 +191,16 @@ class AdmissionTests(unittest.TestCase):
                             candidate_for(self.stub), certificate_dir=root)
         self.assertEqual(tree_sha256(root), before)
         self.assertFalse((root / "tier1-certificate.json").exists())
+
+    def test_empty_metadata_makes_session_ineligible(self) -> None:
+        root = build_session()
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        (root / "metadata.json").write_text("{}\n", encoding="utf-8")
+        reseal(root)
+        cert = _certify(root, self.stub, self.policy, self.out / "empty-metadata")
+        self.assertEqual(cert["reference_admission"]["session"]["verdict"], "ineligible")
+        self.assertTrue(any("metadata is empty" in reason
+                            for reason in cert["reference_admission"]["session"]["reasons"]))
 
     def test_evidence_refusal_is_an_admission_inconsistency(self) -> None:
         texts = [evidence_refusal_transcript(thread) for thread in range(50)]

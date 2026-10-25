@@ -14,7 +14,7 @@ from oracle.function import fixture, replay
 from tests.test_oracle_certify_fixtures import (
     POLICY_PATH,
     build_session,
-    candidate_for,
+    certify_with_test_record,
     compile_re1_harness,
     narrow_policy,
     rewrite_word_count,
@@ -25,13 +25,32 @@ from tests.test_oracle_certify_fixtures import (
 
 def _certify(root: Path, executable: Path, policy: Path, out: Path, **candidate_kwargs):
     before = tree_sha256(root)
-    certificate = certify_session(
-        root, fixture.load_descriptor(), policy,
-        candidate_for(executable, **candidate_kwargs),
-        certificate_dir=out)
+    certificate = certify_with_test_record(
+        certify_session, root, policy, executable, out, **candidate_kwargs)
     if tree_sha256(root) != before:
         raise AssertionError("certify_session modified the sealed evidence directory")
     return certificate
+
+
+class PublishTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.work = Path(tempfile.mkdtemp(prefix="e1-publish-"))
+        self.addCleanup(lambda: shutil.rmtree(self.work, ignore_errors=True))
+        self.stub = self.work / "stub.sh"
+        write_stub(self.stub)
+        self.policy = narrow_policy(self.work / "policy.json")
+        self.root = build_session()
+        self.addCleanup(lambda: shutil.rmtree(self.root, ignore_errors=True))
+
+    def test_symlink_certificate_target_does_not_modify_the_seal(self) -> None:
+        before = tree_sha256(self.root)
+        cert_dir = self.work / "cert-out"
+        cert_dir.mkdir()
+        (cert_dir / "tier1-certificate.json").symlink_to(self.root / "manifest.json")
+        _certify(self.root, self.stub, self.policy, cert_dir)
+        self.assertEqual(tree_sha256(self.root), before)
+        self.assertTrue((cert_dir / "tier1-certificate.json").is_file())
+        self.assertFalse((cert_dir / "tier1-certificate.json").is_symlink())
 
 
 class BindingTests(unittest.TestCase):
