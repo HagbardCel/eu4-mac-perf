@@ -38,26 +38,40 @@ The package must:
   selection, accounting, signature transitions, and commit outcomes;
 - add a **v2-only** branch in `benchmark/eu4_gfx_live_capture.py` for
   `EU4-GFX-LIVE-SUMMARY v2` validation (v1 path and tests unchanged);
-- provide the E1-v2 adapter entry point that re-reads sealed artifacts, ignores the
-  reporter’s verdict, materializes **retained** transcripts through A2, replays through
-  the existing comparator, applies the unchanged
-  [`gfx-set-constant-buffer.json`](../policies/gfx-set-constant-buffer.json), verifies
-  audit files via `reference_capture_sha256` and A2, and checks
-  `established ⊆ qualified`;
+- provide the E1-v2 adapter entry point that re-reads sealed artifacts and ignores
+  the reporter’s verdict. It must **not** call `oracle.certify.certify.certify_session`
+  unchanged, because that path admits only v1 summaries. Reuse the existing
+  candidate-binding, replay, coverage, and promotion helpers on **retained**
+  transcripts, emit `eu4-oracle-tier1-certificate/v1`, and apply the unchanged
+  [`gfx-set-constant-buffer.json`](../policies/gfx-set-constant-buffer.json). v2
+  evidence does not upgrade `sealed-session-unverified` into independently attested
+  live-grounded provenance. Check `established ⊆ qualified`;
+- verify `audit-associations.json` (schema `eu4-gfx-live-audit-associations/v1`):
+  the file is present and hashed by the v2 manifest even when `entries` is empty;
+  reject duplicate audit paths, references outside the session, references that are
+  not retained captures, rows that do not match the audit files, and hash mismatches.
+  Recompute the producer match from the audit and reference transcripts; do not
+  treat equal SHA-256 values as the match;
 - differential-test native predicate and behavior key against
   `oracle.function.fixture.assess` and `oracle.certify.policy.behavior` on shared
-  fixtures (ACQ-1 C must match).
+  fixtures (ACQ-1 C must match). Parity-test the certificate shape against E1 on
+  equivalent fixture sets where the v1 path applies.
 
 ## Required tests
 
 - Contract acceptance matrix adversarial cases in `tests/test_acq_diversity_v1.py`.
 - v1 reporter regression in `tests/test_gfx_live_capture_report.py` (historical summary
   header and accounting unchanged).
-- Adapter: tampered manifest, audit hash mismatch, native over-claimed cells, broken v2
-  counter identities, `admission_invariant_lost` nonzero → structural admission fail.
+- Adapter: tampered manifest, audit hash mismatch, duplicate or out-of-session
+  audit references, native over-claimed cells, broken v2 counter identities,
+  `admission_invariant_lost` nonzero → structural admission fail. A producer-match
+  disagreement fails even when the file hashes are internally consistent.
+- Certificate parity: candidate binding and promotion match E1 on equivalent
+  fixtures; v2 sessions are not reported as a stronger evidence tier.
 - **First shared integration test** (when ACQ-1 exists): reconcile every native
-  invocation outcome against the Python model, including failed reservations and
-  unsuccessful selected captures.
+  invocation outcome against the Python model, including failed reservations,
+  `signature_read_contended`, post-bind invariant failure, and unsuccessful selected
+  captures.
 
 ## Non-goals
 

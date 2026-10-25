@@ -100,11 +100,23 @@ reclamation victim.
 
 ### Linearizable key publication
 
-Variable key is 96 bits (`slot`, `selector`, `input_value`). Writer: CAS even
-generation → odd, write key and state, release-store next even generation. Reader:
-copy only when generation is even and unchanged across the copy. Odd generation is a
-write mark, not a fifth state. Completion CAS must match the even generation; mismatch
-releases that capture’s reservation and buffer without modifying the rebound entry.
+The 96-bit screening key (`slot`, `selector`, `input_value`) and the entry state/flags
+are published with C11 `_Atomic` loads and stores. A 64-bit state CAS does not
+contain the key. Ordinary non-atomic fields must not be read or written concurrently.
+
+Writer: CAS generation even→odd, `atomic_store` the key and state, then
+release-store the next even generation. Sequentially consistent atomics are an
+acceptable conservative default; weaker ordering needs a separate justification and
+tests. The odd generation is a write mark, not a fifth signature state.
+
+Phase A reader (≤8 attempts): accept a snapshot only when the generation is even and
+unchanged across the copy. A stable snapshot proceeds to screening and sampling.
+Eight failed attempts are `signature_read_contended`: no sampling-counter advance, no
+Phase B, and no capacity or signature mutation. That outcome is not `screened_repeat`,
+`pending_contended`, or `verification_contended`.
+
+Post-bind completion rules are in [Hook path](#hook-path-two-phases). A mismatch
+there is not a discarded reader snapshot.
 
 ### Reclamation
 
@@ -120,8 +132,9 @@ Binding after admission CAS; failed bind rolls back admission. No idle victim �
 ### Unanchored reprobe sampling
 
 Same schedule as anchored verification on `u`: select when `u == 2`, or `u > 2` and
-`(u - 1) % 16 == 0`, or projected cells meet the priority rule — plus free buffer and
-successful admission CAS. Skip only when all three decline. Winner sets `reprobe_held`.
+`(u - 1) % 16 == 0`, or projected cells meet the priority rule. Skip only when all
+three decline. The winner proceeds to Phase B and sets `reprobe_held` only after the
+admission CAS succeeds.
 
 ## Coverage feasibility
 
@@ -144,40 +157,62 @@ Initial remaining obligation: `L = 6`. Contract check: remaining
 
 **Invariant:** `R + P_cov + P_div + L ≤ 64`.
 
-Admission CAS reserves unreserved projected cells and increments `P_cov` or `P_div`.
-At most one in-flight reservation per missing slot. Second novel signature for an
-already-reserved slot does not reduce `L`. Provisional reservation ≠ established cell;
-establishment only on durable commit with native predicate pass.
+Every selected capture reserves one retained-record slot. If it projects at least one
+required cell that is neither established nor reserved, the admission CAS sets those
+bits and counts the attempt as `P_cov`; otherwise it counts `P_div` only. The
+coordinator sets `coverage_designated` when that CAS reserved new coverage bits. A
+coverage-designated capture is not declined under the retention cap. At most one
+in-flight reservation holds a given missing slot. A second signature for an
+already-reserved slot does not reduce `L`. A provisional reservation is not an
+established cell.
 
-## Admission linearization
+## Hook path (two phases)
 
-One atomic 64-bit word: `established`, `reserved`, `R`, `P_cov`, `P_div` (only
-capacity linearization point).
+Phase A applies to every armed-path attempt. Phase B applies only after selection.
 
-Every selected verification and unanchored reprobe reserves one worst-case `P_div` in
-that CAS. Classification converts to `R` or releases. No post-selection
-`capacity_refused`; pre-CAS pressure is `capacity_refused_selection`.
+**Phase A:** register refusals, screening snapshot, atomic signature lookup, then the
+sampling decision. Outcomes are `screened_repeat`, `pending_contended`,
+`verification_contended`, `signature_read_contended`, or proceed to Phase B. Phase A
+does not claim a temporary buffer, does not CAS the admission word, and does not
+return `capacity_refused_selection`.
 
-`admission_invariant_lost` is a **sticky session flag**, not an invocation outcome.
-Missing reservation after successful selection → `selected_invariant_failure` + flag +
-stop selection.
+**Phase B:**
 
-**Order:**
+1. Claim a temporary buffer (pool of 64) or return `capture_buffer_refused`.
+2. Admission CAS, at most 8 attempts (`P_cov` or `P_div` as above). Exhaustion is
+   `cas_exhausted` and releases the buffer. The word is unchanged.
+3. Signature bind or reclaim CAS, at most 8 attempts. A pre-bind mismatch is an
+   expected race: retry inside those attempts, or roll the admission word back and
+   return `cas_exhausted`. Do not retain.
+4. Rollback of this attempt’s own bits, at most 64 attempts. If they do not clear,
+   the outcome is `cas_exhausted`, set `admission_invariant_lost`, and stop further
+   selection. That call is not in `selected`.
+5. Deep capture, then coordinator classification.
 
-1. Claim temporary buffer (64 pool) or `capture_buffer_refused`.
-2. Admission CAS, ≤8 attempts → else `cas_exhausted`, release buffer.
-3. Signature CAS, ≤8 attempts; on failure roll back admission → `cas_exhausted`.
-4. Rollback own bits, ≤64 attempts; on failure → `cas_exhausted`, set
-   `admission_invariant_lost`, stop selection (not counted in `selected`).
+Before classify or commit, the coordinator revalidates the bound entry:
 
-Threads: 64. Offline TLS (`live == NULL`) unchanged.
+| When | Mismatch | Outcome |
+| --- | --- | --- |
+| Pre-bind (step 3 has not succeeded) | Expected race | Retry or roll back as in step 3. No retain. |
+| Post-bind (the capture owns the reservation and `verify_held` or `reprobe_held`) | Ownership failure | `selected_invariant_failure`, set `admission_invariant_lost`, do not retain, stop further selection. Apply the transition table so an existing `ANCHORED` transcript stays. |
+
+A post-bind mismatch is not `screened_repeat` and not ordinary contention.
+Classification converts the reserved slot into `R` or releases it. There is no
+post-selection `capacity_refused`. A selected capture that no longer holds its
+reservation is also `selected_invariant_failure`.
+
+`admission_invariant_lost` is a sticky session flag, not an invocation outcome.
+Threads remain 64. Offline TLS (`live == NULL`) is unchanged.
 
 ## Anchored sampling
 
-On `ANCHORED`, CAS advancing `e` selects when `e == 2`, or `e > 2` and `(e-1) % 16 == 0`,
-or priority cells unreserved; needs `verify_held == 0` and admission CAS. Winner sets
-`verify_held`. Contended → `verification_contended`. Skip → `screened_repeat`.
-`PENDING` encounters → `pending_contended` (no `e`/`u` advance).
+On `ANCHORED`, the CAS that advances `e` selects when `e == 2`, or `e > 2` and
+`(e - 1) % 16 == 0`, or priority cells are still unreserved, and `verify_held` is
+clear. That decision is Phase A: a skip is `screened_repeat` and does not claim a
+buffer. The winner proceeds to Phase B and sets `verify_held` only after the
+admission CAS succeeds. If `verify_held` is already set, the outcome is
+`verification_contended` and `e` is unchanged. `PENDING` encounters are
+`pending_contended` and do not advance `e` or `u`.
 
 ## Commit, native eligibility, retention
 
@@ -199,10 +234,11 @@ behavior key; second only if new `input_value` for that key. Cap = 2. Further va
 class, pointer role, `RAX` class, canary preservation. Uncertainty → not a match.
 
 **Outcomes:** `candidate_incomplete`; `ineligible_not_established` (+ ≤11
-`ineligible_persisted` files); `producer_matched_repeat` (+ ≤8 audit files with
-`reference_capture_sha256` of retained bytes — native does not compute A2
-`record_digest`); `novel_retained` on successful rename; `storage_failed`;
-`undrained`; `distinct_not_retained`; `selected_invariant_failure`.
+`ineligible_persisted` files); `producer_matched_repeat` (+ ≤8 audit transcripts;
+the association lives in [audit-associations.json](#audit-association-artifact),
+not in the transcript; native code does not compute A2 `record_digest`);
+`novel_retained` on successful rename; `storage_failed`; `undrained`;
+`distinct_not_retained`; `selected_invariant_failure`.
 
 Only `FUNCTION-CAPTURE v1` files that are durably retained count toward `R` and
 coverage.
@@ -216,13 +252,39 @@ coverage.
 | Coverage qualification | E1-v2 adapter only; missing cells do not unseal |
 
 **v2 artifacts:** `EU4-GFX-LIVE-SUMMARY v2`, `acquisition_policy=acq-diversity/v1`,
-manifest lists `retained`, `audit`, `ineligible` by path and file sha256. No
-qualified-count floor.
+manifest schema `eu4-gfx-live-manifest/v2` listing retained, audit, and ineligible
+files plus `audit-associations.json` by path and file sha256. No qualified-count
+floor.
 
-**E1-v2 adapter:** `benchmark/acq_diversity_v1.py` — re-reads sealed artifacts, does
-not trust reporter verdict, A2 + existing comparator + unchanged policy. Does not
-modify `oracle/certify/`. E1 v1 rejects v2 summary. **Adapter tests pass before the
-next live session.**
+### Audit association artifact
+
+Audit transcripts stay strict `FUNCTION-CAPTURE v1` (for example
+`captures/<session>.<n>.audit.capture`). [`parse_capture`](../../oracle/function/fixture.py)
+rejects extra fields, so the reference is not stored in the transcript.
+
+The coordinator writes session-root `audit-associations.json`
+(`eu4-gfx-live-audit-associations/v1`) and finalizes it before seal, including
+`entries: []` when there are no audits. Each entry has `audit_path`, `audit_sha256`,
+`reference_path`, and `reference_sha256` (sha256 of file bytes), plus an optional
+`screening_key` of `{slot, selector, input_value}`. The v2 manifest hashes that
+finalized file. Native code appends a row when an audit transcript is persisted and
+does not compute A2 `record_digest`.
+
+ACQ-2 rejects duplicate audit paths, references outside the sealed session,
+references that are not retained captures, rows that do not match the audit files,
+and hash mismatches. It recomputes the producer-match relationship from the two
+transcripts. Matching hashes alone are not a match.
+
+**E1-v2 adapter:** `benchmark/acq_diversity_v1.py`. It re-reads sealed artifacts,
+ignores the reporter verdict, and does not call
+[`certify_session`](../../oracle/certify/certify.py) unchanged, because that entry
+point admits only v1 summaries. It reuses the existing candidate-binding, replay,
+coverage, and promotion helpers on **retained** transcripts and emits
+`eu4-oracle-tier1-certificate/v1`. v2 evidence does not upgrade
+`sealed-session-unverified` into independently attested live-grounded provenance.
+It does not modify `oracle/certify/`. E1 v1 still rejects a v2 summary. **Adapter
+tests pass before the next live session.** Structural admission is not
+`certified`, `scoped`, or `failed`.
 
 ## Accounting (v2)
 
@@ -234,8 +296,8 @@ intercepted = invalid_refused + pending_contended + verification_contended
             + screened_repeat + selected
 
 invalid_refused = busy + slot + pointer + address + thread_limit + closed
-                + read_failed + table_capacity_refused + capture_buffer_refused
-                + capacity_refused_selection + cas_exhausted
+                + read_failed + signature_read_contended + table_capacity_refused
+                + capture_buffer_refused + capacity_refused_selection + cas_exhausted
 
 selected = first_selected + verification_selected
 
@@ -281,8 +343,12 @@ relax limits inside ACQ-1.
 | `reprobe_held` / generation mismatch | No wrongful eviction or cross-key mutation |
 | Reader | Never new state + old key |
 | Anchored + `distinct_not_retained` / ineligible / `storage_failed` | Stays `ANCHORED`; prior transcript in manifest |
-| Unanchored + missing cell | Priority override on next encounter |
+| Unanchored + missing cell | Priority override; reprobe is `P_cov`; cell established only after qualified retain |
 | Ineligible persist then same cell | Second capture still gets reservation |
+| Capacity reserved for missing cells; known anchored repeat | `screened_repeat`; no buffer and no admission CAS |
+| Eight failed atomic key reads | `signature_read_contended` only |
+| Post-bind generation mismatch at commit | `selected_invariant_failure`; flag set; prior anchor kept |
+| Empty or populated `audit-associations.json` | Finalized before seal; manifest hashes it; adapter recomputes the match |
 | False native coverage | Written ineligible does not establish cell |
 | 64 retained | Bounded closure, no overwrite |
 | Deadline, missing coverage | Honest partial; no false promotion |
@@ -308,5 +374,7 @@ sites. ACQ-1/ACQ-2 stop and propose amendment if this contract cannot be preserv
 | `FUNCTION-CAPTURE v1` | Unchanged for retained transcripts |
 | `EU4-GFX-LIVE-SUMMARY v1` | E1 v1 + v1 reporter only |
 | `EU4-GFX-LIVE-SUMMARY v2` | This contract |
+| `audit-associations.json` | Session-root association; not part of `FUNCTION-CAPTURE v1` |
+| `eu4-gfx-live-manifest/v2` | Hashes the finalized association file and capture paths |
 | E1 v1 certifier | Unchanged |
 | E1-v2 adapter | New; required before next live session |

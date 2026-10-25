@@ -34,13 +34,22 @@ commit, native `fixture.assess` / `policy.behavior` predicates in C, and
 
 The implementation must:
 
+- run Phase A (screen and sample) on the hot path and Phase B only after selection;
+- publish the screening key with `_Atomic` fields and a generation seqlock; eight
+  failed stable reads are `signature_read_contended`, never `screened_repeat`;
 - reuse the screening dword as the entry pre-buffer snapshot on the buffer-length path;
-- enforce `R + P_cov + P_div + L ≤ 64` through the single admission word;
+- enforce `R + P_cov + P_div + L ≤ 64` through the single admission word, counting
+  `P_cov` when the selected capture reserves previously unreserved required cells;
 - preserve `ANCHORED` across non-retained verifications per the transition table;
+- treat a post-bind generation mismatch at classification as
+  `selected_invariant_failure` and set `admission_invariant_lost`; a pre-bind
+  mismatch retries or rolls back;
 - never establish coverage without native predicate pass and durable rename of a
   retained transcript;
 - classify `producer_matched_repeat` only against anchored records; persist ≤8 audit
-  transcripts with `reference_capture_sha256` only (no A2 digest in native code);
+  transcripts as `FUNCTION-CAPTURE v1` and record the reference in
+  `audit-associations.json` (finalize that file before seal, including an empty
+  `entries` array; no A2 digest in native code);
 - set sticky `admission_invariant_lost` per the contract; use `selected_invariant_failure`
   and `cas_exhausted` as specified;
 - keep PR D v1 behavior available for historical replay tests (do not break v1 summary
@@ -56,8 +65,13 @@ All scenarios in the contract acceptance matrix, exercised via
 - signature-table starvation with reclamation for diversity keys;
 - false coverage establishment (ineligible write does not clear missing cell);
 - screening dword / snapshot consistency;
-- concurrent admission and generation mismatch;
-- rollback failure → `cas_exhausted` + flag, not in `selected`.
+- unanchored missing-cell reprobe reserved as `P_cov`;
+- known anchored repeat with coverage capacity tight: `screened_repeat`, no Phase B;
+- `signature_read_contended` after eight failed atomic reads;
+- post-bind generation mismatch → `selected_invariant_failure`, prior anchor kept;
+- concurrent admission and pre-bind rollback;
+- rollback failure → `cas_exhausted` + flag, not in `selected`;
+- `audit-associations.json` finalized empty or populated before seal.
 
 ## Overhead gate (mandatory stop)
 
