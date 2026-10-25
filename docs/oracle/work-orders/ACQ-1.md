@@ -37,6 +37,11 @@ The implementation must:
 - run Phase A (screen and sample) on the hot path and Phase B only after selection;
 - publish the screening key with `_Atomic` fields and a generation seqlock; eight
   failed stable reads are `signature_read_contended`, never `screened_repeat`;
+- take the insertion gate for a new key only after a stable snapshot of all 128
+  entries; an unreadable entry is `cas_exhausted`, and a live duplicate is
+  `key_insert_contended`. Re-check `UNANCHORED`, `reprobe_held`, and generation at
+  the victim claim. Leave `e` and `u` advanced when Phase B refuses an existing
+  signature, and do not count that call in `selected`;
 - reuse the screening dword as the entry pre-buffer snapshot on the buffer-length path;
 - enforce `R + P_cov + P_div + L ≤ 64` through the single admission word, counting
   `P_cov` when the selected capture reserves previously unreserved required cells;
@@ -68,6 +73,12 @@ All scenarios in the contract acceptance matrix, exercised via
 - unanchored missing-cell reprobe reserved as `P_cov`;
 - known anchored repeat with coverage capacity tight: `screened_repeat`, no Phase B;
 - `signature_read_contended` after eight failed atomic reads;
+- two threads, same unseen key: one `PENDING` owner; loser `key_insert_contended`
+  or `cas_exhausted` with the reservation released;
+- uniqueness scan with one unreadable entry: no publish, `cas_exhausted`;
+- reprobe in flight while the insertion holder scans: claim fails, entry unchanged;
+- scheduled sample whose Phase B is refused: `e` or `u` stays advanced, one refusal,
+  not `selected`;
 - post-bind generation mismatch → `selected_invariant_failure`, prior anchor kept;
 - concurrent admission and pre-bind rollback;
 - rollback failure → `cas_exhausted` + flag, not in `selected`;

@@ -118,14 +118,39 @@ Phase B, and no capacity or signature mutation. That outcome is not `screened_re
 Post-bind completion rules are in [Hook path](#hook-path-two-phases). A mismatch
 there is not a discarded reader snapshot.
 
+### Unique key
+
+At most one live entry (`PENDING`, `ANCHORED`, or `UNANCHORED`) holds a full
+screening key. New-key publication, including reclamation, takes one `_Atomic`
+insertion gate. Anchored and unanchored sampling of an existing entry do not take
+the gate. There is no concurrent map and no wait in the hook.
+
+The gate CAS goes from idle to held, at most 8 attempts. A caller that never gets
+the gate releases the buffer and the admission reservation and is `cas_exhausted`,
+not `selected`.
+
+The holder may publish only after a stable snapshot of all 128 entries. An entry
+that is not stable within 8 reads is not absent: clear the gate, roll back the
+reservation and buffer, publish nothing, and count `cas_exhausted`. If any stable
+snapshot already shows the key live, do not publish; the same release applies and
+the invocation is `key_insert_contended`. Otherwise publish exactly one `PENDING`
+entry, or claim one victim, then clear the gate.
+
+`key_insert_contended` is part of `invalid_refused`. It does not advance `e` or
+`u`, does not set an in-flight flag, and does not leave a second entry.
+
+The gate does not replace victim ownership. The claim CAS must still see
+`UNANCHORED`, `reprobe_held == 0`, and the expected generation. If it does not,
+try the next idle victim inside the same bound, or abort with `cas_exhausted` or
+`table_capacity_refused`. Do not overwrite the entry. A diversity candidate that
+has already published keeps the entry. Missing-cell priority applies only to a
+victim that is not yet claimed. There is no second arbitration word.
+
 ### Reclamation
 
-When the table is full, a new key that passes the admission CAS may reuse the
-lowest-index idle `UNANCHORED` entry (any key that passes admission, not only
-missing-cell keys). At victim CAS: coverage candidate may set `coverage_reclaim` and
-bind; diversity candidate that has not bound skips that victim and tries the next idle
-entry within eight attempts; diversity candidate that already won keeps the entry.
-Binding after admission CAS; failed bind rolls back admission. No idle victim →
+When the table is full, a new key that passes the admission CAS and the insertion
+gate may reuse the lowest-index idle `UNANCHORED` entry. The [unique-key](#unique-key)
+scan and the victim-claim CAS both apply. No idle victim →
 `table_capacity_refused`. Counter `unanchored_reclaimed` is diagnostic (outside
 `intercepted`).
 
@@ -181,9 +206,10 @@ return `capacity_refused_selection`.
 1. Claim a temporary buffer (pool of 64) or return `capture_buffer_refused`.
 2. Admission CAS, at most 8 attempts (`P_cov` or `P_div` as above). Exhaustion is
    `cas_exhausted` and releases the buffer. The word is unchanged.
-3. Signature bind or reclaim CAS, at most 8 attempts. A pre-bind mismatch is an
-   expected race: retry inside those attempts, or roll the admission word back and
-   return `cas_exhausted`. Do not retain.
+3. For a new key, take the insertion gate and bind or reclaim as in
+   [Unique key](#unique-key). A pre-bind mismatch is an expected race: retry inside
+   those attempts, or roll the admission word back and return `cas_exhausted`. Do
+   not retain. An existing-key sample CASes that entry and does not take the gate.
 4. Rollback of this attempt’s own bits, at most 64 attempts. If they do not clear,
    the outcome is `cas_exhausted`, set `admission_invariant_lost`, and stop further
    selection. That call is not in `selected`.
@@ -213,6 +239,15 @@ buffer. The winner proceeds to Phase B and sets `verify_held` only after the
 admission CAS succeeds. If `verify_held` is already set, the outcome is
 `verification_contended` and `e` is unchanged. `PENDING` encounters are
 `pending_contended` and do not advance `e` or `u`.
+
+`e` and `u` count eligible encounters, not finished captures. The Phase A CAS that
+advances them stays advanced when Phase B returns `capture_buffer_refused`,
+`capacity_refused_selection`, or `cas_exhausted` on an existing signature. That
+failure increments its refusal counter once, does not increment `selected`, and
+does not leave `verify_held` or `reprobe_held` set. `signature_read_contended`,
+`pending_contended`, `key_insert_contended`, and a uniqueness scan that cannot
+read every entry do not advance `e` or `u`. The unread-scan case is
+`cas_exhausted`.
 
 ## Commit, native eligibility, retention
 
@@ -296,8 +331,9 @@ intercepted = invalid_refused + pending_contended + verification_contended
             + screened_repeat + selected
 
 invalid_refused = busy + slot + pointer + address + thread_limit + closed
-                + read_failed + signature_read_contended + table_capacity_refused
-                + capture_buffer_refused + capacity_refused_selection + cas_exhausted
+                + read_failed + signature_read_contended + key_insert_contended
+                + table_capacity_refused + capture_buffer_refused
+                + capacity_refused_selection + cas_exhausted
 
 selected = first_selected + verification_selected
 
@@ -335,7 +371,10 @@ relax limits inside ACQ-1.
 | Same key, different pre-state | Not producer match; cap → `distinct_not_retained`; anchor stays |
 | Same key, different post-state | Distinct on full verification |
 | Zero input after many nonzero | Eligible; coverage capacity not exhausted by repeats |
-| Two threads, unseen key | Bounded pending; no false verified repeat |
+| Two threads, same unseen key | One `PENDING` owner; loser is `key_insert_contended` or `cas_exhausted`; reservation released |
+| Uniqueness scan cannot read one entry | No publish; `cas_exhausted`; `e` and `u` unchanged |
+| Reprobe in flight during reclamation | Victim claim fails; reprobe entry unchanged |
+| Scheduled sample, Phase B refused | `e` or `u` stays advanced; one refusal; not `selected` |
 | Failed first pending capture | Retry eligible (`EMPTY`) |
 | Signature table full | `table_capacity_refused` or reclamation |
 | 128 unanchored + free R slots, new diversity key | Admitted via reclamation |

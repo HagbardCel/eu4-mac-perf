@@ -70,8 +70,10 @@ The package must:
   fixtures; v2 sessions are not reported as a stronger evidence tier.
 - **First shared integration test** (when ACQ-1 exists): reconcile every native
   invocation outcome against the Python model, including failed reservations,
-  `signature_read_contended`, post-bind invariant failure, and unsuccessful selected
-  captures.
+  `signature_read_contended`, `key_insert_contended`, an unreadable uniqueness
+  scan, a reprobe that blocks reclamation, Phase B refusals that keep `e` or `u`
+  advanced without incrementing `selected`, post-bind invariant failure, and
+  unsuccessful selected captures.
 
 ## Non-goals
 
