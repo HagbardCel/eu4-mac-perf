@@ -10,11 +10,18 @@ recorded hashes do not prove that those bytes were loaded in the game.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from oracle.certify.build_record import (
+    TRUSTED_BUILD_FLAGS,
+    frozen_re1_source_sha256,
+    load_production_build_record,
+)
 from oracle.certify.errors import CertifyError
 from oracle.certify.evidence import Admission, admit_session
 from oracle.certify.policy import coverage, load_policy
@@ -22,26 +29,6 @@ from oracle.function import fixture, replay
 
 SCHEMA = "eu4-oracle-tier1-certificate/v1"
 CERTIFICATE_NAME = "tier1-certificate.json"
-
-#: The RE1 scenario harness recipe shared with PR C. The certifier does not
-#: rebuild the candidate; it refuses any other flag set.
-TRUSTED_BUILD_FLAGS = (
-    "-std=c++20",
-    "-O0",
-    "-g",
-    "-Wall",
-    "-Wextra",
-    "-Werror",
-    "-fsanitize=address,undefined",
-    "-fno-sanitize-recover=all",
-)
-RECON_DIR = (Path(__file__).resolve().parents[2] / "analysis" / "reconstruction"
-             / "_GfxSetConstantBuffer" / "reconstruction")
-RE1_SOURCE_FILES = (
-    "arith_literals.cpp",
-    "gfx_set_constant_buffer.cpp",
-    "harness.cpp",
-)
 
 _LIVE_TIER = "tier1-live-sealed-session"
 _GROUNDING = (
@@ -52,19 +39,7 @@ _GROUNDING = (
 
 def frozen_source_sha256() -> str:
     """Digest of the tracked RE1 sources, independent of a caller-supplied hash."""
-    digest = sha256()
-    for name in sorted(RE1_SOURCE_FILES):
-        path = RECON_DIR / name
-        try:
-            data = path.read_bytes()
-        except OSError as error:
-            raise CertifyError(
-                f"frozen reconstruction source is unreadable: {name}: {error}") from None
-        digest.update(name.encode("utf-8"))
-        digest.update(b"\x00")
-        digest.update(data)
-        digest.update(b"\n")
-    return digest.hexdigest()
+    return frozen_re1_source_sha256()
 
 
 def _descriptor_file_sha256(descriptor: dict[str, Any]) -> str:
@@ -164,6 +139,42 @@ def _bind_candidate(candidate: dict[str, Any]) -> _Binding:
                 "candidate binding: executable digest "
                 f"{on_disk} does not match the recorded build artifact "
                 f"{submitted_executable}; executed_matches_build is false")
+
+    try:
+        record = load_production_build_record()
+    except CertifyError as error:
+        failures.append(f"candidate binding: {error}")
+        record = None
+
+    if record is not None:
+        record_source = record["source_sha256"]
+        if source != record_source:
+            failures.append(
+                "candidate binding: frozen source digest disagrees with the "
+                "production build record")
+        if submitted_source != record_source:
+            failures.append(
+                "candidate binding: source_sha256 does not match the production "
+                "build record")
+        record_identity = record["build_identity"]
+        if identity != record_identity:
+            failures.append(
+                "candidate binding: build_identity does not match the production "
+                "build record")
+        record_flags = tuple(record["build_flags"])
+        if flag_tuple != record_flags:
+            failures.append(
+                "candidate binding: build flags do not match the production "
+                "build record")
+        record_executable = record["executable_sha256"]
+        if submitted_executable is not None and submitted_executable != record_executable:
+            failures.append(
+                "candidate binding: executable_sha256 does not match the production "
+                "build record")
+        if on_disk is not None and on_disk != record_executable:
+            failures.append(
+                "candidate binding: executable digest does not match the production "
+                "build record")
 
     return _Binding(
         ok=not failures,
@@ -364,8 +375,31 @@ def certify_session(session_dir: Path, descriptor: dict[str, Any], policy: Path,
     certificate_dir.mkdir(parents=True, exist_ok=True)
     target = certificate_dir / CERTIFICATE_NAME
     _reject_certificate_inside_session(session_dir, target.parent)
-    target.write_text(text, encoding="utf-8")
+    _publish_certificate_atomically(certificate_dir, target, text)
     return json.loads(text)
+
+
+def _publish_certificate_atomically(certificate_dir: Path, target: Path,
+                                    text: str) -> None:
+    """Write the certificate via a sibling temp file so symlinks are not followed."""
+    fd, staging = tempfile.mkstemp(
+        dir=str(certificate_dir),
+        prefix=f".{CERTIFICATE_NAME}.",
+        suffix=".tmp",
+    )
+    try:
+        os.write(fd, text.encode("utf-8"))
+    finally:
+        os.close(fd)
+    try:
+        os.replace(staging, target)
+    except OSError as error:
+        try:
+            os.unlink(staging)
+        except OSError:
+            pass
+        raise CertifyError(
+            f"could not publish the tier1 certificate: {error}") from None
 
 
 def _session_id(session_dir: Path) -> str | None:

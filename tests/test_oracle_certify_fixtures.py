@@ -10,9 +10,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCH = ROOT / "benchmark"
@@ -264,6 +266,40 @@ def candidate_for(executable: Path, *, identity: str = "test-binding",
         "build_flags": list(TRUSTED_BUILD_FLAGS if flags is None else flags),
         "harness_path": str(executable),
     }
+
+
+def test_local_build_record(candidate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema": "eu4-oracle-trusted-build/v1",
+        "build_identity": candidate["build_identity"],
+        "source_sha256": candidate["source_sha256"],
+        "executable_sha256": candidate["executable_sha256"],
+        "build_flags": list(candidate["build_flags"]),
+    }
+
+
+@contextmanager
+def portable_production_record_patch(
+        candidate: dict[str, Any]) -> Iterator[None]:
+    record = test_local_build_record(candidate)
+    with patch(
+            "oracle.certify.certify.load_production_build_record",
+            return_value=record):
+        yield
+
+
+def certify_with_test_record(certify_session, session_dir: Path, policy: Path,
+                             executable: Path, out: Path,
+                             **candidate_kwargs) -> dict[str, Any]:
+    candidate = candidate_for(executable, **candidate_kwargs)
+    with portable_production_record_patch(candidate):
+        return certify_session(
+            session_dir,
+            fixture.load_descriptor(),
+            policy,
+            candidate,
+            certificate_dir=out,
+        )
 
 
 def write_policy(path: Path, *, slots: list[int], selectors: list[str],
