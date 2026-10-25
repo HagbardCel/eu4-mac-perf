@@ -376,6 +376,34 @@ class ProductionFixtureIntegrityTests(unittest.TestCase):
             ok, reason = assert_fixture_integrity()
         self.assertFalse(ok, reason)
 
+    def test_meta_platform_mismatch_with_approved_pin_fails_integrity(self):
+        real = approved_harness_meta()
+        self.assertIsNotNone(real)
+        base = copy.deepcopy(real)
+
+        def wrong_system(meta: dict) -> None:
+            meta.setdefault("platform", {})
+            meta["platform"]["system"] = "windows"
+
+        def wrong_machine(meta: dict) -> None:
+            meta.setdefault("platform", {})
+            meta["platform"]["machine"] = "x86_64"
+
+        cases = (
+            ("wrong system", wrong_system),
+            ("wrong machine", wrong_machine),
+        )
+        for label, mutate in cases:
+            with self.subTest(label=label):
+                meta = copy.deepcopy(base)
+                mutate(meta)
+                with mock.patch(
+                    "tests.oracle_certify_acceptance.production_binding.approved_harness_meta",
+                    return_value=meta,
+                ):
+                    ok, reason = assert_fixture_integrity()
+                self.assertFalse(ok, reason)
+
 
 @unittest.skipIf(importlib.util.find_spec("oracle.certify") is None,
                  "oracle.certify absent — E2 preparation only")
