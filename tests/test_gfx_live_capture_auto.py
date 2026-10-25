@@ -82,48 +82,6 @@ class VeniceReadinessEvaluatorTests(unittest.TestCase):
         self.assertFalse(auto.game_log_ready("Venice only"))
 
 
-class WaitForVeniceReadyDeadlineTests(unittest.TestCase):
-    class _FakeMonotonic:
-        """Advances past the readiness deadline before the success decision."""
-
-        def __init__(self, timeout_s: float) -> None:
-            self._start = 100.0
-            self._deadline = self._start + timeout_s
-            self._calls = 0
-
-        def __call__(self) -> float:
-            self._calls += 1
-            if self._calls <= 3:
-                return self._start
-            return self._deadline
-
-    def test_ready_predicates_after_deadline_raise_timeout(self) -> None:
-        clock = self._FakeMonotonic(live.READY_TIMEOUT_S)
-        diagnostics: dict = {}
-        ready = {"ready_to_pass": True}
-
-        class FakeGame:
-            pid = 42
-
-            def poll(self):
-                return None
-
-        with patch.object(live.time, "monotonic", clock), \
-             patch.object(live.time, "sleep"), \
-             patch.object(live, "_record_focus_snapshot"), \
-             patch.object(live, "_maybe_record_focus_snapshot"), \
-             patch.object(live, "_bounded_focus_state", return_value=(True, True)), \
-             patch.object(auto, "fresh_game_log", return_value=""), \
-             patch.object(auto, "probe_rows", return_value=[]), \
-             patch.object(live, "evaluate_venice_readiness", return_value=ready):
-            with self.assertRaises(live.LiveError) as ctx:
-                live.wait_for_venice_ready(
-                    FakeGame(), live.FOCUS, Path("/tmp/probe.csv"),
-                    {}, Path("/tmp/game.log"), b"", diagnostics=diagnostics)
-        self.assertIn(live.VENICE_READY_TIMEOUT_MSG, str(ctx.exception))
-        self.assertTrue(diagnostics.get("timed_out"))
-
-
 class _ReadinessFakeClock:
     """Advances past the readiness deadline when the loop sleeps."""
 
@@ -135,6 +93,45 @@ class _ReadinessFakeClock:
 
     def sleep(self, _seconds: float) -> None:
         self.now += _seconds + live.READY_TIMEOUT_S
+
+
+class WaitForVeniceReadyDeadlineTests(unittest.TestCase):
+    def test_ready_predicates_after_deadline_raise_timeout(self) -> None:
+        clock = _ReadinessFakeClock()
+        diagnostics: dict = {}
+        now_ns = 10_000_000_000
+        real_evaluate = live.evaluate_venice_readiness
+
+        def evaluate_at_deadline(**kwargs):
+            predicates = real_evaluate(**kwargs)
+            self.assertTrue(predicates["ready_to_pass"])
+            clock.now = 100.0 + live.READY_TIMEOUT_S
+            return predicates
+
+        class FakeGame:
+            pid = 42
+
+            def poll(self):
+                return None
+
+        with patch.object(live.time, "monotonic", clock.monotonic), \
+             patch.object(live.time, "sleep", clock.sleep), \
+             patch.object(live.time, "monotonic_ns", return_value=now_ns), \
+             patch.object(live, "_record_focus_snapshot"), \
+             patch.object(live, "_maybe_record_focus_snapshot"), \
+             patch.object(live, "_bounded_focus_state", return_value=(True, True)), \
+             patch.object(auto, "fresh_game_log", return_value=VENICE_LOG), \
+             patch.object(auto, "probe_rows", return_value=_paused_rows(now_ns)), \
+             patch.object(live, "evaluate_venice_readiness",
+                          side_effect=evaluate_at_deadline) as evaluate:
+            with self.assertRaises(live.LiveError) as ctx:
+                live.wait_for_venice_ready(
+                    FakeGame(), live.FOCUS, Path("/tmp/probe.csv"),
+                    {}, Path("/tmp/game.log"), b"", diagnostics=diagnostics)
+        evaluate.assert_called()
+        self.assertIn(live.VENICE_READY_TIMEOUT_MSG, str(ctx.exception))
+        self.assertTrue(diagnostics.get("timed_out"))
+        self.assertTrue(diagnostics["last_predicates"]["ready_to_pass"])
 
 
 class WaitForVeniceReadyGateTests(unittest.TestCase):
