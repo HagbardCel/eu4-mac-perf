@@ -66,6 +66,8 @@ PROBE_SOURCE = auto.PROBE_SOURCE
 READY_TIMEOUT_S = auto.READY_TIMEOUT_S
 VENICE_READY_TIMEOUT_MSG = auto.VENICE_READY_TIMEOUT_MSG
 FOCUS_REPAIR_INTERVAL_S = 2.0
+FOCUS_INSPECT_INTERVAL_S = 5.0
+FOCUS_SNAPSHOT_MAX = 5
 TERMINATE_GRACE_S = 15
 
 
@@ -210,6 +212,88 @@ def _focus_command(focus_bin: Path, action: str, pid: int, timeout: float) -> bo
     return result.returncode == 0
 
 
+def _focus_inspect(
+    focus_bin: Path, pid: int, timeout: float,
+) -> tuple[dict | None, str | None]:
+    if timeout <= 0:
+        return None, "inspect timeout budget exhausted"
+    try:
+        result = subprocess.run(
+            [str(focus_bin), "inspect", str(pid)],
+            capture_output=True, check=False, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, str(exc)
+    if result.returncode != 0:
+        return None, f"inspect exit {result.returncode}"
+    try:
+        payload = json.loads(result.stdout.decode("utf-8").strip() or "{}")
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, str(exc)
+    if not isinstance(payload, dict):
+        return None, "inspect payload is not an object"
+    return payload, None
+
+
+def venice_log_probe_ready(predicates: dict[str, bool | int]) -> bool:
+    return (
+        predicates["game_log_ready"]
+        and predicates["probe_sample_count"] >= 10
+        and predicates["probe_fresh"]
+        and predicates["paused_rows_ok"]
+    )
+
+
+def _observe_focus_state(
+    focus_bin: Path, pid: int, deadline: float,
+) -> tuple[bool, bool]:
+    timeout = _focus_timeout_for(deadline)
+    frontmost = _focus_command(focus_bin, "check", pid, timeout)
+    interior = False
+    if frontmost:
+        interior = _focus_command(focus_bin, "interior", pid, timeout)
+    return frontmost, interior
+
+
+def _record_focus_snapshot(
+    diagnostics: dict,
+    focus_bin: Path,
+    pid: int,
+    deadline: float,
+    *,
+    reason: str,
+) -> None:
+    observed_utc = dt.datetime.now(dt.timezone.utc).isoformat()
+    timeout = _focus_timeout_for(deadline)
+    snapshot, error = _focus_inspect(focus_bin, pid, timeout)
+    entry = {
+        "reason": reason,
+        "observed_utc": observed_utc,
+        "snapshot": snapshot,
+        "error": error,
+    }
+    snapshots = diagnostics.setdefault("focus_snapshots", [])
+    snapshots.append(entry)
+    if len(snapshots) > FOCUS_SNAPSHOT_MAX:
+        del snapshots[:-FOCUS_SNAPSHOT_MAX]
+    diagnostics["last_focus_snapshot"] = entry
+
+
+def _maybe_record_focus_snapshot(
+    diagnostics: dict,
+    focus_bin: Path,
+    pid: int,
+    deadline: float,
+    inspect_clock: list[float],
+    *,
+    reason: str,
+) -> None:
+    now = time.monotonic()
+    if inspect_clock[0] == 0.0 or now - inspect_clock[0] >= FOCUS_INSPECT_INTERVAL_S:
+        _record_focus_snapshot(
+            diagnostics, focus_bin, pid, deadline, reason=reason)
+        inspect_clock[0] = now
+
+
 def _bounded_focus_state(
     focus_bin: Path,
     pid: int,
@@ -272,6 +356,8 @@ def wait_for_venice_ready(
     game_log: Path,
     old_log: bytes,
     diagnostics: dict | None = None,
+    *,
+    require_focus: bool = True,
 ) -> dict:
     deadline = time.monotonic() + READY_TIMEOUT_S
     counters = {
@@ -281,14 +367,28 @@ def wait_for_venice_ready(
         "pointer_noninterior_iterations": 0,
     }
     repair_clock = [0.0]
+    inspect_clock = [0.0]
     last_predicates: dict[str, bool | int] | None = None
+    if diagnostics is not None:
+        diagnostics["require_focus"] = require_focus
+        _record_focus_snapshot(
+            diagnostics, focus_bin, game.pid, deadline, reason="initial")
+        inspect_clock[0] = time.monotonic()
     while time.monotonic() < deadline:
         if game.poll() is not None:
             raise LiveError("GOG EU IV exited before Venice became ready")
         if time.monotonic() >= deadline:
             break
-        frontmost, interior = _bounded_focus_state(
-            focus_bin, game.pid, deadline, counters, repair_clock)
+        if require_focus:
+            frontmost, interior = _bounded_focus_state(
+                focus_bin, game.pid, deadline, counters, repair_clock)
+        else:
+            frontmost, interior = _observe_focus_state(
+                focus_bin, game.pid, deadline)
+        if diagnostics is not None:
+            _maybe_record_focus_snapshot(
+                diagnostics, focus_bin, game.pid, deadline, inspect_clock,
+                reason="periodic")
         now_ns = time.monotonic_ns()
         log_text = auto.fresh_game_log(game_log, old_log)
         logged = auto.game_log_ready(log_text)
@@ -301,24 +401,41 @@ def wait_for_venice_ready(
             now_ns=now_ns,
         )
         last_predicates = predicates
+        strict_ready = bool(predicates["ready_to_pass"])
+        log_probe_ready = venice_log_probe_ready(predicates)
+        selected_ready = strict_ready if require_focus else log_probe_ready
         if diagnostics is not None:
             diagnostics.update({
                 "last_predicates": predicates,
                 "counters": dict(counters),
-                "ready_to_pass": predicates["ready_to_pass"],
+                "strict_ready": strict_ready,
+                "venice_log_probe_ready": log_probe_ready,
+                "selected_gate_ready": selected_ready,
+                "ready_to_pass": strict_ready,
                 "observed_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             })
-        if predicates["ready_to_pass"] and time.monotonic() < deadline:
+        if selected_ready and time.monotonic() < deadline:
+            if game.poll() is not None:
+                raise LiveError("GOG EU IV exited before Venice became ready")
+            if diagnostics is not None:
+                _record_focus_snapshot(
+                    diagnostics, focus_bin, game.pid, deadline, reason="success")
             return {
                 "ready_ns": now_ns,
                 "predicates": predicates,
                 "counters": counters,
+                "require_focus": require_focus,
+                "strict_ready": strict_ready,
+                "venice_log_probe_ready": log_probe_ready,
+                "selected_gate_ready": selected_ready,
             }
         time.sleep(1)
     if diagnostics is not None:
         diagnostics["timed_out"] = True
         diagnostics.setdefault("last_predicates", last_predicates or {})
         diagnostics.setdefault("counters", dict(counters))
+        _record_focus_snapshot(
+            diagnostics, focus_bin, game.pid, deadline, reason="timeout")
     raise LiveError(
         f"{VENICE_READY_TIMEOUT_MSG}: {last_predicates or {}}")
 
@@ -535,6 +652,8 @@ def _run_auto_venice(
     evidence: dict,
     deadline_seconds: int,
     wait_seconds: int,
+    *,
+    allow_unfocused_venice: bool = False,
 ) -> dict:
     output_root = output.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -582,6 +701,9 @@ def _run_auto_venice(
         "probe_library": evidence["probe_library"],
         "probe_library_sha256": evidence["probe_library_sha256"],
         "focus_helper": str(focus_bin),
+        "readiness_mode": (
+            "strict_focus" if not allow_unfocused_venice
+            else "allow_unfocused_venice"),
     }
     game: subprocess.Popen | None = None
     working_save: Path | None = None
@@ -624,12 +746,18 @@ def _run_auto_venice(
             _verify_startup_attestation(startup_path, session_id, game)
             readiness = wait_for_venice_ready(
                 game, focus_bin, probe_path, anchor, game_log, old_log,
-                diagnostics=readiness_diag)
+                diagnostics=readiness_diag,
+                require_focus=not allow_unfocused_venice)
             metadata["readiness"] = readiness
             metadata["readiness_diagnostics"] = readiness_diag
             metadata["game_settings"] = base.game_settings()
             metadata["display_mode"] = base.display_mode()
-            if game.poll() is not None or base.running_game_pid("paused") != game.pid:
+            process_verified = (
+                game.poll() is None
+                and base.running_game_pid("paused") == game.pid
+            )
+            readiness["game_process_verified"] = process_verified
+            if not process_verified:
                 raise LiveError("The expected GOG EU IV process is not running")
             metadata["armed_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
             _arm_and_seal_capture(control, game, run_dir, captures,
@@ -717,14 +845,20 @@ def _run_auto_venice(
 
 def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
         wait_seconds: int = 90, authorized: bool = False,
-        auto_venice: bool = False) -> dict:
+        auto_venice: bool = False,
+        allow_unfocused_venice: bool = False) -> dict:
     if not authorized:
         raise LiveError("Live launch requires the explicit --authorize-live flag")
     if auto_venice and save is not None:
         raise LiveError("--auto-venice cannot be combined with --save")
+    if allow_unfocused_venice and not auto_venice:
+        raise LiveError(
+            "--allow-unfocused-venice requires --auto-venice")
     evidence = preflight(save, auto_venice=auto_venice)
     if auto_venice:
-        return _run_auto_venice(output, evidence, deadline_seconds, wait_seconds)
+        return _run_auto_venice(
+            output, evidence, deadline_seconds, wait_seconds,
+            allow_unfocused_venice=allow_unfocused_venice)
     focus_bin, focus_build_error = _try_build_focus_helper()
     save_path = Path(evidence["save"])
     save_hash = evidence["save_sha256"]
@@ -1276,6 +1410,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--wait", type=int, default=90)
     run_parser.add_argument("--authorize-live", action="store_true")
     run_parser.add_argument("--auto-venice", action="store_true")
+    run_parser.add_argument("--allow-unfocused-venice", action="store_true")
 
     report_parser = commands.add_parser("report")
     report_parser.add_argument("--run-dir", type=Path, required=True)
@@ -1288,7 +1423,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "run":
             result = run(args.output, args.save, args.deadline, args.wait,
-                         args.authorize_live, args.auto_venice)
+                         args.authorize_live, args.auto_venice,
+                         args.allow_unfocused_venice)
             return 0 if result["status"] == "accepted" else 1
         result = report(args.run_dir)
         print(json.dumps({

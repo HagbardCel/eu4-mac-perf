@@ -647,8 +647,14 @@ deadline.
 Preflight validates the pinned `fixtures/venice_paused` digest (not `DEFAULT_SAVE`),
 builds the readiness probe and requires `mac_game_focus`. `FixtureManager` stages
 `continue_game.json` and launches with `--continuelastsave` plus dual
-`DYLD_INSERT_LIBRARIES` (`auto_probe` then gfx live). A bounded readiness gate
-(game-log markers, paused probe rows, timed focus repair) must pass before arming.
+`DYLD_INSERT_LIBRARIES` (`auto_probe` then gfx live). By default, a bounded
+readiness gate requires fresh Venice log markers (`L`), paused probe rows (`P`),
+AppKit foreground and pointer-interior checks (`F`, `W`), and the launched process
+still running (`I`) before arming (`readiness_mode: strict_focus`). With
+`--allow-unfocused-venice` (requires `--auto-venice` and `--authorize-live`), arming
+uses only `L ∧ P ∧ I`; focus is observed passively (`inspect` snapshots, no
+`activate`/`park`) and recorded in metadata (`readiness_mode: allow_unfocused_venice`,
+`strict_ready` vs `selected_gate_ready`). Reporter acceptance is unchanged.
 After sealing, the launcher terminates EU IV, hashes the working save, restores
 continuation state, writes final metadata, and calls `report()` once. Display and
 fullscreen settings are recorded for live acceptance; they are not enforced at
