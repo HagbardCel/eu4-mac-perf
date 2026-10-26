@@ -1012,28 +1012,66 @@ def validate_max_unique(value: int) -> int:
     return value
 
 
+def _region_pair(regions: dict[tuple[str, str], dict], name: str
+                 ) -> tuple[dict, dict] | None:
+    pre = regions.get((name, "pre"))
+    post = regions.get((name, "post"))
+    if pre is None and post is None:
+        return None
+    if pre is None or post is None:
+        raise LiveError(f"Region {name} is missing a pre/post phase")
+    if (pre["address"] != post["address"] or
+            len(pre["bytes"]) != len(post["bytes"])):
+        raise LiveError(f"Region {name} pre/post address or length disagrees")
+    return pre, post
+
+
 def canonical_observation(parsed: dict) -> bytes:
-    """Rebuild ``eu4-exact-dedup-canon/v1`` from one parsed transcript."""
-    name = parsed["capture"]["function"].encode("utf-8")
+    """Rebuild ``eu4-exact-dedup-canon/v1`` from one complete transcript."""
+    capture = parsed.get("capture")
+    carriers = parsed.get("carriers")
+    outcome = parsed.get("outcome")
+    if not isinstance(capture, dict) or not isinstance(capture.get("function"), str):
+        raise LiveError("Transcript has no function identity")
+    if not isinstance(carriers, dict):
+        raise LiveError("Transcript has no carriers")
+    for carrier in ("RDI", "RSI", "RCX", "R9"):
+        value = carriers.get(carrier)
+        if not isinstance(value, dict) or not isinstance(value.get("value"), int):
+            raise LiveError(f"Transcript is missing carrier {carrier}")
+    if not isinstance(outcome, dict) or not isinstance(outcome.get("value"), int):
+        raise LiveError("Transcript has no OUTCOME")
+    regions = {(item["name"], item["phase"]): item
+               for item in parsed.get("regions") or []}
+    pairs = {name: _region_pair(regions, name) for name in CANON_REGIONS}
+    for name in CANON_REGIONS:
+        if name != "buffer" and pairs[name] is None:
+            raise LiveError(f"Transcript is missing region {name}")
+    buffer_path = (carriers["R9"]["value"] & 0xFFFFFFFF) == 0xFFFFFFFF
+    if buffer_path and pairs["buffer"] is None:
+        raise LiveError("Buffer-path transcript is missing the buffer region")
+    if not buffer_path and pairs["buffer"] is not None:
+        raise LiveError("Fixed-length transcript includes a buffer region")
+
+    name = capture["function"].encode("utf-8")
     out = bytearray(b"EXDEDUP1")
     out += struct.pack("<H", len(name))
     out += name
     for carrier in ("RDI", "RSI", "RCX", "R9"):
-        out += struct.pack("<Q", parsed["carriers"][carrier]["value"])
-    regions = {(item["name"], item["phase"]): item for item in parsed["regions"]}
-    out.append(1 if ("buffer", "pre") in regions else 0)
+        out += struct.pack("<Q", carriers[carrier]["value"])
+    out.append(1 if pairs["buffer"] is not None else 0)
     for region_name in CANON_REGIONS:
-        pre = regions.get((region_name, "pre"))
-        post = regions.get((region_name, "post"))
-        if pre is None:
+        pair = pairs[region_name]
+        if pair is None:
             out.append(0)
             continue
+        pre, post = pair
         blob = pre["bytes"]
         out.append(1)
         out += struct.pack("<QH", pre["address"], len(blob))
         out += blob
         out += post["bytes"]
-    out += struct.pack("<Q", parsed["outcome"]["value"])
+    out += struct.pack("<Q", outcome["value"])
     return bytes(out)
 
 
@@ -1059,28 +1097,111 @@ def report_exact(run_dir: Path) -> dict:
     except (LiveError, OSError) as exc:
         done = None
         add_problem(str(exc))
+    session = summary.get("session")
+    descriptor = fixture.load_descriptor()
+    descriptor_sha = descriptor["binary"]["sha256"]
     startup_path = run_dir / "startup.status"
-    if startup_path.is_file():
+    startup: dict[str, str] | None = None
+    if not startup_path.is_file():
+        add_problem("Missing startup.status")
+    else:
         try:
             startup = _parse_table(startup_path, STARTUP_HEADER)
-            if startup.get("max_unique") != summary.get("max_unique"):
-                add_problem("Startup max_unique does not match the summary")
         except LiveError as exc:
             add_problem(str(exc))
+    if startup is not None:
+        if startup.get("state") != "installed":
+            add_problem(f"Dylib startup failed: {startup.get('error') or 'unknown'}")
+        if startup.get("session") != session:
+            add_problem("Startup session does not match the native summary")
+        if startup.get("arch") != "x86_64":
+            add_problem("Startup architecture is not x86_64")
+        if startup.get("module") != descriptor_sha:
+            add_problem("Startup module digest does not match the descriptor")
+        if startup.get("max_unique") != summary.get("max_unique"):
+            add_problem("Startup max_unique does not match the summary")
+        try:
+            image_base = _integer(startup, "image_base", hexadecimal=True)
+            site = _integer(startup, "site", hexadecimal=True)
+            if site != image_base + TARGET_RVA:
+                add_problem("Startup site is not image_base + pinned RVA")
+            if _integer(startup, "pid") <= 0:
+                add_problem("Startup PID is not positive")
+        except (LiveError, TypeError, ValueError) as exc:
+            add_problem(f"Startup address/PID check failed: {exc}")
+        executable = startup.get("executable")
+        if not executable or Path(executable).resolve() != base.GOG_EXE.resolve():
+            add_problem("Startup executable does not match the GOG executable")
+
+    metadata_path = run_dir / "metadata.json"
+    metadata: dict = {}
+    metadata_pid: int | None = None
+    if not metadata_path.is_file():
+        add_problem("Missing metadata.json")
+    else:
+        try:
+            parsed_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            add_problem(f"Malformed metadata.json: {exc}")
+        else:
+            if not isinstance(parsed_metadata, dict):
+                add_problem("Malformed metadata.json: expected a JSON object")
+            else:
+                metadata = parsed_metadata
+                game_pid = metadata.get("game_pid")
+                if type(game_pid) is int and game_pid > 0:
+                    metadata_pid = game_pid
+                else:
+                    add_problem("Launch metadata game_pid is missing or invalid")
+    if metadata:
+        if metadata.get("error"):
+            add_problem(f"Launch metadata reports an error: {metadata['error']}")
+        if metadata.get("status") != "captured":
+            add_problem(f"Launch metadata status is {metadata.get('status')!r}")
+        if metadata.get("session_id") != session:
+            add_problem("Metadata session ID does not match the native summary")
+        save_before = metadata.get("save_sha256")
+        save_after = metadata.get("save_after_sha256")
+        if not save_before or not save_after or save_before != save_after:
+            add_problem("Disposable save was not proven unchanged")
+        if metadata.get("descriptor_sha256") != base.sha256(
+                ROOT / "oracle/function/descriptors/gfx_set_constant_buffer.json"):
+            add_problem("Descriptor digest changed after the run")
+        if LIBRARY.is_file() and metadata.get("library_sha256") != base.sha256(LIBRARY):
+            add_problem("Live capture library changed after the run")
+
+    if done is not None:
+        if done.get("session") != session:
+            add_problem("Session-done marker does not match the native summary")
+        if done.get("state") != summary.get("state"):
+            add_problem("Done marker does not match the summary state")
+        if done.get("state") != "sealed":
+            add_problem("Session-done state is not sealed")
 
     keys = (
-        "max_unique", "intercepted", "not_admitted", "not_admitted_busy",
-        "not_admitted_slot", "not_admitted_pointer", "not_admitted_address",
-        "not_admitted_closed", "not_admitted_thread_limit", "buffer_refused",
-        "complete_observations", "unique_retained", "duplicates_discarded",
-        "unique_limit_discarded", "storage_failed", "incomplete_observations",
-        "undrained_observations")
+        "pid", "threads", "started_ns", "armed_ns", "closed_ns", "max_unique",
+        "intercepted", "not_admitted", "not_admitted_busy", "not_admitted_slot",
+        "not_admitted_pointer", "not_admitted_address", "not_admitted_closed",
+        "not_admitted_thread_limit", "buffer_refused", "complete_observations",
+        "unique_retained", "duplicates_discarded", "unique_limit_discarded",
+        "storage_failed", "incomplete_observations", "undrained_observations")
     values: dict[str, int] = {}
     try:
         values = {key: _integer(summary, key) for key in keys}
     except LiveError as exc:
         add_problem(str(exc))
     if values:
+        for key, value in values.items():
+            if value < 0:
+                add_problem(f"Native counter {key} is negative")
+        if values["pid"] <= 0:
+            add_problem("Native PID is not positive")
+        if not 1 <= values["threads"] <= THREADS:
+            add_problem("Native thread count is outside 1..64")
+        if not (values["started_ns"] > 0 and
+                values["armed_ns"] >= values["started_ns"] and
+                values["closed_ns"] >= values["armed_ns"]):
+            add_problem("Native epoch timestamps are not monotonic and armed")
         if not 1 <= values["max_unique"] <= MAX_UNIQUE_LIMIT:
             add_problem("max_unique is outside 1..4096")
         if values["unique_retained"] > values["max_unique"]:
@@ -1101,12 +1222,19 @@ def report_exact(run_dir: Path) -> dict:
                     values["not_admitted_thread_limit"])
         if values["not_admitted"] != refusals:
             add_problem("not_admitted does not match its parts")
-        if values["undrained_observations"] != 0 or summary.get("state") != "sealed":
+        if (values["undrained_observations"] != 0 or
+                summary.get("state") != "sealed" or
+                summary.get("quiescence") != "ok"):
             add_problem("Session is not cleanly sealed")
-        if summary.get("quiescence") != "ok":
-            add_problem("Quiescence timed out")
-    if done is not None and done.get("state") != summary.get("state"):
-        add_problem("Done marker does not match the summary state")
+        startup_pid = None
+        if startup is not None:
+            try:
+                startup_pid = _integer(startup, "pid")
+            except LiveError:
+                startup_pid = None
+        if (metadata_pid is None or startup_pid is None or
+                metadata_pid != startup_pid or startup_pid != values["pid"]):
+            add_problem("Launch, startup and native PIDs do not match")
     if list(run_dir.rglob("*.partial")):
         add_problem("A partial file survived the session")
 
@@ -1118,7 +1246,10 @@ def report_exact(run_dir: Path) -> dict:
     if expected is not None and len(files) != expected:
         add_problem("Retained file count does not match unique_retained")
     indexes: set[int] = set()
-    session = summary.get("session")
+    calls: set[tuple[int, int]] = set()
+    policy_sha = fixture.capture_policy_digest(descriptor)
+    if metadata and metadata.get("capture_files") != len(files):
+        add_problem("Metadata capture-file count does not match the transcripts")
     for path in files:
         prefix = f"{session}."
         stem = path.name[:-len(".capture")]
@@ -1129,10 +1260,35 @@ def report_exact(run_dir: Path) -> dict:
             continue
         indexes.add(int(ticket_text))
         try:
-            parsed = fixture.parse_capture(path.read_text(encoding="utf-8"))
+            text = path.read_text(encoding="utf-8")
+            parsed = fixture.parse_capture(text)
+            capture = parsed["capture"]
+            if capture["synthetic"] is not False:
+                raise LiveError("Transcript is synthetic")
+            if capture["capture"] != session:
+                raise LiveError("Transcript capture ID does not match the session")
+            if capture["function"] != descriptor["function_id"]:
+                raise LiveError("Transcript function does not match the descriptor")
+            if capture["module"] != descriptor_sha:
+                raise LiveError("Transcript module does not match the descriptor")
+            if capture["policy"] != policy_sha:
+                raise LiveError("Transcript policy does not match the descriptor")
+            if capture["scenario"] not in SCENARIOS:
+                raise LiveError(f"Unexpected live scenario: {capture['scenario']}")
+            if capture["epoch"] != EPOCH:
+                raise LiveError(f"Unexpected live epoch: {capture['epoch']}")
+            call = (int(capture["thread"]), int(capture["sequence"]))
+            if call in calls:
+                raise LiveError(f"Duplicate thread/sequence: {call}")
+            calls.add(call)
+            materialized = fixture.materialize_capture(text, descriptor)
+            if materialized["manifest"]["verdict"] != "qualified":
+                missing = materialized["manifest"].get("missing")
+                raise LiveError(f"Transcript is not qualified: {missing}")
             fingerprints.append(canonical_observation(parsed))
-        except (OSError, fixture.FixtureError, ValueError, struct.error) as exc:
-            malformed.append({"file": path.name, "error": str(exc)})
+        except Exception as exc:
+            malformed.append({"file": path.name,
+                              "error": f"{type(exc).__name__}: {exc}"})
     if expected is not None and indexes != set(range(expected)):
         add_problem("Retained filenames are not 0..unique_retained-1")
     if len(fingerprints) != len(set(fingerprints)):

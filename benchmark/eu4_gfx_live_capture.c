@@ -76,7 +76,7 @@ static _Atomic unsigned undrained_observations;
 static unsigned fail_writes_remaining;
 static int force_identical_hash;
 static int dump_canonical;
-static int pause_drain;
+static _Atomic int pause_drain;
 static pthread_t coordinator_thread;
 static bool coordinator_started;
 static bool started;
@@ -141,7 +141,7 @@ void eu4_gfx_live_capture_test_dump_canonical(int enabled) {
 }
 
 void eu4_gfx_live_capture_test_pause_drain(int enabled) {
-    pause_drain = enabled;
+    atomic_store_explicit(&pause_drain, enabled, memory_order_release);
 }
 
 bool eu4_gfx_live_capture_wait_idle(unsigned timeout_ms) {
@@ -613,7 +613,7 @@ static void classify(const eu4_gfx_capture_record *record) {
 }
 
 static bool drain_one(uint64_t deadline) {
-    if (pause_drain) {
+    if (atomic_load_explicit(&pause_drain, memory_order_acquire)) {
         return false;
     }
     if (deadline != 0 && now_ns() >= deadline) {

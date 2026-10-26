@@ -11,6 +11,7 @@ owned_paths:
   - benchmark/eu4_gfx_live_capture.h
   - benchmark/eu4_gfx_live_capture.py
   - benchmark/eu4_gfx_live_capture_dylib.c
+  - benchmark/eu4_gfx_set_constant_buffer_capture.c
   - benchmark/eu4_gfx_set_constant_buffer_capture.h
   - tests/gfx_live_capture_harness.c
   - tests/test_gfx_live_capture.py

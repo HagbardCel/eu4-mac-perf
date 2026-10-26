@@ -252,7 +252,10 @@ class GfxLiveCaptureTests(unittest.TestCase):
         self.assertEqual(summary["buffer_refused"], "0")
         self.assertEqual(len(self._captures(root)), 128)
         report = live.report(root)
-        self.assertEqual(report["status"], "accepted", msg=report["problems"])
+        self.assertEqual(report["status"], "failed", msg=report["problems"])
+        self.assertTrue(
+            any("startup.status" in problem for problem in report["problems"]),
+            msg=report["problems"])
 
     def test_in_flight_uniques_past_the_limit_are_discarded(self) -> None:
         root, result = self._run("inflight-limit", max_unique=1)
