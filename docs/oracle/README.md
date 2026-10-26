@@ -49,7 +49,7 @@ consumes. The project's power/heat objective is the downstream consumer of that 
 | [P4B_REPLAY.md](P4B_REPLAY.md) | P4b: independent synthetic graphics replay — sealed frame captures, closure and fail-closed reconstruction |
 | [P4_INTEGRATION.md](P4_INTEGRATION.md) | Pre-P5 offline integration gate: resource-content capture, the versioned observation export, materialization and declared `gfx-v2` translation |
 | [ACQ_DIVERSITY_V1.md](ACQ_DIVERSITY_V1.md) | Historical diversity-aware draft (`acq-diversity/v1`); superseded for future sessions |
-| [EXACT_DEDUP_V1.md](EXACT_DEDUP_V1.md) | Future P5a acquisition (`exact-dedup/v1`): reusable pool, exact canonical dedup, runtime `max_unique` |
+| [EXACT_DEDUP_V1.md](EXACT_DEDUP_V1.md) | Active P5a recorder (`exact-dedup/v1`), merged in PR #94: reusable pool, exact canonical dedup, runtime `max_unique` |
 | [BLUEPRINT_PROVENANCE.md](BLUEPRINT_PROVENANCE.md) | Preserved v2 blueprint bytes, hashes and tag (historical reference) |
 | [../repo-map.md](../repo-map.md) | Tracked-path inventory and lifecycle labels (P1 audit) |
 | [../repo-audit-context.json](../repo-audit-context.json) | Audit identity triple (source snapshot, policy, tools); governs `docs/repo-{inventory,edges,lifecycle}.csv` |
