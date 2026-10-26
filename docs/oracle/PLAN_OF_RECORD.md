@@ -121,11 +121,18 @@ first 64 invocations. P4 invocation-ledger names are not reused for v2 counters.
 Integrated offline gate after both merge: native capture vs ACQ-2’s Python model
 (contention, failure injection, counter reconciliation, v1 regression).
 
+Those drafts are not the implementation path. Future sessions follow
+[EXACT_DEDUP_V1.md](EXACT_DEDUP_V1.md) (`exact-dedup/v1`): a reusable 64-slot pool,
+exact canonical-byte dedup, and a runtime `max_unique` of 1..4096. Drafts #92 and
+#93 stay open and superseded. `ACQ_DIVERSITY_V1.md` is not edited. No EU IV launch
+is authorized by this replacement. E1 integration is later, after the new summary
+is reportable on its own.
+
 ### Minimum frozen contracts
 
 | Contract | Freeze now | Defer |
 | --- | --- | --- |
-| Capture evidence | Sealed session admission, hash integrity and immutability; v1 PR D sessions immutable; v2 per ACQ_DIVERSITY_V1 | Further acquisition formats |
+| Capture evidence | Sealed session admission, hash integrity and immutability; v1 PR D sessions immutable; future sessions per EXACT_DEDUP_V1 | Further acquisition formats |
 | Certification result | Identity, session/fixture admission, candidate evaluation, coverage and promotion | Function-specific extensions |
 | Shadow invocation | Owned snapshot handoff, identity, result and failure vocabulary | Live throughput architecture |
 | Function package | G1's documented deliverable boundary | Generic schema for future functions |

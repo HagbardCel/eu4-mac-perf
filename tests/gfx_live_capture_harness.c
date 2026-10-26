@@ -176,14 +176,36 @@ static void *thread_fill_worker(void *argument) {
     return NULL;
 }
 
+static unsigned configured_unique(void) {
+    const char *text = getenv("EU4_GFX_TEST_MAX_UNIQUE");
+    if (text == NULL || text[0] == '\0') {
+        return 64u;
+    }
+    char *end = NULL;
+    unsigned long value = strtoul(text, &end, 10);
+    if (end == NULL || *end != '\0' || value == 0 || value > 4096ul) {
+        return 0u;
+    }
+    return (unsigned)value;
+}
+
 static int run_mode(const char *mode, const char *run_dir,
                     const char *control_path) {
     if (open_control(control_path) != 0) {
         return 1;
     }
+    if (strcmp(mode, "collide") == 0) {
+        eu4_gfx_live_capture_test_force_identical_hash(1);
+    } else if (strcmp(mode, "canon") == 0) {
+        eu4_gfx_live_capture_test_dump_canonical(1);
+    } else if (strcmp(mode, "retry-write") == 0) {
+        eu4_gfx_live_capture_test_fail_next_writes(1);
+    } else if (strcmp(mode, "pool-full") == 0) {
+        eu4_gfx_live_capture_test_pause_drain(1);
+    }
     if (!eu4_gfx_live_capture_start(
             (void *)(uintptr_t)gfx_set_constant_buffer_contract_stub, run_dir,
-            control_path, "live-test", 5, true)) {
+            control_path, "live-test", 5, configured_unique(), true)) {
         return fail("live capture start failed");
     }
 
@@ -447,6 +469,120 @@ static int run_mode(const char *mode, const char *run_dir,
         if (!sealed) {
             return fail("late publish session did not seal");
         }
+    } else if (strcmp(mode, "identical") == 0) {
+        set_control(1);
+        sleep_ms(20);
+        fixture value;
+        fill_fixture(&value);
+        for (unsigned i = 0; i < 100; i++) {
+            direct_capture(&value, 3, 0);
+            if (!eu4_gfx_live_capture_wait_idle(2000)) {
+                return fail("identical capture did not drain");
+            }
+        }
+    } else if (strcmp(mode, "distinct-byte") == 0) {
+        set_control(1);
+        sleep_ms(20);
+        fixture value;
+        fill_fixture(&value);
+        direct_capture(&value, 3, 1);
+        if (!eu4_gfx_live_capture_wait_idle(2000)) {
+            return fail("first distinct capture did not drain");
+        }
+        value.ctx[200] ^= 0xff;
+        direct_capture(&value, 3, 1);
+    } else if (strcmp(mode, "collide") == 0) {
+        set_control(1);
+        sleep_ms(20);
+        fixture first;
+        fixture second;
+        fill_fixture(&first);
+        fill_fixture(&second);
+        second.ctx[200] ^= 0xff;
+        direct_capture(&first, 2, 1);
+        direct_capture(&second, 3, 0);
+    } else if (strcmp(mode, "many-unique") == 0) {
+        set_control(1);
+        sleep_ms(20);
+        fixture *values = calloc(128, sizeof(*values));
+        if (values == NULL) {
+            return fail("cannot allocate distinct fixtures");
+        }
+        for (unsigned i = 0; i < 128; i++) {
+            fill_fixture(&values[i]);
+            values[i].ctx[200] = (uint8_t)i;
+            direct_capture(&values[i], i % 6u, 1);
+            if ((i + 1) % 32u == 0 &&
+                !eu4_gfx_live_capture_wait_idle(5000)) {
+                free(values);
+                return fail("distinct batch did not drain");
+            }
+        }
+        free(values);
+    } else if (strcmp(mode, "inflight-limit") == 0) {
+        set_control(1);
+        sleep_ms(20);
+        held_capture *held = calloc(3, sizeof(*held));
+        pthread_t producers[3];
+        if (held == NULL) {
+            return fail("cannot allocate in-flight captures");
+        }
+        for (unsigned i = 0; i < 3; i++) {
+            fill_fixture(&held[i].value);
+            held[i].value.ctx[200] = (uint8_t)(i + 1);
+            frame_for(&held[i].frame, &held[i].value, i, 1);
+            if (pthread_create(&producers[i], NULL, held_capture_worker,
+                               &held[i]) != 0) {
+                return fail("cannot create in-flight capture");
+            }
+            wait_flag(&held[i].entered);
+        }
+        open_gate(&held[0].release);
+        (void)pthread_join(producers[0], NULL);
+        sleep_ms(100);
+        fixture extra;
+        fill_fixture(&extra);
+        extra.ctx[200] = 9;
+        direct_capture(&extra, 4, 1);
+        for (unsigned i = 1; i < 3; i++) {
+            open_gate(&held[i].release);
+            (void)pthread_join(producers[i], NULL);
+        }
+        if (!eu4_gfx_live_capture_wait_idle(2000)) {
+            free(held);
+            return fail("in-flight captures did not drain");
+        }
+        free(held);
+    } else if (strcmp(mode, "retry-write") == 0) {
+        set_control(1);
+        sleep_ms(20);
+        fixture value;
+        fill_fixture(&value);
+        direct_capture(&value, 3, 0);
+        if (!eu4_gfx_live_capture_wait_idle(2000)) {
+            return fail("failed write did not drain");
+        }
+        direct_capture(&value, 3, 0);
+    } else if (strcmp(mode, "pool-full") == 0) {
+        set_control(1);
+        sleep_ms(20);
+        fixture value;
+        fill_fixture(&value);
+        for (unsigned i = 0; i < 64; i++) {
+            direct_capture(&value, 3, 0);
+        }
+        direct_capture(&value, 3, 0);
+        eu4_gfx_live_capture_test_pause_drain(0);
+        if (!eu4_gfx_live_capture_wait_idle(5000)) {
+            return fail("paused pool did not drain");
+        }
+    } else if (strcmp(mode, "canon") == 0) {
+        set_control(1);
+        sleep_ms(20);
+        fixture value;
+        fill_fixture(&value);
+        direct_capture(&value, 2, 1);
+        direct_capture(&value, 3, 0);
     } else {
         return fail("unknown mode");
     }
@@ -476,7 +612,7 @@ static int run_start_failure(const char *run_dir, const char *control_path) {
         return fail("cannot protect fake site");
     }
     bool started = eu4_gfx_live_capture_start(site, run_dir, control_path,
-                                              "live-start-fail", 5, true);
+                                              "live-start-fail", 5, 64, true);
     printf("LIVE-START-FAIL started=%d\n", started ? 1 : 0);
     (void)munmap(site, (size_t)page);
     (void)close(control_fd);

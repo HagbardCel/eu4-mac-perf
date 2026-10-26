@@ -354,6 +354,234 @@ class GfxLiveReportTests(unittest.TestCase):
         self.assertEqual(result["status"], "insufficient")
         self.assertEqual(result["qualified"], 0)
 
+    def _exact(self, transcripts: list[str] | None = None, *,
+               summary_overrides: dict[str, str] | None = None,
+               metadata_overrides: dict | None = None,
+               write_startup: bool = True, write_metadata: bool = True,
+               done_session: str = SESSION, done_state: str = "sealed") -> Path:
+        """Build one exact-dedup session from synthetic A2 bytes.
+
+        The rewritten fields exercise the reporter. They are not evidence that
+        a game process produced the session.
+        """
+        root = Path(tempfile.mkdtemp(prefix="gfx-exact-report-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, True))
+        texts = transcripts if transcripts is not None else [self._transcript(0)]
+        captures = root / "captures"
+        captures.mkdir()
+        for index, text in enumerate(texts):
+            (captures / f"{SESSION}.{index}.capture").write_text(
+                text, encoding="utf-8")
+        count = len(texts)
+        summary = {
+            "session": SESSION,
+            "pid": "123",
+            "state": "sealed",
+            "closed_reason": "operator",
+            "quiescence": "ok",
+            "started_ns": "1",
+            "armed_ns": "2",
+            "closed_ns": "3",
+            "max_unique": "64",
+            "threads": str(max(count, 1)),
+            "intercepted": str(count),
+            "not_admitted": "0",
+            "not_admitted_busy": "0",
+            "not_admitted_slot": "0",
+            "not_admitted_pointer": "0",
+            "not_admitted_address": "0",
+            "not_admitted_closed": "0",
+            "not_admitted_thread_limit": "0",
+            "buffer_refused": "0",
+            "complete_observations": str(count),
+            "unique_retained": str(count),
+            "duplicates_discarded": "0",
+            "unique_limit_discarded": "0",
+            "storage_failed": "0",
+            "incomplete_observations": "0",
+            "undrained_observations": "0",
+        }
+        summary.update(summary_overrides or {})
+        startup = {
+            "state": "installed",
+            "session": SESSION,
+            "pid": "123",
+            "executable": str(base.GOG_EXE),
+            "arch": "x86_64",
+            "image_base": hex(0x100000000),
+            "site": hex(0x100000000 + live.TARGET_RVA),
+            "module": self.binary_sha,
+            "max_unique": summary["max_unique"],
+            "error": "",
+        }
+        metadata = {
+            "status": "captured",
+            "session_id": SESSION,
+            "game_pid": 123,
+            "capture_files": count,
+            "save_sha256": "a" * 64,
+            "save_after_sha256": "a" * 64,
+            "descriptor_sha256": self.descriptor_sha,
+            "library_sha256": self.library_sha,
+            "max_unique": int(summary["max_unique"]),
+        }
+        metadata.update(metadata_overrides or {})
+
+        def table(header: str, values: dict[str, str]) -> str:
+            return "\n".join(
+                [header, *(f"{key}={value}" for key, value in values.items()), "END"]
+            ) + "\n"
+
+        (root / "summary.native").write_text(
+            table(live.EXACT_SUMMARY, summary), encoding="utf-8")
+        if write_startup:
+            (root / "startup.status").write_text(
+                table(live.STARTUP_HEADER, startup), encoding="utf-8")
+        if write_metadata:
+            (root / "metadata.json").write_text(
+                json.dumps(metadata), encoding="utf-8")
+        (root / "session.done").write_text(
+            table(live.DONE_HEADER, {"session": done_session, "state": done_state}),
+            encoding="utf-8")
+        return root
+
+    def _assert_exact_failed(self, root: Path, expected: str) -> dict:
+        result = live.report(root)
+        self.assertEqual(result["status"], "failed", msg=result["problems"])
+        self.assertFalse((root / "manifest.json").is_file())
+        self.assertTrue(
+            any(expected in problem for problem in result["problems"]),
+            result["problems"])
+        return result
+
+    def test_exact_complete_session_is_accepted_without_v1_manifest(self) -> None:
+        root = self._exact()
+        result = live.report(root)
+        self.assertEqual(result["status"], "accepted", msg=result["problems"])
+        self.assertEqual(result["qualified"], 1)
+        self.assertEqual(result["problems"], [])
+        self.assertFalse((root / "manifest.json").is_file())
+        self.assertFalse((root / "session.json").is_file())
+
+    def test_exact_negative_counter_is_refused_when_the_identity_holds(self) -> None:
+        root = self._exact(summary_overrides={
+            "unique_retained": "1",
+            "duplicates_discarded": "-1",
+            "unique_limit_discarded": "0",
+            "storage_failed": "0",
+            "complete_observations": "0",
+            "intercepted": "0",
+        })
+        result = self._assert_exact_failed(root, "duplicates_discarded is negative")
+        self.assertFalse(any("does not match its parts" in problem
+                             for problem in result["problems"]))
+
+    def test_exact_session_done_must_name_the_summary_session(self) -> None:
+        root = self._exact(done_session="other-session")
+        self._assert_exact_failed(
+            root, "Session-done marker does not match the native summary")
+
+    def test_exact_canonical_requires_the_buffer_selected_by_r9(self) -> None:
+        incomplete = []
+        removed = False
+        for line in self._transcript(0).splitlines():
+            if not removed and line.startswith("EXIT name=buffer "):
+                removed = True
+                continue
+            if removed and line.startswith("END "):
+                line = " ".join(
+                    f"regions={int(part.split('=', 1)[1]) - 1}"
+                    if part.startswith("regions=") else part
+                    for part in line.split())
+            incomplete.append(line)
+        incomplete_text = "\n".join(incomplete) + "\n"
+        parsed = fixture.parse_capture(incomplete_text)
+        with self.assertRaises(live.LiveError) as caught:
+            live.canonical_observation(parsed)
+        self.assertIn("buffer", str(caught.exception).lower())
+        self._assert_exact_failed(self._exact([incomplete_text]), "Malformed transcript")
+
+        unexpected = self._transcript(0).replace(
+            "name=R9 kind=int bits=64 value=0xffffffff",
+            "name=R9 kind=int bits=64 value=0x10",
+            1)
+        parsed = fixture.parse_capture(unexpected)
+        with self.assertRaises(live.LiveError) as caught:
+            live.canonical_observation(parsed)
+        self.assertIn("buffer", str(caught.exception).lower())
+
+    def test_exact_metadata_limit_and_undecodable_evidence_are_refused(self) -> None:
+        mismatched = self._exact(metadata_overrides={"max_unique": 32})
+        self._assert_exact_failed(mismatched, "Metadata max_unique does not match")
+
+        missing = self._exact()
+        metadata_path = missing / "metadata.json"
+        recorded = json.loads(metadata_path.read_text(encoding="utf-8"))
+        del recorded["max_unique"]
+        metadata_path.write_text(json.dumps(recorded), encoding="utf-8")
+        self._assert_exact_failed(missing, "Metadata max_unique does not match")
+
+        undecodable = self._exact()
+        (undecodable / "metadata.json").write_bytes(b"\xff")
+        self._assert_exact_failed(undecodable, "Malformed metadata.json")
+
+        bad_startup = self._exact()
+        (bad_startup / "startup.status").write_bytes(b"\xff")
+        result = live.report(bad_startup)
+        self.assertEqual(result["status"], "failed", msg=result["problems"])
+
+    def test_exact_unprovenanced_or_unqualified_evidence_is_refused(self) -> None:
+        missing_outcome = "\n".join(
+            line.replace("outcomes=1", "outcomes=0") if line.startswith("END ") else line
+            for line in self._transcript(0).splitlines()
+            if not line.startswith("OUTCOME ")
+        ) + "\n"
+        cases = {
+            "missing outcome": ([missing_outcome], {}, "Malformed transcript"),
+            "synthetic": ([self._transcript(0, synthetic_bad=True)], {}, "synthetic"),
+            "capture id": (
+                [self._transcript(0).replace(
+                    f"capture={SESSION}", "capture=other-session", 1)],
+                {}, "capture ID"),
+            "scenario": (
+                [self._transcript(0).replace(
+                    "scenario=live:length-from-buffer", "scenario=live:nope", 1)],
+                {}, "Malformed transcript"),
+            "epoch": (
+                [self._transcript(0).replace("epoch=p5a-live", "epoch=other", 1)],
+                {}, "epoch"),
+            "missing startup": (None, {"write_startup": False}, "startup.status"),
+            "missing metadata": (None, {"write_metadata": False}, "metadata.json"),
+            "pid mismatch": (
+                None, {"metadata_overrides": {"game_pid": 999}}, "PIDs do not match"),
+            "duplicate invocation": (
+                [self._transcript(0), self._transcript(0)], {}, "Duplicate thread"),
+            "duplicate canonical": (
+                [self._transcript(0), self._transcript(1)], {},
+                "not mutually distinct"),
+            "inconsistent complete": (
+                None, {"summary_overrides": {"complete_observations": "9",
+                                             "intercepted": "9"}},
+                "does not match its parts"),
+        }
+        for name, (texts, kwargs, expected) in cases.items():
+            with self.subTest(case=name):
+                if name == "duplicate canonical":
+                    for text in texts:
+                        verdict = fixture.materialize_capture(
+                            text, self.descriptor)["manifest"]["verdict"]
+                        self.assertEqual(verdict, "qualified")
+                root = self._exact(texts, **kwargs)
+                self._assert_exact_failed(root, expected)
+
+    def test_max_unique_range_is_rejected_before_launch(self) -> None:
+        self.assertEqual(live.validate_max_unique(64), 64)
+        self.assertEqual(live.validate_max_unique(4096), 4096)
+        with self.assertRaises(live.LiveError):
+            live.validate_max_unique(0)
+        with self.assertRaises(live.LiveError):
+            live.validate_max_unique(4097)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 #include "eu4_gfx_capture_detour.h"
 #include "eu4_gfx_set_constant_buffer_capture.h"
 
+#include <CommonCrypto/CommonDigest.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <mach/mach.h>
@@ -20,13 +21,12 @@
 
 #define LIVE_PATH 1024u
 #define LIVE_SESSION 128u
+#define LIVE_CANON_MAX 1536u
 #define LIVE_TICKET_FREE 0
 #define LIVE_TICKET_RESERVED 1
 #define LIVE_TICKET_READY 2
-#define LIVE_TICKET_INCOMPLETE 3
-#define LIVE_TICKET_WRITTEN 4
-#define LIVE_TICKET_WRITE_FAILED 5
-#define LIVE_TICKET_UNDRAINED 6
+#define LIVE_TICKET_PROCESSING 3
+#define LIVE_TICKET_QUARANTINE 4
 #define LIVE_STATE_DISARMED 0
 #define LIVE_STATE_ARMED 1
 #define LIVE_STATE_CLOSING 2
@@ -45,10 +45,18 @@ typedef struct {
     eu4_gfx_capture_record record;
 } live_ticket;
 
+typedef struct {
+    uint8_t hash[CC_SHA256_DIGEST_LENGTH];
+    uint16_t length;
+    uint8_t bytes[LIVE_CANON_MAX];
+} retained_observation;
+
 static live_thread threads[EU4_GFX_LIVE_CAPTURE_THREADS];
-static live_ticket tickets[EU4_GFX_LIVE_CAPTURE_QUOTA];
+static live_ticket tickets[EU4_GFX_LIVE_CAPTURE_POOL];
+static retained_observation *retained;
+static unsigned max_unique;
+static unsigned unique_retained;
 static _Atomic unsigned next_thread_id;
-static _Atomic unsigned next_ticket;
 static _Atomic unsigned active_entries;
 static _Atomic int session_state;
 static _Atomic bool stop_requested;
@@ -57,9 +65,18 @@ static _Atomic unsigned not_admitted_busy;
 static _Atomic unsigned not_admitted_slot;
 static _Atomic unsigned not_admitted_pointer;
 static _Atomic unsigned not_admitted_address;
-static _Atomic unsigned not_admitted_quota;
 static _Atomic unsigned not_admitted_closed;
 static _Atomic unsigned not_admitted_thread_limit;
+static _Atomic unsigned buffer_refused;
+static _Atomic unsigned duplicates_discarded;
+static _Atomic unsigned unique_limit_discarded;
+static _Atomic unsigned storage_failed;
+static _Atomic unsigned incomplete_observations;
+static _Atomic unsigned undrained_observations;
+static unsigned fail_writes_remaining;
+static int force_identical_hash;
+static int dump_canonical;
+static _Atomic int pause_drain;
 static pthread_t coordinator_thread;
 static bool coordinator_started;
 static bool started;
@@ -96,15 +113,45 @@ static void sleep_ms(unsigned milliseconds) {
     (void)nanosleep(&value, NULL);
 }
 
-static unsigned admitted_count(void) {
-    unsigned count = 0;
-    for (unsigned i = 0; i < EU4_GFX_LIVE_CAPTURE_QUOTA; i++) {
-        if (atomic_load_explicit(&tickets[i].state, memory_order_acquire) !=
-            LIVE_TICKET_FREE) {
-            count++;
+static bool slot_outstanding(int state) {
+    return state == LIVE_TICKET_RESERVED || state == LIVE_TICKET_READY ||
+           state == LIVE_TICKET_PROCESSING;
+}
+
+static bool slots_outstanding(void) {
+    for (unsigned i = 0; i < EU4_GFX_LIVE_CAPTURE_POOL; i++) {
+        int state = atomic_load_explicit(&tickets[i].state, memory_order_acquire);
+        if (slot_outstanding(state)) {
+            return true;
         }
     }
-    return count;
+    return false;
+}
+
+void eu4_gfx_live_capture_test_force_identical_hash(int enabled) {
+    force_identical_hash = enabled;
+}
+
+void eu4_gfx_live_capture_test_fail_next_writes(unsigned count) {
+    fail_writes_remaining = count;
+}
+
+void eu4_gfx_live_capture_test_dump_canonical(int enabled) {
+    dump_canonical = enabled;
+}
+
+void eu4_gfx_live_capture_test_pause_drain(int enabled) {
+    atomic_store_explicit(&pause_drain, enabled, memory_order_release);
+}
+
+bool eu4_gfx_live_capture_wait_idle(unsigned timeout_ms) {
+    for (unsigned elapsed = 0; elapsed <= timeout_ms; elapsed++) {
+        if (!slots_outstanding()) {
+            return true;
+        }
+        sleep_ms(1);
+    }
+    return !slots_outstanding();
 }
 
 static unsigned thread_count(void) {
@@ -234,27 +281,32 @@ static void live_end(void) {
 static int live_admit(const eu4_gfx_capture_frame *frame) {
     (void)frame;
     if (!atomic_load_explicit(&accepting, memory_order_acquire)) {
-        atomic_fetch_add_explicit(&not_admitted_closed, 1,
-                                  memory_order_relaxed);
+        atomic_fetch_add_explicit(&not_admitted_closed, 1, memory_order_relaxed);
         return -1;
     }
-    unsigned ticket = atomic_load_explicit(&next_ticket, memory_order_acquire);
-    while (ticket < EU4_GFX_LIVE_CAPTURE_QUOTA) {
-        if (atomic_compare_exchange_weak_explicit(
-                &next_ticket, &ticket, ticket + 1, memory_order_acq_rel,
-                memory_order_acquire)) {
-            atomic_store_explicit(&tickets[ticket].state,
-                                  LIVE_TICKET_RESERVED, memory_order_release);
-            return (int)ticket;
+    for (unsigned ticket = 0; ticket < EU4_GFX_LIVE_CAPTURE_POOL; ticket++) {
+        int expected = LIVE_TICKET_FREE;
+        if (!atomic_compare_exchange_strong_explicit(
+                &tickets[ticket].state, &expected, LIVE_TICKET_RESERVED,
+                memory_order_acq_rel, memory_order_acquire)) {
+            continue;
         }
+        if (!atomic_load_explicit(&accepting, memory_order_acquire)) {
+            atomic_store_explicit(&tickets[ticket].state, LIVE_TICKET_FREE,
+                                  memory_order_release);
+            atomic_fetch_add_explicit(&not_admitted_closed, 1,
+                                      memory_order_relaxed);
+            return -1;
+        }
+        return (int)ticket;
     }
-    atomic_fetch_add_explicit(&not_admitted_quota, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&buffer_refused, 1, memory_order_relaxed);
     return -1;
 }
 
 static bool live_publish(unsigned ticket,
                          const eu4_gfx_capture_record *record) {
-    if (ticket >= EU4_GFX_LIVE_CAPTURE_QUOTA) {
+    if (ticket >= EU4_GFX_LIVE_CAPTURE_POOL || record == NULL) {
         return false;
     }
     if (atomic_load_explicit(&tickets[ticket].state, memory_order_acquire) !=
@@ -269,13 +321,18 @@ static bool live_publish(unsigned ticket,
 }
 
 static void live_incomplete(unsigned ticket) {
-    if (ticket >= EU4_GFX_LIVE_CAPTURE_QUOTA) {
+    if (ticket >= EU4_GFX_LIVE_CAPTURE_POOL) {
         return;
     }
     int expected = LIVE_TICKET_RESERVED;
-    (void)atomic_compare_exchange_strong_explicit(
-        &tickets[ticket].state, &expected, LIVE_TICKET_INCOMPLETE,
-        memory_order_acq_rel, memory_order_acquire);
+    if (!atomic_compare_exchange_strong_explicit(
+            &tickets[ticket].state, &expected, LIVE_TICKET_PROCESSING,
+            memory_order_acq_rel, memory_order_acquire)) {
+        return;
+    }
+    atomic_fetch_add_explicit(&incomplete_observations, 1, memory_order_relaxed);
+    atomic_store_explicit(&tickets[ticket].state, LIVE_TICKET_FREE,
+                          memory_order_release);
 }
 
 static void live_refuse(eu4_gfx_capture_refusal reason) {
@@ -295,7 +352,7 @@ static void live_refuse(eu4_gfx_capture_refusal reason) {
                                   memory_order_relaxed);
         break;
     case EU4_GFX_CAPTURE_REFUSE_QUOTA:
-        atomic_fetch_add_explicit(&not_admitted_quota, 1, memory_order_relaxed);
+        atomic_fetch_add_explicit(&buffer_refused, 1, memory_order_relaxed);
         break;
     case EU4_GFX_CAPTURE_REFUSE_THREAD_LIMIT:
         atomic_fetch_add_explicit(&not_admitted_thread_limit, 1,
@@ -316,15 +373,129 @@ static const eu4_gfx_capture_live_ops live_ops = {
     .safe_read = true,
 };
 
-static bool write_transcript(unsigned ticket) {
+static bool put_bytes(uint8_t *out, size_t cap, size_t *used,
+                      const void *src, size_t length) {
+    if (*used > cap || length > cap - *used) {
+        return false;
+    }
+    memcpy(out + *used, src, length);
+    *used += length;
+    return true;
+}
+
+static bool put_u8(uint8_t *out, size_t cap, size_t *used, uint8_t value) {
+    return put_bytes(out, cap, used, &value, 1);
+}
+
+static bool put_u16(uint8_t *out, size_t cap, size_t *used, uint16_t value) {
+    uint8_t bytes[2] = {(uint8_t)value, (uint8_t)(value >> 8)};
+    return put_bytes(out, cap, used, bytes, 2);
+}
+
+static bool put_u64(uint8_t *out, size_t cap, size_t *used, uint64_t value) {
+    uint8_t bytes[8];
+    for (int shift = 0; shift < 8; shift++) {
+        bytes[shift] = (uint8_t)(value >> (8 * shift));
+    }
+    return put_bytes(out, cap, used, bytes, 8);
+}
+
+static bool put_region(uint8_t *out, size_t cap, size_t *used, int present,
+                       uint64_t address, const uint8_t *pre,
+                       const uint8_t *post, uint16_t length) {
+    if (!put_u8(out, cap, used, present ? 1u : 0u)) {
+        return false;
+    }
+    if (!present) {
+        return true;
+    }
+    return put_u64(out, cap, used, address) &&
+           put_u16(out, cap, used, length) &&
+           put_bytes(out, cap, used, pre, length) &&
+           put_bytes(out, cap, used, post, length);
+}
+
+/* eu4-exact-dedup-canon/v1. Field order is the contract, not struct layout. */
+static bool canonical_bytes(const eu4_gfx_capture_record *record,
+                            uint8_t *out, size_t cap, size_t *length) {
+    const char *function_id = eu4_gfx_set_constant_buffer_function_id();
+    size_t name_length = strlen(function_id);
+    size_t used = 0;
+    if (name_length > 65535u ||
+        !put_bytes(out, cap, &used, "EXDEDUP1", 8) ||
+        !put_u16(out, cap, &used, (uint16_t)name_length) ||
+        !put_bytes(out, cap, &used, function_id, name_length) ||
+        !put_u64(out, cap, &used, record->rdi) ||
+        !put_u64(out, cap, &used, record->rsi) ||
+        !put_u64(out, cap, &used, record->rcx) ||
+        !put_u64(out, cap, &used, record->r9) ||
+        !put_u8(out, cap, &used, record->buffer_path ? 1u : 0u) ||
+        !put_region(out, cap, &used, 1, (uint64_t)record->handle_address,
+                    record->handle, record->post_handle,
+                    EU4_GFX_CAPTURE_HANDLE_LENGTH) ||
+        !put_region(out, cap, &used, 1,
+                    (uint64_t)record->ctx_address +
+                        EU4_GFX_CAPTURE_OBSERVATION_START,
+                    record->ctx, record->post_ctx,
+                    EU4_GFX_CAPTURE_OBSERVATION_LENGTH) ||
+        !put_region(out, cap, &used, 1,
+                    (uint64_t)record->ctx_address +
+                        EU4_GFX_CAPTURE_CANARY_BEFORE_START,
+                    record->canary_before, record->post_canary_before,
+                    EU4_GFX_CAPTURE_CANARY_LENGTH) ||
+        !put_region(out, cap, &used, 1,
+                    (uint64_t)record->ctx_address +
+                        EU4_GFX_CAPTURE_CANARY_AFTER_START,
+                    record->canary_after, record->post_canary_after,
+                    EU4_GFX_CAPTURE_CANARY_LENGTH) ||
+        !put_region(out, cap, &used, record->buffer_path,
+                    (uint64_t)record->buffer_address, record->buffer,
+                    record->post_buffer, EU4_GFX_CAPTURE_BUFFER_LENGTH) ||
+        !put_u64(out, cap, &used, record->outcome)) {
+        return false;
+    }
+    *length = used;
+    return true;
+}
+
+static void fingerprint(const uint8_t *bytes, size_t length, uint8_t out[32]) {
+    if (force_identical_hash) {
+        memset(out, 0, 32);
+        return;
+    }
+    CC_SHA256(bytes, (CC_LONG)length, out);
+}
+
+static bool retained_match(const uint8_t hash[32], const uint8_t *bytes,
+                           size_t length) {
+    for (unsigned i = 0; i < unique_retained; i++) {
+        if (memcmp(retained[i].hash, hash, 32) != 0) {
+            continue;
+        }
+        if (retained[i].length == length &&
+            memcmp(retained[i].bytes, bytes, length) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void discard_partial(const char *path) {
+    if (path != NULL && path[0] != '\0') {
+        (void)unlink(path);
+    }
+}
+
+static bool write_transcript(const eu4_gfx_capture_record *record,
+                             unsigned index) {
     char final_path[LIVE_PATH];
     char partial_path[LIVE_PATH];
     int final_length = snprintf(final_path, sizeof(final_path),
                                 "%s/%s.%u.capture", captures_dir, session_id,
-                                ticket);
+                                index);
     int partial_length = snprintf(partial_path, sizeof(partial_path),
                                   "%s/%s.%u.capture.partial", captures_dir,
-                                  session_id, ticket);
+                                  session_id, index);
     if (final_length < 0 || (size_t)final_length >= sizeof(final_path) ||
         partial_length < 0 ||
         (size_t)partial_length >= sizeof(partial_path)) {
@@ -338,10 +509,17 @@ static bool write_transcript(unsigned ticket) {
     FILE *file = fdopen(descriptor, "w");
     if (file == NULL) {
         (void)close(descriptor);
+        discard_partial(partial_path);
         return false;
     }
-    bool ok = eu4_gfx_set_constant_buffer_capture_write(
-        file, &tickets[ticket].record, &live_metadata);
+    bool injected_failure = false;
+    if (fail_writes_remaining > 0) {
+        fail_writes_remaining--;
+        injected_failure = true;
+    }
+    bool ok = !injected_failure &&
+              eu4_gfx_set_constant_buffer_capture_write(
+                  file, record, &live_metadata);
     if (ok && fflush(file) != 0) {
         ok = false;
     }
@@ -351,52 +529,122 @@ static bool write_transcript(unsigned ticket) {
     if (fclose(file) != 0) {
         ok = false;
     }
-    if (!ok) {
+    if (!ok || rename(partial_path, final_path) != 0) {
+        discard_partial(partial_path);
+        discard_partial(final_path);
         return false;
     }
-    return rename(partial_path, final_path) == 0;
+    return true;
 }
 
-static void drain_ready(uint64_t deadline) {
-    unsigned admitted = atomic_load_explicit(&next_ticket, memory_order_acquire);
-    if (admitted > EU4_GFX_LIVE_CAPTURE_QUOTA) {
-        admitted = EU4_GFX_LIVE_CAPTURE_QUOTA;
+static bool write_canonical_sidecar(unsigned index, const uint8_t *bytes,
+                                    size_t length) {
+    char path[LIVE_PATH];
+    int written = snprintf(path, sizeof(path), "%s/%s.%u.canon", captures_dir,
+                           session_id, index);
+    if (written < 0 || (size_t)written >= sizeof(path)) {
+        return false;
     }
-    for (unsigned i = 0; i < admitted; i++) {
-        int state = atomic_load_explicit(&tickets[i].state,
-                                         memory_order_acquire);
-        if (state != LIVE_TICKET_READY) {
-            continue;
-        }
-        if (deadline != 0 && now_ns() >= deadline) {
-            atomic_store_explicit(&tickets[i].state, LIVE_TICKET_UNDRAINED,
-                                  memory_order_release);
-            continue;
-        }
-        if (write_transcript(i)) {
-            atomic_store_explicit(&tickets[i].state, LIVE_TICKET_WRITTEN,
-                                  memory_order_release);
-        } else {
-            atomic_store_explicit(&tickets[i].state,
-                                  LIVE_TICKET_WRITE_FAILED,
-                                  memory_order_release);
-        }
+    int descriptor = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (descriptor < 0) {
+        return false;
     }
-}
-
-static bool tickets_terminal(void) {
-    unsigned admitted = atomic_load_explicit(&next_ticket, memory_order_acquire);
-    if (admitted > EU4_GFX_LIVE_CAPTURE_QUOTA) {
-        admitted = EU4_GFX_LIVE_CAPTURE_QUOTA;
-    }
-    for (unsigned i = 0; i < admitted; i++) {
-        int state = atomic_load_explicit(&tickets[i].state,
-                                         memory_order_acquire);
-        if (state == LIVE_TICKET_RESERVED || state == LIVE_TICKET_READY) {
+    size_t offset = 0;
+    while (offset < length) {
+        ssize_t chunk = write(descriptor, bytes + offset, length - offset);
+        if (chunk < 0) {
+            (void)close(descriptor);
+            (void)unlink(path);
             return false;
         }
+        offset += (size_t)chunk;
+    }
+    if (fsync(descriptor) != 0 || close(descriptor) != 0) {
+        (void)unlink(path);
+        return false;
     }
     return true;
+}
+
+static void classify(const eu4_gfx_capture_record *record) {
+    uint8_t canon[LIVE_CANON_MAX];
+    size_t length = 0;
+    uint8_t hash[CC_SHA256_DIGEST_LENGTH];
+    if (retained == NULL ||
+        !canonical_bytes(record, canon, sizeof(canon), &length)) {
+        atomic_fetch_add_explicit(&storage_failed, 1, memory_order_relaxed);
+        return;
+    }
+    fingerprint(canon, length, hash);
+    if (retained_match(hash, canon, length)) {
+        atomic_fetch_add_explicit(&duplicates_discarded, 1,
+                                  memory_order_relaxed);
+        return;
+    }
+    if (unique_retained >= max_unique) {
+        atomic_fetch_add_explicit(&unique_limit_discarded, 1,
+                                  memory_order_relaxed);
+        atomic_store_explicit(&accepting, false, memory_order_release);
+        return;
+    }
+    if (!write_transcript(record, unique_retained)) {
+        atomic_fetch_add_explicit(&storage_failed, 1, memory_order_relaxed);
+        return;
+    }
+    if (dump_canonical &&
+        !write_canonical_sidecar(unique_retained, canon, length)) {
+        char published[LIVE_PATH];
+        int written = snprintf(published, sizeof(published),
+                               "%s/%s.%u.capture", captures_dir, session_id,
+                               unique_retained);
+        if (written > 0 && (size_t)written < sizeof(published)) {
+            (void)unlink(published);
+        }
+        atomic_fetch_add_explicit(&storage_failed, 1, memory_order_relaxed);
+        return;
+    }
+    memcpy(retained[unique_retained].hash, hash, sizeof(hash));
+    retained[unique_retained].length = (uint16_t)length;
+    memcpy(retained[unique_retained].bytes, canon, length);
+    unique_retained++;
+    if (unique_retained >= max_unique) {
+        atomic_store_explicit(&accepting, false, memory_order_release);
+    }
+}
+
+static bool drain_one(uint64_t deadline) {
+    if (atomic_load_explicit(&pause_drain, memory_order_acquire)) {
+        return false;
+    }
+    if (deadline != 0 && now_ns() >= deadline) {
+        return false;
+    }
+    for (unsigned i = 0; i < EU4_GFX_LIVE_CAPTURE_POOL; i++) {
+        int expected = LIVE_TICKET_READY;
+        if (!atomic_compare_exchange_strong_explicit(
+                &tickets[i].state, &expected, LIVE_TICKET_PROCESSING,
+                memory_order_acq_rel, memory_order_acquire)) {
+            continue;
+        }
+        eu4_gfx_capture_record record = tickets[i].record;
+        classify(&record);
+        atomic_store_explicit(&tickets[i].state, LIVE_TICKET_FREE,
+                              memory_order_release);
+        return true;
+    }
+    return false;
+}
+
+static void quarantine(int from_state) {
+    for (unsigned i = 0; i < EU4_GFX_LIVE_CAPTURE_POOL; i++) {
+        int expected = from_state;
+        if (atomic_compare_exchange_strong_explicit(
+                &tickets[i].state, &expected, LIVE_TICKET_QUARANTINE,
+                memory_order_acq_rel, memory_order_acquire)) {
+            atomic_fetch_add_explicit(&undrained_observations, 1,
+                                      memory_order_relaxed);
+        }
+    }
 }
 
 static bool wait_active(uint64_t deadline) {
@@ -410,13 +658,9 @@ static bool wait_active(uint64_t deadline) {
 }
 
 static bool wait_reserved(uint64_t deadline) {
-    unsigned admitted = atomic_load_explicit(&next_ticket, memory_order_acquire);
-    if (admitted > EU4_GFX_LIVE_CAPTURE_QUOTA) {
-        admitted = EU4_GFX_LIVE_CAPTURE_QUOTA;
-    }
     for (;;) {
         bool reserved = false;
-        for (unsigned i = 0; i < admitted; i++) {
+        for (unsigned i = 0; i < EU4_GFX_LIVE_CAPTURE_POOL; i++) {
             if (atomic_load_explicit(&tickets[i].state,
                                      memory_order_acquire) ==
                 LIVE_TICKET_RESERVED) {
@@ -434,32 +678,6 @@ static bool wait_reserved(uint64_t deadline) {
     }
 }
 
-static void terminalize_reserved(void) {
-    unsigned admitted = atomic_load_explicit(&next_ticket, memory_order_acquire);
-    if (admitted > EU4_GFX_LIVE_CAPTURE_QUOTA) {
-        admitted = EU4_GFX_LIVE_CAPTURE_QUOTA;
-    }
-    for (unsigned i = 0; i < admitted; i++) {
-        int expected = LIVE_TICKET_RESERVED;
-        (void)atomic_compare_exchange_strong_explicit(
-            &tickets[i].state, &expected, LIVE_TICKET_INCOMPLETE,
-            memory_order_acq_rel, memory_order_acquire);
-    }
-}
-
-static void terminalize_undrained(void) {
-    unsigned admitted = atomic_load_explicit(&next_ticket, memory_order_acquire);
-    if (admitted > EU4_GFX_LIVE_CAPTURE_QUOTA) {
-        admitted = EU4_GFX_LIVE_CAPTURE_QUOTA;
-    }
-    for (unsigned i = 0; i < admitted; i++) {
-        int expected = LIVE_TICKET_READY;
-        (void)atomic_compare_exchange_strong_explicit(
-            &tickets[i].state, &expected, LIVE_TICKET_UNDRAINED,
-            memory_order_acq_rel, memory_order_acquire);
-    }
-}
-
 static bool write_summary(void) {
     char partial_path[LIVE_PATH];
     int length = snprintf(partial_path, sizeof(partial_path), "%s.partial",
@@ -468,47 +686,36 @@ static bool write_summary(void) {
         return false;
     }
 
-    unsigned admitted = admitted_count();
-    unsigned incomplete = 0;
-    unsigned written = 0;
-    unsigned write_failed = 0;
-    unsigned undrained = 0;
-    unsigned reserved = 0;
-    unsigned ready = 0;
-    for (unsigned i = 0; i < EU4_GFX_LIVE_CAPTURE_QUOTA; i++) {
-        switch (atomic_load_explicit(&tickets[i].state,
-                                     memory_order_acquire)) {
-        case LIVE_TICKET_INCOMPLETE:
-            incomplete++;
-            break;
-        case LIVE_TICKET_WRITTEN:
-            written++;
-            break;
-        case LIVE_TICKET_WRITE_FAILED:
-            write_failed++;
-            break;
-        case LIVE_TICKET_UNDRAINED:
-            undrained++;
-            break;
-        case LIVE_TICKET_RESERVED:
-            reserved++;
-            break;
-        case LIVE_TICKET_READY:
-            ready++;
-            break;
-        default:
-            break;
-        }
-    }
-    unsigned completed = written + write_failed + undrained;
-    unsigned not_admitted =
-        atomic_load_explicit(&not_admitted_busy, memory_order_relaxed) +
-        atomic_load_explicit(&not_admitted_slot, memory_order_relaxed) +
-        atomic_load_explicit(&not_admitted_pointer, memory_order_relaxed) +
-        atomic_load_explicit(&not_admitted_address, memory_order_relaxed) +
-        atomic_load_explicit(&not_admitted_quota, memory_order_relaxed) +
-        atomic_load_explicit(&not_admitted_closed, memory_order_relaxed) +
+    unsigned busy =
+        atomic_load_explicit(&not_admitted_busy, memory_order_relaxed);
+    unsigned slot =
+        atomic_load_explicit(&not_admitted_slot, memory_order_relaxed);
+    unsigned pointer =
+        atomic_load_explicit(&not_admitted_pointer, memory_order_relaxed);
+    unsigned address =
+        atomic_load_explicit(&not_admitted_address, memory_order_relaxed);
+    unsigned closed =
+        atomic_load_explicit(&not_admitted_closed, memory_order_relaxed);
+    unsigned thread_limit =
         atomic_load_explicit(&not_admitted_thread_limit, memory_order_relaxed);
+    unsigned refused_buffer =
+        atomic_load_explicit(&buffer_refused, memory_order_relaxed);
+    unsigned duplicates =
+        atomic_load_explicit(&duplicates_discarded, memory_order_relaxed);
+    unsigned past_limit =
+        atomic_load_explicit(&unique_limit_discarded, memory_order_relaxed);
+    unsigned failed =
+        atomic_load_explicit(&storage_failed, memory_order_relaxed);
+    unsigned incomplete =
+        atomic_load_explicit(&incomplete_observations, memory_order_relaxed);
+    unsigned undrained =
+        atomic_load_explicit(&undrained_observations, memory_order_relaxed);
+    unsigned not_admitted =
+        busy + slot + pointer + address + closed + thread_limit;
+    unsigned complete = unique_retained + duplicates + past_limit + failed;
+    unsigned intercepted =
+        not_admitted + refused_buffer + incomplete + complete + undrained;
+    int clean = !quiescence_timeout && undrained == 0;
 
     int descriptor = open(partial_path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (descriptor < 0) {
@@ -519,43 +726,34 @@ static bool write_summary(void) {
         (void)close(descriptor);
         return false;
     }
-    fprintf(file, "EU4-GFX-LIVE-SUMMARY v1\n");
+    fprintf(file, "EU4-GFX-LIVE-SUMMARY exact-dedup/v1\n");
     fprintf(file, "session=%s\n", session_id);
     fprintf(file, "pid=%d\n", (int)getpid());
-    fprintf(file, "state=%s\n", quiescence_timeout ? "partial" : "sealed");
+    fprintf(file, "state=%s\n", clean ? "sealed" : "partial");
     fprintf(file, "closed_reason=%s\n",
             closed_reason != NULL ? closed_reason : "unknown");
     fprintf(file, "quiescence=%s\n", quiescence_timeout ? "timeout" : "ok");
     fprintf(file, "started_ns=%llu\n", (unsigned long long)started_ns);
     fprintf(file, "armed_ns=%llu\n", (unsigned long long)armed_ns);
     fprintf(file, "closed_ns=%llu\n", (unsigned long long)closed_ns);
-    fprintf(file, "quota=%u\n", EU4_GFX_LIVE_CAPTURE_QUOTA);
+    fprintf(file, "max_unique=%u\n", max_unique);
     fprintf(file, "threads=%u\n", thread_count());
-    fprintf(file, "intercepted=%u\n", admitted + not_admitted);
+    fprintf(file, "intercepted=%u\n", intercepted);
     fprintf(file, "not_admitted=%u\n", not_admitted);
-    fprintf(file, "not_admitted_busy=%u\n",
-            atomic_load_explicit(&not_admitted_busy, memory_order_relaxed));
-    fprintf(file, "not_admitted_slot=%u\n",
-            atomic_load_explicit(&not_admitted_slot, memory_order_relaxed));
-    fprintf(file, "not_admitted_pointer=%u\n",
-            atomic_load_explicit(&not_admitted_pointer, memory_order_relaxed));
-    fprintf(file, "not_admitted_address=%u\n",
-            atomic_load_explicit(&not_admitted_address, memory_order_relaxed));
-    fprintf(file, "not_admitted_quota=%u\n",
-            atomic_load_explicit(&not_admitted_quota, memory_order_relaxed));
-    fprintf(file, "not_admitted_closed=%u\n",
-            atomic_load_explicit(&not_admitted_closed, memory_order_relaxed));
-    fprintf(file, "not_admitted_thread_limit=%u\n",
-            atomic_load_explicit(&not_admitted_thread_limit,
-                                 memory_order_relaxed));
-    fprintf(file, "admitted=%u\n", admitted);
-    fprintf(file, "incomplete=%u\n", incomplete);
-    fprintf(file, "completed=%u\n", completed);
-    fprintf(file, "written=%u\n", written);
-    fprintf(file, "write_failed=%u\n", write_failed);
-    fprintf(file, "undrained=%u\n", undrained);
-    fprintf(file, "reserved=%u\n", reserved);
-    fprintf(file, "ready=%u\n", ready);
+    fprintf(file, "not_admitted_busy=%u\n", busy);
+    fprintf(file, "not_admitted_slot=%u\n", slot);
+    fprintf(file, "not_admitted_pointer=%u\n", pointer);
+    fprintf(file, "not_admitted_address=%u\n", address);
+    fprintf(file, "not_admitted_closed=%u\n", closed);
+    fprintf(file, "not_admitted_thread_limit=%u\n", thread_limit);
+    fprintf(file, "buffer_refused=%u\n", refused_buffer);
+    fprintf(file, "complete_observations=%u\n", complete);
+    fprintf(file, "unique_retained=%u\n", unique_retained);
+    fprintf(file, "duplicates_discarded=%u\n", duplicates);
+    fprintf(file, "unique_limit_discarded=%u\n", past_limit);
+    fprintf(file, "storage_failed=%u\n", failed);
+    fprintf(file, "incomplete_observations=%u\n", incomplete);
+    fprintf(file, "undrained_observations=%u\n", undrained);
     fprintf(file, "END\n");
 
     bool ok = ferror(file) == 0;
@@ -610,6 +808,7 @@ static bool write_done(const char *state) {
 
 static void close_session(const char *reason) {
     closed_reason = reason;
+    atomic_store_explicit(&accepting, false, memory_order_release);
     atomic_store_explicit(&session_state, LIVE_STATE_CLOSING,
                           memory_order_release);
     uint64_t quiesce_deadline = now_ns() + LIVE_QUIESCE_NS;
@@ -619,17 +818,19 @@ static void close_session(const char *reason) {
         quiescence_timeout = true;
     }
 
-    atomic_store_explicit(&accepting, false, memory_order_release);
-
-    terminalize_reserved();
+    quarantine(LIVE_TICKET_RESERVED);
     uint64_t drain_deadline = now_ns() + LIVE_DRAIN_NS;
-    drain_ready(drain_deadline);
-    terminalize_undrained();
+    while (drain_one(drain_deadline)) {
+    }
+    quarantine(LIVE_TICKET_READY);
+    quarantine(LIVE_TICKET_PROCESSING);
     closed_ns = now_ns();
 
+    unsigned undrained =
+        atomic_load_explicit(&undrained_observations, memory_order_relaxed);
+    bool clean = !quiescence_timeout && undrained == 0;
     bool summary_ok = write_summary();
-    (void)write_done(summary_ok ? (quiescence_timeout ? "partial" : "sealed")
-                                : "error");
+    (void)write_done(summary_ok ? (clean ? "sealed" : "partial") : "error");
     atomic_store_explicit(&session_state, LIVE_STATE_SEALED,
                           memory_order_release);
 }
@@ -654,7 +855,8 @@ static void *coordinator_main(void *argument) {
             state = LIVE_STATE_ARMED;
         }
         if (state == LIVE_STATE_ARMED) {
-            drain_ready(0);
+            while (drain_one(0)) {
+            }
             if (mode == 2) {
                 reason = "operator";
                 break;
@@ -663,10 +865,8 @@ static void *coordinator_main(void *argument) {
                 reason = "destructor";
                 break;
             }
-            if (atomic_load_explicit(&next_ticket, memory_order_acquire) >=
-                    EU4_GFX_LIVE_CAPTURE_QUOTA &&
-                tickets_terminal()) {
-                reason = "quota";
+            if (unique_retained >= max_unique && !slots_outstanding()) {
+                reason = "unique_limit";
                 break;
             }
             if (arm_time != 0 &&
@@ -694,16 +894,25 @@ static void *coordinator_main(void *argument) {
 bool eu4_gfx_live_capture_start(void *site, const char *run_directory,
                                 const char *control_path,
                                 const char *capture_session_id,
-                                unsigned seconds, bool restore) {
+                                unsigned seconds, unsigned unique_limit,
+                                bool restore) {
     if (started || site == NULL || run_directory == NULL ||
         control_path == NULL || !valid_session_id(capture_session_id) ||
-        seconds == 0) {
+        seconds == 0 || unique_limit == 0 ||
+        unique_limit > EU4_GFX_LIVE_CAPTURE_MAX_UNIQUE) {
+        return false;
+    }
+    retained_observation *table =
+        calloc(unique_limit, sizeof(*table));
+    if (table == NULL) {
         return false;
     }
     memset(threads, 0, sizeof(threads));
     memset(tickets, 0, sizeof(tickets));
+    retained = table;
+    max_unique = unique_limit;
+    unique_retained = 0;
     atomic_store(&next_thread_id, 0);
-    atomic_store(&next_ticket, 0);
     atomic_store(&active_entries, 0);
     atomic_store(&session_state, LIVE_STATE_DISARMED);
     atomic_store(&stop_requested, false);
@@ -712,9 +921,14 @@ bool eu4_gfx_live_capture_start(void *site, const char *run_directory,
     atomic_store(&not_admitted_slot, 0);
     atomic_store(&not_admitted_pointer, 0);
     atomic_store(&not_admitted_address, 0);
-    atomic_store(&not_admitted_quota, 0);
     atomic_store(&not_admitted_closed, 0);
     atomic_store(&not_admitted_thread_limit, 0);
+    atomic_store(&buffer_refused, 0);
+    atomic_store(&duplicates_discarded, 0);
+    atomic_store(&unique_limit_discarded, 0);
+    atomic_store(&storage_failed, 0);
+    atomic_store(&incomplete_observations, 0);
+    atomic_store(&undrained_observations, 0);
     quiescence_timeout = false;
     closed_reason = NULL;
     armed_ns = 0;
@@ -738,30 +952,42 @@ bool eu4_gfx_live_capture_start(void *site, const char *run_directory,
         (size_t)summary_length >= sizeof(summary_path) || done_length < 0 ||
         (size_t)done_length >= sizeof(done_path) || session_length < 0 ||
         (size_t)session_length >= sizeof(session_id)) {
+        free(retained);
+        retained = NULL;
         return false;
     }
     if (mkdir(captures_dir, 0700) != 0 && errno != EEXIST) {
+        free(retained);
+        retained = NULL;
         return false;
     }
     struct stat directory_status;
     if (stat(captures_dir, &directory_status) != 0 ||
         !S_ISDIR(directory_status.st_mode)) {
+        free(retained);
+        retained = NULL;
         return false;
     }
 
     int descriptor = open(control_path, O_RDONLY);
     if (descriptor < 0) {
+        free(retained);
+        retained = NULL;
         return false;
     }
     struct stat control_status;
     if (fstat(descriptor, &control_status) != 0 ||
         control_status.st_size < 8) {
         (void)close(descriptor);
+        free(retained);
+        retained = NULL;
         return false;
     }
     long page_value = sysconf(_SC_PAGESIZE);
     if (page_value <= 0) {
         (void)close(descriptor);
+        free(retained);
+        retained = NULL;
         return false;
     }
     control_page = (size_t)page_value;
@@ -769,6 +995,8 @@ bool eu4_gfx_live_capture_start(void *site, const char *run_directory,
     (void)close(descriptor);
     if (control_map == MAP_FAILED) {
         control_map = NULL;
+        free(retained);
+        retained = NULL;
         return false;
     }
     control_word = (_Atomic uint64_t *)control_map;
@@ -786,6 +1014,8 @@ bool eu4_gfx_live_capture_start(void *site, const char *run_directory,
         eu4_gfx_set_constant_buffer_capture_set_live(NULL);
         (void)munmap(control_map, control_page);
         control_map = NULL;
+        free(retained);
+        retained = NULL;
         return false;
     }
     started_ns = now_ns();
@@ -794,6 +1024,8 @@ bool eu4_gfx_live_capture_start(void *site, const char *run_directory,
         eu4_gfx_set_constant_buffer_capture_set_live(NULL);
         (void)munmap(control_map, control_page);
         control_map = NULL;
+        free(retained);
+        retained = NULL;
         return false;
     }
     coordinator_started = true;
@@ -814,5 +1046,7 @@ void eu4_gfx_live_capture_stop(void) {
         (void)eu4_gfx_capture_restore();
         eu4_gfx_set_constant_buffer_capture_set_live(NULL);
     }
+    free(retained);
+    retained = NULL;
     started = false;
 }

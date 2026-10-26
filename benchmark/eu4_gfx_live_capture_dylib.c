@@ -24,7 +24,7 @@
 static bool write_status(const char *run_dir, const char *state,
                          const char *session, const char *executable,
                          uintptr_t image_base, uintptr_t site,
-                         const char *error) {
+                         unsigned max_unique, const char *error) {
     if (run_dir == NULL) {
         return false;
     }
@@ -57,6 +57,7 @@ static bool write_status(const char *run_dir, const char *state,
     fprintf(file, "image_base=0x%llx\n", (unsigned long long)image_base);
     fprintf(file, "site=0x%llx\n", (unsigned long long)site);
     fprintf(file, "module=%s\n", LIVE_MODULE_SHA);
+    fprintf(file, "max_unique=%u\n", max_unique);
     fprintf(file, "error=%s\n", error != NULL ? error : "");
     fprintf(file, "END\n");
     bool ok = ferror(file) == 0;
@@ -155,6 +156,7 @@ __attribute__((constructor)) static void initialize_capture(void) {
     const char *session = getenv("EU4_GFX_CAPTURE_ID");
     const char *expected = getenv("EU4_GFX_EXPECTED_EXE");
     const char *deadline_text = getenv("EU4_GFX_CAPTURE_DEADLINE_S");
+    const char *unique_text = getenv("EU4_GFX_CAPTURE_MAX_UNIQUE");
     char actual[PATH_MAX] = {0};
     uintptr_t image_base = 0;
     uintptr_t site = 0;
@@ -162,14 +164,14 @@ __attribute__((constructor)) static void initialize_capture(void) {
 
     if (run_dir == NULL || control == NULL || session == NULL ||
         expected == NULL) {
-        (void)write_status(run_dir, "error", session, actual, 0, 0,
+        (void)write_status(run_dir, "error", session, actual, 0, 0, 0,
                            "missing-environment");
         return;
     }
     if (!attest(expected, actual, sizeof(actual), &image_base, &site,
                 &error)) {
         (void)write_status(run_dir, "error", session, actual, image_base, site,
-                           error);
+                           0, error);
         return;
     }
     unsigned deadline = 120;
@@ -178,19 +180,31 @@ __attribute__((constructor)) static void initialize_capture(void) {
         unsigned long value = strtoul(deadline_text, &end, 10);
         if (end == NULL || *end != '\0' || value == 0 || value > 3600) {
             (void)write_status(run_dir, "error", session, actual, image_base,
-                               site, "invalid-deadline");
+                               site, 0, "invalid-deadline");
             return;
         }
         deadline = (unsigned)value;
     }
+    unsigned max_unique = 64;
+    if (unique_text != NULL) {
+        char *end = NULL;
+        unsigned long value = strtoul(unique_text, &end, 10);
+        if (end == NULL || *end != '\0' || value == 0 ||
+            value > EU4_GFX_LIVE_CAPTURE_MAX_UNIQUE) {
+            (void)write_status(run_dir, "error", session, actual, image_base,
+                               site, 0, "invalid-max-unique");
+            return;
+        }
+        max_unique = (unsigned)value;
+    }
     if (!eu4_gfx_live_capture_start((void *)site, run_dir, control, session,
-                                    deadline, false)) {
+                                    deadline, max_unique, false)) {
         (void)write_status(run_dir, "error", session, actual, image_base, site,
-                           "capture-start");
+                           max_unique, "capture-start");
         return;
     }
     (void)write_status(run_dir, "installed", session, actual, image_base, site,
-                       "");
+                       max_unique, "");
 }
 
 __attribute__((destructor)) static void finalize_capture(void) {
