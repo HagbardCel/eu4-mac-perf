@@ -1,6 +1,6 @@
 # WP6 — REFERENCE CPU-path decomposition
 
-**Status:** planned (branch `wp6-reference-cpu-decomposition`).  
+**Status:** closed (2026-10-03). Phases A–D merged in PRs #12–#17. Marginal ablations were not run; reconciliation `a1dfde61` was accepted as sufficient and follow-on work went to WP7 (see the checklist below).
 **Prerequisite:** [WP5b completion diagnosis](wp5b-completion-diagnosis.md) merged (archive `f7cbf346` / `6e5d53c`).
 
 ## Problem statement

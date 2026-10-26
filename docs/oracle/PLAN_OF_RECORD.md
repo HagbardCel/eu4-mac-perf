@@ -100,7 +100,13 @@ campaign is decided after F1 is working and the operational cost of one session 
 measured. Do not silently raise PR D's quota. Replaying files after their sessions
 have ended is offline validation, not live shadow validation.
 
-### ACQ diversity-aware P5a capture (2026-10-25)
+The 64-ticket baseline in that paragraph is the historical PR-D acquisition
+approach. It does not constrain `exact-dedup/v1`.
+
+### Historical: ACQ diversity-aware P5a capture (superseded 2026-10-26)
+
+The paragraphs below are a superseded implementation plan. ACQ-1, ACQ-2, and the
+E1-v2 adapter are not authorization to start work.
 
 **ACQ-0** freezes [ACQ_DIVERSITY_V1.md](ACQ_DIVERSITY_V1.md): diversity-aware admission
 for `_GfxSetConstantBuffer` under `EU4-GFX-LIVE-SUMMARY v2` (`acq-diversity/v1`).
@@ -121,12 +127,15 @@ first 64 invocations. P4 invocation-ledger names are not reused for v2 counters.
 Integrated offline gate after both merge: native capture vs ACQ-2’s Python model
 (contention, failure injection, counter reconciliation, v1 regression).
 
-Those drafts are not the implementation path. Future sessions follow
-[EXACT_DEDUP_V1.md](EXACT_DEDUP_V1.md) (`exact-dedup/v1`): a reusable 64-slot pool,
-exact canonical-byte dedup, and a runtime `max_unique` of 1..4096. Drafts #92 and
-#93 stay open and superseded. `ACQ_DIVERSITY_V1.md` is not edited. No EU IV launch
-is authorized by this replacement. E1 integration is later, after the new summary
-is reportable on its own.
+### Active P5a recorder — `exact-dedup/v1`
+
+The sole active P5a recorder specification is
+[EXACT_DEDUP_V1.md](EXACT_DEDUP_V1.md) (`exact-dedup/v1`), merged in PR #94
+(`7b17c83`): a reusable 64-slot pool, exact canonical-byte dedup, and a runtime
+`max_unique` of 1..4096. Offline tests passed. No EU IV launch is authorized.
+E1 integration is later, after the new summary is reportable on its own.
+`ACQ_DIVERSITY_V1.md` is not edited. PRs #92 and #93 are superseded, will not be
+merged, and are scheduled for administrative closure.
 
 ### Minimum frozen contracts
 
@@ -140,7 +149,9 @@ is reportable on its own.
 ### Branch and merge discipline
 
 - Branch from the amendment merge commit, not `09223f8`, so every agent sees the
-  same frozen contracts and work order.
+  same frozen contracts and work order. That instruction records the base used for
+  the E–G amendment. It is not the base for new work; new work branches from
+  current `main`.
 - A work order owns its paths. Frozen contracts and certified P3 components are
   read-only; a required change is a focused contract amendment, not a branch-local
   edit.
