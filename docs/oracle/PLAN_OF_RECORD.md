@@ -41,10 +41,12 @@ Tier 1. **RE3** (automatic in-game replacement) is deferred until both tiers suc
 PR B is observation-only. **P4.11/P5b do not block P5a.**
 
 Every added abstraction must map to a demonstrated false-positive risk or an
-essential scaling requirement. Deliberately deferred: automatic memory-graph
-discovery, general dynamic access tracing, frame-level replay/P4.11, live shadow
-against real game objects, automatic in-game replacement/RE3, multi-function
-campaigns before the G pilot (**PR H is proposed only**), and new agent frameworks.
+essential scaling requirement. Deliberately deferred: frame-level replay/P4.11,
+live shadow against real game objects, automatic in-game replacement/RE3,
+multi-function campaigns before the G pilot (**PR H is proposed only**), and
+new agent frameworks. Automatic memory-graph discovery and general dynamic
+access tracing remain deferred except for the bounded synthetic stage in
+[Trace and fixture stage (2026-10-26)](#trace-and-fixture-stage-2026-10-26).
 
 ## Parallel development (2026-10-24)
 
@@ -145,6 +147,7 @@ merged, and are scheduled for administrative closure.
 | Certification result | Identity, session/fixture admission, candidate evaluation, coverage and promotion | Function-specific extensions |
 | Shadow invocation | Owned snapshot handoff, identity, result and failure vocabulary | Live throughput architecture |
 | Function package | G1's documented deliverable boundary | Generic schema for future functions |
+| Execution observation | [`execution-observation/v1`](TRACE_V1.md): one schema, two producers, one consumer | Branch-local event extensions; E1 admission; native replay of EU IV functions |
 
 ### Branch and merge discipline
 
@@ -162,6 +165,87 @@ merged, and are scheduled for administrative closure.
   an architectural decision before adding a subsystem) and **evidence limitation**
   (finish the independently testable part and report the blocked acceptance
   honestly).
+
+## Trace and fixture stage (2026-10-26)
+
+This stage asks whether observed machine behavior can become a trustworthy
+fixture. It does not ask whether that can be done inside EU IV. A passing
+synthetic QBDI trace is not evidence that interception works in the translated
+game process.
+
+The milestone is one synthetic leaf and one synthetic caller–callee pair. It
+does not reconstruct `_GfxForceWireframe`, `_GfxSetPrimitiveType`, or
+`GetOpenGLPrimitiveType`. It does not add an agent, a function-packaging SDK,
+or a second fixture format. The canonical schema is
+[`execution-observation/v1`](TRACE_V1.md). Later branches do not extend it
+locally. `reconstruction_trace/` stays outside `oracle/` and does not retrofit
+`FUNCTION-CAPTURE v1`, replay, or E1.
+
+Showing that QBDI can trace, and that a builder can transform handwritten
+traces, is not enough. If TR0 supports QBDI, one actual QBDI trace must become
+a qualified fixture and pass a fresh replay
+(`tests/test_trace_qbdi_fixture.py`). If TR0 is unsupported, that integration
+is blocked and this definition of done is amended in the same decision. A
+Ghidra trace does not complete TR0.
+
+### Authorized offline work
+
+After this amendment merges, **TR0**, **TR1**, and **INV** may proceed in
+separate worktrees. **TR2** composition may start from handwritten traces once
+TR1's schema implementation is accepted. Its QBDI integration waits for a
+supported TR0 producer, or for the explicit unsupported decision. Work orders:
+[TR0](work-orders/TR0.md), [TR1](work-orders/TR1.md), [TR2](work-orders/TR2.md),
+[INV](work-orders/INV.md).
+
+This amendment does not start F2, G2, G3b, G4, or H1. G2 has not started. G2
+retains its existing RE0 handoff and authorization gate.
+`execution-observation/v1` may be used as upstream behavioral evidence or
+fixture input. Any change to G2's existing capture-closure or replay-adapter
+contract requires an explicit amendment when G2 starts. This PR does not edit
+the frozen `_GfxForceWireframe` package. G3b stays gated. E1 does not admit
+these traces. There is no G2a package.
+
+### Frozen for this stage
+
+Read-only: `oracle/function/**` (including `fixture.py`), `oracle/recorder/**`,
+`oracle/certify/**`, `oracle/shadow/**`, `oracle/function_agent/**`,
+`oracle/slice/**`, `FUNCTION-CAPTURE v1`, PR-D session
+`gfx-live-20261025T155406Z`, E1 policies, P3,
+`reverse_engineering/target.json`, and the existing RE0–RE2 artifacts under
+`analysis/reconstruction/_GfxSetConstantBuffer/` and
+`analysis/reconstruction/_GfxForceWireframe/`. No launch path is added to
+`benchmark/eu4_gfx_live_capture.py`.
+
+### TR3 gate — not authorized
+
+TR3 would be a separately authorized experiment: a preselected handful of
+original `_GfxSetConstantBuffer` invocations, with entry and exit state, memory
+events, completeness, one native-derived fixture replayed against the existing
+qualified reconstruction, no dropped events, and overhead measured against a
+budget taken from the TR0 receipt. This section is the gate text. It is not a
+work order and it authorizes no EU IV launch, injection, live trace, or
+replacement.
+
+### Definition of done
+
+- An auditable QBDI/Rosetta receipt, or an explicit unsupported decision. A
+  Ghidra substitution does not complete TR0.
+- When QBDI is supported, one fixture derived from an actual QBDI trace, using
+  the generic harness inventory and no function-specific dependency map. When
+  QBDI is unsupported, this item is blocked and this list is revised in that
+  decision.
+- Fresh execution of the original synthetic function matches the independent
+  expected observations, including a stored pointer relocated to a new base.
+- A missing input and an incomplete trace are rejected.
+  `expected_accesses_match` alone does not qualify a fixture.
+- The original and reconstructed caller–callee pair agree, including one direct
+  call and one indirect call. A defective callee produces a reproducible
+  mismatch. The invalidated object is the validation result.
+- A bounded readiness shortlist joined by pinned address. An unresolved or
+  unvisited edge is not a ready leaf.
+- The P-code importer checks the frozen receipt, labels `value_source`, and
+  fabricates no load value. It does not execute the receipt.
+- PR-D, E1, P3, and existing RE0–RE2 evidence are unchanged.
 
 ## Invocation accounting (P4)
 
