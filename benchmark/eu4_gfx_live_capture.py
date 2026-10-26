@@ -57,6 +57,9 @@ HEADERS = (
 SCENARIOS = {"live:length-from-buffer", "live:explicit-length"}
 EPOCH = "p5a-live"
 SUMMARY_HEADER = "EU4-GFX-LIVE-SUMMARY v1"
+EXACT_SUMMARY = "EU4-GFX-LIVE-SUMMARY exact-dedup/v1"
+MAX_UNIQUE_LIMIT = 4096
+CANON_REGIONS = ("handle", "ctx", "canary-before", "canary-after", "buffer")
 STARTUP_HEADER = "EU4-GFX-LIVE-STARTUP v1"
 DONE_HEADER = "EU4-GFX-LIVE-DONE v1"
 VENICE_FIXTURE = ROOT / "fixtures/venice_paused.eu4"
@@ -623,16 +626,18 @@ def _arm_and_seal_capture(
     captures: Path,
     wait_seconds: int,
     deadline_seconds: int,
+    max_unique: int,
 ) -> None:
     _write_control(control, 1)
-    print("Capture is armed. Quota is 64; the session closes on quota or deadline.")
+    print(f"Capture is armed. max_unique is {max_unique}; "
+          "the session closes on that limit or the deadline.")
     done = run_dir / "session.done"
     wait_limit = max(1, min(wait_seconds, deadline_seconds - 10))
     end = time.monotonic() + wait_limit
     while time.monotonic() < end:
         if done.is_file():
             break
-        if len(list(captures.glob("*.capture"))) >= QUOTA:
+        if len(list(captures.glob("*.capture"))) >= max_unique:
             break
         if game.poll() is not None:
             break
@@ -651,6 +656,7 @@ def _run_auto_venice(
     wait_seconds: int,
     *,
     allow_unfocused_venice: bool = False,
+    max_unique: int = 64,
 ) -> dict:
     output_root = output.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -685,7 +691,7 @@ def _run_auto_venice(
         "control": str(control),
         "deadline_seconds": deadline_seconds,
         "wait_seconds": wait_seconds,
-        "quota": QUOTA,
+        "max_unique": max_unique,
         "acceptance_qualified": ACCEPTANCE,
         "gog": evidence["gog"],
         "descriptor_sha256": evidence["descriptor_sha256"],
@@ -729,6 +735,7 @@ def _run_auto_venice(
                 "EU4_GFX_CAPTURE_ID": session_id,
                 "EU4_GFX_EXPECTED_EXE": str(base.GOG_EXE),
                 "EU4_GFX_CAPTURE_DEADLINE_S": str(deadline_seconds),
+                "EU4_GFX_CAPTURE_MAX_UNIQUE": str(max_unique),
             })
             with (run_dir / "game.stdout").open("wb") as stdout, (
                     run_dir / "game.stderr").open("wb") as stderr:
@@ -758,7 +765,7 @@ def _run_auto_venice(
                 raise LiveError("The expected GOG EU IV process is not running")
             metadata["armed_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
             _arm_and_seal_capture(control, game, run_dir, captures,
-                                  wait_seconds, deadline_seconds)
+                                  wait_seconds, deadline_seconds, max_unique)
             sealed = True
         except (LiveError, base.BenchmarkError, OSError, KeyboardInterrupt) as exc:
             metadata["status"] = "incomplete"
@@ -843,7 +850,8 @@ def _run_auto_venice(
 def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
         wait_seconds: int = 90, authorized: bool = False,
         auto_venice: bool = False,
-        allow_unfocused_venice: bool = False) -> dict:
+        allow_unfocused_venice: bool = False,
+        max_unique: int = 64) -> dict:
     if not authorized:
         raise LiveError("Live launch requires the explicit --authorize-live flag")
     if auto_venice and save is not None:
@@ -851,11 +859,13 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
     if allow_unfocused_venice and not auto_venice:
         raise LiveError(
             "--allow-unfocused-venice requires --auto-venice")
+    max_unique = validate_max_unique(max_unique)
     evidence = preflight(save, auto_venice=auto_venice)
     if auto_venice:
         return _run_auto_venice(
             output, evidence, deadline_seconds, wait_seconds,
-            allow_unfocused_venice=allow_unfocused_venice)
+            allow_unfocused_venice=allow_unfocused_venice,
+            max_unique=max_unique)
     focus_bin, focus_build_error = _try_build_focus_helper()
     save_path = Path(evidence["save"])
     save_hash = evidence["save_sha256"]
@@ -885,7 +895,7 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
         "control": str(control),
         "deadline_seconds": deadline_seconds,
         "wait_seconds": wait_seconds,
-        "quota": QUOTA,
+        "max_unique": max_unique,
         "acceptance_qualified": ACCEPTANCE,
         "gog": evidence["gog"],
         "descriptor_sha256": evidence["descriptor_sha256"],
@@ -908,6 +918,7 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
         "EU4_GFX_CAPTURE_ID": session_id,
         "EU4_GFX_EXPECTED_EXE": str(base.GOG_EXE),
         "EU4_GFX_CAPTURE_DEADLINE_S": str(deadline_seconds),
+        "EU4_GFX_CAPTURE_MAX_UNIQUE": str(max_unique),
     })
     game: subprocess.Popen | None = None
     try:
@@ -957,7 +968,7 @@ def run(output: Path, save: Path | None = None, deadline_seconds: int = 120,
         metadata["armed_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
         metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
         _arm_and_seal_capture(control, game, run_dir, captures,
-                              wait_seconds, deadline_seconds)
+                              wait_seconds, deadline_seconds, max_unique)
 
         after_hash = base.sha256(save_path)
         metadata["save_after_sha256"] = after_hash
@@ -993,8 +1004,157 @@ def _relpath(path: Path, root: Path) -> str:
         return str(path)
 
 
+def validate_max_unique(value: int) -> int:
+    if (not isinstance(value, int) or isinstance(value, bool) or
+            value < 1 or value > MAX_UNIQUE_LIMIT):
+        raise LiveError(
+            f"--max-unique must be an integer from 1 to {MAX_UNIQUE_LIMIT}")
+    return value
+
+
+def canonical_observation(parsed: dict) -> bytes:
+    """Rebuild ``eu4-exact-dedup-canon/v1`` from one parsed transcript."""
+    name = parsed["capture"]["function"].encode("utf-8")
+    out = bytearray(b"EXDEDUP1")
+    out += struct.pack("<H", len(name))
+    out += name
+    for carrier in ("RDI", "RSI", "RCX", "R9"):
+        out += struct.pack("<Q", parsed["carriers"][carrier]["value"])
+    regions = {(item["name"], item["phase"]): item for item in parsed["regions"]}
+    out.append(1 if ("buffer", "pre") in regions else 0)
+    for region_name in CANON_REGIONS:
+        pre = regions.get((region_name, "pre"))
+        post = regions.get((region_name, "post"))
+        if pre is None:
+            out.append(0)
+            continue
+        blob = pre["bytes"]
+        out.append(1)
+        out += struct.pack("<QH", pre["address"], len(blob))
+        out += blob
+        out += post["bytes"]
+    out += struct.pack("<Q", parsed["outcome"]["value"])
+    return bytes(out)
+
+
+def report_exact(run_dir: Path) -> dict:
+    """Check an exact-dedup summary. Retained transcripts must be distinct.
+
+    Discarded observations are not on disk, so this cannot prove they were
+    duplicates. Historical v1 sessions never enter this function.
+    """
+    run_dir = run_dir.expanduser().resolve()
+    problems: list[str] = []
+
+    def add_problem(message: str) -> None:
+        problems.append(message)
+
+    try:
+        summary = _parse_table(run_dir / "summary.native", EXACT_SUMMARY)
+    except (LiveError, OSError) as exc:
+        return {"status": "failed", "qualified": 0, "unqualified": 0,
+                "malformed": [], "problems": [str(exc)]}
+    try:
+        done = _parse_table(run_dir / "session.done", DONE_HEADER)
+    except (LiveError, OSError) as exc:
+        done = None
+        add_problem(str(exc))
+    startup_path = run_dir / "startup.status"
+    if startup_path.is_file():
+        try:
+            startup = _parse_table(startup_path, STARTUP_HEADER)
+            if startup.get("max_unique") != summary.get("max_unique"):
+                add_problem("Startup max_unique does not match the summary")
+        except LiveError as exc:
+            add_problem(str(exc))
+
+    keys = (
+        "max_unique", "intercepted", "not_admitted", "not_admitted_busy",
+        "not_admitted_slot", "not_admitted_pointer", "not_admitted_address",
+        "not_admitted_closed", "not_admitted_thread_limit", "buffer_refused",
+        "complete_observations", "unique_retained", "duplicates_discarded",
+        "unique_limit_discarded", "storage_failed", "incomplete_observations",
+        "undrained_observations")
+    values: dict[str, int] = {}
+    try:
+        values = {key: _integer(summary, key) for key in keys}
+    except LiveError as exc:
+        add_problem(str(exc))
+    if values:
+        if not 1 <= values["max_unique"] <= MAX_UNIQUE_LIMIT:
+            add_problem("max_unique is outside 1..4096")
+        if values["unique_retained"] > values["max_unique"]:
+            add_problem("unique_retained exceeds max_unique")
+        complete = (values["unique_retained"] + values["duplicates_discarded"] +
+                    values["unique_limit_discarded"] + values["storage_failed"])
+        if values["complete_observations"] != complete:
+            add_problem("complete_observations does not match its parts")
+        intercepted = (values["not_admitted"] + values["buffer_refused"] +
+                       values["incomplete_observations"] + complete +
+                       values["undrained_observations"])
+        if values["intercepted"] != intercepted:
+            add_problem("intercepted does not match its parts")
+        refusals = (values["not_admitted_busy"] + values["not_admitted_slot"] +
+                    values["not_admitted_pointer"] +
+                    values["not_admitted_address"] +
+                    values["not_admitted_closed"] +
+                    values["not_admitted_thread_limit"])
+        if values["not_admitted"] != refusals:
+            add_problem("not_admitted does not match its parts")
+        if values["undrained_observations"] != 0 or summary.get("state") != "sealed":
+            add_problem("Session is not cleanly sealed")
+        if summary.get("quiescence") != "ok":
+            add_problem("Quiescence timed out")
+    if done is not None and done.get("state") != summary.get("state"):
+        add_problem("Done marker does not match the summary state")
+    if list(run_dir.rglob("*.partial")):
+        add_problem("A partial file survived the session")
+
+    fingerprints: list[bytes] = []
+    malformed: list[dict] = []
+    captures = run_dir / "captures"
+    files = sorted(captures.glob("*.capture")) if captures.is_dir() else []
+    expected = values.get("unique_retained")
+    if expected is not None and len(files) != expected:
+        add_problem("Retained file count does not match unique_retained")
+    indexes: set[int] = set()
+    session = summary.get("session")
+    for path in files:
+        prefix = f"{session}."
+        stem = path.name[:-len(".capture")]
+        ticket_text = stem[len(prefix):] if stem.startswith(prefix) else ""
+        if (not ticket_text.isascii() or not ticket_text.isdigit() or
+                str(int(ticket_text)) != ticket_text):
+            malformed.append({"file": path.name, "error": "Unexpected filename"})
+            continue
+        indexes.add(int(ticket_text))
+        try:
+            parsed = fixture.parse_capture(path.read_text(encoding="utf-8"))
+            fingerprints.append(canonical_observation(parsed))
+        except (OSError, fixture.FixtureError, ValueError, struct.error) as exc:
+            malformed.append({"file": path.name, "error": str(exc)})
+    if expected is not None and indexes != set(range(expected)):
+        add_problem("Retained filenames are not 0..unique_retained-1")
+    if len(fingerprints) != len(set(fingerprints)):
+        add_problem("Retained canonical observations are not mutually distinct")
+    for item in malformed:
+        add_problem(f"Malformed transcript {item['file']}: {item['error']}")
+
+    status = "accepted" if not problems else "failed"
+    return {"status": status, "qualified": len(fingerprints),
+            "unqualified": 0, "malformed": malformed, "problems": problems,
+            "max_unique": summary.get("max_unique"),
+            "unique_retained": summary.get("unique_retained")}
+
+
 def report(run_dir: Path) -> dict:
     run_dir = run_dir.expanduser().resolve()
+    try:
+        first = (run_dir / "summary.native").read_text(encoding="utf-8").splitlines()[0].strip()
+    except (OSError, IndexError):
+        first = ""
+    if first == EXACT_SUMMARY:
+        return report_exact(run_dir)
     problems: list[str] = []
     gates: dict[str, bool] = {"pids": False}
     summary: dict[str, str] | None = None
@@ -1404,6 +1564,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--output", type=Path, required=True)
     run_parser.add_argument("--save", type=Path, default=None)
     run_parser.add_argument("--deadline", type=int, default=120)
+    run_parser.add_argument("--max-unique", type=int, default=64)
     run_parser.add_argument("--wait", type=int, default=90)
     run_parser.add_argument("--authorize-live", action="store_true")
     run_parser.add_argument("--auto-venice", action="store_true")
@@ -1421,7 +1582,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "run":
             result = run(args.output, args.save, args.deadline, args.wait,
                          args.authorize_live, args.auto_venice,
-                         args.allow_unfocused_venice)
+                         args.allow_unfocused_venice,
+                         max_unique=args.max_unique)
             return 0 if result["status"] == "accepted" else 1
         result = report(args.run_dir)
         print(json.dumps({

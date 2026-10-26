@@ -193,6 +193,10 @@ static bool write_capture(void) {
     return ok && closed == 0;
 }
 
+const char *eu4_gfx_set_constant_buffer_function_id(void) {
+    return function_id;
+}
+
 void eu4_gfx_set_constant_buffer_capture_thread_init(void) {
     if (live != NULL && live->thread_claim != NULL) {
         (void)live->thread_claim();

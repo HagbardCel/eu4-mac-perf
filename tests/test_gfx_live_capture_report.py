@@ -354,6 +354,14 @@ class GfxLiveReportTests(unittest.TestCase):
         self.assertEqual(result["status"], "insufficient")
         self.assertEqual(result["qualified"], 0)
 
+    def test_max_unique_range_is_rejected_before_launch(self) -> None:
+        self.assertEqual(live.validate_max_unique(64), 64)
+        self.assertEqual(live.validate_max_unique(4096), 4096)
+        with self.assertRaises(live.LiveError):
+            live.validate_max_unique(0)
+        with self.assertRaises(live.LiveError):
+            live.validate_max_unique(4097)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -88,6 +88,7 @@ typedef struct {
     bool safe_read;
 } eu4_gfx_capture_live_ops;
 
+const char *eu4_gfx_set_constant_buffer_function_id(void);
 void eu4_gfx_set_constant_buffer_capture_thread_init(void);
 void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame);
 void eu4_gfx_set_constant_buffer_capture_exit(eu4_gfx_capture_frame *frame);

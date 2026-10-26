@@ -69,7 +69,8 @@ class GfxLiveCaptureTests(unittest.TestCase):
     def _runner(self) -> list[str]:
         return []
 
-    def _run(self, mode: str, *, read_only_captures: bool = False
+    def _run(self, mode: str, *, read_only_captures: bool = False,
+             max_unique: int | None = None
              ) -> tuple[Path, subprocess.CompletedProcess[str]]:
         root = Path(tempfile.mkdtemp(prefix=f"gfx-live-{mode}-"))
         self.addCleanup(shutil.rmtree, root, True)
@@ -79,16 +80,22 @@ class GfxLiveCaptureTests(unittest.TestCase):
             captures.chmod(0o500)
             self.addCleanup(captures.chmod, 0o700)
         control = root / "control.bin"
+        env = os.environ.copy()
+        if max_unique is not None:
+            env["EU4_GFX_TEST_MAX_UNIQUE"] = str(max_unique)
         result = subprocess.run(
             [*self._runner(), str(self.harness), mode, str(root),
              str(control)],
             capture_output=True, text=True, check=False, timeout=90,
+            env=env,
         )
         return root, result
 
     def _summary(self, root: Path) -> dict[str, str]:
-        return live._parse_table(root / "summary.native",
-                                 live.SUMMARY_HEADER)
+        return live._parse_table(root / "summary.native", live.EXACT_SUMMARY)
+
+    def _captures(self, root: Path) -> list[Path]:
+        return list((root / "captures").glob("*.capture"))
 
     def test_admission_predicates_account_exactly(self) -> None:
         root, result = self._run("accept")
@@ -102,32 +109,27 @@ class GfxLiveCaptureTests(unittest.TestCase):
         self.assertEqual(summary["not_admitted_slot"], "1")
         self.assertEqual(summary["not_admitted_pointer"], "1")
         self.assertEqual(summary["not_admitted_address"], "0")
-        self.assertEqual(summary["admitted"], "4")
-        self.assertEqual(summary["incomplete"], "0")
-        self.assertEqual(summary["completed"], "4")
-        self.assertEqual(summary["written"], "4")
-        self.assertEqual(summary["write_failed"], "0")
-        self.assertEqual(summary["undrained"], "0")
-        self.assertEqual(summary["reserved"], "0")
-        self.assertEqual(summary["ready"], "0")
+        self.assertEqual(summary["complete_observations"], "4")
+        self.assertEqual(summary["unique_retained"], "3")
+        self.assertEqual(summary["duplicates_discarded"], "1")
+        self.assertEqual(summary["incomplete_observations"], "0")
+        self.assertEqual(summary["storage_failed"], "0")
+        self.assertEqual(summary["undrained_observations"], "0")
+        self.assertEqual(summary["buffer_refused"], "0")
         self.assertEqual(
             int(summary["intercepted"]),
-            int(summary["admitted"]) + int(summary["not_admitted"]))
-        self.assertEqual(
-            int(summary["admitted"]),
-            int(summary["incomplete"]) + int(summary["completed"]))
-        self.assertEqual(
-            int(summary["completed"]),
-            int(summary["written"]) + int(summary["write_failed"]) +
-            int(summary["undrained"]))
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 4)
+            int(summary["not_admitted"]) + int(summary["buffer_refused"]) +
+            int(summary["incomplete_observations"]) +
+            int(summary["complete_observations"]) +
+            int(summary["undrained_observations"]))
+        self.assertEqual(len(self._captures(root)), 3)
 
     def test_hook_produces_live_a2_fixtures(self) -> None:
         root, result = self._run("hook")
         self.assertEqual(result.returncode, 0,
                          msg=result.stderr or result.stdout)
         summary = self._summary(root)
-        self.assertEqual(summary["written"], "2")
+        self.assertEqual(summary["unique_retained"], "2")
         descriptor = fixture.load_descriptor()
         transcripts = sorted((root / "captures").glob("*.capture"))
         self.assertEqual(len(transcripts), 2)
@@ -149,46 +151,42 @@ class GfxLiveCaptureTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0,
                          msg=result.stderr or result.stdout)
         summary = self._summary(root)
-        self.assertEqual(summary["admitted"], "2")
-        self.assertEqual(summary["incomplete"], "2")
-        self.assertEqual(summary["completed"], "0")
-        self.assertEqual(summary["written"], "0")
-        self.assertEqual(summary["write_failed"], "0")
-        self.assertEqual(summary["undrained"], "0")
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+        self.assertEqual(summary["incomplete_observations"], "2")
+        self.assertEqual(summary["complete_observations"], "0")
+        self.assertEqual(summary["unique_retained"], "0")
+        self.assertEqual(summary["storage_failed"], "0")
+        self.assertEqual(summary["undrained_observations"], "0")
+        self.assertEqual(len(self._captures(root)), 0)
 
     def test_extent_crossing_protected_page_is_incomplete(self) -> None:
         root, result = self._run("extent-cross")
         self.assertEqual(result.returncode, 0,
                          msg=result.stderr or result.stdout)
         summary = self._summary(root)
-        self.assertEqual(summary["admitted"], "1")
-        self.assertEqual(summary["incomplete"], "1")
-        self.assertEqual(summary["completed"], "0")
-        self.assertEqual(summary["written"], "0")
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+        self.assertEqual(summary["incomplete_observations"], "1")
+        self.assertEqual(summary["complete_observations"], "0")
+        self.assertEqual(summary["unique_retained"], "0")
+        self.assertEqual(len(self._captures(root)), 0)
 
     def test_unreadable_required_buffer_is_incomplete(self) -> None:
         root, result = self._run("buffer-guard")
         self.assertEqual(result.returncode, 0,
                          msg=result.stderr or result.stdout)
         summary = self._summary(root)
-        self.assertEqual(summary["admitted"], "1")
-        self.assertEqual(summary["incomplete"], "1")
-        self.assertEqual(summary["completed"], "0")
-        self.assertEqual(summary["written"], "0")
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+        self.assertEqual(summary["incomplete_observations"], "1")
+        self.assertEqual(summary["complete_observations"], "0")
+        self.assertEqual(summary["unique_retained"], "0")
+        self.assertEqual(len(self._captures(root)), 0)
 
     def test_unreadable_exit_state_is_incomplete(self) -> None:
         root, result = self._run("exit-guard")
         self.assertEqual(result.returncode, 0,
                          msg=result.stderr or result.stdout)
         summary = self._summary(root)
-        self.assertEqual(summary["admitted"], "1")
-        self.assertEqual(summary["incomplete"], "1")
-        self.assertEqual(summary["completed"], "0")
-        self.assertEqual(summary["written"], "0")
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+        self.assertEqual(summary["incomplete_observations"], "1")
+        self.assertEqual(summary["complete_observations"], "0")
+        self.assertEqual(summary["unique_retained"], "0")
+        self.assertEqual(len(self._captures(root)), 0)
 
     def test_thread_table_exhaustion_refuses_once(self) -> None:
         root, result = self._run("thread-full")
@@ -199,9 +197,9 @@ class GfxLiveCaptureTests(unittest.TestCase):
         self.assertEqual(summary["not_admitted_slot"], "63")
         self.assertEqual(summary["not_admitted_thread_limit"], "1")
         self.assertEqual(summary["not_admitted"], "64")
-        self.assertEqual(summary["admitted"], "0")
-        self.assertEqual(summary["written"], "0")
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+        self.assertEqual(summary["unique_retained"], "0")
+        self.assertEqual(summary["complete_observations"], "0")
+        self.assertEqual(len(self._captures(root)), 0)
 
     def test_close_waits_for_reserved_capture_and_nested_exit(self) -> None:
         root, result = self._run("nested")
@@ -210,39 +208,102 @@ class GfxLiveCaptureTests(unittest.TestCase):
         summary = self._summary(root)
         self.assertEqual(summary["state"], "sealed")
         self.assertEqual(summary["quiescence"], "ok")
-        self.assertEqual(summary["admitted"], "1")
-        self.assertEqual(summary["written"], "1")
-        self.assertEqual(summary["incomplete"], "0")
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 1)
+        self.assertEqual(summary["unique_retained"], "1")
+        self.assertEqual(summary["duplicates_discarded"], "0")
+        self.assertEqual(summary["incomplete_observations"], "0")
+        self.assertEqual(len(self._captures(root)), 1)
 
-    def test_quota_consumes_no_more_than_64_tickets(self) -> None:
-        root, result = self._run("quota")
+    def test_identical_calls_retain_one_record(self) -> None:
+        root, result = self._run("identical")
         self.assertEqual(result.returncode, 0,
                          msg=result.stderr or result.stdout)
         summary = self._summary(root)
-        self.assertEqual(summary["quota"], "64")
-        self.assertEqual(summary["admitted"], "64")
-        self.assertEqual(summary["written"], "64")
-        self.assertEqual(summary["not_admitted_quota"], "0")
-        self.assertEqual(summary["reserved"], "0")
-        self.assertEqual(summary["ready"], "0")
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 64)
-        names = {path.name for path in (root / "captures").glob("*.capture")}
-        self.assertEqual(len(names), 64)
+        self.assertEqual(summary["unique_retained"], "1")
+        self.assertEqual(summary["duplicates_discarded"], "99")
+        self.assertEqual(summary["complete_observations"], "100")
+        self.assertEqual(summary["buffer_refused"], "0")
+        self.assertEqual(len(self._captures(root)), 1)
 
-    def test_quota_overflow_refuses_the_65th_invocation(self) -> None:
-        root, result = self._run("quota-overflow")
+    def test_distinct_pre_state_byte_retains_two(self) -> None:
+        root, result = self._run("distinct-byte")
         self.assertEqual(result.returncode, 0,
                          msg=result.stderr or result.stdout)
         summary = self._summary(root)
-        self.assertEqual(summary["quota"], "64")
-        self.assertEqual(summary["admitted"], "64")
-        self.assertEqual(summary["written"], "64")
-        self.assertEqual(summary["not_admitted_quota"], "1")
+        self.assertEqual(summary["unique_retained"], "2")
+        self.assertEqual(summary["duplicates_discarded"], "0")
+        self.assertEqual(len(self._captures(root)), 2)
+
+    def test_hash_collision_does_not_discard_distinct_bytes(self) -> None:
+        root, result = self._run("collide")
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["unique_retained"], "2")
+        self.assertEqual(summary["duplicates_discarded"], "0")
+        self.assertEqual(len(self._captures(root)), 2)
+
+    def test_max_unique_128_with_smaller_pool(self) -> None:
+        root, result = self._run("many-unique", max_unique=128)
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["max_unique"], "128")
+        self.assertEqual(summary["unique_retained"], "128")
+        self.assertEqual(summary["buffer_refused"], "0")
+        self.assertEqual(len(self._captures(root)), 128)
+        report = live.report(root)
+        self.assertEqual(report["status"], "accepted", msg=report["problems"])
+
+    def test_in_flight_uniques_past_the_limit_are_discarded(self) -> None:
+        root, result = self._run("inflight-limit", max_unique=1)
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["max_unique"], "1")
+        self.assertEqual(summary["unique_retained"], "1")
+        self.assertEqual(summary["unique_limit_discarded"], "2")
+        self.assertEqual(summary["not_admitted_closed"], "1")
+        self.assertEqual(summary["state"], "sealed")
+        self.assertEqual(len(self._captures(root)), 1)
+
+    def test_full_pool_refuses_without_consuming_uniques(self) -> None:
+        root, result = self._run("pool-full")
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["buffer_refused"], "1")
+        self.assertEqual(summary["unique_retained"], "1")
+        self.assertEqual(summary["duplicates_discarded"], "63")
+        self.assertEqual(summary["complete_observations"], "64")
         self.assertEqual(summary["intercepted"], "65")
-        self.assertEqual(summary["reserved"], "0")
-        self.assertEqual(summary["ready"], "0")
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 64)
+        self.assertEqual(len(self._captures(root)), 1)
+
+    def test_failed_write_then_retry_retains_once(self) -> None:
+        root, result = self._run("retry-write")
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        summary = self._summary(root)
+        self.assertEqual(summary["storage_failed"], "1")
+        self.assertEqual(summary["unique_retained"], "1")
+        self.assertEqual(summary["duplicates_discarded"], "0")
+        self.assertEqual(len(self._captures(root)), 1)
+        self.assertEqual(list((root / "captures").glob("*.partial")), [])
+
+    def test_native_and_python_canonical_bytes_match(self) -> None:
+        root, result = self._run("canon")
+        self.assertEqual(result.returncode, 0,
+                         msg=result.stderr or result.stdout)
+        captures = sorted(self._captures(root))
+        self.assertEqual(len(captures), 2)
+        scenarios = set()
+        for path in captures:
+            parsed = fixture.parse_capture(path.read_text(encoding="utf-8"))
+            scenarios.add(parsed["capture"]["scenario"])
+            sidecar = path.with_suffix(".canon")
+            self.assertEqual(sidecar.read_bytes(),
+                             live.canonical_observation(parsed))
+        self.assertEqual(scenarios, {"live:length-from-buffer",
+                                     "live:explicit-length"})
 
     def test_late_publication_loses_to_terminalization(self) -> None:
         root, result = self._run("late-publish")
@@ -251,11 +312,11 @@ class GfxLiveCaptureTests(unittest.TestCase):
         summary = self._summary(root)
         self.assertEqual(summary["state"], "partial")
         self.assertEqual(summary["quiescence"], "timeout")
-        self.assertEqual(summary["admitted"], "1")
-        self.assertEqual(summary["incomplete"], "1")
-        self.assertEqual(summary["completed"], "0")
-        self.assertEqual(summary["written"], "0")
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+        self.assertEqual(summary["undrained_observations"], "1")
+        self.assertEqual(summary["incomplete_observations"], "0")
+        self.assertEqual(summary["complete_observations"], "0")
+        self.assertEqual(summary["unique_retained"], "0")
+        self.assertEqual(len(self._captures(root)), 0)
 
     def test_thread_table_names_capturing_threads(self) -> None:
         root, result = self._run("threads")
@@ -263,8 +324,8 @@ class GfxLiveCaptureTests(unittest.TestCase):
                          msg=result.stderr or result.stdout)
         summary = self._summary(root)
         self.assertEqual(summary["threads"], "3")
-        self.assertEqual(summary["admitted"], "2")
-        self.assertEqual(summary["written"], "2")
+        self.assertEqual(summary["unique_retained"], "2")
+        self.assertEqual(summary["complete_observations"], "2")
         threads = set()
         for path in (root / "captures").glob("*.capture"):
             parsed = fixture.parse_capture(path.read_text(encoding="utf-8"))
@@ -276,13 +337,14 @@ class GfxLiveCaptureTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0,
                          msg=result.stderr or result.stdout)
         summary = self._summary(root)
-        self.assertEqual(summary["admitted"], "64")
-        self.assertEqual(summary["written"], "0")
-        self.assertEqual(summary["write_failed"], "64")
-        self.assertEqual(summary["undrained"], "0")
-        self.assertEqual(summary["incomplete"], "0")
-        self.assertEqual(summary["completed"], "64")
-        self.assertEqual(len(list((root / "captures").glob("*.capture"))), 0)
+        self.assertEqual(summary["storage_failed"], "64")
+        self.assertEqual(summary["unique_retained"], "0")
+        self.assertEqual(summary["duplicates_discarded"], "0")
+        self.assertEqual(summary["undrained_observations"], "0")
+        self.assertEqual(summary["incomplete_observations"], "0")
+        self.assertEqual(summary["complete_observations"], "64")
+        self.assertEqual(len(self._captures(root)), 0)
+        self.assertEqual(list((root / "captures").glob("*.partial")), [])
 
     def test_start_failure_does_not_report_a_capture_session(self) -> None:
         root, result = self._run("start-fail")
