@@ -510,6 +510,26 @@ class GfxLiveReportTests(unittest.TestCase):
             live.canonical_observation(parsed)
         self.assertIn("buffer", str(caught.exception).lower())
 
+    def test_exact_metadata_limit_and_undecodable_evidence_are_refused(self) -> None:
+        mismatched = self._exact(metadata_overrides={"max_unique": 32})
+        self._assert_exact_failed(mismatched, "Metadata max_unique does not match")
+
+        missing = self._exact()
+        metadata_path = missing / "metadata.json"
+        recorded = json.loads(metadata_path.read_text(encoding="utf-8"))
+        del recorded["max_unique"]
+        metadata_path.write_text(json.dumps(recorded), encoding="utf-8")
+        self._assert_exact_failed(missing, "Metadata max_unique does not match")
+
+        undecodable = self._exact()
+        (undecodable / "metadata.json").write_bytes(b"\xff")
+        self._assert_exact_failed(undecodable, "Malformed metadata.json")
+
+        bad_startup = self._exact()
+        (bad_startup / "startup.status").write_bytes(b"\xff")
+        result = live.report(bad_startup)
+        self.assertEqual(result["status"], "failed", msg=result["problems"])
+
     def test_exact_unprovenanced_or_unqualified_evidence_is_refused(self) -> None:
         missing_outcome = "\n".join(
             line.replace("outcomes=1", "outcomes=0") if line.startswith("END ") else line

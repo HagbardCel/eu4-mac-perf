@@ -1089,12 +1089,12 @@ def report_exact(run_dir: Path) -> dict:
 
     try:
         summary = _parse_table(run_dir / "summary.native", EXACT_SUMMARY)
-    except (LiveError, OSError) as exc:
+    except (LiveError, OSError, UnicodeDecodeError) as exc:
         return {"status": "failed", "qualified": 0, "unqualified": 0,
                 "malformed": [], "problems": [str(exc)]}
     try:
         done = _parse_table(run_dir / "session.done", DONE_HEADER)
-    except (LiveError, OSError) as exc:
+    except (LiveError, OSError, UnicodeDecodeError) as exc:
         done = None
         add_problem(str(exc))
     session = summary.get("session")
@@ -1107,7 +1107,7 @@ def report_exact(run_dir: Path) -> dict:
     else:
         try:
             startup = _parse_table(startup_path, STARTUP_HEADER)
-        except LiveError as exc:
+        except (LiveError, UnicodeDecodeError) as exc:
             add_problem(str(exc))
     if startup is not None:
         if startup.get("state") != "installed":
@@ -1141,7 +1141,7 @@ def report_exact(run_dir: Path) -> dict:
     else:
         try:
             parsed_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             add_problem(f"Malformed metadata.json: {exc}")
         else:
             if not isinstance(parsed_metadata, dict):
@@ -1160,6 +1160,10 @@ def report_exact(run_dir: Path) -> dict:
             add_problem(f"Launch metadata status is {metadata.get('status')!r}")
         if metadata.get("session_id") != session:
             add_problem("Metadata session ID does not match the native summary")
+        recorded_limit = metadata.get("max_unique")
+        if (type(recorded_limit) is not int or
+                str(recorded_limit) != summary.get("max_unique")):
+            add_problem("Metadata max_unique does not match the summary")
         save_before = metadata.get("save_sha256")
         save_after = metadata.get("save_after_sha256")
         if not save_before or not save_after or save_before != save_after:
