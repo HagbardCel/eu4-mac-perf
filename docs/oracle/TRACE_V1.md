@@ -46,6 +46,59 @@ any event was dropped, or any dependency is unresolved. Incomplete traces do
 not become fixtures. This milestone fails closed. It does not recover a partial
 trace.
 
+`completeness: complete` requires `incomplete_reasons` and
+`unresolved_dependencies` to be empty, every required access in the declared
+scope to be known, and every present value to carry `value_source`.
+
+## Encoding
+
+`reconstruction_trace/schema.py` enforces these rules. No separate schema
+generator is required.
+
+- Addresses, PCs, bases, targets, and register values are strings: `0x` plus
+  lowercase hex, with no leading zeros except `0x0`. They are not JSON numbers.
+- `size` and an edge `offset` are JSON integers, in bytes.
+- Region `bytes` and a memory event `value` are lowercase hex in address order,
+  exactly `2 * size` digits. The first byte is the byte at the lowest address.
+- Events are one array in execution order. A `call_enter` opens a frame. A
+  `call_exit` closes the most recent open frame, and its `target` equals that
+  frame's `target`. Frames are not interleaved.
+- If two regions cover the same byte, the recorded bytes at that offset are
+  equal. A disagreement makes the trace incomplete.
+
+```json
+{
+  "schema": "execution-observation/v1",
+  "function_id": "synth:chase",
+  "binary": null,
+  "evidence": "handwritten-synthetic",
+  "instrumentation": {"name": "handwritten", "version": "v1"},
+  "entry_state": {
+    "registers": {"rdi": "0x100000"},
+    "regions": [
+      {"id": "a", "kind": "heap", "base": "0x100000", "size": 16, "bytes": "00002000000000002a00000000000000", "preservation": "required"},
+      {"id": "b", "kind": "heap", "base": "0x200000", "size": 4, "bytes": "2a000000", "preservation": "required"}
+    ],
+    "pointers": [
+      {"from": {"region": "a", "offset": 0}, "to": {"region": "b", "offset": 0}},
+      {"from": {"register": "rdi"}, "to": {"region": "a", "offset": 0}}
+    ]
+  },
+  "events": [
+    {"kind": "read", "pc": "0x1000", "address": "0x100000", "size": 8, "value": "0000200000000000", "value_source": "observed"}
+  ],
+  "exit_state": {"registers": {"rax": "0x2a"}},
+  "completeness": "complete",
+  "incomplete_reasons": [],
+  "unresolved_dependencies": []
+}
+```
+
+The eight-byte value `0000200000000000` is the little-endian bytes of
+`0x200000` as they sit in memory. Replay does not treat that numeric value as
+a discovered pointer. It relocates the byte range only because `pointers`
+names it.
+
 ## Three results
 
 These are separate. None implies the next.
@@ -65,8 +118,8 @@ A present `value` carries `value_source`:
 
 | `value_source` | Meaning |
 | --- | --- |
-| `observed` | The value was read by native instrumentation. |
-| `derived-scenario` | The value was reconstructed from an authenticated historical scenario. The event names the scenario field or memory window (`provenance`). |
+| `observed` | The identified `evidence` producer recorded the value directly. |
+| `derived-scenario` | The value was reconstructed from authenticated historical scenario state. The event names the scenario field or memory window (`provenance`). |
 
 Both are legitimate. They are not the same evidence. A missing value, an
 ambiguous derivation, or a missing `value_source` makes the trace incomplete.
@@ -103,6 +156,26 @@ Alias identity is the harness allocation id when two arguments reference the
 same allocation. Numeric equality of raw bytes is not a pointer type and is
 not an alias.
 
+## Pointer relocation
+
+Fresh-process replay does not reserve the original virtual addresses. The
+synthetic harness records each pointer it constructs. An edge is
+`from` a region offset or a register, and `to` a region offset. The harness
+knows these relationships because it built them. The fixture builder does not
+infer them by scanning bytes for addresses.
+
+The builder keeps an edge only when the observed trace reads or writes that
+stored pointer, or a later access depends on it. Replay allocates each region
+at a new base and rewrites each kept edge to the new `to` address. Bytes that
+are not a kept edge are copied unchanged. A stored address with no harness edge
+is not relocated. If the trace dereferences it, qualification fails and names
+that address and size.
+
+TR1 must replay one case where a pointer stored in one heap allocation refers
+to another allocation, and both allocations receive different bases in the
+fresh process. Copying the original pointer bytes without relocation is not a
+pass.
+
 ## Events
 
 Memory events are `read` and `write`: `pc`, `address`, `size`, `value`,
@@ -112,7 +185,7 @@ A call is a boundary:
 
 - `call_enter`: `pc` (the call site) and `target` (the resolved target). An indirect call records the resolved target, not only the call site. Argument values are included only when the declared contract observes them.
 - nested `read`, `write`, and `call_*` events while that call is active
-- `call_exit`: the same `target`, the result values the contract observes, and `effects_complete`
+- `call_exit`: the same `target` as the open frame, the result values the contract observes, and `effects_complete`
 
 `effects_complete: true` may replace the nested events with an `effects` list
 only when that list keeps every effect the caller's later execution and final
@@ -155,7 +228,8 @@ layout, registers, the return boundary, and the flags or SIMD state the
 contract declares, then calls the original compiled function and records the
 declared exit observations. An ordinary C function pointer is not that harness.
 
-The reference run executes original synthetic code. Native replay of an EU IV
+The reference run executes original synthetic code. Replay relocates
+harness-recorded pointer edges as specified above. Native replay of an EU IV
 function extracted from the Mach-O, including its imports, globals, and
 callees, is outside this stage.
 

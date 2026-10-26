@@ -47,6 +47,9 @@ it, and it does not fabricate a load value. See the importer rules in
   initial bytes.
 - A partial overlapping write is represented.
 - Two pointers to the same allocation stay aliased.
+- A pointer stored in one heap allocation refers to a second allocation. Fresh
+  replay uses different bases for both, and the result matches. Copying the
+  original pointer bytes without relocation is not a pass.
 - A missing input region fails qualification with that address and size.
 - A fresh native replay matches the independent expected result.
 - The importer marks receipt-present values `observed` and scenario-derived

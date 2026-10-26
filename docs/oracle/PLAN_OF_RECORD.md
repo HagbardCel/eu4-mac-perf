@@ -197,10 +197,13 @@ supported TR0 producer, or for the explicit unsupported decision. Work orders:
 [TR0](work-orders/TR0.md), [TR1](work-orders/TR1.md), [TR2](work-orders/TR2.md),
 [INV](work-orders/INV.md).
 
-This amendment does not start F2, G2, G3b, G4, or H1. G2 has not started. If
-G2 later builds a replay adapter under its existing gate, that adapter consumes
-`execution-observation/v1` and does not invent another format. G3b stays gated.
-E1 does not admit these traces. There is no G2a package.
+This amendment does not start F2, G2, G3b, G4, or H1. G2 has not started. G2
+retains its existing RE0 handoff and authorization gate.
+`execution-observation/v1` may be used as upstream behavioral evidence or
+fixture input. Any change to G2's existing capture-closure or replay-adapter
+contract requires an explicit amendment when G2 starts. This PR does not edit
+the frozen `_GfxForceWireframe` package. G3b stays gated. E1 does not admit
+these traces. There is no G2a package.
 
 ### Frozen for this stage
 
@@ -232,7 +235,7 @@ replacement.
   QBDI is unsupported, this item is blocked and this list is revised in that
   decision.
 - Fresh execution of the original synthetic function matches the independent
-  expected observations.
+  expected observations, including a stored pointer relocated to a new base.
 - A missing input and an incomplete trace are rejected.
   `expected_accesses_match` alone does not qualify a fixture.
 - The original and reconstructed caller–callee pair agree, including one direct

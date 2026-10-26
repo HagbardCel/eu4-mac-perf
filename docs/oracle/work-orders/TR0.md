@@ -51,6 +51,11 @@ cannot run an x86-64 QBDI build. There is no slowdown threshold.
 - Unknown sizes, unknown values, unclassified accesses, and unsupported
   instrumentation stay explicit, keep QBDI access flags, and prevent
   `fixture_qualified`.
+- The helper already in the probe produces a paired `call_enter` and
+  `call_exit` for the resolved helper target, and nested accesses from that
+  call sit between the pair. If QBDI cannot supply that boundary, the receipt
+  reports call-boundary tracing unsupported. A matching memory-access set does
+  not imply this result. Do not add a second program.
 
 ## Decision
 
@@ -83,4 +88,5 @@ The receipt fills one of these outcomes:
 ## Merge gate
 
 The receipt is committed, or the unsupported decision is written in the
-receipt. Either outcome names the three results separately.
+receipt. Either outcome names the three memory results separately, and names
+the helper call-boundary result or reports that boundary unsupported.
