@@ -6,6 +6,7 @@ contracts:
 owned_paths:
   - reverse_engineering/readiness.py
   - tests/test_trace_readiness.py
+  - analysis/trace-readiness/shortlist-v1.json
 frozen_read_only:
   - docs/oracle/TRACE_V1.md
   - oracle/**
