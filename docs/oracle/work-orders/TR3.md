@@ -38,21 +38,101 @@ Passing TR2 and passing the checks below grant neither later permission:
 
 ## Upstream
 
-TR2 stays unsatisfied until both tests pass on a branch that contains the TR2
-merge. The evaluation base is `origin/main` after that merge.
+TR2 stays unsatisfied until the block below exits 0. Run it from the
+repository root on a checkout whose `HEAD` is `origin/main` after the TR2
+merge. A missing file, a skip, a loader error, or any other failed check exits
+nonzero. Do not add a test module or a script to hold these checks.
 
-```
-python3 -m unittest tests.test_trace_composition tests.test_trace_qbdi_fixture
-```
-
-`tests/test_trace_composition.py` must include the defective-callee mismatch.
-`tests/test_trace_qbdi_fixture.py` must take a trace from the TR0 QBDI
-producer, pass it through `reconstruction_trace/fixture.py`, and replay the
+`tests/test_trace_composition.py` must collect a test id containing
+`defective`: the defective-callee mismatch. `tests/test_trace_qbdi_fixture.py`
+must collect a test id containing `replay`: a trace from the TR0 QBDI
+producer, passed through `reconstruction_trace/fixture.py`, replaying the
 original synthetic function against the independent expected observations. A
 Ghidra trace does not count. The blocked-because-unsupported outcome does not
-count either: `reconstruction_trace/qbdi/receipt.json` already records the
-decision `Reliable Rosetta traces with explicit gaps: continue with QBDI.` and
-`interception.result` of `supported`.
+count either.
+
+```bash
+set -euo pipefail
+
+git fetch origin main
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+git cat-file -e origin/main:tests/test_trace_composition.py
+git cat-file -e origin/main:tests/test_trace_qbdi_fixture.py
+git diff --exit-code HEAD -- \
+  tests/test_trace_composition.py \
+  tests/test_trace_qbdi_fixture.py
+
+python3 - <<'PY'
+import json
+receipt = json.load(open("reconstruction_trace/qbdi/receipt.json"))
+assert receipt["decision"] == (
+    "Reliable Rosetta traces with explicit gaps: continue with QBDI.")
+assert receipt["interception"]["result"] == "supported"
+assert receipt["measurements"]["slowdown_threshold"] is None
+PY
+
+tr2_base="$(
+  git log --first-parent --reverse \
+    --format=%H origin/main \
+    -- tests/test_trace_qbdi_fixture.py |
+    sed -n '1p'
+)"
+test -n "$tr2_base"
+git diff --exit-code "$tr2_base" origin/main -- \
+  docs/oracle/TRACE_V1.md \
+  oracle \
+  analysis/reconstruction \
+  reverse_engineering/target.json \
+  benchmark/eu4_gfx_live_capture.py
+git diff --exit-code HEAD -- \
+  docs/oracle/TRACE_V1.md \
+  oracle \
+  analysis/reconstruction \
+  reverse_engineering/target.json \
+  benchmark/eu4_gfx_live_capture.py
+
+python3 - <<'PY'
+import sys
+import unittest
+
+def collect(pattern):
+    loader = unittest.TestLoader()
+    suite = loader.discover("tests", pattern=pattern)
+    if loader.errors:
+        sys.exit(1)
+    ids = []
+    def walk(node):
+        if isinstance(node, unittest.TestSuite):
+            for child in node:
+                walk(child)
+        else:
+            ids.append(node.id())
+    walk(suite)
+    if not ids:
+        sys.exit(1)
+    return ids
+
+composition = collect("test_trace_composition.py")
+qbdi = collect("test_trace_qbdi_fixture.py")
+if not any("defective" in test_id for test_id in composition):
+    sys.exit(1)
+if not any("replay" in test_id for test_id in qbdi):
+    sys.exit(1)
+PY
+
+log="$(mktemp)"
+trap 'rm -f "$log"' EXIT
+discover_tests() {
+  python3 -m unittest discover -s tests -p "$1" -v 2>&1 | tee "$log"
+  if grep -Eq 'skipped=|\.\.\. skipped' "$log"; then
+    exit 1
+  fi
+}
+discover_tests test_trace_composition.py
+discover_tests test_trace_qbdi_fixture.py
+```
+
+A passing block does not authorize implementation or an EU4 execution.
 
 ## Frozen paths
 
