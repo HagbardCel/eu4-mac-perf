@@ -1,6 +1,6 @@
 ---
 package: TR3
-upstream: TR2 QBDI-to-fixture integration (unsatisfied)
+upstream: TR2 QBDI-to-fixture integration (satisfied at 0a24c90)
 contracts:
   - execution-observation/v1
 owned_paths: []
@@ -38,10 +38,15 @@ Passing TR2 and passing the checks below grant neither later permission:
 
 ## Upstream
 
-TR2 stays unsatisfied until the block below exits 0. Run it from the
-repository root on a checkout whose `HEAD` is `origin/main` after the TR2
-merge. A missing file, a skip, a loader error, or any other failed check exits
-nonzero. Do not add a test module or a script to hold these checks.
+The block below exited 0 on 2026-10-29. `HEAD` and `origin/main` were both
+`0a24c90`, the TR2 merge. Both TR2 modules ran with zero skips. That pass
+satisfies the TR2 upstream. It does not authorize implementation or an EU4
+execution.
+
+Re-run the block from the repository root on a checkout whose `HEAD` is
+`origin/main`. A missing file, a skip, a loader error, or any other failed
+check exits nonzero. Do not add a test module or a script to hold these
+checks.
 
 `tests/test_trace_composition.py` must collect a test id containing
 `defective`: the defective-callee mismatch. `tests/test_trace_qbdi_fixture.py`
@@ -187,6 +192,6 @@ performance acceptance threshold needs its own authorization.
 
 ## Merge gate
 
-This file may land while TR2 is unsatisfied. The preflight passes only when
-the upstream tests pass. A passing preflight stops. It does not authorize
+This file landed while TR2 was unsatisfied. The preflight passed at `0a24c90`
+on 2026-10-29. A passing preflight stops. It does not authorize
 implementation or an EU4 execution.

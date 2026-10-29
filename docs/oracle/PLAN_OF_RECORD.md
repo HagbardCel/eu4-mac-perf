@@ -219,9 +219,11 @@ Read-only: `oracle/function/**` (including `fixture.py`), `oracle/recorder/**`,
 ### TR3 gate — not authorized
 
 TR3 has a preflight-only work order at
-[work-orders/TR3.md](work-orders/TR3.md). The work order records prerequisites
-and a proposed later experiment. It authorizes no implementation, EU4 launch,
-injection, live trace, or replacement.
+[work-orders/TR3.md](work-orders/TR3.md). The preflight passed on 2026-10-29
+at `0a24c90`: `HEAD` matched `origin/main`, and both TR2 modules ran with
+zero skips. The work order records prerequisites and a proposed later
+experiment. That pass authorizes no implementation, EU4 launch, injection,
+live trace, or replacement.
 
 The proposed experiment is exactly one preselected original
 `_GfxSetConstantBuffer` invocation, with entry and exit state, memory events,
