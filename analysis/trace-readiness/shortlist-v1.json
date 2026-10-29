@@ -110,7 +110,8 @@
   "capacity": 512,
   "limits": [
    "Indirect edges remain unresolved; pointer references are not proven calls.",
-   "Traversal is bounded, not exhaustive. Aliases share an address."
+   "Traversal is bounded, not exhaustive. Aliases share an address.",
+   "A ready-leaf has no unresolved internal callee. An external dyld stub is recorded, not identified, and is not a replay candidate."
   ],
   "max_depth": 4,
   "unvisited_at_bound": 1244

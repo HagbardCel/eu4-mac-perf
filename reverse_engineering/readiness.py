@@ -24,6 +24,10 @@ from reverse_engineering.intervals import parse_rva
 from reverse_engineering.paths import ROOT, ReError, load_target
 
 SCHEMA = "eu4-trace-readiness-shortlist/v1"
+EXTERNAL_STUB_LIMIT = (
+    "A ready-leaf has no unresolved internal callee. An external dyld stub is recorded, "
+    "not identified, and is not a replay candidate."
+)
 STATIC_GRAPH = ROOT / "analysis" / "frame-model-static.json"
 CORPUS = ROOT / "analysis" / "renderer-corpus" / "scope" / "v1" / "renderer-functions.jsonl"
 RECONSTRUCTION = ROOT / "analysis" / "reconstruction"
@@ -91,7 +95,10 @@ def load_packages(reconstruction_dir: Path, binary_sha: str) -> dict[int, dict]:
     return packages
 
 
-def _classify(name: str, alias_to_node: dict[str, str], unvisited: set[str], image_base: int) -> str:
+def _classify(name: str, alias_to_node: dict[str, str], unvisited: set[str], image_base: int,
+              ambiguous: set[str]) -> str:
+    if name in ambiguous:
+        return "unresolved"
     if name in alias_to_node:
         return "visited"
     if name in unvisited:
@@ -128,6 +135,7 @@ def build_shortlist(
         corpus[rva] = row
 
     alias_to_node: dict[str, str] = {}
+    ambiguous: set[str] = set()
     by_address: dict[int, str] = {}
     for key, node in nodes.items():
         if not isinstance(node.get("address"), int):
@@ -136,7 +144,14 @@ def build_shortlist(
             raise ReError(f"nodes {by_address[node['address']]} and {key} share an address")
         by_address[node["address"]] = key
         for alias in {key, *node["aliases"]}:
-            alias_to_node[alias] = key
+            if alias in ambiguous:
+                continue
+            previous = alias_to_node.get(alias)
+            if previous is None:
+                alias_to_node[alias] = key
+            elif previous != key:
+                ambiguous.add(alias)
+                del alias_to_node[alias]
 
     def callee_nodes(key: str) -> list[str]:
         return sorted(
@@ -162,7 +177,7 @@ def build_shortlist(
         callees: dict[tuple, dict] = {}
         stubs: dict[int, int] = {}
         for edge in node["edges"]:
-            status = _classify(edge["target"], alias_to_node, unvisited, image_base)
+            status = _classify(edge["target"], alias_to_node, unvisited, image_base, ambiguous)
             if status == "external_stub":
                 stub = int(edge["target"][len(STUB_PREFIX):], 16)
                 stubs[stub] = stubs.get(stub, 0) + 1
@@ -266,7 +281,7 @@ def build_shortlist(
             "max_depth": graph["max_depth"],
             "capacity": graph["capacity"],
             "unvisited_at_bound": len(unvisited),
-            "limits": graph["limits"],
+            "limits": [*graph["limits"], EXTERNAL_STUB_LIMIT],
         },
         "counts": {label: counts.get(label, 0) for label in ("blocked", "not-this-stage", "ready-leaf")},
         "ready_leaves": [

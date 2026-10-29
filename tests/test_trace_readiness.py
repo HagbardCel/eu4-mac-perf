@@ -98,6 +98,12 @@ class CommittedShortlistTests(unittest.TestCase):
             self.assertEqual(f["binary_sha256"], TARGET["sha256"])
             self.assertTrue(f["rva"].startswith("0x"))
 
+    def test_external_stubs_stay_recorded_without_relabeling(self):
+        self.assertEqual(self.shortlist["counts"],
+                         {"blocked": 388, "not-this-stage": 8, "ready-leaf": 87})
+        self.assertIn(readiness.EXTERNAL_STUB_LIMIT, self.shortlist["bounds"]["limits"])
+        self.assertTrue(any(leaf["external_api_calls"] for leaf in self.shortlist["ready_leaves"]))
+
 
 class SyntheticGraphTests(unittest.TestCase):
     def test_unvisited_or_unresolved_edge_is_never_ready_leaf(self):
@@ -146,6 +152,23 @@ class SyntheticGraphTests(unittest.TestCase):
         self.assertEqual(shortlist["cycles"], [["0x100", "0x200"]])
         labels = {f["symbol"]: f["label"] for f in shortlist["functions"]}
         self.assertEqual(labels, {"a": "not-this-stage", "b": "not-this-stage", "c": "ready-leaf"})
+
+    def test_ambiguous_alias_is_unresolved_everywhere(self) -> None:
+        nodes = {
+            "left": _node(BASE + 0x100),
+            "right": _node(BASE + 0x200),
+            "caller": _node(BASE + 0x300, edges=["shared"]),
+        }
+        nodes["left"]["aliases"] = ["shared"]
+        nodes["right"]["aliases"] = ["shared"]
+        rows = [_row(node["address"] - BASE, key) for key, node in nodes.items()]
+        shortlist = _build(nodes, rows, roots=["caller", "shared"])
+        symbols = {item["symbol"] for item in shortlist["functions"]}
+        self.assertEqual(symbols, {"caller"})
+        self.assertIn("shared", shortlist["unresolved_anchors"])
+        callee = shortlist["functions"][0]["direct_callees"]
+        self.assertEqual(callee, [{"rva": None, "sites": 1, "status": "unresolved", "symbol": "shared"}])
+        self.assertEqual(shortlist["functions"][0]["label"], "blocked")
 
     def test_cycle_member_inherits_block(self):
         nodes = {"a": _node(BASE + 0x100, edges=["b"]), "b": _node(BASE + 0x200, edges=["a"])}
