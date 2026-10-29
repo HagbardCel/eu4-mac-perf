@@ -218,13 +218,17 @@ Read-only: `oracle/function/**` (including `fixture.py`), `oracle/recorder/**`,
 
 ### TR3 gate — not authorized
 
-TR3 would be a separately authorized experiment: a preselected handful of
-original `_GfxSetConstantBuffer` invocations, with entry and exit state, memory
-events, completeness, one native-derived fixture replayed against the existing
-qualified reconstruction, no dropped events, and overhead measured against a
-budget taken from the TR0 receipt. This section is the gate text. It is not a
-work order and it authorizes no EU IV launch, injection, live trace, or
-replacement.
+TR3 has a preflight-only work order at
+[work-orders/TR3.md](work-orders/TR3.md). The work order records prerequisites
+and a proposed later experiment. It authorizes no implementation, EU4 launch,
+injection, live trace, or replacement.
+
+The proposed experiment is exactly one preselected original
+`_GfxSetConstantBuffer` invocation, with entry and exit state, memory events,
+completeness, one native-derived fixture replayed against the existing
+qualified reconstruction, and no dropped events. The TR0 receipt is the
+measurement reference. This gate sets no slowdown threshold. This section
+authorizes no EU IV launch, injection, live trace, or replacement.
 
 ### Definition of done
 
