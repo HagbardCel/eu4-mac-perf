@@ -223,7 +223,9 @@ TR3 has a preflight-only work order at
 at `0a24c90`: `HEAD` matched `origin/main`, and both TR2 modules ran with
 zero skips. The work order records prerequisites and a proposed later
 experiment. That pass authorizes no implementation, EU4 launch, injection,
-live trace, or replacement.
+live trace, or replacement. The implementation scope is
+[work-orders/TR3-IMPL.md](work-orders/TR3-IMPL.md). Writing its named paths
+waits for that work order to merge. Running EU4 remains unauthorized.
 
 The proposed experiment is exactly one preselected original
 `_GfxSetConstantBuffer` invocation, with entry and exit state, memory events,

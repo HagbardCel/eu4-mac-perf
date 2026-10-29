@@ -27,6 +27,8 @@ replacement.
 `owned_paths` is empty. Instrumentation, fixture integration, replay, and any
 launch path need a separately approved scope amendment or execution work order
 that names those paths. Recording the experiment here is not that amendment.
+The implementation scope is [TR3-IMPL.md](TR3-IMPL.md). Writing its named
+paths waits for that work order to merge. Running EU4 remains unauthorized.
 
 Passing TR2 and passing the checks below grant neither later permission:
 
