@@ -171,10 +171,43 @@ class TraceQbdiReceiptTests(unittest.TestCase):
     def test_missing_call_boundary_is_reported_unsupported(self) -> None:
         raw = copy.deepcopy(committed_receipt()["probe_output"])
         instruction(raw, "vm_call", "CALL64pcrel32")["is_call"] = False
-        run = producer.evaluate(raw)["runs"]["vm_call"]
+        evaluation = producer.evaluate(raw)
+        run = evaluation["runs"]["vm_call"]
         self.assertEqual(run["call_boundary"]["result"], "unsupported")
         self.assertTrue(run["call_boundary"]["reason"].startswith("call-boundary unsupported"))
         self.assertTrue(run["results"]["expected_accesses_match"]["value"])
+        self.assertEqual(evaluation["decision"], producer.OUTCOMES[1])
+        self.assertNotEqual(evaluation["decision"], producer.OUTCOMES[0])
+
+    def test_wrong_known_answer_is_not_a_reliable_trace(self) -> None:
+        raw = copy.deepcopy(committed_receipt()["probe_output"])
+        access = instruction(raw, "vm_call", "IMUL64rm")["accesses"][0]
+        access["value"] = "0x0"
+        evaluation = producer.evaluate(raw)
+        run = evaluation["runs"]["vm_call"]
+        self.assertFalse(run["results"]["expected_accesses_match"]["value"])
+        self.assertEqual(evaluation["decision"], producer.OUTCOMES[1])
+        self.assertNotEqual(evaluation["decision"], producer.OUTCOMES[0])
+
+    def test_dropped_instruction_is_not_a_reliable_trace(self) -> None:
+        raw = copy.deepcopy(committed_receipt()["probe_output"])
+        run_raw = next(item for item in raw["runs"] if item["mode"] == "vm_call")
+        run_raw["dropped_instructions"] = 1
+        evaluation = producer.evaluate(raw)
+        run = evaluation["runs"]["vm_call"]
+        self.assertFalse(run["results"]["instrumentation_complete"]["value"])
+        self.assertEqual(evaluation["decision"], producer.OUTCOMES[1])
+        self.assertNotEqual(evaluation["decision"], producer.OUTCOMES[0])
+
+    def test_execution_transfer_stays_an_unresolved_dependency(self) -> None:
+        raw = copy.deepcopy(committed_receipt()["probe_output"])
+        run_raw = next(item for item in raw["runs"] if item["mode"] == "vm_call")
+        run_raw["exec_transfers"] = ["0x1"]
+        evaluation = producer.evaluate(raw)
+        run = evaluation["runs"]["vm_call"]
+        self.assertFalse(run["results"]["instrumentation_complete"]["value"])
+        self.assertEqual(evaluation["decision"], producer.OUTCOMES[4])
+        self.assertNotEqual(evaluation["decision"], producer.OUTCOMES[1])
 
     def test_probe_rebuilds_and_runs_under_rosetta(self) -> None:
         reason = producer.unsupported_host_reason()

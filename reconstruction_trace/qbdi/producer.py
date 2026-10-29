@@ -426,9 +426,16 @@ def _decision(raw: dict, observations: dict, runs: dict, interception: dict) -> 
         return OUTCOMES[3]
     if any(_has_value_or_size_gap(runs[mode], observations[mode]) for mode in runs):
         return OUTCOMES[1]
+    # An execution transfer already fails instrumentation_complete via _run_gaps.
+    # It must be decided here, before that generic check, or it becomes OUTCOMES[1].
     if any(r["unresolved_dependencies"] for r in runs.values()) or any(
             r["exec_transfers"] for r in raw["runs"]):
         return OUTCOMES[4]
+    if any(not run["results"]["expected_accesses_match"]["value"]
+           or not run["results"]["instrumentation_complete"]["value"]
+           or run["call_boundary"]["result"] != "supported"
+           for run in runs.values()):
+        return OUTCOMES[1]
     if interception["result"] != "supported":
         return OUTCOMES[2]
     return OUTCOMES[0]
