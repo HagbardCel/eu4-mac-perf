@@ -15,9 +15,12 @@ addresses or compares raw values to find an alias.
 
 An edge is kept only when the trace reads or writes the stored pointer, or when a
 later access depends on it: an access inside a register edge's target region, or
-the return boundary that dereferences ``rsp``. Every unresolved byte range
-fails qualification and names its address and size. An incomplete trace never
-becomes a fixture. This module does not emit ``FUNCTION-CAPTURE v1``.
+the return boundary that dereferences ``rsp``. A dereferenced region must then be
+reachable from a kept register edge through kept stored edges. Every unresolved
+byte range fails qualification and names its address and size. An exit register
+that has a kept edge must be that entry pointer, or ``rsp`` at that address plus
+8; any other value fails qualification. An incomplete trace never becomes a
+fixture. This module does not emit ``FUNCTION-CAPTURE v1``.
 """
 from __future__ import annotations
 
@@ -177,6 +180,38 @@ def qualify(trace: dict) -> dict:
             keep = any(at in accessed for at in range(stored, stored + schema.POINTER_SIZE))
         if keep:
             pointers.append(edge)
+
+    reachable = {edge["to"]["region"] for edge in pointers if "register" in edge["from"]}
+    # shortcut: reachability over kept edges does not prove which pointer was loaded, upgrade when a trace records the pointer that produced each address.
+    growing = True
+    while growing:
+        growing = False
+        for edge in pointers:
+            source = edge["from"]
+            if "region" not in source or source["region"] not in reachable:
+                continue
+            target = edge["to"]["region"]
+            if target not in reachable:
+                reachable.add(target)
+                growing = True
+    # Any containing span counts. region_at returns only the first one.
+    orphan = set()
+    for at in accessed:
+        covers = [region["id"] for base, length, region in inventory.spans
+                  if base <= at < base + length]
+        if covers and not any(region_id in reachable for region_id in covers):
+            orphan.add(at)
+    if orphan:
+        unresolve(orphan, "dereferenced address has no relocation edge")
+
+    for name, value in trace["exit_state"]["registers"].items():
+        edge = next((item for item in pointers if item["from"].get("register") == name), None)
+        if edge is None:
+            continue
+        original = inventory.base(edge["to"]["region"]) + edge["to"]["offset"]
+        supported = original + 8 if name == "rsp" else original
+        if int(value, 16) != supported:
+            reasons.append(f"exit register {name} is not a supported relocated pointer")
 
     if reasons:
         return _rejected(reasons, unresolved)

@@ -360,6 +360,19 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(result["fixture"]["pointers"],
                          [_stored("a", 0, "b"), _edge("rdi", "a"), RSP_EDGE])
 
+    def test_missing_stored_edge_to_a_dereferenced_region_does_not_qualify(self) -> None:
+        trace = copy.deepcopy(_fabricated_trace(_chase_case()))
+        pointers = trace["entry_state"]["pointers"]
+        pointers[:] = [edge for edge in pointers if edge != _stored("a", 0, "b")]
+        self.assertIn(_stored("d", 0, "b"), pointers)
+        result = fixture.qualify(trace)
+        self.assertFalse(result["fixture_qualified"])
+        self.assertIsNone(result["fixture"])
+        base = int(next(region["base"] for region in trace["entry_state"]["regions"]
+                        if region["id"] == "b"), 16)
+        self.assertTrue(any(base <= int(item["address"], 16) < base + 8
+                            for item in result["unresolved_dependencies"]))
+
     def test_incomplete_trace_never_becomes_a_fixture(self) -> None:
         trace = _fabricated_trace(_chase_case())
         trace["completeness"] = "incomplete"
@@ -494,6 +507,28 @@ class NativeReplayTests(unittest.TestCase):
             return
         self.assertNotEqual(native.compare(unrelocated, replayed), [])
         self.assertNotEqual(int(replayed["registers"]["rax"], 16), B_VALUE + ADDEND)
+
+    def test_unchanged_rdi_and_return_rsp_are_relocated(self) -> None:
+        function_id, regions, pointers, events, (rax, _) = _select_case(1)
+        recorded = self.harness.record(function_id, regions, pointers, {},
+                                       ["rax", "rdi", "rsp"])
+        trace = _trace(function_id, recorded["entry_state"],
+                       events(_Inventory(recorded["entry_state"])), recorded["exit_state"])
+        result = fixture.qualify(trace)
+        self.assertTrue(result["fixture_qualified"], result["reasons"])
+        built = result["fixture"]
+        replayed = self.harness.replay(built)
+        self.assertEqual(native.compare(built, replayed), [])
+        self.assertEqual(int(replayed["registers"]["rax"], 16), rax)
+        self.assertEqual(replayed["registers"]["rdi"], hex(replayed["bases"]["p"]))
+        self.assertEqual(replayed["registers"]["rsp"],
+                         hex(replayed["bases"]["stack"] + STACK_SIZE + 8))
+        broken = copy.deepcopy(trace)
+        broken["exit_state"]["registers"]["rdi"] = "0x1"
+        failed = fixture.qualify(broken)
+        self.assertFalse(failed["fixture_qualified"])
+        self.assertIsNone(failed["fixture"])
+        self.assertTrue(any("rdi" in reason for reason in failed["reasons"]))
 
     def test_extra_subject_is_called_through_the_entry_stub(self) -> None:
         (self.workdir / "extra").mkdir()

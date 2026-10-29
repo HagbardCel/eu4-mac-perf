@@ -188,8 +188,18 @@ def compare(fixture: dict, replayed: dict) -> list[str]:
             if final[at] != data[at]:
                 mismatches.append(f"region {region_id} differs at offset {at}")
                 break
+    edged = {edge["from"]["register"]: edge for edge in fixture["pointers"]
+             if "register" in edge["from"]}
     for name, value in fixture["exit_registers"].items():
-        if replayed["registers"].get(name) != value:
+        expected = value
+        edge = edged.get(name)
+        if edge is not None:
+            target = edge["to"]
+            original = int(regions[target["region"]]["base"], 16) + target["offset"]
+            shift = 8 if name == "rsp" else 0
+            if int(value, 16) == original + shift:
+                expected = hex(replayed["bases"][target["region"]] + target["offset"] + shift)
+        if replayed["registers"].get(name) != expected:
             mismatches.append(f"register {name} is {replayed['registers'].get(name)}, "
-                              f"expected {value}")
+                              f"expected {expected}")
     return mismatches
