@@ -7,6 +7,7 @@ observed process addresses and they are not native symbol resolution.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import shutil
 import struct
@@ -29,7 +30,6 @@ CALLEE_SOURCE = """\
     movl %eax, (%rdi)
     ret
 """
-CALLER_CANDIDATE = "call qualified callee; call qualified callee"
 QUALIFICATION_SCOPE = "one increment of the dword at rdi"
 COMPARATOR = "tr2-composition-v1"
 HARNESS_ID = "reconstruction_trace.harness.native"
@@ -121,8 +121,17 @@ def _pair(pc: str, value: int) -> list[dict]:
 def _caller_trace() -> dict:
     # The caller trace records the effect each call leaves. It does not record
     # the callee body's instructions.
+    entry = _entry("excluded")
     events = [*_pair(DIRECT_PC, INITIAL + 1), *_pair(INDIRECT_PC, INITIAL + 2)]
-    return _trace("synth:caller", _entry("excluded"), events, INITIAL + 2)
+    events.append({
+        "kind": "read",
+        "pc": "0x2007",
+        "address": entry["regions"][0]["base"],
+        "size": 4,
+        "value": struct.pack("<I", INITIAL + 2).hex(),
+        "value_source": "observed",
+    })
+    return _trace("synth:caller", entry, events, INITIAL + 2)
 
 
 def _dword(recorded: dict) -> int:
@@ -156,9 +165,12 @@ def _qualification_note() -> dict:
     }
 
 
-def _identity(callee_digest: str, caller_fixture: dict, qualification_note: dict) -> str:
+def _identity(callee_digest: str, caller_fixture: dict,
+              qualification_note: dict, caller_candidate=None) -> str:
     payload = {
-        "caller_candidate": CALLER_CANDIDATE,
+        "caller_candidate": inspect.getsource(
+            _reconstructed_caller if caller_candidate is None else caller_candidate
+        ),
         "callee_implementation_digests": [callee_digest],
         "callee_qualification": qualification_note,
         "comparator_version": COMPARATOR,
@@ -244,6 +256,13 @@ class CompositionTests(unittest.TestCase):
         self.assertEqual(indirect["pc"], INDIRECT_PC)
         self.assertNotEqual(indirect["pc"], indirect["target"])
         self.assertNotIn(CALLEE, [event["pc"] for event in caller["events"] if "pc" in event])
+        self.assertEqual(caller["events"][-1]["kind"], "read")
+        self.assertEqual(caller["events"][-1]["pc"], "0x2007")
+        self.assertEqual(caller["events"][-1]["address"],
+                         caller["entry_state"]["regions"][0]["base"])
+        self.assertEqual(caller["events"][-1]["size"], 4)
+        self.assertEqual(caller["events"][-1]["value"],
+                         exits[-1]["effects"][0]["value"])
 
         for trace, expected in ((callee, INITIAL + 1), (caller, INITIAL + 2)):
             built = _qualified(trace)
@@ -251,6 +270,7 @@ class CompositionTests(unittest.TestCase):
             self.assertEqual(native.compare(built, replayed), [])
             self.assertEqual(int(replayed["registers"]["rax"], 16), expected)
         caller_fixture = _qualified(caller)
+        self.assertEqual(caller_fixture["dependencies"], [])
         self.assertEqual(
             _compare_caller(_reconstructed_caller(INITIAL, _original_callee), caller_fixture),
             [],
@@ -274,6 +294,16 @@ class CompositionTests(unittest.TestCase):
             qualification_note,
         )
         self.assertNotEqual(qualified_identity, defective_identity)
+        self.assertEqual(_canonical(caller_fixture), caller_fixture_bytes)
+
+        def alternative_caller(value, callee):
+            return value, value
+
+        alternative_identity = _identity(
+            digest, caller_fixture, qualification_note,
+            caller_candidate=alternative_caller,
+        )
+        self.assertNotEqual(qualified_identity, alternative_identity)
         self.assertEqual(_canonical(caller_fixture), caller_fixture_bytes)
 
         good = _compare_caller(
