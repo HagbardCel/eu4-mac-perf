@@ -34,6 +34,8 @@ def _no(reason: str) -> dict:
 
 
 def _identity(trace: dict) -> str | None:
+    if trace["function_id"] != FUNCTION_ID:
+        return "unauthenticated-target"
     if trace["evidence"] == "handwritten-synthetic":
         if trace["binary"] is not None:
             return "unauthenticated-target"
@@ -42,8 +44,7 @@ def _identity(trace: dict) -> str | None:
         return "unauthenticated-target"
     target, window = _pin()
     binary = trace["binary"]
-    if (trace["function_id"] != FUNCTION_ID
-            or binary["sha256"] != target["sha256"]
+    if (binary["sha256"] != target["sha256"]
             or binary["entry_rva"] != window["entry_rva"]
             or int(binary["image_base"], 16) != target["image_base"]):
         return "unauthenticated-target"
@@ -71,6 +72,22 @@ def _span(region: dict) -> tuple[int, int]:
 
 def _overlaps(left: tuple[int, int], right: tuple[int, int]) -> bool:
     return left[0] < right[1] and right[0] < left[1]
+
+
+def _buffer_was_read(trace: dict, buffer: dict) -> bool:
+    """True when a flat ``read`` event overlaps the buffer region.
+
+    ``call_exit.effects`` are writes under the frozen schema, so they are not
+    inspected. A read is not inferred from values or from fixture dependencies.
+    """
+    base, end = _span(buffer)
+    for event in trace["events"]:
+        if event.get("kind") != "read":
+            continue
+        start = int(event["address"], 16)
+        if _overlaps((start, start + event["size"]), (base, end)):
+            return True
+    return False
 
 
 def _covered(rows: list[dict]) -> dict[tuple[str, int], int] | None:
@@ -166,8 +183,10 @@ def prepare_scenario(trace: dict) -> dict:
         first = int.from_bytes(
             _slice(dependencies, buffer["id"], rsi["to"]["offset"], 4), "little")
         expected_words = words_from_buffer(first)
-        buffer_arg = format(first, "x")
+        buffer_arg = f"{first:08x}"
     else:
+        if _buffer_was_read(trace, buffer):
+            return _no("unsupported-buffer-read")
         expected_words = words_from_selector(selector)
         buffer_arg = "absent"
     word = int.from_bytes(_slice(covered, context["id"], word_at, 4), "little")

@@ -187,7 +187,7 @@ class TraceTr3Tests(unittest.TestCase):
             prepared = adapter.prepare_scenario(trace)
             self.assertIsNone(prepared["refusal"], slot)
             self.assertEqual(prepared["scenario"]["command"],
-                             f"scenario {slot} ffffffff 11")
+                             f"scenario {slot} ffffffff 00000011")
             self.assertEqual(len(bytes.fromhex(prepared["scenario"]["prestate"])), CONTEXT_SIZE)
             self.assertIsNone(adapter.compare_scenario(prepared, _candidate(prepared)))
 
@@ -209,6 +209,31 @@ class TraceTr3Tests(unittest.TestCase):
         mutated = copy.deepcopy(trace)
         mutated["function_id"] = "other"
         self.assertEqual(adapter.prepare_scenario(mutated)["refusal"], "unauthenticated-target")
+
+    def test_synthetic_function_id(self) -> None:
+        trace = _invocation(slot=0)
+        trace["function_id"] = "other"
+        self.assertEqual(adapter.prepare_scenario(trace)["refusal"], "unauthenticated-target")
+
+    def test_buffer_dword_padding(self) -> None:
+        padded = {0: "00000000", 1: "00000001", 0x100: "00000100", 0xffffffff: "ffffffff"}
+        for first, text in padded.items():
+            trace = _invocation(slot=0, first_dword=first)
+            prepared = adapter.prepare_scenario(trace)
+            self.assertIsNone(prepared["refusal"], hex(first))
+            self.assertEqual(prepared["scenario"]["command"], f"scenario 0 ffffffff {text}")
+        self.assertEqual(adapter.words_from_buffer(0xffffffff), 0)
+        wrapped = fixture.qualify(_invocation(slot=0, first_dword=0xffffffff))
+        word = next(row for row in wrapped["fixture"]["effects"] if row["offset"] == 0xc8)
+        self.assertEqual(word["bytes"], "00000000")
+
+    def test_explicit_length_refuses_observed_buffer_read(self) -> None:
+        trace = _invocation(slot=1, selector=0x10, read_buffer=True)
+        qualified = fixture.qualify(trace)
+        self.assertTrue(qualified["fixture_qualified"])
+        kept = [edge["from"].get("register") for edge in qualified["fixture"]["pointers"]]
+        self.assertIn("rsi", kept)
+        self.assertEqual(adapter.prepare_scenario(trace)["refusal"], "unsupported-buffer-read")
 
     def test_alias_overlap(self) -> None:
         overlapping = _invocation(slot=0, buffer_base=CONTEXT_BASE + 0x100, buffer_size=0x40)
