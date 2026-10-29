@@ -1,0 +1,261 @@
+{
+  "schema": "execution-observation/v1",
+  "function_id": "synth:tr0_chase",
+  "binary": null,
+  "evidence": "qbdi-rosetta",
+  "instrumentation": {
+    "name": "QBDI",
+    "version": "0.12.1"
+  },
+  "entry_state": {
+    "registers": {
+      "rax": "0x0",
+      "rbx": "0x0",
+      "rcx": "0x0",
+      "rdx": "0x0",
+      "rsi": "0x7fa3e2f077e0",
+      "rdi": "0x7fa3e2f04e70",
+      "r8": "0x0",
+      "r9": "0x0",
+      "r10": "0x0",
+      "r11": "0x0",
+      "r12": "0x0",
+      "r13": "0x0",
+      "r14": "0x0",
+      "r15": "0x0",
+      "rbp": "0x7fa3e8108000",
+      "rsp": "0x7fa3e8107f78"
+    },
+    "regions": [
+      {
+        "id": "heap0",
+        "kind": "heap",
+        "base": "0x7fa3e2f04e70",
+        "size": 16,
+        "bytes": "c077f0e2a37f00000300000000000000",
+        "preservation": "required"
+      },
+      {
+        "id": "heap1",
+        "kind": "heap",
+        "base": "0x7fa3e2f077c0",
+        "size": 16,
+        "bytes": "d077f0e2a37f00000000000000000000",
+        "preservation": "required"
+      },
+      {
+        "id": "heap2",
+        "kind": "heap",
+        "base": "0x7fa3e2f077d0",
+        "size": 16,
+        "bytes": "00000000000000003200000000000000",
+        "preservation": "required"
+      },
+      {
+        "id": "heap3",
+        "kind": "heap",
+        "base": "0x7fa3e2f077e0",
+        "size": 8,
+        "bytes": "0000000000000000",
+        "preservation": "required"
+      },
+      {
+        "id": "stack",
+        "kind": "stack",
+        "base": "0x7fa3e8107e80",
+        "size": 256,
+        "bytes": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002a00000000000000",
+        "preservation": "excluded"
+      }
+    ],
+    "pointers": [
+      {
+        "from": {
+          "region": "heap0",
+          "offset": 0
+        },
+        "to": {
+          "region": "heap1",
+          "offset": 0
+        }
+      },
+      {
+        "from": {
+          "region": "heap1",
+          "offset": 0
+        },
+        "to": {
+          "region": "heap2",
+          "offset": 0
+        }
+      },
+      {
+        "from": {
+          "register": "rdi"
+        },
+        "to": {
+          "region": "heap0",
+          "offset": 0
+        }
+      },
+      {
+        "from": {
+          "register": "rsi"
+        },
+        "to": {
+          "region": "heap3",
+          "offset": 0
+        }
+      },
+      {
+        "from": {
+          "register": "rsp"
+        },
+        "to": {
+          "region": "stack",
+          "offset": 248
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "kind": "write",
+      "pc": "0x101122450",
+      "address": "0x7fa3e8107f70",
+      "size": 8,
+      "value": "008010e8a37f0000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "write",
+      "pc": "0x101122454",
+      "address": "0x7fa3e8107f68",
+      "size": 8,
+      "value": "0000000000000000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "write",
+      "pc": "0x101122455",
+      "address": "0x7fa3e8107f60",
+      "size": 8,
+      "value": "0000000000000000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "read",
+      "pc": "0x101122459",
+      "address": "0x7fa3e2f04e70",
+      "size": 8,
+      "value": "c077f0e2a37f0000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "read",
+      "pc": "0x10112245c",
+      "address": "0x7fa3e2f077c0",
+      "size": 8,
+      "value": "d077f0e2a37f0000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "read",
+      "pc": "0x10112245f",
+      "address": "0x7fa3e2f077d8",
+      "size": 8,
+      "value": "3200000000000000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "write",
+      "pc": "0x101122470",
+      "address": "0x7fa3e8107f58",
+      "size": 8,
+      "value": "7524120101000000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "call_enter",
+      "pc": "0x101122470",
+      "target": "0x101122440"
+    },
+    {
+      "kind": "write",
+      "pc": "0x101122440",
+      "address": "0x7fa3e8107f50",
+      "size": 8,
+      "value": "707f10e8a37f0000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "read",
+      "pc": "0x101122447",
+      "address": "0x7fa3e2f04e78",
+      "size": 8,
+      "value": "0300000000000000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "read",
+      "pc": "0x10112244b",
+      "address": "0x7fa3e8107f50",
+      "size": 8,
+      "value": "707f10e8a37f0000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "read",
+      "pc": "0x10112244c",
+      "address": "0x7fa3e8107f58",
+      "size": 8,
+      "value": "7524120101000000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "call_exit",
+      "target": "0x101122440",
+      "effects_complete": false
+    },
+    {
+      "kind": "write",
+      "pc": "0x101122475",
+      "address": "0x7fa3e2f077e0",
+      "size": 8,
+      "value": "9600000000000000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "read",
+      "pc": "0x10112247c",
+      "address": "0x7fa3e8107f68",
+      "size": 8,
+      "value": "0000000000000000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "read",
+      "pc": "0x10112247d",
+      "address": "0x7fa3e8107f70",
+      "size": 8,
+      "value": "008010e8a37f0000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "read",
+      "pc": "0x10112247e",
+      "address": "0x7fa3e8107f78",
+      "size": 8,
+      "value": "2a00000000000000",
+      "value_source": "observed"
+    }
+  ],
+  "exit_state": {
+    "registers": {
+      "rax": "0x96"
+    }
+  },
+  "completeness": "complete",
+  "incomplete_reasons": [],
+  "unresolved_dependencies": []
+}

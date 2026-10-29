@@ -1,0 +1,1661 @@
+{
+  "schema": "tr0-qbdi-receipt/v1",
+  "work_order": "TR0",
+  "contract": "execution-observation/v1",
+  "evidence": "qbdi-rosetta",
+  "host": {
+    "machine": "arm64",
+    "macos": "27.0.1",
+    "probe_architecture": "x86_64",
+    "rosetta": {
+      "sysctl.proc_translated": 1,
+      "status": "translated"
+    }
+  },
+  "toolchain": {
+    "clang": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+    "cflags": [
+      "-arch",
+      "x86_64",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-mno-avx"
+    ]
+  },
+  "qbdi": {
+    "version": "0.12.1",
+    "architecture": "X86_64",
+    "platform": "osx",
+    "package": {
+      "name": "QBDI-0.12.1-osx-X86_64.pkg",
+      "url": "https://github.com/QBDI/QBDI/releases/download/v0.12.1/QBDI-0.12.1-osx-X86_64.pkg",
+      "sha256": "5fc095acd69f0417db9fad58e75061d391413301d6a19d6d39636d1199d9c7d3"
+    },
+    "linkage": "static lib/libQBDI.a from the package payload"
+  },
+  "probe": {
+    "sources_sha256": {
+      "probe_subject.h": "1712f11ba6d97e03d1418daae737e5843af9d181aca9abf975a92d778804a056",
+      "probe_subject.c": "ae9e2723923524a544b3d405fe04741c960d564bbd5308afce8bd70af26597d2",
+      "probe_main.c": "ff8160d56d023bc1de523c2cf011bab73898179f0596b1b9be86b0b3c1e3222b",
+      "intercept_stub.S": "5cd03c34ee115baedac9d4249644901bf6f49836b74b13f73ad94c0c9239a7c5"
+    },
+    "executable_sha256": "68759a39c4eaf47fb52de9531239bac2f7611d6f7cb0a82f9ccb990a5dc4805c",
+    "subject": "tr0_chase",
+    "helper": "tr0_scale",
+    "instrumentation_scope": {
+      "section": "__TEXT,__tr0_scope",
+      "start": "0x101122440",
+      "end": "0x10112247f"
+    }
+  },
+  "commands": {
+    "producer": "python3 -m reconstruction_trace.qbdi.producer --out reconstruction_trace/qbdi",
+    "build": [
+      "clang",
+      "-arch",
+      "x86_64",
+      "-O2",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-mno-avx",
+      "-I",
+      "$HOME/.cache/eu4-mac-perf/qbdi/0.12.1/include",
+      "-o",
+      "$HOME/.cache/eu4-mac-perf/tr0-build/tr0_qbdi_probe",
+      "reconstruction_trace/qbdi/probe_subject.c",
+      "reconstruction_trace/qbdi/probe_main.c",
+      "reconstruction_trace/qbdi/intercept_stub.S",
+      "$HOME/.cache/eu4-mac-perf/qbdi/0.12.1/lib/libQBDI.a",
+      "-lc++"
+    ],
+    "run": [
+      "arch",
+      "-x86_64",
+      "$HOME/.cache/eu4-mac-perf/tr0-build/tr0_qbdi_probe",
+      "3",
+      "50"
+    ]
+  },
+  "declared_expectations": {
+    "inputs": {
+      "head_value": 3,
+      "tail_value": 50
+    },
+    "target_accesses": [
+      {
+        "label": "head->next",
+        "kind": "read",
+        "region": "heap0",
+        "offset": 0,
+        "size": 8,
+        "value": {
+          "pointer_to": "heap1",
+          "offset": 0
+        }
+      },
+      {
+        "label": "head->next->next",
+        "kind": "read",
+        "region": "heap1",
+        "offset": 0,
+        "size": 8,
+        "value": {
+          "pointer_to": "heap2",
+          "offset": 0
+        }
+      },
+      {
+        "label": "tail->value",
+        "kind": "read",
+        "region": "heap2",
+        "offset": 8,
+        "size": 8,
+        "value": {
+          "integer": 50
+        }
+      },
+      {
+        "label": "helper reads *factor",
+        "kind": "read",
+        "region": "heap0",
+        "offset": 8,
+        "size": 8,
+        "value": {
+          "integer": 3
+        },
+        "inside_helper_call": true
+      },
+      {
+        "label": "*out",
+        "kind": "write",
+        "region": "heap3",
+        "offset": 0,
+        "size": 8,
+        "value": {
+          "integer": 150
+        }
+      }
+    ],
+    "exit_rax": "0x96",
+    "native_result": 150
+  },
+  "runs": {
+    "vm_call": {
+      "observation": "observation-vm_call.json",
+      "observation_sha256": "e8a26267b1f665e2433ad1e052b0d04cffc81f9cd2764161901d3a45eb5be329",
+      "completeness": "complete",
+      "incomplete_reasons": [],
+      "unresolved_dependencies": [],
+      "results": {
+        "expected_accesses_match": {
+          "value": true,
+          "declared": [
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f04e70",
+              "size": 8,
+              "value": "c077f0e2a37f0000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f077c0",
+              "size": 8,
+              "value": "d077f0e2a37f0000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f077d8",
+              "size": 8,
+              "value": "3200000000000000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f04e78",
+              "size": 8,
+              "value": "0300000000000000"
+            },
+            {
+              "kind": "write",
+              "address": "0x7fa3e2f077e0",
+              "size": 8,
+              "value": "9600000000000000"
+            }
+          ],
+          "observed_target_accesses": [
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f04e70",
+              "size": 8,
+              "value": "c077f0e2a37f0000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f077c0",
+              "size": 8,
+              "value": "d077f0e2a37f0000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f077d8",
+              "size": 8,
+              "value": "3200000000000000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f04e78",
+              "size": 8,
+              "value": "0300000000000000"
+            },
+            {
+              "kind": "write",
+              "address": "0x7fa3e2f077e0",
+              "size": 8,
+              "value": "9600000000000000"
+            }
+          ],
+          "compiler_generated_accesses": {
+            "count": 10,
+            "reads": 5,
+            "writes": 5
+          },
+          "unclassified_accesses": 0
+        },
+        "instrumentation_complete": {
+          "value": true,
+          "executed_instructions": 24,
+          "memory_instructions": 15,
+          "recorded_accesses": 15,
+          "unreconciled_instructions": [],
+          "flagged_accesses": [],
+          "run_gaps": []
+        },
+        "fixture_qualified": {
+          "value": false,
+          "blocked_by": [
+            "TR0 builds no fixture: qualification belongs to reconstruction_trace/fixture.py (TR1) and the QBDI-to-fixture integration (TR2)"
+          ]
+        }
+      },
+      "call_boundary": {
+        "result": "supported",
+        "helper_target": "0x101122440",
+        "call_enter": {
+          "kind": "call_enter",
+          "pc": "0x101122470",
+          "target": "0x101122440"
+        },
+        "call_exit": {
+          "kind": "call_exit",
+          "target": "0x101122440",
+          "effects_complete": false
+        },
+        "nested_events": 4,
+        "declared_nested_accesses_inside": true,
+        "reason": null
+      },
+      "wall_ns": 1536375
+    },
+    "interception": {
+      "observation": "observation-interception.json",
+      "observation_sha256": "919d26c4bfa420549315d8f4932929809941f822a248dd10ee3468ae00a87ee4",
+      "completeness": "complete",
+      "incomplete_reasons": [],
+      "unresolved_dependencies": [],
+      "results": {
+        "expected_accesses_match": {
+          "value": true,
+          "declared": [
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f077f0",
+              "size": 8,
+              "value": "e072f0e2a37f0000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f072e0",
+              "size": 8,
+              "value": "f072f0e2a37f0000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f072f8",
+              "size": 8,
+              "value": "3200000000000000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f077f8",
+              "size": 8,
+              "value": "0300000000000000"
+            },
+            {
+              "kind": "write",
+              "address": "0x7fa3e2f07300",
+              "size": 8,
+              "value": "9600000000000000"
+            }
+          ],
+          "observed_target_accesses": [
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f077f0",
+              "size": 8,
+              "value": "e072f0e2a37f0000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f072e0",
+              "size": 8,
+              "value": "f072f0e2a37f0000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f072f8",
+              "size": 8,
+              "value": "3200000000000000"
+            },
+            {
+              "kind": "read",
+              "address": "0x7fa3e2f077f8",
+              "size": 8,
+              "value": "0300000000000000"
+            },
+            {
+              "kind": "write",
+              "address": "0x7fa3e2f07300",
+              "size": 8,
+              "value": "9600000000000000"
+            }
+          ],
+          "compiler_generated_accesses": {
+            "count": 10,
+            "reads": 5,
+            "writes": 5
+          },
+          "unclassified_accesses": 0
+        },
+        "instrumentation_complete": {
+          "value": true,
+          "executed_instructions": 24,
+          "memory_instructions": 15,
+          "recorded_accesses": 15,
+          "unreconciled_instructions": [],
+          "flagged_accesses": [],
+          "run_gaps": []
+        },
+        "fixture_qualified": {
+          "value": false,
+          "blocked_by": [
+            "TR0 builds no fixture: qualification belongs to reconstruction_trace/fixture.py (TR1) and the QBDI-to-fixture integration (TR2)"
+          ]
+        }
+      },
+      "call_boundary": {
+        "result": "supported",
+        "helper_target": "0x101122440",
+        "call_enter": {
+          "kind": "call_enter",
+          "pc": "0x101122470",
+          "target": "0x101122440"
+        },
+        "call_exit": {
+          "kind": "call_exit",
+          "target": "0x101122440",
+          "effects_complete": false
+        },
+        "nested_events": 4,
+        "declared_nested_accesses_inside": true,
+        "reason": null
+      },
+      "wall_ns": 7708375
+    }
+  },
+  "interception": {
+    "result": "supported",
+    "reason": null,
+    "mechanism": "5-byte jmp rel32 at tr0_chase entry to intercept_stub.S; the stub saves the natural caller's GPRs and FXSAVE state, switches to a private host stack, removes the hook, and qbdi_run executes from the entry to the caller's return address on the caller's own stack; the hook is reinstalled and the caller resumes from QBDI's exit state. This is QBDI's documented hook-then-run pattern without Frida.",
+    "checks": {
+      "natural_call_entered_qbdi": true,
+      "caller_resumed_with_expected_result": true,
+      "hook_removed_after_call": true,
+      "same_instruction_path_as_vm_call": true
+    },
+    "limits": [
+      "The hook is removed while QBDI runs, so a concurrent call from another thread runs natively and untraced.",
+      "A recursive call into the hooked function during the run is traced by the same VM, not intercepted again.",
+      "Unwinding or longjmp through the stub is unsupported."
+    ],
+    "trace_completeness": "complete"
+  },
+  "measurements": {
+    "process_wall_ns": 660066250,
+    "native_call_ns": 83,
+    "vm_call_ns": 1536375,
+    "interception_call_ns": 7708375,
+    "peak_rss_bytes": 8851456,
+    "slowdown_threshold": null
+  },
+  "qbdi_limits": {
+    "threads": "A QBDI VM traces only the thread that calls run/call; other threads run natively. run, call, setOptions and precacheBasicBlock are not reentrant and must not be called from a callback (QBDI 0.12.1 docs/source/api_description.rst, 'User callbacks'). Not exercised: the probe is single-threaded.",
+    "signals": "VMEvent SIGNAL, SYSCALL_ENTRY, SYSCALL_EXIT and VMState.lastSignal are 'Not implemented' (QBDI 0.12.1 include/QBDI/Callback.h). A signal handler is not traced. Not exercised.",
+    "exceptions": "The ExecBroker does not support any exception mechanism, including setjmp/longjmp (QBDI 0.12.1 docs/source/api_description.rst, 'Instrumentation ranges'). Not exercised.",
+    "shared_process": "Host and guest share heap and libraries; non-reentrant code such as the allocator must stay outside the instrumented range (QBDI 0.12.1 docs/source/intro.rst, 'Limitations'). The declared scope holds only the probe subject.",
+    "memory_access_coverage": "x86-64 memory-access information is missing for AVX512, CET, HLE/RTM, MPX, APX, XOP and VGATHER*/VPGATHER* (QBDI 0.12.1 docs/source/architecture_support.rst)."
+  },
+  "decision": "Reliable Rosetta traces with explicit gaps: continue with QBDI.",
+  "probe_output": {
+    "qbdi_version": "0.12.1",
+    "qbdi_architecture": "X86_64",
+    "qbdi_platform": "osx",
+    "proc_translated": 1,
+    "symbols": {
+      "tr0_chase": "0x101122450",
+      "tr0_scale": "0x101122440",
+      "scope_start": "0x101122440",
+      "scope_end": "0x10112247f"
+    },
+    "native": {
+      "result": 150,
+      "out_value": 150,
+      "wall_ns": 83
+    },
+    "hook": {
+      "installed_at_exit": false,
+      "removed": true
+    },
+    "max_rss_bytes": 8851456,
+    "runs": [
+      {
+        "mode": "vm_call",
+        "ran": true,
+        "entered": true,
+        "memory_recording": true,
+        "failure": null,
+        "result": "0x96",
+        "out_value": 150,
+        "wall_ns": 1536375,
+        "entry_gpr": {
+          "rax": "0x0",
+          "rbx": "0x0",
+          "rcx": "0x0",
+          "rdx": "0x0",
+          "rsi": "0x7fa3e2f077e0",
+          "rdi": "0x7fa3e2f04e70",
+          "r8": "0x0",
+          "r9": "0x0",
+          "r10": "0x0",
+          "r11": "0x0",
+          "r12": "0x0",
+          "r13": "0x0",
+          "r14": "0x0",
+          "r15": "0x0",
+          "rbp": "0x7fa3e8108000",
+          "rsp": "0x7fa3e8107f78",
+          "rip": "0x101122450",
+          "eflags": "0x202"
+        },
+        "exit_gpr": {
+          "rax": "0x96",
+          "rbx": "0x0",
+          "rcx": "0x0",
+          "rdx": "0x0",
+          "rsi": "0x32",
+          "rdi": "0x7fa3e2f04e78",
+          "r8": "0x0",
+          "r9": "0x0",
+          "r10": "0x0",
+          "r11": "0x0",
+          "r12": "0x0",
+          "r13": "0x0",
+          "r14": "0x0",
+          "r15": "0x0",
+          "rbp": "0x7fa3e8108000",
+          "rsp": "0x7fa3e8107f80",
+          "rip": "0x2a",
+          "eflags": "0x202"
+        },
+        "regions": [
+          {
+            "id": "heap0",
+            "kind": "heap",
+            "base": "0x7fa3e2f04e70",
+            "size": 16,
+            "bytes": "c077f0e2a37f00000300000000000000"
+          },
+          {
+            "id": "heap1",
+            "kind": "heap",
+            "base": "0x7fa3e2f077c0",
+            "size": 16,
+            "bytes": "d077f0e2a37f00000000000000000000"
+          },
+          {
+            "id": "heap2",
+            "kind": "heap",
+            "base": "0x7fa3e2f077d0",
+            "size": 16,
+            "bytes": "00000000000000003200000000000000"
+          },
+          {
+            "id": "heap3",
+            "kind": "heap",
+            "base": "0x7fa3e2f077e0",
+            "size": 8,
+            "bytes": "0000000000000000"
+          },
+          {
+            "id": "stack",
+            "kind": "stack",
+            "base": "0x7fa3e8107e80",
+            "size": 256,
+            "bytes": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002a00000000000000"
+          }
+        ],
+        "pointers": [
+          {
+            "from": {
+              "region": "heap0",
+              "offset": 0
+            },
+            "to": {
+              "region": "heap1",
+              "offset": 0
+            }
+          },
+          {
+            "from": {
+              "region": "heap1",
+              "offset": 0
+            },
+            "to": {
+              "region": "heap2",
+              "offset": 0
+            }
+          },
+          {
+            "from": {
+              "register": "rdi"
+            },
+            "to": {
+              "region": "heap0",
+              "offset": 0
+            }
+          },
+          {
+            "from": {
+              "register": "rsi"
+            },
+            "to": {
+              "region": "heap3",
+              "offset": 0
+            }
+          },
+          {
+            "from": {
+              "register": "rsp"
+            },
+            "to": {
+              "region": "stack",
+              "offset": 248
+            }
+          }
+        ],
+        "instructions": [
+          {
+            "pc": "0x101122450",
+            "next_pc": "0x101122451",
+            "inst_size": 1,
+            "mnemonic": "PUSH64r",
+            "disassembly": "push rbp",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122450",
+                "address": "0x7fa3e8107f70",
+                "value": "0x7fa3e8108000",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122451",
+            "next_pc": "0x101122454",
+            "inst_size": 3,
+            "mnemonic": "MOV64rr",
+            "disassembly": "mov rbp, rsp",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122454",
+            "next_pc": "0x101122455",
+            "inst_size": 1,
+            "mnemonic": "PUSH64r",
+            "disassembly": "push rbx",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122454",
+                "address": "0x7fa3e8107f68",
+                "value": "0x0",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122455",
+            "next_pc": "0x101122456",
+            "inst_size": 1,
+            "mnemonic": "PUSH64r",
+            "disassembly": "push rax",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122455",
+                "address": "0x7fa3e8107f60",
+                "value": "0x0",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122456",
+            "next_pc": "0x101122459",
+            "inst_size": 3,
+            "mnemonic": "MOV64rr",
+            "disassembly": "mov rbx, rsi",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122459",
+            "next_pc": "0x10112245c",
+            "inst_size": 3,
+            "mnemonic": "MOV64rm",
+            "disassembly": "mov rax, qword ptr [rdi]",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122459",
+                "address": "0x7fa3e2f04e70",
+                "value": "0x7fa3e2f077c0",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112245c",
+            "next_pc": "0x10112245f",
+            "inst_size": 3,
+            "mnemonic": "MOV64rm",
+            "disassembly": "mov rax, qword ptr [rax]",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x10112245c",
+                "address": "0x7fa3e2f077c0",
+                "value": "0x7fa3e2f077d0",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112245f",
+            "next_pc": "0x101122463",
+            "inst_size": 4,
+            "mnemonic": "MOV64rm",
+            "disassembly": "mov rax, qword ptr [rax + 0x8]",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x10112245f",
+                "address": "0x7fa3e2f077d8",
+                "value": "0x32",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122463",
+            "next_pc": "0x101122467",
+            "inst_size": 4,
+            "mnemonic": "CMP64ri8",
+            "disassembly": "cmp rax, 0x29",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122467",
+            "next_pc": "0x101122469",
+            "inst_size": 2,
+            "mnemonic": "JCC_1",
+            "disassembly": "jl 0xc",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122469",
+            "next_pc": "0x10112246d",
+            "inst_size": 4,
+            "mnemonic": "ADD64ri8",
+            "disassembly": "add rdi, 0x8",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x10112246d",
+            "next_pc": "0x101122470",
+            "inst_size": 3,
+            "mnemonic": "MOV64rr",
+            "disassembly": "mov rsi, rax",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122470",
+            "next_pc": "0x101122440",
+            "inst_size": 5,
+            "mnemonic": "CALL64pcrel32",
+            "disassembly": "call -0x35",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": true,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122470",
+                "address": "0x7fa3e8107f58",
+                "value": "0x101122475",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122440",
+            "next_pc": "0x101122441",
+            "inst_size": 1,
+            "mnemonic": "PUSH64r",
+            "disassembly": "push rbp",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122440",
+                "address": "0x7fa3e8107f50",
+                "value": "0x7fa3e8107f70",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122441",
+            "next_pc": "0x101122444",
+            "inst_size": 3,
+            "mnemonic": "MOV64rr",
+            "disassembly": "mov rbp, rsp",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122444",
+            "next_pc": "0x101122447",
+            "inst_size": 3,
+            "mnemonic": "MOV64rr",
+            "disassembly": "mov rax, rsi",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122447",
+            "next_pc": "0x10112244b",
+            "inst_size": 4,
+            "mnemonic": "IMUL64rm",
+            "disassembly": "imul rax, qword ptr [rdi]",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122447",
+                "address": "0x7fa3e2f04e78",
+                "value": "0x3",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112244b",
+            "next_pc": "0x10112244c",
+            "inst_size": 1,
+            "mnemonic": "POP64r",
+            "disassembly": "pop rbp",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x10112244b",
+                "address": "0x7fa3e8107f50",
+                "value": "0x7fa3e8107f70",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112244c",
+            "next_pc": "0x101122475",
+            "inst_size": 1,
+            "mnemonic": "RET64",
+            "disassembly": "ret",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": true,
+            "accesses": [
+              {
+                "inst_address": "0x10112244c",
+                "address": "0x7fa3e8107f58",
+                "value": "0x101122475",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122475",
+            "next_pc": "0x101122478",
+            "inst_size": 3,
+            "mnemonic": "MOV64mr",
+            "disassembly": "mov qword ptr [rbx], rax",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122475",
+                "address": "0x7fa3e2f077e0",
+                "value": "0x96",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122478",
+            "next_pc": "0x10112247c",
+            "inst_size": 4,
+            "mnemonic": "ADD64ri8",
+            "disassembly": "add rsp, 0x8",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x10112247c",
+            "next_pc": "0x10112247d",
+            "inst_size": 1,
+            "mnemonic": "POP64r",
+            "disassembly": "pop rbx",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x10112247c",
+                "address": "0x7fa3e8107f68",
+                "value": "0x0",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112247d",
+            "next_pc": "0x10112247e",
+            "inst_size": 1,
+            "mnemonic": "POP64r",
+            "disassembly": "pop rbp",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x10112247d",
+                "address": "0x7fa3e8107f70",
+                "value": "0x7fa3e8108000",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112247e",
+            "next_pc": "0x2a",
+            "inst_size": 1,
+            "mnemonic": "RET64",
+            "disassembly": "ret",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": true,
+            "accesses": [
+              {
+                "inst_address": "0x10112247e",
+                "address": "0x7fa3e8107f78",
+                "value": "0x2a",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          }
+        ],
+        "exec_transfers": [],
+        "dropped_instructions": 0,
+        "dropped_accesses": 0,
+        "dropped_transfers": 0
+      },
+      {
+        "mode": "interception",
+        "ran": true,
+        "entered": true,
+        "memory_recording": true,
+        "failure": null,
+        "result": "0x96",
+        "out_value": 150,
+        "wall_ns": 7708375,
+        "entry_gpr": {
+          "rax": "0x49d14423abb9e",
+          "rbx": "0x101122450",
+          "rcx": "0x49d14423abb9e",
+          "rdx": "0x0",
+          "rsi": "0x7fa3e2f07300",
+          "rdi": "0x7fa3e2f077f0",
+          "r8": "0x5a2",
+          "r9": "0xffffdfff",
+          "r10": "0x0",
+          "r11": "0x0",
+          "r12": "0x306d0c118",
+          "r13": "0x201dd70c0",
+          "r14": "0x49d14423abb9e",
+          "r15": "0x7fa3e2f07300",
+          "rbp": "0x306d0b730",
+          "rsp": "0x306cee268",
+          "rip": "0x101122450",
+          "eflags": "0x202"
+        },
+        "exit_gpr": {
+          "rax": "0x96",
+          "rbx": "0x101122450",
+          "rcx": "0x49d14423abb9e",
+          "rdx": "0x0",
+          "rsi": "0x32",
+          "rdi": "0x7fa3e2f077f8",
+          "r8": "0x5a2",
+          "r9": "0xffffdfff",
+          "r10": "0x0",
+          "r11": "0x0",
+          "r12": "0x306d0c118",
+          "r13": "0x201dd70c0",
+          "r14": "0x49d14423abb9e",
+          "r15": "0x7fa3e2f07300",
+          "rbp": "0x306d0b730",
+          "rsp": "0x306cee270",
+          "rip": "0x100ed251b",
+          "eflags": "0x202"
+        },
+        "regions": [
+          {
+            "id": "heap0",
+            "kind": "heap",
+            "base": "0x7fa3e2f077f0",
+            "size": 16,
+            "bytes": "e072f0e2a37f00000300000000000000"
+          },
+          {
+            "id": "heap1",
+            "kind": "heap",
+            "base": "0x7fa3e2f072e0",
+            "size": 16,
+            "bytes": "f072f0e2a37f00000000000000000000"
+          },
+          {
+            "id": "heap2",
+            "kind": "heap",
+            "base": "0x7fa3e2f072f0",
+            "size": 16,
+            "bytes": "00000000000000003200000000000000"
+          },
+          {
+            "id": "heap3",
+            "kind": "heap",
+            "base": "0x7fa3e2f07300",
+            "size": 8,
+            "bytes": "0000000000000000"
+          },
+          {
+            "id": "stack",
+            "kind": "stack",
+            "base": "0x306cee170",
+            "size": 256,
+            "bytes": "24634240000c000030c5f0e2a37f0000a0e1ce0603000000dbf4e60bf87f0000000000000000000001000000000000000100000000000000080000000000000060e2ce06030000009f3fd40bf87f0000010000000100000041000000020000001091f0e2a37f000020c7690101000000e030ed00010000002b7be70bf87f0000cb0cdbff0000000000100000000000000000000000000000201ca24bf87f00000020120101000000502412010100000060e2ce06030000008022ed00010000005300000000000000502412010100000018c1d00603000000c070dd0102000000849d1d42149d0400502412010100000002020000000000001b25ed0001000000"
+          }
+        ],
+        "pointers": [
+          {
+            "from": {
+              "region": "heap0",
+              "offset": 0
+            },
+            "to": {
+              "region": "heap1",
+              "offset": 0
+            }
+          },
+          {
+            "from": {
+              "region": "heap1",
+              "offset": 0
+            },
+            "to": {
+              "region": "heap2",
+              "offset": 0
+            }
+          },
+          {
+            "from": {
+              "register": "rdi"
+            },
+            "to": {
+              "region": "heap0",
+              "offset": 0
+            }
+          },
+          {
+            "from": {
+              "register": "rsi"
+            },
+            "to": {
+              "region": "heap3",
+              "offset": 0
+            }
+          },
+          {
+            "from": {
+              "register": "rsp"
+            },
+            "to": {
+              "region": "stack",
+              "offset": 248
+            }
+          }
+        ],
+        "instructions": [
+          {
+            "pc": "0x101122450",
+            "next_pc": "0x101122451",
+            "inst_size": 1,
+            "mnemonic": "PUSH64r",
+            "disassembly": "push rbp",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122450",
+                "address": "0x306cee260",
+                "value": "0x306d0b730",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122451",
+            "next_pc": "0x101122454",
+            "inst_size": 3,
+            "mnemonic": "MOV64rr",
+            "disassembly": "mov rbp, rsp",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122454",
+            "next_pc": "0x101122455",
+            "inst_size": 1,
+            "mnemonic": "PUSH64r",
+            "disassembly": "push rbx",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122454",
+                "address": "0x306cee258",
+                "value": "0x101122450",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122455",
+            "next_pc": "0x101122456",
+            "inst_size": 1,
+            "mnemonic": "PUSH64r",
+            "disassembly": "push rax",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122455",
+                "address": "0x306cee250",
+                "value": "0x49d14423abb9e",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122456",
+            "next_pc": "0x101122459",
+            "inst_size": 3,
+            "mnemonic": "MOV64rr",
+            "disassembly": "mov rbx, rsi",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122459",
+            "next_pc": "0x10112245c",
+            "inst_size": 3,
+            "mnemonic": "MOV64rm",
+            "disassembly": "mov rax, qword ptr [rdi]",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122459",
+                "address": "0x7fa3e2f077f0",
+                "value": "0x7fa3e2f072e0",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112245c",
+            "next_pc": "0x10112245f",
+            "inst_size": 3,
+            "mnemonic": "MOV64rm",
+            "disassembly": "mov rax, qword ptr [rax]",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x10112245c",
+                "address": "0x7fa3e2f072e0",
+                "value": "0x7fa3e2f072f0",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112245f",
+            "next_pc": "0x101122463",
+            "inst_size": 4,
+            "mnemonic": "MOV64rm",
+            "disassembly": "mov rax, qword ptr [rax + 0x8]",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x10112245f",
+                "address": "0x7fa3e2f072f8",
+                "value": "0x32",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122463",
+            "next_pc": "0x101122467",
+            "inst_size": 4,
+            "mnemonic": "CMP64ri8",
+            "disassembly": "cmp rax, 0x29",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122467",
+            "next_pc": "0x101122469",
+            "inst_size": 2,
+            "mnemonic": "JCC_1",
+            "disassembly": "jl 0xc",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122469",
+            "next_pc": "0x10112246d",
+            "inst_size": 4,
+            "mnemonic": "ADD64ri8",
+            "disassembly": "add rdi, 0x8",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x10112246d",
+            "next_pc": "0x101122470",
+            "inst_size": 3,
+            "mnemonic": "MOV64rr",
+            "disassembly": "mov rsi, rax",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122470",
+            "next_pc": "0x101122440",
+            "inst_size": 5,
+            "mnemonic": "CALL64pcrel32",
+            "disassembly": "call -0x35",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": true,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122470",
+                "address": "0x306cee248",
+                "value": "0x101122475",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122440",
+            "next_pc": "0x101122441",
+            "inst_size": 1,
+            "mnemonic": "PUSH64r",
+            "disassembly": "push rbp",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122440",
+                "address": "0x306cee240",
+                "value": "0x306cee260",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122441",
+            "next_pc": "0x101122444",
+            "inst_size": 3,
+            "mnemonic": "MOV64rr",
+            "disassembly": "mov rbp, rsp",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122444",
+            "next_pc": "0x101122447",
+            "inst_size": 3,
+            "mnemonic": "MOV64rr",
+            "disassembly": "mov rax, rsi",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x101122447",
+            "next_pc": "0x10112244b",
+            "inst_size": 4,
+            "mnemonic": "IMUL64rm",
+            "disassembly": "imul rax, qword ptr [rdi]",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122447",
+                "address": "0x7fa3e2f077f8",
+                "value": "0x3",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112244b",
+            "next_pc": "0x10112244c",
+            "inst_size": 1,
+            "mnemonic": "POP64r",
+            "disassembly": "pop rbp",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x10112244b",
+                "address": "0x306cee240",
+                "value": "0x306cee260",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112244c",
+            "next_pc": "0x101122475",
+            "inst_size": 1,
+            "mnemonic": "RET64",
+            "disassembly": "ret",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": true,
+            "accesses": [
+              {
+                "inst_address": "0x10112244c",
+                "address": "0x306cee248",
+                "value": "0x101122475",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122475",
+            "next_pc": "0x101122478",
+            "inst_size": 3,
+            "mnemonic": "MOV64mr",
+            "disassembly": "mov qword ptr [rbx], rax",
+            "may_load": false,
+            "may_store": true,
+            "load_size": 0,
+            "store_size": 8,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x101122475",
+                "address": "0x7fa3e2f07300",
+                "value": "0x96",
+                "size": 8,
+                "type": 2,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x101122478",
+            "next_pc": "0x10112247c",
+            "inst_size": 4,
+            "mnemonic": "ADD64ri8",
+            "disassembly": "add rsp, 0x8",
+            "may_load": false,
+            "may_store": false,
+            "load_size": 0,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": []
+          },
+          {
+            "pc": "0x10112247c",
+            "next_pc": "0x10112247d",
+            "inst_size": 1,
+            "mnemonic": "POP64r",
+            "disassembly": "pop rbx",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x10112247c",
+                "address": "0x306cee258",
+                "value": "0x101122450",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112247d",
+            "next_pc": "0x10112247e",
+            "inst_size": 1,
+            "mnemonic": "POP64r",
+            "disassembly": "pop rbp",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": false,
+            "accesses": [
+              {
+                "inst_address": "0x10112247d",
+                "address": "0x306cee260",
+                "value": "0x306d0b730",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          },
+          {
+            "pc": "0x10112247e",
+            "next_pc": "0x100ed251b",
+            "inst_size": 1,
+            "mnemonic": "RET64",
+            "disassembly": "ret",
+            "may_load": true,
+            "may_store": false,
+            "load_size": 8,
+            "store_size": 0,
+            "is_call": false,
+            "is_return": true,
+            "accesses": [
+              {
+                "inst_address": "0x10112247e",
+                "address": "0x306cee268",
+                "value": "0x100ed251b",
+                "size": 8,
+                "type": 1,
+                "flags": 0
+              }
+            ]
+          }
+        ],
+        "exec_transfers": [],
+        "dropped_instructions": 0,
+        "dropped_accesses": 0,
+        "dropped_transfers": 0
+      }
+    ]
+  }
+}
