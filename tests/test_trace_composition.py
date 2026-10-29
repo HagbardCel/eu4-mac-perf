@@ -23,27 +23,17 @@ STACK_SIZE = 64
 CALLEE = "0x3000"
 DIRECT_PC = "0x2000"
 INDIRECT_PC = "0x2005"
-CALLEE_SOURCE = (
-    "movl (%rdi), %eax\n"
-    "incl %eax\n"
-    "movl %eax, (%rdi)\n"
-    "ret\n"
-)
-CALLER_CANDIDATE = "call qualified callee; call qualified callee"
-QUALIFICATION = {
-    "outcome": "qualified",
-    "scope": "one increment of the dword at rdi",
-}
-COMPARATOR = "tr2-composition-v1"
-HARNESS_ID = "reconstruction_trace.harness.native"
-ASSEMBLY = """\
-.section __TEXT,__text
-.globl _trace_subject_callee
-_trace_subject_callee:
+CALLEE_SOURCE = """\
     movl (%rdi), %eax
     incl %eax
     movl %eax, (%rdi)
     ret
+"""
+CALLER_CANDIDATE = "call qualified callee; call qualified callee"
+QUALIFICATION_SCOPE = "one increment of the dword at rdi"
+COMPARATOR = "tr2-composition-v1"
+HARNESS_ID = "reconstruction_trace.harness.native"
+CALLER_SOURCE = """\
 .globl _trace_subject_caller
 _trace_subject_caller:
     leaq _trace_subject_callee(%rip), %rsi
@@ -52,6 +42,13 @@ _trace_subject_caller:
     movl (%rdi), %eax
     ret
 """
+ASSEMBLY = (
+    ".section __TEXT,__text\n"
+    ".globl _trace_subject_callee\n"
+    "_trace_subject_callee:\n"
+    + CALLEE_SOURCE
+    + CALLER_SOURCE
+)
 
 
 def _regions() -> list[dict]:
@@ -145,11 +142,25 @@ def _canonical(value: dict) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _identity(callee_digest: str, caller_fixture: dict) -> str:
+def _qualification_note() -> dict:
+    """Only an actually qualified callee fixture yields a qualification note."""
+    trace = _callee_trace()
+    schema.validate(trace)
+    result = fixture.qualify(trace)
+    if not result["fixture_qualified"]:
+        raise AssertionError(result["reasons"])
+    return {
+        "outcome": "qualified" if result["fixture_qualified"] else "rejected",
+        "scope": QUALIFICATION_SCOPE,
+        "fixture_sha256": hashlib.sha256(_canonical(result["fixture"])).hexdigest(),
+    }
+
+
+def _identity(callee_digest: str, caller_fixture: dict, qualification_note: dict) -> str:
     payload = {
         "caller_candidate": CALLER_CANDIDATE,
         "callee_implementation_digests": [callee_digest],
-        "callee_qualification": QUALIFICATION,
+        "callee_qualification": qualification_note,
         "comparator_version": COMPARATOR,
         "fixtures": {"caller": caller_fixture},
         "harness": HARNESS_ID,
@@ -165,12 +176,29 @@ def _defective_callee(value: int) -> int:
     return value
 
 
-def _reconstructed_caller(value: int, callee) -> int:
-    return callee(callee(value))
+def _reconstructed_caller(value: int, callee) -> tuple[int, int]:
+    """Return the final buffer dword and RAX; do not embed the callee's body."""
+    final_dword = callee(callee(value))
+    return final_dword, final_dword
 
 
-def _mismatch(actual: int) -> str:
-    return f"caller dword {actual}, original caller left {INITIAL + 2}"
+def _compare_caller(observed: tuple[int, int], caller_fixture: dict) -> list[str]:
+    """Compare both declared caller observations against the qualified fixture."""
+    buf_effects = [
+        effect for effect in caller_fixture["effects"]
+        if (effect["region"], effect["offset"], effect["size"]) == ("buf", 0, 4)
+    ]
+    if len(buf_effects) != 1:
+        raise AssertionError(f"expected one four-byte buf effect, got {buf_effects!r}")
+    expected_dword = int.from_bytes(bytes.fromhex(buf_effects[0]["bytes"]), "little")
+    expected_rax = int(caller_fixture["exit_registers"]["rax"], 16)
+    actual_dword, actual_rax = observed
+    mismatches = []
+    if actual_dword != expected_dword:
+        mismatches.append(f"buf dword {actual_dword}, expected {expected_dword}")
+    if actual_rax != expected_rax:
+        mismatches.append(f"rax {hex(actual_rax)}, expected {hex(expected_rax)}")
+    return mismatches
 
 
 class CompositionTests(unittest.TestCase):
@@ -179,6 +207,15 @@ class CompositionTests(unittest.TestCase):
         cls.workdir = Path(tempfile.mkdtemp(prefix="eu4-tr2-"))
         source = cls.workdir / "pair.S"
         source.write_text(ASSEMBLY)
+        compiled_text = source.read_text()
+        calls = (
+            "    leaq _trace_subject_callee(%rip), %rsi\n",
+            "    call _trace_subject_callee\n",
+            "    call *%rsi\n",
+        )
+        positions = [compiled_text.index(instruction) for instruction in calls]
+        if positions != sorted(positions) or len(set(positions)) != len(calls):
+            raise AssertionError("direct and indirect caller instructions are out of order")
         try:
             cls.harness = native.load(cls.workdir, (source,))
         except native.Unavailable as reason:
@@ -213,24 +250,45 @@ class CompositionTests(unittest.TestCase):
             replayed = self.harness.replay(built)
             self.assertEqual(native.compare(built, replayed), [])
             self.assertEqual(int(replayed["registers"]["rax"], 16), expected)
-        self.assertEqual(_reconstructed_caller(INITIAL, _original_callee), INITIAL + 2)
+        caller_fixture = _qualified(caller)
+        self.assertEqual(
+            _compare_caller(_reconstructed_caller(INITIAL, _original_callee), caller_fixture),
+            [],
+        )
 
     def test_defective_callee_mismatch(self) -> None:
         caller_fixture = _qualified(_caller_trace())
-        fixture_bytes = _canonical(caller_fixture)
+        caller_fixture_bytes = _canonical(caller_fixture)
+        qualification_note = _qualification_note()
+        self.assertEqual(qualification_note["outcome"], "qualified")
+        self.assertEqual(qualification_note["scope"], QUALIFICATION_SCOPE)
+        self.assertIn("fixture_sha256", qualification_note)
+
+        # Hash exactly the callee source that the harness compiled.
         digest = hashlib.sha256(CALLEE_SOURCE.encode("utf-8")).hexdigest()
-        self.assertEqual(set(QUALIFICATION), {"outcome", "scope"})
-        self.assertNotEqual(QUALIFICATION, {"digest": digest})
+        qualified_identity = _identity(digest, caller_fixture, qualification_note)
+        # Identity sensitivity only: this does not claim the defective callee is qualified.
+        defective_identity = _identity(
+            hashlib.sha256(b"defective callee implementation").hexdigest(),
+            caller_fixture,
+            qualification_note,
+        )
+        self.assertNotEqual(qualified_identity, defective_identity)
+        self.assertEqual(_canonical(caller_fixture), caller_fixture_bytes)
 
-        original = _identity(digest, caller_fixture)
-        replaced = _identity(hashlib.sha256(b"defective").hexdigest(), caller_fixture)
-        self.assertNotEqual(original, replaced)
-        self.assertEqual(_canonical(caller_fixture), fixture_bytes)
-
-        first = _mismatch(_reconstructed_caller(INITIAL, _defective_callee))
-        second = _mismatch(_reconstructed_caller(INITIAL, _defective_callee))
+        good = _compare_caller(
+            _reconstructed_caller(INITIAL, _original_callee), caller_fixture
+        )
+        first = _compare_caller(
+            _reconstructed_caller(INITIAL, _defective_callee), caller_fixture
+        )
+        second = _compare_caller(
+            _reconstructed_caller(INITIAL, _defective_callee), caller_fixture
+        )
+        self.assertEqual(good, [])
+        self.assertTrue(first)
         self.assertEqual(first, second)
-        self.assertNotEqual(_reconstructed_caller(INITIAL, _defective_callee), INITIAL + 2)
+        self.assertEqual(_canonical(caller_fixture), caller_fixture_bytes)
 
 
 if __name__ == "__main__":
