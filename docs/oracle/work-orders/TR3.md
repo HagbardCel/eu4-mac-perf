@@ -64,11 +64,15 @@ git diff --exit-code HEAD -- \
 
 python3 - <<'PY'
 import json
-receipt = json.load(open("reconstruction_trace/qbdi/receipt.json"))
-assert receipt["decision"] == (
-    "Reliable Rosetta traces with explicit gaps: continue with QBDI.")
-assert receipt["interception"]["result"] == "supported"
-assert receipt["measurements"]["slowdown_threshold"] is None
+with open("reconstruction_trace/qbdi/receipt.json") as f:
+    receipt = json.load(f)
+if not (
+    receipt["decision"]
+    == "Reliable Rosetta traces with explicit gaps: continue with QBDI."
+    and receipt["interception"]["result"] == "supported"
+    and receipt["measurements"]["slowdown_threshold"] is None
+):
+    raise SystemExit(1)
 PY
 
 tr2_base="$(
