@@ -132,19 +132,34 @@ def _region(region: Any, where: str) -> None:
         raise TraceError(f"{where}.preservation: must be one of {PRESERVATION}")
 
 
+def _target_address(target: dict, regions: dict[str, dict], where: str) -> int:
+    region = regions.get(target["region"])
+    if region is None:
+        raise TraceError(f"{where}: unknown region {target['region']!r}")
+    start = offset(target["offset"], f"{where}.offset")
+    if start > region["size"]:
+        raise TraceError(f"{where}: offset is past the end of its region")
+    return int(region["base"], 16) + start
+
+
 def _pointers(pointers: Any, regions: dict[str, dict], registers: dict, where: str) -> None:
     if not isinstance(pointers, list):
         raise TraceError(f"{where}: expected a list")
     sources = set()
+    windows: list[tuple[int, int]] = []
     for index, edge in enumerate(pointers):
         at = f"{where}[{index}]"
         _keys(edge, frozenset({"from", "to"}), {"from", "to"}, at)
         source = edge["from"]
+        target = _keys(edge["to"], frozenset({"region", "offset"}), {"region", "offset"},
+                       f"{at}.to")
+        expected = _target_address(target, regions, f"{at}.to")
         if isinstance(source, dict) and "register" in source:
             _keys(source, frozenset({"register"}), {"register"}, f"{at}.from")
             if source["register"] not in registers:
                 raise TraceError(f"{at}.from: register {source['register']!r} has no entry value")
             key = ("register", source["register"])
+            recorded = registers[source["register"]]
         else:
             _keys(source, frozenset({"region", "offset"}), {"region", "offset"}, f"{at}.from")
             region = regions.get(source["region"])
@@ -153,17 +168,22 @@ def _pointers(pointers: Any, regions: dict[str, dict], registers: dict, where: s
             start = offset(source["offset"], f"{at}.from.offset")
             if start + POINTER_SIZE > region["size"]:
                 raise TraceError(f"{at}.from: the stored pointer does not fit its region")
+            if "bytes" not in region:
+                raise TraceError(f"{at}.from: the stored pointer is not in recorded bytes")
             key = ("region", source["region"], start)
+            recorded = int.from_bytes(
+                bytes.fromhex(region["bytes"])[start:start + POINTER_SIZE], "little")
+            absolute = int(region["base"], 16) + start
+            windows.append((absolute, absolute + POINTER_SIZE))
         if key in sources:
             raise TraceError(f"{at}.from: a second edge from the same source")
         sources.add(key)
-        target = _keys(edge["to"], frozenset({"region", "offset"}), {"region", "offset"},
-                       f"{at}.to")
-        region = regions.get(target["region"])
-        if region is None:
-            raise TraceError(f"{at}.to: unknown region {target['region']!r}")
-        if offset(target["offset"], f"{at}.to.offset") > region["size"]:
-            raise TraceError(f"{at}.to: offset is past the end of its region")
+        if recorded != expected:
+            raise TraceError(f"{at}: recorded value is {hex(recorded)}, not {hex(expected)}")
+    for index, (start, end) in enumerate(windows):
+        for other, limit in windows[index + 1:]:
+            if start < limit and other < end:
+                raise TraceError(f"{where}: pointer sources overlap at {hex(max(start, other))}")
 
 
 def _memory_event(event: dict, where: str, complete: bool, kind: str | None = None) -> None:
@@ -195,22 +215,27 @@ def _memory_event(event: dict, where: str, complete: bool, kind: str | None = No
 def _events(events: Any, complete: bool) -> None:
     if not isinstance(events, list):
         raise TraceError("events: expected a list")
-    frames: list[int] = []
+    frames: list[dict] = []
     for index, event in enumerate(events):
         where = f"events[{index}]"
         kind = event.get("kind") if isinstance(event, dict) else None
         if kind in ("read", "write"):
             _memory_event(event, where, complete)
+            if frames:
+                frames[-1]["nested"] = True
         elif kind == "call_enter":
             _keys(event, CALL_ENTER_KEYS, set(CALL_ENTER_KEYS), where)
             address(event["pc"], f"{where}.pc")
-            frames.append(address(event["target"], f"{where}.target"))
+            if frames:
+                frames[-1]["nested"] = True
+            frames.append({"target": address(event["target"], f"{where}.target"), "nested": False})
         elif kind == "call_exit":
             _keys(event, CALL_EXIT_KEYS, {"kind", "target"}, where)
             target = address(event["target"], f"{where}.target")
             if not frames:
                 raise TraceError(f"{where}: call_exit without an open frame")
-            if frames.pop() != target:
+            frame = frames.pop()
+            if frame["target"] != target:
                 raise TraceError(f"{where}: call_exit target differs from the open frame")
             effects_complete = event.get("effects_complete", False)
             if not isinstance(effects_complete, bool):
@@ -222,6 +247,9 @@ def _events(events: Any, complete: bool) -> None:
                     raise TraceError(f"{where}.effects: expected a list")
                 for number, effect in enumerate(event["effects"]):
                     _memory_event(effect, f"{where}.effects[{number}]", complete, "write")
+            elif complete and not frame["nested"]:
+                raise TraceError(f"{where}: a frame with no nested events needs "
+                                 "effects_complete: true and an effects list")
         else:
             raise TraceError(f"{where}: unknown event kind {kind!r}")
     if frames and complete:

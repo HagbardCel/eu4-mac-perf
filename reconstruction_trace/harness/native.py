@@ -42,13 +42,19 @@ def _toolchain() -> tuple[list[str], list[str]]:
     return ["-arch", "x86_64"], ["arch", "-x86_64"]
 
 
-def load(workdir: Path) -> "Harness":
-    """Build the harness into ``workdir`` and prove the host can execute it."""
+def load(workdir: Path, extra_sources: tuple[Path, ...] = ()) -> "Harness":
+    """Build the harness into ``workdir`` and prove the host can execute it.
+
+    ``extra_sources`` are additional translation units. A subject name that is
+    not one of the four built-ins resolves only as the symbol
+    ``trace_subject_<name>`` inside this binary.
+    """
     flags, runner = _toolchain()
     binary = Path(workdir) / "trace_harness"
     subprocess.run(
         ["clang", *flags, "-O2", "-Wall", "-Wextra", "-Werror", "-o", str(binary),
-         *(str(HERE / source) for source in SOURCES)],
+         *(str(HERE / source) for source in SOURCES),
+         *(str(path) for path in extra_sources)],
         check=True,
     )
     try:

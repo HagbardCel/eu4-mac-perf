@@ -17,6 +17,7 @@ import copy
 import json
 import shutil
 import struct
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -236,9 +237,19 @@ class SchemaTests(unittest.TestCase):
 
     def test_call_frames_nest_with_matching_targets(self) -> None:
         enter = {"kind": "call_enter", "pc": "0x2000", "target": "0x3000"}
-        good = copy.deepcopy(self.trace)
-        good["events"][1:1] = [enter, {"kind": "call_exit", "target": "0x3000"}]
-        schema.validate(good)
+        empty = copy.deepcopy(self.trace)
+        empty["events"][1:1] = [enter, {"kind": "call_exit", "target": "0x3000"}]
+        self.assertRejected(empty)
+        with self.assertRaises(schema.TraceError):
+            fixture.qualify(empty)
+        covered = copy.deepcopy(self.trace)
+        covered["events"][0:0] = [enter]
+        covered["events"].insert(2, {"kind": "call_exit", "target": "0x3000"})
+        schema.validate(covered)
+        explicit = copy.deepcopy(self.trace)
+        explicit["events"][1:1] = [enter, {"kind": "call_exit", "target": "0x3000",
+                                           "effects_complete": True, "effects": []}]
+        schema.validate(explicit)
         for tail in ([{"kind": "call_exit", "target": "0x3001"}], []):
             trace = copy.deepcopy(self.trace)
             trace["events"][1:1] = [enter, *tail]
@@ -318,7 +329,7 @@ class FixtureTests(unittest.TestCase):
         q["preservation"] = "excluded"
         result = fixture.qualify(trace)
         self.assertTrue(result["fixture_qualified"], result["reasons"])
-        self.assertIn(("q", 0, 4), _ranges(result, "effects"))
+        self.assertNotIn("q", {row["region"] for row in result["fixture"]["effects"]})
 
     def test_missing_input_region_fails_with_address_and_size(self) -> None:
         trace = _fabricated_trace(_chase_case())
@@ -356,6 +367,56 @@ class FixtureTests(unittest.TestCase):
         result = fixture.qualify(trace)
         self.assertFalse(result["fixture_qualified"])
         self.assertIsNone(result["fixture"])
+
+    def test_pointer_edge_must_match_the_recorded_value(self) -> None:
+        trace = copy.deepcopy(_fabricated_trace(_chase_case()))
+        edge = next(item for item in trace["entry_state"]["pointers"]
+                    if item["from"].get("region") == "a")
+        edge["to"] = {"region": "stack", "offset": 0}
+        with self.assertRaises(schema.TraceError):
+            fixture.qualify(trace)
+
+    def test_pointer_source_windows_overlap_by_absolute_address(self) -> None:
+        trace = copy.deepcopy(_fabricated_trace(_chase_case()))
+        entry = trace["entry_state"]
+        original = next(region for region in entry["regions"] if region["id"] == "a")
+        alias = dict(original)
+        alias["id"] = "alias"
+        entry["regions"].append(alias)
+        entry["pointers"].append(_stored("alias", 0, "b"))
+        with self.assertRaises(schema.TraceError):
+            fixture.qualify(trace)
+
+    def test_excluded_stack_write_is_not_an_observable_effect(self) -> None:
+        entry = _fabricate([STACK], [RSP_EDGE])
+        stack = entry["regions"][0]
+        stack["preservation"] = "excluded"
+        inv = _Inventory(entry)
+        written = b"\x11" * 8
+        events = [inv.event("write", "stack", 16, written),
+                  inv.event("read", "stack", 16, written)]
+        result = fixture.qualify(_trace("synth:stack", entry, events,
+                                         {"registers": {"rax": "0x0"}}))
+        self.assertTrue(result["fixture_qualified"], result["reasons"])
+        self.assertEqual(result["fixture"]["effects"], [])
+        self.assertEqual(result["fixture"]["dependencies"], [])
+
+    def test_excluded_stack_read_of_absent_bytes_does_not_qualify(self) -> None:
+        entry = _fabricate([STACK], [RSP_EDGE])
+        stack = entry["regions"][0]
+        value = bytes.fromhex(stack["bytes"])[16:24]
+        inv = _Inventory(entry)
+        events = [inv.event("read", "stack", 16, value)]
+        stack["preservation"] = "excluded"
+        del stack["bytes"]
+        stack["bytes_absent"] = True
+        result = fixture.qualify(_trace("synth:stack", entry, events,
+                                         {"registers": {"rax": "0x0"}}))
+        self.assertFalse(result["fixture_qualified"])
+        self.assertIsNone(result["fixture"])
+        self.assertIn({"address": hex(int(stack["base"], 16) + 16), "size": 8,
+                       "reason": "read of absent initial bytes"},
+                      result["unresolved_dependencies"])
 
     def test_read_value_must_match_recorded_state(self) -> None:
         trace = _fabricated_trace(_chase_case())
@@ -433,6 +494,33 @@ class NativeReplayTests(unittest.TestCase):
             return
         self.assertNotEqual(native.compare(unrelocated, replayed), [])
         self.assertNotEqual(int(replayed["registers"]["rax"], 16), B_VALUE + ADDEND)
+
+    def test_extra_subject_is_called_through_the_entry_stub(self) -> None:
+        (self.workdir / "extra").mkdir()
+        source = self.workdir / "fifth.S"
+        source.write_text(
+            ".section __TEXT,__text\n"
+            ".globl _trace_subject_fifth\n"
+            "_trace_subject_fifth:\n"
+            "    movq %rdi, %rax\n"
+            "    incq %rax\n"
+            "    ret\n")
+        extra = native.load(self.workdir / "extra", (source,))
+        exported = subprocess.run(["nm", str(extra.binary)], capture_output=True, text=True,
+                                  check=True)
+        self.assertIn("T _trace_subject_fifth", exported.stdout)
+        recorded = extra.record("synth:fifth", [STACK], [RSP_EDGE], {"rdi": "0x2a"}, ["rax"])
+        self.assertEqual(recorded["exit_state"]["registers"]["rax"], "0x2b")
+        built = fixture.qualify(_trace("synth:fifth", recorded["entry_state"], [],
+                                        recorded["exit_state"]))
+        self.assertTrue(built["fixture_qualified"], built["reasons"])
+        replayed = extra.replay(built["fixture"])
+        self.assertEqual(native.compare(built["fixture"], replayed), [])
+        self.assertEqual(replayed["registers"]["rax"], "0x2b")
+        for name in ("missing", "printf"):
+            with self.assertRaises(native.HarnessError) as caught:
+                extra.record(f"synth:{name}", [STACK], [RSP_EDGE], {}, ["rax"])
+            self.assertIn("synthetic subject symbol was not found", str(caught.exception))
 
 
 class PcodeImportTests(unittest.TestCase):

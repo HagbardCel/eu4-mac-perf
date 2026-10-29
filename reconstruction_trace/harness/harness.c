@@ -22,6 +22,7 @@
  * call. stdout reports the bases, entry bytes and registers, the observed exit
  * registers and every region's final bytes.
  */
+#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -98,6 +99,7 @@ typedef struct {
 
 static request req;
 static char word[2 * MAX_SIZE + 1];
+static const char *parse_error;
 
 static int fail(const char *message) {
     fprintf(stderr, "trace harness: %s\n", message);
@@ -152,6 +154,29 @@ static int read_hex(region *g) {
     return 1;
 }
 
+static int synthetic_subject_name(const char *name) {
+    if (*name < 'a' || *name > 'z') {
+        return 0;
+    }
+    for (const char *p = name; *p != '\0'; p++) {
+        if ((*p < 'a' || *p > 'z') && (*p < '0' || *p > '9') && *p != '_') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void *linked_subject(const char *name) {
+    char symbol[64];
+    if (!synthetic_subject_name(name)) {
+        return NULL;
+    }
+    if (snprintf(symbol, sizeof(symbol), "trace_subject_%s", name) >= (int)sizeof(symbol)) {
+        return NULL;
+    }
+    return dlsym(RTLD_DEFAULT, symbol);
+}
+
 static int parse(void) {
     while (next_word()) {
         if (strcmp(word, "end") == 0) {
@@ -167,7 +192,11 @@ static int parse(void) {
                 }
             }
             if (req.subject == NULL) {
-                return 0;
+                req.subject = linked_subject(word);
+                if (req.subject == NULL) {
+                    parse_error = "synthetic subject symbol was not found";
+                    return 0;
+                }
             }
         } else if (strcmp(word, "region") == 0) {
             if (req.region_count == MAX_REGIONS || !next_word()) {
@@ -355,7 +384,7 @@ int main(int argc, char **argv) {
         return fail("usage: harness [probe] < request");
     }
     if (!parse()) {
-        return fail("malformed request");
+        return fail(parse_error != NULL ? parse_error : "malformed request");
     }
     if (!check_edges()) {
         return fail("edges are invalid or RSP has no edge into a stack region");

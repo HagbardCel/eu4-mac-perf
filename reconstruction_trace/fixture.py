@@ -96,6 +96,7 @@ def qualify(trace: dict) -> dict:
     entry = trace["entry_state"]
     inventory = _Inventory(entry["regions"])
     written: dict[int, int] = {}
+    observable: dict[int, int] = {}
     dependencies: dict[int, int] = {}
     accessed: set[int] = set()
     reasons: list[str] = []
@@ -117,6 +118,11 @@ def qualify(trace: dict) -> dict:
                 unresolve(outside, "write outside the entry inventory")
             for at, byte in zip(span, value):
                 written[at] = byte
+                region = inventory.region_at(at)
+                # preservation: excluded drops the final effect only. The write stays
+                # in `written` so a later read is not a new input.
+                if region is None or region.get("preservation", "required") != "excluded":
+                    observable[at] = byte
             continue
         missing = set()
         for at, byte in zip(span, value):
@@ -186,7 +192,7 @@ def qualify(trace: dict) -> dict:
             "regions": [dict(region) for region in entry["regions"]],
             "pointers": pointers,
             "dependencies": _per_region(inventory, dependencies),
-            "effects": _per_region(inventory, written),
+            "effects": _per_region(inventory, observable),
             "exit_registers": dict(trace["exit_state"]["registers"]),
         },
     }
