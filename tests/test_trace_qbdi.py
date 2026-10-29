@@ -134,6 +134,31 @@ class TraceQbdiReceiptTests(unittest.TestCase):
         self.assertNotIn("value", event)
         self.assertEqual(evaluation["decision"], producer.OUTCOMES[1])
 
+    def _unusable_width(self, flags: int, size: int) -> None:
+        raw = copy.deepcopy(committed_receipt()["probe_output"])
+        access = instruction(raw, "vm_call", "IMUL64rm")["accesses"][0]
+        pc = access["inst_address"]
+        access["flags"] = flags
+        access["size"] = size
+        evaluation = producer.evaluate(raw)
+        run = evaluation["runs"]["vm_call"]
+        self.assertEqual(run["completeness"], "incomplete")
+        self.assertFalse(run["results"]["instrumentation_complete"]["value"])
+        self.assertFalse(run["results"]["fixture_qualified"]["value"])
+        events = [event for event in evaluation["observations"]["vm_call"]["events"]
+                  if event.get("pc") == pc and event["kind"] in ("read", "write")]
+        self.assertEqual(events, [])
+        flagged = [row for row in run["results"]["instrumentation_complete"]["flagged_accesses"]
+                   if row["address"] == access["address"]]
+        self.assertEqual([(row["size"], row["flags"], row["type"]) for row in flagged],
+                         [(size, flags, access["type"])])
+
+    def test_unknown_size_is_omitted_and_stays_in_the_receipt(self) -> None:
+        self._unusable_width(producer.MEMORY_UNKNOWN_SIZE, 0)
+
+    def test_non_positive_size_without_flags_is_not_complete(self) -> None:
+        self._unusable_width(0, 0)
+
     def test_known_answers_do_not_imply_instrumentation_complete(self) -> None:
         raw = copy.deepcopy(committed_receipt()["probe_output"])
         instruction(raw, "vm_call", "PUSH64r")["accesses"].clear()

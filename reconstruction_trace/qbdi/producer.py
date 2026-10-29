@@ -6,6 +6,10 @@
 
 QBDI is not vendored. Set ``TR0_QBDI_PREFIX`` to an extracted official release
 (the ``usr/local`` payload of ``QBDI_PACKAGE``); the default is under ~/.cache.
+
+Raw QBDI access flags stay on the receipt's per-access log. The normalized
+``execution-observation/v1`` events do not carry them: that event shape is frozen
+and has no flag field. The receipt is where those flags remain available.
 """
 from __future__ import annotations
 
@@ -205,6 +209,8 @@ def _reconcile(inst: dict) -> list[str]:
             problems.append(f"unclassified access type {access['type']}")
         if access["flags"]:
             problems.append("QBDI flags " + "|".join(flag_names(access["flags"])))
+        if access["size"] <= 0:
+            problems.append("non-positive access size")
         if access["inst_address"] != inst["pc"]:
             problems.append("access attributed to another instruction")
     return problems
@@ -250,14 +256,15 @@ def build_observation(run: dict, qbdi_version: str) -> dict:
             if kind is None:
                 continue
             address, size, flags = _int(access["address"]), access["size"], access["flags"]
+            if flags & (MEMORY_UNKNOWN_SIZE | MEMORY_MINIMUM_SIZE) or size <= 0:
+                reasons.append(f"{kind} at {access['address']} by {inst['pc']} has no known size")
+                continue
             event = {"kind": kind, "pc": inst["pc"], "address": access["address"], "size": size}
-            if flags & (MEMORY_UNKNOWN_SIZE | MEMORY_MINIMUM_SIZE | MEMORY_UNKNOWN_VALUE) == 0 \
-                    and size <= 8:
+            if flags & MEMORY_UNKNOWN_VALUE == 0 and size <= 8:
                 event["value"] = _le(_int(access["value"]), size)
                 event["value_source"] = "observed"
             else:
-                reasons.append(f"{kind} at {access['address']} by {inst['pc']} has no known "
-                               "value or size")
+                reasons.append(f"{kind} at {access['address']} by {inst['pc']} has no known value")
             events.append(event)
             if _region_of(regions, address, size) is None:
                 if kind == "read":
@@ -313,7 +320,7 @@ def _memory_results(run: dict, observation: dict) -> dict:
                     for i in insts if (p := _reconcile(i))]
     flagged = [{"pc": i["pc"], "address": a["address"], "size": a["size"], "type": a["type"],
                 "flags": a["flags"], "flag_names": flag_names(a["flags"])}
-               for i in insts for a in i["accesses"] if a["flags"]]
+               for i in insts for a in i["accesses"] if a["flags"] or a["size"] <= 0]
     gaps = _run_gaps(run)
     memory_insts = [i for i in insts if i["may_load"] or i["may_store"]]
     complete = bool(insts) and not unreconciled and not flagged and not gaps
