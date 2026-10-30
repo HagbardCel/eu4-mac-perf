@@ -1295,14 +1295,22 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
         def terminate(self):
             raise OSError("busy")
 
+        def kill(self):
+            self.killed = True
+            raise OSError("unkillable")
+
         child.terminate = terminate.__get__(child, _Child)
+        child.kill = kill.__get__(child, _Child)
         with tempfile.TemporaryDirectory() as tmp:
             status, out, _build = self._launch(tmp, popen)
             payload = json.loads(out.read_text())
-        self.assertEqual(status, 0)
+        self.assertTrue(child.killed)
+        self.assertIsNone(child.returncode)
+        self.assertEqual(status, 1)
         self.assertTrue(payload["raw"]["sealed"])
         self.assertEqual(payload["outcome"], "captured_incomplete")
-        self.assertIn("busy", payload["termination"]["error"])
+        self.assertFalse(payload["termination"]["stopped"])
+        self.assertIn("unkillable", payload["termination"]["error"])
         self.assertIn("process cleanup failed", payload["diagnostic"])
 
     def test_launcher_args_must_be_strings(self) -> None:
