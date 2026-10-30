@@ -24,9 +24,18 @@
 #define STACK_ABOVE 8
 #define HOST_STACK (4u << 20)
 #define PATCH_SIZE 5
-#define MAX_INSTS 21
+#define MAX_INSTS 64
 #define MAX_ACCESSES 4
+#define MAX_ACCESSES_TOTAL 256
+#define MAX_CAPTURE_BYTES 65536
 #define MAX_TRANSFERS 4
+#define GPR_IMAGE_BYTES (18 * 8)
+#define FXSAVE_IMAGE_BYTES 512
+#define INST_META_BYTES 64
+#define ACCESS_CHARGE 32
+#define REGION_META_BYTES 32
+#define FLOW_BYTES 8
+#define UNKNOWN_MEMORY (QBDI_MEMORY_UNKNOWN_VALUE | QBDI_MEMORY_UNKNOWN_SIZE | QBDI_MEMORY_MINIMUM_SIZE)
 
 extern void tr3_insert_stub(void);
 GPRState tr3_entry_gpr, tr3_exit_gpr;
@@ -53,22 +62,26 @@ struct inst {
     rword pc, next_pc;
     uint32_t inst_size, load_size, store_size;
     char mnemonic[32], disassembly[64];
-    bool may_load, may_store, is_call, is_return;
+    bool may_load, may_store, is_call, is_return, have_bytes;
     size_t n_access;
+    uint8_t bytes[15];
     MemoryAccess access[MAX_ACCESSES];
 };
 
 struct run {
     const char *failure;
+    const char *boundary_reason;
+    const char *boundary_from;
+    rword boundary_pc;
     VMInstanceRef vm;
-    bool memory_recording, ran, entered;
+    bool memory_recording, ran, entered, natural_return, unknown_memory;
     GPRState entry, exit;
-    size_t n_regions, n_pointers, n_insts, n_transfers;
+    size_t n_regions, n_pointers, n_insts, n_transfers, n_accesses;
     struct region regions[4];
     struct pointer pointers[4];
     struct inst insts[MAX_INSTS];
     rword transfers[MAX_TRANSFERS];
-    uint64_t dropped_insts, dropped_accesses, dropped_transfers;
+    uint64_t dropped_insts, dropped_accesses, dropped_transfers, dropped_bytes;
 };
 
 static struct run run;
@@ -76,8 +89,10 @@ static uint8_t saved_entry[PATCH_SIZE];
 static uint8_t window_bytes[75];
 static uint8_t mapped_window[75];
 static size_t window_len, mapped_window_len;
-static bool sealed;
+static bool sealed, legacy_regions;
 static const char *refusal;
+static char refusal_text[128];
+static uint64_t cap_insts, cap_accesses, cap_bytes, used_bytes;
 static const char *image_name;
 static const char *expect_file;
 static const char *expect_window;
@@ -208,6 +223,34 @@ static bool write_entry(const uint8_t bytes[PATCH_SIZE]) {
 
 static void refuse(const char *reason) { refusal = reason; }
 
+static bool budget_u64(const char *name, uint64_t ceiling, uint64_t *out) {
+    const char *text = getenv(name);
+    if (text == NULL || text[0] == '\0' || !parse_u64(text, out)) {
+        refuse("budget was not supplied");
+        return false;
+    }
+    if (*out == 0) {
+        refuse("budget is not positive");
+        return false;
+    }
+    if (*out > ceiling) {
+        refuse("budget exceeds the capture ceiling");
+        return false;
+    }
+    return true;
+}
+
+static size_t envelope_size(void) {
+    /* entry/exit GPR, both FXSAVE images, and the mapped window */
+    return 2 * GPR_IMAGE_BYTES + 2 * FXSAVE_IMAGE_BYTES + window_len;
+}
+
+static bool charge(uint64_t n) {
+    if (used_bytes + n > cap_bytes) return false;
+    used_bytes += n;
+    return true;
+}
+
 static void fail(const char *reason);
 static void publish(void);
 
@@ -257,9 +300,11 @@ static void authenticate(void) {
         return;
     }
     tr3_subject_site = (uint64_t)((intptr_t)preferred_base + slide + (intptr_t)entry_rva);
+    const char *symbol_name = getenv("TR3_SYMBOL");
+    if (symbol_name == NULL || symbol_name[0] == '\0') symbol_name = "tr3_subject";
     const char *check_symbol = getenv("TR3_CHECK_SYMBOL");
     if (check_symbol != NULL && check_symbol[0] != '\0') {
-        void *symbol = dlsym(RTLD_MAIN_ONLY, "tr3_subject");
+        void *symbol = dlsym(RTLD_MAIN_ONLY, symbol_name);
         if (symbol == NULL || (uintptr_t)symbol != (uintptr_t)tr3_subject_site) {
             refuse("subject symbol is not the slid entry");
             return;
@@ -285,6 +330,20 @@ static void authenticate(void) {
         refuse("mapped bytes mismatch");
         return;
     }
+    if (!budget_u64("TR3_MAX_INSTRUCTIONS", MAX_INSTS, &cap_insts) ||
+        !budget_u64("TR3_MAX_ACCESSES", MAX_ACCESSES_TOTAL, &cap_accesses) ||
+        !budget_u64("TR3_MAX_BYTES", MAX_CAPTURE_BYTES, &cap_bytes)) {
+        return;
+    }
+    size_t minimum = envelope_size();
+    if (cap_bytes < minimum) {
+        snprintf(refusal_text, sizeof(refusal_text), "max_bytes below mandatory envelope of %zu",
+                 minimum);
+        refusal = refusal_text;
+        return;
+    }
+    const char *legacy = getenv("TR3_LEGACY_REGIONS");
+    legacy_regions = legacy != NULL && strcmp(legacy, "1") == 0;
     memcpy(saved_entry, mapped_window, PATCH_SIZE);
     have_saved = true;
     int64_t delta = (int64_t)(uintptr_t)tr3_insert_stub - (int64_t)(tr3_subject_site + PATCH_SIZE);
@@ -310,13 +369,12 @@ static void authenticate(void) {
     patched = true;
 }
 
-static VMAction on_entry(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, void *data) {
-    (void)vm;
-    (void)fpr;
-    struct run *current = data;
-    if (current->entered) return QBDI_CONTINUE;
-    current->entered = true;
-    current->entry = *gpr;
+static void snapshot_legacy(struct run *current, GPRState *gpr) {
+    size_t stack_bytes = STACK_BELOW + STACK_ABOVE;
+    if (!charge(REGION_META_BYTES + 8) || !charge(REGION_META_BYTES + stack_bytes)) {
+        current->dropped_bytes++;
+        return;
+    }
     struct region *cell = &current->regions[current->n_regions];
     snprintf(cell->id, sizeof(cell->id), "cell");
     cell->kind = "heap";
@@ -330,12 +388,54 @@ static VMAction on_entry(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, void *d
     snprintf(stack->id, sizeof(stack->id), "stack");
     stack->kind = "stack";
     stack->base = gpr->rsp - STACK_BELOW;
-    stack->size = STACK_BELOW + STACK_ABOVE;
+    stack->size = stack_bytes;
     memcpy(stack->bytes, (const void *)stack->base, stack->size);
     current->pointers[current->n_pointers++] =
         (struct pointer){"rsp", (int)current->n_regions, STACK_BELOW};
     current->n_regions++;
+}
+
+static void note_boundary(struct run *current, const char *reason, const char *from, rword pc) {
+    current->boundary_reason = reason;
+    current->boundary_from = from;
+    current->boundary_pc = pc;
+    if (!charge(FLOW_BYTES)) current->dropped_bytes++;
+}
+
+static bool left_window(rword pc) {
+    rword begin = (rword)tr3_subject_site;
+    return pc < begin || pc >= begin + (rword)window_len;
+}
+
+static VMAction on_pre(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, void *data) {
+    (void)fpr;
+    struct run *current = data;
+    if (!current->entered) {
+        current->entered = true;
+        current->entry = *gpr;
+        if (legacy_regions) snapshot_legacy(current, gpr);
+    }
+    const InstAnalysis *analysis = qbdi_getInstAnalysis(vm, QBDI_ANALYSIS_INSTRUCTION);
+    if (analysis != NULL && analysis->isCall) {
+        note_boundary(current, "call", "preinst", analysis->address);
+        return QBDI_STOP;
+    }
     return QBDI_CONTINUE;
+}
+
+static void keep_accesses(struct run *current, struct inst *item, MemoryAccess *access, size_t count) {
+    size_t slot = count < MAX_ACCESSES ? count : MAX_ACCESSES;
+    if (count > MAX_ACCESSES) current->dropped_accesses += count - MAX_ACCESSES;
+    for (size_t i = 0; i < slot; i++) {
+        if (current->n_accesses >= cap_accesses || current->n_accesses >= MAX_ACCESSES_TOTAL ||
+            !charge(ACCESS_CHARGE)) {
+            current->dropped_accesses += slot - i;
+            return;
+        }
+        item->access[item->n_access++] = access[i];
+        current->n_accesses++;
+        if (access[i].flags & UNKNOWN_MEMORY) current->unknown_memory = true;
+    }
 }
 
 static VMAction on_inst(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, void *data) {
@@ -343,14 +443,22 @@ static VMAction on_inst(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, void *da
     struct run *current = data;
     size_t count = 0;
     MemoryAccess *access = qbdi_getInstMemoryAccess(vm, &count);
-    if (current->n_insts == MAX_INSTS) {
-        current->dropped_insts++;
-        current->dropped_accesses += count;
-        free(access);
-        return QBDI_CONTINUE;
-    }
     const InstAnalysis *analysis =
         qbdi_getInstAnalysis(vm, QBDI_ANALYSIS_INSTRUCTION | QBDI_ANALYSIS_DISASSEMBLY);
+    bool escape = analysis->isBranch && !analysis->isReturn && left_window(gpr->rip);
+    bool room = current->n_insts < cap_insts && current->n_insts < MAX_INSTS;
+    uint64_t cost = INST_META_BYTES + analysis->instSize;
+    if (!room || !charge(cost)) {
+        current->dropped_insts++;
+        current->dropped_accesses += count;
+        if (room) current->dropped_bytes++;
+        free(access);
+        if (escape) {
+            note_boundary(current, "out-of-range", "postinst", gpr->rip);
+            return QBDI_STOP;
+        }
+        return QBDI_CONTINUE;
+    }
     struct inst *item = &current->insts[current->n_insts++];
     item->pc = analysis->address;
     item->next_pc = gpr->rip;
@@ -363,10 +471,18 @@ static VMAction on_inst(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, void *da
     item->is_return = analysis->isReturn;
     item->load_size = analysis->loadSize;
     item->store_size = analysis->storeSize;
-    item->n_access = count < MAX_ACCESSES ? count : MAX_ACCESSES;
-    if (count > MAX_ACCESSES) current->dropped_accesses += count - MAX_ACCESSES;
-    if (item->n_access) memcpy(item->access, access, item->n_access * sizeof(*access));
+    rword begin = (rword)tr3_subject_site;
+    if (analysis->instSize <= sizeof(item->bytes) && analysis->address >= begin &&
+        analysis->address + analysis->instSize <= begin + (rword)window_len) {
+        memcpy(item->bytes, mapped_window + (analysis->address - begin), analysis->instSize);
+        item->have_bytes = true;
+    }
+    keep_accesses(current, item, access, count);
     free(access);
+    if (escape) {
+        note_boundary(current, "out-of-range", "postinst", gpr->rip);
+        return QBDI_STOP;
+    }
     return QBDI_CONTINUE;
 }
 
@@ -388,7 +504,7 @@ static bool vm_setup(void) {
     rword end = begin + (rword)window_len;
     qbdi_addInstrumentedRange(run.vm, begin, end);
     run.memory_recording = qbdi_recordMemoryAccess(run.vm, QBDI_MEMORY_READ_WRITE);
-    vm_ready = qbdi_addCodeAddrCB(run.vm, begin, QBDI_PREINST, on_entry, &run, 0) !=
+    vm_ready = qbdi_addCodeRangeCB(run.vm, begin, end, QBDI_PREINST, on_pre, &run, 0) !=
                    QBDI_INVALID_EVENTID &&
                qbdi_addCodeRangeCB(run.vm, begin, end, QBDI_POSTINST, on_inst, &run, 0) !=
                    QBDI_INVALID_EVENTID &&
@@ -490,6 +606,12 @@ static bool write_log(void) {
     emit_gpr(out, &run.entry);
     fprintf(out, ", \"exit_gpr\": ");
     emit_gpr(out, &run.exit);
+    fputs(", \"entry_fpr\": ", out);
+    if (run.entered) hex_bytes(out, (const uint8_t *)&tr3_entry_fpr, FXSAVE_IMAGE_BYTES);
+    else fputs("null", out);
+    fputs(", \"exit_fpr\": ", out);
+    if (run.entered) hex_bytes(out, (const uint8_t *)&tr3_exit_fpr, FXSAVE_IMAGE_BYTES);
+    else fputs("null", out);
     fprintf(out, ", \"regions\": [");
     for (size_t i = 0; i < run.n_regions; i++) {
         const struct region *region = &run.regions[i];
@@ -516,11 +638,14 @@ static bool write_log(void) {
                 "%s{\"pc\": \"0x%llx\", \"next_pc\": \"0x%llx\", \"inst_size\": %u, "
                 "\"mnemonic\": \"%s\", \"disassembly\": \"%s\", \"may_load\": %s, "
                 "\"may_store\": %s, \"load_size\": %u, \"store_size\": %u, \"is_call\": %s, "
-                "\"is_return\": %s, \"accesses\": [",
+                "\"is_return\": %s, \"bytes\": ",
                 i ? ", " : "", (unsigned long long)item->pc, (unsigned long long)item->next_pc,
                 item->inst_size, item->mnemonic, item->disassembly, item->may_load ? "true" : "false",
                 item->may_store ? "true" : "false", item->load_size, item->store_size,
                 item->is_call ? "true" : "false", item->is_return ? "true" : "false");
+        if (item->have_bytes) hex_bytes(out, item->bytes, item->inst_size);
+        else fputs("null", out);
+        fputs(", \"accesses\": [", out);
         for (size_t j = 0; j < item->n_access; j++) {
             const MemoryAccess *access = &item->access[j];
             fprintf(out,
@@ -536,11 +661,23 @@ static bool write_log(void) {
     for (size_t i = 0; i < run.n_transfers; i++) {
         fprintf(out, "%s\"0x%llx\"", i ? ", " : "", (unsigned long long)run.transfers[i]);
     }
+    bool execution_complete = refusal == NULL && run.natural_return && run.boundary_reason == NULL &&
+                              !run.unknown_memory && run.dropped_insts == 0 && run.dropped_accesses == 0 &&
+                              run.dropped_transfers == 0 && run.dropped_bytes == 0 && run.entered;
     fprintf(out,
             "], \"dropped_instructions\": %llu, \"dropped_accesses\": %llu, "
-            "\"dropped_transfers\": %llu}}\n",
+            "\"dropped_transfers\": %llu, \"dropped_bytes\": %llu, \"execution_complete\": %s, "
+            "\"rejected_boundary\": ",
             (unsigned long long)run.dropped_insts, (unsigned long long)run.dropped_accesses,
-            (unsigned long long)run.dropped_transfers);
+            (unsigned long long)run.dropped_transfers, (unsigned long long)run.dropped_bytes,
+            execution_complete ? "true" : "false");
+    if (run.boundary_reason != NULL) {
+        fprintf(out, "{\"reason\": \"%s\", \"from\": \"%s\", \"pc\": \"0x%llx\"}",
+                run.boundary_reason, run.boundary_from, (unsigned long long)run.boundary_pc);
+    } else {
+        fputs("null", out);
+    }
+    fputs("}}\n", out);
     if (!durable) return false;
     /* sealed only after rename; a failed write stays retryable from the destructor */
     if (ferror(out) || fflush(out) != 0 || fsync(fileno(out)) != 0) {
@@ -592,13 +729,20 @@ void tr3_insert_dispatch(void) {
     rword stop = *(const rword *)tr3_entry_gpr.rsp;
     qbdi_setGPRState(run.vm, &tr3_entry_gpr);
     qbdi_setFPRState(run.vm, &tr3_entry_fpr);
+    used_bytes = envelope_size();
     qbdi_invocations++;
     run.ran = qbdi_run(run.vm, (rword)tr3_subject_site, stop);
     tr3_exit_gpr = *qbdi_getGPRState(run.vm);
     tr3_exit_fpr = *qbdi_getFPRState(run.vm);
     run.exit = tr3_exit_gpr;
-    if (!run.ran || !run.entered || tr3_exit_gpr.rip != stop ||
-        tr3_exit_gpr.rsp != tr3_entry_gpr.rsp + 8) {
+    run.natural_return = run.ran && run.entered && run.boundary_reason == NULL &&
+                         tr3_exit_gpr.rip == stop && tr3_exit_gpr.rsp == tr3_entry_gpr.rsp + 8;
+    if (run.boundary_reason != NULL) {
+        run.natural_return = false;
+        publish();
+        exit(0); /* sealed incomplete; do not resume an unverified continuation */
+    }
+    if (!run.natural_return) {
         fail(run.ran ? "QBDI did not return to the natural call site" : "QBDI executed no block");
     }
     publish();

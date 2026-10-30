@@ -590,6 +590,182 @@ class TraceTr3Tests(unittest.TestCase):
         schema.validate(observation)
         self._assert_startup(observation, receipt)
 
+    def _darwin_subject(self) -> bool:
+        if platform.system() != "Darwin":
+            self.assertNotEqual(
+                platform.system(), "Darwin",
+                "this host checks the committed startup receipt and does not execute the subject")
+            return False
+        reason = native.unsupported_host_reason()
+        self.assertIsNone(reason, reason)
+        return True
+
+    def _run_target(self, build_dir: Path, host: Path, dylib: Path, symbol: str, budgets: dict,
+                    *, legacy: bool = False, log_name: str = "insert.json"):
+        prepared = startup.prepare_target(host, symbol, startup.CEILING)
+        log = build_dir / log_name
+        env = startup.target_env(dylib, log, prepared, budgets, legacy=legacy)
+        proc, raw = startup.acquire(host, env, log)
+        return proc, raw, prepared
+
+    def _assert_instruction_bytes(self, raw: dict, window: bytes) -> None:
+        mapped = bytes.fromhex(raw["mapped_window"])
+        self.assertEqual(mapped, window)
+        site = int(raw["image"]["runtime_site"], 16)
+        self.assertGreaterEqual(len(raw["run"]["instructions"]), 1)
+        for inst in raw["run"]["instructions"]:
+            offset = int(inst["pc"], 16) - site
+            size = inst["inst_size"]
+            self.assertEqual(bytes.fromhex(inst["bytes"]), mapped[offset:offset + size])
+
+    @staticmethod
+    def _norm_snap(blob: bytes):
+        regs = [int.from_bytes(blob[i:i + 8], "little") for i in range(0, 128, 8)]
+        rsp = regs[15]
+        flags = int.from_bytes(blob[128:136], "little") & 0xCD5
+        normalized = []
+        for value in regs:
+            if rsp - 0x8000 <= value <= rsp + 0x8000:
+                normalized.append(value - rsp)
+            else:
+                normalized.append(value)
+        fx = blob[144:656]
+        parts = [fx[0:2], fx[2:4], fx[4:5], fx[24:28]]
+        for index in range(8):
+            parts.append(fx[32 + 16 * index:32 + 16 * index + 10])
+        parts.append(fx[160:416])
+        return tuple(normalized), flags, b"".join(parts)
+
+    def test_two_leaves_share_one_dylib(self) -> None:
+        if not self._darwin_subject():
+            return
+        with tempfile.TemporaryDirectory() as tmp:
+            build_dir = Path(tmp)
+            host, dylib = startup.build(build_dir)
+            digest = hashlib.sha256(dylib.read_bytes()).hexdigest()
+            _, subject, subject_prep = self._run_target(
+                build_dir, host, dylib, "_tr3_subject", startup.CEILING, log_name="subject.json")
+            _, leaf, leaf_prep = self._run_target(
+                build_dir, host, dylib, "_tr3_leaf_b", startup.CEILING, log_name="leaf.json")
+            self.assertEqual(hashlib.sha256(dylib.read_bytes()).hexdigest(), digest)
+            for prepared in (subject_prep, leaf_prep):
+                self.assertGreaterEqual(prepared["window_len"], 5)
+                self.assertLessEqual(prepared["window_len"], 75)
+            self._assert_instruction_bytes(subject, subject_prep["window"])
+            self._assert_instruction_bytes(leaf, leaf_prep["window"])
+            self.assertNotEqual(subject_prep["window"], leaf_prep["window"])
+            self.assertTrue(subject["run"]["execution_complete"], subject["run"])
+            self.assertTrue(leaf["run"]["execution_complete"], leaf["run"])
+            site = int(leaf["image"]["runtime_site"], 16)
+            end = site + leaf_prep["window_len"]
+            branched = [inst for inst in leaf["run"]["instructions"]
+                        if not inst["is_return"]
+                        and int(inst["next_pc"], 16) != int(inst["pc"], 16) + inst["inst_size"]]
+            self.assertTrue(branched)
+            for inst in branched:
+                nxt = int(inst["next_pc"], 16)
+                self.assertTrue(site <= nxt < end)
+
+    def test_intercepted_leaf_matches_native_snapshot(self) -> None:
+        if not self._darwin_subject():
+            return
+        with tempfile.TemporaryDirectory() as tmp:
+            build_dir = Path(tmp)
+            host, dylib = startup.build(build_dir)
+            proc, raw, _prepared = self._run_target(
+                build_dir, host, dylib, "_tr3_leaf_b", startup.CEILING, log_name="leaf.json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        host_out = json.loads(proc.stdout)
+        self.assertEqual(host_out["snaps"], 2)
+        entry = self._norm_snap(bytes.fromhex(host_out["snap_entry0"]))
+        self.assertEqual(entry, self._norm_snap(bytes.fromhex(host_out["snap_entry1"])))
+        intercepted = self._norm_snap(bytes.fromhex(host_out["snap_exit0"]))
+        native_exit = self._norm_snap(bytes.fromhex(host_out["snap_exit1"]))
+        self.assertNotEqual(entry, intercepted)
+        self.assertEqual(intercepted, native_exit)
+        self.assertEqual(raw["hook"]["count"], 1)
+        self.assertTrue(raw["run"]["execution_complete"])
+
+    def _assert_rejected_transfer(self, build_dir: Path, host: Path, dylib: Path, symbol: str,
+                                  reason: str) -> None:
+        _proc, raw, prepared = self._run_target(
+            build_dir, host, dylib, symbol, startup.CEILING, log_name=f"{reason}.json")
+        self.assertTrue(raw["sealed"])
+        self.assertIsNone(raw["refusal"])
+        self.assertFalse(raw["run"]["execution_complete"])
+        boundary = raw["run"]["rejected_boundary"]
+        if reason == "call":
+            self.assertEqual(boundary["reason"], "call")
+            self.assertEqual(boundary["from"], "preinst")
+            self.assertNotIn(boundary["pc"], [inst["pc"] for inst in raw["run"]["instructions"]])
+            self.assertFalse(any(inst["is_call"] for inst in raw["run"]["instructions"]))
+            return
+        if boundary is None or boundary.get("from") != "postinst":
+            self.fail("blocked: post-instruction callback did not observe the out-of-range transfer")
+        self.assertEqual(boundary["reason"], "out-of-range")
+        site = int(raw["image"]["runtime_site"], 16)
+        end = site + prepared["window_len"]
+        pc = int(boundary["pc"], 16)
+        self.assertTrue(pc < site or pc >= end)
+        self.assertTrue(any(int(inst["next_pc"], 16) == pc for inst in raw["run"]["instructions"]))
+
+    def test_call_and_jump_stay_incomplete(self) -> None:
+        if not self._darwin_subject():
+            return
+        with tempfile.TemporaryDirectory() as tmp:
+            build_dir = Path(tmp)
+            host, dylib = startup.build(build_dir)
+            self._assert_rejected_transfer(build_dir, host, dylib, "_tr3_calls", "call")
+            self._assert_rejected_transfer(build_dir, host, dylib, "_tr3_jump_out", "out-of-range")
+
+    def _assert_budget_refusal(self, build_dir: Path, host: Path, dylib: Path, budgets: dict,
+                               needle: str) -> None:
+        prepared = startup.prepare_target(host, "_tr3_subject", startup.CEILING)
+        log = build_dir / "budget.json"
+        env = startup.target_env(dylib, log, prepared, budgets)
+        proc, raw = startup.acquire(host, env, log)
+        self.assertFalse(raw["patched"])
+        self.assertEqual(raw["hook"]["count"], 0)
+        self.assertIn(needle, raw["refusal"])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["entry"], prepared["window"][:5].hex())
+
+    def test_bad_budgets_refuse_before_the_hook(self) -> None:
+        if not self._darwin_subject():
+            return
+        with tempfile.TemporaryDirectory() as tmp:
+            build_dir = Path(tmp)
+            host, dylib = startup.build(build_dir)
+            prepared = startup.prepare_target(host, "_tr3_subject", startup.CEILING)
+            minimum = startup.envelope(prepared["window_len"])
+            self._assert_budget_refusal(
+                build_dir, host, dylib,
+                {**startup.CEILING, "max_memory_accesses": None}, "budget was not supplied")
+            self._assert_budget_refusal(
+                build_dir, host, dylib, {**startup.CEILING, "max_instructions": 0},
+                "budget is not positive")
+            self._assert_budget_refusal(
+                build_dir, host, dylib, {**startup.CEILING, "max_bytes": startup.CEILING["max_bytes"] + 1},
+                "budget exceeds the capture ceiling")
+            self._assert_budget_refusal(
+                build_dir, host, dylib, {**startup.CEILING, "max_bytes": minimum - 1}, str(minimum))
+
+    def test_runtime_overflow_stays_incomplete(self) -> None:
+        if not self._darwin_subject():
+            return
+        with tempfile.TemporaryDirectory() as tmp:
+            build_dir = Path(tmp)
+            host, dylib = startup.build(build_dir)
+            proc, raw, _prepared = self._run_target(
+                build_dir, host, dylib, "_tr3_subject",
+                {**startup.CEILING, "max_instructions": 1}, log_name="overflow.json")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(raw["patched"])
+        self.assertGreater(len(raw["run"]["instructions"]), 0)
+        self.assertGreater(raw["run"]["dropped_instructions"], 0)
+        self.assertFalse(raw["run"]["execution_complete"])
+        self.assertTrue(raw["sealed"])
+
     def _planted_success(self) -> tuple[dict, dict, str, str]:
         receipt = json.loads((native.HERE / "startup_receipt.json").read_text())
         file_hash, window_hash = "a" * 64, "b" * 64
