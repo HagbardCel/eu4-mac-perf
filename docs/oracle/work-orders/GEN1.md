@@ -1,0 +1,98 @@
+---
+package: GEN1
+upstream: GEN0 trace-target/v1
+contracts:
+  - trace-target/v1
+  - execution-observation/v1
+owned_paths:
+  - reconstruction_trace/tr3/insert.c
+  - reconstruction_trace/tr3/insert_stub.S
+  - reconstruction_trace/tr3/startup.py
+  - reconstruction_trace/tr3/run.py
+  - reconstruction_trace/tr3/startup_receipt.json
+  - reconstruction_trace/tr3/startup_observation.json
+  - tests/test_trace_tr3.py
+frozen_read_only:
+  - docs/oracle/GENERIC_TRACE_V1.md
+  - docs/oracle/TRACE_V1.md
+  - reconstruction_trace/schema.py
+  - reconstruction_trace/fixture.py
+  - reconstruction_trace/tr3/adapter.py
+  - reconstruction_trace/tr3/gfx.py
+  - oracle/**
+  - analysis/reconstruction/**
+  - reverse_engineering/target.json
+  - benchmark/eu4_gfx_live_capture.py
+stop_rules:
+  - contract-conflict
+  - scope-expansion
+  - evidence-limitation
+---
+
+# GEN1 — one dylib, two controlled functions
+
+## Deliverable
+
+Parameterize the existing one-shot QBDI hook from a `trace-target/v1`
+descriptor. Merging this work order authorizes a later implementation PR to
+edit only the owned paths. It does not authorize launching or attaching to
+EU4, and it does not authorize a claim that the tracer is ready for live use.
+
+No new source file is authorized. A required loader module stops for an
+amendment that names that one file. `run.py` may change only so offline
+configuration reads a target descriptor. It gains no EU4 execution.
+
+The two controlled functions use one compiled instrumentation dylib. Only
+their descriptors change. Two separately compiled tracers do not pass.
+
+`startup_receipt.json` and `startup_observation.json` are regenerated when
+source hashes change. They stay the controlled-host receipts.
+
+## Acceptance
+
+1. Two materially different controlled x86-64 leaf functions are captured
+   with the same compiled instrumentation dylib, only their descriptors
+   changing.
+2. Executed instruction paths, memory accesses, entry/exit state, and control
+   flow are accounted for without function-specific semantics.
+3. Actual CPU continuation after the stub is verified for the supported
+   register and flag state, including caller-saved registers and flags. The
+   test reads the CPU after return from the stub. Inspecting the saved QBDI
+   exit structure is not that test. An unsupported register or
+   instruction-state requirement is a refusal, not a transparency claim.
+4. Budget overflow and unsupported execution shapes produce retained,
+   explicitly incomplete raw traces. Intra-range branches stay supported.
+   A call, recursion, an exception, execution outside the authenticated
+   range, or an exit other than the expected return is incomplete.
+5. Existing TR3 controlled-host regression tests and receipts remain valid.
+   No EU4 process is started.
+
+`max_bytes` is the raw capture payload size, excluding serialization
+overhead, as defined in [GENERIC_TRACE_V1.md](../GENERIC_TRACE_V1.md). The
+engine enforces a safety ceiling before allocation. Overflow keeps the record
+and a drop count.
+
+Before any later claim that the tracer is ready for live use, condition 3
+has already passed on the controlled host.
+
+## Non-goals
+
+- No edit to `adapter.py`, `gfx.py`, `fixture.py`, `schema.py`, or
+  `TRACE_V1.md`.
+- No new raw-trace schema, provenance analysis, Frida backend, or second
+  function in one session.
+- No EU4 process in tests or CI.
+
+## Stopping rules
+
+- **Contract conflict:** a change to `execution-observation/v1`, a new raw
+  schema, or a weaker `fixture.qualify()` stops for an amendment.
+- **Scope expansion:** a file not named above, a live EU4 run, or
+  function-specific C for either controlled subject stops.
+- **Evidence limitation:** an incomplete trace stays incomplete. A QBDI exit
+  dump is not the continuation test.
+
+## Merge gate
+
+The five acceptance conditions pass, with zero skips. `run.py` does not
+launch EU4. A green run does not authorize a live session.
