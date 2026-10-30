@@ -5,6 +5,8 @@ contracts:
   - trace-target/v1
   - execution-observation/v1
 owned_paths:
+  - reconstruction_trace/tr3/host.c
+  - reconstruction_trace/tr3/subject.S
   - reconstruction_trace/tr3/insert.c
   - reconstruction_trace/tr3/insert_stub.S
   - reconstruction_trace/tr3/startup.py
@@ -43,7 +45,9 @@ amendment that names that one file. `run.py` may change only so offline
 configuration reads a target descriptor. It gains no EU4 execution.
 
 The two controlled functions use one compiled instrumentation dylib. Only
-their descriptors change. Two separately compiled tracers do not pass.
+their descriptors change. Two separately compiled tracers do not pass. Add
+the second leaf to the existing host in `host.c` and `subject.S`, and select
+which function that host invokes.
 
 `startup_receipt.json` and `startup_observation.json` are regenerated when
 source hashes change. They stay the controlled-host receipts.
@@ -53,17 +57,19 @@ source hashes change. They stay the controlled-host receipts.
 1. Two materially different controlled x86-64 leaf functions are captured
    with the same compiled instrumentation dylib, only their descriptors
    changing.
-2. Executed instruction paths, memory accesses, entry/exit state, and control
-   flow are accounted for without function-specific semantics.
+2. Executed instruction addresses and bytes match the authenticated mapped
+   code window. Memory accesses, entry/exit state, and control flow are
+   accounted for without function-specific semantics.
 3. Actual CPU continuation after the stub is verified for the supported
    register and flag state, including caller-saved registers and flags. The
    test reads the CPU after return from the stub. Inspecting the saved QBDI
    exit structure is not that test. An unsupported register or
    instruction-state requirement is a refusal, not a transparency claim.
-4. Budget overflow and unsupported execution shapes produce retained,
-   explicitly incomplete raw traces. Intra-range branches stay supported.
-   A call, recursion, an exception, execution outside the authenticated
-   range, or an exit other than the expected return is incomplete.
+4. Budget overflow, a call, and an out-of-range jump each produce a retained,
+   explicitly incomplete raw trace. The out-of-range jump is reported; a
+   range-limited instrumentation window does not hide it. Intra-range
+   branches stay supported. Recursion, an exception, or an exit other than
+   the expected return is likewise incomplete.
 5. Existing TR3 controlled-host regression tests and receipts remain valid.
    No EU4 process is started.
 
