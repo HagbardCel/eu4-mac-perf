@@ -206,6 +206,8 @@ static bool write_entry(const uint8_t bytes[PATCH_SIZE]) {
 
 static void refuse(const char *reason) { refusal = reason; }
 
+static void fail(const char *reason);
+
 static void authenticate(void) {
     const struct mach_header_64 *main_image = NULL;
     const char *name = NULL;
@@ -286,7 +288,14 @@ static void authenticate(void) {
     int32_t rel = (int32_t)delta;
     memcpy(patch + 1, &rel, sizeof(rel));
     if (!write_entry(patch)) {
-        write_entry(saved_entry);
+        bool unchanged = memcmp((const void *)(uintptr_t)tr3_subject_site, saved_entry, PATCH_SIZE) == 0;
+        if (!unchanged) {
+            bool restored = write_entry(saved_entry);
+            if (!restored ||
+                memcmp((const void *)(uintptr_t)tr3_subject_site, saved_entry, PATCH_SIZE) != 0) {
+                fail("entry restoration failed");
+            }
+        }
         refuse("entry hook could not be installed");
         return;
     }

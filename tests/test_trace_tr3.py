@@ -12,6 +12,7 @@ import copy
 import hashlib
 import json
 import platform
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -509,6 +510,7 @@ class TraceTr3Tests(unittest.TestCase):
         return records, window, inventory
 
     def test_each_branch_is_one_complete_path(self) -> None:
+        # Synthetic window bytes. This does not authenticate EU4's 75-byte pin.
         for take_jz in (False, True):
             records, window, inventory = self._branch(take_jz)
             self.assertLess(len(records), inventory["instruction_count"])
@@ -583,6 +585,77 @@ class TraceTr3Tests(unittest.TestCase):
             receipt = json.loads((out / "startup_receipt.json").read_text())
         schema.validate(observation)
         self._assert_startup(observation, receipt)
+
+    def _planted_success(self) -> tuple[dict, dict, str, str]:
+        receipt = json.loads((native.HERE / "startup_receipt.json").read_text())
+        file_hash, window_hash = "a" * 64, "b" * 64
+        raw = copy.deepcopy(receipt["probe_output"])
+        raw["expected_file_sha256"] = raw["file_sha256"] = file_hash
+        raw["expected_window_sha256"] = raw["window_sha256"] = window_hash
+        return raw, receipt["host_result"], file_hash, window_hash
+
+    def test_stale_insert_log_is_not_this_run(self) -> None:
+        raw, host_out, file_hash, window_hash = self._planted_success()
+        proc = subprocess.CompletedProcess(["tr3_host"], 0, stdout=json.dumps(host_out), stderr="")
+        startup.accept(proc, raw, file_hash, window_hash)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "insert.json"
+            log.write_text(json.dumps(raw))
+
+            def runner(argv, **_kwargs):
+                return subprocess.CompletedProcess(argv, 0, stdout=proc.stdout, stderr="")
+
+            with self.assertRaises(RuntimeError) as caught:
+                startup.acquire(Path("tr3_host"), {}, log, runner)
+            self.assertIn("no log", str(caught.exception))
+
+    def test_measured_file_digest_must_match_this_host(self) -> None:
+        raw, host_out, file_hash, window_hash = self._planted_success()
+        raw["file_sha256"] = "c" * 64
+        proc = subprocess.CompletedProcess(["tr3_host"], 0, stdout=json.dumps(host_out), stderr="")
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "insert.json"
+            log.write_text(json.dumps(raw))
+            with self.assertRaises(RuntimeError) as caught:
+                startup.accept(proc, json.loads(log.read_text()), file_hash, window_hash)
+        self.assertIn("file_sha256", str(caught.exception))
+
+    def test_dropped_access_refuses_before_a_receipt(self) -> None:
+        raw, host_out, file_hash, window_hash = self._planted_success()
+        raw["run"]["dropped_accesses"] = 1
+        proc = subprocess.CompletedProcess(["tr3_host"], 0, stdout=json.dumps(host_out), stderr="")
+        with self.assertRaises(RuntimeError) as caught:
+            startup.accept(proc, raw, file_hash, window_hash)
+        self.assertIn("incomplete capture", str(caught.exception))
+
+    def _assert_auth_refusal(self, proc, raw, reason: str, entry: str) -> None:
+        self.assertEqual(raw["refusal"], reason)
+        self.assertFalse(raw["patched"])
+        self.assertEqual(json.loads(proc.stdout)["entry"], entry)
+
+    def test_wrong_file_hash_refuses_without_a_patch(self) -> None:
+        if platform.system() != "Darwin":
+            self.assertNotEqual(
+                platform.system(), "Darwin",
+                "this host checks the committed startup receipt and does not execute the subject")
+            return
+        reason = native.unsupported_host_reason()
+        self.assertIsNone(reason, reason)
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, raw, built = startup.launch(Path(tmp), file_hash="0" * 64)
+        self._assert_auth_refusal(proc, raw, "file hash mismatch", built["entry"])
+
+    def test_wrong_window_hash_refuses_without_a_patch(self) -> None:
+        if platform.system() != "Darwin":
+            self.assertNotEqual(
+                platform.system(), "Darwin",
+                "this host checks the committed startup receipt and does not execute the subject")
+            return
+        reason = native.unsupported_host_reason()
+        self.assertIsNone(reason, reason)
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, raw, built = startup.launch(Path(tmp), window_hash="0" * 64)
+        self._assert_auth_refusal(proc, raw, "window hash mismatch", built["entry"])
 
 
 if __name__ == "__main__":

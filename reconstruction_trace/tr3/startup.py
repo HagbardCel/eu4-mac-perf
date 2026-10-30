@@ -14,7 +14,8 @@ from pathlib import Path
 from reverse_engineering.corpus import sha256_file
 from reverse_engineering.macho_rva import MachOMapper
 
-from reconstruction_trace.tr3 import image, native
+from reconstruction_trace import fixture
+from reconstruction_trace.tr3 import adapter, image, native
 
 HERE = Path(__file__).resolve().parent
 SOURCES = ("host.c", "subject.S", "insert.c", "insert_stub.S", "startup.py", "image.py", "path.py")
@@ -55,37 +56,26 @@ def build(build_dir: Path) -> tuple[Path, Path]:
     return host, dylib
 
 
-def capture(build_dir: Path) -> tuple[dict, dict]:
-    """Run the host once. A rel32 miss raises; it does not switch mechanisms."""
-    reason = native.unsupported_host_reason()
-    if reason:
-        raise RuntimeError(reason)
-    host, dylib = build(build_dir)
-    preferred = image.text_vmaddr(host)
-    entry_rva = _symbol_rva(host, "_tr3_subject")
-    window_end = entry_rva + native.SUBJECT_BYTES
-    with MachOMapper(host) as mapper:
-        window = mapper.read_bytes_at_rva(preferred, entry_rva, native.SUBJECT_BYTES)
-    file_hash = sha256_file(host)
-    window_hash = hashlib.sha256(window).hexdigest()
-    log_path = build_dir / "insert.json"
-    env = os.environ.copy()
-    env["DYLD_INSERT_LIBRARIES"] = str(dylib)
-    env["TR3_EXPECT_FILE_SHA256"] = file_hash
-    env["TR3_EXPECT_WINDOW_SHA256"] = window_hash
-    env["TR3_ENTRY_RVA"] = hex(entry_rva)
-    env["TR3_WINDOW_LEN"] = str(native.SUBJECT_BYTES)
-    env["TR3_LOG"] = str(log_path)
-    # `arch -x86_64` drops DYLD_INSERT_LIBRARIES. The host is already x86-64,
-    # so executing it directly is what loads the dylib under Rosetta.
-    proc = subprocess.run([str(host)], capture_output=True, text=True, env=env, check=False)
+def acquire(host: Path, env: dict, log_path: Path, runner=None):
+    """Launch once and read the log this launch wrote. A missing log is not a previous run."""
+    log_path.unlink(missing_ok=True)
+    run = subprocess.run if runner is None else runner
+    proc = run([str(host)], capture_output=True, text=True, env=env, check=False)
     if not log_path.is_file():
-        raise RuntimeError(f"dylib wrote no log: {proc.returncode} {proc.stderr.strip()}")
-    raw = json.loads(log_path.read_text())
+        raise RuntimeError(f"dylib wrote no log: {proc.returncode} {(proc.stderr or '').strip()}")
+    return proc, json.loads(log_path.read_text())
+
+
+def accept(proc: subprocess.CompletedProcess, raw: dict, file_hash: str, window_hash: str):
+    """Require a successful interception. This is not the path for an expected refusal."""
+    for key, expected in (("expected_file_sha256", file_hash), ("file_sha256", file_hash),
+                          ("expected_window_sha256", window_hash), ("window_sha256", window_hash)):
+        if raw.get(key) != expected:
+            raise RuntimeError(f"{key} does not match this executable")
     host_out = json.loads(proc.stdout)
     if proc.returncode != 0 or raw.get("refusal"):
         raise RuntimeError(
-            f"startup interception failed ({raw.get('refusal')}): {proc.stderr.strip()}")
+            f"startup interception failed ({raw.get('refusal')}): {(proc.stderr or '').strip()}")
     if raw["proc_translated"] != 1:
         raise RuntimeError(f"sysctl.proc_translated is {raw['proc_translated']}, not 1")
     hook = raw["hook"]
@@ -104,6 +94,50 @@ def capture(build_dir: Path) -> tuple[dict, dict]:
         raise RuntimeError(gap)
     observation = native.observation_from_run(raw["run"], raw["qbdi_version"])
     native.schema.validate(observation)
+    if observation["completeness"] != "complete":
+        raise RuntimeError("incomplete capture: " + "; ".join(observation["incomplete_reasons"]))
+    qualified = fixture.qualify(observation)
+    if not qualified["fixture_qualified"]:
+        raise RuntimeError("unqualified capture: " + "; ".join(qualified["reasons"]))
+    if adapter.prepare_scenario(observation)["refusal"] != "unauthenticated-target":
+        raise RuntimeError("unexpected adapter result")
+    return observation, host_out
+
+
+def launch(build_dir: Path, *, file_hash: str | None = None, window_hash: str | None = None,
+           runner=None):
+    """Build the host and acquire its log. The caller decides success or refusal."""
+    reason = native.unsupported_host_reason()
+    if reason:
+        raise RuntimeError(reason)
+    host, dylib = build(build_dir)
+    preferred = image.text_vmaddr(host)
+    entry_rva = _symbol_rva(host, "_tr3_subject")
+    with MachOMapper(host) as mapper:
+        window = mapper.read_bytes_at_rva(preferred, entry_rva, native.SUBJECT_BYTES)
+    real_file = sha256_file(host)
+    real_window = hashlib.sha256(window).hexdigest()
+    env = os.environ.copy()
+    env["DYLD_INSERT_LIBRARIES"] = str(dylib)
+    env["TR3_EXPECT_FILE_SHA256"] = real_file if file_hash is None else file_hash
+    env["TR3_EXPECT_WINDOW_SHA256"] = real_window if window_hash is None else window_hash
+    env["TR3_ENTRY_RVA"] = hex(entry_rva)
+    env["TR3_WINDOW_LEN"] = str(native.SUBJECT_BYTES)
+    env["TR3_LOG"] = str(build_dir / "insert.json")
+    # `arch -x86_64` drops DYLD_INSERT_LIBRARIES. The host is already x86-64,
+    # so executing it directly is what loads the dylib under Rosetta.
+    proc, raw = acquire(host, env, build_dir / "insert.json", runner)
+    return proc, raw, {
+        "file_hash": real_file, "window_hash": real_window, "entry": window[:5].hex(),
+        "preferred": preferred, "entry_rva": entry_rva,
+        "window_end": entry_rva + native.SUBJECT_BYTES,
+    }
+
+
+def capture(build_dir: Path) -> tuple[dict, dict]:
+    """Run the host once. A rel32 miss raises; it does not switch mechanisms."""
+    proc, raw, built = launch(build_dir)
+    observation, host_out = accept(proc, raw, built["file_hash"], built["window_hash"])
     receipt = {
         "schema": "tr3-startup-receipt/v1",
         "work_order": "TR3",
@@ -114,10 +148,11 @@ def capture(build_dir: Path) -> tuple[dict, dict]:
         "concurrency": "single-threaded host; another thread entering while the hook is removed is untraced",
         "host_result": host_out,
         "image": raw["image"],
-        "hook": {**hook, "native_call_count": host_out["calls"]},
-        "expected_file_sha256": file_hash,
-        "expected_window_sha256": window_hash,
-        "window": {"image_base": preferred, "entry_rva": entry_rva, "end_rva": window_end},
+        "hook": {**raw["hook"], "native_call_count": host_out["calls"]},
+        "expected_file_sha256": built["file_hash"],
+        "expected_window_sha256": built["window_hash"],
+        "window": {"image_base": built["preferred"], "entry_rva": built["entry_rva"],
+                   "end_rva": built["window_end"]},
         "proc_translated": raw["proc_translated"],
         "qbdi_version": raw["qbdi_version"],
         "probe": {"sources_sha256": {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()
