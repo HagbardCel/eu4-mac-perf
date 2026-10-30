@@ -358,6 +358,10 @@ class TraceTr3Tests(unittest.TestCase):
         self.assertFalse(fixture.qualify(dropped)["fixture_qualified"])
 
     def _assert_controlled_capture(self, trace: dict, receipt: dict) -> None:
+        self.assertIsNone(native.subject_gap(receipt["probe_output"]))
+        reconstructed = native.observation_from_run(
+            receipt["probe_output"]["run"], receipt["probe_output"]["qbdi_version"])
+        self.assertEqual(trace, reconstructed)
         qualified = fixture.qualify(trace)
         self.assertTrue(qualified["fixture_qualified"], qualified["reasons"])
         self.assertEqual(adapter.prepare_scenario(trace)["refusal"], "unauthenticated-target")
@@ -399,6 +403,27 @@ class TraceTr3Tests(unittest.TestCase):
         for name, digest in receipt["probe"]["sources_sha256"].items():
             self.assertEqual(hashlib.sha256((native.HERE / name).read_bytes()).hexdigest(),
                              digest, name)
+
+    def test_tampered_cell_write_disagrees_with_raw_output(self) -> None:
+        trace = json.loads((native.HERE / "observation.json").read_text())
+        receipt = json.loads((native.HERE / "receipt.json").read_text())
+        tampered = copy.deepcopy(trace)
+        write = next(event for event in tampered["events"] if event["kind"] == "write")
+        write["value"] = (native.DECOY_ADDRESS + 2).to_bytes(8, "little").hex()
+        with self.assertRaises(AssertionError):
+            self._assert_controlled_capture(tampered, receipt)
+
+    def test_missing_inc_stays_complete_and_is_refused(self) -> None:
+        receipt = json.loads((native.HERE / "receipt.json").read_text())
+        raw = copy.deepcopy(receipt["probe_output"])
+        self.assertEqual(raw["run"]["instructions"][1]["mnemonic"], "INC64r")
+        del raw["run"]["instructions"][1]
+        self.assertEqual(raw["run"]["dropped_instructions"], 0)
+        self.assertEqual(raw["run"]["dropped_accesses"], 0)
+        self.assertEqual(raw["run"]["dropped_transfers"], 0)
+        traced = native.observation_from_run(raw["run"], raw["qbdi_version"])
+        self.assertEqual(traced["completeness"], "complete")
+        self.assertIsNotNone(native.subject_gap(raw))
 
     def test_committed_rosetta_artifact(self) -> None:
         """Read the committed capture. This is not a fresh native execution."""

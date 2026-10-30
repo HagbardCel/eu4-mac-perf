@@ -36,7 +36,7 @@
       "subject.S": "7827a8886fc20d87657b1a232650c068fd82dd86c92c6ae96b6a45529a284069",
       "intercept_stub.S": "c0c8c6288ccb8481f3a924cd9b1b0e404860bcfaeaea2692f552a9c7fe10006b",
       "probe.c": "885ac84cf96e179b996a41a7bd6746188d73c37d7acce21cbb6307ea7118f116",
-      "native.py": "a7013d8d26dbb21736c6b248855301ff3159ce289dcd9c19b5687666c85c856f"
+      "native.py": "579d67781d0f35bd8297fbe99e8f5234b5b7af537934fa7e2930a19175cdf7fe"
     },
     "executable_sha256": "90d914a289871408bb5d03e10a39938f0613c28f4b07c843008d347c81387513"
   },
@@ -101,9 +101,9 @@
       "second_result": "0x100000002"
     },
     "symbols": {
-      "subject": "0x1024ffe20",
-      "scope_start": "0x1024ffe20",
-      "scope_end": "0x1024ffe2a"
+      "subject": "0x102b65e20",
+      "scope_start": "0x102b65e20",
+      "scope_end": "0x102b65e2a"
     },
     "run": {
       "failure": null,
@@ -112,58 +112,58 @@
       "memory_recording": true,
       "entry_gpr": {
         "rax": "0x0",
-        "rbx": "0x7ff855049c20",
+        "rbx": "0x7ff85524dc20",
         "rcx": "0x0",
-        "rdx": "0x102500000",
-        "rsi": "0x1024ff000",
-        "rdi": "0x7fee88106bd0",
+        "rdx": "0x102b66000",
+        "rsi": "0x102b65000",
+        "rdi": "0x7fd4aff07840",
         "r8": "0x5",
-        "r9": "0xdfffffff",
+        "r9": "0xffffff7f",
         "r10": "0x0",
         "r11": "0x0",
-        "r12": "0x7fee88106bd0",
+        "r12": "0x7fd4aff07840",
         "r13": "0x1000",
-        "r14": "0x102a5d288",
-        "r15": "0x1024ffe20",
-        "rbp": "0x3094cb8c0",
-        "rsp": "0x3094cb848",
-        "rip": "0x1024ffe20",
+        "r14": "0x1030c3288",
+        "r15": "0x102b65e20",
+        "rbp": "0x30a2308c0",
+        "rsp": "0x30a230848",
+        "rip": "0x102b65e20",
         "eflags": "0x202"
       },
       "exit_gpr": {
         "rax": "0x100000001",
-        "rbx": "0x7ff855049c20",
+        "rbx": "0x7ff85524dc20",
         "rcx": "0x0",
-        "rdx": "0x102500000",
-        "rsi": "0x1024ff000",
-        "rdi": "0x7fee88106bd0",
+        "rdx": "0x102b66000",
+        "rsi": "0x102b65000",
+        "rdi": "0x7fd4aff07840",
         "r8": "0x5",
-        "r9": "0xdfffffff",
+        "r9": "0xffffff7f",
         "r10": "0x0",
         "r11": "0x0",
-        "r12": "0x7fee88106bd0",
+        "r12": "0x7fd4aff07840",
         "r13": "0x1000",
-        "r14": "0x102a5d288",
-        "r15": "0x1024ffe20",
-        "rbp": "0x3094cb8c0",
-        "rsp": "0x3094cb850",
-        "rip": "0x1022afd24",
+        "r14": "0x1030c3288",
+        "r15": "0x102b65e20",
+        "rbp": "0x30a2308c0",
+        "rsp": "0x30a230850",
+        "rip": "0x102915d24",
         "eflags": "0x202"
       },
       "regions": [
         {
           "id": "cell",
           "kind": "heap",
-          "base": "0x7fee88106bd0",
+          "base": "0x7fd4aff07840",
           "size": 8,
           "bytes": "0000000001000000"
         },
         {
           "id": "stack",
           "kind": "stack",
-          "base": "0x3094cb750",
+          "base": "0x30a230750",
           "size": 256,
-          "bytes": "0000000000000000200000000000000090b74c09030000000fbc2c15f87f00002000000000000000000000000000000084d99140000c000060671088ee7f0000b0b74c0903000000db744915f87f00000000000000000000010000000000000040b84c09030000005f664702010000000000000003000000410000000100000000000000ee7f000088d2a5020100000060671088ee7f0000000000000000000060082b020100000088d2a5020100000000000000000000002bfb4915f87f00007b0cdbff00000000209c0455f87f000000f04f0201000000001000000000000088d2a5020100000020fe4f0201000000020200000000000024fd2a0201000000"
+          "bytes": "000000000000000020000000000000009007230a030000000ffc4c15f87f0000200000000000000000000000000000008471ab40000c0000d073f0afd47f0000b007230a03000000dbb46915f87f0000000000000000000001000000000000004008230a030000005fc6ad02010000000000000003000000410000000100000000000000d47f000088320c0301000000d073f0afd47f00000000000000000000606891020100000088320c030100000000000000000000002b3b6a15f87f00007b0cdbff0000000020dc2455f87f00000050b60201000000001000000000000088320c0301000000205eb602010000000202000000000000245d910201000000"
         }
       ],
       "pointers": [
@@ -188,8 +188,8 @@
       ],
       "instructions": [
         {
-          "pc": "0x1024ffe20",
-          "next_pc": "0x1024ffe23",
+          "pc": "0x102b65e20",
+          "next_pc": "0x102b65e23",
           "inst_size": 3,
           "mnemonic": "MOV64rm",
           "disassembly": "mov rax, qword ptr [rdi]",
@@ -201,8 +201,8 @@
           "is_return": false,
           "accesses": [
             {
-              "inst_address": "0x1024ffe20",
-              "address": "0x7fee88106bd0",
+              "inst_address": "0x102b65e20",
+              "address": "0x7fd4aff07840",
               "value": "0x100000000",
               "size": 8,
               "type": 1,
@@ -211,8 +211,8 @@
           ]
         },
         {
-          "pc": "0x1024ffe23",
-          "next_pc": "0x1024ffe26",
+          "pc": "0x102b65e23",
+          "next_pc": "0x102b65e26",
           "inst_size": 3,
           "mnemonic": "INC64r",
           "disassembly": "inc rax",
@@ -225,8 +225,8 @@
           "accesses": []
         },
         {
-          "pc": "0x1024ffe26",
-          "next_pc": "0x1024ffe29",
+          "pc": "0x102b65e26",
+          "next_pc": "0x102b65e29",
           "inst_size": 3,
           "mnemonic": "MOV64mr",
           "disassembly": "mov qword ptr [rdi], rax",
@@ -238,8 +238,8 @@
           "is_return": false,
           "accesses": [
             {
-              "inst_address": "0x1024ffe26",
-              "address": "0x7fee88106bd0",
+              "inst_address": "0x102b65e26",
+              "address": "0x7fd4aff07840",
               "value": "0x100000001",
               "size": 8,
               "type": 2,
@@ -248,8 +248,8 @@
           ]
         },
         {
-          "pc": "0x1024ffe29",
-          "next_pc": "0x1022afd24",
+          "pc": "0x102b65e29",
+          "next_pc": "0x102915d24",
           "inst_size": 1,
           "mnemonic": "RET64",
           "disassembly": "ret",
@@ -261,9 +261,9 @@
           "is_return": true,
           "accesses": [
             {
-              "inst_address": "0x1024ffe29",
-              "address": "0x3094cb848",
-              "value": "0x1022afd24",
+              "inst_address": "0x102b65e29",
+              "address": "0x30a230848",
+              "value": "0x102915d24",
               "size": 8,
               "type": 1,
               "flags": 0
@@ -277,5 +277,5 @@
       "dropped_transfers": 0
     }
   },
-  "observation_sha256": "088b1cda2bc32d9235e750ddd39e6d9f3da58f67facebb3f79b59632a58435db"
+  "observation_sha256": "74f7c0cbaa1a632cad926c064321fe56cb22c618e7f5f7b8d4bdce46aa41b6b0"
 }

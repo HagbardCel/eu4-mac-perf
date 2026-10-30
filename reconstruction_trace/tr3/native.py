@@ -43,6 +43,8 @@ FLAG_NAMES = {
 ENTRY_REGISTERS = ("rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11",
                    "r12", "r13", "r14", "r15", "rbp", "rsp")
 EXIT_REGISTERS = ("rax",)
+SUBJECT_BYTES = 10
+SUBJECT = ((0, 3, "MOV64rm"), (3, 3, "INC64r"), (6, 3, "MOV64mr"), (9, 1, "RET64"))
 _DROP = "events dropped: {instructions} instructions, {accesses} accesses, {transfers} transfers"
 
 
@@ -233,6 +235,33 @@ def observation_from_run(run: dict, qbdi_version: str) -> dict:
     return traced
 
 
+def subject_gap(raw: dict) -> str | None:
+    """Reason the raw run is not the four instructions of this subject.
+
+    ``ret`` leaves the function, so continuity is ``pc`` plus ``inst_size``,
+    not ``next_pc``.
+    """
+    symbols = raw["symbols"]
+    subject = _int(symbols["subject"])
+    if _int(symbols["scope_start"]) != subject:
+        return "scope does not start at the subject"
+    if _int(symbols["scope_end"]) != subject + SUBJECT_BYTES:
+        return "scope is not the 10-byte subject"
+    instructions = raw["run"]["instructions"]
+    if len(instructions) != len(SUBJECT):
+        return f"{len(instructions)} instructions, expected {len(SUBJECT)}"
+    cursor = subject
+    for inst, (offset, size, mnemonic) in zip(instructions, SUBJECT):
+        pc = _int(inst["pc"])
+        if (pc != subject + offset or pc != cursor or inst["inst_size"] != size
+                or inst["mnemonic"] != mnemonic):
+            return f"{inst.get('mnemonic')} at {inst.get('pc')} is not {mnemonic} at +{offset}"
+        cursor += inst["inst_size"]
+    if cursor != subject + SUBJECT_BYTES:
+        return "instructions do not cover the 10-byte subject"
+    return None
+
+
 def _first_line(command: list[str]) -> str:
     out = subprocess.run(command, capture_output=True, text=True, check=False).stdout
     return out.splitlines()[0].strip() if out else ""
@@ -275,6 +304,9 @@ def capture(build_dir: Path) -> tuple[dict, dict]:
     raw, run_command = run_probe(exe)
     if raw["proc_translated"] != 1:
         raise RuntimeError(f"sysctl.proc_translated is {raw['proc_translated']}, not 1")
+    gap = subject_gap(raw)
+    if gap:
+        raise RuntimeError(gap)
     observation = observation_from_run(raw["run"], raw["qbdi_version"])
     schema.validate(observation)
     if observation["completeness"] != "complete":
