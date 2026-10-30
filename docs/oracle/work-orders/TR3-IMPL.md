@@ -95,7 +95,7 @@ observable region.
 
 `reconstruction_trace/tr3/run.py` is the only launch entry. It sits inside
 `reconstruction_trace/tr3/**` and is named here so that restriction is
-explicit. Tests and CI do not call it.
+explicit. Tests may call it for an offline refusal or a mocked child, and must not launch EU4.
 
 Before it installs instrumentation or attaches to a process, it verifies the
 pin already recorded in read-only `reverse_engineering/target.json`:
@@ -150,5 +150,5 @@ Three acceptance cases:
 ## Merge gate
 
 The offline test passes, including the three acceptance cases, with zero
-skips. `run.py` is not executed. A green implementation does not authorize
+skips. `run.py` is not executed against EU4. A green implementation does not authorize
 the EU4 run and does not by itself show that a live trace can qualify.
