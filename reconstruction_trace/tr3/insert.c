@@ -74,7 +74,9 @@ struct run {
 static struct run run;
 static uint8_t saved_entry[PATCH_SIZE];
 static uint8_t window_bytes[75];
-static size_t window_len;
+static uint8_t mapped_window[75];
+static size_t window_len, mapped_window_len;
+static bool sealed;
 static const char *refusal;
 static const char *image_name;
 static const char *expect_file;
@@ -207,6 +209,7 @@ static bool write_entry(const uint8_t bytes[PATCH_SIZE]) {
 static void refuse(const char *reason) { refusal = reason; }
 
 static void fail(const char *reason);
+static void publish(void);
 
 static void authenticate(void) {
     const struct mach_header_64 *main_image = NULL;
@@ -276,11 +279,13 @@ static void authenticate(void) {
         refuse("window hash mismatch");
         return;
     }
-    if (memcmp((const void *)tr3_subject_site, window_bytes, window_len) != 0) {
+    memcpy(mapped_window, (const void *)(uintptr_t)tr3_subject_site, window_len);
+    mapped_window_len = window_len;
+    if (memcmp(mapped_window, window_bytes, window_len) != 0) {
         refuse("mapped bytes mismatch");
         return;
     }
-    memcpy(saved_entry, window_bytes, PATCH_SIZE);
+    memcpy(saved_entry, mapped_window, PATCH_SIZE);
     have_saved = true;
     int64_t delta = (int64_t)(uintptr_t)tr3_insert_stub - (int64_t)(tr3_subject_site + PATCH_SIZE);
     if (delta < INT32_MIN || delta > INT32_MAX) {
@@ -410,17 +415,48 @@ static void emit_gpr(FILE *out, const GPRState *gpr) {
     fputc('}', out);
 }
 
-static void write_log(void) {
+static bool hex_session(char out[65]) {
+    const char *text = getenv("TR3_SESSION");
+    if (text == NULL || *text == '\0') return false;
+    size_t n = 0;
+    for (; text[n] != '\0'; n++) {
+        char c = text[n];
+        bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        if (!hex || n >= 64) return false;
+        out[n] = c;
+    }
+    out[n] = '\0';
+    return n > 0;
+}
+
+static bool write_log(void) {
     const char *path = getenv("TR3_LOG");
-    FILE *out = path ? fopen(path, "w") : stderr;
-    if (out == NULL) return;
+    char tmp[PATH_MAX];
+    FILE *out = stderr;
+    bool durable = false;
+    if (path != NULL && path[0] != '\0') {
+        int wrote = snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+        if (wrote < 0 || (size_t)wrote >= sizeof(tmp)) return false;
+        out = fopen(tmp, "w");
+        if (out == NULL) return false;
+        durable = true;
+    }
+    char session[65];
+    bool have_session = hex_session(session);
+    fputs("{\"sealed\": true, \"session\": ", out);
+    if (have_session) fprintf(out, "\"%s\"", session);
+    else fputs("null", out);
+    fprintf(out, ", \"pid\": %d, \"mapped_window\": ", (int)getpid());
+    if (mapped_window_len != 0) hex_bytes(out, mapped_window, mapped_window_len);
+    else fputs("null", out);
+    fputs(", ", out);
     int translated = -1;
     size_t len = sizeof(translated);
     if (sysctlbyname("sysctl.proc_translated", &translated, &len, NULL, 0) != 0) translated = -1;
     uint32_t version_num = 0;
     const char *version = qbdi_getVersion(&version_num);
     fprintf(out,
-            "{\"refusal\": %s%s%s, \"patched\": %s, \"proc_translated\": %d, "
+            "\"refusal\": %s%s%s, \"patched\": %s, \"proc_translated\": %d, "
             "\"qbdi_version\": \"%s\", \"expected_file_sha256\": \"%s\", "
             "\"file_sha256\": \"%s\", \"expected_window_sha256\": \"%s\", "
             "\"window_sha256\": \"%s\", ",
@@ -505,11 +541,44 @@ static void write_log(void) {
             "\"dropped_transfers\": %llu}}\n",
             (unsigned long long)run.dropped_insts, (unsigned long long)run.dropped_accesses,
             (unsigned long long)run.dropped_transfers);
-    if (out != stderr) fclose(out);
+    if (!durable) return false;
+    /* sealed only after rename; a failed write stays retryable from the destructor */
+    if (ferror(out) || fflush(out) != 0 || fsync(fileno(out)) != 0) {
+        fclose(out);
+        unlink(tmp);
+        return false;
+    }
+    if (fclose(out) != 0) {
+        unlink(tmp);
+        return false;
+    }
+    if (rename(tmp, path) != 0) {
+        unlink(tmp);
+        return false;
+    }
+    return true;
+}
+
+static void release_vm(void) {
+    if (run.vm != NULL) {
+        qbdi_terminateVM(run.vm);
+        run.vm = NULL;
+    }
+}
+
+static void publish(void) {
+    if (sealed) return;
+    if (have_saved) {
+        entry_bytes_match_after =
+            memcmp((const void *)(uintptr_t)tr3_subject_site, saved_entry, PATCH_SIZE) == 0;
+    }
+    release_vm();
+    if (write_log()) sealed = true;
 }
 
 static void fail(const char *reason) {
     refusal = reason;
+    publish();
     exit(1);
 }
 
@@ -532,15 +601,12 @@ void tr3_insert_dispatch(void) {
         tr3_exit_gpr.rsp != tr3_entry_gpr.rsp + 8) {
         fail(run.ran ? "QBDI did not return to the natural call site" : "QBDI executed no block");
     }
+    publish();
 }
 
-__attribute__((constructor)) static void tr3_insert_init(void) { authenticate(); }
-
-__attribute__((destructor)) static void tr3_insert_fini(void) {
-    if (have_saved) {
-        entry_bytes_match_after =
-            memcmp((const void *)(uintptr_t)tr3_subject_site, saved_entry, PATCH_SIZE) == 0;
-    }
-    if (run.vm != NULL) qbdi_terminateVM(run.vm);
-    write_log();
+__attribute__((constructor)) static void tr3_insert_init(void) {
+    authenticate();
+    if (refusal != NULL) publish();
 }
+
+__attribute__((destructor)) static void tr3_insert_fini(void) { publish(); }

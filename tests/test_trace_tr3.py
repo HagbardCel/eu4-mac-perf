@@ -11,14 +11,18 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import platform
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 from reconstruction_trace import fixture, schema
-from reconstruction_trace.tr3 import adapter, gfx, image, native, observe, path, startup
+from reconstruction_trace.tr3 import adapter, gfx, image, native, observe, path, run as tr3_run, startup
 from reverse_engineering.macho_rva import build_synthetic_macho_64
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -905,6 +909,463 @@ class TraceTr3Tests(unittest.TestCase):
         self.assertNotIn("r8", observation["entry_state"]["registers"])
         self.assertEqual(adapter.prepare_scenario(observation)["refusal"], "unqualified")
         self.assertIsNone(adapter.prepare_scenario(observation)["scenario"])
+
+
+class TraceTr3LiveLaunchTests(unittest.TestCase):
+    def test_live_launch_refuses_without_operator_authorization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(tr3_run.startup, "build") as build, \
+                 mock.patch("subprocess.Popen") as popen:
+                with redirect_stdout(StringIO()) as out:
+                    status = tr3_run.main(["--output", str(Path(tmp) / "live.json")])
+        self.assertEqual(status, 1)
+        self.assertEqual(out.getvalue().strip(), tr3_run.UNAUTHORIZED)
+        build.assert_not_called()
+        popen.assert_not_called()
+
+    def test_live_launch_refuses_a_failed_image_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(Path, "is_file", return_value=True), \
+                 mock.patch.object(tr3_run.image, "check", return_value="file hash mismatch") as check, \
+                 mock.patch.object(tr3_run.startup, "build") as build, \
+                 mock.patch("subprocess.Popen") as popen:
+                with redirect_stdout(StringIO()) as out:
+                    status = tr3_run.main(
+                        ["--authorize-live", "--output", str(Path(tmp) / "live.json")])
+        self.assertEqual(status, 1)
+        self.assertEqual(out.getvalue().strip(), "refused: file hash mismatch")
+        check.assert_called_once()
+        build.assert_not_called()
+        popen.assert_not_called()
+
+    def test_live_candidate_refusal_is_the_diagnostic(self) -> None:
+        result = gfx.interpret([tr3_run.live_candidate({"refusal": "rel32 out of range"})])
+        self.assertIsNone(result["observation"])
+        self.assertEqual(result["diagnostic"], "rel32 out of range")
+        self.assertEqual(result["limits"], gfx.LIMITS)
+
+    def test_live_launch_keeps_the_first_candidate_only(self) -> None:
+        first = tr3_run.live_candidate({"refusal": "rel32 out of range"})
+        second = tr3_run.live_candidate({"refusal": "QBDI executed no block"})
+        result = gfx.interpret([first, second])
+        self.assertIsNone(result["observation"])
+        self.assertEqual(result["diagnostic"], "rel32 out of range")
+
+    def test_read_log_returns_none_for_a_missing_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(tr3_run.read_log(Path(tmp) / "insert.json"))
+
+    def _child(self) -> "_Child":
+        return _Child()
+
+    def _seal(self, path: Path, session: str, pid: int, **overrides: object) -> dict:
+        raw = {
+            "sealed": True, "session": session, "pid": pid, "refusal": None,
+            "proc_translated": 1, "patched": True, "qbdi_version": "test",
+            "hook": {"count": 1, "qbdi_invocations": 1, "restored_before_qbdi": True,
+                     "entry_bytes_match_after": True},
+            "run": {
+                "failure": None, "ran": True, "entered": True, "memory_recording": True,
+                "exec_transfers": [], "dropped_instructions": 0, "dropped_accesses": 0,
+                "dropped_transfers": 0, "regions": [], "pointers": [],
+                "entry_gpr": {name: "0x0" for name in native.ENTRY_REGISTERS},
+                "exit_gpr": {"rax": "0x0"}, "instructions": [],
+            },
+        }
+        raw.update(overrides)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(raw))
+        return raw
+
+    def _launch(self, tmp: str, popen, *, output: Path | None = None, timeout: float = 0,
+                exe_args: object = None, path: Path | None = None, gog: Path | None = None,
+                build: mock.Mock | None = None):
+        root = Path(tmp)
+        exe = root / "gog" / "eu4"
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        exe.write_bytes(b"eu4")
+        launcher = root / "launcher-settings.json"
+        launcher.write_text(json.dumps({
+            "exePath": "./eu4.app/Contents/MacOS/eu4",
+            "exeArgs": ["-nographics"] if exe_args is None else exe_args,
+        }))
+        out = root / "live.json" if output is None else output
+        build_mock = build if build is not None else mock.Mock(
+            return_value=(root / "host", root / "dylib"))
+        with mock.patch.object(tr3_run.startup, "build", build_mock), \
+             mock.patch.object(tr3_run.base, "GOG_LAUNCHER", launcher), \
+             mock.patch.object(tr3_run.base, "GOG_EXE", exe if gog is None else gog), \
+             mock.patch.object(tr3_run.base, "running_game_pid", return_value=None), \
+             mock.patch.object(tr3_run.subprocess, "Popen", side_effect=popen):
+            status = tr3_run.launch_live(
+                out, {"sha256": "aa", "image_base": 1}, {"sha256": "bb"},
+                exe if path is None else path, timeout=timeout)
+        return status, out, build_mock
+
+    def test_relative_output_is_resolved_before_launch(self) -> None:
+        captured: dict = {}
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            captured.update(log=env["TR3_LOG"], cwd=cwd, stdout=stdout.name, stderr=stderr.name,
+                            session=env["TR3_SESSION"])
+            child = _Child()
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid, refusal="rel32 out of range")
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = os.getcwd()
+            os.chdir(tmp)
+            try:
+                status, out, _build = self._launch(tmp, popen, output=Path("results/live.json"))
+                payload = json.loads(out.resolve().read_text())
+            finally:
+                os.chdir(previous)
+        log = Path(captured["log"])
+        self.assertTrue(log.is_absolute())
+        self.assertTrue(Path(captured["stdout"]).is_absolute())
+        self.assertTrue(Path(captured["stderr"]).is_absolute())
+        self.assertEqual(log.parent, Path(captured["stdout"]).parent)
+        self.assertEqual(log.parent, Path(captured["stderr"]).parent)
+        self.assertEqual(log.parent.name, f".tr3-{captured['session']}")
+        self.assertNotEqual(log.parent, Path(captured["cwd"]))
+        self.assertEqual(status, 1)
+        self.assertEqual(payload["outcome"], "hook_refused")
+
+    def test_existing_output_refuses_before_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ready = Path(tmp) / "live.json"
+            ready.write_text("{}\n")
+            status, _out, build = self._launch(tmp, lambda *args, **kwargs: self.fail("launched"),
+                                                build=mock.Mock())
+        self.assertEqual(status, 1)
+        build.assert_not_called()
+
+    def test_planted_insert_log_is_ignored(self) -> None:
+        planted = {"sealed": True, "session": "ab" * 16, "pid": 1, "refusal": None,
+                   "hook": {"count": 1}}
+
+        def popen(*_args, **_kwargs):
+            return _Child()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "insert.json").write_text(json.dumps(planted))
+            status, out, _build = self._launch(tmp, popen)
+            text = out.read_text()
+        payload = json.loads(text)
+        self.assertEqual(status, 1)
+        self.assertIsNone(payload["raw"])
+        self.assertEqual(payload["outcome"], "capture_missing")
+        self.assertNotIn("ab" * 16, text)
+
+    def test_wrong_session_is_not_fresh_evidence(self) -> None:
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            child = _Child()
+            child.returncode = 0
+            self._seal(Path(env["TR3_LOG"]), "ff" * 16, child.pid)
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(status, 1)
+        self.assertIsNone(payload["raw"])
+        self.assertEqual(payload["outcome"], "capture_missing")
+        self.assertIn("does not match", payload["diagnostic"])
+
+    def test_wrong_pid_is_not_fresh_evidence(self) -> None:
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            child = _Child()
+            child.returncode = 0
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid + 1)
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertIsNone(payload["raw"])
+        self.assertEqual(status, 1)
+        self.assertIn("does not match", payload["diagnostic"])
+
+    def test_hook_attestation_failure_is_not_a_capture(self) -> None:
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            child = _Child()
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid, patched=False)
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(status, 1)
+        self.assertEqual(payload["outcome"], "hook_unattested")
+        self.assertIn("patched", payload["diagnostic"])
+        self.assertIsNone(payload["observation"])
+        self.assertFalse(payload["raw"]["patched"])
+
+    def test_constructor_refusal_stays_hook_refused(self) -> None:
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            child = _Child()
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid,
+                       refusal="rel32 out of range", patched=False,
+                       hook={"count": 0, "qbdi_invocations": 0,
+                             "restored_before_qbdi": False, "entry_bytes_match_after": False})
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(status, 1)
+        self.assertEqual(payload["outcome"], "hook_refused")
+        self.assertEqual(payload["diagnostic"], "rel32 out of range")
+        self.assertEqual(payload["raw"]["refusal"], "rel32 out of range")
+
+    def test_mapped_window_is_passed_unchanged(self) -> None:
+        window = bytes(range(75))
+        seen: dict = {}
+        real = tr3_run.gfx.interpret
+
+        def spy(candidates, **kwargs):
+            seen["mapped"] = kwargs.get("mapped")
+            return real(candidates, **kwargs)
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            child = _Child()
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid,
+                       mapped_window=window.hex())
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(tr3_run.gfx, "interpret", side_effect=spy):
+                status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(seen["mapped"], window)
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["outcome"], "captured_incomplete")
+        self.assertEqual(payload["qualification"], "not claimed")
+        self.assertEqual(payload["observation"]["completeness"], "incomplete")
+        self.assertIsNone(payload["observation"]["binary"])
+
+    def test_missing_mapped_window_is_not_authenticated(self) -> None:
+        seen: dict = {}
+        real = tr3_run.gfx.interpret
+
+        def spy(candidates, **kwargs):
+            seen["mapped"] = kwargs.get("mapped")
+            return real(candidates, **kwargs)
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            child = _Child()
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid)
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(tr3_run.gfx, "interpret", side_effect=spy):
+                status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertIsNone(seen["mapped"])
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["outcome"], "captured_incomplete")
+        self.assertEqual(payload["diagnostic"], "image was not authenticated")
+        self.assertEqual(payload["qualification"], "not claimed")
+        self.assertIsNotNone(payload["observation"])
+
+    def test_capture_is_observed_before_termination(self) -> None:
+        child = _Child()
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid)
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertIsNone(child.polls[0])
+        self.assertTrue(child.terminated)
+        self.assertEqual(payload["termination"]["classification"], "capture_stop")
+        self.assertEqual(payload["termination"]["returncode"], -15)
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["outcome"], "captured_incomplete")
+
+    def test_exit_during_poll_keeps_the_return_code(self) -> None:
+        child = _Child()
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            child.log = Path(env["TR3_LOG"])
+            child.session = env["TR3_SESSION"]
+            return child
+
+        def poll(self):
+            if self.returncode is None:
+                self.returncode = 3
+                self._owner._seal(self.log, self.session, self.pid)
+            self.polls.append(self.returncode)
+            return self.returncode
+
+        child.poll = poll.__get__(child, _Child)
+        child._owner = self
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(payload["termination"]["returncode"], 3)
+        self.assertEqual(payload["termination"]["classification"], "unexpected_crash")
+        self.assertEqual(payload["outcome"], "captured_incomplete")
+        self.assertEqual(status, 0)
+        self.assertFalse(child.terminated)
+
+    def test_process_lookup_error_keeps_a_sealed_capture(self) -> None:
+        child = _Child()
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid)
+            return child
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = 0
+            raise ProcessLookupError("gone")
+
+        child.terminate = terminate.__get__(child, _Child)
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["outcome"], "captured_incomplete")
+        self.assertEqual(payload["termination"]["returncode"], 0)
+        self.assertEqual(payload["termination"]["action"], "none")
+        self.assertIsNotNone(payload["raw"])
+
+    def test_interpret_failure_keeps_the_sealed_log(self) -> None:
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            child = _Child()
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid)
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(tr3_run.gfx, "interpret", side_effect=RuntimeError("bad qbdi")):
+                status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(status, 1)
+        self.assertEqual(payload["outcome"], "interpretation_failed")
+        self.assertIn("bad qbdi", payload["diagnostic"])
+        self.assertTrue(payload["raw"]["sealed"])
+        self.assertIsNone(payload["observation"])
+
+    def test_exception_after_launch_stops_the_child_and_keeps_the_code(self) -> None:
+        child = _Child()
+
+        def popen(*_args, **_kwargs):
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(tr3_run, "await_record", side_effect=RuntimeError("boom")):
+                status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertTrue(child.terminated)
+        self.assertEqual(status, 1)
+        self.assertEqual(payload["outcome"], "process_failed")
+        self.assertEqual(payload["termination"]["returncode"], -15)
+        self.assertEqual(payload["termination"]["action"], "terminate")
+        self.assertEqual(payload["termination"]["wait"], "error")
+        self.assertEqual(payload["termination"]["classification"], "launcher_stop")
+        self.assertIn("boom", payload["diagnostic"])
+
+    def test_live_launch_drops_the_host_symbol_check(self) -> None:
+        captured: dict = {}
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            captured["check"] = env.get("TR3_CHECK_SYMBOL", "")
+            child = _Child()
+            child.returncode = 0
+            return child
+
+        os.environ["TR3_CHECK_SYMBOL"] = "1"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._launch(tmp, popen)
+        finally:
+            os.environ.pop("TR3_CHECK_SYMBOL", None)
+        self.assertEqual(captured["check"], "")
+
+    def test_cleanup_oserror_keeps_the_sealed_log(self) -> None:
+        child = _Child()
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid)
+            return child
+
+        def terminate(self):
+            raise OSError("busy")
+
+        child.terminate = terminate.__get__(child, _Child)
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(status, 0)
+        self.assertTrue(payload["raw"]["sealed"])
+        self.assertEqual(payload["outcome"], "captured_incomplete")
+        self.assertIn("busy", payload["termination"]["error"])
+        self.assertIn("process cleanup failed", payload["diagnostic"])
+
+    def test_launcher_args_must_be_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            status, _out, build = self._launch(
+                tmp, lambda *args, **kwargs: self.fail("launched"), exe_args="nope",
+                build=mock.Mock())
+        self.assertEqual(status, 1)
+        build.assert_not_called()
+
+    def test_executable_must_be_the_gog_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            other = Path(tmp) / "other"
+            other.write_bytes(b"x")
+            status, _out, build = self._launch(
+                tmp, lambda *args, **kwargs: self.fail("launched"), path=other, build=mock.Mock())
+        self.assertEqual(status, 1)
+        build.assert_not_called()
+
+    def test_complete_trace_does_not_claim_qualification(self) -> None:
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            child = _Child()
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid)
+            return child
+
+        def fake(_candidates, **_kwargs):
+            return {"diagnostic": None, "observation": {"completeness": "complete"},
+                    "limits": gfx.LIMITS}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(tr3_run.gfx, "interpret", side_effect=fake):
+                status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["outcome"], "captured_complete")
+        self.assertEqual(payload["qualification"], "not claimed")
+
+
+class _Child:
+    def __init__(self) -> None:
+        self.pid = 4242
+        self.returncode = None
+        self.terminated = False
+        self.killed = False
+        self.polls: list = []
+
+    def poll(self):
+        self.polls.append(self.returncode)
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+        if self.returncode is None:
+            self.returncode = -15
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self.returncode is None:
+            raise subprocess.TimeoutExpired(cmd="./eu4", timeout=timeout)
+        return self.returncode
 
 
 if __name__ == "__main__":
