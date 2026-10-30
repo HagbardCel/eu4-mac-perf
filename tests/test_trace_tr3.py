@@ -15,10 +15,13 @@ import platform
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
+from unittest import mock
 
 from reconstruction_trace import fixture, schema
-from reconstruction_trace.tr3 import adapter, gfx, image, native, observe, path, startup
+from reconstruction_trace.tr3 import adapter, gfx, image, native, observe, path, run as tr3_run, startup
 from reverse_engineering.macho_rva import build_synthetic_macho_64
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -905,6 +908,70 @@ class TraceTr3Tests(unittest.TestCase):
         self.assertNotIn("r8", observation["entry_state"]["registers"])
         self.assertEqual(adapter.prepare_scenario(observation)["refusal"], "unqualified")
         self.assertIsNone(adapter.prepare_scenario(observation)["scenario"])
+
+
+class TraceTr3LiveLaunchTests(unittest.TestCase):
+    def test_live_launch_refuses_without_operator_authorization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(tr3_run.startup, "build") as build, \
+                 mock.patch("subprocess.Popen") as popen:
+                with redirect_stdout(StringIO()) as out:
+                    status = tr3_run.main(["--output", str(Path(tmp) / "live.json")])
+        self.assertEqual(status, 1)
+        self.assertEqual(out.getvalue().strip(), tr3_run.UNAUTHORIZED)
+        build.assert_not_called()
+        popen.assert_not_called()
+
+    def test_live_launch_refuses_a_failed_image_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(Path, "is_file", return_value=True), \
+                 mock.patch.object(tr3_run.image, "check", return_value="file hash mismatch") as check, \
+                 mock.patch.object(tr3_run.startup, "build") as build, \
+                 mock.patch("subprocess.Popen") as popen:
+                with redirect_stdout(StringIO()) as out:
+                    status = tr3_run.main(
+                        ["--authorize-live", "--output", str(Path(tmp) / "live.json")])
+        self.assertEqual(status, 1)
+        self.assertEqual(out.getvalue().strip(), "refused: file hash mismatch")
+        check.assert_called_once()
+        build.assert_not_called()
+        popen.assert_not_called()
+
+    def test_live_candidate_refusal_is_the_diagnostic(self) -> None:
+        result = gfx.interpret([tr3_run.live_candidate({"refusal": "rel32 out of range"})])
+        self.assertIsNone(result["observation"])
+        self.assertEqual(result["diagnostic"], "rel32 out of range")
+        self.assertEqual(result["limits"], gfx.LIMITS)
+
+    def test_live_launch_keeps_the_first_candidate_only(self) -> None:
+        first = tr3_run.live_candidate({"refusal": "rel32 out of range"})
+        second = tr3_run.live_candidate({"refusal": "QBDI executed no block"})
+        result = gfx.interpret([first, second])
+        self.assertIsNone(result["observation"])
+        self.assertEqual(result["diagnostic"], "rel32 out of range")
+
+    def test_read_log_returns_none_for_a_missing_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(tr3_run.read_log(Path(tmp) / "insert.json"))
+
+    def test_await_exit_reports_the_status(self) -> None:
+        proc = mock.MagicMock()
+        proc.wait.return_value = 0
+        self.assertEqual(tr3_run.await_exit(proc, 120), {"status": "exited"})
+        proc.wait.assert_called_once_with(timeout=120)
+        proc.terminate.assert_not_called()
+
+    def test_await_exit_terminates_the_owned_process_on_expiry(self) -> None:
+        proc = mock.MagicMock()
+        proc.wait.side_effect = [
+            subprocess.TimeoutExpired(cmd="./eu4", timeout=120),
+            subprocess.TimeoutExpired(cmd="./eu4", timeout=30),
+            None,
+        ]
+        self.assertEqual(tr3_run.await_exit(proc, 120), {"status": "terminated"})
+        proc.terminate.assert_called_once()
+        proc.kill.assert_called_once()
+        proc.wait.assert_called()
 
 
 if __name__ == "__main__":
