@@ -816,6 +816,9 @@ class TraceTr3Tests(unittest.TestCase):
         self.assertTrue(raw["sealed"])
         self.assertIsNone(raw["refusal"])
         retained = payload(raw, prepared["window_len"])
+        dropped = (raw["run"]["dropped_instructions"] + raw["run"]["dropped_accesses"]
+                   + raw["run"]["dropped_transfers"] + raw["run"]["dropped_bytes"])
+        self.assertGreater(dropped, 0)
         if retained > budget:
             self.assertFalse(raw["run"]["execution_complete"])
         self.assertFalse(raw["run"]["execution_complete"])

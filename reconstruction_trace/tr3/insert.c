@@ -77,7 +77,7 @@ struct run {
     const char *boundary_from;
     rword boundary_pc;
     VMInstanceRef vm;
-    bool memory_recording, ran, entered, natural_return, unknown_memory;
+    bool memory_recording, ran, entered, natural_return;
     GPRState entry, exit;
     size_t n_regions, n_pointers, n_insts, n_transfers, n_accesses;
     struct region regions[4];
@@ -438,7 +438,6 @@ static void keep_accesses(struct run *current, struct inst *item, MemoryAccess *
         }
         item->access[item->n_access++] = access[i];
         current->n_accesses++;
-        if (access[i].flags & UNKNOWN_MEMORY) current->unknown_memory = true;
     }
 }
 
