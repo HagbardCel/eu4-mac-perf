@@ -12,12 +12,13 @@ import copy
 import hashlib
 import json
 import platform
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from reconstruction_trace import fixture, schema
-from reconstruction_trace.tr3 import adapter, image, native, observe
+from reconstruction_trace.tr3 import adapter, image, native, observe, path, startup
 from reverse_engineering.macho_rva import build_synthetic_macho_64
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -450,6 +451,211 @@ class TraceTr3Tests(unittest.TestCase):
             receipt = json.loads((out / "receipt.json").read_text())
         schema.validate(trace)
         self._assert_controlled_capture(trace, receipt)
+
+    def test_runtime_site_applies_the_slide_once(self) -> None:
+        preferred, slide, entry = 0x100000000, 0x5000, 0x15EC36A
+        header = preferred + slide
+        site = image.runtime_site(preferred, slide, entry, header)
+        self.assertEqual(site, header + entry)
+        self.assertNotEqual(site, header + slide + entry)
+        with self.assertRaises(ValueError):
+            image.runtime_site(preferred, slide, entry, preferred)
+
+    def test_mapped_bytes_are_checked_independently(self) -> None:
+        code = bytes(range(16))
+        image_base, fileoff, end = 0x100000000, 0x200, 8
+        payload = build_synthetic_macho_64(image_base=image_base, segment_fileoff=fileoff,
+                                           code_bytes=code)
+        pin = {"file_sha256": hashlib.sha256(payload).hexdigest(),
+               "window_sha256": hashlib.sha256(code[:end]).hexdigest(),
+               "image_base": image_base, "entry_rva": 0, "end_rva": end}
+        path_ = Path(tempfile.mkstemp(suffix=".macho")[1])
+        path_.write_bytes(payload)
+        try:
+            self.assertIsNone(image.check_mapped(path_, pin, code[:end]))
+            flipped = bytearray(code[:end])
+            flipped[0] ^= 0xff
+            self.assertEqual(image.check_mapped(path_, pin, bytes(flipped)), "mapped bytes mismatch")
+            eu4 = dict(pin, file_sha256="b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+                       window_sha256="8e5f94bf3f132cbf17397928c72df44b7fb6d24bcc95575702c457fb48e32943",
+                       entry_rva=0x15EC36A, end_rva=0x15EC3B5)
+            self.assertEqual(image.check(path_, eu4), "file hash mismatch")
+        finally:
+            path_.unlink(missing_ok=True)
+
+    def test_far_rel32_leaves_the_entry_unchanged(self) -> None:
+        entry = bytearray(b"\x90" * 5)
+        self.assertEqual(image.apply_rel32(entry, 0x1000, 0x1000 + 5 + (1 << 31)), "rel32 out of range")
+        self.assertEqual(bytes(entry), b"\x90" * 5)
+        near = bytearray(b"\x90" * 5)
+        self.assertIsNone(image.apply_rel32(near, 0x1000, 0x1100))
+        self.assertEqual(bytes(near), bytes([0xE9, 0xFB, 0x00, 0x00, 0x00]))
+
+    def _branch(self, take_jz: bool) -> tuple[list[dict], bytes, dict]:
+        inventory = path.load_inventory()
+        entry = int(inventory["entry_rva"], 16)
+        window = bytes(range(int(inventory["end_rva"], 16) - entry))
+        by_rva = {int(inst["rva"], 16): inst for inst in inventory["instructions"]}
+        rva = entry
+        records = []
+        while True:
+            inst = by_rva[rva]
+            offset = rva - entry
+            records.append({"rva": rva, "size": inst["length"],
+                            "bytes": window[offset:offset + inst["length"]]})
+            if inst["mnemonic"] == "RET":
+                break
+            choices = path.successors(inst, inventory["image_base"])
+            rva = choices[1] if take_jz and inst["mnemonic"] == "JZ" else choices[0]
+        return records, window, inventory
+
+    def test_each_branch_is_one_complete_path(self) -> None:
+        # Synthetic window bytes. This does not authenticate EU4's 75-byte pin.
+        for take_jz in (False, True):
+            records, window, inventory = self._branch(take_jz)
+            self.assertLess(len(records), inventory["instruction_count"])
+            self.assertIsNone(path.path_gap(records, inventory, window))
+            self.assertEqual(records[0]["rva"], path.ENTRY_RVA)
+            self.assertEqual(records[-1]["rva"], path.RET_RVA)
+
+    def test_deleted_register_move_is_not_a_path(self) -> None:
+        records, window, inventory = self._branch(False)
+        removed = next(record for record in records if record["rva"] == 0x15EC371)
+        self.assertEqual(removed["size"], 2)
+        gapped = [record for record in records if record is not removed]
+        drops = {"instructions": 0, "accesses": 0, "transfers": 0}
+        self.assertEqual(drops["instructions"], 0)
+        self.assertEqual(path.path_gap(gapped, inventory, window),
+                         "0x15ec36e does not continue to 0x15ec373")
+
+    def _assert_startup(self, observation: dict, receipt: dict) -> None:
+        self.assertEqual(receipt["claims"], startup.CLAIMS)
+        self.assertIn("untraced", receipt["concurrency"])
+        raw = receipt["probe_output"]
+        self.assertIsNone(native.subject_gap(raw))
+        self.assertEqual(observation, native.observation_from_run(raw["run"], raw["qbdi_version"]))
+        qualified = fixture.qualify(observation)
+        self.assertTrue(qualified["fixture_qualified"], qualified["reasons"])
+        self.assertEqual(adapter.prepare_scenario(observation)["refusal"], "unauthenticated-target")
+        hook = receipt["hook"]
+        self.assertEqual(hook["count"], 1)
+        self.assertEqual(hook["qbdi_invocations"], 1)
+        self.assertEqual(hook["native_call_count"], 2)
+        self.assertTrue(hook["restored_before_qbdi"])
+        self.assertTrue(hook["entry_bytes_match_after"])
+        self.assertEqual(receipt["proc_translated"], 1)
+        loaded = image.runtime_site(int(raw["image"]["preferred_base"], 16),
+                                    int(raw["image"]["slide"], 16),
+                                    int(raw["image"]["entry_rva"], 16),
+                                    int(raw["image"]["header"], 16))
+        self.assertEqual(loaded, int(raw["image"]["runtime_site"], 16))
+        self.assertEqual(loaded, int(raw["image"]["header"], 16) + int(raw["image"]["entry_rva"], 16))
+        decoy = native.DECOY_ADDRESS
+        regions = {region["id"]: region for region in observation["entry_state"]["regions"]}
+        targets = [int(regions[edge["to"]["region"]]["base"], 16) + edge["to"]["offset"]
+                   for edge in observation["entry_state"]["pointers"]]
+        self.assertNotIn(decoy, targets)
+        self.assertEqual(bytes.fromhex(regions["cell"]["bytes"]), decoy.to_bytes(8, "little"))
+        for name, digest in receipt["probe"]["sources_sha256"].items():
+            self.assertEqual(hashlib.sha256((native.HERE / name).read_bytes()).hexdigest(), digest,
+                             name)
+
+    def test_committed_startup_receipt(self) -> None:
+        """Read the committed startup capture. This is not a fresh native execution."""
+        receipt = json.loads((native.HERE / "startup_receipt.json").read_text())
+        observation = json.loads((native.HERE / "startup_observation.json").read_text())
+        schema.validate(observation)
+        self.assertEqual(receipt["observation_sha256"],
+                         hashlib.sha256((native.HERE / "startup_observation.json").read_bytes()).hexdigest())
+        self._assert_startup(observation, receipt)
+
+    def test_startup_interception_certifies_the_milestone(self) -> None:
+        """The macOS startup run certifies the milestone and does not skip."""
+        if platform.system() != "Darwin":
+            self.assertNotEqual(
+                platform.system(), "Darwin",
+                "this host checks the committed startup receipt and does not execute the subject")
+            return
+        reason = native.unsupported_host_reason()
+        self.assertIsNone(reason, reason)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            startup.write_capture(out, out / "build")
+            observation = json.loads((out / "startup_observation.json").read_text())
+            receipt = json.loads((out / "startup_receipt.json").read_text())
+        schema.validate(observation)
+        self._assert_startup(observation, receipt)
+
+    def _planted_success(self) -> tuple[dict, dict, str, str]:
+        receipt = json.loads((native.HERE / "startup_receipt.json").read_text())
+        file_hash, window_hash = "a" * 64, "b" * 64
+        raw = copy.deepcopy(receipt["probe_output"])
+        raw["expected_file_sha256"] = raw["file_sha256"] = file_hash
+        raw["expected_window_sha256"] = raw["window_sha256"] = window_hash
+        return raw, receipt["host_result"], file_hash, window_hash
+
+    def test_stale_insert_log_is_not_this_run(self) -> None:
+        raw, host_out, file_hash, window_hash = self._planted_success()
+        proc = subprocess.CompletedProcess(["tr3_host"], 0, stdout=json.dumps(host_out), stderr="")
+        startup.accept(proc, raw, file_hash, window_hash)
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "insert.json"
+            log.write_text(json.dumps(raw))
+
+            def runner(argv, **_kwargs):
+                return subprocess.CompletedProcess(argv, 0, stdout=proc.stdout, stderr="")
+
+            with self.assertRaises(RuntimeError) as caught:
+                startup.acquire(Path("tr3_host"), {}, log, runner)
+            self.assertIn("no log", str(caught.exception))
+
+    def test_measured_file_digest_must_match_this_host(self) -> None:
+        raw, host_out, file_hash, window_hash = self._planted_success()
+        raw["file_sha256"] = "c" * 64
+        proc = subprocess.CompletedProcess(["tr3_host"], 0, stdout=json.dumps(host_out), stderr="")
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "insert.json"
+            log.write_text(json.dumps(raw))
+            with self.assertRaises(RuntimeError) as caught:
+                startup.accept(proc, json.loads(log.read_text()), file_hash, window_hash)
+        self.assertIn("file_sha256", str(caught.exception))
+
+    def test_dropped_access_refuses_before_a_receipt(self) -> None:
+        raw, host_out, file_hash, window_hash = self._planted_success()
+        raw["run"]["dropped_accesses"] = 1
+        proc = subprocess.CompletedProcess(["tr3_host"], 0, stdout=json.dumps(host_out), stderr="")
+        with self.assertRaises(RuntimeError) as caught:
+            startup.accept(proc, raw, file_hash, window_hash)
+        self.assertIn("incomplete capture", str(caught.exception))
+
+    def _assert_auth_refusal(self, proc, raw, reason: str, entry: str) -> None:
+        self.assertEqual(raw["refusal"], reason)
+        self.assertFalse(raw["patched"])
+        self.assertEqual(json.loads(proc.stdout)["entry"], entry)
+
+    def test_wrong_file_hash_refuses_without_a_patch(self) -> None:
+        if platform.system() != "Darwin":
+            self.assertNotEqual(
+                platform.system(), "Darwin",
+                "this host checks the committed startup receipt and does not execute the subject")
+            return
+        reason = native.unsupported_host_reason()
+        self.assertIsNone(reason, reason)
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, raw, built = startup.launch(Path(tmp), file_hash="0" * 64)
+        self._assert_auth_refusal(proc, raw, "file hash mismatch", built["entry"])
+
+    def test_wrong_window_hash_refuses_without_a_patch(self) -> None:
+        if platform.system() != "Darwin":
+            self.assertNotEqual(
+                platform.system(), "Darwin",
+                "this host checks the committed startup receipt and does not execute the subject")
+            return
+        reason = native.unsupported_host_reason()
+        self.assertIsNone(reason, reason)
+        with tempfile.TemporaryDirectory() as tmp:
+            proc, raw, built = startup.launch(Path(tmp), window_hash="0" * 64)
+        self._assert_auth_refusal(proc, raw, "window hash mismatch", built["entry"])
 
 
 if __name__ == "__main__":

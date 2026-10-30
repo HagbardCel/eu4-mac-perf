@@ -1,0 +1,263 @@
+{
+  "schema": "tr3-startup-receipt/v1",
+  "work_order": "TR3",
+  "evidence": "qbdi-rosetta",
+  "function_id": "synth:tr3-oneshot",
+  "binary": null,
+  "claims": {
+    "controlled_host_startup_loading": "demonstrated",
+    "one_shot_qbdi_interception": "demonstrated",
+    "eu4_startup_loading": "not demonstrated",
+    "eu4_hook_reachability": "not demonstrated",
+    "eu4_memory_provenance": "not demonstrated",
+    "live_gfx_set_constant_buffer": "not authorized"
+  },
+  "concurrency": "single-threaded host; another thread entering while the hook is removed is untraced",
+  "host_result": {
+    "calls": 2,
+    "first": "0x100000001",
+    "second": "0x100000002",
+    "cell": "0x100000002",
+    "entry": "488b0748ff"
+  },
+  "image": {
+    "preferred_base": "0x100000000",
+    "slide": "0x2e1000",
+    "header": "0x1002e1000",
+    "entry_rva": "0x5d0",
+    "runtime_site": "0x1002e15d0",
+    "filetype": "MH_EXECUTE",
+    "cputype": "CPU_TYPE_X86_64"
+  },
+  "hook": {
+    "count": 1,
+    "qbdi_invocations": 1,
+    "restored_before_qbdi": true,
+    "entry_bytes_match_after": true,
+    "saved_entry": "488b0748ff",
+    "native_call_count": 2
+  },
+  "expected_file_sha256": "5047d734d83b260ce96817a7cdfcdfb8da78c83e74118666ae9471de66a59e95",
+  "expected_window_sha256": "d998ba77f7115d4f76b0fad59fd601f5e0e395c72ebe4ea6849be5ba09a3ab3f",
+  "window": {
+    "image_base": 4294967296,
+    "entry_rva": 1488,
+    "end_rva": 1498
+  },
+  "proc_translated": 1,
+  "qbdi_version": "0.12.1",
+  "probe": {
+    "sources_sha256": {
+      "host.c": "7bbbb1e20e1cb7f73248a8f1ea7fe0da6abed592863340374a9126f68ac9ad8b",
+      "subject.S": "7827a8886fc20d87657b1a232650c068fd82dd86c92c6ae96b6a45529a284069",
+      "insert.c": "0f0250770eb9663155f84deb23d677a3b1e3855e70d90939fc6edb55ca36ff7b",
+      "insert_stub.S": "c9bcdde912e6834ee200eef45960167f8dadba0cea4c74fed54582a2ca09b600",
+      "startup.py": "fb779999023a861c6a1fd8acafcf48d0067721843ad9fe1e1ac48482e04013b6",
+      "image.py": "7da2037be6d49f484b204fd3af01d4c3f1439f213e0613cc515d447f1ae78046",
+      "path.py": "a229cac6f5141298baab095e8c9a76f820a0e5d637ec42f5cd7b9db75ad75816"
+    }
+  },
+  "probe_output": {
+    "refusal": null,
+    "patched": true,
+    "proc_translated": 1,
+    "qbdi_version": "0.12.1",
+    "expected_file_sha256": "5047d734d83b260ce96817a7cdfcdfb8da78c83e74118666ae9471de66a59e95",
+    "file_sha256": "5047d734d83b260ce96817a7cdfcdfb8da78c83e74118666ae9471de66a59e95",
+    "expected_window_sha256": "d998ba77f7115d4f76b0fad59fd601f5e0e395c72ebe4ea6849be5ba09a3ab3f",
+    "window_sha256": "d998ba77f7115d4f76b0fad59fd601f5e0e395c72ebe4ea6849be5ba09a3ab3f",
+    "image": {
+      "preferred_base": "0x100000000",
+      "slide": "0x2e1000",
+      "header": "0x1002e1000",
+      "entry_rva": "0x5d0",
+      "runtime_site": "0x1002e15d0",
+      "filetype": "MH_EXECUTE",
+      "cputype": "CPU_TYPE_X86_64"
+    },
+    "hook": {
+      "count": 1,
+      "qbdi_invocations": 1,
+      "restored_before_qbdi": true,
+      "entry_bytes_match_after": true,
+      "saved_entry": "488b0748ff"
+    },
+    "symbols": {
+      "subject": "0x1002e15d0",
+      "scope_start": "0x1002e15d0",
+      "scope_end": "0x1002e15da"
+    },
+    "run": {
+      "failure": null,
+      "ran": true,
+      "entered": true,
+      "memory_recording": true,
+      "entry_gpr": {
+        "rax": "0x100000000",
+        "rbx": "0x1",
+        "rcx": "0x0",
+        "rdx": "0x1",
+        "rsi": "0x1",
+        "rdi": "0x7f83ee707840",
+        "r8": "0x3ff8",
+        "r9": "0x37c",
+        "r10": "0x10849c080",
+        "r11": "0x2004e0ae0",
+        "r12": "0x304841138",
+        "r13": "0x2004fc0c0",
+        "r14": "0x7f83ee707840",
+        "r15": "0x2004dc0e0",
+        "rbp": "0x304840730",
+        "rsp": "0x3048406f8",
+        "rip": "0x1002e15d0",
+        "eflags": "0x217"
+      },
+      "exit_gpr": {
+        "rax": "0x100000001",
+        "rbx": "0x1",
+        "rcx": "0x0",
+        "rdx": "0x1",
+        "rsi": "0x1",
+        "rdi": "0x7f83ee707840",
+        "r8": "0x3ff8",
+        "r9": "0x37c",
+        "r10": "0x10849c080",
+        "r11": "0x2004e0ae0",
+        "r12": "0x304841138",
+        "r13": "0x2004fc0c0",
+        "r14": "0x7f83ee707840",
+        "r15": "0x2004dc0e0",
+        "rbp": "0x304840730",
+        "rsp": "0x304840700",
+        "rip": "0x1002e1507",
+        "eflags": "0x203"
+      },
+      "regions": [
+        {
+          "id": "cell",
+          "kind": "heap",
+          "base": "0x7f83ee707840",
+          "size": 8,
+          "bytes": "0000000001000000"
+        },
+        {
+          "id": "stack",
+          "kind": "stack",
+          "base": "0x304840600",
+          "size": 256,
+          "bytes": "0000000000000000be9442000200000000000000000000000000000000000000600684040300000000b68b08010000000e00000000000000010000000000000000b68b08010000000100000000000000c0068404030000000aceb507f87f000028d65b04f87f0000010000000000000000005704f87f00000000570400000000c006840403000000b6944700010000000e0000000000000000804908010000003811840403000000c0c04f000200000001000000000000000800000000000000f0068404030000000fbcb507f87f0000700b84040300000038118404030000001807500002000000e0c04d0002000000170200000000000007152e0001000000"
+        }
+      ],
+      "pointers": [
+        {
+          "from": {
+            "register": "rdi"
+          },
+          "to": {
+            "region": "cell",
+            "offset": 0
+          }
+        },
+        {
+          "from": {
+            "register": "rsp"
+          },
+          "to": {
+            "region": "stack",
+            "offset": 248
+          }
+        }
+      ],
+      "instructions": [
+        {
+          "pc": "0x1002e15d0",
+          "next_pc": "0x1002e15d3",
+          "inst_size": 3,
+          "mnemonic": "MOV64rm",
+          "disassembly": "mov rax, qword ptr [rdi]",
+          "may_load": true,
+          "may_store": false,
+          "load_size": 8,
+          "store_size": 0,
+          "is_call": false,
+          "is_return": false,
+          "accesses": [
+            {
+              "inst_address": "0x1002e15d0",
+              "address": "0x7f83ee707840",
+              "value": "0x100000000",
+              "size": 8,
+              "type": 1,
+              "flags": 0
+            }
+          ]
+        },
+        {
+          "pc": "0x1002e15d3",
+          "next_pc": "0x1002e15d6",
+          "inst_size": 3,
+          "mnemonic": "INC64r",
+          "disassembly": "inc rax",
+          "may_load": false,
+          "may_store": false,
+          "load_size": 0,
+          "store_size": 0,
+          "is_call": false,
+          "is_return": false,
+          "accesses": []
+        },
+        {
+          "pc": "0x1002e15d6",
+          "next_pc": "0x1002e15d9",
+          "inst_size": 3,
+          "mnemonic": "MOV64mr",
+          "disassembly": "mov qword ptr [rdi], rax",
+          "may_load": false,
+          "may_store": true,
+          "load_size": 0,
+          "store_size": 8,
+          "is_call": false,
+          "is_return": false,
+          "accesses": [
+            {
+              "inst_address": "0x1002e15d6",
+              "address": "0x7f83ee707840",
+              "value": "0x100000001",
+              "size": 8,
+              "type": 2,
+              "flags": 0
+            }
+          ]
+        },
+        {
+          "pc": "0x1002e15d9",
+          "next_pc": "0x1002e1507",
+          "inst_size": 1,
+          "mnemonic": "RET64",
+          "disassembly": "ret",
+          "may_load": true,
+          "may_store": false,
+          "load_size": 8,
+          "store_size": 0,
+          "is_call": false,
+          "is_return": true,
+          "accesses": [
+            {
+              "inst_address": "0x1002e15d9",
+              "address": "0x3048406f8",
+              "value": "0x1002e1507",
+              "size": 8,
+              "type": 1,
+              "flags": 0
+            }
+          ]
+        }
+      ],
+      "exec_transfers": [],
+      "dropped_instructions": 0,
+      "dropped_accesses": 0,
+      "dropped_transfers": 0
+    }
+  },
+  "observation_sha256": "1d8e511a6e635f683dce03cd5d37b17f0a0f4a99181cd56ca884a24389879140"
+}
