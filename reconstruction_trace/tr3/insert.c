@@ -24,7 +24,7 @@
 #define STACK_ABOVE 8
 #define HOST_STACK (4u << 20)
 #define PATCH_SIZE 5
-#define MAX_INSTS 16
+#define MAX_INSTS 21
 #define MAX_ACCESSES 4
 #define MAX_TRANSFERS 4
 
@@ -73,7 +73,7 @@ struct run {
 
 static struct run run;
 static uint8_t saved_entry[PATCH_SIZE];
-static uint8_t window_bytes[16];
+static uint8_t window_bytes[75];
 static size_t window_len;
 static const char *refusal;
 static const char *image_name;
@@ -254,10 +254,13 @@ static void authenticate(void) {
         return;
     }
     tr3_subject_site = (uint64_t)((intptr_t)preferred_base + slide + (intptr_t)entry_rva);
-    void *symbol = dlsym(RTLD_MAIN_ONLY, "tr3_subject");
-    if (symbol == NULL || (uintptr_t)symbol != (uintptr_t)tr3_subject_site) {
-        refuse("subject symbol is not the slid entry");
-        return;
+    const char *check_symbol = getenv("TR3_CHECK_SYMBOL");
+    if (check_symbol != NULL && check_symbol[0] != '\0') {
+        void *symbol = dlsym(RTLD_MAIN_ONLY, "tr3_subject");
+        if (symbol == NULL || (uintptr_t)symbol != (uintptr_t)tr3_subject_site) {
+            refuse("subject symbol is not the slid entry");
+            return;
+        }
     }
     if (!sha256_path(name, file_sha) || !expect_hex(file_sha, expect_file)) {
         refuse("file hash mismatch");

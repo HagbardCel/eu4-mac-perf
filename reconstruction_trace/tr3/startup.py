@@ -123,6 +123,7 @@ def launch(build_dir: Path, *, file_hash: str | None = None, window_hash: str | 
     env["TR3_EXPECT_WINDOW_SHA256"] = real_window if window_hash is None else window_hash
     env["TR3_ENTRY_RVA"] = hex(entry_rva)
     env["TR3_WINDOW_LEN"] = str(native.SUBJECT_BYTES)
+    env["TR3_CHECK_SYMBOL"] = "1"
     env["TR3_LOG"] = str(build_dir / "insert.json")
     # `arch -x86_64` drops DYLD_INSERT_LIBRARIES. The host is already x86-64,
     # so executing it directly is what loads the dylib under Rosetta.
