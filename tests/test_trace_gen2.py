@@ -163,6 +163,26 @@ class Gen2PortableTests(unittest.TestCase):
         self.assertEqual(observation["completeness"], "incomplete")
         self.assertFalse(fixture.qualify(observation)["fixture_qualified"])
 
+    def test_uncovered_write_is_unresolved(self) -> None:
+        raw = copy.deepcopy(self.raw)
+        raw["run"]["regions"] = [region for region in raw["run"]["regions"] if region["id"] != "cell"]
+        raw["run"]["pointers"] = [edge for edge in raw["run"]["pointers"]
+                                  if edge["to"]["region"] != "cell"]
+        load = raw["run"]["instructions"][0]
+        load["accesses"] = []
+        load["may_load"] = False
+        load["load_size"] = 0
+        write = raw["run"]["instructions"][2]["accesses"][0]
+        observation = project.project(raw, self.desc, synthetic=True)
+        self.assertEqual(observation["unresolved_dependencies"], [{
+            "address": write["address"], "size": write["size"],
+            "reason": "write outside the harness inventory",
+        }])
+        self.assertEqual(observation["completeness"], "incomplete")
+        self.assertFalse(fixture.qualify(observation)["fixture_qualified"])
+        self.assertFalse(any(event["kind"] == "read" and event["address"] == write["address"]
+                             for event in observation["events"]))
+
     def test_unknown_memory_is_not_fabricated(self) -> None:
         cases = {
             "unknown-value": lambda access: access.__setitem__("flags", native.MEMORY_UNKNOWN_VALUE),
@@ -225,8 +245,12 @@ class Gen2PortableTests(unittest.TestCase):
         def edit_entry(raw: dict) -> None:
             raw["image"]["entry_rva"] = "0x1"
 
+        def edit_subject(raw: dict) -> None:
+            raw["symbols"]["subject"] = "0x1"
+
         for name, edit in {
             "file": edit_file, "window": edit_window, "byte": edit_byte, "entry": edit_entry,
+            "subject": edit_subject,
         }.items():
             with self.subTest(name):
                 raw = copy.deepcopy(self.raw)

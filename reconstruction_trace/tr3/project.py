@@ -74,7 +74,8 @@ def _identity(raw: dict, descriptor: dict) -> None:
     if site != int(meta["runtime_site"], 16):
         raise ProjectError("runtime site disagrees with the image identity")
     symbols = raw["symbols"]
-    if int(symbols["scope_start"], 16) != site or int(symbols["scope_end"], 16) != site + len(mapped):
+    if (int(symbols["subject"], 16) != site or int(symbols["scope_start"], 16) != site
+            or int(symbols["scope_end"], 16) != site + len(mapped)):
         raise ProjectError("symbol range disagrees with the mapped window")
     for inst in run["instructions"]:
         if inst.get("bytes") is None:
@@ -147,8 +148,26 @@ def _note_gaps(raw: dict, observation: dict) -> None:
             f"{boundary.get('reason')} from {boundary.get('from')} at {boundary.get('pc')}")
     if raw.get("refusal"):
         add(str(raw["refusal"]))
+    unresolved = list(observation["unresolved_dependencies"])
+    seen = {(item["address"], item["size"]) for item in unresolved}
+    regions = observation["entry_state"]["regions"]
+    for event in observation["events"]:
+        if event.get("kind") != "write":
+            continue
+        start, size = int(event["address"], 16), event["size"]
+        covered = any(int(region["base"], 16) <= start
+                      and start + size <= int(region["base"], 16) + region["size"]
+                      for region in regions)
+        key = (event["address"], size)
+        if covered or key in seen:
+            continue
+        seen.add(key)
+        unresolved.append({"address": event["address"], "size": size,
+                           "reason": "write outside the harness inventory"})
+        add(f"write outside the harness inventory at {event['address']} size {size}")
     if run.get("execution_complete") is not True and not reasons:
         add("native execution completeness is false")
     observation["incomplete_reasons"] = reasons
-    if reasons or observation["unresolved_dependencies"] or run.get("execution_complete") is not True:
+    observation["unresolved_dependencies"] = unresolved
+    if reasons or unresolved or run.get("execution_complete") is not True:
         observation["completeness"] = "incomplete"
