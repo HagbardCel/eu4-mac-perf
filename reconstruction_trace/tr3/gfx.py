@@ -178,15 +178,15 @@ def _native_gap(raw: dict, mapped: bytes | None) -> str | None:
 
 def _native(selected: dict, image_path: Path | None, mapped: bytes | None) -> dict:
     trace = native.observation_from_run(selected["run"], selected.get("qbdi_version", "unverified"))
-    extras = []
-    gap = _native_gap(selected, mapped)
-    if gap:
-        extras.append(gap)
     reason = _identity(selected, image_path, mapped)
-    if reason:
-        extras.append(reason)
-    else:
+    gap = _native_gap(selected, mapped) if reason is None else None
+    if reason is None:
         trace["function_id"] = FUNCTION_ID
         trace["binary"] = _binary()
-    diagnostic = _remember(trace, extras)
+    primary = reason or gap
+    if primary:
+        prior = trace["incomplete_reasons"]
+        trace["incomplete_reasons"] = [primary, *(item for item in prior if item != primary)]
+        trace["completeness"] = "incomplete"
+    diagnostic = trace["incomplete_reasons"][0] if trace["incomplete_reasons"] else None
     return {"diagnostic": diagnostic, "observation": trace, "limits": LIMITS}

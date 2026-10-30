@@ -818,16 +818,23 @@ class TraceTr3Tests(unittest.TestCase):
             pc, may_store=True, store_size=8,
             accesses=[self._access(pc, "0x100000", value="0x1", size=8, type_=0)])])
         missing = self._qbdi([self._qbdi_instruction(pc, may_load=True, load_size=8, accesses=[])])
-        for run in (unknown, unclassified, missing):
+        cases = (
+            (unknown, "has no known value"),
+            (unclassified, "unclassified access type"),
+            (missing, "mayLoad without a recorded read"),
+        )
+        for run, sentence in cases:
             result = gfx.interpret([{"evidence": "qbdi-rosetta", "qbdi_version": "test", "run": run}])
             observation = result["observation"]
             schema.validate(observation)
             self.assertEqual(observation["completeness"], "incomplete")
+            self.assertEqual(result["diagnostic"], "image was not authenticated")
             self.assertEqual(result["diagnostic"], observation["incomplete_reasons"][0])
+            self.assertTrue(any(sentence in reason for reason in observation["incomplete_reasons"]))
             self.assertFalse(fixture.qualify(observation)["fixture_qualified"])
             self.assertNotEqual(observation["function_id"], gfx.FUNCTION_ID)
 
-    def test_native_cfg_gap_is_the_diagnostic(self) -> None:
+    def test_unauthenticated_window_is_not_a_cfg_diagnostic(self) -> None:
         site = 0x100000000 + 0x5000 + 0x15EC36A
         pc = hex(site)
         run = self._qbdi([self._qbdi_instruction(
@@ -841,8 +848,8 @@ class TraceTr3Tests(unittest.TestCase):
         }
         result = gfx.interpret([candidate], mapped=bytes(75))
         observation = result["observation"]
-        self.assertEqual(result["diagnostic"], "path does not end at the ret")
-        self.assertIn("path does not end at the ret", observation["incomplete_reasons"])
+        self.assertEqual(result["diagnostic"], "image was not authenticated")
+        self.assertNotIn("path does not end at the ret", observation["incomplete_reasons"])
         self.assertEqual(observation["completeness"], "incomplete")
         self.assertFalse(fixture.qualify(observation)["fixture_qualified"])
         self._assert_not_native(result)
