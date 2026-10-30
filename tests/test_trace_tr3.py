@@ -600,13 +600,20 @@ class TraceTr3Tests(unittest.TestCase):
         self.assertIsNone(reason, reason)
         return True
 
-    def _run_target(self, build_dir: Path, host: Path, dylib: Path, symbol: str, budgets: dict,
+    def _run_target(self, build_dir: Path, host: Path, dylib: Path, symbol: str,
                     *, legacy: bool = False, log_name: str = "insert.json"):
         prepared = startup.prepare_target(host, symbol, startup.CEILING)
         log = build_dir / log_name
-        env = startup.target_env(dylib, log, prepared, budgets, legacy=legacy)
+        env = startup.target_env(dylib, log, prepared["descriptor"], preferred=prepared["preferred"],
+                                 legacy=legacy)
         proc, raw = startup.acquire(host, env, log)
         return proc, raw, prepared
+
+    def _valid_env(self, build_dir: Path, host: Path, dylib: Path, log_name: str):
+        prepared = startup.prepare_target(host, "_tr3_subject", startup.CEILING)
+        log = build_dir / log_name
+        env = startup.target_env(dylib, log, prepared["descriptor"], preferred=prepared["preferred"])
+        return prepared, log, env
 
     def _assert_instruction_bytes(self, raw: dict, window: bytes) -> None:
         mapped = bytes.fromhex(raw["mapped_window"])
@@ -620,21 +627,14 @@ class TraceTr3Tests(unittest.TestCase):
 
     @staticmethod
     def _norm_snap(blob: bytes):
-        regs = [int.from_bytes(blob[i:i + 8], "little") for i in range(0, 128, 8)]
-        rsp = regs[15]
+        regs = tuple(int.from_bytes(blob[i:i + 8], "little") for i in range(0, 128, 8))
         flags = int.from_bytes(blob[128:136], "little") & 0xCD5
-        normalized = []
-        for value in regs:
-            if rsp - 0x8000 <= value <= rsp + 0x8000:
-                normalized.append(value - rsp)
-            else:
-                normalized.append(value)
         fx = blob[144:656]
         parts = [fx[0:2], fx[2:4], fx[4:5], fx[24:28]]
         for index in range(8):
             parts.append(fx[32 + 16 * index:32 + 16 * index + 10])
         parts.append(fx[160:416])
-        return tuple(normalized), flags, b"".join(parts)
+        return regs, flags, b"".join(parts)
 
     def test_two_leaves_share_one_dylib(self) -> None:
         if not self._darwin_subject():
@@ -643,12 +643,18 @@ class TraceTr3Tests(unittest.TestCase):
             build_dir = Path(tmp)
             host, dylib = startup.build(build_dir)
             digest = hashlib.sha256(dylib.read_bytes()).hexdigest()
-            _, subject, subject_prep = self._run_target(
-                build_dir, host, dylib, "_tr3_subject", startup.CEILING, log_name="subject.json")
-            _, leaf, leaf_prep = self._run_target(
-                build_dir, host, dylib, "_tr3_leaf_b", startup.CEILING, log_name="leaf.json")
+            subject_proc, subject, subject_prep = self._run_target(
+                build_dir, host, dylib, "_tr3_subject", log_name="subject.json")
+            leaf_proc, leaf, leaf_prep = self._run_target(
+                build_dir, host, dylib, "_tr3_leaf_b", log_name="leaf.json")
+            self.assertEqual(subject_proc.returncode, 0, subject_proc.stderr)
+            self.assertEqual(leaf_proc.returncode, 0, leaf_proc.stderr)
             self.assertEqual(hashlib.sha256(dylib.read_bytes()).hexdigest(), digest)
-            for prepared in (subject_prep, leaf_prep):
+            for raw, prepared in ((subject, subject_prep), (leaf, leaf_prep)):
+                desc = prepared["descriptor"]
+                self.assertEqual(raw["image"]["entry_rva"], desc["function"]["entry_rva"])
+                self.assertEqual(raw["expected_file_sha256"], desc["binary"]["sha256"])
+                self.assertEqual(raw["expected_window_sha256"], desc["binary"]["window_sha256"])
                 self.assertGreaterEqual(prepared["window_len"], 5)
                 self.assertLessEqual(prepared["window_len"], 75)
             self._assert_instruction_bytes(subject, subject_prep["window"])
@@ -673,7 +679,7 @@ class TraceTr3Tests(unittest.TestCase):
             build_dir = Path(tmp)
             host, dylib = startup.build(build_dir)
             proc, raw, _prepared = self._run_target(
-                build_dir, host, dylib, "_tr3_leaf_b", startup.CEILING, log_name="leaf.json")
+                build_dir, host, dylib, "_tr3_leaf_b", log_name="leaf.json")
         self.assertEqual(proc.returncode, 0, proc.stderr)
         host_out = json.loads(proc.stdout)
         self.assertEqual(host_out["snaps"], 2)
@@ -689,7 +695,7 @@ class TraceTr3Tests(unittest.TestCase):
     def _assert_rejected_transfer(self, build_dir: Path, host: Path, dylib: Path, symbol: str,
                                   reason: str) -> None:
         _proc, raw, prepared = self._run_target(
-            build_dir, host, dylib, symbol, startup.CEILING, log_name=f"{reason}.json")
+            build_dir, host, dylib, symbol, log_name=f"{reason}.json")
         self.assertTrue(raw["sealed"])
         self.assertIsNone(raw["refusal"])
         self.assertFalse(raw["run"]["execution_complete"])
@@ -718,11 +724,9 @@ class TraceTr3Tests(unittest.TestCase):
             self._assert_rejected_transfer(build_dir, host, dylib, "_tr3_calls", "call")
             self._assert_rejected_transfer(build_dir, host, dylib, "_tr3_jump_out", "out-of-range")
 
-    def _assert_budget_refusal(self, build_dir: Path, host: Path, dylib: Path, budgets: dict,
-                               needle: str) -> None:
-        prepared = startup.prepare_target(host, "_tr3_subject", startup.CEILING)
-        log = build_dir / "budget.json"
-        env = startup.target_env(dylib, log, prepared, budgets)
+    def _assert_budget_refusal(self, build_dir: Path, host: Path, dylib: Path, edit, needle: str) -> None:
+        prepared, log, env = self._valid_env(build_dir, host, dylib, "budget.json")
+        edit(env)
         proc, raw = startup.acquire(host, env, log)
         self.assertFalse(raw["patched"])
         self.assertEqual(raw["hook"]["count"], 0)
@@ -739,16 +743,43 @@ class TraceTr3Tests(unittest.TestCase):
             prepared = startup.prepare_target(host, "_tr3_subject", startup.CEILING)
             minimum = startup.envelope(prepared["window_len"])
             self._assert_budget_refusal(
-                build_dir, host, dylib,
-                {**startup.CEILING, "max_memory_accesses": None}, "budget was not supplied")
+                build_dir, host, dylib, lambda env: env.pop("TR3_MAX_ACCESSES"),
+                "budget was not supplied")
             self._assert_budget_refusal(
-                build_dir, host, dylib, {**startup.CEILING, "max_instructions": 0},
+                build_dir, host, dylib, lambda env: env.__setitem__("TR3_MAX_INSTRUCTIONS", "0"),
                 "budget is not positive")
             self._assert_budget_refusal(
-                build_dir, host, dylib, {**startup.CEILING, "max_bytes": startup.CEILING["max_bytes"] + 1},
+                build_dir, host, dylib,
+                lambda env: env.__setitem__("TR3_MAX_BYTES", str(startup.CEILING["max_bytes"] + 1)),
                 "budget exceeds the capture ceiling")
             self._assert_budget_refusal(
-                build_dir, host, dylib, {**startup.CEILING, "max_bytes": minimum - 1}, str(minimum))
+                build_dir, host, dylib,
+                lambda env: env.__setitem__("TR3_MAX_BYTES", str(minimum - 1)), str(minimum))
+
+    def test_short_window_fallthrough_is_incomplete(self) -> None:
+        if not self._darwin_subject():
+            return
+        with tempfile.TemporaryDirectory() as tmp:
+            build_dir = Path(tmp)
+            host, dylib = startup.build(build_dir)
+            prepared = startup.prepare_target(host, "_tr3_subject", startup.CEILING)
+            desc = copy.deepcopy(prepared["descriptor"])
+            entry = prepared["entry_rva"]
+            short = prepared["window"][:6]
+            desc["function"]["ranges"] = [[hex(entry), hex(entry + len(short))]]
+            desc["binary"]["window_sha256"] = hashlib.sha256(short).hexdigest()
+            log = build_dir / "short.json"
+            env = startup.target_env(dylib, log, desc, preferred=prepared["preferred"])
+            _proc, raw = startup.acquire(host, env, log)
+        self.assertTrue(raw["sealed"])
+        self.assertIsNone(raw["refusal"])
+        self.assertFalse(raw["run"]["execution_complete"])
+        site = int(raw["image"]["runtime_site"], 16)
+        end = site + len(short)
+        outside = [inst for inst in raw["run"]["instructions"]
+                   if not inst["is_return"] and not site <= int(inst["next_pc"], 16) < end]
+        if not outside:
+            self.fail("blocked: post-instruction callback did not observe fallthrough past the window")
 
     def test_runtime_overflow_stays_incomplete(self) -> None:
         if not self._darwin_subject():
@@ -756,15 +787,62 @@ class TraceTr3Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             build_dir = Path(tmp)
             host, dylib = startup.build(build_dir)
-            proc, raw, _prepared = self._run_target(
-                build_dir, host, dylib, "_tr3_subject",
-                {**startup.CEILING, "max_instructions": 1}, log_name="overflow.json")
+            prepared, log, env = self._valid_env(build_dir, host, dylib, "overflow.json")
+            env["TR3_MAX_INSTRUCTIONS"] = "1"
+            proc, raw = startup.acquire(host, env, log)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertTrue(raw["patched"])
+            self.assertGreater(len(raw["run"]["instructions"]), 0)
+            self.assertGreater(raw["run"]["dropped_instructions"], 0)
+            self.assertFalse(raw["run"]["execution_complete"])
+            self.assertTrue(raw["sealed"])
+
+            _prepared, log, env = self._valid_env(build_dir, host, dylib, "bytes.json")
+            env["TR3_MAX_BYTES"] = str(startup.envelope(prepared["window_len"]) + 1)
+            proc, raw = startup.acquire(host, env, log)
+            self.assertTrue(raw["sealed"])
+            self.assertFalse(raw["run"]["execution_complete"])
+            self.assertIsNotNone(raw["run"]["entry_fpr"])
+            self.assertIsNotNone(raw["mapped_window"])
+            self.assertGreater(raw["run"]["dropped_instructions"] + raw["run"]["dropped_bytes"], 0)
+
+            _prepared, log, env = self._valid_env(build_dir, host, dylib, "access.json")
+            env["TR3_MAX_ACCESSES"] = "1"
+            proc, raw = startup.acquire(host, env, log)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertTrue(raw["patched"])
-        self.assertGreater(len(raw["run"]["instructions"]), 0)
-        self.assertGreater(raw["run"]["dropped_instructions"], 0)
+        kept = sum(len(inst["accesses"]) for inst in raw["run"]["instructions"])
+        self.assertGreater(kept, 0)
+        self.assertGreater(raw["run"]["dropped_accesses"], 0)
         self.assertFalse(raw["run"]["execution_complete"])
         self.assertTrue(raw["sealed"])
+
+    def test_descriptor_is_the_launch_configuration(self) -> None:
+        preferred = 0x100000000
+        entry = 0x1000
+        desc = {
+            "schema": "trace-target/v1",
+            "binary": {"sha256": "a" * 64, "image_base": hex(preferred), "window_sha256": "b" * 64},
+            "function": {"name": "tr3_subject", "entry_rva": hex(entry),
+                         "ranges": [[hex(entry), hex(entry + 10)]]},
+            "trigger": {"mode": "first-invocation"},
+            "capture": dict(startup.CEILING),
+        }
+        env = startup.target_env(Path("lib.dylib"), Path("log.json"), desc, preferred=preferred)
+        self.assertEqual(env["TR3_ENTRY_RVA"], hex(entry))
+        self.assertEqual(env["TR3_MAX_INSTRUCTIONS"], str(startup.CEILING["max_instructions"]))
+        moved = copy.deepcopy(desc)
+        moved["function"]["entry_rva"] = hex(entry + 16)
+        moved["function"]["ranges"] = [[hex(entry + 16), hex(entry + 26)]]
+        moved["capture"]["max_instructions"] = 7
+        changed = startup.target_env(Path("lib.dylib"), Path("log.json"), moved, preferred=preferred)
+        self.assertEqual(changed["TR3_ENTRY_RVA"], hex(entry + 16))
+        self.assertEqual(changed["TR3_WINDOW_LEN"], "10")
+        self.assertEqual(changed["TR3_MAX_INSTRUCTIONS"], "7")
+        wrong = copy.deepcopy(desc)
+        wrong["binary"]["image_base"] = hex(preferred + 0x1000)
+        with self.assertRaises(RuntimeError) as caught:
+            startup.target_env(Path("lib.dylib"), Path("log.json"), wrong, preferred=preferred)
+        self.assertIn("image base", str(caught.exception))
 
     def _planted_success(self) -> tuple[dict, dict, str, str]:
         receipt = json.loads((native.HERE / "startup_receipt.json").read_text())

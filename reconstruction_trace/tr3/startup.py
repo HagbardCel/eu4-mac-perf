@@ -5,6 +5,7 @@ dylib only compares them. This module does not launch EU4.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -51,7 +52,7 @@ def _hex_addr(text: object) -> int:
     return int(text, 16)
 
 
-def check_descriptor(desc: dict) -> None:
+def check_descriptor(desc: dict, preferred: int) -> None:
     """Refuse a trace-target/v1 shape the engine is not allowed to run."""
     if desc.get("schema") != "trace-target/v1":
         raise RuntimeError("schema is not trace-target/v1")
@@ -65,7 +66,8 @@ def check_descriptor(desc: dict) -> None:
     start, end = _hex_addr(ranges[0][0]), _hex_addr(ranges[0][1])
     if start != entry or end <= start:
         raise RuntimeError("range does not start at the entry")
-    _hex_addr(binary["image_base"])
+    if _hex_addr(binary["image_base"]) != preferred:
+        raise RuntimeError("image base is not the preferred base")
     for digest in (binary["sha256"], binary["window_sha256"]):
         if (not isinstance(digest, str) or len(digest) != 64
                 or any(c not in "0123456789abcdef" for c in digest)):
@@ -110,27 +112,32 @@ def prepare_target(host: Path, symbol: str, budgets: dict) -> dict:
             "max_bytes": budgets["max_bytes"],
         },
     }
-    check_descriptor(prepared["descriptor"])
+    check_descriptor(prepared["descriptor"], preferred)
     return prepared
 
 
-def target_env(dylib: Path, log: Path, prepared: dict, budgets: dict, *, legacy: bool = False) -> dict:
+def target_env(dylib: Path, log: Path, descriptor: dict, *, preferred: int, legacy: bool = False) -> dict:
+    """Translate one validated descriptor. The dylib still applies the loaded slide itself."""
+    check_descriptor(descriptor, preferred)
+    function = descriptor["function"]
+    binary = descriptor["binary"]
+    entry = _hex_addr(function["entry_rva"])
+    end = _hex_addr(function["ranges"][0][1])
     env = os.environ.copy()
     env["DYLD_INSERT_LIBRARIES"] = str(dylib)
-    env["TR3_EXPECT_FILE_SHA256"] = prepared["file_hash"]
-    env["TR3_EXPECT_WINDOW_SHA256"] = prepared["window_hash"]
-    env["TR3_ENTRY_RVA"] = hex(prepared["entry_rva"])
-    env["TR3_WINDOW_LEN"] = str(prepared["window_len"])
+    env["TR3_EXPECT_FILE_SHA256"] = binary["sha256"]
+    env["TR3_EXPECT_WINDOW_SHA256"] = binary["window_sha256"]
+    env["TR3_ENTRY_RVA"] = function["entry_rva"]
+    env["TR3_WINDOW_LEN"] = str(end - entry)
     env["TR3_CHECK_SYMBOL"] = "1"
-    env["TR3_SYMBOL"] = prepared["symbol"]
+    env["TR3_SYMBOL"] = function["name"]
     env["TR3_LOG"] = str(log)
     env.pop("TR3_LEGACY_REGIONS", None)
     if legacy:
         env["TR3_LEGACY_REGIONS"] = "1"
     for key, name in _BUDGET_ENV:
         env.pop(name, None)
-        if key in budgets and budgets[key] is not None:
-            env[name] = str(budgets[key])
+        env[name] = str(descriptor["capture"][key])
     return env
 
 
@@ -223,12 +230,13 @@ def launch(build_dir: Path, *, file_hash: str | None = None, window_hash: str | 
         "entry_rva": prepared["entry_rva"],
         "window_end": prepared["entry_rva"] + prepared["window_len"],
     }
+    descriptor = copy.deepcopy(prepared["descriptor"])
     if file_hash is not None:
-        prepared["file_hash"] = file_hash
+        descriptor["binary"]["sha256"] = file_hash
     if window_hash is not None:
-        prepared["window_hash"] = window_hash
+        descriptor["binary"]["window_sha256"] = window_hash
     log = build_dir / "insert.json"
-    env = target_env(dylib, log, prepared, CEILING, legacy=True)
+    env = target_env(dylib, log, descriptor, preferred=prepared["preferred"], legacy=True)
     # `arch -x86_64` drops DYLD_INSERT_LIBRARIES. The host is already x86-64,
     # so executing it directly is what loads the dylib under Rosetta.
     proc, raw = acquire(host, env, log, runner)

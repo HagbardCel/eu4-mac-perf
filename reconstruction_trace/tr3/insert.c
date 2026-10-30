@@ -31,10 +31,7 @@
 #define MAX_TRANSFERS 4
 #define GPR_IMAGE_BYTES (18 * 8)
 #define FXSAVE_IMAGE_BYTES 512
-#define INST_META_BYTES 64
-#define ACCESS_CHARGE 32
 #define REGION_META_BYTES 32
-#define FLOW_BYTES 8
 #define UNKNOWN_MEMORY (QBDI_MEMORY_UNKNOWN_VALUE | QBDI_MEMORY_UNKNOWN_SIZE | QBDI_MEMORY_MINIMUM_SIZE)
 
 extern void tr3_insert_stub(void);
@@ -67,6 +64,14 @@ struct inst {
     uint8_t bytes[15];
     MemoryAccess access[MAX_ACCESSES];
 };
+
+/* Text capacities and numeric fields. The byte slice is charged separately. */
+#define INST_META_BYTES ( \
+    sizeof(((struct inst *)0)->mnemonic) + sizeof(((struct inst *)0)->disassembly) + \
+    sizeof(((struct inst *)0)->pc) + sizeof(((struct inst *)0)->next_pc) + \
+    sizeof(((struct inst *)0)->inst_size) + sizeof(((struct inst *)0)->load_size) + \
+    sizeof(((struct inst *)0)->store_size))
+#define ACCESS_CHARGE sizeof(MemoryAccess)
 
 struct run {
     const char *failure;
@@ -399,7 +404,7 @@ static void note_boundary(struct run *current, const char *reason, const char *f
     current->boundary_reason = reason;
     current->boundary_from = from;
     current->boundary_pc = pc;
-    if (!charge(FLOW_BYTES)) current->dropped_bytes++;
+    if (!charge(sizeof(rword))) current->dropped_bytes++;
 }
 
 static bool left_window(rword pc) {
@@ -445,7 +450,7 @@ static VMAction on_inst(VMInstanceRef vm, GPRState *gpr, FPRState *fpr, void *da
     MemoryAccess *access = qbdi_getInstMemoryAccess(vm, &count);
     const InstAnalysis *analysis =
         qbdi_getInstAnalysis(vm, QBDI_ANALYSIS_INSTRUCTION | QBDI_ANALYSIS_DISASSEMBLY);
-    bool escape = analysis->isBranch && !analysis->isReturn && left_window(gpr->rip);
+    bool escape = !analysis->isReturn && left_window(gpr->rip);
     bool room = current->n_insts < cap_insts && current->n_insts < MAX_INSTS;
     uint64_t cost = INST_META_BYTES + analysis->instSize;
     if (!room || !charge(cost)) {
@@ -492,8 +497,12 @@ static VMAction on_transfer(VMInstanceRef vm, const VMState *state, GPRState *gp
     (void)state;
     (void)fpr;
     struct run *current = data;
-    if (current->n_transfers == MAX_TRANSFERS) current->dropped_transfers++;
-    else current->transfers[current->n_transfers++] = gpr->rip;
+    if (current->n_transfers == MAX_TRANSFERS || !charge(sizeof(rword))) {
+        current->dropped_transfers++;
+        if (current->n_transfers < MAX_TRANSFERS) current->dropped_bytes++;
+    } else {
+        current->transfers[current->n_transfers++] = gpr->rip;
+    }
     return QBDI_CONTINUE;
 }
 
@@ -529,6 +538,34 @@ static void emit_gpr(FILE *out, const GPRState *gpr) {
                 (unsigned long long)QBDI_GPR_GET(gpr, i));
     }
     fputc('}', out);
+}
+
+static bool capture_complete(void) {
+    if (refusal != NULL || !run.natural_return || run.boundary_reason != NULL || !run.memory_recording ||
+        !run.entered || run.n_transfers != 0 || run.dropped_insts != 0 || run.dropped_accesses != 0 ||
+        run.dropped_transfers != 0 || run.dropped_bytes != 0 || run.n_insts == 0) {
+        return false;
+    }
+    rword expect = (rword)tr3_subject_site;
+    for (size_t i = 0; i < run.n_insts; i++) {
+        const struct inst *item = &run.insts[i];
+        bool last = i + 1 == run.n_insts;
+        if (!item->have_bytes || item->pc != expect) return false;
+        if (last) {
+            if (!item->is_return) return false;
+        } else if (item->is_return || left_window(item->next_pc)) {
+            return false;
+        }
+        for (size_t j = 0; j < item->n_access; j++) {
+            const MemoryAccess *access = &item->access[j];
+            bool known = (access->type == QBDI_MEMORY_READ || access->type == QBDI_MEMORY_WRITE) &&
+                         access->size > 0 && access->size <= sizeof(rword) &&
+                         (access->flags & UNKNOWN_MEMORY) == 0;
+            if (!known) return false;
+        }
+        expect = item->next_pc;
+    }
+    return true;
 }
 
 static bool hex_session(char out[65]) {
@@ -661,9 +698,7 @@ static bool write_log(void) {
     for (size_t i = 0; i < run.n_transfers; i++) {
         fprintf(out, "%s\"0x%llx\"", i ? ", " : "", (unsigned long long)run.transfers[i]);
     }
-    bool execution_complete = refusal == NULL && run.natural_return && run.boundary_reason == NULL &&
-                              !run.unknown_memory && run.dropped_insts == 0 && run.dropped_accesses == 0 &&
-                              run.dropped_transfers == 0 && run.dropped_bytes == 0 && run.entered;
+    bool execution_complete = capture_complete();
     fprintf(out,
             "], \"dropped_instructions\": %llu, \"dropped_accesses\": %llu, "
             "\"dropped_transfers\": %llu, \"dropped_bytes\": %llu, \"execution_complete\": %s, "

@@ -105,6 +105,15 @@ has already passed on the controlled host.
 - **Evidence limitation:** an incomplete trace stays incomplete. A QBDI exit
   dump is not the continuation test.
 
+## Live launcher
+
+`run.py` is unchanged. It does not supply the budgets this dylib now requires,
+so a normal environment refuses after EU4 has started. A budget variable
+already in the environment is not a guarantee that the launch will refuse,
+because the launcher copies that environment. This note does not repair that
+incompatibility. Live acquisition is repaired and revalidated only under a
+separate authorization.
+
 ## Merge gate
 
 The five acceptance conditions pass, with zero skips. `run.py` does not
