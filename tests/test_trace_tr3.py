@@ -727,60 +727,135 @@ class TraceTr3Tests(unittest.TestCase):
         self.assertFalse(fixture.qualify(observation)["fixture_qualified"])
         self.assertEqual(adapter.prepare_scenario(observation)["refusal"], "unqualified")
 
+    def _qbdi(self, instructions: list[dict], *, handle: int = 0x100000,
+              stack: int = 0x400000, pc: str | None = None) -> dict:
+        registers = {name: "0x0" for name in native.ENTRY_REGISTERS}
+        registers["rdi"] = hex(handle)
+        registers["rsp"] = hex(stack + 248)
+        return {
+            "failure": None, "ran": True, "entered": True, "memory_recording": True,
+            "exec_transfers": [], "dropped_instructions": 0, "dropped_accesses": 0,
+            "dropped_transfers": 0,
+            "regions": [
+                {"id": "handle", "kind": "heap", "base": hex(handle), "size": 8, "bytes": "00" * 8},
+                {"id": "stack", "kind": "stack", "base": hex(stack), "size": 256, "bytes": "00" * 256},
+            ],
+            "pointers": [
+                {"from": {"register": "rdi"}, "to": {"region": "handle", "offset": 0}},
+                {"from": {"register": "rsp"}, "to": {"region": "stack", "offset": 248}},
+            ],
+            "entry_gpr": registers, "exit_gpr": {"rax": "0x0"}, "instructions": instructions,
+        }
+
+    def _qbdi_instruction(self, pc: str, *, may_load: bool = False, may_store: bool = False,
+                          load_size: int = 0, store_size: int = 0,
+                          accesses: list[dict] | None = None, inst_size: int = 4) -> dict:
+        return {
+            "pc": pc, "next_pc": "0x1004", "inst_size": inst_size, "mnemonic": "MOV64mr",
+            "disassembly": "mov qword ptr [rdi], rax", "may_load": may_load, "may_store": may_store,
+            "load_size": load_size, "store_size": store_size, "is_call": False, "is_return": False,
+            "accesses": [] if accesses is None else accesses,
+        }
+
+    def _access(self, pc: str, address: str, *, value: str = "0x0", size: int = 8,
+                type_: int = 2, flags: int = 0) -> dict:
+        return {"inst_address": pc, "address": address, "value": value, "size": size,
+                "type": type_, "flags": flags}
+
     def test_native_identity_requires_this_capture(self) -> None:
         site = 0x100000000 + 0x5000 + 0x15EC36A
         image_meta = {"preferred_base": hex(0x100000000), "slide": hex(0x5000),
                       "header": hex(0x100000000 + 0x5000), "entry_rva": hex(0x15EC36A),
                       "runtime_site": hex(site)}
         captured = {
-            "evidence": "qbdi-rosetta",
+            "evidence": "qbdi-rosetta", "qbdi_version": "test",
             "expected_file_sha256": gfx.PIN_FILE, "expected_window_sha256": gfx.PIN_WINDOW,
             "file_sha256": gfx.PIN_FILE, "window_sha256": gfx.PIN_WINDOW,
-            "window": bytes(75), "image": image_meta,
-            "run": {"ran": True, "entered": True, "dropped_instructions": 0,
-                    "dropped_accesses": 0, "dropped_transfers": 0, "regions": [],
-                    "pointers": [], "instructions": [], "entry_gpr": {}, "exit_gpr": {}},
+            "image": image_meta, "run": self._qbdi([]),
         }
-        cases = (
+        for candidate in (
+            captured,
             {**captured, "file_sha256": "ab" * 32},
-            {**captured, "window_sha256": "cd" * 32},
             {**captured, "image": {**image_meta, "runtime_site": hex(site + 0x5000)}},
             {key: value for key, value in captured.items() if key != "image"},
-            {**captured, "window": bytes(range(75))},
-        )
-        for candidate in cases:
-            result = gfx.interpret([candidate])
+        ):
+            result = gfx.interpret([candidate], mapped=bytes(75))
             self._assert_not_native(result)
             self.assertIsNotNone(result["diagnostic"])
+            self.assertNotEqual(result["observation"]["function_id"], gfx.FUNCTION_ID)
+            self.assertIsNone(result["observation"]["binary"])
+        code = bytes(range(16))
+        payload = build_synthetic_macho_64(image_base=0x100000000, segment_fileoff=0x200,
+                                           code_bytes=code)
+        path_ = Path(tempfile.mkstemp(suffix=".macho")[1])
+        path_.write_bytes(payload)
+        try:
+            result = gfx.interpret([captured], image_path=path_, mapped=code[:8])
+        finally:
+            path_.unlink(missing_ok=True)
+        self._assert_not_native(result)
+        self.assertIn("file hash mismatch", result["observation"]["incomplete_reasons"])
+        self.assertNotEqual(result["observation"]["function_id"], gfx.FUNCTION_ID)
+
+    def test_qbdi_value_is_little_endian_bytes(self) -> None:
+        pc = "0x1000"
+        run = self._qbdi([self._qbdi_instruction(
+            pc, may_store=True, store_size=8,
+            accesses=[self._access(pc, "0x100000", value="0x100000001", size=8)])])
+        result = gfx.interpret([{"evidence": "qbdi-rosetta", "qbdi_version": "test", "run": run}])
+        event = result["observation"]["events"][0]
+        self.assertEqual(event["value"], "0100000001000000")
+        self.assertEqual(event["value_source"], "observed")
+        self.assertNotIn("0x", event["value"])
+
+    def test_uncertain_qbdi_access_stays_unqualified(self) -> None:
+        pc = "0x1000"
+        unknown = self._qbdi([self._qbdi_instruction(
+            pc, may_store=True, store_size=8,
+            accesses=[self._access(pc, "0x100000", value="0x100000001", size=8,
+                                   flags=native.MEMORY_UNKNOWN_VALUE)])])
+        unclassified = self._qbdi([self._qbdi_instruction(
+            pc, may_store=True, store_size=8,
+            accesses=[self._access(pc, "0x100000", value="0x1", size=8, type_=0)])])
+        missing = self._qbdi([self._qbdi_instruction(pc, may_load=True, load_size=8, accesses=[])])
+        for run in (unknown, unclassified, missing):
+            result = gfx.interpret([{"evidence": "qbdi-rosetta", "qbdi_version": "test", "run": run}])
+            observation = result["observation"]
+            schema.validate(observation)
+            self.assertEqual(observation["completeness"], "incomplete")
+            self.assertEqual(result["diagnostic"], observation["incomplete_reasons"][0])
+            self.assertFalse(fixture.qualify(observation)["fixture_qualified"])
+            self.assertNotEqual(observation["function_id"], gfx.FUNCTION_ID)
+
+    def test_native_cfg_gap_is_the_diagnostic(self) -> None:
+        site = 0x100000000 + 0x5000 + 0x15EC36A
+        pc = hex(site)
+        run = self._qbdi([self._qbdi_instruction(
+            pc, inst_size=1, may_store=True, store_size=8,
+            accesses=[self._access(pc, "0x100000", value="0x1", size=8)])])
+        candidate = {
+            "evidence": "qbdi-rosetta", "qbdi_version": "test", "run": run,
+            "image": {"preferred_base": hex(0x100000000), "slide": hex(0x5000),
+                      "header": hex(0x100000000 + 0x5000), "entry_rva": hex(0x15EC36A),
+                      "runtime_site": pc},
+        }
+        result = gfx.interpret([candidate], mapped=bytes(75))
+        observation = result["observation"]
+        self.assertEqual(result["diagnostic"], "path does not end at the ret")
+        self.assertIn("path does not end at the ret", observation["incomplete_reasons"])
+        self.assertEqual(observation["completeness"], "incomplete")
+        self.assertFalse(fixture.qualify(observation)["fixture_qualified"])
+        self._assert_not_native(result)
 
     def test_captured_handle_does_not_invent_a_context(self) -> None:
-        handle, stack, context = 0x100000, 0x400000, 0x200000
+        pc = "0x1000"
+        context = 0x200000
+        run = self._qbdi([self._qbdi_instruction(
+            pc, may_store=True, store_size=4,
+            accesses=[self._access(pc, hex(context), value="0x1", size=4)])])
         candidate = {
-            "evidence": "qbdi-rosetta",
-            "expected_file_sha256": "11" * 32, "expected_window_sha256": "22" * 32,
-            "file_sha256": "11" * 32, "window_sha256": "22" * 32, "window": bytes(75),
+            "evidence": "qbdi-rosetta", "qbdi_version": "test", "run": run,
             "supplied_regions": [_heap("ctx", context, bytes(0x130))],
-            "run": {
-                "ran": True, "entered": True, "dropped_instructions": 0,
-                "dropped_accesses": 0, "dropped_transfers": 0,
-                "regions": [
-                    {"id": "handle", "kind": "heap", "base": hex(handle), "size": 8,
-                     "bytes": "00" * 8},
-                    {"id": "stack", "kind": "stack", "base": hex(stack), "size": 256,
-                     "bytes": "00" * 256, "preservation": "excluded"},
-                ],
-                "pointers": [
-                    {"from": {"register": "rdi"}, "to": {"region": "handle", "offset": 0}},
-                    {"from": {"register": "rsp"}, "to": {"region": "stack", "offset": 248}},
-                ],
-                "entry_gpr": {"rdi": hex(handle), "rsp": hex(stack + 248)},
-                "exit_gpr": {},
-                "instructions": [{
-                    "pc": "0x1000", "inst_size": 4,
-                    "accesses": [{"type": 2, "address": hex(context), "size": 4,
-                                  "value": "01000000"}],
-                }],
-            },
         }
         result = gfx.interpret([candidate])
         observation = result["observation"]
@@ -788,10 +863,24 @@ class TraceTr3Tests(unittest.TestCase):
         self._assert_not_native(result)
         self.assertEqual([region["id"] for region in observation["entry_state"]["regions"]],
                          ["handle", "stack"])
+        self.assertEqual(observation["events"][0]["address"], hex(context))
         self.assertEqual(observation["completeness"], "incomplete")
-        self.assertTrue(observation["unresolved_dependencies"])
+        self.assertTrue(any("write outside the harness inventory" in reason
+                            for reason in observation["incomplete_reasons"]))
+        self.assertEqual(result["diagnostic"], observation["incomplete_reasons"][0])
         self.assertFalse(fixture.qualify(observation)["fixture_qualified"])
         self.assertIn("untraced", result["limits"])
+
+    def test_prior_incomplete_synthetic_trace_stays_incomplete(self) -> None:
+        trace = _invocation(slot=0)
+        trace["completeness"] = "incomplete"
+        trace["incomplete_reasons"] = ["already incomplete"]
+        result = gfx.interpret([self._synth(True, trace)])
+        observation = result["observation"]
+        self.assertEqual(observation["completeness"], "incomplete")
+        self.assertEqual(observation["incomplete_reasons"][0], "already incomplete")
+        self.assertEqual(result["diagnostic"], "already incomplete")
+        self.assertFalse(fixture.qualify(observation)["fixture_qualified"])
 
     def test_hook_refusal_builds_no_observation(self) -> None:
         later = self._synth(True, _invocation(slot=0))
