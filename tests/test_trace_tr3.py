@@ -1295,15 +1295,55 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
         def terminate(self):
             raise OSError("busy")
 
+        def kill(self):
+            self.killed = True
+            raise OSError("unkillable")
+
         child.terminate = terminate.__get__(child, _Child)
+        child.kill = kill.__get__(child, _Child)
         with tempfile.TemporaryDirectory() as tmp:
             status, out, _build = self._launch(tmp, popen)
             payload = json.loads(out.read_text())
-        self.assertEqual(status, 0)
+        self.assertTrue(child.killed)
+        self.assertIsNone(child.returncode)
+        self.assertEqual(status, 1)
         self.assertTrue(payload["raw"]["sealed"])
         self.assertEqual(payload["outcome"], "captured_incomplete")
-        self.assertIn("busy", payload["termination"]["error"])
+        self.assertFalse(payload["termination"]["stopped"])
+        self.assertIn("unkillable", payload["termination"]["error"])
         self.assertIn("process cleanup failed", payload["diagnostic"])
+
+    def test_sigkill_wait_is_bounded(self) -> None:
+        child = _Child()
+        child.waits: list = []
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid)
+            return child
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout=None):
+            self.waits.append(timeout)
+            raise subprocess.TimeoutExpired(cmd="./eu4", timeout=timeout)
+
+        child.terminate = terminate.__get__(child, _Child)
+        child.kill = kill.__get__(child, _Child)
+        child.wait = wait.__get__(child, _Child)
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(child.waits, [tr3_run.STOP_WAIT_S, tr3_run.STOP_WAIT_S])
+        self.assertTrue(child.killed)
+        self.assertEqual(status, 1)
+        self.assertFalse(payload["termination"]["stopped"])
+        self.assertIn("kill wait timed out", payload["termination"]["error"])
+        self.assertTrue(payload["raw"]["sealed"])
+        self.assertEqual(payload["outcome"], "captured_incomplete")
 
     def test_launcher_args_must_be_strings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

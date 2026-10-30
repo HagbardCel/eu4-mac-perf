@@ -147,19 +147,53 @@ def await_record(process: subprocess.Popen, log_path: Path, session: str,
     return None, "exited" if exited else "timeout", mismatch
 
 
+def _confirm_stopped(process: subprocess.Popen, code: int | None) -> tuple[int | None, bool]:
+    """Recheck the owned child. A lookup failure means it is already gone."""
+    try:
+        polled = process.poll()
+    except ProcessLookupError:
+        return code, True
+    except OSError:
+        return code, False
+    if polled is None:
+        return code, False
+    return polled, True
+
+
 def stop_owned(process: subprocess.Popen | None) -> dict:
     """Stop the process this launcher started. An already-exited child is not an error."""
     if process is None:
-        return {"action": "none", "returncode": None}
+        return {"action": "none", "returncode": None, "stopped": True}
+    error = None
     try:
-        return _stop_owned(process)
+        result = _stop_owned(process)
+        action, code = result["action"], result["returncode"]
     except OSError as exc:
-        code = None
+        error = str(exc)
+        action, code = "none", None
+    code, stopped = _confirm_stopped(process, code)
+    if not stopped and action == "kill":
+        error = error or "kill wait timed out"
+    elif not stopped:
+        action = "kill"
         try:
-            code = process.poll()
-        except OSError:
-            pass
-        return {"action": "none", "returncode": code, "error": str(exc)}
+            process.kill()
+        except ProcessLookupError:
+            stopped = True
+        except OSError as exc:
+            error = f"{error}; {exc}" if error else str(exc)
+        else:
+            try:
+                code = process.wait(timeout=STOP_WAIT_S)
+            except subprocess.TimeoutExpired:
+                error = f"{error}; kill wait timed out" if error else "kill wait timed out"
+            except OSError as exc:
+                error = f"{error}; {exc}" if error else str(exc)
+        code, stopped = _confirm_stopped(process, code)
+    result = {"action": action, "returncode": code, "stopped": stopped}
+    if error and not stopped:
+        result["error"] = error
+    return result
 
 
 def _stop_owned(process: subprocess.Popen) -> dict:
@@ -183,14 +217,19 @@ def _stop_owned(process: subprocess.Popen) -> dict:
         process.kill()
     except ProcessLookupError:
         return {"action": "kill", "returncode": process.poll()}
-    return {"action": "kill", "returncode": process.wait()}
+    try:
+        return {"action": "kill", "returncode": process.wait(timeout=STOP_WAIT_S)}
+    except subprocess.TimeoutExpired:
+        return {"action": "kill", "returncode": process.poll()}
 
 
 def classify_termination(wait: str, stop: dict) -> dict:
     """How the owned process ended. ``wait`` separates a deadline from a launcher error."""
     code = stop["returncode"]
     action = stop["action"]
-    if action == "kill":
+    if stop.get("stopped") is False:
+        kind = "launcher_stop"
+    elif action == "kill":
         kind = "forced_kill"
     elif action == "terminate" and wait == "capture":
         kind = "capture_stop"
@@ -198,13 +237,12 @@ def classify_termination(wait: str, stop: dict) -> dict:
         kind = "timeout_termination"
     elif action == "terminate":
         kind = "launcher_stop"
-    elif stop.get("error"):
-        kind = "launcher_stop"
     elif code == 0:
         kind = "normal_exit"
     else:
         kind = "unexpected_crash"
-    result = {"wait": wait, "action": action, "returncode": code, "classification": kind}
+    result = {"wait": wait, "action": action, "returncode": code, "classification": kind,
+              "stopped": stop.get("stopped", True)}
     if stop.get("error"):
         result["error"] = stop["error"]
     return result
@@ -334,8 +372,8 @@ def launch_live(output: Path, target: dict, window: dict, path: Path,
         interpret_error = None
     else:
         outcome, _gap, interpret_error = _interpret(raw, path)
-    if stop.get("error"):
-        extra = f"process cleanup failed: {stop['error']}"
+    if stop.get("stopped") is False:
+        extra = f"process cleanup failed: {stop.get('error') or 'process still running'}"
         text = outcome["diagnostic"]
         outcome = {**outcome, "diagnostic": f"{text}; {extra}" if text else extra}
     name = _outcome_name(raw, outcome, termination, launch_error=launch_error,
@@ -351,6 +389,8 @@ def launch_live(output: Path, target: dict, window: dict, path: Path,
         print(f"refused: could not write {output}: {exc}")
         return 1
     print(name)
+    if stop.get("stopped") is False:
+        return 1
     return 0 if name in CAPTURED else 1
 
 
