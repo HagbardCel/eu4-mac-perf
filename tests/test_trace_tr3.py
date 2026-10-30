@@ -1264,7 +1264,46 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
         self.assertEqual(payload["outcome"], "process_failed")
         self.assertEqual(payload["termination"]["returncode"], -15)
         self.assertEqual(payload["termination"]["action"], "terminate")
+        self.assertEqual(payload["termination"]["wait"], "error")
+        self.assertEqual(payload["termination"]["classification"], "launcher_stop")
         self.assertIn("boom", payload["diagnostic"])
+
+    def test_live_launch_drops_the_host_symbol_check(self) -> None:
+        captured: dict = {}
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            captured["check"] = env.get("TR3_CHECK_SYMBOL", "")
+            child = _Child()
+            child.returncode = 0
+            return child
+
+        os.environ["TR3_CHECK_SYMBOL"] = "1"
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._launch(tmp, popen)
+        finally:
+            os.environ.pop("TR3_CHECK_SYMBOL", None)
+        self.assertEqual(captured["check"], "")
+
+    def test_cleanup_oserror_keeps_the_sealed_log(self) -> None:
+        child = _Child()
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid)
+            return child
+
+        def terminate(self):
+            raise OSError("busy")
+
+        child.terminate = terminate.__get__(child, _Child)
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(status, 0)
+        self.assertTrue(payload["raw"]["sealed"])
+        self.assertEqual(payload["outcome"], "captured_incomplete")
+        self.assertIn("busy", payload["termination"]["error"])
+        self.assertIn("process cleanup failed", payload["diagnostic"])
 
     def test_launcher_args_must_be_strings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

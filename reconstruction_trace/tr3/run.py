@@ -152,6 +152,18 @@ def stop_owned(process: subprocess.Popen | None) -> dict:
     if process is None:
         return {"action": "none", "returncode": None}
     try:
+        return _stop_owned(process)
+    except OSError as exc:
+        code = None
+        try:
+            code = process.poll()
+        except OSError:
+            pass
+        return {"action": "none", "returncode": code, "error": str(exc)}
+
+
+def _stop_owned(process: subprocess.Popen) -> dict:
+    try:
         code = process.poll()
     except ProcessLookupError:
         return {"action": "none", "returncode": None}
@@ -185,13 +197,17 @@ def classify_termination(wait: str, stop: dict) -> dict:
     elif action == "terminate" and wait == "timeout":
         kind = "timeout_termination"
     elif action == "terminate":
-        # Launcher exception after Popen. ``wait`` is ``error``, not the deadline.
-        kind = "timeout_termination"
+        kind = "launcher_stop"
+    elif stop.get("error"):
+        kind = "launcher_stop"
     elif code == 0:
         kind = "normal_exit"
     else:
         kind = "unexpected_crash"
-    return {"wait": wait, "action": action, "returncode": code, "classification": kind}
+    result = {"wait": wait, "action": action, "returncode": code, "classification": kind}
+    if stop.get("error"):
+        result["error"] = stop["error"]
+    return result
 
 
 def _blank(diagnostic: str) -> dict:
@@ -273,6 +289,8 @@ def launch_live(output: Path, target: dict, window: dict, path: Path,
     log_path = acquire / "insert.json"
     _host, dylib = startup.build(BUILD_DIR)
     env = os.environ.copy()
+    # The controlled host sets this. EU4 is pinned by executable and RVA, not tr3_subject.
+    env.pop("TR3_CHECK_SYMBOL", None)
     env["DYLD_INSERT_LIBRARIES"] = str(dylib)
     env["TR3_EXPECT_FILE_SHA256"] = str(target["sha256"])
     env["TR3_EXPECT_WINDOW_SHA256"] = str(window["sha256"])
@@ -316,6 +334,10 @@ def launch_live(output: Path, target: dict, window: dict, path: Path,
         interpret_error = None
     else:
         outcome, _gap, interpret_error = _interpret(raw, path)
+    if stop.get("error"):
+        extra = f"process cleanup failed: {stop['error']}"
+        text = outcome["diagnostic"]
+        outcome = {**outcome, "diagnostic": f"{text}; {extra}" if text else extra}
     name = _outcome_name(raw, outcome, termination, launch_error=launch_error,
                          interpret_error=interpret_error)
     payload = {
