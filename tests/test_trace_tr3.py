@@ -780,6 +780,45 @@ class TraceTr3Tests(unittest.TestCase):
                    if not inst["is_return"] and not site <= int(inst["next_pc"], 16) < end]
         if not outside:
             self.fail("blocked: post-instruction callback did not observe fallthrough past the window")
+        self.assertEqual(raw["run"]["rejected_boundary"]["reason"], "out-of-range")
+        self.assertEqual(raw["run"]["rejected_boundary"]["from"], "postinst")
+
+    def test_retained_payload_cannot_exceed_max_bytes(self) -> None:
+        """A budget one byte under the retained fields must not be reported complete."""
+        if not self._darwin_subject():
+            return
+
+        def payload(raw: dict, window_len: int) -> int:
+            total = startup.envelope(window_len)
+            for inst in raw["run"]["instructions"]:
+                total += 8 + 8 + 4 + 4 + 4 + 32 + 64 + 5 + 8 + inst["inst_size"]
+                total += len(inst["accesses"]) * (8 + 8 + 8 + 2 + 4 + 4)
+            for region in raw["run"]["regions"]:
+                total += 16 + 8 + 8 + 8 + region["size"]
+            total += len(raw["run"]["pointers"]) * (8 + 4 + 8)
+            return total
+
+        with tempfile.TemporaryDirectory() as tmp:
+            build_dir = Path(tmp)
+            host, dylib = startup.build(build_dir)
+            prepared, log, env = self._valid_env(build_dir, host, dylib, "full.json")
+            env["TR3_LEGACY_REGIONS"] = "1"
+            proc, full = startup.acquire(host, env, log)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertTrue(full["run"]["execution_complete"])
+            self.assertGreater(len(full["run"]["pointers"]), 0)
+            budget = payload(full, prepared["window_len"]) - 1
+            env["TR3_MAX_BYTES"] = str(budget)
+            log = build_dir / "tight.json"
+            env["TR3_LOG"] = str(log)
+            proc, raw = startup.acquire(host, env, log)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(raw["sealed"])
+        self.assertIsNone(raw["refusal"])
+        retained = payload(raw, prepared["window_len"])
+        if retained > budget:
+            self.assertFalse(raw["run"]["execution_complete"])
+        self.assertFalse(raw["run"]["execution_complete"])
 
     def test_runtime_overflow_stays_incomplete(self) -> None:
         if not self._darwin_subject():

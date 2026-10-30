@@ -31,7 +31,6 @@
 #define MAX_TRANSFERS 4
 #define GPR_IMAGE_BYTES (18 * 8)
 #define FXSAVE_IMAGE_BYTES 512
-#define REGION_META_BYTES 32
 #define UNKNOWN_MEMORY (QBDI_MEMORY_UNKNOWN_VALUE | QBDI_MEMORY_UNKNOWN_SIZE | QBDI_MEMORY_MINIMUM_SIZE)
 
 extern void tr3_insert_stub(void);
@@ -65,12 +64,11 @@ struct inst {
     MemoryAccess access[MAX_ACCESSES];
 };
 
-/* Text capacities and numeric fields. The byte slice is charged separately. */
+/* Instruction bytes and access slots are charged apart; this is the rest of the record. */
 #define INST_META_BYTES ( \
-    sizeof(((struct inst *)0)->mnemonic) + sizeof(((struct inst *)0)->disassembly) + \
-    sizeof(((struct inst *)0)->pc) + sizeof(((struct inst *)0)->next_pc) + \
-    sizeof(((struct inst *)0)->inst_size) + sizeof(((struct inst *)0)->load_size) + \
-    sizeof(((struct inst *)0)->store_size))
+    sizeof(struct inst) - sizeof(((struct inst *)0)->bytes) - sizeof(((struct inst *)0)->access))
+#define REGION_META_BYTES (sizeof(struct region) - sizeof(((struct region *)0)->bytes))
+#define POINTER_BYTES sizeof(struct pointer)
 #define ACCESS_CHARGE sizeof(MemoryAccess)
 
 struct run {
@@ -376,7 +374,8 @@ static void authenticate(void) {
 
 static void snapshot_legacy(struct run *current, GPRState *gpr) {
     size_t stack_bytes = STACK_BELOW + STACK_ABOVE;
-    if (!charge(REGION_META_BYTES + 8) || !charge(REGION_META_BYTES + stack_bytes)) {
+    if (!charge(REGION_META_BYTES + 8 + POINTER_BYTES) ||
+        !charge(REGION_META_BYTES + stack_bytes + POINTER_BYTES)) {
         current->dropped_bytes++;
         return;
     }
