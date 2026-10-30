@@ -5,6 +5,7 @@ dylib only compares them. This module does not launch EU4.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -27,6 +28,117 @@ CLAIMS = {
     "eu4_memory_provenance": "not demonstrated",
     "live_gfx_set_constant_buffer": "not authorized",
 }
+GPR_IMAGE_BYTES = 18 * 8
+FXSAVE_IMAGE_BYTES = 512
+CEILING = {"max_instructions": 64, "max_memory_accesses": 256, "max_bytes": 65536}
+_BUDGET_ENV = (
+    ("max_instructions", "TR3_MAX_INSTRUCTIONS"),
+    ("max_memory_accesses", "TR3_MAX_ACCESSES"),
+    ("max_bytes", "TR3_MAX_BYTES"),
+)
+
+
+def envelope(window_len: int) -> int:
+    """Entry and exit GPR, both FXSAVE images, and the mapped window."""
+    return 2 * GPR_IMAGE_BYTES + 2 * FXSAVE_IMAGE_BYTES + window_len
+
+
+def _hex_addr(text: object) -> int:
+    if not isinstance(text, str) or not text.startswith("0x"):
+        raise RuntimeError("address is not hex")
+    body = text[2:]
+    if body != "0" and (body == "" or body[0] == "0" or any(c not in "0123456789abcdef" for c in body)):
+        raise RuntimeError("address is not canonical hex")
+    return int(text, 16)
+
+
+def check_descriptor(desc: dict, preferred: int) -> None:
+    """Refuse a trace-target/v1 shape the engine is not allowed to run."""
+    if desc.get("schema") != "trace-target/v1":
+        raise RuntimeError("schema is not trace-target/v1")
+    if desc.get("trigger") != {"mode": "first-invocation"}:
+        raise RuntimeError("trigger is not first-invocation")
+    binary, function = desc["binary"], desc["function"]
+    ranges = function["ranges"]
+    if not isinstance(ranges, list) or len(ranges) != 1 or len(ranges[0]) != 2:
+        raise RuntimeError("function range is not one pair")
+    entry = _hex_addr(function["entry_rva"])
+    start, end = _hex_addr(ranges[0][0]), _hex_addr(ranges[0][1])
+    if start != entry or end <= start:
+        raise RuntimeError("range does not start at the entry")
+    if _hex_addr(binary["image_base"]) != preferred:
+        raise RuntimeError("image base is not the preferred base")
+    for digest in (binary["sha256"], binary["window_sha256"]):
+        if (not isinstance(digest, str) or len(digest) != 64
+                or any(c not in "0123456789abcdef" for c in digest)):
+            raise RuntimeError("digest is not sha256")
+    for key in ("max_instructions", "max_memory_accesses", "max_bytes"):
+        value = desc["capture"][key]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise RuntimeError(f"{key} is not a positive integer")
+
+
+def prepare_target(host: Path, symbol: str, budgets: dict) -> dict:
+    preferred = image.text_vmaddr(host)
+    entry = _symbol_rva(host, symbol)
+    length = native.SUBJECT_BYTES if symbol == "_tr3_subject" else _symbol_rva(host, symbol + "_end") - entry
+    with MachOMapper(host) as mapper:
+        window = mapper.read_bytes_at_rva(preferred, entry, length)
+    prepared = {
+        "entry_rva": entry,
+        "window_len": length,
+        "window": window,
+        "file_hash": sha256_file(host),
+        "window_hash": hashlib.sha256(window).hexdigest(),
+        "symbol": symbol[1:] if symbol.startswith("_") else symbol,
+        "preferred": preferred,
+    }
+    prepared["descriptor"] = {
+        "schema": "trace-target/v1",
+        "binary": {
+            "sha256": prepared["file_hash"],
+            "image_base": hex(preferred),
+            "window_sha256": prepared["window_hash"],
+        },
+        "function": {
+            "name": prepared["symbol"],
+            "entry_rva": hex(entry),
+            "ranges": [[hex(entry), hex(entry + length)]],
+        },
+        "trigger": {"mode": "first-invocation"},
+        "capture": {
+            "max_instructions": budgets["max_instructions"],
+            "max_memory_accesses": budgets["max_memory_accesses"],
+            "max_bytes": budgets["max_bytes"],
+        },
+    }
+    check_descriptor(prepared["descriptor"], preferred)
+    return prepared
+
+
+def target_env(dylib: Path, log: Path, descriptor: dict, *, preferred: int, legacy: bool = False) -> dict:
+    """Translate one validated descriptor. The dylib still applies the loaded slide itself."""
+    check_descriptor(descriptor, preferred)
+    function = descriptor["function"]
+    binary = descriptor["binary"]
+    entry = _hex_addr(function["entry_rva"])
+    end = _hex_addr(function["ranges"][0][1])
+    env = os.environ.copy()
+    env["DYLD_INSERT_LIBRARIES"] = str(dylib)
+    env["TR3_EXPECT_FILE_SHA256"] = binary["sha256"]
+    env["TR3_EXPECT_WINDOW_SHA256"] = binary["window_sha256"]
+    env["TR3_ENTRY_RVA"] = function["entry_rva"]
+    env["TR3_WINDOW_LEN"] = str(end - entry)
+    env["TR3_CHECK_SYMBOL"] = "1"
+    env["TR3_SYMBOL"] = function["name"]
+    env["TR3_LOG"] = str(log)
+    env.pop("TR3_LEGACY_REGIONS", None)
+    if legacy:
+        env["TR3_LEGACY_REGIONS"] = "1"
+    for key, name in _BUDGET_ENV:
+        env.pop(name, None)
+        env[name] = str(descriptor["capture"][key])
+    return env
 
 
 def _symbol_rva(path: Path, name: str) -> int:
@@ -111,28 +223,24 @@ def launch(build_dir: Path, *, file_hash: str | None = None, window_hash: str | 
     if reason:
         raise RuntimeError(reason)
     host, dylib = build(build_dir)
-    preferred = image.text_vmaddr(host)
-    entry_rva = _symbol_rva(host, "_tr3_subject")
-    with MachOMapper(host) as mapper:
-        window = mapper.read_bytes_at_rva(preferred, entry_rva, native.SUBJECT_BYTES)
-    real_file = sha256_file(host)
-    real_window = hashlib.sha256(window).hexdigest()
-    env = os.environ.copy()
-    env["DYLD_INSERT_LIBRARIES"] = str(dylib)
-    env["TR3_EXPECT_FILE_SHA256"] = real_file if file_hash is None else file_hash
-    env["TR3_EXPECT_WINDOW_SHA256"] = real_window if window_hash is None else window_hash
-    env["TR3_ENTRY_RVA"] = hex(entry_rva)
-    env["TR3_WINDOW_LEN"] = str(native.SUBJECT_BYTES)
-    env["TR3_CHECK_SYMBOL"] = "1"
-    env["TR3_LOG"] = str(build_dir / "insert.json")
+    prepared = prepare_target(host, "_tr3_subject", CEILING)
+    built = {
+        "file_hash": prepared["file_hash"], "window_hash": prepared["window_hash"],
+        "entry": prepared["window"][:5].hex(), "preferred": prepared["preferred"],
+        "entry_rva": prepared["entry_rva"],
+        "window_end": prepared["entry_rva"] + prepared["window_len"],
+    }
+    descriptor = copy.deepcopy(prepared["descriptor"])
+    if file_hash is not None:
+        descriptor["binary"]["sha256"] = file_hash
+    if window_hash is not None:
+        descriptor["binary"]["window_sha256"] = window_hash
+    log = build_dir / "insert.json"
+    env = target_env(dylib, log, descriptor, preferred=prepared["preferred"], legacy=True)
     # `arch -x86_64` drops DYLD_INSERT_LIBRARIES. The host is already x86-64,
     # so executing it directly is what loads the dylib under Rosetta.
-    proc, raw = acquire(host, env, build_dir / "insert.json", runner)
-    return proc, raw, {
-        "file_hash": real_file, "window_hash": real_window, "entry": window[:5].hex(),
-        "preferred": preferred, "entry_rva": entry_rva,
-        "window_end": entry_rva + native.SUBJECT_BYTES,
-    }
+    proc, raw = acquire(host, env, log, runner)
+    return proc, raw, built
 
 
 def capture(build_dir: Path) -> tuple[dict, dict]:

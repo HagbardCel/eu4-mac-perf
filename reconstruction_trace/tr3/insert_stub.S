@@ -34,13 +34,24 @@ _tr3_insert_stub:
     callq _tr3_insert_dispatch
 
     fxrstor64 _tr3_exit_fpr(%rip)
+    /* popfq uses the instrumentation stack; guest rsp is installed after it. */
+    movq _tr3_exit_gpr+136(%rip), %rax
+    pushq %rax
+    popfq
+    movq _tr3_exit_gpr+16(%rip), %rcx
+    movq _tr3_exit_gpr+32(%rip), %rsi
+    movq _tr3_exit_gpr+40(%rip), %rdi
+    movq _tr3_exit_gpr+48(%rip), %r8
+    movq _tr3_exit_gpr+56(%rip), %r9
+    movq _tr3_exit_gpr+64(%rip), %r10
+    movq _tr3_exit_gpr+72(%rip), %r11
     movq _tr3_exit_gpr+8(%rip), %rbx
+    movq _tr3_exit_gpr+24(%rip), %rdx
     movq _tr3_exit_gpr+80(%rip), %r12
     movq _tr3_exit_gpr+88(%rip), %r13
     movq _tr3_exit_gpr+96(%rip), %r14
     movq _tr3_exit_gpr+104(%rip), %r15
     movq _tr3_exit_gpr+112(%rip), %rbp
-    movq _tr3_exit_gpr+120(%rip), %rsp
     movq _tr3_exit_gpr+0(%rip), %rax
-    movq _tr3_exit_gpr+24(%rip), %rdx
+    movq _tr3_exit_gpr+120(%rip), %rsp
     jmpq *_tr3_exit_gpr+128(%rip)

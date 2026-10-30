@@ -13,9 +13,10 @@ owned_paths:
   - reconstruction_trace/tr3/run.py
   - reconstruction_trace/tr3/startup_receipt.json
   - reconstruction_trace/tr3/startup_observation.json
+  - reconstruction_trace/tr3/receipt.json
+  - reconstruction_trace/tr3/observation.json
   - tests/test_trace_tr3.py
 frozen_read_only:
-  - docs/oracle/GENERIC_TRACE_V1.md
   - docs/oracle/TRACE_V1.md
   - reconstruction_trace/schema.py
   - reconstruction_trace/fixture.py
@@ -51,6 +52,12 @@ which function that host invokes.
 
 `startup_receipt.json` and `startup_observation.json` are regenerated when
 source hashes change. They stay the controlled-host receipts.
+`receipt.json` and `observation.json` are regenerated only to record the
+unchanged 10-byte subject again.
+
+`docs/oracle/GENERIC_TRACE_V1.md` may be amended solely to specify pre-hook
+refusal when `max_bytes` cannot hold the mandatory capture envelope. All
+other contract content remains frozen.
 
 ## Acceptance
 
@@ -97,6 +104,15 @@ has already passed on the controlled host.
   function-specific C for either controlled subject stops.
 - **Evidence limitation:** an incomplete trace stays incomplete. A QBDI exit
   dump is not the continuation test.
+
+## Live launcher
+
+`run.py` is unchanged. It does not supply the budgets this dylib now requires,
+so a normal environment refuses after EU4 has started. A budget variable
+already in the environment is not a guarantee that the launch will refuse,
+because the launcher copies that environment. This note does not repair that
+incompatibility. Live acquisition is repaired and revalidated only under a
+separate authorization.
 
 ## Merge gate
 

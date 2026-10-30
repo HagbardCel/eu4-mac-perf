@@ -90,7 +90,10 @@ Each budget is a positive integer supplied by the descriptor.
 Overflow keeps the raw record, records a drop count, and makes the trace
 execution-incomplete. A silent drop is not a complete trace. GEN1 enforces an
 implementation safety ceiling before allocation. This contract adds no
-budgeting subsystem and no resource-accounting schema.
+budgeting subsystem and no resource-accounting schema. A positive `max_bytes`
+smaller than the mandatory capture envelope — entry and exit GPR state, the
+two FXSAVE images, and the mapped code window — refuses before the hook, and
+the diagnostic names that minimum.
 
 ## Control flow
 
