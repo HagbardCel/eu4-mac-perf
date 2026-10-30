@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""TR3 offline adapter. Synthetic observations are test doubles, not an EU4 trace.
+"""TR3 adapter and the controlled one-shot subject.
 
-A `qbdi-rosetta` identity case fabricates the pinned metadata. It checks the
-validator. It is not a QBDI capture and it does not launch EU4.
+Synthetic observations are test doubles. The committed observation is a Rosetta
+capture of this package's subject, not an EU4 trace. Hosts other than the
+certifying Mac check that artifact; that check is not a fresh native execution.
+Nothing here launches EU4.
 """
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import platform
+import tempfile
 import unittest
 from pathlib import Path
 
 from reconstruction_trace import fixture, schema
-from reconstruction_trace.tr3 import adapter, observe
+from reconstruction_trace.tr3 import adapter, image, native, observe
+from reverse_engineering.macho_rva import build_synthetic_macho_64
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTEXT_SIZE = 0x130
@@ -292,6 +298,133 @@ class TraceTr3Tests(unittest.TestCase):
         excluded = _invocation(slot=0, preservation="excluded")
         self.assertTrue(fixture.qualify(excluded)["fixture_qualified"])
         self.assertEqual(adapter.prepare_scenario(excluded)["refusal"], "incomplete-prestate")
+
+    def test_image_checks_file_and_window_independently(self) -> None:
+        code = bytes(range(16))
+        image_base, fileoff, end = 0x100000000, 0x200, 8
+        payload = build_synthetic_macho_64(image_base=image_base, segment_fileoff=fileoff,
+                                           code_bytes=code)
+        window_hash = hashlib.sha256(code[:end]).hexdigest()
+
+        def pin(blob: bytes, window: str) -> dict:
+            return {"file_sha256": hashlib.sha256(blob).hexdigest(), "window_sha256": window,
+                    "image_base": image_base, "entry_rva": 0, "end_rva": end}
+
+        def check(blob: bytes, expected: dict) -> str | None:
+            path = Path(tempfile.mkstemp(suffix=".macho")[1])
+            path.write_bytes(blob)
+            try:
+                return image.check(path, expected)
+            finally:
+                path.unlink(missing_ok=True)
+
+        self.assertIsNone(check(payload, pin(payload, window_hash)))
+        outside = bytearray(payload)
+        outside[fileoff + end] ^= 0xff
+        self.assertEqual(check(bytes(outside), pin(payload, window_hash)), "file hash mismatch")
+        inside = bytearray(code)
+        inside[0] ^= 0xff
+        changed = build_synthetic_macho_64(image_base=image_base, segment_fileoff=fileoff,
+                                           code_bytes=bytes(inside))
+        self.assertEqual(check(changed, pin(changed, window_hash)), "window hash mismatch")
+
+    def test_gaps_stay_on_the_trace(self) -> None:
+        def run(instruction: dict, dropped: int = 0) -> dict:
+            return {
+                "failure": None, "ran": True, "entered": True, "memory_recording": True,
+                "entry_gpr": {name: "0x0" for name in native.ENTRY_REGISTERS},
+                "exit_gpr": {"rax": "0x0"}, "regions": [], "pointers": [],
+                "instructions": [instruction], "exec_transfers": [],
+                "dropped_instructions": dropped, "dropped_accesses": 0,
+                "dropped_transfers": 0,
+            }
+
+        missing = native.observation_from_run(run({
+            "pc": "0x10", "next_pc": "0x11", "inst_size": 1, "disassembly": "mov",
+            "may_load": True, "may_store": False, "load_size": 0, "store_size": 0,
+            "is_call": False, "is_return": False, "accesses": [],
+        }), "0.12.1")
+        self.assertEqual(missing["completeness"], "incomplete")
+        self.assertIn("mayLoad without a recorded read", missing["incomplete_reasons"][0])
+        self.assertFalse(fixture.qualify(missing)["fixture_qualified"])
+
+        dropped = native.observation_from_run(run({
+            "pc": "0x10", "next_pc": "0x11", "inst_size": 1, "disassembly": "nop",
+            "may_load": False, "may_store": False, "load_size": 0, "store_size": 0,
+            "is_call": False, "is_return": False, "accesses": [],
+        }, dropped=1), "0.12.1")
+        self.assertEqual(dropped["incomplete_reasons"],
+                         ["events dropped: 1 instructions, 0 accesses, 0 transfers"])
+        self.assertFalse(fixture.qualify(dropped)["fixture_qualified"])
+
+    def _assert_controlled_capture(self, trace: dict, receipt: dict) -> None:
+        qualified = fixture.qualify(trace)
+        self.assertTrue(qualified["fixture_qualified"], qualified["reasons"])
+        self.assertEqual(adapter.prepare_scenario(trace)["refusal"], "unauthenticated-target")
+        self.assertEqual(trace["function_id"], native.FUNCTION_ID)
+        self.assertIsNone(trace["binary"])
+        self.assertEqual(trace["evidence"], "qbdi-rosetta")
+        self.assertEqual(trace["completeness"], "complete")
+        decoy = int(receipt["decoy_address"], 16)
+        self.assertEqual(decoy, native.DECOY_ADDRESS)
+        regions = {region["id"]: region for region in trace["entry_state"]["regions"]}
+        self.assertEqual(bytes.fromhex(regions["cell"]["bytes"]), decoy.to_bytes(8, "little"))
+        targets = []
+        for edge in trace["entry_state"]["pointers"]:
+            region = regions[edge["to"]["region"]]
+            targets.append(int(region["base"], 16) + edge["to"]["offset"])
+        self.assertNotIn(decoy, targets)
+        for edge in qualified["fixture"]["pointers"]:
+            region = regions[edge["to"]["region"]]
+            self.assertNotEqual(int(region["base"], 16) + edge["to"]["offset"], decoy)
+        hook = receipt["hook"]
+        self.assertEqual(hook["count"], 1)
+        self.assertEqual(hook["qbdi_invocations"], 1)
+        self.assertEqual(hook["native_call_count"], 2)
+        self.assertTrue(hook["restored_before_qbdi"])
+        self.assertTrue(hook["entry_bytes_match_after"])
+        self.assertEqual(int(hook["first_result"], 16), decoy + 1)
+        self.assertEqual(int(hook["second_result"], 16), decoy + 2)
+        self.assertEqual(receipt["drops"], {"instructions": 0, "accesses": 0, "transfers": 0})
+        self.assertEqual(receipt["completeness"], "complete")
+        self.assertEqual(receipt["host"]["rosetta"]["sysctl.proc_translated"], 1)
+        self.assertEqual(receipt["qbdi"]["version"], "0.12.1")
+        self.assertTrue(receipt["toolchain"]["clang"])
+        self.assertEqual(receipt["host"]["probe_architecture"], "x86_64")
+        for event in trace["events"]:
+            self.assertNotIn("flags", event)
+        self.assertTrue(any(access["flags"] == 0
+                            for inst in receipt["probe_output"]["run"]["instructions"]
+                            for access in inst["accesses"]))
+        for name, digest in receipt["probe"]["sources_sha256"].items():
+            self.assertEqual(hashlib.sha256((native.HERE / name).read_bytes()).hexdigest(),
+                             digest, name)
+
+    def test_committed_rosetta_artifact(self) -> None:
+        """Read the committed capture. This is not a fresh native execution."""
+        trace = json.loads((native.HERE / "observation.json").read_text())
+        receipt = json.loads((native.HERE / "receipt.json").read_text())
+        schema.validate(trace)
+        self.assertEqual(receipt["observation_sha256"],
+                         hashlib.sha256((native.HERE / "observation.json").read_bytes()).hexdigest())
+        self._assert_controlled_capture(trace, receipt)
+
+    def test_rosetta_run_certifies_the_milestone(self) -> None:
+        """The macOS Rosetta run certifies the milestone and does not skip."""
+        if platform.system() != "Darwin":
+            self.assertNotEqual(
+                platform.system(), "Darwin",
+                "this host checks the committed artifact and does not execute the subject")
+            return
+        reason = native.unsupported_host_reason()
+        self.assertIsNone(reason, reason)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            native.write_capture(out, out / "build")
+            trace = json.loads((out / "observation.json").read_text())
+            receipt = json.loads((out / "receipt.json").read_text())
+        schema.validate(trace)
+        self._assert_controlled_capture(trace, receipt)
 
 
 if __name__ == "__main__":

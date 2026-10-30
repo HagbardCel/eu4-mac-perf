@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from reconstruction_trace.tr3 import image
+
 ROOT = Path(__file__).resolve().parents[2]
 TARGET = ROOT / "reverse_engineering" / "target.json"
 
@@ -32,7 +34,27 @@ def decide(target: dict) -> str:
 
 
 def main() -> int:
-    print(decide(json.loads(TARGET.read_text())))
+    target = json.loads(TARGET.read_text())
+    decision = decide(target)
+    if decision != "refused: operator authorization is absent":
+        print(decision)
+        return 1
+    window = target["code_windows"]["_GfxSetConstantBuffer"]
+    path = Path(target["default_executable"])
+    if not path.is_file():
+        print("refused: executable missing")
+        return 1
+    reason = image.check(path, {
+        "file_sha256": target["sha256"],
+        "window_sha256": window["sha256"],
+        "image_base": target["image_base"],
+        "entry_rva": int(window["entry_rva"], 16),
+        "end_rva": int(window["end_rva"], 16),
+    })
+    if reason:
+        print(f"refused: {reason}")
+        return 1
+    print(decision)
     return 1
 
 

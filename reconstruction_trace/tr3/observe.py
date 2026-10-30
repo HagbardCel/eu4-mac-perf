@@ -1,8 +1,7 @@
-"""One-shot selection and dropped-event accounting for one `_GfxSetConstantBuffer` call.
+"""One-shot selection and dropped-event accounting.
 
-A native QBDI producer is a later step. This module does not intercept the
-function or read an instruction stream. Synthetic observations stay labeled
-`handwritten-synthetic`.
+``apply_accounting`` is how the native producer names dropped events. This
+module does not intercept a function or read an instruction stream.
 """
 from __future__ import annotations
 
