@@ -44,8 +44,11 @@ Every added abstraction must map to a demonstrated false-positive risk or an
 essential scaling requirement. Deliberately deferred: frame-level replay/P4.11,
 live shadow against real game objects, automatic in-game replacement/RE3,
 multi-function campaigns before the G pilot (**PR H is proposed only**), and
-new agent frameworks. Automatic memory-graph discovery and general dynamic
-access tracing remain deferred except for the bounded synthetic stage in
+new agent frameworks. Automatic memory-graph discovery stays deferred.
+General dynamic access tracing of one preselected function is the next trace
+milestone in
+[Function-agnostic trace stage (GEN0, 2026-10-30)](#function-agnostic-trace-stage-gen0-2026-10-30).
+The bounded synthetic stage remains
 [Trace and fixture stage (2026-10-26)](#trace-and-fixture-stage-2026-10-26).
 
 ## Parallel development (2026-10-24)
@@ -254,6 +257,48 @@ authorizes no EU IV launch, injection, live trace, or replacement.
 - The P-code importer checks the frozen receipt, labels `value_source`, and
   fabricates no load value. It does not execute the receipt.
 - PR-D, E1, P3, and existing RE0–RE2 evidence are unchanged.
+
+## Function-agnostic trace stage (GEN0, 2026-10-30)
+
+The next trace milestone is one bounded execution of one preselected function,
+given an executable identity and a function address, without function-specific
+C. Descriptor fields, budgets, control flow, and the split between
+execution-trace completeness and replay-state completeness are defined in
+[`trace-target/v1`](GENERIC_TRACE_V1.md). This stage does not extend
+[`execution-observation/v1`](TRACE_V1.md). The existing TR3 native JSON remains
+the raw acquisition artifact. Historical function-first RE0–RE2 and P5a text
+above stays in force. This section authorizes no EU IV launch, injection,
+live trace, or code replacement.
+
+### Recorded experiment
+
+Committed receipts under `reconstruction_trace/tr3/` demonstrate controlled-host
+one-shot QBDI interception under Rosetta. `startup_receipt.json` records
+`live_gfx_set_constant_buffer` as `not authorized` and the EU4 claims as
+`not demonstrated`. `receipt.json` is the controlled host `synth:tr3-oneshot`.
+
+An operator report, not a sealed session, describes the first EU4 interception.
+No session id and no log digest are recorded here. QBDI captured one dynamic
+path of 15 instructions and eight memory operations, including `[RDI]`,
+`[RSI]`, and the writes at context `+0xc8`, `+0xd0`, and `+0x128`, without
+those objects in the entry inventory, and reported reaching the natural return
+boundary. It did not establish transparent CPU state for an arbitrary function
+and produced no replay-qualified fixture. It is not E1 evidence and authorizes
+no further launch.
+
+`insert_stub.S` restores `rbx`, `r12`–`r15`, `rbp`, `rsp`, `rax`, `rdx`, and
+exit `rip` only. It does not restore `rcx`, `rsi`, `rdi`, `r8`–`r11`, or
+`eflags`. Continuation for the supported register and flag state is GEN1
+acceptance condition 3. This amendment does not change that code.
+
+### Authorization
+
+After this amendment merges, **GEN1** may start from
+[work-orders/GEN1.md](work-orders/GEN1.md). **GEN2** and **GEN3** do not start.
+GEN1 does not authorize live use. A later EU4 function remains a separate
+operator authorization after GEN1 and GEN2. Deferred work and read-only paths
+are that work order together with [`GENERIC_TRACE_V1.md`](GENERIC_TRACE_V1.md).
+No launch path is added to `benchmark/eu4_gfx_live_capture.py`.
 
 ## Invocation accounting (P4)
 
