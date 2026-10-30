@@ -286,19 +286,26 @@ boundary. It did not establish transparent CPU state for an arbitrary function
 and produced no replay-qualified fixture. It is not E1 evidence and authorizes
 no further launch.
 
-`insert_stub.S` restores `rbx`, `r12`–`r15`, `rbp`, `rsp`, `rax`, `rdx`, and
-exit `rip` only. It does not restore `rcx`, `rsi`, `rdi`, `r8`–`r11`, or
-`eflags`. Continuation for the supported register and flag state is GEN1
-acceptance condition 3. This amendment does not change that code.
+At GEN0, `insert_stub.S` restored `rbx`, `r12`–`r15`, `rbp`, `rsp`, `rax`,
+`rdx`, and exit `rip` only. It did not restore `rcx`, `rsi`, `rdi`,
+`r8`–`r11`, or `eflags`. GEN1 changed that stub on the controlled host, and
+continuation for the supported register and flag state is GEN1 acceptance
+condition 3. That GEN0 limitation is superseded there. This amendment does
+not change the stub.
 
 ### Authorization
 
-After this amendment merges, **GEN1** may start from
-[work-orders/GEN1.md](work-orders/GEN1.md). **GEN2** and **GEN3** do not start.
-GEN1 does not authorize live use. A later EU4 function remains a separate
-operator authorization after GEN1 and GEN2. Deferred work and read-only paths
-are that work order together with [`GENERIC_TRACE_V1.md`](GENERIC_TRACE_V1.md).
-No launch path is added to `benchmark/eu4_gfx_live_capture.py`.
+**GEN1** is the native tracer, from
+[work-orders/GEN1.md](work-orders/GEN1.md). It does not authorize live use.
+After this amendment merges, **GEN2** may start from
+[work-orders/GEN2.md](work-orders/GEN2.md). GEN2 is offline projection of an
+existing GEN1 raw record into `execution-observation/v1`. It authorizes no
+EU4 launch, no native instrumentation change, no fixture-schema change, and
+no new evidence tier. **GEN3** does not start. A later EU4 function remains a
+separate operator authorization after GEN1 and GEN2. Deferred work and
+read-only paths are that work order together with
+[`GENERIC_TRACE_V1.md`](GENERIC_TRACE_V1.md). No launch path is added to
+`benchmark/eu4_gfx_live_capture.py`.
 
 ## Invocation accounting (P4)
 
