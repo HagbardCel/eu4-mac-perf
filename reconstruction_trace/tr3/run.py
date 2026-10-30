@@ -172,7 +172,9 @@ def stop_owned(process: subprocess.Popen | None) -> dict:
         error = str(exc)
         action, code = "none", None
     code, stopped = _confirm_stopped(process, code)
-    if not stopped:
+    if not stopped and action == "kill":
+        error = error or "kill wait timed out"
+    elif not stopped:
         action = "kill"
         try:
             process.kill()
@@ -215,7 +217,10 @@ def _stop_owned(process: subprocess.Popen) -> dict:
         process.kill()
     except ProcessLookupError:
         return {"action": "kill", "returncode": process.poll()}
-    return {"action": "kill", "returncode": process.wait()}
+    try:
+        return {"action": "kill", "returncode": process.wait(timeout=STOP_WAIT_S)}
+    except subprocess.TimeoutExpired:
+        return {"action": "kill", "returncode": process.poll()}
 
 
 def classify_termination(wait: str, stop: dict) -> dict:
