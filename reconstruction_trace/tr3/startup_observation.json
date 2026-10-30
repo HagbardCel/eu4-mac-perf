@@ -1,0 +1,102 @@
+{
+  "schema": "execution-observation/v1",
+  "function_id": "synth:tr3-oneshot",
+  "binary": null,
+  "evidence": "qbdi-rosetta",
+  "instrumentation": {
+    "name": "QBDI",
+    "version": "0.12.1"
+  },
+  "entry_state": {
+    "registers": {
+      "rax": "0x100000000",
+      "rbx": "0x1",
+      "rcx": "0x0",
+      "rdx": "0x1",
+      "rsi": "0x1",
+      "rdi": "0x7fd071707860",
+      "r8": "0x3ff8",
+      "r9": "0x37e",
+      "r10": "0x10c333080",
+      "r11": "0x2044b5ae0",
+      "r12": "0x30c6ad138",
+      "r13": "0x2044d10c0",
+      "r14": "0x7fd071707860",
+      "r15": "0x2044b10e0",
+      "rbp": "0x30c6ac730",
+      "rsp": "0x30c6ac6f8"
+    },
+    "regions": [
+      {
+        "id": "cell",
+        "kind": "heap",
+        "base": "0x7fd071707860",
+        "size": 8,
+        "bytes": "0000000001000000",
+        "preservation": "required"
+      },
+      {
+        "id": "stack",
+        "kind": "stack",
+        "base": "0x30c6ac600",
+        "size": 256,
+        "bytes": "0000000000000000bee43f04020000000000000000000000000000000000000060c66a0c030000000026750c010000000e0000000000000001000000000000000026750c010000000100000000000000c0c66a0c030000000a8e0c10f87f00002896b20cf87f0000010000000000000000c0ad0cf87f000000c0ad0c00000000c0c66a0c03000000b6e44404010000000e0000000000000000f0320c0100000038d16a0c03000000c0104d040200000001000000000000000800000000000000f0c66a0c030000000f7c0c10f87f000070cb6a0c0300000038d16a0c0300000018574d0402000000e0104b040200000017020000000000000785170401000000",
+        "preservation": "excluded"
+      }
+    ],
+    "pointers": [
+      {
+        "from": {
+          "register": "rdi"
+        },
+        "to": {
+          "region": "cell",
+          "offset": 0
+        }
+      },
+      {
+        "from": {
+          "register": "rsp"
+        },
+        "to": {
+          "region": "stack",
+          "offset": 248
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "kind": "read",
+      "pc": "0x1041785d0",
+      "address": "0x7fd071707860",
+      "size": 8,
+      "value": "0000000001000000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "write",
+      "pc": "0x1041785d6",
+      "address": "0x7fd071707860",
+      "size": 8,
+      "value": "0100000001000000",
+      "value_source": "observed"
+    },
+    {
+      "kind": "read",
+      "pc": "0x1041785d9",
+      "address": "0x30c6ac6f8",
+      "size": 8,
+      "value": "0785170401000000",
+      "value_source": "observed"
+    }
+  ],
+  "exit_state": {
+    "registers": {
+      "rax": "0x100000001"
+    }
+  },
+  "completeness": "complete",
+  "incomplete_reasons": [],
+  "unresolved_dependencies": []
+}
