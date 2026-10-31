@@ -7,6 +7,12 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+static void fail(const char *message) {
+    fprintf(stderr, "%s\n", message);
+    exit(1);
+}
+
+#ifndef EU4_METAL_BOOT_TEST_FAIL
 static int target_flags = -1;
 static int target_calls;
 static int wrapper_calls;
@@ -34,11 +40,6 @@ int metal_boot_wrapper(int a, int b, int c, int d, int e, int flags) {
     int (*original)(int, int, int, int, int, int) = installed.original;
     wrapper_calls += 1;
     return original(a, b, c, d, e, flags & ~2);
-}
-
-static void fail(const char *message) {
-    fprintf(stderr, "%s\n", message);
-    exit(1);
 }
 
 static int relay_hits;
@@ -73,7 +74,153 @@ static void test_relay(void) {
         fail("out-of-range E8 was accepted");
     }
 }
+#endif
 
+static int four_hits;
+
+static void hit0(void) { four_hits += 1; }
+static void hit1(void) { four_hits += 2; }
+static void hit2(void) { four_hits += 4; }
+static void hit3(void) { four_hits += 8; }
+
+static int place_four(uint8_t *mapping, size_t page, void *sites[4], void *stubs[4],
+                      uint8_t expected[4][5]) {
+    sites[0] = mapping;
+    sites[1] = mapping + 8;
+    sites[2] = mapping + page;
+    sites[3] = mapping + page + 8;
+    stubs[0] = mapping + 64;
+    stubs[1] = mapping + 72;
+    stubs[2] = mapping + page + 64;
+    stubs[3] = mapping + page + 72;
+    for (int i = 0; i < 4; i++) {
+        ((uint8_t *)stubs[i])[0] = 0xc3;
+        if (!eu4_metal_boot_encode_call(sites[i], stubs[i], expected[i])) {
+            return 0;
+        }
+        memcpy(sites[i], expected[i], 5);
+        ((uint8_t *)sites[i])[5] = 0xc3;
+    }
+    return mprotect(mapping, page * 2, PROT_READ | PROT_EXEC) == 0;
+}
+
+static void fill_four(void *sites[4], void *stubs[4], uint8_t expected[4][5],
+                      eu4_metal_boot_request requests[4]) {
+    void (*wraps[4])(void) = {hit0, hit1, hit2, hit3};
+    for (int i = 0; i < 4; i++) {
+        requests[i].callsite = sites[i];
+        requests[i].expected = expected[i];
+        requests[i].wrapper = (void *)wraps[i];
+        requests[i].expected_target = stubs[i];
+    }
+}
+
+static uint8_t *map_two_pages(size_t page) {
+    uint8_t *mapping = mmap(NULL, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (mapping == MAP_FAILED) {
+        fail("two-page mmap failed");
+    }
+    return mapping;
+}
+
+#ifdef EU4_METAL_BOOT_TEST_FAIL
+static void test_rollback(void) {
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    uint8_t *mapping = map_two_pages(page);
+    void *sites[4];
+    void *stubs[4];
+    uint8_t expected[4][5];
+    if (!place_four(mapping, page, sites, stubs, expected)) {
+        fail("could not place four callsites");
+    }
+    eu4_metal_boot_request requests[4];
+    eu4_metal_boot_patch patches[4];
+    fill_four(sites, stubs, expected, requests);
+    if (eu4_metal_boot_install_sites(requests, 4, patches)) {
+        fail("injected failure still installed");
+    }
+    for (int i = 0; i < 4; i++) {
+        if (memcmp(sites[i], expected[i], 5) != 0) {
+            fail("rollback left a callsite patched");
+        }
+    }
+    if (eu4_metal_boot_restore()) {
+        fail("failed install stayed committed");
+    }
+    if (munmap(mapping, page * 2) != 0) {
+        fail("two-page munmap failed");
+    }
+}
+#endif
+
+#ifndef EU4_METAL_BOOT_TEST_FAIL
+static void test_four(void) {
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    uint8_t *mapping = map_two_pages(page);
+    void *sites[4];
+    void *stubs[4];
+    uint8_t expected[4][5];
+    if (!place_four(mapping, page, sites, stubs, expected)) {
+        fail("could not place four callsites");
+    }
+    eu4_metal_boot_request requests[4];
+    eu4_metal_boot_patch patches[4];
+    fill_four(sites, stubs, expected, requests);
+    uint8_t bad[5];
+    memcpy(bad, expected[2], 5);
+    bad[1] ^= 0xff;
+    requests[2].expected = bad;
+    if (eu4_metal_boot_install_sites(requests, 4, patches)) {
+        fail("bad third site was installed");
+    }
+    requests[2].expected = expected[2];
+    memcpy(bad, expected[3], 5);
+    bad[1] ^= 0xff;
+    requests[3].expected = bad;
+    if (eu4_metal_boot_install_sites(requests, 4, patches)) {
+        fail("bad fourth site was installed");
+    }
+    requests[3].expected = expected[3];
+    for (int i = 0; i < 4; i++) {
+        if (memcmp(sites[i], expected[i], 5) != 0) {
+            fail("rejected preflight changed a callsite");
+        }
+    }
+    if (!eu4_metal_boot_install_sites(requests, 4, patches)) {
+        fail("four-site install failed");
+    }
+    four_hits = 0;
+    for (int i = 0; i < 4; i++) {
+        ((void (*)(void))sites[i])();
+    }
+    if (four_hits != 15) {
+        fail("four wrappers did not run");
+    }
+    if (!eu4_metal_boot_restore()) {
+        fail("four-site restore failed");
+    }
+    four_hits = 0;
+    for (int i = 0; i < 4; i++) {
+        if (memcmp(sites[i], expected[i], 5) != 0) {
+            fail("four-site restore left a callsite changed");
+        }
+        ((void (*)(void))sites[i])();
+    }
+    if (four_hits != 0) {
+        fail("restored four-site still entered a wrapper");
+    }
+    if (munmap(mapping, page * 2) != 0) {
+        fail("two-page munmap failed");
+    }
+}
+#endif
+
+#ifdef EU4_METAL_BOOT_TEST_FAIL
+int main(void) {
+    test_rollback();
+    return 0;
+}
+#else
 int main(void) {
     test_relay();
     uint8_t expected[5];
@@ -125,5 +272,7 @@ int main(void) {
     if (wrapper_calls != 0 || target_calls != 1 || target_flags != 0x6) {
         fail("restored callsite did not reach the original unchanged");
     }
+    test_four();
     return 0;
 }
+#endif

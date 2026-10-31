@@ -8,10 +8,17 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-static bool installed;
-static uintptr_t site_address;
-static uint8_t saved[5];
-static void *relay_page;
+typedef struct {
+    uintptr_t address;
+    uint8_t saved[5];
+    uint8_t encoded[5];
+    void *relay;
+    int live;
+} slot_state;
+
+static slot_state slots[EU4_METAL_BOOT_MAX_SITES];
+static int slot_count;
+static int committed;
 static size_t page_size;
 
 static size_t page_bytes(void) {
@@ -89,96 +96,199 @@ static void *allocate_near(uintptr_t site) {
     return NULL;
 }
 
-bool eu4_metal_boot_install(void *callsite, const uint8_t expected[5], void *expected_original,
-                            void *wrapper, eu4_metal_boot_patch *out) {
+static void unmap_relays(void) {
     size_t page = page_bytes();
-    if (installed || callsite == NULL || expected == NULL || wrapper == NULL || out == NULL ||
-        page == 0 || expected[0] != 0xe8) {
-        return false;
+    for (int i = 0; i < slot_count; i++) {
+        if (slots[i].relay != NULL) {
+            (void)munmap(slots[i].relay, page);
+            slots[i].relay = NULL;
+        }
     }
-    uintptr_t address = (uintptr_t)callsite;
-    uintptr_t begin = address & ~((uintptr_t)page - 1);
-    if (address + 5 > begin + page) {
-        return false;
-    }
-    if (memcmp(callsite, expected, 5) != 0) {
-        return false;
-    }
-    void *original = decode_call(callsite);
-    if (original != expected_original) {
-        return false;
-    }
+}
 
-    void *dest = wrapper;
-    void *relay = NULL;
-    if (!eu4_metal_boot_rel32_fits(callsite, wrapper)) {
-        relay = allocate_near(address);
-        if (relay == NULL) {
+static void forget_slots(void) {
+    unmap_relays();
+    memset(slots, 0, sizeof slots);
+    slot_count = 0;
+    committed = 0;
+}
+
+/* Restores every callsite whose bytes were already replaced. Relays are dropped either way. */
+static bool rollback_live(void) {
+    size_t page = page_bytes();
+    uintptr_t seen[EU4_METAL_BOOT_MAX_SITES];
+    int seen_count = 0;
+    for (int i = 0; i < slot_count; i++) {
+        if (!slots[i].live) {
+            continue;
+        }
+        uintptr_t begin = slots[i].address & ~(page - 1);
+        int found = 0;
+        for (int j = 0; j < seen_count; j++) {
+            if (seen[j] == begin) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            seen[seen_count++] = begin;
+        }
+    }
+    for (int p = seen_count - 1; p >= 0; p--) {
+        if (!protect_page(seen[p], VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY)) {
             return false;
         }
-        eu4_metal_boot_encode_relay(relay, wrapper);
-        sys_icache_invalidate(relay, 14);
-        if (mprotect(relay, page, PROT_READ | PROT_EXEC) != 0) {
-            (void)munmap(relay, page);
+        for (int i = slot_count - 1; i >= 0; i--) {
+            if (!slots[i].live || (slots[i].address & ~(page - 1)) != seen[p]) {
+                continue;
+            }
+            memcpy((void *)slots[i].address, slots[i].saved, 5);
+            sys_icache_invalidate((void *)slots[i].address, 5);
+            slots[i].live = 0;
+        }
+        if (!protect_page(seen[p], VM_PROT_READ | VM_PROT_EXECUTE)) {
             return false;
         }
-        dest = relay;
     }
-
-    if (!protect_page(begin, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY)) {
-        if (relay != NULL) {
-            (void)munmap(relay, page);
-        }
-        return false;
-    }
-    memcpy(saved, callsite, 5);
-    uint8_t encoded[5];
-    if (!eu4_metal_boot_encode_call(callsite, dest, encoded)) {
-        (void)protect_page(begin, VM_PROT_READ | VM_PROT_EXECUTE);
-        if (relay != NULL) {
-            (void)munmap(relay, page);
-        }
-        return false;
-    }
-    memcpy(callsite, encoded, 5);
-    sys_icache_invalidate(callsite, 5);
-    if (!protect_page(begin, VM_PROT_READ | VM_PROT_EXECUTE)) {
-        memcpy(callsite, saved, 5);
-        sys_icache_invalidate(callsite, 5);
-        (void)protect_page(begin, VM_PROT_READ | VM_PROT_EXECUTE);
-        if (relay != NULL) {
-            (void)munmap(relay, page);
-        }
-        return false;
-    }
-
-    site_address = address;
-    relay_page = relay;
-    installed = true;
-    out->original = original;
-    out->used_relay = relay != NULL;
+    forget_slots();
     return true;
 }
 
-bool eu4_metal_boot_restore(void) {
-    if (!installed) {
-        return false;
+static void rollback_or_exit(void) {
+    if (!rollback_live()) {
+        _exit(2);
     }
+}
+
+bool eu4_metal_boot_install_sites(const eu4_metal_boot_request *requests, int count,
+                                  eu4_metal_boot_patch *out) {
     size_t page = page_bytes();
-    uintptr_t begin = site_address & ~((uintptr_t)page - 1);
-    if (!protect_page(begin, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY)) {
+    if (committed || requests == NULL || out == NULL || count < 1 ||
+        count > EU4_METAL_BOOT_MAX_SITES || page == 0) {
         return false;
     }
-    memcpy((void *)site_address, saved, 5);
-    sys_icache_invalidate((void *)site_address, 5);
-    if (!protect_page(begin, VM_PROT_READ | VM_PROT_EXECUTE)) {
+    memset(slots, 0, sizeof slots);
+    slot_count = 0;
+
+    uintptr_t pages[EU4_METAL_BOOT_MAX_SITES];
+    int page_count = 0;
+    int page_of[EU4_METAL_BOOT_MAX_SITES];
+    for (int i = 0; i < count; i++) {
+        if (requests[i].callsite == NULL || requests[i].expected == NULL ||
+            requests[i].wrapper == NULL || requests[i].expected[0] != 0xe8) {
+            return false;
+        }
+        uintptr_t address = (uintptr_t)requests[i].callsite;
+        uintptr_t begin = address & ~(page - 1);
+        if (address + 5 > begin + page) {
+            return false;
+        }
+        for (int j = 0; j < i; j++) {
+            uintptr_t other = slots[j].address;
+            if (address < other + 5 && other < address + 5) {
+                return false;
+            }
+        }
+        if (memcmp(requests[i].callsite, requests[i].expected, 5) != 0) {
+            return false;
+        }
+        void *original = decode_call(requests[i].callsite);
+        if (requests[i].expected_target == NULL || original != requests[i].expected_target) {
+            return false;
+        }
+        slots[i].address = address;
+        memcpy(slots[i].saved, requests[i].callsite, 5);
+        page_of[i] = -1;
+        for (int p = 0; p < page_count; p++) {
+            if (pages[p] == begin) {
+                page_of[i] = p;
+                break;
+            }
+        }
+        if (page_of[i] < 0) {
+            page_of[i] = page_count;
+            pages[page_count++] = begin;
+        }
+        out[i].original = original;
+        out[i].used_relay = false;
+    }
+    slot_count = count;
+
+    for (int i = 0; i < count; i++) {
+        void *dest = requests[i].wrapper;
+        if (!eu4_metal_boot_rel32_fits(requests[i].callsite, dest)) {
+            void *relay = allocate_near(slots[i].address);
+            if (relay == NULL) {
+                forget_slots();
+                return false;
+            }
+            eu4_metal_boot_encode_relay(relay, requests[i].wrapper);
+            sys_icache_invalidate(relay, 14);
+            if (mprotect(relay, page, PROT_READ | PROT_EXEC) != 0) {
+                (void)munmap(relay, page);
+                forget_slots();
+                return false;
+            }
+            slots[i].relay = relay;
+            dest = relay;
+            out[i].used_relay = true;
+        }
+        if (!eu4_metal_boot_encode_call(requests[i].callsite, dest, slots[i].encoded)) {
+            forget_slots();
+            return false;
+        }
+    }
+
+    int pages_done = 0;
+    for (int p = 0; p < page_count; p++) {
+#ifdef EU4_METAL_BOOT_TEST_FAIL
+        if (pages_done >= 1) {
+            rollback_or_exit();
+            return false;
+        }
+#endif
+        if (!protect_page(pages[p], VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY)) {
+            if (pages_done == 0) {
+                forget_slots();
+                return false;
+            }
+            rollback_or_exit();
+            return false;
+        }
+        for (int i = 0; i < count; i++) {
+            if (page_of[i] != p) {
+                continue;
+            }
+            memcpy((void *)slots[i].address, slots[i].encoded, 5);
+            sys_icache_invalidate((void *)slots[i].address, 5);
+            slots[i].live = 1;
+        }
+        if (!protect_page(pages[p], VM_PROT_READ | VM_PROT_EXECUTE)) {
+            rollback_or_exit();
+            return false;
+        }
+        pages_done++;
+    }
+
+    committed = 1;
+    return true;
+}
+
+bool eu4_metal_boot_install(void *callsite, const uint8_t expected[5], void *expected_original,
+                            void *wrapper, eu4_metal_boot_patch *out) {
+    eu4_metal_boot_request request = {callsite, expected, wrapper, expected_original};
+    if (expected_original == NULL) {
         return false;
     }
-    if (relay_page != NULL) {
-        (void)munmap(relay_page, page);
-        relay_page = NULL;
+    return eu4_metal_boot_install_sites(&request, 1, out);
+}
+
+bool eu4_metal_boot_restore(void) {
+    if (!committed) {
+        return false;
     }
-    installed = false;
-    site_address = 0;
+    if (!rollback_live()) {
+        _exit(2);
+    }
     return true;
 }
