@@ -8,5 +8,7 @@ Detailed technical analyses remain in their original paths during migration. Pre
 | Border multidraw / loop head | [../../analysis/border-multidraw-re.md](../../analysis/border-multidraw-re.md), [gfx-border-multidraw-ababa.md](../gfx-border-multidraw-ababa.md) |
 | Frame model / profiler | [../../analysis/frame-model-verification.md](../../analysis/frame-model-verification.md), [../../analysis/frame-model-protocol.md](../../analysis/frame-model-protocol.md) |
 | Gfx subrecord observers | [gfx-subrecord-ababa.md](../gfx-subrecord-ababa.md), [../../analysis/mesh-observer-chain-semantics-20261004.md](../../analysis/mesh-observer-chain-semantics-20261004.md) |
+| Metal sessions: graphics stack | [eu4-graphics-stack-metal-experiments.md](eu4-graphics-stack-metal-experiments.md) |
+| Metal sessions: what the probes tested | [metal-probe-approaches.md](metal-probe-approaches.md) |
 
 Generated JSON under `analysis/evidence/` supports measurements; interpretation belongs in findings or status.
