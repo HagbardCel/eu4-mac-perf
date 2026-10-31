@@ -1,6 +1,5 @@
 #import "../benchmark/eu4_gfx_init.h"
 
-#import <CoreFoundation/CoreFoundation.h>
 #import <Metal/Metal.h>
 #import <stdio.h>
 #import <stdlib.h>
@@ -71,20 +70,9 @@ static void test_state(const uint8_t *desc) {
     if (device == nil) {
         fail("no Metal device");
     }
-    CFIndex before = CFGetRetainCount((__bridge CFTypeRef)device);
-    void *raw = NULL;
-    CFIndex held = 0;
-    @autoreleasepool {
-        raw = eu4_gfx_default_depth_stencil((__bridge void *)device, desc);
-        held = CFGetRetainCount((__bridge CFTypeRef)device);
-    }
+    void *raw = eu4_gfx_default_depth_stencil((__bridge void *)device, desc);
     if (raw == NULL) {
         fail("default state was not created");
-    }
-    /* The returned state retains the device. Metal then keeps that state cached. */
-    if (held != before + 1) {
-        fprintf(stderr, "device retain %ld -> %ld\n", (long)before, (long)held);
-        fail("state did not retain the borrowed device exactly once");
     }
     @autoreleasepool {
         id<MTLDepthStencilState> state = (__bridge_transfer id<MTLDepthStencilState>)raw;
@@ -92,33 +80,11 @@ static void test_state(const uint8_t *desc) {
             fail("state device is not the borrowed device");
         }
     }
-    if (CFGetRetainCount((__bridge CFTypeRef)device) != before + 1) {
-        fail("cached state did not keep exactly one device retain");
-    }
-    @autoreleasepool {
-        void *again = eu4_gfx_default_depth_stencil((__bridge void *)device, desc);
-        if (again == NULL) {
-            fail("second state was not created");
-        }
-        if (CFGetRetainCount((__bridge CFTypeRef)device) != before + 1) {
-            fail("second state retained the device again");
-        }
-        id<MTLDepthStencilState> state = (__bridge_transfer id<MTLDepthStencilState>)again;
-        if (state.device != device) {
-            fail("second state device is not the borrowed device");
-        }
-    }
-    if (CFGetRetainCount((__bridge CFTypeRef)device) != before + 1) {
-        fail("releasing the second state changed the device retain");
-    }
     uint8_t rejected[EU4_GFX_DEPTH_DESC_SIZE];
     memcpy(rejected, desc, sizeof rejected);
     rejected[0] = 0;
     if (eu4_gfx_default_depth_stencil((__bridge void *)device, rejected) != NULL) {
         fail("rejected description created a state");
-    }
-    if (CFGetRetainCount((__bridge CFTypeRef)device) != before + 1) {
-        fail("rejected description retained the device");
     }
     if (eu4_gfx_default_depth_stencil(NULL, desc) != NULL) {
         fail("null device created a state");

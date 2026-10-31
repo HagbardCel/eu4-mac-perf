@@ -3,14 +3,19 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Memory image written by GetDefaultDepthStencil (0x15c6784). 40 bytes.
    Bytes 1..3 and 0xd..0xf are not stored by that function. */
 #define EU4_GFX_DEPTH_DESC_SIZE 0x28
 
 void eu4_gfx_write_default_depth_stencil(uint8_t desc[EU4_GFX_DEPTH_DESC_SIZE]);
 
-/* Properties read back from the Metal descriptor this slice submits.
-   Stencil fields are the same on both faces. */
+/* Diagnostic inspection of a descriptor constructed by the same factory used for
+   Metal state creation. The resulting MTLDepthStencilState does not expose these
+   properties. Stencil fields are the same on both faces. */
 typedef struct {
     int depth_compare;
     int depth_write;
@@ -29,5 +34,9 @@ int eu4_gfx_default_depth_stencil_view(const uint8_t *desc, eu4_gfx_depth_view *
    The caller releases the state. The device is not retained or released.
    NULL device, NULL desc, or a non-default description returns NULL. */
 void *eu4_gfx_default_depth_stencil(void *device, const uint8_t *desc);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
