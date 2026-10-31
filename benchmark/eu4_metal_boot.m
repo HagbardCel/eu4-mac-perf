@@ -114,6 +114,9 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
                                                   uint32_t passed,
                    int have_window_flags, uint32_t window_flags, int view_ok, int layer_ok,
                    int width, int height, const char *command_status, int readback_matches) {
+    if (g_bootstrap && strcmp(result, "metal_window_boot_failed") == 0) {
+        result = "backend_bootstrap_failed";
+    }
     char body[4096];
     int length = snprintf(
         body, sizeof body,
@@ -122,15 +125,13 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
         "  \"callsite_rva\": \"0x13cc1d7\",\n"
         "  \"preflight_basis\": \"%s\",\n"
         "  \"matched_bytes\": \"e814ecefff\",\n"
-        "  \"successor\": \"%s\",\n"
-        "  \"successor_rva\": \"%s\",\n"
+        "  \"successor\": \"SDL_GL_SetSwapInterval\",\n"
+        "  \"successor_rva\": \"0x13cc1e4\",\n"
         "  \"earlier_gl\": \"not_in_evidence\",\n"
         "  \"incoming_flags\": %u,\n"
         "  \"flags_passed\": %u,\n"
         "  \"window_flags\": ",
-        result, g_bootstrap ? kBootstrapBasis : kBasis,
-        g_bootstrap ? "_glewInit" : "SDL_GL_SetSwapInterval",
-        g_bootstrap ? "0x15e91fd" : "0x13cc1e4", incoming, passed);
+        result, g_bootstrap ? kBootstrapBasis : kBasis, incoming, passed);
     if (length < 0 || (size_t)length >= sizeof body) {
         _exit(kExitFail);
     }
@@ -170,13 +171,16 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
                          "  \"drawable_height\": %d,\n"
                          "  \"command_status\": %s%s%s,\n"
                          "  \"readback_matches\": %s,\n"
-                         "  \"cause\": %s%s%s\n"
+                         "  \"cause\": %s%s%s%s\n"
                          "}\n",
                          view_ok ? "true" : "false", layer_ok ? "true" : "false", width, height,
                          command_status ? "\"" : "null", command_status ? command_status : "",
                          command_status ? "\"" : "",
                          readback_matches < 0 ? "null" : readback_matches ? "true" : "false",
-                         cause ? "\"" : "null", cause ? cause : "", cause ? "\"" : "") < 0;
+                         cause ? "\"" : "null", cause ? cause : "", cause ? "\"" : "",
+                         g_bootstrap ? ",\n  \"checkpoint\": \"_GfxInit/_glewInit\",\n"
+                                      "  \"checkpoint_rva\": \"0x15e91fd\""
+                                    : "") < 0;
     }
     if (!failed) {
         failed = fflush(out) != 0;

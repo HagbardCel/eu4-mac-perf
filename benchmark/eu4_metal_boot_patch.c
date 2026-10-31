@@ -184,7 +184,8 @@ bool eu4_metal_boot_install_sites(const eu4_metal_boot_request *requests, int co
             return false;
         }
         for (int j = 0; j < i; j++) {
-            if (slots[j].address == address) {
+            uintptr_t other = slots[j].address;
+            if (address < other + 5 && other < address + 5) {
                 return false;
             }
         }
@@ -192,7 +193,7 @@ bool eu4_metal_boot_install_sites(const eu4_metal_boot_request *requests, int co
             return false;
         }
         void *original = decode_call(requests[i].callsite);
-        if (requests[i].expected_target != NULL && original != requests[i].expected_target) {
+        if (requests[i].expected_target == NULL || original != requests[i].expected_target) {
             return false;
         }
         slots[i].address = address;
