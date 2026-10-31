@@ -76,7 +76,9 @@ static void init_gl(NSString *vert, NSString *frag) {
         die("no legacy opengl context");
     }
     CGLDestroyPixelFormat(format);
-    CGLSetCurrentContext(context);
+    if (CGLSetCurrentContext(context) != kCGLNoError) {
+        die("no current GL context");
+    }
     while (glGetError() != GL_NO_ERROR) {
     }
 
