@@ -1,0 +1,13 @@
+{
+  "nonzero_pixels": 246,
+  "vertex_count": 300,
+  "stride": 12,
+  "color_is_byte": true,
+  "depth_test": false,
+  "blend": false,
+  "cull_face": true,
+  "position_min": [-24, -24],
+  "position_max": [24, 24],
+  "has_position_bounds": true,
+  "cause": null
+}
