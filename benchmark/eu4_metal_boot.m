@@ -8,6 +8,7 @@
 // 0x15ed55a is _GfxGetGraphicsSettings creating "PdxDetectWindow" at 128x128, then
 // SDL_GL_CreateContext, then destroying both. That call is not patched.
 // Earlier OpenGL activity is outside this result.
+// A1 exits after the clear. Bootstrap returns this window and stops at _glewInit.
 #import "eu4_metal_boot_patch.h"
 
 #import <AppKit/AppKit.h>
@@ -25,6 +26,12 @@
 enum {
     kCallRva = 0x13cc1d7,
     kCreateRva = 0x12cadf0,
+    kSwapRva = 0x13cc1e4,
+    kSwapTarget = 0x12cb110,
+    kContextRva = 0x15e90d5,
+    kContextTarget = 0x12cb0c0,
+    kGlewRva = 0x15e91fd,
+    kGlewTarget = 0x15d2708,
     kOpenGL = 0x00000002,
     kMetal = 0x20000000,
     kReadWidth = 4,
@@ -34,6 +41,9 @@ enum {
 };
 
 static const uint8_t kExpectedCall[5] = {0xe8, 0x14, 0xec, 0xef, 0xff};
+static const uint8_t kSwapCall[5] = {0xe8, 0x27, 0xef, 0xef, 0xff};
+static const uint8_t kContextCall[5] = {0xe8, 0xe6, 0x1f, 0xce, 0xff};
+static const uint8_t kGlewCall[5] = {0xe8, 0x06, 0x95, 0xfe, 0xff};
 static const uint8_t kClearBGRA[4] = {0, 0, 255, 255};
 static const char kBasis[] =
     "CApplication::CreateApplicationWindow stores this SDL_Window* on CPdxWindow and "
@@ -42,6 +52,12 @@ static const char kBasis[] =
     "Earlier OpenGL activity is outside this result. SDL_WINDOW_METAL is not requested. "
     "A CAMetalLayer is attached to the Cocoa content view. presentDrawable is not an on-screen inspection. "
     "SDL_GL_SetSwapInterval at 0x13cc1e4 does not run because this wrapper does not return.";
+static const char kBootstrapBasis[] =
+    "Checkpoint is the _glewInit callsite inside _GfxInit at 0x15e91fd. "
+    "This is not a finished Metal backend and not a valid GL context. "
+    "The PdxDetectWindow call at 0x15ed55a is not patched. "
+    "Earlier OpenGL activity is outside this result. "
+    "SDL_WINDOW_METAL is not requested. A CAMetalLayer is attached to the Cocoa content view.";
 
 /* SDL 2.0.14 SDL_SysWMinfo on x86-64. The Cocoa NSWindow* is the first union field. */
 typedef struct {
@@ -79,6 +95,18 @@ static int32_t g_subsystem;
 static int g_have_view_points;
 static double g_view_points_w;
 static double g_view_points_h;
+static int g_bootstrap;
+static void *g_window;
+static void *g_context_window;
+static char g_sentinel;
+static id<MTLDevice> g_device;
+static id<MTLCommandQueue> g_queue;
+static CAMetalLayer *g_layer;
+static NSView *g_child;
+static uint32_t g_incoming;
+static uint32_t g_passed;
+static uint32_t g_window_flags;
+static int g_have_flags;
 
 static void copy_sdl_error(void);
 
@@ -94,13 +122,15 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
         "  \"callsite_rva\": \"0x13cc1d7\",\n"
         "  \"preflight_basis\": \"%s\",\n"
         "  \"matched_bytes\": \"e814ecefff\",\n"
-        "  \"successor\": \"SDL_GL_SetSwapInterval\",\n"
-        "  \"successor_rva\": \"0x13cc1e4\",\n"
+        "  \"successor\": \"%s\",\n"
+        "  \"successor_rva\": \"%s\",\n"
         "  \"earlier_gl\": \"not_in_evidence\",\n"
         "  \"incoming_flags\": %u,\n"
         "  \"flags_passed\": %u,\n"
         "  \"window_flags\": ",
-        result, kBasis, incoming, passed);
+        result, g_bootstrap ? kBootstrapBasis : kBasis,
+        g_bootstrap ? "_glewInit" : "SDL_GL_SetSwapInterval",
+        g_bootstrap ? "0x15e91fd" : "0x13cc1e4", incoming, passed);
     if (length < 0 || (size_t)length >= sizeof body) {
         _exit(kExitFail);
     }
@@ -158,8 +188,9 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
     if (fclose(out) != 0) {
         failed = 1;
     }
-    int verified = !failed && strcmp(result, "metal_window_boot_verified") == 0;
-    _exit(verified ? 0 : kExitFail);
+    int accepted = !failed && (g_bootstrap ? strcmp(result, "backend_bootstrap_checkpoint_reached") == 0
+                                         : strcmp(result, "metal_window_boot_verified") == 0);
+    _exit(accepted ? 0 : kExitFail);
 }
 
 static const struct mach_header_64 *eu4_header(void) {
@@ -314,7 +345,43 @@ static void boot_window(void *window, uint32_t incoming, uint32_t passed) {
     record_view_points(child);
     NSRect backing = [child convertRectToBacking:child.bounds];
     layer.drawableSize = backing.size;
+    if (g_bootstrap) {
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        if (queue == nil) {
+            finish("metal_window_boot_failed", "command_queue_or_readback_failed", incoming, passed,
+                   1, reported, 1, 1, 0, 0, NULL, -1);
+        }
+        g_device = device;
+        g_queue = queue;
+        g_layer = layer;
+        g_child = child;
+        g_window = window;
+        g_incoming = incoming;
+        g_passed = passed;
+        g_window_flags = reported;
+        g_have_flags = 1;
+        return;
+    }
     present(layer, incoming, passed, reported);
+}
+
+static int eu4_metal_boot_on_swap(int interval) {
+    (void)interval;
+    return 0;
+}
+
+static void *eu4_metal_boot_on_context(void *window) {
+    g_context_window = window;
+    return &g_sentinel;
+}
+
+static void eu4_metal_boot_on_glew(void) {
+    if (g_window == NULL || g_context_window != g_window) {
+        finish("backend_bootstrap_failed", "window_pointer_mismatch", g_incoming, g_passed,
+               g_have_flags, g_window_flags, g_layer != nil, g_layer != nil, 0, 0, NULL, -1);
+    }
+    finish("backend_bootstrap_checkpoint_reached", NULL, g_incoming, g_passed, g_have_flags,
+           g_window_flags, g_layer != nil, g_layer != nil, 0, 0, NULL, -1);
 }
 
 void *eu4_metal_boot_on_create(const char *title, int x, int y, int w, int h, uint32_t flags) {
@@ -341,6 +408,9 @@ void *eu4_metal_boot_on_create(const char *title, int x, int y, int w, int h, ui
                NULL, -1);
     }
     boot_window(window, incoming, passed);
+    if (g_bootstrap) {
+        return window;
+    }
     finish("metal_window_boot_failed", "wrapper_returned", incoming, passed, 0, 0, 0, 0, 0, 0,
            NULL, -1);
 }
@@ -394,6 +464,14 @@ __attribute__((constructor)) static void eu4_metal_boot_init(void) {
         return;
     }
     snprintf(g_receipt, sizeof g_receipt, "%s", path);
+    const char *mode = getenv("EU4_METAL_BOOT_MODE");
+    if (mode == NULL || mode[0] == '\0' || strcmp(mode, "a1") == 0) {
+        g_bootstrap = 0;
+    } else if (strcmp(mode, "bootstrap") == 0) {
+        g_bootstrap = 1;
+    } else {
+        finish("metal_window_boot_failed", "unknown_mode", 0, 0, 0, 0, 0, 0, 0, 0, NULL, -1);
+    }
     if (!resolve_helpers()) {
         finish("metal_window_boot_failed", "sdl_helper_unresolved", 0, 0, 0, 0, 0, 0, 0, 0, NULL,
                -1);
@@ -403,11 +481,23 @@ __attribute__((constructor)) static void eu4_metal_boot_init(void) {
         finish("metal_window_boot_failed", "eu4_image_not_found", 0, 0, 0, 0, 0, 0, 0, 0, NULL,
                -1);
     }
-    void *site = (uint8_t *)header + kCallRva;
-    void *expected = (uint8_t *)header + kCreateRva;
-    eu4_metal_boot_patch patch = {0};
-    if (!eu4_metal_boot_install(site, kExpectedCall, expected, eu4_metal_boot_on_create, &patch)) {
+    uint8_t *base = (uint8_t *)header;
+    eu4_metal_boot_request requests[EU4_METAL_BOOT_MAX_SITES];
+    int count = 1;
+    requests[0] = (eu4_metal_boot_request){base + kCallRva, kExpectedCall,
+                                           (void *)eu4_metal_boot_on_create, base + kCreateRva};
+    if (g_bootstrap) {
+        requests[1] = (eu4_metal_boot_request){base + kSwapRva, kSwapCall, (void *)eu4_metal_boot_on_swap,
+                                               base + kSwapTarget};
+        requests[2] = (eu4_metal_boot_request){base + kContextRva, kContextCall,
+                                               (void *)eu4_metal_boot_on_context, base + kContextTarget};
+        requests[3] = (eu4_metal_boot_request){base + kGlewRva, kGlewCall, (void *)eu4_metal_boot_on_glew,
+                                               base + kGlewTarget};
+        count = 4;
+    }
+    eu4_metal_boot_patch patches[EU4_METAL_BOOT_MAX_SITES] = {0};
+    if (!eu4_metal_boot_install_sites(requests, count, patches)) {
         finish("metal_window_boot_failed", "callsite_rejected", 0, 0, 0, 0, 0, 0, 0, 0, NULL, -1);
     }
-    g_original = (CreateWindowFn)patch.original;
+    g_original = (CreateWindowFn)patches[0].original;
 }

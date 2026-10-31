@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import json
 import os
@@ -41,13 +42,17 @@ def build_library(arch: str = "x86_64") -> Path:
     return output
 
 
-def build_host(arch: str = "x86_64") -> Path:
+def build_host(arch: str = "x86_64", fail_inject: bool = False) -> Path:
     HOST.parent.mkdir(parents=True, exist_ok=True)
-    output = HOST if arch == "x86_64" else HOST.with_name(f"metal_boot_host_{arch}")
+    output = HOST if not fail_inject else HOST.with_name("metal_boot_host_fail")
+    if arch != "x86_64":
+        output = output.with_name(f"{output.name}_{arch}")
     command = [
         "clang", "-arch", arch, "-O2", "-Wall", "-Wextra",
         "-o", str(output), str(HOST_SOURCE), str(PATCH),
     ]
+    if fail_inject:
+        command.insert(1, "-DEU4_METAL_BOOT_TEST_FAIL")
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
         raise base.BenchmarkError(result.stderr.strip() or "Metal boot host failed to build")
@@ -55,10 +60,19 @@ def build_host(arch: str = "x86_64") -> Path:
 
 
 def run_host(arch: str = "x86_64") -> None:
-    host = build_host(arch)
-    result = subprocess.run([str(host)], capture_output=True, text=True, check=False)
-    if result.returncode:
-        raise base.BenchmarkError(result.stderr.strip() or result.stdout.strip() or "Metal boot host failed")
+    for fail_inject in (False, True):
+        host = build_host(arch, fail_inject=fail_inject)
+        result = subprocess.run([str(host)], capture_output=True, text=True, check=False)
+        if result.returncode:
+            label = "rollback host" if fail_inject else "Metal boot host"
+            raise base.BenchmarkError(result.stderr.strip() or result.stdout.strip() or f"{label} failed")
+
+
+def probe_environ(inherited: dict, bootstrap: bool) -> dict:
+    """Select the mode here. An inherited bootstrap value does not stick."""
+    env = dict(inherited)
+    env["EU4_METAL_BOOT_MODE"] = "bootstrap" if bootstrap else "a1"
+    return env
 
 
 def read_receipt(path: Path) -> dict | None:
@@ -81,7 +95,7 @@ def stop_game(game: subprocess.Popen) -> None:
         game.wait(timeout=10)
 
 
-def launch_session(run_dir: Path, wait_seconds: float = 180) -> dict:
+def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = False) -> dict:
     """Operator launch. The dylib exits the game after the receipt. Not a CI job."""
     identity = base.gog_identity()
     if identity["executable_sha256"] != PINNED_SHA256:
@@ -96,7 +110,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180) -> dict:
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=False)
     receipt_path = run_dir / "receipt.json"
-    env = os.environ.copy()
+    env = probe_environ(os.environ, bootstrap)
     env["EU4_METAL_BOOT_RECEIPT"] = str(receipt_path)
     env["SDL_VIDEO_EXTERNAL_CONTEXT"] = "1"
     env["DYLD_INSERT_LIBRARIES"] = str(library)
@@ -128,11 +142,8 @@ def launch_session(run_dir: Path, wait_seconds: float = 180) -> dict:
         stop_game(game)
         stdout.close()
         stderr.close()
-    verified = (
-        receipt is not None
-        and receipt.get("result") == "metal_window_boot_verified"
-        and game.returncode == 0
-    )
+    wanted = "backend_bootstrap_checkpoint_reached" if bootstrap else "metal_window_boot_verified"
+    verified = receipt is not None and receipt.get("result") == wanted and game.returncode == 0
     metadata = {
         "status": "complete" if verified else "failed",
         "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -149,12 +160,13 @@ def launch_session(run_dir: Path, wait_seconds: float = 180) -> dict:
     return receipt
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: eu4_metal_boot.py RUN_DIR", file=sys.stderr)
-        return 2
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Operator EU4 Metal boot. Not a CI job.")
+    parser.add_argument("--bootstrap", action="store_true")
+    parser.add_argument("run_dir", type=Path)
+    args = parser.parse_args(argv)
     try:
-        launch_session(Path(sys.argv[1]))
+        launch_session(args.run_dir, bootstrap=args.bootstrap)
     except base.BenchmarkError as exc:
         print(exc, file=sys.stderr)
         return 1
