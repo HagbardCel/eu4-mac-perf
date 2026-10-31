@@ -85,7 +85,9 @@ def launch_session(run_dir: Path, wait_seconds: float = 300) -> dict:
             result["gl_flush_success_count"] = flushes
             result_path.write_text(json.dumps(result, indent=2) + "\n")
         alive = game.poll() is None
-        captured = result.get("cause") in (None, "") and result.get("program")
+        png = run_dir / "readback.png"
+        png_ok = png.is_file() and png.stat().st_size > 0
+        captured = result.get("cause") in (None, "") and result.get("program") and png_ok
         metadata = {
             "status": "complete" if (
                 alive and result.get("original_gl_draw_invoked") and flushes > 0

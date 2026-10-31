@@ -170,10 +170,10 @@ static void reject(GLuint program) {
     g_rejected[g_rejected_count++] = program;
 }
 
-static void write_png(const uint8_t *bgra, int width, int height, const char *path) {
+static int write_png(const uint8_t *bgra, int width, int height, const char *path) {
     uint8_t *rgba = malloc((size_t)width * (size_t)height * 4);
     if (rgba == NULL) {
-        return;
+        return 0;
     }
     for (int i = 0; i < width * height; i++) {
         rgba[i * 4] = bgra[i * 4 + 2];
@@ -187,17 +187,20 @@ static void write_png(const uint8_t *bgra, int width, int height, const char *pa
                                      kCGImageAlphaLast | kCGBitmapByteOrder32Big, provider, NULL, false,
                                      kCGRenderingIntentDefault);
     CFURLRef url = CFURLCreateFromFileSystemRepresentation(NULL, (const UInt8 *)path, (CFIndex)strlen(path), false);
-    CGImageDestinationRef dest = CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL);
+    CGImageDestinationRef dest = image != NULL && url != NULL
+        ? CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL) : NULL;
+    int wrote = 0;
     if (dest != NULL) {
         CGImageDestinationAddImage(dest, image, NULL);
-        CGImageDestinationFinalize(dest);
+        wrote = CGImageDestinationFinalize(dest) ? 1 : 0;
         CFRelease(dest);
     }
-    CFRelease(url);
-    CGImageRelease(image);
+    if (url != NULL) CFRelease(url);
+    if (image != NULL) CGImageRelease(image);
     CGColorSpaceRelease(space);
     CGDataProviderRelease(provider);
     free(rgba);
+    return wrote;
 }
 
 static const char *json_string(const char *text) {
@@ -208,7 +211,8 @@ static void write_result(int pixels, int invoked, const char *cause, GLuint prog
                          int stride, int shared, int indexed, int vertex_count, float min_x, float min_y,
                          float max_x, float max_y, int pos_loc, GLenum pos_type, int pos_size, int pos_off,
                          GLuint pos_buf, int col_loc, GLenum col_type, int col_size, int col_norm, int col_off,
-                         GLuint col_buf, int cull, GLenum cull_mode, GLenum front, const char *metal_winding) {
+                         GLuint col_buf, int cull, GLenum cull_mode, GLenum front, const char *metal_winding,
+                         int view_w, int view_h, int metal_w, int metal_h, int png_ok) {
     char path[1100];
     snprintf(path, sizeof path, "%s/result.json", g_dir);
     FILE *out = fopen(path, "w");
@@ -246,7 +250,11 @@ static void write_result(int pixels, int invoked, const char *cause, GLuint prog
             "  \"metal_winding\": \"%s\",\n"
             "  \"depth_test\": %s,\n"
             "  \"blend\": %s,\n"
-            "  \"png\": \"readback.png\"\n"
+            "  \"viewport_width\": %d,\n"
+            "  \"viewport_height\": %d,\n"
+            "  \"metal_width\": %d,\n"
+            "  \"metal_height\": %d,\n"
+            "  \"png\": %s\n"
             "}\n",
             invoked ? "true" : "false", atomic_load(&g_flushes), pixels,
             cause ? "\"" : "null", json_string(cause), cause ? "\"" : "",
@@ -254,7 +262,8 @@ static void write_result(int pixels, int invoked, const char *cause, GLuint prog
             min_x, min_y, max_x, max_y, pos_loc, pos_type, pos_size, pos_off, pos_buf, col_loc, col_type,
             col_size, col_norm ? "true" : "false", col_off, col_buf, cull ? "true" : "false", cull_mode, front,
             metal_winding, glIsEnabled(GL_DEPTH_TEST) ? "true" : "false",
-            glIsEnabled(GL_BLEND) ? "true" : "false");
+            glIsEnabled(GL_BLEND) ? "true" : "false",
+            view_w, view_h, metal_w, metal_h, png_ok ? "\"readback.png\"" : "null");
     fclose(out);
 }
 
@@ -262,13 +271,20 @@ static void *read_buffer(GLenum target, GLuint binding, GLenum binding_query, in
     GLint previous = 0;
     glGetIntegerv(binding_query, &previous);
     glBindBuffer(target, binding);
-    GLint size = 0;
+    GLint size = 0, mapped = 0;
     glGetBufferParameteriv(target, GL_BUFFER_SIZE, &size);
+    glGetBufferParameteriv(target, GL_BUFFER_MAPPED, &mapped);
     void *data = NULL;
-    if (size > 0 && size <= 4 * 1024 * 1024) {
+    if (!mapped && size > 0 && size <= 4 * 1024 * 1024) {
         data = malloc((size_t)size);
         if (data != NULL) {
+            // GL cannot restore a pending error, so this read clears it.
+            (void)glGetError();
             glGetBufferSubData(target, 0, size, data);
+            if (glGetError() != GL_NO_ERROR) {
+                free(data);
+                data = NULL;
+            }
         }
     }
     glBindBuffer(target, (GLuint)previous);
@@ -329,7 +345,8 @@ static void finish_draw(GLenum mode, GLint first, GLsizei count, int indexed, GL
         }
         if (shader_count > 0 && unreadable == shader_count) {
             write_result(0, g_draw_invoked, "shaders detached after link", (GLuint)program, "none", 0, 0,
-                         indexed, count, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, "none");
+                         indexed, count, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, "none",
+                         0, 0, 0, 0, 0);
             g_done = 1;
             return;
         }
@@ -383,6 +400,20 @@ static void finish_draw(GLenum mode, GLint first, GLsizei count, int indexed, GL
             (col_type == GL_UNSIGNED_BYTE && !col_norm)) {
             failure = "unsupported color attribute layout";
         }
+    }
+    if (failure == NULL) {
+        GLint pos_enabled = 0, col_enabled = 0;
+        glGetVertexAttribiv(pos, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &pos_enabled);
+        glGetVertexAttribiv(col, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &col_enabled);
+        if (!pos_enabled || !col_enabled) {
+            failure = "color attribute array is disabled";
+        }
+    }
+    if (failure == NULL) {
+        if (glIsEnabled(GL_DEPTH_TEST)) failure = "unsupported fixed-function state: depth";
+        else if (glIsEnabled(GL_BLEND)) failure = "unsupported fixed-function state: blend";
+        else if (glIsEnabled(GL_STENCIL_TEST)) failure = "unsupported fixed-function state: stencil";
+        else if (glIsEnabled(GL_SCISSOR_TEST)) failure = "unsupported fixed-function state: scissor";
     }
     int color_is_byte = col_type == GL_UNSIGNED_BYTE;
     int color_bytes = color_is_byte ? 4 : 16;
@@ -460,18 +491,19 @@ static void finish_draw(GLenum mode, GLint first, GLsizei count, int indexed, GL
     glGetIntegerv(GL_FRONT_FACE, &front);
     int metal_cull = !cull_on ? 0 : (cull_mode == GL_FRONT ? 2 : 1);
     const char *winding_name = front == GL_CCW ? "counter_clockwise" : "clockwise";
-    GLint viewport[4] = {0, 0, 256, 256};
+    GLint viewport[4] = {0, 0, 0, 0};
     glGetIntegerv(GL_VIEWPORT, viewport);
+    int metal_w = viewport[2] > kMaxDim ? kMaxDim : viewport[2];
+    int metal_h = viewport[3] > kMaxDim ? kMaxDim : viewport[3];
+    if (metal_w < 2) metal_w = 2;
+    if (metal_h < 2) metal_h = 2;
     int pixels = -1;
     uint8_t *image = NULL;
+    int png_ok = 0;
     if (failure == NULL) {
-        int width = viewport[2] > 0 ? viewport[2] : 2;
-        int height = viewport[3] > 0 ? viewport[3] : 2;
-        if (width > kMaxDim) width = kMaxDim;
-        if (height > kMaxDim) height = kMaxDim;
-        image = malloc((size_t)width * (size_t)height * 4);
+        image = malloc((size_t)metal_w * (size_t)metal_h * 4);
         pixels = eu4_metal_draw_render(gathered, count * packed, packed, 8, color_is_byte, uniform, count,
-                                       width, height, mode == GL_TRIANGLE_STRIP, metal_cull, front == GL_CCW, image);
+                                       metal_w, metal_h, mode == GL_TRIANGLE_STRIP, metal_cull, front == GL_CCW, image);
         if (pixels < 0) {
             failure = "metal pipeline failed";
         } else if (pixels == 0) {
@@ -485,15 +517,16 @@ static void finish_draw(GLenum mode, GLint first, GLsizei count, int indexed, GL
     if (image != NULL && pixels > 0) {
         char png[1100];
         snprintf(png, sizeof png, "%s/readback.png", g_dir);
-        int width = viewport[2] > kMaxDim ? kMaxDim : viewport[2];
-        int height = viewport[3] > kMaxDim ? kMaxDim : viewport[3];
-        write_png(image, width < 2 ? 2 : width, height < 2 ? 2 : height, png);
+        png_ok = write_png(image, metal_w, metal_h, png);
+        if (!png_ok) {
+            failure = "readback png was not written";
+        }
     }
     write_result(pixels < 0 ? 0 : pixels, g_draw_invoked, failure, g_color_program,
                  mode == GL_TRIANGLE_STRIP ? "triangle_strip" : "triangles", pos_stride, pos_buf == col_buf,
                  indexed, count, min_x, min_y, max_x, max_y, pos, (GLenum)pos_type, pos_size, pos_off,
                  (GLuint)pos_buf, col, (GLenum)col_type, col_size, col_norm, col_off, (GLuint)col_buf, cull_on,
-                 (GLenum)cull_mode, (GLenum)front, winding_name);
+                 (GLenum)cull_mode, (GLenum)front, winding_name, viewport[2], viewport[3], metal_w, metal_h, png_ok);
     g_done = 1;
     free(image);
     free(gathered);
