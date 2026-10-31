@@ -30,9 +30,12 @@ PIN_SHA256 = "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d"
 PIN_ENTRY_RVA = "0x15ec36a"
 PIN_END_RVA = "0x15ec3b5"
 PIN_WINDOW_SHA256 = "8e5f94bf3f132cbf17397928c72df44b7fb6d24bcc95575702c457fb48e32943"
+PIN_IMAGE_BASE = 0x100000000
 WINDOW_LEN = int(PIN_END_RVA, 16) - int(PIN_ENTRY_RVA, 16)
 UNAUTHORIZED = "refused: operator authorization is absent"
 CAPTURED = ("captured_complete", "captured_incomplete")
+_DROP_ENV = ("TR3_LEGACY_REGIONS", "TR3_CHECK_SYMBOL", "TR3_SYMBOL",
+             "TR3_MAX_INSTRUCTIONS", "TR3_MAX_ACCESSES", "TR3_MAX_BYTES")
 
 
 def decide(target: dict) -> str:
@@ -45,6 +48,63 @@ def decide(target: dict) -> str:
     if not pinned:
         return "refused: binary pin mismatch"
     return UNAUTHORIZED
+
+
+def _refuse_pin(target: dict, window: dict) -> str | None:
+    """Metadata pin for a direct ``launch_live`` caller. This does not hash the file."""
+    decision = decide(target)
+    # UNAUTHORIZED is decide()'s pin-match signal, not a live-authorization failure here.
+    if decision != UNAUTHORIZED:
+        return decision
+    pinned = target["code_windows"]["_GfxSetConstantBuffer"]
+    if target.get("image_base") != PIN_IMAGE_BASE or window != pinned:
+        return "refused: binary pin mismatch"
+    return None
+
+
+def live_descriptor(target: dict) -> dict:
+    """One ``trace-target/v1`` descriptor from the pin and ``startup.CEILING``."""
+    desc = {
+        "schema": "trace-target/v1",
+        "binary": {
+            "sha256": PIN_SHA256,
+            "image_base": hex(target["image_base"]),
+            "window_sha256": PIN_WINDOW_SHA256,
+        },
+        "function": {
+            "name": "_GfxSetConstantBuffer",
+            "entry_rva": PIN_ENTRY_RVA,
+            "ranges": [[PIN_ENTRY_RVA, PIN_END_RVA]],
+        },
+        "trigger": {"mode": "first-invocation"},
+        "capture": dict(startup.CEILING),
+    }
+    startup.check_descriptor(desc, PIN_IMAGE_BASE)
+    minimum = startup.envelope(WINDOW_LEN)
+    if desc["capture"]["max_bytes"] < minimum:
+        raise RuntimeError(f"max_bytes below mandatory envelope of {minimum}")
+    return desc
+
+
+def _live_env(dylib: Path, log_path: Path, session: str, descriptor: dict) -> dict:
+    """startup.target_env forces TR3_CHECK_SYMBOL. EU4 is pinned by file and RVA."""
+    env = os.environ.copy()
+    for name in _DROP_ENV:
+        env.pop(name, None)
+    function, binary, capture = descriptor["function"], descriptor["binary"], descriptor["capture"]
+    end = int(function["ranges"][0][1], 16)
+    entry = int(function["entry_rva"], 16)
+    env["DYLD_INSERT_LIBRARIES"] = str(dylib)
+    env["TR3_EXPECT_FILE_SHA256"] = binary["sha256"]
+    env["TR3_EXPECT_WINDOW_SHA256"] = binary["window_sha256"]
+    env["TR3_ENTRY_RVA"] = function["entry_rva"]
+    env["TR3_WINDOW_LEN"] = str(end - entry)
+    env["TR3_LOG"] = str(log_path)
+    env["TR3_SESSION"] = session
+    env["TR3_MAX_INSTRUCTIONS"] = str(capture["max_instructions"])
+    env["TR3_MAX_ACCESSES"] = str(capture["max_memory_accesses"])
+    env["TR3_MAX_BYTES"] = str(capture["max_bytes"])
+    return env
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -266,7 +326,9 @@ def _outcome_name(raw: dict | None, outcome: dict, termination: dict, *,
         return "hook_refused"
     if outcome["observation"] is None:
         return "hook_unattested"
-    if outcome["observation"].get("completeness") == "complete":
+    run = raw.get("run")
+    native_complete = isinstance(run, dict) and run.get("execution_complete") is True
+    if native_complete and outcome["observation"].get("completeness") == "complete":
         return "captured_complete"
     return "captured_incomplete"
 
@@ -319,6 +381,15 @@ def launch_live(output: Path, target: dict, window: dict, path: Path,
     except base.BenchmarkError as exc:
         print(f"refused: {exc}")
         return 1
+    try:
+        reason = _refuse_pin(target, window)
+        if reason:
+            print(reason)
+            return 1
+        descriptor = live_descriptor(target)
+    except (RuntimeError, KeyError, TypeError) as exc:
+        print(f"refused: {exc}")
+        return 1
 
     output.parent.mkdir(parents=True, exist_ok=True)
     session = uuid.uuid4().hex
@@ -326,16 +397,7 @@ def launch_live(output: Path, target: dict, window: dict, path: Path,
     acquire.mkdir(exist_ok=False)
     log_path = acquire / "insert.json"
     _host, dylib = startup.build(BUILD_DIR)
-    env = os.environ.copy()
-    # The controlled host sets this. EU4 is pinned by executable and RVA, not tr3_subject.
-    env.pop("TR3_CHECK_SYMBOL", None)
-    env["DYLD_INSERT_LIBRARIES"] = str(dylib)
-    env["TR3_EXPECT_FILE_SHA256"] = str(target["sha256"])
-    env["TR3_EXPECT_WINDOW_SHA256"] = str(window["sha256"])
-    env["TR3_ENTRY_RVA"] = PIN_ENTRY_RVA
-    env["TR3_WINDOW_LEN"] = str(WINDOW_LEN)
-    env["TR3_LOG"] = str(log_path)
-    env["TR3_SESSION"] = session
+    env = _live_env(dylib, log_path, session, descriptor)
 
     game: subprocess.Popen | None = None
     stop = {"action": "none", "returncode": None}
@@ -379,9 +441,9 @@ def launch_live(output: Path, target: dict, window: dict, path: Path,
     name = _outcome_name(raw, outcome, termination, launch_error=launch_error,
                          interpret_error=interpret_error)
     payload = {
-        "raw": raw, "diagnostic": outcome["diagnostic"], "observation": outcome["observation"],
-        "limits": outcome["limits"], "termination": termination, "outcome": name,
-        "qualification": "not claimed",
+        "raw": raw, "descriptor": descriptor, "diagnostic": outcome["diagnostic"],
+        "observation": outcome["observation"], "limits": outcome["limits"],
+        "termination": termination, "outcome": name, "qualification": "not claimed",
     }
     try:
         output.write_text(json.dumps(payload, indent=2) + "\n")
