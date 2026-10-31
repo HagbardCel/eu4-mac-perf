@@ -26,6 +26,7 @@ def build_library() -> Path:
     command = [
         "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-dynamiclib",
         "-framework", "Foundation", "-framework", "Metal", "-framework", "OpenGL",
+        "-framework", "ImageIO", "-framework", "CoreGraphics", "-framework", "CoreFoundation",
         "-o", str(LIBRARY), str(SOURCE),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -48,7 +49,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 300) -> dict:
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
     game = subprocess.Popen(
-        ["./eu4", *launcher["exeArgs"]],
+        ["./eu4", *launcher["exeArgs"], "--continuelastsave"],
         cwd=base.GOG_EXE.parent,
         env=env,
         stdout=stdout,
@@ -68,22 +69,35 @@ def launch_session(run_dir: Path, wait_seconds: float = 300) -> dict:
                 except json.JSONDecodeError:
                     pass
             time.sleep(0.5)
+        flush_deadline = time.monotonic() + 30
+        while time.monotonic() < flush_deadline and game.poll() is None and not flushes_path.is_file():
+            time.sleep(0.5)
         flushes = int(flushes_path.read_text().strip()) if flushes_path.is_file() else 0
         if result is None:
             result = {
-                "nonzero_pixels": 0,
-                "cause": "no closed color or DebugLines draw was recorded before the load window closed",
-                "gl_draw_not_skipped": True,
+                "original_gl_draw_invoked": False,
+                "gl_flush_success_count": flushes,
+                "metal_nonzero_pixels": 0,
+                "cause": "no closed color draw was recorded before the load window closed",
             }
             result_path.write_text(json.dumps(result, indent=2) + "\n")
+        else:
+            result["gl_flush_success_count"] = flushes
+            result_path.write_text(json.dumps(result, indent=2) + "\n")
+        alive = game.poll() is None
+        captured = result.get("cause") in (None, "") and result.get("program")
         metadata = {
-            "status": "complete",
+            "status": "complete" if (
+                alive and result.get("original_gl_draw_invoked") and flushes > 0
+                and result.get("metal_nonzero_pixels", 0) > 0 and captured
+            ) else "incomplete",
             "gog": identity,
             "library_sha256": base.sha256(library),
             "game_pid": game.pid,
             "result": result,
-            "gl_flushes": flushes,
-            "gl_draw_still_called": True,
+            "original_gl_draw_invoked": bool(result.get("original_gl_draw_invoked")),
+            "gl_flush_success_count": flushes,
+            "metal_nonzero_pixels": result.get("metal_nonzero_pixels", 0),
         }
     finally:
         if game.poll() is None:
@@ -109,9 +123,13 @@ def main() -> int:
     except (base.BenchmarkError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps({"run_dir": str(run_dir), "result": metadata["result"], "gl_flushes": metadata["gl_flushes"]}, indent=2))
-    result = metadata["result"]
-    return 0 if result.get("nonzero_pixels", 0) > 0 and not result.get("cause") else 1
+    print(json.dumps({
+        "run_dir": str(run_dir),
+        "status": metadata["status"],
+        "metal_nonzero_pixels": metadata["metal_nonzero_pixels"],
+        "gl_flush_success_count": metadata["gl_flush_success_count"],
+    }, indent=2))
+    return 0 if metadata["status"] == "complete" else 1
 
 
 if __name__ == "__main__":

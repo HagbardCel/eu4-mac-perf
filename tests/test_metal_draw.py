@@ -19,11 +19,13 @@ class MetalDrawTests(unittest.TestCase):
         host = BUILD / "metal_draw_host"
         compile = subprocess.run(
             ["clang", "-arch", "arm64", "-fobjc-arc", "-dynamiclib", "-framework", "Metal",
-             "-framework", "OpenGL", "-framework", "Foundation", "-o", str(library), str(SOURCE)],
+             "-framework", "OpenGL", "-framework", "Foundation", "-framework", "ImageIO",
+             "-framework", "CoreGraphics", "-framework", "CoreFoundation", "-o", str(library), str(SOURCE)],
             capture_output=True, text=True, check=False)
         self.assertEqual(compile.returncode, 0, compile.stderr)
         host_compile = subprocess.run(
-            ["clang", "-arch", "arm64", "-o", str(host), str(ROOT / "tests/metal_draw_host.c"), str(library)],
+            ["clang", "-arch", "arm64", "-framework", "OpenGL", "-o", str(host),
+             str(ROOT / "tests/metal_draw_host.c"), str(library)],
             capture_output=True, text=True, check=False)
         self.assertEqual(host_compile.returncode, 0, host_compile.stderr)
         env = os.environ.copy()
