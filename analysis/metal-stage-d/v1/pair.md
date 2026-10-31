@@ -10,14 +10,32 @@ The installed `.shader` file is Clausewitz HLSL, not the GL compiler input. `Bui
 
 - `#version 120`
 - `#define PDX_OPENGL 1`
-- `#define NO_SHADER_TEXTURE_LOD` or the `GL_ARB_shader_texture_lod` extension. This pair does not use that macro. The recorded source uses the `NO_SHADER_TEXTURE_LOD` branch.
+- `#define NO_SHADER_TEXTURE_LOD` or the `GL_ARB_shader_texture_lod` extension. This pair does not sample textures. The reconstructed files use the `NO_SHADER_TEXTURE_LOD` branch.
 - `#define VERTEX_SHADER` or `#define PIXEL_SHADER`
 - the pasted text of `gfx/FX/defines_glsl.fxh`
 - `uniform vec4 UNIFORM0[4]` and `#define Matrix mat4(UNIFORM0[0], UNIFORM0[1], UNIFORM0[2], UNIFORM0[3])`
 - `attribute` / `varying` names `in_POSITION`, `in_PDX_COLOR`, `v_TEXCOORD1`
 - `main` renamed to `glsl_main`, and the pixel `: PDX_COLOR` removed
 
-That reconstruction is the snapshot's format strings plus `color.shader`. It is not a captured `glShaderSource` buffer. `glslangValidator` accepts it as desktop GLSL 120 with no SPIR-V (`color.vert`, `color.frag`).
+That reconstruction is the snapshot's format strings plus `color.shader`. It is not byte-identical to the compiler input captured later from EU4 (`ea46e32:results/20261031T144434Z-metal-draw/matched.glsl`). The reconstructed vertex file starts:
+
+```glsl
+#define NO_SHADER_TEXTURE_LOD
+```
+
+The captured vertex source starts:
+
+```glsl
+#extension GL_ARB_shader_texture_lod : enable
+#define MAP_SIZE_X 5632.000
+#define MAP_SIZE_Y 2048.000
+#define MAP_POW2_X 1.000
+#define MAP_POW2_Y 1.000
+#define FOW_POW2_X 1.000
+#define FOW_POW2_Y 1.000
+```
+
+Color's position and color math uses none of those defines, so the translation was not repeated. `glslangValidator` accepts the reconstructed text as desktop GLSL 120 with no SPIR-V (`color.vert`, `color.frag`).
 
 ## Toolchain
 
@@ -34,7 +52,18 @@ Vulkan semantics were not used. The OpenGL client was kept. For this pair only, 
 - `#define texture2D texture` and the matching `texture2DLod` / `textureCube` macros, so the pasted desktop header typechecks
 - explicit locations: uniform 0, position 0, color 1, interpolator 0
 
-`glslangValidator -S vert|frag -G100` then wrote `color330.vert.spv` and `color330.frag.spv`. `spirv-cross --msl` wrote `color.vert.metal` and `color.frag.metal`.
+Tools, from this directory: glslang 16.6.0 (`glslangValidator --version`, Glslang Version 11:16.6.0) and SPIRV-Cross 1.4.363.0.
+
+```text
+glslangValidator -S vert color.vert
+glslangValidator -S frag color.frag
+glslangValidator -S vert -G100 -o color330.vert.spv color330.vert
+glslangValidator -S frag -G100 -o color330.frag.spv color330.frag
+spirv-cross --msl color330.vert.spv --output color.vert.metal
+spirv-cross --msl color330.frag.spv --output color.frag.metal
+```
+
+The `#version 120` rejection is `color.spirv120.txt`. The successful OpenGL SPIR-V logs are `color330.vert.glslang.txt` and `color330.frag.glslang.txt`.
 
 The vertex MSL did not compile until one address-space edit: `glsl_main`'s uniform argument is `constant`, matching the buffer it is passed. The fragment library compiled as SPIRV-Cross emitted it. `compile_msl` (`newLibraryWithSource`) reports entry point `main0` for both. The `metal` CLI is not in the active Command Line Tools install. This is a Metal library, not a render pipeline. Vertex descriptors and the render target are the draw milestone.
 
