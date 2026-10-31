@@ -212,14 +212,26 @@ static void present(CAMetalLayer *layer, uint32_t incoming, uint32_t passed, uin
                window_flags, 1, 1, (int)width, (int)height, NULL, -1);
     }
     id<MTLCommandBuffer> buffer = [queue commandBuffer];
+    if (buffer == nil) {
+        finish("metal_window_boot_failed", "command_encoding_failed", incoming, passed, 1,
+               window_flags, 1, 1, (int)width, (int)height, NULL, -1);
+    }
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = drawable.texture;
     pass.colorAttachments[0].loadAction = MTLLoadActionClear;
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
     pass.colorAttachments[0].clearColor = MTLClearColorMake(1, 0, 0, 1);
     id<MTLRenderCommandEncoder> encoder = [buffer renderCommandEncoderWithDescriptor:pass];
+    if (encoder == nil) {
+        finish("metal_window_boot_failed", "command_encoding_failed", incoming, passed, 1,
+               window_flags, 1, 1, (int)width, (int)height, NULL, -1);
+    }
     [encoder endEncoding];
     id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
+    if (blit == nil) {
+        finish("metal_window_boot_failed", "command_encoding_failed", incoming, passed, 1,
+               window_flags, 1, 1, (int)width, (int)height, NULL, -1);
+    }
     [blit copyFromTexture:drawable.texture
               sourceSlice:0
               sourceLevel:0

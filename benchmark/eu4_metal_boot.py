@@ -139,6 +139,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180) -> dict:
         "gog": identity,
         "exit_code": game.returncode,
         "result": None if receipt is None else receipt.get("result"),
+        "probe_sha256": base.sha256(library),
     }
     (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     if not verified:
