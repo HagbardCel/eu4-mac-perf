@@ -41,11 +41,11 @@ Adapter callsites are not counted as structural bypasses.
 - Bounded candidates: 0
 - Confirmed graphics dispatches: 0
 - Confirmed non-graphics dispatches: 0
-- Minimum direct-GL candidates: 30
-- Implementation surface (cut plus behind-cut and shared helpers): 97
+- Non-GLEW direct-GL callers to consider: 30
+- Known-root Gfx surface (cut plus behind-cut and shared helpers): 97
 - GLEW init callers: 2
 
-Counts of indirect sites only. They do not measure shader behavior, resource lifetimes, Metal init, or presentation. 77 unresolved sites record an operand_source slot address. That address is not a closed set of call targets. A slot-load site and a _GfxInit displacement call were checked; their machine operands do not name the callee.
+Counts of indirect sites only. They do not measure shader behavior, resource lifetimes, Metal init, or presentation. 77 unresolved sites record a possible_operand_source slot address. That address is not a closed set of call targets, and the hint does not show the value survived until the call. A slot-load site and a _GfxInit displacement call were checked; their machine operands do not name the callee.
 
 ## Platform adaptation
 
@@ -65,7 +65,7 @@ Counts of indirect sites only. They do not measure shader behavior, resource lif
 
 ## Effort estimate
 
-Minimum direct-GL set: 30 functions and 3440 instructions. Decompiled lines for that set, where the snapshot has a body: 1896 across 30 functions. The implementation surface is 97 functions (the `_Gfx*` cut plus behind-cut and shared helpers) and is not classified as retain or replace. Faithful C++ and Metal infrastructure are not estimated. Shader conversion is deferred to stage D.
+Non-GLEW direct-GL callers to consider: 30 functions and 3440 instructions. Decompiled lines for that set, where the snapshot has a body: 1896 across 30 functions. These are callers that touch an imported GL symbol, not a count of bodies that must be rewritten. The known-root Gfx surface is 97 functions: the `_Gfx*` cut plus behind-cut and shared helpers reached from the selected roots. It is not an exhaustive modification set. Unrooted direct-GL functions such as BuildGLSL stay outside it. Faithful C++ and Metal infrastructure are not estimated. Shader conversion is deferred to stage D.
 
 ## Recommendation
 

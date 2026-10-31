@@ -84,7 +84,7 @@ class MetalCensusTests(unittest.TestCase):
         self.assertEqual(bundle["direct_gl_caller_count"], 1)
         self.assertEqual(bundle["direct_gl_in_gfx"], 1)
         candidate_names = {row["name"] for row in bundle["direct_gl_candidates"]}
-        surface_names = {row["name"] for row in bundle["implementation_surface"]}
+        surface_names = {row["name"] for row in bundle["known_root_gfx_surface"]}
         self.assertEqual(candidate_names, {"_GfxDraw"})
         self.assertIn("_GfxShutdown", surface_names)
         self.assertNotIn("_GfxShutdown", candidate_names)
@@ -126,6 +126,18 @@ class MetalCensusTests(unittest.TestCase):
         bundle = _census([], [_edge("0x1000", "0x1001", "direct_external", symbol="_glDrawElements")])
         self.assertEqual(bundle["bypasses"][0]["status"], ENDPOINT_STATUS_DIRECT_BYPASS)
         self.assertEqual(bundle["boundary_verdict"], "dispersed_backend")
+
+    def test_nsopengl_external_call_is_a_bypass(self) -> None:
+        bundle = _census([], [_edge("0x1000", "0x1001", "direct_external", symbol="NSOpenGLContext::update")])
+        self.assertEqual(bundle["bypasses"][0]["endpoint"], "NSOpenGLContext::update")
+        self.assertNotEqual(bundle["boundary_verdict"], "compact_gfx_boundary")
+
+    def test_nsopengl_thunk_call_is_a_bypass(self) -> None:
+        functions = [_fn("0x1700", "NSOpenGLContext::update", kind="thunk")]
+        bundle = _census(functions, [_edge("0x1000", "0x1001", "direct_internal", internal="0x1700")])
+        self.assertEqual(bundle["bypasses"][0]["endpoint"], "0x1700")
+        self.assertEqual(bundle["bypasses"][0]["edges"][0]["resolution"], "direct_internal")
+        self.assertNotEqual(bundle["boundary_verdict"], "compact_gfx_boundary")
 
     def test_thunk_survivor_is_not_a_clean_miss(self) -> None:
         bundle = _census([], [_edge("0x1000", "0x1001", "thunk", symbol="_glDrawElements")])
@@ -269,10 +281,37 @@ class MetalCensusTests(unittest.TestCase):
         row = classify_static_site(static, "0x1602", prior=None)
         self.assertEqual(row["classification"], "unresolved")
         self.assertEqual(row["mechanism_id"], "slot_loaded_register")
-        self.assertEqual(row["operand_source"]["slot_rva"], "0x0000000002252010")
-        self.assertEqual(row["operand_source"]["load_rva"], "0x0000000000001601")
-        self.assertIn("pointer source", row["operand_source"]["reason"])
+        self.assertEqual(row["possible_operand_source"]["slot_rva"], "0x0000000002252010")
+        self.assertEqual(row["possible_operand_source"]["load_rva"], "0x0000000000001601")
+        self.assertIn("possible pointer source", row["possible_operand_source"]["reason"])
+        self.assertNotIn("not overwritten", row["possible_operand_source"]["reason"])
         self.assertFalse(row["reviewed"])
+        clobbered = {
+            "entry_rva": "0x1600",
+            "instructions": [
+                static["instructions"][0],
+                {
+                    "instruction_rva": "0x1602",
+                    "mnemonic": "XOR",
+                    "operands": "XOR EAX, EAX",
+                    "pcode_is_call": False,
+                    "flow_type_is_call": False,
+                    "references_from": [],
+                },
+                {
+                    "instruction_rva": "0x1603",
+                    "mnemonic": "CALL",
+                    "operands": "CALL qword ptr [RAX]",
+                    "pcode_is_call": True,
+                    "flow_type_is_call": True,
+                    "references_from": [{"ref_type": "READ", "target_rva": "0x2252010"}],
+                },
+            ],
+        }
+        hinted = classify_static_site(clobbered, "0x1603", prior=None)
+        self.assertEqual(hinted["classification"], "unresolved")
+        self.assertIn("possible pointer source", hinted["possible_operand_source"]["reason"])
+        self.assertNotIn("not overwritten", hinted["possible_operand_source"]["reason"])
         reviewed = classify_static_site(
             static,
             "0x1602",

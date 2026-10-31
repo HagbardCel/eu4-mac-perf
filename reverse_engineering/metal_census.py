@@ -107,6 +107,14 @@ def is_glew_body(name: str) -> bool:
     return name.startswith("_glew") or name.startswith("__glew")
 
 
+def _nsopengl_thunks(graph: CallGraph) -> dict[str, str]:
+    return {
+        rva: fn_name(row)
+        for rva, row in graph.functions.items()
+        if row.get("kind") == "thunk" and "NSOpenGL" in fn_name(row)
+    }
+
+
 def endpoint_family(symbol: str) -> str | None:
     if OPENGL_RE.match(symbol):
         return "gl"
@@ -151,6 +159,7 @@ def _caller_rows(graph: CallGraph) -> list[dict[str, Any]]:
         for rva, row in graph.functions.items()
         if is_public_sdl_gl(fn_name(row))
     }
+    ns_rva = _nsopengl_thunks(graph)
     for edge in graph.edges_raw:
         caller = edge.get("caller_rva")
         if not caller:
@@ -164,6 +173,9 @@ def _caller_rows(graph: CallGraph) -> list[dict[str, Any]]:
         elif resolution == "direct_internal" and edge.get("callee_internal_rva") in sdl_rva:
             endpoint = sdl_rva[edge["callee_internal_rva"]]
             family = "sdl_gl"
+        elif resolution == "direct_internal" and edge.get("callee_internal_rva") in ns_rva:
+            endpoint = ns_rva[edge["callee_internal_rva"]]
+            family = "nsopengl"
         else:
             continue
         grouped[caller].append(
@@ -301,11 +313,7 @@ def _platform_gaps(
         )
     called_gl = {site["endpoint"] for row in callers for site in row["callsites"] if site["family"] == "gl"}
     thunks_without = sorted(symbol for symbol in thunk_symbols if symbol not in called_gl)
-    ns_thunks = sorted(
-        (rva, fn_name(row))
-        for rva, row in graph.functions.items()
-        if row.get("kind") == "thunk" and "NSOpenGL" in fn_name(row)
-    )
+    ns_thunks = sorted(_nsopengl_thunks(graph).items())
     incoming = {edge.get("callee_internal_rva") for edge in graph.edges_raw}
     unreferenced = [
         {"entry_rva": rva, "name": name}
@@ -361,7 +369,14 @@ def build_census(
     sdl_endpoints = {
         rva for rva, row in graph.functions.items() if is_public_sdl_gl(fn_name(row))
     }
-    endpoints = sorted(gl_endpoints | sdl_endpoints | set(graph.cgl_endpoints()))
+    ns_endpoints = set(_nsopengl_thunks(graph))
+    ns_endpoints.update(
+        callee
+        for edges in graph.resolved_adj.values()
+        for callee, _meta in edges
+        if is_external_node(callee) and "NSOpenGL" in callee
+    )
+    endpoints = sorted(gl_endpoints | sdl_endpoints | set(graph.cgl_endpoints()) | ns_endpoints)
     views = {root: reachability_views(graph, root, cut) for root in roots}
     resolved_in, direct_in = _incoming_by_endpoint(graph)
 
@@ -493,11 +508,11 @@ def build_census(
         for row in gfx_rows
         if not is_glew_body(row["name"])
     ]
-    implementation_surface = [
+    known_root_gfx_surface = [
         {"entry_rva": rva, "name": fn_name(graph.functions.get(rva)), "role": "cut"}
         for rva in sorted(cut)
     ]
-    implementation_surface.extend(
+    known_root_gfx_surface.extend(
         {
             "entry_rva": row["entry_rva"],
             "name": row["name"],
@@ -542,7 +557,7 @@ def build_census(
             for row in outside_gl
         ],
         "direct_gl_candidates": direct_gl_candidates,
-        "implementation_surface": implementation_surface,
+        "known_root_gfx_surface": known_root_gfx_surface,
         "platform_gaps": gaps,
         "bypasses": bypasses,
         "helpers": helpers,
@@ -628,8 +643,8 @@ def render_boundary_md(bundle: dict[str, Any]) -> str:
             f"- Bounded candidates: {coverage['bounded_candidates']}",
             f"- Confirmed graphics dispatches: {coverage['confirmed_graphics_dispatch']}",
             f"- Confirmed non-graphics dispatches: {coverage['confirmed_non_graphics']}",
-            f"- Minimum direct-GL candidates: {len(bundle['direct_gl_candidates'])}",
-            f"- Implementation surface (cut plus behind-cut and shared helpers): {len(bundle['implementation_surface'])}",
+            f"- Non-GLEW direct-GL callers to consider: {len(bundle['direct_gl_candidates'])}",
+            f"- Known-root Gfx surface (cut plus behind-cut and shared helpers): {len(bundle['known_root_gfx_surface'])}",
             f"- GLEW init callers: {len(bundle['glew_init_dependency']['caller_rvas'])}",
             "",
             coverage["note"],
@@ -752,16 +767,17 @@ def trace_call_operand(instructions: list[dict[str, Any]], index: int) -> dict[s
                     norm_rva(ins["instruction_rva"]),
                     norm_rva(slot),
                 ],
-                "operand_source": {
+                "possible_operand_source": {
                     "load_rva": norm_rva(prior["instruction_rva"]),
                     "slot_rva": norm_rva(slot),
                     "reason": (
-                        "The call register is loaded from this slot and not overwritten in this window. "
-                        "The slot is a pointer source, not a closed set of target functions."
+                        "A straight-line LEA or MOV names this slot for the call register. "
+                        "Alias writes are not checked. This is a possible pointer source, "
+                        "not a closed set of target functions, and not evidence the value survived until the call."
                     ),
                 },
                 "reason": (
-                    f"{reg} is loaded from slot {norm_rva(slot)} before the call. "
+                    f"An earlier instruction in this window loads {reg} from slot {norm_rva(slot)}. "
                     "That address does not identify which functions the slot can hold."
                 ),
                 "reviewed": False,
@@ -822,8 +838,8 @@ def classify_static_site(static_row: dict[str, Any], callsite_rva: str, *, prior
         "mechanism_id": auto["mechanism_id"],
         "reviewed": False,
     }
-    if auto.get("operand_source"):
-        row["operand_source"] = auto["operand_source"]
+    if auto.get("possible_operand_source"):
+        row["possible_operand_source"] = auto["possible_operand_source"]
     if prior and prior.get("reviewed"):
         row.update(
             {
@@ -891,12 +907,14 @@ def _effort(bundle: dict[str, Any], static_by_rva: dict[str, dict[str, Any]]) ->
         if text:
             total_lines += len(text.splitlines())
             counted += 1
-    surface = len(bundle["implementation_surface"])
+    surface = len(bundle["known_root_gfx_surface"])
     summary = (
-        f"Minimum direct-GL set: {len(candidates)} functions and {total_ins} instructions. "
+        f"Non-GLEW direct-GL callers to consider: {len(candidates)} functions and {total_ins} instructions. "
         f"Decompiled lines for that set, where the snapshot has a body: {total_lines} across {counted} functions. "
-        f"The implementation surface is {surface} functions (the `_Gfx*` cut plus behind-cut and shared helpers) "
-        "and is not classified as retain or replace. "
+        "These are callers that touch an imported GL symbol, not a count of bodies that must be rewritten. "
+        f"The known-root Gfx surface is {surface} functions: the `_Gfx*` cut plus behind-cut and shared helpers "
+        "reached from the selected roots. It is not an exhaustive modification set. "
+        "Unrooted direct-GL functions such as BuildGLSL stay outside it. "
         "Faithful C++ and Metal infrastructure are not estimated. Shader conversion is deferred to stage D."
     )
     return {
@@ -905,7 +923,7 @@ def _effort(bundle: dict[str, Any], static_by_rva: dict[str, dict[str, Any]]) ->
         "direct_gl_instructions": total_ins,
         "decompiled_lines": total_lines,
         "decompiled_functions": counted,
-        "implementation_surface_count": surface,
+        "known_root_gfx_surface_count": surface,
         "faithful_cpp": "not_estimated",
         "metal_infrastructure": "not_estimated",
         "shader_conversion": "deferred to stage D",
@@ -931,7 +949,7 @@ def apply_indirect(
                 prior=prior.get((site["caller_rva"], site["callsite_rva"])),
             )
         )
-    slot_sources = sum(1 for row in rows if row.get("operand_source"))
+    slot_sources = sum(1 for row in rows if row.get("possible_operand_source"))
     bundle["indirect_dispatch_coverage"] = {
         "selected_sites": len(rows),
         "reviewed": sum(1 for row in rows if row["reviewed"]),
@@ -939,13 +957,13 @@ def apply_indirect(
         "confirmed_non_graphics": sum(1 for row in rows if row["classification"] == "confirmed_non_graphics"),
         "bounded_candidates": sum(1 for row in rows if row["classification"] == "bounded_candidates"),
         "unresolved": sum(1 for row in rows if row["classification"] == "unresolved"),
-        "operand_source_slots": slot_sources,
+        "possible_operand_source_slots": slot_sources,
         # shortcut: names the two callsites checked on this pinned binary; re-read them if the snapshot changes.
         "note": (
             "Counts of indirect sites only. They do not measure shader behavior, "
             "resource lifetimes, Metal init, or presentation. "
-            f"{slot_sources} unresolved sites record an operand_source slot address. "
-            "That address is not a closed set of call targets. "
+            f"{slot_sources} unresolved sites record a possible_operand_source slot address. "
+            "That address is not a closed set of call targets, and the hint does not show the value survived until the call. "
             "A slot-load site and a _GfxInit displacement call were checked; "
             "their machine operands do not name the callee."
         ),
