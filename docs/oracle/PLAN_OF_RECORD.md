@@ -301,9 +301,11 @@ After this amendment merges, **GEN2** may start from
 [work-orders/GEN2.md](work-orders/GEN2.md). GEN2 is offline projection of an
 existing GEN1 raw record into `execution-observation/v1`. It authorizes no
 EU4 launch, no native instrumentation change, no fixture-schema change, and
-no new evidence tier. **GEN3** does not start. A later EU4 function remains a
-separate operator authorization after GEN1 and GEN2. Deferred work and
-read-only paths are that work order together with
+no new evidence tier. **GEN3-A** may be written from
+[work-orders/GEN3.md](work-orders/GEN3.md). After that work order merges,
+**GEN3-B** may repair the launcher. One live EU4 launch remains a separate
+operator authorization after both merge and the GEN3 readiness review
+passes. Deferred work and read-only paths are that work order together with
 [`GENERIC_TRACE_V1.md`](GENERIC_TRACE_V1.md). No launch path is added to
 `benchmark/eu4_gfx_live_capture.py`.
 
