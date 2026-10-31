@@ -26,8 +26,8 @@ def build_library(arch: str = "x86_64") -> Path:
     output = LIBRARY if arch == "x86_64" else LIBRARY.with_name(f"libeu4_metal_coexist_{arch}.dylib")
     command = [
         "clang", "-arch", arch, "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-dynamiclib",
-        "-framework", "Foundation", "-framework", "Metal", "-framework", "QuartzCore",
-        "-framework", "AppKit", "-framework", "OpenGL", "-o", str(output), str(SOURCE),
+        "-framework", "Foundation", "-framework", "Metal", "-framework", "OpenGL",
+        "-o", str(output), str(SOURCE),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
@@ -145,7 +145,7 @@ def wait_for_receipt(path: Path, game: subprocess.Popen, timeout: float) -> dict
     raise base.BenchmarkError("EU4 did not write the Metal receipt")
 
 
-def launch_session(run_dir: Path, settle_seconds: float = 25) -> dict:
+def launch_session(run_dir: Path, settle_seconds: float = 45) -> dict:
     """One EU4 launch. Does not replace the GL view. Stops the process after the receipt."""
     identity = base.gog_identity()
     if base.command("lipo", "-archs", str(base.GOG_EXE)).strip() != "x86_64":
@@ -181,29 +181,14 @@ def launch_session(run_dir: Path, settle_seconds: float = 25) -> dict:
     try:
         receipt = wait_for_receipt(receipt_path, game, 30)
         require_offscreen(receipt)
-        deadline = time.monotonic() + settle_seconds
-        while time.monotonic() < deadline and receipt.get("optional_view") == "pending":
-            if game.poll() is not None:
-                break
-            time.sleep(0.5)
-            if receipt_path.is_file():
-                try:
-                    receipt = json.loads(receipt_path.read_text())
-                except json.JSONDecodeError:
-                    pass
         metadata["receipt"] = receipt
-        metadata["process_alive_after_receipt"] = game.poll() is None
         windows = []
-        shot = run_dir / "eu4-window.png"
         flushes_path = receipt_path.with_name(receipt_path.name + ".flushes")
         flushes = 0
-        deadline = time.monotonic() + 45
+        deadline = time.monotonic() + settle_seconds
         while time.monotonic() < deadline and game.poll() is None:
             if not windows:
                 windows = windows_for_pid(game.pid)
-                window_id = next((item["window_id"] for item in windows if item.get("title")), None)
-                if window_id is not None:
-                    subprocess.run(["screencapture", "-x", "-l", str(window_id), str(shot)], check=False)
             if flushes_path.is_file():
                 try:
                     flushes = int(flushes_path.read_text().strip() or "0")
@@ -212,11 +197,13 @@ def launch_session(run_dir: Path, settle_seconds: float = 25) -> dict:
                 if flushes > 0 and windows:
                     break
             time.sleep(0.5)
+        alive = game.poll() is None
         metadata["windows"] = windows
-        metadata["screenshot"] = str(shot) if shot.is_file() else None
-        metadata["gl_flushes"] = flushes
-        metadata["gl_window_visible"] = bool(windows and flushes > 0)
-        metadata["status"] = "complete" if metadata["process_alive_after_receipt"] and metadata["gl_window_visible"] else "process_exited"
+        metadata["gl_flush_success_count"] = flushes
+        metadata["eu4_window_enumerated"] = bool(windows)
+        metadata["metal_readback_matched"] = bool(receipt.get("readback_matches"))
+        metadata["visual_frame_inspected"] = False
+        metadata["status"] = "complete" if alive and flushes > 0 and windows and receipt.get("readback_matches") else "process_exited"
     finally:
         if game.poll() is None:
             game.send_signal(signal.SIGTERM)
@@ -245,7 +232,8 @@ def main() -> int:
     print(json.dumps({
         "status": metadata["status"],
         "receipt": metadata.get("receipt"),
-        "alive": metadata.get("process_alive_after_receipt"),
+        "gl_flush_success_count": metadata.get("gl_flush_success_count"),
+        "eu4_window_enumerated": metadata.get("eu4_window_enumerated"),
         "run_dir": str(parser_dir),
     }, indent=2))
     return 0 if metadata["status"] == "complete" else 1

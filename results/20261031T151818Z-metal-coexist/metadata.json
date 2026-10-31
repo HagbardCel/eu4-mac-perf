@@ -1,6 +1,6 @@
 {
   "status": "complete",
-  "started_utc": "2026-10-31T14:00:34.038980+00:00",
+  "started_utc": "2026-10-31T15:18:18.985915+00:00",
   "gog": {
     "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
     "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
@@ -17,13 +17,14 @@
       "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
     ]
   },
-  "library": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/benchmark/.build/libeu4_metal_coexist.dylib",
-  "library_sha256": "4c1d094be927d1cc33389eedd9b844fb9713f99a121dcbd348d48df9d7eef14c",
-  "source_sha256": "840c9bbc0dc07e81c020d5f360be38935164642a67e13eee354155592e1887ab",
-  "game_pid": 11675,
+  "library": "/private/tmp/eu4-pr118/benchmark/.build/libeu4_metal_coexist.dylib",
+  "library_sha256": "c2221a6e5717153072deeb1fc92f08cb2e8d698305133d6fb284db129ccae1c1",
+  "source_sha256": "7791423fe40445c286400f9b1eaf15aead96103f1ed3af28e548f3d8f89f41be",
+  "game_pid": 22195,
   "receipt": {
     "gpu_coexistence": "offscreen_coexistence_verified",
     "readback_matches": true,
+    "metal_command_completed": true,
     "width": 4,
     "height": 4,
     "format": "BGRA8Unorm",
@@ -34,42 +35,38 @@
       1
     ],
     "cause": null,
-    "sdl_metal_create_view": "resolved",
-    "sdl_metal_get_layer": "resolved",
-    "window_drawable": "window_drawable_not_tested",
-    "optional_view": "failed",
-    "optional_view_cause": "SDL_Metal_CreateView returned null"
+    "window_drawable": "window_drawable_not_tested"
   },
-  "process_alive_after_receipt": true,
   "windows": [
     {
-      "window_id": 46912,
+      "window_id": 47196,
       "owner": "eu4",
       "title": "Europa Universalis IV",
       "layer": 2147483628,
       "bounds": {
         "x": 0,
         "y": 0,
-        "width": 1728,
-        "height": 1117
+        "width": 2048,
+        "height": 1152
       }
     },
     {
-      "window_id": 46913,
+      "window_id": 47199,
       "owner": "eu4",
       "title": "",
       "layer": 2147483628,
       "bounds": {
         "x": 0,
         "y": 0,
-        "width": 1728,
-        "height": 1117
+        "width": 2048,
+        "height": 1152
       }
     }
   ],
-  "screenshot": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261031T140033Z-metal-coexist/eu4-window.png",
-  "gl_flushes": 1,
-  "gl_window_visible": true,
-  "ended_utc": "2026-10-31T14:01:00.822235+00:00",
+  "gl_flush_success_count": 1,
+  "eu4_window_enumerated": true,
+  "metal_readback_matched": true,
+  "visual_frame_inspected": false,
+  "ended_utc": "2026-10-31T15:18:47.324337+00:00",
   "game_returncode": -9
 }
