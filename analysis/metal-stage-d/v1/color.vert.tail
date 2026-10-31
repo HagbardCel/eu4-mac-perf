@@ -1,0 +1,37 @@
+uniform vec4 UNIFORM0[4];
+#define Matrix mat4(UNIFORM0[0], UNIFORM0[1], UNIFORM0[2], UNIFORM0[3])
+
+struct VS_INPUT
+{
+	float2 vPosition;
+	float4 vColor;
+};
+
+struct VS_OUTPUT
+{
+	float4 vPosition;
+	float4 vColor;
+};
+
+attribute float2 in_POSITION;
+attribute float4 in_PDX_COLOR;
+varying float4 v_TEXCOORD1;
+
+VS_OUTPUT glsl_main(const VS_INPUT v)
+{
+	VS_OUTPUT Out;
+	float4 vPosition = float4(v.vPosition.x, v.vPosition.y, 0, 1);
+	Out.vPosition = mul(Matrix, vPosition);
+	Out.vColor = v.vColor;
+	return Out;
+}
+
+void main()
+{
+	VS_INPUT glsl_vertex;
+	glsl_vertex.vPosition = in_POSITION;
+	glsl_vertex.vColor = in_PDX_COLOR;
+	VS_OUTPUT out_glsl_vertex = glsl_main(glsl_vertex);
+	gl_Position = out_glsl_vertex.vPosition;
+	v_TEXCOORD1 = out_glsl_vertex.vColor;
+}
