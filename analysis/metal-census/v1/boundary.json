@@ -1,0 +1,2895 @@
+{
+  "boundary_limit": "Within recovered static edges from the selected roots. Higher-level indirect calls, including those in CInGameIdler::Render, were not classified. This is not proof that no out-of-cut dispatch exists.",
+  "boundary_verdict": "compact_gfx_boundary",
+  "bypasses": [],
+  "cut_decoded_bytes": 16324,
+  "cut_function_count": 92,
+  "cut_instructions": 4415,
+  "direct_callers": [
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000013cc062",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc071",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc080",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc08c",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc09b",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc0aa",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc0b9",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc0c8",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc0dd",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc103",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc10f",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000013cc1e4",
+          "endpoint": "_SDL_GL_SetSwapInterval",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        }
+      ],
+      "decoded_instruction_bytes": 1042,
+      "in_gfx": false,
+      "instruction_count": 277,
+      "name": "CApplication::CreateApplicationWindow"
+    },
+    {
+      "caller_rva": "0x00000000015d25ee",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015d25fc",
+          "endpoint": "_glGetString",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 71,
+      "in_gfx": false,
+      "instruction_count": 27,
+      "name": "_glewGetExtension"
+    },
+    {
+      "caller_rva": "0x00000000015d2712",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015d2725",
+          "endpoint": "_glGetString",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015d2829",
+          "endpoint": "_glGetString",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 71320,
+      "in_gfx": false,
+      "instruction_count": 14935,
+      "name": "_glewContextInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015e90d5",
+          "endpoint": "_SDL_GL_CreateContext",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015e9829",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9a64",
+          "endpoint": "_SDL_GL_GetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015e9a74",
+          "endpoint": "_SDL_GL_SetSwapInterval",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015e9a7e",
+          "endpoint": "_glGetString",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9b01",
+          "endpoint": "_glGetString",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 3558,
+      "in_gfx": true,
+      "instruction_count": 770,
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e9dfa",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015e9e1b",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9e32",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9e48",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9e5f",
+          "endpoint": "_glGetBooleanv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9e78",
+          "endpoint": "_glGetBooleanv",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 148,
+      "in_gfx": false,
+      "instruction_count": 42,
+      "name": "GetOpenGLContextRasterizerState"
+    },
+    {
+      "caller_rva": "0x00000000015e9e8e",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015e9ea4",
+          "endpoint": "_glGetBooleanv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9eb2",
+          "endpoint": "_glGetBooleanv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9ec3",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9eda",
+          "endpoint": "_glGetBooleanv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9ef1",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9f08",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9f1f",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9f36",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9f4d",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9f64",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 234,
+      "in_gfx": false,
+      "instruction_count": 65,
+      "name": "GetOpenGLContextDepthStencilState"
+    },
+    {
+      "caller_rva": "0x00000000015e9f78",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015e9f92",
+          "endpoint": "_glGetBooleanv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9faa",
+          "endpoint": "_glGetBooleanv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9fc3",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9fda",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015e9ff1",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea008",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea01f",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea036",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea04d",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea064",
+          "endpoint": "_glGetBooleanv",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 327,
+      "in_gfx": false,
+      "instruction_count": 96,
+      "name": "GetOpenGLContextBlendState"
+    },
+    {
+      "caller_rva": "0x00000000015ea0bf",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ea0ee",
+          "endpoint": "_glEnable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea0f5",
+          "endpoint": "_glDisable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea10c",
+          "endpoint": "_glEnable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea113",
+          "endpoint": "_glDisable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea19d",
+          "endpoint": "_glBlendFunc",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea1ea",
+          "endpoint": "_glAlphaFunc",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea22c",
+          "endpoint": "_glColorMask",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 418,
+      "in_gfx": true,
+      "instruction_count": 125,
+      "name": "_GfxSetBlendState"
+    },
+    {
+      "caller_rva": "0x00000000015ea261",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ea28e",
+          "endpoint": "_glDepthMask",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea2a4",
+          "endpoint": "_glEnable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea2ab",
+          "endpoint": "_glDisable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea2b9",
+          "endpoint": "_glDepthFunc",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea2d0",
+          "endpoint": "_glEnable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea2d7",
+          "endpoint": "_glDisable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea2e5",
+          "endpoint": "_glStencilMask",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea2fe",
+          "endpoint": "_glStencilFunc",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea325",
+          "endpoint": "_glStencilOp",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 249,
+      "in_gfx": true,
+      "instruction_count": 80,
+      "name": "_GfxSetDepthStencilState"
+    },
+    {
+      "caller_rva": "0x00000000015ea35a",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ea388",
+          "endpoint": "_glEnable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea38f",
+          "endpoint": "_glDisable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea3c0",
+          "endpoint": "_glPolygonMode",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea3db",
+          "endpoint": "_glEnable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea3e2",
+          "endpoint": "_glDisable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea3ee",
+          "endpoint": "_glCullFace",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea3fc",
+          "endpoint": "_glFrontFace",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 210,
+      "in_gfx": true,
+      "instruction_count": 65,
+      "name": "_GfxSetRasterizerState"
+    },
+    {
+      "caller_rva": "0x00000000015ea42c",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ea43c",
+          "endpoint": "_SDL_GL_DeleteContext",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        }
+      ],
+      "decoded_instruction_bytes": 52,
+      "in_gfx": true,
+      "instruction_count": 16,
+      "name": "_GfxShutdown"
+    },
+    {
+      "caller_rva": "0x00000000015ea4f8",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ea527",
+          "endpoint": "_glViewport",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 52,
+      "in_gfx": true,
+      "instruction_count": 13,
+      "name": "_GfxSetViewPort"
+    },
+    {
+      "caller_rva": "0x00000000015ea552",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ea5ad",
+          "endpoint": "_glDepthMask",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea5ca",
+          "endpoint": "_glStencilMask",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea5e7",
+          "endpoint": "_glScissor",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea5f7",
+          "endpoint": "_glEnable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea610",
+          "endpoint": "_glColorMask",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea64e",
+          "endpoint": "_glClearColor",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea656",
+          "endpoint": "_glClear",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea66b",
+          "endpoint": "_glColorMask",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea67b",
+          "endpoint": "_glDisable",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea68e",
+          "endpoint": "_glDepthMask",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ea6a1",
+          "endpoint": "_glStencilMask",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 355,
+      "in_gfx": true,
+      "instruction_count": 96,
+      "name": "_GfxClear"
+    },
+    {
+      "caller_rva": "0x00000000015ea6cb",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ea6d6",
+          "endpoint": "_SDL_GL_SwapWindow",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        }
+      ],
+      "decoded_instruction_bytes": 20,
+      "in_gfx": true,
+      "instruction_count": 7,
+      "name": "_GfxPresent"
+    },
+    {
+      "caller_rva": "0x00000000015ea789",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ea944",
+          "endpoint": "_glDrawArrays",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 448,
+      "in_gfx": true,
+      "instruction_count": 106,
+      "name": "_GfxDraw"
+    },
+    {
+      "caller_rva": "0x00000000015eaa77",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015eac6a",
+          "endpoint": "_glDrawElements",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 504,
+      "in_gfx": true,
+      "instruction_count": 124,
+      "name": "_GfxDrawIndexed"
+    },
+    {
+      "caller_rva": "0x00000000015ead87",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015eadba",
+          "endpoint": "_glMatrixMode",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015eadbf",
+          "endpoint": "_glLoadIdentity",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015eadeb",
+          "endpoint": "_glOrtho",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015eadf5",
+          "endpoint": "_glMatrixMode",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015eadfa",
+          "endpoint": "_glLoadIdentity",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015eae04",
+          "endpoint": "_glLineWidth",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015eae0e",
+          "endpoint": "_glBegin",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015eae2a",
+          "endpoint": "_glColor4f",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015eae47",
+          "endpoint": "_glVertex2f",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015eae6a",
+          "endpoint": "_glVertex2f",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015eae77",
+          "endpoint": "_glEnd",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 272,
+      "in_gfx": true,
+      "instruction_count": 71,
+      "name": "_GfxDraw2dLines"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015eafe9",
+          "endpoint": "_glGetError",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 565,
+      "in_gfx": true,
+      "instruction_count": 135,
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015eb460",
+          "endpoint": "_glGetError",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 855,
+      "in_gfx": true,
+      "instruction_count": 197,
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015ec43b",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ec4e8",
+          "endpoint": "_glGenTextures",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec4f6",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec56b",
+          "endpoint": "_glPixelStorei",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec5b8",
+          "endpoint": "_glTexImage2D",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec5cb",
+          "endpoint": "_glPixelStorei",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 482,
+      "in_gfx": true,
+      "instruction_count": 130,
+      "name": "_GfxInitializeTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec66f",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ec698",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec6a7",
+          "endpoint": "_glPixelStorei",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec6d0",
+          "endpoint": "_glTexImage2D",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec6e3",
+          "endpoint": "_glPixelStorei",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec6f7",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 142,
+      "in_gfx": true,
+      "instruction_count": 44,
+      "name": "_GfxUpdateTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec6fd",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ec70e",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec729",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 50,
+      "in_gfx": true,
+      "instruction_count": 15,
+      "name": "_GfxGenerateMipMaps"
+    },
+    {
+      "caller_rva": "0x00000000015ec72f",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ec765",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec774",
+          "endpoint": "_glPixelStorei",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec7b0",
+          "endpoint": "_glTexSubImage2D",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec7c3",
+          "endpoint": "_glPixelStorei",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec7dd",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 194,
+      "in_gfx": true,
+      "instruction_count": 62,
+      "name": "_GfxUpdateTextureRectangle"
+    },
+    {
+      "caller_rva": "0x00000000015ec836",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ec8d4",
+          "endpoint": "_glDeleteTextures",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 172,
+      "in_gfx": true,
+      "instruction_count": 45,
+      "name": "_GfxClearTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ec933",
+          "endpoint": "_glGenTextures",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec940",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec98f",
+          "endpoint": "_glTexImage2D",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ec99f",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 669,
+      "in_gfx": true,
+      "instruction_count": 175,
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ecce2",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ecd20",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ecd3f",
+          "endpoint": "_glTexEnvf",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ecd75",
+          "endpoint": "_glTexParameteri",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ecd84",
+          "endpoint": "_glTexParameteri",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ecd93",
+          "endpoint": "_glTexParameteri",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ecdad",
+          "endpoint": "_glTexParameteri",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ecdbe",
+          "endpoint": "_glTexParameteri",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ecdcf",
+          "endpoint": "_glTexParameteri",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ecde0",
+          "endpoint": "_glTexParameteri",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ecdf8",
+          "endpoint": "_glTexParameterf",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 305,
+      "in_gfx": false,
+      "instruction_count": 84,
+      "name": "InternalSetTextureAndSamplerState"
+    },
+    {
+      "caller_rva": "0x00000000015ece13",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ece29",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ece47",
+          "endpoint": "_glCopyTexSubImage2D",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ece5d",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 80,
+      "in_gfx": true,
+      "instruction_count": 29,
+      "name": "_GfxResolve"
+    },
+    {
+      "caller_rva": "0x00000000015ece63",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ecefa",
+          "endpoint": "_glViewport",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 165,
+      "in_gfx": true,
+      "instruction_count": 56,
+      "name": "_GfxResolveTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ed004",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ed08b",
+          "endpoint": "_glViewport",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 153,
+      "in_gfx": true,
+      "instruction_count": 42,
+      "name": "_GfxSetRenderTarget"
+    },
+    {
+      "caller_rva": "0x00000000015ed0aa",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ed0dd",
+          "endpoint": "_glScissor",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 56,
+      "in_gfx": true,
+      "instruction_count": 18,
+      "name": "_GfxSetScissorRectangle"
+    },
+    {
+      "caller_rva": "0x00000000015ed1b5",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ed21a",
+          "endpoint": "_glReadPixels",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 158,
+      "in_gfx": true,
+      "instruction_count": 48,
+      "name": "_GfxWriteScreenshot"
+    },
+    {
+      "caller_rva": "0x00000000015ed272",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ed2bf",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ed2e1",
+          "endpoint": "_glGetTexImage",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 171,
+      "in_gfx": true,
+      "instruction_count": 55,
+      "name": "_GfxWriteTextureAsTGA"
+    },
+    {
+      "caller_rva": "0x00000000015ed31d",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ed348",
+          "endpoint": "_glBindTexture",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ed361",
+          "endpoint": "_glGetTexImage",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 107,
+      "in_gfx": true,
+      "instruction_count": 37,
+      "name": "_GfxGetTextureBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ed388",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015ed4bd",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015ed4cb",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015ed4da",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015ed4e9",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015ed4f8",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015ed507",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015ed516",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015ed520",
+          "endpoint": "_SDL_GL_SetSwapInterval",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015ed52f",
+          "endpoint": "_SDL_GL_SetAttribute",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015ed565",
+          "endpoint": "_SDL_GL_CreateContext",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        },
+        {
+          "callsite_rva": "0x00000000015ed65f",
+          "endpoint": "_glGetFloatv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ed676",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ed77e",
+          "endpoint": "_glGetIntegerv",
+          "family": "gl",
+          "resolution": "thunk"
+        },
+        {
+          "callsite_rva": "0x00000000015ed8cd",
+          "endpoint": "_SDL_GL_DeleteContext",
+          "family": "sdl_gl",
+          "resolution": "direct_internal"
+        }
+      ],
+      "decoded_instruction_bytes": 1566,
+      "in_gfx": true,
+      "instruction_count": 366,
+      "name": "_GfxGetGraphicsSettings"
+    },
+    {
+      "caller_rva": "0x00000000015efec7",
+      "callsites": [
+        {
+          "callsite_rva": "0x00000000015eff1f",
+          "endpoint": "_glGetString",
+          "family": "gl",
+          "resolution": "thunk"
+        }
+      ],
+      "decoded_instruction_bytes": 991,
+      "in_gfx": false,
+      "instruction_count": 249,
+      "name": "BuildGLSL"
+    }
+  ],
+  "direct_gl_caller_count": 32,
+  "direct_gl_in_gfx": 25,
+  "effort": {
+    "decompiled_lines": 1731,
+    "faithful_cpp_lines": [
+      1731,
+      2596
+    ],
+    "metal_infrastructure_lines": [
+      1500,
+      4000
+    ],
+    "replace_candidate_count": 29,
+    "replace_instructions": 3191,
+    "representatives": [
+      {
+        "decompiled_lines": 18,
+        "entry_rva": "0x00000000015ea4f8",
+        "instruction_count": 13,
+        "name": "_GfxSetViewPort"
+      },
+      {
+        "decompiled_lines": 52,
+        "entry_rva": "0x00000000015ea35a",
+        "instruction_count": 65,
+        "name": "_GfxSetRasterizerState"
+      },
+      {
+        "decompiled_lines": 387,
+        "entry_rva": "0x00000000015e8ea0",
+        "instruction_count": 770,
+        "name": "_GfxInit"
+      }
+    ],
+    "shader_conversion": "deferred to stage D",
+    "status": "estimated",
+    "summary": "Replace candidates: 29 functions, 3191 original instructions, 1731 decompiled lines. Faithful C++ is estimated at 1731\u20132596 lines: the low end is the decompiled line count of those functions, and the high end adds about half again for types and calls the decompiler left implicit. That band is taken from the decompiled bodies of the representative functions below, not from an instruction-to-line multiplier. Metal infrastructure, which has no original body, is a separate 1500\u20134000 lines for a device, queue, pipeline cache, and resource table. Shader conversion is deferred to stage D."
+  },
+  "glew_init_dependency": {
+    "callee_rvas": [
+      "0x00000000015d2708"
+    ],
+    "caller_rvas": [
+      "0x00000000015e8ea0",
+      "0x00000000015ed388"
+    ],
+    "note": "GLEW bodies are excluded from reconstruction. Init still has to be retired or replaced."
+  },
+  "helpers": [
+    {
+      "entry_rva": "0x00000000015c5a96",
+      "in_cone": true,
+      "known_root": "shared",
+      "name": "GfxCreateTexture"
+    },
+    {
+      "entry_rva": "0x00000000015d2708",
+      "in_cone": true,
+      "known_root": "unknown",
+      "name": "_glewInit"
+    },
+    {
+      "entry_rva": "0x00000000015e9dfa",
+      "in_cone": true,
+      "known_root": "behind_cut",
+      "name": "GetOpenGLContextRasterizerState"
+    },
+    {
+      "entry_rva": "0x00000000015e9e8e",
+      "in_cone": true,
+      "known_root": "behind_cut",
+      "name": "GetOpenGLContextDepthStencilState"
+    },
+    {
+      "entry_rva": "0x00000000015e9f78",
+      "in_cone": true,
+      "known_root": "behind_cut",
+      "name": "GetOpenGLContextBlendState"
+    },
+    {
+      "entry_rva": "0x00000000015ecce2",
+      "in_cone": true,
+      "known_root": "behind_cut",
+      "name": "InternalSetTextureAndSamplerState"
+    }
+  ],
+  "indirect_dispatch_coverage": {
+    "bounded_candidates": 77,
+    "confirmed_graphics_dispatch": 0,
+    "confirmed_non_graphics": 0,
+    "note": "Counts of indirect sites only. They do not measure shader behavior, resource lifetimes, Metal init, or presentation.",
+    "reviewed": 0,
+    "selected_sites": 126,
+    "unresolved": 49
+  },
+  "indirect_sites": [
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e9094",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e9175",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e929d",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e934d",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e93f5",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e949d",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e9545",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e95ed",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e9695",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e973d",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e97e8",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e9b50",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e9bb8",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "callsite_rva": "0x00000000015e9c1b",
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015ea0bf",
+      "callsite_rva": "0x00000000015ea163",
+      "name": "_GfxSetBlendState"
+    },
+    {
+      "caller_rva": "0x00000000015ea0bf",
+      "callsite_rva": "0x00000000015ea1c7",
+      "name": "_GfxSetBlendState"
+    },
+    {
+      "caller_rva": "0x00000000015ea0bf",
+      "callsite_rva": "0x00000000015ea1d6",
+      "name": "_GfxSetBlendState"
+    },
+    {
+      "caller_rva": "0x00000000015ea6df",
+      "callsite_rva": "0x00000000015ea71f",
+      "name": "_GfxBeginScene"
+    },
+    {
+      "caller_rva": "0x00000000015ea789",
+      "callsite_rva": "0x00000000015ea806",
+      "name": "_GfxDraw"
+    },
+    {
+      "caller_rva": "0x00000000015ea789",
+      "callsite_rva": "0x00000000015ea8a6",
+      "name": "_GfxDraw"
+    },
+    {
+      "caller_rva": "0x00000000015ea970",
+      "callsite_rva": "0x00000000015ea9b8",
+      "name": "SShaderOpenGL::EnableVertexAttribArrays"
+    },
+    {
+      "caller_rva": "0x00000000015ea970",
+      "callsite_rva": "0x00000000015eaa25",
+      "name": "SShaderOpenGL::EnableVertexAttribArrays"
+    },
+    {
+      "caller_rva": "0x00000000015ea970",
+      "callsite_rva": "0x00000000015eaa38",
+      "name": "SShaderOpenGL::EnableVertexAttribArrays"
+    },
+    {
+      "caller_rva": "0x00000000015ea970",
+      "callsite_rva": "0x00000000015eaa45",
+      "name": "SShaderOpenGL::EnableVertexAttribArrays"
+    },
+    {
+      "caller_rva": "0x00000000015eaa77",
+      "callsite_rva": "0x00000000015eaaf4",
+      "name": "_GfxDrawIndexed"
+    },
+    {
+      "caller_rva": "0x00000000015eaa77",
+      "callsite_rva": "0x00000000015eab94",
+      "name": "_GfxDrawIndexed"
+    },
+    {
+      "caller_rva": "0x00000000015eac9c",
+      "callsite_rva": "0x00000000015ead02",
+      "name": "_GfxDrawIndexedInstanced"
+    },
+    {
+      "caller_rva": "0x00000000015ead87",
+      "callsite_rva": "0x00000000015eadb3",
+      "name": "_GfxDraw2dLines"
+    },
+    {
+      "caller_rva": "0x00000000015eae97",
+      "callsite_rva": "0x00000000015eaeb9",
+      "name": "_GfxCreateShader"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "callsite_rva": "0x00000000015eafe7",
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "callsite_rva": "0x00000000015eaffa",
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "callsite_rva": "0x00000000015eb015",
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "callsite_rva": "0x00000000015eb020",
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "callsite_rva": "0x00000000015eb03a",
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "callsite_rva": "0x00000000015eb051",
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "callsite_rva": "0x00000000015eb087",
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "callsite_rva": "0x00000000015eb112",
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "callsite_rva": "0x00000000015eb18c",
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb45e",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb471",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb48c",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb497",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb4b1",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb4c8",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb4fb",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb577",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb5f1",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb6ab",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "callsite_rva": "0x00000000015eb725",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb892",
+      "callsite_rva": "0x00000000015eb8de",
+      "name": "SShaderOpenGL::LinkProgram"
+    },
+    {
+      "caller_rva": "0x00000000015eb892",
+      "callsite_rva": "0x00000000015eb8e7",
+      "name": "SShaderOpenGL::LinkProgram"
+    },
+    {
+      "caller_rva": "0x00000000015eb892",
+      "callsite_rva": "0x00000000015eb932",
+      "name": "SShaderOpenGL::LinkProgram"
+    },
+    {
+      "caller_rva": "0x00000000015eb892",
+      "callsite_rva": "0x00000000015eb94b",
+      "name": "SShaderOpenGL::LinkProgram"
+    },
+    {
+      "caller_rva": "0x00000000015eb892",
+      "callsite_rva": "0x00000000015eb966",
+      "name": "SShaderOpenGL::LinkProgram"
+    },
+    {
+      "caller_rva": "0x00000000015eb892",
+      "callsite_rva": "0x00000000015eb9a0",
+      "name": "SShaderOpenGL::LinkProgram"
+    },
+    {
+      "caller_rva": "0x00000000015eb892",
+      "callsite_rva": "0x00000000015eba11",
+      "name": "SShaderOpenGL::LinkProgram"
+    },
+    {
+      "caller_rva": "0x00000000015eb892",
+      "callsite_rva": "0x00000000015eba8b",
+      "name": "SShaderOpenGL::LinkProgram"
+    },
+    {
+      "caller_rva": "0x00000000015ebb3e",
+      "callsite_rva": "0x00000000015ebb55",
+      "name": "SShaderOpenGL::UnloadAll"
+    },
+    {
+      "caller_rva": "0x00000000015ebb3e",
+      "callsite_rva": "0x00000000015ebb5b",
+      "name": "SShaderOpenGL::UnloadAll"
+    },
+    {
+      "caller_rva": "0x00000000015ebb3e",
+      "callsite_rva": "0x00000000015ebb6a",
+      "name": "SShaderOpenGL::UnloadAll"
+    },
+    {
+      "caller_rva": "0x00000000015ebb3e",
+      "callsite_rva": "0x00000000015ebb72",
+      "name": "SShaderOpenGL::UnloadAll"
+    },
+    {
+      "caller_rva": "0x00000000015ebb3e",
+      "callsite_rva": "0x00000000015ebb77",
+      "name": "SShaderOpenGL::UnloadAll"
+    },
+    {
+      "caller_rva": "0x00000000015ebbb0",
+      "callsite_rva": "0x00000000015ebc03",
+      "name": "_GfxSetShader"
+    },
+    {
+      "caller_rva": "0x00000000015ebc40",
+      "callsite_rva": "0x00000000015ebc63",
+      "name": "SShaderOpenGL::SetAll"
+    },
+    {
+      "caller_rva": "0x00000000015ebc40",
+      "callsite_rva": "0x00000000015ebc78",
+      "name": "SShaderOpenGL::SetAll"
+    },
+    {
+      "caller_rva": "0x00000000015ebcb3",
+      "callsite_rva": "0x00000000015ebd00",
+      "name": "_GfxCreateVertexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ebcb3",
+      "callsite_rva": "0x00000000015ebd11",
+      "name": "_GfxCreateVertexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ebcb3",
+      "callsite_rva": "0x00000000015ebd2e",
+      "name": "_GfxCreateVertexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ebcb3",
+      "callsite_rva": "0x00000000015ebd37",
+      "name": "_GfxCreateVertexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ebd4c",
+      "callsite_rva": "0x00000000015ebd6a",
+      "name": "_GfxDestroyVertexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ebd81",
+      "callsite_rva": "0x00000000015ebdc3",
+      "name": "_GfxUpdateVertexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ebd81",
+      "callsite_rva": "0x00000000015ebde3",
+      "name": "_GfxUpdateVertexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ebd81",
+      "callsite_rva": "0x00000000015ebe02",
+      "name": "_GfxUpdateVertexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ebd81",
+      "callsite_rva": "0x00000000015ebe37",
+      "name": "_GfxUpdateVertexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ebe5f",
+      "callsite_rva": "0x00000000015ebe9e",
+      "name": "_GfxUpdateVertexBufferMultiple"
+    },
+    {
+      "caller_rva": "0x00000000015ebe5f",
+      "callsite_rva": "0x00000000015ebecd",
+      "name": "_GfxUpdateVertexBufferMultiple"
+    },
+    {
+      "caller_rva": "0x00000000015ebe5f",
+      "callsite_rva": "0x00000000015ebf19",
+      "name": "_GfxUpdateVertexBufferMultiple"
+    },
+    {
+      "caller_rva": "0x00000000015ebf41",
+      "callsite_rva": "0x00000000015ebf9d",
+      "name": "_GfxSetVertexBuffers"
+    },
+    {
+      "caller_rva": "0x00000000015ebf41",
+      "callsite_rva": "0x00000000015ec06a",
+      "name": "_GfxSetVertexBuffers"
+    },
+    {
+      "caller_rva": "0x00000000015ec154",
+      "callsite_rva": "0x00000000015ec1a9",
+      "name": "_GfxCreateIndexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ec154",
+      "callsite_rva": "0x00000000015ec1ba",
+      "name": "_GfxCreateIndexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ec154",
+      "callsite_rva": "0x00000000015ec1d6",
+      "name": "_GfxCreateIndexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ec1e6",
+      "callsite_rva": "0x00000000015ec204",
+      "name": "_GfxDestroyIndexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ec23c",
+      "callsite_rva": "0x00000000015ec264",
+      "name": "_GfxUpdateIndexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ec28e",
+      "callsite_rva": "0x00000000015ec2af",
+      "name": "_GfxSetIndexBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ec43b",
+      "callsite_rva": "0x00000000015ec5f7",
+      "name": "_GfxInitializeTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec6fd",
+      "callsite_rva": "0x00000000015ec71f",
+      "name": "_GfxGenerateMipMaps"
+    },
+    {
+      "caller_rva": "0x00000000015ec836",
+      "callsite_rva": "0x00000000015ec85f",
+      "name": "_GfxClearTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec836",
+      "callsite_rva": "0x00000000015ec882",
+      "name": "_GfxClearTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec836",
+      "callsite_rva": "0x00000000015ec8a5",
+      "name": "_GfxClearTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec836",
+      "callsite_rva": "0x00000000015ec8c2",
+      "name": "_GfxClearTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ec9be",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ec9cf",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ec9f2",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015eca0d",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015eca16",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015eca3a",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015eca4b",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015eca65",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015eca77",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015eca88",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ecaa3",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ecab8",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ecac7",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ecadd",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ecaee",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ecb0d",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ecb33",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ecb47",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "callsite_rva": "0x00000000015ecb50",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ecce2",
+      "callsite_rva": "0x00000000015ecd06",
+      "name": "InternalSetTextureAndSamplerState"
+    },
+    {
+      "caller_rva": "0x00000000015ece63",
+      "callsite_rva": "0x00000000015ece91",
+      "name": "_GfxResolveTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ece63",
+      "callsite_rva": "0x00000000015ece9e",
+      "name": "_GfxResolveTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ece63",
+      "callsite_rva": "0x00000000015ececd",
+      "name": "_GfxResolveTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ece63",
+      "callsite_rva": "0x00000000015ecee0",
+      "name": "_GfxResolveTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ed004",
+      "callsite_rva": "0x00000000015ed03b",
+      "name": "_GfxSetRenderTarget"
+    },
+    {
+      "caller_rva": "0x00000000015ed004",
+      "callsite_rva": "0x00000000015ed04e",
+      "name": "_GfxSetRenderTarget"
+    },
+    {
+      "caller_rva": "0x00000000015ed388",
+      "callsite_rva": "0x00000000015ed469",
+      "name": "_GfxGetGraphicsSettings"
+    },
+    {
+      "caller_rva": "0x00000000015ed388",
+      "callsite_rva": "0x00000000015ed60f",
+      "name": "_GfxGetGraphicsSettings"
+    },
+    {
+      "caller_rva": "0x00000000015ed388",
+      "callsite_rva": "0x00000000015ed6e4",
+      "name": "_GfxGetGraphicsSettings"
+    },
+    {
+      "caller_rva": "0x00000000015ed388",
+      "callsite_rva": "0x00000000015ed7f7",
+      "name": "_GfxGetGraphicsSettings"
+    },
+    {
+      "caller_rva": "0x00000000015ed388",
+      "callsite_rva": "0x00000000015ed89a",
+      "name": "_GfxGetGraphicsSettings"
+    },
+    {
+      "caller_rva": "0x00000000015ed388",
+      "callsite_rva": "0x00000000015ed979",
+      "name": "_GfxGetGraphicsSettings"
+    },
+    {
+      "caller_rva": "0x00000000015ed9fc",
+      "callsite_rva": "0x00000000015eda3a",
+      "name": "SShaderOpenGL::SetUniformLocations"
+    },
+    {
+      "caller_rva": "0x00000000015ed9fc",
+      "callsite_rva": "0x00000000015eda75",
+      "name": "SShaderOpenGL::SetUniformLocations"
+    },
+    {
+      "caller_rva": "0x00000000015ed9fc",
+      "callsite_rva": "0x00000000015edaa8",
+      "name": "SShaderOpenGL::SetUniformLocations"
+    }
+  ],
+  "inventory_bundle_digest": "1eaff96fe79d6b142a7c158a9701e24b78d11cc84e9e2f44cb8aed75d5bf7cae",
+  "migration_labels": [
+    {
+      "entry_rva": "0x00000000013cbfb8",
+      "instruction_count": 277,
+      "migration": "adapter_candidate",
+      "name": "CApplication::CreateApplicationWindow"
+    },
+    {
+      "entry_rva": "0x00000000015c5a82",
+      "instruction_count": 8,
+      "migration": "retain_candidate",
+      "name": "_GfxIsOpenGL"
+    },
+    {
+      "entry_rva": "0x00000000015c5c0e",
+      "instruction_count": 4,
+      "migration": "retain_candidate",
+      "name": "_GfxSetRenderType"
+    },
+    {
+      "entry_rva": "0x00000000015d25ee",
+      "instruction_count": 27,
+      "migration": "exclude",
+      "name": "_glewGetExtension"
+    },
+    {
+      "entry_rva": "0x00000000015d2708",
+      "instruction_count": 4,
+      "migration": "exclude",
+      "name": "_glewInit"
+    },
+    {
+      "entry_rva": "0x00000000015d2712",
+      "instruction_count": 14935,
+      "migration": "exclude",
+      "name": "_glewContextInit"
+    },
+    {
+      "entry_rva": "0x00000000015e8ea0",
+      "instruction_count": 770,
+      "migration": "replace_candidate",
+      "name": "_GfxInit"
+    },
+    {
+      "entry_rva": "0x00000000015e9d11",
+      "instruction_count": 26,
+      "migration": "retain_candidate",
+      "name": "_GfxCreateBlendState"
+    },
+    {
+      "entry_rva": "0x00000000015e9d61",
+      "instruction_count": 26,
+      "migration": "retain_candidate",
+      "name": "_GfxCreateDepthStencilState"
+    },
+    {
+      "entry_rva": "0x00000000015e9db2",
+      "instruction_count": 24,
+      "migration": "retain_candidate",
+      "name": "_GfxCreateRasterizerState"
+    },
+    {
+      "entry_rva": "0x00000000015e9dfa",
+      "instruction_count": 42,
+      "migration": "replace_candidate",
+      "name": "GetOpenGLContextRasterizerState"
+    },
+    {
+      "entry_rva": "0x00000000015e9e8e",
+      "instruction_count": 65,
+      "migration": "replace_candidate",
+      "name": "GetOpenGLContextDepthStencilState"
+    },
+    {
+      "entry_rva": "0x00000000015e9f78",
+      "instruction_count": 96,
+      "migration": "replace_candidate",
+      "name": "GetOpenGLContextBlendState"
+    },
+    {
+      "entry_rva": "0x00000000015ea0bf",
+      "instruction_count": 125,
+      "migration": "replace_candidate",
+      "name": "_GfxSetBlendState"
+    },
+    {
+      "entry_rva": "0x00000000015ea261",
+      "instruction_count": 80,
+      "migration": "replace_candidate",
+      "name": "_GfxSetDepthStencilState"
+    },
+    {
+      "entry_rva": "0x00000000015ea35a",
+      "instruction_count": 65,
+      "migration": "replace_candidate",
+      "name": "_GfxSetRasterizerState"
+    },
+    {
+      "entry_rva": "0x00000000015ea42c",
+      "instruction_count": 16,
+      "migration": "retain_candidate",
+      "name": "_GfxShutdown"
+    },
+    {
+      "entry_rva": "0x00000000015ea460",
+      "instruction_count": 5,
+      "migration": "retain_candidate",
+      "name": "_GfxGetRenderType"
+    },
+    {
+      "entry_rva": "0x00000000015ea46b",
+      "instruction_count": 17,
+      "migration": "retain_candidate",
+      "name": "_GfxReset"
+    },
+    {
+      "entry_rva": "0x00000000015ea49b",
+      "instruction_count": 23,
+      "migration": "retain_candidate",
+      "name": "_GfxOnResetMasterContext"
+    },
+    {
+      "entry_rva": "0x00000000015ea4f2",
+      "instruction_count": 4,
+      "migration": "retain_candidate",
+      "name": "_GfxOnLostMasterContext"
+    },
+    {
+      "entry_rva": "0x00000000015ea4f8",
+      "instruction_count": 13,
+      "migration": "replace_candidate",
+      "name": "_GfxSetViewPort"
+    },
+    {
+      "entry_rva": "0x00000000015ea52c",
+      "instruction_count": 10,
+      "migration": "retain_candidate",
+      "name": "_GfxGetViewPort"
+    },
+    {
+      "entry_rva": "0x00000000015ea552",
+      "instruction_count": 96,
+      "migration": "replace_candidate",
+      "name": "_GfxClear"
+    },
+    {
+      "entry_rva": "0x00000000015ea6b5",
+      "instruction_count": 5,
+      "migration": "retain_candidate",
+      "name": "_GfxGetMasterContext"
+    },
+    {
+      "entry_rva": "0x00000000015ea6c2",
+      "instruction_count": 5,
+      "migration": "retain_candidate",
+      "name": "_GfxGetImmediateContext"
+    },
+    {
+      "entry_rva": "0x00000000015ea6cb",
+      "instruction_count": 7,
+      "migration": "retain_candidate",
+      "name": "_GfxPresent"
+    },
+    {
+      "entry_rva": "0x00000000015ea6df",
+      "instruction_count": 39,
+      "migration": "unresolved",
+      "name": "_GfxBeginScene"
+    },
+    {
+      "entry_rva": "0x00000000015ea758",
+      "instruction_count": 5,
+      "migration": "retain_candidate",
+      "name": "_GfxEndScene"
+    },
+    {
+      "entry_rva": "0x00000000015ea760",
+      "instruction_count": 5,
+      "migration": "retain_candidate",
+      "name": "_GfxCreateDeferredContext"
+    },
+    {
+      "entry_rva": "0x00000000015ea769",
+      "instruction_count": 4,
+      "migration": "retain_candidate",
+      "name": "_GfxDestroyDeferredContext"
+    },
+    {
+      "entry_rva": "0x00000000015ea76f",
+      "instruction_count": 12,
+      "migration": "retain_candidate",
+      "name": "_GfxSetPrimitiveType"
+    },
+    {
+      "entry_rva": "0x00000000015ea789",
+      "instruction_count": 106,
+      "migration": "replace_candidate",
+      "name": "_GfxDraw"
+    },
+    {
+      "entry_rva": "0x00000000015ea970",
+      "instruction_count": 72,
+      "migration": "unresolved",
+      "name": "SShaderOpenGL::EnableVertexAttribArrays"
+    },
+    {
+      "entry_rva": "0x00000000015eaa77",
+      "instruction_count": 124,
+      "migration": "replace_candidate",
+      "name": "_GfxDrawIndexed"
+    },
+    {
+      "entry_rva": "0x00000000015eac96",
+      "instruction_count": 4,
+      "migration": "retain_candidate",
+      "name": "_GfxDrawInstanced"
+    },
+    {
+      "entry_rva": "0x00000000015eac9c",
+      "instruction_count": 63,
+      "migration": "unresolved",
+      "name": "_GfxDrawIndexedInstanced"
+    },
+    {
+      "entry_rva": "0x00000000015ead87",
+      "instruction_count": 71,
+      "migration": "replace_candidate",
+      "name": "_GfxDraw2dLines"
+    },
+    {
+      "entry_rva": "0x00000000015eae97",
+      "instruction_count": 16,
+      "migration": "unresolved",
+      "name": "_GfxCreateShader"
+    },
+    {
+      "entry_rva": "0x00000000015eaec7",
+      "instruction_count": 71,
+      "migration": "retain_candidate",
+      "name": "_GfxAddVertexLayout"
+    },
+    {
+      "entry_rva": "0x00000000015eafae",
+      "instruction_count": 135,
+      "migration": "replace_candidate",
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "entry_rva": "0x00000000015eb352",
+      "instruction_count": 58,
+      "migration": "retain_candidate",
+      "name": "_GfxBuildAndAddVertexShader"
+    },
+    {
+      "entry_rva": "0x00000000015eb425",
+      "instruction_count": 197,
+      "migration": "replace_candidate",
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "entry_rva": "0x00000000015eb7ae",
+      "instruction_count": 58,
+      "migration": "retain_candidate",
+      "name": "_GfxBuildAndAddPixelShader"
+    },
+    {
+      "entry_rva": "0x00000000015eb884",
+      "instruction_count": 5,
+      "migration": "retain_candidate",
+      "name": "_GfxLinkShader"
+    },
+    {
+      "entry_rva": "0x00000000015eb892",
+      "instruction_count": 147,
+      "migration": "unresolved",
+      "name": "SShaderOpenGL::LinkProgram"
+    },
+    {
+      "entry_rva": "0x00000000015ebb12",
+      "instruction_count": 4,
+      "migration": "retain_candidate",
+      "name": "_GfxClearBuilderCache"
+    },
+    {
+      "entry_rva": "0x00000000015ebb1c",
+      "instruction_count": 14,
+      "migration": "retain_candidate",
+      "name": "_GfxDestroyShader"
+    },
+    {
+      "entry_rva": "0x00000000015ebb3e",
+      "instruction_count": 35,
+      "migration": "unresolved",
+      "name": "SShaderOpenGL::UnloadAll"
+    },
+    {
+      "entry_rva": "0x00000000015ebbb0",
+      "instruction_count": 47,
+      "migration": "unresolved",
+      "name": "_GfxSetShader"
+    },
+    {
+      "entry_rva": "0x00000000015ebc40",
+      "instruction_count": 38,
+      "migration": "unresolved",
+      "name": "SShaderOpenGL::SetAll"
+    },
+    {
+      "entry_rva": "0x00000000015ebca6",
+      "instruction_count": 6,
+      "migration": "retain_candidate",
+      "name": "_GfxGetShader"
+    },
+    {
+      "entry_rva": "0x00000000015ebcb3",
+      "instruction_count": 46,
+      "migration": "unresolved",
+      "name": "_GfxCreateVertexBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ebd4c",
+      "instruction_count": 18,
+      "migration": "unresolved",
+      "name": "_GfxDestroyVertexBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ebd81",
+      "instruction_count": 68,
+      "migration": "unresolved",
+      "name": "_GfxUpdateVertexBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ebe5f",
+      "instruction_count": 70,
+      "migration": "unresolved",
+      "name": "_GfxUpdateVertexBufferMultiple"
+    },
+    {
+      "entry_rva": "0x00000000015ebf41",
+      "instruction_count": 125,
+      "migration": "unresolved",
+      "name": "_GfxSetVertexBuffers"
+    },
+    {
+      "entry_rva": "0x00000000015ec143",
+      "instruction_count": 9,
+      "migration": "retain_candidate",
+      "name": "_GfxGetVertexCount"
+    },
+    {
+      "entry_rva": "0x00000000015ec154",
+      "instruction_count": 43,
+      "migration": "unresolved",
+      "name": "_GfxCreateIndexBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ec1e6",
+      "instruction_count": 26,
+      "migration": "unresolved",
+      "name": "_GfxDestroyIndexBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ec23c",
+      "instruction_count": 31,
+      "migration": "unresolved",
+      "name": "_GfxUpdateIndexBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ec28e",
+      "instruction_count": 18,
+      "migration": "unresolved",
+      "name": "_GfxSetIndexBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ec2bc",
+      "instruction_count": 29,
+      "migration": "retain_candidate",
+      "name": "_GfxCreateConstantBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ec318",
+      "instruction_count": 26,
+      "migration": "retain_candidate",
+      "name": "_GfxDestroyConstantBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ec36a",
+      "instruction_count": 21,
+      "migration": "retain_candidate",
+      "name": "_GfxSetConstantBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ec3b5",
+      "instruction_count": 15,
+      "migration": "retain_candidate",
+      "name": "_GfxUpdateConstantBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ec3dd",
+      "instruction_count": 8,
+      "migration": "retain_candidate",
+      "name": "_GfxDestroyBlendState"
+    },
+    {
+      "entry_rva": "0x00000000015ec3ee",
+      "instruction_count": 14,
+      "migration": "retain_candidate",
+      "name": "_GfxGetBlendStateInfo"
+    },
+    {
+      "entry_rva": "0x00000000015ec419",
+      "instruction_count": 8,
+      "migration": "retain_candidate",
+      "name": "_GfxDestroyDepthStencilState"
+    },
+    {
+      "entry_rva": "0x00000000015ec42a",
+      "instruction_count": 8,
+      "migration": "retain_candidate",
+      "name": "_GfxDestroyRasterizerState"
+    },
+    {
+      "entry_rva": "0x00000000015ec43b",
+      "instruction_count": 130,
+      "migration": "replace_candidate",
+      "name": "_GfxInitializeTexture"
+    },
+    {
+      "entry_rva": "0x00000000015ec61d",
+      "instruction_count": 29,
+      "migration": "retain_candidate",
+      "name": "_GfxCreateTexture"
+    },
+    {
+      "entry_rva": "0x00000000015ec66f",
+      "instruction_count": 44,
+      "migration": "replace_candidate",
+      "name": "_GfxUpdateTexture"
+    },
+    {
+      "entry_rva": "0x00000000015ec6fd",
+      "instruction_count": 15,
+      "migration": "replace_candidate",
+      "name": "_GfxGenerateMipMaps"
+    },
+    {
+      "entry_rva": "0x00000000015ec72f",
+      "instruction_count": 62,
+      "migration": "replace_candidate",
+      "name": "_GfxUpdateTextureRectangle"
+    },
+    {
+      "entry_rva": "0x00000000015ec7f1",
+      "instruction_count": 12,
+      "migration": "retain_candidate",
+      "name": "_GfxGetTextureDescription"
+    },
+    {
+      "entry_rva": "0x00000000015ec814",
+      "instruction_count": 14,
+      "migration": "retain_candidate",
+      "name": "_GfxDestroyTexture"
+    },
+    {
+      "entry_rva": "0x00000000015ec836",
+      "instruction_count": 45,
+      "migration": "replace_candidate",
+      "name": "_GfxClearTexture"
+    },
+    {
+      "entry_rva": "0x00000000015ec8e2",
+      "instruction_count": 175,
+      "migration": "replace_candidate",
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "entry_rva": "0x00000000015ecb7f",
+      "instruction_count": 39,
+      "migration": "retain_candidate",
+      "name": "_GfxCreateRenderTargetTexture"
+    },
+    {
+      "entry_rva": "0x00000000015ecbf2",
+      "instruction_count": 81,
+      "migration": "retain_candidate",
+      "name": "_GfxSetTextures"
+    },
+    {
+      "entry_rva": "0x00000000015ecce2",
+      "instruction_count": 84,
+      "migration": "replace_candidate",
+      "name": "InternalSetTextureAndSamplerState"
+    },
+    {
+      "entry_rva": "0x00000000015ece13",
+      "instruction_count": 29,
+      "migration": "replace_candidate",
+      "name": "_GfxResolve"
+    },
+    {
+      "entry_rva": "0x00000000015ece63",
+      "instruction_count": 56,
+      "migration": "replace_candidate",
+      "name": "_GfxResolveTexture"
+    },
+    {
+      "entry_rva": "0x00000000015ecf12",
+      "instruction_count": 62,
+      "migration": "retain_candidate",
+      "name": "_GfxCreateSampler"
+    },
+    {
+      "entry_rva": "0x00000000015ecff3",
+      "instruction_count": 8,
+      "migration": "retain_candidate",
+      "name": "_GfxDestroySampler"
+    },
+    {
+      "entry_rva": "0x00000000015ed004",
+      "instruction_count": 42,
+      "migration": "replace_candidate",
+      "name": "_GfxSetRenderTarget"
+    },
+    {
+      "entry_rva": "0x00000000015ed09d",
+      "instruction_count": 6,
+      "migration": "retain_candidate",
+      "name": "_GfxGetRenderTarget"
+    },
+    {
+      "entry_rva": "0x00000000015ed0aa",
+      "instruction_count": 18,
+      "migration": "replace_candidate",
+      "name": "_GfxSetScissorRectangle"
+    },
+    {
+      "entry_rva": "0x00000000015ed0e2",
+      "instruction_count": 4,
+      "migration": "retain_candidate",
+      "name": "_GfxSetGamma"
+    },
+    {
+      "entry_rva": "0x00000000015ed0e8",
+      "instruction_count": 5,
+      "migration": "retain_candidate",
+      "name": "_GfxCheckDevice"
+    },
+    {
+      "entry_rva": "0x00000000015ed0f0",
+      "instruction_count": 11,
+      "migration": "retain_candidate",
+      "name": "_GfxGetAdapterModeCount"
+    },
+    {
+      "entry_rva": "0x00000000015ed110",
+      "instruction_count": 31,
+      "migration": "retain_candidate",
+      "name": "_GfxGetAdapterDisplayMode"
+    },
+    {
+      "entry_rva": "0x00000000015ed16d",
+      "instruction_count": 5,
+      "migration": "retain_candidate",
+      "name": "_GfxGetUsedMemory"
+    },
+    {
+      "entry_rva": "0x00000000015ed175",
+      "instruction_count": 5,
+      "migration": "retain_candidate",
+      "name": "_GfxForceWireframe"
+    },
+    {
+      "entry_rva": "0x00000000015ed182",
+      "instruction_count": 8,
+      "migration": "retain_candidate",
+      "name": "_GfxGetCaps"
+    },
+    {
+      "entry_rva": "0x00000000015ed19b",
+      "instruction_count": 4,
+      "migration": "retain_candidate",
+      "name": "_GfxRenderLock"
+    },
+    {
+      "entry_rva": "0x00000000015ed1a1",
+      "instruction_count": 4,
+      "migration": "retain_candidate",
+      "name": "_GfxRenderUnlock"
+    },
+    {
+      "entry_rva": "0x00000000015ed1a7",
+      "instruction_count": 5,
+      "migration": "retain_candidate",
+      "name": "_GfxHasRenderLock"
+    },
+    {
+      "entry_rva": "0x00000000015ed1af",
+      "instruction_count": 4,
+      "migration": "retain_candidate",
+      "name": "_GfxSetAllowResourceCreation"
+    },
+    {
+      "entry_rva": "0x00000000015ed1b5",
+      "instruction_count": 48,
+      "migration": "replace_candidate",
+      "name": "_GfxWriteScreenshot"
+    },
+    {
+      "entry_rva": "0x00000000015ed272",
+      "instruction_count": 55,
+      "migration": "replace_candidate",
+      "name": "_GfxWriteTextureAsTGA"
+    },
+    {
+      "entry_rva": "0x00000000015ed31d",
+      "instruction_count": 37,
+      "migration": "replace_candidate",
+      "name": "_GfxGetTextureBuffer"
+    },
+    {
+      "entry_rva": "0x00000000015ed388",
+      "instruction_count": 366,
+      "migration": "replace_candidate",
+      "name": "_GfxGetGraphicsSettings"
+    },
+    {
+      "entry_rva": "0x00000000015ed9fc",
+      "instruction_count": 62,
+      "migration": "unresolved",
+      "name": "SShaderOpenGL::SetUniformLocations"
+    },
+    {
+      "entry_rva": "0x00000000015efec7",
+      "instruction_count": 249,
+      "migration": "retain_candidate",
+      "name": "BuildGLSL"
+    }
+  ],
+  "outside_gfx_gl_callers": [
+    {
+      "caller_rva": "0x00000000015d25ee",
+      "endpoints": [
+        "_glGetString"
+      ],
+      "instruction_count": 27,
+      "name": "_glewGetExtension"
+    },
+    {
+      "caller_rva": "0x00000000015d2712",
+      "endpoints": [
+        "_glGetString"
+      ],
+      "instruction_count": 14935,
+      "name": "_glewContextInit"
+    },
+    {
+      "caller_rva": "0x00000000015e9dfa",
+      "endpoints": [
+        "_glGetBooleanv",
+        "_glGetIntegerv"
+      ],
+      "instruction_count": 42,
+      "name": "GetOpenGLContextRasterizerState"
+    },
+    {
+      "caller_rva": "0x00000000015e9e8e",
+      "endpoints": [
+        "_glGetBooleanv",
+        "_glGetIntegerv"
+      ],
+      "instruction_count": 65,
+      "name": "GetOpenGLContextDepthStencilState"
+    },
+    {
+      "caller_rva": "0x00000000015e9f78",
+      "endpoints": [
+        "_glGetBooleanv",
+        "_glGetIntegerv"
+      ],
+      "instruction_count": 96,
+      "name": "GetOpenGLContextBlendState"
+    },
+    {
+      "caller_rva": "0x00000000015ecce2",
+      "endpoints": [
+        "_glBindTexture",
+        "_glTexEnvf",
+        "_glTexParameterf",
+        "_glTexParameteri"
+      ],
+      "instruction_count": 84,
+      "name": "InternalSetTextureAndSamplerState"
+    },
+    {
+      "caller_rva": "0x00000000015efec7",
+      "endpoints": [
+        "_glGetString"
+      ],
+      "instruction_count": 249,
+      "name": "BuildGLSL"
+    }
+  ],
+  "outside_region_edges": [],
+  "platform_gaps": {
+    "adapter_path": [
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc062",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc071",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc080",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc08c",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc09b",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc0aa",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc0b9",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc0c8",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc0dd",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc103",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc10f",
+        "endpoint": "_SDL_GL_SetAttribute",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      },
+      {
+        "caller_rva": "0x00000000013cbfb8",
+        "callsite_rva": "0x00000000013cc1e4",
+        "endpoint": "_SDL_GL_SetSwapInterval",
+        "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+        "resolution": "direct_internal"
+      }
+    ],
+    "boundary_thunks_without_caller": [],
+    "not_observed": [
+      {
+        "api": "CGL",
+        "reason": "no CGL symbol in the recovered functions or call edges",
+        "status": "not_observed"
+      }
+    ],
+    "unreferenced_platform_thunk": [
+      {
+        "entry_rva": "0x0000000002ea7201",
+        "name": "NSOpenGLContext::initWithFormat:shareContext:"
+      },
+      {
+        "entry_rva": "0x0000000002ea7202",
+        "name": "NSOpenGLContext::update"
+      },
+      {
+        "entry_rva": "0x0000000002ea7203",
+        "name": "NSOpenGLContext::clearCurrentContext"
+      },
+      {
+        "entry_rva": "0x0000000002ea7204",
+        "name": "NSOpenGLContext::currentContext"
+      },
+      {
+        "entry_rva": "0x0000000002ea7301",
+        "name": "NSOpenGLPixelFormat::alloc"
+      },
+      {
+        "entry_rva": "0x0000000002ea7302",
+        "name": "NSOpenGLPixelFormat::initWithAttributes:"
+      },
+      {
+        "entry_rva": "0x0000000002ea7303",
+        "name": "NSOpenGLPixelFormat::release"
+      }
+    ],
+    "unresolved_active_platform_op": [],
+    "window_adaptation": {
+      "entry_rva": "0x00000000013cbfb8",
+      "function": "CApplication::CreateApplicationWindow",
+      "status": "scanned",
+      "tokens_absent": [
+        "SDL_WINDOW_OPENGL",
+        "SDL_GL_CreateContext",
+        "SDL_GL_SwapWindow",
+        "NSView",
+        "NSWindow",
+        "CAMetalLayer",
+        "Cocoa"
+      ],
+      "tokens_present": [
+        "SDL_CreateWindow",
+        "SDL_GL_SetAttribute",
+        "SDL_GL_SetSwapInterval"
+      ]
+    }
+  },
+  "roots": [
+    {
+      "name": "CInGameIdler::Render",
+      "rvas": [
+        "0x0000000000702d3e"
+      ],
+      "status": "resolved"
+    },
+    {
+      "name": "CEU3GraphicalMap::Render",
+      "rvas": [
+        "0x0000000000ed4ac8"
+      ],
+      "status": "resolved"
+    },
+    {
+      "name": "CPdxMeshObject::RenderBuckets",
+      "rvas": [
+        "0x00000000014c7da4"
+      ],
+      "status": "resolved"
+    },
+    {
+      "name": "CApplication::CreateApplicationWindow",
+      "rvas": [
+        "0x00000000013cbfb8"
+      ],
+      "status": "resolved"
+    },
+    {
+      "name": "_GfxShutdown caller",
+      "rvas": [
+        "0x000000000149b6fe"
+      ],
+      "status": "resolved"
+    }
+  ],
+  "unrooted_in_selected_graph": [
+    {
+      "entry_rva": "0x00000000015d25ee",
+      "in_cone": false,
+      "known_root": "unknown",
+      "name": "_glewGetExtension"
+    },
+    {
+      "entry_rva": "0x00000000015d2712",
+      "in_cone": true,
+      "known_root": "unknown",
+      "name": "_glewContextInit"
+    },
+    {
+      "entry_rva": "0x00000000015efec7",
+      "in_cone": true,
+      "known_root": "unknown",
+      "name": "BuildGLSL"
+    }
+  ]
+}
