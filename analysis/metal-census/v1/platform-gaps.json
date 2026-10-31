@@ -1,0 +1,147 @@
+{
+  "adapter_path": [
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc062",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc071",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc080",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc08c",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc09b",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc0aa",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc0b9",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc0c8",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc0dd",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc103",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc10f",
+      "endpoint": "_SDL_GL_SetAttribute",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    },
+    {
+      "caller_rva": "0x00000000013cbfb8",
+      "callsite_rva": "0x00000000013cc1e4",
+      "endpoint": "_SDL_GL_SetSwapInterval",
+      "reason": "public SDL_GL callsite in window creation; anticipated adapter",
+      "resolution": "direct_internal"
+    }
+  ],
+  "boundary_thunks_without_caller": [],
+  "not_observed": [
+    {
+      "api": "CGL",
+      "reason": "no CGL symbol in the recovered functions or call edges",
+      "status": "not_observed"
+    }
+  ],
+  "platform_assessment": "platform_not_assessed",
+  "unreferenced_platform_thunk": [
+    {
+      "entry_rva": "0x0000000002ea7201",
+      "name": "NSOpenGLContext::initWithFormat:shareContext:"
+    },
+    {
+      "entry_rva": "0x0000000002ea7202",
+      "name": "NSOpenGLContext::update"
+    },
+    {
+      "entry_rva": "0x0000000002ea7203",
+      "name": "NSOpenGLContext::clearCurrentContext"
+    },
+    {
+      "entry_rva": "0x0000000002ea7204",
+      "name": "NSOpenGLContext::currentContext"
+    },
+    {
+      "entry_rva": "0x0000000002ea7301",
+      "name": "NSOpenGLPixelFormat::alloc"
+    },
+    {
+      "entry_rva": "0x0000000002ea7302",
+      "name": "NSOpenGLPixelFormat::initWithAttributes:"
+    },
+    {
+      "entry_rva": "0x0000000002ea7303",
+      "name": "NSOpenGLPixelFormat::release"
+    }
+  ],
+  "window_adaptation": {
+    "entry_rva": "0x00000000013cbfb8",
+    "function": "CApplication::CreateApplicationWindow",
+    "note": "Token hits are names present in pseudocode, not a drawable-lifecycle assessment.",
+    "status": "scanned",
+    "tokens_absent": [
+      "SDL_WINDOW_OPENGL",
+      "SDL_GL_CreateContext",
+      "SDL_GL_SwapWindow",
+      "NSView",
+      "NSWindow",
+      "CAMetalLayer",
+      "Cocoa"
+    ],
+    "tokens_present": [
+      "SDL_CreateWindow",
+      "SDL_GL_SetAttribute",
+      "SDL_GL_SetSwapInterval"
+    ]
+  }
+}
