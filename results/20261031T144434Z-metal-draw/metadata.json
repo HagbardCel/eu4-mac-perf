@@ -1,0 +1,43 @@
+{
+  "status": "complete",
+  "gog": {
+    "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "gog_game_id": "2057001589",
+    "gog_build_id": "59158198792514056",
+    "gog_package_version": "1",
+    "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
+    "eu4_branch": "release_1.37.5-gog-fix",
+    "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
+    "gog_user_data": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG",
+    "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
+    "linked_graphics": [
+      "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
+      "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
+    ]
+  },
+  "library_sha256": "bda3139375fa5e32be8b2cf928a3c8e55d71bb270e2587f677de5001f0e1da10",
+  "game_pid": 18181,
+  "result": {
+    "nonzero_pixels": 246,
+    "vertex_count": 300,
+    "stride": 12,
+    "color_is_byte": true,
+    "depth_test": false,
+    "blend": false,
+    "cull_face": true,
+    "position_min": [
+      -24,
+      -24
+    ],
+    "position_max": [
+      24,
+      24
+    ],
+    "has_position_bounds": true,
+    "cause": null
+  },
+  "gl_flushes": 1,
+  "gl_draw_still_called": true,
+  "game_returncode": 0
+}
