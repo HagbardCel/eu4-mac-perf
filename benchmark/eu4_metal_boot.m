@@ -43,12 +43,23 @@ typedef uint32_t (*GetFlagsFn)(void *);
 typedef void *(*CreateViewFn)(void *);
 typedef void *(*GetLayerFn)(void *);
 typedef void *(*CreateWindowFn)(const char *, int, int, int, int, uint32_t);
+typedef const char *(*GetErrorFn)(void);
+typedef void (*ClearErrorFn)(void);
 
 static GetFlagsFn g_get_flags;
 static CreateViewFn g_create_view;
 static GetLayerFn g_get_layer;
 static CreateWindowFn g_original;
+static GetErrorFn g_get_error;
+static ClearErrorFn g_clear_error;
 static char g_receipt[1024];
+static char g_sdl_error[256];
+static int g_have_sdl_error;
+static int g_record_window_size;
+static int g_window_w;
+static int g_window_h;
+
+static void copy_sdl_error(void);
 
 __attribute__((noreturn)) static void finish(const char *result, const char *cause, uint32_t incoming,
                                                   uint32_t passed,
@@ -81,8 +92,17 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
         failed = have_window_flags ? fprintf(out, "%u", window_flags) < 0 : fputs("null", out) == EOF;
     }
     if (!failed) {
+        failed = g_record_window_size
+                     ? fprintf(out, ",\n  \"window_width\": %d,\n  \"window_height\": %d,\n", g_window_w,
+                               g_window_h) < 0
+                     : fputs(",\n  \"window_width\": null,\n  \"window_height\": null,\n", out) == EOF;
+    }
+    if (!failed) {
+        failed = g_have_sdl_error ? fprintf(out, "  \"sdl_error\": \"%s\",\n", g_sdl_error) < 0
+                                  : fputs("  \"sdl_error\": null,\n", out) == EOF;
+    }
+    if (!failed) {
         failed = fprintf(out,
-                         ",\n"
                          "  \"view_ok\": %s,\n"
                          "  \"layer_ok\": %s,\n"
                          "  \"drawable_width\": %d,\n"
@@ -221,8 +241,15 @@ void *eu4_metal_boot_on_create(const char *title, int x, int y, int w, int h, ui
                0, 0, 0, 0, NULL, -1);
     }
     uint32_t passed = (incoming & ~(uint32_t)kOpenGL) | (uint32_t)kMetal;
+    if (g_clear_error != NULL) {
+        g_clear_error();
+    }
     void *window = g_original(title, x, y, w, h, passed);
     if (window == NULL) {
+        copy_sdl_error();
+        g_window_w = w;
+        g_window_h = h;
+        g_record_window_size = 1;
         finish("metal_window_boot_failed", "sdl_create_window_returned_null", incoming, passed, 0,
                0, 0, 0, 0, 0, NULL, -1);
     }
@@ -235,11 +262,47 @@ void *eu4_metal_boot_on_create(const char *title, int x, int y, int w, int h, ui
            NULL, -1);
 }
 
+/* SDL_GetError points at a buffer the next SDL call may replace. */
+static void copy_sdl_error(void) {
+    const char *text = g_get_error();
+    size_t out = 0;
+    g_sdl_error[0] = 0;
+    g_have_sdl_error = 1;
+    if (text == NULL) {
+        return;
+    }
+    for (size_t i = 0; text[i] != 0; i++) {
+        unsigned char c = (unsigned char)text[i];
+        if (c == '"' || c == '\\') {
+            if (out + 2 >= sizeof g_sdl_error) {
+                break;
+            }
+            g_sdl_error[out++] = '\\';
+            g_sdl_error[out++] = (char)c;
+        } else if (c < 0x20) {
+            if (out + 6 >= sizeof g_sdl_error) {
+                break;
+            }
+            if (snprintf(g_sdl_error + out, sizeof g_sdl_error - out, "\\u%04x", c) != 6) {
+                break;
+            }
+            out += 6;
+        } else if (out + 1 >= sizeof g_sdl_error) {
+            break;
+        } else {
+            g_sdl_error[out++] = (char)c;
+        }
+    }
+    g_sdl_error[out] = 0;
+}
+
 static int resolve_helpers(void) {
     g_get_flags = (GetFlagsFn)dlsym(RTLD_DEFAULT, "SDL_GetWindowFlags");
     g_create_view = (CreateViewFn)dlsym(RTLD_DEFAULT, "SDL_Metal_CreateView");
     g_get_layer = (GetLayerFn)dlsym(RTLD_DEFAULT, "SDL_Metal_GetLayer");
-    return g_get_flags != NULL && g_create_view != NULL && g_get_layer != NULL;
+    g_get_error = (GetErrorFn)dlsym(RTLD_DEFAULT, "SDL_GetError");
+    g_clear_error = (ClearErrorFn)dlsym(RTLD_DEFAULT, "SDL_ClearError");
+    return g_get_flags != NULL && g_create_view != NULL && g_get_layer != NULL && g_get_error != NULL;
 }
 
 __attribute__((constructor)) static void eu4_metal_boot_init(void) {
