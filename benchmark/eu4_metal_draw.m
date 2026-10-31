@@ -340,7 +340,7 @@ static void finish_draw(GLenum mode, GLint first, GLsizei count, int indexed, GL
         g_color_program = (GLuint)program;
     }
     if (mode != GL_TRIANGLES && mode != GL_TRIANGLE_STRIP) {
-        return; /* shortcut: a quad is not the captured draw; a later triangle can be */
+        return; /* shortcut: quads are skipped, upgrade if Color is only drawn as quads */
     }
     const char *failure = NULL;
     float uniform[16];
