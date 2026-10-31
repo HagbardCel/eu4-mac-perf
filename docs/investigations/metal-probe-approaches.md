@@ -1,0 +1,29 @@
+# Testing the Metal functions — what worked, and what did not
+
+The functions under test were small: create a Metal command buffer beside the running game, compile the Color pair, and replay one real Color draw into an offscreen texture. The useful tests were the ones that checked a return value or a byte buffer. The ones that failed inferred a frame from a side effect.
+
+## What produced evidence
+
+**A host process, with no EU4.** Compile the Metal library, draw one known triangle into a private texture, and count pixels that are not the clear color. The same viewport the EU4 path uses (origin at 0,0, positive width and height, no Y flip) decides winding: back-face culling keeps the counterclockwise triangle only for `MTLWindingCounterClockwise`, and drops it for the opposite winding. A second check creates a CGL context, calls `glShaderSource`, and reads the string back with `GL_SHADER_SOURCE_LENGTH` and `glGetShaderSource`. The length from `glGetShaderiv` includes the NUL; the length `glGetShaderSource` writes does not. A missing shader returns an error. This is the test that actually locks the Metal side. It does not need the game, and it does not flicker between sessions.
+
+**An offscreen clear in the EU4 process.** A 4×4 private `BGRA8Unorm` texture, cleared to red, blitted to a shared buffer, and waited on with `waitUntilCompleted`, reads back as BGRA `{0, 0, 255, 255}`. `commit` alone was not treated as success. One coexist session recorded that readback, plus one `CGLFlushDrawable` that returned `kCGLNoError`, while an EU4-owned window existed. That shows Metal and GL both ran. It does not show that a game draw was replayed.
+
+**Read the GL state after the original draw returns.** Interpose `glDrawArrays` and `glDrawElements`, and also replace those names when `dlsym` returns them, including the ARB aliases. Call the original, then on that thread query the current program, the attached shader source, `UNIFORM0[0]` through `UNIFORM0[3]` separately, both attribute bindings, and for an indexed draw the element buffer. Restore every binding the read changes. Replay only that vertex set into the offscreen target and write a PNG. The session that did this recorded `original_gl_draw_invoked`, a successful flush count, and 246 non-background pixels for the Color draw described in [eu4-graphics-stack-metal-experiments.md](eu4-graphics-stack-metal-experiments.md). A flush was counted only when `CGLFlushDrawable` returned `kCGLNoError`, and the receipt waited for that file instead of treating the flush as proof the draw had run.
+
+The shader translation that fed the replay is the one in [pair.md](../../analysis/metal-stage-d/v1/pair.md): GLSL normalized far enough for `glslangValidator -G100`, then `spirv-cross --msl`. The `metal` CLI is not in the active Command Line Tools, so the library is built with `newLibraryWithSource`. The vertex uniform argument has to be `constant` or that compile fails.
+
+## What did not work
+
+**A screenshot, or an SDL Metal view.** `SDL_Metal_CreateView` returned null, so there was no second view to draw into. A capture of the EU4 window was not the GL surface. Window enumeration can prove an EU4 window exists. It cannot prove what the GL drawable contained. The coexist receipt leaves the window drawable untested on purpose.
+
+**Mirroring GL as the calls happen.** Hooking `glShaderSource`, uniform calls, buffer uploads, and vertex-attrib setup, then hoping the shadow still matches at the draw, was the first Color attempt. The source length was trusted past the bytes that were actually passed. One `glGetUniformfv` on `UNIFORM0[0]` does not return the four `vec4`s; each element is its own location. The current `GL_ARRAY_BUFFER` binding is not the buffer an attribute uses; that is `GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING` on the attribute index. Bytes saved from an earlier upload were not the bytes of the draw that was rendered. Cull state was not applied. The receipt then claimed the GL draw had run because the hook existed. That 246-pixel file is not evidence for the queried path.
+
+**Recognizing Color by a careless substring.** The shared compiler header contains the text `sampler` for every effect. Requiring the fragment source to contain no such substring rejected the real Color program. The check that matches the effect is `v_TEXCOORD1` and no `uniform sampler`. Requiring `float2 vPosition` as well is what separates Color from the other `in_PDX_COLOR` shaders, which use `float4 vPosition`.
+
+**Doing GL work inside the draw hook without care.** `glDrawElements` took a non-recursive lock and, for a while, did not unlock it. The second indexed draw of the session deadlocked, and the map never finished loading. `glDrawRangeElements` is worse: its implementation can call `glDrawElements` again while the driver lock is held, and a `glGet*` from that nested hook does not return. The ranged and instanced entry points are resolved, and they were left unhooked. The Color draw that did complete came through `glDrawElements`.
+
+**Expecting the idle map to keep issuing Color.** After that one queried capture, further sessions on the same Venice save reached `End RestoreDeviceObjects` and kept presenting, and the hooked draws never had Color current. Clearing `dismissed_news_banner` did not bring the draw back; the setting was restored. Quads are skipped so a later triangle can be the capture, which means a Color quad would be missed; the completed draw was triangles. A present, a window, and a running process are not a substitute for the program id at the draw.
+
+## What to run next time
+
+Run the host triangle and the shader-source round trip first. They fail in seconds when the winding map or the MSL compile is wrong. Use one EU4 session only after that, and keep the receipt only when the three fields are set and the PNG is from that process. If Color is not current, the session is incomplete; another idle launch does not fix it.
