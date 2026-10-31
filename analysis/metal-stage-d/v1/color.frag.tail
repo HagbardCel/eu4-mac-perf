@@ -1,0 +1,28 @@
+uniform vec4 UNIFORM0[4];
+#define Matrix mat4(UNIFORM0[0], UNIFORM0[1], UNIFORM0[2], UNIFORM0[3])
+
+struct VS_INPUT
+{
+	float2 vPosition;
+	float4 vColor;
+};
+
+struct VS_OUTPUT
+{
+	float4 vPosition;
+	float4 vColor;
+};
+
+varying float4 v_TEXCOORD1;
+
+float4 glsl_main(VS_OUTPUT v)
+{
+	return v.vColor;
+}
+
+void main()
+{
+	VS_OUTPUT glsl_vertex;
+	glsl_vertex.vColor = v_TEXCOORD1;
+	gl_FragColor = glsl_main(glsl_vertex);
+}
