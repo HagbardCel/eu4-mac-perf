@@ -123,7 +123,11 @@ After this work order merges, `run.py` may:
 4. Leave session matching, the sealed log, the 120-second capture wait,
    owned-child stop, and `gfx.interpret` as they are. Do not import `project`.
 5. `captured_complete` only when `run.execution_complete` is true and the
-   interpreted observation is complete. A missing flag stays incomplete.
+   interpreted observation is complete. A missing flag stays incomplete. A
+   raw-incomplete run stays `captured_incomplete` even when `gfx.interpret`
+   returns an observation whose `completeness` is `complete`. The receipt
+   keeps that launcher outcome and that observation. It does not rewrite the
+   observation, and GEN2 remains the offline consistency check.
 6. Store that descriptor on the launcher output. Do not alter the sealed raw
    record.
 
