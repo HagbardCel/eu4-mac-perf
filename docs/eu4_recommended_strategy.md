@@ -10,6 +10,19 @@ The workstream is **function-first**: the first target is the 21-instruction, 0-
 
 **This is the canonical roadmap.** It supersedes the earlier `eu4_rendering_strategy_90pct.md` (removed; available in git history). That document's lasting architecture (Gfx seam, shadow state, pipeline caches, complete vertical slices, B→C) is carried over in §3. Its sequencing is replaced: priorities now follow measured cost rather than draw counts.
 
+**Supersession (2026-10-31): one graphics backend per process.** We deliberately choose whole-backend Metal replacement rather than GL/Metal interoperability. This removes cross-API synchronization and composition from the production architecture, at the cost of requiring a complete renderer before a usable Metal-only frame is available. OpenGL remains a separate reference run, started as its own process. A failed Metal-only attempt revises the hook or the init path. It does not by itself restore interop.
+
+This choice supersedes the hybrid dependencies below. Those sections stay as historical rationale:
+
+- §2, the offscreen map seam as the place the GL and Metal tracks join, including M1 and the diagram edge into R2b.
+- §3.5 item 2 and §3.6, coexistence through a shared offscreen target. §3.5 item 1 still stands: implement the next live slice, not a horizontal Gfx layer.
+- R2, the GL seam followed by interop, and the dependency order into R4.
+- R3, map-layer caching on that seam.
+- R4, a Metal domain composited into a GL frame, including the R2b prerequisite, the R2 target, and the live GL/B0/C0 toggle inside one process.
+- R5, domain-by-domain expansion that still composites with GL and treats GL as the in-frame fallback.
+
+The whole-backend sequence is a Metal window, then the semantics the next live render needs, then one full Metal frame. It is not the older domain-first R4/M2 plan. Map caching and caller redesign, if done later, are Metal-only. A2 and A3 must not freeze an OpenGL-shaped resource model that later Metal-native work cannot replace.
+
 Related documents:
 
 - evidence, alternatives, and ranking behind this plan: [`eu4_rendering_alternatives_ranked.md`](eu4_rendering_alternatives_ranked.md);
