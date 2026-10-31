@@ -10,11 +10,14 @@
 // Earlier OpenGL activity is outside this result.
 #import "eu4_metal_boot_patch.h"
 
+#import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import <pthread.h>
+#import <stddef.h>
+#import <stdint.h>
 #import <stdio.h>
 #import <string.h>
 #import <unistd.h>
@@ -36,28 +39,46 @@ static const char kBasis[] =
     "CApplication::CreateApplicationWindow stores this SDL_Window* on CPdxWindow and "
     "draws the loading splash with it. Call RVA 0x13cc1d7 targets SDL_CreateWindow. "
     "The PdxDetectWindow call at 0x15ed55a is a temporary settings probe and is not patched. "
-    "Earlier OpenGL activity is outside this result. SDL_GL_SetSwapInterval at 0x13cc1e4 "
-    "does not run because this wrapper does not return.";
+    "Earlier OpenGL activity is outside this result. SDL_WINDOW_METAL is not requested. "
+    "A CAMetalLayer is attached to the Cocoa content view. presentDrawable is not an on-screen inspection. "
+    "SDL_GL_SetSwapInterval at 0x13cc1e4 does not run because this wrapper does not return.";
+
+/* SDL 2.0.14 SDL_SysWMinfo on x86-64. The Cocoa NSWindow* is the first union field. */
+typedef struct {
+    uint8_t version[3];
+    uint8_t pad0;
+    int32_t subsystem;
+    uint8_t info[64];
+} eu4_sdl_syswm;
+
+_Static_assert(sizeof(eu4_sdl_syswm) == 72, "SDL 2.0.14 SysWMinfo is 72 bytes");
+_Static_assert(offsetof(eu4_sdl_syswm, subsystem) == 4, "subsystem is at byte 4");
+_Static_assert(offsetof(eu4_sdl_syswm, info) == 8, "info union is at byte 8");
 
 typedef uint32_t (*GetFlagsFn)(void *);
-typedef void *(*CreateViewFn)(void *);
-typedef void *(*GetLayerFn)(void *);
 typedef void *(*CreateWindowFn)(const char *, int, int, int, int, uint32_t);
 typedef const char *(*GetErrorFn)(void);
 typedef void (*ClearErrorFn)(void);
+typedef void (*GetVersionFn)(uint8_t version[3]);
+typedef int (*GetWMInfoFn)(void *, eu4_sdl_syswm *);
 
 static GetFlagsFn g_get_flags;
-static CreateViewFn g_create_view;
-static GetLayerFn g_get_layer;
 static CreateWindowFn g_original;
 static GetErrorFn g_get_error;
 static ClearErrorFn g_clear_error;
+static GetVersionFn g_get_version;
+static GetWMInfoFn g_get_wm_info;
 static char g_receipt[1024];
 static char g_sdl_error[256];
 static int g_have_sdl_error;
 static int g_record_window_size;
 static int g_window_w;
 static int g_window_h;
+static int g_have_subsystem;
+static int32_t g_subsystem;
+static int g_have_view_points;
+static double g_view_points_w;
+static double g_view_points_h;
 
 static void copy_sdl_error(void);
 
@@ -100,6 +121,16 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
     if (!failed) {
         failed = g_have_sdl_error ? fprintf(out, "  \"sdl_error\": \"%s\",\n", g_sdl_error) < 0
                                   : fputs("  \"sdl_error\": null,\n", out) == EOF;
+    }
+    if (!failed) {
+        failed = g_have_subsystem ? fprintf(out, "  \"wm_subsystem\": %d,\n", g_subsystem) < 0
+                                  : fputs("  \"wm_subsystem\": null,\n", out) == EOF;
+    }
+    if (!failed) {
+        failed = g_have_view_points
+                     ? fprintf(out, "  \"view_width_points\": %.2f,\n  \"view_height_points\": %.2f,\n",
+                               g_view_points_w, g_view_points_h) < 0
+                     : fputs("  \"view_width_points\": null,\n  \"view_height_points\": null,\n", out) == EOF;
     }
     if (!failed) {
         failed = fprintf(out,
@@ -155,34 +186,18 @@ static int pixels_match(const uint8_t *bytes) {
     return 1;
 }
 
-static void present(void *window, uint32_t incoming, uint32_t passed, uint32_t window_flags) {
-    if (g_create_view == NULL || g_get_layer == NULL) {
-        finish("metal_window_boot_failed", "sdl_helpers_missing", incoming, passed, 1,
-               window_flags, 0, 0, 0, 0, NULL, -1);
-    }
-    void *view = g_create_view(window);
-    if (view == NULL) {
-        finish("metal_window_boot_failed", "sdl_metal_create_view_failed", incoming, passed, 1,
-               window_flags, 0, 0, 0, 0, NULL, -1);
-    }
-    CAMetalLayer *layer = (__bridge CAMetalLayer *)g_get_layer(view);
-    if (layer == nil) {
-        finish("metal_window_boot_failed", "sdl_metal_get_layer_failed", incoming, passed, 1,
-               window_flags, 1, 0, 0, 0, NULL, -1);
-    }
-    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+static void present(CAMetalLayer *layer, uint32_t incoming, uint32_t passed, uint32_t window_flags) {
+    id<MTLDevice> device = layer.device;
     if (device == nil) {
-        finish("metal_window_boot_failed", "no_metal_device", incoming, passed, 1, window_flags,
-               1, 1, 0, 0, NULL, -1);
+        finish("metal_window_boot_failed", "no_metal_device", incoming, passed, 1, window_flags, 1,
+               1, 0, 0, NULL, -1);
     }
     id<MTLCommandQueue> queue = [device newCommandQueue];
-    layer.device = device;
-    layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    layer.framebufferOnly = NO;
     id<CAMetalDrawable> drawable = [layer nextDrawable];
     if (drawable == nil) {
         finish("metal_window_boot_failed", "drawable_unavailable_at_window_creation", incoming,
-               passed, 1, window_flags, 1, 1, 0, 0, NULL, -1);
+               passed, 1, window_flags, 1, 1, (int)layer.drawableSize.width,
+               (int)layer.drawableSize.height, NULL, -1);
     }
     NSUInteger width = drawable.texture.width;
     NSUInteger height = drawable.texture.height;
@@ -225,13 +240,69 @@ static void present(void *window, uint32_t incoming, uint32_t passed, uint32_t w
            (int)width, (int)height, status, matches);
 }
 
+static void record_view_points(NSView *view) {
+    g_have_view_points = 1;
+    g_view_points_w = view.bounds.size.width;
+    g_view_points_h = view.bounds.size.height;
+}
+
 static void boot_window(void *window, uint32_t incoming, uint32_t passed) {
     uint32_t reported = g_get_flags(window);
-    if ((reported & kMetal) == 0 || (reported & kOpenGL) != 0) {
-        finish("metal_window_boot_failed", "window_flags_are_not_metal", incoming, passed, 1,
+    if ((reported & kOpenGL) != 0) {
+        copy_sdl_error();
+        finish("metal_window_boot_failed", "window_flags_still_opengl", incoming, passed, 1,
                reported, 0, 0, 0, 0, NULL, -1);
     }
-    present(window, incoming, passed, reported);
+    if ((reported & kMetal) != 0) {
+        copy_sdl_error();
+        finish("metal_window_boot_failed", "window_flags_include_metal", incoming, passed, 1,
+               reported, 0, 0, 0, 0, NULL, -1);
+    }
+    eu4_sdl_syswm info;
+    memset(&info, 0, sizeof info);
+    g_get_version(info.version);
+    int wm_ok = g_get_wm_info(window, &info);
+    g_have_subsystem = 1;
+    g_subsystem = info.subsystem;
+    void *raw = NULL;
+    memcpy(&raw, info.info, sizeof raw);
+    if (!wm_ok || info.subsystem != 4 || raw == NULL) {
+        copy_sdl_error();
+        finish("metal_window_boot_failed", "cocoa_window_unavailable", incoming, passed, 1, reported,
+               0, 0, 0, 0, NULL, -1);
+    }
+    NSWindow *native = (__bridge NSWindow *)raw;
+    NSView *content = native.contentView;
+    if (content == nil) {
+        finish("metal_window_boot_failed", "native_view_unavailable", incoming, passed, 1, reported,
+               0, 0, 0, 0, NULL, -1);
+    }
+    if (NSIsEmptyRect(content.bounds)) {
+        record_view_points(content);
+        finish("metal_window_boot_failed", "content_bounds_empty", incoming, passed, 1, reported, 0,
+               0, 0, 0, NULL, -1);
+    }
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device == nil) {
+        finish("metal_window_boot_failed", "no_metal_device", incoming, passed, 1, reported, 0, 0,
+               0, 0, NULL, -1);
+    }
+    NSView *child = [[NSView alloc] initWithFrame:content.bounds];
+    CAMetalLayer *layer = [CAMetalLayer layer];
+    layer.device = device;
+    layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    layer.framebufferOnly = NO;
+    child.layer = layer;
+    child.wantsLayer = YES;
+    [content addSubview:child];
+    if (child.layer != layer) {
+        finish("metal_window_boot_failed", "metal_layer_attach_failed", incoming, passed, 1,
+               reported, 1, 0, 0, 0, NULL, -1);
+    }
+    record_view_points(child);
+    NSRect backing = [child convertRectToBacking:child.bounds];
+    layer.drawableSize = backing.size;
+    present(layer, incoming, passed, reported);
 }
 
 void *eu4_metal_boot_on_create(const char *title, int x, int y, int w, int h, uint32_t flags) {
@@ -240,16 +311,16 @@ void *eu4_metal_boot_on_create(const char *title, int x, int y, int w, int h, ui
         finish("metal_window_boot_failed", "incoming_flags_lack_opengl", incoming, incoming, 0, 0,
                0, 0, 0, 0, NULL, -1);
     }
-    uint32_t passed = (incoming & ~(uint32_t)kOpenGL) | (uint32_t)kMetal;
+    uint32_t passed = incoming & ~(uint32_t)kOpenGL;
     if (g_clear_error != NULL) {
         g_clear_error();
     }
+    g_window_w = w;
+    g_window_h = h;
+    g_record_window_size = 1;
     void *window = g_original(title, x, y, w, h, passed);
     if (window == NULL) {
         copy_sdl_error();
-        g_window_w = w;
-        g_window_h = h;
-        g_record_window_size = 1;
         finish("metal_window_boot_failed", "sdl_create_window_returned_null", incoming, passed, 0,
                0, 0, 0, 0, 0, NULL, -1);
     }
@@ -298,11 +369,11 @@ static void copy_sdl_error(void) {
 
 static int resolve_helpers(void) {
     g_get_flags = (GetFlagsFn)dlsym(RTLD_DEFAULT, "SDL_GetWindowFlags");
-    g_create_view = (CreateViewFn)dlsym(RTLD_DEFAULT, "SDL_Metal_CreateView");
-    g_get_layer = (GetLayerFn)dlsym(RTLD_DEFAULT, "SDL_Metal_GetLayer");
+    g_get_version = (GetVersionFn)dlsym(RTLD_DEFAULT, "SDL_GetVersion");
+    g_get_wm_info = (GetWMInfoFn)dlsym(RTLD_DEFAULT, "SDL_GetWindowWMInfo");
     g_get_error = (GetErrorFn)dlsym(RTLD_DEFAULT, "SDL_GetError");
     g_clear_error = (ClearErrorFn)dlsym(RTLD_DEFAULT, "SDL_ClearError");
-    return g_get_flags != NULL && g_create_view != NULL && g_get_layer != NULL && g_get_error != NULL;
+    return g_get_flags != NULL && g_get_version != NULL && g_get_wm_info != NULL && g_get_error != NULL;
 }
 
 __attribute__((constructor)) static void eu4_metal_boot_init(void) {

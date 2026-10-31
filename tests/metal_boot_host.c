@@ -33,7 +33,7 @@ extern int metal_boot_site(int, int, int, int, int, int);
 int metal_boot_wrapper(int a, int b, int c, int d, int e, int flags) {
     int (*original)(int, int, int, int, int, int) = installed.original;
     wrapper_calls += 1;
-    return original(a, b, c, d, e, (flags & ~2) | 0x20000000);
+    return original(a, b, c, d, e, flags & ~2);
 }
 
 static void fail(const char *message) {
@@ -110,7 +110,7 @@ int main(void) {
     if (wrapper_calls != 1 || target_calls != 1) {
         fail("wrapper did not call the original");
     }
-    if (target_flags != ((0x6 & ~2) | 0x20000000) || seen != target_flags) {
+    if (target_flags != (0x6 & ~2) || seen != target_flags) {
         fail("sixth argument was not rewritten");
     }
     if (!eu4_metal_boot_restore()) {

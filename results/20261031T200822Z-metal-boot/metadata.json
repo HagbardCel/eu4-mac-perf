@@ -1,6 +1,6 @@
 {
-  "status": "failed",
-  "started_utc": "2026-10-31T19:40:34.498950+00:00",
+  "status": "complete",
+  "started_utc": "2026-10-31T20:08:39.790129+00:00",
   "gog": {
     "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
     "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
@@ -17,6 +17,6 @@
       "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
     ]
   },
-  "exit_code": 2,
-  "result": "metal_window_boot_failed"
+  "exit_code": 0,
+  "result": "metal_window_boot_verified"
 }

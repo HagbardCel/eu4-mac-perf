@@ -30,7 +30,7 @@ def build_library(arch: str = "x86_64") -> Path:
     output = LIBRARY if arch == "x86_64" else LIBRARY.with_name(f"libeu4_metal_boot_{arch}.dylib")
     command = [
         "clang", "-arch", arch, "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-dynamiclib",
-        "-framework", "Foundation", "-framework", "Metal", "-framework", "QuartzCore",
+        "-framework", "AppKit", "-framework", "Foundation", "-framework", "Metal", "-framework", "QuartzCore",
         "-o", str(output), str(SOURCE), str(PATCH),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -98,6 +98,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180) -> dict:
     receipt_path = run_dir / "receipt.json"
     env = os.environ.copy()
     env["EU4_METAL_BOOT_RECEIPT"] = str(receipt_path)
+    env["SDL_VIDEO_EXTERNAL_CONTEXT"] = "1"
     env["DYLD_INSERT_LIBRARIES"] = str(library)
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")

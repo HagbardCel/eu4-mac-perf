@@ -9,6 +9,7 @@ import eu4_metal_boot as probe  # noqa: E402
 @unittest.skipUnless(sys.platform == "darwin", "Metal boot patch runs on macOS")
 class MetalBootTests(unittest.TestCase):
     def test_callsite_rewrite_and_restore(self):
+        probe.build_library("x86_64")
         probe.run_host("x86_64")
 
 
