@@ -85,13 +85,22 @@ int main(void) {
     memcpy(wrong, expected, 5);
     wrong[1] ^= 0xff;
     eu4_metal_boot_patch ignored = {0};
-    if (eu4_metal_boot_install((void *)metal_boot_site, wrong, metal_boot_wrapper, &ignored)) {
+    if (eu4_metal_boot_install((void *)metal_boot_site, wrong, metal_boot_target, metal_boot_wrapper,
+                               &ignored)) {
         fail("mismatched bytes were patched");
     }
     if (memcmp((void *)metal_boot_site, expected, 5) != 0) {
         fail("mismatched install changed the callsite");
     }
-    if (!eu4_metal_boot_install((void *)metal_boot_site, expected, metal_boot_wrapper, &installed)) {
+    if (eu4_metal_boot_install((void *)metal_boot_site, expected, (void *)1, metal_boot_wrapper,
+                               &ignored)) {
+        fail("wrong callee was patched");
+    }
+    if (memcmp((void *)metal_boot_site, expected, 5) != 0) {
+        fail("wrong callee changed the callsite");
+    }
+    if (!eu4_metal_boot_install((void *)metal_boot_site, expected, metal_boot_target,
+                                metal_boot_wrapper, &installed)) {
         fail("install failed");
     }
     if (installed.original != (void *)metal_boot_target) {

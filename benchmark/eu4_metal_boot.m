@@ -12,7 +12,6 @@
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
-#import <dispatch/dispatch.h>
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import <pthread.h>
@@ -77,34 +76,39 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
     if (out == NULL) {
         _exit(kExitFail);
     }
-    fputs(body, out);
-    if (have_window_flags) {
-        fprintf(out, "%u", window_flags);
-    } else {
-        fputs("null", out);
+    int failed = fputs(body, out) == EOF;
+    if (!failed) {
+        failed = have_window_flags ? fprintf(out, "%u", window_flags) < 0 : fputs("null", out) == EOF;
     }
-    fprintf(out,
-            ",\n"
-            "  \"view_ok\": %s,\n"
-            "  \"layer_ok\": %s,\n"
-            "  \"drawable_width\": %d,\n"
-            "  \"drawable_height\": %d,\n"
-            "  \"command_status\": %s%s%s,\n"
-            "  \"readback_matches\": %s,\n"
-            "  \"cause\": %s%s%s\n"
-            "}\n",
-            view_ok ? "true" : "false", layer_ok ? "true" : "false", width, height,
-            command_status ? "\"" : "null", command_status ? command_status : "",
-            command_status ? "\"" : "",
-            readback_matches < 0 ? "null" : readback_matches ? "true" : "false",
-            cause ? "\"" : "null", cause ? cause : "", cause ? "\"" : "");
-    fflush(out);
-    int fd = fileno(out);
-    if (fd >= 0) {
-        fsync(fd);
+    if (!failed) {
+        failed = fprintf(out,
+                         ",\n"
+                         "  \"view_ok\": %s,\n"
+                         "  \"layer_ok\": %s,\n"
+                         "  \"drawable_width\": %d,\n"
+                         "  \"drawable_height\": %d,\n"
+                         "  \"command_status\": %s%s%s,\n"
+                         "  \"readback_matches\": %s,\n"
+                         "  \"cause\": %s%s%s\n"
+                         "}\n",
+                         view_ok ? "true" : "false", layer_ok ? "true" : "false", width, height,
+                         command_status ? "\"" : "null", command_status ? command_status : "",
+                         command_status ? "\"" : "",
+                         readback_matches < 0 ? "null" : readback_matches ? "true" : "false",
+                         cause ? "\"" : "null", cause ? cause : "", cause ? "\"" : "") < 0;
     }
-    fclose(out);
-    _exit(strcmp(result, "metal_window_boot_verified") == 0 ? 0 : kExitFail);
+    if (!failed) {
+        failed = fflush(out) != 0;
+    }
+    if (!failed) {
+        int fd = fileno(out);
+        failed = fd < 0 || fsync(fd) != 0;
+    }
+    if (fclose(out) != 0) {
+        failed = 1;
+    }
+    int verified = !failed && strcmp(result, "metal_window_boot_verified") == 0;
+    _exit(verified ? 0 : kExitFail);
 }
 
 static const struct mach_header_64 *eu4_header(void) {
@@ -222,13 +226,11 @@ void *eu4_metal_boot_on_create(const char *title, int x, int y, int w, int h, ui
         finish("metal_window_boot_failed", "sdl_create_window_returned_null", incoming, passed, 0,
                0, 0, 0, 0, 0, NULL, -1);
     }
-    if (pthread_main_np() != 0) {
-        boot_window(window, incoming, passed);
-    } else {
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            boot_window(window, incoming, passed);
-        });
+    if (pthread_main_np() == 0) {
+        finish("metal_window_boot_failed", "not_main_thread", incoming, passed, 0, 0, 0, 0, 0, 0,
+               NULL, -1);
     }
+    boot_window(window, incoming, passed);
     finish("metal_window_boot_failed", "wrapper_returned", incoming, passed, 0, 0, 0, 0, 0, 0,
            NULL, -1);
 }
@@ -256,14 +258,10 @@ __attribute__((constructor)) static void eu4_metal_boot_init(void) {
                -1);
     }
     void *site = (uint8_t *)header + kCallRva;
+    void *expected = (uint8_t *)header + kCreateRva;
     eu4_metal_boot_patch patch = {0};
-    if (!eu4_metal_boot_install(site, kExpectedCall, eu4_metal_boot_on_create, &patch)) {
+    if (!eu4_metal_boot_install(site, kExpectedCall, expected, eu4_metal_boot_on_create, &patch)) {
         finish("metal_window_boot_failed", "callsite_rejected", 0, 0, 0, 0, 0, 0, 0, 0, NULL, -1);
-    }
-    if (patch.original != (uint8_t *)header + kCreateRva) {
-        (void)eu4_metal_boot_restore();
-        finish("metal_window_boot_failed", "decoded_target_is_not_sdl_create_window", 0, 0, 0, 0, 0,
-               0, 0, 0, NULL, -1);
     }
     g_original = (CreateWindowFn)patch.original;
 }

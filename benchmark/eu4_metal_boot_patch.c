@@ -89,8 +89,8 @@ static void *allocate_near(uintptr_t site) {
     return NULL;
 }
 
-bool eu4_metal_boot_install(void *callsite, const uint8_t expected[5], void *wrapper,
-                            eu4_metal_boot_patch *out) {
+bool eu4_metal_boot_install(void *callsite, const uint8_t expected[5], void *expected_original,
+                            void *wrapper, eu4_metal_boot_patch *out) {
     size_t page = page_bytes();
     if (installed || callsite == NULL || expected == NULL || wrapper == NULL || out == NULL ||
         page == 0 || expected[0] != 0xe8) {
@@ -102,6 +102,10 @@ bool eu4_metal_boot_install(void *callsite, const uint8_t expected[5], void *wra
         return false;
     }
     if (memcmp(callsite, expected, 5) != 0) {
+        return false;
+    }
+    void *original = decode_call(callsite);
+    if (original != expected_original) {
         return false;
     }
 
@@ -127,7 +131,6 @@ bool eu4_metal_boot_install(void *callsite, const uint8_t expected[5], void *wra
         }
         return false;
     }
-    void *original = decode_call(callsite);
     memcpy(saved, callsite, 5);
     uint8_t encoded[5];
     if (!eu4_metal_boot_encode_call(callsite, dest, encoded)) {
