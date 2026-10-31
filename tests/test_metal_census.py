@@ -83,6 +83,13 @@ class MetalCensusTests(unittest.TestCase):
         self.assertEqual(bundle["bypasses"], [])
         self.assertEqual(bundle["direct_gl_caller_count"], 1)
         self.assertEqual(bundle["direct_gl_in_gfx"], 1)
+        candidate_names = {row["name"] for row in bundle["direct_gl_candidates"]}
+        surface_names = {row["name"] for row in bundle["implementation_surface"]}
+        self.assertEqual(candidate_names, {"_GfxDraw"})
+        self.assertIn("_GfxShutdown", surface_names)
+        self.assertNotIn("_GfxShutdown", candidate_names)
+        self.assertEqual(bundle["platform_gaps"]["platform_assessment"], "platform_not_assessed")
+        self.assertNotIn("unresolved_active_platform_op", bundle["platform_gaps"])
 
     def test_transitive_helper_is_behind_cut(self) -> None:
         functions = [
@@ -260,10 +267,26 @@ class MetalCensusTests(unittest.TestCase):
             ],
         }
         row = classify_static_site(static, "0x1602", prior=None)
-        self.assertEqual(row["classification"], "bounded_candidates")
+        self.assertEqual(row["classification"], "unresolved")
         self.assertEqual(row["mechanism_id"], "slot_loaded_register")
-        self.assertIn("0x0000000002252010", row["target_evidence"])
+        self.assertEqual(row["operand_source"]["slot_rva"], "0x0000000002252010")
+        self.assertEqual(row["operand_source"]["load_rva"], "0x0000000000001601")
+        self.assertIn("pointer source", row["operand_source"]["reason"])
         self.assertFalse(row["reviewed"])
+        reviewed = classify_static_site(
+            static,
+            "0x1602",
+            prior={
+                "classification": "confirmed_graphics_dispatch",
+                "target_evidence": ["0x1601", "0x1602"],
+                "reason": "reviewed closed list",
+                "confidence": "reviewed",
+                "mechanism_id": "slot_loaded_register",
+                "reviewed": True,
+            },
+        )
+        self.assertEqual(reviewed["classification"], "confirmed_graphics_dispatch")
+        self.assertTrue(reviewed["reviewed"])
 
 
 if __name__ == "__main__":

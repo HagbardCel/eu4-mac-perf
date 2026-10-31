@@ -11,8 +11,7 @@ import argparse
 import json
 import re
 import sys
-import zipfile
-from collections import defaultdict, deque
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +19,8 @@ from reverse_engineering.call_graph import (
     ENDPOINT_STATUS_DIRECT_BYPASS,
     ENDPOINT_STATUS_INDETERMINATE,
     CallGraph,
+    ancestors_of,
+    descendants_of,
     endpoint_status_from_sets,
     is_external_node,
     load_call_graph,
@@ -76,7 +77,6 @@ WINDOW_TOKENS = (
     "CAMetalLayer",
     "Cocoa",
 )
-QUERY_GL = frozenset({"_glGetString", "glGetString"})
 CALL_MEM = re.compile(
     r"qword ptr \[([A-Z][A-Z0-9]{0,2})(?: \+ (0x[0-9a-fA-F]+))?\]",
     re.I,
@@ -101,15 +101,6 @@ def is_public_sdl_gl(name: str) -> bool:
     if name.endswith("_REAL") or name.endswith("_DEFAULT"):
         return False
     return True
-
-
-def is_sdl_internal(name: str) -> bool:
-    return (
-        name.endswith("_REAL")
-        or name.endswith("_DEFAULT")
-        or name.startswith("_GL_")
-        or name.startswith("_GLES2_")
-    )
 
 
 def is_glew_body(name: str) -> bool:
@@ -258,46 +249,6 @@ def _resolve_roots(graph: CallGraph, cut: frozenset[str]) -> tuple[list[str], li
     return ordered, notes
 
 
-def _cone_behind(graph: CallGraph, cut: frozenset[str]) -> set[str]:
-    seen: set[str] = set()
-    queue: deque[str] = deque()
-    for member in cut:
-        for callee, _meta in graph.resolved_adj.get(member, []):
-            if callee in cut or is_external_node(callee) or callee in seen:
-                continue
-            seen.add(callee)
-            queue.append(callee)
-    while queue:
-        node = queue.popleft()
-        for callee, _meta in graph.resolved_adj.get(node, []):
-            if callee in cut or is_external_node(callee) or callee in seen:
-                continue
-            seen.add(callee)
-            queue.append(callee)
-    return seen
-
-
-def _reaches_gl(graph: CallGraph, gl_endpoints: set[str]) -> set[str]:
-    reverse: dict[str, list[str]] = defaultdict(list)
-    for caller, edges in graph.resolved_adj.items():
-        for callee, _meta in edges:
-            reverse[callee].append(caller)
-    seen: set[str] = set()
-    queue: deque[str] = deque()
-    for endpoint in gl_endpoints:
-        for pred in reverse.get(endpoint, []):
-            if pred not in seen:
-                seen.add(pred)
-                queue.append(pred)
-    while queue:
-        node = queue.popleft()
-        for pred in reverse.get(node, []):
-            if pred not in seen and not is_external_node(pred):
-                seen.add(pred)
-                queue.append(pred)
-    return {node for node in seen if not is_external_node(node)}
-
-
 def _incoming_by_endpoint(graph: CallGraph) -> tuple[dict[str, list[tuple[str, dict[str, Any]]]], dict[str, list[tuple[str, dict[str, Any]]]]]:
     resolved: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
     direct: dict[str, list[tuple[str, dict[str, Any]]]] = defaultdict(list)
@@ -327,6 +278,7 @@ def _window_notes(text: str | None, rva: str | None) -> dict[str, Any]:
         "status": "scanned",
         "tokens_present": present,
         "tokens_absent": absent,
+        "note": "Token hits are names present in pseudocode, not a drawable-lifecycle assessment.",
     }
 
 
@@ -384,7 +336,7 @@ def _platform_gaps(
     return {
         "not_observed": not_observed,
         "unreferenced_platform_thunk": unreferenced,
-        "unresolved_active_platform_op": [],
+        "platform_assessment": "platform_not_assessed",
         "adapter_path": adapter,
         "window_adaptation": _window_notes(window_text, window_rva),
         "boundary_thunks_without_caller": thunks_without,
@@ -454,8 +406,15 @@ def build_census(
             )
     bypasses.sort(key=lambda item: (item["root_rva"], item["endpoint"], item["status"]))
 
-    cone = _cone_behind(graph, cut)
-    gl_reachers = _reaches_gl(graph, gl_endpoints)
+    # descendants_of skips a root that is inside the cut, so the seeds are the first callees outside it.
+    cone_seeds = [
+        callee
+        for member in cut
+        for callee, _meta in graph.resolved_adj.get(member, [])
+        if callee not in cut and not is_external_node(callee)
+    ]
+    cone = descendants_of(graph, cone_seeds, cut)
+    gl_reachers = ancestors_of(graph, gl_endpoints)
     gl_caller_rvas = {
         row["caller_rva"]
         for row in callers
@@ -512,7 +471,7 @@ def build_census(
 
     established = [row for row in bypasses if row["established"]]
     uncertain = [row for row in bypasses if not row["established"]]
-    if missing_roots or uncertain or gaps["unresolved_active_platform_op"]:
+    if missing_roots or uncertain:
         boundary_verdict = "inconclusive"
     elif not established:
         boundary_verdict = "compact_gfx_boundary"
@@ -524,6 +483,29 @@ def build_census(
     sites = selected_indirect_rows(scope_rows)
     gfx_rows = [row for row in callers if any(site["family"] == "gl" for site in row["callsites"])]
     outside_gl = [row for row in gfx_rows if not row["in_gfx"]]
+    direct_gl_candidates = [
+        {
+            "caller_rva": row["caller_rva"],
+            "name": row["name"],
+            "instruction_count": row["instruction_count"],
+            "endpoints": sorted({site["endpoint"] for site in row["callsites"] if site["family"] == "gl"}),
+        }
+        for row in gfx_rows
+        if not is_glew_body(row["name"])
+    ]
+    implementation_surface = [
+        {"entry_rva": rva, "name": fn_name(graph.functions.get(rva)), "role": "cut"}
+        for rva in sorted(cut)
+    ]
+    implementation_surface.extend(
+        {
+            "entry_rva": row["entry_rva"],
+            "name": row["name"],
+            "role": row["known_root"],
+        }
+        for row in helpers
+        if row["known_root"] in {"behind_cut", "shared"}
+    )
     glew_init = sorted(
         rva for rva, row in graph.functions.items() if fn_name(row) in {"_glewInit", "__glewInit"}
     )
@@ -559,6 +541,8 @@ def build_census(
             }
             for row in outside_gl
         ],
+        "direct_gl_candidates": direct_gl_candidates,
+        "implementation_surface": implementation_surface,
         "platform_gaps": gaps,
         "bypasses": bypasses,
         "helpers": helpers,
@@ -644,16 +628,20 @@ def render_boundary_md(bundle: dict[str, Any]) -> str:
             f"- Bounded candidates: {coverage['bounded_candidates']}",
             f"- Confirmed graphics dispatches: {coverage['confirmed_graphics_dispatch']}",
             f"- Confirmed non-graphics dispatches: {coverage['confirmed_non_graphics']}",
+            f"- Minimum direct-GL candidates: {len(bundle['direct_gl_candidates'])}",
+            f"- Implementation surface (cut plus behind-cut and shared helpers): {len(bundle['implementation_surface'])}",
             f"- GLEW init callers: {len(bundle['glew_init_dependency']['caller_rvas'])}",
             "",
             coverage["note"],
             "",
             "## Platform adaptation",
             "",
+            f"- Platform assessment: `{gaps['platform_assessment']}`",
             f"- Unreferenced NSOpenGL thunks: {len(gaps['unreferenced_platform_thunk'])}",
             f"- Adapter SDL_GL callsites: {len(gaps['adapter_path'])}",
             f"- CGL rows: {len(gaps['not_observed'])}",
             f"- Window scan: {gaps['window_adaptation'].get('status')}",
+            "- Window tokens are names found in pseudocode, not a drawable-lifecycle result.",
         ]
     )
     present = gaps["window_adaptation"].get("tokens_present") or []
@@ -664,8 +652,8 @@ def render_boundary_md(bundle: dict[str, Any]) -> str:
             "",
             "## Remaining uncertainties",
             "",
-            "- Material: any survivor listed in `boundary.json` under `bypasses`, and any `unresolved_active_platform_op`.",
-            "- Low impact: unreferenced NSOpenGL thunks, and `not_observed` CGL, unless a required operation is later tied to them.",
+            "- Material: any survivor listed in `boundary.json` under `bypasses`.",
+            "- Platform lifecycle was not assessed. Unreferenced NSOpenGL thunks and `not_observed` CGL stay disclosed.",
             "- Not analyzed: indirect sites in `CInGameIdler::Render` and other functions outside the selected site list.",
             "",
             "## Effort estimate",
@@ -677,11 +665,6 @@ def render_boundary_md(bundle: dict[str, Any]) -> str:
         lines.append("Pending the indirect-dispatch pass. Original `_Gfx*` size is above.")
     else:
         lines.append(effort.get("summary") or "")
-        for row in effort.get("representatives") or []:
-            lines.append(
-                f"- `{row['name']}`: {row['instruction_count']} instructions, "
-                f"{row['decompiled_lines']} decompiled lines"
-            )
     lines.extend(["", "## Recommendation", "", f"`{bundle['boundary_verdict']}`", ""])
     return "\n".join(lines)
 
@@ -762,16 +745,24 @@ def trace_call_operand(instructions: list[dict[str, Any]], index: int) -> dict[s
         if mnem in {"LEA", "MOV"} and slot:
             return {
                 "mechanism_id": "slot_loaded_register",
-                "classification": "bounded_candidates",
-                "confidence": "call_operand_traced_to_slot",
+                "classification": "unresolved",
+                "confidence": "untraced",
                 "target_evidence": [
                     norm_rva(prior["instruction_rva"]),
                     norm_rva(ins["instruction_rva"]),
                     norm_rva(slot),
                 ],
+                "operand_source": {
+                    "load_rva": norm_rva(prior["instruction_rva"]),
+                    "slot_rva": norm_rva(slot),
+                    "reason": (
+                        "The call register is loaded from this slot and not overwritten in this window. "
+                        "The slot is a pointer source, not a closed set of target functions."
+                    ),
+                },
                 "reason": (
-                    f"{reg} is loaded from slot {norm_rva(slot)} and not overwritten before the call. "
-                    "The slot's symbol is not named by the machine operand, so the graphics target stays a candidate."
+                    f"{reg} is loaded from slot {norm_rva(slot)} before the call. "
+                    "That address does not identify which functions the slot can hold."
                 ),
                 "reviewed": False,
             }
@@ -809,8 +800,8 @@ def site_instruction(static_row: dict[str, Any], callsite_rva: str) -> dict[str,
 
 
 def check_classification(row: dict[str, Any], known_rvas: set[str]) -> None:
-    if row["classification"] == "confirmed_graphics_dispatch" and not row.get("reviewed"):
-        raise ReError("confirmed_graphics_dispatch requires a reviewed reason")
+    if row["classification"] in {"confirmed_graphics_dispatch", "bounded_candidates"} and not row.get("reviewed"):
+        raise ReError(f"{row['classification']} requires a reviewed closed target list")
     for rva in row.get("target_evidence") or []:
         if norm_rva(rva) not in known_rvas:
             raise ReError(f"evidence RVA {rva} is not in the validated function")
@@ -831,6 +822,8 @@ def classify_static_site(static_row: dict[str, Any], callsite_rva: str, *, prior
         "mechanism_id": auto["mechanism_id"],
         "reviewed": False,
     }
+    if auto.get("operand_source"):
+        row["operand_source"] = auto["operand_source"]
     if prior and prior.get("reviewed"):
         row.update(
             {
@@ -887,155 +880,83 @@ def _load_static_by_rva(exp: Path, summary: dict[str, Any], needed: set[str]) ->
     return found
 
 
-def _migration_label(name: str, in_gfx: bool, endpoints: set[str], classes: list[str]) -> str:
-    if is_glew_body(name) or is_sdl_internal(name):
-        return "exclude"
-    if name == WINDOW_NAME:
-        return "adapter_candidate"
-    if name == "BuildGLSL" and endpoints and endpoints <= QUERY_GL:
-        return "retain_candidate"
-    if endpoints:
-        return "replace_candidate"
-    if "confirmed_graphics_dispatch" in classes:
-        return "replace_candidate"
-    if classes:
-        return "unresolved"
-    if in_gfx:
-        return "retain_candidate"
-    return "unresolved"
-
-
-def _effort(bundle: dict[str, Any], static_by_rva: dict[str, dict[str, Any]], labels: list[dict[str, Any]]) -> dict[str, Any]:
-    replace = [row for row in labels if row["migration"] == "replace_candidate"]
-    reps = []
+def _effort(bundle: dict[str, Any], static_by_rva: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    candidates = bundle["direct_gl_candidates"]
     total_lines = 0
+    counted = 0
     total_ins = 0
-    for row in replace:
-        static = static_by_rva.get(row["entry_rva"]) or {}
-        text = static.get("pseudocode") or ""
-        lines = len(text.splitlines()) if text else 0
-        total_lines += lines
+    for row in candidates:
         total_ins += row.get("instruction_count") or 0
-        reps.append({**row, "decompiled_lines": lines})
-    reps.sort(key=lambda item: (item["instruction_count"], item["entry_rva"]))
-    ranked = [row for row in reps if row["decompiled_lines"]]
-    pool = ranked or reps
-    chosen = []
-    if pool:
-        chosen = [pool[0], pool[len(pool) // 2], pool[-1]]
-        # unique by rva, stable
-        seen = set()
-        picked = []
-        for row in chosen:
-            if row["entry_rva"] not in seen:
-                seen.add(row["entry_rva"])
-                picked.append(row)
-        chosen = picked
-    low = total_lines
-    high = total_lines + total_lines // 2
+        text = (static_by_rva.get(row["caller_rva"]) or {}).get("pseudocode") or ""
+        if text:
+            total_lines += len(text.splitlines())
+            counted += 1
+    surface = len(bundle["implementation_surface"])
     summary = (
-        f"Replace candidates: {len(replace)} functions, {total_ins} original instructions, "
-        f"{total_lines} decompiled lines. Faithful C++ is estimated at {low}–{high} lines: "
-        "the low end is the decompiled line count of those functions, and the high end adds "
-        "about half again for types and calls the decompiler left implicit. "
-        "That band is taken from the decompiled bodies of the representative functions below, "
-        "not from an instruction-to-line multiplier. "
-        "Metal infrastructure, which has no original body, is a separate 1500–4000 lines "
-        "for a device, queue, pipeline cache, and resource table. "
-        "Shader conversion is deferred to stage D."
+        f"Minimum direct-GL set: {len(candidates)} functions and {total_ins} instructions. "
+        f"Decompiled lines for that set, where the snapshot has a body: {total_lines} across {counted} functions. "
+        f"The implementation surface is {surface} functions (the `_Gfx*` cut plus behind-cut and shared helpers) "
+        "and is not classified as retain or replace. "
+        "Faithful C++ and Metal infrastructure are not estimated. Shader conversion is deferred to stage D."
     )
     return {
-        "status": "estimated",
-        "replace_candidate_count": len(replace),
-        "replace_instructions": total_ins,
+        "status": "descriptive",
+        "direct_gl_candidate_count": len(candidates),
+        "direct_gl_instructions": total_ins,
         "decompiled_lines": total_lines,
-        "faithful_cpp_lines": [low, high],
-        "metal_infrastructure_lines": [1500, 4000],
+        "decompiled_functions": counted,
+        "implementation_surface_count": surface,
+        "faithful_cpp": "not_estimated",
+        "metal_infrastructure": "not_estimated",
         "shader_conversion": "deferred to stage D",
         "summary": summary,
-        "representatives": [
-            {
-                "entry_rva": row["entry_rva"],
-                "name": row["name"],
-                "instruction_count": row["instruction_count"],
-                "decompiled_lines": row["decompiled_lines"],
-            }
-            for row in chosen
-        ],
     }
 
 
 def apply_indirect(
     bundle: dict[str, Any],
     static_by_rva: dict[str, dict[str, Any]],
-    graph: CallGraph,
     prior_sites: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     prior = {(row["caller_rva"], row["callsite_rva"]): row for row in prior_sites}
-    classes_by_caller: dict[str, list[str]] = defaultdict(list)
     rows = []
     for site in bundle["indirect_sites"]:
         static = static_by_rva.get(site["caller_rva"])
         if static is None:
             raise ReError(f"no snapshot row for {site['caller_rva']}")
-        classified = classify_static_site(
-            static,
-            site["callsite_rva"],
-            prior=prior.get((site["caller_rva"], site["callsite_rva"])),
+        rows.append(
+            classify_static_site(
+                static,
+                site["callsite_rva"],
+                prior=prior.get((site["caller_rva"], site["callsite_rva"])),
+            )
         )
-        rows.append(classified)
-        classes_by_caller[site["caller_rva"]].append(classified["classification"])
-    counts = {
+    slot_sources = sum(1 for row in rows if row.get("operand_source"))
+    bundle["indirect_dispatch_coverage"] = {
         "selected_sites": len(rows),
         "reviewed": sum(1 for row in rows if row["reviewed"]),
         "confirmed_graphics_dispatch": sum(1 for row in rows if row["classification"] == "confirmed_graphics_dispatch"),
         "confirmed_non_graphics": sum(1 for row in rows if row["classification"] == "confirmed_non_graphics"),
         "bounded_candidates": sum(1 for row in rows if row["classification"] == "bounded_candidates"),
         "unresolved": sum(1 for row in rows if row["classification"] == "unresolved"),
-        "note": bundle["indirect_dispatch_coverage"]["note"],
+        "operand_source_slots": slot_sources,
+        # shortcut: names the two callsites checked on this pinned binary; re-read them if the snapshot changes.
+        "note": (
+            "Counts of indirect sites only. They do not measure shader behavior, "
+            "resource lifetimes, Metal init, or presentation. "
+            f"{slot_sources} unresolved sites record an operand_source slot address. "
+            "That address is not a closed set of call targets. "
+            "A slot-load site and a _GfxInit displacement call were checked; "
+            "their machine operands do not name the callee."
+        ),
     }
-    bundle["indirect_dispatch_coverage"] = counts
-    endpoints_by_caller = {
-        row["caller_rva"]: {site["endpoint"] for site in row["callsites"] if site["family"] == "gl"}
-        for row in bundle["direct_callers"]
-    }
-    label_ids = set(classes_by_caller) | {
-        rva for rva, row in graph.functions.items() if is_gfx_helper(row)
-    }
-    label_ids |= {row["caller_rva"] for row in bundle["outside_gfx_gl_callers"]}
-    label_ids.update(bundle["glew_init_dependency"]["callee_rvas"])
-    window = [rva for rva, row in graph.functions.items() if fn_name(row) == WINDOW_NAME]
-    label_ids.update(window)
-    labels = []
-    for rva in sorted(label_ids):
-        row = graph.functions.get(rva) or {}
-        name = fn_name(row)
-        labels.append(
-            {
-                "entry_rva": rva,
-                "name": name,
-                "instruction_count": row.get("instruction_count") or 0,
-                "migration": _migration_label(
-                    name,
-                    is_gfx_helper(row),
-                    endpoints_by_caller.get(rva, set()),
-                    classes_by_caller.get(rva, []),
-                ),
-            }
-        )
-    bundle["migration_labels"] = labels
-    bundle["effort"] = _effort(bundle, static_by_rva, labels)
-    # In-cut indirect rows do not move the structural verdict.
+    bundle["effort"] = _effort(bundle, static_by_rva)
     return rows
 
 
-def assert_prior_matches(prior: dict[str, Any], fresh: dict[str, Any], digest: str) -> None:
+def assert_prior_matches(prior: dict[str, Any], digest: str) -> None:
     if prior.get("inventory_bundle_digest") != digest:
         raise ReError("stored census digest does not match the live inventory")
-    if prior.get("direct_gl_caller_count") != fresh["direct_gl_caller_count"]:
-        raise ReError("stored direct GL caller count does not match a fresh census")
-    if prior.get("cut_function_count") != fresh["cut_function_count"]:
-        raise ReError("stored Gfx cut size does not match a fresh census")
 
 
 def _scope_rows(scope_dir: Path) -> list[dict[str, Any]]:
@@ -1058,26 +979,21 @@ def _export(args: argparse.Namespace) -> Path:
     return resolve_export_dir(local_binary_root(binary_sha256()), args.baseline_revision)
 
 
-def _window_text(exp: Path, graph: CallGraph) -> str | None:
+def _window_pseudocode(exp: Path, summary: dict[str, Any], graph: CallGraph) -> str | None:
     hits = [rva for rva, row in graph.functions.items() if fn_name(row) == WINDOW_NAME]
     if len(hits) != 1:
         return None
-    plan_path = exp / "renderer_snapshot" / "v1" / "manifest" / "batch_plan.json"
-    if not plan_path.is_file():
+    key = norm_rva(hits[0])
+    plan = load_batch_plan(exp)
+    in_snapshot = {
+        norm_rva(rva)
+        for rvas in (plan.get("batches") or {}).values()
+        for rva in rvas
+    }
+    if key not in in_snapshot:
         return None
-    plan = json.loads(plan_path.read_text())
-    for batch_id, rvas in plan.get("batches", {}).items():
-        if hits[0] not in rvas:
-            continue
-        zip_path = exp / "renderer_snapshot" / "v1" / "batches" / f"{batch_id}.zip"
-        if not zip_path.is_file():
-            return None
-        with zipfile.ZipFile(zip_path) as zf:
-            for line in zf.read("decompiled.jsonl").decode().splitlines():
-                row = json.loads(line)
-                if row.get("entry_rva") == hits[0] and row.get("status") == "success":
-                    return row.get("pseudocode") or ""
-    return None
+    loaded = _load_static_by_rva(exp, summary, {key})
+    return loaded[key].get("pseudocode") or ""
 
 
 def cmd_direct(args: argparse.Namespace) -> int:
@@ -1091,7 +1007,7 @@ def cmd_direct(args: argparse.Namespace) -> int:
         graph,
         scope_rows=_scope_rows(scope_dir),
         thunk_symbols=_thunk_symbols(scope_dir),
-        window_text=_window_text(exp, graph),
+        window_text=_window_pseudocode(exp, summary, graph),
     )
     out = Path(args.out_dir) if args.out_dir else DEFAULT_OUT
     publish_census(out, bundle, computed_digest=digest, expected_digest=summary["inventory_bundle_digest"])
@@ -1127,9 +1043,9 @@ def cmd_indirect(args: argparse.Namespace) -> int:
         graph,
         scope_rows=_scope_rows(scope_dir),
         thunk_symbols=_thunk_symbols(scope_dir),
-        window_text=_window_text(exp, graph),
+        window_text=_window_pseudocode(exp, summary, graph),
     )
-    assert_prior_matches(prior, fresh, digest)
+    assert_prior_matches(prior, digest)
     plan = load_batch_plan(exp)
     in_snapshot = {
         norm_rva(rva)
@@ -1145,7 +1061,7 @@ def cmd_indirect(args: argparse.Namespace) -> int:
     sites_path = out / "indirect-sites.jsonl"
     if sites_path.is_file():
         prior_sites = [json.loads(line) for line in sites_path.read_text().splitlines() if line.strip()]
-    rows = apply_indirect(fresh, static_by_rva, graph, prior_sites)
+    rows = apply_indirect(fresh, static_by_rva, prior_sites)
     evidence_dir = exp / "renderer_snapshot" / "v1" / "logs"
     evidence_dir.mkdir(parents=True, exist_ok=True)
     evidence_rows = []

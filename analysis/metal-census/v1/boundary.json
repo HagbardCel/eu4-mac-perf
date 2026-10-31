@@ -1259,42 +1259,308 @@
     }
   ],
   "direct_gl_caller_count": 32,
+  "direct_gl_candidates": [
+    {
+      "caller_rva": "0x00000000015e8ea0",
+      "endpoints": [
+        "_glGetIntegerv",
+        "_glGetString"
+      ],
+      "instruction_count": 770,
+      "name": "_GfxInit"
+    },
+    {
+      "caller_rva": "0x00000000015e9dfa",
+      "endpoints": [
+        "_glGetBooleanv",
+        "_glGetIntegerv"
+      ],
+      "instruction_count": 42,
+      "name": "GetOpenGLContextRasterizerState"
+    },
+    {
+      "caller_rva": "0x00000000015e9e8e",
+      "endpoints": [
+        "_glGetBooleanv",
+        "_glGetIntegerv"
+      ],
+      "instruction_count": 65,
+      "name": "GetOpenGLContextDepthStencilState"
+    },
+    {
+      "caller_rva": "0x00000000015e9f78",
+      "endpoints": [
+        "_glGetBooleanv",
+        "_glGetIntegerv"
+      ],
+      "instruction_count": 96,
+      "name": "GetOpenGLContextBlendState"
+    },
+    {
+      "caller_rva": "0x00000000015ea0bf",
+      "endpoints": [
+        "_glAlphaFunc",
+        "_glBlendFunc",
+        "_glColorMask",
+        "_glDisable",
+        "_glEnable"
+      ],
+      "instruction_count": 125,
+      "name": "_GfxSetBlendState"
+    },
+    {
+      "caller_rva": "0x00000000015ea261",
+      "endpoints": [
+        "_glDepthFunc",
+        "_glDepthMask",
+        "_glDisable",
+        "_glEnable",
+        "_glStencilFunc",
+        "_glStencilMask",
+        "_glStencilOp"
+      ],
+      "instruction_count": 80,
+      "name": "_GfxSetDepthStencilState"
+    },
+    {
+      "caller_rva": "0x00000000015ea35a",
+      "endpoints": [
+        "_glCullFace",
+        "_glDisable",
+        "_glEnable",
+        "_glFrontFace",
+        "_glPolygonMode"
+      ],
+      "instruction_count": 65,
+      "name": "_GfxSetRasterizerState"
+    },
+    {
+      "caller_rva": "0x00000000015ea4f8",
+      "endpoints": [
+        "_glViewport"
+      ],
+      "instruction_count": 13,
+      "name": "_GfxSetViewPort"
+    },
+    {
+      "caller_rva": "0x00000000015ea552",
+      "endpoints": [
+        "_glClear",
+        "_glClearColor",
+        "_glColorMask",
+        "_glDepthMask",
+        "_glDisable",
+        "_glEnable",
+        "_glScissor",
+        "_glStencilMask"
+      ],
+      "instruction_count": 96,
+      "name": "_GfxClear"
+    },
+    {
+      "caller_rva": "0x00000000015ea789",
+      "endpoints": [
+        "_glDrawArrays"
+      ],
+      "instruction_count": 106,
+      "name": "_GfxDraw"
+    },
+    {
+      "caller_rva": "0x00000000015eaa77",
+      "endpoints": [
+        "_glDrawElements"
+      ],
+      "instruction_count": 124,
+      "name": "_GfxDrawIndexed"
+    },
+    {
+      "caller_rva": "0x00000000015ead87",
+      "endpoints": [
+        "_glBegin",
+        "_glColor4f",
+        "_glEnd",
+        "_glLineWidth",
+        "_glLoadIdentity",
+        "_glMatrixMode",
+        "_glOrtho",
+        "_glVertex2f"
+      ],
+      "instruction_count": 71,
+      "name": "_GfxDraw2dLines"
+    },
+    {
+      "caller_rva": "0x00000000015eafae",
+      "endpoints": [
+        "_glGetError"
+      ],
+      "instruction_count": 135,
+      "name": "_GfxAddVertexShader"
+    },
+    {
+      "caller_rva": "0x00000000015eb425",
+      "endpoints": [
+        "_glGetError"
+      ],
+      "instruction_count": 197,
+      "name": "_GfxAddPixelShader"
+    },
+    {
+      "caller_rva": "0x00000000015ec43b",
+      "endpoints": [
+        "_glBindTexture",
+        "_glGenTextures",
+        "_glPixelStorei",
+        "_glTexImage2D"
+      ],
+      "instruction_count": 130,
+      "name": "_GfxInitializeTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec66f",
+      "endpoints": [
+        "_glBindTexture",
+        "_glPixelStorei",
+        "_glTexImage2D"
+      ],
+      "instruction_count": 44,
+      "name": "_GfxUpdateTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec6fd",
+      "endpoints": [
+        "_glBindTexture"
+      ],
+      "instruction_count": 15,
+      "name": "_GfxGenerateMipMaps"
+    },
+    {
+      "caller_rva": "0x00000000015ec72f",
+      "endpoints": [
+        "_glBindTexture",
+        "_glPixelStorei",
+        "_glTexSubImage2D"
+      ],
+      "instruction_count": 62,
+      "name": "_GfxUpdateTextureRectangle"
+    },
+    {
+      "caller_rva": "0x00000000015ec836",
+      "endpoints": [
+        "_glDeleteTextures"
+      ],
+      "instruction_count": 45,
+      "name": "_GfxClearTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ec8e2",
+      "endpoints": [
+        "_glBindTexture",
+        "_glGenTextures",
+        "_glTexImage2D"
+      ],
+      "instruction_count": 175,
+      "name": "_GfxInitializeRenderTargetTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ecce2",
+      "endpoints": [
+        "_glBindTexture",
+        "_glTexEnvf",
+        "_glTexParameterf",
+        "_glTexParameteri"
+      ],
+      "instruction_count": 84,
+      "name": "InternalSetTextureAndSamplerState"
+    },
+    {
+      "caller_rva": "0x00000000015ece13",
+      "endpoints": [
+        "_glBindTexture",
+        "_glCopyTexSubImage2D"
+      ],
+      "instruction_count": 29,
+      "name": "_GfxResolve"
+    },
+    {
+      "caller_rva": "0x00000000015ece63",
+      "endpoints": [
+        "_glViewport"
+      ],
+      "instruction_count": 56,
+      "name": "_GfxResolveTexture"
+    },
+    {
+      "caller_rva": "0x00000000015ed004",
+      "endpoints": [
+        "_glViewport"
+      ],
+      "instruction_count": 42,
+      "name": "_GfxSetRenderTarget"
+    },
+    {
+      "caller_rva": "0x00000000015ed0aa",
+      "endpoints": [
+        "_glScissor"
+      ],
+      "instruction_count": 18,
+      "name": "_GfxSetScissorRectangle"
+    },
+    {
+      "caller_rva": "0x00000000015ed1b5",
+      "endpoints": [
+        "_glReadPixels"
+      ],
+      "instruction_count": 48,
+      "name": "_GfxWriteScreenshot"
+    },
+    {
+      "caller_rva": "0x00000000015ed272",
+      "endpoints": [
+        "_glBindTexture",
+        "_glGetTexImage"
+      ],
+      "instruction_count": 55,
+      "name": "_GfxWriteTextureAsTGA"
+    },
+    {
+      "caller_rva": "0x00000000015ed31d",
+      "endpoints": [
+        "_glBindTexture",
+        "_glGetTexImage"
+      ],
+      "instruction_count": 37,
+      "name": "_GfxGetTextureBuffer"
+    },
+    {
+      "caller_rva": "0x00000000015ed388",
+      "endpoints": [
+        "_glGetFloatv",
+        "_glGetIntegerv"
+      ],
+      "instruction_count": 366,
+      "name": "_GfxGetGraphicsSettings"
+    },
+    {
+      "caller_rva": "0x00000000015efec7",
+      "endpoints": [
+        "_glGetString"
+      ],
+      "instruction_count": 249,
+      "name": "BuildGLSL"
+    }
+  ],
   "direct_gl_in_gfx": 25,
   "effort": {
-    "decompiled_lines": 1731,
-    "faithful_cpp_lines": [
-      1731,
-      2596
-    ],
-    "metal_infrastructure_lines": [
-      1500,
-      4000
-    ],
-    "replace_candidate_count": 29,
-    "replace_instructions": 3191,
-    "representatives": [
-      {
-        "decompiled_lines": 18,
-        "entry_rva": "0x00000000015ea4f8",
-        "instruction_count": 13,
-        "name": "_GfxSetViewPort"
-      },
-      {
-        "decompiled_lines": 52,
-        "entry_rva": "0x00000000015ea35a",
-        "instruction_count": 65,
-        "name": "_GfxSetRasterizerState"
-      },
-      {
-        "decompiled_lines": 387,
-        "entry_rva": "0x00000000015e8ea0",
-        "instruction_count": 770,
-        "name": "_GfxInit"
-      }
-    ],
+    "decompiled_functions": 30,
+    "decompiled_lines": 1896,
+    "direct_gl_candidate_count": 30,
+    "direct_gl_instructions": 3440,
+    "faithful_cpp": "not_estimated",
+    "implementation_surface_count": 97,
+    "metal_infrastructure": "not_estimated",
     "shader_conversion": "deferred to stage D",
-    "status": "estimated",
-    "summary": "Replace candidates: 29 functions, 3191 original instructions, 1731 decompiled lines. Faithful C++ is estimated at 1731\u20132596 lines: the low end is the decompiled line count of those functions, and the high end adds about half again for types and calls the decompiler left implicit. That band is taken from the decompiled bodies of the representative functions below, not from an instruction-to-line multiplier. Metal infrastructure, which has no original body, is a separate 1500\u20134000 lines for a device, queue, pipeline cache, and resource table. Shader conversion is deferred to stage D."
+    "status": "descriptive",
+    "summary": "Minimum direct-GL set: 30 functions and 3440 instructions. Decompiled lines for that set, where the snapshot has a body: 1896 across 30 functions. The implementation surface is 97 functions (the `_Gfx*` cut plus behind-cut and shared helpers) and is not classified as retain or replace. Faithful C++ and Metal infrastructure are not estimated. Shader conversion is deferred to stage D."
   },
   "glew_init_dependency": {
     "callee_rvas": [
@@ -1344,14 +1610,502 @@
       "name": "InternalSetTextureAndSamplerState"
     }
   ],
+  "implementation_surface": [
+    {
+      "entry_rva": "0x00000000015c5a82",
+      "name": "_GfxIsOpenGL",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015c5c0e",
+      "name": "_GfxSetRenderType",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015e8ea0",
+      "name": "_GfxInit",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015e9d11",
+      "name": "_GfxCreateBlendState",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015e9d61",
+      "name": "_GfxCreateDepthStencilState",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015e9db2",
+      "name": "_GfxCreateRasterizerState",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea0bf",
+      "name": "_GfxSetBlendState",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea261",
+      "name": "_GfxSetDepthStencilState",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea35a",
+      "name": "_GfxSetRasterizerState",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea42c",
+      "name": "_GfxShutdown",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea460",
+      "name": "_GfxGetRenderType",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea46b",
+      "name": "_GfxReset",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea49b",
+      "name": "_GfxOnResetMasterContext",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea4f2",
+      "name": "_GfxOnLostMasterContext",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea4f8",
+      "name": "_GfxSetViewPort",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea52c",
+      "name": "_GfxGetViewPort",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea552",
+      "name": "_GfxClear",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea6b5",
+      "name": "_GfxGetMasterContext",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea6c2",
+      "name": "_GfxGetImmediateContext",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea6cb",
+      "name": "_GfxPresent",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea6df",
+      "name": "_GfxBeginScene",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea758",
+      "name": "_GfxEndScene",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea760",
+      "name": "_GfxCreateDeferredContext",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea769",
+      "name": "_GfxDestroyDeferredContext",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea76f",
+      "name": "_GfxSetPrimitiveType",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ea789",
+      "name": "_GfxDraw",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015eaa77",
+      "name": "_GfxDrawIndexed",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015eac96",
+      "name": "_GfxDrawInstanced",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015eac9c",
+      "name": "_GfxDrawIndexedInstanced",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ead87",
+      "name": "_GfxDraw2dLines",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015eae97",
+      "name": "_GfxCreateShader",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015eaec7",
+      "name": "_GfxAddVertexLayout",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015eafae",
+      "name": "_GfxAddVertexShader",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015eb352",
+      "name": "_GfxBuildAndAddVertexShader",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015eb425",
+      "name": "_GfxAddPixelShader",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015eb7ae",
+      "name": "_GfxBuildAndAddPixelShader",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015eb884",
+      "name": "_GfxLinkShader",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ebb12",
+      "name": "_GfxClearBuilderCache",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ebb1c",
+      "name": "_GfxDestroyShader",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ebbb0",
+      "name": "_GfxSetShader",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ebca6",
+      "name": "_GfxGetShader",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ebcb3",
+      "name": "_GfxCreateVertexBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ebd4c",
+      "name": "_GfxDestroyVertexBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ebd81",
+      "name": "_GfxUpdateVertexBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ebe5f",
+      "name": "_GfxUpdateVertexBufferMultiple",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ebf41",
+      "name": "_GfxSetVertexBuffers",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec143",
+      "name": "_GfxGetVertexCount",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec154",
+      "name": "_GfxCreateIndexBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec1e6",
+      "name": "_GfxDestroyIndexBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec23c",
+      "name": "_GfxUpdateIndexBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec28e",
+      "name": "_GfxSetIndexBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec2bc",
+      "name": "_GfxCreateConstantBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec318",
+      "name": "_GfxDestroyConstantBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec36a",
+      "name": "_GfxSetConstantBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec3b5",
+      "name": "_GfxUpdateConstantBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec3dd",
+      "name": "_GfxDestroyBlendState",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec3ee",
+      "name": "_GfxGetBlendStateInfo",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec419",
+      "name": "_GfxDestroyDepthStencilState",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec42a",
+      "name": "_GfxDestroyRasterizerState",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec43b",
+      "name": "_GfxInitializeTexture",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec61d",
+      "name": "_GfxCreateTexture",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec66f",
+      "name": "_GfxUpdateTexture",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec6fd",
+      "name": "_GfxGenerateMipMaps",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec72f",
+      "name": "_GfxUpdateTextureRectangle",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec7f1",
+      "name": "_GfxGetTextureDescription",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec814",
+      "name": "_GfxDestroyTexture",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec836",
+      "name": "_GfxClearTexture",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ec8e2",
+      "name": "_GfxInitializeRenderTargetTexture",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ecb7f",
+      "name": "_GfxCreateRenderTargetTexture",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ecbf2",
+      "name": "_GfxSetTextures",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ece13",
+      "name": "_GfxResolve",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ece63",
+      "name": "_GfxResolveTexture",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ecf12",
+      "name": "_GfxCreateSampler",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ecff3",
+      "name": "_GfxDestroySampler",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed004",
+      "name": "_GfxSetRenderTarget",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed09d",
+      "name": "_GfxGetRenderTarget",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed0aa",
+      "name": "_GfxSetScissorRectangle",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed0e2",
+      "name": "_GfxSetGamma",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed0e8",
+      "name": "_GfxCheckDevice",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed0f0",
+      "name": "_GfxGetAdapterModeCount",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed110",
+      "name": "_GfxGetAdapterDisplayMode",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed16d",
+      "name": "_GfxGetUsedMemory",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed175",
+      "name": "_GfxForceWireframe",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed182",
+      "name": "_GfxGetCaps",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed19b",
+      "name": "_GfxRenderLock",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed1a1",
+      "name": "_GfxRenderUnlock",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed1a7",
+      "name": "_GfxHasRenderLock",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed1af",
+      "name": "_GfxSetAllowResourceCreation",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed1b5",
+      "name": "_GfxWriteScreenshot",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed272",
+      "name": "_GfxWriteTextureAsTGA",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed31d",
+      "name": "_GfxGetTextureBuffer",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015ed388",
+      "name": "_GfxGetGraphicsSettings",
+      "role": "cut"
+    },
+    {
+      "entry_rva": "0x00000000015c5a96",
+      "name": "GfxCreateTexture",
+      "role": "shared"
+    },
+    {
+      "entry_rva": "0x00000000015e9dfa",
+      "name": "GetOpenGLContextRasterizerState",
+      "role": "behind_cut"
+    },
+    {
+      "entry_rva": "0x00000000015e9e8e",
+      "name": "GetOpenGLContextDepthStencilState",
+      "role": "behind_cut"
+    },
+    {
+      "entry_rva": "0x00000000015e9f78",
+      "name": "GetOpenGLContextBlendState",
+      "role": "behind_cut"
+    },
+    {
+      "entry_rva": "0x00000000015ecce2",
+      "name": "InternalSetTextureAndSamplerState",
+      "role": "behind_cut"
+    }
+  ],
   "indirect_dispatch_coverage": {
-    "bounded_candidates": 77,
+    "bounded_candidates": 0,
     "confirmed_graphics_dispatch": 0,
     "confirmed_non_graphics": 0,
-    "note": "Counts of indirect sites only. They do not measure shader behavior, resource lifetimes, Metal init, or presentation.",
+    "note": "Counts of indirect sites only. They do not measure shader behavior, resource lifetimes, Metal init, or presentation. 77 unresolved sites record an operand_source slot address. That address is not a closed set of call targets. A slot-load site and a _GfxInit displacement call were checked; their machine operands do not name the callee.",
+    "operand_source_slots": 77,
     "reviewed": 0,
     "selected_sites": 126,
-    "unresolved": 49
+    "unresolved": 126
   },
   "indirect_sites": [
     {
@@ -1986,644 +2740,6 @@
     }
   ],
   "inventory_bundle_digest": "1eaff96fe79d6b142a7c158a9701e24b78d11cc84e9e2f44cb8aed75d5bf7cae",
-  "migration_labels": [
-    {
-      "entry_rva": "0x00000000013cbfb8",
-      "instruction_count": 277,
-      "migration": "adapter_candidate",
-      "name": "CApplication::CreateApplicationWindow"
-    },
-    {
-      "entry_rva": "0x00000000015c5a82",
-      "instruction_count": 8,
-      "migration": "retain_candidate",
-      "name": "_GfxIsOpenGL"
-    },
-    {
-      "entry_rva": "0x00000000015c5c0e",
-      "instruction_count": 4,
-      "migration": "retain_candidate",
-      "name": "_GfxSetRenderType"
-    },
-    {
-      "entry_rva": "0x00000000015d25ee",
-      "instruction_count": 27,
-      "migration": "exclude",
-      "name": "_glewGetExtension"
-    },
-    {
-      "entry_rva": "0x00000000015d2708",
-      "instruction_count": 4,
-      "migration": "exclude",
-      "name": "_glewInit"
-    },
-    {
-      "entry_rva": "0x00000000015d2712",
-      "instruction_count": 14935,
-      "migration": "exclude",
-      "name": "_glewContextInit"
-    },
-    {
-      "entry_rva": "0x00000000015e8ea0",
-      "instruction_count": 770,
-      "migration": "replace_candidate",
-      "name": "_GfxInit"
-    },
-    {
-      "entry_rva": "0x00000000015e9d11",
-      "instruction_count": 26,
-      "migration": "retain_candidate",
-      "name": "_GfxCreateBlendState"
-    },
-    {
-      "entry_rva": "0x00000000015e9d61",
-      "instruction_count": 26,
-      "migration": "retain_candidate",
-      "name": "_GfxCreateDepthStencilState"
-    },
-    {
-      "entry_rva": "0x00000000015e9db2",
-      "instruction_count": 24,
-      "migration": "retain_candidate",
-      "name": "_GfxCreateRasterizerState"
-    },
-    {
-      "entry_rva": "0x00000000015e9dfa",
-      "instruction_count": 42,
-      "migration": "replace_candidate",
-      "name": "GetOpenGLContextRasterizerState"
-    },
-    {
-      "entry_rva": "0x00000000015e9e8e",
-      "instruction_count": 65,
-      "migration": "replace_candidate",
-      "name": "GetOpenGLContextDepthStencilState"
-    },
-    {
-      "entry_rva": "0x00000000015e9f78",
-      "instruction_count": 96,
-      "migration": "replace_candidate",
-      "name": "GetOpenGLContextBlendState"
-    },
-    {
-      "entry_rva": "0x00000000015ea0bf",
-      "instruction_count": 125,
-      "migration": "replace_candidate",
-      "name": "_GfxSetBlendState"
-    },
-    {
-      "entry_rva": "0x00000000015ea261",
-      "instruction_count": 80,
-      "migration": "replace_candidate",
-      "name": "_GfxSetDepthStencilState"
-    },
-    {
-      "entry_rva": "0x00000000015ea35a",
-      "instruction_count": 65,
-      "migration": "replace_candidate",
-      "name": "_GfxSetRasterizerState"
-    },
-    {
-      "entry_rva": "0x00000000015ea42c",
-      "instruction_count": 16,
-      "migration": "retain_candidate",
-      "name": "_GfxShutdown"
-    },
-    {
-      "entry_rva": "0x00000000015ea460",
-      "instruction_count": 5,
-      "migration": "retain_candidate",
-      "name": "_GfxGetRenderType"
-    },
-    {
-      "entry_rva": "0x00000000015ea46b",
-      "instruction_count": 17,
-      "migration": "retain_candidate",
-      "name": "_GfxReset"
-    },
-    {
-      "entry_rva": "0x00000000015ea49b",
-      "instruction_count": 23,
-      "migration": "retain_candidate",
-      "name": "_GfxOnResetMasterContext"
-    },
-    {
-      "entry_rva": "0x00000000015ea4f2",
-      "instruction_count": 4,
-      "migration": "retain_candidate",
-      "name": "_GfxOnLostMasterContext"
-    },
-    {
-      "entry_rva": "0x00000000015ea4f8",
-      "instruction_count": 13,
-      "migration": "replace_candidate",
-      "name": "_GfxSetViewPort"
-    },
-    {
-      "entry_rva": "0x00000000015ea52c",
-      "instruction_count": 10,
-      "migration": "retain_candidate",
-      "name": "_GfxGetViewPort"
-    },
-    {
-      "entry_rva": "0x00000000015ea552",
-      "instruction_count": 96,
-      "migration": "replace_candidate",
-      "name": "_GfxClear"
-    },
-    {
-      "entry_rva": "0x00000000015ea6b5",
-      "instruction_count": 5,
-      "migration": "retain_candidate",
-      "name": "_GfxGetMasterContext"
-    },
-    {
-      "entry_rva": "0x00000000015ea6c2",
-      "instruction_count": 5,
-      "migration": "retain_candidate",
-      "name": "_GfxGetImmediateContext"
-    },
-    {
-      "entry_rva": "0x00000000015ea6cb",
-      "instruction_count": 7,
-      "migration": "retain_candidate",
-      "name": "_GfxPresent"
-    },
-    {
-      "entry_rva": "0x00000000015ea6df",
-      "instruction_count": 39,
-      "migration": "unresolved",
-      "name": "_GfxBeginScene"
-    },
-    {
-      "entry_rva": "0x00000000015ea758",
-      "instruction_count": 5,
-      "migration": "retain_candidate",
-      "name": "_GfxEndScene"
-    },
-    {
-      "entry_rva": "0x00000000015ea760",
-      "instruction_count": 5,
-      "migration": "retain_candidate",
-      "name": "_GfxCreateDeferredContext"
-    },
-    {
-      "entry_rva": "0x00000000015ea769",
-      "instruction_count": 4,
-      "migration": "retain_candidate",
-      "name": "_GfxDestroyDeferredContext"
-    },
-    {
-      "entry_rva": "0x00000000015ea76f",
-      "instruction_count": 12,
-      "migration": "retain_candidate",
-      "name": "_GfxSetPrimitiveType"
-    },
-    {
-      "entry_rva": "0x00000000015ea789",
-      "instruction_count": 106,
-      "migration": "replace_candidate",
-      "name": "_GfxDraw"
-    },
-    {
-      "entry_rva": "0x00000000015ea970",
-      "instruction_count": 72,
-      "migration": "unresolved",
-      "name": "SShaderOpenGL::EnableVertexAttribArrays"
-    },
-    {
-      "entry_rva": "0x00000000015eaa77",
-      "instruction_count": 124,
-      "migration": "replace_candidate",
-      "name": "_GfxDrawIndexed"
-    },
-    {
-      "entry_rva": "0x00000000015eac96",
-      "instruction_count": 4,
-      "migration": "retain_candidate",
-      "name": "_GfxDrawInstanced"
-    },
-    {
-      "entry_rva": "0x00000000015eac9c",
-      "instruction_count": 63,
-      "migration": "unresolved",
-      "name": "_GfxDrawIndexedInstanced"
-    },
-    {
-      "entry_rva": "0x00000000015ead87",
-      "instruction_count": 71,
-      "migration": "replace_candidate",
-      "name": "_GfxDraw2dLines"
-    },
-    {
-      "entry_rva": "0x00000000015eae97",
-      "instruction_count": 16,
-      "migration": "unresolved",
-      "name": "_GfxCreateShader"
-    },
-    {
-      "entry_rva": "0x00000000015eaec7",
-      "instruction_count": 71,
-      "migration": "retain_candidate",
-      "name": "_GfxAddVertexLayout"
-    },
-    {
-      "entry_rva": "0x00000000015eafae",
-      "instruction_count": 135,
-      "migration": "replace_candidate",
-      "name": "_GfxAddVertexShader"
-    },
-    {
-      "entry_rva": "0x00000000015eb352",
-      "instruction_count": 58,
-      "migration": "retain_candidate",
-      "name": "_GfxBuildAndAddVertexShader"
-    },
-    {
-      "entry_rva": "0x00000000015eb425",
-      "instruction_count": 197,
-      "migration": "replace_candidate",
-      "name": "_GfxAddPixelShader"
-    },
-    {
-      "entry_rva": "0x00000000015eb7ae",
-      "instruction_count": 58,
-      "migration": "retain_candidate",
-      "name": "_GfxBuildAndAddPixelShader"
-    },
-    {
-      "entry_rva": "0x00000000015eb884",
-      "instruction_count": 5,
-      "migration": "retain_candidate",
-      "name": "_GfxLinkShader"
-    },
-    {
-      "entry_rva": "0x00000000015eb892",
-      "instruction_count": 147,
-      "migration": "unresolved",
-      "name": "SShaderOpenGL::LinkProgram"
-    },
-    {
-      "entry_rva": "0x00000000015ebb12",
-      "instruction_count": 4,
-      "migration": "retain_candidate",
-      "name": "_GfxClearBuilderCache"
-    },
-    {
-      "entry_rva": "0x00000000015ebb1c",
-      "instruction_count": 14,
-      "migration": "retain_candidate",
-      "name": "_GfxDestroyShader"
-    },
-    {
-      "entry_rva": "0x00000000015ebb3e",
-      "instruction_count": 35,
-      "migration": "unresolved",
-      "name": "SShaderOpenGL::UnloadAll"
-    },
-    {
-      "entry_rva": "0x00000000015ebbb0",
-      "instruction_count": 47,
-      "migration": "unresolved",
-      "name": "_GfxSetShader"
-    },
-    {
-      "entry_rva": "0x00000000015ebc40",
-      "instruction_count": 38,
-      "migration": "unresolved",
-      "name": "SShaderOpenGL::SetAll"
-    },
-    {
-      "entry_rva": "0x00000000015ebca6",
-      "instruction_count": 6,
-      "migration": "retain_candidate",
-      "name": "_GfxGetShader"
-    },
-    {
-      "entry_rva": "0x00000000015ebcb3",
-      "instruction_count": 46,
-      "migration": "unresolved",
-      "name": "_GfxCreateVertexBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ebd4c",
-      "instruction_count": 18,
-      "migration": "unresolved",
-      "name": "_GfxDestroyVertexBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ebd81",
-      "instruction_count": 68,
-      "migration": "unresolved",
-      "name": "_GfxUpdateVertexBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ebe5f",
-      "instruction_count": 70,
-      "migration": "unresolved",
-      "name": "_GfxUpdateVertexBufferMultiple"
-    },
-    {
-      "entry_rva": "0x00000000015ebf41",
-      "instruction_count": 125,
-      "migration": "unresolved",
-      "name": "_GfxSetVertexBuffers"
-    },
-    {
-      "entry_rva": "0x00000000015ec143",
-      "instruction_count": 9,
-      "migration": "retain_candidate",
-      "name": "_GfxGetVertexCount"
-    },
-    {
-      "entry_rva": "0x00000000015ec154",
-      "instruction_count": 43,
-      "migration": "unresolved",
-      "name": "_GfxCreateIndexBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ec1e6",
-      "instruction_count": 26,
-      "migration": "unresolved",
-      "name": "_GfxDestroyIndexBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ec23c",
-      "instruction_count": 31,
-      "migration": "unresolved",
-      "name": "_GfxUpdateIndexBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ec28e",
-      "instruction_count": 18,
-      "migration": "unresolved",
-      "name": "_GfxSetIndexBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ec2bc",
-      "instruction_count": 29,
-      "migration": "retain_candidate",
-      "name": "_GfxCreateConstantBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ec318",
-      "instruction_count": 26,
-      "migration": "retain_candidate",
-      "name": "_GfxDestroyConstantBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ec36a",
-      "instruction_count": 21,
-      "migration": "retain_candidate",
-      "name": "_GfxSetConstantBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ec3b5",
-      "instruction_count": 15,
-      "migration": "retain_candidate",
-      "name": "_GfxUpdateConstantBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ec3dd",
-      "instruction_count": 8,
-      "migration": "retain_candidate",
-      "name": "_GfxDestroyBlendState"
-    },
-    {
-      "entry_rva": "0x00000000015ec3ee",
-      "instruction_count": 14,
-      "migration": "retain_candidate",
-      "name": "_GfxGetBlendStateInfo"
-    },
-    {
-      "entry_rva": "0x00000000015ec419",
-      "instruction_count": 8,
-      "migration": "retain_candidate",
-      "name": "_GfxDestroyDepthStencilState"
-    },
-    {
-      "entry_rva": "0x00000000015ec42a",
-      "instruction_count": 8,
-      "migration": "retain_candidate",
-      "name": "_GfxDestroyRasterizerState"
-    },
-    {
-      "entry_rva": "0x00000000015ec43b",
-      "instruction_count": 130,
-      "migration": "replace_candidate",
-      "name": "_GfxInitializeTexture"
-    },
-    {
-      "entry_rva": "0x00000000015ec61d",
-      "instruction_count": 29,
-      "migration": "retain_candidate",
-      "name": "_GfxCreateTexture"
-    },
-    {
-      "entry_rva": "0x00000000015ec66f",
-      "instruction_count": 44,
-      "migration": "replace_candidate",
-      "name": "_GfxUpdateTexture"
-    },
-    {
-      "entry_rva": "0x00000000015ec6fd",
-      "instruction_count": 15,
-      "migration": "replace_candidate",
-      "name": "_GfxGenerateMipMaps"
-    },
-    {
-      "entry_rva": "0x00000000015ec72f",
-      "instruction_count": 62,
-      "migration": "replace_candidate",
-      "name": "_GfxUpdateTextureRectangle"
-    },
-    {
-      "entry_rva": "0x00000000015ec7f1",
-      "instruction_count": 12,
-      "migration": "retain_candidate",
-      "name": "_GfxGetTextureDescription"
-    },
-    {
-      "entry_rva": "0x00000000015ec814",
-      "instruction_count": 14,
-      "migration": "retain_candidate",
-      "name": "_GfxDestroyTexture"
-    },
-    {
-      "entry_rva": "0x00000000015ec836",
-      "instruction_count": 45,
-      "migration": "replace_candidate",
-      "name": "_GfxClearTexture"
-    },
-    {
-      "entry_rva": "0x00000000015ec8e2",
-      "instruction_count": 175,
-      "migration": "replace_candidate",
-      "name": "_GfxInitializeRenderTargetTexture"
-    },
-    {
-      "entry_rva": "0x00000000015ecb7f",
-      "instruction_count": 39,
-      "migration": "retain_candidate",
-      "name": "_GfxCreateRenderTargetTexture"
-    },
-    {
-      "entry_rva": "0x00000000015ecbf2",
-      "instruction_count": 81,
-      "migration": "retain_candidate",
-      "name": "_GfxSetTextures"
-    },
-    {
-      "entry_rva": "0x00000000015ecce2",
-      "instruction_count": 84,
-      "migration": "replace_candidate",
-      "name": "InternalSetTextureAndSamplerState"
-    },
-    {
-      "entry_rva": "0x00000000015ece13",
-      "instruction_count": 29,
-      "migration": "replace_candidate",
-      "name": "_GfxResolve"
-    },
-    {
-      "entry_rva": "0x00000000015ece63",
-      "instruction_count": 56,
-      "migration": "replace_candidate",
-      "name": "_GfxResolveTexture"
-    },
-    {
-      "entry_rva": "0x00000000015ecf12",
-      "instruction_count": 62,
-      "migration": "retain_candidate",
-      "name": "_GfxCreateSampler"
-    },
-    {
-      "entry_rva": "0x00000000015ecff3",
-      "instruction_count": 8,
-      "migration": "retain_candidate",
-      "name": "_GfxDestroySampler"
-    },
-    {
-      "entry_rva": "0x00000000015ed004",
-      "instruction_count": 42,
-      "migration": "replace_candidate",
-      "name": "_GfxSetRenderTarget"
-    },
-    {
-      "entry_rva": "0x00000000015ed09d",
-      "instruction_count": 6,
-      "migration": "retain_candidate",
-      "name": "_GfxGetRenderTarget"
-    },
-    {
-      "entry_rva": "0x00000000015ed0aa",
-      "instruction_count": 18,
-      "migration": "replace_candidate",
-      "name": "_GfxSetScissorRectangle"
-    },
-    {
-      "entry_rva": "0x00000000015ed0e2",
-      "instruction_count": 4,
-      "migration": "retain_candidate",
-      "name": "_GfxSetGamma"
-    },
-    {
-      "entry_rva": "0x00000000015ed0e8",
-      "instruction_count": 5,
-      "migration": "retain_candidate",
-      "name": "_GfxCheckDevice"
-    },
-    {
-      "entry_rva": "0x00000000015ed0f0",
-      "instruction_count": 11,
-      "migration": "retain_candidate",
-      "name": "_GfxGetAdapterModeCount"
-    },
-    {
-      "entry_rva": "0x00000000015ed110",
-      "instruction_count": 31,
-      "migration": "retain_candidate",
-      "name": "_GfxGetAdapterDisplayMode"
-    },
-    {
-      "entry_rva": "0x00000000015ed16d",
-      "instruction_count": 5,
-      "migration": "retain_candidate",
-      "name": "_GfxGetUsedMemory"
-    },
-    {
-      "entry_rva": "0x00000000015ed175",
-      "instruction_count": 5,
-      "migration": "retain_candidate",
-      "name": "_GfxForceWireframe"
-    },
-    {
-      "entry_rva": "0x00000000015ed182",
-      "instruction_count": 8,
-      "migration": "retain_candidate",
-      "name": "_GfxGetCaps"
-    },
-    {
-      "entry_rva": "0x00000000015ed19b",
-      "instruction_count": 4,
-      "migration": "retain_candidate",
-      "name": "_GfxRenderLock"
-    },
-    {
-      "entry_rva": "0x00000000015ed1a1",
-      "instruction_count": 4,
-      "migration": "retain_candidate",
-      "name": "_GfxRenderUnlock"
-    },
-    {
-      "entry_rva": "0x00000000015ed1a7",
-      "instruction_count": 5,
-      "migration": "retain_candidate",
-      "name": "_GfxHasRenderLock"
-    },
-    {
-      "entry_rva": "0x00000000015ed1af",
-      "instruction_count": 4,
-      "migration": "retain_candidate",
-      "name": "_GfxSetAllowResourceCreation"
-    },
-    {
-      "entry_rva": "0x00000000015ed1b5",
-      "instruction_count": 48,
-      "migration": "replace_candidate",
-      "name": "_GfxWriteScreenshot"
-    },
-    {
-      "entry_rva": "0x00000000015ed272",
-      "instruction_count": 55,
-      "migration": "replace_candidate",
-      "name": "_GfxWriteTextureAsTGA"
-    },
-    {
-      "entry_rva": "0x00000000015ed31d",
-      "instruction_count": 37,
-      "migration": "replace_candidate",
-      "name": "_GfxGetTextureBuffer"
-    },
-    {
-      "entry_rva": "0x00000000015ed388",
-      "instruction_count": 366,
-      "migration": "replace_candidate",
-      "name": "_GfxGetGraphicsSettings"
-    },
-    {
-      "entry_rva": "0x00000000015ed9fc",
-      "instruction_count": 62,
-      "migration": "unresolved",
-      "name": "SShaderOpenGL::SetUniformLocations"
-    },
-    {
-      "entry_rva": "0x00000000015efec7",
-      "instruction_count": 249,
-      "migration": "retain_candidate",
-      "name": "BuildGLSL"
-    }
-  ],
   "outside_gfx_gl_callers": [
     {
       "caller_rva": "0x00000000015d25ee",
@@ -2784,6 +2900,7 @@
         "status": "not_observed"
       }
     ],
+    "platform_assessment": "platform_not_assessed",
     "unreferenced_platform_thunk": [
       {
         "entry_rva": "0x0000000002ea7201",
@@ -2814,10 +2931,10 @@
         "name": "NSOpenGLPixelFormat::release"
       }
     ],
-    "unresolved_active_platform_op": [],
     "window_adaptation": {
       "entry_rva": "0x00000000013cbfb8",
       "function": "CApplication::CreateApplicationWindow",
+      "note": "Token hits are names present in pseudocode, not a drawable-lifecycle assessment.",
       "status": "scanned",
       "tokens_absent": [
         "SDL_WINDOW_OPENGL",

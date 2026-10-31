@@ -37,34 +37,35 @@ Adapter callsites are not counted as structural bypasses.
 ## Implementation dependencies
 
 - Selected indirect sites: 126
-- Unresolved among them: 49
-- Bounded candidates: 77
+- Unresolved among them: 126
+- Bounded candidates: 0
 - Confirmed graphics dispatches: 0
 - Confirmed non-graphics dispatches: 0
+- Minimum direct-GL candidates: 30
+- Implementation surface (cut plus behind-cut and shared helpers): 97
 - GLEW init callers: 2
 
-Counts of indirect sites only. They do not measure shader behavior, resource lifetimes, Metal init, or presentation.
+Counts of indirect sites only. They do not measure shader behavior, resource lifetimes, Metal init, or presentation. 77 unresolved sites record an operand_source slot address. That address is not a closed set of call targets. A slot-load site and a _GfxInit displacement call were checked; their machine operands do not name the callee.
 
 ## Platform adaptation
 
+- Platform assessment: `platform_not_assessed`
 - Unreferenced NSOpenGL thunks: 7
 - Adapter SDL_GL callsites: 12
 - CGL rows: 1
 - Window scan: scanned
+- Window tokens are names found in pseudocode, not a drawable-lifecycle result.
 - Window tokens present: SDL_CreateWindow, SDL_GL_SetAttribute, SDL_GL_SetSwapInterval
 
 ## Remaining uncertainties
 
-- Material: any survivor listed in `boundary.json` under `bypasses`, and any `unresolved_active_platform_op`.
-- Low impact: unreferenced NSOpenGL thunks, and `not_observed` CGL, unless a required operation is later tied to them.
+- Material: any survivor listed in `boundary.json` under `bypasses`.
+- Platform lifecycle was not assessed. Unreferenced NSOpenGL thunks and `not_observed` CGL stay disclosed.
 - Not analyzed: indirect sites in `CInGameIdler::Render` and other functions outside the selected site list.
 
 ## Effort estimate
 
-Replace candidates: 29 functions, 3191 original instructions, 1731 decompiled lines. Faithful C++ is estimated at 1731–2596 lines: the low end is the decompiled line count of those functions, and the high end adds about half again for types and calls the decompiler left implicit. That band is taken from the decompiled bodies of the representative functions below, not from an instruction-to-line multiplier. Metal infrastructure, which has no original body, is a separate 1500–4000 lines for a device, queue, pipeline cache, and resource table. Shader conversion is deferred to stage D.
-- `_GfxSetViewPort`: 13 instructions, 18 decompiled lines
-- `_GfxSetRasterizerState`: 65 instructions, 52 decompiled lines
-- `_GfxInit`: 770 instructions, 387 decompiled lines
+Minimum direct-GL set: 30 functions and 3440 instructions. Decompiled lines for that set, where the snapshot has a body: 1896 across 30 functions. The implementation surface is 97 functions (the `_Gfx*` cut plus behind-cut and shared helpers) and is not classified as retain or replace. Faithful C++ and Metal infrastructure are not estimated. Shader conversion is deferred to stage D.
 
 ## Recommendation
 
