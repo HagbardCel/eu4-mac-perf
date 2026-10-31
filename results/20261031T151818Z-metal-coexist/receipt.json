@@ -1,0 +1,11 @@
+{
+  "gpu_coexistence": "offscreen_coexistence_verified",
+  "readback_matches": true,
+  "metal_command_completed": true,
+  "width": 4,
+  "height": 4,
+  "format": "BGRA8Unorm",
+  "clear_rgba": [1, 0, 0, 1],
+  "cause": null,
+  "window_drawable": "window_drawable_not_tested"
+}

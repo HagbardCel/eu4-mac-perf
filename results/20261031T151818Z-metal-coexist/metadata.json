@@ -1,0 +1,72 @@
+{
+  "status": "complete",
+  "started_utc": "2026-10-31T15:18:18.985915+00:00",
+  "gog": {
+    "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "gog_game_id": "2057001589",
+    "gog_build_id": "59158198792514056",
+    "gog_package_version": "1",
+    "eu4_version": "EU4 v1.37.5.0 Inca (491d)",
+    "eu4_branch": "release_1.37.5-gog-fix",
+    "eu4_revision": "ab7d269d73abffe0859e96b92e2bfe46201883e8",
+    "gog_user_data": "/Users/fabian/Documents/Paradox Interactive/Europa Universalis IV GOG",
+    "architecture": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4: Mach-O 64-bit executable x86_64",
+    "linked_graphics": [
+      "/System/Library/Frameworks/GLUT.framework/Versions/A/GLUT (compatibility version 1.0.0, current version 1.0.0)",
+      "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
+    ]
+  },
+  "library": "/private/tmp/eu4-pr118/benchmark/.build/libeu4_metal_coexist.dylib",
+  "library_sha256": "c2221a6e5717153072deeb1fc92f08cb2e8d698305133d6fb284db129ccae1c1",
+  "source_sha256": "7791423fe40445c286400f9b1eaf15aead96103f1ed3af28e548f3d8f89f41be",
+  "game_pid": 22195,
+  "receipt": {
+    "gpu_coexistence": "offscreen_coexistence_verified",
+    "readback_matches": true,
+    "metal_command_completed": true,
+    "width": 4,
+    "height": 4,
+    "format": "BGRA8Unorm",
+    "clear_rgba": [
+      1,
+      0,
+      0,
+      1
+    ],
+    "cause": null,
+    "window_drawable": "window_drawable_not_tested"
+  },
+  "windows": [
+    {
+      "window_id": 47196,
+      "owner": "eu4",
+      "title": "Europa Universalis IV",
+      "layer": 2147483628,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 2048,
+        "height": 1152
+      }
+    },
+    {
+      "window_id": 47199,
+      "owner": "eu4",
+      "title": "",
+      "layer": 2147483628,
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 2048,
+        "height": 1152
+      }
+    }
+  ],
+  "gl_flush_success_count": 1,
+  "eu4_window_enumerated": true,
+  "metal_readback_matched": true,
+  "visual_frame_inspected": false,
+  "ended_utc": "2026-10-31T15:18:47.324337+00:00",
+  "game_returncode": -9
+}
