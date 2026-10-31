@@ -1722,22 +1722,13 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
             "TR3_LEGACY_REGIONS": "1", "TR3_CHECK_SYMBOL": "1", "TR3_SYMBOL": "tr3_subject",
             "TR3_MAX_INSTRUCTIONS": "1", "TR3_MAX_ACCESSES": "1", "TR3_MAX_BYTES": "1",
         }
-        previous = {key: os.environ.get(key) for key in injected}
-        os.environ.update(injected)
-
         def popen(argv, cwd, env, stdout, stderr, **_kwargs):
             captured["env"] = env
             return _Child()
 
-        try:
+        with mock.patch.dict(os.environ, injected):
             with tempfile.TemporaryDirectory() as tmp:
                 self._launch(tmp, popen)
-        finally:
-            for key, value in previous.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
         env = captured["env"]
         for name in ("TR3_LEGACY_REGIONS", "TR3_CHECK_SYMBOL", "TR3_SYMBOL"):
             self.assertNotIn(name, env)
@@ -1807,6 +1798,7 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
             payload = json.loads(out.read_text())
         self.assertEqual(status, 0)
         self.assertEqual(payload["outcome"], "captured_incomplete")
+        self.assertEqual(payload["observation"]["completeness"], "complete")
         self.assertEqual(payload["qualification"], "not claimed")
         self.assertIs(payload["raw"]["run"]["execution_complete"], False)
 

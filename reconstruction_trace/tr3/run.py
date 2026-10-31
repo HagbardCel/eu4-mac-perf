@@ -53,6 +53,7 @@ def decide(target: dict) -> str:
 def _refuse_pin(target: dict, window: dict) -> str | None:
     """Metadata pin for a direct ``launch_live`` caller. This does not hash the file."""
     decision = decide(target)
+    # UNAUTHORIZED is decide()'s pin-match signal, not a live-authorization failure here.
     if decision != UNAUTHORIZED:
         return decision
     pinned = target["code_windows"]["_GfxSetConstantBuffer"]
