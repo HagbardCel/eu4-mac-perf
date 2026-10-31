@@ -178,9 +178,10 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
                          command_status ? "\"" : "",
                          readback_matches < 0 ? "null" : readback_matches ? "true" : "false",
                          cause ? "\"" : "null", cause ? cause : "", cause ? "\"" : "",
-                         g_bootstrap ? ",\n  \"checkpoint\": \"_GfxInit/_glewInit\",\n"
-                                      "  \"checkpoint_rva\": \"0x15e91fd\""
-                                    : "") < 0;
+                         strcmp(result, "backend_bootstrap_checkpoint_reached") == 0
+                             ? ",\n  \"checkpoint\": \"_GfxInit/_glewInit\",\n"
+                               "  \"checkpoint_rva\": \"0x15e91fd\""
+                             : "") < 0;
     }
     if (!failed) {
         failed = fflush(out) != 0;
