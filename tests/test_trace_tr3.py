@@ -1254,7 +1254,19 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
     def _child(self) -> "_Child":
         return _Child()
 
-    def _seal(self, path: Path, session: str, pid: int, **overrides: object) -> dict:
+    def _authorized_target(self) -> dict:
+        return {
+            "sha256": tr3_run.PIN_SHA256,
+            "image_base": tr3_run.PIN_IMAGE_BASE,
+            "code_windows": {"_GfxSetConstantBuffer": {
+                "entry_rva": tr3_run.PIN_ENTRY_RVA,
+                "end_rva": tr3_run.PIN_END_RVA,
+                "sha256": tr3_run.PIN_WINDOW_SHA256,
+            }},
+        }
+
+    def _seal(self, path: Path, session: str, pid: int, *,
+              execution_complete: bool = False, **overrides: object) -> dict:
         raw = {
             "sealed": True, "session": session, "pid": pid, "refusal": None,
             "proc_translated": 1, "patched": True, "qbdi_version": "test",
@@ -1262,6 +1274,7 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
                      "entry_bytes_match_after": True},
             "run": {
                 "failure": None, "ran": True, "entered": True, "memory_recording": True,
+                "execution_complete": execution_complete,
                 "exec_transfers": [], "dropped_instructions": 0, "dropped_accesses": 0,
                 "dropped_transfers": 0, "regions": [], "pointers": [],
                 "entry_gpr": {name: "0x0" for name in native.ENTRY_REGISTERS},
@@ -1275,7 +1288,8 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
 
     def _launch(self, tmp: str, popen, *, output: Path | None = None, timeout: float = 0,
                 exe_args: object = None, path: Path | None = None, gog: Path | None = None,
-                build: mock.Mock | None = None):
+                build: mock.Mock | None = None, target: dict | None = None,
+                window: dict | None = None):
         root = Path(tmp)
         exe = root / "gog" / "eu4"
         exe.parent.mkdir(parents=True, exist_ok=True)
@@ -1286,6 +1300,9 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
             "exeArgs": ["-nographics"] if exe_args is None else exe_args,
         }))
         out = root / "live.json" if output is None else output
+        pinned = self._authorized_target() if target is None else target
+        pinned_window = (pinned["code_windows"]["_GfxSetConstantBuffer"]
+                         if window is None else window)
         build_mock = build if build is not None else mock.Mock(
             return_value=(root / "host", root / "dylib"))
         with mock.patch.object(tr3_run.startup, "build", build_mock), \
@@ -1294,8 +1311,7 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
              mock.patch.object(tr3_run.base, "running_game_pid", return_value=None), \
              mock.patch.object(tr3_run.subprocess, "Popen", side_effect=popen):
             status = tr3_run.launch_live(
-                out, {"sha256": "aa", "image_base": 1}, {"sha256": "bb"},
-                exe if path is None else path, timeout=timeout)
+                out, pinned, pinned_window, exe if path is None else path, timeout=timeout)
         return status, out, build_mock
 
     def test_relative_output_is_resolved_before_launch(self) -> None:
@@ -1661,7 +1677,8 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
     def test_complete_trace_does_not_claim_qualification(self) -> None:
         def popen(argv, cwd, env, stdout, stderr, **_kwargs):
             child = _Child()
-            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid)
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid,
+                       execution_complete=True)
             return child
 
         def fake(_candidates, **_kwargs):
@@ -1675,6 +1692,123 @@ class TraceTr3LiveLaunchTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(payload["outcome"], "captured_complete")
         self.assertEqual(payload["qualification"], "not claimed")
+
+    def test_authorized_descriptor_uses_the_fixed_ceilings(self) -> None:
+        captured: dict = {}
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            captured["env"] = env
+            child = _Child()
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid,
+                       refusal="rel32 out of range")
+            return child
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        desc = payload["descriptor"]
+        self.assertEqual(desc["schema"], "trace-target/v1")
+        self.assertEqual(desc["binary"]["image_base"], hex(tr3_run.PIN_IMAGE_BASE))
+        self.assertEqual(desc["function"]["ranges"], [[tr3_run.PIN_ENTRY_RVA, tr3_run.PIN_END_RVA]])
+        self.assertEqual(desc["capture"], dict(startup.CEILING))
+        self.assertEqual(captured["env"]["TR3_MAX_INSTRUCTIONS"], "64")
+        self.assertEqual(captured["env"]["TR3_MAX_ACCESSES"], "256")
+        self.assertEqual(captured["env"]["TR3_MAX_BYTES"], "65536")
+        self.assertNotIn("TR3_LEGACY_REGIONS", captured["env"])
+
+    def test_inherited_acquisition_env_cannot_override_the_launch(self) -> None:
+        captured: dict = {}
+        injected = {
+            "TR3_LEGACY_REGIONS": "1", "TR3_CHECK_SYMBOL": "1", "TR3_SYMBOL": "tr3_subject",
+            "TR3_MAX_INSTRUCTIONS": "1", "TR3_MAX_ACCESSES": "1", "TR3_MAX_BYTES": "1",
+        }
+        previous = {key: os.environ.get(key) for key in injected}
+        os.environ.update(injected)
+
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            captured["env"] = env
+            return _Child()
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._launch(tmp, popen)
+        finally:
+            for key, value in previous.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        env = captured["env"]
+        for name in ("TR3_LEGACY_REGIONS", "TR3_CHECK_SYMBOL", "TR3_SYMBOL"):
+            self.assertNotIn(name, env)
+        self.assertEqual(env["TR3_MAX_INSTRUCTIONS"], "64")
+        self.assertEqual(env["TR3_MAX_ACCESSES"], "256")
+        self.assertEqual(env["TR3_MAX_BYTES"], "65536")
+
+    def test_invalid_descriptor_refuses_before_build(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                    tr3_run.startup, "check_descriptor",
+                    side_effect=RuntimeError("schema is not trace-target/v1")), \
+                 redirect_stdout(StringIO()) as out:
+                status, _path, build = self._launch(
+                    tmp, lambda *args, **kwargs: self.fail("launched"), build=mock.Mock())
+        self.assertEqual(status, 1)
+        self.assertEqual(out.getvalue().strip(), "refused: schema is not trace-target/v1")
+        build.assert_not_called()
+
+    def test_malformed_target_refuses_before_build(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with redirect_stdout(StringIO()) as out:
+                status, _path, build = self._launch(
+                    tmp, lambda *args, **kwargs: self.fail("launched"),
+                    target={}, window={}, build=mock.Mock())
+        self.assertEqual(status, 1)
+        self.assertTrue(out.getvalue().startswith("refused:"))
+        build.assert_not_called()
+
+    def test_pin_mismatch_refuses_before_launch(self) -> None:
+        bad_sha = self._authorized_target()
+        bad_sha["sha256"] = "0" * 64
+        bad_base = self._authorized_target()
+        bad_base["image_base"] = 1
+        cases = ((bad_sha, None), (bad_base, None), (self._authorized_target(), {"sha256": "bb"}))
+        for target, window in cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                with redirect_stdout(StringIO()) as out:
+                    status, _path, build = self._launch(
+                        tmp, lambda *args, **kwargs: self.fail("launched"),
+                        target=target, window=window, build=mock.Mock())
+            self.assertEqual(status, 1, out.getvalue())
+            self.assertEqual(out.getvalue().strip(), "refused: binary pin mismatch")
+            build.assert_not_called()
+
+    def test_missing_log_while_running_is_a_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            status, out, _build = self._launch(tmp, lambda *_args, **_kwargs: _Child())
+            payload = json.loads(out.read_text())
+        self.assertEqual(status, 1)
+        self.assertEqual(payload["outcome"], "capture_missing")
+        self.assertEqual(payload["termination"]["classification"], "timeout_termination")
+
+    def test_interpreter_complete_cannot_promote_a_native_incomplete_run(self) -> None:
+        def popen(argv, cwd, env, stdout, stderr, **_kwargs):
+            child = _Child()
+            self._seal(Path(env["TR3_LOG"]), env["TR3_SESSION"], child.pid)
+            return child
+
+        def fake(_candidates, **_kwargs):
+            return {"diagnostic": None, "observation": {"completeness": "complete"},
+                    "limits": gfx.LIMITS}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(tr3_run.gfx, "interpret", side_effect=fake):
+                status, out, _build = self._launch(tmp, popen)
+            payload = json.loads(out.read_text())
+        self.assertEqual(status, 0)
+        self.assertEqual(payload["outcome"], "captured_incomplete")
+        self.assertEqual(payload["qualification"], "not claimed")
+        self.assertIs(payload["raw"]["run"]["execution_complete"], False)
 
 
 class _Child:
