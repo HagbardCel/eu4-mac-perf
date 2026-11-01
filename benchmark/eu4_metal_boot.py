@@ -17,6 +17,10 @@ import eu4_benchmark as base
 
 SOURCE = Path(__file__).resolve().with_suffix(".m")
 PATCH = SOURCE.with_name("eu4_metal_boot_patch.c")
+ENTRY = SOURCE.with_name("eu4_gfx_entry_patch.c")
+EVENTS = SOURCE.with_name("eu4_metal_events.c")
+GL_DIAG = SOURCE.with_name("eu4_metal_gl_diag.c")
+GFX = SOURCE.with_name("eu4_gfx_init.mm")
 LIBRARY = SOURCE.parent / ".build/libeu4_metal_boot.dylib"
 HOST_SOURCE = SOURCE.parents[1] / "tests/metal_boot_host.c"
 HOST = SOURCE.parent / ".build/metal_boot_host"
@@ -30,9 +34,10 @@ def build_library(arch: str = "x86_64") -> Path:
     LIBRARY.parent.mkdir(parents=True, exist_ok=True)
     output = LIBRARY if arch == "x86_64" else LIBRARY.with_name(f"libeu4_metal_boot_{arch}.dylib")
     command = [
-        "clang", "-arch", arch, "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-dynamiclib",
-        "-framework", "AppKit", "-framework", "Foundation", "-framework", "Metal", "-framework", "QuartzCore",
-        "-o", str(output), str(SOURCE), str(PATCH),
+        "clang", "-arch", arch, "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-lc++", "-dynamiclib",
+        "-framework", "AppKit", "-framework", "Foundation", "-framework", "Metal",
+        "-framework", "QuartzCore", "-framework", "OpenGL",
+        "-o", str(output), str(SOURCE), str(PATCH), str(ENTRY), str(EVENTS), str(GL_DIAG), str(GFX),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
@@ -48,8 +53,8 @@ def build_host(arch: str = "x86_64", fail_inject: bool = False) -> Path:
     if arch != "x86_64":
         output = output.with_name(f"{output.name}_{arch}")
     command = [
-        "clang", "-arch", arch, "-O2", "-Wall", "-Wextra",
-        "-o", str(output), str(HOST_SOURCE), str(PATCH),
+        "clang", "-arch", arch, "-O2", "-Wall", "-Wextra", "-DEU4_METAL_GL_NO_INTERPOSE",
+        "-o", str(output), str(HOST_SOURCE), str(PATCH), str(ENTRY), str(GL_DIAG),
     ]
     if fail_inject:
         command.insert(1, "-DEU4_METAL_BOOT_TEST_FAIL")
@@ -75,6 +80,29 @@ def probe_environ(inherited: dict, bootstrap: bool) -> dict:
     return env
 
 
+def read_event(path: Path) -> dict | None:
+    """A missing, empty, or truncated file is not an event. Temp siblings are not read."""
+    if path.name.endswith(".partial") or not path.is_file() or path.stat().st_size == 0:
+        return None
+    try:
+        value = json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def metal_init_should_stop(init_seen: bool, stop_seen: bool, exited: bool, deadline_hit: bool) -> str | None:
+    """init.json alone does not stop the run."""
+    del init_seen
+    if stop_seen:
+        return "stop"
+    if exited:
+        return "exit"
+    if deadline_hit:
+        return "deadline"
+    return None
+
+
 def read_receipt(path: Path) -> dict | None:
     if not path.is_file() or path.stat().st_size == 0:
         return None
@@ -95,8 +123,11 @@ def stop_game(game: subprocess.Popen) -> None:
         game.wait(timeout=10)
 
 
-def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = False) -> dict:
-    """Operator launch. The dylib exits the game after the receipt. Not a CI job."""
+def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = False,
+                   metal_init: bool = False) -> dict:
+    """Operator launch. a1 and bootstrap exit after their receipt. metal_init keeps running."""
+    if metal_init and bootstrap:
+        raise base.BenchmarkError("--metal-init and --bootstrap are mutually exclusive")
     identity = base.gog_identity()
     if identity["executable_sha256"] != PINNED_SHA256:
         raise base.BenchmarkError(
@@ -110,8 +141,14 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
     run_dir = Path(run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=False)
     receipt_path = run_dir / "receipt.json"
-    env = probe_environ(os.environ, bootstrap)
-    env["EU4_METAL_BOOT_RECEIPT"] = str(receipt_path)
+    if metal_init:
+        env = dict(os.environ)
+        env["EU4_METAL_BOOT_MODE"] = "metal_init"
+        env["EU4_METAL_INIT_DIR"] = str(run_dir)
+        env.pop("EU4_METAL_BOOT_RECEIPT", None)
+    else:
+        env = probe_environ(os.environ, bootstrap)
+        env["EU4_METAL_BOOT_RECEIPT"] = str(receipt_path)
     env["SDL_VIDEO_EXTERNAL_CONTEXT"] = "1"
     env["DYLD_INSERT_LIBRARIES"] = str(library)
     stdout = (run_dir / "game.stdout").open("wb")
@@ -125,23 +162,58 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
     )
     deadline = time.monotonic() + wait_seconds
     receipt = None
+    why = None
     try:
-        while time.monotonic() < deadline:
-            if game.poll() is not None:
+        if metal_init:
+            while True:
+                exited = game.poll() is not None
+                stop_seen = read_event(run_dir / "stop.json") is not None
+                deadline_hit = time.monotonic() >= deadline
+                why = metal_init_should_stop(
+                    read_event(run_dir / "init.json") is not None, stop_seen, exited, deadline_hit
+                )
+                if why is not None:
+                    break
+                time.sleep(0.2)
+        else:
+            while time.monotonic() < deadline:
+                if game.poll() is not None:
+                    receipt = read_receipt(receipt_path)
+                    break
                 receipt = read_receipt(receipt_path)
-                break
-            receipt = read_receipt(receipt_path)
-            if receipt is not None:
-                try:
-                    game.wait(timeout=EXIT_WAIT_SECONDS)
-                except subprocess.TimeoutExpired:
-                    stop_game(game)
-                break
-            time.sleep(0.2)
+                if receipt is not None:
+                    try:
+                        game.wait(timeout=EXIT_WAIT_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        stop_game(game)
+                    break
+                time.sleep(0.2)
     finally:
         stop_game(game)
         stdout.close()
         stderr.close()
+    if metal_init:
+        init = read_event(run_dir / "init.json")
+        stop = read_event(run_dir / "stop.json")
+        success = init is not None and init.get("success") == 1
+        phase = None if stop is None else stop.get("phase")
+        verified = success and (stop is None or phase == "after_init")
+        metadata = {
+            "status": "bounded" if verified and stop is None else "complete" if verified else "failed",
+            "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "gog": identity,
+            "exit_code": game.returncode,
+            "stop_reason": why,
+            "phase": phase,
+            "probe_sha256": base.sha256(library),
+            "live_gfx_init": "not_verified" if not verified else "recorded",
+        }
+        (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        if not verified:
+            raise base.BenchmarkError(
+                f"metal_init did not reach a successful init: stop={why} phase={phase}"
+            )
+        return init
     wanted = "backend_bootstrap_checkpoint_reached" if bootstrap else "metal_window_boot_verified"
     verified = receipt is not None and receipt.get("result") == wanted and game.returncode == 0
     metadata = {
@@ -162,11 +234,13 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Operator EU4 Metal boot. Not a CI job.")
-    parser.add_argument("--bootstrap", action="store_true")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--bootstrap", action="store_true")
+    group.add_argument("--metal-init", action="store_true")
     parser.add_argument("run_dir", type=Path)
     args = parser.parse_args(argv)
     try:
-        launch_session(args.run_dir, bootstrap=args.bootstrap)
+        launch_session(args.run_dir, bootstrap=args.bootstrap, metal_init=args.metal_init)
     except base.BenchmarkError as exc:
         print(exc, file=sys.stderr)
         return 1
