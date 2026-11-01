@@ -4,9 +4,14 @@ Blockers are questions a Metal `_GfxInit` cannot ignore. Everything else can wai
 
 ## Blocks Metal `_GfxInit`
 
-- The engine-visible postconditions in [architecture.md](architecture.md) are the established list. The open items there are the blockers: unnamed indirect calls inside init, which stored GLEW flags callers test, the 4x4 texture format, whether `+0x180` must still be a GL context, and the settings constants written by `_GfxGetGraphicsSettings`.
-- `_GfxGetGraphicsSettings` is a second `_glewInit`, on a window it creates and destroys. Skipping it, or skipping only the GLEW call inside `_GfxInit`, does not leave the settings object filled.
-- Default state objects at `+0x80`, `+0x88`, and `+0x90` are `SOpenGL*` today. Init can keep creating them only if the later setters still understand them. Replacing the objects during init means those setters are in the same change.
+The implementation contract is [metal-init-interface.md](metal-init-interface.md). It settles the settings probe, the context pointer, and the default-state objects. Still open, and not classified by that contract:
+
+- The fourteen indirect calls inside `_GfxInit`. Implementation inspects any whose side effect the postconditions require.
+- Which capability bytes besides the advertised max-texture dimension a later caller tests. The contract writes the rest of that span as 0.
+- The numeric format argument of the 4×4 texture.
+- Whether any caller outside the 92 reads `+0x180` as a GL context.
+- The meaning of the settings constants `0x400` and `0x30000000300`, and the fields inside a sample record.
+- The wireframe pointer alias in [architecture.md](architecture.md).
 
 ## Does not block init
 
