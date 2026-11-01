@@ -11,11 +11,11 @@ migration_role: `replace-metal`
 
 ## ABI
 
-From the [gfx-init-handoff](../../../../../analysis/metal-census/v1/gfx-init-handoff.md): `rdi` is the window-handle struct, `rsi` is the success byte, and `rax` returns the `0x198`-byte master (`movq %r12, %rax` at `0x15e9c6c`) after the store to `gMasterContext` at `0x15e8fe7`. The B0 run reached `_glewInit` and did not show this return.
+From the [gfx-init-handoff](../../../../../analysis/metal-census/v1/gfx-init-handoff.md): `rdi` is the window-handle struct, `rsi` is the success byte, and `rax` returns the `0x198`-byte master (`movq %r12, %rax` at `0x15e9c6c`) after the store to `gMasterContext` at `0x15e8fe7`.
 
 ## Fields
 
-The handoff establishes these stores on the normal path before that return: the SDL window, an OpenGL context, GLEW flags, blend, rasterizer, depth-stencil, and the 4×4 texture. Offsets for those stores are the established list in [architecture.md](../architecture.md). A matching displacement in another function is not an alias.
+The handoff names these objects on the normal path before that return: the SDL window, an OpenGL context, GLEW flags, blend, rasterizer, depth-stencil, and the 4×4 texture. Their offsets are in [architecture.md](../architecture.md). That list also includes init-body readings the handoff does not establish. A matching displacement in another function is not an alias.
 
 ## Dependencies
 

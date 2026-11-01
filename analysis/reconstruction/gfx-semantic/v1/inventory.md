@@ -1,10 +1,13 @@
 # Inventory
 
-File presence is not semantic completeness. Counts below are the dossier statuses.
+File presence is not semantic completeness. Counts below are the dossier headers.
 
 - `reconstructed`: 61
 - `partial`: 31
 - `blocked`: 0
+- `retain-original`: 37
+- `replace-metal`: 51
+- `undetermined`: 4
 
 | entry_rva | name | instructions | subsystem | semantic_status | migration_role | dossier |
 | --- | --- | --- | --- | --- | --- | --- |

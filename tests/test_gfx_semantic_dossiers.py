@@ -138,7 +138,11 @@ class GfxSemanticDossierTest(unittest.TestCase):
         for status in STATUSES:
             self.assertIn(f"`{status}`:", inventory)
 
-        by_name = {header(path.read_text())["name"]: header(path.read_text()) for path in dossiers.values()}
+        by_name = {}
+        for path in dossiers.values():
+            fields = header(path.read_text())
+            self.assertNotIn(fields["name"], by_name, path.name)
+            by_name[fields["name"]] = fields
         listed = re.findall(
             r"^\| `0x[0-9a-f]+` \| `(_Gfx[^`]+)` \| \d+ \| [a-z]+ \| `(reconstructed|partial|blocked)` \| `(retain-original|replace-metal|undetermined)` \|",
             inventory,
@@ -152,9 +156,10 @@ class GfxSemanticDossierTest(unittest.TestCase):
             fields = by_name[name]
             self.assertEqual(fields["semantic_status"], status, name)
             self.assertEqual(fields["migration_role"], role, name)
-        for status in STATUSES:
-            count = sum(1 for fields in by_name.values() if fields["semantic_status"] == status)
-            self.assertRegex(inventory, rf"(?m)^- `{status}`: {count}$", status)
+        for key, field in (("semantic_status", STATUSES), ("migration_role", ROLES)):
+            for label in field:
+                count = sum(1 for fields in by_name.values() if fields[key] == label)
+                self.assertRegex(inventory, rf"(?m)^- `{label}`: {count}$", label)
 
     def test_shared_pages_have_no_decompiler_fence(self) -> None:
         for path in TREE.glob("*.md"):

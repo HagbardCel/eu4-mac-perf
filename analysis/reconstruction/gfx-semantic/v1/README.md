@@ -37,7 +37,7 @@ The existing [_GfxSetConstantBuffer](../../_GfxSetConstantBuffer/contract.md) co
 
 ## Acceptance
 
-The mechanical test checks identity against the frozen TSV, required header fields, the six-way partition, and a fence guard. The guard rejects fenced decompiler or instruction dumps. It does not prove that a sentence was written independently or that a claim is faithful. Those are review checks. There is no percentage gate.
+The mechanical test checks identity against the frozen TSV, one dossier per RVA, required header fields, the six-way partition, inventory rows and counts against those headers, and a fence guard. The guard rejects fenced decompiler or instruction dumps. It does not prove that a sentence was written independently or that a claim is faithful. Those are review checks. There is no percentage gate.
 
 ## Subsystems
 
