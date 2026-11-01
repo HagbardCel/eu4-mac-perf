@@ -34,8 +34,8 @@ The Color contract is a candidate for one authentic indexed EU4 draw. The observ
 
 ## Limits
 
-EU4 resolves `glDrawElements` through `dlsym`, including the ARB alias. Ordinary Mach-O interposition cannot be assumed to see this draw. This note does not add a hook.
+EU4 submissions can reach different dispatch paths. The observed main-menu indexed submissions reached the directly bound `glDrawElements` symbol, while `dlsym` lookups remain a second entry to the same wrapper, and capture has to cover the path that actually runs.
 
-Later idle sessions did not see this program. Color is a UI path, not the paused-map frame. One prior session does not make it available. A future acquisition has to name a UI context that submits it. That session is not authorized here.
+The authorized session on 2026-11-01 followed the main-menu Options step and then the in-game Esc menu. It is recorded in [color-note.md](color-note.md). The direct indexed path ran, and 22 inspected programs had no qualifying Color identity. Classification is cached, so the 17,080,117 `not-color` rejects are not that many independent shader comparisons. `not-color` is recorded before interface and draw-state checks, and the historical fragment compiler input was not retained, so the session does not separate a missing program from a false-negative match. This note does not authorize another session.
 
-This is the last preparatory note. The next milestone, separately authorized, is one complete original Color fixture compared with Metal.
+B2 is still one complete original Color fixture compared with Metal. This session did not produce that fixture.
