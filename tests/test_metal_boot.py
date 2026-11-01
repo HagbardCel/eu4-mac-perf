@@ -59,6 +59,12 @@ class MetalBootTests(unittest.TestCase):
             True, "after_init", "stop", 2, 7, 7, False, "gl", image, "0x15e9d11"
         )
         self.assertEqual(inside["status"], "post_init_failure")
+        for rva in ("0x15ea480", "0x15ea49b", "0x15ea4c0", "0x15ea4f2"):
+            replaced = probe.metal_init_outcome(
+                True, "after_init", "stop", 2, 7, 7, False, "gl", image, rva
+            )
+            self.assertEqual(replaced["status"], "post_init_failure")
+            self.assertTrue(replaced["raises"])
         for bad in (None, "nope", -1, 0):
             malformed = probe.metal_init_outcome(
                 True, "after_init", "stop", 2, 7, 7, False, "gl", image, bad

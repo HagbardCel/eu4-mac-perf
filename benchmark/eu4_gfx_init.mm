@@ -610,7 +610,7 @@ void eu4_gfx_shutdown(void *master) {
 }
 
 static void set_state(void *handle, void *state, int slot, int (*apply)(void *, void *, int),
-                       const char *symbol) {
+                       const char *symbol, int force) {
     void *master = NULL;
     if (handle != NULL) {
         memcpy(&master, handle, sizeof master);
@@ -621,21 +621,33 @@ static void set_state(void *handle, void *state, int slot, int (*apply)(void *, 
     if (state == NULL) {
         state = load_ptr(master, slot);
     }
-    if (apply(master, state, 0) != 0 && g_succeeded) {
+    if (apply(master, state, force) != 0 && g_succeeded) {
         stop_now("after_init", symbol, "unsupported", __builtin_return_address(0));
     }
 }
 
 void eu4_gfx_set_blend(void *handle, void *state) {
-    set_state(handle, state, 0x80, apply_blend, "_GfxSetBlendState");
+    set_state(handle, state, 0x80, apply_blend, "_GfxSetBlendState", 0);
 }
 
 void eu4_gfx_set_depth(void *handle, void *state) {
-    set_state(handle, state, 0x88, apply_depth, "_GfxSetDepthStencilState");
+    set_state(handle, state, 0x88, apply_depth, "_GfxSetDepthStencilState", 0);
 }
 
 void eu4_gfx_set_raster(void *handle, void *state) {
-    set_state(handle, state, 0x90, apply_raster, "_GfxSetRasterizerState");
+    set_state(handle, state, 0x90, apply_raster, "_GfxSetRasterizerState", 0);
+}
+
+int eu4_gfx_reset(void *master) {
+    (void)master;
+    return 1;
+}
+
+void eu4_gfx_on_reset_master(void *master) {
+    /* force skips the snapshot compare. No encoder exists yet, so this is the CPU write only. */
+    set_state(master, NULL, 0x80, apply_blend, "_GfxSetBlendState", 1);
+    set_state(master, NULL, 0x88, apply_depth, "_GfxSetDepthStencilState", 1);
+    set_state(master, NULL, 0x90, apply_raster, "_GfxSetRasterizerState", 1);
 }
 
 int eu4_gfx_settings(int display, int windowed, int count, void *settings) {

@@ -100,6 +100,8 @@ REPLACED_BODIES = (
     (0x15EA261, 0x15EA35A),
     (0x15EA35A, 0x15EA42C),
     (0x15EA42C, 0x15EA460),
+    (0x15EA46B, 0x15EA49B),
+    (0x15EA49B, 0x15EA4F2),
     (0x15ED388, 0x15ED9FC),
 )
 
@@ -158,7 +160,7 @@ def metal_init_outcome(init_success: bool, stop_phase: str | None, why: str | No
                        init_thread: int | None, stop_thread: int | None, launcher_signaled: bool,
                        stop_reason: str | None = None, stop_image: str | None = None,
                        stop_rva: object = None) -> dict:
-    """Exit code 2 is the diagnostic _exit, and only with an after_init gl stop outside the six bodies."""
+    """Exit code 2 is the diagnostic _exit, and only with an after_init gl stop outside the eight bodies."""
     threads = init_thread is not None and init_thread == stop_thread
     diagnostic = (
         why == "stop" and stop_phase == "after_init" and init_success and returncode == 2
