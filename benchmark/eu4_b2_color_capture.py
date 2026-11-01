@@ -64,6 +64,12 @@ def wait_status(state: dict) -> str:
     return "incomplete"
 
 
+def acquisition_settled(state: dict, counters: dict | None) -> bool:
+    if not isinstance(counters, dict) or int(counters.get("qualified") or 0) <= 0:
+        return False
+    return state["fixture_phase"] is not None and state["ack"] == state["fixture_phase"]
+
+
 def acquisition_note(counters: dict) -> str:
     indexed = int(counters.get("indexed_draws") or 0)
     inspected = int(counters.get("programs_inspected") or 0)
@@ -214,7 +220,8 @@ def launch_session(run_dir: Path, wait_seconds: float) -> dict:
                     print(acquisition_note(fresh), flush=True)
                     last_printed = fresh
                     last_print = now
-            if see_fixture(state, fixture.is_file()):
+            see_fixture(state, fixture.is_file())
+            if acquisition_settled(state, fresh):
                 break
             if game.poll() is not None and state["fixture_phase"] is None:
                 break
@@ -225,7 +232,8 @@ def launch_session(run_dir: Path, wait_seconds: float) -> dict:
                 continue
             acks.append(line)
             see_fixture(state, fixture.is_file())
-            if take_ack(state, line):
+            take_ack(state, line)
+            if acquisition_settled(state, fresh):
                 break
     finally:
         if game.poll() is None:
@@ -238,8 +246,14 @@ def launch_session(run_dir: Path, wait_seconds: float) -> dict:
         stdout.close()
         stderr.close()
     counters = json.loads(counters_path.read_text()) if counters_path.is_file() else {}
+    if acquisition_settled(state, counters):
+        status = "acquired"
+    elif state["fixture_phase"] is None:
+        status = "acquisition-failed"
+    else:
+        status = "incomplete"
     metadata = {
-        "status": wait_status(state),
+        "status": status,
         "gog": identity,
         "library_sha256": base.sha256(library),
         "preflight": preflight,

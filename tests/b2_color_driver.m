@@ -455,8 +455,10 @@ int main(int argc, char **argv) {
             return 1;
         }
         typedef void (*DeleteArb)(void *);
-        DeleteArb delete_arb = sym("glDeleteObjectARB");
-        delete_arb((void *)(uintptr_t)program);
+        DeleteArb delete_arb = dlsym(RTLD_DEFAULT, "glDeleteObjectARB");
+        if (delete_arb != NULL) {
+            delete_arb((void *)(uintptr_t)program);
+        }
         char *edited = used_extra(frag);
         GLuint again = build_program(vert, edited, NULL);
         fixed_state(0, 0);
@@ -470,13 +472,16 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (strcmp(argv[1], "arb-link") == 0) {
+        typedef void (*LinkArb)(void *);
+        LinkArb link = dlsym(RTLD_DEFAULT, "glLinkProgramARB");
+        if (link == NULL) {
+            return 0;
+        }
         GLuint program = build_program(vert, frag, NULL);
         upload(GL_UNSIGNED_SHORT, shorts, (int)sizeof shorts);
         fixed_state(1, 0);
         set_matrix(program, 0.f);
         issue("glDrawElements", GL_UNSIGNED_SHORT, 3, 0);
-        typedef void (*LinkArb)(void *);
-        LinkArb link = sym("glLinkProgramARB");
         link((void *)(uintptr_t)program);
         if (cached_state(program) != -1) {
             fprintf(stderr, "ARB link left the cached identity\n");

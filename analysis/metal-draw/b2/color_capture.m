@@ -1200,13 +1200,10 @@ static void shader_source_arb_hook(GLhandleARB shader, GLsizei count, const GLch
 
 static void *hooked_dlsym(void *handle, const char *symbol) {
     void *found = dlsym(handle, symbol);
-    if (symbol == NULL) {
+    if (symbol == NULL || found == NULL) {
         return found;
     }
     if (strcmp(symbol, "glDrawElements") == 0 || strcmp(symbol, "glDrawElementsARB") == 0) {
-        if (found == NULL) {
-            return NULL;
-        }
         return (void *)draw_elements;
     }
     if (strcmp(symbol, "glLinkProgram") == 0) {

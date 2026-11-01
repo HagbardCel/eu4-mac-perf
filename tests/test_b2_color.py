@@ -319,6 +319,14 @@ class AcquisitionWaitTests(unittest.TestCase):
         color_capture.see_fixture(state, True)
         self.assertEqual(color_capture.wait_status(state), "incomplete")
 
+    def test_fixture_and_ack_wait_for_the_qualified_counter(self):
+        state = color_capture.new_wait()
+        color_capture.see_fixture(state, True)
+        self.assertTrue(color_capture.take_ack(state, "menu-options"))
+        self.assertFalse(color_capture.acquisition_settled(state, None))
+        self.assertFalse(color_capture.acquisition_settled(state, {"qualified": 0}))
+        self.assertTrue(color_capture.acquisition_settled(state, {"qualified": 1}))
+
     def test_spent_menu_ack_does_not_certify_a_later_fixture(self):
         state = color_capture.new_wait()
         self.assertFalse(color_capture.take_ack(state, "menu-options"))
