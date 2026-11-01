@@ -17,7 +17,8 @@ tests/re_fixtures/callsite_mini/callsite_mini
 # Test debris: tests/test_frame_evolution_analyze.py writes into the CWD instead of a tempdir
 test_build_report_writes_candidates/
 
-# Local fixtures (not tracked; see results/README.md)
+# Local fixtures (not tracked; see results/README.md).
+# B2 Color originals stay here; see analysis/metal-draw/b2/color-impl.md.
 fixtures/
 
 # E2 pinned RE1 production harness (see docs/oracle/audits/E2.md)
