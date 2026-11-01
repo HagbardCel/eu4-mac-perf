@@ -98,20 +98,20 @@ int eu4_b2_draw_fixture(const char *dir, uint8_t *pixels, int capacity) {
         char *json = (char *)read_file(path, &json_size);
         if (json == NULL) return -1;
         int width = 0, height = 0, elements = 0, first = 0, count = 0, index_offset = 0, stride = 0;
-        int attrib_count = 0, texture_count = 0, stencil_enable = 0, depth_test = 0, depth_write = 0;
-        int depth_func = 0, depth_matches_b1 = 0, blend = 0, cull = 0, front_ccw = 1, scissor = 0;
-        int tex_w = 0, tex_h = 0, tex_linear = 0, box[4] = {0, 0, 0, 0};
+        int attrib_count = 0, texture_count = 0, uniform_count = 0, stencil_enable = 0, depth_test = 0;
+        int depth_write = 0, depth_func = 0, depth_matches_b1 = 0, blend = 0, cull = 0, front_ccw = 1, scissor = 0;
+        int box[4] = {0, 0, 0, 0};
+        if (json_find(json, "texture_count") != NULL && json_int(json, "texture_count", &texture_count)) return -1;
+        if (json_find(json, "uniform_count") != NULL && json_int(json, "uniform_count", &uniform_count)) return -1;
         if (json_int(json, "width", &width) || json_int(json, "height", &height) ||
             json_int(json, "elements", &elements) || json_int(json, "first", &first) ||
             json_int(json, "count", &count) || json_int(json, "index_offset", &index_offset) ||
             json_int(json, "stride", &stride) || json_int(json, "attrib_count", &attrib_count) ||
-            json_int(json, "texture_count", &texture_count) || json_int(json, "stencil_enable", &stencil_enable) ||
-            json_int(json, "depth_test", &depth_test) || json_int(json, "depth_write", &depth_write) ||
-            json_int(json, "depth_func", &depth_func) || json_int(json, "depth_matches_b1", &depth_matches_b1) ||
-            json_int(json, "blend", &blend) || json_int(json, "cull", &cull) ||
-            json_int(json, "front_ccw", &front_ccw) || json_int(json, "scissor", &scissor) ||
-            json_int(json, "tex0_width", &tex_w) || json_int(json, "tex0_height", &tex_h) ||
-            json_int(json, "tex0_linear", &tex_linear)) {
+            json_int(json, "stencil_enable", &stencil_enable) || json_int(json, "depth_test", &depth_test) ||
+            json_int(json, "depth_write", &depth_write) || json_int(json, "depth_func", &depth_func) ||
+            json_int(json, "depth_matches_b1", &depth_matches_b1) || json_int(json, "blend", &blend) ||
+            json_int(json, "cull", &cull) || json_int(json, "front_ccw", &front_ccw) ||
+            json_int(json, "scissor", &scissor)) {
             free(json);
             return -1;
         }
@@ -134,7 +134,16 @@ int eu4_b2_draw_fixture(const char *dir, uint8_t *pixels, int capacity) {
         if (depth_matches_b1 && strcmp(evidence, "engine") == 0) use_b1 = 1;
         int pixels_needed = width * height * 4;
         if (width < 1 || height < 1 || pixels == NULL || capacity < pixels_needed || attrib_count < 1 ||
-            attrib_count > 4 || texture_count > 1) {
+            attrib_count > 4 || elements != 1 || texture_count != 0 || uniform_count != 0 ||
+            strcmp(mode, "triangles") != 0 ||
+            (strcmp(index_type, "uint16") != 0 && strcmp(index_type, "uint32") != 0)) {
+            free(json);
+            return -1;
+        }
+        snprintf(path, sizeof path, "%s/vertices1.bin", dir);
+        FILE *second_buffer = fopen(path, "rb");
+        if (second_buffer != NULL) {
+            fclose(second_buffer);
             free(json);
             return -1;
         }
@@ -166,7 +175,7 @@ int eu4_b2_draw_fixture(const char *dir, uint8_t *pixels, int capacity) {
         MTLVertexDescriptor *layout = [MTLVertexDescriptor vertexDescriptor];
         for (int i = 0; i < attrib_count; i++) {
             char key[32], format_name[32];
-            int offset = 0, buffer = 0;
+            int offset = 0, buffer = 0, location = 0;
             snprintf(key, sizeof key, "attrib%d_format", i);
             if (json_string(json, key, format_name, sizeof format_name)) {
                 free(json);
@@ -175,13 +184,15 @@ int eu4_b2_draw_fixture(const char *dir, uint8_t *pixels, int capacity) {
             snprintf(key, sizeof key, "attrib%d_offset", i);
             if (json_int(json, key, &offset)) return -1;
             snprintf(key, sizeof key, "attrib%d_buffer", i);
-            if (json_int(json, key, &buffer)) return -1;
+            if (json_int(json, key, &buffer) || buffer != 0) return -1;
+            snprintf(key, sizeof key, "attrib%d_location", i);
+            if (json_int(json, key, &location) || location < 0 || location > 31) return -1;
             MTLVertexFormat format = format_for(format_name);
             if (format == MTLVertexFormatInvalid) return -1;
-            layout.attributes[i].format = format;
-            layout.attributes[i].offset = (NSUInteger)offset;
-            layout.attributes[i].bufferIndex = (NSUInteger)buffer;
-            layout.layouts[buffer].stride = (NSUInteger)stride;
+            layout.attributes[location].format = format;
+            layout.attributes[location].offset = (NSUInteger)offset;
+            layout.attributes[location].bufferIndex = 0;
+            layout.layouts[0].stride = (NSUInteger)stride;
         }
         free(json);
         MTLTextureDescriptor *color_desc =
@@ -221,28 +232,6 @@ int eu4_b2_draw_fixture(const char *dir, uint8_t *pixels, int capacity) {
         id<MTLRenderPipelineState> state = [device newRenderPipelineStateWithDescriptor:pipeline error:&error];
         id<MTLBuffer> vertex_buffer =
             [device newBufferWithBytes:vertices length:(NSUInteger)vert_bytes options:MTLResourceStorageModeShared];
-        id<MTLTexture> texture = nil;
-        if (texture_count == 1) {
-            snprintf(path, sizeof path, "%s/texture0.bin", dir);
-            int tex_bytes = 0;
-            uint8_t *tex_pixels = read_file(path, &tex_bytes);
-            if (tex_pixels == NULL || tex_bytes != tex_w * tex_h * 4) {
-                free(tex_pixels);
-                return -1;
-            }
-            MTLTextureDescriptor *tex_desc =
-                [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA8Unorm
-                                                                   width:(NSUInteger)tex_w
-                                                                  height:(NSUInteger)tex_h
-                                                               mipmapped:NO];
-            tex_desc.usage = MTLTextureUsageShaderRead;
-            texture = [device newTextureWithDescriptor:tex_desc];
-            [texture replaceRegion:MTLRegionMake2D(0, 0, (NSUInteger)tex_w, (NSUInteger)tex_h)
-                       mipmapLevel:0
-                         withBytes:tex_pixels
-                       bytesPerRow:(NSUInteger)tex_w * 4];
-            free(tex_pixels);
-        }
         int index_bytes = 0;
         uint8_t *indices = NULL;
         if (elements) {
@@ -286,23 +275,13 @@ int eu4_b2_draw_fixture(const char *dir, uint8_t *pixels, int capacity) {
             [encoder setScissorRect:rect];
         }
         [encoder setVertexBuffer:vertex_buffer offset:0 atIndex:0];
-        if (texture != nil) {
-            [encoder setFragmentTexture:texture atIndex:0];
-        }
-        if (elements && index_buffer != nil) {
-            MTLIndexType type = strcmp(index_type, "uint16") == 0 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
-            [encoder drawIndexedPrimitives:strcmp(mode, "triangle_strip") == 0 ? MTLPrimitiveTypeTriangleStrip
-                                                                               : MTLPrimitiveTypeTriangle
-                                indexCount:(NSUInteger)count
-                                 indexType:type
-                               indexBuffer:index_buffer
-                         indexBufferOffset:(NSUInteger)index_offset];
-        } else {
-            [encoder drawPrimitives:strcmp(mode, "triangle_strip") == 0 ? MTLPrimitiveTypeTriangleStrip
-                                                                        : MTLPrimitiveTypeTriangle
-                        vertexStart:(NSUInteger)first
-                        vertexCount:(NSUInteger)count];
-        }
+        if (index_buffer == nil) return -1;
+        MTLIndexType type = strcmp(index_type, "uint16") == 0 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
+        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                            indexCount:(NSUInteger)count
+                             indexType:type
+                           indexBuffer:index_buffer
+                     indexBufferOffset:(NSUInteger)index_offset];
         [encoder endEncoding];
         id<MTLBlitCommandEncoder> blit = [buffer blitCommandEncoder];
         [blit copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)

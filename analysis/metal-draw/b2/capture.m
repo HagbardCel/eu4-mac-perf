@@ -1,5 +1,5 @@
-/* One-draw capture. Attribution is the patched Gfx call, local to this file.
-   glDrawArrays / glDrawElements are recorded only while that call is on the stack. */
+/* One mesh draw. The wrapper is local to this file and is not a hook framework.
+   Only an ordinary glDrawElements is recorded, and only while the patched call is on the stack. */
 #define GL_SILENCE_DEPRECATION 1
 #import <OpenGL/OpenGL.h>
 #import <OpenGL/gl.h>
@@ -15,18 +15,28 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-enum { kMesh = 0, kPost = 1, kMaxAttrib = 4, kMaxUni = 32, kMaxTex = 2, kMaxBytes = 1 << 20 };
+#ifndef GL_READ_FRAMEBUFFER
+#define GL_READ_FRAMEBUFFER 0x8CA8
+#define GL_DRAW_FRAMEBUFFER 0x8CA9
+#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
+#define GL_DRAW_FRAMEBUFFER_BINDING 0x8CAB
+#endif
+#ifndef GL_PIXEL_PACK_BUFFER_BINDING
+#define GL_PIXEL_PACK_BUFFER_BINDING 0x88ED
+#endif
+#ifndef GL_PRIMITIVE_RESTART
+#define GL_PRIMITIVE_RESTART 0x8F9D
+#endif
+
+enum { kMaxAttrib = 4, kMaxBytes = 1 << 20 };
 
 static const uint32_t kMeshRva = 0x14c8404u;
-static const uint32_t kPostRva = 0xed7ba4u;
-static const uint32_t kDrawRva = 0x15ea789u;
 static const uint32_t kIndexedRva = 0x15eaa77u;
 static const uint8_t kMeshExpected[5] = {0xe8, 0x6e, 0x26, 0x12, 0x00};
-static const uint8_t kPostExpected[5] = {0xe8, 0xe0, 0x2b, 0x71, 0x00};
 
-void *g_b2_original[2];
-static void *g_installed_site[2];
-static uint8_t g_saved_bytes[2][5];
+void *g_b2_original;
+static void *g_installed_site;
+static uint8_t g_saved_bytes[5];
 
 static void *decode_target(const void *site) {
     int32_t relative = 0;
@@ -41,43 +51,40 @@ static int g_smoke;
 static const char *g_reject;
 static char g_reject_text[96];
 static int g_draws;
+static int g_prepare_count;
 
 typedef struct {
-    int enabled, size, type, normalized, stride, offset, buffer_slot;
+    int location, size, type, normalized, stride, offset;
+    char name[64];
 } Attrib;
 
 typedef struct {
-    int site, elements, mode, first, count, index_type, index_offset;
-    int width, height, stencil_enable, depth_test, depth_write, depth_func;
-    int depth_matches_b1, blend, filter_linear, cull, front_ccw, scissor;
-    int scissor_box[4], stride, attrib_count, tex_count, uni_count;
-    int vert_bytes[2], index_bytes, uniform_bytes;
+    int mode, count, index_type, index_offset;
+    int width, height, depth_test, depth_write, depth_func;
+    int depth_matches_b1, blend, cull, front_ccw, scissor;
+    int scissor_box[4], stride, attrib_count;
+    int vert_bytes, index_bytes;
     Attrib attribs[kMaxAttrib];
-    void *verts[2];
+    void *verts;
     void *indices;
-    void *uniforms;
     char *vert_src;
     char *frag_src;
-    int tex_w[kMaxTex], tex_h[kMaxTex], tex_linear[kMaxTex], tex_wrap_s[kMaxTex], tex_wrap_t[kMaxTex];
-    void *tex[kMaxTex];
-    int tex_unit[kMaxTex];
 } Capture;
 
 static _Thread_local Capture g_cap;
 
 typedef struct {
-    GLint fbo, viewport[4], scissor_box[4], scissor, program, vao;
-    GLint array_buf, elem_buf, active_tex, tex0, tex1;
+    GLint read_fbo, draw_fbo, viewport[4], scissor_box[4], scissor, program, vao;
+    GLint array_buf, elem_buf, active_tex, tex_binding, rbo;
     GLint blend, blend_src, blend_dst, blend_eq, depth_test, depth_mask, depth_func;
     GLint stencil, cull, cull_mode, front, pack;
+    GLfloat clear_color[4];
+    GLdouble clear_depth;
     GLboolean color_mask[4];
 } Saved;
 
-int eu4_b2_claim(int site) {
-    (void)site;
-    if (g_depth != 0) {
-        return 0;
-    }
+int eu4_b2_claim(void) {
+    if (g_depth != 0) return 0;
     g_depth = 1;
     return 1;
 }
@@ -87,15 +94,13 @@ void eu4_b2_release(void) {
     g_in_original = 0;
 }
 
-void eu4_b2_prepare(int site) {
-    if (g_cap.vert_src) free(g_cap.vert_src);
-    if (g_cap.frag_src) free(g_cap.frag_src);
-    for (int i = 0; i < 2; i++) free(g_cap.verts[i]);
+void eu4_b2_prepare(void) {
+    g_prepare_count++;
+    free(g_cap.vert_src);
+    free(g_cap.frag_src);
+    free(g_cap.verts);
     free(g_cap.indices);
-    free(g_cap.uniforms);
-    for (int i = 0; i < kMaxTex; i++) free(g_cap.tex[i]);
     memset(&g_cap, 0, sizeof g_cap);
-    g_cap.site = site;
     g_reject = NULL;
     g_draws = 0;
 }
@@ -108,40 +113,30 @@ void eu4_b2_disarm_original(void) {
     g_in_original = 0;
 }
 
+/* %r10 is caller-saved and is not an argument register. %rcx stays the fourth argument. */
 __asm__(
     ".globl _eu4_b2_enter_mesh\n"
     "_eu4_b2_enter_mesh:\n"
-    "    xorl %eax, %eax\n"
-    "    jmp L_b2_common\n"
-    ".globl _eu4_b2_enter_post\n"
-    "_eu4_b2_enter_post:\n"
-    "    movl $1, %eax\n"
-    "L_b2_common:\n"
     "    pushq %rbp\n"
     "    movq %rsp, %rbp\n"
-    "    pushq %rax\n"
-    "    subq $0x158, %rsp\n"
+    "    subq $0x160, %rsp\n"
     "    movq %rdi, -0x10(%rbp)\n"
     "    movq %rsi, -0x18(%rbp)\n"
     "    movq %rdx, -0x20(%rbp)\n"
     "    movq %rcx, -0x28(%rbp)\n"
     "    movq %r8, -0x30(%rbp)\n"
     "    movq %r9, -0x38(%rbp)\n"
-    "    movq %r10, -0x40(%rbp)\n"
-    "    movq %r11, -0x48(%rbp)\n"
-    "    movaps %xmm0, -0x60(%rbp)\n"
-    "    movaps %xmm1, -0x70(%rbp)\n"
-    "    movaps %xmm2, -0x80(%rbp)\n"
-    "    movaps %xmm3, -0x90(%rbp)\n"
-    "    movaps %xmm4, -0xa0(%rbp)\n"
-    "    movaps %xmm5, -0xb0(%rbp)\n"
-    "    movaps %xmm6, -0xc0(%rbp)\n"
-    "    movaps %xmm7, -0xd0(%rbp)\n"
-    "    movl -8(%rbp), %edi\n"
+    "    movaps %xmm0, -0x50(%rbp)\n"
+    "    movaps %xmm1, -0x60(%rbp)\n"
+    "    movaps %xmm2, -0x70(%rbp)\n"
+    "    movaps %xmm3, -0x80(%rbp)\n"
+    "    movaps %xmm4, -0x90(%rbp)\n"
+    "    movaps %xmm5, -0xa0(%rbp)\n"
+    "    movaps %xmm6, -0xb0(%rbp)\n"
+    "    movaps %xmm7, -0xc0(%rbp)\n"
     "    call _eu4_b2_claim\n"
     "    testl %eax, %eax\n"
     "    jz L_b2_reenter\n"
-    "    movl -8(%rbp), %edi\n"
     "    call _eu4_b2_prepare\n"
     "    call _eu4_b2_arm_original\n"
     "    movq -0x10(%rbp), %rdi\n"
@@ -150,16 +145,14 @@ __asm__(
     "    movq -0x28(%rbp), %rcx\n"
     "    movq -0x30(%rbp), %r8\n"
     "    movq -0x38(%rbp), %r9\n"
-    "    movq -0x40(%rbp), %r10\n"
-    "    movq -0x48(%rbp), %r11\n"
-    "    movaps -0x60(%rbp), %xmm0\n"
-    "    movaps -0x70(%rbp), %xmm1\n"
-    "    movaps -0x80(%rbp), %xmm2\n"
-    "    movaps -0x90(%rbp), %xmm3\n"
-    "    movaps -0xa0(%rbp), %xmm4\n"
-    "    movaps -0xb0(%rbp), %xmm5\n"
-    "    movaps -0xc0(%rbp), %xmm6\n"
-    "    movaps -0xd0(%rbp), %xmm7\n"
+    "    movaps -0x50(%rbp), %xmm0\n"
+    "    movaps -0x60(%rbp), %xmm1\n"
+    "    movaps -0x70(%rbp), %xmm2\n"
+    "    movaps -0x80(%rbp), %xmm3\n"
+    "    movaps -0x90(%rbp), %xmm4\n"
+    "    movaps -0xa0(%rbp), %xmm5\n"
+    "    movaps -0xb0(%rbp), %xmm6\n"
+    "    movaps -0xc0(%rbp), %xmm7\n"
     "    movq 16(%rbp), %rax\n"
     "    movq %rax, -0x160(%rbp)\n"
     "    movq 24(%rbp), %rax\n"
@@ -176,15 +169,13 @@ __asm__(
     "    movq %rax, -0x130(%rbp)\n"
     "    movq 72(%rbp), %rax\n"
     "    movq %rax, -0x128(%rbp)\n"
-    "    movslq -8(%rbp), %rax\n"
-    "    leaq _g_b2_original(%rip), %rcx\n"
-    "    callq *(%rcx,%rax,8)\n"
-    "    movq %rax, -0xe0(%rbp)\n"
+    "    leaq _g_b2_original(%rip), %r10\n"
+    "    callq *(%r10)\n"
+    "    movq %rax, -0xd0(%rbp)\n"
     "    call _eu4_b2_disarm_original\n"
-    "    movl -8(%rbp), %edi\n"
     "    call _eu4_b2_after\n"
     "    call _eu4_b2_release\n"
-    "    movq -0xe0(%rbp), %rax\n"
+    "    movq -0xd0(%rbp), %rax\n"
     "    movq %rbp, %rsp\n"
     "    popq %rbp\n"
     "    ret\n"
@@ -195,16 +186,14 @@ __asm__(
     "    movq -0x28(%rbp), %rcx\n"
     "    movq -0x30(%rbp), %r8\n"
     "    movq -0x38(%rbp), %r9\n"
-    "    movq -0x40(%rbp), %r10\n"
-    "    movq -0x48(%rbp), %r11\n"
-    "    movaps -0x60(%rbp), %xmm0\n"
-    "    movaps -0x70(%rbp), %xmm1\n"
-    "    movaps -0x80(%rbp), %xmm2\n"
-    "    movaps -0x90(%rbp), %xmm3\n"
-    "    movaps -0xa0(%rbp), %xmm4\n"
-    "    movaps -0xb0(%rbp), %xmm5\n"
-    "    movaps -0xc0(%rbp), %xmm6\n"
-    "    movaps -0xd0(%rbp), %xmm7\n"
+    "    movaps -0x50(%rbp), %xmm0\n"
+    "    movaps -0x60(%rbp), %xmm1\n"
+    "    movaps -0x70(%rbp), %xmm2\n"
+    "    movaps -0x80(%rbp), %xmm3\n"
+    "    movaps -0x90(%rbp), %xmm4\n"
+    "    movaps -0xa0(%rbp), %xmm5\n"
+    "    movaps -0xb0(%rbp), %xmm6\n"
+    "    movaps -0xc0(%rbp), %xmm7\n"
     "    movq 16(%rbp), %rax\n"
     "    movq %rax, -0x160(%rbp)\n"
     "    movq 24(%rbp), %rax\n"
@@ -221,33 +210,27 @@ __asm__(
     "    movq %rax, -0x130(%rbp)\n"
     "    movq 72(%rbp), %rax\n"
     "    movq %rax, -0x128(%rbp)\n"
-    "    movslq -8(%rbp), %rax\n"
-    "    leaq _g_b2_original(%rip), %rcx\n"
-    "    callq *(%rcx,%rax,8)\n"
+    "    leaq _g_b2_original(%rip), %r10\n"
+    "    callq *(%r10)\n"
     "    movq %rbp, %rsp\n"
     "    popq %rbp\n"
     "    ret\n"
 );
 
-extern void eu4_b2_enter_mesh(void);
-extern void eu4_b2_enter_post(void);
-void eu4_b2_after(int site);
+extern uintptr_t eu4_b2_enter_mesh(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+void eu4_b2_after(void);
 
 static void note_reject(const char *reason) {
     if (g_reject == NULL) {
         snprintf(g_reject_text, sizeof g_reject_text, "%s", reason);
         g_reject = g_reject_text;
     }
-    if (g_dir[0] != '/') {
-        return;
-    }
+    if (g_dir[0] != '/') return;
     char path[1100];
     snprintf(path, sizeof path, "%s/rejects.log", g_dir);
     FILE *out = fopen(path, "a");
-    if (out == NULL) {
-        return;
-    }
-    fprintf(out, "site %d: %s\n", g_cap.site, reason);
+    if (out == NULL) return;
+    fprintf(out, "mesh: %s\n", reason);
     fclose(out);
 }
 
@@ -270,11 +253,8 @@ static void *copy_buffer(GLenum target, GLuint id, int *out_size) {
         note_reject(id == 0 ? "client vertex memory" : mapped ? "mapped buffer" : "buffer over 1 MiB");
     } else {
         data = malloc((size_t)size);
-        if (data == NULL) {
-            note_reject("out of memory");
-        } else {
-            glGetBufferSubData(target, 0, size, data);
-        }
+        if (data == NULL) note_reject("out of memory");
+        else glGetBufferSubData(target, 0, size, data);
     }
     glBindBuffer(target, (GLuint)prev);
     *out_size = data ? size : 0;
@@ -298,7 +278,7 @@ static char *shader_source(GLuint shader) {
 }
 
 static void snapshot_program(void) {
-    GLint program = 0, count = 0;
+    GLint program = 0, count = 0, uniforms = 0;
     glGetIntegerv(GL_CURRENT_PROGRAM, &program);
     if (program == 0) {
         note_reject("no program");
@@ -318,138 +298,14 @@ static void snapshot_program(void) {
         else if (type == GL_FRAGMENT_SHADER) g_cap.frag_src = text;
         else note_reject("shader stage");
     }
-    if (g_cap.vert_src == NULL || g_cap.frag_src == NULL) {
-        note_reject("missing stage");
-    }
-    GLint uniforms = 0;
+    if (g_cap.vert_src == NULL || g_cap.frag_src == NULL) note_reject("missing stage");
     glGetProgramiv((GLuint)program, GL_ACTIVE_UNIFORMS, &uniforms);
-    if (uniforms < 0 || uniforms > kMaxUni) {
-        note_reject("uniform count");
-        return;
-    }
-    g_cap.uni_count = uniforms;
-    g_cap.uniform_bytes = uniforms * (64 + 16 * 4);
-    if (g_cap.uniform_bytes > 65536) {
-        note_reject("uniforms over 64 KiB");
-        return;
-    }
-    if (uniforms == 0) {
-        return;
-    }
-    g_cap.uniforms = calloc((size_t)uniforms, 64 + 64);
-    if (g_cap.uniforms == NULL) {
-        note_reject("out of memory");
-    }
-}
-
-typedef struct {
-    char name[64];
-    int kind, elems;
-    float data[16];
-    int unit;
-} UniRec;
-
-static UniRec *uni_at(int index) {
-    return (UniRec *)((uint8_t *)g_cap.uniforms + (size_t)index * sizeof(UniRec));
-}
-
-static void read_uniforms(void) {
-    GLint program = 0;
-    glGetIntegerv(GL_CURRENT_PROGRAM, &program);
-    for (int i = 0; i < g_cap.uni_count; i++) {
-        char name[64];
-        GLsizei length = 0;
-        GLint size = 0;
-        GLenum type = 0;
-        glGetActiveUniform((GLuint)program, (GLuint)i, 63, &length, &size, &type, name);
-        name[63] = 0;
-        if (size != 1) {
-            note_reject("uniform array");
-            return;
-        }
-        UniRec *rec = uni_at(i);
-        snprintf(rec->name, sizeof rec->name, "%s", name);
-        GLint loc = glGetUniformLocation((GLuint)program, name);
-        if (type == GL_FLOAT || type == GL_FLOAT_VEC2 || type == GL_FLOAT_VEC3 || type == GL_FLOAT_VEC4 ||
-            type == GL_FLOAT_MAT4) {
-            int n = type == GL_FLOAT ? 1 : type == GL_FLOAT_VEC2 ? 2 : type == GL_FLOAT_VEC3 ? 3
-                    : type == GL_FLOAT_VEC4 ? 4 : 16;
-            rec->kind = type == GL_FLOAT_MAT4 ? 16 : n;
-            rec->elems = n;
-            glGetUniformfv((GLuint)program, loc, rec->data);
-        } else if (type == GL_SAMPLER_2D || type == GL_INT) {
-            int value = 0;
-            glGetUniformiv((GLuint)program, loc, &value);
-            rec->kind = type == GL_SAMPLER_2D ? 100 : 1;
-            rec->unit = value;
-            rec->elems = 1;
-            if (type == GL_SAMPLER_2D && g_cap.tex_count < kMaxTex) {
-                g_cap.tex_unit[g_cap.tex_count++] = value;
-            } else if (type == GL_SAMPLER_2D) {
-                note_reject("more than two textures");
-            }
-        } else {
-            note_reject("uniform type");
-            return;
-        }
-    }
-}
-
-static int wrap_ok(GLint wrap) {
-    return wrap == GL_CLAMP_TO_EDGE || wrap == GL_REPEAT || wrap == GL_CLAMP;
-}
-
-static void snapshot_textures(void) {
-    GLint active = 0, prev0 = 0;
-    glGetIntegerv(GL_ACTIVE_TEXTURE, &active);
-    for (int i = 0; i < g_cap.tex_count; i++) {
-        glActiveTexture(GL_TEXTURE0 + g_cap.tex_unit[i]);
-        GLint name = 0, w = 0, h = 0, internal = 0, minf = 0, magf = 0, wraps = 0, wrapt = 0;
-        glGetIntegerv(GL_TEXTURE_BINDING_2D, &name);
-        if (name == 0) {
-            note_reject("missing texture");
-            break;
-        }
-        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &w);
-        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &h);
-        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &internal);
-        glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &minf);
-        glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &magf);
-        glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &wraps);
-        glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &wrapt);
-        int rgba = internal == GL_RGBA || internal == GL_RGBA8 || internal == GL_BGRA;
-        if (!rgba || w < 1 || h < 1 || w > 2048 || h > 2048) {
-            note_reject("texture format or size");
-            break;
-        }
-        if ((minf != GL_NEAREST && minf != GL_LINEAR) || (magf != GL_NEAREST && magf != GL_LINEAR) ||
-            !wrap_ok(wraps) || !wrap_ok(wrapt)) {
-            note_reject("sampler state");
-            break;
-        }
-        size_t bytes = (size_t)w * (size_t)h * 4u;
-        void *pixels = malloc(bytes);
-        if (pixels == NULL) {
-            note_reject("out of memory");
-            break;
-        }
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-        g_cap.tex_w[i] = w;
-        g_cap.tex_h[i] = h;
-        g_cap.tex_linear[i] = minf == GL_LINEAR || magf == GL_LINEAR;
-        g_cap.tex_wrap_s[i] = wraps;
-        g_cap.tex_wrap_t[i] = wrapt;
-        g_cap.tex[i] = pixels;
-        if (g_cap.tex_linear[i]) g_cap.filter_linear = 1;
-        (void)prev0;
-    }
-    glActiveTexture((GLenum)active);
+    if (uniforms != 0) note_reject("uniforms");
 }
 
 static void snapshot_attribs(void) {
     GLint stride_seen = -1;
-    int buffers[2] = {0, 0};
-    int buffer_count = 0;
+    int binding_seen = 0;
     for (int index = 0; index < 16; index++) {
         GLint enabled = 0;
         glGetVertexAttribiv(index, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &enabled);
@@ -471,28 +327,41 @@ static void snapshot_attribs(void) {
             note_reject("attribute format");
             return;
         }
-        int slot = -1;
-        for (int b = 0; b < buffer_count; b++) {
-            if (buffers[b] == binding) slot = b;
-        }
-        if (slot < 0) {
-            if (buffer_count >= 2) {
-                note_reject("more than two vertex buffers");
-                return;
-            }
-            slot = buffer_count;
-            buffers[buffer_count++] = binding;
-            g_cap.verts[slot] = copy_buffer(GL_ARRAY_BUFFER, (GLuint)binding, &g_cap.vert_bytes[slot]);
+        if (binding_seen == 0) {
+            binding_seen = binding;
+            g_cap.verts = copy_buffer(GL_ARRAY_BUFFER, (GLuint)binding, &g_cap.vert_bytes);
+        } else if (binding != binding_seen) {
+            note_reject("more than one vertex buffer");
+            return;
         }
         if (stride == 0) stride = size * type_size(type);
         if (stride_seen < 0) stride_seen = stride;
-        attrib->enabled = 1;
+        else if (stride != stride_seen) {
+            note_reject("stride mismatch");
+            return;
+        }
+        attrib->location = index;
         attrib->size = size;
         attrib->type = type;
         attrib->normalized = norm;
         attrib->stride = stride;
         attrib->offset = (int)(uintptr_t)pointer;
-        attrib->buffer_slot = slot;
+        GLint program = 0, active = 0;
+        glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+        glGetProgramiv((GLuint)program, GL_ACTIVE_ATTRIBUTES, &active);
+        for (int a = 0; a < active; a++) {
+            GLsizei length = 0;
+            GLint asize = 0;
+            GLenum atype = 0;
+            glGetActiveAttrib((GLuint)program, (GLuint)a, (GLsizei)sizeof attrib->name, &length, &asize, &atype,
+                              attrib->name);
+            if (glGetAttribLocation((GLuint)program, attrib->name) == index) break;
+            attrib->name[0] = 0;
+        }
+        if (attrib->name[0] == 0) {
+            note_reject("attribute name");
+            return;
+        }
         g_cap.attrib_count++;
     }
     if (g_cap.attrib_count == 0) note_reject("no attributes");
@@ -501,6 +370,7 @@ static void snapshot_attribs(void) {
 
 static void snapshot_state(void) {
     GLint viewport[4] = {0}, samples = 0, srgb = 0, scissor = 0;
+    GLdouble depth_range[2] = {0, 0};
     glGetIntegerv(GL_VIEWPORT, viewport);
     glGetIntegerv(GL_SAMPLE_BUFFERS, &samples);
     glGetIntegerv(GL_FRAMEBUFFER_SRGB, &srgb);
@@ -514,11 +384,25 @@ static void snapshot_state(void) {
     }
     g_cap.width = viewport[2];
     g_cap.height = viewport[3];
+    /* GL 2.1 raises INVALID_ENUM for this query, and that error cannot be put back. */
+    const char *version = (const char *)glGetString(GL_VERSION);
+    if (version != NULL && version[0] >= '3' && glIsEnabled(GL_PRIMITIVE_RESTART)) {
+        note_reject("primitive restart");
+        return;
+    }
+    glGetDoublev(GL_DEPTH_RANGE, depth_range);
+    if (depth_range[0] != 0.0 || depth_range[1] != 1.0) {
+        note_reject("depth range");
+        return;
+    }
+    if (glIsEnabled(GL_POLYGON_OFFSET_FILL)) {
+        note_reject("polygon offset");
+        return;
+    }
     g_cap.depth_test = glIsEnabled(GL_DEPTH_TEST) ? 1 : 0;
     glGetIntegerv(GL_DEPTH_WRITEMASK, &g_cap.depth_write);
     glGetIntegerv(GL_DEPTH_FUNC, &g_cap.depth_func);
-    g_cap.stencil_enable = glIsEnabled(GL_STENCIL_TEST) ? 1 : 0;
-    if (g_cap.stencil_enable) {
+    if (glIsEnabled(GL_STENCIL_TEST)) {
         note_reject("stencil test enabled");
         return;
     }
@@ -559,60 +443,50 @@ static void snapshot_state(void) {
     if (g_cap.scissor) glGetIntegerv(GL_SCISSOR_BOX, g_cap.scissor_box);
 }
 
-static void snapshot_draw(int elements, GLenum mode, GLint first, GLsizei count, GLenum index_type,
-                          const void *indices) {
+static int index_range_ok(uintptr_t offset, int count, int index_size, int bytes) {
+    if (count <= 0 || index_size <= 0 || bytes < 0 || offset > (uintptr_t)bytes) return 0;
+    uint64_t need = (uint64_t)count * (uint64_t)index_size;
+    return need <= (uint64_t)bytes - offset;
+}
+
+static void snapshot_draw(GLenum mode, GLsizei count, GLenum index_type, const void *indices) {
     if (g_draws > 0) {
         g_draws++;
         note_reject("multiple GL draws");
         return;
     }
     g_draws = 1;
-    while (glGetError() != GL_NO_ERROR) {
-    }
-    if (mode != GL_TRIANGLES && mode != GL_TRIANGLE_STRIP) {
-        note_reject("primitive");
+    if (mode != GL_TRIANGLES || count <= 0) {
+        note_reject(mode != GL_TRIANGLES ? "primitive" : "empty draw");
         return;
     }
-    if (count <= 0) {
-        note_reject("empty draw");
+    if (index_type != GL_UNSIGNED_SHORT && index_type != GL_UNSIGNED_INT) {
+        note_reject("index type");
         return;
     }
-    g_cap.elements = elements;
-    g_cap.mode = (int)mode;
-    g_cap.first = first;
-    g_cap.count = count;
     snapshot_state();
-    snapshot_program();
-    if (g_reject == NULL && g_cap.uni_count > 0 && g_cap.uniforms != NULL) read_uniforms();
-    if (g_reject == NULL) snapshot_textures();
+    if (g_reject == NULL) snapshot_program();
     if (g_reject == NULL) snapshot_attribs();
-    if (elements) {
-        if (index_type != GL_UNSIGNED_SHORT && index_type != GL_UNSIGNED_INT) {
-            note_reject("index type");
-            return;
-        }
-        GLint element = 0;
-        glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &element);
-        g_cap.index_type = (int)index_type;
-        g_cap.index_offset = (int)(uintptr_t)indices;
-        g_cap.indices = copy_buffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)element, &g_cap.index_bytes);
+    if (g_reject != NULL) return;
+    GLint element = 0;
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &element);
+    g_cap.mode = (int)mode;
+    g_cap.count = count;
+    g_cap.index_type = (int)index_type;
+    g_cap.indices = copy_buffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)element, &g_cap.index_bytes);
+    int index_size = index_type == GL_UNSIGNED_SHORT ? 2 : 4;
+    uintptr_t offset = (uintptr_t)indices;
+    if (g_reject == NULL && !index_range_ok(offset, count, index_size, g_cap.index_bytes)) {
+        note_reject("index range");
     }
-    int64_t bytes = (int64_t)g_cap.width * g_cap.height * 8;
-    bytes += g_cap.vert_bytes[0] + g_cap.vert_bytes[1] + g_cap.index_bytes;
-    for (int i = 0; i < g_cap.tex_count; i++) {
-        bytes += (int64_t)g_cap.tex_w[i] * g_cap.tex_h[i] * 4;
-    }
+    if (offset > 0x7fffffff) note_reject("index range");
+    g_cap.index_offset = (int)offset;
+    int64_t bytes = (int64_t)g_cap.width * g_cap.height * 8 + g_cap.vert_bytes + g_cap.index_bytes;
     if (bytes > (64 << 20)) note_reject("fixture over 64 MiB");
-    if (glGetError() != GL_NO_ERROR) note_reject("GL error during snapshot");
-}
-
-static void hooked_arrays(GLenum mode, GLint first, GLsizei count) {
-    if (g_in_original) snapshot_draw(0, mode, first, count, 0, NULL);
-    glDrawArrays(mode, first, count);
 }
 
 static void hooked_elements(GLenum mode, GLsizei count, GLenum type, const void *indices) {
-    if (g_in_original) snapshot_draw(1, mode, 0, count, type, indices);
+    if (g_in_original) snapshot_draw(mode, count, type, indices);
     glDrawElements(mode, count, type, indices);
 }
 
@@ -621,12 +495,12 @@ static void hooked_elements(GLenum mode, GLsizei count, GLenum type, const void 
     static const struct { const void *replacement; const void *replacee; } \
         interpose_##orig = {(const void *)(repl), (const void *)(orig)}
 
-INTERPOSE(hooked_arrays, glDrawArrays);
 INTERPOSE(hooked_elements, glDrawElements);
 
 static void save_bindings(Saved *saved) {
     memset(saved, 0, sizeof *saved);
-    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved->fbo);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &saved->read_fbo);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &saved->draw_fbo);
     glGetIntegerv(GL_VIEWPORT, saved->viewport);
     glGetIntegerv(GL_SCISSOR_BOX, saved->scissor_box);
     saved->scissor = glIsEnabled(GL_SCISSOR_TEST);
@@ -635,11 +509,10 @@ static void save_bindings(Saved *saved) {
     glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &saved->array_buf);
     glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &saved->elem_buf);
     glGetIntegerv(GL_ACTIVE_TEXTURE, &saved->active_tex);
-    glActiveTexture(GL_TEXTURE0);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &saved->tex0);
-    glActiveTexture(GL_TEXTURE1);
-    glGetIntegerv(GL_TEXTURE_BINDING_2D, &saved->tex1);
-    glActiveTexture((GLenum)saved->active_tex);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &saved->tex_binding);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &saved->rbo);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, saved->clear_color);
+    glGetDoublev(GL_DEPTH_CLEAR_VALUE, &saved->clear_depth);
     saved->blend = glIsEnabled(GL_BLEND);
     glGetIntegerv(GL_BLEND_SRC_RGB, &saved->blend_src);
     glGetIntegerv(GL_BLEND_DST_RGB, &saved->blend_dst);
@@ -656,7 +529,8 @@ static void save_bindings(Saved *saved) {
 }
 
 static void restore_bindings(const Saved *saved) {
-    glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)saved->fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)saved->read_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)saved->draw_fbo);
     glViewport(saved->viewport[0], saved->viewport[1], saved->viewport[2], saved->viewport[3]);
     if (saved->scissor) glEnable(GL_SCISSOR_TEST);
     else glDisable(GL_SCISSOR_TEST);
@@ -665,11 +539,11 @@ static void restore_bindings(const Saved *saved) {
     glBindVertexArrayAPPLE((GLuint)saved->vao);
     glBindBuffer(GL_ARRAY_BUFFER, (GLuint)saved->array_buf);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, (GLuint)saved->elem_buf);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, (GLuint)saved->tex0);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, (GLuint)saved->tex1);
     glActiveTexture((GLenum)saved->active_tex);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)saved->tex_binding);
+    glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)saved->rbo);
+    glClearColor(saved->clear_color[0], saved->clear_color[1], saved->clear_color[2], saved->clear_color[3]);
+    glClearDepth(saved->clear_depth);
     if (saved->blend) glEnable(GL_BLEND);
     else glDisable(GL_BLEND);
     glBlendFunc(saved->blend_src, saved->blend_dst);
@@ -723,47 +597,35 @@ static const char *attrib_format(const Attrib *attrib) {
 static int write_fixture(const uint8_t *reference, const uint8_t *clear, int pixels) {
     if (write_bytes("reference.rgba", reference, pixels) || write_bytes("clear.rgba", clear, pixels) ||
         write_bytes("draw.vert.glsl", g_cap.vert_src, (int)strlen(g_cap.vert_src)) ||
-        write_bytes("draw.frag.glsl", g_cap.frag_src, (int)strlen(g_cap.frag_src))) {
+        write_bytes("draw.frag.glsl", g_cap.frag_src, (int)strlen(g_cap.frag_src)) ||
+        write_bytes("vertices.bin", g_cap.verts, g_cap.vert_bytes) ||
+        write_bytes("indices.bin", g_cap.indices, g_cap.index_bytes)) {
         return -1;
-    }
-    if (g_cap.vert_bytes[0] && write_bytes("vertices.bin", g_cap.verts[0], g_cap.vert_bytes[0])) return -1;
-    if (g_cap.vert_bytes[1] && write_bytes("vertices1.bin", g_cap.verts[1], g_cap.vert_bytes[1])) return -1;
-    if (g_cap.index_bytes && write_bytes("indices.bin", g_cap.indices, g_cap.index_bytes)) return -1;
-    for (int i = 0; i < g_cap.tex_count; i++) {
-        char name[32];
-        snprintf(name, sizeof name, "texture%d.bin", i);
-        if (write_bytes(name, g_cap.tex[i], g_cap.tex_w[i] * g_cap.tex_h[i] * 4)) return -1;
-    }
-    if (g_cap.uni_count > 0) {
-        if (write_bytes("uniforms.bin", g_cap.uniforms, g_cap.uni_count * (int)sizeof(UniRec))) return -1;
     }
     char path[1100];
     snprintf(path, sizeof path, "%s/fixture.json", g_dir);
     FILE *out = fopen(path, "w");
     if (out == NULL) return -1;
-    const char *site = g_cap.site == kMesh ? "0x14c8404" : "0xed7ba4";
-    int tolerance = (g_cap.blend || g_cap.filter_linear) ? 1 : 0;
-    const char *why = tolerance ? "blend or linear filter; declared before the Metal run"
-                                : "no blend and no linear filter; declared before the Metal run";
+    int tolerance = g_cap.blend ? 1 : 0;
+    const char *why = tolerance ? "blend; declared before the Metal run" : "no blend and no linear filter; declared before the Metal run";
     fprintf(out,
             "{\n"
-            "  \"callsite\": \"%s\",\n"
+            "  \"callsite\": \"0x14c8404\",\n"
             "  \"width\": %d,\n"
             "  \"height\": %d,\n"
             "  \"clear\": [0, 0, 0, 0],\n"
             "  \"depth_clear\": 1.0,\n"
-            "  \"elements\": %d,\n"
-            "  \"mode\": \"%s\",\n"
-            "  \"first\": %d,\n"
+            "  \"elements\": 1,\n"
+            "  \"mode\": \"triangles\",\n"
+            "  \"first\": 0,\n"
             "  \"count\": %d,\n"
             "  \"index_type\": \"%s\",\n"
             "  \"index_offset\": %d,\n"
             "  \"stride\": %d,\n"
             "  \"attrib_count\": %d,\n",
-            site, g_cap.width, g_cap.height, g_cap.elements,
-            g_cap.mode == GL_TRIANGLE_STRIP ? "triangle_strip" : "triangles", g_cap.first, g_cap.count,
-            g_cap.elements ? (g_cap.index_type == GL_UNSIGNED_SHORT ? "uint16" : "uint32") : "none",
-            g_cap.index_offset, g_cap.stride, g_cap.attrib_count);
+            g_cap.width, g_cap.height, g_cap.count,
+            g_cap.index_type == GL_UNSIGNED_SHORT ? "uint16" : "uint32", g_cap.index_offset, g_cap.stride,
+            g_cap.attrib_count);
     for (int i = 0; i < g_cap.attrib_count; i++) {
         const char *format = attrib_format(&g_cap.attribs[i]);
         if (format == NULL) {
@@ -773,13 +635,13 @@ static int write_fixture(const uint8_t *reference, const uint8_t *clear, int pix
         }
         fprintf(out,
                 "  \"attrib%d_format\": \"%s\",\n"
+                "  \"attrib%d_location\": %d,\n"
                 "  \"attrib%d_offset\": %d,\n"
-                "  \"attrib%d_buffer\": %d,\n",
-                i, format, i, g_cap.attribs[i].offset, i, g_cap.attribs[i].buffer_slot);
+                "  \"attrib%d_buffer\": 0,\n",
+                i, format, i, g_cap.attribs[i].location, i, g_cap.attribs[i].offset, i);
     }
     fprintf(out,
-            "  \"texture_count\": %d,\n"
-            "  \"stencil_enable\": %d,\n"
+            "  \"stencil_enable\": 0,\n"
             "  \"depth_test\": %d,\n"
             "  \"depth_write\": %d,\n"
             "  \"depth_func\": %d,\n"
@@ -791,31 +653,26 @@ static int write_fixture(const uint8_t *reference, const uint8_t *clear, int pix
             "  \"scissor\": %d,\n"
             "  \"scissor_box\": [%d, %d, %d, %d],\n"
             "  \"max_channel_abs\": %d,\n"
-            "  \"tolerance_justification\": \"%s\",\n"
-            "  \"uniform_count\": %d,\n"
-            "  \"tex0_width\": %d,\n"
-            "  \"tex0_height\": %d,\n"
-            "  \"tex0_linear\": %d,\n"
-            "  \"tex0_wrap_s\": %d,\n"
-            "  \"tex0_wrap_t\": %d\n"
+            "  \"tolerance_justification\": \"%s\"\n"
             "}\n",
-            g_cap.tex_count, g_cap.stencil_enable, g_cap.depth_test, g_cap.depth_write, g_cap.depth_func,
-            g_cap.depth_matches_b1, g_cap.blend, g_cap.cull, g_cap.front_ccw, g_cap.scissor,
-            g_cap.scissor_box[0], g_cap.scissor_box[1], g_cap.scissor_box[2], g_cap.scissor_box[3],
-            tolerance, why, g_cap.uni_count, g_cap.tex_w[0], g_cap.tex_h[0], g_cap.tex_linear[0],
-            g_cap.tex_wrap_s[0], g_cap.tex_wrap_t[0]);
+            g_cap.depth_test, g_cap.depth_write, g_cap.depth_func, g_cap.depth_matches_b1, g_cap.blend, g_cap.cull,
+            g_cap.front_ccw, g_cap.scissor, g_cap.scissor_box[0], g_cap.scissor_box[1], g_cap.scissor_box[2],
+            g_cap.scissor_box[3], tolerance, why);
     fclose(out);
     return 0;
 }
 
 static int replay(uint8_t **reference, uint8_t **clear_pixels, int *pixel_bytes) {
-    GLuint fbo = 0, color = 0, depth = 0, program = 0, vbo[2] = {0, 0}, ibo = 0, textures[kMaxTex] = {0, 0};
+    GLuint fbo = 0, color = 0, depth = 0, program = 0, vbo = 0, ibo = 0, vao = 0;
     GLuint vert = compile_stage(GL_VERTEX_SHADER, g_cap.vert_src);
     GLuint frag = compile_stage(GL_FRAGMENT_SHADER, g_cap.frag_src);
     if (vert == 0 || frag == 0) return -1;
     program = glCreateProgram();
     glAttachShader(program, vert);
     glAttachShader(program, frag);
+    for (int i = 0; i < g_cap.attrib_count; i++) {
+        glBindAttribLocation(program, (GLuint)g_cap.attribs[i].location, g_cap.attribs[i].name);
+    }
     glLinkProgram(program);
     GLint linked = 0;
     glGetProgramiv(program, GL_LINK_STATUS, &linked);
@@ -823,12 +680,19 @@ static int replay(uint8_t **reference, uint8_t **clear_pixels, int *pixel_bytes)
         note_reject("replay link");
         return -1;
     }
+    for (int i = 0; i < g_cap.attrib_count; i++) {
+        if (glGetAttribLocation(program, g_cap.attribs[i].name) != g_cap.attribs[i].location) {
+            note_reject("attrib location");
+            return -1;
+        }
+    }
     glGenTextures(1, &color);
     glBindTexture(GL_TEXTURE_2D, color);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, g_cap.width, g_cap.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     glGenFramebuffers(1, &fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
     if (g_cap.depth_test) {
         glGenRenderbuffers(1, &depth);
         glBindRenderbuffer(GL_RENDERBUFFER, depth);
@@ -839,48 +703,29 @@ static int replay(uint8_t **reference, uint8_t **clear_pixels, int *pixel_bytes)
         note_reject("replay framebuffer");
         return -1;
     }
-    for (int slot = 0; slot < 2; slot++) {
-        if (g_cap.vert_bytes[slot] == 0) continue;
-        glGenBuffers(1, &vbo[slot]);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo[slot]);
-        glBufferData(GL_ARRAY_BUFFER, g_cap.vert_bytes[slot], g_cap.verts[slot], GL_STATIC_DRAW);
-    }
-    if (g_cap.index_bytes) {
-        glGenBuffers(1, &ibo);
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, g_cap.index_bytes, g_cap.indices, GL_STATIC_DRAW);
-    }
-    glBindVertexArrayAPPLE(0);
+    glGenVertexArraysAPPLE(1, &vao);
+    glBindVertexArrayAPPLE(vao);
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, g_cap.vert_bytes, g_cap.verts, GL_STATIC_DRAW);
+    glGenBuffers(1, &ibo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, g_cap.index_bytes, g_cap.indices, GL_STATIC_DRAW);
     glUseProgram(program);
-    for (int i = 0; i < 16; i++) glDisableVertexAttribArray(i);
+    int uses_location0 = 0;
     for (int i = 0; i < g_cap.attrib_count; i++) {
         Attrib *attrib = &g_cap.attribs[i];
-        glBindBuffer(GL_ARRAY_BUFFER, vbo[attrib->buffer_slot]);
-        glEnableVertexAttribArray((GLuint)i);
-        glVertexAttribPointer((GLuint)i, attrib->size, (GLenum)attrib->type, (GLboolean)attrib->normalized,
-                              attrib->stride, (void *)(uintptr_t)attrib->offset);
+        if (attrib->location == 0) uses_location0 = 1;
+        glEnableVertexAttribArray((GLuint)attrib->location);
+        glVertexAttribPointer((GLuint)attrib->location, attrib->size, (GLenum)attrib->type,
+                              (GLboolean)attrib->normalized, attrib->stride, (void *)(uintptr_t)attrib->offset);
     }
-    for (int i = 0; i < g_cap.uni_count; i++) {
-        UniRec *rec = uni_at(i);
-        GLint loc = glGetUniformLocation(program, rec->name);
-        if (loc < 0) continue;
-        if (rec->kind == 100) glUniform1i(loc, rec->unit);
-        else if (rec->kind == 16) glUniformMatrix4fv(loc, 1, GL_FALSE, rec->data);
-        else if (rec->kind == 1) glUniform1fv(loc, 1, rec->data);
-        else if (rec->kind == 2) glUniform2fv(loc, 1, rec->data);
-        else if (rec->kind == 3) glUniform3fv(loc, 1, rec->data);
-        else if (rec->kind == 4) glUniform4fv(loc, 1, rec->data);
-    }
-    for (int i = 0; i < g_cap.tex_count; i++) {
-        glGenTextures(1, &textures[i]);
-        glActiveTexture(GL_TEXTURE0 + g_cap.tex_unit[i]);
-        glBindTexture(GL_TEXTURE_2D, textures[i]);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, g_cap.tex_w[i], g_cap.tex_h[i], 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                     g_cap.tex[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, g_cap.tex_linear[i] ? GL_LINEAR : GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, g_cap.tex_linear[i] ? GL_LINEAR : GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, g_cap.tex_wrap_s[i]);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, g_cap.tex_wrap_t[i]);
+    /* This driver fetches no generic attribute unless location 0's array is enabled. */
+    if (!uses_location0) {
+        Attrib *attrib = &g_cap.attribs[0];
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, attrib->size, (GLenum)attrib->type, (GLboolean)attrib->normalized, attrib->stride,
+                              (void *)(uintptr_t)attrib->offset);
     }
     if (g_cap.blend) {
         glEnable(GL_BLEND);
@@ -910,6 +755,7 @@ static int replay(uint8_t **reference, uint8_t **clear_pixels, int *pixel_bytes)
     uint8_t *cleared = malloc((size_t)pixels);
     if (drawn == NULL || cleared == NULL) {
         note_reject("out of memory");
+        glDeleteVertexArraysAPPLE(1, &vao);
         return -1;
     }
     glDisable(GL_SCISSOR_TEST);
@@ -924,27 +770,18 @@ static int replay(uint8_t **reference, uint8_t **clear_pixels, int *pixel_bytes)
         glEnable(GL_SCISSOR_TEST);
         glScissor(g_cap.scissor_box[0], g_cap.scissor_box[1], g_cap.scissor_box[2], g_cap.scissor_box[3]);
     }
-    if (g_cap.elements) {
-        glDrawElements((GLenum)g_cap.mode, g_cap.count, (GLenum)g_cap.index_type,
-                       (void *)(uintptr_t)g_cap.index_offset);
-    } else {
-        glDrawArrays((GLenum)g_cap.mode, g_cap.first, g_cap.count);
-    }
+    glDrawElements(GL_TRIANGLES, g_cap.count, (GLenum)g_cap.index_type, (void *)(uintptr_t)g_cap.index_offset);
     glReadPixels(0, 0, g_cap.width, g_cap.height, GL_RGBA, GL_UNSIGNED_BYTE, drawn);
     int differs = memcmp(drawn, cleared, (size_t)pixels) != 0;
+    glDeleteVertexArraysAPPLE(1, &vao);
     glDeleteProgram(program);
     glDeleteShader(vert);
     glDeleteShader(frag);
     glDeleteFramebuffers(1, &fbo);
     glDeleteTextures(1, &color);
     if (depth) glDeleteRenderbuffers(1, &depth);
-    for (int slot = 0; slot < 2; slot++) {
-        if (vbo[slot]) glDeleteBuffers(1, &vbo[slot]);
-    }
-    if (ibo) glDeleteBuffers(1, &ibo);
-    for (int i = 0; i < g_cap.tex_count; i++) {
-        if (textures[i]) glDeleteTextures(1, &textures[i]);
-    }
+    glDeleteBuffers(1, &vbo);
+    glDeleteBuffers(1, &ibo);
     if (!differs) {
         free(drawn);
         free(cleared);
@@ -959,18 +796,25 @@ static int replay(uint8_t **reference, uint8_t **clear_pixels, int *pixel_bytes)
 
 static int protect_page(void *address, int writable);
 
-static void restore_site(int kind) {
-    if (kind < 0 || kind > 1 || g_installed_site[kind] == NULL) return;
-    if (protect_page(g_installed_site[kind], 1) != 0) return;
-    memcpy(g_installed_site[kind], g_saved_bytes[kind], 5);
-    protect_page(g_installed_site[kind], 0);
-    g_installed_site[kind] = NULL;
+static void restore_site(void) {
+    if (g_installed_site == NULL) return;
+    if (protect_page(g_installed_site, 1) != 0) return;
+    memcpy(g_installed_site, g_saved_bytes, 5);
+    protect_page(g_installed_site, 0);
+    g_installed_site = NULL;
 }
 
-void eu4_b2_after(int site) {
+void eu4_b2_after(void) {
     if (g_reject != NULL || g_draws != 1) {
         if (g_reject == NULL) note_reject("no GL draw");
-        restore_site(site);
+        restore_site();
+        return;
+    }
+    GLint pack_buffer = 0;
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
+    if (pack_buffer != 0) {
+        note_reject("pixel pack buffer");
+        restore_site();
         return;
     }
     Saved saved;
@@ -983,14 +827,14 @@ void eu4_b2_after(int site) {
         free(reference);
         free(cleared);
         if (g_reject == NULL) note_reject("replay failed");
-        restore_site(site);
+        restore_site();
         return;
     }
     if (write_fixture(reference, cleared, pixels) != 0) {
         note_reject("fixture write");
         free(reference);
         free(cleared);
-        restore_site(site);
+        restore_site();
         return;
     }
     free(reference);
@@ -1035,11 +879,11 @@ static int protect_page(void *address, int writable) {
     return 0;
 }
 
-int eu4_b2_install_site(void *site, const uint8_t expected[5], void *expected_target, int kind) {
-    if (site == NULL || expected == NULL || expected_target == NULL || kind < 0 || kind > 1) return 1;
+int eu4_b2_install_site(void *site, const uint8_t expected[5], void *expected_target) {
+    if (site == NULL || expected == NULL || expected_target == NULL) return 1;
     if (memcmp(site, expected, 5) != 0) return 2;
     if (decode_target(site) != expected_target) return 3;
-    void *wrapper = kind == kMesh ? (void *)eu4_b2_enter_mesh : (void *)eu4_b2_enter_post;
+    void *wrapper = (void *)eu4_b2_enter_mesh;
     void *dest = wrapper;
     void *relay = NULL;
     if (!rel32_fits(site, wrapper)) {
@@ -1058,9 +902,9 @@ int eu4_b2_install_site(void *site, const uint8_t expected[5], void *expected_ta
     int32_t relative = (int32_t)((int64_t)(intptr_t)dest - ((int64_t)(intptr_t)site + 5));
     encoded[0] = 0xe8;
     memcpy(encoded + 1, &relative, 4);
-    g_b2_original[kind] = expected_target;
-    g_installed_site[kind] = site;
-    memcpy(g_saved_bytes[kind], expected, 5);
+    g_b2_original = expected_target;
+    g_installed_site = site;
+    memcpy(g_saved_bytes, expected, 5);
     if (protect_page(site, 1) != 0) return 6;
     memcpy(site, encoded, 5);
     if (protect_page(site, 0) != 0) return 6;
@@ -1073,9 +917,9 @@ static const struct mach_header_64 *eu4_header(void) {
         const struct mach_header *header = _dyld_get_image_header(i);
         if (header == NULL || header->magic != MH_MAGIC_64 || header->cputype != CPU_TYPE_X86_64) continue;
         const uint8_t *base = (const uint8_t *)header;
-        if (memcmp(base + kMeshRva, kMeshExpected, 5) == 0 && memcmp(base + kPostRva, kPostExpected, 5) == 0) {
-            return (const struct mach_header_64 *)header;
-        }
+        if (memcmp(base + kMeshRva, kMeshExpected, 5) != 0) continue;
+        if (decode_target(base + kMeshRva) != (void *)(base + kIndexedRva)) continue;
+        return (const struct mach_header_64 *)header;
     }
     return NULL;
 }
@@ -1087,18 +931,10 @@ static void install_eu4(void) {
         return;
     }
     uint8_t *base = (uint8_t *)header;
-    void *mesh = base + kMeshRva;
-    void *post = base + kPostRva;
-    int mesh_status = eu4_b2_install_site(mesh, kMeshExpected, base + kIndexedRva, kMesh);
-    int post_status = eu4_b2_install_site(post, kPostExpected, base + kDrawRva, kPost);
-    if (mesh_status != 0) {
+    int status = eu4_b2_install_site(base + kMeshRva, kMeshExpected, base + kIndexedRva);
+    if (status != 0) {
         char reason[64];
-        snprintf(reason, sizeof reason, "mesh install status %d", mesh_status);
-        note_reject(reason);
-    }
-    if (post_status != 0) {
-        char reason[64];
-        snprintf(reason, sizeof reason, "post install status %d", post_status);
+        snprintf(reason, sizeof reason, "mesh install status %d", status);
         note_reject(reason);
     }
 }
@@ -1110,34 +946,38 @@ __attribute__((constructor)) static void eu4_b2_capture_init(void) {
     install_eu4();
 }
 
+int g_b2_smoke_count = 3;
+int g_b2_smoke_base_vertex = 0;
+
 static int g_original_calls;
-static int g_inner_result;
-static void *g_patched;
+static int g_case;
 static GLuint g_prog;
+static GLuint g_bad_prog;
 static GLuint g_vbo;
+static GLuint g_ibo;
 static int (*g_issue_draw)(void);
-static int (*g_smoke_post)(void);
 
 static int smoke_original(void) {
     g_original_calls++;
-    if (g_original_calls == 1) {
-        g_inner_result = ((int (*)(void))g_patched)();
-        return 7;
-    }
-    glUseProgram(g_prog);
+    glUseProgram(g_case == 1 ? g_bad_prog : g_prog);
+    if (g_case == 2) glEnable(GL_PRIMITIVE_RESTART);
+    if (g_case == 3) glDepthRange(0.2, 0.8);
+    if (g_case == 4) glEnable(GL_POLYGON_OFFSET_FILL);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 8, (void *)0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_ibo);
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 8, (void *)0);
     GLint saved[4];
     glGetIntegerv(GL_VIEWPORT, saved);
     glViewport(0, 0, 16, 16);
+    g_b2_smoke_count = g_case == 5 ? 100 : 3;
+    g_b2_smoke_base_vertex = g_case == 6;
     int issued = g_issue_draw();
     glViewport(saved[0], saved[1], saved[2], saved[3]);
+    if (g_case == 2) glDisable(GL_PRIMITIVE_RESTART);
+    if (g_case == 3) glDepthRange(0.0, 1.0);
+    if (g_case == 4) glDisable(GL_POLYGON_OFFSET_FILL);
     return issued == 0 ? 7 : 9;
-}
-
-static int smoke_post(void) {
-    return g_smoke_post();
 }
 
 static GLuint smoke_shader(GLenum type, const char *source) {
@@ -1147,9 +987,70 @@ static GLuint smoke_shader(GLenum type, const char *source) {
     return shader;
 }
 
-int eu4_b2_capture_smoke(const char *dir, int (*issue_draw)(void), int (*post_draw)(void)) {
+static int fixture_exists(const char *dir) {
+    char path[1100];
+    snprintf(path, sizeof path, "%s/fixture.json", dir);
+    FILE *file = fopen(path, "r");
+    if (file == NULL) return 0;
+    fclose(file);
+    return 1;
+}
+
+static int reject_case(uint8_t *page, const uint8_t expected[5], const char *dir, int cse) {
+    char path[1100];
+    snprintf(path, sizeof path, "%s/fixture.json", dir);
+    unlink(path);
+    g_case = cse;
+    if (eu4_b2_install_site(page, expected, (void *)smoke_original) != 0) return 2;
+    if (((int (*)(void))page)() != 7) return 40 + cse;
+    if (fixture_exists(dir)) return 50 + cse;
+    return 0;
+}
+
+static int abi_calls;
+static uintptr_t abi_args[2][7];
+static void *abi_page;
+
+static uintptr_t abi_original(uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d, uintptr_t e, uintptr_t f,
+                              uintptr_t stack) {
+    int n = abi_calls++;
+    if (n < 2) {
+        abi_args[n][0] = a;
+        abi_args[n][1] = b;
+        abi_args[n][2] = c;
+        abi_args[n][3] = d;
+        abi_args[n][4] = e;
+        abi_args[n][5] = f;
+        abi_args[n][6] = stack;
+    }
+    if (n == 0) {
+        uintptr_t (*site)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t) = abi_page;
+        return site(a, b, c, d, e, f, stack);
+    }
+    return 0xA11C;
+}
+
+int eu4_b2_abi_check(void) {
+    /* The patched EU4 instruction is the call into the wrapper, so the check calls that entry.
+       A stub that then calls the wrapper would shift the stack argument by one return address. */
+    abi_page = (void *)eu4_b2_enter_mesh;
+    abi_calls = 0;
+    g_prepare_count = 0;
+    g_b2_original = (void *)abi_original;
+    uintptr_t got = eu4_b2_enter_mesh(0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77);
+    if (got != 0xA11C) return 2;
+    if (abi_calls != 2 || g_prepare_count != 1) return 3;
+    static const uintptr_t want[7] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77};
+    for (int n = 0; n < 2; n++) {
+        for (int i = 0; i < 7; i++) {
+            if (abi_args[n][i] != want[i]) return 4;
+        }
+    }
+    return 0;
+}
+
+int eu4_b2_capture_smoke(const char *dir, int (*issue_draw)(void)) {
     g_issue_draw = issue_draw;
-    g_smoke_post = post_draw;
     snprintf(g_dir, sizeof g_dir, "%s", dir);
     g_smoke = 1;
     CGLPixelFormatAttribute attrs[] = {
@@ -1165,76 +1066,134 @@ int eu4_b2_capture_smoke(const char *dir, int (*issue_draw)(void), int (*post_dr
     CGLSetCurrentContext(context);
     const char *vert = "attribute vec2 in_pos;\nvoid main(){ gl_Position = vec4(in_pos, 0.0, 1.0); }\n";
     const char *frag = "void main(){ gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); }\n";
+    const char *bad = "uniform vec4 a;\nuniform vec4 b;\nvoid main(){ gl_FragColor = a + b; }\n";
     GLuint vs = smoke_shader(GL_VERTEX_SHADER, vert);
     GLuint fs = smoke_shader(GL_FRAGMENT_SHADER, frag);
+    GLuint bad_fs = smoke_shader(GL_FRAGMENT_SHADER, bad);
     g_prog = glCreateProgram();
     glAttachShader(g_prog, vs);
     glAttachShader(g_prog, fs);
-    glBindAttribLocation(g_prog, 0, "in_pos");
+    glBindAttribLocation(g_prog, 3, "in_pos");
     glLinkProgram(g_prog);
-    float triangle[] = {-0.8f, -0.8f, 0.8f, -0.8f, 0.0f, 0.8f};
+    g_bad_prog = glCreateProgram();
+    glAttachShader(g_bad_prog, vs);
+    glAttachShader(g_bad_prog, bad_fs);
+    glLinkProgram(g_bad_prog);
+    float triangle[] = {-1.f, -1.f, 3.f, -1.f, -1.f, 3.f};
+    uint16_t indices[3] = {0, 1, 2};
     glGenBuffers(1, &g_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof triangle, triangle, GL_STATIC_DRAW);
-    long page = sysconf(_SC_PAGESIZE);
-    uint8_t *mesh_page = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    uint8_t *post_page = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (mesh_page == MAP_FAILED || post_page == MAP_FAILED) return 1;
-    int32_t mesh_rel = (int32_t)((uintptr_t)smoke_original - ((uintptr_t)mesh_page + 5));
-    int32_t post_rel = (int32_t)((uintptr_t)smoke_post - ((uintptr_t)post_page + 5));
-    mesh_page[0] = 0xe8;
-    memcpy(mesh_page + 1, &mesh_rel, 4);
-    mesh_page[5] = 0xc3;
-    post_page[0] = 0xe8;
-    memcpy(post_page + 1, &post_rel, 4);
-    post_page[5] = 0xc3;
-    uint8_t mesh_expected[5], post_expected[5];
-    memcpy(mesh_expected, mesh_page, 5);
-    memcpy(post_expected, post_page, 5);
-    if (eu4_b2_install_site(mesh_page, mesh_expected, (void *)smoke_original, kMesh) != 0) return 2;
-    if (eu4_b2_install_site(post_page, post_expected, (void *)smoke_post, kPost) != 0) return 3;
-    g_patched = mesh_page;
-    int post_result = ((int (*)(void))post_page)();
-    if (post_result != 4) return 4;
+    glGenBuffers(1, &g_ibo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof indices, indices, GL_STATIC_DRAW);
+    long page_size = sysconf(_SC_PAGESIZE);
+    uint8_t *page = mmap(NULL, (size_t)page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (page == MAP_FAILED || !rel32_fits(page, (void *)smoke_original)) return 1;
+    int32_t relative = (int32_t)((uintptr_t)smoke_original - ((uintptr_t)page + 5));
+    page[0] = 0xe8;
+    memcpy(page + 1, &relative, 4);
+    page[5] = 0xc3;
+    uint8_t expected[5];
+    memcpy(expected, page, 5);
+
+#ifndef GL_PIXEL_PACK_BUFFER
+#define GL_PIXEL_PACK_BUFFER 0x88EB
+#endif
+    GLuint pack = 0, sentinel_vao = 0, sentinel_ibo = 0, unit2 = 0, read_fbo = 0, draw_fbo = 0, rbo = 0;
+    glGenBuffers(1, &pack);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, pack);
+    glBufferData(GL_PIXEL_PACK_BUFFER, 4, indices, GL_STATIC_DRAW);
+    GLint pack_binding = 0;
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_binding);
+    if (pack_binding != (GLint)pack) return 31;
+    int rejected = reject_case(page, expected, dir, 0);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    if (rejected != 0) return rejected;
+
+    glEnable(GL_PRIMITIVE_RESTART);
+    int restart_sticks = glIsEnabled(GL_PRIMITIVE_RESTART);
+    glDisable(GL_PRIMITIVE_RESTART);
+    while (glGetError() != GL_NO_ERROR) {
+    }
+    for (int cse = 1; cse <= 6; cse++) {
+        if (cse == 2 && !restart_sticks) continue;
+        rejected = reject_case(page, expected, dir, cse);
+        if (rejected != 0) return rejected;
+    }
+
+    glGenVertexArraysAPPLE(1, &sentinel_vao);
+    glBindVertexArrayAPPLE(sentinel_vao);
+    glGenBuffers(1, &sentinel_ibo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sentinel_ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof indices, indices, GL_STATIC_DRAW);
+    glBindVertexArrayAPPLE(0);
+    glGenTextures(1, &unit2);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, unit2);
+    glActiveTexture(GL_TEXTURE0);
+    glGenFramebuffers(1, &read_fbo);
+    glGenFramebuffers(1, &draw_fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, read_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, draw_fbo);
+    glGenRenderbuffers(1, &rbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+    glClearColor(0.25f, 0.5f, 0.75f, 1.f);
+    glClearDepth(0.25);
     glViewport(3, 5, 7, 9);
     glUseProgram(0);
-    int mesh_result = ((int (*)(void))mesh_page)();
-    GLint viewport[4] = {0};
-    GLint program = 0;
+    GLint read_bound = 0, draw_bound = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_bound);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_bound);
+    if (read_bound != (GLint)read_fbo || draw_bound != (GLint)draw_fbo || read_fbo == draw_fbo) return 32;
+    g_case = 7;
+    if (eu4_b2_install_site(page, expected, (void *)smoke_original) != 0) return 2;
+    if (((int (*)(void))page)() != 7) return 5;
+
+    GLint viewport[4] = {0}, program = 0, rbo_bound = 0, unit2_bound = 0, sentinel_elem = 0;
+    GLfloat clear_color[4] = {0, 0, 0, 0};
+    GLdouble clear_depth = 0;
     glGetIntegerv(GL_VIEWPORT, viewport);
     glGetIntegerv(GL_CURRENT_PROGRAM, &program);
-    if (mesh_result != 7 || g_original_calls != 2 || g_inner_result != 7) return 5;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_bound);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw_bound);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &rbo_bound);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_binding);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, clear_color);
+    glGetDoublev(GL_DEPTH_CLEAR_VALUE, &clear_depth);
+    glActiveTexture(GL_TEXTURE2);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &unit2_bound);
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArrayAPPLE(sentinel_vao);
+    glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &sentinel_elem);
     if (viewport[0] != 3 || viewport[1] != 5 || viewport[2] != 7 || viewport[3] != 9) return 6;
     if (program != (GLint)g_prog) return 7;
-    char fixture_path[1100];
-    snprintf(fixture_path, sizeof fixture_path, "%s/fixture.json", dir);
-    FILE *fixture = fopen(fixture_path, "r");
-    if (fixture == NULL) return 8;
-    fclose(fixture);
-    FILE *reference = fopen((snprintf(fixture_path, sizeof fixture_path, "%s/reference.rgba", dir), fixture_path), "rb");
-    FILE *clear = NULL;
-    if (reference == NULL) return 9;
+    if (read_bound != (GLint)read_fbo || draw_bound != (GLint)draw_fbo) return 8;
+    if (rbo_bound != (GLint)rbo || pack_binding != 0 || sentinel_elem != (GLint)sentinel_ibo) return 9;
+    if (unit2_bound != (GLint)unit2) return 10;
+    if (clear_color[0] != 0.25f || clear_color[1] != 0.5f || clear_color[2] != 0.75f || clear_color[3] != 1.f) return 11;
+    if (clear_depth != 0.25) return 12;
+    if (!fixture_exists(dir)) return 13;
+    char path[1100];
+    snprintf(path, sizeof path, "%s/reference.rgba", dir);
+    FILE *reference = fopen(path, "rb");
+    if (reference == NULL) return 14;
     fseek(reference, 0, SEEK_END);
     long ref_size = ftell(reference);
     fseek(reference, 0, SEEK_SET);
     uint8_t *ref_bytes = malloc((size_t)ref_size);
-    if (ref_bytes == NULL || fread(ref_bytes, 1, (size_t)ref_size, reference) != (size_t)ref_size) return 10;
+    if (ref_bytes == NULL || fread(ref_bytes, 1, (size_t)ref_size, reference) != (size_t)ref_size) return 15;
     fclose(reference);
-    snprintf(fixture_path, sizeof fixture_path, "%s/clear.rgba", dir);
-    clear = fopen(fixture_path, "rb");
-    if (clear == NULL) return 11;
+    snprintf(path, sizeof path, "%s/clear.rgba", dir);
+    FILE *cleared = fopen(path, "rb");
     uint8_t *clear_bytes = malloc((size_t)ref_size);
-    if (clear_bytes == NULL || fread(clear_bytes, 1, (size_t)ref_size, clear) != (size_t)ref_size) return 12;
-    fclose(clear);
-    if (memcmp(ref_bytes, clear_bytes, (size_t)ref_size) == 0) return 13;
-    int red = 0;
-    for (long i = 0; i < ref_size; i += 4) {
-        if (ref_bytes[i] == 255 && ref_bytes[i + 1] == 0 && ref_bytes[i + 2] == 0) red = 1;
-    }
+    if (cleared == NULL || clear_bytes == NULL || fread(clear_bytes, 1, (size_t)ref_size, cleared) != (size_t)ref_size) return 16;
+    fclose(cleared);
+    int same = memcmp(ref_bytes, clear_bytes, (size_t)ref_size) == 0;
     free(ref_bytes);
     free(clear_bytes);
     CGLSetCurrentContext(NULL);
     CGLDestroyContext(context);
     CGLDestroyPixelFormat(format);
-    return red ? 0 : 14;
+    return same ? 17 : 0;
 }
