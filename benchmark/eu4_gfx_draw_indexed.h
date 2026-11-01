@@ -35,7 +35,8 @@ enum {
 
 /* context_slot is rdi: one pointer to the context image. context_bytes is that
    image's length. Each resolved index copies exactly stride bytes. Success writes
-   the selected vertex count and the written byte count. Failure writes no output. */
+   the selected vertex count and the written byte count. Failure writes no output.
+   out must not overlap the vertex or index bytes. */
 int eu4_gfx_draw_indexed_gather(const void *context_slot, int context_bytes, int count, int unused_edx,
                                 int base_vertex, const void *vertices, int vertex_bytes, int stride,
                                 int color_offset, int color_is_byte, const void *indices, int index_bytes,

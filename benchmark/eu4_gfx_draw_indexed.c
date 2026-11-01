@@ -24,6 +24,18 @@ static int reject(int code, int *vertex_count_out, int *written_bytes_out, int *
     return finish(code, 0, 0, 0, vertex_count_out, written_bytes_out, as_strip_out);
 }
 
+static int ranges_overlap(const void *left, int64_t left_len, const void *right, int64_t right_len) {
+    uintptr_t a = (uintptr_t)left;
+    uintptr_t b = (uintptr_t)right;
+    if (left_len <= 0 || right_len <= 0) {
+        return 0;
+    }
+    if (a > UINTPTR_MAX - (uintptr_t)left_len || b > UINTPTR_MAX - (uintptr_t)right_len) {
+        return 1;
+    }
+    return a < b + (uintptr_t)right_len && b < a + (uintptr_t)left_len;
+}
+
 static int layout_ok(int stride, int color_offset, int color_is_byte) {
     int color_bytes = color_is_byte ? 4 : 16;
     if ((color_is_byte != 0 && color_is_byte != 1) || stride < 8 || color_offset < 0) {
@@ -92,7 +104,9 @@ int eu4_gfx_draw_indexed_gather(const void *context_slot, int context_bytes, int
         return reject(EU4_GFX_DRAW_RANGE, vertex_count_out, written_bytes_out, as_strip_out);
     }
     written = (int64_t)selected * stride;
-    if ((int64_t)selected * 2 > index_bytes || written > out_bytes) {
+    if ((int64_t)selected * 2 > index_bytes || written > out_bytes ||
+        ranges_overlap(out, written, indices, (int64_t)selected * 2) ||
+        ranges_overlap(out, written, vertices, vertex_bytes)) {
         return reject(EU4_GFX_DRAW_RANGE, vertex_count_out, written_bytes_out, as_strip_out);
     }
     for (i = 0; i < selected; i++) {

@@ -312,10 +312,43 @@ static void test_pixels(void) {
     }
 }
 
+static void test_overlap(void) {
+    uint8_t image[0x180];
+    uint8_t block[80];
+    uint8_t saved[80];
+    uint8_t verts[72];
+    uint8_t saved_verts[72];
+    int vertices = 7;
+    int written = 7;
+    int as_strip = 7;
+    void *context;
+    const uint16_t order[3] = {0, 1, 2};
+    prepare(image, 4, 0);
+    context = image;
+    memset(block, 0x3c, sizeof block);
+    memcpy(block, order, sizeof order);
+    memcpy(saved, block, sizeof saved);
+    expect(eu4_gfx_draw_indexed_gather(&context, EU4_GFX_DRAW_CONTEXT_BYTES, 3, 0, 0, kTriangle, 72, kStride, 8, 0,
+                                       block, 6, block, 72, &vertices, &written, &as_strip),
+           EU4_GFX_DRAW_RANGE, "output overlaps indices");
+    if (memcmp(block, saved, sizeof block) != 0) {
+        fail("index overlap wrote the input");
+    }
+    memcpy(verts, kTriangle, sizeof verts);
+    memcpy(saved_verts, verts, sizeof verts);
+    expect(eu4_gfx_draw_indexed_gather(&context, EU4_GFX_DRAW_CONTEXT_BYTES, 3, 0, 0, verts, 72, kStride, 8, 0, order,
+                                       6, verts, 72, &vertices, &written, &as_strip),
+           EU4_GFX_DRAW_RANGE, "output overlaps vertices");
+    if (memcmp(verts, saved_verts, sizeof verts) != 0) {
+        fail("vertex overlap wrote the input");
+    }
+}
+
 int main(void) {
     test_counts();
     test_preconditions();
     test_geometry();
+    test_overlap();
     test_pixels();
     return 0;
 }
