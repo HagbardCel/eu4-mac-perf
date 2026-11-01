@@ -50,7 +50,7 @@ static int forwarding(void) {
     return eu4_metal_gl_should_forward(current_mode(), phase);
 }
 
-__attribute__((noreturn)) static void abort_gl(const char *name, const void *caller) {
+__attribute__((noreturn)) static void abort_gl(const char *name, const void *caller, const char *reason) {
     const char *phase = "before_init";
     int value = g_test_phase >= 0 ? g_test_phase : eu4_gfx_phase();
     if (value == 1) {
@@ -58,7 +58,7 @@ __attribute__((noreturn)) static void abort_gl(const char *name, const void *cal
     } else if (value == 2) {
         phase = "after_init";
     }
-    eu4_metal_events_stop(phase, name, "gl", caller);
+    eu4_metal_events_stop(phase, name, reason, caller);
     _exit(2);
 }
 
@@ -77,12 +77,13 @@ __attribute__((noreturn)) static void abort_gl(const char *name, const void *cal
     static void (*real_##name)(T);                                                            \
     __attribute__((used)) static void eu4_##name(T a) {                                       \
         if (forwarding()) {                                                                   \
-            if (real_##name != NULL) {                                                        \
-                real_##name(a);                                                               \
+            if (real_##name == NULL) {                                                        \
+                abort_gl(#name, __builtin_return_address(0), "unresolved_forward");           \
             }                                                                                 \
+            real_##name(a);                                                                   \
             return;                                                                           \
         }                                                                                     \
-        abort_gl(#name, __builtin_return_address(0));                                         \
+        abort_gl(#name, __builtin_return_address(0), "gl");                                   \
     }                                                                                         \
     GL_BIND(eu4_##name, name)
 
@@ -90,12 +91,13 @@ __attribute__((noreturn)) static void abort_gl(const char *name, const void *cal
     static void (*real_##name)(T, U);                                                         \
     __attribute__((used)) static void eu4_##name(T a, U b) {                                  \
         if (forwarding()) {                                                                   \
-            if (real_##name != NULL) {                                                        \
-                real_##name(a, b);                                                            \
+            if (real_##name == NULL) {                                                        \
+                abort_gl(#name, __builtin_return_address(0), "unresolved_forward");           \
             }                                                                                 \
+            real_##name(a, b);                                                                \
             return;                                                                           \
         }                                                                                     \
-        abort_gl(#name, __builtin_return_address(0));                                         \
+        abort_gl(#name, __builtin_return_address(0), "gl");                                   \
     }                                                                                         \
     GL_BIND(eu4_##name, name)
 
@@ -103,12 +105,13 @@ __attribute__((noreturn)) static void abort_gl(const char *name, const void *cal
     static void (*real_##name)(T, U, V);                                                      \
     __attribute__((used)) static void eu4_##name(T a, U b, V c) {                             \
         if (forwarding()) {                                                                   \
-            if (real_##name != NULL) {                                                        \
-                real_##name(a, b, c);                                                         \
+            if (real_##name == NULL) {                                                        \
+                abort_gl(#name, __builtin_return_address(0), "unresolved_forward");           \
             }                                                                                 \
+            real_##name(a, b, c);                                                             \
             return;                                                                           \
         }                                                                                     \
-        abort_gl(#name, __builtin_return_address(0));                                         \
+        abort_gl(#name, __builtin_return_address(0), "gl");                                   \
     }                                                                                         \
     GL_BIND(eu4_##name, name)
 
@@ -116,12 +119,13 @@ __attribute__((noreturn)) static void abort_gl(const char *name, const void *cal
     static void (*real_##name)(T, U, V, W);                                                   \
     __attribute__((used)) static void eu4_##name(T a, U b, V c, W d) {                        \
         if (forwarding()) {                                                                   \
-            if (real_##name != NULL) {                                                        \
-                real_##name(a, b, c, d);                                                      \
+            if (real_##name == NULL) {                                                        \
+                abort_gl(#name, __builtin_return_address(0), "unresolved_forward");           \
             }                                                                                 \
+            real_##name(a, b, c, d);                                                          \
             return;                                                                           \
         }                                                                                     \
-        abort_gl(#name, __builtin_return_address(0));                                         \
+        abort_gl(#name, __builtin_return_address(0), "gl");                                   \
     }                                                                                         \
     GL_BIND(eu4_##name, name)
 
@@ -157,9 +161,12 @@ GL_VOID4(glDrawElements, GLenum, GLsizei, GLenum, const void *)
 static const GLubyte *(*real_glGetString)(GLenum);
 __attribute__((used)) static const GLubyte *eu4_glGetString(GLenum name) {
     if (forwarding()) {
-        return real_glGetString != NULL ? real_glGetString(name) : NULL;
+        if (real_glGetString == NULL) {
+            abort_gl("glGetString", __builtin_return_address(0), "unresolved_forward");
+        }
+        return real_glGetString(name);
     }
-    abort_gl("glGetString", __builtin_return_address(0));
+    abort_gl("glGetString", __builtin_return_address(0), "gl");
 }
 GL_BIND(eu4_glGetString, glGetString);
 
@@ -168,28 +175,39 @@ __attribute__((used)) static void eu4_glTexImage2D(GLenum target, GLint level, G
                              GLsizei height, GLint border, GLenum format, GLenum type,
                              const void *pixels) {
     if (forwarding()) {
-        if (real_glTexImage2D != NULL) {
-            real_glTexImage2D(target, level, internal, width, height, border, format, type, pixels);
+        if (real_glTexImage2D == NULL) {
+            abort_gl("glTexImage2D", __builtin_return_address(0), "unresolved_forward");
         }
+        real_glTexImage2D(target, level, internal, width, height, border, format, type, pixels);
         return;
     }
-    abort_gl("glTexImage2D", __builtin_return_address(0));
+    abort_gl("glTexImage2D", __builtin_return_address(0), "gl");
 }
 GL_BIND(eu4_glTexImage2D, glTexImage2D);
 
 static void (*real_glBufferData)(GLenum, GLsizeiptr, const void *, GLenum);
 __attribute__((used)) static void eu4_glBufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage) {
     if (forwarding()) {
-        if (real_glBufferData != NULL) {
-            real_glBufferData(target, size, data, usage);
+        if (real_glBufferData == NULL) {
+            abort_gl("glBufferData", __builtin_return_address(0), "unresolved_forward");
         }
+        real_glBufferData(target, size, data, usage);
         return;
     }
-    abort_gl("glBufferData", __builtin_return_address(0));
+    abort_gl("glBufferData", __builtin_return_address(0), "gl");
 }
 GL_BIND(eu4_glBufferData, glBufferData);
 
+#ifdef EU4_METAL_GL_NO_INTERPOSE
 void (*eu4_metal_gl_test_clear(void))(GLbitfield) { return eu4_glClear; }
+void *eu4_metal_gl_test_clear_target(void) { return (void *)real_glClear; }
+const GLubyte *(*eu4_metal_gl_test_get_string(void))(GLenum) { return eu4_glGetString; }
+void *eu4_metal_gl_test_get_string_target(void) { return (void *)real_glGetString; }
+
+void eu4_metal_gl_test_set_get_string_target(void *target) {
+    memcpy(&real_glGetString, &target, sizeof target);
+}
+#endif
 
 static uint64_t read_uleb(const uint8_t **cursor, const uint8_t *end) {
     uint64_t value = 0;

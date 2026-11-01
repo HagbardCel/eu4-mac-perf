@@ -93,6 +93,46 @@ def read_event(path: Path) -> dict | None:
 
 
 DIAGNOSTIC_GRACE_SECONDS = 2
+# Half-open bodies. The next symbol in the pinned binary is the end.
+REPLACED_BODIES = (
+    (0x15E8EA0, 0x15E9D11),
+    (0x15EA0BF, 0x15EA261),
+    (0x15EA261, 0x15EA35A),
+    (0x15EA35A, 0x15EA42C),
+    (0x15EA42C, 0x15EA460),
+    (0x15ED388, 0x15ED9FC),
+)
+
+
+def parse_rva(value: object) -> int | None:
+    """A return address. Unparseable, null, and non-positive values are not callers."""
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = int(value, 0)
+        except ValueError:
+            return None
+    else:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def caller_outside_replacements(value: object) -> bool:
+    """The recorded address is the instruction after the call, so the call byte is rva - 1."""
+    rva = parse_rva(value)
+    if rva is None:
+        return False
+    call = rva - 1
+    return all(call < start or call >= end for start, end in REPLACED_BODIES)
+
+
+def same_pinned_executable(image: object) -> bool:
+    if not isinstance(image, str) or image == "":
+        return False
+    return Path(image).resolve(strict=False) == Path(base.GOG_EXE).resolve(strict=False)
 
 
 def metal_init_should_stop(init_seen: bool, stop_seen: bool, exited: bool, deadline_hit: bool) -> str | None:
@@ -115,12 +155,15 @@ def classify_diagnostic_exit(exited_within_grace: bool, returncode: int | None) 
 
 
 def metal_init_outcome(init_success: bool, stop_phase: str | None, why: str | None, returncode: int | None,
-                       init_thread: int | None, stop_thread: int | None, launcher_signaled: bool) -> dict:
-    """Exit code 2 is the diagnostic _exit, and only together with an after_init stop on the init thread."""
+                       init_thread: int | None, stop_thread: int | None, launcher_signaled: bool,
+                       stop_reason: str | None = None, stop_image: str | None = None,
+                       stop_rva: object = None) -> dict:
+    """Exit code 2 is the diagnostic _exit, and only with an after_init gl stop outside the six bodies."""
     threads = init_thread is not None and init_thread == stop_thread
     diagnostic = (
         why == "stop" and stop_phase == "after_init" and init_success and returncode == 2
-        and not launcher_signaled and threads
+        and not launcher_signaled and threads and stop_reason == "gl"
+        and same_pinned_executable(stop_image) and caller_outside_replacements(stop_rva)
     )
     if diagnostic:
         return {"status": "complete", "live_gfx_init": "returned", "raises": False}
@@ -244,6 +287,9 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
             None if init is None else init.get("thread"),
             None if stop is None else stop.get("thread"),
             launcher_signaled,
+            None if stop is None else stop.get("reason"),
+            None if stop is None else stop.get("image"),
+            None if stop is None else stop.get("rva"),
         )
         metadata = {
             "status": outcome["status"],

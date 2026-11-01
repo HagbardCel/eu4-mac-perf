@@ -29,10 +29,42 @@ class MetalBootTests(unittest.TestCase):
         self.assertEqual((code, signaled), (2, False))
         code, signaled = probe.classify_diagnostic_exit(False, None)
         self.assertEqual(signaled, True)
-        complete = probe.metal_init_outcome(True, "after_init", "stop", 2, 7, 7, False)
+        live = Path(__file__).resolve().parents[1] / "results/20261101T220023Z-metal-init"
+        init = probe.read_event(live / "init.json")
+        stop = probe.read_event(live / "stop.json")
+        self.assertIsNotNone(init)
+        self.assertIsNotNone(stop)
+        recorded = probe.metal_init_outcome(
+            init.get("success") == 1, stop.get("phase"), "stop", 2,
+            init.get("thread"), stop.get("thread"), False,
+            stop.get("reason"), stop.get("image"), stop.get("rva"),
+        )
+        self.assertEqual(recorded["status"], "complete")
+        self.assertEqual(recorded["live_gfx_init"], "returned")
+        self.assertFalse(recorded["raises"])
+        image = stop.get("image")
+        complete = probe.metal_init_outcome(
+            True, "after_init", "stop", 2, 7, 7, False, "gl", image, "0x15e9e20"
+        )
         self.assertEqual(complete["status"], "complete")
         self.assertEqual(complete["live_gfx_init"], "returned")
         self.assertFalse(complete["raises"])
+        for reason in ("unsupported", "reentry", "unresolved_forward"):
+            rejected = probe.metal_init_outcome(
+                True, "after_init", "stop", 2, 7, 7, False, reason, image, "0x15e9e20"
+            )
+            self.assertEqual(rejected["status"], "post_init_failure")
+            self.assertTrue(rejected["raises"])
+        inside = probe.metal_init_outcome(
+            True, "after_init", "stop", 2, 7, 7, False, "gl", image, "0x15e9d11"
+        )
+        self.assertEqual(inside["status"], "post_init_failure")
+        for bad in (None, "nope", -1, 0):
+            malformed = probe.metal_init_outcome(
+                True, "after_init", "stop", 2, 7, 7, False, "gl", image, bad
+            )
+            self.assertEqual(malformed["status"], "post_init_failure")
+            self.assertTrue(malformed["raises"])
         other_thread = probe.metal_init_outcome(True, "after_init", "stop", 2, 7, 8, False)
         self.assertTrue(other_thread["raises"])
         self.assertEqual(other_thread["live_gfx_init"], "postconditions")

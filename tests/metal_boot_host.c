@@ -229,6 +229,10 @@ int eu4_metal_gl_should_forward(int mode, int phase);
 void eu4_metal_gl_test_set_mode(int mode);
 void eu4_metal_gl_test_set_phase(int phase);
 void (*eu4_metal_gl_test_clear(void))(GLbitfield);
+void *eu4_metal_gl_test_clear_target(void);
+const GLubyte *(*eu4_metal_gl_test_get_string(void))(GLenum);
+void *eu4_metal_gl_test_get_string_target(void);
+void eu4_metal_gl_test_set_get_string_target(void *target);
 void eu4_metal_events_set_dir(const char *dir);
 void eu4_metal_events_set_image(uintptr_t base, uintptr_t end);
 
@@ -264,6 +268,23 @@ static void test_gl_forward(void) {
         info.dli_fname == NULL || strstr(info.dli_fname, "metal_boot_host") != NULL) {
         fail("glClear did not resolve past the wrapper");
     }
+    void *clear_target = eu4_metal_gl_test_clear_target();
+    const GLubyte *(*get_string)(GLenum) = eu4_metal_gl_test_get_string();
+    void *string_target = eu4_metal_gl_test_get_string_target();
+    const GLubyte *(*string_next)(GLenum) = dlsym(RTLD_NEXT, "glGetString");
+    Dl_info string_info;
+    memset(&string_info, 0, sizeof string_info);
+    if (clear_target == NULL || (uintptr_t)clear_target == (uintptr_t)wrap ||
+        (uintptr_t)clear_target != (uintptr_t)real) {
+        fail("glClear target is not the resolved symbol");
+    }
+    if (get_string == NULL || string_target == NULL || string_next == NULL ||
+        (uintptr_t)string_target == (uintptr_t)get_string ||
+        (uintptr_t)string_target != (uintptr_t)string_next ||
+        dladdr(string_target, &string_info) == 0 || string_info.dli_fname == NULL ||
+        strstr(string_info.dli_fname, "metal_boot_host") != NULL) {
+        fail("glGetString target is not the resolved symbol");
+    }
     CGLPixelFormatAttribute attrs[] = {kCGLPFAAccelerated, 0};
     CGLPixelFormatObj format = NULL;
     GLint count = 0;
@@ -274,6 +295,10 @@ static void test_gl_forward(void) {
         fail("could not make a GL context");
     }
     real(0);
+    const GLubyte *version = get_string(0x1f02);
+    if (version == NULL || version[0] == '\0') {
+        fail("glGetString did not return a version");
+    }
     char dir[] = "/tmp/eu4-gl-XXXXXX";
     if (mkdtemp(dir) == NULL) {
         fail("gl temp dir");
@@ -325,6 +350,33 @@ static void test_gl_forward(void) {
     if (strstr(body, expected) == NULL || strstr(body, "\"rva\":null") != NULL) {
         fail("stop.json did not record the host callsite");
     }
+    char missing_dir[] = "/tmp/eu4-gl-miss-XXXXXX";
+    if (mkdtemp(missing_dir) == NULL) {
+        fail("missing-target temp dir");
+    }
+    eu4_metal_events_set_dir(missing_dir);
+    pid_t missing = fork();
+    if (missing < 0) {
+        fail("missing-target fork");
+    }
+    if (missing == 0) {
+        eu4_metal_gl_test_set_mode(0);
+        eu4_metal_gl_test_set_get_string_target(NULL);
+        (void)get_string(0x1f02);
+        _exit(99);
+    }
+    int missing_status = 0;
+    if (waitpid(missing, &missing_status, 0) < 0 || !WIFEXITED(missing_status) ||
+        WEXITSTATUS(missing_status) != 2) {
+        fail("unresolved forward did not exit 2");
+    }
+    snprintf(stop, sizeof stop, "%s/stop.json", missing_dir);
+    file = fopen(stop, "r");
+    if (file == NULL || fgets(body, sizeof body, file) == NULL ||
+        strstr(body, "\"reason\":\"unresolved_forward\"") == NULL) {
+        fail("unresolved forward did not record its reason");
+    }
+    fclose(file);
 }
 
 static uint8_t *map_entries(size_t page, eu4_gfx_entry_request entries[6],
