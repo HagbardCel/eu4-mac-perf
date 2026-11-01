@@ -4,6 +4,8 @@ Session `fixtures/b2-color/20261101T133219Z` was the authorized capture on GOG E
 
 The operator opened Options on the main menu and closed it, then acknowledged `menu-options`. No fixture was present. The same process continued the Lübeck single-player save dated 25 January 1609, opened the Esc menu once the map was up, and closed it. That step was acknowledged as `ingame-esc`.
 
-The recorder saw 17,080,117 indexed `glDrawElements` submissions and 22 programs. Every indexed draw was rejected as `not-color`. `candidates` and `qualified` stayed 0. No fixture was written, so there is no GL–Metal compare. The main menu accounted for 5 of the 22 programs. The map and Esc menu raised the count to 22.
+The recorder saw 17,080,117 indexed `glDrawElements` submissions and inspected 22 programs. All 22 were classified `not-color` before any interface or draw-state check. Classification is cached, so those rejects are not 17,080,117 independent shader comparisons. `candidates` and `qualified` stayed 0. No fixture was written, so there is no GL–Metal compare. The main menu accounted for 5 of the 22 programs. The map and Esc menu raised the count to 22.
 
-B2 is not accepted. `docs/status.md` is unchanged. The matcher, the fixed-state checks, and the 2048 viewport cap were not widened.
+The result is that no qualifying Color identity was observed among the intercepted indexed submissions. It does not show that Color is absent from this build. A program can be rejected as `not-color` when its vertex source, fragment source, or attached stages differ from the Stage D pair, and the historical fragment compiler input was not retained. The session does not separate a missing program from a false-negative match.
+
+B2 is not accepted. `docs/status.md` on this branch is unchanged. The matcher, the fixed-state checks, and the 2048 viewport cap were not widened.

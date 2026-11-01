@@ -305,19 +305,22 @@ class AcquisitionWaitTests(unittest.TestCase):
         state = color_capture.new_wait()
         self.assertFalse(color_capture.see_fixture(state, True))
         self.assertTrue(color_capture.take_ack(state, "menu-options"))
-        self.assertEqual(color_capture.wait_status(state), "acquired")
+        self.assertEqual(color_capture.recorded_status(state, None), "incomplete")
+        self.assertEqual(color_capture.recorded_status(state, {"qualified": 0}), "incomplete")
+        self.assertEqual(color_capture.recorded_status(state, {"qualified": 1}), "acquired")
 
     def test_ack_then_fixture_in_the_ingame_phase(self):
         state = color_capture.new_wait()
         self.assertFalse(color_capture.take_ack(state, "menu-options"))
         self.assertFalse(color_capture.take_ack(state, "ingame-esc"))
         self.assertTrue(color_capture.see_fixture(state, True))
-        self.assertEqual(color_capture.wait_status(state), "acquired")
+        self.assertEqual(color_capture.recorded_status(state, {"qualified": 0}), "incomplete")
+        self.assertEqual(color_capture.recorded_status(state, {"qualified": 1}), "acquired")
 
     def test_fixture_without_ack_is_incomplete(self):
         state = color_capture.new_wait()
         color_capture.see_fixture(state, True)
-        self.assertEqual(color_capture.wait_status(state), "incomplete")
+        self.assertEqual(color_capture.recorded_status(state, {"qualified": 1}), "incomplete")
 
     def test_fixture_and_ack_wait_for_the_qualified_counter(self):
         state = color_capture.new_wait()
@@ -331,15 +334,16 @@ class AcquisitionWaitTests(unittest.TestCase):
         state = color_capture.new_wait()
         self.assertFalse(color_capture.take_ack(state, "menu-options"))
         self.assertFalse(color_capture.see_fixture(state, True))
-        self.assertEqual(color_capture.wait_status(state), "incomplete")
+        self.assertEqual(color_capture.recorded_status(state, {"qualified": 1}), "incomplete")
         self.assertTrue(color_capture.take_ack(state, "ingame-esc"))
-        self.assertEqual(color_capture.wait_status(state), "acquired")
+        self.assertEqual(color_capture.recorded_status(state, None), "incomplete")
+        self.assertEqual(color_capture.recorded_status(state, {"qualified": 1}), "acquired")
 
     def test_ingame_ack_does_not_certify_a_menu_fixture(self):
         state = color_capture.new_wait()
         color_capture.see_fixture(state, True)
         self.assertFalse(color_capture.take_ack(state, "ingame-esc"))
-        self.assertEqual(color_capture.wait_status(state), "incomplete")
+        self.assertEqual(color_capture.recorded_status(state, {"qualified": 1}), "incomplete")
 
     def test_progress_distinguishes_an_open_acquisition(self):
         absent = color_capture.acquisition_note(
@@ -385,7 +389,7 @@ class AcquisitionWaitTests(unittest.TestCase):
         with os.fdopen(read) as stream:
             self.assertEqual(color_capture.pull_line(stream, 5), "")
         self.assertLess(time.monotonic() - started, 1)
-        self.assertEqual(color_capture.wait_status(state), "acquisition-failed")
+        self.assertEqual(color_capture.recorded_status(state, None), "acquisition-failed")
 
 
 if __name__ == "__main__":

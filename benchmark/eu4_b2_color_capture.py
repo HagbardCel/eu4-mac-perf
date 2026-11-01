@@ -56,18 +56,18 @@ def take_ack(state: dict, line: str) -> bool:
     return state["fixture_phase"] is not None and state["ack"] == state["fixture_phase"]
 
 
-def wait_status(state: dict) -> str:
-    if state["fixture_phase"] is None:
-        return "acquisition-failed"
-    if state["ack"] == state["fixture_phase"]:
-        return "acquired"
-    return "incomplete"
-
-
 def acquisition_settled(state: dict, counters: dict | None) -> bool:
     if not isinstance(counters, dict) or int(counters.get("qualified") or 0) <= 0:
         return False
     return state["fixture_phase"] is not None and state["ack"] == state["fixture_phase"]
+
+
+def recorded_status(state: dict, counters: dict | None) -> str:
+    if acquisition_settled(state, counters):
+        return "acquired"
+    if state["fixture_phase"] is None:
+        return "acquisition-failed"
+    return "incomplete"
 
 
 def acquisition_note(counters: dict) -> str:
@@ -246,14 +246,8 @@ def launch_session(run_dir: Path, wait_seconds: float) -> dict:
         stdout.close()
         stderr.close()
     counters = json.loads(counters_path.read_text()) if counters_path.is_file() else {}
-    if acquisition_settled(state, counters):
-        status = "acquired"
-    elif state["fixture_phase"] is None:
-        status = "acquisition-failed"
-    else:
-        status = "incomplete"
     metadata = {
-        "status": status,
+        "status": recorded_status(state, counters),
         "gog": identity,
         "library_sha256": base.sha256(library),
         "preflight": preflight,
