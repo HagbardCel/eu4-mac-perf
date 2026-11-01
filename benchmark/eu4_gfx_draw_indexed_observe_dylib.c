@@ -139,22 +139,9 @@ static bool attest(const char *expected, char *actual, size_t actual_size,
     return true;
 }
 
-static int reserved_outstanding(void) {
-    uint64_t posted = eu4_gfx_draw_indexed_observe_post_ready();
-    unsigned limit = posted > EU4_GFX_DRAW_OBSERVE_SAMPLES
-                         ? EU4_GFX_DRAW_OBSERVE_SAMPLES
-                         : (unsigned)posted;
-    for (unsigned index = 0; index < limit; index++) {
-        if (eu4_gfx_draw_indexed_observe_slot_state(index) == 1) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 static bool publish_samples(void) {
-    for (int spin = 0; spin < 1000 && reserved_outstanding(); spin++) {
-        usleep(1000);
+    if (!eu4_gfx_draw_indexed_observe_freeze(2000)) {
+        return false;
     }
     char partial[DRAW_PATH];
     int length = snprintf(partial, sizeof partial, "%s.partial", samples_path);

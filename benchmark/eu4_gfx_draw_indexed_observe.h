@@ -25,10 +25,14 @@ typedef struct {
     uint8_t refusal;
 } eu4_gfx_draw_observe_sample;
 
-/* arm_word is a shared uint64. Nonzero arms detailed samples. Set it before install
- * and do not retarget it while intercepted calls may still run. */
+/* arm_word is a shared uint64. Nonzero arms detailed samples. Set the pointer
+ * before install and do not retarget it while intercepted calls may still run.
+ * Storing zero freezes admission. */
 void eu4_gfx_draw_indexed_observe_bind(void *arm_word);
 void eu4_gfx_draw_indexed_observe_entry(eu4_gfx_capture_frame *frame);
+/* Store zero to the arm word, then wait until admitted calls have finished.
+ * Returns false if that wait exceeds timeout_ms. */
+bool eu4_gfx_draw_indexed_observe_freeze(unsigned timeout_ms);
 
 bool eu4_gfx_draw_indexed_observe_write(FILE *file);
 uint64_t eu4_gfx_draw_indexed_observe_hits(void);

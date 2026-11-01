@@ -1,13 +1,16 @@
 #include "eu4_gfx_draw_indexed_observe.h"
 
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
 extern void eu4_gfx_draw_indexed_observe_test_reset(void);
 extern void eu4_gfx_draw_indexed_observe_test_hold(unsigned index, uint64_t rdi_value);
+extern void eu4_gfx_draw_indexed_observe_test_pause(void (*pause)(void));
 
 static _Atomic uint64_t armed;
 
@@ -131,6 +134,122 @@ static int test_quota(void) {
     return 0;
 }
 
+static int test_disarm(void) {
+    uint8_t image[EU4_GFX_DRAW_OBSERVE_CONTEXT_BYTES];
+    uint64_t slot;
+    eu4_gfx_capture_frame frame;
+    eu4_gfx_draw_indexed_observe_test_reset();
+    atomic_store_explicit(&armed, 1, memory_order_release);
+    eu4_gfx_draw_indexed_observe_bind(&armed);
+    fill_image(image, 4, 3, 0x20, 0, 0);
+    slot = (uint64_t)(uintptr_t)image;
+    frame = frame_for((uint64_t)(uintptr_t)&slot, 1, 0, 0);
+    eu4_gfx_draw_indexed_observe_entry(&frame);
+    if (!eu4_gfx_draw_indexed_observe_freeze(1000)) {
+        return fail("freeze timed out after one sample");
+    }
+    eu4_gfx_draw_indexed_observe_entry(&frame);
+    if (eu4_gfx_draw_indexed_observe_post_ready() != 1 ||
+        eu4_gfx_draw_indexed_observe_completed() != 1) {
+        return fail("a call after disarm was recorded");
+    }
+    return 0;
+}
+
+static _Atomic int pause_entered;
+static _Atomic int pause_release;
+static _Atomic int freeze_finished;
+
+static void pause_inside_read(void) {
+    atomic_store_explicit(&pause_entered, 1, memory_order_release);
+    while (atomic_load_explicit(&pause_release, memory_order_acquire) == 0) {
+        usleep(1000);
+    }
+}
+
+static void *call_entry(void *argument) {
+    eu4_gfx_draw_indexed_observe_entry(argument);
+    return NULL;
+}
+
+static void *call_freeze(void *argument) {
+    int *ok = argument;
+    *ok = eu4_gfx_draw_indexed_observe_freeze(2000);
+    atomic_store_explicit(&freeze_finished, 1, memory_order_release);
+    return NULL;
+}
+
+static int file_counts_match(FILE *file) {
+    char line[512];
+    unsigned completed = 0;
+    unsigned records = 0;
+    int saw_completed = 0;
+    rewind(file);
+    while (fgets(line, sizeof line, file) != NULL) {
+        if (strncmp(line, "completed=", 10) == 0) {
+            completed = (unsigned)strtoul(line + 10, NULL, 10);
+            saw_completed = 1;
+        } else if (strncmp(line, "sample ", 7) == 0) {
+            records++;
+        }
+    }
+    return saw_completed && completed == records && records == 1;
+}
+
+static int test_freeze_waits(void) {
+    uint8_t image[EU4_GFX_DRAW_OBSERVE_CONTEXT_BYTES];
+    uint64_t slot;
+    eu4_gfx_capture_frame frame;
+    pthread_t observer;
+    pthread_t publisher;
+    int froze = 0;
+    FILE *out;
+    eu4_gfx_draw_indexed_observe_test_reset();
+    atomic_store_explicit(&pause_entered, 0, memory_order_relaxed);
+    atomic_store_explicit(&pause_release, 0, memory_order_relaxed);
+    atomic_store_explicit(&freeze_finished, 0, memory_order_relaxed);
+    atomic_store_explicit(&armed, 1, memory_order_release);
+    eu4_gfx_draw_indexed_observe_bind(&armed);
+    eu4_gfx_draw_indexed_observe_test_pause(pause_inside_read);
+    fill_image(image, 4, 6, 0x30, 1, 0);
+    slot = (uint64_t)(uintptr_t)image;
+    frame = frame_for((uint64_t)(uintptr_t)&slot, 2, 0, 0);
+    if (pthread_create(&observer, NULL, call_entry, &frame) != 0) {
+        return fail("observer thread");
+    }
+    while (atomic_load_explicit(&pause_entered, memory_order_acquire) == 0) {
+        usleep(1000);
+    }
+    if (pthread_create(&publisher, NULL, call_freeze, &froze) != 0) {
+        atomic_store_explicit(&pause_release, 1, memory_order_release);
+        pthread_join(observer, NULL);
+        return fail("publisher thread");
+    }
+    usleep(50000);
+    if (atomic_load_explicit(&freeze_finished, memory_order_acquire) != 0) {
+        atomic_store_explicit(&pause_release, 1, memory_order_release);
+        pthread_join(observer, NULL);
+        pthread_join(publisher, NULL);
+        return fail("publication did not wait for the admitted observer");
+    }
+    atomic_store_explicit(&pause_release, 1, memory_order_release);
+    pthread_join(observer, NULL);
+    pthread_join(publisher, NULL);
+    if (!froze) {
+        return fail("freeze failed after the observer finished");
+    }
+    out = tmpfile();
+    if (out == NULL || !eu4_gfx_draw_indexed_observe_write(out) ||
+        !file_counts_match(out)) {
+        if (out != NULL) {
+            fclose(out);
+        }
+        return fail("published header count does not match the records");
+    }
+    fclose(out);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc != 2) {
         return fail("usage: observe_host samples.txt");
@@ -149,7 +268,7 @@ int main(int argc, char **argv) {
     if (fclose(file) != 0) {
         return fail("close");
     }
-    if (test_quota() != 0) {
+    if (test_quota() != 0 || test_disarm() != 0 || test_freeze_waits() != 0) {
         return 1;
     }
     puts("gfx draw indexed observe: ok");

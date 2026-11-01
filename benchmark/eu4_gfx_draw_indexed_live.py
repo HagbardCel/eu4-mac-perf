@@ -52,8 +52,13 @@ def derive_selected(rsi: int, stored_count: int) -> int:
 
 
 def classify(*, startup_ok: bool, ready: bool, receipt_ok: bool,
-             post_ready: int, completed: int, refusals: int) -> str:
-    if not startup_ok or not ready or not receipt_ok:
+             post_ready: int, completed: int, refusals: int,
+             process_exited: bool, save_verified: bool,
+             continue_restored: bool, working_save_removed: bool,
+             cleanup_ok: bool) -> str:
+    if not (startup_ok and ready and receipt_ok and process_exited and
+            save_verified and continue_restored and working_save_removed and
+            cleanup_ok):
         return "probe-failed"
     if post_ready == 0:
         return "not-observed"
@@ -205,6 +210,7 @@ def run(output: Path, *, authorize_live: bool) -> dict:
                 if ready_path.is_file() or game.poll() is not None:
                     break
                 time.sleep(0.25)
+            _write_word(control, 0, 0)
             _write_word(control, 8, 1)
             flush_deadline = time.monotonic() + 5
             while time.monotonic() < flush_deadline and not ready_path.is_file():
@@ -228,25 +234,48 @@ def run(output: Path, *, authorize_live: bool) -> dict:
                 live._terminate_owned_game(game, focus_bin)
             except BaseException as exc:
                 error = error or str(exc)
-            save_verified = "0"
-            if working_save is not None and working_save.is_file():
-                try:
-                    save_verified = "1" if base.sha256(working_save) == digest else "0"
-                except OSError:
-                    save_verified = "0"
-            if working_save is not None and (game is None or game.poll() is not None):
+            process_exited = game is not None and game.poll() is not None
+            save_matches = False
+            continue_restored = False
+            working_save_removed = False
+            cleanup_ok = False
+            cleanup_reason = ""
+            if game is not None and game.poll() is None:
+                cleanup_reason = "process still running"
+            elif working_save is not None:
+                if working_save.is_file():
+                    try:
+                        save_matches = base.sha256(working_save) == digest
+                    except OSError:
+                        save_matches = False
+                if process_exited and not save_matches:
+                    cleanup_reason = "save hash mismatch"
                 try:
                     fixture.finish(run_dir)
                 except BaseException as exc:
                     error = error or str(exc)
+                    cleanup_reason = cleanup_reason or "fixture cleanup did not complete"
+                else:
+                    continue_restored, _completed = live._fixture_cleanup_state(
+                        fixture, working_save)
+                    working_save_removed = not working_save.exists()
+                    cleanup_ok = continue_restored and working_save_removed
+                    if not cleanup_ok:
+                        cleanup_reason = (
+                            cleanup_reason or "fixture cleanup did not complete")
+            if cleanup_reason:
+                error = f"{error}; {cleanup_reason}" if error else cleanup_reason
             outcome = classify(
                 startup_ok=startup_ok, ready=ready, receipt_ok=receipt_ok,
                 post_ready=int(header.get("post_ready", "0")),
                 completed=int(header.get("completed", "0")),
-                refusals=int(header.get("refusals", "0")))
+                refusals=int(header.get("refusals", "0")),
+                process_exited=process_exited, save_verified=save_matches,
+                continue_restored=continue_restored,
+                working_save_removed=working_save_removed, cleanup_ok=cleanup_ok)
             extra = {
                 "session": session_id,
-                "save_verified": save_verified,
+                "save_verified": "1" if save_matches else "0",
                 "error": error,
             }
             receipt = _receipt_text(outcome, header, samples, extra)
@@ -255,7 +284,7 @@ def run(output: Path, *, authorize_live: bool) -> dict:
                 "outcome": outcome,
                 "run_dir": str(run_dir),
                 "error": error,
-                "save_verified": save_verified,
+                "save_verified": "1" if save_matches else "0",
             }
     return result
 

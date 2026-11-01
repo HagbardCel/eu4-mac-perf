@@ -18,6 +18,15 @@ sys.path.insert(0, str(BENCH))
 import eu4_gfx_draw_indexed_live as probe  # noqa: E402
 
 
+CLEAN = {
+    "process_exited": True,
+    "save_verified": True,
+    "continue_restored": True,
+    "working_save_removed": True,
+    "cleanup_ok": True,
+}
+
+
 class DrawIndexedObserveTests(unittest.TestCase):
     def test_derive_selected_uses_the_entry_rule(self) -> None:
         self.assertEqual(probe.derive_selected(3, 9), 3)
@@ -27,25 +36,34 @@ class DrawIndexedObserveTests(unittest.TestCase):
     def test_classify_outcomes(self) -> None:
         self.assertEqual(probe.classify(
             startup_ok=True, ready=True, receipt_ok=True,
-            post_ready=10, completed=10, refusals=0), "observed")
+            post_ready=10, completed=10, refusals=0, **CLEAN), "observed")
         self.assertEqual(probe.classify(
             startup_ok=True, ready=True, receipt_ok=True,
-            post_ready=80, completed=64, refusals=0), "observed")
+            post_ready=80, completed=64, refusals=0, **CLEAN), "observed")
         self.assertEqual(probe.classify(
             startup_ok=True, ready=True, receipt_ok=True,
-            post_ready=0, completed=0, refusals=0), "not-observed")
+            post_ready=0, completed=0, refusals=0, **CLEAN), "not-observed")
         self.assertEqual(probe.classify(
             startup_ok=True, ready=True, receipt_ok=True,
-            post_ready=4, completed=4, refusals=1), "partial")
+            post_ready=4, completed=4, refusals=1, **CLEAN), "partial")
         self.assertEqual(probe.classify(
             startup_ok=True, ready=True, receipt_ok=True,
-            post_ready=4, completed=2, refusals=0), "partial")
+            post_ready=4, completed=2, refusals=0, **CLEAN), "partial")
         self.assertEqual(probe.classify(
             startup_ok=False, ready=True, receipt_ok=True,
-            post_ready=1, completed=1, refusals=0), "probe-failed")
+            post_ready=1, completed=1, refusals=0, **CLEAN), "probe-failed")
         self.assertEqual(probe.classify(
             startup_ok=True, ready=False, receipt_ok=False,
-            post_ready=0, completed=0, refusals=0), "probe-failed")
+            post_ready=0, completed=0, refusals=0, **CLEAN), "probe-failed")
+        alive = dict(CLEAN, process_exited=False)
+        self.assertEqual(probe.classify(
+            startup_ok=True, ready=True, receipt_ok=True,
+            post_ready=10, completed=10, refusals=0, **alive), "probe-failed")
+        unrestored = dict(CLEAN, continue_restored=False, working_save_removed=False,
+                          cleanup_ok=False)
+        self.assertEqual(probe.classify(
+            startup_ok=True, ready=True, receipt_ok=True,
+            post_ready=10, completed=10, refusals=0, **unrestored), "probe-failed")
 
     def test_host_records_raw_fields_and_skips_unpublished_slots(self) -> None:
         if platform.system() != "Darwin":

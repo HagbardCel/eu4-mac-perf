@@ -1010,8 +1010,6 @@ bool eu4_gfx_live_capture_start(void *site, const char *run_directory,
 
     eu4_gfx_set_constant_buffer_capture_set_live(&live_ops);
     eu4_gfx_set_constant_buffer_capture_thread_init();
-    eu4_gfx_capture_entry_ptr = eu4_gfx_set_constant_buffer_capture_entry;
-    eu4_gfx_capture_exit_ptr = eu4_gfx_set_constant_buffer_capture_exit;
     if (!eu4_gfx_set_constant_buffer_capture_install(site)) {
         eu4_gfx_set_constant_buffer_capture_set_live(NULL);
         (void)munmap(control_map, control_page);

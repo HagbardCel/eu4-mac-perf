@@ -4,6 +4,7 @@
 #include <mach/mach_vm.h>
 #include <stdatomic.h>
 #include <string.h>
+#include <unistd.h>
 
 enum { SLOT_EMPTY = 0, SLOT_RESERVED = 1, SLOT_COMPLETE = 2 };
 
@@ -13,7 +14,9 @@ static _Atomic uint64_t hits;
 static _Atomic uint64_t post_ready;
 static _Atomic unsigned completed;
 static _Atomic unsigned refusals;
+static _Atomic unsigned in_flight;
 static _Atomic uint64_t *arm_word;
+static void (*admitted_pause)(void);
 
 static bool read_bytes(void *destination, uintptr_t source, size_t length) {
     if (destination == NULL || source == 0 || length == 0) {
@@ -34,19 +37,28 @@ void eu4_gfx_draw_indexed_observe_bind(void *word) {
 }
 
 void eu4_gfx_draw_indexed_observe_entry(eu4_gfx_capture_frame *frame) {
+    eu4_gfx_draw_observe_sample sample;
+    uint64_t index;
+    uint64_t context;
+    uint8_t image[EU4_GFX_DRAW_OBSERVE_CONTEXT_BYTES];
+    bool slot_ok;
+    bool image_ok;
+
     atomic_fetch_add_explicit(&hits, 1, memory_order_relaxed);
     if (arm_word == NULL ||
-        atomic_load_explicit(arm_word, memory_order_acquire) == 0) {
+        atomic_load_explicit(arm_word, memory_order_seq_cst) == 0) {
         return;
     }
-    uint64_t index =
-        atomic_fetch_add_explicit(&post_ready, 1, memory_order_relaxed);
+    atomic_fetch_add_explicit(&in_flight, 1, memory_order_seq_cst);
+    if (atomic_load_explicit(arm_word, memory_order_seq_cst) == 0) {
+        goto done;
+    }
+    index = atomic_fetch_add_explicit(&post_ready, 1, memory_order_relaxed);
     if (index >= EU4_GFX_DRAW_OBSERVE_SAMPLES) {
-        return;
+        goto done;
     }
     atomic_store_explicit(&slot_state[index], SLOT_RESERVED, memory_order_relaxed);
 
-    eu4_gfx_draw_observe_sample sample;
     memset(&sample, 0, sizeof sample);
     if (frame != NULL) {
         sample.rdi = frame->rdi;
@@ -54,13 +66,14 @@ void eu4_gfx_draw_indexed_observe_entry(eu4_gfx_capture_frame *frame) {
         sample.rdx = frame->rdx;
         sample.rcx = frame->rcx;
     }
-
-    uint64_t context = 0;
-    uint8_t image[EU4_GFX_DRAW_OBSERVE_CONTEXT_BYTES];
-    bool slot_ok = frame != NULL &&
-                   read_bytes(&context, (uintptr_t)frame->rdi, sizeof context);
-    bool image_ok = slot_ok && context != 0 &&
-                    read_bytes(image, (uintptr_t)context, sizeof image);
+    context = 0;
+    if (admitted_pause != NULL) {
+        admitted_pause();
+    }
+    slot_ok = frame != NULL &&
+              read_bytes(&context, (uintptr_t)frame->rdi, sizeof context);
+    image_ok = slot_ok && context != 0 &&
+               read_bytes(image, (uintptr_t)context, sizeof image);
     if (!image_ok) {
         sample.refusal = 1;
         atomic_fetch_add_explicit(&refusals, 1, memory_order_relaxed);
@@ -75,6 +88,25 @@ void eu4_gfx_draw_indexed_observe_entry(eu4_gfx_capture_frame *frame) {
     slots[index] = sample;
     atomic_store_explicit(&slot_state[index], SLOT_COMPLETE, memory_order_release);
     atomic_fetch_add_explicit(&completed, 1, memory_order_release);
+done:
+    atomic_fetch_sub_explicit(&in_flight, 1, memory_order_seq_cst);
+}
+
+bool eu4_gfx_draw_indexed_observe_freeze(unsigned timeout_ms) {
+    unsigned waited = 0;
+    if (arm_word != NULL) {
+        atomic_store_explicit(arm_word, 0, memory_order_seq_cst);
+    }
+    for (;;) {
+        if (atomic_load_explicit(&in_flight, memory_order_seq_cst) == 0) {
+            return true;
+        }
+        if (waited >= timeout_ms) {
+            return false;
+        }
+        usleep(1000);
+        waited++;
+    }
 }
 
 static unsigned count_flag(int which) {
@@ -196,7 +228,13 @@ void eu4_gfx_draw_indexed_observe_test_reset(void) {
     atomic_store_explicit(&post_ready, 0, memory_order_relaxed);
     atomic_store_explicit(&completed, 0, memory_order_relaxed);
     atomic_store_explicit(&refusals, 0, memory_order_relaxed);
+    atomic_store_explicit(&in_flight, 0, memory_order_relaxed);
     arm_word = NULL;
+    admitted_pause = NULL;
+}
+
+void eu4_gfx_draw_indexed_observe_test_pause(void (*pause)(void)) {
+    admitted_pause = pause;
 }
 
 void eu4_gfx_draw_indexed_observe_test_hold(unsigned index, uint64_t rdi_value) {
