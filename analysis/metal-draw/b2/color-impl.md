@@ -8,6 +8,8 @@ The fragment compiler input from the historical session was not retained. Fragme
 
 Inspection runs after the original `glDrawElements` returns. It assumes that call does not rebind the buffers or replace the program. The capture restores any binding it changes and does not call `glGetError`.
 
+The indexed wrapper is the directly bound `glDrawElements` symbol, and `dlsym` lookups of `glDrawElements` and `glDrawElementsARB` return that same wrapper. It forwards only through this capture image's own `glDrawElements` call. A pointer returned by `dlsym` is not the forward target. `indexed_draws` counts draws while acquisition is active. After the first accepted fixture, later draws still forward and do not increment `indexed_draws`.
+
 ## Fixture schema
 
 Schema version 1. `analysis/metal-draw/b2/color_capture.m` writes these files under `fixture/` after the original draw. The replay host checks the version, sizes, offsets, and hashes before it allocates or draws.

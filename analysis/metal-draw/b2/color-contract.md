@@ -34,7 +34,7 @@ The Color contract is a candidate for one authentic indexed EU4 draw. The observ
 
 ## Limits
 
-EU4 resolves `glDrawElements` through `dlsym`, including the ARB alias. Ordinary Mach-O interposition cannot be assumed to see this draw. This note does not add a hook.
+EU4 submissions can reach different dispatch paths. The observed main-menu indexed submissions reached the directly bound `glDrawElements` symbol, while `dlsym` lookups remain a second entry to the same wrapper, and capture has to cover the path that actually runs.
 
 Later idle sessions did not see this program. Color is a UI path, not the paused-map frame. One prior session does not make it available. A future acquisition has to name a UI context that submits it. That session is not authorized here.
 

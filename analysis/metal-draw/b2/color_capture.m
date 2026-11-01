@@ -81,8 +81,6 @@ static int g_last_count;
 static unsigned g_last_type;
 static uint64_t g_last_offset;
 
-static void (*g_real_draw)(GLenum, GLsizei, GLenum, const void *);
-static void (*g_real_draw_arb)(GLenum, GLsizei, GLenum, const void *);
 static void (*g_real_link)(GLuint);
 static void (*g_real_link_arb)(GLhandleARB);
 static void (*g_real_delete)(GLuint);
@@ -359,6 +357,10 @@ int eu4_b2_color_index_range_ok(uint64_t offset, uint64_t count, uint64_t index_
 
 int eu4_b2_color_forward_count(void) {
     return g_forward_count;
+}
+
+int eu4_b2_color_indexed_count(void) {
+    return g_indexed;
 }
 
 void eu4_b2_color_last_forward(unsigned *mode, int *count, unsigned *type, unsigned long long *offset) {
@@ -1112,29 +1114,18 @@ static void inspect(GLenum mode, GLsizei count, GLenum type, const void *indices
     }
 }
 
-static void forward_draw(void (*real)(GLenum, GLsizei, GLenum, const void *), GLenum mode, GLsizei count, GLenum type,
-                         const void *indices) {
+static void draw_elements(GLenum mode, GLsizei count, GLenum type, const void *indices) {
     g_last_mode = mode;
     g_last_count = count;
     g_last_type = type;
     g_last_offset = (uint64_t)(uintptr_t)indices;
     g_forward_count++;
-    if (real == NULL) {
-        glDrawElements(mode, count, type, indices);
-    } else {
-        real(mode, count, type, indices);
-    }
+    /* This image is not interposed onto itself, so this call is the original GL entry.
+     * A pointer from dlsym would be this wrapper once the symbol is interposed. */
+    glDrawElements(mode, count, type, indices);
     pthread_mutex_lock(&g_lock);
     inspect(mode, count, type, indices);
     pthread_mutex_unlock(&g_lock);
-}
-
-static void draw_elements(GLenum mode, GLsizei count, GLenum type, const void *indices) {
-    forward_draw(g_real_draw, mode, count, type, indices);
-}
-
-static void draw_elements_arb(GLenum mode, GLsizei count, GLenum type, const void *indices) {
-    forward_draw(g_real_draw_arb != NULL ? g_real_draw_arb : g_real_draw, mode, count, type, indices);
 }
 
 static void after_link(uintptr_t program) {
@@ -1212,13 +1203,11 @@ static void *hooked_dlsym(void *handle, const char *symbol) {
     if (symbol == NULL) {
         return found;
     }
-    if (strcmp(symbol, "glDrawElements") == 0) {
-        g_real_draw = found;
+    if (strcmp(symbol, "glDrawElements") == 0 || strcmp(symbol, "glDrawElementsARB") == 0) {
+        if (found == NULL) {
+            return NULL;
+        }
         return (void *)draw_elements;
-    }
-    if (strcmp(symbol, "glDrawElementsARB") == 0) {
-        g_real_draw_arb = found;
-        return (void *)draw_elements_arb;
     }
     if (strcmp(symbol, "glLinkProgram") == 0) {
         g_real_link = found;
@@ -1253,6 +1242,7 @@ static void *hooked_dlsym(void *handle, const char *symbol) {
         interpose_##orig = {(const void *)(repl), (const void *)(orig)}
 
 INTERPOSE(hooked_dlsym, dlsym);
+INTERPOSE(draw_elements, glDrawElements);
 
 __attribute__((constructor)) static void eu4_b2_color_init(void) {
     const char *dir = getenv("EU4_B2_COLOR_DIR");

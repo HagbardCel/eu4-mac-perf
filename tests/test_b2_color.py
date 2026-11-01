@@ -125,6 +125,10 @@ class B2ColorTests(unittest.TestCase):
         check(4, 3, 2, 8, "no")
         check(2 ** 64 - 2, 2, 2, 2 ** 64 - 1, "no")
 
+    def test_direct_symbol_forwards_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.drive("dispatch", Path(tmp))
+
     def test_draw_symbols_and_attribute_types(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.drive("symbols", Path(tmp))
@@ -328,6 +332,25 @@ class AcquisitionWaitTests(unittest.TestCase):
         color_capture.see_fixture(state, True)
         self.assertFalse(color_capture.take_ack(state, "ingame-esc"))
         self.assertEqual(color_capture.wait_status(state), "incomplete")
+
+    def test_progress_distinguishes_an_open_acquisition(self):
+        absent = color_capture.acquisition_note(
+            {"indexed_draws": 4, "programs_inspected": 2, "candidates": 0, "qualified": 0,
+             "rejects": {"not-color": 3}}
+        )
+        self.assertIn("indexed_draws=4", absent)
+        self.assertIn("programs_inspected=2", absent)
+        self.assertIn("candidates=0", absent)
+        self.assertIn("qualified=0", absent)
+        self.assertIn("not-color=3", absent)
+        self.assertIn("no supported Color program has been recognized", absent)
+        recognized = color_capture.acquisition_note(
+            {"indexed_draws": 9, "programs_inspected": 1, "candidates": 1, "qualified": 0,
+             "rejects": {"interface": 4}}
+        )
+        self.assertIn("Color was recognized, and no draw has satisfied the capture contract", recognized)
+        self.assertNotIn("no supported Color program", recognized)
+        self.assertIn("no qualifying Color fixture yet", color_capture.acquisition_note({}))
 
     def test_closed_stdin_returns_without_waiting_out_the_timeout(self):
         state = color_capture.new_wait()

@@ -63,6 +63,33 @@ def wait_status(state: dict) -> str:
     return "incomplete"
 
 
+def acquisition_note(counters: dict) -> str:
+    indexed = int(counters.get("indexed_draws") or 0)
+    inspected = int(counters.get("programs_inspected") or 0)
+    candidates = int(counters.get("candidates") or 0)
+    qualified = int(counters.get("qualified") or 0)
+    rejects = counters.get("rejects") if isinstance(counters.get("rejects"), dict) else {}
+    if indexed > 0 and candidates == 0:
+        detail = "no supported Color program has been recognized"
+    elif candidates > 0 and qualified == 0:
+        detail = "Color was recognized, and no draw has satisfied the capture contract"
+    else:
+        detail = "no qualifying Color fixture yet"
+    reject_text = ",".join(f"{key}={rejects[key]}" for key in rejects)
+    return (
+        f"indexed_draws={indexed} programs_inspected={inspected} "
+        f"candidates={candidates} qualified={qualified} rejects={reject_text or '{}'} {detail}"
+    )
+
+
+def read_counters(path: Path) -> dict | None:
+    try:
+        loaded = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return loaded if isinstance(loaded, dict) else None
+
+
 def pull_line(stream, timeout: float):
     ready, _, _ = select.select([stream], [], [], timeout)
     if not ready:
@@ -155,11 +182,19 @@ def launch_session(run_dir: Path, wait_seconds: float) -> dict:
         stderr=stderr,
     )
     fixture = run_dir / "fixture" / "fixture.json"
+    counters_path = run_dir / "counters.json"
     state = new_wait()
     acks: list[str] = []
+    last_note = None
     deadline = time.monotonic() + wait_seconds
     try:
         while time.monotonic() < deadline:
+            fresh = read_counters(counters_path)
+            if fresh is not None and not fixture.is_file():
+                note = acquisition_note(fresh)
+                if note != last_note:
+                    print(note, flush=True)
+                    last_note = note
             if see_fixture(state, fixture.is_file()):
                 break
             if game.poll() is not None and state["fixture_phase"] is None:
@@ -183,7 +218,6 @@ def launch_session(run_dir: Path, wait_seconds: float) -> dict:
                 game.wait(timeout=5)
         stdout.close()
         stderr.close()
-    counters_path = run_dir / "counters.json"
     counters = json.loads(counters_path.read_text()) if counters_path.is_file() else {}
     metadata = {
         "status": wait_status(state),

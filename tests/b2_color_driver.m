@@ -204,6 +204,25 @@ static void set_matrix(GLuint program, float clip_z) {
     glUniform4fv(glGetUniformLocation(program, "UNIFORM0"), 4, matrix);
 }
 
+static void clear_target(void) {
+    glClearColor(16.f / 255.f, 32.f / 255.f, 48.f / 255.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+}
+
+static void expect_drawn(void) {
+    unsigned char pixel[4] = {0, 0, 0, 0};
+    glReadPixels(13, 13, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    if (pixel[0] == 16 && pixel[1] == 32 && pixel[2] == 48 && pixel[3] == 255) {
+        fprintf(stderr, "framebuffer still clear\n");
+        exit(1);
+    }
+}
+
+static int indexed_count(void) {
+    int (*count)(void) = sym("eu4_b2_color_indexed_count");
+    return count();
+}
+
 static void check_forward(unsigned mode, int count, unsigned type, unsigned long long offset, int total) {
     unsigned got_mode = 0;
     int got_count = 0;
@@ -288,8 +307,12 @@ int main(int argc, char **argv) {
         set_matrix(program, 0.f);
         issue("glDrawElements", GL_UNSIGNED_SHORT, 3, 0);
         check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, 1);
-        issue("glDrawElementsARB", GL_UNSIGNED_INT, 3, (void *)4);
-        check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_INT, 4, 2);
+        typedef void (*DrawFn)(GLenum, GLsizei, GLenum, const void *);
+        DrawFn arb = dlsym(RTLD_DEFAULT, "glDrawElementsARB");
+        if (arb != NULL) {
+            arb(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (void *)4);
+            check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_INT, 4, 2);
+        }
         expect_fixture(0);
         return 0;
     }
@@ -510,8 +533,45 @@ int main(int argc, char **argv) {
             return 2;
         }
         issue("glDrawElements", GL_UNSIGNED_SHORT, 3, 0);
+        check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, 1);
         expect_fixture(0);
         free(edited);
+        return 0;
+    }
+    if (strcmp(argv[1], "dispatch") == 0) {
+        GLuint program = build_program(vert, frag, NULL);
+        upload(GL_UNSIGNED_SHORT, shorts, (int)sizeof shorts);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 12, (void *)0);
+        glEnableVertexAttribArray(0);
+        fixed_state(1, 0);
+        set_matrix(program, 0.f);
+        clear_target();
+        int total = 0;
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0);
+        check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, ++total);
+        expect_drawn();
+        issue("glDrawElements", GL_UNSIGNED_SHORT, 3, 0);
+        check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, ++total);
+        typedef void (*DrawFn)(GLenum, GLsizei, GLenum, const void *);
+        DrawFn arb = dlsym(RTLD_DEFAULT, "glDrawElementsARB");
+        if (arb != NULL) {
+            arb(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (void *)4);
+            check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_INT, 4, ++total);
+        }
+        expect_fixture(0);
+        fixed_state(0, 0);
+        set_matrix(program, 0.f);
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0);
+        check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, ++total);
+        expect_fixture(1);
+        int indexed = indexed_count();
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0);
+        check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, ++total);
+        if (indexed_count() != indexed) {
+            fprintf(stderr, "indexed %d then %d\n", indexed, indexed_count());
+            return 1;
+        }
+        expect_fixture(1);
         return 0;
     }
     fprintf(stderr, "unknown scenario %s\n", argv[1]);
