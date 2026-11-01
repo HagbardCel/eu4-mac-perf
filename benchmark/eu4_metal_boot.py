@@ -7,8 +7,6 @@ import argparse
 import datetime as dt
 import json
 import os
-import re
-import signal
 import subprocess
 import sys
 import time
@@ -124,169 +122,6 @@ def session_event(path: Path, game_pid: int, *, legacy: bool = False) -> dict | 
     return None
 
 
-class Inferior:
-    """The eu4 process LLDB spawned. This process is not our waitpid child."""
-
-    def __init__(self):
-        self.pid = None
-        self.returncode = None
-
-    def note_pid(self, pid: int) -> None:
-        if self.pid is None:
-            self.pid = pid
-
-    def note_exit(self, pid: int, code: int) -> None:
-        self.note_pid(pid)
-        if self.pid == pid:
-            self.returncode = code
-
-    def poll(self):
-        if self.returncode is not None:
-            return self.returncode
-        if self.pid is None:
-            return None
-        try:
-            os.kill(self.pid, 0)
-        except ProcessLookupError:
-            self.returncode = -1
-            return self.returncode
-        return None
-
-    def wait(self, timeout: float | None = None):
-        if self.returncode is not None:
-            return self.returncode
-        deadline = None if timeout is None else time.monotonic() + timeout
-        while deadline is None or time.monotonic() < deadline:
-            if self.poll() is not None:
-                return self.returncode
-            time.sleep(0.05)
-        raise subprocess.TimeoutExpired("./eu4", timeout)
-
-    def terminate(self) -> None:
-        if self.pid is not None and self.poll() is None:
-            os.kill(self.pid, signal.SIGTERM)
-
-    def kill(self) -> None:
-        if self.pid is not None and self.poll() is None:
-            os.kill(self.pid, signal.SIGKILL)
-
-
-LLDB_HELPER = """\
-import lldb
-import signal
-
-
-def record(debugger):
-    debugger.HandleCommand("process status")
-    debugger.HandleCommand("thread backtrace")
-    debugger.HandleCommand("register read pc")
-    debugger.HandleCommand("image lookup --address $pc")
-    debugger.HandleCommand("thread info")
-
-
-def faulting(thread):
-    reason = thread.GetStopReason()
-    if reason in (lldb.eStopReasonException, lldb.eStopReasonBreakpoint, lldb.eStopReasonWatchpoint):
-        return True
-    if reason == lldb.eStopReasonSignal and thread.GetStopReasonDataCount():
-        return thread.GetStopReasonDataAtIndex(0) != signal.SIGSTOP
-    return False
-
-
-def until_fault(debugger, command, result, internal_dict):
-    proc = debugger.GetSelectedTarget().GetProcess()
-    for _ in range(400):
-        if proc.GetState() == lldb.eStateExited:
-            break
-        thread = proc.GetSelectedThread()
-        if proc.GetState() == lldb.eStateStopped and thread.IsValid() and faulting(thread):
-            break
-        error = proc.Continue()
-        if not error.Success() and proc.GetState() != lldb.eStateExited:
-            result.AppendMessage("continue failed: %s" % error.GetCString())
-            return
-    if proc.GetState() == lldb.eStateExited:
-        result.AppendMessage(
-            "Process %d exited with status = %d" % (proc.GetProcessID(), proc.GetExitStatus())
-        )
-        return
-    if proc.GetState() != lldb.eStateStopped or not faulting(proc.GetSelectedThread()):
-        result.AppendMessage("no fault stop")
-        return
-    record(debugger)
-    proc.Continue()
-    if proc.GetState() == lldb.eStateExited:
-        result.AppendMessage(
-            "Process %d exited with status = %d" % (proc.GetProcessID(), proc.GetExitStatus())
-        )
-        return
-    record(debugger)
-    proc.Continue()
-    if proc.GetState() == lldb.eStateExited:
-        result.AppendMessage(
-            "Process %d exited with status = %d" % (proc.GetProcessID(), proc.GetExitStatus())
-        )
-
-
-def __lldb_init_module(debugger, internal_dict):
-    debugger.HandleCommand("command script add -f lldb_until_fault.until_fault until_fault")
-"""
-
-
-def lldb_script(executable: str, args: list[str], cwd: str, stdout_path: str, stderr_path: str,
-                library: str, helper: str) -> str:
-    """Stop at the entry point, confirm AbortHandler, then continue into the fault.
-
-    debugserver cannot task_for_pid an existing process from this session, so LLDB
-    spawns eu4. The transcript pid is the process that writes the receipts.
-    Dyld image notifications stop with reason trace; the helper continues past those.
-    """
-    if any(any(char.isspace() for char in item) for item in (executable, cwd, stdout_path, stderr_path, library, helper, *args)):
-        raise base.BenchmarkError("LLDB launch path contains whitespace")
-    arguments = " ".join(args)
-    return f"""\
-settings set interpreter.stop-command-source-on-error false
-settings set auto-confirm true
-target create {executable}
-breakpoint set --name _ZN12_GLOBAL__N_112AbortHandlerEiP9__siginfoPv
-process handle SIGSEGV --stop true --pass true --notify true
-process handle SIGBUS --stop true --pass true --notify true
-process handle SIGILL --stop true --pass true --notify true
-process launch -s -a x86_64 -w {cwd} -o {stdout_path} -e {stderr_path} -E DYLD_INSERT_LIBRARIES={library} -- {arguments}
-breakpoint list
-image lookup --name _ZN12_GLOBAL__N_112AbortHandlerEiP9__siginfoPv
-process status
-command script import {helper}
-until_fault
-"""
-
-
-_LLDB_LAUNCHED = re.compile(r"Process (\d+) launched")
-_LLDB_STOPPED = re.compile(r"Process (\d+) stopped")
-_LLDB_EXITED = re.compile(r"Process (\d+) exited with status = (-?\d+)")
-
-
-def drain_transcript(transcript, pending: bytes, game: Inferior) -> bytes:
-    if transcript is None:
-        return pending
-    pending += transcript.read()
-    while b"\n" in pending:
-        raw, pending = pending.split(b"\n", 1)
-        note_lldb_line(game, raw.decode(errors="replace"))
-    return pending
-
-
-def note_lldb_line(game: Inferior, line: str) -> None:
-    exited = _LLDB_EXITED.search(line)
-    if exited:
-        game.note_exit(int(exited.group(1)), int(exited.group(2)))
-        return
-    if game.pid is not None:
-        return
-    launched = _LLDB_LAUNCHED.search(line) or _LLDB_STOPPED.search(line)
-    if launched:
-        game.note_pid(int(launched.group(1)))
-
 
 DIAGNOSTIC_GRACE_SECONDS = 2
 # Half-open bodies. The next symbol in the pinned binary is the end.
@@ -395,21 +230,14 @@ def stop_game(game: subprocess.Popen) -> None:
         game.wait(timeout=10)
     except subprocess.TimeoutExpired:
         game.kill()
-        try:
-            game.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            # A debugger can keep the task stopped after SIGKILL until it detaches.
-            if isinstance(game, Inferior) and game.returncode is None:
-                game.returncode = -9
+        game.wait(timeout=10)
 
 
 def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = False,
-                   metal_init: bool = False, lldb: bool = False) -> dict:
+                   metal_init: bool = False) -> dict:
     """Operator launch. a1 and bootstrap exit after their receipt. metal_init keeps running."""
     if metal_init and bootstrap:
         raise base.BenchmarkError("--metal-init and --bootstrap are mutually exclusive")
-    if lldb and not metal_init:
-        raise base.BenchmarkError("--lldb requires --metal-init")
     identity = base.gog_identity()
     if identity["executable_sha256"] != PINNED_SHA256:
         raise base.BenchmarkError(
@@ -435,77 +263,31 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
     env["DYLD_INSERT_LIBRARIES"] = str(library)
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
-    game = None
-    debugger = None
-    lldb_out = None
-    transcript = None
-    pending = b""
-    debugger_held = False
+    game = subprocess.Popen(
+        ["./eu4", *launcher["exeArgs"]],
+        cwd=base.GOG_EXE.parent,
+        env=env,
+        stdout=stdout,
+        stderr=stderr,
+    )
     deadline = time.monotonic() + wait_seconds
     receipt = None
     why = None
     launcher_signaled = False
     try:
-        if lldb:
-            helper = run_dir / "lldb_until_fault.py"
-            helper.write_text(LLDB_HELPER)
-            (run_dir / "lldb.commands").write_text(lldb_script(
-                str(base.GOG_EXE), list(launcher["exeArgs"]), str(base.GOG_EXE.parent),
-                str(run_dir / "game.stdout"), str(run_dir / "game.stderr"), str(library),
-                str(helper),
-            ))
-            lldb_out = (run_dir / "lldb.txt").open("wb")
-            lldb_env = dict(env)
-            lldb_env.pop("DYLD_INSERT_LIBRARIES", None)
-            lldb_env.pop("LLDB_DEBUGSERVER_LOG_FILE", None)
-            lldb_env.pop("LLDB_DEBUGSERVER_LOG_FLAGS", None)
-            debugger = subprocess.Popen(
-                ["lldb", "--batch", "-s", str(run_dir / "lldb.commands")],
-                stdout=lldb_out, stderr=subprocess.STDOUT, env=lldb_env,
-            )
-            game = Inferior()
-            transcript = (run_dir / "lldb.txt").open("rb")
-        else:
-            game = subprocess.Popen(
-                ["./eu4", *launcher["exeArgs"]],
-                cwd=base.GOG_EXE.parent,
-                env=env,
-                stdout=stdout,
-                stderr=stderr,
-            )
         if metal_init:
             while True:
-                pending = drain_transcript(transcript, pending, game)
-                if isinstance(game, Inferior) and game.pid is None:
-                    if debugger is not None and debugger.poll() is not None:
-                        pending = drain_transcript(transcript, pending, game)
-                    if game.pid is None and (
-                        (debugger is not None and debugger.poll() is not None) or time.monotonic() >= deadline
-                    ):
-                        debugger_held = True
-                        break
-                    time.sleep(0.2)
-                    continue
                 exited = game.poll() is not None
                 stop_seen = session_event(run_dir / "stop.json", game.pid) is not None
-                debugger_running = debugger is not None and debugger.poll() is None
-                if debugger_running and time.monotonic() >= deadline:
-                    debugger_held = True
-                    break
-                deadline_hit = False if debugger_running else time.monotonic() >= deadline
+                deadline_hit = time.monotonic() >= deadline
                 why = metal_init_should_stop(
                     session_event(run_dir / "init.json", game.pid) is not None, stop_seen, exited,
                     deadline_hit,
                 )
                 if why is not None:
                     break
-                if debugger is not None and not debugger_running and game.poll() is None:
-                    debugger_held = True
-                    break
                 time.sleep(0.2)
-            if debugger_held:
-                why = "debugger_held"
-            elif why == "stop" and game.poll() is None:
+            if why == "stop" and game.poll() is None:
                 try:
                     game.wait(timeout=DIAGNOSTIC_GRACE_SECONDS)
                 except subprocess.TimeoutExpired:
@@ -525,56 +307,24 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
                         stop_game(game)
                     break
                 time.sleep(0.2)
-        pending = drain_transcript(transcript, pending, game) if isinstance(game, Inferior) else pending
     finally:
-        if debugger is not None and debugger.poll() is None:
-            if game is not None and game.poll() is not None:
-                try:
-                    debugger.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    debugger.kill()
-                    debugger.wait(timeout=10)
-            else:
-                debugger.kill()
-                try:
-                    debugger.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    pass
-        if isinstance(game, Inferior):
-            pending = drain_transcript(transcript, pending, game)
-        if transcript is not None:
-            transcript.close()
-        if lldb_out is not None:
-            lldb_out.close()
-        if game is not None:
-            stop_game(game)
+        stop_game(game)
         stdout.close()
         stderr.close()
     if metal_init:
-        if game.pid is None:
-            init = None
-            stop = None
-        else:
-            init = session_event(run_dir / "init.json", game.pid)
-            stop = session_event(run_dir / "stop.json", game.pid)
+        init = session_event(run_dir / "init.json", game.pid)
+        stop = session_event(run_dir / "stop.json", game.pid)
         success = init is not None and init.get("success") == 1
         phase = None if stop is None else stop.get("phase")
-        if debugger_held:
-            outcome = {
-                "status": "debugger_held",
-                "live_gfx_init": "postconditions" if success else "not_verified",
-                "raises": True,
-            }
-        else:
-            outcome = metal_init_outcome(
-                success, phase, why, game.returncode,
-                None if init is None else init.get("thread"),
-                None if stop is None else stop.get("thread"),
-                launcher_signaled,
-                None if stop is None else stop.get("reason"),
-                None if stop is None else stop.get("image"),
-                None if stop is None else stop.get("rva"),
-            )
+        outcome = metal_init_outcome(
+            success, phase, why, game.returncode,
+            None if init is None else init.get("thread"),
+            None if stop is None else stop.get("thread"),
+            launcher_signaled,
+            None if stop is None else stop.get("reason"),
+            None if stop is None else stop.get("image"),
+            None if stop is None else stop.get("rva"),
+        )
         metadata = {
             "status": outcome["status"],
             "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -584,7 +334,6 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
             "stop_reason": why,
             "phase": phase,
             "launcher_signaled": launcher_signaled,
-            "debugger_held": debugger_held,
             "probe_sha256": base.sha256(library),
             "live_gfx_init": outcome["live_gfx_init"],
         }
@@ -618,14 +367,10 @@ def main(argv: list[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--bootstrap", action="store_true")
     group.add_argument("--metal-init", action="store_true")
-    parser.add_argument("--lldb", action="store_true")
     parser.add_argument("run_dir", type=Path)
     args = parser.parse_args(argv)
-    if args.lldb and not args.metal_init:
-        parser.error("--lldb requires --metal-init")
     try:
-        launch_session(args.run_dir, bootstrap=args.bootstrap, metal_init=args.metal_init,
-                       lldb=args.lldb)
+        launch_session(args.run_dir, bootstrap=args.bootstrap, metal_init=args.metal_init)
     except base.BenchmarkError as exc:
         print(exc, file=sys.stderr)
         return 1

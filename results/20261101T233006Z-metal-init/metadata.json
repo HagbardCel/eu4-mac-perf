@@ -1,6 +1,14 @@
 {
-  "status": "debugger_held",
-  "started_utc": "2026-11-01T23:30:39.844509+00:00",
+  "provenance": "reconstructed",
+  "status": "evidence_only",
+  "pid": 76944,
+  "exit_code": null,
+  "fault": {
+    "reason": "EXC_BAD_ACCESS",
+    "pc": "0x0",
+    "return_rva": "0x15ebd02",
+    "function": "GfxCreateVertexBuffer"
+  },
   "gog": {
     "executable": "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4",
     "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
@@ -17,12 +25,6 @@
       "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL (compatibility version 1.0.0, current version 1.0.0)"
     ]
   },
-  "pid": 76944,
-  "exit_code": null,
-  "stop_reason": "debugger_held",
-  "phase": null,
-  "launcher_signaled": false,
-  "debugger_held": true,
   "probe_sha256": "9743682a499ec169eb6b3801cea637024ee7112e43e28e48145e47ee6603d1bb",
-  "live_gfx_init": "postconditions"
+  "note": "Reconstructed from init.json and lldb.txt after the launcher failed during cleanup. Not a launcher result."
 }

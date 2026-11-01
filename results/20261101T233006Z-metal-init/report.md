@@ -15,8 +15,8 @@ The first fault stop is thread 1, tid `0xf0332` (983858, the init thread):
 
 `0x15ebd02` is outside the eight replaced bodies. The stack is `InitGfx` → `CGraphics::OnResetDevice` → `CPdxParticleObject::OnResetDevice` → `GfxCreateVertexBuffer`, so both state replacements had returned.
 
-A second continue stopped on the same exception. `AbortHandler` was not entered. The process did not `_exit`. The launcher then raised in `stop_game` because the stopped task outlived `SIGKILL` until the debugger detached, so it did not write `metadata.json` itself. That file was written from these same receipts: status `debugger_held`, pid 76944, no exit code.
+A second continue stopped on the same exception. `AbortHandler` was not entered. LLDB did not observe a natural process exit, so `exit_code` is null. `metadata.json` was reconstructed afterward from `init.json` and `lldb.txt`. Its `provenance` is `reconstructed` and its `status` is `evidence_only`. It is not a launcher result, and the fault object there is not a `stop.json` event.
 
-This is a verified fault in the retained vertex-buffer function. It is not a GL diagnostic, and it is not a fault inside either new replacement.
+This is verified continuation past both replacements, then a fault in retained `GfxCreateVertexBuffer`. It is not a successful completion and not a GL diagnostic.
 
 `results/20261101T224903Z-metal-init/stop.json` is not the game.
