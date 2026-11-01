@@ -36,4 +36,4 @@ October 31 directories read: `results/20261031T144434Z-metal-draw/`, `results/20
 
 The closest evidence is the 14:44 worktree directory. It is not a qualifying draw. The compiler blob is not linked to one draw, it is not raw-equal to Stage D, and the fragment source, buffer bytes, uniform values, full state, textures, and initial render target were not retained.
 
-The next engineering task is a minimal real `_Gfx*`-to-Metal draw, using the existing synthetic host as the correctness baseline. That draw stays explicitly unverified against authentic EU4 draw inputs until such evidence exists. This search does not continue under the corpus above.
+This search does not continue under the corpus above. The follow-up is an offline CPU adapter for `_GfxDrawIndexed`: it copies one full vertex record per resolved index and is compared with the synthetic `drawPrimitives` renderer. Those pixels are not an EU4 frame. The next draw-path milestone is a persistent Metal index buffer and `drawIndexedPrimitives`, not another synthetic gather.
