@@ -34,8 +34,6 @@ The Color contract is a candidate for one authentic indexed EU4 draw. The observ
 
 ## Limits
 
-EU4 resolves `glDrawElements` through `dlsym`, including the ARB alias. Ordinary Mach-O interposition cannot be assumed to see this draw. This note does not add a hook.
+The authorized session on 2026-11-01 is recorded in [color-note.md](color-note.md). It intercepted indexed submissions, inspected 22 programs, and found no qualifying Color identity. It produced no original fixture. Classification stopped at shader identity, so the session does not separate a missing program from a false-negative match. This note does not authorize another capture.
 
-Later idle sessions did not see this program. Color is a UI path, not the paused-map frame. One prior session does not make it available. A future acquisition has to name a UI context that submits it. That session is not authorized here.
-
-This is the last preparatory note. The next milestone, separately authorized, is one complete original Color fixture compared with Metal.
+B2 is still one complete original Color fixture compared with Metal. This session did not produce that fixture.
