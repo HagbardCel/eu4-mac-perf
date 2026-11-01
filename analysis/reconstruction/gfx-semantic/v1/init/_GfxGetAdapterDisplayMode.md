@@ -6,7 +6,7 @@ instruction_count: 31
 source_batch: `gfx-batch-00044.zip`
 static_status: `success`
 decomp_status: `success`
-semantic_status: `reconstructed`
+semantic_status: `partial`
 migration_role: `retain-original`
 
 ## ABI

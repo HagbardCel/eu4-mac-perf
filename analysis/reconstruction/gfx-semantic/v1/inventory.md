@@ -2,13 +2,13 @@
 
 File presence is not semantic completeness. Counts below are the dossier statuses.
 
-- `reconstructed`: 64
-- `partial`: 28
+- `reconstructed`: 61
+- `partial`: 31
 - `blocked`: 0
 
 | entry_rva | name | instructions | subsystem | semantic_status | migration_role | dossier |
 | --- | --- | --- | --- | --- | --- | --- |
-| `0x00000000015c5a82` | `_GfxIsOpenGL` | 8 | init | `reconstructed` | `retain-original` | [_GfxIsOpenGL](init/_GfxIsOpenGL.md) |
+| `0x00000000015c5a82` | `_GfxIsOpenGL` | 8 | init | `reconstructed` | `undetermined` | [_GfxIsOpenGL](init/_GfxIsOpenGL.md) |
 | `0x00000000015c5c0e` | `_GfxSetRenderType` | 4 | init | `reconstructed` | `retain-original` | [_GfxSetRenderType](init/_GfxSetRenderType.md) |
 | `0x00000000015e8ea0` | `_GfxInit` | 770 | init | `partial` | `replace-metal` | [_GfxInit](init/_GfxInit.md) |
 | `0x00000000015e9d11` | `_GfxCreateBlendState` | 26 | state | `reconstructed` | `replace-metal` | [_GfxCreateBlendState](state/_GfxCreateBlendState.md) |
@@ -18,17 +18,17 @@ File presence is not semantic completeness. Counts below are the dossier statuse
 | `0x00000000015ea261` | `_GfxSetDepthStencilState` | 80 | state | `partial` | `replace-metal` | [_GfxSetDepthStencilState](state/_GfxSetDepthStencilState.md) |
 | `0x00000000015ea35a` | `_GfxSetRasterizerState` | 65 | state | `partial` | `replace-metal` | [_GfxSetRasterizerState](state/_GfxSetRasterizerState.md) |
 | `0x00000000015ea42c` | `_GfxShutdown` | 16 | init | `reconstructed` | `replace-metal` | [_GfxShutdown](init/_GfxShutdown.md) |
-| `0x00000000015ea460` | `_GfxGetRenderType` | 5 | init | `reconstructed` | `retain-original` | [_GfxGetRenderType](init/_GfxGetRenderType.md) |
+| `0x00000000015ea460` | `_GfxGetRenderType` | 5 | init | `reconstructed` | `undetermined` | [_GfxGetRenderType](init/_GfxGetRenderType.md) |
 | `0x00000000015ea46b` | `_GfxReset` | 17 | init | `reconstructed` | `replace-metal` | [_GfxReset](init/_GfxReset.md) |
 | `0x00000000015ea49b` | `_GfxOnResetMasterContext` | 23 | init | `reconstructed` | `replace-metal` | [_GfxOnResetMasterContext](init/_GfxOnResetMasterContext.md) |
 | `0x00000000015ea4f2` | `_GfxOnLostMasterContext` | 4 | init | `reconstructed` | `retain-original` | [_GfxOnLostMasterContext](init/_GfxOnLostMasterContext.md) |
-| `0x00000000015ea4f8` | `_GfxSetViewPort` | 13 | state | `reconstructed` | `replace-metal` | [_GfxSetViewPort](state/_GfxSetViewPort.md) |
+| `0x00000000015ea4f8` | `_GfxSetViewPort` | 13 | state | `partial` | `replace-metal` | [_GfxSetViewPort](state/_GfxSetViewPort.md) |
 | `0x00000000015ea52c` | `_GfxGetViewPort` | 10 | state | `reconstructed` | `retain-original` | [_GfxGetViewPort](state/_GfxGetViewPort.md) |
 | `0x00000000015ea552` | `_GfxClear` | 96 | state | `partial` | `replace-metal` | [_GfxClear](state/_GfxClear.md) |
 | `0x00000000015ea6b5` | `_GfxGetMasterContext` | 5 | init | `reconstructed` | `retain-original` | [_GfxGetMasterContext](init/_GfxGetMasterContext.md) |
 | `0x00000000015ea6c2` | `_GfxGetImmediateContext` | 5 | init | `reconstructed` | `retain-original` | [_GfxGetImmediateContext](init/_GfxGetImmediateContext.md) |
 | `0x00000000015ea6cb` | `_GfxPresent` | 7 | init | `reconstructed` | `replace-metal` | [_GfxPresent](init/_GfxPresent.md) |
-| `0x00000000015ea6df` | `_GfxBeginScene` | 39 | init | `reconstructed` | `retain-original` | [_GfxBeginScene](init/_GfxBeginScene.md) |
+| `0x00000000015ea6df` | `_GfxBeginScene` | 39 | init | `reconstructed` | `replace-metal` | [_GfxBeginScene](init/_GfxBeginScene.md) |
 | `0x00000000015ea758` | `_GfxEndScene` | 5 | init | `reconstructed` | `retain-original` | [_GfxEndScene](init/_GfxEndScene.md) |
 | `0x00000000015ea760` | `_GfxCreateDeferredContext` | 5 | init | `reconstructed` | `retain-original` | [_GfxCreateDeferredContext](init/_GfxCreateDeferredContext.md) |
 | `0x00000000015ea769` | `_GfxDestroyDeferredContext` | 4 | init | `reconstructed` | `retain-original` | [_GfxDestroyDeferredContext](init/_GfxDestroyDeferredContext.md) |
@@ -38,7 +38,7 @@ File presence is not semantic completeness. Counts below are the dossier statuse
 | `0x00000000015eac96` | `_GfxDrawInstanced` | 4 | draw | `reconstructed` | `retain-original` | [_GfxDrawInstanced](draw/_GfxDrawInstanced.md) |
 | `0x00000000015eac9c` | `_GfxDrawIndexedInstanced` | 63 | draw | `partial` | `replace-metal` | [_GfxDrawIndexedInstanced](draw/_GfxDrawIndexedInstanced.md) |
 | `0x00000000015ead87` | `_GfxDraw2dLines` | 71 | draw | `partial` | `replace-metal` | [_GfxDraw2dLines](draw/_GfxDraw2dLines.md) |
-| `0x00000000015eae97` | `_GfxCreateShader` | 16 | shaders | `reconstructed` | `retain-original` | [_GfxCreateShader](shaders/_GfxCreateShader.md) |
+| `0x00000000015eae97` | `_GfxCreateShader` | 16 | shaders | `reconstructed` | `replace-metal` | [_GfxCreateShader](shaders/_GfxCreateShader.md) |
 | `0x00000000015eaec7` | `_GfxAddVertexLayout` | 71 | buffers | `partial` | `retain-original` | [_GfxAddVertexLayout](buffers/_GfxAddVertexLayout.md) |
 | `0x00000000015eafae` | `_GfxAddVertexShader` | 135 | shaders | `partial` | `replace-metal` | [_GfxAddVertexShader](shaders/_GfxAddVertexShader.md) |
 | `0x00000000015eb352` | `_GfxBuildAndAddVertexShader` | 58 | shaders | `partial` | `replace-metal` | [_GfxBuildAndAddVertexShader](shaders/_GfxBuildAndAddVertexShader.md) |
@@ -49,16 +49,16 @@ File presence is not semantic completeness. Counts below are the dossier statuse
 | `0x00000000015ebb1c` | `_GfxDestroyShader` | 14 | shaders | `reconstructed` | `replace-metal` | [_GfxDestroyShader](shaders/_GfxDestroyShader.md) |
 | `0x00000000015ebbb0` | `_GfxSetShader` | 47 | shaders | `partial` | `replace-metal` | [_GfxSetShader](shaders/_GfxSetShader.md) |
 | `0x00000000015ebca6` | `_GfxGetShader` | 6 | shaders | `reconstructed` | `retain-original` | [_GfxGetShader](shaders/_GfxGetShader.md) |
-| `0x00000000015ebcb3` | `_GfxCreateVertexBuffer` | 46 | buffers | `partial` | `retain-original` | [_GfxCreateVertexBuffer](buffers/_GfxCreateVertexBuffer.md) |
-| `0x00000000015ebd4c` | `_GfxDestroyVertexBuffer` | 18 | buffers | `reconstructed` | `retain-original` | [_GfxDestroyVertexBuffer](buffers/_GfxDestroyVertexBuffer.md) |
-| `0x00000000015ebd81` | `_GfxUpdateVertexBuffer` | 68 | buffers | `partial` | `retain-original` | [_GfxUpdateVertexBuffer](buffers/_GfxUpdateVertexBuffer.md) |
-| `0x00000000015ebe5f` | `_GfxUpdateVertexBufferMultiple` | 70 | buffers | `partial` | `retain-original` | [_GfxUpdateVertexBufferMultiple](buffers/_GfxUpdateVertexBufferMultiple.md) |
-| `0x00000000015ebf41` | `_GfxSetVertexBuffers` | 125 | buffers | `partial` | `retain-original` | [_GfxSetVertexBuffers](buffers/_GfxSetVertexBuffers.md) |
+| `0x00000000015ebcb3` | `_GfxCreateVertexBuffer` | 46 | buffers | `partial` | `replace-metal` | [_GfxCreateVertexBuffer](buffers/_GfxCreateVertexBuffer.md) |
+| `0x00000000015ebd4c` | `_GfxDestroyVertexBuffer` | 18 | buffers | `reconstructed` | `replace-metal` | [_GfxDestroyVertexBuffer](buffers/_GfxDestroyVertexBuffer.md) |
+| `0x00000000015ebd81` | `_GfxUpdateVertexBuffer` | 68 | buffers | `partial` | `replace-metal` | [_GfxUpdateVertexBuffer](buffers/_GfxUpdateVertexBuffer.md) |
+| `0x00000000015ebe5f` | `_GfxUpdateVertexBufferMultiple` | 70 | buffers | `partial` | `replace-metal` | [_GfxUpdateVertexBufferMultiple](buffers/_GfxUpdateVertexBufferMultiple.md) |
+| `0x00000000015ebf41` | `_GfxSetVertexBuffers` | 125 | buffers | `partial` | `replace-metal` | [_GfxSetVertexBuffers](buffers/_GfxSetVertexBuffers.md) |
 | `0x00000000015ec143` | `_GfxGetVertexCount` | 9 | buffers | `reconstructed` | `retain-original` | [_GfxGetVertexCount](buffers/_GfxGetVertexCount.md) |
-| `0x00000000015ec154` | `_GfxCreateIndexBuffer` | 43 | buffers | `reconstructed` | `retain-original` | [_GfxCreateIndexBuffer](buffers/_GfxCreateIndexBuffer.md) |
-| `0x00000000015ec1e6` | `_GfxDestroyIndexBuffer` | 26 | buffers | `reconstructed` | `retain-original` | [_GfxDestroyIndexBuffer](buffers/_GfxDestroyIndexBuffer.md) |
-| `0x00000000015ec23c` | `_GfxUpdateIndexBuffer` | 31 | buffers | `reconstructed` | `retain-original` | [_GfxUpdateIndexBuffer](buffers/_GfxUpdateIndexBuffer.md) |
-| `0x00000000015ec28e` | `_GfxSetIndexBuffer` | 18 | buffers | `reconstructed` | `retain-original` | [_GfxSetIndexBuffer](buffers/_GfxSetIndexBuffer.md) |
+| `0x00000000015ec154` | `_GfxCreateIndexBuffer` | 43 | buffers | `reconstructed` | `replace-metal` | [_GfxCreateIndexBuffer](buffers/_GfxCreateIndexBuffer.md) |
+| `0x00000000015ec1e6` | `_GfxDestroyIndexBuffer` | 26 | buffers | `reconstructed` | `replace-metal` | [_GfxDestroyIndexBuffer](buffers/_GfxDestroyIndexBuffer.md) |
+| `0x00000000015ec23c` | `_GfxUpdateIndexBuffer` | 31 | buffers | `reconstructed` | `replace-metal` | [_GfxUpdateIndexBuffer](buffers/_GfxUpdateIndexBuffer.md) |
+| `0x00000000015ec28e` | `_GfxSetIndexBuffer` | 18 | buffers | `reconstructed` | `replace-metal` | [_GfxSetIndexBuffer](buffers/_GfxSetIndexBuffer.md) |
 | `0x00000000015ec2bc` | `_GfxCreateConstantBuffer` | 29 | buffers | `reconstructed` | `retain-original` | [_GfxCreateConstantBuffer](buffers/_GfxCreateConstantBuffer.md) |
 | `0x00000000015ec318` | `_GfxDestroyConstantBuffer` | 26 | buffers | `reconstructed` | `retain-original` | [_GfxDestroyConstantBuffer](buffers/_GfxDestroyConstantBuffer.md) |
 | `0x00000000015ec36a` | `_GfxSetConstantBuffer` | 21 | shaders | `reconstructed` | `retain-original` | [_GfxSetConstantBuffer](shaders/_GfxSetConstantBuffer.md) |
@@ -68,7 +68,7 @@ File presence is not semantic completeness. Counts below are the dossier statuse
 | `0x00000000015ec419` | `_GfxDestroyDepthStencilState` | 8 | state | `reconstructed` | `retain-original` | [_GfxDestroyDepthStencilState](state/_GfxDestroyDepthStencilState.md) |
 | `0x00000000015ec42a` | `_GfxDestroyRasterizerState` | 8 | state | `reconstructed` | `retain-original` | [_GfxDestroyRasterizerState](state/_GfxDestroyRasterizerState.md) |
 | `0x00000000015ec43b` | `_GfxInitializeTexture` | 130 | textures | `partial` | `replace-metal` | [_GfxInitializeTexture](textures/_GfxInitializeTexture.md) |
-| `0x00000000015ec61d` | `_GfxCreateTexture` | 29 | textures | `reconstructed` | `retain-original` | [_GfxCreateTexture](textures/_GfxCreateTexture.md) |
+| `0x00000000015ec61d` | `_GfxCreateTexture` | 29 | textures | `partial` | `retain-original` | [_GfxCreateTexture](textures/_GfxCreateTexture.md) |
 | `0x00000000015ec66f` | `_GfxUpdateTexture` | 44 | textures | `reconstructed` | `replace-metal` | [_GfxUpdateTexture](textures/_GfxUpdateTexture.md) |
 | `0x00000000015ec6fd` | `_GfxGenerateMipMaps` | 15 | textures | `reconstructed` | `replace-metal` | [_GfxGenerateMipMaps](textures/_GfxGenerateMipMaps.md) |
 | `0x00000000015ec72f` | `_GfxUpdateTextureRectangle` | 62 | textures | `partial` | `replace-metal` | [_GfxUpdateTextureRectangle](textures/_GfxUpdateTextureRectangle.md) |
@@ -88,7 +88,7 @@ File presence is not semantic completeness. Counts below are the dossier statuse
 | `0x00000000015ed0e2` | `_GfxSetGamma` | 4 | init | `reconstructed` | `retain-original` | [_GfxSetGamma](init/_GfxSetGamma.md) |
 | `0x00000000015ed0e8` | `_GfxCheckDevice` | 5 | init | `reconstructed` | `retain-original` | [_GfxCheckDevice](init/_GfxCheckDevice.md) |
 | `0x00000000015ed0f0` | `_GfxGetAdapterModeCount` | 11 | init | `reconstructed` | `retain-original` | [_GfxGetAdapterModeCount](init/_GfxGetAdapterModeCount.md) |
-| `0x00000000015ed110` | `_GfxGetAdapterDisplayMode` | 31 | init | `reconstructed` | `retain-original` | [_GfxGetAdapterDisplayMode](init/_GfxGetAdapterDisplayMode.md) |
+| `0x00000000015ed110` | `_GfxGetAdapterDisplayMode` | 31 | init | `partial` | `retain-original` | [_GfxGetAdapterDisplayMode](init/_GfxGetAdapterDisplayMode.md) |
 | `0x00000000015ed16d` | `_GfxGetUsedMemory` | 5 | init | `reconstructed` | `retain-original` | [_GfxGetUsedMemory](init/_GfxGetUsedMemory.md) |
 | `0x00000000015ed175` | `_GfxForceWireframe` | 5 | state | `reconstructed` | `retain-original` | [_GfxForceWireframe](state/_GfxForceWireframe.md) |
 | `0x00000000015ed182` | `_GfxGetCaps` | 8 | init | `reconstructed` | `retain-original` | [_GfxGetCaps](init/_GfxGetCaps.md) |

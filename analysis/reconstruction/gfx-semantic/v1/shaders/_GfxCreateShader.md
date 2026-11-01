@@ -7,7 +7,7 @@ source_batch: `gfx-batch-00043.zip`
 static_status: `success`
 decomp_status: `success`
 semantic_status: `reconstructed`
-migration_role: `retain-original`
+migration_role: `replace-metal`
 
 ## ABI
 
@@ -24,7 +24,7 @@ Indirect call instructions in the body: 1. An indirect site is not a resolved ca
 
 ## Uncertainties
 
-- `retain-original` stays valid only while this function's data layout and calling contract stay valid.
+- Replacing this function also means replacing the GL or SDL-GL effect it performs. A CPU-side store that feeds that effect is not optional.
 - Runtime execution of every branch is `unknown` unless a record is named below.
 
 ## Behavior

@@ -7,7 +7,7 @@ source_batch: `gfx-batch-00042.zip`
 static_status: `success`
 decomp_status: `success`
 semantic_status: `reconstructed`
-migration_role: `retain-original`
+migration_role: `undetermined`
 
 ## ABI
 
@@ -24,7 +24,7 @@ Indirect call instructions in the body: 0. An indirect site is not a resolved ca
 
 ## Uncertainties
 
-- `retain-original` stays valid only while this function's data layout and calling contract stay valid.
+- Whether Metal can keep this predicate true is `undetermined`. It follows `_GfxGetRenderType`, and callers of that result are not established here.
 - Runtime execution of every branch is `unknown` unless a record is named below.
 
 ## Behavior

@@ -17,7 +17,7 @@ Those three packages contain every one of the 92 functions. Before the dossiers 
 
 ## How to read a dossier
 
-Identity, batch, and the two evidence statuses are the header. Behavior is the reading. `semantic_status` is `reconstructed`, `partial`, or `blocked`. A file existing does not make the status `reconstructed`. `migration_role` is provisional:
+Identity, batch, and the two evidence statuses are the header. Behavior is the reading. `semantic_status` is `reconstructed`, `partial`, or `blocked`. `reconstructed` means the function's material behavior, state changes, and relevant control-flow branches are understood at the semantic level. Unresolved ABI details stay written down and may still have to be resolved before an executable replacement. A material uncertainty in the behavior itself is `partial`. Successful decompilation alone is not reconstruction. A file existing does not make the status `reconstructed`. `migration_role` is provisional:
 
 - `retain-original`: no demonstrated need to replace the body, and only while its data layout and calling contract stay valid.
 - `replace-metal`: the body performs a graphics or presentation effect the Metal backend has to provide.

@@ -25,6 +25,7 @@ Indirect call instructions in the body: 0. An indirect site is not a resolved ca
 ## Uncertainties
 
 - `retain-original` stays valid only while this function's data layout and calling contract stay valid.
+- This wrapper stays `retain-original` only if its callee is replaced and the `0x44`-byte header contract stays valid.
 - Runtime execution of every branch is `unknown` unless a record is named below.
 
 ## Behavior

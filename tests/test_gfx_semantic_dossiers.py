@@ -103,10 +103,13 @@ class GfxSemanticDossierTest(unittest.TestCase):
         by_rva = {int(row["entry_rva"], 16): row for row in rows}
         self.assertEqual(len(by_rva), 92)
 
-        dossiers = {
-            int(header(path.read_text())["entry_rva"], 16): path
-            for path in TREE.glob("*/*.md")
-        }
+        paths = sorted(TREE.glob("*/*.md"))
+        self.assertEqual(len(paths), 92)
+        dossiers = {}
+        for path in paths:
+            rva = int(header(path.read_text())["entry_rva"], 16)
+            self.assertNotIn(rva, dossiers, path.name)
+            dossiers[rva] = path
         self.assertEqual(set(dossiers), set(by_rva))
         parents = {path.parent.name for path in dossiers.values()}
         self.assertEqual(parents, set(SUBSYSTEMS))
@@ -134,6 +137,24 @@ class GfxSemanticDossierTest(unittest.TestCase):
             self.assertEqual(inventory.count(f"`{row['name']}`"), 1)
         for status in STATUSES:
             self.assertIn(f"`{status}`:", inventory)
+
+        by_name = {header(path.read_text())["name"]: header(path.read_text()) for path in dossiers.values()}
+        listed = re.findall(
+            r"^\| `0x[0-9a-f]+` \| `(_Gfx[^`]+)` \| \d+ \| [a-z]+ \| `(reconstructed|partial|blocked)` \| `(retain-original|replace-metal|undetermined)` \|",
+            inventory,
+            re.M,
+        )
+        self.assertEqual(len(listed), 92)
+        seen = {}
+        for name, status, role in listed:
+            self.assertNotIn(name, seen, name)
+            seen[name] = (status, role)
+            fields = by_name[name]
+            self.assertEqual(fields["semantic_status"], status, name)
+            self.assertEqual(fields["migration_role"], role, name)
+        for status in STATUSES:
+            count = sum(1 for fields in by_name.values() if fields["semantic_status"] == status)
+            self.assertRegex(inventory, rf"(?m)^- `{status}`: {count}$", status)
 
     def test_shared_pages_have_no_decompiler_fence(self) -> None:
         for path in TREE.glob("*.md"):
