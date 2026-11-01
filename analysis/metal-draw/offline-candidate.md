@@ -6,9 +6,9 @@ A candidate passes only when every required input is retained and unambiguously 
 
 Required inputs are both original compiler stages, the vertex bytes and any index bytes with their attribute layout, every active uniform value, and the fixed-function state a replay would set. Also required: every pixel-affecting texture or sampler, or positive evidence that the draw uses none, and the initial framebuffer contents, attachments, and framebuffer state. A format name is not that condition.
 
-Three shader facts stay separate. Raw byte equality with [`analysis/metal-stage-d/v1/color.vert`](../metal-stage-d/v1/color.vert) is false for every retained blob. No supported normalization of those blobs is recorded. Same-draw provenance is not established. Only the last, together with the other inputs, could pass.
+Three shader facts stay separate. Raw byte equality with [`analysis/metal-stage-d/v1/color.vert`](../metal-stage-d/v1/color.vert) is false for every retained blob. The prior B2 matcher establishes a supported normalization match for the historical vertex source ([session note](b2/color-note.md)). It does not retain a complete original shader pair, establish same-draw provenance, or supply the missing replay inputs. Only that provenance, together with the other inputs, could pass.
 
-`matched.glsl` is a session-level compiler dump. At `ea46e32`, [`benchmark/eu4_metal_draw.m`](../../benchmark/eu4_metal_draw.m) writes it when one `glShaderSource` blob contains both `float2 vPosition` and `in_PDX_COLOR`, using `fopen` with `"w"`. A later match overwrites the file. The file shows that a matching source was submitted during the session. It does not name the draw that used those bytes, and it is not the fragment stage.
+`matched.glsl` is a session-level compiler dump. The producer at [`ea46e32` `benchmark/eu4_metal_draw.m`](https://github.com/HagbardCel/eu4-mac-perf/blob/ea46e32/benchmark/eu4_metal_draw.m) writes it when one `glShaderSource` blob contains both `float2 vPosition` and `in_PDX_COLOR`, using `fopen` with `"w"`. A later match overwrites the file. The copy of `benchmark/eu4_metal_draw.m` on this pull request does not contain that dump. The historical file shows that a matching source was submitted during the session. It does not name the draw that used those bytes, and it is not the fragment stage.
 
 ## Measurements
 
@@ -29,6 +29,8 @@ No run directory contains a fragment compiler file, vertex or index bytes, unifo
 | October 3 intrusive diagnostic | [`results/20261003T210202Z-intrusive-diagnostic/report.json`](../../results/20261003T210202Z-intrusive-diagnostic/report.json), `5c65cf01`; `draw_records` is 0 | No | Hashes and signatures | Hashes | Partial | No |
 | Stage D static reconstruction | [`analysis/metal-stage-d/v1/`](../metal-stage-d/v1/) on this branch. [`pair.md`](../metal-stage-d/v1/pair.md) says the GLSL is format strings plus `color.shader`, not a captured `glShaderSource` buffer | Reconstructed, not a captured pair | No | No | No | No |
 | October 25 Gfx fixture | [`results/20261025T155406Z-gfx-live-publication/`](../../results/20261025T155406Z-gfx-live-publication/), `6248b00f`. `_GfxSetConstantBuffer` publication; transcripts are not in the checkout | Not draw-linked | Not draw-linked | Not draw-linked | Not draw-linked | No |
+
+[`analysis/frame-model-static.json`](../frame-model-static.json) is a static feature seed of installed `.shader` files. [`analysis/frame-model-backend.json`](../frame-model-backend.json) records that program binds were sampled while shader sources, compile and link calls, and the GLSL feature corpus were not inventoried. Neither file ties compiler bytes, buffers, uniforms, or render-target state to one original draw.
 
 October 31 directories read: `results/20261031T144434Z-metal-draw/`, `results/20261031T143735Z-metal-draw/`, `results/20261031T143211Z-metal-draw/`, `results/20261031T142703Z-metal-draw/`, `results/20261031T142142Z-metal-draw/`, `results/20261031T141455Z-metal-draw/`.
 
