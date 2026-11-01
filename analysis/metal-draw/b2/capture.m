@@ -382,6 +382,10 @@ static void snapshot_state(void) {
         note_reject("viewport");
         return;
     }
+    if (viewport[0] != 0 || viewport[1] != 0) {
+        note_reject("viewport origin");
+        return;
+    }
     g_cap.width = viewport[2];
     g_cap.height = viewport[3];
     /* GL 2.1 raises INVALID_ENUM for this query, and that error cannot be put back. */
@@ -544,10 +548,13 @@ static void restore_bindings(const Saved *saved) {
     glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)saved->rbo);
     glClearColor(saved->clear_color[0], saved->clear_color[1], saved->clear_color[2], saved->clear_color[3]);
     glClearDepth(saved->clear_depth);
-    if (saved->blend) glEnable(GL_BLEND);
-    else glDisable(GL_BLEND);
-    glBlendFunc(saved->blend_src, saved->blend_dst);
-    glBlendEquation(saved->blend_eq);
+    if (saved->blend) {
+        glEnable(GL_BLEND);
+        glBlendFunc(saved->blend_src, saved->blend_dst);
+        glBlendEquation(saved->blend_eq);
+    } else {
+        glDisable(GL_BLEND);
+    }
     if (saved->depth_test) glEnable(GL_DEPTH_TEST);
     else glDisable(GL_DEPTH_TEST);
     glDepthMask((GLboolean)saved->depth_mask);
@@ -743,7 +750,6 @@ static int replay(uint8_t **reference, uint8_t **clear_pixels, int *pixel_bytes)
     glFrontFace(g_cap.front_ccw ? GL_CCW : GL_CW);
     if (g_cap.depth_test) {
         glEnable(GL_DEPTH_TEST);
-        glDepthMask(g_cap.depth_write ? GL_TRUE : GL_FALSE);
         glDepthFunc((GLenum)g_cap.depth_func);
     } else {
         glDisable(GL_DEPTH_TEST);
@@ -764,7 +770,9 @@ static int replay(uint8_t **reference, uint8_t **clear_pixels, int *pixel_bytes)
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     GLbitfield bits = GL_COLOR_BUFFER_BIT;
     if (g_cap.depth_test) bits |= GL_DEPTH_BUFFER_BIT;
+    if (g_cap.depth_test) glDepthMask(GL_TRUE);
     glClear(bits);
+    if (g_cap.depth_test) glDepthMask(g_cap.depth_write ? GL_TRUE : GL_FALSE);
     glReadPixels(0, 0, g_cap.width, g_cap.height, GL_RGBA, GL_UNSIGNED_BYTE, cleared);
     if (g_cap.scissor) {
         glEnable(GL_SCISSOR_TEST);
@@ -967,9 +975,18 @@ static int smoke_original(void) {
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, g_ibo);
     glEnableVertexAttribArray(3);
     glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 8, (void *)0);
+    if (g_case == 7) {
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glDepthFunc(GL_LESS);
+    }
+    if (g_case == 8) {
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 0, 8, 8);
+    }
     GLint saved[4];
     glGetIntegerv(GL_VIEWPORT, saved);
-    glViewport(0, 0, 16, 16);
+    glViewport(g_case == 8 ? 4 : 0, 0, 16, 16);
     g_b2_smoke_count = g_case == 5 ? 100 : 3;
     g_b2_smoke_base_vertex = g_case == 6;
     int issued = g_issue_draw();
@@ -977,7 +994,60 @@ static int smoke_original(void) {
     if (g_case == 2) glDisable(GL_PRIMITIVE_RESTART);
     if (g_case == 3) glDepthRange(0.0, 1.0);
     if (g_case == 4) glDisable(GL_POLYGON_OFFSET_FILL);
+    if (g_case == 7) {
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_TRUE);
+        glDepthFunc(GL_LESS);
+    }
+    if (g_case == 8) glDisable(GL_SCISSOR_TEST);
     return issued == 0 ? 7 : 9;
+}
+
+static int masked_depth_clear_keeps_zero(void) {
+    GLint draw = 0, read = 0, rbo = 0, tex = 0, viewport[4] = {0};
+    GLdouble clear_depth = 0;
+    GLboolean mask = GL_TRUE;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &rbo);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
+    glGetIntegerv(GL_VIEWPORT, viewport);
+    glGetDoublev(GL_DEPTH_CLEAR_VALUE, &clear_depth);
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &mask);
+    GLuint fbo = 0, color = 0, depth = 0;
+    glGenTextures(1, &color);
+    glBindTexture(GL_TEXTURE_2D, color);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenRenderbuffers(1, &depth);
+    glBindRenderbuffer(GL_RENDERBUFFER, depth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, 16, 16);
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+    glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
+    int complete = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glViewport(0, 0, 16, 16);
+    glDepthMask(GL_TRUE);
+    glClearDepth(0);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glDepthMask(GL_FALSE);
+    glClearDepth(1);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    float z = 1.f;
+    glReadPixels(0, 0, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &z);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read);
+    glBindRenderbuffer(GL_RENDERBUFFER, (GLuint)rbo);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)tex);
+    glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+    glClearDepth(clear_depth);
+    glDepthMask(mask);
+    glDeleteFramebuffers(1, &fbo);
+    glDeleteTextures(1, &color);
+    glDeleteRenderbuffers(1, &depth);
+    if (!complete) return 33;
+    return z <= 0.01f ? 0 : 34;
 }
 
 static GLuint smoke_shader(GLenum type, const char *source) {
@@ -1121,6 +1191,10 @@ int eu4_b2_capture_smoke(const char *dir, int (*issue_draw)(void)) {
         rejected = reject_case(page, expected, dir, cse);
         if (rejected != 0) return rejected;
     }
+    rejected = reject_case(page, expected, dir, 8);
+    if (rejected != 0) return rejected;
+    int depth_clear = masked_depth_clear_keeps_zero();
+    if (depth_clear != 0) return depth_clear;
 
     glGenVertexArraysAPPLE(1, &sentinel_vao);
     glBindVertexArrayAPPLE(sentinel_vao);
@@ -1141,6 +1215,9 @@ int eu4_b2_capture_smoke(const char *dir, int (*issue_draw)(void)) {
     glClearColor(0.25f, 0.5f, 0.75f, 1.f);
     glClearDepth(0.25);
     glViewport(3, 5, 7, 9);
+    glDisable(GL_BLEND);
+    glBlendFuncSeparate(GL_ONE, GL_ZERO, GL_SRC_ALPHA, GL_ONE);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_SUBTRACT);
     glUseProgram(0);
     GLint read_bound = 0, draw_bound = 0;
     glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read_bound);
@@ -1173,6 +1250,17 @@ int eu4_b2_capture_smoke(const char *dir, int (*issue_draw)(void)) {
     if (unit2_bound != (GLint)unit2) return 10;
     if (clear_color[0] != 0.25f || clear_color[1] != 0.5f || clear_color[2] != 0.75f || clear_color[3] != 1.f) return 11;
     if (clear_depth != 0.25) return 12;
+    GLint blend_src = 0, blend_dst = 0, blend_eq = 0, blend_src_a = 0, blend_dst_a = 0, blend_eq_a = 0;
+    glGetIntegerv(GL_BLEND_SRC_RGB, &blend_src);
+    glGetIntegerv(GL_BLEND_DST_RGB, &blend_dst);
+    glGetIntegerv(GL_BLEND_EQUATION_RGB, &blend_eq);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &blend_src_a);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &blend_dst_a);
+    glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &blend_eq_a);
+    if (glIsEnabled(GL_BLEND) || blend_src != GL_ONE || blend_dst != GL_ZERO || blend_eq != GL_FUNC_ADD ||
+        blend_src_a != GL_SRC_ALPHA || blend_dst_a != GL_ONE || blend_eq_a != GL_FUNC_SUBTRACT) {
+        return 18;
+    }
     if (!fixture_exists(dir)) return 13;
     char path[1100];
     snprintf(path, sizeof path, "%s/reference.rgba", dir);

@@ -44,8 +44,23 @@ def run(command):
     return subprocess.run(command, capture_output=True, text=True, check=False)
 
 
+def build_host():
+    BUILD.mkdir(parents=True, exist_ok=True)
+    return run([
+        "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-lc++",
+        "-framework", "Foundation", "-framework", "Metal",
+        "-o", str(HOST), str(HOST_SOURCE), str(SOURCE), str(DEPTH),
+    ])
+
+
 @unittest.skipUnless(sys.platform == "darwin", "Metal draw runs on macOS")
 class B2DrawTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        built = build_host()
+        if built.returncode:
+            raise RuntimeError(built.stderr.strip() or "b2 draw host failed to build")
+
     def test_abi_preserves_arguments_and_return(self):
         BUILD.mkdir(parents=True, exist_ok=True)
         built = run([
@@ -75,13 +90,6 @@ class B2DrawTests(unittest.TestCase):
         ])
         if smoke.returncode:
             self.fail(smoke.stderr.strip() or "smoke driver failed to build")
-        host = run([
-            "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-lc++",
-            "-framework", "Foundation", "-framework", "Metal",
-            "-o", str(HOST), str(HOST_SOURCE), str(SOURCE), str(DEPTH),
-        ])
-        if host.returncode:
-            self.fail(host.stderr.strip() or "b2 draw host failed to build")
         with tempfile.TemporaryDirectory() as directory:
             ran = run([str(SMOKE), directory])
             if ran.returncode:
@@ -97,7 +105,7 @@ class B2DrawTests(unittest.TestCase):
         if not (FIXTURE / "fixture.json").is_file():
             self.skipTest("operator-local B2 fixture is absent; public CI does not validate pixels")
         if not HOST.is_file():
-            self.skipTest("host is built by the synthetic test")
+            self.fail("b2 draw host is missing")
         ran = run([str(HOST), str(FIXTURE)])
         if ran.returncode:
             self.fail(ran.stderr.strip() or ran.stdout.strip() or "b2 draw host failed")
