@@ -436,5 +436,7 @@ unsigned eu4_gfx_set_constant_buffer_capture_refusals(void) {
 }
 
 bool eu4_gfx_set_constant_buffer_capture_install(void *site) {
+    eu4_gfx_capture_entry_ptr = eu4_gfx_set_constant_buffer_capture_entry;
+    eu4_gfx_capture_exit_ptr = eu4_gfx_set_constant_buffer_capture_exit;
     return eu4_gfx_capture_install(site, capture_site);
 }

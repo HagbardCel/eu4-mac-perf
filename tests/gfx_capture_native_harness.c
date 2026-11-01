@@ -6,6 +6,9 @@
 #include <string.h>
 
 extern void gfx_capture_native_leaf(void);
+extern uint64_t gfx_capture_native_leaf_calls;
+extern void eu4_gfx_set_constant_buffer_capture_entry(eu4_gfx_capture_frame *frame);
+extern void eu4_gfx_set_constant_buffer_capture_exit(eu4_gfx_capture_frame *frame);
 extern uint64_t gfx_capture_native_entry_frame;
 extern uint64_t gfx_capture_native_exit_frame;
 extern uint64_t gfx_capture_native_entry_calls;
@@ -182,6 +185,9 @@ static int test_transparency(void) {
     gfx_capture_native_exit_calls = 0;
 
     fill_seed();
+    eu4_gfx_capture_entry_ptr = eu4_gfx_set_constant_buffer_capture_entry;
+    eu4_gfx_capture_exit_ptr = eu4_gfx_set_constant_buffer_capture_exit;
+    uint64_t leaf_before = gfx_capture_native_leaf_calls;
     if (!eu4_gfx_capture_install(
             (void *)(uintptr_t)gfx_capture_native_leaf, expected)) {
         return fail("transparency install failed");
@@ -194,6 +200,9 @@ static int test_transparency(void) {
         return fail("transparency restore failed");
     }
 
+    if (gfx_capture_native_leaf_calls != leaf_before + 1) {
+        return fail("original target did not run exactly once");
+    }
     if (gfx_capture_native_entry_calls != 1 ||
         gfx_capture_native_exit_calls != 1) {
         return fail("gateway did not call entry and exit once");
@@ -247,6 +256,62 @@ static int test_transparency(void) {
     return 0;
 }
 
+static int test_callbacks(eu4_gfx_capture_hook entry, eu4_gfx_capture_hook exit_hook,
+                          uint64_t expect_entry, uint64_t expect_exit,
+                          const char *name) {
+    fill_seed();
+    run_target();
+    gfx_capture_test_state unhooked = gfx_capture_test_capture;
+
+    gfx_capture_native_entry_calls = 0;
+    gfx_capture_native_exit_calls = 0;
+    eu4_gfx_capture_entry_ptr = entry;
+    eu4_gfx_capture_exit_ptr = exit_hook;
+    fill_seed();
+    uint64_t leaf_before = gfx_capture_native_leaf_calls;
+    if (!eu4_gfx_capture_install(
+            (void *)(uintptr_t)gfx_capture_native_leaf, expected)) {
+        fprintf(stderr, "%s install failed\n", name);
+        return 1;
+    }
+    run_target();
+    gfx_capture_test_state hooked = gfx_capture_test_capture;
+    if (!eu4_gfx_capture_restore()) {
+        fprintf(stderr, "%s restore failed\n", name);
+        return 1;
+    }
+    if (gfx_capture_native_leaf_calls != leaf_before + 1) {
+        fprintf(stderr, "%s original target count\n", name);
+        return 1;
+    }
+    if (gfx_capture_native_entry_calls != expect_entry ||
+        gfx_capture_native_exit_calls != expect_exit) {
+        fprintf(stderr, "%s callback counts entry=%llu exit=%llu\n", name,
+                (unsigned long long)gfx_capture_native_entry_calls,
+                (unsigned long long)gfx_capture_native_exit_calls);
+        return 1;
+    }
+    if (!gfx_capture_test_state_equal(&unhooked, &hooked)) {
+        fprintf(stderr, "%s register state differs flags %llx/%llx mxcsr %x/%x rax %llx/%llx\n",
+                name, (unsigned long long)unhooked.flags,
+                (unsigned long long)hooked.flags, unhooked.mxcsr, hooked.mxcsr,
+                (unsigned long long)unhooked.rax, (unsigned long long)hooked.rax);
+        return 1;
+    }
+    return 0;
+}
+
+static int test_nullable_callbacks(void) {
+    if (test_callbacks(NULL, NULL, 0, 0, "null callbacks") != 0) {
+        return 1;
+    }
+    if (test_callbacks(eu4_gfx_set_constant_buffer_capture_entry, NULL, 1, 0,
+                       "entry only") != 0) {
+        return 1;
+    }
+    return 0;
+}
+
 int main(void) {
     if (test_encodings() != 0) {
         return 1;
@@ -258,6 +323,9 @@ int main(void) {
         return 1;
     }
     if (test_transparency() != 0) {
+        return 1;
+    }
+    if (test_nullable_callbacks() != 0) {
         return 1;
     }
     puts("gfx capture native harness: ok");

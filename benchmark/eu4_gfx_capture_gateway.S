@@ -3,6 +3,14 @@
 .align 3
 _eu4_gfx_capture_trampoline_ptr:
     .quad 0
+.globl _eu4_gfx_capture_entry_ptr
+.align 3
+_eu4_gfx_capture_entry_ptr:
+    .quad 0
+.globl _eu4_gfx_capture_exit_ptr
+.align 3
+_eu4_gfx_capture_exit_ptr:
+    .quad 0
 
 .section __TEXT,__text
 
@@ -38,8 +46,12 @@ _eu4_gfx_capture_gateway:
     movq %r15, 624(%rsp)
     fxsave64 0(%rsp)
 
+    movq _eu4_gfx_capture_entry_ptr(%rip), %rax
+    testq %rax, %rax
+    jz 1f
     movq %rsp, %rdi
-    callq _eu4_gfx_set_constant_buffer_capture_entry
+    callq *%rax
+1:
 
     fxrstor64 0(%rsp)
     movq 512(%rsp), %rax
@@ -82,8 +94,12 @@ _eu4_gfx_capture_gateway:
     movq %rax, 640(%rsp)
     fxsave64 0(%rsp)
 
+    movq _eu4_gfx_capture_exit_ptr(%rip), %rax
+    testq %rax, %rax
+    jz 2f
     movq %rsp, %rdi
-    callq _eu4_gfx_set_constant_buffer_capture_exit
+    callq *%rax
+2:
 
     fxrstor64 0(%rsp)
     movq 512(%rsp), %rax

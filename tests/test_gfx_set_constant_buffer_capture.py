@@ -262,9 +262,21 @@ class GfxSetConstantBufferCaptureTests(unittest.TestCase):
         self.assertIn("eu4_gfx_capture_rel32_fits", installer)
         self.assertNotIn("0x49", installer)
         self.assertNotIn("0xbb", installer)
-        self.assertIn("callq _eu4_gfx_set_constant_buffer_capture_entry", gateway)
-        self.assertIn("callq _eu4_gfx_set_constant_buffer_capture_exit", gateway)
+        self.assertIn("movq _eu4_gfx_capture_entry_ptr(%rip), %rax", gateway)
+        self.assertIn("movq _eu4_gfx_capture_exit_ptr(%rip), %rax", gateway)
+        self.assertEqual(gateway.count("callq *%rax"), 2)
+        self.assertNotIn("callq _eu4_gfx_set_constant_buffer_capture_entry", gateway)
+        self.assertNotIn("callq _eu4_gfx_set_constant_buffer_capture_exit", gateway)
         self.assertIn("callq *_eu4_gfx_capture_trampoline_ptr(%rip)", gateway)
+        install = adapter[adapter.index(
+            "bool eu4_gfx_set_constant_buffer_capture_install"):]
+        self.assertLess(install.index("eu4_gfx_capture_entry_ptr ="),
+                        install.index("eu4_gfx_capture_install"))
+        self.assertLess(install.index("eu4_gfx_capture_exit_ptr ="),
+                        install.index("eu4_gfx_capture_install"))
+        live = (BENCH / "eu4_gfx_live_capture.c").read_text()
+        self.assertNotIn("eu4_gfx_capture_entry_ptr =", live)
+        self.assertNotIn("eu4_gfx_capture_exit_ptr =", live)
         self.assertIn("OBSERVATION_LENGTH 97u", adapter_header)
         self.assertIn("CANARY_AFTER_START 297u", adapter_header)
         self.assertIn("metadata->synthetic ? 1 : 0", adapter)
