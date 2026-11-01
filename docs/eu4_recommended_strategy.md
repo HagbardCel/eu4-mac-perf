@@ -21,7 +21,7 @@ This choice supersedes the hybrid dependencies below. Those sections stay as his
 - R4, a Metal domain composited into a GL frame, including the R2b prerequisite, the R2 target, and the live GL/B0/C0 toggle inside one process.
 - R5, domain-by-domain expansion that still composites with GL and treats GL as the in-frame fallback.
 
-The whole-backend sequence is a Metal window, then the semantics the next live render needs, then one full Metal frame. It is not the older domain-first R4/M2 plan. Map caching and caller redesign, if done later, are Metal-only. Do not freeze an OpenGL-shaped resource model that later Metal-native work cannot replace. The replacement boundary is the Clausewitz `_Gfx*` surface. The opt-in B0 checkpoint reached `_glewInit` inside `_GfxInit` (`results/20261031T223735Z-metal-boot-bootstrap/`, exit 0). Completion of `_GfxInit` remains untested, and B0 is not a Metal backend.
+The whole-backend sequence is a Metal window, then B1's offline depth-stencil state, then B2's one offline EU4 draw on Metal, then the minimum Gfx initialization and resource setup required for EU4 to call Metal, then one full Metal frame. It is not the older domain-first R4/M2 plan. Map caching and caller redesign, if done later, are Metal-only. Do not freeze an OpenGL-shaped resource model that later Metal-native work cannot replace. The replacement boundary is the Clausewitz `_Gfx*` surface. The opt-in B0 checkpoint reached `_glewInit` inside `_GfxInit` (`results/20261031T223735Z-metal-boot-bootstrap/`, exit 0). Completion of `_GfxInit` remains untested, and B0 is not a Metal backend.
 
 Related documents:
 
