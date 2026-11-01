@@ -1,8 +1,6 @@
 # EU IV Oracle v2 — plan of record
 
-**Status:** authorized execution sequence. This records decisions only; detailed design
-lives in the documents named under *Ownership* in [README.md](README.md). Do not spawn
-competing architecture documents.
+**Status:** retained for a targeted correctness question. As of [decision 0001](../decisions/0001-semantic-gfx-then-metal.md) (2026-11-01), the gates below are not prerequisites for a semantic `_Gfx*` dossier or for a Metal-native implementation. Historical receipts stay valid. This note does not authorize a live process modification, and it does not relax an existing safety constraint. This file records decisions only; detailed design lives in the documents named under *Ownership* in [README.md](README.md). Do not spawn competing architecture documents.
 
 ## Mission
 
