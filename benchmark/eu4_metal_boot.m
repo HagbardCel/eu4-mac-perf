@@ -9,13 +9,17 @@
 // SDL_GL_CreateContext, then destroying both. That call is not patched.
 // Earlier OpenGL activity is outside this result.
 // A1 exits after the clear. Bootstrap returns this window and stops at _glewInit.
+#import "eu4_gfx_entry_patch.h"
+#import "eu4_gfx_init.h"
 #import "eu4_metal_boot_patch.h"
+#import "eu4_metal_events.h"
 
 #import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
+#import <mach-o/loader.h>
 #import <pthread.h>
 #import <stddef.h>
 #import <stdint.h>
@@ -96,6 +100,14 @@ static int g_have_view_points;
 static double g_view_points_w;
 static double g_view_points_h;
 static int g_bootstrap;
+static int g_mode;
+
+int eu4_metal_mode(void) { return g_mode; }
+
+static void metal_init_terminate(const char *reason) {
+    (void)reason;
+    _exit(kExitFail);
+}
 static void *g_window;
 static void *g_context_window;
 static char g_sentinel;
@@ -108,12 +120,18 @@ static uint32_t g_passed;
 static uint32_t g_window_flags;
 static int g_have_flags;
 
+void *eu4_metal_child_layer(void) { return (__bridge void *)g_layer; }
+
 static void copy_sdl_error(void);
 
 __attribute__((noreturn)) static void finish(const char *result, const char *cause, uint32_t incoming,
                                                   uint32_t passed,
                    int have_window_flags, uint32_t window_flags, int view_ok, int layer_ok,
                    int width, int height, const char *command_status, int readback_matches) {
+    if (g_mode == 3) {
+        eu4_metal_events_stop("before_init", "boot", cause != NULL ? cause : "boot", NULL);
+        _exit(kExitFail);
+    }
     if (g_bootstrap && strcmp(result, "metal_window_boot_failed") == 0) {
         result = "backend_bootstrap_failed";
     }
@@ -350,6 +368,12 @@ static void boot_window(void *window, uint32_t incoming, uint32_t passed) {
     record_view_points(child);
     NSRect backing = [child convertRectToBacking:child.bounds];
     layer.drawableSize = backing.size;
+    if (g_mode == 3) {
+        g_layer = layer;
+        g_child = child;
+        g_window = window;
+        return;
+    }
     if (g_bootstrap) {
         id<MTLCommandQueue> queue = [device newCommandQueue];
         if (queue == nil) {
@@ -413,7 +437,7 @@ void *eu4_metal_boot_on_create(const char *title, int x, int y, int w, int h, ui
                NULL, -1);
     }
     boot_window(window, incoming, passed);
-    if (g_bootstrap) {
+    if (g_bootstrap || g_mode == 3) {
         return window;
     }
     finish("metal_window_boot_failed", "wrapper_returned", incoming, passed, 0, 0, 0, 0, 0, 0,
@@ -463,19 +487,74 @@ static int resolve_helpers(void) {
     return g_get_flags != NULL && g_get_version != NULL && g_get_wm_info != NULL && g_get_error != NULL;
 }
 
-__attribute__((constructor)) static void eu4_metal_boot_init(void) {
-    const char *path = getenv("EU4_METAL_BOOT_RECEIPT");
-    if (path == NULL || path[0] != '/') {
-        return;
+static uintptr_t image_limit(const struct mach_header_64 *header) {
+    uintptr_t base = (uintptr_t)header;
+    uintptr_t end = base;
+    const uint8_t *cmd = (const uint8_t *)(header + 1);
+    for (uint32_t i = 0; i < header->ncmds; i++) {
+        const struct load_command *command = (const struct load_command *)cmd;
+        if (command->cmd == LC_SEGMENT_64) {
+            const struct segment_command_64 *segment = (const struct segment_command_64 *)cmd;
+            if (segment->vmaddr >= 0x100000000ULL) {
+                uintptr_t local = base + (uintptr_t)(segment->vmaddr - 0x100000000ULL);
+                uintptr_t segment_end = local + (uintptr_t)segment->vmsize;
+                if (segment_end > end) {
+                    end = segment_end;
+                }
+            }
+        }
+        cmd += command->cmdsize;
     }
-    snprintf(g_receipt, sizeof g_receipt, "%s", path);
+    return end;
+}
+
+static void install_metal_init(uint8_t *base) {
+    static const uint8_t kPrefix6[6] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
+    static const uint8_t kPrefix5[5] = {0x55, 0x48, 0x89, 0xe5, 0x53};
+    eu4_gfx_entry_request entries[6] = {
+        {base + 0x15ed388, kPrefix6, 6, (void *)eu4_gfx_settings},
+        {base + 0x15e8ea0, kPrefix6, 6, (void *)eu4_gfx_init},
+        {base + 0x15ea0bf, kPrefix6, 6, (void *)eu4_gfx_set_blend},
+        {base + 0x15ea261, kPrefix6, 6, (void *)eu4_gfx_set_depth},
+        {base + 0x15ea35a, kPrefix6, 6, (void *)eu4_gfx_set_raster},
+        {base + 0x15ea42c, kPrefix5, 5, (void *)eu4_gfx_shutdown},
+    };
+    eu4_metal_boot_request calls[2] = {
+        {base + kCallRva, kExpectedCall, (void *)eu4_metal_boot_on_create, base + kCreateRva},
+        {base + kSwapRva, kSwapCall, (void *)eu4_metal_boot_on_swap, base + kSwapTarget},
+    };
+    eu4_metal_boot_patch patches[2] = {0};
+    if (!eu4_gfx_install_all(entries, 6, calls, 2, patches)) {
+        finish("metal_window_boot_failed", "callsite_rejected", 0, 0, 0, 0, 0, 0, 0, 0, NULL, -1);
+    }
+    g_original = (CreateWindowFn)patches[0].original;
+}
+
+__attribute__((constructor)) static void eu4_metal_boot_init(void) {
     const char *mode = getenv("EU4_METAL_BOOT_MODE");
-    if (mode == NULL || mode[0] == '\0' || strcmp(mode, "a1") == 0) {
-        g_bootstrap = 0;
-    } else if (strcmp(mode, "bootstrap") == 0) {
-        g_bootstrap = 1;
+    if (mode != NULL && strcmp(mode, "metal_init") == 0) {
+        g_mode = 3;
+        const char *dir = getenv("EU4_METAL_INIT_DIR");
+        if (dir == NULL || dir[0] != '/') {
+            _exit(kExitFail);
+        }
+        eu4_metal_events_set_dir(dir);
+        eu4_gfx_set_terminate(metal_init_terminate);
     } else {
-        finish("metal_window_boot_failed", "unknown_mode", 0, 0, 0, 0, 0, 0, 0, 0, NULL, -1);
+        const char *path = getenv("EU4_METAL_BOOT_RECEIPT");
+        if (path == NULL || path[0] != '/') {
+            return;
+        }
+        snprintf(g_receipt, sizeof g_receipt, "%s", path);
+        if (mode == NULL || mode[0] == '\0' || strcmp(mode, "a1") == 0) {
+            g_mode = 1;
+            g_bootstrap = 0;
+        } else if (strcmp(mode, "bootstrap") == 0) {
+            g_mode = 2;
+            g_bootstrap = 1;
+        } else {
+            finish("metal_window_boot_failed", "unknown_mode", 0, 0, 0, 0, 0, 0, 0, 0, NULL, -1);
+        }
     }
     if (!resolve_helpers()) {
         finish("metal_window_boot_failed", "sdl_helper_unresolved", 0, 0, 0, 0, 0, 0, 0, 0, NULL,
@@ -487,6 +566,12 @@ __attribute__((constructor)) static void eu4_metal_boot_init(void) {
                -1);
     }
     uint8_t *base = (uint8_t *)header;
+    eu4_metal_events_set_image((uintptr_t)base, image_limit(header));
+    eu4_gfx_set_image(base, (void **)(base + EU4_GFX_MASTER_CONTEXT_RVA));
+    if (g_mode == 3) {
+        install_metal_init(base);
+        return;
+    }
     eu4_metal_boot_request requests[EU4_METAL_BOOT_MAX_SITES];
     int count = 1;
     requests[0] = (eu4_metal_boot_request){base + kCallRva, kExpectedCall,

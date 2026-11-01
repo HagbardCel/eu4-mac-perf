@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "benchmark" / "eu4_gfx_init.mm"
 HOST_SOURCE = ROOT / "tests" / "gfx_init_host.mm"
+EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
 HOST = ROOT / "benchmark" / ".build" / "gfx_init_host"
 
 
@@ -15,8 +16,8 @@ class GfxInitTests(unittest.TestCase):
         HOST.parent.mkdir(parents=True, exist_ok=True)
         command = [
             "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-lc++",
-            "-framework", "Foundation", "-framework", "Metal",
-            "-o", str(HOST), str(HOST_SOURCE), str(SOURCE),
+            "-framework", "Foundation", "-framework", "Metal", "-framework", "QuartzCore",
+            "-o", str(HOST), str(HOST_SOURCE), str(SOURCE), str(EVENTS),
         ]
         built = subprocess.run(command, capture_output=True, text=True, check=False)
         if built.returncode:
