@@ -6,7 +6,7 @@ The reading is [architecture.md](architecture.md), [types.md](types.md), and [un
 
 ```mermaid
 flowchart TD
-  a1["A1 layer on the SDL window"]
+  a1["A1 layer on the child view"]
   settings["_GfxGetGraphicsSettings"]
   init["_GfxInit"]
   backend["backend context at +0x180"]
@@ -36,12 +36,12 @@ On success the success byte is 1, and the master and every required backend-owne
 
 Init does not call `SDL_GL_*`, `_glewInit`, `glGet*`, `InitOpenGLConversionTables`, or `GetOpenGLContext*`.
 
-A1 already attaches one `CAMetalLayer` to the primary SDL/Cocoa content view and sets that layer's device ([eu4_metal_boot.m](../../../../benchmark/eu4_metal_boot.m)).
+A1 gets the `NSWindow` with `SDL_GetWindowWMInfo`, inserts a child `NSView` in `native.contentView`, and sets that child's `layer` to the `CAMetalLayer` ([eu4_metal_boot.m](../../../../benchmark/eu4_metal_boot.m)). `contentView.layer` is not that layer. Bootstrap holds the child-view layer in its private `g_layer`.
 
 - A1 owns layer creation and attachment. Init does not create a second layer or a second hosting view.
-- Init adopts that layer from the window at `+0x178`. The backend device is `layer.device`. If that is nil, init assigns `MTLCreateSystemDefaultDevice()` on the existing layer. The command queue is created from that device. `_GfxShutdown` destroys the queue.
-- If no layer is attached, init fails. It does not invent a layer.
-- Init compares `registryID` with a fresh `MTLCreateSystemDefaultDevice()` and releases that comparison reference. If the ids differ, init fails. The settings probe and the adopted device are not assumed to be the same object.
+- `backend.adopt` receives that child-view layer pointer from the existing boot integration. Init does not read `contentView.layer` and does not search subviews. If the handoff pointer is nil, init fails.
+- The backend device is `layer.device`. If that is nil, init assigns `MTLCreateSystemDefaultDevice()` on that same layer.
+- The queue `_GfxShutdown` destroys is the backend queue. Bootstrap's private `g_queue` is not a second live queue. The continued-execution path either does not create it, or transfers it into the backend.
 - Drawable acquisition and encoding come later. `_GfxPresent` submits the completed frame. Neither runs as part of init.
 
 ## `_GfxGetGraphicsSettings`
@@ -74,11 +74,11 @@ The backend owns GPU references. The master owns the engine headers init creates
 
 ## Services init calls
 
-Init calls `backend.adopt` for the existing layer, device, and queue; `state.create` from a `GetDefault*` description; `state.apply` with force; and `texture.create_fallback`. Header `operator.new` and `operator.delete` stay the engine allocator. GPU ownership stays in the backend.
+Init calls `backend.adopt` with the handed-off child-view layer; `state.create` from a `GetDefault*` description; `state.apply` with force; and `texture.create_fallback`. Header `operator.new` and `operator.delete` stay the engine allocator. GPU ownership stays in the backend.
 
 ## What is replaced with init
 
-Patched together, because init calls them or they own `+0x180`:
+These six entries are the engine patch set, because init calls them or they own `+0x180`. They are not the whole startup path. PR3 keeps A1's child view and its layer, and it keeps the bypass of `SDL_GL_SetSwapInterval` at `0x13cc1e4` (`eu4_metal_boot_on_swap` returns 0). It does not keep the terminating `_glewInit` hook at `0x15e91fd`. `a1` exits after the synthetic clear. `bootstrap` exits at that hook. Neither is the continued run. The original `_GfxInit` body is replaced, so it does not create a GL context. This adds no checkpoint.
 
 - `_GfxGetGraphicsSettings`
 - `_GfxInit`
