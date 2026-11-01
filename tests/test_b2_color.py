@@ -1,13 +1,19 @@
+import hashlib
 import json
 import os
+import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "benchmark"))
+import eu4_b2_color_capture as color_capture
+
 CAPTURE = ROOT / "analysis/metal-draw/b2/color_capture.m"
 DRIVER = ROOT / "tests/b2_color_driver.m"
 HOST = ROOT / "tests/metal_color_ref_host.m"
@@ -177,6 +183,106 @@ class B2ColorTests(unittest.TestCase):
         self.assertNotIn("glReadPixels", nm)
         self.assertNotIn("glGenFramebuffers", nm)
 
+    def rewrite_fixture(self, directory, name, data):
+        (directory / name).write_bytes(data)
+        path = directory / "fixture.json"
+        fixture = json.loads(path.read_text())
+        fixture["hashes"][name] = hashlib.sha256(data).hexdigest()
+        if name == "indices.bin":
+            fixture["index_bytes"] = len(data)
+        if name == "vertices.bin":
+            fixture["vertex_bytes"] = len(data)
+        path.write_text(json.dumps(fixture))
+
+    def replay(self, directory):
+        return run([str(self.host), "--fixture", str(directory)], self.env(directory), check=False)
+
+    def test_replay_rejects_the_named_fault(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.drive("accept", Path(tmp))
+            source = Path(tmp) / "fixture"
+            faults = {
+                "index": "fixture vertex index is outside the vertex buffer",
+                "shader": "fixture shader exceeds 128 KiB",
+                "attribute": "linked attribute type is not the Color pair",
+                "uniform": "linked UNIFORM0 element is missing",
+            }
+            for name, message in faults.items():
+                with tempfile.TemporaryDirectory() as case:
+                    shutil.copytree(source, Path(case) / "fixture")
+                    directory = Path(case) / "fixture"
+                    if name == "index":
+                        data = bytearray((directory / "indices.bin").read_bytes())
+                        struct.pack_into("<H", data, 4, 99)
+                        self.rewrite_fixture(directory, "indices.bin", bytes(data))
+                    elif name == "shader":
+                        blob = (directory / "draw.vert.glsl").read_bytes() + b"\n"
+                        blob += b" " * (128 * 1024 + 1 - len(blob))
+                        self.rewrite_fixture(directory, "draw.vert.glsl", blob)
+                    elif name == "attribute":
+                        text = (directory / "draw.vert.glsl").read_text()
+                        text = text.replace(
+                            "attribute float4 in_PDX_COLOR;", "attribute float3 in_PDX_COLOR;", 1)
+                        text = text.replace(
+                            "glsl_vertex.vColor = in_PDX_COLOR;",
+                            "glsl_vertex.vColor = float4(in_PDX_COLOR, 1.0);", 1)
+                        self.rewrite_fixture(directory, "draw.vert.glsl", text.encode())
+                    else:
+                        vert = (
+                            "#version 120\n"
+                            "attribute vec2 in_POSITION;\n"
+                            "attribute vec4 in_PDX_COLOR;\n"
+                            "uniform vec4 UNIFORM0;\n"
+                            "varying vec4 v_TEXCOORD1;\n"
+                            "void main() {\n"
+                            "  gl_Position = vec4(in_POSITION, 0.0, 1.0) + UNIFORM0;\n"
+                            "  v_TEXCOORD1 = in_PDX_COLOR;\n"
+                            "}\n"
+                        )
+                        frag = (
+                            "#version 120\nvarying vec4 v_TEXCOORD1;\nuniform vec4 UNIFORM0;\n"
+                            "void main() { gl_FragColor = v_TEXCOORD1; }\n"
+                        )
+                        self.rewrite_fixture(directory, "draw.vert.glsl", vert.encode())
+                        self.rewrite_fixture(directory, "draw.frag.glsl", frag.encode())
+                    result = self.replay(directory)
+                    self.assertNotEqual(result.returncode, 0, name)
+                    self.assertIn(message, result.stderr, result.stderr)
+                    self.assertNotIn("fixture hash mismatch", result.stderr)
+                    self.assertNotIn("ok ", result.stdout)
+
+    def test_eligibility_rejections(self):
+        cases = {
+            "disabled-color": "interface",
+            "stride": "interface",
+            "depth": "depth",
+            "scissor": "scissor",
+            "cull-off": "cull",
+            "extra-uniform": "not-color",
+        }
+        for kind, reason in cases.items():
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                run([str(self.driver), "reject", kind], self.env(root))
+                self.assertFalse((root / "fixture" / "fixture.json").exists(), kind)
+                counters = json.loads((root / "counters.json").read_text())
+                self.assertGreaterEqual(counters["rejects"].get(reason, 0), 1, counters)
+                if reason == "not-color":
+                    self.assertNotIn("interface", counters["rejects"])
+
+    def test_historical_preflight_uses_the_built_matcher(self):
+        present = subprocess.run(["git", "cat-file", "-e", HISTORICAL], cwd=ROOT, check=False)
+        if present.returncode != 0:
+            self.skipTest("historical blob is not in this clone")
+        record = color_capture.require_historical_vertex(self.dylib)
+        self.assertEqual(record["historical_vertex"], HISTORICAL)
+        self.assertTrue(record["historical_vertex_match"])
+        self.assertEqual(record["matcher"], "benchmark/.build/b2_color_driver")
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp) / "bad.glsl"
+            bad.write_text("void main(){}\n")
+            self.assertFalse(color_capture.historical_vertex_matches(self.dylib, bad))
+
     def test_launcher_refuses_without_both_authorizations(self):
         launcher = ROOT / "benchmark/eu4_b2_color_capture.py"
         env = os.environ.copy()
@@ -188,6 +294,50 @@ class B2ColorTests(unittest.TestCase):
         env["EU4_B2_COLOR_AUTHORIZE"] = "yes"
         only_env = run([sys.executable, str(launcher)], env, check=False)
         self.assertEqual(only_env.returncode, 2)
+
+
+class AcquisitionWaitTests(unittest.TestCase):
+    def test_fixture_then_matching_ack(self):
+        state = color_capture.new_wait()
+        self.assertFalse(color_capture.see_fixture(state, True))
+        self.assertTrue(color_capture.take_ack(state, "menu-options"))
+        self.assertEqual(color_capture.wait_status(state), "acquired")
+
+    def test_ack_then_fixture_in_the_ingame_phase(self):
+        state = color_capture.new_wait()
+        self.assertFalse(color_capture.take_ack(state, "menu-options"))
+        self.assertFalse(color_capture.take_ack(state, "ingame-esc"))
+        self.assertTrue(color_capture.see_fixture(state, True))
+        self.assertEqual(color_capture.wait_status(state), "acquired")
+
+    def test_fixture_without_ack_is_incomplete(self):
+        state = color_capture.new_wait()
+        color_capture.see_fixture(state, True)
+        self.assertEqual(color_capture.wait_status(state), "incomplete")
+
+    def test_spent_menu_ack_does_not_certify_a_later_fixture(self):
+        state = color_capture.new_wait()
+        self.assertFalse(color_capture.take_ack(state, "menu-options"))
+        self.assertFalse(color_capture.see_fixture(state, True))
+        self.assertEqual(color_capture.wait_status(state), "incomplete")
+        self.assertTrue(color_capture.take_ack(state, "ingame-esc"))
+        self.assertEqual(color_capture.wait_status(state), "acquired")
+
+    def test_ingame_ack_does_not_certify_a_menu_fixture(self):
+        state = color_capture.new_wait()
+        color_capture.see_fixture(state, True)
+        self.assertFalse(color_capture.take_ack(state, "ingame-esc"))
+        self.assertEqual(color_capture.wait_status(state), "incomplete")
+
+    def test_closed_stdin_returns_without_waiting_out_the_timeout(self):
+        state = color_capture.new_wait()
+        read, write = os.pipe()
+        os.close(write)
+        started = time.monotonic()
+        with os.fdopen(read) as stream:
+            self.assertEqual(color_capture.pull_line(stream, 5), "")
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(color_capture.wait_status(state), "acquisition-failed")
 
 
 if __name__ == "__main__":

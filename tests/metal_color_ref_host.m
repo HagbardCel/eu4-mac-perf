@@ -393,6 +393,48 @@ static void flip_rgba(const uint8_t *bottom_up, uint8_t *top_down, int width, in
     }
 }
 
+static void require_color_interface(GLuint program) {
+    GLint attribs = 0;
+    GLint uniforms = 0;
+    glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &attribs);
+    glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &uniforms);
+    if (attribs != 2 || uniforms != 1) {
+        die("linked interface is not the Color pair");
+    }
+    int saw_pos = 0;
+    int saw_color = 0;
+    for (GLint i = 0; i < attribs; i++) {
+        char name[64];
+        GLsizei length = 0;
+        GLint size = 0;
+        GLenum type = 0;
+        glGetActiveAttrib(program, (GLuint)i, (GLsizei)sizeof name, &length, &size, &type, name);
+        if (strcmp(name, "in_POSITION") == 0 && type == GL_FLOAT_VEC2 && size == 1) {
+            saw_pos = 1;
+        } else if (strcmp(name, "in_PDX_COLOR") == 0 && type == GL_FLOAT_VEC4 && size == 1) {
+            saw_color = 1;
+        }
+    }
+    if (!saw_pos || !saw_color) {
+        die("linked attribute type is not the Color pair");
+    }
+    char uname[64];
+    GLsizei ulen = 0;
+    GLint usize = 0;
+    GLenum utype = 0;
+    glGetActiveUniform(program, 0, (GLsizei)sizeof uname, &ulen, &usize, &utype, uname);
+    if ((strcmp(uname, "UNIFORM0") != 0 && strcmp(uname, "UNIFORM0[0]") != 0) || utype != GL_FLOAT_VEC4 || usize != 4) {
+        die("linked UNIFORM0 element is missing");
+    }
+    for (int i = 0; i < 4; i++) {
+        char element[32];
+        snprintf(element, sizeof element, "UNIFORM0[%d]", i);
+        if (glGetUniformLocation(program, element) < 0) {
+            die("linked UNIFORM0 element is missing");
+        }
+    }
+}
+
 static void init_indexed_gl(NSString *vert, NSString *frag, int width, int height, GLuint pos_loc, GLuint color_loc) {
     CGLPixelFormatAttribute attrs[] = {
         kCGLPFAOpenGLProfile, (CGLPixelFormatAttribute)kCGLOGLPVersion_Legacy,
@@ -467,6 +509,7 @@ static void init_indexed_gl(NSString *vert, NSString *frag, int width, int heigh
         glGetAttribLocation(g_program, "in_PDX_COLOR") != (GLint)color_loc) {
         die("linked attribute locations do not match the fixture");
     }
+    require_color_interface(g_program);
     glGenBuffers(1, &g_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
     glVertexAttribPointer(pos_loc, 2, GL_FLOAT, GL_FALSE, 12, (void *)0);
@@ -707,6 +750,34 @@ static NSString *json_string(NSDictionary *object, NSString *key) {
     return value;
 }
 
+static int vertices_cover_indices(const uint8_t *indices, uint64_t offset, uint64_t count, uint64_t index_size,
+                                 uint64_t vertex_bytes) {
+    if (index_size != 2 && index_size != 4) {
+        return 0;
+    }
+    for (uint64_t i = 0; i < count; i++) {
+        uint32_t index = 0;
+        const uint8_t *cursor = indices + offset + i * index_size;
+        if (index_size == 2) {
+            uint16_t narrow = 0;
+            memcpy(&narrow, cursor, sizeof narrow);
+            index = narrow;
+        } else {
+            memcpy(&index, cursor, sizeof index);
+        }
+        if ((uint64_t)index > UINT64_MAX / 12) {
+            return 0;
+        }
+        uint64_t base = (uint64_t)index * 12;
+        uint64_t position_end = base + 8;
+        uint64_t color_end = base + 12;
+        if (position_end < base || color_end < position_end || color_end > vertex_bytes) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int range_ok(uint64_t offset, uint64_t count, uint64_t index_size, uint64_t buffer_bytes) {
     if (count == 0 || offset > buffer_bytes || count > UINT64_MAX / index_size) {
         return 0;
@@ -785,6 +856,15 @@ static int fixture_main(const char *dir) {
                 die("fixture hash mismatch");
             }
         }
+        if (vertices.length > 1024 * 1024) {
+            die("fixture vertex bytes exceed 1 MiB");
+        }
+        if (indices.length > 256 * 1024) {
+            die("fixture index bytes exceed 256 KiB");
+        }
+        if (vert.length > 128 * 1024 || frag.length > 128 * 1024) {
+            die("fixture shader exceeds 128 KiB");
+        }
         NSString *index_name = json_string(fixture, @"index_type");
         GLenum index_type = 0;
         MTLIndexType metal_index = MTLIndexTypeUInt16;
@@ -805,6 +885,10 @@ static int fixture_main(const char *dir) {
         if (count < 3 || (count % 3) != 0 || offset < 0 ||
             !range_ok((uint64_t)offset, (uint64_t)count, index_size, indices.length)) {
             die("fixture index range does not fit");
+        }
+        if (!vertices_cover_indices((const uint8_t *)indices.bytes, (uint64_t)offset, (uint64_t)count, index_size,
+                                    vertices.length)) {
+            die("fixture vertex index is outside the vertex buffer");
         }
         float matrix[16];
         memcpy(matrix, uniform.bytes, sizeof matrix);

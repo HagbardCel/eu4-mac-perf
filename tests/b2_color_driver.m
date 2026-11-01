@@ -479,6 +479,41 @@ int main(int argc, char **argv) {
         expect_fixture(1);
         return 0;
     }
+    if (strcmp(argv[1], "reject") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: b2_color_driver reject <kind>\n");
+            return 2;
+        }
+        char *edited = NULL;
+        const char *frag_text = frag;
+        if (strcmp(argv[2], "extra-uniform") == 0) {
+            edited = used_extra(frag);
+            frag_text = edited;
+        }
+        GLuint program = build_program(vert, frag_text, NULL);
+        upload(GL_UNSIGNED_SHORT, shorts, (int)sizeof shorts);
+        fixed_state(0, 0);
+        set_matrix(program, 0.f);
+        if (strcmp(argv[2], "disabled-color") == 0) {
+            glDisableVertexAttribArray(5);
+        } else if (strcmp(argv[2], "stride") == 0) {
+            glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, 16, (void *)0);
+            glVertexAttribPointer(5, 4, GL_UNSIGNED_BYTE, GL_TRUE, 16, (void *)8);
+        } else if (strcmp(argv[2], "depth") == 0) {
+            glEnable(GL_DEPTH_TEST);
+        } else if (strcmp(argv[2], "scissor") == 0) {
+            glEnable(GL_SCISSOR_TEST);
+        } else if (strcmp(argv[2], "cull-off") == 0) {
+            glDisable(GL_CULL_FACE);
+        } else if (strcmp(argv[2], "extra-uniform") != 0) {
+            fprintf(stderr, "unknown reject %s\n", argv[2]);
+            return 2;
+        }
+        issue("glDrawElements", GL_UNSIGNED_SHORT, 3, 0);
+        expect_fixture(0);
+        free(edited);
+        return 0;
+    }
     fprintf(stderr, "unknown scenario %s\n", argv[1]);
     return 2;
 }

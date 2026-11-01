@@ -33,7 +33,7 @@ Schema version 1. `analysis/metal-draw/b2/color_capture.m` writes these files un
 - `count`, `index_offset`: index count and byte offset into `indices.bin`
 - `vertex_bytes`, `index_bytes`, `stride`: `stride` is 12
 - `attributes`: `in_POSITION` then `in_PDX_COLOR`, each with `location`, `shader_type` (`GL_FLOAT_VEC2` or `GL_FLOAT_VEC4`), `size`, `component_type`, `normalized`, `offset`
-- `viewport`: `x` and `y` are 0; `width` and `height` are in `1..2048`
+- `viewport`: `x` and `y` are 0; `width` and `height` are in `1..2048`. A larger target is an acquisition failure, not a reason to raise the cap
 - `cull` true, `cull_face` `GL_BACK`, `front_face` `GL_CW`
 - `dither`: the captured Boolean
 - Fixed false or fixed values: `depth_test`, `blend`, `stencil_test`, `scissor_test`, `alpha_test`, `color_logic_op`, `framebuffer_srgb`, `polygon_smooth`, `clip_planes`, `primitive_restart`, `samples` 0, `color_mask` all true, `polygon_mode` `GL_FILL`
@@ -42,7 +42,7 @@ Schema version 1. `analysis/metal-draw/b2/color_capture.m` writes these files un
 - `acceptance`: `coverage_mismatches` 0, `max_channel_delta` 1, `synthetic_exact` true
 - `hashes`: SHA-256 of the five original-input files
 
-Caps, reject rather than truncate: vertex bytes 1 MiB, index bytes 256 KiB, each shader 128 KiB. A nonfinite matrix is a reject. A mapped buffer is a reject before `glGetBufferSubData`. Index ranges use overflow-safe 64-bit arithmetic.
+Caps, reject rather than truncate: vertex bytes 1 MiB, index bytes 256 KiB, each shader 128 KiB. The replay host applies those caps and walks every index before it draws. For stride 12, position occupies `[base, base+8)` and color `[base+8, base+12)`. A referenced index outside that record is rejected on its own, separately from the index buffer's byte range. After link, the host requires exactly the Color attribute pair and `UNIFORM0[4]`. A nonfinite matrix is a reject. A mapped buffer is a reject before `glGetBufferSubData`. Index ranges use overflow-safe 64-bit arithmetic.
 
 On this legacy driver a draw with a vertex array object still produces no fragments unless vertex attribute array 0 is enabled. The replay enables array 0 from the same position bytes when neither captured location is 0. The linked shader locations remain the captured ones. Array 0 is not a shader input.
 
@@ -55,7 +55,9 @@ The original fixture directory is gitignored under `fixtures/`. Do not commit ca
 ## Three gates
 
 1. Synthetic pass. The commands below compile the x86-64 capture and the Color host and run them without EU4. A pass is not acquisition and not B2 acceptance.
-2. Acquisition. One process, only after `--authorize-live` and `EU4_B2_COLOR_AUTHORIZE=yes`, and only when `gog_identity()` reports the pinned SHA-256. The operator stays on the main menu, opens Options, and closes it. If that produces no fixture, they start one single-player game, open the Esc menu once the map is up, and close it. They acknowledge the step actually reached by writing `menu-options` or `ingame-esc` to the launcher's stdin. A Color program whose draws all fail the fixed-state checks is an acquisition failure. Record the counters and stop. Do not widen the checks and do not launch again in this implementation.
+2. Acquisition. One process, only after `--authorize-live` and `EU4_B2_COLOR_AUTHORIZE=yes`, and only when `gog_identity()` reports the pinned SHA-256. Before that process starts, the launcher builds `benchmark/.build/b2_color_driver` and runs its `match-vertex` path on `ea46e32:results/20261031T144434Z-metal-draw/matched.glsl`. A missing blob, a compile failure, or a mismatch does not start EU4. The operator stays on the main menu, opens Options, and closes it. If that produces no fixture, they start one single-player game, open the Esc menu once the map is up, and close it. They acknowledge the step actually reached by writing `menu-options` or `ingame-esc` to the launcher's stdin. `menu-options` certifies only a fixture first seen during that menu step. Once it is sent with no fixture, a later fixture needs `ingame-esc`. A viewport above 2048 is an acquisition failure; do not raise the cap. A Color program whose draws all fail the fixed-state checks is an acquisition failure. Record the counters and stop. Do not widen the checks and do not launch again in this implementation.
+
+   `acquired` means the fixture and the acknowledgement for its phase both exist. `incomplete` means a fixture was written but the matching acknowledgement did not arrive; the fixture stays on disk. `acquisition-failed` means no fixture. The session metadata records the historical object, `historical_vertex_match`, and the matcher path `benchmark/.build/b2_color_driver`.
 3. B2 acceptance. The frozen fixture replays in GL, then Metal. `docs/status.md` changes only when coverage mismatches are 0 and the channel cap holds. `color-note.md` records provenance, the acknowledged UI step, draw parameters, hashes, and the compare.
 
 ## Preflight
