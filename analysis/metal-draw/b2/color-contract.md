@@ -36,6 +36,6 @@ The Color contract is a candidate for one authentic indexed EU4 draw. The observ
 
 EU4 submissions can reach different dispatch paths. The observed main-menu indexed submissions reached the directly bound `glDrawElements` symbol, while `dlsym` lookups remain a second entry to the same wrapper, and capture has to cover the path that actually runs.
 
-Later idle sessions did not see this program. Color is a UI path, not the paused-map frame. One prior session does not make it available. A future acquisition has to name a UI context that submits it. That session is not authorized here.
+The authorized session on 2026-11-01 followed the main-menu Options step and then the in-game Esc menu. It is recorded in [color-note.md](color-note.md). The direct indexed path ran, 22 programs were inspected, and none matched this Color pair. Those two UI steps did not submit the candidate. Color remains the effect from the earlier queried draw, not a program these two steps were shown to submit. This note does not authorize another session.
 
-This is the last preparatory note. The next milestone, separately authorized, is one complete original Color fixture compared with Metal.
+B2 is still one complete original Color fixture compared with Metal. This session did not produce that fixture.
