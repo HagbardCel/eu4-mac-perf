@@ -37,6 +37,12 @@ _Static_assert(sizeof(eu4_gfx_capture_frame) == 648, "gateway frame size");
 extern void eu4_gfx_capture_gateway(void);
 extern void *eu4_gfx_capture_trampoline_ptr;
 
+/* Set once before eu4_gfx_capture_install. A null hook is skipped. Do not
+ * change either pointer while an intercepted call can still be in the gateway. */
+typedef void (*eu4_gfx_capture_hook)(eu4_gfx_capture_frame *frame);
+extern eu4_gfx_capture_hook eu4_gfx_capture_entry_ptr;
+extern eu4_gfx_capture_hook eu4_gfx_capture_exit_ptr;
+
 bool eu4_gfx_capture_rel32_fits(const void *site, const void *target);
 bool eu4_gfx_capture_install(void *site,
                              const uint8_t expected[EU4_GFX_CAPTURE_PATCH_SIZE]);
