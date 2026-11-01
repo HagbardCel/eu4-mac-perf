@@ -29,4 +29,9 @@ Write each conclusion in **one** place. Other documents **link** to it—do not 
 
 Game binaries, Ghidra projects, full decompiled pseudocode, and searchable corpora belong under `.local/eu4/<binary-sha256>/` (gitignored). The public repository tracks extraction tooling, aggregate metrics, and original analysis—not reconstructed game source.
 
-One exception: a **narrow, handwritten functional reimplementation of documented behaviour** may be tracked under `analysis/reconstruction/<function>/` so that it is reviewable, buildable and testable against the reconstruction workstream's differential validation. It must be written from the documented contract (offsets, widths, arithmetic, control flow) and must not copy decompiler output or pseudocode. Original binaries, decompiled source dumps and bulk reconstructed game source remain local-only.
+Two exceptions may be tracked:
+
+- A **narrow, handwritten functional reimplementation of documented behaviour** under `analysis/reconstruction/<function>/`, so that it is reviewable, buildable and testable against differential validation. It must be written from the documented contract (offsets, widths, arithmetic, control flow).
+- A **handwritten semantic dossier** under `analysis/reconstruction/gfx-semantic/`. It records a reading of sealed evidence: behavior, ABI, fields, dependencies, and uncertainties. It need not compile.
+
+Neither exception may include decompiler output, pseudocode, instruction dumps, or bulk reconstructed game source. Those remain local-only.

@@ -1,6 +1,6 @@
 # Renderer reconstruction and differential validation — RE0–RE3
 
-- **Status:** proposed architecture-track workstream (not yet implemented or empirically qualified).
+- **Status:** retained for a targeted correctness question. As of [decision 0001](decisions/0001-semantic-gfx-then-metal.md) (2026-11-01), per-function differential validation is not a prerequisite for a semantic dossier or for a Metal-native implementation. Historical evidence in this document stays valid. This note does not authorize a live process change.
 - **Scope:** pinned GOG EU IV 1.37.5 x86-64, Apple Silicon/Rosetta, initially paused Venice.
 - **Canonical strategy:** [EU IV rendering roadmap](eu4_recommended_strategy.md).
 - **Evidence:** [state of knowledge](eu4_macos_rendering_findings.md), the [cost-based alternatives ranking](eu4_rendering_alternatives_ranked.md), and the closed-hypothesis records ([border multi-draw](gfx-border-multidraw-ababa.md), [sub-record](gfx-subrecord-ababa.md)). That corpus is the standing constraint on this workstream: reconstruction must not reopen a closed hypothesis without genuinely new evidence, and must not disturb the frozen Phase-C diagnostic. This document proposes work; it does not change the status of existing evidence.

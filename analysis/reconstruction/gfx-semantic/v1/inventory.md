@@ -1,0 +1,105 @@
+# Inventory
+
+File presence is not semantic completeness. Counts below are the dossier headers.
+
+- `reconstructed`: 61
+- `partial`: 31
+- `blocked`: 0
+- `retain-original`: 37
+- `replace-metal`: 51
+- `undetermined`: 4
+
+| entry_rva | name | instructions | subsystem | semantic_status | migration_role | dossier |
+| --- | --- | --- | --- | --- | --- | --- |
+| `0x00000000015c5a82` | `_GfxIsOpenGL` | 8 | init | `reconstructed` | `undetermined` | [_GfxIsOpenGL](init/_GfxIsOpenGL.md) |
+| `0x00000000015c5c0e` | `_GfxSetRenderType` | 4 | init | `reconstructed` | `retain-original` | [_GfxSetRenderType](init/_GfxSetRenderType.md) |
+| `0x00000000015e8ea0` | `_GfxInit` | 770 | init | `partial` | `replace-metal` | [_GfxInit](init/_GfxInit.md) |
+| `0x00000000015e9d11` | `_GfxCreateBlendState` | 26 | state | `reconstructed` | `replace-metal` | [_GfxCreateBlendState](state/_GfxCreateBlendState.md) |
+| `0x00000000015e9d61` | `_GfxCreateDepthStencilState` | 26 | state | `reconstructed` | `replace-metal` | [_GfxCreateDepthStencilState](state/_GfxCreateDepthStencilState.md) |
+| `0x00000000015e9db2` | `_GfxCreateRasterizerState` | 24 | state | `reconstructed` | `replace-metal` | [_GfxCreateRasterizerState](state/_GfxCreateRasterizerState.md) |
+| `0x00000000015ea0bf` | `_GfxSetBlendState` | 125 | state | `partial` | `replace-metal` | [_GfxSetBlendState](state/_GfxSetBlendState.md) |
+| `0x00000000015ea261` | `_GfxSetDepthStencilState` | 80 | state | `partial` | `replace-metal` | [_GfxSetDepthStencilState](state/_GfxSetDepthStencilState.md) |
+| `0x00000000015ea35a` | `_GfxSetRasterizerState` | 65 | state | `partial` | `replace-metal` | [_GfxSetRasterizerState](state/_GfxSetRasterizerState.md) |
+| `0x00000000015ea42c` | `_GfxShutdown` | 16 | init | `reconstructed` | `replace-metal` | [_GfxShutdown](init/_GfxShutdown.md) |
+| `0x00000000015ea460` | `_GfxGetRenderType` | 5 | init | `reconstructed` | `undetermined` | [_GfxGetRenderType](init/_GfxGetRenderType.md) |
+| `0x00000000015ea46b` | `_GfxReset` | 17 | init | `reconstructed` | `replace-metal` | [_GfxReset](init/_GfxReset.md) |
+| `0x00000000015ea49b` | `_GfxOnResetMasterContext` | 23 | init | `reconstructed` | `replace-metal` | [_GfxOnResetMasterContext](init/_GfxOnResetMasterContext.md) |
+| `0x00000000015ea4f2` | `_GfxOnLostMasterContext` | 4 | init | `reconstructed` | `retain-original` | [_GfxOnLostMasterContext](init/_GfxOnLostMasterContext.md) |
+| `0x00000000015ea4f8` | `_GfxSetViewPort` | 13 | state | `partial` | `replace-metal` | [_GfxSetViewPort](state/_GfxSetViewPort.md) |
+| `0x00000000015ea52c` | `_GfxGetViewPort` | 10 | state | `reconstructed` | `retain-original` | [_GfxGetViewPort](state/_GfxGetViewPort.md) |
+| `0x00000000015ea552` | `_GfxClear` | 96 | state | `partial` | `replace-metal` | [_GfxClear](state/_GfxClear.md) |
+| `0x00000000015ea6b5` | `_GfxGetMasterContext` | 5 | init | `reconstructed` | `retain-original` | [_GfxGetMasterContext](init/_GfxGetMasterContext.md) |
+| `0x00000000015ea6c2` | `_GfxGetImmediateContext` | 5 | init | `reconstructed` | `retain-original` | [_GfxGetImmediateContext](init/_GfxGetImmediateContext.md) |
+| `0x00000000015ea6cb` | `_GfxPresent` | 7 | init | `reconstructed` | `replace-metal` | [_GfxPresent](init/_GfxPresent.md) |
+| `0x00000000015ea6df` | `_GfxBeginScene` | 39 | init | `reconstructed` | `replace-metal` | [_GfxBeginScene](init/_GfxBeginScene.md) |
+| `0x00000000015ea758` | `_GfxEndScene` | 5 | init | `reconstructed` | `retain-original` | [_GfxEndScene](init/_GfxEndScene.md) |
+| `0x00000000015ea760` | `_GfxCreateDeferredContext` | 5 | init | `reconstructed` | `retain-original` | [_GfxCreateDeferredContext](init/_GfxCreateDeferredContext.md) |
+| `0x00000000015ea769` | `_GfxDestroyDeferredContext` | 4 | init | `reconstructed` | `retain-original` | [_GfxDestroyDeferredContext](init/_GfxDestroyDeferredContext.md) |
+| `0x00000000015ea76f` | `_GfxSetPrimitiveType` | 12 | buffers | `reconstructed` | `undetermined` | [_GfxSetPrimitiveType](buffers/_GfxSetPrimitiveType.md) |
+| `0x00000000015ea789` | `_GfxDraw` | 106 | draw | `partial` | `replace-metal` | [_GfxDraw](draw/_GfxDraw.md) |
+| `0x00000000015eaa77` | `_GfxDrawIndexed` | 124 | draw | `partial` | `replace-metal` | [_GfxDrawIndexed](draw/_GfxDrawIndexed.md) |
+| `0x00000000015eac96` | `_GfxDrawInstanced` | 4 | draw | `reconstructed` | `retain-original` | [_GfxDrawInstanced](draw/_GfxDrawInstanced.md) |
+| `0x00000000015eac9c` | `_GfxDrawIndexedInstanced` | 63 | draw | `partial` | `replace-metal` | [_GfxDrawIndexedInstanced](draw/_GfxDrawIndexedInstanced.md) |
+| `0x00000000015ead87` | `_GfxDraw2dLines` | 71 | draw | `partial` | `replace-metal` | [_GfxDraw2dLines](draw/_GfxDraw2dLines.md) |
+| `0x00000000015eae97` | `_GfxCreateShader` | 16 | shaders | `reconstructed` | `replace-metal` | [_GfxCreateShader](shaders/_GfxCreateShader.md) |
+| `0x00000000015eaec7` | `_GfxAddVertexLayout` | 71 | buffers | `partial` | `retain-original` | [_GfxAddVertexLayout](buffers/_GfxAddVertexLayout.md) |
+| `0x00000000015eafae` | `_GfxAddVertexShader` | 135 | shaders | `partial` | `replace-metal` | [_GfxAddVertexShader](shaders/_GfxAddVertexShader.md) |
+| `0x00000000015eb352` | `_GfxBuildAndAddVertexShader` | 58 | shaders | `partial` | `replace-metal` | [_GfxBuildAndAddVertexShader](shaders/_GfxBuildAndAddVertexShader.md) |
+| `0x00000000015eb425` | `_GfxAddPixelShader` | 197 | shaders | `partial` | `replace-metal` | [_GfxAddPixelShader](shaders/_GfxAddPixelShader.md) |
+| `0x00000000015eb7ae` | `_GfxBuildAndAddPixelShader` | 58 | shaders | `partial` | `replace-metal` | [_GfxBuildAndAddPixelShader](shaders/_GfxBuildAndAddPixelShader.md) |
+| `0x00000000015eb884` | `_GfxLinkShader` | 5 | shaders | `reconstructed` | `replace-metal` | [_GfxLinkShader](shaders/_GfxLinkShader.md) |
+| `0x00000000015ebb12` | `_GfxClearBuilderCache` | 4 | shaders | `reconstructed` | `undetermined` | [_GfxClearBuilderCache](shaders/_GfxClearBuilderCache.md) |
+| `0x00000000015ebb1c` | `_GfxDestroyShader` | 14 | shaders | `reconstructed` | `replace-metal` | [_GfxDestroyShader](shaders/_GfxDestroyShader.md) |
+| `0x00000000015ebbb0` | `_GfxSetShader` | 47 | shaders | `partial` | `replace-metal` | [_GfxSetShader](shaders/_GfxSetShader.md) |
+| `0x00000000015ebca6` | `_GfxGetShader` | 6 | shaders | `reconstructed` | `retain-original` | [_GfxGetShader](shaders/_GfxGetShader.md) |
+| `0x00000000015ebcb3` | `_GfxCreateVertexBuffer` | 46 | buffers | `partial` | `replace-metal` | [_GfxCreateVertexBuffer](buffers/_GfxCreateVertexBuffer.md) |
+| `0x00000000015ebd4c` | `_GfxDestroyVertexBuffer` | 18 | buffers | `reconstructed` | `replace-metal` | [_GfxDestroyVertexBuffer](buffers/_GfxDestroyVertexBuffer.md) |
+| `0x00000000015ebd81` | `_GfxUpdateVertexBuffer` | 68 | buffers | `partial` | `replace-metal` | [_GfxUpdateVertexBuffer](buffers/_GfxUpdateVertexBuffer.md) |
+| `0x00000000015ebe5f` | `_GfxUpdateVertexBufferMultiple` | 70 | buffers | `partial` | `replace-metal` | [_GfxUpdateVertexBufferMultiple](buffers/_GfxUpdateVertexBufferMultiple.md) |
+| `0x00000000015ebf41` | `_GfxSetVertexBuffers` | 125 | buffers | `partial` | `replace-metal` | [_GfxSetVertexBuffers](buffers/_GfxSetVertexBuffers.md) |
+| `0x00000000015ec143` | `_GfxGetVertexCount` | 9 | buffers | `reconstructed` | `retain-original` | [_GfxGetVertexCount](buffers/_GfxGetVertexCount.md) |
+| `0x00000000015ec154` | `_GfxCreateIndexBuffer` | 43 | buffers | `reconstructed` | `replace-metal` | [_GfxCreateIndexBuffer](buffers/_GfxCreateIndexBuffer.md) |
+| `0x00000000015ec1e6` | `_GfxDestroyIndexBuffer` | 26 | buffers | `reconstructed` | `replace-metal` | [_GfxDestroyIndexBuffer](buffers/_GfxDestroyIndexBuffer.md) |
+| `0x00000000015ec23c` | `_GfxUpdateIndexBuffer` | 31 | buffers | `reconstructed` | `replace-metal` | [_GfxUpdateIndexBuffer](buffers/_GfxUpdateIndexBuffer.md) |
+| `0x00000000015ec28e` | `_GfxSetIndexBuffer` | 18 | buffers | `reconstructed` | `replace-metal` | [_GfxSetIndexBuffer](buffers/_GfxSetIndexBuffer.md) |
+| `0x00000000015ec2bc` | `_GfxCreateConstantBuffer` | 29 | buffers | `reconstructed` | `retain-original` | [_GfxCreateConstantBuffer](buffers/_GfxCreateConstantBuffer.md) |
+| `0x00000000015ec318` | `_GfxDestroyConstantBuffer` | 26 | buffers | `reconstructed` | `retain-original` | [_GfxDestroyConstantBuffer](buffers/_GfxDestroyConstantBuffer.md) |
+| `0x00000000015ec36a` | `_GfxSetConstantBuffer` | 21 | shaders | `reconstructed` | `retain-original` | [_GfxSetConstantBuffer](shaders/_GfxSetConstantBuffer.md) |
+| `0x00000000015ec3b5` | `_GfxUpdateConstantBuffer` | 15 | shaders | `reconstructed` | `retain-original` | [_GfxUpdateConstantBuffer](shaders/_GfxUpdateConstantBuffer.md) |
+| `0x00000000015ec3dd` | `_GfxDestroyBlendState` | 8 | state | `reconstructed` | `retain-original` | [_GfxDestroyBlendState](state/_GfxDestroyBlendState.md) |
+| `0x00000000015ec3ee` | `_GfxGetBlendStateInfo` | 14 | state | `reconstructed` | `retain-original` | [_GfxGetBlendStateInfo](state/_GfxGetBlendStateInfo.md) |
+| `0x00000000015ec419` | `_GfxDestroyDepthStencilState` | 8 | state | `reconstructed` | `retain-original` | [_GfxDestroyDepthStencilState](state/_GfxDestroyDepthStencilState.md) |
+| `0x00000000015ec42a` | `_GfxDestroyRasterizerState` | 8 | state | `reconstructed` | `retain-original` | [_GfxDestroyRasterizerState](state/_GfxDestroyRasterizerState.md) |
+| `0x00000000015ec43b` | `_GfxInitializeTexture` | 130 | textures | `partial` | `replace-metal` | [_GfxInitializeTexture](textures/_GfxInitializeTexture.md) |
+| `0x00000000015ec61d` | `_GfxCreateTexture` | 29 | textures | `partial` | `retain-original` | [_GfxCreateTexture](textures/_GfxCreateTexture.md) |
+| `0x00000000015ec66f` | `_GfxUpdateTexture` | 44 | textures | `reconstructed` | `replace-metal` | [_GfxUpdateTexture](textures/_GfxUpdateTexture.md) |
+| `0x00000000015ec6fd` | `_GfxGenerateMipMaps` | 15 | textures | `reconstructed` | `replace-metal` | [_GfxGenerateMipMaps](textures/_GfxGenerateMipMaps.md) |
+| `0x00000000015ec72f` | `_GfxUpdateTextureRectangle` | 62 | textures | `partial` | `replace-metal` | [_GfxUpdateTextureRectangle](textures/_GfxUpdateTextureRectangle.md) |
+| `0x00000000015ec7f1` | `_GfxGetTextureDescription` | 12 | textures | `reconstructed` | `retain-original` | [_GfxGetTextureDescription](textures/_GfxGetTextureDescription.md) |
+| `0x00000000015ec814` | `_GfxDestroyTexture` | 14 | textures | `reconstructed` | `retain-original` | [_GfxDestroyTexture](textures/_GfxDestroyTexture.md) |
+| `0x00000000015ec836` | `_GfxClearTexture` | 45 | textures | `reconstructed` | `replace-metal` | [_GfxClearTexture](textures/_GfxClearTexture.md) |
+| `0x00000000015ec8e2` | `_GfxInitializeRenderTargetTexture` | 175 | textures | `partial` | `replace-metal` | [_GfxInitializeRenderTargetTexture](textures/_GfxInitializeRenderTargetTexture.md) |
+| `0x00000000015ecb7f` | `_GfxCreateRenderTargetTexture` | 39 | textures | `reconstructed` | `retain-original` | [_GfxCreateRenderTargetTexture](textures/_GfxCreateRenderTargetTexture.md) |
+| `0x00000000015ecbf2` | `_GfxSetTextures` | 81 | textures | `partial` | `replace-metal` | [_GfxSetTextures](textures/_GfxSetTextures.md) |
+| `0x00000000015ece13` | `_GfxResolve` | 29 | textures | `reconstructed` | `replace-metal` | [_GfxResolve](textures/_GfxResolve.md) |
+| `0x00000000015ece63` | `_GfxResolveTexture` | 56 | textures | `partial` | `replace-metal` | [_GfxResolveTexture](textures/_GfxResolveTexture.md) |
+| `0x00000000015ecf12` | `_GfxCreateSampler` | 62 | textures | `partial` | `replace-metal` | [_GfxCreateSampler](textures/_GfxCreateSampler.md) |
+| `0x00000000015ecff3` | `_GfxDestroySampler` | 8 | textures | `reconstructed` | `retain-original` | [_GfxDestroySampler](textures/_GfxDestroySampler.md) |
+| `0x00000000015ed004` | `_GfxSetRenderTarget` | 42 | textures | `reconstructed` | `replace-metal` | [_GfxSetRenderTarget](textures/_GfxSetRenderTarget.md) |
+| `0x00000000015ed09d` | `_GfxGetRenderTarget` | 6 | textures | `reconstructed` | `retain-original` | [_GfxGetRenderTarget](textures/_GfxGetRenderTarget.md) |
+| `0x00000000015ed0aa` | `_GfxSetScissorRectangle` | 18 | state | `reconstructed` | `replace-metal` | [_GfxSetScissorRectangle](state/_GfxSetScissorRectangle.md) |
+| `0x00000000015ed0e2` | `_GfxSetGamma` | 4 | init | `reconstructed` | `retain-original` | [_GfxSetGamma](init/_GfxSetGamma.md) |
+| `0x00000000015ed0e8` | `_GfxCheckDevice` | 5 | init | `reconstructed` | `retain-original` | [_GfxCheckDevice](init/_GfxCheckDevice.md) |
+| `0x00000000015ed0f0` | `_GfxGetAdapterModeCount` | 11 | init | `reconstructed` | `retain-original` | [_GfxGetAdapterModeCount](init/_GfxGetAdapterModeCount.md) |
+| `0x00000000015ed110` | `_GfxGetAdapterDisplayMode` | 31 | init | `partial` | `retain-original` | [_GfxGetAdapterDisplayMode](init/_GfxGetAdapterDisplayMode.md) |
+| `0x00000000015ed16d` | `_GfxGetUsedMemory` | 5 | init | `reconstructed` | `retain-original` | [_GfxGetUsedMemory](init/_GfxGetUsedMemory.md) |
+| `0x00000000015ed175` | `_GfxForceWireframe` | 5 | state | `reconstructed` | `retain-original` | [_GfxForceWireframe](state/_GfxForceWireframe.md) |
+| `0x00000000015ed182` | `_GfxGetCaps` | 8 | init | `reconstructed` | `retain-original` | [_GfxGetCaps](init/_GfxGetCaps.md) |
+| `0x00000000015ed19b` | `_GfxRenderLock` | 4 | init | `reconstructed` | `retain-original` | [_GfxRenderLock](init/_GfxRenderLock.md) |
+| `0x00000000015ed1a1` | `_GfxRenderUnlock` | 4 | init | `reconstructed` | `retain-original` | [_GfxRenderUnlock](init/_GfxRenderUnlock.md) |
+| `0x00000000015ed1a7` | `_GfxHasRenderLock` | 5 | init | `reconstructed` | `retain-original` | [_GfxHasRenderLock](init/_GfxHasRenderLock.md) |
+| `0x00000000015ed1af` | `_GfxSetAllowResourceCreation` | 4 | init | `reconstructed` | `retain-original` | [_GfxSetAllowResourceCreation](init/_GfxSetAllowResourceCreation.md) |
+| `0x00000000015ed1b5` | `_GfxWriteScreenshot` | 48 | init | `partial` | `replace-metal` | [_GfxWriteScreenshot](init/_GfxWriteScreenshot.md) |
+| `0x00000000015ed272` | `_GfxWriteTextureAsTGA` | 55 | textures | `partial` | `replace-metal` | [_GfxWriteTextureAsTGA](textures/_GfxWriteTextureAsTGA.md) |
+| `0x00000000015ed31d` | `_GfxGetTextureBuffer` | 37 | textures | `reconstructed` | `replace-metal` | [_GfxGetTextureBuffer](textures/_GfxGetTextureBuffer.md) |
+| `0x00000000015ed388` | `_GfxGetGraphicsSettings` | 366 | init | `partial` | `replace-metal` | [_GfxGetGraphicsSettings](init/_GfxGetGraphicsSettings.md) |

@@ -10,6 +10,8 @@ The workstream is **function-first**: the first target is the 21-instruction, 0-
 
 **This is the canonical roadmap.** It supersedes the earlier `eu4_rendering_strategy_90pct.md` (removed; available in git history). That document's lasting architecture (Gfx seam, shadow state, pipeline caches, complete vertical slices, B→C) is carried over in §3. Its sequencing is replaced: priorities now follow measured cost rather than draw counts.
 
+**Supersession (2026-11-01): semantic reading, then Metal.** The next step is a semantic reading of the frozen 92 `_Gfx*` functions, then a Metal-native `_GfxInit`, then replacement in execution order until one real Metal frame. Differential validation of every function, and the B1-then-B2-then-init sequence below, are no longer the critical path. B0 stays the last artificial startup checkpoint. The decision is [0001](decisions/0001-semantic-gfx-then-metal.md). The 2026-10-31 whole-backend choice still stands: one graphics API per process, OpenGL only as a separate reference run.
+
 **Supersession (2026-10-31): one graphics backend per process.** We deliberately choose whole-backend Metal replacement rather than GL/Metal interoperability. This removes cross-API synchronization and composition from the production architecture, at the cost of requiring a complete renderer before a usable Metal-only frame is available. OpenGL remains a separate reference run, started as its own process. A failed Metal-only attempt revises the hook or the init path. It does not by itself restore interop.
 
 This choice supersedes the hybrid dependencies below. Those sections stay as historical rationale:
