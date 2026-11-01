@@ -30,8 +30,10 @@ class MetalBootTests(unittest.TestCase):
         code, signaled = probe.classify_diagnostic_exit(False, None)
         self.assertEqual(signaled, True)
         live = Path(__file__).resolve().parents[1] / "results/20261101T220023Z-metal-init"
-        init = probe.read_event(live / "init.json")
-        stop = probe.read_event(live / "stop.json")
+        init = probe.session_event(live / "init.json", 0, legacy=True)
+        stop = probe.session_event(live / "stop.json", 0, legacy=True)
+        self.assertTrue((live / "init.json").is_file())
+        self.assertTrue((live / "stop.json").is_file())
         self.assertIsNotNone(init)
         self.assertIsNotNone(stop)
         recorded = probe.metal_init_outcome(
@@ -94,6 +96,37 @@ class MetalBootTests(unittest.TestCase):
         partial = directory / "init.json.partial"
         partial.write_text('{"success": 1}\n')
         self.assertIsNone(probe.read_event(partial))
+
+    def test_session_event_requires_launched_pid(self):
+        directory = Path(__file__).resolve().parents[1] / "benchmark" / ".build" / "pid-test"
+        if directory.exists():
+            for child in directory.iterdir():
+                child.unlink()
+        directory.mkdir(parents=True, exist_ok=True)
+        for name in ("init.json", "stop.json"):
+            path = directory / name
+            path.write_text('{"pid": 7}\n')
+            self.assertEqual(probe.session_event(path, 7)["pid"], 7)
+            self.assertTrue(path.is_file())
+            path.write_text('{"pid": 8}\n')
+            self.assertIsNone(probe.session_event(path, 7))
+            self.assertFalse(path.exists())
+            path.write_text('{"phase": "after_init"}\n')
+            self.assertIsNone(probe.session_event(path, 7))
+            self.assertFalse(path.exists())
+            self.assertIsNotNone(probe.session_event(directory / f"{name}.untrusted-1", 7, legacy=True))
+            path.write_text('{"pid": "7"}\n')
+            self.assertIsNone(probe.session_event(path, 7))
+            path.write_text('{"pid": true}\n')
+            self.assertIsNone(probe.session_event(path, 1))
+        legacy = directory / "legacy.json"
+        legacy.write_text('{"success": 1}\n')
+        self.assertEqual(probe.session_event(legacy, 7, legacy=True)["success"], 1)
+        self.assertTrue(legacy.is_file())
+        wrong = directory / "wrong.json"
+        wrong.write_text('{"pid": 9}\n')
+        self.assertIsNone(probe.session_event(wrong, 7, legacy=True))
+        self.assertFalse(wrong.exists())
 
     def test_metal_init_excludes_bootstrap(self):
         with contextlib.redirect_stderr(io.StringIO()):

@@ -391,7 +391,7 @@ static uint8_t *map_entries(size_t page, int count, eu4_gfx_entry_request *entri
     for (int i = 0; i < count; i++) {
         int length = i >= 5 ? 5 : 6;
         memset(prefixes[i], 0, 6);
-        memcpy(prefixes[i], i == 5 ? prefix5 : prefix6, (size_t)length);
+        memcpy(prefixes[i], i >= 5 ? prefix5 : prefix6, (size_t)length);
         memcpy(mapping + (size_t)i * 16, prefixes[i], (size_t)length);
         mapping[(size_t)i * 16 + (size_t)length] = 0xc3;
         entries[i].site = mapping + (size_t)i * 16;

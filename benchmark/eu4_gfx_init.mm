@@ -404,14 +404,15 @@ static int write_success(void *master, EU4GfxBackend *backend) {
     int length = snprintf(
         body, sizeof body,
         "{\"success\":1,\"master\":\"0x%llx\",\"layer\":\"0x%llx\",\"device\":\"0x%llx\","
-        "\"queue\":\"0x%llx\",\"depth\":\"0x%llx\",\"texture\":\"0x%llx\",\"thread\":%llu}\n",
+        "\"queue\":\"0x%llx\",\"depth\":\"0x%llx\",\"texture\":\"0x%llx\",\"thread\":%llu,"
+        "\"pid\":%d}\n",
         (unsigned long long)(uintptr_t)master,
         (unsigned long long)(uintptr_t)(__bridge void *)backend.layer,
         (unsigned long long)(uintptr_t)(__bridge void *)backend.device,
         (unsigned long long)(uintptr_t)(__bridge void *)backend.queue,
         (unsigned long long)(uintptr_t)(__bridge void *)backend.depthState,
         (unsigned long long)(uintptr_t)(__bridge void *)backend.fallback,
-        (unsigned long long)g_init_thread);
+        (unsigned long long)g_init_thread, (int)getpid());
     if (length < 0 || (size_t)length >= sizeof body) {
         return -1;
     }

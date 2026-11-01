@@ -93,24 +93,25 @@ void eu4_metal_events_stop(const char *phase, const char *symbol, const char *re
     int inside = caller != NULL && image_base != 0 && address >= image_base && address < image_end;
     uint64_t thread = 0;
     (void)pthread_threadid_np(pthread_self(), &thread);
-    char body[1024];
+    char body[1280];
     int length;
+    int pid = (int)getpid();
     if (inside) {
         length = snprintf(body, sizeof body,
                           "{\"phase\":\"%s\",\"symbol\":\"%s\",\"image\":\"%s\","
                           "\"address\":\"0x%llx\",\"rva\":\"0x%llx\",\"reason\":\"%s\","
-                          "\"thread\":%llu}\n",
+                          "\"thread\":%llu,\"pid\":%d}\n",
                           phase ? phase : "", symbol ? symbol : "", escaped,
                           (unsigned long long)address, (unsigned long long)(address - image_base),
-                          reason ? reason : "", (unsigned long long)thread);
+                          reason ? reason : "", (unsigned long long)thread, pid);
     } else {
         length = snprintf(body, sizeof body,
                           "{\"phase\":\"%s\",\"symbol\":\"%s\",\"image\":\"%s\","
                           "\"address\":\"0x%llx\",\"rva\":null,\"reason\":\"%s\","
-                          "\"thread\":%llu}\n",
+                          "\"thread\":%llu,\"pid\":%d}\n",
                           phase ? phase : "", symbol ? symbol : "", escaped,
                           (unsigned long long)address, reason ? reason : "",
-                          (unsigned long long)thread);
+                          (unsigned long long)thread, pid);
     }
     if (length < 0 || (size_t)length >= sizeof body) {
         _exit(2);

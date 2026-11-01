@@ -216,19 +216,19 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
     _exit(accepted ? 0 : kExitFail);
 }
 
+/* Image 0 is the main executable. Another loaded image named eu4 does not qualify. */
 static const struct mach_header_64 *eu4_header(void) {
-    uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; i++) {
-        const char *name = _dyld_get_image_name(i);
-        if (name == NULL) {
-            continue;
-        }
-        size_t length = strlen(name);
-        if (length >= 4 && strcmp(name + length - 4, "/eu4") == 0) {
-            return (const struct mach_header_64 *)_dyld_get_image_header(i);
-        }
+    const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(0);
+    const char *name = _dyld_get_image_name(0);
+    if (header == NULL || name == NULL || header->magic != MH_MAGIC_64 ||
+        header->filetype != MH_EXECUTE) {
+        return NULL;
     }
-    return NULL;
+    size_t length = strlen(name);
+    if (length < 4 || strcmp(name + length - 4, "/eu4") != 0) {
+        return NULL;
+    }
+    return header;
 }
 
 static int pixels_match(const uint8_t *bytes) {
@@ -533,6 +533,10 @@ static void install_metal_init(uint8_t *base) {
 }
 
 __attribute__((constructor)) static void eu4_metal_boot_init(void) {
+    const struct mach_header_64 *header = eu4_header();
+    if (header == NULL) {
+        return;
+    }
     const char *mode = getenv("EU4_METAL_BOOT_MODE");
     if (mode != NULL && strcmp(mode, "metal_init") == 0) {
         g_mode = 3;
@@ -560,11 +564,6 @@ __attribute__((constructor)) static void eu4_metal_boot_init(void) {
     }
     if (!resolve_helpers()) {
         finish("metal_window_boot_failed", "sdl_helper_unresolved", 0, 0, 0, 0, 0, 0, 0, 0, NULL,
-               -1);
-    }
-    const struct mach_header_64 *header = eu4_header();
-    if (header == NULL) {
-        finish("metal_window_boot_failed", "eu4_image_not_found", 0, 0, 0, 0, 0, 0, 0, 0, NULL,
                -1);
     }
     uint8_t *base = (uint8_t *)header;
