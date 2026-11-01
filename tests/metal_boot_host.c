@@ -1,12 +1,18 @@
 #include "../benchmark/eu4_gfx_entry_patch.h"
 #include "../benchmark/eu4_metal_boot_patch.h"
 
+#include <dlfcn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 #include <unistd.h>
+
+#define GL_SILENCE_DEPRECATION
+#include <OpenGL/OpenGL.h>
+#include <OpenGL/gl.h>
 
 static void fail(const char *message) {
     fprintf(stderr, "%s\n", message);
@@ -220,14 +226,104 @@ static void entry_hit(void) { entry_hits += 1; }
 static void call_hit(void) { call_hits += 1; }
 
 int eu4_metal_gl_should_forward(int mode, int phase);
+void eu4_metal_gl_test_set_mode(int mode);
+void eu4_metal_gl_test_set_phase(int phase);
+void (*eu4_metal_gl_test_clear(void))(GLbitfield);
+void eu4_metal_events_set_dir(const char *dir);
+void eu4_metal_events_set_image(uintptr_t base, uintptr_t end);
+
+extern char gl_clear_ret[];
+
+__attribute__((noinline)) static void clear_callsite(void (*fn)(GLbitfield)) {
+    asm volatile("movq %0, %%r11\n\t"
+                 "movl $0x4000, %%edi\n\t"
+                 "call *%%r11\n\t"
+                 ".globl _gl_clear_ret\n\t"
+                 "_gl_clear_ret:\n\t"
+                 :
+                 : "r"(fn)
+                 : "r11", "rdi", "memory");
+}
 
 static void test_gl_forward(void) {
     if (!eu4_metal_gl_should_forward(0, 0) || !eu4_metal_gl_should_forward(1, 1) ||
         !eu4_metal_gl_should_forward(2, 2)) {
         fail("unset, a1, or bootstrap did not forward");
     }
-    if (eu4_metal_gl_should_forward(3, 0) || eu4_metal_gl_should_forward(3, 2)) {
-        fail("metal_init forwarded a GL call");
+    if (!eu4_metal_gl_should_forward(3, 0)) {
+        fail("before_init did not forward");
+    }
+    if (eu4_metal_gl_should_forward(3, 1) || eu4_metal_gl_should_forward(3, 2)) {
+        fail("metal_init forwarded during or after init");
+    }
+    void (*wrap)(GLbitfield) = eu4_metal_gl_test_clear();
+    void (*real)(GLbitfield) = dlsym(RTLD_NEXT, "glClear");
+    Dl_info info;
+    memset(&info, 0, sizeof info);
+    if (wrap == NULL || real == NULL || real == wrap || dladdr((void *)real, &info) == 0 ||
+        info.dli_fname == NULL || strstr(info.dli_fname, "metal_boot_host") != NULL) {
+        fail("glClear did not resolve past the wrapper");
+    }
+    CGLPixelFormatAttribute attrs[] = {kCGLPFAAccelerated, 0};
+    CGLPixelFormatObj format = NULL;
+    GLint count = 0;
+    CGLContextObj context = NULL;
+    if (CGLChoosePixelFormat(attrs, &format, &count) != kCGLNoError || format == NULL ||
+        CGLCreateContext(format, NULL, &context) != kCGLNoError ||
+        CGLSetCurrentContext(context) != kCGLNoError) {
+        fail("could not make a GL context");
+    }
+    real(0);
+    char dir[] = "/tmp/eu4-gl-XXXXXX";
+    if (mkdtemp(dir) == NULL) {
+        fail("gl temp dir");
+    }
+    eu4_metal_events_set_dir(dir);
+    Dl_info self;
+    if (dladdr((void *)clear_callsite, &self) == 0 || self.dli_fbase == NULL) {
+        fail("callsite image");
+    }
+    eu4_metal_events_set_image((uintptr_t)self.dli_fbase, (uintptr_t)self.dli_fbase + 0x10000000);
+    const int modes[] = {0, 1, 2};
+    for (int i = 0; i < 3; i++) {
+        eu4_metal_gl_test_set_mode(modes[i]);
+        wrap(0);
+    }
+    char stop[64];
+    snprintf(stop, sizeof stop, "%s/stop.json", dir);
+    if (access(stop, F_OK) == 0) {
+        fail("forwarding wrote stop.json");
+    }
+    eu4_metal_gl_test_set_phase(0);
+    eu4_metal_gl_test_set_mode(3);
+    wrap(0);
+    if (access(stop, F_OK) == 0) {
+        fail("before_init wrote stop.json");
+    }
+    pid_t child = fork();
+    if (child < 0) {
+        fail("fork");
+    }
+    if (child == 0) {
+        eu4_metal_gl_test_set_mode(3);
+        eu4_metal_gl_test_set_phase(2);
+        clear_callsite(wrap);
+        _exit(99);
+    }
+    int status = 0;
+    if (waitpid(child, &status, 0) < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 2) {
+        fail("diagnostic child did not exit 2");
+    }
+    FILE *file = fopen(stop, "r");
+    char body[1024];
+    if (file == NULL || fgets(body, sizeof body, file) == NULL) {
+        fail("stop.json missing");
+    }
+    fclose(file);
+    char expected[64];
+    snprintf(expected, sizeof expected, "\"address\":\"0x%llx\"", (unsigned long long)(uintptr_t)gl_clear_ret);
+    if (strstr(body, expected) == NULL || strstr(body, "\"rva\":null") != NULL) {
+        fail("stop.json did not record the host callsite");
     }
 }
 

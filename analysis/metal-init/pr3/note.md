@@ -24,7 +24,9 @@ The setters copy a translated prefix, not the description. Blend copies `0x24` b
 
 Default blend description stores: word 0 at `+0`, then `01 00 00 00 00 00 00 00 00 00 00 00 01 00 00 00` at `+4`, then `00 00 00 00 00 00 00 00 0f 00 00 00 06 00 00 00` at `+0x14`. Bytes `+2` and `+3` are not stored. The translated prefix is GL one/zero, `GL_FUNC_ADD` (`0x8006`), compare `6+0x200`, and four mask bytes of 1. Depth's translated prefix is the B1 default: enable and write bytes 1, compare `0x203`, stencil compare `0x207`, three `GL_KEEP` (`0x1e00`) ops, both masks `0xffffffff`. Rasterizer's translated prefix is `GL_BACK` (`0x405`), `GL_FILL` (`0x1b02`), `GL_CCW` (`0x900`), scissor 0, cull 1.
 
-Fallback `GfxCreateTexture` at `0x15e99fb` passes format `0xb`, 4×4, type 0, and 64 bytes of `0xff`. Format `0xb` selects internal `GL_RGBA8`, external `GL_BGRA`, type `GL_UNSIGNED_BYTE`, which is `MTLPixelFormatBGRA8Unorm`. The header is `0x44` bytes at `+0x98`. Name `+4` stays 0. One mip, sampleable, not a render target.
+Fallback `GfxCreateTexture` at `0x15e99fb` passes format `0xb`, 4×4, type 0, and 64 bytes of `0xff`. It goes through `GfxCreateTexture` (`0x15c5a96`) into `_GfxInitializeTexture`. `_GfxGetTextureDescription` copies `0x1c` bytes from header `+0x28`: width `4`, height `4`, format `0xb`, bytes per pixel `4` (`GetBytesPerPixel(0xb)` table index 4 at `0x101a793a0`), width `4`, height `4`, mip count `1`. The header name at `+4` stays 0. Format `0xb` is `MTLPixelFormatBGRA8Unorm`. One mip, sampleable, not a render target.
+
+`_GfxInit` stores primitive token `4` at master `+8` (`movl $4, 0x8(%rax)` at `0x1015e8eda`). This replacement does the same.
 
 `GL_MAX_TEXTURE_SIZE` (`0x0D33`) is stored as the dword at `+0x188`. The other bytes through `+0x192` stay 0. 8192 when the device is Apple2 and not Apple3 or Mac2. 16384 otherwise.
 
@@ -39,10 +41,10 @@ The two CALL sites stay `e8 14 ec ef ff` at `0x13cc1d7` and `e8 27 ef ef ff` at 
 
 ## Not settled
 
-Fourteen indirect `call [rcx+0x38]` log sites. The wireframe alias (`+0x194` versus a pointer that is not shown to be the master). The meaning of the settings immediates. Blend and rasterizer description fields no default reader loads. The GL interpose is the symbols these six bodies call, not every GL entry and not a pointer cached before the interpose is bound. The original init also stores primitive token `4` at master `+8`. This replacement leaves that dword 0.
+Fourteen indirect `call [rcx+0x38]` log sites. The wireframe alias (`+0x194` versus a pointer that is not shown to be the master). The meaning of the settings immediates. Blend and rasterizer description fields no default reader loads. The GL interpose is the symbols these six bodies call, plus `glClear`, `glClearColor`, `glScissor`, `glViewport`, `glUseProgram`, `glGenBuffers`, `glBindBuffer`, `glBufferData`, and `glDrawElements`. It is not every GL entry and not a pointer cached before the interpose is bound. A call before `_GfxInit` is forwarded: `SDL_GL_ExtensionSupported` calls `glGetString` through the SDL driver while the phase is still `before_init`, and stopping there never reaches the replacement. libGL's export trie is read once at load. `dlsym` returns this interpose, and a tail call through that pointer never reaches libGL. `during_init` and `after_init` still stop. `init.json` records the init thread. `stop.json` records the thread that hit the intercepted call. The same thread is what counts as continuation.
 
 ## Offline result
 
-`python3 tests/test_gfx_init.py` and `python3 tests/test_metal_boot.py` passed on the x86_64 hosts. Neither launches EU4. Live `_GfxInit` integration is not verified.
+`python3 tests/test_gfx_init.py` and `python3 tests/test_metal_boot.py` passed on the x86_64 hosts after the review fixes. Neither launches EU4. The live session is [results/20261101T220023Z-metal-init](../../../results/20261101T220023Z-metal-init): init succeeded, the same thread stopped on `glGetIntegerv` at RVA `0x15e9e20` with phase `after_init`, and the process exited 2 without a launcher signal.
 
-New files: `eu4_gfx_entry_patch` 349 lines, `eu4_metal_events` 139, `eu4_metal_gl_diag.c` 141. `eu4_gfx_init.mm` is 650 including the existing depth writer. `eu4_metal_boot.m` is 593 including the existing a1 and bootstrap path. Host checks are `tests/gfx_init_host.mm` 361 and `tests/metal_boot_host.c` 446.
+New files: `eu4_gfx_entry_patch` 313 lines, `eu4_metal_events` 121, `eu4_metal_gl_diag.c` 348. `eu4_gfx_init.mm` is 676 including the existing depth writer. `eu4_metal_boot.m` is 593 including the existing a1 and bootstrap path. Host checks are `tests/gfx_init_host.mm` 424 and `tests/metal_boot_host.c` 542.

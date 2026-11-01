@@ -5,6 +5,7 @@
 #import <QuartzCore/CAMetalLayer.h>
 #import <dlfcn.h>
 #import <new>
+#import <pthread.h>
 #import <stdio.h>
 #import <string.h>
 #import <unistd.h>
@@ -134,6 +135,13 @@ static int g_phase;
 static int g_succeeded;
 static void *g_master;
 static int g_releases;
+static uint64_t g_init_thread;
+
+static uint64_t current_thread(void) {
+    uint64_t thread = 0;
+    (void)pthread_threadid_np(pthread_self(), &thread);
+    return thread;
+}
 
 void eu4_gfx_write_default_blend(void *dest) {
     uint8_t *bytes = (uint8_t *)dest;
@@ -396,13 +404,14 @@ static int write_success(void *master, EU4GfxBackend *backend) {
     int length = snprintf(
         body, sizeof body,
         "{\"success\":1,\"master\":\"0x%llx\",\"layer\":\"0x%llx\",\"device\":\"0x%llx\","
-        "\"queue\":\"0x%llx\",\"depth\":\"0x%llx\",\"texture\":\"0x%llx\"}\n",
+        "\"queue\":\"0x%llx\",\"depth\":\"0x%llx\",\"texture\":\"0x%llx\",\"thread\":%llu}\n",
         (unsigned long long)(uintptr_t)master,
         (unsigned long long)(uintptr_t)(__bridge void *)backend.layer,
         (unsigned long long)(uintptr_t)(__bridge void *)backend.device,
         (unsigned long long)(uintptr_t)(__bridge void *)backend.queue,
         (unsigned long long)(uintptr_t)(__bridge void *)backend.depthState,
-        (unsigned long long)(uintptr_t)(__bridge void *)backend.fallback);
+        (unsigned long long)(uintptr_t)(__bridge void *)backend.fallback,
+        (unsigned long long)g_init_thread);
     if (length < 0 || (size_t)length >= sizeof body) {
         return -1;
     }
@@ -410,6 +419,8 @@ static int write_success(void *master, EU4GfxBackend *backend) {
 }
 
 static int fill_master(void *master, void *handle) {
+    uint32_t primitive = 4;
+    memcpy((uint8_t *)master + 8, &primitive, sizeof primitive);
     EU4GfxBackend *backend = publish_backend(master);
     if (backend == nil) {
         return -1;
@@ -491,6 +502,7 @@ static int fill_master(void *master, void *handle) {
         return -1;
     }
     uint8_t *texture = (uint8_t *)alloc_zero(0x44);
+    /* +0x28 image: width, height, format, bytes per pixel, width, height, one mip. */
     uint32_t four = 4, format = 0xb, mips = 1;
     memcpy(texture + 0x28, &four, 4);
     memcpy(texture + 0x2c, &four, 4);
@@ -515,7 +527,7 @@ static int fill_master(void *master, void *handle) {
     [gpu replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0 withBytes:white bytesPerRow:16];
     backend.fallback = gpu;
     install_one(backend, master, 0x98, texture);
-    return write_success(master, backend);
+    return 0;
 }
 
 void *eu4_gfx_init(void *handle, uint8_t *success) {
@@ -529,6 +541,7 @@ void *eu4_gfx_init(void *handle, uint8_t *success) {
     if (success != NULL) {
         *success = 0;
     }
+    g_init_thread = current_thread();
     g_phase = 1;
     g_allocs = 0;
     void *master = NULL;
@@ -559,6 +572,19 @@ void *eu4_gfx_init(void *handle, uint8_t *success) {
     g_succeeded = 1;
     g_master = master;
     g_phase = 2;
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
+    int wrote = write_success(master, backend);
+    backend = nil;
+    if (wrote != 0) {
+        if (success != NULL) {
+            *success = 0;
+        }
+        g_succeeded = 0;
+        g_master = NULL;
+        g_phase = 0;
+        rollback(master);
+        return master;
+    }
     return master;
 }
 

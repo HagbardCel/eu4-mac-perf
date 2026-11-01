@@ -54,7 +54,8 @@ def build_host(arch: str = "x86_64", fail_inject: bool = False) -> Path:
         output = output.with_name(f"{output.name}_{arch}")
     command = [
         "clang", "-arch", arch, "-O2", "-Wall", "-Wextra", "-DEU4_METAL_GL_NO_INTERPOSE",
-        "-o", str(output), str(HOST_SOURCE), str(PATCH), str(ENTRY), str(GL_DIAG),
+        "-framework", "OpenGL",
+        "-o", str(output), str(HOST_SOURCE), str(PATCH), str(ENTRY), str(EVENTS), str(GL_DIAG),
     ]
     if fail_inject:
         command.insert(1, "-DEU4_METAL_BOOT_TEST_FAIL")
@@ -91,6 +92,9 @@ def read_event(path: Path) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+DIAGNOSTIC_GRACE_SECONDS = 2
+
+
 def metal_init_should_stop(init_seen: bool, stop_seen: bool, exited: bool, deadline_hit: bool) -> str | None:
     """init.json alone does not stop the run."""
     del init_seen
@@ -101,6 +105,36 @@ def metal_init_should_stop(init_seen: bool, stop_seen: bool, exited: bool, deadl
     if deadline_hit:
         return "deadline"
     return None
+
+
+def classify_diagnostic_exit(exited_within_grace: bool, returncode: int | None) -> tuple[int | None, bool]:
+    """A process that exits during the grace wait keeps its own status. Otherwise the launcher signals it."""
+    if exited_within_grace:
+        return returncode, False
+    return returncode, True
+
+
+def metal_init_outcome(init_success: bool, stop_phase: str | None, why: str | None, returncode: int | None,
+                       init_thread: int | None, stop_thread: int | None, launcher_signaled: bool) -> dict:
+    """Exit code 2 is the diagnostic _exit, and only together with an after_init stop on the init thread."""
+    threads = init_thread is not None and init_thread == stop_thread
+    diagnostic = (
+        why == "stop" and stop_phase == "after_init" and init_success and returncode == 2
+        and not launcher_signaled and threads
+    )
+    if diagnostic:
+        return {"status": "complete", "live_gfx_init": "returned", "raises": False}
+    if why == "exit" and returncode == 0 and init_success:
+        return {"status": "clean_exit", "live_gfx_init": "postconditions", "raises": False}
+    if why == "deadline" and init_success and stop_phase is None:
+        return {"status": "deadline", "live_gfx_init": "postconditions", "raises": False}
+    if init_success and (why == "exit" or why == "stop"):
+        return {"status": "post_init_failure", "live_gfx_init": "postconditions", "raises": True}
+    return {
+        "status": "failed",
+        "live_gfx_init": "postconditions" if init_success else "not_verified",
+        "raises": True,
+    }
 
 
 def read_receipt(path: Path) -> dict | None:
@@ -163,6 +197,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
     deadline = time.monotonic() + wait_seconds
     receipt = None
     why = None
+    launcher_signaled = False
     try:
         if metal_init:
             while True:
@@ -175,6 +210,13 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
                 if why is not None:
                     break
                 time.sleep(0.2)
+            if why == "stop" and game.poll() is None:
+                try:
+                    game.wait(timeout=DIAGNOSTIC_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    launcher_signaled = True
+            elif why == "deadline" and game.poll() is None:
+                launcher_signaled = True
         else:
             while time.monotonic() < deadline:
                 if game.poll() is not None:
@@ -197,21 +239,28 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         stop = read_event(run_dir / "stop.json")
         success = init is not None and init.get("success") == 1
         phase = None if stop is None else stop.get("phase")
-        verified = success and (stop is None or phase == "after_init")
+        outcome = metal_init_outcome(
+            success, phase, why, game.returncode,
+            None if init is None else init.get("thread"),
+            None if stop is None else stop.get("thread"),
+            launcher_signaled,
+        )
         metadata = {
-            "status": "bounded" if verified and stop is None else "complete" if verified else "failed",
+            "status": outcome["status"],
             "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "gog": identity,
             "exit_code": game.returncode,
             "stop_reason": why,
             "phase": phase,
+            "launcher_signaled": launcher_signaled,
             "probe_sha256": base.sha256(library),
-            "live_gfx_init": "not_verified" if not verified else "recorded",
+            "live_gfx_init": outcome["live_gfx_init"],
         }
         (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
-        if not verified:
+        if outcome["raises"]:
             raise base.BenchmarkError(
-                f"metal_init did not reach a successful init: stop={why} phase={phase}"
+                f"metal_init did not reach a successful init: stop={why} phase={phase} "
+                f"exit={game.returncode}"
             )
         return init
     wanted = "backend_bootstrap_checkpoint_reached" if bootstrap else "metal_window_boot_verified"

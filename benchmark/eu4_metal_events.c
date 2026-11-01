@@ -1,6 +1,7 @@
 #include "eu4_metal_events.h"
 
 #include <dlfcn.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -90,21 +91,26 @@ void eu4_metal_events_stop(const char *phase, const char *symbol, const char *re
     json_escape(image, escaped, sizeof escaped);
     uintptr_t address = (uintptr_t)caller;
     int inside = caller != NULL && image_base != 0 && address >= image_base && address < image_end;
+    uint64_t thread = 0;
+    (void)pthread_threadid_np(pthread_self(), &thread);
     char body[1024];
     int length;
     if (inside) {
         length = snprintf(body, sizeof body,
                           "{\"phase\":\"%s\",\"symbol\":\"%s\",\"image\":\"%s\","
-                          "\"address\":\"0x%llx\",\"rva\":\"0x%llx\",\"reason\":\"%s\"}\n",
+                          "\"address\":\"0x%llx\",\"rva\":\"0x%llx\",\"reason\":\"%s\","
+                          "\"thread\":%llu}\n",
                           phase ? phase : "", symbol ? symbol : "", escaped,
                           (unsigned long long)address, (unsigned long long)(address - image_base),
-                          reason ? reason : "");
+                          reason ? reason : "", (unsigned long long)thread);
     } else {
         length = snprintf(body, sizeof body,
                           "{\"phase\":\"%s\",\"symbol\":\"%s\",\"image\":\"%s\","
-                          "\"address\":\"0x%llx\",\"rva\":null,\"reason\":\"%s\"}\n",
+                          "\"address\":\"0x%llx\",\"rva\":null,\"reason\":\"%s\","
+                          "\"thread\":%llu}\n",
                           phase ? phase : "", symbol ? symbol : "", escaped,
-                          (unsigned long long)address, reason ? reason : "");
+                          (unsigned long long)address, reason ? reason : "",
+                          (unsigned long long)thread);
     }
     if (length < 0 || (size_t)length >= sizeof body) {
         _exit(2);

@@ -126,6 +126,60 @@ static uint32_t load_at(const void *base, int offset) {
     return value;
 }
 
+static void test_receipt_rollback(void *handle) {
+    int releases = eu4_gfx_backend_releases();
+    char blocker[] = "/tmp/eu4-pr3-not-a-dir";
+    FILE *block = fopen(blocker, "w");
+    if (block == NULL) {
+        fail("receipt blocker");
+    }
+    fclose(block);
+    eu4_metal_events_set_dir(blocker);
+    void *slot = (void *)0x1;
+    eu4_gfx_set_image(NULL, &slot);
+    uint8_t ok = 1;
+    void *blocked = eu4_gfx_init(handle, &ok);
+    if (ok != 0 || eu4_gfx_phase() != 0 || blocked == NULL || slot != blocked) {
+        fail("unwritable receipt did not fail init");
+    }
+    if (*(void **)((uint8_t *)blocked + 0x180) != NULL ||
+        *(void **)((uint8_t *)blocked + 0x80) != NULL ||
+        *(void **)((uint8_t *)blocked + 0x98) != NULL) {
+        fail("unwritable receipt left a header");
+    }
+    if (eu4_gfx_backend_releases() != releases + 1) {
+        fail("unwritable receipt did not release the backend");
+    }
+    char dir[] = "/tmp/eu4-pr3-XXXXXX";
+    if (mkdtemp(dir) == NULL) {
+        fail("receipt retry dir");
+    }
+    eu4_metal_events_set_dir(dir);
+    ok = 0;
+    void *master = eu4_gfx_init(handle, &ok);
+    if (ok != 1 || master == NULL || master == blocked || eu4_gfx_phase() != 2) {
+        fail("init after a failed receipt did not succeed");
+    }
+    if (*(void **)((uint8_t *)blocked + 0x180) != NULL) {
+        fail("first master regained a backend");
+    }
+    char path[96];
+    snprintf(path, sizeof path, "%s/init.json", dir);
+    FILE *file = fopen(path, "r");
+    if (file == NULL) {
+        fail("retry did not write init.json");
+    }
+    fclose(file);
+    eu4_gfx_shutdown(master);
+    if (eu4_gfx_backend_releases() != releases + 2) {
+        fail("retry shutdown did not release once");
+    }
+    eu4_gfx_shutdown(blocked);
+    if (eu4_gfx_backend_releases() != releases + 2) {
+        fail("failed master was released twice");
+    }
+}
+
 static void test_backend(void) {
     char dir[] = "/tmp/eu4-pr3-XXXXXX";
     if (mkdtemp(dir) == NULL) {
@@ -296,9 +350,17 @@ static void test_backend(void) {
         raster != backend.rasterHeader || tex_header != backend.textureHeader) {
         fail("master slots are not the backend headers");
     }
-    if (load_at(tex_header, 4) != 0 || load_at(tex_header, 0x28) != 4 || load_at(tex_header, 0x30) != 0xb ||
-        load_at(tex_header, 0x40) != 1) {
-        fail("fallback header");
+    if (load_at(master, 8) != 4) {
+        fail("primitive token");
+    }
+    if (load_at(tex_header, 4) != 0) {
+        fail("fallback header name");
+    }
+    static const uint32_t description[7] = {4, 4, 0xb, 4, 4, 4, 1};
+    uint32_t actual[7];
+    memcpy(actual, (uint8_t *)tex_header + 0x28, sizeof actual);
+    if (memcmp(actual, description, sizeof actual) != 0) {
+        fail("fallback description");
     }
     if (load_at(master, 0xc + 0xc) == load_at(blend, 0x24 + 0xc)) {
         fail("blend snapshot copied the description");
@@ -347,6 +409,7 @@ static void test_backend(void) {
     if (eu4_gfx_backend_releases() != releases + 1 || slot != NULL) {
         fail("shutdown did not release the backend once");
     }
+    test_receipt_rollback(handle);
 }
 
 int main(void) {
