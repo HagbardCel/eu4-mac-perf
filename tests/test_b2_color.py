@@ -352,6 +352,23 @@ class AcquisitionWaitTests(unittest.TestCase):
         self.assertNotIn("no supported Color program", recognized)
         self.assertIn("no qualifying Color fixture yet", color_capture.acquisition_note({}))
 
+    def test_progress_waits_for_the_interval_unless_the_category_changes(self):
+        base = {
+            "indexed_draws": 4, "programs_inspected": 2, "candidates": 0, "qualified": 0,
+            "rejects": {"not-color": 3},
+        }
+        counted = {**base, "indexed_draws": 5004, "rejects": {"not-color": 8}}
+        self.assertTrue(color_capture.report_progress(None, base, 0))
+        self.assertFalse(color_capture.report_progress(base, counted, 4.9))
+        self.assertTrue(color_capture.report_progress(base, counted, 5.0))
+        self.assertFalse(color_capture.report_progress(base, base, 5.0))
+        candidate = {**base, "candidates": 1}
+        self.assertTrue(color_capture.report_progress(base, candidate, 0))
+        qualified = {**candidate, "qualified": 1}
+        self.assertTrue(color_capture.report_progress(candidate, qualified, 0))
+        new_reason = {**base, "rejects": {"not-color": 3, "interface": 1}}
+        self.assertTrue(color_capture.report_progress(base, new_reason, 0))
+
     def test_closed_stdin_returns_without_waiting_out_the_timeout(self):
         state = color_capture.new_wait()
         read, write = os.pipe()

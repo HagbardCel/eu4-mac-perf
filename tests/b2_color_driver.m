@@ -307,11 +307,18 @@ int main(int argc, char **argv) {
         set_matrix(program, 0.f);
         issue("glDrawElements", GL_UNSIGNED_SHORT, 3, 0);
         check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, 1);
+        /* Direct and dlsym("glDrawElements") forwarding is required. ARB forwarding is
+         * checked only when that entry point is exported. A missing optional symbol
+         * preserves NULL and does not fail preflight. */
         typedef void (*DrawFn)(GLenum, GLsizei, GLenum, const void *);
         DrawFn arb = dlsym(RTLD_DEFAULT, "glDrawElementsARB");
         if (arb != NULL) {
-            arb(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (void *)4);
-            check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_INT, 4, 2);
+            arb(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (void *)0);
+            check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, 2);
+        }
+        if (dlsym(RTLD_DEFAULT, "eu4_b2_no_such_gl_symbol") != NULL) {
+            fprintf(stderr, "nonexistent symbol was fabricated\n");
+            return 1;
         }
         expect_fixture(0);
         return 0;
@@ -552,11 +559,14 @@ int main(int argc, char **argv) {
         expect_drawn();
         issue("glDrawElements", GL_UNSIGNED_SHORT, 3, 0);
         check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, ++total);
+        /* Direct and dlsym("glDrawElements") forwarding is required. ARB forwarding is
+         * checked only when that entry point is exported. A missing optional symbol
+         * preserves NULL and does not fail preflight. */
         typedef void (*DrawFn)(GLenum, GLsizei, GLenum, const void *);
         DrawFn arb = dlsym(RTLD_DEFAULT, "glDrawElementsARB");
         if (arb != NULL) {
-            arb(GL_TRIANGLES, 3, GL_UNSIGNED_INT, (void *)4);
-            check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_INT, 4, ++total);
+            arb(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, (void *)0);
+            check_forward(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, 0, ++total);
         }
         expect_fixture(0);
         fixed_state(0, 0);

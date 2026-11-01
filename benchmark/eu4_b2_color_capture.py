@@ -27,6 +27,7 @@ FRAG = base.ROOT / "analysis/metal-stage-d/v1/color.frag"
 PIN = "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d"
 HISTORICAL = "ea46e32:results/20261031T144434Z-metal-draw/matched.glsl"
 MATCHER = "benchmark/.build/b2_color_driver"
+PROGRESS_INTERVAL = 5.0
 
 
 def authorized(flag: bool) -> bool:
@@ -80,6 +81,21 @@ def acquisition_note(counters: dict) -> str:
         f"indexed_draws={indexed} programs_inspected={inspected} "
         f"candidates={candidates} qualified={qualified} rejects={reject_text or '{}'} {detail}"
     )
+
+
+def report_progress(previous: dict | None, counters: dict, elapsed: float) -> bool:
+    """Whether to print. elapsed is seconds since the last printed report."""
+    if previous is None:
+        return True
+    if int(previous.get("candidates") or 0) == 0 and int(counters.get("candidates") or 0) > 0:
+        return True
+    if int(previous.get("qualified") or 0) == 0 and int(counters.get("qualified") or 0) > 0:
+        return True
+    previous_rejects = previous.get("rejects") if isinstance(previous.get("rejects"), dict) else {}
+    rejects = counters.get("rejects") if isinstance(counters.get("rejects"), dict) else {}
+    if set(previous_rejects) != set(rejects):
+        return True
+    return elapsed >= PROGRESS_INTERVAL and acquisition_note(counters) != acquisition_note(previous)
 
 
 def read_counters(path: Path) -> dict | None:
@@ -185,16 +201,19 @@ def launch_session(run_dir: Path, wait_seconds: float) -> dict:
     counters_path = run_dir / "counters.json"
     state = new_wait()
     acks: list[str] = []
-    last_note = None
+    last_printed = None
+    last_print = None
     deadline = time.monotonic() + wait_seconds
     try:
         while time.monotonic() < deadline:
             fresh = read_counters(counters_path)
-            if fresh is not None and not fixture.is_file():
-                note = acquisition_note(fresh)
-                if note != last_note:
-                    print(note, flush=True)
-                    last_note = note
+            if fresh is not None:
+                now = time.monotonic()
+                elapsed = 0.0 if last_print is None else now - last_print
+                if report_progress(last_printed, fresh, elapsed):
+                    print(acquisition_note(fresh), flush=True)
+                    last_printed = fresh
+                    last_print = now
             if see_fixture(state, fixture.is_file()):
                 break
             if game.poll() is not None and state["fixture_phase"] is None:
