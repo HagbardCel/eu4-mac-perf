@@ -49,6 +49,8 @@ The 92 are not the whole backend. Shader linking, texture upload format conversi
 
 ## What Metal `_GfxInit` has to leave behind
 
+Metal init follows [metal-init-interface.md](metal-init-interface.md). The bullets below are what the original body stores. Where that contract and this list disagree, the contract wins. This includes the success byte, `+0x180`, the capability span, the settings probe, and the default objects.
+
 Established, from the init body and the handoff:
 
 - A master pointer in `gMasterContext`, also stored at offset 0, size `0x198`, returned to the caller.
@@ -71,4 +73,4 @@ Unresolved, and not required to be solved in the reading:
 - The meaning of the settings constants `0x400` and `0x30000000300`.
 - Alias between the `_GfxForceWireframe` argument and the master. The rasterizer setter reads `+0x194` on the handle object. The wireframe function writes `+0x194` on a raw pointer.
 
-A later init implements the established list and stops at the first unresolved item that a real caller requires. It does not add a startup checkpoint.
+A later init implements the contract and stops at the first unresolved item that a real caller requires. It does not add a startup checkpoint.
