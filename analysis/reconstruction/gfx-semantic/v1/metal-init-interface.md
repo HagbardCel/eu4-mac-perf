@@ -85,9 +85,11 @@ These six entries are the engine patch set, because init calls them or they own 
 - `_GfxSetBlendState`, `_GfxSetDepthStencilState`, `_GfxSetRasterizerState`
 - `_GfxShutdown`
 
+PR4, from the live `glGetIntegerv` stop at RVA `0x15e9e20`, also replaces `_GfxReset` and `_GfxOnResetMasterContext`. The record is [pr4/note.md](../../../metal-init/pr4/note.md). Reset returns 1 and leaves the master unchanged. OnReset force-applies the objects at `+0x80`, `+0x88`, and `+0x90` and does not query OpenGL. The six entries above stay the init contract.
+
 `_GfxBeginScene` stays `replace-metal`, as in its [dossier](init/_GfxBeginScene.md). It is not in this set. Its indirect call at `0x15ea71f` disables vertex-attrib arrays when a shader is current, and that branch is GL-dependent. Successful init leaves `+0x70` null, so a call before `_GfxSetShader` does not take the branch. It still calls `_GfxSetBlendState`. Replace `_GfxBeginScene` when execution reaches the shader-current branch.
 
-Specified now, patched when a run reaches them: `_GfxReset` and `_GfxOnResetMasterContext` (force-apply through the same setters, no GL readback), `_GfxPresent`, drawable acquisition, the `_GfxCreate*` state wrappers, texture upload, draws, and shaders. The six functions above are the initial scope. They are not a proof that startup finishes with only those six.
+Specified now, patched when a run reaches them: `_GfxPresent`, drawable acquisition, the `_GfxCreate*` state wrappers, texture upload, draws, and shaders. The six functions above are the initial scope. They are not a proof that startup finishes with only those six.
 
 Every other current entry stays original across this milestone, including `_GfxGetMasterContext`, `_GfxGetImmediateContext`, `_GfxGetCaps`, `_GfxGetViewPort`, `_GfxForceWireframe`, the constant-buffer functions, and header destroys that only call `operator.delete`. A retained function that still contains GL fails at its own first call.
 

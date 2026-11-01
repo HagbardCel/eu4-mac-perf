@@ -381,6 +381,61 @@ static void test_backend(void) {
     if (!g_stopped || memcmp((uint8_t *)master + 0xc, saved, sizeof saved) != 0) {
         fail("unsupported state after success did not stop");
     }
+
+    uint8_t blend_snap[0x24], depth_snap[0x24], raster_snap[0x10];
+    memcpy(blend_snap, (uint8_t *)master + 0xc, sizeof blend_snap);
+    memcpy(depth_snap, (uint8_t *)master + 0x30, sizeof depth_snap);
+    memcpy(raster_snap, (uint8_t *)master + 0x54, sizeof raster_snap);
+    memset((uint8_t *)master + 0xc, 0x11, sizeof blend_snap);
+    memset((uint8_t *)master + 0x30, 0x22, sizeof depth_snap);
+    memset((uint8_t *)master + 0x54, 0x33, sizeof raster_snap);
+    ((uint8_t *)master)[0x128] = 0x5a;
+    ((uint8_t *)master)[0x170] = 0xa5;
+    g_stopped = 0;
+    if (eu4_gfx_reset(master) != 1 || g_stopped) {
+        fail("reset did not return 1");
+    }
+    uint8_t expect_blend[0x24], expect_depth[0x24], expect_raster[0x10];
+    memset(expect_blend, 0x11, sizeof expect_blend);
+    memset(expect_depth, 0x22, sizeof expect_depth);
+    memset(expect_raster, 0x33, sizeof expect_raster);
+    if (memcmp((uint8_t *)master + 0xc, expect_blend, sizeof expect_blend) != 0 ||
+        memcmp((uint8_t *)master + 0x30, expect_depth, sizeof expect_depth) != 0 ||
+        memcmp((uint8_t *)master + 0x54, expect_raster, sizeof expect_raster) != 0) {
+        fail("reset rewrote a snapshot");
+    }
+    if (((uint8_t *)master)[0x128] != 0x5a || ((uint8_t *)master)[0x170] != 0xa5) {
+        fail("reset changed a dirty byte");
+    }
+    if (*(void **)((uint8_t *)master + 0x80) != blend ||
+        *(void **)((uint8_t *)master + 0x88) != depth_header ||
+        *(void **)((uint8_t *)master + 0x90) != raster) {
+        fail("reset changed a state object");
+    }
+
+    g_stopped = 0;
+    eu4_gfx_on_reset_master(master);
+    if (g_stopped || memcmp((uint8_t *)master + 0xc, blend_snap, sizeof blend_snap) != 0 ||
+        memcmp((uint8_t *)master + 0x30, depth_snap, sizeof depth_snap) != 0 ||
+        memcmp((uint8_t *)master + 0x54, raster_snap, sizeof raster_snap) != 0) {
+        fail("on-reset did not restore the default snapshots");
+    }
+    ((uint8_t *)master)[0x128] = 0;
+    ((uint8_t *)master)[0x170] = 0;
+
+    void *saved_blend = *(void **)((uint8_t *)master + 0x80);
+    uint8_t junk_object[0x48];
+    memset(junk_object, 0, sizeof junk_object);
+    memcpy(saved, (uint8_t *)master + 0xc, sizeof saved);
+    *(void **)((uint8_t *)master + 0x80) = junk_object;
+    g_stopped = 0;
+    eu4_gfx_on_reset_master(master);
+    int stopped = g_stopped;
+    *(void **)((uint8_t *)master + 0x80) = saved_blend;
+    g_stopped = 0;
+    if (!stopped || memcmp((uint8_t *)master + 0xc, saved, sizeof saved) != 0) {
+        fail("unsupported object on reset did not stop");
+    }
     char init_path[96];
     snprintf(init_path, sizeof init_path, "%s/init.json", dir);
     FILE *init_file = fopen(init_path, "r");

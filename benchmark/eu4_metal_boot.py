@@ -92,6 +92,37 @@ def read_event(path: Path) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def _trusted_pid(value: object, game_pid: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value == game_pid
+
+
+def _quarantine(path: Path) -> None:
+    dest = path.with_name(path.name + ".untrusted")
+    number = 0
+    while dest.exists():
+        number += 1
+        dest = path.with_name(f"{path.name}.untrusted-{number}")
+    path.rename(dest)
+
+
+def session_event(path: Path, game_pid: int, *, legacy: bool = False) -> dict | None:
+    """A live receipt counts only when its pid is the launched process.
+
+    Legacy mode keeps a historical file that has no pid field. A pid that is present
+    and wrong is still quarantined.
+    """
+    event = read_event(path)
+    if event is None:
+        return None
+    if _trusted_pid(event.get("pid"), game_pid):
+        return event
+    if legacy and "pid" not in event:
+        return event
+    _quarantine(path)
+    return None
+
+
+
 DIAGNOSTIC_GRACE_SECONDS = 2
 # Half-open bodies. The next symbol in the pinned binary is the end.
 REPLACED_BODIES = (
@@ -100,6 +131,8 @@ REPLACED_BODIES = (
     (0x15EA261, 0x15EA35A),
     (0x15EA35A, 0x15EA42C),
     (0x15EA42C, 0x15EA460),
+    (0x15EA46B, 0x15EA49B),
+    (0x15EA49B, 0x15EA4F2),
     (0x15ED388, 0x15ED9FC),
 )
 
@@ -158,7 +191,7 @@ def metal_init_outcome(init_success: bool, stop_phase: str | None, why: str | No
                        init_thread: int | None, stop_thread: int | None, launcher_signaled: bool,
                        stop_reason: str | None = None, stop_image: str | None = None,
                        stop_rva: object = None) -> dict:
-    """Exit code 2 is the diagnostic _exit, and only with an after_init gl stop outside the six bodies."""
+    """Exit code 2 is the diagnostic _exit, and only with an after_init gl stop outside the eight bodies."""
     threads = init_thread is not None and init_thread == stop_thread
     diagnostic = (
         why == "stop" and stop_phase == "after_init" and init_success and returncode == 2
@@ -245,10 +278,11 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         if metal_init:
             while True:
                 exited = game.poll() is not None
-                stop_seen = read_event(run_dir / "stop.json") is not None
+                stop_seen = session_event(run_dir / "stop.json", game.pid) is not None
                 deadline_hit = time.monotonic() >= deadline
                 why = metal_init_should_stop(
-                    read_event(run_dir / "init.json") is not None, stop_seen, exited, deadline_hit
+                    session_event(run_dir / "init.json", game.pid) is not None, stop_seen, exited,
+                    deadline_hit,
                 )
                 if why is not None:
                     break
@@ -278,8 +312,8 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         stdout.close()
         stderr.close()
     if metal_init:
-        init = read_event(run_dir / "init.json")
-        stop = read_event(run_dir / "stop.json")
+        init = session_event(run_dir / "init.json", game.pid)
+        stop = session_event(run_dir / "stop.json", game.pid)
         success = init is not None and init.get("success") == 1
         phase = None if stop is None else stop.get("phase")
         outcome = metal_init_outcome(
@@ -295,6 +329,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
             "status": outcome["status"],
             "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "gog": identity,
+            "pid": game.pid,
             "exit_code": game.returncode,
             "stop_reason": why,
             "phase": phase,

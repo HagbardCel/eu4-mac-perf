@@ -1,0 +1,13 @@
+settings set interpreter.stop-command-source-on-error false
+settings set auto-confirm true
+target create /Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4
+breakpoint set --name _ZN12_GLOBAL__N_112AbortHandlerEiP9__siginfoPv
+process handle SIGSEGV --stop true --pass true --notify true
+process handle SIGBUS --stop true --pass true --notify true
+process handle SIGILL --stop true --pass true --notify true
+process launch -s -a x86_64 -w /Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS -o /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261101T233006Z-metal-init/game.stdout -e /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261101T233006Z-metal-init/game.stderr -E DYLD_INSERT_LIBRARIES=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/benchmark/.build/libeu4_metal_boot.dylib -- -enabletelemetry -gdpr-compliant
+breakpoint list
+image lookup --name _ZN12_GLOBAL__N_112AbortHandlerEiP9__siginfoPv
+process status
+command script import /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261101T233006Z-metal-init/lldb_until_fault.py
+until_fault

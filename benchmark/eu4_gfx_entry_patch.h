@@ -6,10 +6,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Six function entries. The prefix is the Stage A complete-instruction run
+/* Eight function entries. The prefix is a complete-instruction run
    (5 or 6 bytes). The patch is e9 rel32 inside that prefix, then nop. */
 
-#define EU4_GFX_ENTRY_MAX 6
+#define EU4_GFX_ENTRY_MAX 8
 
 typedef struct {
     void *site;
@@ -24,8 +24,9 @@ bool eu4_gfx_entry_commit(void);
    On a prepared-only set, unmap the relays. */
 bool eu4_gfx_entry_restore(void);
 
-/* Verify eight sites, prepare six entries, install the CALL sites, then commit.
-   A false return from eu4_metal_boot_install_sites is not restored again. */
+/* Verify the entries and the two call sites, prepare the entries, install the
+   CALL sites, then commit. A false return from eu4_metal_boot_install_sites
+   is not restored again. */
 bool eu4_gfx_install_all(const eu4_gfx_entry_request *entries, int entry_count,
                          const eu4_metal_boot_request *calls, int call_count,
                          eu4_metal_boot_patch *call_out);

@@ -216,19 +216,19 @@ __attribute__((noreturn)) static void finish(const char *result, const char *cau
     _exit(accepted ? 0 : kExitFail);
 }
 
+/* Image 0 is the main executable. Another loaded image named eu4 does not qualify. */
 static const struct mach_header_64 *eu4_header(void) {
-    uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; i++) {
-        const char *name = _dyld_get_image_name(i);
-        if (name == NULL) {
-            continue;
-        }
-        size_t length = strlen(name);
-        if (length >= 4 && strcmp(name + length - 4, "/eu4") == 0) {
-            return (const struct mach_header_64 *)_dyld_get_image_header(i);
-        }
+    const struct mach_header_64 *header = (const struct mach_header_64 *)_dyld_get_image_header(0);
+    const char *name = _dyld_get_image_name(0);
+    if (header == NULL || name == NULL || header->magic != MH_MAGIC_64 ||
+        header->filetype != MH_EXECUTE) {
+        return NULL;
     }
-    return NULL;
+    size_t length = strlen(name);
+    if (length < 4 || strcmp(name + length - 4, "/eu4") != 0) {
+        return NULL;
+    }
+    return header;
 }
 
 static int pixels_match(const uint8_t *bytes) {
@@ -511,26 +511,32 @@ static uintptr_t image_limit(const struct mach_header_64 *header) {
 static void install_metal_init(uint8_t *base) {
     static const uint8_t kPrefix6[6] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
     static const uint8_t kPrefix5[5] = {0x55, 0x48, 0x89, 0xe5, 0x53};
-    eu4_gfx_entry_request entries[6] = {
+    eu4_gfx_entry_request entries[8] = {
         {base + 0x15ed388, kPrefix6, 6, (void *)eu4_gfx_settings},
         {base + 0x15e8ea0, kPrefix6, 6, (void *)eu4_gfx_init},
         {base + 0x15ea0bf, kPrefix6, 6, (void *)eu4_gfx_set_blend},
         {base + 0x15ea261, kPrefix6, 6, (void *)eu4_gfx_set_depth},
         {base + 0x15ea35a, kPrefix6, 6, (void *)eu4_gfx_set_raster},
         {base + 0x15ea42c, kPrefix5, 5, (void *)eu4_gfx_shutdown},
+        {base + 0x15ea46b, kPrefix5, 5, (void *)eu4_gfx_reset},
+        {base + 0x15ea49b, kPrefix5, 5, (void *)eu4_gfx_on_reset_master},
     };
     eu4_metal_boot_request calls[2] = {
         {base + kCallRva, kExpectedCall, (void *)eu4_metal_boot_on_create, base + kCreateRva},
         {base + kSwapRva, kSwapCall, (void *)eu4_metal_boot_on_swap, base + kSwapTarget},
     };
     eu4_metal_boot_patch patches[2] = {0};
-    if (!eu4_gfx_install_all(entries, 6, calls, 2, patches)) {
+    if (!eu4_gfx_install_all(entries, 8, calls, 2, patches)) {
         finish("metal_window_boot_failed", "callsite_rejected", 0, 0, 0, 0, 0, 0, 0, 0, NULL, -1);
     }
     g_original = (CreateWindowFn)patches[0].original;
 }
 
 __attribute__((constructor)) static void eu4_metal_boot_init(void) {
+    const struct mach_header_64 *header = eu4_header();
+    if (header == NULL) {
+        return;
+    }
     const char *mode = getenv("EU4_METAL_BOOT_MODE");
     if (mode != NULL && strcmp(mode, "metal_init") == 0) {
         g_mode = 3;
@@ -558,11 +564,6 @@ __attribute__((constructor)) static void eu4_metal_boot_init(void) {
     }
     if (!resolve_helpers()) {
         finish("metal_window_boot_failed", "sdl_helper_unresolved", 0, 0, 0, 0, 0, 0, 0, 0, NULL,
-               -1);
-    }
-    const struct mach_header_64 *header = eu4_header();
-    if (header == NULL) {
-        finish("metal_window_boot_failed", "eu4_image_not_found", 0, 0, 0, 0, 0, 0, 0, 0, NULL,
                -1);
     }
     uint8_t *base = (uint8_t *)header;

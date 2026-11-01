@@ -1,0 +1,79 @@
+(lldb) command source -s 0 '/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261101T233006Z-metal-init/lldb.commands'
+Executing commands in '/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261101T233006Z-metal-init/lldb.commands'.
+(lldb) settings set interpreter.stop-command-source-on-error false
+(lldb) settings set auto-confirm true
+(lldb) target create /Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4
+Current executable set to '/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4' (x86_64).
+(lldb) breakpoint set --name _ZN12_GLOBAL__N_112AbortHandlerEiP9__siginfoPv
+Breakpoint 1: where = eu4`(anonymous namespace)::AbortHandler(int, __siginfo*, void*), address = 0x000000010153e8c2
+(lldb) process handle SIGSEGV --stop true --pass true --notify true
+NAME         PASS     STOP     NOTIFY
+===========  =======  =======  =======
+SIGSEGV      true     true     true
+(lldb) process handle SIGBUS --stop true --pass true --notify true
+NAME         PASS     STOP     NOTIFY
+===========  =======  =======  =======
+SIGBUS       true     true     true
+(lldb) process handle SIGILL --stop true --pass true --notify true
+NAME         PASS     STOP     NOTIFY
+===========  =======  =======  =======
+SIGILL       true     true     true
+(lldb) process launch -s -a x86_64 -w /Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS -o /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261101T233006Z-metal-init/game.stdout -e /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261101T233006Z-metal-init/game.stderr -E DYLD_INSERT_LIBRARIES=/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/benchmark/.build/libeu4_metal_boot.dylib -- -enabletelemetry -gdpr-compliant
+Process 76944 launched: '/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4' (x86_64)
+(lldb) breakpoint list
+Current breakpoints:
+1: name = '_ZN12_GLOBAL__N_112AbortHandlerEiP9__siginfoPv', locations = 1, resolved = 1, hit count = 0
+  1.1: where = eu4`(anonymous namespace)::AbortHandler(int, __siginfo*, void*), address = 0x000000010153e8c2, resolved, hit count = 0
+
+(lldb) image lookup --name _ZN12_GLOBAL__N_112AbortHandlerEiP9__siginfoPv
+1 match found in /Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4:
+        Address: eu4[0x000000010153e8c2] (eu4.__TEXT.__text + 22236098)
+        Summary: eu4`(anonymous namespace)::AbortHandler(int, __siginfo*, void*)
+(lldb) process status
+Process 76944 stopped
+* thread #1, stop reason = signal SIGSTOP
+       frame #0: 0x0000000202ea8c50 dyld`_dyld_start
+dyld`_dyld_start:
+->  0x202ea8c50 <+0>:  movq   %rsp, %rdi
+    0x202ea8c53 <+3>:  andq   $-0x10, %rsp
+    0x202ea8c57 <+7>:  movq   $0x0, %rbp
+    0x202ea8c5e <+14>: pushq  $0x0
+(lldb) command script import /Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/results/20261101T233006Z-metal-init/lldb_until_fault.py
+(lldb) until_fault
+warning: libobjc.A.dylib is being read from process memory. This indicates that LLDB could not read from the host's in-memory shared cache. This will likely reduce debugging performance.
+
+Process 76944 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = EXC_BAD_ACCESS (code=1, address=0x0)
+       frame #0: 0x0000000000000000
+error: memory read failed for 0x0
+* thread #1, queue = 'com.apple.main-thread', stop reason = EXC_BAD_ACCESS (code=1, address=0x0)
+   * frame #0: 0x0000000000000000
+     frame #1: 0x00000001015ebd02 eu4`GfxCreateVertexBuffer + 79
+     frame #2: 0x00000001014d44e4 eu4`CPdxParticleObject::OnResetDevice() + 128
+     frame #3: 0x000000010149b4a2 eu4`CGraphics::OnResetDevice() + 118
+     frame #4: 0x000000010149b087 eu4`CGraphics::InitGfx(SWindowHandle) + 2147
+     frame #5: 0x000000010149a43e eu4`CGraphics::CGraphics(SWindowHandle, CGraphicsSettings&) + 810
+     frame #6: 0x0000000100edeff8 eu4`CEU3Graphics::CEU3Graphics(SWindowHandle, CGraphicsSettings&) + 18
+     frame #7: 0x00000001001489c6 eu4`CEU4Application::InitInMainThread(bool, double&) + 2608
+     frame #8: 0x0000000100756ee8 eu4`main + 9534
+     frame #9: 0x0000000202ec41b5 dyld`start + 3253
+     rip = 0x0000000000000000
+thread #1: tid = 0xf0332, 0x0000000000000000, queue = 'com.apple.main-thread', stop reason = EXC_BAD_ACCESS (code=1, address=0x0)
+
+Process 76944 stopped
+* thread #1, queue = 'com.apple.main-thread', stop reason = EXC_BAD_ACCESS (code=1, address=0x0)
+       frame #0: 0x0000000000000000
+error: memory read failed for 0x0
+* thread #1, queue = 'com.apple.main-thread', stop reason = EXC_BAD_ACCESS (code=1, address=0x0)
+   * frame #0: 0x0000000000000000
+     frame #1: 0x00000001015ebd02 eu4`GfxCreateVertexBuffer + 79
+     frame #2: 0x00000001014d44e4 eu4`CPdxParticleObject::OnResetDevice() + 128
+     frame #3: 0x000000010149b4a2 eu4`CGraphics::OnResetDevice() + 118
+     frame #4: 0x000000010149b087 eu4`CGraphics::InitGfx(SWindowHandle) + 2147
+     frame #5: 0x000000010149a43e eu4`CGraphics::CGraphics(SWindowHandle, CGraphicsSettings&) + 810
+     frame #6: 0x0000000100edeff8 eu4`CEU3Graphics::CEU3Graphics(SWindowHandle, CGraphicsSettings&) + 18
+     frame #7: 0x00000001001489c6 eu4`CEU4Application::InitInMainThread(bool, double&) + 2608
+     frame #8: 0x0000000100756ee8 eu4`main + 9534
+     frame #9: 0x0000000202ec41b5 dyld`start + 3253
+     rip = 0x0000000000000000
+thread #1: tid = 0xf0332, 0x0000000000000000, queue = 'com.apple.main-thread', stop reason = EXC_BAD_ACCESS (code=1, address=0x0)
