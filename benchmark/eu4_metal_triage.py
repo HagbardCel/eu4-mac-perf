@@ -121,7 +121,7 @@ def _kind(exists: dict[str, bool], loaded: dict[str, dict | None]) -> str:
             outcome = _outcome(loaded, () if ranges is None else ranges)
             if outcome["status"] == "complete":
                 return "gl_diagnostic"
-            if outcome["status"] == "blocked_at":
+            if outcome["status"] == "blocked_at" and blocked_session(exists, loaded):
                 return "blocked_at"
             if outcome["status"] == "draw_reached" and draw_session(exists, loaded):
                 return "draw_reached"
@@ -150,10 +150,6 @@ def _receipt(create: dict | None, present: bool, pid: int | None) -> str:
     ):
         return "validated"
     return "unvalidated"
-
-
-def _same_pid(event: dict | None, pid: object) -> bool:
-    return event is not None and type(pid) is int and event.get("pid") == pid
 
 
 def _parse_ranges(raw: object) -> tuple | None:
@@ -248,7 +244,37 @@ def draw_session(exists: dict[str, bool], loaded: dict[str, dict | None]) -> boo
     if not _positive_int(thread) or stop.get("thread") != thread or draw.get("thread") != thread:
         return False
     gog = meta.get("gog")
-    if isinstance(gog, dict) and "executable_sha256" in gog and gog["executable_sha256"] != boot.PINNED_SHA256:
+    if not isinstance(gog, dict) or gog.get("executable_sha256") != boot.PINNED_SHA256:
+        return False
+    return True
+
+
+def blocked_session(exists: dict[str, bool], loaded: dict[str, dict | None]) -> bool:
+    """A blocked_at stop and its receipt are one terminal session."""
+    names = ("metadata.json", "init.json", "stop.json", "blocked_at.json")
+    if any(not exists.get(name) or loaded.get(name) is None for name in names):
+        return False
+    meta = loaded["metadata.json"]
+    init = loaded["init.json"]
+    stop = loaded["stop.json"]
+    blocked = loaded["blocked_at.json"]
+    assert meta is not None and init is not None and stop is not None and blocked is not None
+    ranges = session_ranges(meta)
+    if ranges is None or _outcome(loaded, ranges)["status"] != "blocked_at":
+        return False
+    if stop.get("symbol") != blocked.get("symbol") or not isinstance(stop.get("symbol"), str):
+        return False
+    caller = boot.parse_rva(stop.get("rva"))
+    if caller is None or boot.parse_rva(blocked.get("caller_rva")) != caller:
+        return False
+    pid = stop.get("pid")
+    if not _positive_int(pid):
+        return False
+    for event in (meta, init, blocked):
+        if not _positive_int(event.get("pid")) or event.get("pid") != pid:
+            return False
+    thread = init.get("thread")
+    if not _positive_int(thread) or stop.get("thread") != thread or blocked.get("thread") != thread:
         return False
     return True
 
@@ -264,15 +290,9 @@ def d1_state(exists: dict[str, bool], loaded: dict[str, dict | None]) -> str:
         return "draw_reached" if draw_session(exists, loaded) else "error"
     if exists.get("blocked_at.json") and loaded.get("blocked_at.json") is None:
         return "error"
-    stop = loaded.get("stop.json")
-    if stop is not None and stop.get("reason") == "blocked_at":
-        meta = loaded.get("metadata.json")
-        if meta is not None and "pid" in meta and not _same_pid(stop, meta.get("pid")):
-            return "error"
-        blocked = loaded.get("blocked_at.json")
-        if blocked is not None and blocked.get("pid") != stop.get("pid"):
-            return "error"
-        return "blocked_at"
+    blocked = loaded.get("blocked_at.json")
+    if blocked is not None or (stop is not None and stop.get("reason") == "blocked_at"):
+        return "blocked_at" if blocked_session(exists, loaded) else "error"
     return "not_started"
 
 

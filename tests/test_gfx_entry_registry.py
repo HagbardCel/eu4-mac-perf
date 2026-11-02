@@ -355,6 +355,22 @@ class D1StateTests(unittest.TestCase):
         self.assertNotEqual(diag["d1"], "draw_reached")
         self.assertNotEqual(diag["kind"], "draw_reached")
 
+    def test_draw_requires_the_pinned_sha(self) -> None:
+        files = self._base()
+        meta = json.loads(files["metadata.json"])
+        del meta["gog"]["executable_sha256"]
+        files["metadata.json"] = json.dumps(meta) + "\n"
+        missing = triage.diagnose(self._dir(files))
+        self.assertEqual(missing["d1"], "error")
+        self.assertNotEqual(missing["kind"], "draw_reached")
+        files = self._base()
+        meta = json.loads(files["metadata.json"])
+        del meta["gog"]
+        files["metadata.json"] = json.dumps(meta) + "\n"
+        absent = triage.diagnose(self._dir(files))
+        self.assertEqual(absent["d1"], "error")
+        self.assertNotEqual(absent["kind"], "draw_reached")
+
     def test_draw_requires_a_terminal_launcher_stop(self) -> None:
         files = self._base()
         files["metadata.json"] = files["metadata.json"].replace('"exit_code":2', '"exit_code":0')
@@ -381,15 +397,42 @@ class D1StateTests(unittest.TestCase):
         self.assertEqual(reached["d1"], "draw_reached")
         self.assertEqual(reached["kind"], "draw_reached")
 
-    def test_blocked_at_is_not_init_success(self) -> None:
+    def _blocker(self) -> dict[str, str]:
         files = self._base()
         del files["draw_invocation.json"]
-        files["stop.json"] = files["stop.json"].replace('"reason":"draw"', '"reason":"blocked_at"')
-        files["blocked_at.json"] = '{"symbol":"_GfxInitializeTexture","branch":"compressed","pid":7}\n'
-        diag = triage.diagnose(self._dir(files))
+        files["stop.json"] = files["stop.json"].replace(
+            '"reason":"draw","symbol":"_GfxDraw"',
+            '"reason":"blocked_at","symbol":"_GfxInitializeTexture"',
+        )
+        files["blocked_at.json"] = (
+            '{"symbol":"_GfxInitializeTexture","caller_rva":"0x1000","pid":7,"thread":3}\n'
+        )
+        return files
+
+    def test_blocked_at_is_not_init_success(self) -> None:
+        diag = triage.diagnose(self._dir(self._blocker()))
         self.assertEqual(diag["d1"], "blocked_at")
+        self.assertEqual(diag["kind"], "blocked_at")
         self.assertNotEqual(diag["kind"], "gl_diagnostic")
-        files["blocked_at.json"] = '{"symbol":"_GfxInitializeTexture","pid":8}\n'
+
+    def test_blocked_at_requires_the_receipt(self) -> None:
+        files = self._blocker()
+        del files["blocked_at.json"]
+        missing = triage.diagnose(self._dir(files))
+        self.assertEqual(missing["d1"], "error")
+        self.assertNotEqual(missing["kind"], "blocked_at")
+        files = self._blocker()
+        del files["metadata.json"]
+        self.assertEqual(triage.diagnose(self._dir(files))["d1"], "error")
+        files = self._blocker()
+        files["blocked_at.json"] = files["blocked_at.json"].replace(
+            '"symbol":"_GfxInitializeTexture"', '"symbol":"_GfxDraw"'
+        )
+        mismatched = triage.diagnose(self._dir(files))
+        self.assertEqual(mismatched["d1"], "error")
+        self.assertNotEqual(mismatched["kind"], "blocked_at")
+        files = self._blocker()
+        files["blocked_at.json"] = files["blocked_at.json"].replace('"caller_rva":"0x1000"', '"caller_rva":"0x1001"')
         self.assertEqual(triage.diagnose(self._dir(files))["d1"], "error")
 
 

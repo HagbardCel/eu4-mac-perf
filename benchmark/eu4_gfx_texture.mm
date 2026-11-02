@@ -54,7 +54,8 @@ static void free_staged(uint8_t **staged, uint32_t count) {
     }
 }
 
-/* Uncompressed rows are tightly packed: the original sets GL_UNPACK_ALIGNMENT to 1. */
+/* Uncompressed rows are tightly packed. GL_UNPACK_ALIGNMENT (0xCF5) is set to 1 at
+   RVA 0x15ec561 and restored to 4 at 0x15ec5c1, around glTexImage2D at 0x15ec5b8. */
 static int source_span(uint32_t width, uint32_t height, uint32_t bpp, uint32_t *span) {
     if (bpp == 0 || width > UINT32_MAX / bpp) {
         return -1;
