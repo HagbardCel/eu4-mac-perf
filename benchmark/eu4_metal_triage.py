@@ -67,7 +67,7 @@ def _kind(exists: dict[str, bool], loaded: dict[str, dict | None]) -> str:
     code = None if meta is None else meta.get("exit_code")
     if why == "deadline":
         return "timeout"
-    if why == "exit" and isinstance(code, int) and not isinstance(code, bool) and code < 0:
+    if type(code) is int and code < 0 and meta is not None and meta.get("launcher_signaled") is False:
         return "crash"
     if meta is not None and init is not None and stop is not None:
         create = loaded["create.json"]

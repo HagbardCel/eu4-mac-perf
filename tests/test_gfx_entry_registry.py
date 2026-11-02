@@ -210,7 +210,7 @@ class GfxEntryRegistryTests(unittest.TestCase):
                 "init.json": '{"success":1,"pid":1,"thread":7}\n',
             },
             "crash": {
-                "metadata.json": '{"stop_reason":"exit","exit_code":-11,"pid":7}\n',
+                "metadata.json": '{"stop_reason":"exit","exit_code":-11,"pid":7,"launcher_signaled":false}\n',
                 "init.json": '{"success":1,"pid":7}\n',
             },
             "clean_exit": {
@@ -229,6 +229,20 @@ class GfxEntryRegistryTests(unittest.TestCase):
                     "stop.json": f'{{"reason":"{reason}","symbol":"glFoo","pid":7,"phase":"after_init"}}\n',
                 }
                 self.assertEqual(self._diagnose(self._dir(files))["kind"], "unsupported")
+
+    def test_crash_after_recorded_stop(self) -> None:
+        def session(signaled: bool) -> dict[str, str]:
+            return {
+                "metadata.json": (
+                    '{"stop_reason":"stop","exit_code":-11,"pid":7,'
+                    f'"launcher_signaled":{"true" if signaled else "false"}}}\n'
+                ),
+                "init.json": '{"success":1,"pid":7,"thread":3}\n',
+                "stop.json": '{"reason":"gl","symbol":"glGenTextures","pid":7,"phase":"after_init"}\n',
+            }
+
+        self.assertEqual(self._diagnose(self._dir(session(False)))["kind"], "crash")
+        self.assertNotEqual(self._diagnose(self._dir(session(True)))["kind"], "crash")
 
     def test_integrity_before_outcome(self) -> None:
         self.assertEqual(self._diagnose(self._dir({}))["kind"], "missing")
