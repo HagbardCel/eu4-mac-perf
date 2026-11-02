@@ -32,6 +32,8 @@ int eu4_gfx_vertex_buffer_read(void *header, void *dest, size_t n);
 int eu4_gfx_vertex_buffer_shared(void *header);
 
 void eu4_gfx_buffer_test_fail_metal(int on);
+void eu4_gfx_buffer_test_fail_metal_throw(int on);
+void eu4_gfx_buffer_test_fail_entry(int on);
 void eu4_gfx_buffer_test_fail_insert(int on);
 void eu4_gfx_buffer_test_fail_header(int on);
 

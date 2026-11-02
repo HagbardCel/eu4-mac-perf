@@ -170,7 +170,14 @@ void *eu4_gfx_metal_device(void) {
 __attribute__((noreturn)) void eu4_gfx_stop(const char *symbol, const char *reason,
                                             const void *caller) {
     g_stop_caller = caller;
-    eu4_metal_events_stop("after_init", symbol, reason, caller);
+    const char *phase = "before_init";
+    int value = eu4_gfx_phase();
+    if (value == 1) {
+        phase = "during_init";
+    } else if (value == 2) {
+        phase = "after_init";
+    }
+    eu4_metal_events_stop(phase, symbol, reason, caller);
     if (g_terminate != NULL) {
         g_terminate(reason);
     }

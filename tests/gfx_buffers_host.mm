@@ -28,6 +28,8 @@ static const void *g_expect_fn;
 static int g_expect_records;
 static int g_expect_gpus;
 static int32_t g_expect_counter;
+static void *g_kept;
+static uint8_t g_kept_byte;
 
 static int32_t *counter(void) { return (int32_t *)(g_image + EU4_GFX_VB_COUNT_RVA); }
 
@@ -95,6 +97,12 @@ static void child_stop(const char *reason) {
         g_image == NULL || *counter() != g_expect_counter) {
         _exit(3);
     }
+    if (g_kept != NULL) {
+        uint8_t back = 0;
+        if (eu4_gfx_vertex_buffer_read(g_kept, &back, 1) != 0 || back != g_kept_byte) {
+            _exit(3);
+        }
+    }
     _exit(2);
 }
 
@@ -116,6 +124,28 @@ __attribute__((noinline)) static void run_fail_metal(void) {
     eu4_gfx_buffer_test_fail_metal(1);
     eu4_gfx_create_vertex_buffer(NULL, NULL, 4, 4, 0);
     fail("metal failure returned");
+}
+
+__attribute__((noinline)) static void run_fail_metal_throw(void) {
+    boot(1);
+    uint8_t byte = 0x5a;
+    g_kept = eu4_gfx_create_vertex_buffer(NULL, &byte, 1, 1, 0);
+    g_kept_byte = byte;
+    if (g_kept == NULL || *counter() != 1) {
+        fail("metal-throw setup");
+    }
+    arm((const void *)run_fail_metal_throw, 1, 1, 1);
+    eu4_gfx_buffer_test_fail_metal_throw(1);
+    eu4_gfx_update_vertex_buffer(&g_master, g_kept, NULL, 4, 0, 0);
+    fail("metal throw returned");
+}
+
+__attribute__((noinline)) static void run_fail_entry(void) {
+    boot(1);
+    arm((const void *)run_fail_entry, 0, 0, 0);
+    eu4_gfx_buffer_test_fail_entry(1);
+    eu4_gfx_create_vertex_buffer(NULL, NULL, 4, 4, 0);
+    fail("entry failure returned");
 }
 
 __attribute__((noinline)) static void run_fail_insert(void) {
@@ -239,7 +269,7 @@ __attribute__((noinline)) static void run_wrong_shutdown(void) {
     fail("wrong shutdown returned");
 }
 
-static void expect_child(const char *mode, const char *symbol, const char *reason) {
+static void expect_child(const char *mode, const char *symbol, const char *reason, const char *phase) {
     char dir[] = "/tmp/eu4-vb-XXXXXX";
     if (mkdtemp(dir) == NULL) {
         fail("child dir");
@@ -269,9 +299,12 @@ static void expect_child(const char *mode, const char *symbol, const char *reaso
     fclose(file);
     char symbol_bit[64];
     char reason_bit[64];
+    char phase_bit[64];
     snprintf(symbol_bit, sizeof symbol_bit, "\"symbol\":\"%s\"", symbol);
     snprintf(reason_bit, sizeof reason_bit, "\"reason\":\"%s\"", reason);
-    if (strstr(body, symbol_bit) == NULL || strstr(body, reason_bit) == NULL) {
+    snprintf(phase_bit, sizeof phase_bit, "\"phase\":\"%s\"", phase);
+    if (strstr(body, symbol_bit) == NULL || strstr(body, reason_bit) == NULL ||
+        strstr(body, phase_bit) == NULL) {
         fail("stop fields");
     }
 }
@@ -405,6 +438,10 @@ int main(int argc, char **argv) {
         eu4_gfx_set_terminate(child_stop);
         if (strcmp(argv[1], "fail-metal") == 0) {
             run_fail_metal();
+        } else if (strcmp(argv[1], "fail-metal-throw") == 0) {
+            run_fail_metal_throw();
+        } else if (strcmp(argv[1], "fail-entry") == 0) {
+            run_fail_entry();
         } else if (strcmp(argv[1], "fail-insert") == 0) {
             run_fail_insert();
         } else if (strcmp(argv[1], "fail-header") == 0) {
@@ -435,16 +472,18 @@ int main(int argc, char **argv) {
     eu4_metal_events_set_dir(dir);
     eu4_gfx_set_terminate(parent_stop);
     success();
-    expect_child("fail-metal", "_GfxCreateVertexBuffer", "metal");
-    expect_child("fail-insert", "_GfxCreateVertexBuffer", "insert");
-    expect_child("fail-header", "_GfxCreateVertexBuffer", "header");
-    expect_child("bad-size", "_GfxCreateVertexBuffer", "size");
-    expect_child("bounds", "_GfxUpdateVertexBuffer", "bounds");
-    expect_child("null-data", "_GfxUpdateVertexBuffer", "null_data");
-    expect_child("after-shutdown", "_GfxUpdateVertexBuffer", "released");
-    expect_child("double-destroy", "_GfxDestroyVertexBuffer", "missing");
-    expect_child("no-backend", "_GfxCreateVertexBuffer", "no_backend");
-    expect_child("wrong-thread", "_GfxCreateVertexBuffer", "thread");
-    expect_child("wrong-shutdown", "_GfxShutdown", "thread");
+    expect_child("fail-metal", "_GfxCreateVertexBuffer", "metal", "after_init");
+    expect_child("fail-metal-throw", "_GfxUpdateVertexBuffer", "metal", "after_init");
+    expect_child("fail-entry", "_GfxCreateVertexBuffer", "entry", "after_init");
+    expect_child("fail-insert", "_GfxCreateVertexBuffer", "insert", "after_init");
+    expect_child("fail-header", "_GfxCreateVertexBuffer", "header", "after_init");
+    expect_child("bad-size", "_GfxCreateVertexBuffer", "size", "after_init");
+    expect_child("bounds", "_GfxUpdateVertexBuffer", "bounds", "after_init");
+    expect_child("null-data", "_GfxUpdateVertexBuffer", "null_data", "after_init");
+    expect_child("after-shutdown", "_GfxUpdateVertexBuffer", "released", "after_init");
+    expect_child("double-destroy", "_GfxDestroyVertexBuffer", "missing", "after_init");
+    expect_child("no-backend", "_GfxCreateVertexBuffer", "no_backend", "before_init");
+    expect_child("wrong-thread", "_GfxCreateVertexBuffer", "thread", "after_init");
+    expect_child("wrong-shutdown", "_GfxShutdown", "thread", "after_init");
     return 0;
 }

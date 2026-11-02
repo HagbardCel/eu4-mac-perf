@@ -10,7 +10,9 @@ The fault at `0x15ebd02` is the return from `ff 10` at `0x15ebd00`, `call qword 
 
 `_GfxDestroyVertexBuffer` (`0x15ebd4c`) starts `48 85 ff 74 2f`, not a `push %rbp` prologue. Null returns without freeing or changing `nGLVBCount`. The counter is the `int32` at `0x223857c`. It increments only after the entry is registered and decrements only when that header is freed.
 
-`_GfxUpdateVertexBuffer` (`0x15ebd81`) uses the same 6-byte prologue as create. `rdi` is the handle and the master is `*rdi`. Lookup is the header pointer, not the zero GL name. `r9 == 0` replaces the store, including a null pointer, and does not write the header. A subrange rejects a null pointer when the size is non-zero, and accepts a copy only when `offset <= length` and `size <= length - offset`. A successful update stores `1` at master `+0x170` and does not call `___glewDisableVertexAttribArrayARB`.
+`_GfxUpdateVertexBuffer` (`0x15ebd81`) uses the same 6-byte prologue as create. `rdi` is the handle and the master is `*rdi`. Lookup is the header pointer, not the zero GL name. `r9 == 0` replaces the store, including a null pointer, and does not write the header. The subdata offset is `r8d`: the body copies `r8d` to `r12d` and then zero-extends it with `mov esi, r12d`. A subrange rejects a null pointer when the size is non-zero, and accepts a copy only when `offset <= length` and `size <= length - offset`. A successful update stores `1` at master `+0x170` and does not call `___glewDisableVertexAttribArrayARB`.
+
+A buffer stop uses `eu4_gfx_phase()`: 0 is `before_init`, 1 is `during_init`, and 2 is `after_init`. Create before a successful init is `before_init`.
 
 Half-open diagnostic ranges are create `[0x15ebcb3, 0x15ebd4c)`, destroy `[0x15ebd4c, 0x15ebd81)`, update `[0x15ebd81, 0x15ebe5f)`.
 
@@ -20,7 +22,7 @@ The table lives for the process. Each entry strongly owns its `MTLBuffer` and st
 
 ## Offline result
 
-`python3 tests/test_gfx_buffers.py`, `python3 tests/test_gfx_init.py`, and `python3 tests/test_metal_boot.py` passed. They cover the header and byte contracts, zero-length and null data, growth, insert and allocation failure, destroy after shutdown, the eleven-entry transaction, rollback after ten writes, and rejection of a destroy prefix other than `48 85 ff 74 2f`.
+`python3 tests/test_gfx_buffers.py`, `python3 tests/test_gfx_init.py`, and `python3 tests/test_metal_boot.py` passed. They cover the header and byte contracts, zero-length and null data, growth, insert and allocation failure, an Objective-C exception during Metal allocation and during entry construction, the `before_init` phase when no backend exists, destroy after shutdown, the eleven-entry transaction, rollback after ten writes, and rejection of a destroy prefix other than `48 85 ff 74 2f`.
 
 ## Live result
 

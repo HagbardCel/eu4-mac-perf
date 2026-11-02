@@ -21,6 +21,8 @@ static NSMutableArray<EU4VertexBuffer *> *g_entries;
 static pthread_t g_thread;
 static int g_thread_set;
 static int g_fail_metal;
+static int g_fail_metal_throw;
+static int g_fail_entry;
 static int g_fail_insert;
 static int g_fail_header;
 
@@ -56,6 +58,9 @@ static int logical_bytes(int32_t count, int32_t stride, size_t *out) {
 
 /* shortcut: zero-length logical buffers use a 1-byte backing store, until a caller requires a true empty allocation. */
 static id<MTLBuffer> make_buffer(id<MTLDevice> device, const void *data, size_t logical) {
+    if (g_fail_metal_throw) {
+        @throw [NSException exceptionWithName:NSMallocException reason:@"metal" userInfo:nil];
+    }
     if (g_fail_metal) {
         return nil;
     }
@@ -78,17 +83,23 @@ static void *new_header(const void *caller) {
     }
 }
 
-__attribute__((noreturn)) static void drop_new(EU4VertexBuffer *entry, void *header, const void *caller) {
-    if (g_entries != nil) {
+__attribute__((noreturn)) static void abandon_create(EU4VertexBuffer *entry, id<MTLBuffer> buffer,
+                                                       void *header, const char *reason,
+                                                       const void *caller) {
+    if (entry != nil && g_entries != nil) {
         NSUInteger index = [g_entries indexOfObjectIdenticalTo:entry];
         if (index != NSNotFound) {
             [g_entries removeObjectAtIndex:index];
         }
+        entry.header = NULL;
+        entry.buffer = nil;
     }
-    entry.buffer = nil;
-    entry.header = NULL;
-    ::operator delete(header);
-    eu4_gfx_stop("_GfxCreateVertexBuffer", "insert", caller);
+    buffer = nil;
+    (void)buffer;
+    if (header != NULL) {
+        ::operator delete(header);
+    }
+    eu4_gfx_stop("_GfxCreateVertexBuffer", reason, caller);
 }
 
 static void require_thread(const char *symbol, const void *caller) {
@@ -135,17 +146,23 @@ void *eu4_gfx_create_vertex_buffer(void *ignored, const void *data, int32_t coun
     memcpy(header, &stride_bits, 4);
     memcpy((uint8_t *)header + 4, &count_bits, 4);
     memcpy((uint8_t *)header + 8, &name, 4);
-    id<MTLBuffer> buffer = make_buffer(device, data, logical);
-    if (buffer == nil) {
-        ::operator delete(header);
-        eu4_gfx_stop("_GfxCreateVertexBuffer", "metal", caller);
-    }
-    EU4VertexBuffer *entry = [EU4VertexBuffer new];
-    entry.header = header;
-    entry.buffer = buffer;
-    entry.length = logical;
-    entry.backend = backend;
+    id<MTLBuffer> buffer = nil;
+    EU4VertexBuffer *entry = nil;
     @try {
+        buffer = make_buffer(device, data, logical);
+        if (buffer == nil) {
+            ::operator delete(header);
+            header = NULL;
+            eu4_gfx_stop("_GfxCreateVertexBuffer", "metal", caller);
+        }
+        if (g_fail_entry) {
+            @throw [NSException exceptionWithName:NSMallocException reason:@"entry" userInfo:nil];
+        }
+        entry = [EU4VertexBuffer new];
+        entry.header = header;
+        entry.buffer = buffer;
+        entry.length = logical;
+        entry.backend = backend;
         if (g_fail_insert) {
             @throw [NSException exceptionWithName:NSMallocException reason:@"insert" userInfo:nil];
         }
@@ -154,14 +171,22 @@ void *eu4_gfx_create_vertex_buffer(void *ignored, const void *data, int32_t coun
         }
         [g_entries addObject:entry];
     } @catch (NSException *exception) {
-        (void)exception;
-        drop_new(entry, header, caller);
+        const char *reason = "alloc";
+        if ([exception.reason isEqualToString:@"metal"]) {
+            reason = "metal";
+        } else if ([exception.reason isEqualToString:@"entry"]) {
+            reason = "entry";
+        } else if ([exception.reason isEqualToString:@"insert"]) {
+            reason = "insert";
+        }
+        abandon_create(entry, buffer, header, reason, caller);
     }
     int32_t *counter = (int32_t *)(eu4_gfx_image() + EU4_GFX_VB_COUNT_RVA);
     *counter += 1;
     return header;
 }
 
+/* Offset is r8d. The sealed body copies r8d, then zero-extends it as the subdata offset. */
 void eu4_gfx_update_vertex_buffer(void *handle, void *header, const void *data, int32_t count,
                                   uint32_t offset, int32_t partial) {
     const void *caller = __builtin_return_address(0);
@@ -195,7 +220,13 @@ void eu4_gfx_update_vertex_buffer(void *handle, void *header, const void *data, 
             if (device == nil) {
                 eu4_gfx_stop("_GfxUpdateVertexBuffer", "no_backend", caller);
             }
-            id<MTLBuffer> fresh = make_buffer(device, data, logical);
+            id<MTLBuffer> fresh = nil;
+            @try {
+                fresh = make_buffer(device, data, logical);
+            } @catch (NSException *exception) {
+                (void)exception;
+                eu4_gfx_stop("_GfxUpdateVertexBuffer", "metal", caller);
+            }
             if (fresh == nil) {
                 eu4_gfx_stop("_GfxUpdateVertexBuffer", "metal", caller);
             }
@@ -284,5 +315,7 @@ int eu4_gfx_vertex_buffer_shared(void *header) {
 }
 
 void eu4_gfx_buffer_test_fail_metal(int on) { g_fail_metal = on; }
+void eu4_gfx_buffer_test_fail_metal_throw(int on) { g_fail_metal_throw = on; }
+void eu4_gfx_buffer_test_fail_entry(int on) { g_fail_entry = on; }
 void eu4_gfx_buffer_test_fail_insert(int on) { g_fail_insert = on; }
 void eu4_gfx_buffer_test_fail_header(int on) { g_fail_header = on; }
