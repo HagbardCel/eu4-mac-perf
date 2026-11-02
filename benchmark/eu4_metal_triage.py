@@ -28,6 +28,10 @@ def _load(path: Path) -> tuple[dict[str, bool], dict[str, dict | None]]:
     return exists, loaded
 
 
+def _positive_int(value: object) -> bool:
+    return type(value) is int and value > 0
+
+
 def _bad_pid(event: dict) -> bool:
     if "pid" not in event:
         return False
@@ -66,22 +70,40 @@ def _kind(exists: dict[str, bool], loaded: dict[str, dict | None]) -> str:
     if why == "exit" and isinstance(code, int) and not isinstance(code, bool) and code < 0:
         return "crash"
     if meta is not None and init is not None and stop is not None:
-        # A missing flag is not evidence the launcher stayed quiet.
-        signaled = meta.get("launcher_signaled")
-        outcome = boot.metal_init_outcome(
-            init.get("success") == 1,
-            stop.get("phase"),
-            why,
-            code,
-            init.get("thread"),
-            stop.get("thread"),
-            signaled if isinstance(signaled, bool) else True,
-            stop.get("reason"),
-            stop.get("image"),
-            stop.get("rva"),
+        create = loaded["create.json"]
+        pids = [meta.get("pid"), init.get("pid"), stop.get("pid")]
+        gog = meta.get("gog")
+        sha_ok = (
+            not isinstance(gog, dict)
+            or "executable_sha256" not in gog
+            or gog["executable_sha256"] == boot.PINNED_SHA256
         )
-        if outcome["status"] == "complete":
-            return "gl_diagnostic"
+        identity_ok = (
+            all(_positive_int(pid) for pid in pids)
+            and len(set(pids)) == 1
+            and (create is None or create.get("pid") == pids[0])
+            and _positive_int(init.get("thread"))
+            and _positive_int(stop.get("thread"))
+            and init["thread"] == stop["thread"]
+            and sha_ok
+        )
+        if identity_ok:
+            # A missing flag is not evidence the launcher stayed quiet.
+            signaled = meta.get("launcher_signaled")
+            outcome = boot.metal_init_outcome(
+                init.get("success") == 1,
+                stop.get("phase"),
+                why,
+                code,
+                init.get("thread"),
+                stop.get("thread"),
+                signaled if isinstance(signaled, bool) else True,
+                stop.get("reason"),
+                stop.get("image"),
+                stop.get("rva"),
+            )
+            if outcome["status"] == "complete":
+                return "gl_diagnostic"
     if (
         why == "exit"
         and isinstance(code, int)

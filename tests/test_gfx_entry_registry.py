@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import shutil
 import sys
 import tempfile
@@ -152,6 +153,47 @@ class GfxEntryRegistryTests(unittest.TestCase):
                 if preceding is not None:
                     self.assertEqual(diag["preceding_byte_rva"], preceding)
                     self.assertIn(f"preceding_byte_rva: {preceding:#x}", text)
+
+    def _pr6(self, edit) -> Path:
+        names = ("metadata.json", "init.json", "stop.json", "create.json")
+        events = {name: json.loads((_PR6 / name).read_text()) for name in names}
+        edit(events)
+        files = {
+            name: json.dumps(event) + "\n" for name, event in events.items() if event is not None
+        }
+        return self._dir(files)
+
+    def test_gl_diagnostic_requires_identity(self) -> None:
+        def drop_all(events: dict) -> None:
+            for name in ("metadata.json", "init.json", "stop.json"):
+                events[name].pop("pid")
+            events["create.json"] = None
+
+        def drop_create_pid(events: dict) -> None:
+            events["create.json"].pop("pid")
+
+        def string_threads(events: dict) -> None:
+            events["init.json"]["thread"] = "1856966"
+            events["stop.json"]["thread"] = "1856966"
+
+        def wrong_sha(events: dict) -> None:
+            events["metadata.json"]["gog"]["executable_sha256"] = "0" * 64
+
+        def absent_sha(events: dict) -> None:
+            del events["metadata.json"]["gog"]["executable_sha256"]
+
+        for edit in (drop_all, drop_create_pid, string_threads, wrong_sha):
+            with self.subTest(edit=edit.__name__):
+                self.assertEqual(self._diagnose(self._pr6(edit))["kind"], "incomplete")
+        for name in ("metadata.json", "init.json", "stop.json"):
+            with self.subTest(missing_pid=name):
+                self.assertEqual(
+                    self._diagnose(self._pr6(lambda events, name=name: events[name].pop("pid")))["kind"],
+                    "incomplete",
+                )
+        kept = self._diagnose(self._pr6(absent_sha))
+        self.assertEqual(kept["kind"], "gl_diagnostic")
+        self.assertIsNone(kept["pinned_sha256"])
 
     def test_missing_create_receipt_stays_diagnostic(self) -> None:
         path = self._copy(_PR6)
