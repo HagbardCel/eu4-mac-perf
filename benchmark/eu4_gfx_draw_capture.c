@@ -59,7 +59,11 @@ int eu4_gfx_draw_receipt(const eu4_gfx_draw_raw *raw, char *out, int cap) {
     int pid = 0;
     eu4_metal_events_describe((const void *)(uintptr_t)raw->retaddr, image, sizeof image, &rva, &inside,
                               &thread, &pid);
-    int context_want = raw->which == EU4_GFX_DRAW_INDEXED ? EU4_GFX_DRAW_CONTEXT_WANT : 0;
+    /* _GfxDraw's last read is the byte at +0x170. Indexed uses the same bound. */
+    int context_want = raw->which == 1 || raw->which == EU4_GFX_DRAW_INDEXED ? EU4_GFX_DRAW_CONTEXT_WANT : 0;
+    if (context_want > EU4_GFX_DRAW_CONTEXT_WANT) {
+        return -1;
+    }
     int context_got = 0;
     uint8_t context[EU4_GFX_DRAW_CONTEXT_WANT];
     memset(context, 0, sizeof context);
@@ -92,6 +96,35 @@ int eu4_gfx_draw_receipt(const eu4_gfx_draw_raw *raw, char *out, int cap) {
     if (context_got > 0 && hex_put(context, context_got, context_hex, (int)sizeof context_hex) != 0) {
         return -1;
     }
+    char shader_json[32] = "null";
+    char count_json[16] = "null";
+    char dirty_json[8] = "null";
+    char extra[128];
+    extra[0] = 0;
+    if (raw->which == 1) {
+        int32_t esi = (int32_t)raw->rsi;
+        if (esi > 0) {
+            snprintf(count_json, sizeof count_json, "%d", esi);
+        } else if (context_got >= 0x68) {
+            int32_t count = 0;
+            memcpy(&count, context + 0x64, sizeof count);
+            snprintf(count_json, sizeof count_json, "%d", count);
+        }
+        if (context_got >= 0x78) {
+            uint64_t shader = 0;
+            memcpy(&shader, context + 0x70, sizeof shader);
+            snprintf(shader_json, sizeof shader_json, "\"0x%llx\"", (unsigned long long)shader);
+        }
+        if (context_got >= 0x171) {
+            snprintf(dirty_json, sizeof dirty_json, "%u", context[0x170]);
+        }
+        int extra_len = snprintf(extra, sizeof extra,
+                                 ",\"shader_ptr\":%s,\"effective_count\":%s,\"attrib_dirty\":%s",
+                                 shader_json, count_json, dirty_json);
+        if (extra_len < 0 || extra_len >= (int)sizeof extra) {
+            return -1;
+        }
+    }
     char chain_buf[80];
     char caller_buf[80];
     const char *chain = "";
@@ -109,14 +142,13 @@ int eu4_gfx_draw_receipt(const eu4_gfx_draw_raw *raw, char *out, int cap) {
         "\"rdi\":\"0x%llx\",\"rsi\":\"0x%llx\",\"rdx\":\"0x%llx\",\"rcx\":\"0x%llx\","
         "\"r8\":\"0x%llx\",\"r9\":\"0x%llx\",\"stack\":\"%s\","
         "\"xmm\":[\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"],"
-        "\"context_want\":%d,\"context_got\":%d,\"context_complete\":%s,\"context\":\"%s\","
-        "\"unresolved_dependencies\":0}\n",
+        "\"context_want\":%d,\"context_got\":%d,\"context_complete\":%s,\"context\":\"%s\"%s}\n",
         symbol, inside ? "game" : "rejected", chain, image, caller, pid, (unsigned long long)thread,
         (unsigned long long)raw->rdi, (unsigned long long)raw->rsi, (unsigned long long)raw->rdx,
         (unsigned long long)raw->rcx, (unsigned long long)raw->r8, (unsigned long long)raw->r9,
         stack_hex, xmm_hex[0], xmm_hex[1], xmm_hex[2], xmm_hex[3], xmm_hex[4], xmm_hex[5],
         xmm_hex[6], xmm_hex[7], context_want, context_got, complete ? "true" : "false",
-        context_hex);
+        context_hex, extra);
     if (length < 0 || length >= cap) {
         return -1;
     }

@@ -108,9 +108,73 @@ static void test_executable_ranges(void) {
     }
 }
 
+static void expect_draw(const eu4_gfx_draw_raw *raw, const char *needle, const char *absent) {
+    char body[8192];
+    if (eu4_gfx_draw_receipt(raw, body, (int)sizeof body) != 0 || strstr(body, needle) == NULL) {
+        fail(needle);
+    }
+    if (absent != NULL && strstr(body, absent) != NULL) {
+        fail(absent);
+    }
+}
+
+static void test_draw_fields(void) {
+    long page_size = sysconf(_SC_PAGESIZE);
+    uint8_t *base = mmap(NULL, (size_t)page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (base == MAP_FAILED) {
+        fail("draw mmap");
+    }
+    memset(base, 0, (size_t)page_size);
+    uint32_t fallback = 9;
+    memcpy(base + 0x64, &fallback, sizeof fallback);
+    base[0x170] = 0;
+    uint64_t master = (uint64_t)(uintptr_t)base;
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.which = 1;
+    raw.rsi = 4;
+    raw.rdi = (uint64_t)(uintptr_t)&master;
+    uintptr_t image = (uintptr_t)&raw & ~(uintptr_t)0xffff;
+    eu4_metal_events_set_image(image, image + 0x20000);
+    raw.retaddr = (uint64_t)(uintptr_t)&raw;
+    expect_draw(&raw, "\"shader_ptr\":\"0x0\"", NULL);
+    expect_draw(&raw, "\"effective_count\":4", "\"effective_count\":9");
+    expect_draw(&raw, "\"attrib_dirty\":0", NULL);
+    expect_draw(&raw, "\"context_complete\":true", NULL);
+    uint64_t shader = 0x20;
+    memcpy(base + 0x70, &shader, sizeof shader);
+    raw.rsi = 0;
+    expect_draw(&raw, "\"shader_ptr\":\"0x20\"", NULL);
+    expect_draw(&raw, "\"effective_count\":9", NULL);
+    munmap(base, (size_t)page_size);
+
+    uint8_t *span = mmap(NULL, (size_t)page_size * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (span == MAP_FAILED) {
+        fail("short draw mmap");
+    }
+    memset(span, 0xff, (size_t)page_size);
+    munmap(span + page_size, (size_t)page_size);
+    master = (uint64_t)(uintptr_t)(span + page_size - 0x70);
+    raw.rsi = 5;
+    raw.rdi = (uint64_t)(uintptr_t)&master;
+    expect_draw(&raw, "\"shader_ptr\":null", "\"shader_ptr\":\"0x0\"");
+    expect_draw(&raw, "\"effective_count\":5", NULL);
+    expect_draw(&raw, "\"attrib_dirty\":null", NULL);
+    expect_draw(&raw, "\"context_got\":112", NULL);
+    expect_draw(&raw, "\"context_complete\":false", NULL);
+    master = (uint64_t)(uintptr_t)(span + page_size - 0x60);
+    raw.rsi = 0;
+    raw.rdi = (uint64_t)(uintptr_t)&master;
+    expect_draw(&raw, "\"effective_count\":null", NULL);
+    expect_draw(&raw, "\"shader_ptr\":null", NULL);
+    expect_draw(&raw, "\"context_got\":96", NULL);
+    munmap(span, (size_t)page_size);
+}
+
 int main(void) {
     test_read();
     test_receipt();
     test_executable_ranges();
+    test_draw_fields();
     return 0;
 }
