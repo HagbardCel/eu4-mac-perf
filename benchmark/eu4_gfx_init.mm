@@ -704,6 +704,12 @@ void eu4_gfx_set_viewport(void *master, const void *rect) {
     memcpy((uint8_t *)master + 0xac, rect, 24);
 }
 
+void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
+    (void)handle;
+    (void)flags;
+    (void)color;
+}
+
 int eu4_gfx_settings(int display, int windowed, int count, void *settings) {
     (void)display;
     (void)windowed;
