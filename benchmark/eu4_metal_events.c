@@ -1,6 +1,9 @@
 #include "eu4_metal_events.h"
 
 #include <dlfcn.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_page_size.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -8,7 +11,11 @@
 
 static char event_dir[1024];
 static uintptr_t image_base;
-static uintptr_t image_end;
+/* shortcut: eight executable intervals. EU4 has one; raise the cap if a later image has more. */
+#define EU4_EXEC_MAX 8
+static uintptr_t exec_lo[EU4_EXEC_MAX];
+static uintptr_t exec_hi[EU4_EXEC_MAX];
+static int exec_count;
 
 void eu4_metal_events_set_dir(const char *dir) {
     event_dir[0] = 0;
@@ -18,9 +25,30 @@ void eu4_metal_events_set_dir(const char *dir) {
     snprintf(event_dir, sizeof event_dir, "%s", dir);
 }
 
+void eu4_metal_events_add_executable(uintptr_t start, uintptr_t end) {
+    if (exec_count >= EU4_EXEC_MAX || end <= start) {
+        return;
+    }
+    exec_lo[exec_count] = start;
+    exec_hi[exec_count] = end;
+    exec_count++;
+}
+
 void eu4_metal_events_set_image(uintptr_t base, uintptr_t end) {
     image_base = base;
-    image_end = end;
+    exec_count = 0;
+    if (end > base) {
+        eu4_metal_events_add_executable(base, end);
+    }
+}
+
+static int in_executable(uintptr_t address) {
+    for (int i = 0; i < exec_count; i++) {
+        if (address >= exec_lo[i] && address < exec_hi[i]) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int eu4_metal_events_write(const char *name, const char *body) {
@@ -89,7 +117,7 @@ static void describe_caller(const void *caller, char *escaped, size_t cap, uintp
     }
     json_escape(image, escaped, cap);
     *address = (uintptr_t)caller;
-    *inside = caller != NULL && image_base != 0 && *address >= image_base && *address < image_end;
+    *inside = caller != NULL && image_base != 0 && in_executable(*address);
     *thread = 0;
     (void)pthread_threadid_np(pthread_self(), thread);
     *pid = (int)getpid();
@@ -155,4 +183,62 @@ int eu4_metal_events_create(const void *caller) {
         return -1;
     }
     return eu4_metal_events_write("create.json", body);
+}
+
+int eu4_metal_events_read(const void *src, void *dst, int want, int *got) {
+    if (got == NULL) {
+        return -1;
+    }
+    *got = 0;
+    if (want < 0 || (want > 0 && (src == NULL || dst == NULL)) || vm_page_size == 0) {
+        return -1;
+    }
+    const uint8_t *cursor = src;
+    uint8_t *out = dst;
+    int done = 0;
+    while (done < want) {
+        uintptr_t addr = (uintptr_t)cursor;
+        uintptr_t page = addr & ~((uintptr_t)vm_page_size - 1);
+        int room = (int)((page + (uintptr_t)vm_page_size) - addr);
+        int n = want - done;
+        if (n > room) {
+            n = room;
+        }
+        mach_vm_size_t copied = 0;
+        kern_return_t result = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr,
+                                                      (mach_vm_size_t)n, (mach_vm_address_t)out, &copied);
+        if (result != KERN_SUCCESS || copied != (mach_vm_size_t)n) {
+            break;
+        }
+        done += n;
+        cursor += n;
+        out += n;
+    }
+    *got = done;
+    return 0;
+}
+
+void eu4_metal_events_describe(const void *caller, char *image, size_t cap, uint64_t *rva, int *inside,
+                               uint64_t *thread, int *pid) {
+    char escaped[512];
+    uintptr_t address = 0;
+    int in_image = 0;
+    uint64_t tid = 0;
+    int process = 0;
+    describe_caller(caller, escaped, sizeof escaped, &address, &in_image, &tid, &process);
+    if (image != NULL && cap > 0) {
+        snprintf(image, cap, "%s", escaped);
+    }
+    if (rva != NULL) {
+        *rva = in_image ? (uint64_t)(address - image_base) : 0;
+    }
+    if (inside != NULL) {
+        *inside = in_image;
+    }
+    if (thread != NULL) {
+        *thread = tid;
+    }
+    if (pid != NULL) {
+        *pid = process;
+    }
 }

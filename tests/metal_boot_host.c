@@ -226,6 +226,7 @@ static void entry_hit(void) { entry_hits += 1; }
 static void call_hit(void) { call_hits += 1; }
 
 int eu4_metal_gl_should_forward(int mode, int phase);
+int eu4_metal_gl_unused_vendor(int mode, int phase, unsigned name, int inside, uint64_t rva);
 void eu4_metal_gl_test_set_mode(int mode);
 void eu4_metal_gl_test_set_phase(int phase);
 void (*eu4_metal_gl_test_clear(void))(GLbitfield);
@@ -259,6 +260,16 @@ static void test_gl_forward(void) {
     }
     if (eu4_metal_gl_should_forward(3, 1) || eu4_metal_gl_should_forward(3, 2)) {
         fail("metal_init forwarded during or after init");
+    }
+    if (!eu4_metal_gl_unused_vendor(3, 2, 0x1f00, 1, 0x15eff24ULL)) {
+        fail("BuildGLSL vendor query was not accepted");
+    }
+    if (eu4_metal_gl_unused_vendor(3, 2, 0x1f02, 1, 0x15eff24ULL) ||
+        eu4_metal_gl_unused_vendor(3, 2, 0x1f00, 1, 0x15eff25ULL) ||
+        eu4_metal_gl_unused_vendor(2, 2, 0x1f00, 1, 0x15eff24ULL) ||
+        eu4_metal_gl_unused_vendor(3, 0, 0x1f00, 1, 0x15eff24ULL) ||
+        eu4_metal_gl_unused_vendor(3, 2, 0x1f00, 0, 0x15eff24ULL)) {
+        fail("vendor exception accepted another caller");
     }
     void (*wrap)(GLbitfield) = eu4_metal_gl_test_clear();
     void (*real)(GLbitfield) = dlsym(RTLD_NEXT, "glClear");
@@ -349,6 +360,24 @@ static void test_gl_forward(void) {
     snprintf(expected, sizeof expected, "\"address\":\"0x%llx\"", (unsigned long long)(uintptr_t)gl_clear_ret);
     if (strstr(body, expected) == NULL || strstr(body, "\"rva\":null") != NULL) {
         fail("stop.json did not record the host callsite");
+    }
+    const GLenum vendor_enums[] = {0x1f00, 0x1f02};
+    for (int i = 0; i < 2; i++) {
+        pid_t vendor = fork();
+        if (vendor < 0) {
+            fail("vendor fork");
+        }
+        if (vendor == 0) {
+            eu4_metal_gl_test_set_mode(3);
+            eu4_metal_gl_test_set_phase(2);
+            (void)get_string(vendor_enums[i]);
+            _exit(99);
+        }
+        int vendor_status = 0;
+        if (waitpid(vendor, &vendor_status, 0) < 0 || !WIFEXITED(vendor_status) ||
+            WEXITSTATUS(vendor_status) != 2) {
+            fail("host glGetString did not exit 2");
+        }
     }
     char missing_dir[] = "/tmp/eu4-gl-miss-XXXXXX";
     if (mkdtemp(missing_dir) == NULL) {

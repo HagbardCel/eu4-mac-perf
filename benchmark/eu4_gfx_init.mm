@@ -511,6 +511,9 @@ static int fill_master(void *master, void *handle) {
     }
     uint32_t texture_limit = max_texture(device);
     memcpy((uint8_t *)master + 0x188, &texture_limit, sizeof texture_limit);
+    /* 0x15e985e sets +0x18e only when ___GLEW_ARB_shader_texture_lod is 1. */
+    uint8_t texture_lod = 0;
+    memcpy((uint8_t *)master + 0x18e, &texture_lod, sizeof texture_lod);
 
     uint8_t *blend = (uint8_t *)alloc_zero(0x48);
     call_writer(g_write_blend, kBlendRva, blend + 0x24);
@@ -699,6 +702,12 @@ void eu4_gfx_on_reset_master(void *master) {
 void eu4_gfx_set_viewport(void *master, const void *rect) {
     /* CGraphics+0x2c57c and the master allocation do not overlap. */
     memcpy((uint8_t *)master + 0xac, rect, 24);
+}
+
+void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
+    (void)handle;
+    (void)flags;
+    (void)color;
 }
 
 int eu4_gfx_settings(int display, int windowed, int count, void *settings) {

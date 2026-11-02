@@ -1,0 +1,57 @@
+#ifndef EU4_GFX_TEXTURE_H
+#define EU4_GFX_TEXTURE_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* rdi is unused. rsi is the caller-owned 0x44 header. rdx is the description.
+   rcx is the image array. r8d is the image count. Returns void.
+   Disassembly at 0x15ec43b: kind 1 is a cubemap, formats 1..7 are compressed.
+   On success the GL name at header+4 is written 0. A rejected record leaves the header
+   untouched. glDeleteTextures is a diagnostic stop, not a Metal destroy. */
+enum {
+    EU4_GFX_TEX_OK = 0,
+    EU4_GFX_TEX_HEADER = 1,
+    EU4_GFX_TEX_CUBEMAP = 2,
+    EU4_GFX_TEX_COMPRESSED = 3,
+    EU4_GFX_TEX_FORMAT = 4,
+    EU4_GFX_TEX_SIZE = 5,
+    EU4_GFX_TEX_PIXELS = 6,
+    EU4_GFX_TEX_LEVEL = 7,
+    EU4_GFX_TEX_METAL = 8,
+    EU4_GFX_TEX_BACKEND = 9
+};
+
+/* Fills the header only on OK. Does not allocate a texture. */
+int eu4_gfx_texture_prepare(void *header, const void *desc, const void *images, uint32_t count);
+
+/* On OK, *out_texture is +1. device is id<MTLDevice>. A later upload call is
+   required when count is 0: this allocates storage and does not invent pixels. */
+int eu4_gfx_texture_make(void *device, void *header, const void *desc, const void *images,
+                         uint32_t count, void **out_texture);
+
+void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, const void *images,
+                                uint32_t count);
+
+/* _GfxSetTextures at 0x15ecbf2. rdi is the handle and (%rdi) is the state object.
+   esi is the count. rdx is the texture-pointer array. ecx bit 0 binds from r8d,
+   and bit 1 binds from r8d + 0xf. r9 is an optional sampler-pointer array. A null
+   texture is replaced by the pointer at state +0x98. The dword at state +0xa8 is
+   compared with 1. The only calls are InternalSetTextureAndSamplerState at
+   0x15ecc6d and 0x15eccc6. That helper's first control transfer is callq *(%rax)
+   at 0x15ecd06 through ___glewActiveTextureARB. The 0xc crash did not capture
+   that slot. D1a-only control-flow replacement. The CPU-side object is left
+   unchanged. Texture and sampler binding is skipped. No Metal bind is
+   implemented. A later draw_reached shows the game entered a draw, not that the
+   original binding workload was reconstructed. */
+void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned flags,
+                          unsigned base_unit, void *samplers);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

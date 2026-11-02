@@ -511,10 +511,27 @@ static void test_viewport(void) {
     }
 }
 
+static void test_clear(void) {
+    uint8_t object[EU4_GFX_MASTER_SIZE];
+    uint8_t saved[EU4_GFX_MASTER_SIZE];
+    memset(object, 0x5a, sizeof object);
+    memcpy(saved, object, sizeof saved);
+    void *handle = object;
+    eu4_gfx_clear(&handle, 0, NULL);
+    if (memcmp(object, saved, sizeof saved) != 0) {
+        fail("clear wrote the object");
+    }
+    eu4_gfx_clear(&handle, 7, reinterpret_cast<const float *>(1));
+    if (memcmp(object, saved, sizeof saved) != 0) {
+        fail("clear wrote the object with flags");
+    }
+}
+
 int main(void) {
     uint8_t desc[EU4_GFX_DEPTH_DESC_SIZE];
     memset(desc, 0xa5, sizeof desc);
     test_viewport();
+    test_clear();
     test_writes();
     eu4_gfx_write_default_depth_stencil(desc);
     test_view(desc);

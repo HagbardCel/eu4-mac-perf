@@ -18,6 +18,8 @@
 @property (nonatomic) void *depthHeader;
 @property (nonatomic) void *rasterHeader;
 @property (nonatomic) void *textureHeader;
+/* Textures created by _GfxInitializeTexture. Released with the backend. */
+@property (nonatomic, strong) NSMutableDictionary *textures;
 @end
 #endif
 
@@ -90,6 +92,15 @@ int eu4_gfx_reset(void *master);
 void eu4_gfx_on_reset_master(void *master);
 /* rdi is the master. rsi is 24 bytes at CGraphics+0x2c57c, disjoint from the master. */
 void eu4_gfx_set_viewport(void *master, const void *rect);
+/* _GfxClear at 0x15ea552. rdi is the handle and (%rdi) is the state object.
+   esi is the flag dword: bit 0 is color (0x4000), bit 1 is depth (0x100), and
+   bit 2 is stencil (0x400). rdx is an optional color; null is (0, 0, 0, 1).
+   The glScissor at 0x15ea5e7 uses the viewport image: x at +0xbc, y at +0xc0,
+   width at +0xb0, height at +0xac. D1a-only no-op. The original function
+   performs GL state changes and a conditional clear but does not modify the
+   master object. No Metal render target or render pass is available. This
+   does not implement GPU clearing. */
+void eu4_gfx_clear(void *handle, unsigned flags, const float *color);
 int eu4_gfx_settings(int display, int windowed, int count, void *settings);
 
 #ifdef __cplusplus

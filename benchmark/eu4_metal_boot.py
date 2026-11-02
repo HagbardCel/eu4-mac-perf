@@ -23,6 +23,10 @@ EVENTS = SOURCE.with_name("eu4_metal_events.c")
 GL_DIAG = SOURCE.with_name("eu4_metal_gl_diag.c")
 GFX = SOURCE.with_name("eu4_gfx_init.mm")
 BUFFERS = SOURCE.with_name("eu4_gfx_buffers.mm")
+DRAW_C = SOURCE.with_name("eu4_gfx_draw_capture.c")
+DRAW_S = SOURCE.with_name("eu4_gfx_draw_entry.S")
+TEXTURE = SOURCE.with_name("eu4_gfx_texture.mm")
+SHADER = SOURCE.with_name("eu4_gfx_shader.mm")
 LIBRARY = SOURCE.parent / ".build/libeu4_metal_boot.dylib"
 HOST_SOURCE = SOURCE.parents[1] / "tests/metal_boot_host.c"
 HOST = SOURCE.parent / ".build/metal_boot_host"
@@ -40,7 +44,7 @@ def build_library(arch: str = "x86_64") -> Path:
         "-framework", "AppKit", "-framework", "Foundation", "-framework", "Metal",
         "-framework", "QuartzCore", "-framework", "OpenGL",
         "-o", str(output), str(SOURCE), str(PATCH), str(ENTRY), str(EVENTS), str(GL_DIAG), str(GFX),
-        str(BUFFERS),
+        str(BUFFERS), str(DRAW_C), str(DRAW_S), str(TEXTURE), str(SHADER),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
@@ -186,13 +190,14 @@ def parse_rva(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def caller_outside_replacements(value: object) -> bool:
+def caller_outside_replacements(value: object, bodies: tuple | None = None) -> bool:
     """The recorded address is the instruction after the call, so the call byte is rva - 1."""
+    spans = REPLACED_BODIES if bodies is None else bodies
     rva = parse_rva(value)
-    if rva is None:
+    if rva is None or not spans:
         return False
     call = rva - 1
-    return all(call < start or call >= end for start, end in REPLACED_BODIES)
+    return all(call < start or call >= end for start, end in spans)
 
 
 def same_pinned_executable(image: object) -> bool:
@@ -223,16 +228,21 @@ def classify_diagnostic_exit(exited_within_grace: bool, returncode: int | None) 
 def metal_init_outcome(init_success: bool, stop_phase: str | None, why: str | None, returncode: int | None,
                        init_thread: int | None, stop_thread: int | None, launcher_signaled: bool,
                        stop_reason: str | None = None, stop_image: str | None = None,
-                       stop_rva: object = None) -> dict:
-    """Exit code 2 is the diagnostic _exit, and only with an after_init gl stop outside the replaced bodies."""
-    threads = init_thread is not None and init_thread == stop_thread
-    diagnostic = (
+                       stop_rva: object = None, bodies: tuple | None = None) -> dict:
+    """Exit code 2 is a diagnostic _exit. gl is the init-loop stop. blocked_at and draw are D1 terminals, not init success."""
+    threads = type(init_thread) is int and init_thread > 0 and init_thread == stop_thread
+    spans = REPLACED_BODIES if bodies is None else bodies
+    terminal = (
         why == "stop" and stop_phase == "after_init" and init_success and returncode == 2
-        and not launcher_signaled and threads and stop_reason == "gl"
-        and same_pinned_executable(stop_image) and caller_outside_replacements(stop_rva)
+        and not launcher_signaled and threads
+        and same_pinned_executable(stop_image) and caller_outside_replacements(stop_rva, spans)
     )
-    if diagnostic:
+    if terminal and stop_reason == "gl":
         return {"status": "complete", "live_gfx_init": "returned", "raises": False}
+    if terminal and stop_reason == "blocked_at":
+        return {"status": "blocked_at", "live_gfx_init": "returned", "raises": False}
+    if terminal and stop_reason == "draw":
+        return {"status": "draw_reached", "live_gfx_init": "returned", "raises": False}
     if why == "exit" and returncode == 0 and init_success:
         return {"status": "clean_exit", "live_gfx_init": "postconditions", "raises": False}
     if why == "deadline" and init_success and stop_phase is None:
@@ -294,6 +304,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         env["EU4_METAL_BOOT_RECEIPT"] = str(receipt_path)
     env["SDL_VIDEO_EXTERNAL_CONTEXT"] = "1"
     env["DYLD_INSERT_LIBRARIES"] = str(library)
+    started = dt.datetime.now(dt.timezone.utc).isoformat()
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
     game = subprocess.Popen(
@@ -360,7 +371,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         )
         metadata = {
             "status": outcome["status"],
-            "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "started_utc": started,
             "gog": identity,
             "pid": game.pid,
             "exit_code": game.returncode,
@@ -369,6 +380,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
             "launcher_signaled": launcher_signaled,
             "probe_sha256": base.sha256(library),
             "live_gfx_init": outcome["live_gfx_init"],
+            "gfx_entry_ranges": [[entry, end] for _name, entry, end, _fn, _prefix in GFX_ENTRIES],
         }
         (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
         if outcome["raises"]:
@@ -381,7 +393,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
     verified = receipt is not None and receipt.get("result") == wanted and game.returncode == 0
     metadata = {
         "status": "complete" if verified else "failed",
-        "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "started_utc": started,
         "gog": identity,
         "exit_code": game.returncode,
         "result": None if receipt is None else receipt.get("result"),

@@ -123,26 +123,27 @@ class GfxEntryRegistryTests(unittest.TestCase):
 
     def test_recorded_sessions(self) -> None:
         expected = (
-            (_PR5, 14511, "glViewport", 0x149B21F, None),
-            (_PR6, 20282, "glGenTextures", 0x15EC4ED, 0x15EC4EC),
+            (_PR5, 14511, "glViewport", 0x149B21F, None, "gl_diagnostic", False),
+            (_PR6, 20282, "glGenTextures", 0x15EC4ED, 0x15EC4EC, "gl_diagnostic", False),
         )
-        for src, pid, symbol, rva, preceding in expected:
+        for src, pid, symbol, rva, preceding, kind, inside in expected:
             with self.subTest(src=src.name):
                 diag = self._diagnose(self._copy(src))
                 text = triage.format_diagnosis(diag)
-                self.assertEqual(diag["kind"], "gl_diagnostic")
+                self.assertEqual(diag["kind"], kind)
+                self.assertEqual(diag["d1"], "not_started")
                 self.assertEqual(diag["process"], pid)
                 self.assertEqual(diag["stop_symbol"], symbol)
                 self.assertEqual(diag["return_rva"], rva)
                 self.assertEqual(diag["exit_code"], 2)
                 self.assertIs(diag["launcher_signaled"], False)
-                self.assertIs(diag["inside_replaced_body"], False)
+                self.assertIs(diag["inside_replaced_body"], inside)
                 self.assertIs(diag["threads_agree"], True)
                 self.assertIs(diag["pinned_image"], True)
                 self.assertIs(diag["pinned_sha256"], True)
                 self.assertEqual(diag["vertex_buffer_receipt"], "validated")
                 self.assertIn(f"return_rva: {rva:#x}", text)
-                self.assertIn("inside_replaced_body: no", text)
+                self.assertIn("inside_replaced_body: " + ("yes" if inside else "no"), text)
                 self.assertIn(_RECEIPT, text)
                 self.assertIn("reached its success-reporting point", text)
                 self.assertIn(_DISCLAIMER, text)
@@ -156,7 +157,7 @@ class GfxEntryRegistryTests(unittest.TestCase):
 
     def _pr6(self, edit) -> Path:
         names = ("metadata.json", "init.json", "stop.json", "create.json")
-        events = {name: json.loads((_PR6 / name).read_text()) for name in names}
+        events = {name: json.loads((_PR5 / name).read_text()) for name in names}
         edit(events)
         files = {
             name: json.dumps(event) + "\n" for name, event in events.items() if event is not None
@@ -196,12 +197,32 @@ class GfxEntryRegistryTests(unittest.TestCase):
         self.assertIsNone(kept["pinned_sha256"])
 
     def test_missing_create_receipt_stays_diagnostic(self) -> None:
-        path = self._copy(_PR6)
+        path = self._copy(_PR5)
         (path / "create.json").unlink()
         diag = self._diagnose(path)
         self.assertEqual(diag["kind"], "gl_diagnostic")
         self.assertEqual(diag["vertex_buffer_receipt"], "absent")
         self.assertIn("No vertex-buffer receipt was recorded.", triage.format_diagnosis(diag))
+
+    def test_recorded_ranges_keep_pr6_outside_the_later_texture_body(self) -> None:
+        recorded = self._diagnose(self._copy(_PR6))
+        self.assertEqual(recorded["kind"], "gl_diagnostic")
+        self.assertIs(recorded["inside_replaced_body"], False)
+        path = self._copy(_PR6)
+        meta = json.loads((path / "metadata.json").read_text())
+        meta["gfx_entry_ranges"] = [[0x15EC43B, 0x15EC61D]]
+        (path / "metadata.json").write_text(json.dumps(meta) + "\n")
+        revalidated = self._diagnose(path)
+        self.assertIs(revalidated["inside_replaced_body"], True)
+        self.assertNotEqual(revalidated["kind"], "gl_diagnostic")
+
+    def test_unknown_probe_cannot_become_a_diagnostic(self) -> None:
+        def unknown(events: dict) -> None:
+            events["metadata.json"]["probe_sha256"] = "0" * 64
+
+        diag = self._diagnose(self._pr6(unknown))
+        self.assertNotEqual(diag["kind"], "gl_diagnostic")
+        self.assertIsNone(diag["inside_replaced_body"])
 
     def test_outcome_precedence(self) -> None:
         cases = {
@@ -274,6 +295,179 @@ class GfxEntryRegistryTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(triage.main([str(path / "init.json")]), 1)
             self.assertEqual(triage.main(["/no/such/metal-init-dir"]), 1)
+
+
+class D1StateTests(unittest.TestCase):
+    def _dir(self, files: dict[str, str]) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for name, body in files.items():
+            (root / name).write_text(body)
+        return root
+
+    def _base(self) -> dict[str, str]:
+        image = json.loads((_PR6 / "stop.json").read_text())["image"]
+        sha = json.loads((_PR6 / "metadata.json").read_text())["gog"]["executable_sha256"]
+        common = (
+            f'"pid":7,"thread":3,"image":{json.dumps(image)}'
+        )
+        return {
+            "metadata.json": (
+                '{"pid":7,"stop_reason":"stop","exit_code":2,"launcher_signaled":false,'
+                f'"gog":{{"executable_sha256":"{sha}"}},"gfx_entry_ranges":[[1,2]]}}\n'
+            ),
+            "init.json": '{"success":1,"pid":7,"thread":3}\n',
+            "stop.json": '{"reason":"draw","symbol":"_GfxDraw","phase":"after_init",' + common + ',"rva":"0x1000"}\n',
+            "draw_invocation.json": (
+                '{"symbol":"_GfxDraw","invocation_id":1,"provenance":"game",'
+                '"call_chain":["0x1000"],"caller_rva":"0x1000","context_want":0,'
+                '"context_got":0,"context_complete":true,' + common + '}\n'
+            ),
+        }
+
+    def test_draw_reached_requires_game_provenance(self) -> None:
+        files = self._base()
+        diag = triage.diagnose(self._dir(files))
+        self.assertEqual(diag["d1"], "draw_reached")
+        self.assertEqual(diag["kind"], "draw_reached")
+        files["draw_invocation.json"] = files["draw_invocation.json"].replace(
+            '"provenance":"game"', '"provenance":"rejected"'
+        )
+        rejected = triage.diagnose(self._dir(files))
+        self.assertEqual(rejected["d1"], "error")
+        self.assertNotEqual(rejected["kind"], "draw_reached")
+
+    def test_draw_stop_without_a_receipt_is_not_reached(self) -> None:
+        files = self._base()
+        del files["draw_invocation.json"]
+        diag = triage.diagnose(self._dir(files))
+        self.assertEqual(diag["d1"], "error")
+        self.assertNotEqual(diag["kind"], "draw_reached")
+
+    def test_receipt_without_a_draw_stop_is_not_reached(self) -> None:
+        files = self._base()
+        del files["stop.json"]
+        self.assertEqual(triage.diagnose(self._dir(files))["d1"], "error")
+        files = self._base()
+        files["stop.json"] = files["stop.json"].replace('"reason":"draw"', '"reason":"blocked_at"')
+        diag = triage.diagnose(self._dir(files))
+        self.assertNotEqual(diag["d1"], "draw_reached")
+        self.assertNotEqual(diag["kind"], "draw_reached")
+
+    def test_draw_requires_the_pinned_sha(self) -> None:
+        files = self._base()
+        meta = json.loads(files["metadata.json"])
+        del meta["gog"]["executable_sha256"]
+        files["metadata.json"] = json.dumps(meta) + "\n"
+        missing = triage.diagnose(self._dir(files))
+        self.assertEqual(missing["d1"], "error")
+        self.assertNotEqual(missing["kind"], "draw_reached")
+        files = self._base()
+        meta = json.loads(files["metadata.json"])
+        del meta["gog"]
+        files["metadata.json"] = json.dumps(meta) + "\n"
+        absent = triage.diagnose(self._dir(files))
+        self.assertEqual(absent["d1"], "error")
+        self.assertNotEqual(absent["kind"], "draw_reached")
+
+    def test_draw_requires_a_terminal_launcher_stop(self) -> None:
+        files = self._base()
+        files["metadata.json"] = files["metadata.json"].replace('"exit_code":2', '"exit_code":0')
+        diag = triage.diagnose(self._dir(files))
+        self.assertEqual(diag["d1"], "error")
+        self.assertNotEqual(diag["kind"], "draw_reached")
+
+    def test_cross_pid_and_incomplete_context_are_errors(self) -> None:
+        files = self._base()
+        files["draw_invocation.json"] = files["draw_invocation.json"].replace('"pid":7', '"pid":8')
+        self.assertEqual(triage.diagnose(self._dir(files))["d1"], "error")
+        files = self._base()
+        files["draw_invocation.json"] = files["draw_invocation.json"].replace(
+            '"context_want":0,"context_got":0,"context_complete":true',
+            '"context_want":10,"context_got":4,"context_complete":true',
+        )
+        self.assertEqual(triage.diagnose(self._dir(files))["d1"], "error")
+        files = self._base()
+        files["draw_invocation.json"] = files["draw_invocation.json"].replace(
+            '"context_want":0,"context_got":0,"context_complete":true',
+            '"context_want":10,"context_got":4,"context_complete":false',
+        )
+        reached = triage.diagnose(self._dir(files))
+        self.assertEqual(reached["d1"], "draw_reached")
+        self.assertEqual(reached["kind"], "draw_reached")
+
+    def _blocker(self) -> dict[str, str]:
+        files = self._base()
+        del files["draw_invocation.json"]
+        files["stop.json"] = files["stop.json"].replace(
+            '"reason":"draw","symbol":"_GfxDraw"',
+            '"reason":"blocked_at","symbol":"_GfxInitializeTexture"',
+        )
+        files["blocked_at.json"] = (
+            '{"symbol":"_GfxInitializeTexture","caller_rva":"0x1000","pid":7,"thread":3}\n'
+        )
+        return files
+
+    def test_blocked_at_is_not_init_success(self) -> None:
+        diag = triage.diagnose(self._dir(self._blocker()))
+        self.assertEqual(diag["d1"], "blocked_at")
+        self.assertEqual(diag["kind"], "blocked_at")
+        self.assertNotEqual(diag["kind"], "gl_diagnostic")
+
+    def test_blocked_at_requires_the_receipt(self) -> None:
+        files = self._blocker()
+        del files["blocked_at.json"]
+        missing = triage.diagnose(self._dir(files))
+        self.assertEqual(missing["d1"], "error")
+        self.assertNotEqual(missing["kind"], "blocked_at")
+        files = self._blocker()
+        del files["metadata.json"]
+        self.assertEqual(triage.diagnose(self._dir(files))["d1"], "error")
+        files = self._blocker()
+        files["blocked_at.json"] = files["blocked_at.json"].replace(
+            '"symbol":"_GfxInitializeTexture"', '"symbol":"_GfxDraw"'
+        )
+        mismatched = triage.diagnose(self._dir(files))
+        self.assertEqual(mismatched["d1"], "error")
+        self.assertNotEqual(mismatched["kind"], "blocked_at")
+        files = self._blocker()
+        files["blocked_at.json"] = files["blocked_at.json"].replace('"caller_rva":"0x1000"', '"caller_rva":"0x1001"')
+        self.assertEqual(triage.diagnose(self._dir(files))["d1"], "error")
+
+    def test_blocked_at_requires_the_pinned_sha(self) -> None:
+        files = self._blocker()
+        meta = json.loads(files["metadata.json"])
+        del meta["gog"]["executable_sha256"]
+        files["metadata.json"] = json.dumps(meta) + "\n"
+        missing = triage.diagnose(self._dir(files))
+        self.assertEqual(missing["d1"], "error")
+        self.assertNotEqual(missing["kind"], "blocked_at")
+        files = self._blocker()
+        meta = json.loads(files["metadata.json"])
+        meta["gog"]["executable_sha256"] = "0" * 64
+        files["metadata.json"] = json.dumps(meta) + "\n"
+        mismatched = triage.diagnose(self._dir(files))
+        self.assertEqual(mismatched["d1"], "error")
+        self.assertNotEqual(mismatched["kind"], "blocked_at")
+
+    def test_optional_create_receipt_must_match_the_session_pid(self) -> None:
+        receipt = '{"pid":999,"success":1,"symbol":"_GfxCreateVertexBuffer"}\n'
+        files = self._base()
+        files["create.json"] = receipt
+        draw = triage.diagnose(self._dir(files))
+        self.assertEqual(draw["d1"], "error")
+        self.assertNotEqual(draw["kind"], "draw_reached")
+        files = self._blocker()
+        files["create.json"] = receipt
+        blocked = triage.diagnose(self._dir(files))
+        self.assertEqual(blocked["d1"], "error")
+        self.assertNotEqual(blocked["kind"], "blocked_at")
+        files = self._base()
+        files["create.json"] = "{\n"
+        malformed = triage.diagnose(self._dir(files))
+        self.assertEqual(malformed["d1"], "error")
+        self.assertNotEqual(malformed["kind"], "draw_reached")
 
 
 if __name__ == "__main__":

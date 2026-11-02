@@ -14,6 +14,8 @@ extern "C" {
 /* Registry mutations run on the thread bound at a successful _GfxInit.
    An unexpected thread stops before touching the table. */
 void eu4_gfx_buffers_bind_thread(void);
+/* Stops unless the caller is the thread bound at a successful _GfxInit. */
+void eu4_gfx_require_thread(const char *symbol, const void *caller);
 
 /* Nils MTLBuffers created by this backend token. Does not free headers.
    backend is the non-owning master+0x180 pointer. */
