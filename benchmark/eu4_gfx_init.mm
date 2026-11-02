@@ -696,6 +696,11 @@ void eu4_gfx_on_reset_master(void *master) {
     set_state(master, NULL, 0x90, apply_raster, "_GfxSetRasterizerState", 1);
 }
 
+void eu4_gfx_set_viewport(void *master, const void *rect) {
+    /* CGraphics+0x2c57c and the master allocation do not overlap. */
+    memcpy((uint8_t *)master + 0xac, rect, 24);
+}
+
 int eu4_gfx_settings(int display, int windowed, int count, void *settings) {
     (void)display;
     (void)windowed;

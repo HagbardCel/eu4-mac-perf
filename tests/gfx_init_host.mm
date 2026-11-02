@@ -467,9 +467,54 @@ static void test_backend(void) {
     test_receipt_rollback(handle);
 }
 
+static void test_viewport(void) {
+    if (eu4_gfx_phase() != 0 || eu4_gfx_backend_releases() != 0) {
+        fail("viewport test started with a backend");
+    }
+    uint8_t master[EU4_GFX_MASTER_SIZE];
+    memset(master, 0xa5, sizeof master);
+    uint8_t rect[24];
+    for (int i = 0; i < 24; i++) {
+        rect[i] = (uint8_t)(0xa3 + i * 13);
+    }
+    eu4_gfx_set_viewport(master, rect);
+    if (memcmp(master + 0xac, rect, 24) != 0) {
+        fail("viewport image");
+    }
+    for (int i = 0; i < 0xac; i++) {
+        if (master[i] != 0xa5) {
+            fail("viewport wrote below the record");
+        }
+    }
+    for (int i = 0xc4; i < EU4_GFX_MASTER_SIZE; i++) {
+        if (master[i] != 0xa5) {
+            fail("viewport wrote above the record");
+        }
+    }
+    uint8_t again[24];
+    for (int i = 0; i < 24; i++) {
+        again[i] = (uint8_t)(0x5c - i);
+    }
+    eu4_gfx_set_viewport(master, again);
+    if (memcmp(master + 0xac, again, 24) != 0) {
+        fail("viewport update");
+    }
+    uint8_t got[24];
+    memcpy(got + 0x10, master + 0xbc, 8);
+    memcpy(got, master + 0xac, 8);
+    memcpy(got + 8, master + 0xb4, 8);
+    if (memcmp(got, again, 24) != 0) {
+        fail("getter layout");
+    }
+    if (eu4_gfx_phase() != 0 || eu4_gfx_backend_releases() != 0) {
+        fail("viewport touched the backend");
+    }
+}
+
 int main(void) {
     uint8_t desc[EU4_GFX_DEPTH_DESC_SIZE];
     memset(desc, 0xa5, sizeof desc);
+    test_viewport();
     test_writes();
     eu4_gfx_write_default_depth_stencil(desc);
     test_view(desc);
