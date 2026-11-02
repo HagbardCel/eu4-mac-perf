@@ -1,3 +1,4 @@
+#import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
 #import "eu4_metal_events.h"
 
@@ -141,6 +142,46 @@ static uint64_t current_thread(void) {
     uint64_t thread = 0;
     (void)pthread_threadid_np(pthread_self(), &thread);
     return thread;
+}
+
+static const void *g_stop_caller;
+static void *load_ptr(void *master, int offset);
+
+uint8_t *eu4_gfx_image(void) { return g_image; }
+
+const void *eu4_gfx_test_stop_caller(void) { return g_stop_caller; }
+
+void *eu4_gfx_backend_token(void) {
+    if (!g_succeeded || g_master == NULL) {
+        return NULL;
+    }
+    return load_ptr(g_master, 0x180);
+}
+
+void *eu4_gfx_metal_device(void) {
+    void *raw = eu4_gfx_backend_token();
+    if (raw == NULL) {
+        return NULL;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)raw;
+    return (__bridge void *)backend.device;
+}
+
+__attribute__((noreturn)) void eu4_gfx_stop(const char *symbol, const char *reason,
+                                            const void *caller) {
+    g_stop_caller = caller;
+    const char *phase = "before_init";
+    int value = eu4_gfx_phase();
+    if (value == 1) {
+        phase = "during_init";
+    } else if (value == 2) {
+        phase = "after_init";
+    }
+    eu4_metal_events_stop(phase, symbol, reason, caller);
+    if (g_terminate != NULL) {
+        g_terminate(reason);
+    }
+    _exit(2);
 }
 
 void eu4_gfx_write_default_blend(void *dest) {
@@ -328,6 +369,7 @@ static void rollback(void *master) {
         return;
     }
     void *raw = load_ptr(master, 0x180);
+    eu4_gfx_release_vertex_buffers(raw, __builtin_return_address(0));
     store_ptr(master, 0x80, NULL);
     store_ptr(master, 0x88, NULL);
     store_ptr(master, 0x90, NULL);
@@ -573,6 +615,7 @@ void *eu4_gfx_init(void *handle, uint8_t *success) {
     g_succeeded = 1;
     g_master = master;
     g_phase = 2;
+    eu4_gfx_buffers_bind_thread();
     EU4GfxBackend *backend = (__bridge EU4GfxBackend *)load_ptr(master, 0x180);
     int wrote = write_success(master, backend);
     backend = nil;
@@ -590,8 +633,10 @@ void *eu4_gfx_init(void *handle, uint8_t *success) {
 }
 
 void eu4_gfx_shutdown(void *master) {
+    const void *caller = __builtin_return_address(0);
     if (master != NULL) {
         void *raw = load_ptr(master, 0x180);
+        eu4_gfx_release_vertex_buffers(raw, caller);
         store_ptr(master, 0x180, NULL);
         if (raw != NULL) {
             EU4GfxBackend *taken = (__bridge_transfer EU4GfxBackend *)raw;

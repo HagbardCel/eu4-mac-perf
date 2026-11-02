@@ -381,7 +381,7 @@ static void test_gl_forward(void) {
 
 static uint8_t *map_entries(size_t page, int count, eu4_gfx_entry_request *entries,
                             eu4_metal_boot_request calls[2], uint8_t prefixes[][6],
-                            uint8_t call_expected[2][5]) {
+                            uint8_t call_expected[2][5], const uint8_t *special, int special_at) {
     uint8_t *mapping = mmap(NULL, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (mapping == MAP_FAILED) {
         fail("entry mmap failed");
@@ -391,7 +391,12 @@ static uint8_t *map_entries(size_t page, int count, eu4_gfx_entry_request *entri
     for (int i = 0; i < count; i++) {
         int length = i >= 5 ? 5 : 6;
         memset(prefixes[i], 0, 6);
-        memcpy(prefixes[i], i >= 5 ? prefix5 : prefix6, (size_t)length);
+        if (i == special_at && special != NULL) {
+            length = 5;
+            memcpy(prefixes[i], special, 5);
+        } else {
+            memcpy(prefixes[i], i >= 5 ? prefix5 : prefix6, (size_t)length);
+        }
         memcpy(mapping + (size_t)i * 16, prefixes[i], (size_t)length);
         mapping[(size_t)i * 16 + (size_t)length] = 0xc3;
         entries[i].site = mapping + (size_t)i * 16;
@@ -425,7 +430,7 @@ static void test_entry_transaction(void) {
     eu4_metal_boot_request calls[2];
     uint8_t prefixes[6][6];
     uint8_t call_expected[2][5];
-    uint8_t *mapping = map_entries(page, 6, entries, calls, prefixes, call_expected);
+    uint8_t *mapping = map_entries(page, 6, entries, calls, prefixes, call_expected, NULL, -1);
     uint8_t bad[6];
     memcpy(bad, prefixes[0], 6);
     bad[0] = 0;
@@ -498,49 +503,77 @@ static void test_entry_transaction(void) {
     }
 }
 
-static void test_eight_entry_transaction(void) {
+static void test_eleven_entry_transaction(void) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
-    eu4_gfx_entry_request entries[8];
+    static const uint8_t destroy_prefix[5] = {0x48, 0x85, 0xff, 0x74, 0x2f};
+    eu4_gfx_entry_request entries[11];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[8][6];
+    uint8_t prefixes[11][6];
     uint8_t call_expected[2][5];
-    uint8_t *mapping = map_entries(page, 8, entries, calls, prefixes, call_expected);
+    uint8_t *mapping = map_entries(page, 11, entries, calls, prefixes, call_expected, destroy_prefix, 10);
     eu4_metal_boot_patch patches[2] = {0};
-    if (!eu4_gfx_install_all(entries, 8, calls, 2, patches)) {
-        fail("eight-entry install failed");
+    if (!eu4_gfx_install_all(entries, 11, calls, 2, patches)) {
+        fail("eleven-entry install failed");
     }
     entry_hits = 0;
     call_hits = 0;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 11; i++) {
         ((void (*)(void))entries[i].site)();
     }
     ((void (*)(void))calls[0].callsite)();
     ((void (*)(void))calls[1].callsite)();
-    if (entry_hits != 8 || call_hits != 2) {
-        fail("eight installed sites did not reach the replacements");
+    if (entry_hits != 11 || call_hits != 2) {
+        fail("eleven installed sites did not reach the replacements");
     }
     if (!eu4_gfx_entry_restore() || !eu4_metal_boot_restore()) {
-        fail("could not restore an eight-entry install");
+        fail("could not restore an eleven-entry install");
     }
-    eu4_gfx_entry_test_fail_commit(7);
-    if (eu4_gfx_install_all(entries, 8, calls, 2, patches)) {
-        fail("eighth write reported success");
+    eu4_gfx_entry_test_fail_commit(10);
+    if (eu4_gfx_install_all(entries, 11, calls, 2, patches)) {
+        fail("eleventh write reported success");
     }
     eu4_gfx_entry_test_fail_commit(0);
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 11; i++) {
         if (memcmp(entries[i].site, prefixes[i], (size_t)entries[i].length) != 0) {
-            fail("eighth-write rollback left an entry patched");
+            fail("tenth-write rollback left an entry patched");
         }
     }
     if (memcmp(calls[0].callsite, calls[0].expected, 5) != 0 ||
         memcmp(calls[1].callsite, calls[1].expected, 5) != 0) {
-        fail("eighth-write rollback left a call patched");
+        fail("tenth-write rollback left a call patched");
     }
     if (eu4_metal_boot_restore()) {
-        fail("eighth-write rollback left the call install committed");
+        fail("tenth-write rollback left the call install committed");
     }
     if (munmap(mapping, page * 2) != 0) {
-        fail("eight-entry munmap failed");
+        fail("eleven-entry munmap failed");
+    }
+}
+
+static void test_reject_destroy_prefix(void) {
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    static const uint8_t bad[5] = {0x48, 0x85, 0xff, 0x74, 0x00};
+    eu4_gfx_entry_request entries[1];
+    eu4_metal_boot_request calls[2];
+    uint8_t prefixes[1][6];
+    uint8_t call_expected[2][5];
+    uint8_t *mapping = map_entries(page, 1, entries, calls, prefixes, call_expected, bad, 0);
+    eu4_metal_boot_patch patches[2] = {0};
+    if (eu4_gfx_install_all(entries, 1, calls, 2, patches)) {
+        fail("incorrect destroy prefix was installed");
+    }
+    if (memcmp(entries[0].site, bad, 5) != 0) {
+        fail("incorrect prefix was modified");
+    }
+    if (memcmp(calls[0].callsite, calls[0].expected, 5) != 0 ||
+        memcmp(calls[1].callsite, calls[1].expected, 5) != 0) {
+        fail("incorrect prefix modified a callsite");
+    }
+    if (eu4_metal_boot_restore()) {
+        fail("rejected prefix left a call install committed");
+    }
+    if (munmap(mapping, page * 2) != 0) {
+        fail("rejected-prefix munmap failed");
     }
 }
 
@@ -551,7 +584,7 @@ static void test_failed_call_once(void) {
     eu4_metal_boot_request calls[2];
     uint8_t prefixes[6][6];
     uint8_t call_expected[2][5];
-    uint8_t *mapping = map_entries(page, 6, entries, calls, prefixes, call_expected);
+    uint8_t *mapping = map_entries(page, 6, entries, calls, prefixes, call_expected, NULL, -1);
     eu4_metal_boot_patch patches[2] = {0};
     if (eu4_gfx_install_all(entries, 6, calls, 2, patches)) {
         fail("injected call failure still installed");
@@ -635,7 +668,8 @@ int main(void) {
     test_four();
     test_gl_forward();
     test_entry_transaction();
-    test_eight_entry_transaction();
+    test_eleven_entry_transaction();
+    test_reject_destroy_prefix();
     return 0;
 }
 #endif

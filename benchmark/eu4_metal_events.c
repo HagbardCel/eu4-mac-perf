@@ -79,23 +79,32 @@ static void json_escape(const char *text, char *out, size_t cap) {
     out[n] = 0;
 }
 
-void eu4_metal_events_stop(const char *phase, const char *symbol, const char *reason,
-                           const void *caller) {
+static void describe_caller(const void *caller, char *escaped, size_t cap, uintptr_t *address,
+                             int *inside, uint64_t *thread, int *pid) {
     Dl_info info;
     memset(&info, 0, sizeof info);
     const char *image = "";
     if (caller != NULL && dladdr(caller, &info) != 0 && info.dli_fname != NULL) {
         image = info.dli_fname;
     }
+    json_escape(image, escaped, cap);
+    *address = (uintptr_t)caller;
+    *inside = caller != NULL && image_base != 0 && *address >= image_base && *address < image_end;
+    *thread = 0;
+    (void)pthread_threadid_np(pthread_self(), thread);
+    *pid = (int)getpid();
+}
+
+void eu4_metal_events_stop(const char *phase, const char *symbol, const char *reason,
+                           const void *caller) {
     char escaped[512];
-    json_escape(image, escaped, sizeof escaped);
-    uintptr_t address = (uintptr_t)caller;
-    int inside = caller != NULL && image_base != 0 && address >= image_base && address < image_end;
+    uintptr_t address = 0;
+    int inside = 0;
     uint64_t thread = 0;
-    (void)pthread_threadid_np(pthread_self(), &thread);
+    int pid = 0;
+    describe_caller(caller, escaped, sizeof escaped, &address, &inside, &thread, &pid);
     char body[1280];
     int length;
-    int pid = (int)getpid();
     if (inside) {
         length = snprintf(body, sizeof body,
                           "{\"phase\":\"%s\",\"symbol\":\"%s\",\"image\":\"%s\","
@@ -119,4 +128,31 @@ void eu4_metal_events_stop(const char *phase, const char *symbol, const char *re
     if (eu4_metal_events_write("stop.json", body) != 0) {
         _exit(2);
     }
+}
+
+int eu4_metal_events_create(const void *caller) {
+    char escaped[512];
+    uintptr_t address = 0;
+    int inside = 0;
+    uint64_t thread = 0;
+    int pid = 0;
+    describe_caller(caller, escaped, sizeof escaped, &address, &inside, &thread, &pid);
+    char body[1280];
+    int length;
+    if (inside) {
+        length = snprintf(body, sizeof body,
+                          "{\"success\":1,\"symbol\":\"_GfxCreateVertexBuffer\",\"image\":\"%s\","
+                          "\"address\":\"0x%llx\",\"rva\":\"0x%llx\",\"thread\":%llu,\"pid\":%d}\n",
+                          escaped, (unsigned long long)address,
+                          (unsigned long long)(address - image_base), (unsigned long long)thread, pid);
+    } else {
+        length = snprintf(body, sizeof body,
+                          "{\"success\":1,\"symbol\":\"_GfxCreateVertexBuffer\",\"image\":\"%s\","
+                          "\"address\":\"0x%llx\",\"rva\":null,\"thread\":%llu,\"pid\":%d}\n",
+                          escaped, (unsigned long long)address, (unsigned long long)thread, pid);
+    }
+    if (length < 0 || (size_t)length >= sizeof body) {
+        return -1;
+    }
+    return eu4_metal_events_write("create.json", body);
 }

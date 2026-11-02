@@ -6,10 +6,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Eight function entries. The prefix is a complete-instruction run
+/* Eleven function entries. The prefix is a complete-instruction run
    (5 or 6 bytes). The patch is e9 rel32 inside that prefix, then nop. */
 
-#define EU4_GFX_ENTRY_MAX 8
+#define EU4_GFX_ENTRY_MAX 11
 
 typedef struct {
     void *site;
