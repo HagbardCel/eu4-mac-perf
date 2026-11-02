@@ -6,10 +6,14 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* Twelve function entries. The prefix is a complete-instruction run
-   of 5 to 8 bytes. The patch is e9 rel32 inside that prefix, then nop. */
+/* The prefix is a complete-instruction run of 5 to 8 bytes. The patch is
+   e9 rel32 inside that prefix, then nop. The count is eu4_gfx_entries.def. */
 
-#define EU4_GFX_ENTRY_MAX 12
+#define GFX_ENTRY(name, entry, end, fn, prefix) +1
+enum { EU4_GFX_ENTRY_MAX = 0
+#include "eu4_gfx_entries.def"
+};
+#undef GFX_ENTRY
 
 typedef struct {
     void *site;
