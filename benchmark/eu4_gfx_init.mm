@@ -294,18 +294,40 @@ static void fill_blend_snap(uint8_t snap[0x24]) {
     memcpy(snap + 0x20, &mask, 4);
 }
 
-static void fill_depth_snap(uint8_t snap[0x24]) {
-    uint32_t compare = 0x203, mask = 0xffffffffu, always = 0x207, keep = 0x1e00;
+/* Ordinals 0..7 are GL_NEVER..GL_ALWAYS. GetOpenGLCompareFunction at 0x15edd14. */
+static uint32_t depth_compare_gl(uint32_t ordinal) {
+    if (ordinal > 7) {
+        return 0x203;
+    }
+    return 0x200 + ordinal;
+}
+
+/* Ordinals 1..7 index the table at RVA 0x1a795d0. 0 and every larger dword are GL_KEEP. */
+static uint32_t depth_stencil_op_gl(uint32_t ordinal) {
+    static const uint32_t table[] = {0, 0x1e01, 0x8507, 0x8508, 0x150a, 0x1e02, 0x1e03};
+    if (ordinal < 1 || ordinal > 7) {
+        return 0x1e00;
+    }
+    return table[ordinal - 1];
+}
+
+static void depth_snap_from_desc(const uint8_t *desc, uint8_t snap[0x24]) {
     memset(snap, 0, 0x24);
-    snap[0] = 1;
-    snap[1] = 1;
-    memcpy(snap + 4, &compare, 4);
-    memcpy(snap + 0xc, &mask, 4);
-    memcpy(snap + 0x10, &mask, 4);
-    memcpy(snap + 0x14, &always, 4);
-    memcpy(snap + 0x18, &keep, 4);
-    memcpy(snap + 0x1c, &keep, 4);
-    memcpy(snap + 0x20, &keep, 4);
+    snap[0] = desc[0];
+    snap[1] = load_u32(desc, 4) == 1 ? 1 : 0;
+    uint32_t depth_cmp = depth_compare_gl(load_u32(desc, 8));
+    memcpy(snap + 4, &depth_cmp, 4);
+    snap[8] = desc[0xc];
+    memcpy(snap + 0xc, desc + 0x10, 4);
+    memcpy(snap + 0x10, desc + 0x14, 4);
+    uint32_t stencil_cmp = depth_compare_gl(load_u32(desc, 0x24));
+    memcpy(snap + 0x14, &stencil_cmp, 4);
+    uint32_t fail_op = depth_stencil_op_gl(load_u32(desc, 0x18));
+    uint32_t depth_fail = depth_stencil_op_gl(load_u32(desc, 0x1c));
+    uint32_t pass_op = depth_stencil_op_gl(load_u32(desc, 0x20));
+    memcpy(snap + 0x18, &fail_op, 4);
+    memcpy(snap + 0x1c, &depth_fail, 4);
+    memcpy(snap + 0x20, &pass_op, 4);
 }
 
 static void fill_raster_snap(uint8_t snap[0x10]) {
@@ -336,12 +358,16 @@ static int apply_blend(void *master, void *state, int force) {
 }
 
 static int apply_depth(void *master, void *state, int force) {
-    eu4_gfx_depth_view ignored;
-    if (state == NULL || eu4_gfx_default_depth_stencil_view((uint8_t *)state + 0x24, &ignored) != 0) {
+    if (state == NULL) {
+        return -1;
+    }
+    uint8_t desc[0x28];
+    int got = 0;
+    if (eu4_metal_events_read((uint8_t *)state + 0x24, desc, 0x28, &got) != 0 || got != 0x28) {
         return -1;
     }
     uint8_t snap[0x24];
-    fill_depth_snap(snap);
+    depth_snap_from_desc(desc, snap);
     return apply_snap(master, 0x30, snap, 0x24, force);
 }
 
@@ -658,8 +684,62 @@ void eu4_gfx_shutdown(void *master) {
     g_succeeded = 0;
 }
 
+static void put_hex(const uint8_t *bytes, int count, char *out) {
+    static const char digits[] = "0123456789abcdef";
+    for (int i = 0; i < count; i++) {
+        out[i * 2] = digits[bytes[i] >> 4];
+        out[i * 2 + 1] = digits[bytes[i] & 0xf];
+    }
+    out[count * 2] = 0;
+}
+
+/* Only the Setup2dGraphics return at 0x149d061 gets this file. A failed write still stops. */
+static void write_depth_receipt(void *master, void *state, const char *source, const void *caller) {
+    char image[8];
+    uint64_t rva = 0;
+    int inside = 0;
+    uint64_t thread = 0;
+    int pid = 0;
+    eu4_metal_events_describe(caller, image, sizeof image, &rva, &inside, &thread, &pid);
+    if (!inside || rva != 0x149d061) {
+        return;
+    }
+    uint8_t object[0x4c];
+    uint8_t current[0x24];
+    int state_got = 0;
+    int snap_got = 0;
+    (void)eu4_metal_events_read(state, object, (int)sizeof object, &state_got);
+    if (master != NULL) {
+        (void)eu4_metal_events_read((uint8_t *)master + 0x30, current, (int)sizeof current, &snap_got);
+    }
+    char state_hex[0x4c * 2 + 1];
+    char snap_hex[0x24 * 2 + 1];
+    char state_json[0x4c * 2 + 3] = "null";
+    char snap_json[0x24 * 2 + 3] = "null";
+    if (state_got == (int)sizeof object) {
+        put_hex(object, state_got, state_hex);
+        snprintf(state_json, sizeof state_json, "\"%s\"", state_hex);
+    }
+    if (snap_got == (int)sizeof current) {
+        put_hex(current, snap_got, snap_hex);
+        snprintf(snap_json, sizeof snap_json, "\"%s\"", snap_hex);
+    }
+    char body[1024];
+    int length = snprintf(
+        body, sizeof body,
+        "{\"symbol\":\"_GfxSetDepthStencilState\",\"caller_rva\":\"0x%llx\",\"pid\":%d,"
+        "\"thread\":%llu,\"source\":\"%s\",\"state_want\":76,\"state_got\":%d,\"state\":%s,"
+        "\"master_depth_want\":36,\"master_depth_got\":%d,\"master_depth\":%s}\n",
+        (unsigned long long)rva, pid, (unsigned long long)thread, source, state_got, state_json,
+        snap_got, snap_json);
+    if (length < 0 || (size_t)length >= sizeof body) {
+        return;
+    }
+    (void)eu4_metal_events_write("depth_state.json", body);
+}
+
 static void set_state(void *handle, void *state, int slot, int (*apply)(void *, void *, int),
-                       const char *symbol, int force) {
+                       const char *symbol, int force, const void *caller) {
     void *master = NULL;
     if (handle != NULL) {
         memcpy(&master, handle, sizeof master);
@@ -667,24 +747,30 @@ static void set_state(void *handle, void *state, int slot, int (*apply)(void *, 
     if (master == NULL) {
         return;
     }
+    const char *source = state != NULL ? "explicit" : "default";
     if (state == NULL) {
         state = load_ptr(master, slot);
     }
     if (apply(master, state, force) != 0 && g_succeeded) {
-        stop_now("after_init", symbol, "unsupported", __builtin_return_address(0));
+        if (slot == 0x88) {
+            write_depth_receipt(master, state, source, caller);
+        }
+        stop_now("after_init", symbol, "unsupported", caller);
     }
 }
 
 void eu4_gfx_set_blend(void *handle, void *state) {
-    set_state(handle, state, 0x80, apply_blend, "_GfxSetBlendState", 0);
+    set_state(handle, state, 0x80, apply_blend, "_GfxSetBlendState", 0, __builtin_return_address(0));
 }
 
 void eu4_gfx_set_depth(void *handle, void *state) {
-    set_state(handle, state, 0x88, apply_depth, "_GfxSetDepthStencilState", 0);
+    set_state(handle, state, 0x88, apply_depth, "_GfxSetDepthStencilState", 0,
+              __builtin_return_address(0));
 }
 
 void eu4_gfx_set_raster(void *handle, void *state) {
-    set_state(handle, state, 0x90, apply_raster, "_GfxSetRasterizerState", 0);
+    set_state(handle, state, 0x90, apply_raster, "_GfxSetRasterizerState", 0,
+              __builtin_return_address(0));
 }
 
 int eu4_gfx_reset(void *master) {
@@ -693,10 +779,11 @@ int eu4_gfx_reset(void *master) {
 }
 
 void eu4_gfx_on_reset_master(void *master) {
+    const void *caller = __builtin_return_address(0);
     /* force skips the snapshot compare. No encoder exists yet, so this is the CPU write only. */
-    set_state(master, NULL, 0x80, apply_blend, "_GfxSetBlendState", 1);
-    set_state(master, NULL, 0x88, apply_depth, "_GfxSetDepthStencilState", 1);
-    set_state(master, NULL, 0x90, apply_raster, "_GfxSetRasterizerState", 1);
+    set_state(master, NULL, 0x80, apply_blend, "_GfxSetBlendState", 1, caller);
+    set_state(master, NULL, 0x88, apply_depth, "_GfxSetDepthStencilState", 1, caller);
+    set_state(master, NULL, 0x90, apply_raster, "_GfxSetRasterizerState", 1, caller);
 }
 
 void eu4_gfx_set_viewport(void *master, const void *rect) {
