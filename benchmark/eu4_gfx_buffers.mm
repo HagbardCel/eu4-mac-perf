@@ -37,6 +37,10 @@ void eu4_gfx_buffers_bind_thread(void) {
     g_thread_set = 1;
 }
 
+int eu4_gfx_buffers_on_thread(void) {
+    return on_gfx_thread();
+}
+
 static EU4VertexBuffer *find_entry(void *header) {
     for (EU4VertexBuffer *entry in g_entries) {
         if (entry.header == header) {

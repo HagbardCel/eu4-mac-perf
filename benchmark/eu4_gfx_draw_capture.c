@@ -1,5 +1,6 @@
 #include "eu4_gfx_draw_capture.h"
 
+#include "eu4_gfx_buffers.h"
 #include "eu4_gfx_init.h"
 #include "eu4_metal_events.h"
 
@@ -9,7 +10,22 @@
 
 /* _GfxDrawIndexed reads the context through (%rdi). The other two entries
    have no verified context layout, so their receipts stay raw. */
-enum { EU4_GFX_DRAW_INDEXED = 2, EU4_GFX_DRAW_CONTEXT_WANT = 0x171 };
+enum {
+    EU4_GFX_DRAW = 1,
+    EU4_GFX_DRAW_INDEXED = 2,
+    EU4_GFX_DRAW_CONTEXT_WANT = 0x171,
+    EU4_GFX_DRAW_CALLER = 0xedfcd1,
+    EU4_GFX_DRAW_SKIP_MAX = 256,
+    EU4_GFX_SHADER_OBJECT = 0x78
+};
+
+static int g_draw_count;
+static int g_skip_count;
+
+void eu4_gfx_draw_selection_reset(void) {
+    g_draw_count = 0;
+    g_skip_count = 0;
+}
 
 _Static_assert(offsetof(eu4_gfx_draw_raw, rdi) == 8, "rdi slot");
 _Static_assert(offsetof(eu4_gfx_draw_raw, xmm) == 56, "xmm slot");
@@ -42,6 +58,12 @@ static const char *symbol_for(uint32_t which) {
         return "_GfxDrawIndexedInstanced";
     }
     return NULL;
+}
+
+static int strip_ready(int inside, uint64_t rva, int complete, int shader_known, uint64_t shader,
+                       int mode_known, uint32_t mode, int count_known, int32_t count, int32_t least) {
+    return inside && rva == EU4_GFX_DRAW_CALLER && complete && shader_known && shader != 0 &&
+           mode_known && mode == 5 && count_known && count >= least;
 }
 
 int eu4_gfx_draw_receipt(const eu4_gfx_draw_raw *raw, char *out, int cap) {
@@ -99,28 +121,88 @@ int eu4_gfx_draw_receipt(const eu4_gfx_draw_raw *raw, char *out, int cap) {
     char shader_json[32] = "null";
     char count_json[16] = "null";
     char dirty_json[8] = "null";
-    char extra[128];
+    char uniform_json[8] = "null";
+    char object_hex[EU4_GFX_SHADER_OBJECT * 2 + 1];
+    char object_json[EU4_GFX_SHADER_OBJECT * 2 + 3];
+    char extra[512];
     extra[0] = 0;
-    if (raw->which == 1) {
+    int invocation = 1;
+    if (raw->which == EU4_GFX_DRAW) {
+        int count_known = 0;
+        int32_t count = 0;
         int32_t esi = (int32_t)raw->rsi;
         if (esi > 0) {
+            count = esi;
+            count_known = 1;
             snprintf(count_json, sizeof count_json, "%d", esi);
         } else if (context_got >= 0x68) {
-            int32_t count = 0;
             memcpy(&count, context + 0x64, sizeof count);
+            count_known = 1;
             snprintf(count_json, sizeof count_json, "%d", count);
         }
+        int shader_known = 0;
+        uint64_t shader = 0;
         if (context_got >= 0x78) {
-            uint64_t shader = 0;
             memcpy(&shader, context + 0x70, sizeof shader);
+            shader_known = 1;
             snprintf(shader_json, sizeof shader_json, "\"0x%llx\"", (unsigned long long)shader);
+        }
+        int mode_known = 0;
+        uint32_t mode = 0;
+        if (context_got >= 12) {
+            memcpy(&mode, context + 8, sizeof mode);
+            mode_known = 1;
+        }
+        if (context_got >= 0x129) {
+            snprintf(uniform_json, sizeof uniform_json, "%u", context[0x128]);
         }
         if (context_got >= 0x171) {
             snprintf(dirty_json, sizeof dirty_json, "%u", context[0x170]);
         }
+        int empty = strip_ready(inside, rva, complete, shader_known, shader, mode_known, mode, count_known,
+                                count, 0) &&
+                    count <= 2;
+        int drawable = strip_ready(inside, rva, complete, shader_known, shader, mode_known, mode, count_known,
+                                   count, 3);
+        const char *selection = "ineligible_stop";
+        int skipped = g_skip_count;
+        if (!eu4_gfx_buffers_on_thread()) {
+            invocation = g_draw_count;
+        } else {
+            g_draw_count += 1;
+            invocation = g_draw_count;
+            if (empty && g_skip_count < EU4_GFX_DRAW_SKIP_MAX) {
+                /* The original body would still upload dirty uniforms and attributes. */
+                g_skip_count += 1;
+                return 1;
+            }
+            if (empty) {
+                selection = "budget_exhausted";
+            } else if (drawable) {
+                selection = "candidate";
+            }
+            skipped = g_skip_count;
+        }
+        int object_got = 0;
+        memcpy(object_json, "null", 5);
+        if (shader_known && shader != 0) {
+            uint8_t object[EU4_GFX_SHADER_OBJECT];
+            (void)eu4_metal_events_read((const void *)(uintptr_t)shader, object, EU4_GFX_SHADER_OBJECT,
+                                        &object_got);
+            if (object_got == EU4_GFX_SHADER_OBJECT &&
+                hex_put(object, object_got, object_hex, (int)sizeof object_hex) == 0) {
+                int quoted = snprintf(object_json, sizeof object_json, "\"%s\"", object_hex);
+                if (quoted < 0 || quoted >= (int)sizeof object_json) {
+                    return -1;
+                }
+            }
+        }
         int extra_len = snprintf(extra, sizeof extra,
-                                 ",\"shader_ptr\":%s,\"effective_count\":%s,\"attrib_dirty\":%s",
-                                 shader_json, count_json, dirty_json);
+                                 ",\"shader_ptr\":%s,\"effective_count\":%s,\"attrib_dirty\":%s,"
+                                 "\"uniform_dirty\":%s,\"selection\":\"%s\",\"skipped_count\":%d,"
+                                 "\"shader_object_want\":%d,\"shader_object_got\":%d,\"shader_object\":%s",
+                                 shader_json, count_json, dirty_json, uniform_json, selection, skipped,
+                                 EU4_GFX_SHADER_OBJECT, object_got, object_json);
         if (extra_len < 0 || extra_len >= (int)sizeof extra) {
             return -1;
         }
@@ -137,13 +219,14 @@ int eu4_gfx_draw_receipt(const eu4_gfx_draw_raw *raw, char *out, int cap) {
     }
     int length = snprintf(
         out, (size_t)cap,
-        "{\"symbol\":\"%s\",\"invocation_id\":1,\"provenance\":\"%s\",\"call_chain\":[%s],"
+        "{\"symbol\":\"%s\",\"invocation_id\":%d,\"provenance\":\"%s\",\"call_chain\":[%s],"
         "\"image\":\"%s\",\"caller_rva\":%s,\"pid\":%d,\"thread\":%llu,"
         "\"rdi\":\"0x%llx\",\"rsi\":\"0x%llx\",\"rdx\":\"0x%llx\",\"rcx\":\"0x%llx\","
         "\"r8\":\"0x%llx\",\"r9\":\"0x%llx\",\"stack\":\"%s\","
         "\"xmm\":[\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"],"
         "\"context_want\":%d,\"context_got\":%d,\"context_complete\":%s,\"context\":\"%s\"%s}\n",
-        symbol, inside ? "game" : "rejected", chain, image, caller, pid, (unsigned long long)thread,
+        symbol, invocation, inside ? "game" : "rejected", chain, image, caller, pid,
+        (unsigned long long)thread,
         (unsigned long long)raw->rdi, (unsigned long long)raw->rsi, (unsigned long long)raw->rdx,
         (unsigned long long)raw->rcx, (unsigned long long)raw->r8, (unsigned long long)raw->r9,
         stack_hex, xmm_hex[0], xmm_hex[1], xmm_hex[2], xmm_hex[3], xmm_hex[4], xmm_hex[5],
@@ -155,7 +238,7 @@ int eu4_gfx_draw_receipt(const eu4_gfx_draw_raw *raw, char *out, int cap) {
     return 0;
 }
 
-void eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw) {
+int eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw) {
     char body[8192];
     const char *reason = "error";
     const char *symbol = "_GfxDraw";
@@ -164,8 +247,11 @@ void eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw) {
         if (named != NULL) {
             symbol = named;
         }
-        if (eu4_gfx_draw_receipt(raw, body, (int)sizeof body) == 0 &&
-            eu4_metal_events_write("draw_invocation.json", body) == 0 &&
+        int disposition = eu4_gfx_draw_receipt(raw, body, (int)sizeof body);
+        if (disposition == 1) {
+            return 1;
+        }
+        if (disposition == 0 && eu4_metal_events_write("draw_invocation.json", body) == 0 &&
             strstr(body, "\"provenance\":\"game\"") != NULL) {
             reason = "draw";
         }

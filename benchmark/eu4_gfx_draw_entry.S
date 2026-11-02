@@ -41,4 +41,9 @@ Lcapture:
     rep movsb
     movq %rsp, %rdi
     call _eu4_gfx_draw_capture
+    cmpl $1, %eax
+    je Lskip
     ud2
+Lskip:
+    leave
+    ret
