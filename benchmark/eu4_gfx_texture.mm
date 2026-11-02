@@ -340,3 +340,13 @@ void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, c
        not followed by initialize leaves the old object until shutdown. */
     backend.textures[[NSValue valueWithPointer:header]] = taken;
 }
+
+void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned flags,
+                          unsigned base_unit, void *samplers) {
+    (void)handle;
+    (void)count;
+    (void)textures;
+    (void)flags;
+    (void)base_unit;
+    (void)samplers;
+}

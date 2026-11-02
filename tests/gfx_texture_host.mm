@@ -162,10 +162,28 @@ static void test_bgr(void) {
     }
 }
 
+static void test_set_textures(void) {
+    uint8_t object[0x198];
+    uint8_t saved[0x198];
+    memset(object, 0x5a, sizeof object);
+    memcpy(saved, object, sizeof saved);
+    void *handle = object;
+    void *invalid = reinterpret_cast<void *>(1);
+    eu4_gfx_set_textures(&handle, 0, invalid, 0, 0, invalid);
+    if (memcmp(object, saved, sizeof saved) != 0) {
+        fail("set textures wrote the object");
+    }
+    eu4_gfx_set_textures(&handle, 2, invalid, 3, 3, invalid);
+    if (memcmp(object, saved, sizeof saved) != 0) {
+        fail("set textures wrote the object with flags");
+    }
+}
+
 int main(void) {
     test_closed_branches();
     test_upload();
     test_short_bgr();
     test_bgr();
+    test_set_textures();
     return 0;
 }

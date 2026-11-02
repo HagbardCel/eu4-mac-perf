@@ -36,6 +36,20 @@ int eu4_gfx_texture_make(void *device, void *header, const void *desc, const voi
 void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, const void *images,
                                 uint32_t count);
 
+/* _GfxSetTextures at 0x15ecbf2. rdi is the handle and (%rdi) is the state object.
+   esi is the count. rdx is the texture-pointer array. ecx bit 0 binds from r8d,
+   and bit 1 binds from r8d + 0xf. r9 is an optional sampler-pointer array. A null
+   texture is replaced by the pointer at state +0x98. The dword at state +0xa8 is
+   compared with 1. The only calls are InternalSetTextureAndSamplerState at
+   0x15ecc6d and 0x15eccc6. That helper's first control transfer is callq *(%rax)
+   at 0x15ecd06 through ___glewActiveTextureARB. The 0xc crash did not capture
+   that slot. D1a-only control-flow replacement. The CPU-side object is left
+   unchanged. Texture and sampler binding is skipped. No Metal bind is
+   implemented. A later draw_reached shows the game entered a draw, not that the
+   original binding workload was reconstructed. */
+void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned flags,
+                          unsigned base_unit, void *samplers);
+
 #ifdef __cplusplus
 }
 #endif
