@@ -23,6 +23,11 @@ int eu4_metal_gl_should_forward(int mode, int phase) {
     return phase == 0;
 }
 
+/* BuildGLSL's glGetString(GL_VENDOR) returns at 0x15eff24. The result is unread when +0x18e is 0. */
+int eu4_metal_gl_unused_vendor(int mode, int phase, unsigned name, int inside, uint64_t rva) {
+    return mode == 3 && phase == 2 && name == 0x1f00u && inside && rva == 0x15eff24ULL;
+}
+
 static int g_test_mode = -1;
 static int g_test_phase = -1;
 
@@ -210,7 +215,18 @@ __attribute__((used)) static const GLubyte *eu4_glGetString(GLenum name) {
         }
         return real_glGetString(name);
     }
-    abort_gl("glGetString", __builtin_return_address(0), "gl", NULL);
+    const void *caller = __builtin_return_address(0);
+    char image[512];
+    uint64_t rva = 0;
+    int inside = 0;
+    uint64_t thread = 0;
+    int pid = 0;
+    eu4_metal_events_describe(caller, image, sizeof image, &rva, &inside, &thread, &pid);
+    int phase = g_test_phase >= 0 ? g_test_phase : eu4_gfx_phase();
+    if (eu4_metal_gl_unused_vendor(current_mode(), phase, name, inside, rva)) {
+        return NULL;
+    }
+    abort_gl("glGetString", caller, "gl", NULL);
 }
 GL_BIND(eu4_glGetString, glGetString);
 

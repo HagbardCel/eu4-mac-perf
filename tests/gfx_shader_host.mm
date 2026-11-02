@@ -2,16 +2,20 @@
 
 #include <new>
 #include <stdint.h>
+#include <string.h>
 
 int main(void) {
     auto *object = static_cast<uint8_t *>(eu4_gfx_create_shader());
     if (object == nullptr) {
         return 1;
     }
-    if (*reinterpret_cast<uint32_t *>(object) != 0) {
+    uint32_t name = *reinterpret_cast<uint32_t *>(object);
+    uint64_t qword = 1;
+    memcpy(&qword, object + 4, sizeof qword);
+    if (name != 0) {
         return 2;
     }
-    if (*reinterpret_cast<uint64_t *>(object + 4) != 0) {
+    if (qword != 0) {
         return 3;
     }
     ::operator delete(object);
