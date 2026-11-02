@@ -73,6 +73,19 @@ class MetalBootTests(unittest.TestCase):
         )
         self.assertEqual(later["status"], "complete")
         self.assertFalse(later["raises"])
+        bounds = (
+            ("0x15ea4f8", "complete"),
+            ("0x15ea4f9", "post_init_failure"),
+            ("0x15ea52c", "post_init_failure"),
+            ("0x15ea52d", "complete"),
+            ("0x149b21f", "complete"),
+        )
+        for rva, status in bounds:
+            bounded = probe.metal_init_outcome(
+                True, "after_init", "stop", 2, 7, 7, False, "gl", image, rva
+            )
+            self.assertEqual(bounded["status"], status)
+            self.assertEqual(bounded["raises"], status != "complete")
         for bad in (None, "nope", -1, 0):
             malformed = probe.metal_init_outcome(
                 True, "after_init", "stop", 2, 7, 7, False, "gl", image, bad

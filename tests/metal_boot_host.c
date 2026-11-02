@@ -380,20 +380,25 @@ static void test_gl_forward(void) {
 }
 
 static uint8_t *map_entries(size_t page, int count, eu4_gfx_entry_request *entries,
-                            eu4_metal_boot_request calls[2], uint8_t prefixes[][6],
-                            uint8_t call_expected[2][5], const uint8_t *special, int special_at) {
+                            eu4_metal_boot_request calls[2], uint8_t prefixes[][8],
+                            uint8_t call_expected[2][5], const uint8_t *special, int special_at,
+                            int wide_at) {
     uint8_t *mapping = mmap(NULL, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (mapping == MAP_FAILED) {
         fail("entry mmap failed");
     }
     static const uint8_t prefix6[6] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
     static const uint8_t prefix5[5] = {0x55, 0x48, 0x89, 0xe5, 0x53};
+    static const uint8_t viewport[8] = {0x55, 0x48, 0x89, 0xe5, 0xf3, 0x0f, 0x6f, 0x06};
     for (int i = 0; i < count; i++) {
         int length = i >= 5 ? 5 : 6;
-        memset(prefixes[i], 0, 6);
+        memset(prefixes[i], 0, 8);
         if (i == special_at && special != NULL) {
             length = 5;
             memcpy(prefixes[i], special, 5);
+        } else if (i == wide_at) {
+            length = 8;
+            memcpy(prefixes[i], viewport, 8);
         } else {
             memcpy(prefixes[i], i >= 5 ? prefix5 : prefix6, (size_t)length);
         }
@@ -428,9 +433,9 @@ static void test_entry_transaction(void) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     eu4_gfx_entry_request entries[6];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[6][6];
+    uint8_t prefixes[6][8];
     uint8_t call_expected[2][5];
-    uint8_t *mapping = map_entries(page, 6, entries, calls, prefixes, call_expected, NULL, -1);
+    uint8_t *mapping = map_entries(page, 6, entries, calls, prefixes, call_expected, NULL, -1, -1);
     uint8_t bad[6];
     memcpy(bad, prefixes[0], 6);
     bad[0] = 0;
@@ -508,9 +513,10 @@ static void test_eleven_entry_transaction(void) {
     static const uint8_t destroy_prefix[5] = {0x48, 0x85, 0xff, 0x74, 0x2f};
     eu4_gfx_entry_request entries[11];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[11][6];
+    uint8_t prefixes[11][8];
     uint8_t call_expected[2][5];
-    uint8_t *mapping = map_entries(page, 11, entries, calls, prefixes, call_expected, destroy_prefix, 10);
+    uint8_t *mapping = map_entries(page, 11, entries, calls, prefixes, call_expected, destroy_prefix, 10,
+                                   -1);
     eu4_metal_boot_patch patches[2] = {0};
     if (!eu4_gfx_install_all(entries, 11, calls, 2, patches)) {
         fail("eleven-entry install failed");
@@ -550,14 +556,85 @@ static void test_eleven_entry_transaction(void) {
     }
 }
 
+static void test_twelve_entry_transaction(void) {
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    static const uint8_t destroy_prefix[5] = {0x48, 0x85, 0xff, 0x74, 0x2f};
+    eu4_gfx_entry_request entries[12];
+    eu4_metal_boot_request calls[2];
+    uint8_t prefixes[12][8];
+    uint8_t call_expected[2][5];
+    uint8_t *mapping = map_entries(page, 12, entries, calls, prefixes, call_expected, destroy_prefix, 10,
+                                   0);
+    if (entries[0].length != 8) {
+        fail("viewport slot is not eight bytes");
+    }
+    uint8_t bad[8];
+    memcpy(bad, prefixes[0], 8);
+    bad[7] ^= 0xff;
+    entries[0].expected = bad;
+    eu4_metal_boot_patch patches[2] = {0};
+    if (eu4_gfx_install_all(entries, 12, calls, 2, patches)) {
+        fail("flipped viewport prefix was installed");
+    }
+    for (int i = 0; i < 12; i++) {
+        if (memcmp(entries[i].site, prefixes[i], (size_t)entries[i].length) != 0) {
+            fail("flipped prefix changed an entry");
+        }
+    }
+    if (memcmp(calls[0].callsite, calls[0].expected, 5) != 0 ||
+        memcmp(calls[1].callsite, calls[1].expected, 5) != 0) {
+        fail("flipped prefix changed a callsite");
+    }
+    if (eu4_metal_boot_restore()) {
+        fail("flipped prefix left a call install committed");
+    }
+    entries[0].expected = prefixes[0];
+    if (!eu4_gfx_install_all(entries, 12, calls, 2, patches)) {
+        fail("twelve-entry install failed");
+    }
+    entry_hits = 0;
+    call_hits = 0;
+    for (int i = 0; i < 12; i++) {
+        ((void (*)(void))entries[i].site)();
+    }
+    ((void (*)(void))calls[0].callsite)();
+    ((void (*)(void))calls[1].callsite)();
+    if (entry_hits != 12 || call_hits != 2) {
+        fail("twelve installed sites did not reach the replacements");
+    }
+    if (!eu4_gfx_entry_restore() || !eu4_metal_boot_restore()) {
+        fail("could not restore a twelve-entry install");
+    }
+    eu4_gfx_entry_test_fail_commit(11);
+    if (eu4_gfx_install_all(entries, 12, calls, 2, patches)) {
+        fail("twelfth write reported success");
+    }
+    eu4_gfx_entry_test_fail_commit(0);
+    for (int i = 0; i < 12; i++) {
+        if (memcmp(entries[i].site, prefixes[i], (size_t)entries[i].length) != 0) {
+            fail("eleventh-write rollback left an entry patched");
+        }
+    }
+    if (memcmp(calls[0].callsite, calls[0].expected, 5) != 0 ||
+        memcmp(calls[1].callsite, calls[1].expected, 5) != 0) {
+        fail("eleventh-write rollback left a call patched");
+    }
+    if (eu4_metal_boot_restore()) {
+        fail("eleventh-write rollback left the call install committed");
+    }
+    if (munmap(mapping, page * 2) != 0) {
+        fail("twelve-entry munmap failed");
+    }
+}
+
 static void test_reject_destroy_prefix(void) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     static const uint8_t bad[5] = {0x48, 0x85, 0xff, 0x74, 0x00};
     eu4_gfx_entry_request entries[1];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[1][6];
+    uint8_t prefixes[1][8];
     uint8_t call_expected[2][5];
-    uint8_t *mapping = map_entries(page, 1, entries, calls, prefixes, call_expected, bad, 0);
+    uint8_t *mapping = map_entries(page, 1, entries, calls, prefixes, call_expected, bad, 0, -1);
     eu4_metal_boot_patch patches[2] = {0};
     if (eu4_gfx_install_all(entries, 1, calls, 2, patches)) {
         fail("incorrect destroy prefix was installed");
@@ -582,9 +659,9 @@ static void test_failed_call_once(void) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     eu4_gfx_entry_request entries[6];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[6][6];
+    uint8_t prefixes[6][8];
     uint8_t call_expected[2][5];
-    uint8_t *mapping = map_entries(page, 6, entries, calls, prefixes, call_expected, NULL, -1);
+    uint8_t *mapping = map_entries(page, 6, entries, calls, prefixes, call_expected, NULL, -1, -1);
     eu4_metal_boot_patch patches[2] = {0};
     if (eu4_gfx_install_all(entries, 6, calls, 2, patches)) {
         fail("injected call failure still installed");
@@ -669,6 +746,7 @@ int main(void) {
     test_gl_forward();
     test_entry_transaction();
     test_eleven_entry_transaction();
+    test_twelve_entry_transaction();
     test_reject_destroy_prefix();
     return 0;
 }

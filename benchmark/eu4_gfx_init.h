@@ -88,6 +88,8 @@ void eu4_gfx_set_raster(void *handle, void *state);
 int eu4_gfx_reset(void *master);
 /* rdi is the master. Force-applies +0x80, +0x88, and +0x90. */
 void eu4_gfx_on_reset_master(void *master);
+/* rdi is the master. rsi is 24 bytes at CGraphics+0x2c57c, disjoint from the master. */
+void eu4_gfx_set_viewport(void *master, const void *rect);
 int eu4_gfx_settings(int display, int windowed, int count, void *settings);
 
 #ifdef __cplusplus
