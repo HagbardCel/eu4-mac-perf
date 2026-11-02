@@ -66,6 +66,16 @@ void eu4_gfx_set_terminate(void (*fn)(const char *reason));
 void eu4_gfx_test_throw_on_alloc(int n);
 void eu4_gfx_test_no_device(int on);
 
+/* Records the caller, writes stop.json, then terminates. A callback that
+   returns still ends in _exit. */
+__attribute__((noreturn)) void eu4_gfx_stop(const char *symbol, const char *reason,
+                                            const void *caller);
+const void *eu4_gfx_test_stop_caller(void);
+uint8_t *eu4_gfx_image(void);
+/* Borrowed device and the non-owning backend token at master+0x180. */
+void *eu4_gfx_metal_device(void);
+void *eu4_gfx_backend_token(void);
+
 int eu4_gfx_phase(void);
 int eu4_gfx_backend_releases(void);
 

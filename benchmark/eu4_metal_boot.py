@@ -21,6 +21,7 @@ ENTRY = SOURCE.with_name("eu4_gfx_entry_patch.c")
 EVENTS = SOURCE.with_name("eu4_metal_events.c")
 GL_DIAG = SOURCE.with_name("eu4_metal_gl_diag.c")
 GFX = SOURCE.with_name("eu4_gfx_init.mm")
+BUFFERS = SOURCE.with_name("eu4_gfx_buffers.mm")
 LIBRARY = SOURCE.parent / ".build/libeu4_metal_boot.dylib"
 HOST_SOURCE = SOURCE.parents[1] / "tests/metal_boot_host.c"
 HOST = SOURCE.parent / ".build/metal_boot_host"
@@ -38,6 +39,7 @@ def build_library(arch: str = "x86_64") -> Path:
         "-framework", "AppKit", "-framework", "Foundation", "-framework", "Metal",
         "-framework", "QuartzCore", "-framework", "OpenGL",
         "-o", str(output), str(SOURCE), str(PATCH), str(ENTRY), str(EVENTS), str(GL_DIAG), str(GFX),
+        str(BUFFERS),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
@@ -133,6 +135,9 @@ REPLACED_BODIES = (
     (0x15EA42C, 0x15EA460),
     (0x15EA46B, 0x15EA49B),
     (0x15EA49B, 0x15EA4F2),
+    (0x15EBCB3, 0x15EBD4C),
+    (0x15EBD4C, 0x15EBD81),
+    (0x15EBD81, 0x15EBE5F),
     (0x15ED388, 0x15ED9FC),
 )
 
@@ -191,7 +196,7 @@ def metal_init_outcome(init_success: bool, stop_phase: str | None, why: str | No
                        init_thread: int | None, stop_thread: int | None, launcher_signaled: bool,
                        stop_reason: str | None = None, stop_image: str | None = None,
                        stop_rva: object = None) -> dict:
-    """Exit code 2 is the diagnostic _exit, and only with an after_init gl stop outside the eight bodies."""
+    """Exit code 2 is the diagnostic _exit, and only with an after_init gl stop outside the replaced bodies."""
     threads = init_thread is not None and init_thread == stop_thread
     diagnostic = (
         why == "stop" and stop_phase == "after_init" and init_success and returncode == 2

@@ -132,8 +132,11 @@ bool eu4_gfx_entry_prepare(const eu4_gfx_entry_request *requests, int count) {
         if (memcmp(requests[i].site, requests[i].expected, (size_t)length) != 0) {
             return false;
         }
-        /* The prefix is a complete instruction run: push %rbp; mov %rsp,%rbp; one more push. */
-        if (requests[i].expected[0] != 0x55 || requests[i].expected[1] != 0x48) {
+        /* Prologue is push %rbp; mov %rsp,%rbp. Destroy's entry is test %rdi,%rdi; jz. */
+        static const uint8_t kDestroyPrefix[5] = {0x48, 0x85, 0xff, 0x74, 0x2f};
+        int prologue = requests[i].expected[0] == 0x55 && requests[i].expected[1] == 0x48;
+        int destroy = length == 5 && memcmp(requests[i].expected, kDestroyPrefix, 5) == 0;
+        if (!prologue && !destroy) {
             return false;
         }
         slots[i].address = address;

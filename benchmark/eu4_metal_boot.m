@@ -9,6 +9,7 @@
 // SDL_GL_CreateContext, then destroying both. That call is not patched.
 // Earlier OpenGL activity is outside this result.
 // A1 exits after the clear. Bootstrap returns this window and stops at _glewInit.
+#import "eu4_gfx_buffers.h"
 #import "eu4_gfx_entry_patch.h"
 #import "eu4_gfx_init.h"
 #import "eu4_metal_boot_patch.h"
@@ -511,7 +512,8 @@ static uintptr_t image_limit(const struct mach_header_64 *header) {
 static void install_metal_init(uint8_t *base) {
     static const uint8_t kPrefix6[6] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
     static const uint8_t kPrefix5[5] = {0x55, 0x48, 0x89, 0xe5, 0x53};
-    eu4_gfx_entry_request entries[8] = {
+    static const uint8_t kDestroy[5] = {0x48, 0x85, 0xff, 0x74, 0x2f};
+    eu4_gfx_entry_request entries[11] = {
         {base + 0x15ed388, kPrefix6, 6, (void *)eu4_gfx_settings},
         {base + 0x15e8ea0, kPrefix6, 6, (void *)eu4_gfx_init},
         {base + 0x15ea0bf, kPrefix6, 6, (void *)eu4_gfx_set_blend},
@@ -520,13 +522,16 @@ static void install_metal_init(uint8_t *base) {
         {base + 0x15ea42c, kPrefix5, 5, (void *)eu4_gfx_shutdown},
         {base + 0x15ea46b, kPrefix5, 5, (void *)eu4_gfx_reset},
         {base + 0x15ea49b, kPrefix5, 5, (void *)eu4_gfx_on_reset_master},
+        {base + 0x15ebcb3, kPrefix6, 6, (void *)eu4_gfx_create_vertex_buffer},
+        {base + 0x15ebd4c, kDestroy, 5, (void *)eu4_gfx_destroy_vertex_buffer},
+        {base + 0x15ebd81, kPrefix6, 6, (void *)eu4_gfx_update_vertex_buffer},
     };
     eu4_metal_boot_request calls[2] = {
         {base + kCallRva, kExpectedCall, (void *)eu4_metal_boot_on_create, base + kCreateRva},
         {base + kSwapRva, kSwapCall, (void *)eu4_metal_boot_on_swap, base + kSwapTarget},
     };
     eu4_metal_boot_patch patches[2] = {0};
-    if (!eu4_gfx_install_all(entries, 8, calls, 2, patches)) {
+    if (!eu4_gfx_install_all(entries, 11, calls, 2, patches)) {
         finish("metal_window_boot_failed", "callsite_rejected", 0, 0, 0, 0, 0, 0, 0, 0, NULL, -1);
     }
     g_original = (CreateWindowFn)patches[0].original;
