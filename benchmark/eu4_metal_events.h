@@ -17,6 +17,9 @@ int eu4_metal_events_write(const char *name, const char *body);
 void eu4_metal_events_stop(const char *phase, const char *symbol, const char *reason,
                            const void *caller);
 
+/* First successful create. 0 means written or already present. Never exits. */
+int eu4_metal_events_create(const void *caller);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,5 +1,6 @@
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_init.h"
+#import "eu4_metal_events.h"
 
 #import <Metal/Metal.h>
 #import <new>
@@ -25,6 +26,7 @@ static int g_fail_metal_throw;
 static int g_fail_entry;
 static int g_fail_insert;
 static int g_fail_header;
+static int g_create_recorded;
 
 static int on_gfx_thread(void) {
     return g_thread_set && pthread_equal(pthread_self(), g_thread);
@@ -91,6 +93,8 @@ __attribute__((noreturn)) static void abandon_create(EU4VertexBuffer *entry, id<
         if (index != NSNotFound) {
             [g_entries removeObjectAtIndex:index];
         }
+    }
+    if (entry != nil) {
         entry.header = NULL;
         entry.buffer = nil;
     }
@@ -183,6 +187,9 @@ void *eu4_gfx_create_vertex_buffer(void *ignored, const void *data, int32_t coun
     }
     int32_t *counter = (int32_t *)(eu4_gfx_image() + EU4_GFX_VB_COUNT_RVA);
     *counter += 1;
+    if (!g_create_recorded && eu4_metal_events_create(caller) == 0) {
+        g_create_recorded = 1;
+    }
     return header;
 }
 

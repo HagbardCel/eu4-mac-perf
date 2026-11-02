@@ -309,7 +309,40 @@ static void expect_child(const char *mode, const char *symbol, const char *reaso
     }
 }
 
-static void success(void) {
+static char g_parent_dir[64];
+
+__attribute__((noinline)) static void success(void);
+
+static void read_create(char *body, size_t cap) {
+    char path[96];
+    snprintf(path, sizeof path, "%s/create.json", g_parent_dir);
+    FILE *file = fopen(path, "r");
+    if (file == NULL || fgets(body, (int)cap, file) == NULL) {
+        fail("create.json");
+    }
+    fclose(file);
+}
+
+static void expect_create_caller(const char *body) {
+    char symbol_bit[] = "\"symbol\":\"_GfxCreateVertexBuffer\"";
+    char success_bit[] = "\"success\":1";
+    char pid_bit[32];
+    snprintf(pid_bit, sizeof pid_bit, "\"pid\":%d", (int)getpid());
+    const char *address_bit = strstr(body, "\"address\":\"0x");
+    unsigned long long address = 0;
+    if (strstr(body, symbol_bit) == NULL || strstr(body, success_bit) == NULL ||
+        strstr(body, pid_bit) == NULL || address_bit == NULL ||
+        sscanf(address_bit, "\"address\":\"0x%llx\"", &address) != 1) {
+        fail("create fields");
+    }
+    Dl_info info;
+    memset(&info, 0, sizeof info);
+    if (dladdr((void *)(uintptr_t)address, &info) == 0 || info.dli_saddr != (void *)success) {
+        fail("create caller");
+    }
+}
+
+__attribute__((noinline)) static void success(void) {
     boot(1);
     if (*counter() != 0) {
         fail("counter did not start at zero");
@@ -317,6 +350,9 @@ static void success(void) {
     uint8_t initial[16];
     memset(initial, 0x11, sizeof initial);
     void *header = eu4_gfx_create_vertex_buffer((void *)0x1, initial, 4, 4, 0);
+    char first_receipt[1280];
+    read_create(first_receipt, sizeof first_receipt);
+    expect_create_caller(first_receipt);
     expect_header(header, 4, 4);
     uint8_t got[16];
     if (*counter() != 1 || !eu4_gfx_vertex_buffer_shared(header) ||
@@ -429,6 +465,11 @@ static void success(void) {
     if (*counter() != 0 || eu4_gfx_vertex_records() != 0) {
         fail("destroy after shutdown");
     }
+    char later_receipt[1280];
+    read_create(later_receipt, sizeof later_receipt);
+    if (strcmp(first_receipt, later_receipt) != 0) {
+        fail("create overwritten");
+    }
 }
 
 int main(int argc, char **argv) {
@@ -470,6 +511,7 @@ int main(int argc, char **argv) {
         fail("parent dir");
     }
     eu4_metal_events_set_dir(dir);
+    snprintf(g_parent_dir, sizeof g_parent_dir, "%s", dir);
     eu4_gfx_set_terminate(parent_stop);
     success();
     expect_child("fail-metal", "_GfxCreateVertexBuffer", "metal", "after_init");
