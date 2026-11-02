@@ -112,6 +112,10 @@ static void require_thread(const char *symbol, const void *caller) {
     }
 }
 
+void eu4_gfx_require_thread(const char *symbol, const void *caller) {
+    require_thread(symbol, caller);
+}
+
 void eu4_gfx_release_vertex_buffers(void *backend, const void *caller) {
     if (!g_thread_set || backend == NULL) {
         return;

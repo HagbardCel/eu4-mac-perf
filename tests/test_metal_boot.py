@@ -73,6 +73,18 @@ class MetalBootTests(unittest.TestCase):
         )
         self.assertEqual(later["status"], "complete")
         self.assertFalse(later["raises"])
+        blocked = probe.metal_init_outcome(
+            True, "after_init", "stop", 2, 7, 7, False, "blocked_at", image, "0x15ebe60"
+        )
+        self.assertEqual(blocked["status"], "blocked_at")
+        self.assertFalse(blocked["raises"])
+        drawn = probe.metal_init_outcome(
+            True, "after_init", "stop", 2, 7, 7, False, "draw", image, "0x15ebe60"
+        )
+        self.assertEqual(drawn["status"], "draw_reached")
+        self.assertFalse(drawn["raises"])
+        self.assertNotEqual(blocked["status"], "complete")
+        self.assertNotEqual(drawn["status"], "complete")
         bounds = (
             ("0x15ea4f8", "complete"),
             ("0x15ea4f9", "post_init_failure"),

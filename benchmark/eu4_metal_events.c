@@ -1,6 +1,9 @@
 #include "eu4_metal_events.h"
 
 #include <dlfcn.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <mach/vm_page_size.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -155,4 +158,62 @@ int eu4_metal_events_create(const void *caller) {
         return -1;
     }
     return eu4_metal_events_write("create.json", body);
+}
+
+int eu4_metal_events_read(const void *src, void *dst, int want, int *got) {
+    if (got == NULL) {
+        return -1;
+    }
+    *got = 0;
+    if (want < 0 || (want > 0 && (src == NULL || dst == NULL)) || vm_page_size == 0) {
+        return -1;
+    }
+    const uint8_t *cursor = src;
+    uint8_t *out = dst;
+    int done = 0;
+    while (done < want) {
+        uintptr_t addr = (uintptr_t)cursor;
+        uintptr_t page = addr & ~((uintptr_t)vm_page_size - 1);
+        int room = (int)((page + (uintptr_t)vm_page_size) - addr);
+        int n = want - done;
+        if (n > room) {
+            n = room;
+        }
+        mach_vm_size_t copied = 0;
+        kern_return_t result = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr,
+                                                      (mach_vm_size_t)n, (mach_vm_address_t)out, &copied);
+        if (result != KERN_SUCCESS || copied != (mach_vm_size_t)n) {
+            break;
+        }
+        done += n;
+        cursor += n;
+        out += n;
+    }
+    *got = done;
+    return 0;
+}
+
+void eu4_metal_events_describe(const void *caller, char *image, size_t cap, uint64_t *rva, int *inside,
+                               uint64_t *thread, int *pid) {
+    char escaped[512];
+    uintptr_t address = 0;
+    int in_image = 0;
+    uint64_t tid = 0;
+    int process = 0;
+    describe_caller(caller, escaped, sizeof escaped, &address, &in_image, &tid, &process);
+    if (image != NULL && cap > 0) {
+        snprintf(image, cap, "%s", escaped);
+    }
+    if (rva != NULL) {
+        *rva = in_image ? (uint64_t)(address - image_base) : 0;
+    }
+    if (inside != NULL) {
+        *inside = in_image;
+    }
+    if (thread != NULL) {
+        *thread = tid;
+    }
+    if (pid != NULL) {
+        *pid = process;
+    }
 }

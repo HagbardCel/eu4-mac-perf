@@ -23,6 +23,9 @@ EVENTS = SOURCE.with_name("eu4_metal_events.c")
 GL_DIAG = SOURCE.with_name("eu4_metal_gl_diag.c")
 GFX = SOURCE.with_name("eu4_gfx_init.mm")
 BUFFERS = SOURCE.with_name("eu4_gfx_buffers.mm")
+DRAW_C = SOURCE.with_name("eu4_gfx_draw_capture.c")
+DRAW_S = SOURCE.with_name("eu4_gfx_draw_entry.S")
+TEXTURE = SOURCE.with_name("eu4_gfx_texture.mm")
 LIBRARY = SOURCE.parent / ".build/libeu4_metal_boot.dylib"
 HOST_SOURCE = SOURCE.parents[1] / "tests/metal_boot_host.c"
 HOST = SOURCE.parent / ".build/metal_boot_host"
@@ -40,7 +43,7 @@ def build_library(arch: str = "x86_64") -> Path:
         "-framework", "AppKit", "-framework", "Foundation", "-framework", "Metal",
         "-framework", "QuartzCore", "-framework", "OpenGL",
         "-o", str(output), str(SOURCE), str(PATCH), str(ENTRY), str(EVENTS), str(GL_DIAG), str(GFX),
-        str(BUFFERS),
+        str(BUFFERS), str(DRAW_C), str(DRAW_S), str(TEXTURE),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
@@ -224,15 +227,19 @@ def metal_init_outcome(init_success: bool, stop_phase: str | None, why: str | No
                        init_thread: int | None, stop_thread: int | None, launcher_signaled: bool,
                        stop_reason: str | None = None, stop_image: str | None = None,
                        stop_rva: object = None) -> dict:
-    """Exit code 2 is the diagnostic _exit, and only with an after_init gl stop outside the replaced bodies."""
+    """Exit code 2 is a diagnostic _exit. gl is the init-loop stop. blocked_at and draw are D1 terminals, not init success."""
     threads = init_thread is not None and init_thread == stop_thread
-    diagnostic = (
+    terminal = (
         why == "stop" and stop_phase == "after_init" and init_success and returncode == 2
-        and not launcher_signaled and threads and stop_reason == "gl"
+        and not launcher_signaled and threads
         and same_pinned_executable(stop_image) and caller_outside_replacements(stop_rva)
     )
-    if diagnostic:
+    if terminal and stop_reason == "gl":
         return {"status": "complete", "live_gfx_init": "returned", "raises": False}
+    if terminal and stop_reason == "blocked_at":
+        return {"status": "blocked_at", "live_gfx_init": "returned", "raises": False}
+    if terminal and stop_reason == "draw":
+        return {"status": "draw_reached", "live_gfx_init": "returned", "raises": False}
     if why == "exit" and returncode == 0 and init_success:
         return {"status": "clean_exit", "live_gfx_init": "postconditions", "raises": False}
     if why == "deadline" and init_success and stop_phase is None:

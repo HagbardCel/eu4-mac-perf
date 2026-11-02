@@ -18,6 +18,8 @@
 @property (nonatomic) void *depthHeader;
 @property (nonatomic) void *rasterHeader;
 @property (nonatomic) void *textureHeader;
+/* Textures created by _GfxInitializeTexture. Released with the backend. */
+@property (nonatomic, strong) NSMutableDictionary *textures;
 @end
 #endif
 

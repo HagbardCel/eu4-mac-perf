@@ -10,8 +10,10 @@
 // Earlier OpenGL activity is outside this result.
 // A1 exits after the clear. Bootstrap returns this window and stops at _glewInit.
 #import "eu4_gfx_buffers.h"
+#import "eu4_gfx_draw_capture.h"
 #import "eu4_gfx_entry_patch.h"
 #import "eu4_gfx_init.h"
+#import "eu4_gfx_texture.h"
 #import "eu4_metal_boot_patch.h"
 #import "eu4_metal_events.h"
 

@@ -11,7 +11,8 @@ import eu4_metal_boot as boot
 
 
 _PRIMARY = ("metadata.json", "init.json", "stop.json")
-_FILES = _PRIMARY + ("create.json",)
+_FILES = _PRIMARY + ("create.json", "draw_invocation.json", "blocked_at.json")
+_DRAW_SYMBOLS = {"_GfxDraw", "_GfxDrawIndexed", "_GfxDrawIndexedInstanced"}
 _BACKEND = {"unsupported", "reentry", "unresolved_forward"}
 _DISCLAIMER = (
     "A diagnostic stop does not show that a replacement ran or that a frame was drawn."
@@ -104,6 +105,8 @@ def _kind(exists: dict[str, bool], loaded: dict[str, dict | None]) -> str:
             )
             if outcome["status"] == "complete":
                 return "gl_diagnostic"
+            if outcome["status"] in ("blocked_at", "draw_reached"):
+                return outcome["status"]
     if (
         why == "exit"
         and isinstance(code, int)
@@ -129,6 +132,75 @@ def _receipt(create: dict | None, present: bool, pid: int | None) -> str:
     ):
         return "validated"
     return "unvalidated"
+
+
+def _same_pid(event: dict | None, pid: object) -> bool:
+    return event is not None and type(pid) is int and event.get("pid") == pid
+
+
+def _draw_game(draw: dict, loaded: dict[str, dict | None]) -> bool:
+    if draw.get("provenance") != "game" or draw.get("symbol") not in _DRAW_SYMBOLS:
+        return False
+    invocation = draw.get("invocation_id")
+    if type(invocation) is not int or isinstance(invocation, bool) or invocation <= 0:
+        return False
+    caller = boot.parse_rva(draw.get("caller_rva"))
+    chain = draw.get("call_chain")
+    if caller is None or not isinstance(chain, list) or not chain:
+        return False
+    if boot.parse_rva(chain[0]) != caller:
+        return False
+    if not boot.same_pinned_executable(draw.get("image")):
+        return False
+    complete = draw.get("context_complete")
+    want = draw.get("context_want")
+    got = draw.get("context_got")
+    if type(complete) is not bool or type(want) is not int or type(got) is not int:
+        return False
+    if isinstance(want, bool) or isinstance(got, bool) or want < 0 or got < 0 or got > want:
+        return False
+    if complete and got != want:
+        return False
+    meta = loaded.get("metadata.json")
+    init = loaded.get("init.json")
+    stop = loaded.get("stop.json")
+    pid = draw.get("pid")
+    if type(pid) is not int or isinstance(pid, bool):
+        return False
+    for event in (meta, init, stop):
+        if event is not None and "pid" in event and event.get("pid") != pid:
+            return False
+    if meta is not None and isinstance(meta.get("gog"), dict) and "executable_sha256" in meta["gog"]:
+        if meta["gog"]["executable_sha256"] != boot.PINNED_SHA256:
+            return False
+    if init is not None and stop is not None:
+        if not _positive_int(init.get("thread")) or init.get("thread") != stop.get("thread"):
+            return False
+        if "thread" in draw and draw.get("thread") != init.get("thread"):
+            return False
+    return True
+
+
+def d1_state(exists: dict[str, bool], loaded: dict[str, dict | None]) -> str:
+    """D1 progress. Independent of the init-loop kind."""
+    name = "draw_invocation.json"
+    if exists.get(name) and loaded.get(name) is None:
+        return "error"
+    draw = loaded.get(name)
+    if draw is not None:
+        return "draw_reached" if _draw_game(draw, loaded) else "error"
+    if exists.get("blocked_at.json") and loaded.get("blocked_at.json") is None:
+        return "error"
+    stop = loaded.get("stop.json")
+    if stop is not None and stop.get("reason") == "blocked_at":
+        meta = loaded.get("metadata.json")
+        if meta is not None and "pid" in meta and not _same_pid(stop, meta.get("pid")):
+            return "error"
+        blocked = loaded.get("blocked_at.json")
+        if blocked is not None and blocked.get("pid") != stop.get("pid"):
+            return "error"
+        return "blocked_at"
+    return "not_started"
 
 
 def diagnose(path: Path) -> dict:
@@ -163,11 +235,12 @@ def diagnose(path: Path) -> dict:
         "pinned_sha256": sha,
         "launcher_signaled": signaled if isinstance(signaled, bool) else None,
         "exit_code": code if isinstance(code, int) and not isinstance(code, bool) else None,
+        "d1": d1_state(exists, loaded),
     }
 
 
 def format_diagnosis(diag: dict) -> str:
-    lines = ["Metal migration diagnostic", f"kind: {diag['kind']}"]
+    lines = ["Metal migration diagnostic", f"kind: {diag['kind']}", f"d1: {diag['d1']}"]
     if diag["process"] is not None:
         lines.append(f"process: {diag['process']}")
     if diag["init_success"] is not None:
