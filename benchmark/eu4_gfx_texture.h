@@ -10,7 +10,8 @@ extern "C" {
 /* rdi is unused. rsi is the caller-owned 0x44 header. rdx is the description.
    rcx is the image array. r8d is the image count. Returns void.
    Disassembly at 0x15ec43b: kind 1 is a cubemap, formats 1..7 are compressed.
-   The GL name at header+4 stays 0 so the original destroy's delete is a no-op. */
+   On success the GL name at header+4 is written 0. A rejected record leaves the header
+   untouched. glDeleteTextures is a diagnostic stop, not a Metal destroy. */
 enum {
     EU4_GFX_TEX_OK = 0,
     EU4_GFX_TEX_HEADER = 1,

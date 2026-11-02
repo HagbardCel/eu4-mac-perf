@@ -10,6 +10,7 @@ extern "C" {
 
 void eu4_metal_events_set_dir(const char *dir);
 void eu4_metal_events_set_image(uintptr_t base, uintptr_t end);
+void eu4_metal_events_add_executable(uintptr_t start, uintptr_t end);
 
 /* Temp sibling, fflush, fsync, then rename. An existing final file is left as it is. */
 int eu4_metal_events_write(const char *name, const char *body);

@@ -82,8 +82,35 @@ static void test_receipt(void) {
     munmap(base, (size_t)page_size);
 }
 
+static void test_executable_ranges(void) {
+    eu4_gfx_draw_raw raw;
+    memset(&raw, 0, sizeof raw);
+    raw.which = 1;
+    uintptr_t base = 0x100000000ULL;
+    eu4_metal_events_set_image(base, base);
+    eu4_metal_events_add_executable(base + 0x1000, base + 0x2000);
+    eu4_metal_events_add_executable(base + 0x4000, base + 0x5000);
+    char body[8192];
+    raw.retaddr = base + 0x1800;
+    if (eu4_gfx_draw_receipt(&raw, body, (int)sizeof body) != 0 || strstr(body, "\"provenance\":\"game\"") == NULL) {
+        fail("executable range rejected");
+    }
+    if (strstr(body, "\"caller_rva\":\"0x1800\"") == NULL) {
+        fail("rva base");
+    }
+    raw.retaddr = base + 0x3000;
+    if (eu4_gfx_draw_receipt(&raw, body, (int)sizeof body) != 0 || strstr(body, "\"provenance\":\"rejected\"") == NULL) {
+        fail("hole accepted");
+    }
+    raw.retaddr = base + 0x800;
+    if (eu4_gfx_draw_receipt(&raw, body, (int)sizeof body) != 0 || strstr(body, "\"provenance\":\"rejected\"") == NULL) {
+        fail("non-executable address accepted");
+    }
+}
+
 int main(void) {
     test_read();
     test_receipt();
+    test_executable_ranges();
     return 0;
 }

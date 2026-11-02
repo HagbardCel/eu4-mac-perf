@@ -189,13 +189,14 @@ def parse_rva(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def caller_outside_replacements(value: object) -> bool:
+def caller_outside_replacements(value: object, bodies: tuple | None = None) -> bool:
     """The recorded address is the instruction after the call, so the call byte is rva - 1."""
+    spans = REPLACED_BODIES if bodies is None else bodies
     rva = parse_rva(value)
-    if rva is None:
+    if rva is None or not spans:
         return False
     call = rva - 1
-    return all(call < start or call >= end for start, end in REPLACED_BODIES)
+    return all(call < start or call >= end for start, end in spans)
 
 
 def same_pinned_executable(image: object) -> bool:
@@ -226,13 +227,14 @@ def classify_diagnostic_exit(exited_within_grace: bool, returncode: int | None) 
 def metal_init_outcome(init_success: bool, stop_phase: str | None, why: str | None, returncode: int | None,
                        init_thread: int | None, stop_thread: int | None, launcher_signaled: bool,
                        stop_reason: str | None = None, stop_image: str | None = None,
-                       stop_rva: object = None) -> dict:
+                       stop_rva: object = None, bodies: tuple | None = None) -> dict:
     """Exit code 2 is a diagnostic _exit. gl is the init-loop stop. blocked_at and draw are D1 terminals, not init success."""
-    threads = init_thread is not None and init_thread == stop_thread
+    threads = type(init_thread) is int and init_thread > 0 and init_thread == stop_thread
+    spans = REPLACED_BODIES if bodies is None else bodies
     terminal = (
         why == "stop" and stop_phase == "after_init" and init_success and returncode == 2
         and not launcher_signaled and threads
-        and same_pinned_executable(stop_image) and caller_outside_replacements(stop_rva)
+        and same_pinned_executable(stop_image) and caller_outside_replacements(stop_rva, spans)
     )
     if terminal and stop_reason == "gl":
         return {"status": "complete", "live_gfx_init": "returned", "raises": False}
@@ -376,6 +378,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
             "launcher_signaled": launcher_signaled,
             "probe_sha256": base.sha256(library),
             "live_gfx_init": outcome["live_gfx_init"],
+            "gfx_entry_ranges": [[entry, end] for _name, entry, end, _fn, _prefix in GFX_ENTRIES],
         }
         (run_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
         if outcome["raises"]:

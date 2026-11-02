@@ -23,6 +23,7 @@
 #import <dlfcn.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
+#import <mach/vm_prot.h>
 #import <pthread.h>
 #import <stddef.h>
 #import <stdint.h>
@@ -490,25 +491,22 @@ static int resolve_helpers(void) {
     return g_get_flags != NULL && g_get_version != NULL && g_get_wm_info != NULL && g_get_error != NULL;
 }
 
-static uintptr_t image_limit(const struct mach_header_64 *header) {
+static void register_image(const struct mach_header_64 *header) {
     uintptr_t base = (uintptr_t)header;
-    uintptr_t end = base;
+    eu4_metal_events_set_image(base, base);
     const uint8_t *cmd = (const uint8_t *)(header + 1);
     for (uint32_t i = 0; i < header->ncmds; i++) {
         const struct load_command *command = (const struct load_command *)cmd;
         if (command->cmd == LC_SEGMENT_64) {
             const struct segment_command_64 *segment = (const struct segment_command_64 *)cmd;
-            if (segment->vmaddr >= 0x100000000ULL) {
+            if ((segment->initprot & VM_PROT_EXECUTE) != 0 && segment->vmaddr >= 0x100000000ULL &&
+                segment->vmsize > 0) {
                 uintptr_t local = base + (uintptr_t)(segment->vmaddr - 0x100000000ULL);
-                uintptr_t segment_end = local + (uintptr_t)segment->vmsize;
-                if (segment_end > end) {
-                    end = segment_end;
-                }
+                eu4_metal_events_add_executable(local, local + (uintptr_t)segment->vmsize);
             }
         }
         cmd += command->cmdsize;
     }
-    return end;
 }
 
 static void install_metal_init(uint8_t *base) {
@@ -566,7 +564,7 @@ __attribute__((constructor)) static void eu4_metal_boot_init(void) {
                -1);
     }
     uint8_t *base = (uint8_t *)header;
-    eu4_metal_events_set_image((uintptr_t)base, image_limit(header));
+    register_image(header);
     eu4_gfx_set_image(base, (void **)(base + EU4_GFX_MASTER_CONTEXT_RVA));
     if (g_mode == 3) {
         install_metal_init(base);

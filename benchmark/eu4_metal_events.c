@@ -11,7 +11,11 @@
 
 static char event_dir[1024];
 static uintptr_t image_base;
-static uintptr_t image_end;
+/* shortcut: eight executable intervals. EU4 has one; raise the cap if a later image has more. */
+#define EU4_EXEC_MAX 8
+static uintptr_t exec_lo[EU4_EXEC_MAX];
+static uintptr_t exec_hi[EU4_EXEC_MAX];
+static int exec_count;
 
 void eu4_metal_events_set_dir(const char *dir) {
     event_dir[0] = 0;
@@ -21,9 +25,30 @@ void eu4_metal_events_set_dir(const char *dir) {
     snprintf(event_dir, sizeof event_dir, "%s", dir);
 }
 
+void eu4_metal_events_add_executable(uintptr_t start, uintptr_t end) {
+    if (exec_count >= EU4_EXEC_MAX || end <= start) {
+        return;
+    }
+    exec_lo[exec_count] = start;
+    exec_hi[exec_count] = end;
+    exec_count++;
+}
+
 void eu4_metal_events_set_image(uintptr_t base, uintptr_t end) {
     image_base = base;
-    image_end = end;
+    exec_count = 0;
+    if (end > base) {
+        eu4_metal_events_add_executable(base, end);
+    }
+}
+
+static int in_executable(uintptr_t address) {
+    for (int i = 0; i < exec_count; i++) {
+        if (address >= exec_lo[i] && address < exec_hi[i]) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int eu4_metal_events_write(const char *name, const char *body) {
@@ -92,7 +117,7 @@ static void describe_caller(const void *caller, char *escaped, size_t cap, uintp
     }
     json_escape(image, escaped, cap);
     *address = (uintptr_t)caller;
-    *inside = caller != NULL && image_base != 0 && *address >= image_base && *address < image_end;
+    *inside = caller != NULL && image_base != 0 && in_executable(*address);
     *thread = 0;
     (void)pthread_threadid_np(pthread_self(), thread);
     *pid = (int)getpid();

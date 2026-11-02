@@ -189,6 +189,7 @@ GL_VOID2(glBindTexture, GLenum, GLuint, NULL)
 GL_VOID2(glGetIntegerv, GLenum, GLint *, b)
 GL_VOID2(glGetFloatv, GLenum, GLfloat *, b)
 GL_VOID2(glGenTextures, GLsizei, GLuint *, b)
+GL_VOID2(glDeleteTextures, GLsizei, const GLuint *, b)
 GL_VOID2(glGenBuffers, GLsizei, GLuint *, b)
 GL_VOID2(glBindBuffer, GLenum, GLuint, NULL)
 GL_VOID3(glTexParameteri, GLenum, GLenum, GLint)
@@ -392,6 +393,7 @@ __attribute__((constructor)) static void eu4_gl_resolve(void) {
     BIND_NEXT(glGetIntegerv);
     BIND_NEXT(glGetFloatv);
     BIND_NEXT(glGenTextures);
+    BIND_NEXT(glDeleteTextures);
     BIND_NEXT(glGenBuffers);
     BIND_NEXT(glBindBuffer);
     BIND_NEXT(glTexParameteri);

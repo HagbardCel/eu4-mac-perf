@@ -124,8 +124,7 @@ class GfxEntryRegistryTests(unittest.TestCase):
     def test_recorded_sessions(self) -> None:
         expected = (
             (_PR5, 14511, "glViewport", 0x149B21F, None, "gl_diagnostic", False),
-            # The glGenTextures return now sits inside the texture replacement.
-            (_PR6, 20282, "glGenTextures", 0x15EC4ED, 0x15EC4EC, "incomplete", True),
+            (_PR6, 20282, "glGenTextures", 0x15EC4ED, 0x15EC4EC, "gl_diagnostic", False),
         )
         for src, pid, symbol, rva, preceding, kind, inside in expected:
             with self.subTest(src=src.name):
@@ -204,6 +203,26 @@ class GfxEntryRegistryTests(unittest.TestCase):
         self.assertEqual(diag["kind"], "gl_diagnostic")
         self.assertEqual(diag["vertex_buffer_receipt"], "absent")
         self.assertIn("No vertex-buffer receipt was recorded.", triage.format_diagnosis(diag))
+
+    def test_recorded_ranges_keep_pr6_outside_the_later_texture_body(self) -> None:
+        recorded = self._diagnose(self._copy(_PR6))
+        self.assertEqual(recorded["kind"], "gl_diagnostic")
+        self.assertIs(recorded["inside_replaced_body"], False)
+        path = self._copy(_PR6)
+        meta = json.loads((path / "metadata.json").read_text())
+        meta["gfx_entry_ranges"] = [[0x15EC43B, 0x15EC61D]]
+        (path / "metadata.json").write_text(json.dumps(meta) + "\n")
+        revalidated = self._diagnose(path)
+        self.assertIs(revalidated["inside_replaced_body"], True)
+        self.assertNotEqual(revalidated["kind"], "gl_diagnostic")
+
+    def test_unknown_probe_cannot_become_a_diagnostic(self) -> None:
+        def unknown(events: dict) -> None:
+            events["metadata.json"]["probe_sha256"] = "0" * 64
+
+        diag = self._diagnose(self._pr6(unknown))
+        self.assertNotEqual(diag["kind"], "gl_diagnostic")
+        self.assertIsNone(diag["inside_replaced_body"])
 
     def test_outcome_precedence(self) -> None:
         cases = {
@@ -296,7 +315,7 @@ class D1StateTests(unittest.TestCase):
         return {
             "metadata.json": (
                 '{"pid":7,"stop_reason":"stop","exit_code":2,"launcher_signaled":false,'
-                f'"gog":{{"executable_sha256":"{sha}"}}}}\n'
+                f'"gog":{{"executable_sha256":"{sha}"}},"gfx_entry_ranges":[[1,2]]}}\n'
             ),
             "init.json": '{"success":1,"pid":7,"thread":3}\n',
             "stop.json": '{"reason":"draw","symbol":"_GfxDraw","phase":"after_init",' + common + ',"rva":"0x1000"}\n',
@@ -311,10 +330,37 @@ class D1StateTests(unittest.TestCase):
         files = self._base()
         diag = triage.diagnose(self._dir(files))
         self.assertEqual(diag["d1"], "draw_reached")
+        self.assertEqual(diag["kind"], "draw_reached")
         files["draw_invocation.json"] = files["draw_invocation.json"].replace(
             '"provenance":"game"', '"provenance":"rejected"'
         )
+        rejected = triage.diagnose(self._dir(files))
+        self.assertEqual(rejected["d1"], "error")
+        self.assertNotEqual(rejected["kind"], "draw_reached")
+
+    def test_draw_stop_without_a_receipt_is_not_reached(self) -> None:
+        files = self._base()
+        del files["draw_invocation.json"]
+        diag = triage.diagnose(self._dir(files))
+        self.assertEqual(diag["d1"], "error")
+        self.assertNotEqual(diag["kind"], "draw_reached")
+
+    def test_receipt_without_a_draw_stop_is_not_reached(self) -> None:
+        files = self._base()
+        del files["stop.json"]
         self.assertEqual(triage.diagnose(self._dir(files))["d1"], "error")
+        files = self._base()
+        files["stop.json"] = files["stop.json"].replace('"reason":"draw"', '"reason":"blocked_at"')
+        diag = triage.diagnose(self._dir(files))
+        self.assertNotEqual(diag["d1"], "draw_reached")
+        self.assertNotEqual(diag["kind"], "draw_reached")
+
+    def test_draw_requires_a_terminal_launcher_stop(self) -> None:
+        files = self._base()
+        files["metadata.json"] = files["metadata.json"].replace('"exit_code":2', '"exit_code":0')
+        diag = triage.diagnose(self._dir(files))
+        self.assertEqual(diag["d1"], "error")
+        self.assertNotEqual(diag["kind"], "draw_reached")
 
     def test_cross_pid_and_incomplete_context_are_errors(self) -> None:
         files = self._base()
@@ -331,7 +377,9 @@ class D1StateTests(unittest.TestCase):
             '"context_want":0,"context_got":0,"context_complete":true',
             '"context_want":10,"context_got":4,"context_complete":false',
         )
-        self.assertEqual(triage.diagnose(self._dir(files))["d1"], "draw_reached")
+        reached = triage.diagnose(self._dir(files))
+        self.assertEqual(reached["d1"], "draw_reached")
+        self.assertEqual(reached["kind"], "draw_reached")
 
     def test_blocked_at_is_not_init_success(self) -> None:
         files = self._base()
