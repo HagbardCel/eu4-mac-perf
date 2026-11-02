@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -126,21 +127,47 @@ def session_event(path: Path, game_pid: int, *, legacy: bool = False) -> dict | 
 
 
 DIAGNOSTIC_GRACE_SECONDS = 2
-# Half-open bodies. The next symbol in the pinned binary is the end.
-REPLACED_BODIES = (
-    (0x15E8EA0, 0x15E9D11),
-    (0x15EA0BF, 0x15EA261),
-    (0x15EA261, 0x15EA35A),
-    (0x15EA35A, 0x15EA42C),
-    (0x15EA42C, 0x15EA460),
-    (0x15EA46B, 0x15EA49B),
-    (0x15EA49B, 0x15EA4F2),
-    (0x15EA4F8, 0x15EA52C),
-    (0x15EBCB3, 0x15EBD4C),
-    (0x15EBD4C, 0x15EBD81),
-    (0x15EBD81, 0x15EBE5F),
-    (0x15ED388, 0x15ED9FC),
+_GFX_ENTRY = re.compile(
+    r'^GFX_ENTRY\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*(0x[0-9a-fA-F]+)\s*,\s*'
+    r'(0x[0-9a-fA-F]+)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*'
+    r'"((?:\\x[0-9a-fA-F]{2})+)"\s*\)$'
 )
+
+
+def parse_gfx_entries(text: str) -> tuple[tuple[str, int, int, str, bytes], ...]:
+    """One GFX_ENTRY record per line. A bad registry raises; nothing is skipped."""
+    found = []
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if line == "" or line.startswith("//"):
+            continue
+        match = _GFX_ENTRY.fullmatch(line)
+        if match is None:
+            raise ValueError(f"gfx registry line {number}")
+        name, entry_text, end_text, fn, encoded = match.groups()
+        prefix = bytes.fromhex(encoded.replace("\\x", ""))
+        entry, end = int(entry_text, 16), int(end_text, 16)
+        if not 5 <= len(prefix) <= 8 or end <= entry:
+            raise ValueError(f"gfx registry line {number}")
+        found.append((name, entry, end, fn, prefix))
+    if not found:
+        raise ValueError("gfx registry is empty")
+    if len({item[0] for item in found}) != len(found):
+        raise ValueError("duplicate gfx entry name")
+    if len({item[1] for item in found}) != len(found):
+        raise ValueError("duplicate gfx entry rva")
+    if len({item[3] for item in found}) != len(found):
+        raise ValueError("duplicate gfx replacement")
+    spans = sorted(found, key=lambda item: item[1])
+    for prev, nxt in zip(spans, spans[1:]):
+        if nxt[1] < prev[2]:
+            raise ValueError("overlapping gfx bodies")
+    return tuple(found)
+
+
+GFX_ENTRIES = parse_gfx_entries(SOURCE.with_name("eu4_gfx_entries.def").read_text())
+# Half-open [entry, end) in install order. Ends come from the registry.
+REPLACED_BODIES = tuple((entry, end) for _name, entry, end, _fn, _prefix in GFX_ENTRIES)
 
 
 def parse_rva(value: object) -> int | None:
