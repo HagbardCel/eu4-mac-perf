@@ -276,6 +276,9 @@ def blocked_session(exists: dict[str, bool], loaded: dict[str, dict | None]) -> 
     thread = init.get("thread")
     if not _positive_int(thread) or stop.get("thread") != thread or blocked.get("thread") != thread:
         return False
+    gog = meta.get("gog")
+    if not isinstance(gog, dict) or gog.get("executable_sha256") != boot.PINNED_SHA256:
+        return False
     return True
 
 

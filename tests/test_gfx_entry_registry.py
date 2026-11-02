@@ -435,6 +435,22 @@ class D1StateTests(unittest.TestCase):
         files["blocked_at.json"] = files["blocked_at.json"].replace('"caller_rva":"0x1000"', '"caller_rva":"0x1001"')
         self.assertEqual(triage.diagnose(self._dir(files))["d1"], "error")
 
+    def test_blocked_at_requires_the_pinned_sha(self) -> None:
+        files = self._blocker()
+        meta = json.loads(files["metadata.json"])
+        del meta["gog"]["executable_sha256"]
+        files["metadata.json"] = json.dumps(meta) + "\n"
+        missing = triage.diagnose(self._dir(files))
+        self.assertEqual(missing["d1"], "error")
+        self.assertNotEqual(missing["kind"], "blocked_at")
+        files = self._blocker()
+        meta = json.loads(files["metadata.json"])
+        meta["gog"]["executable_sha256"] = "0" * 64
+        files["metadata.json"] = json.dumps(meta) + "\n"
+        mismatched = triage.diagnose(self._dir(files))
+        self.assertEqual(mismatched["d1"], "error")
+        self.assertNotEqual(mismatched["kind"], "blocked_at")
+
 
 if __name__ == "__main__":
     unittest.main()

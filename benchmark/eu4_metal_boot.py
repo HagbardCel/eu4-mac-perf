@@ -26,6 +26,7 @@ BUFFERS = SOURCE.with_name("eu4_gfx_buffers.mm")
 DRAW_C = SOURCE.with_name("eu4_gfx_draw_capture.c")
 DRAW_S = SOURCE.with_name("eu4_gfx_draw_entry.S")
 TEXTURE = SOURCE.with_name("eu4_gfx_texture.mm")
+SHADER = SOURCE.with_name("eu4_gfx_shader.mm")
 LIBRARY = SOURCE.parent / ".build/libeu4_metal_boot.dylib"
 HOST_SOURCE = SOURCE.parents[1] / "tests/metal_boot_host.c"
 HOST = SOURCE.parent / ".build/metal_boot_host"
@@ -43,7 +44,7 @@ def build_library(arch: str = "x86_64") -> Path:
         "-framework", "AppKit", "-framework", "Foundation", "-framework", "Metal",
         "-framework", "QuartzCore", "-framework", "OpenGL",
         "-o", str(output), str(SOURCE), str(PATCH), str(ENTRY), str(EVENTS), str(GL_DIAG), str(GFX),
-        str(BUFFERS), str(DRAW_C), str(DRAW_S), str(TEXTURE),
+        str(BUFFERS), str(DRAW_C), str(DRAW_S), str(TEXTURE), str(SHADER),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
@@ -275,28 +276,6 @@ def stop_game(game: subprocess.Popen) -> None:
         game.wait(timeout=10)
 
 
-def _cpu_time(pid: int) -> str:
-    ran = subprocess.run(["ps", "-o", "time=", "-p", str(pid)], capture_output=True, text=True, check=False)
-    return ran.stdout.strip() if ran.returncode == 0 else ""
-
-
-def _sample_hang(pid: int, run_dir: Path) -> None:
-    """One short sample after init with no stop. A failure is recorded and not interpreted."""
-    before = _cpu_time(pid)
-    path = run_dir / "sample.txt"
-    try:
-        ran = subprocess.run(
-            ["sample", str(pid), "3", "-file", str(path)],
-            capture_output=True, text=True, timeout=45, check=False,
-        )
-        if ran.returncode != 0:
-            path.write_text((ran.stderr or ran.stdout or "sample failed") + "\n")
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        path.write_text(f"sample failed: {exc}\n")
-    after = _cpu_time(pid)
-    (run_dir / "sample-cpu.txt").write_text(f"cpu_time_before: {before}\ncpu_time_after: {after}\n")
-
-
 def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = False,
                    metal_init: bool = False) -> dict:
     """Operator launch. a1 and bootstrap exit after their receipt. metal_init keeps running."""
@@ -338,29 +317,18 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
     receipt = None
     why = None
     launcher_signaled = False
-    init_at = None
-    sampled = False
     try:
         if metal_init:
             while True:
                 exited = game.poll() is not None
                 stop_seen = session_event(run_dir / "stop.json", game.pid) is not None
-                init_seen = session_event(run_dir / "init.json", game.pid) is not None
-                if init_seen and init_at is None:
-                    init_at = time.monotonic()
                 deadline_hit = time.monotonic() >= deadline
-                why = metal_init_should_stop(init_seen, stop_seen, exited, deadline_hit)
+                why = metal_init_should_stop(
+                    session_event(run_dir / "init.json", game.pid) is not None, stop_seen, exited,
+                    deadline_hit,
+                )
                 if why is not None:
                     break
-                if (
-                    not sampled
-                    and init_at is not None
-                    and not stop_seen
-                    and game.poll() is None
-                    and time.monotonic() - init_at >= 15
-                ):
-                    sampled = True
-                    _sample_hang(game.pid, run_dir)
                 time.sleep(0.2)
             if why == "stop" and game.poll() is None:
                 try:
