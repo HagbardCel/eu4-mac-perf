@@ -26,4 +26,8 @@ The table lives for the process. Each entry strongly owns its `MTLBuffer` and st
 
 ## Live result
 
-No `metal_init` session has been run for this replacement. A later stop outside the create body is not, by itself, an observed return. The note for that session has to say which stack or call sequence shows the replacement returned, and has to mark the claim indirect when the return itself was not observed. Launcher `post_init_failure` can still accompany a passed PR5 gate. The historical PC-zero return at `0x15ebd02` fails the gate.
+[results/20261102T072350Z-metal-init](../../../results/20261102T072350Z-metal-init) is one launcher session of pid 5979. `init.json` records success 1 on thread 1533453. `stop.json` is `glViewport` at RVA `0x149b21f`, `after_init`, reason `gl`, same thread and the pinned image. The process exited 2. The launcher did not signal it. `metadata.json` status is `complete`.
+
+`0x149b21f` is the instruction after `call _GfxSetViewPort` at `0x149b21a` in `CGraphics::InitGfx`. `_GfxSetViewPort` tail-jumps at `0x15ea527` to the `_glViewport` thunk at `0x18c26ae`, so that return address is the InitGfx callsite. The pc-0 fault at `0x15ebd02` did not recur.
+
+The create return is indirect. The return address of the particle callsite, `0x14d44e4`, was not observed. `InitGfx` calls `CGraphics::OnResetDevice` at `0x149b082` and does not branch over it before `0x149b21a`. `OnResetDevice` always ends with the call to `CPdxParticleObject::OnResetDevice` at `0x149b49d` and then returns. That function calls `_GfxCreateVertexBuffer` at `0x14d44df` only when a count dword is non-zero, which is the callsite that previously faulted inside create, and it skips the call when the dword is zero. This session did not record the dword. The observed fact is that `OnResetDevice` returned and the next stop is `_GfxSetViewPort`'s `glViewport` tail call. That is the next dependency.
