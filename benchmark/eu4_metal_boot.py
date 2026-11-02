@@ -304,6 +304,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         env["EU4_METAL_BOOT_RECEIPT"] = str(receipt_path)
     env["SDL_VIDEO_EXTERNAL_CONTEXT"] = "1"
     env["DYLD_INSERT_LIBRARIES"] = str(library)
+    started = dt.datetime.now(dt.timezone.utc).isoformat()
     stdout = (run_dir / "game.stdout").open("wb")
     stderr = (run_dir / "game.stderr").open("wb")
     game = subprocess.Popen(
@@ -370,7 +371,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
         )
         metadata = {
             "status": outcome["status"],
-            "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "started_utc": started,
             "gog": identity,
             "pid": game.pid,
             "exit_code": game.returncode,
@@ -392,7 +393,7 @@ def launch_session(run_dir: Path, wait_seconds: float = 180, bootstrap: bool = F
     verified = receipt is not None and receipt.get("result") == wanted and game.returncode == 0
     metadata = {
         "status": "complete" if verified else "failed",
-        "started_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "started_utc": started,
         "gog": identity,
         "exit_code": game.returncode,
         "result": None if receipt is None else receipt.get("result"),

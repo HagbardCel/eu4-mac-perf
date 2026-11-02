@@ -18,3 +18,10 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
     (void)source;
     return 0;
 }
+
+int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
+    (void)unused;
+    (void)shader;
+    (void)source;
+    return 0;
+}

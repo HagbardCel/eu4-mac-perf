@@ -20,6 +20,14 @@ void *eu4_gfx_create_shader(void);
    falls through to call _GfxBuildAndAddPixelShader at 0x1511f18. */
 int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source);
 
+/* _GfxAddPixelShader at 0x15eb425. rdi is unread, rsi is the 0x78 object, and rdx is
+   the source pointer. Returns 0 and writes nothing. The dword at +8 is the pixel-shader
+   name. A nonzero value is left unchanged; the original detaches it first, and that
+   path is not reconstructed. _GfxBuildAndAddPixelShader saves AL at 0x15eb844 and
+   returns it. CreateEffectFromFileNew tests AL at 0x1511f1d. AL == 0 logs and falls
+   through to call _GfxLinkShader at 0x1511f71. */
+int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source);
+
 #ifdef __cplusplus
 }
 #endif

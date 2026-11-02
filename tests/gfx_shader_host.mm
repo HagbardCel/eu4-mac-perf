@@ -22,6 +22,8 @@ int main(void) {
     uint8_t object_bytes[0x78];
     uint8_t saved[0x78];
     memset(object_bytes, 0x5a, sizeof object_bytes);
+    uint32_t zero_name = 0;
+    memcpy(object_bytes + 4, &zero_name, sizeof zero_name);
     memcpy(saved, object_bytes, sizeof saved);
     if (eu4_gfx_add_vertex_shader(nullptr, object_bytes, reinterpret_cast<const char *>(1)) != 0) {
         return 4;
@@ -37,6 +39,23 @@ int main(void) {
     }
     if (memcmp(object_bytes, saved, sizeof saved) != 0) {
         return 7;
+    }
+    memset(object_bytes, 0x5a, sizeof object_bytes);
+    memcpy(object_bytes + 8, &zero_name, sizeof zero_name);
+    memcpy(saved, object_bytes, sizeof saved);
+    if (eu4_gfx_add_pixel_shader(nullptr, object_bytes, reinterpret_cast<const char *>(1)) != 0) {
+        return 8;
+    }
+    if (memcmp(object_bytes, saved, sizeof saved) != 0) {
+        return 9;
+    }
+    memcpy(object_bytes + 8, &prior, sizeof prior);
+    memcpy(saved, object_bytes, sizeof saved);
+    if (eu4_gfx_add_pixel_shader(nullptr, object_bytes, reinterpret_cast<const char *>(1)) != 0) {
+        return 10;
+    }
+    if (memcmp(object_bytes, saved, sizeof saved) != 0) {
+        return 11;
     }
     return 0;
 }
