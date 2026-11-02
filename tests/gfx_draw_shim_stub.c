@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 extern uint64_t eu4_gfx_shim_expect_ret;
+extern int eu4_gfx_shim_return;
 
 _Static_assert(offsetof(eu4_gfx_draw_raw, which) == 0, "which");
 _Static_assert(offsetof(eu4_gfx_draw_raw, rdi) == 8, "rdi");
@@ -20,7 +21,7 @@ static void fail(const char *what) {
     _exit(1);
 }
 
-void eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw) {
+int eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw) {
     if (raw == NULL) {
         fail("null");
     }
@@ -51,6 +52,9 @@ void eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw) {
         memcmp(raw->xmm[4], xmm, 16) != 0 || memcmp(raw->xmm[5], xmm + 16, 16) != 0 ||
         memcmp(raw->xmm[6], xmm + 32, 16) != 0 || memcmp(raw->xmm[7], xmm + 48, 16) != 0) {
         fail("xmm");
+    }
+    if (eu4_gfx_shim_return) {
+        return 1;
     }
     _exit(0);
 }

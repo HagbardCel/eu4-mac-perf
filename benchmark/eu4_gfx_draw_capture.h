@@ -23,8 +23,14 @@ typedef struct {
     uint8_t stack[64];
 } eu4_gfx_draw_raw;
 
-/* Writes the receipt JSON. Does not exit. 0 means the buffer holds one record. */
+/* 0: out holds one stopping receipt. 1: verified nonvisible skip; out is unchanged. */
 int eu4_gfx_draw_receipt(const eu4_gfx_draw_raw *raw, char *out, int cap);
+
+/* 1: the shim returns to the caller. Any other path does not return. */
+int eu4_gfx_draw_capture(const eu4_gfx_draw_raw *raw);
+
+/* Host tests only. Zeros the process draw and skip counters. */
+void eu4_gfx_draw_selection_reset(void);
 
 #ifdef __cplusplus
 }
