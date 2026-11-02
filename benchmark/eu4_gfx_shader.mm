@@ -11,3 +11,10 @@ void *eu4_gfx_create_shader(void) {
     memcpy(object + 4, &zero, sizeof zero);
     return object;
 }
+
+int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
+    (void)unused;
+    (void)shader;
+    (void)source;
+    return 0;
+}

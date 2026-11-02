@@ -19,5 +19,24 @@ int main(void) {
         return 3;
     }
     ::operator delete(object);
+    uint8_t object_bytes[0x78];
+    uint8_t saved[0x78];
+    memset(object_bytes, 0x5a, sizeof object_bytes);
+    memcpy(saved, object_bytes, sizeof saved);
+    if (eu4_gfx_add_vertex_shader(nullptr, object_bytes, reinterpret_cast<const char *>(1)) != 0) {
+        return 4;
+    }
+    if (memcmp(object_bytes, saved, sizeof saved) != 0) {
+        return 5;
+    }
+    uint32_t prior = 0x11223344;
+    memcpy(object_bytes + 4, &prior, sizeof prior);
+    memcpy(saved, object_bytes, sizeof saved);
+    if (eu4_gfx_add_vertex_shader(nullptr, object_bytes, reinterpret_cast<const char *>(1)) != 0) {
+        return 6;
+    }
+    if (memcmp(object_bytes, saved, sizeof saved) != 0) {
+        return 7;
+    }
     return 0;
 }

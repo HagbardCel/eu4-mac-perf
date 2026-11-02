@@ -12,6 +12,14 @@ extern "C" {
    qword is ___glewCreateProgramObjectARB. A nonzero value would be a fabricated GL name. */
 void *eu4_gfx_create_shader(void);
 
+/* _GfxAddVertexShader at 0x15eafae. rdi is unread, rsi is the 0x78 object, and rdx is
+   the source pointer. Returns 0 and writes nothing. That is the failure return, not a
+   compiled shader. A nonzero dword at +4 is left unchanged; the original detaches it
+   first, and that path is not reconstructed. _GfxBuildAndAddVertexShader returns this
+   value at 0x15eb3f6. CreateEffectFromFileNew tests AL at 0x1511eba. AL == 0 logs and
+   falls through to call _GfxBuildAndAddPixelShader at 0x1511f18. */
+int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source);
+
 #ifdef __cplusplus
 }
 #endif

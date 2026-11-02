@@ -19,3 +19,5 @@ GFX_ENTRY(draw_indexed_instanced, 0x15eac9c, 0x15ead87, eu4_gfx_draw_indexed_ins
 GFX_ENTRY(initialize_texture, 0x15ec43b, 0x15ec61d, eu4_gfx_initialize_texture, "\x55\x48\x89\xe5\x41\x57")
 // _GfxCreateShader. End is _GfxAddVertexLayout. The null call is at 0x15eaeb9.
 GFX_ENTRY(create_shader, 0x15eae97, 0x15eaec7, eu4_gfx_create_shader, "\x55\x48\x89\xe5\x53")
+// _GfxAddVertexShader. End is LogShaderError. The null call is at 0x15eaffa.
+GFX_ENTRY(add_vertex_shader, 0x15eafae, 0x15eb20f, eu4_gfx_add_vertex_shader, "\x55\x48\x89\xe5\x41\x57")

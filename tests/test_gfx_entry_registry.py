@@ -451,6 +451,24 @@ class D1StateTests(unittest.TestCase):
         self.assertEqual(mismatched["d1"], "error")
         self.assertNotEqual(mismatched["kind"], "blocked_at")
 
+    def test_optional_create_receipt_must_match_the_session_pid(self) -> None:
+        receipt = '{"pid":999,"success":1,"symbol":"_GfxCreateVertexBuffer"}\n'
+        files = self._base()
+        files["create.json"] = receipt
+        draw = triage.diagnose(self._dir(files))
+        self.assertEqual(draw["d1"], "error")
+        self.assertNotEqual(draw["kind"], "draw_reached")
+        files = self._blocker()
+        files["create.json"] = receipt
+        blocked = triage.diagnose(self._dir(files))
+        self.assertEqual(blocked["d1"], "error")
+        self.assertNotEqual(blocked["kind"], "blocked_at")
+        files = self._base()
+        files["create.json"] = "{\n"
+        malformed = triage.diagnose(self._dir(files))
+        self.assertEqual(malformed["d1"], "error")
+        self.assertNotEqual(malformed["kind"], "draw_reached")
+
 
 if __name__ == "__main__":
     unittest.main()

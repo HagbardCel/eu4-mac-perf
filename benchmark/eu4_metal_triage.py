@@ -199,6 +199,13 @@ def _outcome(loaded: dict[str, dict | None], ranges: tuple):
     )
 
 
+def create_pid_matches(exists: dict[str, bool], loaded: dict[str, dict | None], pid: int) -> bool:
+    if not exists["create.json"]:
+        return True
+    create = loaded["create.json"]
+    return create is not None and _positive_int(create.get("pid")) and create["pid"] == pid
+
+
 def draw_session(exists: dict[str, bool], loaded: dict[str, dict | None]) -> bool:
     """One live execution: terminal launcher stop plus a matching game draw receipt."""
     names = ("metadata.json", "init.json", "stop.json", "draw_invocation.json")
@@ -246,7 +253,7 @@ def draw_session(exists: dict[str, bool], loaded: dict[str, dict | None]) -> boo
     gog = meta.get("gog")
     if not isinstance(gog, dict) or gog.get("executable_sha256") != boot.PINNED_SHA256:
         return False
-    return True
+    return create_pid_matches(exists, loaded, pid)
 
 
 def blocked_session(exists: dict[str, bool], loaded: dict[str, dict | None]) -> bool:
@@ -279,7 +286,7 @@ def blocked_session(exists: dict[str, bool], loaded: dict[str, dict | None]) -> 
     gog = meta.get("gog")
     if not isinstance(gog, dict) or gog.get("executable_sha256") != boot.PINNED_SHA256:
         return False
-    return True
+    return create_pid_matches(exists, loaded, pid)
 
 
 def d1_state(exists: dict[str, bool], loaded: dict[str, dict | None]) -> str:
