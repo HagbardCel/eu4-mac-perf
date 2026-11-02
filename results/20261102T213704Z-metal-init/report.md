@@ -6,4 +6,4 @@ One process, pid 62930. Init, create, and draw thread are all `2612664`. `starte
 
 The snapshot read all `0x171` master bytes. `shader_ptr` is `0x7f77e3c3a5d0`. `effective_count` is `0`. `attrib_dirty` is `1`. `rsi` is 0, so the count is the signed dword at master `+0x64`, which is also 0. The saved `edx` is 0, and the mode dword at `+8` is 5. The missing-shader return is not taken. The tail would call `_glDrawArrays` with mode 5, first 0, and count 0.
 
-This invocation submits no primitives. The shader pointer is a captured nonzero value, so the failure-return stubs did not leave this draw without a master shader. A count of 0 is not `draw_nonvisible` by itself: this capture does not show whether a later call at `0xedfcd1` has a positive count. It is not a replayable packet.
+Invocation 1 is `draw_nonvisible`. Its effective count is 0, so `_glDrawArrays(5, 0, 0)` submits no primitives. `d1` remains `draw_reached`. This session does not show a later positive count at `0xedfcd1`, and it does not assign a count to pid 59605. D1b is not `packet_ready`.
