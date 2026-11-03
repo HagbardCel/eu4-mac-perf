@@ -1,0 +1,16 @@
+{
+  "id": "eu4-re2-pilot",
+  "objective": "objective.md",
+  "runtime": "opencode",
+  "model": "opencode/big-pickle",
+  "opencode_version": "2.2.5",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/automation/eu4-re2-pilot/workspace",
+    "commit": "2923c1407371656fd51d962b085eaebc52650993"
+  },
+  "accept": ["python3", "accept.py"],
+  "max_rounds": 6,
+  "max_seconds": 3600,
+  "accept_timeout_seconds": 900
+}
