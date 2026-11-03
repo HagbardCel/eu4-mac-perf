@@ -10,6 +10,7 @@ extern "C" {
 /* rdi is unused. rsi is the caller-owned 0x44 header. rdx is the description.
    rcx is the image array. r8d is the image count. Returns void.
    Disassembly at 0x15ec43b: kind 1 is a cubemap, formats 1..7 are compressed.
+   Ordinal 5 is linear DXT5 and is uploaded as BC3. The other compressed ordinals stay rejected.
    On success the GL name at header+4 is written 0. A rejected record leaves the header
    untouched. glDeleteTextures is a diagnostic stop, not a Metal destroy. */
 enum {
@@ -35,6 +36,9 @@ int eu4_gfx_texture_make(void *device, void *header, const void *desc, const voi
 
 void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, const void *images,
                                 uint32_t count);
+
+/* Forces the BC3 capability check to fail. The host sets it back to 0. */
+void eu4_gfx_test_no_bc(int on);
 
 /* _GfxSetTextures at 0x15ecbf2. rdi is the handle and (%rdi) is the state object.
    esi is the count. rdx is the texture-pointer array. ecx bit 0 binds from r8d,
