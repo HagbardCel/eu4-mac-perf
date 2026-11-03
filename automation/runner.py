@@ -18,6 +18,8 @@ from automation.state import (
     ensure_workspace,
     file_sha256,
     load_state,
+    repo_root,
+    require_worktree,
     save_state,
 )
 from automation.telemetry import append, redact
@@ -45,14 +47,24 @@ class Runner:
 
     def execute(self, *, resume_only: bool) -> dict:
         self.run_root.mkdir(parents=True, exist_ok=True)
+        if self.campaign.worktree is not None:
+            self.live = self.campaign.worktree
+            require_worktree(
+                self.live, repo_root(self.campaign.root), self.campaign.worktree_commit or "")
+        else:
+            self.live = self.run_root / "workspace"
         with campaign_lock(self.run_root / "campaign.lock"):
             existed = self.state_path.exists()
             if resume_only and not existed:
                 raise RuntimeError("no campaign state to resume")
             if existed:
                 state = load_state(self.state_path)
+                saved = Path(state["workspace"]).resolve()
+                if self.campaign.worktree is not None and saved != self.live.resolve():
+                    raise RuntimeError("worktree path does not match the saved campaign")
             else:
-                ensure_workspace(self.campaign.seed, self.live)
+                if self.campaign.worktree is None:
+                    ensure_workspace(self.campaign.seed, self.live)
                 state = self._fresh()
                 save_state(self.state_path, state)
             self._guard(state)

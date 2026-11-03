@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +21,9 @@ class Campaign:
     runtime: str
     model: str
     opencode_version: str
-    seed: Path
+    seed: Path | None
+    worktree: Path | None
+    worktree_commit: str | None
     accept: list[str]
     checker: Path
     max_rounds: int
@@ -45,6 +48,7 @@ def load_campaign(path: Path) -> Campaign:
         raise ValueError("model must be provider/id")
     root = path.parent
     checker = _checker_file(root, data["accept"])
+    seed, worktree, commit = _workspace(root, data["workspace"])
     return Campaign(
         id=str(data["id"]),
         root=root,
@@ -52,7 +56,9 @@ def load_campaign(path: Path) -> Campaign:
         runtime=data["runtime"],
         model=model,
         opencode_version=str(data["opencode_version"]),
-        seed=(root / data["workspace"]).resolve(),
+        seed=seed,
+        worktree=worktree,
+        worktree_commit=commit,
         accept=[str(part) for part in data["accept"]],
         checker=checker,
         max_rounds=int(data["max_rounds"]),
@@ -90,6 +96,57 @@ def load_state(path: Path) -> dict | None:
 
 def save_state(path: Path, state: dict) -> None:
     atomic_write(path, json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def _workspace(campaign_dir: Path, spec) -> tuple[Path | None, Path | None, str | None]:
+    if isinstance(spec, str):
+        return (campaign_dir / spec).resolve(), None, None
+    if not isinstance(spec, dict) or spec.get("mode") != "worktree":
+        raise ValueError("workspace must be a seed path or a worktree object")
+    raw = Path(str(spec["path"]))
+    live = raw if raw.is_absolute() else repo_root(campaign_dir) / raw
+    commit = str(spec["commit"])
+    if not commit:
+        raise ValueError("worktree commit is required")
+    return None, live.resolve(), commit
+
+
+def git_common_dir(path: Path) -> Path:
+    """Absolute git common directory. Relative git output is resolved from ``path``."""
+    raw = _git(path, "rev-parse", "--git-common-dir")
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = path / candidate
+    return candidate.resolve()
+
+
+def require_worktree(path: Path, repo: Path, commit: str) -> None:
+    path = Path(path).resolve()
+    repo = Path(repo).resolve()
+    if not path.is_dir():
+        raise RuntimeError(f"worktree does not exist: {path}")
+    if path == repo or (path / ".git").is_dir():
+        raise RuntimeError("refusing the primary checkout")
+    if not (path / ".git").is_file():
+        raise RuntimeError("not a linked git worktree")
+    if _git(path, "rev-parse", "--is-inside-work-tree") != "true":
+        raise RuntimeError("not a git worktree")
+    if git_common_dir(path) != git_common_dir(repo):
+        raise RuntimeError("worktree belongs to a different repository")
+    if _git(path, "rev-parse", "HEAD") != commit:
+        raise RuntimeError("worktree HEAD is not the pinned commit")
+
+
+def _git(path: Path, *args: str) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(path), *args],
+            capture_output=True, text=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        raise RuntimeError(f"git {' '.join(args)} failed: {detail}") from exc
+    return completed.stdout.strip()
 
 
 def ensure_workspace(seed: Path, live: Path) -> None:
