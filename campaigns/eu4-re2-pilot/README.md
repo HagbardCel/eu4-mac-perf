@@ -22,8 +22,20 @@ An isolated worktree has no default Ghidra index. `EU4_RE_EXPORT` may point at t
 
 ## Pilot
 
-`integration: unverified`
+`integration: verified`
 
-Before any agent turn, `prepare.py` applied the signed-division defect in `.local/automation/eu4-re2-pilot/workspace` at `2923c1407371656fd51d962b085eaebc52650993`. The checker returned `fail` (exit 1): 49 scenarios differ, starting with `d019` (`word_count` `0x20000000` against the candidate's `0xe0000000`).
+Before any agent turn, the detached worktree at `2923c1407371656fd51d962b085eaebc52650993` contained the signed-division defect. The checker returned `fail` (exit 1): 49 scenarios differ, starting with `d019` (`word_count` `0x20000000` against the candidate's `0xe0000000`).
 
-OpenCode 2.2.5 is installed, but nothing was listening on `127.0.0.1:4096` and `OPENCODE_SERVER_PASSWORD` was unset, so `automation.cli run` was not started. There are no rounds, tool counts, model tokens, or agent file edits. This note is not evidence that an agent can repair the candidate. The detached worktree is still registered and still contains the defect.
+OpenCode 2.2.5 served `opencode/big-pickle` on `127.0.0.1:4096`. The first `automation.cli run` paused `runtime_unavailable` after 0.6s because that server was not reachable. The continued run created session `ses_e5c940906ffePm952HZ6jGfw7W` and finished `complete`. The candidate was not repaired by hand.
+
+- rounds: 1
+- tool calls: 20, with 0 tool failures
+- validations: 1, of which 1 passed
+- active time: 103.5s, including the 0.6s unreachable start
+- tokens: input 45426, output 3207, reasoning 2084, cost 0
+- files: `gfx_set_constant_buffer.hpp` and `progress.md`
+- verdict: `pass`, "reference validated and candidate matched"
+
+The agent restored `return (first_dword + 3u) >> 2;` on the buffer path. No other tracked source differs from the pinned commit. `progress.md` is the only remaining worktree change. The agent reported that no Ghidra index was available and used the tracked contract instead.
+
+A passing verdict is still Ghidra P-code under constructed state. It is not a Metal result and does not move Decision 0001, 0002, 0003, or the D1 gates.

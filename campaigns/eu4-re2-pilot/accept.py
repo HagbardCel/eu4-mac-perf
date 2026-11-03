@@ -48,19 +48,40 @@ def _blocked(entry: str, workspace: Path) -> bool:
     return resolved == workspace or workspace in resolved.parents
 
 
+def _require_origin(module, expected: Path, workspace: Path) -> None:
+    loaded = Path(getattr(module, "__file__", "")).resolve()
+    if loaded != expected or loaded == workspace or workspace in loaded.parents:
+        raise RuntimeError(f"untrusted module origin: {loaded}")
+
+
 def import_diff(workspace: Path):
-    """Load reconstruction_diff from the campaign repository only."""
+    """Load reconstruction_diff from the campaign repository only.
+
+    Existing ``sys.modules`` entries are never deleted or replaced. ``sys.path``
+    is adjusted only when the package is not loaded yet, and then restored.
+    """
     root = trusted_root()
     workspace = workspace.resolve()
-    sys.path = [str(root), *[entry for entry in sys.path if not _blocked(entry, workspace)]]
-    for name in list(sys.modules):
-        if name == "reverse_engineering" or name.startswith("reverse_engineering."):
-            del sys.modules[name]
-    import reverse_engineering.reconstruction_diff as diff
-    loaded = Path(diff.__file__).resolve()
-    if root not in loaded.parents or workspace in loaded.parents:
-        raise RuntimeError(f"reconstruction_diff loaded from {loaded}")
-    return diff
+    package_file = (root / "reverse_engineering" / "__init__.py").resolve()
+    diff_file = (root / "reverse_engineering" / "reconstruction_diff.py").resolve()
+    loaded = sys.modules.get("reverse_engineering.reconstruction_diff")
+    if loaded is not None:
+        _require_origin(loaded, diff_file, workspace)
+        return loaded
+    package = sys.modules.get("reverse_engineering")
+    if package is not None:
+        _require_origin(package, package_file, workspace)
+        import reverse_engineering.reconstruction_diff as diff
+        _require_origin(diff, diff_file, workspace)
+        return diff
+    saved = sys.path
+    try:
+        sys.path = [str(root), *[entry for entry in saved if not _blocked(entry, workspace)]]
+        import reverse_engineering.reconstruction_diff as diff
+        _require_origin(diff, diff_file, workspace)
+        return diff
+    finally:
+        sys.path = saved
 
 
 def compare_result(action) -> dict:
@@ -166,7 +187,11 @@ def check(workspace: Path, commit: str | None = None, repo: Path | None = None, 
     file_commit, file_repo = _pinned()
     commit = file_commit if commit is None else commit
     repo = file_repo if repo is None else Path(repo).resolve()
-    diff = import_diff(workspace) if diff is None else diff
+    if diff is None:
+        try:
+            diff = import_diff(workspace)
+        except (RuntimeError, ImportError) as exc:
+            return emit("unavailable", f"trusted comparator unavailable: {exc}")
     try:
         if _git(workspace, "rev-parse", "HEAD") != commit:
             return emit("fail", "worktree HEAD is not the pinned commit")
