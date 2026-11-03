@@ -17,6 +17,7 @@ class GfxBufferTests(unittest.TestCase):
         HOST.parent.mkdir(parents=True, exist_ok=True)
         command = [
             "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-lc++",
+            "-I", str(ROOT / "benchmark"),
             "-framework", "Foundation", "-framework", "Metal", "-framework", "QuartzCore",
             "-o", str(HOST), str(HOST_SOURCE), str(INIT), str(BUFFERS), str(EVENTS),
         ]

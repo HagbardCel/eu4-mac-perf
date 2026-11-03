@@ -43,5 +43,6 @@ jobs:
           measurements/INDEX.md
           automation/README.md
           campaigns/eu4-re2-pilot/README.md
+          campaigns/eu4-index-buffer/README.md
       - run: git diff --check "${{ steps.base.outputs.sha }}" HEAD
 # Proprietary EU IV symbols, Rosetta, CGL, overhead, and live release gates are local evidence.

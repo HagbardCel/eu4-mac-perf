@@ -376,6 +376,58 @@ def format_diagnosis(diag: dict) -> str:
     return "\n".join(lines)
 
 
+_INDEX_SYMBOLS = {
+    "_GfxCreateIndexBuffer",
+    "_GfxDestroyIndexBuffer",
+    "_GfxUpdateIndexBuffer",
+    "_GfxSetIndexBuffer",
+}
+_INDEX_CALLER = "0x14bfa60"
+
+
+def _nonnegative_int(value: object) -> bool:
+    return type(value) is int and value >= 0
+
+
+def _resource_pointer(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("0x"):
+        return False
+    try:
+        return int(value, 16) > 0
+    except ValueError:
+        return False
+
+
+def index_buffer_receipt(index_create: dict | None, stop: dict | None, init: dict | None, *,
+                         image_ok: bool) -> str:
+    """A create log alone is unvalidated. A later same-process stop is the observation.
+
+    unrelated_gl means that later stop is an original GL call outside the index replacements.
+    """
+    if not isinstance(index_create, dict):
+        return "absent"
+    created = (
+        index_create.get("success") == 1
+        and index_create.get("symbol") == "_GfxCreateIndexBuffer"
+        and index_create.get("rva") == _INDEX_CALLER
+        and _positive_int(index_create.get("pid"))
+        and _positive_int(index_create.get("thread"))
+        and _resource_pointer(index_create.get("resource"))
+        and _nonnegative_int(index_create.get("bytes"))
+        and _nonnegative_int(index_create.get("count"))
+        and image_ok
+        and isinstance(init, dict)
+        and init.get("thread") == index_create.get("thread")
+    )
+    if not created:
+        return "unvalidated"
+    if not isinstance(stop, dict) or stop.get("pid") != index_create.get("pid"):
+        return "unvalidated"
+    if stop.get("reason") == "gl" and stop.get("symbol") not in _INDEX_SYMBOLS:
+        return "unrelated_gl"
+    return "returned"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Read-only Metal migration diagnostic.")
     parser.add_argument("run_dir", type=Path)

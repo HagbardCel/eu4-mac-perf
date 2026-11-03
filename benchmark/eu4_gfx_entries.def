@@ -27,3 +27,7 @@ GFX_ENTRY(create_shader, 0x15eae97, 0x15eaec7, eu4_gfx_create_shader, "\x55\x48\
 GFX_ENTRY(add_vertex_shader, 0x15eafae, 0x15eb20f, eu4_gfx_add_vertex_shader, "\x55\x48\x89\xe5\x41\x57")
 // _GfxAddPixelShader. End is _GfxBuildAndAddPixelShader. The indirect call is at 0x15eb471.
 GFX_ENTRY(add_pixel_shader, 0x15eb425, 0x15eb7ae, eu4_gfx_add_pixel_shader, "\x55\x48\x89\xe5\x41\x57")
+GFX_ENTRY(_GfxCreateIndexBuffer, 0x15ec154, 0x15ec1e6, eu4_gfx_create_index_buffer, "\x55\x48\x89\xe5\x41\x57")
+GFX_ENTRY(_GfxDestroyIndexBuffer, 0x15ec1e6, 0x15ec23c, eu4_gfx_destroy_index_buffer, "\x48\x85\xff\x74\x50")
+GFX_ENTRY(_GfxUpdateIndexBuffer, 0x15ec23c, 0x15ec28e, eu4_gfx_update_index_buffer, "\x55\x48\x89\xe5\x41\x56")
+GFX_ENTRY(_GfxSetIndexBuffer, 0x15ec28e, 0x15ec2bc, eu4_gfx_set_index_buffer, "\x48\x85\xf6\x74\x28")

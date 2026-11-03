@@ -22,6 +22,11 @@ void eu4_metal_events_stop(const char *phase, const char *symbol, const char *re
 /* First successful create. 0 means written or already present. Never exits. */
 int eu4_metal_events_create(const void *caller);
 
+/* First successful index-buffer create. resource is the MTLBuffer pointer.
+   0 means written or already present. Never exits. */
+int eu4_metal_events_index_create(const void *caller, uintptr_t resource, uint64_t bytes,
+                                  int32_t count);
+
 /* Page-sized reads. *got is the valid prefix. A short read is not a full image. */
 int eu4_metal_events_read(const void *src, void *dst, int want, int *got);
 
