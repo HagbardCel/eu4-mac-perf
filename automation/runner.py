@@ -85,7 +85,7 @@ class Runner:
             if state["status"] != "running":
                 return
             if not state.get("session_id"):
-                if not self._ensure_session(state, replacement=bool(state.get("rounds"))):
+                if not self._ensure_session(state, replacement=bool(state.get("needs_brief"))):
                     if state["status"] != "running":
                         return
                     self.sleep(0.2)
@@ -110,6 +110,7 @@ class Runner:
                 self._pause(state, "blocked_on_permission")
                 return
             if observation.phase == "missing":
+                state["needs_brief"] = True
                 state["session_id"] = None
                 save_state(self.state_path, state)
                 continue
@@ -160,7 +161,7 @@ class Runner:
                 "Continue from progress.md."
             )
         if brief or not feedback:
-            text = self._prompt(bool(state.get("rounds")))
+            text = self._prompt(True if brief else bool(state.get("rounds")))
             if feedback:
                 text += "\n\n" + feedback
             return text
@@ -257,7 +258,11 @@ class Runner:
             self._pause(state, "checker_modified")
 
     def _digest_matches(self, state: dict) -> bool:
-        return file_sha256(self.campaign.checker) == state["checker_sha256"]
+        try:
+            digest = file_sha256(self.campaign.checker)
+        except OSError:
+            return False
+        return digest == state["checker_sha256"]
 
     def _charge(self, state: dict) -> None:
         now = self.clock()

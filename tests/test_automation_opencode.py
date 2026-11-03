@@ -28,6 +28,7 @@ class App:
         self.paths: list[str] = []
         self.sequence = None
         self.sequence_at = 0
+        self.malformed = False
         self.permission: list[dict] = []
         self.seen: list[str] = []
         self.pages = None
@@ -53,6 +54,14 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(raw) if raw else {}
         path = self.path.split("?", 1)[0]
         app.paths.append(path)
+        if app.malformed and self.command == "GET" and path.count("/") == 3:
+            raw = b"{"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if app.sleep and path.startswith("/api/session/") and self.command == "GET" and path.count("/") == 3:
             time.sleep(2)
         if path == "/api/session" and self.command == "POST":
@@ -169,6 +178,10 @@ class OpenCodeHttpTests(unittest.TestCase):
                 self.agent().create(workspace, "hello")
             self.assertEqual(caught.exception.reason, "workspace_mismatch")
             self.assertTrue(self.app.authorization.startswith("Basic "))
+
+    def test_malformed_json_is_unknown(self) -> None:
+        self.app.malformed = True
+        self.assertEqual(self.agent().inspect("ses_test", "msg_a").phase, "unknown")
 
     def test_timeout_is_unknown(self) -> None:
         self.app.sleep = True

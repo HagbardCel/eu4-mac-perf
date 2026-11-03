@@ -47,6 +47,7 @@ class FakeAgent:
             self.drop_on_inspect = False
             self.dropped_submission_id = submission_id
             self.sessions.pop(session_id, None)
+            self.phase_after_submit = "settled"
             return Observation("missing")
         if self.inspect_phase:
             return Observation(self.inspect_phase)

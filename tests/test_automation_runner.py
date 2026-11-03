@@ -167,6 +167,49 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("progress.md", message)
             self.assertIn("Confirmation round required", message)
 
+    def test_session_loss_before_the_first_check_gets_a_new_id(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agent = FakeAgent()
+            agent.phase_after_submit = "executing"
+
+            def drop_after_the_first_submit(_workspace: Path) -> None:
+                agent.drop_on_inspect = True
+
+            agent.on_submit = drop_after_the_first_submit
+            runner, _clock = self._runner(root, agent, max_rounds=1)
+            state = runner.execute(resume_only=False)
+            self.assertEqual(len(agent.messages), 2)
+            first_session, first_id, _first = agent.messages[0]
+            session_id, submission_id, message = agent.messages[1]
+            self.assertNotEqual(session_id, first_session)
+            self.assertEqual(agent.dropped_submission_id, first_id)
+            self.assertNotEqual(submission_id, first_id)
+            self.assertIn("Make marker.txt", message)
+            self.assertIn("external check", message)
+            self.assertIn("progress.md", message)
+            self.assertEqual(state["rounds"], 1)
+            self.assertEqual(state["pause_reason"], "round_limit")
+
+    def test_deleted_checker_pauses(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            checker = root / "accept.py"
+            checker.write_text(
+                "import json\nprint(json.dumps({'verdict':'pass','diagnostics':'ok'}))\n",
+                encoding="utf-8",
+            )
+            agent = FakeAgent()
+
+            def remove_checker(_workspace: Path) -> None:
+                checker.unlink()
+
+            agent.on_submit = remove_checker
+            runner, _clock = self._runner(root, agent, checker=checker)
+            state = runner.execute(resume_only=False)
+            self.assertEqual(state["pause_reason"], "checker_modified")
+            self.assertNotEqual(state["status"], "complete")
+
     def test_failed_history_does_not_validate(self) -> None:
         cases = (
             (RuntimeError("down"), "trace_unavailable"),

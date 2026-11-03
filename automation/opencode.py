@@ -188,7 +188,7 @@ class OpenCodeAgent:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout if timeout is None else timeout) as response:
                 raw = response.read()
-                return response.status, json.loads(raw) if raw else None
+                status = response.status
         except urllib.error.HTTPError as exc:
             raw = exc.read()
             code = exc.code
@@ -199,6 +199,10 @@ class OpenCodeAgent:
                 parsed = None
             return code, parsed
         except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+            raise TransportError(str(exc)) from exc
+        try:
+            return status, json.loads(raw) if raw else None
+        except json.JSONDecodeError as exc:
             raise TransportError(str(exc)) from exc
 
 
