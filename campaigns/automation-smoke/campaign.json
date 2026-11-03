@@ -1,0 +1,12 @@
+{
+  "id": "automation-smoke",
+  "objective": "objective.md",
+  "runtime": "opencode",
+  "model": "opencode/big-pickle",
+  "opencode_version": "2.2.5",
+  "workspace": "workspace",
+  "accept": ["python3", "accept.py"],
+  "max_rounds": 4,
+  "max_seconds": 1800,
+  "accept_timeout_seconds": 30
+}
