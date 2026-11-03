@@ -11,6 +11,10 @@ SPILL_BYTES = 4096
 _SECRET = re.compile(
     r"(?i)\b([A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|KEY))\s*[:=]\s*\S+"
 )
+# ``tokens`` is a usage count, not a credential. Match token only as its own component.
+_SENSITIVE_KEY = re.compile(
+    r"(?i)(^|_)(password|secret|token|api_key|authorization)($|_)"
+)
 
 
 def append(path: Path, records: list[dict], secrets: list[str] | None = None) -> None:
@@ -22,7 +26,7 @@ def append(path: Path, records: list[dict], secrets: list[str] | None = None) ->
             event_id = record["event_id"]
             if event_id in seen:
                 continue
-            cleaned = _omit_empty(_redact(record, secrets or []))
+            cleaned = _omit_empty(redact(record, secrets or []))
             cleaned = _spill(cleaned, blobs)
             handle.write(json.dumps(cleaned, sort_keys=True) + "\n")
             seen.add(event_id)
@@ -41,6 +45,7 @@ def report(path: Path) -> dict:
         "rounds": None,
     }
     files: list[str] = []
+    calls: set[str] = set()
     if not path.exists():
         counts["files"] = files
         return counts
@@ -49,8 +54,8 @@ def report(path: Path) -> dict:
             continue
         event = json.loads(line)
         kind = event.get("type")
-        if kind == "tool.started":
-            counts["tool_calls"] += 1
+        if kind in ("tool.started", "tool.completed"):
+            calls.add(_tool_identity(event))
         if kind == "tool.completed" and event.get("status") == "error":
             counts["tool_failures"] += 1
         if kind == "validation":
@@ -69,6 +74,7 @@ def report(path: Path) -> dict:
             counts["cost"] = (counts["cost"] or 0) + event["cost"]
         if isinstance(event.get("elapsed_seconds"), (int, float)):
             counts["elapsed_seconds"] = event["elapsed_seconds"]
+    counts["tool_calls"] = len(calls)
     counts["files"] = files
     if not counts["tokens"]:
         counts["tokens"] = None
@@ -86,11 +92,26 @@ def _existing_ids(path: Path) -> set[str]:
     return found
 
 
-def _redact(value, secrets: list[str]):
+def _tool_identity(event: dict) -> str:
+    event_id = str(event.get("event_id") or "")
+    for suffix in ("/tool.started", "/tool.completed"):
+        if event_id.endswith(suffix):
+            event_id = event_id[: -len(suffix)]
+            break
+    return f"{event.get('session_id') or ''}/{event_id}"
+
+
+def redact(value, secrets: list[str]):
     if isinstance(value, dict):
-        return {key: _redact(item, secrets) for key, item in value.items()}
+        cleaned = {}
+        for key, item in value.items():
+            if isinstance(key, str) and _SENSITIVE_KEY.search(key):
+                cleaned[key] = "[redacted]"
+            else:
+                cleaned[key] = redact(item, secrets)
+        return cleaned
     if isinstance(value, list):
-        return [_redact(item, secrets) for item in value]
+        return [redact(item, secrets) for item in value]
     if not isinstance(value, str):
         return value
     for secret in secrets:

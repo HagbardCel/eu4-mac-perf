@@ -2,8 +2,8 @@
 
 Verified against the local server's ``/openapi.json`` (binary ``opencode v2.2.5``).
 That spec has no JSON health route; ``GET /global/health`` is the web UI.
-``POST /api/experimental/session/{id}/wait`` returns 204 while a prompt is still
-in the inbox, so a 204 is not settlement.
+Settlement is the inbox, the active list, and a later idle message. The
+experimental wait route is not called: a 204 arrived while work was still queued.
 """
 
 from __future__ import annotations
@@ -16,17 +16,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from automation.agents import History, Observation
+from automation.agents import ContractError, History, Observation
 
 VERIFIED_VERSION = "2.2.5"
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 _TERMINAL = {"succeeded", "failed", "interrupted"}
-
-
-class ContractError(RuntimeError):
-    def __init__(self, reason: str):
-        super().__init__(reason)
-        self.reason = reason
+_HISTORY_PAGES = 100
 
 
 class TransportError(RuntimeError):
@@ -39,11 +34,9 @@ class OpenCodeAgent:
         _require_loopback(base_url)
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self.wait_timeout = 1.0
         self.model = model
         self.observed_model: str | None = None
         self.protected_root: Path | None = None
-        self._wait_enabled = True
         token = None
         if password:
             token = base64.b64encode(f"{username}:{password}".encode()).decode()
@@ -118,14 +111,6 @@ class OpenCodeAgent:
     def _observe(self, session_id: str, submission_id: str | None) -> Observation:
         if self._permission_pending(session_id):
             return Observation("needs_input", "present")
-        if self._active(session_id) and self._wait_enabled:
-            waited = self._wait(session_id)
-            if waited == "timeout":
-                return Observation("executing", "present")
-            if waited == "down":
-                self._wait_enabled = False
-            elif waited == "error":
-                return Observation("unknown")
         if submission_id and self._queued(session_id, submission_id):
             return Observation("queued", "present")
         if self._active(session_id):
@@ -138,19 +123,6 @@ class OpenCodeAgent:
         if _delivered(messages, submission_id):
             return Observation("executing", "present")
         return Observation("unknown", "absent")
-
-    def _wait(self, session_id: str) -> str:
-        try:
-            status, _payload = self._call(
-                "POST", f"/api/experimental/session/{session_id}/wait",
-                timeout=self.wait_timeout)
-        except TransportError:
-            return "timeout"
-        if status == 204:
-            return "idle"
-        if status == 503:
-            return "down"
-        return "error"
 
     def _permission_pending(self, session_id: str) -> bool:
         status, payload = self._call("GET", f"/api/session/{session_id}/permission")
@@ -174,8 +146,12 @@ class OpenCodeAgent:
         cursor = None
         found: list = []
         seen: set[str] = set()
-        for _page in range(100):
-            if cursor:
+        requested: set[str] = set()
+        for _page in range(_HISTORY_PAGES):
+            if cursor is not None:
+                if cursor in requested:
+                    raise ContractError("history_incomplete")
+                requested.add(cursor)
                 query = "?limit=50&cursor=" + urllib.parse.quote(cursor, safe="")
             else:
                 query = "?limit=50&order=asc"
@@ -186,15 +162,22 @@ class OpenCodeAgent:
                 raise TransportError(f"history failed: {status}")
             page = payload.get("data") or []
             fresh = [item for item in page if item.get("id") not in seen]
+            next_cursor = (payload.get("cursor") or {}).get("next")
             if not fresh:
-                break
+                # A follow-up that only repeats seen ids and an unchanged cursor is the
+                # 2.2.5 end marker. Any other live cursor is an incomplete page.
+                if not next_cursor or next_cursor == cursor:
+                    return found
+                raise ContractError("history_incomplete")
             for item in fresh:
                 seen.add(item.get("id"))
             found.extend(fresh)
-            cursor = (payload.get("cursor") or {}).get("next")
-            if not cursor:
-                break
-        return found
+            if not next_cursor:
+                return found
+            if next_cursor == cursor or next_cursor in requested:
+                raise ContractError("history_incomplete")
+            cursor = next_cursor
+        raise ContractError("history_incomplete")
 
     def _call(self, method: str, path: str, body: dict | None = None, timeout: float | None = None):
         data = None if body is None else json.dumps(body).encode()
@@ -317,6 +300,9 @@ def _tool_event(message_id: str, part: dict) -> dict | None:
     path = _tool_path(state.get("input"))
     if path:
         event["path"] = path
+    args = _tool_args(state.get("input"))
+    if args:
+        event["args"] = args
     if kind == "tool.completed":
         output = _tool_text(state) or _error_text(state.get("error"))
         if output:
@@ -330,6 +316,18 @@ def _duration(time: dict) -> int | None:
     if isinstance(start, (int, float)) and isinstance(end, (int, float)):
         return int(end - start)
     return None
+
+
+def _tool_args(value) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    summary = {}
+    for key, item in value.items():
+        if isinstance(item, str):
+            summary[key] = item[:200]
+        elif isinstance(item, (int, float, bool)):
+            summary[key] = item
+    return summary or None
 
 
 def _tool_path(value) -> str | None:

@@ -10,8 +10,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from automation.agents import Observation
-from automation.opencode import ContractError, OpenCodeAgent, permission_rules
+from automation.agents import ContractError, Observation
+from automation.opencode import OpenCodeAgent, permission_rules
 
 
 class App:
@@ -25,6 +25,9 @@ class App:
         self.active = False
         self.wait_status = 204
         self.inbox: list[dict] = []
+        self.paths: list[str] = []
+        self.sequence = None
+        self.sequence_at = 0
         self.permission: list[dict] = []
         self.seen: list[str] = []
         self.pages = None
@@ -49,6 +52,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
         body = json.loads(raw) if raw else {}
         path = self.path.split("?", 1)[0]
+        app.paths.append(path)
         if app.sleep and path.startswith("/api/session/") and self.command == "GET" and path.count("/") == 3:
             time.sleep(2)
         if path == "/api/session" and self.command == "POST":
@@ -97,6 +101,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send(500, {"_tag": "UnknownError"})
 
     def _page(self, app: App) -> dict:
+        if app.sequence is not None:
+            page = app.sequence[min(app.sequence_at, len(app.sequence) - 1)]
+            app.sequence_at += 1
+            return page
         if app.pages is None:
             return {"data": [], "cursor": {"next": None, "previous": None}}
         if "cursor=" in self.path:
@@ -195,7 +203,7 @@ class OpenCodeHttpTests(unittest.TestCase):
             {"id": "msg_idle", "type": "idle", "outcome": "succeeded"})
         self.assertEqual(self.agent().inspect("ses_test", "msg_a").phase, "settled")
 
-    def test_missing_server_error_and_wait_503(self) -> None:
+    def test_missing_server_error_and_active_session(self) -> None:
         agent = self.agent()
         self.app.session_status = 404
         self.assertEqual(agent.inspect("ses_test", "msg_a").phase, "missing")
@@ -203,8 +211,42 @@ class OpenCodeHttpTests(unittest.TestCase):
         self.assertEqual(agent.inspect("ses_test", "msg_a").phase, "unknown")
         self.app.session_status = 200
         self.app.active = True
-        self.app.wait_status = 503
+        self.app.paths.clear()
         self.assertEqual(agent.inspect("ses_test", "msg_a").phase, "executing")
+        self.assertFalse(any(path.endswith("/wait") for path in self.app.paths))
+
+    def test_repeated_end_cursor_is_complete(self) -> None:
+        self.app.sequence = [
+            {"data": [
+                {"id": "msg_a", "type": "user", "text": "go"},
+                {"id": "msg_idle", "type": "idle", "outcome": "succeeded"},
+            ], "cursor": {"next": "end"}},
+            {"data": [
+                {"id": "msg_idle", "type": "idle", "outcome": "succeeded"},
+            ], "cursor": {"next": "end"}},
+        ]
+        self.assertEqual(self.agent().inspect("ses_test", "msg_a").phase, "settled")
+
+    def test_changed_cursor_without_new_ids_is_incomplete(self) -> None:
+        self.app.sequence = [
+            {"data": [{"id": "msg_a", "type": "user", "text": "go"}],
+             "cursor": {"next": "c1"}},
+            {"data": [{"id": "msg_a", "type": "user", "text": "go"}],
+             "cursor": {"next": "c2"}},
+        ]
+        with self.assertRaises(ContractError) as caught:
+            self.agent().history("ses_test")
+        self.assertEqual(caught.exception.reason, "history_incomplete")
+
+    def test_page_cap_with_a_live_cursor_is_incomplete(self) -> None:
+        self.app.sequence = [
+            {"data": [{"id": f"m{index}", "type": "user", "text": "x"}],
+             "cursor": {"next": f"c{index}"}}
+            for index in range(100)
+        ]
+        with self.assertRaises(ContractError) as caught:
+            self.agent().history("ses_test")
+        self.assertEqual(caught.exception.reason, "history_incomplete")
 
     def test_conflict_reuses_the_same_submission_id(self) -> None:
         agent = self.agent()

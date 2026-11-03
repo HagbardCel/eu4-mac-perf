@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import Protocol
 
 
+class ContractError(RuntimeError):
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 @dataclass
 class Observation:
     """What the runner may do next. ``record`` is empty when the transport failed."""

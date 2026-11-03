@@ -17,6 +17,14 @@ class FakeAgent:
         self.phase_after_submit = "settled"
         self.inspect_phase: str | None = None
         self.on_submit = None
+        self.messages: list[tuple[str, str, str]] = []
+        self.drop_on_inspect = False
+        self.dropped_submission_id = None
+        self.inspect_error = None
+        self.history_error = None
+        self.history_calls = 0
+        self.plant_raw = None
+        self.plant_event = None
         self._next = 0
 
     def create(self, workspace, prompt: str) -> str:
@@ -33,6 +41,13 @@ class FakeAgent:
         return session_id
 
     def inspect(self, session_id: str, submission_id: str | None) -> Observation:
+        if self.inspect_error:
+            raise self.inspect_error
+        if self.drop_on_inspect:
+            self.drop_on_inspect = False
+            self.dropped_submission_id = submission_id
+            self.sessions.pop(session_id, None)
+            return Observation("missing")
         if self.inspect_phase:
             return Observation(self.inspect_phase)
         session = self.sessions.get(session_id)
@@ -57,6 +72,7 @@ class FakeAgent:
             session["admitted"][submission_id] = "settled"
             return Observation("settled", "present")
         self.submits.append(submission_id)
+        self.messages.append((session_id, submission_id, message))
         if self.on_submit:
             self.on_submit(session["workspace"])
         phase = self.phase_after_submit
@@ -70,5 +86,14 @@ class FakeAgent:
         return Observation(phase, "present")
 
     def history(self, session_id: str) -> History:
+        self.history_calls += 1
+        if self.history_error:
+            raise self.history_error
         session = self.sessions[session_id]
-        return History(raw=list(session["raw"]), events=list(session["events"]), model=self.observed_model)
+        raw = list(session["raw"])
+        events = list(session["events"])
+        if self.plant_raw is not None:
+            raw.insert(0, self.plant_raw)
+        if self.plant_event is not None:
+            events.insert(0, self.plant_event)
+        return History(raw=raw, events=events, model=self.observed_model)

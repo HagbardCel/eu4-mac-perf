@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 from automation.opencode import normalize
-from automation.telemetry import append, report
+from automation.telemetry import append, redact, report
 
 
 def _record(event_id: str, kind: str, **extra) -> dict:
@@ -87,6 +87,23 @@ class TelemetryTests(unittest.TestCase):
             }],
         }])
         self.assertEqual(denied[0]["text"], "Permission denied: read")
+        command = "echo hi"
+        recorded = normalize([{
+            "id": "msg_c",
+            "type": "assistant",
+            "content": [{
+                "type": "tool",
+                "id": "call_9",
+                "name": "bash",
+                "state": {
+                    "status": "completed",
+                    "input": {"command": command, "note": "x" * 250},
+                },
+                "time": {},
+            }],
+        }])
+        self.assertEqual(recorded[0]["args"]["command"], command)
+        self.assertEqual(len(recorded[0]["args"]["note"]), 200)
 
     def test_redacts_secrets_and_spills_large_text(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -97,6 +114,12 @@ class TelemetryTests(unittest.TestCase):
             )], secrets=["sekret"])
             row = json.loads(path.read_text())
             self.assertNotIn("sekret", path.read_text())
+            hidden = redact(
+                {"token": "secret123", "tokens": {"input": 4}, "note": "PASSWORD=sekret"},
+                [])
+            self.assertEqual(hidden["token"], "[redacted]")
+            self.assertEqual(hidden["tokens"], {"input": 4})
+            self.assertNotIn("sekret", hidden["note"])
             self.assertIn("[redacted]", row["note"])
             self.assertNotIn("text", row)
             self.assertEqual(row["blob"]["size"], 5000)
@@ -113,13 +136,33 @@ class TelemetryTests(unittest.TestCase):
                 _record("d", "validation", verdict="pass", rounds=2, elapsed_seconds=2.5),
             ])
             summary = report(path)
-            self.assertEqual(summary["tool_calls"], 1)
+            self.assertEqual(summary["tool_calls"], 2)
             self.assertEqual(summary["tool_failures"], 1)
             self.assertEqual(summary["validations"], 2)
             self.assertEqual(summary["validation_passes"], 1)
             self.assertEqual(summary["files"], ["marker.txt"])
             self.assertEqual(summary["rounds"], 2)
             self.assertEqual(summary["elapsed_seconds"], 2.5)
+
+    def test_tool_calls_count_terminal_events_and_not_both_states(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "events.jsonl"
+            append(path, [
+                _record("m/p/tool.started", "tool.started", tool="bash", status="running"),
+                _record("m/p/tool.completed", "tool.completed", tool="bash", status="completed"),
+                _record("m/q/tool.completed", "tool.completed", tool="bash",
+                        status="completed", args={"command": "echo hi"}),
+            ])
+            path.write_text(
+                path.read_text(encoding="utf-8")
+                + json.dumps(_record(
+                    "m/q/tool.completed", "tool.completed", tool="bash",
+                    status="completed", session_id="ses_other",
+                    args={"command": "echo hi"}))
+                + "\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(report(path)["tool_calls"], 3)
 
 
 if __name__ == "__main__":

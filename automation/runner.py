@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from automation.opencode import ContractError
+from automation.agents import ContractError, Observation
 from automation.state import (
     Campaign,
     atomic_write,
@@ -20,7 +20,7 @@ from automation.state import (
     load_state,
     save_state,
 )
-from automation.telemetry import append
+from automation.telemetry import append, redact
 
 _INSTRUCTIONS = (Path(__file__).parent / "prompts" / "agent.md").read_text(encoding="utf-8")
 _OUTPUT_CAP = 65536
@@ -90,14 +90,20 @@ class Runner:
                         return
                     self.sleep(0.2)
                     continue
+            if state.get("needs_brief") and state.get("pending_submission_id"):
+                self._store_submission(state, fresh_id=True)
+                if state["status"] != "running":
+                    return
             if not state.get("pending_submission_id"):
                 if state.get("last_verdict") == "pass":
                     self._complete(state)
                     return
-                self._arm(state)
+                self._store_submission(state, fresh_id=True)
                 if state["status"] != "running":
                     return
             observation = self._reconcile(state)
+            if state["status"] != "running":
+                return
             state["last_observation"] = observation.phase
             save_state(self.state_path, state)
             if observation.phase == "needs_input":
@@ -116,36 +122,49 @@ class Runner:
                 continue
             self._unknown = 0
             if observation.phase in ("executing", "queued"):
-                self._ingest(state)
-                self.sleep(0.2)
+                self.sleep(1.0)
                 continue
             if observation.phase == "settled":
-                self._ingest(state)
-                self._validate(state)
+                if self._ingest(state):
+                    self._validate(state)
 
     def _reconcile(self, state: dict):
         submission_id = state["pending_submission_id"]
-        observation = self.agent.inspect(state["session_id"], submission_id)
-        if observation.phase == "unknown" and observation.record == "absent":
-            observation = self.agent.submit(
-                state["session_id"], state["pending_text"], submission_id)
+        try:
+            observation = self.agent.inspect(state["session_id"], submission_id)
+            if observation.phase == "unknown" and observation.record == "absent":
+                observation = self.agent.submit(
+                    state["session_id"], state["pending_text"], submission_id)
+        except ContractError as exc:
+            self._pause(state, exc.reason)
+            return Observation("unknown")
         return observation
 
-    def _arm(self, state: dict) -> None:
+    def _store_submission(self, state: dict, *, fresh_id: bool) -> None:
         if state["rounds"] >= self.campaign.max_rounds:
             self._pause(state, "round_limit")
             return
+        brief = bool(state.get("needs_brief"))
+        if fresh_id or not state.get("pending_submission_id"):
+            state["pending_submission_id"] = "msg_" + uuid.uuid4().hex
+        state["pending_text"] = self._submission_text(state, brief=brief)
+        state["needs_brief"] = False
+        save_state(self.state_path, state)
+        self._log(state, "runner.continuation", "runner/submit/" + state["pending_submission_id"])
+
+    def _submission_text(self, state: dict, *, brief: bool) -> str:
+        feedback = ""
         if state.get("last_verdict") in ("fail", "inconclusive"):
-            text = (
+            feedback = (
                 f"Validation {state['last_verdict']}: {state.get('last_diagnostics') or ''}\n"
                 "Continue from progress.md."
             )
-        else:
-            text = self._prompt(False)
-        state["pending_submission_id"] = "msg_" + uuid.uuid4().hex
-        state["pending_text"] = text
-        save_state(self.state_path, state)
-        self._log(state, "runner.continuation", "runner/submit/" + state["pending_submission_id"])
+        if brief or not feedback:
+            text = self._prompt(bool(state.get("rounds")))
+            if feedback:
+                text += "\n\n" + feedback
+            return text
+        return feedback
 
     def _validate(self, state: dict) -> None:
         if not self._digest_matches(state):
@@ -189,6 +208,9 @@ class Runner:
                 self._pause(state, "runtime_unavailable")
             return False
         state["session_id"] = session_id
+        if replacement:
+            state["needs_brief"] = True
+            save_state(self.state_path, state)
         observed = getattr(self.agent, "observed_model", None)
         if observed:
             state["model"] = observed
@@ -258,16 +280,21 @@ class Runner:
         self._log(state, "runner.completed", _rid("runner"),
                   elapsed_seconds=state["elapsed_seconds"])
 
-    def _ingest(self, state: dict) -> None:
+    def _ingest(self, state: dict) -> bool:
         session_id = state.get("session_id")
         if not session_id:
-            return
+            self._pause(state, "trace_unavailable")
+            return False
         try:
             history = self.agent.history(session_id)
+        except ContractError as exc:
+            self._pause(state, exc.reason)
+            return False
         except Exception:
-            return
+            self._pause(state, "trace_unavailable")
+            return False
         raw = self.run_root / "raw" / f"{session_id}.json"
-        atomic_write(raw, json_text(history.raw))
+        atomic_write(raw, json_text(redact(history.raw, self.secrets)))
         records = []
         for event in history.events:
             record = {
@@ -282,6 +309,7 @@ class Runner:
         if history.model and not state.get("model"):
             state["model"] = history.model
         append(self.log_path, records, self.secrets)
+        return True
 
     def _log(self, state: dict, kind: str, event_id: str, **data) -> None:
         record = {

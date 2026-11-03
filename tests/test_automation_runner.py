@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from automation.agents import ContractError
 from automation.runner import Runner
 from automation.state import file_sha256, load_campaign, load_state, save_state
 from automation_fake import FakeAgent
@@ -144,6 +145,85 @@ class RunnerTests(unittest.TestCase):
             self.assertIn("progress.md", agent.prompts[0])
             self.assertIn("ready", agent.prompts[0])
 
+    def test_replacement_after_a_failed_check_submits_the_objective(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agent = FakeAgent()
+
+            def ready_then_drop(workspace: Path) -> None:
+                _ready(workspace)
+                agent.drop_on_inspect = True
+
+            agent.on_submit = ready_then_drop
+            runner, _clock = self._runner(root, agent, max_rounds=2)
+            state = runner.execute(resume_only=False)
+            self.assertEqual(state["status"], "complete")
+            self.assertEqual(len(agent.messages), 2)
+            session_id, submission_id, message = agent.messages[1]
+            self.assertNotEqual(session_id, agent.messages[0][0])
+            self.assertNotEqual(submission_id, agent.dropped_submission_id)
+            self.assertIn("Make marker.txt", message)
+            self.assertIn("external check", message)
+            self.assertIn("progress.md", message)
+            self.assertIn("Confirmation round required", message)
+
+    def test_failed_history_does_not_validate(self) -> None:
+        cases = (
+            (RuntimeError("down"), "trace_unavailable"),
+            (ContractError("history_incomplete"), "history_incomplete"),
+        )
+        for error, reason in cases:
+            with self.subTest(reason):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    agent = FakeAgent()
+                    agent.history_error = error
+                    agent.on_submit = _ready
+                    runner, _clock = self._runner(root, agent)
+                    state = runner.execute(resume_only=False)
+                    self.assertEqual(state["pause_reason"], reason)
+                    self.assertNotEqual(state["status"], "complete")
+                    self.assertEqual(state["rounds"], 0)
+
+    def test_incomplete_history_from_inspect_pauses(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agent = FakeAgent()
+            agent.inspect_error = ContractError("history_incomplete")
+            runner, _clock = self._runner(root, agent)
+            state = runner.execute(resume_only=False)
+            self.assertEqual(state["pause_reason"], "history_incomplete")
+            self.assertEqual(agent.submits, [])
+            self.assertNotEqual(state["status"], "complete")
+
+    def test_raw_history_redacts_structured_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agent = FakeAgent()
+            agent.on_submit = _ready
+            agent.plant_raw = {
+                "token": "secret123",
+                "tokens": {"input": 4},
+                "note": "PASSWORD=sekret",
+            }
+            agent.plant_event = {
+                "event_id": "plant/message",
+                "type": "message",
+                "token": "secret123",
+                "tokens": {"input": 4},
+                "text": "PASSWORD=sekret",
+            }
+            runner, _clock = self._runner(root, agent, max_rounds=2)
+            state = runner.execute(resume_only=False)
+            self.assertEqual(state["status"], "complete")
+            raw_text = "\n".join(path.read_text(encoding="utf-8")
+                                 for path in (root / "run" / "raw").glob("*.json"))
+            log_text = (root / "run" / "events.jsonl").read_text(encoding="utf-8")
+            for body in (raw_text, log_text):
+                self.assertNotIn("secret123", body)
+                self.assertNotIn("sekret", body)
+                self.assertIn('"input": 4', body)
+
     def test_round_limit_and_unknown_runtime_pause_without_passing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -176,6 +256,7 @@ class RunnerTests(unittest.TestCase):
             runner.sleep = jump
             state = runner.execute(resume_only=False)
             self.assertEqual(state["pause_reason"], "time_limit")
+            self.assertEqual(agent.history_calls, 0)
             self.assertGreaterEqual(state["elapsed_seconds"], 5)
             self.assertNotEqual(state["status"], "complete")
 
