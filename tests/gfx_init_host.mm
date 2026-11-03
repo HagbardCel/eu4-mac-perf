@@ -6,6 +6,7 @@
 #import <stdio.h>
 #import <stdlib.h>
 #import <string.h>
+#import <sys/mman.h>
 #import <unistd.h>
 
 static void fail(const char *message) {
@@ -178,6 +179,210 @@ static void test_receipt_rollback(void *handle) {
     if (eu4_gfx_backend_releases() != releases + 2) {
         fail("failed master was released twice");
     }
+}
+
+static const uint8_t kCustomSnap[0x24] = {
+    0, 0, 0, 0, 0x01, 0x02, 0, 0, 1, 0, 0, 0, 0xdd, 0xcc, 0xbb, 0xaa,
+    0x44, 0x33, 0x22, 0x11, 0x03, 0x02, 0, 0, 0, 0, 0, 0, 0x00, 0x1e, 0, 0,
+    0x00, 0x1e, 0, 0};
+static const uint8_t kFarSnap[0x24] = {
+    0, 0, 0, 0, 0x03, 0x02, 0, 0, 1, 0, 0, 0, 0xdd, 0xcc, 0xbb, 0xaa,
+    0x44, 0x33, 0x22, 0x11, 0x03, 0x02, 0, 0, 0, 0, 0, 0, 0x00, 0x1e, 0, 0,
+    0x00, 0x1e, 0, 0};
+
+static int g_depth_anchor;
+
+static void __attribute__((noinline)) call_set_depth(void *handle, void *state) {
+    eu4_gfx_set_depth(handle, state);
+    g_depth_anchor = 1;
+}
+
+static void bind_master(uint8_t *object) {
+    void *self = object;
+    memcpy(object, &self, sizeof self);
+}
+
+static void fill_custom(uint8_t *object, uint32_t depth_compare) {
+    memset(object, 0x3c, 0x4c);
+    uint8_t *desc = object + 0x24;
+    uint32_t write = 2;
+    uint32_t mask_a = 0xaabbccdd;
+    uint32_t mask_b = 0x11223344;
+    uint32_t keep = 0;
+    uint32_t zero_op = 1;
+    uint32_t far_op = 0xffffffffu;
+    uint32_t far_compare = 0xffffffffu;
+    memset(desc, 0, 0x28);
+    desc[0] = 0;
+    desc[0xc] = 1;
+    memcpy(desc + 4, &write, 4);
+    memcpy(desc + 8, &depth_compare, 4);
+    memcpy(desc + 0x10, &mask_a, 4);
+    memcpy(desc + 0x14, &mask_b, 4);
+    memcpy(desc + 0x18, &zero_op, 4);
+    memcpy(desc + 0x1c, &keep, 4);
+    memcpy(desc + 0x20, &far_op, 4);
+    memcpy(desc + 0x24, &far_compare, 4);
+}
+
+static void apply_custom(const uint8_t *want, uint32_t depth_compare, const char *message) {
+    uint8_t master[EU4_GFX_MASTER_SIZE];
+    uint8_t object[0x4c];
+    uint8_t saved_object[0x4c];
+    memset(master, 0x5a, sizeof master);
+    bind_master(master);
+    fill_custom(object, depth_compare);
+    memcpy(saved_object, object, sizeof object);
+    g_stopped = 0;
+    eu4_gfx_set_depth(master, object);
+    if (g_stopped || memcmp(master + 0x30, want, 0x24) != 0 ||
+        memcmp(object, saved_object, sizeof object) != 0) {
+        fail(message);
+    }
+    for (int i = 8; i < 0x30; i++) {
+        if (master[i] != 0x5a) {
+            fail("depth wrote below the snapshot");
+        }
+    }
+    for (int i = 0x54; i < EU4_GFX_MASTER_SIZE; i++) {
+        if (master[i] != 0x5a) {
+            fail("depth wrote above the snapshot");
+        }
+    }
+}
+
+static const void *depth_return_site(void) {
+    const uint8_t *code = (const uint8_t *)call_set_depth;
+    for (int i = 0; i < 96; i++) {
+        if (code[i] != 0xe8) {
+            continue;
+        }
+        int32_t rel = 0;
+        memcpy(&rel, code + i + 1, sizeof rel);
+        const uint8_t *target = code + i + 5 + rel;
+        if (target == (const uint8_t *)eu4_gfx_set_depth) {
+            return code + i + 5;
+        }
+    }
+    return NULL;
+}
+
+static void test_depth_cases(const char *dir) {
+    apply_custom(kCustomSnap, 1, "custom depth snapshot");
+    apply_custom(kFarSnap, 0xffffffffu, "out-of-range depth compare");
+
+    uint8_t master[EU4_GFX_MASTER_SIZE];
+    uint8_t object[0x4c];
+    uint8_t saved_object[0x4c];
+    memset(master, 0x5a, sizeof master);
+    bind_master(master);
+    fill_custom(object, 1);
+    memcpy(saved_object, object, sizeof object);
+    void *slot = object;
+    memcpy(master + 0x88, &slot, sizeof slot);
+    g_stopped = 0;
+    eu4_gfx_set_depth(master, NULL);
+    if (g_stopped || memcmp(master + 0x30, kCustomSnap, sizeof kCustomSnap) != 0 ||
+        memcmp(object, saved_object, sizeof object) != 0) {
+        fail("null depth argument did not use master +0x88");
+    }
+
+    long page = sysconf(_SC_PAGESIZE);
+    uint8_t *span = (uint8_t *)mmap(NULL, (size_t)page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON,
+                                    -1, 0);
+    if (span == MAP_FAILED) {
+        fail("short depth map");
+    }
+    if (mprotect(span + page, (size_t)page, PROT_NONE) != 0) {
+        fail("short depth guard");
+    }
+    uint8_t *short_state = span + page - 0x30;
+    memset(short_state, 0x3c, 0x30);
+    uint8_t short_saved[0x30];
+    memcpy(short_saved, short_state, sizeof short_saved);
+    memset(master, 0x5a, sizeof master);
+    bind_master(master);
+    uint8_t master_saved[EU4_GFX_MASTER_SIZE];
+    memcpy(master_saved, master, sizeof master_saved);
+    eu4_metal_events_set_image(0, 0);
+    g_stopped = 0;
+    eu4_gfx_set_depth(master, short_state);
+    char early_path[128];
+    snprintf(early_path, sizeof early_path, "%s/depth_state.json", dir);
+    if (!g_stopped || memcmp(master, master_saved, sizeof master_saved) != 0 ||
+        memcmp(short_state, short_saved, sizeof short_saved) != 0 || access(early_path, F_OK) == 0) {
+        fail("short depth description changed state");
+    }
+
+    const void *site = depth_return_site();
+    if (site == NULL) {
+        fail("depth call site");
+    }
+    uintptr_t base = (uintptr_t)site - 0x149d061;
+    eu4_metal_events_set_image(base, (uintptr_t)site + 1);
+    g_stopped = 0;
+    call_set_depth(master, short_state);
+    eu4_metal_events_set_image(0, 0);
+    if (!g_stopped || !g_depth_anchor || memcmp(master, master_saved, sizeof master_saved) != 0) {
+        fail("depth receipt changed the master");
+    }
+    FILE *receipt = fopen(early_path, "r");
+    char body[1024];
+    if (receipt == NULL || fgets(body, sizeof body, receipt) == NULL) {
+        fail("depth_state.json missing");
+    }
+    fclose(receipt);
+    char hex[73];
+    for (int i = 0; i < 36; i++) {
+        memcpy(hex + i * 2, "5a", 2);
+    }
+    hex[72] = 0;
+    char needle[96];
+    snprintf(needle, sizeof needle, "\"master_depth\":\"%s\"", hex);
+    if (strstr(body, "\"symbol\":\"_GfxSetDepthStencilState\"") == NULL ||
+        strstr(body, "\"caller_rva\":\"0x149d061\"") == NULL ||
+        strstr(body, "\"source\":\"explicit\"") == NULL ||
+        strstr(body, "\"state_want\":76") == NULL || strstr(body, "\"state_got\":48") == NULL ||
+        strstr(body, "\"state\":null") == NULL || strstr(body, "\"master_depth_want\":36") == NULL ||
+        strstr(body, "\"master_depth_got\":36") == NULL || strstr(body, needle) == NULL) {
+        fail("depth_state.json");
+    }
+    mprotect(span + page, (size_t)page, PROT_READ | PROT_WRITE);
+    munmap(span, (size_t)page * 2);
+
+    uint8_t *page_bytes = (uint8_t *)mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON,
+                                          -1, 0);
+    if (page_bytes == MAP_FAILED) {
+        fail("read-only depth map");
+    }
+    memset(page_bytes, 0x5a, (size_t)page);
+    bind_master(page_bytes);
+    static const uint8_t default_snap[0x24] = {
+        1, 1, 0, 0, 0x03, 0x02, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0x07, 0x02, 0, 0, 0x00, 0x1e, 0, 0, 0x00, 0x1e, 0, 0,
+        0x00, 0x1e, 0, 0};
+    memcpy(page_bytes + 0x30, default_snap, sizeof default_snap);
+    uint8_t equal[0x4c];
+    memset(equal, 0, sizeof equal);
+    eu4_gfx_write_default_depth_stencil(equal + 0x24);
+    uint8_t *page_saved = (uint8_t *)malloc((size_t)page);
+    if (page_saved == NULL) {
+        fail("read-only depth image");
+    }
+    memcpy(page_saved, page_bytes, (size_t)page);
+    if (mprotect(page_bytes, (size_t)page, PROT_READ) != 0) {
+        fail("read-only depth protect");
+    }
+    g_stopped = 0;
+    eu4_gfx_set_depth(page_bytes, equal);
+    if (mprotect(page_bytes, (size_t)page, PROT_READ | PROT_WRITE) != 0) {
+        fail("read-only depth restore");
+    }
+    if (g_stopped || memcmp(page_bytes, page_saved, (size_t)page) != 0) {
+        fail("equal depth snapshot wrote a read-only master");
+    }
+    free(page_saved);
+    munmap(page_bytes, (size_t)page);
 }
 
 static void test_backend(void) {
@@ -365,7 +570,11 @@ static void test_backend(void) {
     if (load_at(master, 0xc + 0xc) == load_at(blend, 0x24 + 0xc)) {
         fail("blend snapshot copied the description");
     }
-    if (load_at(master, 0x30 + 4) != 0x203 || ((uint8_t *)master)[0x31] != 1) {
+    static const uint8_t default_snap[0x24] = {
+        1, 1, 0, 0, 0x03, 0x02, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0x07, 0x02, 0, 0, 0x00, 0x1e, 0, 0, 0x00, 0x1e, 0, 0,
+        0x00, 0x1e, 0, 0};
+    if (memcmp((uint8_t *)master + 0x30, default_snap, sizeof default_snap) != 0) {
         fail("depth snapshot");
     }
     if (load_at(master, 0x54) != 0x405 || ((uint8_t *)master)[0x54 + 0xd] != 1) {
@@ -460,6 +669,7 @@ static void test_backend(void) {
     if (eu4_gfx_backend_releases() != releases) {
         fail("reentry created a backend");
     }
+    test_depth_cases(dir);
     eu4_gfx_shutdown(master);
     if (eu4_gfx_backend_releases() != releases + 1 || slot != NULL) {
         fail("shutdown did not release the backend once");
