@@ -940,16 +940,29 @@ __attribute__((noinline)) static void multiple_success(void) {
         fail("case:multiple-range");
     }
 
-    /* case:multiple-attribs: a populated shader records [9, 4] and sets the dirty byte. */
+    /* case:multiple-attribs: a populated shader records [9, 4], sets the dirty
+       byte, and copies a payload the earlier range test did not write. */
     uint8_t shader[0x40];
+    uint8_t attrib_first[8];
+    uint8_t attrib_second[4];
+    memset(attrib_first, 0x99, sizeof attrib_first);
+    memset(attrib_second, 0xaa, sizeof attrib_second);
+    const void *attrib_parts[2] = {attrib_first, attrib_second};
+    int32_t attrib_counts[2] = {2, 1};
     empty_disabled_attribs();
     if (eu4_gfx_disabled_vertex_attrib_count() != 0) {
         fail("case:multiple-attribs clear");
     }
     install_two_attribs(shader);
     ((uint8_t *)g_master)[0x170] = 0;
-    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, parts, counts, 2);
-    if (((uint8_t *)g_master)[0x170] != 1 || !attribs_are(9, 4)) {
+    eu4_gfx_update_vertex_buffer_multiple(
+        &g_master, header, attrib_parts, attrib_counts, 2);
+    uint8_t attrib_got[32];
+    if (eu4_gfx_vertex_buffer_read(header, attrib_got, 32) != 0 ||
+        memcmp(attrib_got, attrib_first, 8) != 0 ||
+        memcmp(attrib_got + 8, attrib_second, 4) != 0 ||
+        memcmp(attrib_got + 12, initial + 12, 20) != 0 ||
+        ((uint8_t *)g_master)[0x170] != 1 || !attribs_are(9, 4)) {
         fail("case:multiple-attribs");
     }
 
