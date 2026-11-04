@@ -39,6 +39,7 @@ BASELINE = (
     ("_GfxDestroyIndexBuffer", 0x15EC1E6, 0x15EC23C, "eu4_gfx_destroy_index_buffer", _INDEX_DESTROY),
     ("_GfxUpdateIndexBuffer", 0x15EC23C, 0x15EC28E, "eu4_gfx_update_index_buffer", _INDEX_UPDATE),
     ("_GfxSetIndexBuffer", 0x15EC28E, 0x15EC2BC, "eu4_gfx_set_index_buffer", _INDEX_SET),
+    ("_GfxSetVertexBuffers", 0x15EBF41, 0x15EC11C, "eu4_gfx_set_vertex_buffers", _P6),
 )
 _ROOT = Path(__file__).resolve().parents[1]
 _PR5 = _ROOT / "results/20261102T100321Z-metal-init"

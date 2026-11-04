@@ -31,3 +31,4 @@ GFX_ENTRY(_GfxCreateIndexBuffer, 0x15ec154, 0x15ec1e6, eu4_gfx_create_index_buff
 GFX_ENTRY(_GfxDestroyIndexBuffer, 0x15ec1e6, 0x15ec23c, eu4_gfx_destroy_index_buffer, "\x48\x85\xff\x74\x50")
 GFX_ENTRY(_GfxUpdateIndexBuffer, 0x15ec23c, 0x15ec28e, eu4_gfx_update_index_buffer, "\x55\x48\x89\xe5\x41\x56")
 GFX_ENTRY(_GfxSetIndexBuffer, 0x15ec28e, 0x15ec2bc, eu4_gfx_set_index_buffer, "\x48\x85\xf6\x74\x28")
+GFX_ENTRY(_GfxSetVertexBuffers, 0x15ebf41, 0x15ec11c, eu4_gfx_set_vertex_buffers, "\x55\x48\x89\xe5\x41\x57")

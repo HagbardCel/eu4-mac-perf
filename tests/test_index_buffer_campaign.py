@@ -133,23 +133,44 @@ class IndexCheckerTests(unittest.TestCase):
         self.assertTrue(observed, detail)
 
     def test_unmodified_worktree_fails_for_missing_registration(self) -> None:
-        commit = json.loads(
+        candidate_rev = json.loads(
             (ROOT / "campaigns" / "eu4-index-buffer" / "campaign.json").read_text()
         )["workspace"]["commit"]
-        path = Path(tempfile.mkdtemp(prefix="eu4-ib-wt-"))
-        shutil.rmtree(path)
-        added = subprocess.run(
-            ["git", "worktree", "add", "--detach", str(path), commit],
-            cwd=ROOT, capture_output=True, text=True, check=False,
-        )
+        trusted_rev = "ea5b89d037028fa5cf0bd6c4c8a4ee9629ae5ecb"
+        parent = Path(tempfile.mkdtemp(prefix="eu4-ib-wt-"))
+        trusted = parent / "trusted"
+        candidate = parent / "candidate"
+        registered: list[Path] = []
         try:
-            self.assertEqual(added.returncode, 0, added.stderr)
-            result = accept.check(path)
+            for path, rev in ((trusted, trusted_rev), (candidate, candidate_rev)):
+                added = subprocess.run(
+                    ["git", "worktree", "add", "--detach", str(path), rev],
+                    cwd=ROOT, capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(added.returncode, 0, added.stderr)
+                registered.append(path)
+            script = trusted / "campaigns" / "eu4-index-buffer" / "accept.py"
+            ran = subprocess.run(
+                [sys.executable, str(script), str(candidate)],
+                cwd=trusted, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(ran.returncode, 1, ran.stderr or ran.stdout)
+            result = json.loads(ran.stdout)
             self.assertEqual(result["verdict"], "fail", result)
             self.assertIn("missing index registration", result["diagnostics"])
         finally:
-            subprocess.run(
-                ["git", "worktree", "remove", "--force", str(path)],
-                cwd=ROOT, capture_output=True, check=False,
-            )
-            shutil.rmtree(path, ignore_errors=True)
+            errors = []
+            for path in registered:
+                removed = subprocess.run(
+                    ["git", "worktree", "remove", "--force", str(path)],
+                    cwd=ROOT, capture_output=True, text=True, check=False,
+                )
+                if removed.returncode != 0:
+                    errors.append(removed.stderr.strip() or f"worktree remove failed: {path}")
+            if not errors:
+                shutil.rmtree(parent, ignore_errors=True)
+            if errors:
+                message = "; ".join(errors)
+                if sys.exc_info()[1] is None:
+                    self.fail(message)
+                raise AssertionError(message)

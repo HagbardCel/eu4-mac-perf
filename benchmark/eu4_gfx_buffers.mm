@@ -43,6 +43,9 @@ static int g_create_recorded;
 static int g_index_create_recorded;
 static void *g_index_current_header;
 static id<MTLBuffer> g_index_current_buffer;
+static void *g_vertex_slots[EU4_GFX_VERTEX_SLOTS];
+static int32_t g_disabled_attribs[32];
+static int g_disabled_count;
 
 /* The trusted events header declares this; the local copy predates it. */
 extern "C" int eu4_metal_events_index_create(const void *caller, uintptr_t resource, uint64_t bytes,
@@ -139,6 +142,17 @@ __attribute__((noreturn)) static void abandon_create(EU4VertexBuffer *entry, id<
     eu4_gfx_stop("_GfxCreateVertexBuffer", reason, caller);
 }
 
+static void clear_vertex_slot(void *header) {
+    if (header == NULL) {
+        return;
+    }
+    for (int slot = 0; slot < EU4_GFX_VERTEX_SLOTS; slot++) {
+        if (g_vertex_slots[slot] == header) {
+            g_vertex_slots[slot] = NULL;
+        }
+    }
+}
+
 static void require_thread(const char *symbol, const void *caller) {
     if (!on_gfx_thread()) {
         eu4_gfx_stop(symbol, "thread", caller);
@@ -161,6 +175,8 @@ void eu4_gfx_release_vertex_buffers(void *backend, const void *caller) {
             entry.buffer = nil;
         }
     }
+    memset(g_vertex_slots, 0, sizeof g_vertex_slots);
+    g_disabled_count = 0;
     for (EU4IndexBuffer *entry in g_index_entries) {
         if (entry.backend == backend) {
             entry.buffer = nil;
@@ -233,6 +249,8 @@ void *eu4_gfx_create_vertex_buffer(void *ignored, const void *data, int32_t coun
     }
     int32_t *counter = (int32_t *)(eu4_gfx_image() + EU4_GFX_VB_COUNT_RVA);
     *counter += 1;
+    uint32_t token = 1;
+    memcpy((uint8_t *)header + 8, &token, 4);
     if (!g_create_recorded && eu4_metal_events_create(caller) == 0) {
         g_create_recorded = 1;
     }
@@ -329,6 +347,7 @@ void eu4_gfx_destroy_vertex_buffer(void *header) {
     entry.buffer = nil;
     entry.header = NULL;
     [g_entries removeObjectAtIndex:index];
+    clear_vertex_slot(header);
     ::operator delete(header);
     int32_t *counter = (int32_t *)(image + EU4_GFX_VB_COUNT_RVA);
     *counter -= 1;
@@ -621,6 +640,142 @@ int eu4_gfx_index_buffer_shared(void *header) {
 }
 
 void *eu4_gfx_current_index_header(void) { return g_index_current_header; }
+
+static void record_disabled_attribs(void *master, const void *caller) {
+    g_disabled_count = 0;
+    void *shader = NULL;
+    memcpy(&shader, (uint8_t *)master + 0x70, sizeof shader);
+    if (shader == NULL) {
+        return;
+    }
+    int32_t count = 0;
+    memcpy(&count, (uint8_t *)shader + 0x18, 4);
+    if (count <= 0) {
+        return;
+    }
+    if (count > 32) {
+        eu4_gfx_stop("_GfxSetVertexBuffers", "attrib", caller);
+    }
+    void *base = NULL;
+    memcpy(&base, (uint8_t *)shader + 0x10, sizeof base);
+    if (base == NULL) {
+        eu4_gfx_stop("_GfxSetVertexBuffers", "attrib", caller);
+    }
+    int32_t offset = count * 0x28 - 0x1c;
+    for (int left = count + 1; left > 1; left--) {
+        int32_t index = 0;
+        memcpy(&index, (uint8_t *)base + offset, 4);
+        g_disabled_attribs[g_disabled_count++] = index;
+        offset -= 0x28;
+    }
+}
+
+static void note_null_header(const void *caller) {
+    uint8_t *image = eu4_gfx_image();
+    if (image == NULL) {
+        eu4_gfx_stop("_GfxSetVertexBuffers", "image", caller);
+    }
+    uint8_t *flag = image + EU4_GFX_VB_ERROR_RVA;
+    if (*flag == 0) {
+        *flag = 1;
+    }
+}
+
+void eu4_gfx_set_vertex_buffers(void *handle, int32_t count, void **headers, int32_t start,
+                                const int32_t *offsets, const int32_t *words) {
+    const void *caller = __builtin_return_address(0);
+    require_thread("_GfxSetVertexBuffers", caller);
+    void *master = NULL;
+    if (handle != NULL) {
+        memcpy(&master, handle, sizeof master);
+    }
+    if (master == NULL) {
+        eu4_gfx_stop("_GfxSetVertexBuffers", "master", caller);
+    }
+    if (count < 0 || (count > 0 && headers == NULL)) {
+        eu4_gfx_stop("_GfxSetVertexBuffers", "range", caller);
+    }
+    if (count > 0) {
+        int64_t last = (int64_t)start + (int64_t)count - 1;
+        if (start < 0 || last >= EU4_GFX_VERTEX_SLOTS) {
+            eu4_gfx_stop("_GfxSetVertexBuffers", "range", caller);
+        }
+    }
+    record_disabled_attribs(master, caller);
+    for (int32_t i = 0; i < count; i++) {
+        void *header = headers[i];
+        int32_t slot = start + i;
+        if (header == NULL) {
+            note_null_header(caller);
+            continue;
+        }
+        int32_t name = 0;
+        memcpy(&name, (uint8_t *)header + 8, 4);
+        if (name == 0) {
+            continue;
+        }
+        int32_t offset = 0;
+        if (offsets != NULL) {
+            memcpy(&offset, offsets + i, 4);
+        }
+        int32_t word = 0;
+        if (words != NULL) {
+            memcpy(&word, words + i, 4);
+        } else {
+            memcpy(&word, header, 4);
+        }
+        memcpy((uint8_t *)master + 0x130 + (size_t)slot * 8, &header, sizeof header);
+        memcpy((uint8_t *)master + 0x150 + (size_t)slot * 4, &offset, 4);
+        memcpy((uint8_t *)master + 0x160 + (size_t)slot * 4, &word, 4);
+        if (slot == 0) {
+            int32_t at_4 = 0;
+            memcpy(&at_4, (uint8_t *)header + 4, 4);
+            memcpy((uint8_t *)master + 0x64, &at_4, 4);
+            memcpy((uint8_t *)master + 0x6c, &word, 4);
+        }
+        g_vertex_slots[slot] = header;
+    }
+    ((uint8_t *)master)[0x170] = 1;
+}
+
+void *eu4_gfx_vertex_slot_header(int slot) {
+    if (slot < 0 || slot >= EU4_GFX_VERTEX_SLOTS) {
+        return NULL;
+    }
+    return g_vertex_slots[slot];
+}
+
+void *eu4_gfx_vertex_slot_buffer(int slot) {
+    EU4VertexBuffer *entry = find_entry(eu4_gfx_vertex_slot_header(slot));
+    if (entry == nil || entry.buffer == nil) {
+        return NULL;
+    }
+    return (__bridge void *)entry.buffer;
+}
+
+int eu4_gfx_vertex_slot_read(int slot, void *dest, size_t n) {
+    EU4VertexBuffer *entry = find_entry(eu4_gfx_vertex_slot_header(slot));
+    if (entry == nil || entry.buffer == nil || entry.length != n) {
+        return -1;
+    }
+    if (n > 0 && dest == NULL) {
+        return -1;
+    }
+    if (n > 0) {
+        memcpy(dest, entry.buffer.contents, n);
+    }
+    return 0;
+}
+
+int eu4_gfx_disabled_vertex_attrib_count(void) { return g_disabled_count; }
+
+int eu4_gfx_disabled_vertex_attrib(int index, int32_t *out) {
+    if (index < 0 || index >= g_disabled_count || out == NULL) {
+        return -1;
+    }
+    *out = g_disabled_attribs[index];
+    return 0;
+}
 
 int eu4_gfx_current_index_read(void *dest, size_t n) {
     EU4IndexBuffer *entry = find_index_entry(g_index_current_header);

@@ -59,6 +59,8 @@ static int g_expect_index_gpus;
 static int32_t g_expect_ib;
 static int g_check_master_count;
 static int32_t g_expect_master_count;
+static int g_check_master_span;
+static uint8_t g_master_span[0x58];
 
 static int32_t *counter(void) { return (int32_t *)(g_image + EU4_GFX_VB_COUNT_RVA); }
 
@@ -109,11 +111,11 @@ static void boot(int do_init) {
 
 static void expect_header(void *header, int32_t stride, int32_t count) {
     int32_t got_stride = 0, got_count = 0;
-    uint32_t name = 1;
+    uint32_t name = 0;
     memcpy(&got_stride, header, 4);
     memcpy(&got_count, (uint8_t *)header + 4, 4);
     memcpy(&name, (uint8_t *)header + 8, 4);
-    if (got_stride != stride || got_count != count || name != 0) {
+    if (got_stride != stride || got_count != count || name != 1) {
         fail("header");
     }
 }
@@ -135,6 +137,10 @@ static void child_stop(const char *reason) {
         if (got != g_expect_master_count) {
             _exit(3);
         }
+    }
+    if (g_check_master_span &&
+        memcmp(g_master_span, (uint8_t *)g_master + 0x130, sizeof g_master_span) != 0) {
+        _exit(3);
     }
     if (g_kept != NULL) {
         uint8_t back = 0;
@@ -665,6 +671,255 @@ __attribute__((noinline)) static void run_ib_missing(void) {
     fail("index set missing returned");
 }
 
+__attribute__((noinline)) static void vertex_set_success(void) {
+    /* Engine writes: 0x15ec103, 0x15ec0b7, 0x15ec0c7, 0x15ec0d3, 0x15ec0dc,
+       0x15ec0eb, 0x15ec0f0, 0x15ec098. The disable call at 0x15ebf9d is deferred:
+       only its dword argument is kept. */
+    boot(0);
+    uint8_t shader[0x40];
+    memset(shader, 0, sizeof shader);
+    void *base = shader;
+    int32_t attribs = 1;
+    int32_t attrib = 7;
+    memcpy(shader + 0x0c, &attrib, 4);
+    memcpy(shader + 0x10, &base, sizeof base);
+    memcpy(shader + 0x18, &attribs, 4);
+    void *shader_ptr = shader;
+    memcpy((uint8_t *)g_master + 0x70, &shader_ptr, sizeof shader_ptr);
+    ((uint8_t *)g_master)[0x170] = 0;
+    eu4_gfx_set_vertex_buffers(&g_master, 0, NULL, 0, NULL, NULL);
+    int32_t got_attrib = 0;
+    if (((uint8_t *)g_master)[0x170] != 1 || eu4_gfx_disabled_vertex_attrib_count() != 1 ||
+        eu4_gfx_disabled_vertex_attrib(0, &got_attrib) != 0 || got_attrib != 7) {
+        fail("vertex count zero");
+    }
+
+    uint8_t initial[16];
+    memset(initial, 0x11, sizeof initial);
+    void *header = eu4_gfx_create_vertex_buffer(NULL, initial, 4, 4, 0);
+    if (header == NULL) {
+        fail("vertex create");
+    }
+    uint32_t token = 0;
+    memcpy(&token, (uint8_t *)header + 8, 4);
+    ((uint8_t *)g_master)[0x170] = 0;
+    eu4_gfx_set_vertex_buffers(&g_master, 1, &header, 0, NULL, NULL);
+    void *selected = NULL;
+    memcpy(&selected, (uint8_t *)g_master + 0x130, sizeof selected);
+    if (token != 1 || selected != header || ((uint8_t *)g_master)[0x170] != 1 ||
+        eu4_gfx_vertex_slot_header(0) != header) {
+        fail("vertex fresh set");
+    }
+
+    uint8_t blank[12];
+    memset(blank, 0, sizeof blank);
+    void *blank_ptr = blank;
+    eu4_gfx_set_vertex_buffers(&g_master, 1, &blank_ptr, 0, NULL, NULL);
+    void *after_blank = NULL;
+    memcpy(&after_blank, (uint8_t *)g_master + 0x130, sizeof after_blank);
+    if (after_blank != header || eu4_gfx_vertex_slot_header(0) != header) {
+        fail("vertex zero token");
+    }
+
+    void *pair[2] = {header, header};
+    eu4_gfx_set_vertex_buffers(&g_master, 2, pair, 0, NULL, NULL);
+    void *slot0 = NULL;
+    void *slot1 = NULL;
+    int32_t off0 = -1, word0 = -1, at64 = -1, at6c = -1;
+    memcpy(&slot0, (uint8_t *)g_master + 0x130, sizeof slot0);
+    memcpy(&slot1, (uint8_t *)g_master + 0x138, sizeof slot1);
+    memcpy(&off0, (uint8_t *)g_master + 0x150, 4);
+    memcpy(&word0, (uint8_t *)g_master + 0x160, 4);
+    memcpy(&at64, (uint8_t *)g_master + 0x64, 4);
+    memcpy(&at6c, (uint8_t *)g_master + 0x6c, 4);
+    if (slot0 != header || slot1 != header || off0 != 0 || word0 != 4 || at64 != 4 || at6c != 4) {
+        fail("vertex engine slots");
+    }
+
+    int32_t keep64 = 0x55;
+    memcpy((uint8_t *)g_master + 0x64, &keep64, 4);
+    int32_t offsets[1] = {9};
+    int32_t words[1] = {3};
+    eu4_gfx_set_vertex_buffers(&g_master, 1, &header, 1, offsets, words);
+    int32_t got64 = 0, off1 = 0, word1 = 0;
+    void *slot1b = NULL;
+    memcpy(&got64, (uint8_t *)g_master + 0x64, 4);
+    memcpy(&off1, (uint8_t *)g_master + 0x154, 4);
+    memcpy(&word1, (uint8_t *)g_master + 0x164, 4);
+    memcpy(&slot1b, (uint8_t *)g_master + 0x138, sizeof slot1b);
+    if (got64 != keep64 || off1 != 9 || word1 != 3 || slot1b != header) {
+        fail("vertex slot one");
+    }
+
+    void *nulls[1] = {NULL};
+    if (g_image[EU4_GFX_VB_ERROR_RVA] != 0) {
+        fail("vertex flag preset");
+    }
+    eu4_gfx_set_vertex_buffers(&g_master, 1, nulls, 2, NULL, NULL);
+    void *slot2 = NULL;
+    memcpy(&slot2, (uint8_t *)g_master + 0x140, sizeof slot2);
+    if (g_image[EU4_GFX_VB_ERROR_RVA] != 1 || slot2 != NULL) {
+        fail("vertex null header");
+    }
+
+    uint8_t raw[12];
+    memset(raw, 0, sizeof raw);
+    int32_t stride = 4;
+    int32_t count = 4;
+    uint32_t named = 1;
+    memcpy(raw, &stride, 4);
+    memcpy(raw + 4, &count, 4);
+    memcpy(raw + 8, &named, 4);
+    void *raw_ptr = raw;
+    eu4_gfx_set_vertex_buffers(&g_master, 1, &raw_ptr, 3, NULL, NULL);
+    void *slot3 = NULL;
+    memcpy(&slot3, (uint8_t *)g_master + 0x148, sizeof slot3);
+    if (slot3 != raw) {
+        fail("vertex unknown master");
+    }
+
+    /* Metal selection is the header, resolved on read. Release and destroy clear
+       that header and do not write the master. Safety policy in the research note. */
+    uint8_t metal[16];
+    void *same_buffer = eu4_gfx_vertex_slot_buffer(0);
+    if (eu4_gfx_vertex_slot_header(0) != header || eu4_gfx_vertex_slot_header(1) != header ||
+        same_buffer == NULL || eu4_gfx_vertex_slot_buffer(1) != same_buffer ||
+        eu4_gfx_vertex_slot_read(0, metal, 16) != 0 || eu4_gfx_vertex_slot_read(1, metal, 16) != 0 ||
+        memcmp(metal, initial, 16) != 0 || eu4_gfx_vertex_slot_header(3) != raw ||
+        eu4_gfx_vertex_slot_buffer(3) != NULL || eu4_gfx_vertex_slot_read(3, metal, 16) == 0) {
+        fail("vertex metal select");
+    }
+    uint8_t inplace[16];
+    memset(inplace, 0x22, sizeof inplace);
+    eu4_gfx_update_vertex_buffer(&g_master, header, inplace, 4, 0, 0);
+    uint8_t metal0[16];
+    uint8_t metal1[16];
+    void *still = NULL;
+    memcpy(&still, (uint8_t *)g_master + 0x130, sizeof still);
+    if (still != header || eu4_gfx_vertex_slot_header(0) != header ||
+        eu4_gfx_vertex_slot_header(1) != header || eu4_gfx_vertex_slot_buffer(0) != same_buffer ||
+        eu4_gfx_vertex_slot_read(0, metal0, 16) != 0 || eu4_gfx_vertex_slot_read(1, metal1, 16) != 0 ||
+        memcmp(metal0, inplace, 16) != 0 || memcmp(metal1, inplace, 16) != 0) {
+        fail("vertex in place");
+    }
+    uint8_t replaced[8];
+    memset(replaced, 0x33, sizeof replaced);
+    eu4_gfx_update_vertex_buffer(&g_master, header, replaced, 2, 0, 0);
+    uint8_t metal_new[8];
+    void *fresh_buffer = eu4_gfx_vertex_slot_buffer(0);
+    if (eu4_gfx_vertex_slot_header(0) != header || eu4_gfx_vertex_slot_header(1) != header ||
+        fresh_buffer == NULL || fresh_buffer == same_buffer || eu4_gfx_vertex_slot_buffer(1) != fresh_buffer ||
+        eu4_gfx_vertex_slot_read(0, metal_new, 8) != 0 || eu4_gfx_vertex_slot_read(1, metal_new, 8) != 0 ||
+        memcmp(metal_new, replaced, 8) != 0 || eu4_gfx_vertex_slot_read(0, metal0, 16) == 0) {
+        fail("vertex replaced");
+    }
+
+    uint8_t other_bytes[16];
+    memset(other_bytes, 0x44, sizeof other_bytes);
+    void *other = eu4_gfx_create_vertex_buffer(NULL, other_bytes, 4, 4, 0);
+    if (other == NULL) {
+        fail("vertex second create");
+    }
+    eu4_gfx_set_vertex_buffers(&g_master, 1, &other, 2, NULL, NULL);
+    void *saved = NULL;
+    memcpy(&saved, (uint8_t *)g_master + 0x130, sizeof saved);
+    uint8_t master_copy[0x58];
+    memcpy(master_copy, (uint8_t *)g_master + 0x130, sizeof master_copy);
+    eu4_gfx_destroy_vertex_buffer(header);
+    void *after_destroy = NULL;
+    uint8_t kept[16];
+    memcpy(&after_destroy, (uint8_t *)g_master + 0x130, sizeof after_destroy);
+    if (after_destroy != saved || memcmp(master_copy, (uint8_t *)g_master + 0x130, sizeof master_copy) != 0 ||
+        eu4_gfx_vertex_slot_header(0) != NULL || eu4_gfx_vertex_slot_header(1) != NULL ||
+        eu4_gfx_vertex_slot_header(2) != other || eu4_gfx_vertex_slot_header(3) != raw ||
+        eu4_gfx_vertex_slot_read(2, kept, 16) != 0 || memcmp(kept, other_bytes, 16) != 0 ||
+        eu4_gfx_vertex_records() != 1) {
+        fail("vertex destroy");
+    }
+    eu4_gfx_release_vertex_buffers(eu4_gfx_backend_token(), (const void *)vertex_set_success);
+    uint32_t released_token = 0;
+    memcpy(&released_token, (uint8_t *)other + 8, 4);
+    if (memcmp(master_copy, (uint8_t *)g_master + 0x130, sizeof master_copy) != 0 ||
+        released_token != 1 || eu4_gfx_vertex_slot_header(2) != NULL ||
+        eu4_gfx_vertex_slot_header(3) != NULL || eu4_gfx_vertex_slot_buffer(2) != NULL ||
+        eu4_gfx_disabled_vertex_attrib_count() != 0 || eu4_gfx_vertex_gpus() != 0 ||
+        eu4_gfx_vertex_records() != 1) {
+        fail("vertex release");
+    }
+    eu4_gfx_destroy_vertex_buffer(other);
+    if (eu4_gfx_vertex_records() != 0 || eu4_gfx_vertex_slot_header(2) != NULL) {
+        fail("vertex second destroy");
+    }
+    eu4_gfx_shutdown(g_master);
+    g_master = NULL;
+    boot(1);
+    for (int slot = 0; slot < EU4_GFX_VERTEX_SLOTS; slot++) {
+        if (eu4_gfx_vertex_slot_header(slot) != NULL || eu4_gfx_vertex_slot_buffer(slot) != NULL) {
+            fail("vertex reinit");
+        }
+    }
+    if (eu4_gfx_disabled_vertex_attrib_count() != 0) {
+        fail("vertex reinit attrib");
+    }
+}
+
+__attribute__((noinline)) static void run_vb_range(void) {
+    /* Safety policy in the research note: a negative count stops with range before any store. */
+    boot(1);
+    arm((const void *)run_vb_range, 0, 0, 0);
+    eu4_gfx_set_vertex_buffers(&g_master, -1, NULL, 0, NULL, NULL);
+    fail("vertex negative count returned");
+}
+
+__attribute__((noinline)) static void run_vb_slot4(void) {
+    /* Slot 4's pointer store would land on the offset array at +0x150. */
+    boot(1);
+    uint8_t bytes[4] = {1, 2, 3, 4};
+    void *header = eu4_gfx_create_vertex_buffer(NULL, bytes, 1, 4, 0);
+    if (header == NULL) {
+        fail("slot4 setup");
+    }
+    memcpy(g_master_span, (uint8_t *)g_master + 0x130, sizeof g_master_span);
+    g_check_master_span = 1;
+    arm((const void *)run_vb_slot4, 1, 1, 1);
+    eu4_gfx_set_vertex_buffers(&g_master, 1, &header, 4, NULL, NULL);
+    fail("vertex slot 4 returned");
+}
+
+__attribute__((noinline)) static void run_vb_attrib(void) {
+    /* Safety policy in the research note: an attribute count above 32 stops with attrib before any store. */
+    boot(1);
+    uint8_t shader[0x20];
+    memset(shader, 0, sizeof shader);
+    int32_t attribs = 33;
+    void *base = shader;
+    memcpy(shader + 0x10, &base, sizeof base);
+    memcpy(shader + 0x18, &attribs, 4);
+    void *shader_ptr = shader;
+    memcpy((uint8_t *)g_master + 0x70, &shader_ptr, sizeof shader_ptr);
+    arm((const void *)run_vb_attrib, 0, 0, 0);
+    eu4_gfx_set_vertex_buffers(&g_master, 0, NULL, 0, NULL, NULL);
+    fail("vertex attrib cap returned");
+}
+
+__attribute__((noinline)) static void *wrong_vertex_set(void *unused) {
+    (void)unused;
+    eu4_gfx_set_vertex_buffers(&g_master, 0, NULL, 0, NULL, NULL);
+    return NULL;
+}
+
+__attribute__((noinline)) static void run_vb_thread(void) {
+    /* Safety policy in the research note: a thread other than the _GfxInit thread stops with thread. */
+    boot(1);
+    arm((const void *)wrong_vertex_set, 0, 0, 0);
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, wrong_vertex_set, NULL) != 0) {
+        fail("pthread");
+    }
+    pthread_join(thread, NULL);
+    fail("vertex wrong thread returned");
+}
+
 static void read_named(const char *name, char *body, size_t cap) {
     char path[96];
     snprintf(path, sizeof path, "%s/%s", g_parent_dir, name);
@@ -900,6 +1155,14 @@ int main(int argc, char **argv) {
             run_ib_unknown();
         } else if (strcmp(argv[1], "ib-released-set") == 0) {
             run_ib_released_set();
+        } else if (strcmp(argv[1], "vb-range") == 0) {
+            run_vb_range();
+        } else if (strcmp(argv[1], "vb-slot4") == 0) {
+            run_vb_slot4();
+        } else if (strcmp(argv[1], "vb-attrib") == 0) {
+            run_vb_attrib();
+        } else if (strcmp(argv[1], "vb-thread") == 0) {
+            run_vb_thread();
         }
         fail("unknown child");
     }
@@ -912,6 +1175,7 @@ int main(int argc, char **argv) {
     eu4_gfx_set_terminate(parent_stop);
     success();
     index_success();
+    vertex_set_success();
     expect_child("fail-metal", "_GfxCreateVertexBuffer", "metal", "after_init");
     expect_child("fail-metal-throw", "_GfxUpdateVertexBuffer", "metal", "after_init");
     expect_child("fail-entry", "_GfxCreateVertexBuffer", "entry", "after_init");
@@ -935,5 +1199,9 @@ int main(int argc, char **argv) {
     expect_child("ib-bound-metal", "_GfxUpdateIndexBuffer", "metal", "after_init");
     expect_child("ib-unknown", "_GfxUpdateIndexBuffer", "missing", "after_init");
     expect_child("ib-released-set", "_GfxSetIndexBuffer", "released", "after_init");
+    expect_child("vb-range", "_GfxSetVertexBuffers", "range", "after_init");
+    expect_child("vb-slot4", "_GfxSetVertexBuffers", "range", "after_init");
+    expect_child("vb-attrib", "_GfxSetVertexBuffers", "attrib", "after_init");
+    expect_child("vb-thread", "_GfxSetVertexBuffers", "thread", "after_init");
     return 0;
 }
