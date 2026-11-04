@@ -656,6 +656,55 @@ static void test_twelve_entry_transaction(void) {
     }
 }
 
+static void test_one_exact_prefix(const uint8_t prefix[5]) {
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    eu4_gfx_entry_request entries[1];
+    eu4_metal_boot_request calls[2];
+    uint8_t prefixes[1][8];
+    uint8_t call_expected[2][5];
+    uint8_t *mapping = map_entries(page, 1, entries, calls, prefixes, call_expected, prefix, 0, -1);
+    eu4_metal_boot_patch patches[2] = {0};
+    if (!eu4_gfx_install_all(entries, 1, calls, 2, patches)) {
+        fail("exact index prefix was rejected");
+    }
+    if (!eu4_gfx_entry_restore() || !eu4_metal_boot_restore()) {
+        fail("exact index prefix restore failed");
+    }
+    if (memcmp(entries[0].site, prefix, 5) != 0) {
+        fail("exact index prefix restore changed the site");
+    }
+    if (munmap(mapping, page * 2) != 0) {
+        fail("exact index prefix munmap failed");
+    }
+}
+
+static void test_index_entry_prefixes(void) {
+    static const uint8_t index_destroy[5] = {0x48, 0x85, 0xff, 0x74, 0x50};
+    static const uint8_t index_set[5] = {0x48, 0x85, 0xf6, 0x74, 0x28};
+    static const uint8_t not_set[5] = {0x48, 0x85, 0xf6, 0x74, 0x00};
+    test_one_exact_prefix(index_destroy);
+    test_one_exact_prefix(index_set);
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    eu4_gfx_entry_request entries[1];
+    eu4_metal_boot_request calls[2];
+    uint8_t prefixes[1][8];
+    uint8_t call_expected[2][5];
+    uint8_t *mapping = map_entries(page, 1, entries, calls, prefixes, call_expected, not_set, 0, -1);
+    eu4_metal_boot_patch patches[2] = {0};
+    if (eu4_gfx_install_all(entries, 1, calls, 2, patches)) {
+        fail("altered index set prefix was installed");
+    }
+    if (memcmp(entries[0].site, not_set, 5) != 0) {
+        fail("altered index set prefix was modified");
+    }
+    if (eu4_metal_boot_restore()) {
+        fail("altered index set prefix left a call install committed");
+    }
+    if (munmap(mapping, page * 2) != 0) {
+        fail("altered index set munmap failed");
+    }
+}
+
 static void test_reject_destroy_prefix(void) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     static const uint8_t bad[5] = {0x48, 0x85, 0xff, 0x74, 0x00};
@@ -777,6 +826,7 @@ int main(void) {
     test_eleven_entry_transaction();
     test_twelve_entry_transaction();
     test_reject_destroy_prefix();
+    test_index_entry_prefixes();
     return 0;
 }
 #endif

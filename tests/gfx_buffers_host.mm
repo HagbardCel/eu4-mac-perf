@@ -1,4 +1,4 @@
-#import "../benchmark/eu4_gfx_buffers.h"
+#import "eu4_gfx_buffers.h"
 #import "../benchmark/eu4_gfx_init.h"
 #import "../benchmark/eu4_metal_events.h"
 
@@ -15,6 +15,28 @@
 
 extern char **environ;
 
+/* Trusted image window. These are not taken from the candidate header. */
+enum {
+    kIndexCountRva = 0x2238584,
+    kIndexCacheTopRva = 0x2238588,
+    kIndexCacheRva = 0x2238590,
+    kIndexCacheSlots = 128,
+};
+
+extern "C" {
+void *eu4_gfx_create_index_buffer(void *ignored, const void *data, int32_t count);
+void eu4_gfx_update_index_buffer(void *ignored, void *header, const void *data, int32_t count);
+void eu4_gfx_destroy_index_buffer(void *header);
+void eu4_gfx_set_index_buffer(void *handle, void *header);
+int eu4_gfx_index_records(void);
+int eu4_gfx_index_gpus(void);
+size_t eu4_gfx_index_buffer_length(void *header);
+int eu4_gfx_index_buffer_read(void *header, void *dest, size_t n);
+int eu4_gfx_index_buffer_shared(void *header);
+void *eu4_gfx_current_index_header(void);
+int eu4_gfx_current_index_read(void *dest, size_t n);
+}
+
 static void fail(const char *message) {
     fprintf(stderr, "%s\n", message);
     _exit(1);
@@ -30,8 +52,17 @@ static int g_expect_gpus;
 static int32_t g_expect_counter;
 static void *g_kept;
 static uint8_t g_kept_byte;
+static void *g_kept_index;
+static uint8_t g_kept_index_bytes[2];
+static int g_expect_index_records;
+static int g_expect_index_gpus;
+static int32_t g_expect_ib;
+static int g_check_master_count;
+static int32_t g_expect_master_count;
 
 static int32_t *counter(void) { return (int32_t *)(g_image + EU4_GFX_VB_COUNT_RVA); }
+
+static int32_t *ib_counter(void) { return (int32_t *)(g_image + kIndexCountRva); }
 
 static void *fake_window(uint32_t window_id) { return window_id == 7 ? (void *)0x11 : NULL; }
 
@@ -45,7 +76,7 @@ static void write_depth(void *dest) { eu4_gfx_write_default_depth_stencil((uint8
 
 static void boot(int do_init) {
     if (g_image == NULL) {
-        size_t bytes = EU4_GFX_VB_COUNT_RVA + sizeof(int32_t);
+        size_t bytes = kIndexCacheRva + (size_t)kIndexCacheSlots * sizeof(void *);
         g_image = (uint8_t *)mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (g_image == MAP_FAILED) {
             fail("image map");
@@ -94,12 +125,29 @@ static void child_stop(const char *reason) {
     if (dladdr(caller, &saved) == 0 || dladdr(g_expect_fn, &expected) == 0 ||
         saved.dli_saddr == NULL || saved.dli_saddr != expected.dli_saddr ||
         eu4_gfx_vertex_records() != g_expect_records || eu4_gfx_vertex_gpus() != g_expect_gpus ||
-        g_image == NULL || *counter() != g_expect_counter) {
+        eu4_gfx_index_records() != g_expect_index_records || eu4_gfx_index_gpus() != g_expect_index_gpus ||
+        g_image == NULL || *counter() != g_expect_counter || *ib_counter() != g_expect_ib) {
         _exit(3);
+    }
+    if (g_check_master_count) {
+        int32_t got = 0;
+        memcpy(&got, (uint8_t *)g_master + 0x68, 4);
+        if (got != g_expect_master_count) {
+            _exit(3);
+        }
     }
     if (g_kept != NULL) {
         uint8_t back = 0;
         if (eu4_gfx_vertex_buffer_read(g_kept, &back, 1) != 0 || back != g_kept_byte) {
+            _exit(3);
+        }
+    }
+    if (g_kept_index != NULL) {
+        uint8_t registry[2];
+        uint8_t bound[2];
+        if (eu4_gfx_index_buffer_read(g_kept_index, registry, 2) != 0 ||
+            memcmp(registry, g_kept_index_bytes, 2) != 0 ||
+            eu4_gfx_current_index_read(bound, 2) != 0 || memcmp(bound, g_kept_index_bytes, 2) != 0) {
             _exit(3);
         }
     }
@@ -116,6 +164,10 @@ static void arm(const void *fn, int records, int gpus, int32_t count) {
     g_expect_records = records;
     g_expect_gpus = gpus;
     g_expect_counter = count;
+    g_expect_index_records = 0;
+    g_expect_index_gpus = 0;
+    g_expect_ib = 0;
+    g_check_master_count = 0;
 }
 
 __attribute__((noinline)) static void run_fail_metal(void) {
@@ -472,6 +524,331 @@ __attribute__((noinline)) static void success(void) {
     }
 }
 
+static void expect_index_header(void *header, int32_t count) {
+    int32_t got = -1;
+    uint32_t name = 0;
+    memcpy(&got, header, 4);
+    memcpy(&name, (uint8_t *)header + 4, 4);
+    if (got != count || name == 0) {
+        fail("index header");
+    }
+}
+
+static void arm_index(const void *fn, int records, int gpus, int32_t count) {
+    arm(fn, 0, 0, 0);
+    g_expect_index_records = records;
+    g_expect_index_gpus = gpus;
+    g_expect_ib = count;
+}
+
+__attribute__((noinline)) static void run_ib_size(void) {
+    boot(1);
+    arm_index((const void *)run_ib_size, 0, 0, 0);
+    eu4_gfx_create_index_buffer(NULL, NULL, -1);
+    fail("negative index count returned");
+}
+
+__attribute__((noinline)) static void run_ib_overflow(void) {
+    boot(1);
+    arm_index((const void *)run_ib_overflow, 0, 0, 0);
+    eu4_gfx_create_index_buffer(NULL, NULL, 0x40000000);
+    fail("overflow index count returned");
+}
+
+__attribute__((noinline)) static void run_ib_metal(void) {
+    boot(1);
+    arm_index((const void *)run_ib_metal, 0, 0, 0);
+    eu4_gfx_buffer_test_fail_metal(1);
+    eu4_gfx_create_index_buffer(NULL, NULL, 4);
+    fail("index metal failure returned");
+}
+
+__attribute__((noinline)) static void run_ib_double(void) {
+    boot(1);
+    uint16_t index = 1;
+    void *header = eu4_gfx_create_index_buffer(NULL, &index, 1);
+    eu4_gfx_destroy_index_buffer(header);
+    if (*ib_counter() != 0 || eu4_gfx_index_records() != 0) {
+        fail("index first destroy");
+    }
+    arm_index((const void *)run_ib_double, 0, 0, 0);
+    eu4_gfx_destroy_index_buffer(header);
+    fail("index second destroy returned");
+}
+
+__attribute__((noinline)) static void run_ib_released(void) {
+    boot(1);
+    uint16_t index = 1;
+    void *header = eu4_gfx_create_index_buffer(NULL, &index, 1);
+    if (header == NULL || *ib_counter() != 1) {
+        fail("index shutdown setup");
+    }
+    eu4_gfx_shutdown(g_master);
+    if (eu4_gfx_index_records() != 1 || eu4_gfx_index_gpus() != 0 || *ib_counter() != 1) {
+        fail("index shutdown dropped the header");
+    }
+    arm_index((const void *)run_ib_released, 1, 0, 1);
+    eu4_gfx_update_index_buffer(NULL, header, &index, 1);
+    fail("index update after shutdown returned");
+}
+
+__attribute__((noinline)) static void *wrong_index_create(void *unused) {
+    (void)unused;
+    eu4_gfx_create_index_buffer(NULL, NULL, 1);
+    return NULL;
+}
+
+__attribute__((noinline)) static void run_ib_thread(void) {
+    boot(1);
+    arm_index((const void *)wrong_index_create, 0, 0, 0);
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, wrong_index_create, NULL) != 0) {
+        fail("pthread");
+    }
+    pthread_join(thread, NULL);
+    fail("index wrong thread returned");
+}
+
+__attribute__((noinline)) static void run_ib_bound_metal(void) {
+    boot(1);
+    uint16_t index = 0x5a;
+    void *header = eu4_gfx_create_index_buffer(NULL, &index, 1);
+    if (header == NULL) {
+        fail("bound metal setup");
+    }
+    eu4_gfx_set_index_buffer(&g_master, header);
+    memcpy(g_kept_index_bytes, &index, 2);
+    g_kept_index = header;
+    arm_index((const void *)run_ib_bound_metal, 1, 1, 1);
+    eu4_gfx_buffer_test_fail_metal(1);
+    eu4_gfx_update_index_buffer(NULL, header, &index, 4);
+    fail("bound metal update returned");
+}
+
+__attribute__((noinline)) static void run_ib_unknown(void) {
+    boot(1);
+    uint8_t header[8];
+    memset(header, 0, sizeof header);
+    arm_index((const void *)run_ib_unknown, 0, 0, 0);
+    eu4_gfx_update_index_buffer(NULL, header, header, 1);
+    fail("unknown zero header returned");
+}
+
+__attribute__((noinline)) static void run_ib_released_set(void) {
+    boot(1);
+    uint16_t index = 1;
+    void *header = eu4_gfx_create_index_buffer(NULL, &index, 1);
+    if (header == NULL || *ib_counter() != 1) {
+        fail("released set setup");
+    }
+    int32_t sentinel = 7;
+    memcpy((uint8_t *)g_master + 0x68, &sentinel, 4);
+    eu4_gfx_release_vertex_buffers(eu4_gfx_backend_token(), __builtin_return_address(0));
+    if (eu4_gfx_index_records() != 1 || eu4_gfx_index_gpus() != 0) {
+        fail("released set did not drop the buffer");
+    }
+    arm_index((const void *)run_ib_released_set, 1, 0, 1);
+    g_check_master_count = 1;
+    g_expect_master_count = 7;
+    eu4_gfx_set_index_buffer(&g_master, header);
+    fail("released set returned");
+}
+
+__attribute__((noinline)) static void run_ib_missing(void) {
+    boot(1);
+    arm_index((const void *)run_ib_missing, 0, 0, 0);
+    g_check_master_count = 1;
+    g_expect_master_count = 7;
+    int32_t sentinel = 7;
+    memcpy((uint8_t *)g_master + 0x68, &sentinel, 4);
+    eu4_gfx_set_index_buffer(&g_master, (void *)0x8);
+    fail("index set missing returned");
+}
+
+static void read_named(const char *name, char *body, size_t cap) {
+    char path[96];
+    snprintf(path, sizeof path, "%s/%s", g_parent_dir, name);
+    FILE *file = fopen(path, "r");
+    if (file == NULL || fgets(body, (int)cap, file) == NULL) {
+        fail(name);
+    }
+    fclose(file);
+}
+
+__attribute__((noinline)) static void index_success(void);
+
+static void expect_index_caller(const char *body) {
+    char symbol_bit[] = "\"symbol\":\"_GfxCreateIndexBuffer\"";
+    char success_bit[] = "\"success\":1";
+    char pid_bit[32];
+    snprintf(pid_bit, sizeof pid_bit, "\"pid\":%d", (int)getpid());
+    const char *address_bit = strstr(body, "\"address\":\"0x");
+    unsigned long long address = 0;
+    if (strstr(body, symbol_bit) == NULL || strstr(body, success_bit) == NULL ||
+        strstr(body, pid_bit) == NULL || strstr(body, "\"resource\":\"0x") == NULL ||
+        address_bit == NULL || sscanf(address_bit, "\"address\":\"0x%llx\"", &address) != 1) {
+        fail("index create fields");
+    }
+    Dl_info info;
+    memset(&info, 0, sizeof info);
+    if (dladdr((void *)(uintptr_t)address, &info) == 0 || info.dli_saddr != (void *)index_success) {
+        fail("index create caller");
+    }
+}
+
+__attribute__((noinline)) static void index_success(void) {
+    boot(1);
+    if (*ib_counter() != 0 || eu4_gfx_index_records() != 0) {
+        fail("index counter did not start at zero");
+    }
+    uint16_t initial[4] = {1, 2, 3, 4};
+    void *header = eu4_gfx_create_index_buffer((void *)0x1, initial, 4);
+    char first_receipt[1280];
+    read_named("index_create.json", first_receipt, sizeof first_receipt);
+    expect_index_caller(first_receipt);
+    expect_index_header(header, 4);
+    uint16_t got[4];
+    if (*ib_counter() != 1 || eu4_gfx_index_records() != 1 || eu4_gfx_index_gpus() != 1 ||
+        !eu4_gfx_index_buffer_shared(header) || eu4_gfx_index_buffer_length(header) != 8 ||
+        eu4_gfx_index_buffer_read(header, got, 8) != 0 || memcmp(got, initial, 8) != 0) {
+        fail("index create bytes");
+    }
+    uint16_t same[4] = {5, 6, 7, 8};
+    eu4_gfx_update_index_buffer(NULL, header, same, 4);
+    expect_index_header(header, 4);
+    if (eu4_gfx_index_buffer_length(header) != 8 || eu4_gfx_index_buffer_read(header, got, 8) != 0 ||
+        memcmp(got, same, 8) != 0) {
+        fail("index equal replace");
+    }
+    uint16_t stored[4] = {9, 10, 11, 12};
+    eu4_gfx_update_index_buffer(NULL, header, stored, 0);
+    expect_index_header(header, 4);
+    if (eu4_gfx_index_buffer_read(header, got, 8) != 0 || memcmp(got, stored, 8) != 0) {
+        fail("index stored count");
+    }
+    uint16_t shorter[2] = {13, 14};
+    eu4_gfx_update_index_buffer(NULL, header, shorter, 2);
+    expect_index_header(header, 4);
+    if (eu4_gfx_index_buffer_length(header) != 4 || eu4_gfx_index_buffer_read(header, got, 4) != 0 ||
+        memcmp(got, shorter, 4) != 0) {
+        fail("index shorter replace");
+    }
+    int32_t written = 0;
+    memcpy((uint8_t *)g_master + 0x68, &written, 4);
+    eu4_gfx_set_index_buffer(&g_master, header);
+    memcpy(&written, (uint8_t *)g_master + 0x68, 4);
+    if (written != 4 || eu4_gfx_current_index_header() != header) {
+        fail("index bind");
+    }
+    uint16_t rebound[4] = {40, 41, 42, 43};
+    eu4_gfx_update_index_buffer(NULL, header, rebound, 4);
+    if (eu4_gfx_current_index_header() != header || eu4_gfx_index_buffer_length(header) != 8 ||
+        eu4_gfx_index_buffer_read(header, got, 8) != 0 || memcmp(got, rebound, 8) != 0 ||
+        eu4_gfx_current_index_read(got, 8) != 0 || memcmp(got, rebound, 8) != 0 ||
+        eu4_gfx_current_index_read(NULL, 8) == 0) {
+        fail("index bound replace");
+    }
+    written = 4;
+    eu4_gfx_set_index_buffer(&g_master, NULL);
+    memcpy(&written, (uint8_t *)g_master + 0x68, 4);
+    if (written != 4 || eu4_gfx_current_index_header() != header) {
+        fail("index null bind");
+    }
+    uint32_t name = 0;
+    memcpy(&name, (uint8_t *)header + 4, 4);
+    uint32_t zero = 0;
+    memcpy((uint8_t *)header + 4, &zero, 4);
+    uint16_t ignored[2] = {15, 16};
+    eu4_gfx_update_index_buffer(NULL, header, ignored, 2);
+    if (eu4_gfx_index_buffer_length(header) != 8 || eu4_gfx_index_buffer_read(header, got, 8) != 0 ||
+        memcmp(got, rebound, 8) != 0) {
+        fail("index zero name update");
+    }
+    memcpy((uint8_t *)header + 4, &name, 4);
+    eu4_gfx_destroy_index_buffer(NULL);
+    if (*ib_counter() != 1 || eu4_gfx_index_records() != 1) {
+        fail("index null destroy");
+    }
+    eu4_gfx_destroy_index_buffer(header);
+    int32_t top = 0;
+    void *cached = NULL;
+    memcpy(&top, g_image + kIndexCacheTopRva, 4);
+    memcpy(&cached, g_image + kIndexCacheRva, sizeof cached);
+    if (*ib_counter() != 0 || eu4_gfx_index_records() != 0 || eu4_gfx_index_gpus() != 0 ||
+        eu4_gfx_current_index_header() != NULL || top != 1 || cached != header) {
+        fail("index destroy recycle");
+    }
+    uint16_t again[4] = {21, 22, 23, 24};
+    void *recycled = eu4_gfx_create_index_buffer(NULL, again, 4);
+    if (recycled != header || eu4_gfx_index_buffer_read(recycled, got, 8) != 0 ||
+        memcmp(got, again, 8) != 0 || *ib_counter() != 1) {
+        fail("index recycle");
+    }
+    void *guard = mmap(NULL, 4096, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (guard == MAP_FAILED) {
+        fail("index guard");
+    }
+    void *empty = eu4_gfx_create_index_buffer(NULL, guard, 0);
+    expect_index_header(empty, 0);
+    if (eu4_gfx_index_buffer_length(empty) != 0 || !eu4_gfx_index_buffer_shared(empty)) {
+        fail("index zero length");
+    }
+    eu4_gfx_set_index_buffer(&g_master, empty);
+    if (eu4_gfx_current_index_header() != empty || eu4_gfx_current_index_read(got, 0) != 0 ||
+        eu4_gfx_current_index_read(NULL, 0) != 0 || eu4_gfx_current_index_read(got, 1) == 0) {
+        fail("index empty binding");
+    }
+    void *blank = eu4_gfx_create_index_buffer(NULL, NULL, 3);
+    expect_index_header(blank, 3);
+    if (eu4_gfx_index_buffer_length(blank) != 6 || !eu4_gfx_index_buffer_shared(blank) ||
+        *ib_counter() != 3) {
+        fail("index null data");
+    }
+    char later_receipt[1280];
+    read_named("index_create.json", later_receipt, sizeof later_receipt);
+    if (strcmp(first_receipt, later_receipt) != 0) {
+        fail("index create overwritten");
+    }
+    int32_t saved = 0;
+    memcpy(&saved, recycled, 4);
+    eu4_gfx_shutdown(g_master);
+    int32_t after = 0;
+    memcpy(&after, recycled, 4);
+    if (after != saved || eu4_gfx_index_records() != 3 || eu4_gfx_index_gpus() != 0 ||
+        *ib_counter() != 3 || eu4_gfx_current_index_header() != NULL) {
+        fail("index shutdown release");
+    }
+    g_master = NULL;
+    uint8_t ok = 0;
+    uint8_t handle[0x20];
+    memset(handle, 0, sizeof handle);
+    uint32_t window_id = 7, source = 9;
+    memcpy(handle, &window_id, 4);
+    memcpy(handle + 0x18, &source, 4);
+    g_master = eu4_gfx_init(handle, &ok);
+    if (ok != 1 || g_master == NULL) {
+        fail("index reinit");
+    }
+    uint16_t fresh_bytes[1] = {30};
+    void *fresh = eu4_gfx_create_index_buffer(NULL, fresh_bytes, 1);
+    if (fresh == NULL || eu4_gfx_index_buffer_read(fresh, got, 2) != 0 || got[0] != 30 ||
+        eu4_gfx_index_records() != 4 || *ib_counter() != 4) {
+        fail("index create after reinit");
+    }
+    memcpy(&after, recycled, 4);
+    if (after != saved || eu4_gfx_index_buffer_length(recycled) != 8 ||
+        eu4_gfx_index_buffer_read(recycled, got, 8) == 0) {
+        fail("index retained header");
+    }
+    eu4_gfx_destroy_index_buffer(recycled);
+    eu4_gfx_destroy_index_buffer(empty);
+    eu4_gfx_destroy_index_buffer(blank);
+    eu4_gfx_destroy_index_buffer(fresh);
+    if (*ib_counter() != 0 || eu4_gfx_index_records() != 0) {
+        fail("index cleanup");
+    }
+}
+
 int main(int argc, char **argv) {
     g_argv0 = argv[0];
     if (argc == 3) {
@@ -503,6 +880,26 @@ int main(int argc, char **argv) {
             run_wrong_thread();
         } else if (strcmp(argv[1], "wrong-shutdown") == 0) {
             run_wrong_shutdown();
+        } else if (strcmp(argv[1], "ib-size") == 0) {
+            run_ib_size();
+        } else if (strcmp(argv[1], "ib-overflow") == 0) {
+            run_ib_overflow();
+        } else if (strcmp(argv[1], "ib-metal") == 0) {
+            run_ib_metal();
+        } else if (strcmp(argv[1], "ib-double") == 0) {
+            run_ib_double();
+        } else if (strcmp(argv[1], "ib-released") == 0) {
+            run_ib_released();
+        } else if (strcmp(argv[1], "ib-thread") == 0) {
+            run_ib_thread();
+        } else if (strcmp(argv[1], "ib-missing") == 0) {
+            run_ib_missing();
+        } else if (strcmp(argv[1], "ib-bound-metal") == 0) {
+            run_ib_bound_metal();
+        } else if (strcmp(argv[1], "ib-unknown") == 0) {
+            run_ib_unknown();
+        } else if (strcmp(argv[1], "ib-released-set") == 0) {
+            run_ib_released_set();
         }
         fail("unknown child");
     }
@@ -514,6 +911,7 @@ int main(int argc, char **argv) {
     snprintf(g_parent_dir, sizeof g_parent_dir, "%s", dir);
     eu4_gfx_set_terminate(parent_stop);
     success();
+    index_success();
     expect_child("fail-metal", "_GfxCreateVertexBuffer", "metal", "after_init");
     expect_child("fail-metal-throw", "_GfxUpdateVertexBuffer", "metal", "after_init");
     expect_child("fail-entry", "_GfxCreateVertexBuffer", "entry", "after_init");
@@ -527,5 +925,15 @@ int main(int argc, char **argv) {
     expect_child("no-backend", "_GfxCreateVertexBuffer", "no_backend", "before_init");
     expect_child("wrong-thread", "_GfxCreateVertexBuffer", "thread", "after_init");
     expect_child("wrong-shutdown", "_GfxShutdown", "thread", "after_init");
+    expect_child("ib-size", "_GfxCreateIndexBuffer", "size", "after_init");
+    expect_child("ib-overflow", "_GfxCreateIndexBuffer", "size", "after_init");
+    expect_child("ib-metal", "_GfxCreateIndexBuffer", "metal", "after_init");
+    expect_child("ib-double", "_GfxDestroyIndexBuffer", "missing", "after_init");
+    expect_child("ib-released", "_GfxUpdateIndexBuffer", "released", "after_init");
+    expect_child("ib-thread", "_GfxCreateIndexBuffer", "thread", "after_init");
+    expect_child("ib-missing", "_GfxSetIndexBuffer", "missing", "after_init");
+    expect_child("ib-bound-metal", "_GfxUpdateIndexBuffer", "metal", "after_init");
+    expect_child("ib-unknown", "_GfxUpdateIndexBuffer", "missing", "after_init");
+    expect_child("ib-released-set", "_GfxSetIndexBuffer", "released", "after_init");
     return 0;
 }

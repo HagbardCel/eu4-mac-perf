@@ -18,7 +18,20 @@
 @implementation EU4VertexBuffer
 @end
 
+/* Second registry. Same shape as EU4VertexBuffer, keyed by the 8-byte index header. */
+@interface EU4IndexBuffer : NSObject
+@property (nonatomic) void *header;
+@property (nonatomic, strong) id<MTLBuffer> buffer;
+@property (nonatomic) size_t length;
+@property (nonatomic) int32_t count;
+@property (nonatomic) void *backend;
+@end
+
+@implementation EU4IndexBuffer
+@end
+
 static NSMutableArray<EU4VertexBuffer *> *g_entries;
+static NSMutableArray<EU4IndexBuffer *> *g_index_entries;
 static pthread_t g_thread;
 static int g_thread_set;
 static int g_fail_metal;
@@ -27,6 +40,13 @@ static int g_fail_entry;
 static int g_fail_insert;
 static int g_fail_header;
 static int g_create_recorded;
+static int g_index_create_recorded;
+static void *g_index_current_header;
+static id<MTLBuffer> g_index_current_buffer;
+
+/* The trusted events header declares this; the local copy predates it. */
+extern "C" int eu4_metal_events_index_create(const void *caller, uintptr_t resource, uint64_t bytes,
+                                             int32_t count);
 
 static int on_gfx_thread(void) {
     return g_thread_set && pthread_equal(pthread_self(), g_thread);
@@ -43,6 +63,15 @@ int eu4_gfx_buffers_on_thread(void) {
 
 static EU4VertexBuffer *find_entry(void *header) {
     for (EU4VertexBuffer *entry in g_entries) {
+        if (entry.header == header) {
+            return entry;
+        }
+    }
+    return nil;
+}
+
+static EU4IndexBuffer *find_index_entry(void *header) {
+    for (EU4IndexBuffer *entry in g_index_entries) {
         if (entry.header == header) {
             return entry;
         }
@@ -130,6 +159,15 @@ void eu4_gfx_release_vertex_buffers(void *backend, const void *caller) {
     for (EU4VertexBuffer *entry in g_entries) {
         if (entry.backend == backend) {
             entry.buffer = nil;
+        }
+    }
+    for (EU4IndexBuffer *entry in g_index_entries) {
+        if (entry.backend == backend) {
+            entry.buffer = nil;
+            if (g_index_current_header == entry.header) {
+                g_index_current_header = NULL;
+                g_index_current_buffer = nil;
+            }
         }
     }
 }
@@ -327,6 +365,275 @@ int eu4_gfx_vertex_buffer_read(void *header, void *dest, size_t n) {
 int eu4_gfx_vertex_buffer_shared(void *header) {
     EU4VertexBuffer *entry = find_entry(header);
     return entry != nil && entry.buffer != nil && entry.buffer.storageMode == MTLStorageModeShared;
+}
+
+static void *new_index_header(const void *caller, int *recycled) {
+    if (g_fail_header) {
+        eu4_gfx_stop("_GfxCreateIndexBuffer", "header", caller);
+    }
+    uint8_t *image = eu4_gfx_image();
+    int32_t top = 0;
+    memcpy(&top, image + EU4_GFX_IB_CACHE_TOP_RVA, 4);
+    if (top > 0 && top <= EU4_GFX_IB_CACHE_SLOTS) {
+        top -= 1;
+        memcpy(image + EU4_GFX_IB_CACHE_TOP_RVA, &top, 4);
+        void *header = NULL;
+        memcpy(&header, image + EU4_GFX_IB_CACHE_RVA + (size_t)top * sizeof header, sizeof header);
+        *recycled = 1;
+        return header;
+    }
+    try {
+        return ::operator new(8);
+    } catch (const std::bad_alloc &) {
+        eu4_gfx_stop("_GfxCreateIndexBuffer", "header", caller);
+    }
+    return NULL;
+}
+
+/* Destroy pushes while the top is <= 0x7f, otherwise the header is freed. */
+static void recycle_index_header(void *header) {
+    uint8_t *image = eu4_gfx_image();
+    int32_t top = 0;
+    memcpy(&top, image + EU4_GFX_IB_CACHE_TOP_RVA, 4);
+    if (top >= 0 && top <= 0x7f) {
+        memcpy(image + EU4_GFX_IB_CACHE_RVA + (size_t)top * sizeof header, &header, sizeof header);
+        top += 1;
+        memcpy(image + EU4_GFX_IB_CACHE_TOP_RVA, &top, 4);
+    } else {
+        ::operator delete(header);
+    }
+}
+
+__attribute__((noreturn)) static void abandon_index_create(EU4IndexBuffer *entry,
+                                                           id<MTLBuffer> buffer, void *header,
+                                                           int recycled, const char *reason,
+                                                           const void *caller) {
+    if (entry != nil && g_index_entries != nil) {
+        NSUInteger index = [g_index_entries indexOfObjectIdenticalTo:entry];
+        if (index != NSNotFound) {
+            [g_index_entries removeObjectAtIndex:index];
+        }
+    }
+    if (entry != nil) {
+        entry.header = NULL;
+        entry.buffer = nil;
+    }
+    buffer = nil;
+    (void)buffer;
+    if (header != NULL) {
+        if (recycled) {
+            recycle_index_header(header);
+        } else {
+            ::operator delete(header);
+        }
+    }
+    eu4_gfx_stop("_GfxCreateIndexBuffer", reason, caller);
+}
+
+void *eu4_gfx_create_index_buffer(void *ignored, const void *data, int32_t count) {
+    const void *caller = __builtin_return_address(0);
+    (void)ignored;
+    if (g_thread_set && !on_gfx_thread()) {
+        eu4_gfx_stop("_GfxCreateIndexBuffer", "thread", caller);
+    }
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    void *backend = eu4_gfx_backend_token();
+    if (device == nil || backend == NULL || eu4_gfx_image() == NULL) {
+        eu4_gfx_stop("_GfxCreateIndexBuffer", "no_backend", caller);
+    }
+    size_t length = 0;
+    if (logical_bytes(count, 2, &length) != 0) {
+        eu4_gfx_stop("_GfxCreateIndexBuffer", "size", caller);
+    }
+    int recycled = 0;
+    void *header = new_index_header(caller, &recycled);
+    int32_t count_bits = count;
+    uint32_t name = 1;
+    memcpy(header, &count_bits, 4);
+    memcpy((uint8_t *)header + 4, &name, 4);
+    id<MTLBuffer> buffer = nil;
+    EU4IndexBuffer *entry = nil;
+    @try {
+        buffer = make_buffer(device, data, length);
+        if (buffer == nil) {
+            abandon_index_create(nil, nil, header, recycled, "metal", caller);
+        }
+        if (g_fail_entry) {
+            @throw [NSException exceptionWithName:NSMallocException reason:@"entry" userInfo:nil];
+        }
+        entry = [EU4IndexBuffer new];
+        entry.header = header;
+        entry.buffer = buffer;
+        entry.length = length;
+        entry.count = count_bits;
+        entry.backend = backend;
+        if (g_fail_insert) {
+            @throw [NSException exceptionWithName:NSMallocException reason:@"insert" userInfo:nil];
+        }
+        if (g_index_entries == nil) {
+            g_index_entries = [NSMutableArray array];
+        }
+        [g_index_entries addObject:entry];
+    } @catch (NSException *exception) {
+        const char *reason = "alloc";
+        if ([exception.reason isEqualToString:@"metal"]) {
+            reason = "metal";
+        } else if ([exception.reason isEqualToString:@"entry"]) {
+            reason = "entry";
+        } else if ([exception.reason isEqualToString:@"insert"]) {
+            reason = "insert";
+        }
+        abandon_index_create(entry, buffer, header, recycled, reason, caller);
+    }
+    int32_t *counter = (int32_t *)(eu4_gfx_image() + EU4_GFX_IB_COUNT_RVA);
+    *counter += 1;
+    if (!g_index_create_recorded &&
+        eu4_metal_events_index_create(caller, (uintptr_t)(__bridge void *)buffer, length, count) == 0) {
+        g_index_create_recorded = 1;
+    }
+    return header;
+}
+
+void eu4_gfx_update_index_buffer(void *ignored, void *header, const void *data, int32_t count) {
+    const void *caller = __builtin_return_address(0);
+    (void)ignored;
+    require_thread("_GfxUpdateIndexBuffer", caller);
+    EU4IndexBuffer *entry = find_index_entry(header);
+    if (entry == nil) {
+        eu4_gfx_stop("_GfxUpdateIndexBuffer", "missing", caller);
+    }
+    uint32_t name = 0;
+    memcpy(&name, (uint8_t *)header + 4, 4);
+    if (name == 0) {
+        return;
+    }
+    if (entry.buffer == nil) {
+        eu4_gfx_stop("_GfxUpdateIndexBuffer", "released", caller);
+    }
+    int32_t effective = count < 1 ? entry.count : count;
+    size_t length = 0;
+    if (logical_bytes(effective, 2, &length) != 0) {
+        eu4_gfx_stop("_GfxUpdateIndexBuffer", "size", caller);
+    }
+    id<MTLDevice> device = (__bridge id<MTLDevice>)eu4_gfx_metal_device();
+    id<MTLBuffer> fresh = nil;
+    @try {
+        fresh = make_buffer(device, data, length);
+    } @catch (NSException *exception) {
+        (void)exception;
+        eu4_gfx_stop("_GfxUpdateIndexBuffer", "metal", caller);
+    }
+    if (fresh == nil) {
+        eu4_gfx_stop("_GfxUpdateIndexBuffer", "metal", caller);
+    }
+    entry.buffer = fresh;
+    entry.length = length;
+    if (g_index_current_header == header) {
+        g_index_current_buffer = fresh;
+    }
+}
+
+void eu4_gfx_destroy_index_buffer(void *header) {
+    const void *caller = __builtin_return_address(0);
+    if (header == NULL) {
+        return;
+    }
+    require_thread("_GfxDestroyIndexBuffer", caller);
+    EU4IndexBuffer *entry = find_index_entry(header);
+    if (entry == nil) {
+        eu4_gfx_stop("_GfxDestroyIndexBuffer", "missing", caller);
+    }
+    uint8_t *image = eu4_gfx_image();
+    if (image == NULL) {
+        eu4_gfx_stop("_GfxDestroyIndexBuffer", "counter", caller);
+    }
+    entry.buffer = nil;
+    entry.header = NULL;
+    NSUInteger index = [g_index_entries indexOfObjectIdenticalTo:entry];
+    if (index != NSNotFound) {
+        [g_index_entries removeObjectAtIndex:index];
+    }
+    if (g_index_current_header == header) {
+        g_index_current_header = NULL;
+        g_index_current_buffer = nil;
+    }
+    recycle_index_header(header);
+    int32_t *counter = (int32_t *)(image + EU4_GFX_IB_COUNT_RVA);
+    *counter -= 1;
+}
+
+void eu4_gfx_set_index_buffer(void *handle, void *header) {
+    const void *caller = __builtin_return_address(0);
+    if (header == NULL) {
+        return;
+    }
+    require_thread("_GfxSetIndexBuffer", caller);
+    EU4IndexBuffer *entry = find_index_entry(header);
+    if (entry == nil) {
+        eu4_gfx_stop("_GfxSetIndexBuffer", "missing", caller);
+    }
+    if (entry.buffer == nil) {
+        eu4_gfx_stop("_GfxSetIndexBuffer", "released", caller);
+    }
+    g_index_current_header = header;
+    g_index_current_buffer = entry.buffer;
+    void *master = NULL;
+    if (handle != NULL) {
+        memcpy(&master, handle, sizeof master);
+    }
+    if (master != NULL) {
+        int32_t stored = entry.count;
+        memcpy((uint8_t *)master + 0x68, &stored, 4);
+    }
+}
+
+int eu4_gfx_index_records(void) { return g_index_entries == nil ? 0 : (int)g_index_entries.count; }
+
+int eu4_gfx_index_gpus(void) {
+    int n = 0;
+    for (EU4IndexBuffer *entry in g_index_entries) {
+        if (entry.buffer != nil) {
+            n += 1;
+        }
+    }
+    return n;
+}
+
+size_t eu4_gfx_index_buffer_length(void *header) {
+    EU4IndexBuffer *entry = find_index_entry(header);
+    return entry == nil ? (size_t)-1 : entry.length;
+}
+
+int eu4_gfx_index_buffer_read(void *header, void *dest, size_t n) {
+    EU4IndexBuffer *entry = find_index_entry(header);
+    if (entry == nil || entry.buffer == nil || entry.length != n) {
+        return -1;
+    }
+    if (n > 0) {
+        memcpy(dest, entry.buffer.contents, n);
+    }
+    return 0;
+}
+
+int eu4_gfx_index_buffer_shared(void *header) {
+    EU4IndexBuffer *entry = find_index_entry(header);
+    return entry != nil && entry.buffer != nil && entry.buffer.storageMode == MTLStorageModeShared;
+}
+
+void *eu4_gfx_current_index_header(void) { return g_index_current_header; }
+
+int eu4_gfx_current_index_read(void *dest, size_t n) {
+    EU4IndexBuffer *entry = find_index_entry(g_index_current_header);
+    if (entry == nil || entry.buffer == nil || g_index_current_buffer != entry.buffer || entry.length != n) {
+        return -1;
+    }
+    if (n > 0 && dest == NULL) {
+        return -1;
+    }
+    if (n > 0) {
+        memcpy(dest, g_index_current_buffer.contents, n);
+    }
+    return 0;
 }
 
 void eu4_gfx_buffer_test_fail_metal(int on) { g_fail_metal = on; }

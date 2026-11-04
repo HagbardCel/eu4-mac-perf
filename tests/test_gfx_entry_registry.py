@@ -17,6 +17,10 @@ _P6 = bytes.fromhex("554889e54157")
 _P5 = bytes.fromhex("554889e553")
 _DESTROY = bytes.fromhex("4885ff742f")
 _VIEW = bytes.fromhex("554889e5f30f6f06")
+_INDEX_CREATE = bytes.fromhex("554889e54157")
+_INDEX_UPDATE = bytes.fromhex("554889e54156")
+_INDEX_DESTROY = bytes.fromhex("4885ff7450")
+_INDEX_SET = bytes.fromhex("4885f67428")
 _FIVE = r"\x55\x48\x89\xe5\x53"
 BASELINE = (
     ("settings", 0x15ED388, 0x15ED9FC, "eu4_gfx_settings", _P6),
@@ -31,6 +35,10 @@ BASELINE = (
     ("destroy_vertex_buffer", 0x15EBD4C, 0x15EBD81, "eu4_gfx_destroy_vertex_buffer", _DESTROY),
     ("update_vertex_buffer", 0x15EBD81, 0x15EBE5F, "eu4_gfx_update_vertex_buffer", _P6),
     ("viewport", 0x15EA4F8, 0x15EA52C, "eu4_gfx_set_viewport", _VIEW),
+    ("_GfxCreateIndexBuffer", 0x15EC154, 0x15EC1E6, "eu4_gfx_create_index_buffer", _INDEX_CREATE),
+    ("_GfxDestroyIndexBuffer", 0x15EC1E6, 0x15EC23C, "eu4_gfx_destroy_index_buffer", _INDEX_DESTROY),
+    ("_GfxUpdateIndexBuffer", 0x15EC23C, 0x15EC28E, "eu4_gfx_update_index_buffer", _INDEX_UPDATE),
+    ("_GfxSetIndexBuffer", 0x15EC28E, 0x15EC2BC, "eu4_gfx_set_index_buffer", _INDEX_SET),
 )
 _ROOT = Path(__file__).resolve().parents[1]
 _PR5 = _ROOT / "results/20261102T100321Z-metal-init"
