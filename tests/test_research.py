@@ -773,9 +773,55 @@ class BudgetTests(IdentityPatchMixin, unittest.TestCase):
         code, doc = _run(ctx, ["function", FIXTURE, "--view", "static", "--max-bytes", str(budget)])
         self.assertEqual(code, 0)
         self.assertLessEqual(research._nbytes(doc), budget)
+        self.assertEqual(doc["status"], "unavailable")
+        self.assertNotEqual(doc["status"], "ambiguous")
+        self.assertEqual(doc["reason"], "response_budget")
+        self.assertIsNone(doc["identity"])
+        self.assertNotIn("N" * 64, research._serialize(doc))
+
+    def test_complete_instructions_mark_a_blocked_decompilation(self) -> None:
+        text = "D" * 400
+        inventory, static, decomp = _many_static(FIXTURE, 4, text)
+        ctx = self._package(static, decomp, inventory)
+        code, full = _run(ctx, ["function", FIXTURE, "--view", "all"])
+        self.assertEqual(code, 0)
+        self.assertEqual(full["status"], "ok")
+        self.assertFalse(full["truncated"])
+        blocked = json.loads(json.dumps(full))
+        blocked["truncated"] = True
+        blocked["evidence"]["pseudocode"] = ""
+        blocked["evidence"]["decompile_blocked"] = True
+        budget = research._nbytes(blocked)
+        self.assertGreaterEqual(budget, research.MIN_MAX_BYTES)
+        code, doc = _run(ctx, ["function", FIXTURE, "--view", "all", "--max-bytes", str(budget)])
+        self.assertEqual(code, 0)
+        self.assertEqual(doc, blocked)
         self.assertEqual(doc["status"], "ok")
-        self.assertEqual(doc["evidence"]["instructions"][0]["bytes_hex"], "90")
-        self.assertLess(len(doc["identity"]["name_demangled"]), 20000)
+        self.assertTrue(doc["truncated"])
+        self.assertTrue(doc["evidence"]["decompile_blocked"])
+        self.assertNotIn("next_decompile_offset", doc)
+        self.assertNotIn("static_blocked", doc["evidence"])
+        self.assertEqual(doc["evidence"]["instructions"], full["evidence"]["instructions"])
+        self.assertLessEqual(research._nbytes(doc), budget)
+        code, restored = _run(ctx, ["function", FIXTURE, "--view", "decompiled"])
+        self.assertEqual(code, 0)
+        self.assertEqual(restored["status"], "ok")
+        self.assertEqual(restored["evidence"]["pseudocode"], text)
+
+    def test_oversized_exact_match_is_a_budget_failure(self) -> None:
+        fixture = CorpusFixture()
+        self.addCleanup(fixture.close)
+        name = "N" * 20000
+        fixture.write_index([_function_row(FIXTURE, name, name)])
+        ctx, _plan = fixture.context([FIXTURE])
+        code, doc = _run(ctx, ["resolve", name, "--max-bytes", str(research.MIN_MAX_BYTES)])
+        self.assertEqual(code, 0)
+        self.assertLessEqual(research._nbytes(doc), research.MIN_MAX_BYTES)
+        self.assertEqual(doc["status"], "unavailable")
+        self.assertNotEqual(doc["status"], "ambiguous")
+        self.assertEqual(doc["reason"], "response_budget")
+        self.assertIsNone(doc["identity"])
+        self.assertNotIn(name[:64], research._serialize(doc))
 
     def test_xref_pages_reconstruct_every_list(self) -> None:
         fixture = CorpusFixture()

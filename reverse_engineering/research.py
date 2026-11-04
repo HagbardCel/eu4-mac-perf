@@ -459,17 +459,25 @@ def _page_function(
             evidence["decompile_error"] = decomp_row.get("error")
         next_static = None
         next_decompile = None
+        truncated = False
         if view != "decompiled":
             evidence["instructions"] = instructions[ins_start : ins_start + n_ins]
             evidence["instruction_total"] = total_ins
-            if n_ins > 0 and ins_start + n_ins < total_ins:
-                next_static = ins_start + n_ins
+            if ins_start + n_ins < total_ins:
+                truncated = True
+                if n_ins > 0:
+                    next_static = ins_start + n_ins
+                else:
+                    evidence["static_blocked"] = True
         if view != "static":
             evidence["pseudocode"] = pseudocode[text_start : text_start + n_chars]
             evidence["pseudocode_total"] = total_chars
-            if n_chars > 0 and text_start + n_chars < total_chars:
-                next_decompile = text_start + n_chars
-        truncated = next_static is not None or next_decompile is not None
+            if text_start + n_chars < total_chars:
+                truncated = True
+                if n_chars > 0:
+                    next_decompile = text_start + n_chars
+                else:
+                    evidence["decompile_blocked"] = True
         return _document(
             "function",
             "ok",
@@ -785,7 +793,7 @@ def _shrink_matches(document: dict[str, Any], budget: int) -> dict[str, Any]:
         if fitted is not None:
             return fitted
         matches = document["evidence"]["matches"]
-        if not matches:
+        if len(matches) <= 1:
             return _budget_document("resolve")
         matches.pop()
         document["truncated"] = True
@@ -877,40 +885,27 @@ def _within(document: dict[str, Any], budget: int) -> dict[str, Any] | None:
 
 
 def _shrink_text(document: dict[str, Any], budget: int) -> None:
-    while _nbytes(document) > budget:
-        detail = document.get("detail")
-        longest = _longest_text(document.get("identity"))
-        if isinstance(detail, str) and detail and (longest is None or len(detail) >= longest[0]):
-            document["detail"] = detail[: len(detail) // 2]
-            if not document["detail"]:
-                del document["detail"]
-            continue
-        if longest is None:
-            return
-        _length, parent, key = longest
-        value = parent[key]
-        shortened = value[: len(value) // 2]
-        if shortened == value:
-            return
-        parent[key] = shortened
-
-
-def _longest_text(value: Any, parent: Any = None, key: Any = None) -> tuple[int, Any, Any] | None:
-    best: tuple[int, Any, Any] | None = None
-    if isinstance(value, str):
-        if value and parent is not None:
-            best = (len(value), parent, key)
-    elif isinstance(value, dict):
-        for child_key, child in value.items():
-            found = _longest_text(child, value, child_key)
-            if found is not None and (best is None or found[0] > best[0]):
-                best = found
-    elif isinstance(value, list):
-        for index, child in enumerate(value):
-            found = _longest_text(child, value, index)
-            if found is not None and (best is None or found[0] > best[0]):
-                best = found
-    return best
+    detail = document.get("detail")
+    if not isinstance(detail, str) or not detail or _nbytes(document) <= budget:
+        return
+    low, high, best = 0, len(detail), 0
+    while low <= high:
+        mid = (low + high) // 2
+        if mid:
+            document["detail"] = detail[:mid]
+        else:
+            document.pop("detail", None)
+        if _nbytes(document) <= budget:
+            best = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+    if best:
+        document["detail"] = detail[:best]
+    else:
+        document.pop("detail", None)
+    if document.get("detail") != detail:
+        document["truncated"] = True
 
 
 def _emit(document: dict[str, Any], budget: int) -> None:
