@@ -485,10 +485,13 @@ def check(workspace: Path, campaign: dict, config: dict) -> dict:
     if saved is not None:
         if saved.get("reconstruction_sha256") != config_sha256(config):
             return emit("unavailable", "reconstruction configuration changed")
+        function = saved.get("function")
+        if not isinstance(function, dict):
+            return emit("unavailable", "research checkpoint identity changed")
         if (
             saved.get("version") != 1 or saved.get("campaign_id") != campaign_id
             or saved.get("commit") != pinned or saved.get("executable_sha256") != exe
-            or (saved.get("function") or {}).get("symbol") != symbol
+            or function.get("symbol") != symbol
         ):
             return emit("unavailable", "research checkpoint identity changed")
         if note_bytes is None:
@@ -500,7 +503,6 @@ def check(workspace: Path, campaign: dict, config: dict) -> dict:
         if error:
             return emit("unavailable", error)
         try:
-            function = saved["function"]
             changed = (
                 int(function["entry_rva"], 16) != entry
                 or int(function["end_rva"], 16) != end

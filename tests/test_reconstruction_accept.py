@@ -150,6 +150,12 @@ class CheckTests(unittest.TestCase):
             drifted = accept.check(workspace, campaign(), changed)
             self.assertEqual(drifted["verdict"], "unavailable")
             self.assertIn("reconstruction configuration changed", drifted["diagnostics"])
+            body = json.loads(path.read_text(encoding="utf-8"))
+            body["function"] = "corrupted"
+            path.write_text(json.dumps(body), encoding="utf-8")
+            corrupt = accept.check(workspace, campaign(), configuration())
+            self.assertEqual(corrupt["verdict"], "unavailable")
+            self.assertIn("research checkpoint identity changed", corrupt["diagnostics"])
 
     def test_entry_authenticity(self) -> None:
         parse = accept.import_parser(Path(tempfile.gettempdir())).parse_gfx_entries
