@@ -58,9 +58,34 @@ class GhidraQueryLiveTests(unittest.TestCase):
         self.assertEqual(document["evidence"]["presence"], "present")
         self.assertEqual(document["evidence"]["entry_rva"], ENTRY)
         self.assertGreaterEqual(document["evidence"]["instruction_returned"], 1)
+        targets = [
+            ref.get("target_rva")
+            for ins in document["evidence"]["instructions"]
+            for ref in ins["references_from"]
+        ]
+        self.assertIn("0x0000000002253610", targets)
         self.assertEqual(document["identity"]["executable_sha256"], load_target()["sha256"])
         self.assertEqual(document["identity"]["image_base"], int(load_target()["image_base"]))
         self.assertNotIn("runtime_value", json.dumps(document))
+
+    def test_out_of_snapshot_function_decompiles(self):
+        project = _project_dir()
+        assert project is not None
+        before = _snapshot(project)
+        code, document = _run(["function", "0xf90fd2", "--max-bytes", "262144", "--process-timeout", "180"])
+        after = _snapshot(project)
+        self.assertEqual(code, 0)
+        self.assertEqual(set(before), set(after))
+        for rel, (digest, mtime) in before.items():
+            got, later = after[rel]
+            self.assertEqual(got, digest, rel)
+            if mtime != later:
+                self.assertIn(Path(rel).name, _INDEX_NAMES, rel)
+        self.assertEqual(document["status"], "ok")
+        evidence = document["evidence"]
+        self.assertEqual(evidence["entry_rva"], "0x0000000000f90fd2")
+        self.assertEqual(evidence["decompile_status"], "success")
+        self.assertTrue(evidence["pseudocode"].strip())
 
 
 def _run(argv: list[str]) -> tuple[int, dict]:

@@ -125,6 +125,22 @@ class AddressAndProjectTests(QuerySetup):
         self.assertEqual(document["evidence"]["hypothesis"]["source"], "ghidra")
         headless.assert_called_once()
 
+    def test_instruction_references_from_are_kept(self):
+        ref = {"ref_type": "READ", "target_rva": "0x0000000002253610"}
+        raw = _present(
+            instructions=[
+                {
+                    "rva": ENTRY,
+                    "bytes": "488d05",
+                    "mnemonic": "LEA",
+                    "text": "LEA RAX,[0x102253610]",
+                    "references_from": [ref],
+                }
+            ]
+        )
+        _headless, document = self._run(["function", ENTRY], self._write_raw(raw))
+        self.assertEqual(document["evidence"]["instructions"][0]["references_from"], [ref])
+
     def test_uses_recorded_project_dir_when_export_root_is_set(self):
         self._run(["function", "_GfxSetIndexBuffer"], self._write_raw(_present(presence="absent")))
         self.assertEqual(self.captured["project_dir"], self.project)

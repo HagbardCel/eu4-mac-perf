@@ -213,6 +213,31 @@ public class QueryProgram extends GhidraScript {
             row.addProperty("bytes", hex(ins.getBytes()));
             row.addProperty("mnemonic", ins.getMnemonicString());
             row.addProperty("text", ins.toString());
+            row.add("references_from", referencesFrom(ins));
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private JsonArray referencesFrom(Instruction ins) {
+        JsonArray rows = new JsonArray();
+        Reference[] refs = ins.getReferencesFrom();
+        if (refs == null) {
+            return rows;
+        }
+        for (Reference ref : refs) {
+            if (ref == null) {
+                continue;
+            }
+            JsonObject row = new JsonObject();
+            row.addProperty("ref_type", ref.getReferenceType().getName());
+            Address to = ref.getToAddress();
+            String target = rva(to);
+            if (target != null) {
+                row.addProperty("target_rva", target);
+            } else if (to != null) {
+                row.addProperty("target_external", to.toString());
+            }
             rows.add(row);
         }
         return rows;

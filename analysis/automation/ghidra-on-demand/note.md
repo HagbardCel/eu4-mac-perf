@@ -27,7 +27,7 @@ One `-process eu4 -noanalysis -readOnly` invocation ran `ExportRendererStatic.ja
 
 Identity matched: executable SHA-256 `b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d`, image base `4294967296`, program `eu4`. Static export status `success`, 18 instructions, name `_GfxSetIndexBuffer`.
 
-Decompilation status was `failed`. Ghidra logged `os/mac_arm_64/decompile does not exist`. The Homebrew 12.2 formula removes native directories whose names are not `mac-arm_64`, and this build's `Decompiler/os` directory is empty. Later `ghidra_query function` calls report `decompile_status: failed` with `decompilation failed`. Instructions, references, defined data, and P-code do not use that binary.
+Decompilation status was `failed`. Ghidra logged `os/mac_arm_64/decompile does not exist`. The Homebrew 12.2 formula removes native directories whose names are not `mac-arm_64`, and this build's `Decompiler/os` directory is empty. Function queries against that install report `decompile_status: failed` with `decompilation failed`. Instructions, references, defined data, and P-code do not use that binary. The install that decompiles is recorded under Decompiler qualification.
 
 A second open rewrote the mtimes of `~index.dat` and `~index.bak` under the project and left their bytes unchanged. No other project file changed. The live test allows that timestamp touch and fails on any content change.
 
@@ -71,7 +71,7 @@ OpenCode shell permissions are not an OS sandbox, and `-readOnly` is not one eit
 | `address 0x2549b23` | the data reference target | 7.5 s |
 | `address 0x2251898` again | the same counter | 7.7 s |
 
-No query returned `response_budget`, `identity_mismatch`, or `unavailable`. The first function pair exited 1 because the agent's own Python consumer read `sys.argv` wrong; the retry wrote both responses. `function 0x1059b8a` returned 128 of 503 instructions, the script window, and the agent did not pass `--instruction-offset`. The call it cited was inside that window. Every `function` query still reports `decompile_status: failed` because `os/mac_arm_64/decompile` is missing. The pseudocode in the report for `BeginScene` is the sealed snapshot, where that function's decompilation status is `success`.
+No query returned `response_budget`, `identity_mismatch`, or `unavailable`. The first function pair exited 1 because the agent's own Python consumer read `sys.argv` wrong; the retry wrote both responses. `function 0x1059b8a` returned 128 of 503 instructions, the script window, and the agent did not pass `--instruction-offset`. The call it cited was inside that window. Every `function` query in this session reports `decompile_status: failed` because the Homebrew install has no `os/mac_arm_64/decompile`. The pseudocode in the report for `BeginScene` is the sealed snapshot, where that function's decompilation status is `success`.
 
 The sealed corpus already contains `BeginScene` and its three direct callees. Restating that body would not count. These `ghidra_query` results are outside that corpus:
 
@@ -83,3 +83,9 @@ The sealed corpus already contains `BeginScene` and its three direct callees. Re
 The report does not claim the Metal backend caused the crash. It says a frame that returns to `0x149d229` shows the call was reached and does not locate the fault.
 
 This experiment succeeds. The agent used `ghidra_query` for functions the snapshot does not store and for defined data whose static bytes are distinct from an unknown runtime pointer. One-shot latency stayed in the same range as the feasibility probe, so this PR still does not add a persistent process. Stronger isolation waits until unattended investigation is authorized.
+
+## Decompiler qualification
+
+The official `ghidra_12.2_PUBLIC_20261016.zip` does not contain `os/mac_arm_64/decompile`. It contains the Windows and Linux x86-64 binaries and the decompiler sources. The qualified tree is `/Users/fabian/ghidra_12.2_PUBLIC`. `decompile` was built from that tree's `Ghidra/Features/Decompiler/src/decompile/cpp` with `g++ -arch arm64` (`make ghidra_opt`) and copied to `Ghidra/Features/Decompiler/os/mac_arm_64/decompile`. `file` reports `Mach-O 64-bit executable arm64`. Java is OpenJDK 25.0.5. The Homebrew cellar was not changed. `GHIDRA_INSTALL` has to point at this tree; the Homebrew path still cannot decompile.
+
+With that `GHIDRA_INSTALL`, `tests.test_ghidra_query_live` passed in 58.9 s. `function 0x15ec28e` is present, and one instruction `references_from` target is `0x0000000002253610`. `function 0xf90fd2` (`CLanguageIdler::Render`, which `research` reports `not_in_snapshot`) returns `decompile_status: success` and non-empty pseudocode. Project file bytes were unchanged aside from the allowed `~index.dat` and `~index.bak` timestamps.
