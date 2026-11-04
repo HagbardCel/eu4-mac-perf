@@ -92,7 +92,9 @@ Unresolved questions are the open assumptions above. The bytes at the bad-buffer
 
 The 0–12 bound above fitted the three stores inside the `0x198` allocation. Those stores overlap. The documented fields used by the draw path are pointers `[+0x130, +0x150)`, offset dwords `[+0x150, +0x160)`, and third dwords `[+0x160, +0x170)`. That admits four slots, 0 through 3. Slot 4's pointer store is the first byte of the offset array. The instructions still have no slot cap. The replacement rejects an index outside 0..3 with `range` before any store. That withdraws the 0–12 sentence above.
 
-A successful `eu4_gfx_create_vertex_buffer` stores `1` at header `+8` after the registry insert and the counter update. That dword is a presence token, not a recovered GL name. The setter's zero test at `0x15ec0b7` then selects a fresh buffer. Failure paths delete the header and do not store the token.
+A successful `eu4_gfx_create_vertex_buffer` stores `1` at header `+8` after the counter update and before the create receipt. That dword is a presence token, not a recovered GL name. The setter's zero test at `0x15ec0b7` then selects a fresh buffer. Failure paths delete the header and do not store the token.
+
+The index-buffer campaign pins the host and compares registries before it reports a missing index registration. Running that checker from this checkout would see `_GfxSetVertexBuffers` and report a changed pre-existing entry. The regression therefore runs `ea5b89d`'s `accept.py` in its own process against candidate `15cbc186`. That revision pair is the original contract: exit `1`, `verdict` `fail`, and `missing index registration`. The pins and `trusted_files_match()` are unchanged. This does not rerun a successful historical campaign.
 
 `eu4_gfx_vertex_slot_buffer` returns the registry's current `MTLBuffer` without the selection retaining one. Release and shutdown clear the private slot table and the deferred attribute list, including a header that was never registered. They do not write the master.
 

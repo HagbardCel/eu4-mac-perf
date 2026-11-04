@@ -249,11 +249,11 @@ void *eu4_gfx_create_vertex_buffer(void *ignored, const void *data, int32_t coun
     }
     int32_t *counter = (int32_t *)(eu4_gfx_image() + EU4_GFX_VB_COUNT_RVA);
     *counter += 1;
+    uint32_t token = 1;
+    memcpy((uint8_t *)header + 8, &token, 4);
     if (!g_create_recorded && eu4_metal_events_create(caller) == 0) {
         g_create_recorded = 1;
     }
-    uint32_t token = 1;
-    memcpy((uint8_t *)header + 8, &token, 4);
     return header;
 }
 
