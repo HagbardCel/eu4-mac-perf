@@ -164,6 +164,21 @@ exports/<baseline-revision>/audits/
 
 **Pre-merge:** run one full offline audit on the qualified EU IV Ghidra project (e.g. `auto-v1-20261013`) and attach summary metrics to the PR.
 
+## Research
+
+`python3 -m reverse_engineering.research` reads the sealed renderer snapshot and the symbol index. It does not rebuild the index, rewrite a ZIP, copy the corpus into a worktree, launch Ghidra, or launch EU4. `EU4_RE_EXPORT` is the binary-specific corpus root that contains `exports/`, not a path to one ZIP.
+
+```bash
+python3 -m reverse_engineering.research status
+python3 -m reverse_engineering.research resolve _GfxCreateIndexBuffer
+python3 -m reverse_engineering.research function 0x15ec154 --view static
+python3 -m reverse_engineering.research xrefs 0x15ec154
+```
+
+Each response is one JSON object with schema `eu4.research.v1`. `status` is `ok`, `not_found`, `ambiguous`, `not_in_snapshot`, `unavailable`, or `identity_error`. A missing source stays missing. A batch plan that parses but does not match the frozen partition, or an index whose recorded binary SHA-256, baseline revision, or inventory bundle digest disagrees, is `identity_error`.
+
+`function` pages static instructions and decompiler text separately with `--static-offset` and `--decompile-offset`. The default budget is 24 KiB. `--max-bytes` cannot exceed 256 KiB. The printed JSON object is always complete. Decompiler text is returned as stored.
+
 ## Frozen renderer scope (Stage 1)
 
 The graphics extraction list is frozen under [`analysis/renderer-corpus/scope/v1/`](../analysis/renderer-corpus/scope/v1/). Later exporters read this explicit RVA list; they do not walk the call graph or select functions by name. Rows tagged `dependency` are static graph inclusions, not verified renderer roles.
