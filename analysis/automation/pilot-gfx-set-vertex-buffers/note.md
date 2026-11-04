@@ -87,3 +87,13 @@ Human decisions, stated as policy rather than recovered instructions: a null han
 Unresolved questions are the open assumptions above. The bytes at the bad-buffer `LEA` `0x15ec02d` (`0x1bb6bb5`) were not read back. The host tests are evidence for review. They are not a claim that the replacement is semantically equivalent.
 
 `python3 -m unittest tests.test_gfx_buffers tests.test_gfx_entry_registry` passed, 24 tests. The replacement, the entry row, and the host tests add 381 lines.
+
+## Correction
+
+The 0–12 bound above fitted the three stores inside the `0x198` allocation. Those stores overlap. The documented fields used by the draw path are pointers `[+0x130, +0x150)`, offset dwords `[+0x150, +0x160)`, and third dwords `[+0x160, +0x170)`. That admits four slots, 0 through 3. Slot 4's pointer store is the first byte of the offset array. The instructions still have no slot cap. The replacement rejects an index outside 0..3 with `range` before any store. That withdraws the 0–12 sentence above.
+
+A successful `eu4_gfx_create_vertex_buffer` stores `1` at header `+8` after the registry insert and the counter update. That dword is a presence token, not a recovered GL name. The setter's zero test at `0x15ec0b7` then selects a fresh buffer. Failure paths delete the header and do not store the token.
+
+`eu4_gfx_vertex_slot_buffer` returns the registry's current `MTLBuffer` without the selection retaining one. Release and shutdown clear the private slot table and the deferred attribute list, including a header that was never registered. They do not write the master.
+
+`PYTHONPATH=benchmark:. python3 -m unittest discover -s tests` ran 1916 tests. The index-buffer campaign reports `trusted file edited: tests/gfx_buffers_host.mm` because it pins that host file. Five errors are a missing local results manifest and Ghidra project-path checks. `tests.test_gfx_buffers` and `tests.test_gfx_entry_registry` passed.

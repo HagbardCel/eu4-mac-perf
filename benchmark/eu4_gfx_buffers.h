@@ -12,8 +12,8 @@ extern "C" {
 #define EU4_GFX_VB_COUNT_RVA 0x223857c
 /* bOutputError. The null-header path in _GfxSetVertexBuffers. */
 #define EU4_GFX_VB_ERROR_RVA 0x2238580
-/* Slots whose +0x130/+0x150/+0x160 stores fit in the 0x198-byte master. */
-#define EU4_GFX_VERTEX_SLOTS 13
+/* Pointers [+0x130, +0x150), offsets [+0x150, +0x160), third dwords [+0x160, +0x170). */
+#define EU4_GFX_VERTEX_SLOTS 4
 
 /* nGLIBCount. Four bytes after nGLVBCount. */
 #define EU4_GFX_IB_COUNT_RVA 0x2238584
@@ -71,6 +71,10 @@ void eu4_gfx_set_vertex_buffers(void *handle, int32_t count, void **headers, int
                                 const int32_t *offsets, const int32_t *words);
 void *eu4_gfx_vertex_slot_header(int slot);
 int eu4_gfx_vertex_slot_read(int slot, void *dest, size_t n);
+/* Borrowed MTLBuffer for a later encoder. Each call resolves the slot header
+   through the vertex registry and returns the current buffer. The selection
+   does not retain a copy. NULL when the slot, entry, or buffer is absent. */
+void *eu4_gfx_vertex_slot_buffer(int slot);
 int eu4_gfx_disabled_vertex_attrib_count(void);
 int eu4_gfx_disabled_vertex_attrib(int index, int32_t *out);
 

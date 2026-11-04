@@ -173,9 +173,10 @@ void eu4_gfx_release_vertex_buffers(void *backend, const void *caller) {
     for (EU4VertexBuffer *entry in g_entries) {
         if (entry.backend == backend) {
             entry.buffer = nil;
-            clear_vertex_slot(entry.header);
         }
     }
+    memset(g_vertex_slots, 0, sizeof g_vertex_slots);
+    g_disabled_count = 0;
     for (EU4IndexBuffer *entry in g_index_entries) {
         if (entry.backend == backend) {
             entry.buffer = nil;
@@ -251,6 +252,8 @@ void *eu4_gfx_create_vertex_buffer(void *ignored, const void *data, int32_t coun
     if (!g_create_recorded && eu4_metal_events_create(caller) == 0) {
         g_create_recorded = 1;
     }
+    uint32_t token = 1;
+    memcpy((uint8_t *)header + 8, &token, 4);
     return header;
 }
 
@@ -740,6 +743,14 @@ void *eu4_gfx_vertex_slot_header(int slot) {
         return NULL;
     }
     return g_vertex_slots[slot];
+}
+
+void *eu4_gfx_vertex_slot_buffer(int slot) {
+    EU4VertexBuffer *entry = find_entry(eu4_gfx_vertex_slot_header(slot));
+    if (entry == nil || entry.buffer == nil) {
+        return NULL;
+    }
+    return (__bridge void *)entry.buffer;
 }
 
 int eu4_gfx_vertex_slot_read(int slot, void *dest, size_t n) {
