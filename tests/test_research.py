@@ -11,7 +11,12 @@ from pathlib import Path
 from reverse_engineering import index_db, research, renderer_extract
 from reverse_engineering.intervals import format_rva, parse_rva
 from reverse_engineering.paths import ReError
-from reverse_engineering.renderer_scope import FROZEN_RENDERER_BATCH_SIZE, build_batch_plan, parse_batch_plan
+from reverse_engineering.renderer_scope import (
+    FROZEN_RENDERER_BATCH_SIZE,
+    build_batch_plan,
+    load_summary,
+    parse_batch_plan,
+)
 from tests.test_renderer_extract import _census_row, _valid_static_row
 
 SHA = "a"
@@ -424,7 +429,14 @@ class PackageTests(IdentityPatchMixin, unittest.TestCase):
         code, doc = _run(self.ctx, ["function", FIXTURE])
         self.assertEqual(code, 0)
         self.assertEqual(doc["status"], "identity_error")
-        self.assertEqual(doc["reason"], "identity")
+        self.assertEqual(doc["reason"], "package")
+
+    def test_receipt_batch_id_mismatch_is_a_package_error(self) -> None:
+        self._seal(self.static_rows, self.decomp_rows, mutate=lambda receipt: receipt.__setitem__("batch_id", "gfx-batch-00099"))
+        code, doc = _run(self.ctx, ["function", FIXTURE])
+        self.assertEqual(code, 0)
+        self.assertEqual(doc["status"], "identity_error")
+        self.assertEqual(doc["reason"], "package")
 
     def test_instruction_and_decompiler_pages_are_independent(self) -> None:
         text = "DECOMPILE-" * 400
@@ -593,6 +605,267 @@ class ProvenanceTests(unittest.TestCase):
     def test_max_bytes_above_the_hard_cap_is_rejected(self) -> None:
         code = research.main(["status", "--max-bytes", str(research.HARD_MAX_BYTES + 1)])
         self.assertEqual(code, 2)
+
+    def test_max_bytes_below_the_minimum_is_rejected(self) -> None:
+        code = research.main(["status", "--max-bytes", str(research.MIN_MAX_BYTES - 1)])
+        self.assertEqual(code, 2)
+        self.assertLessEqual(research._nbytes(research._budget_document("status")), research.MIN_MAX_BYTES)
+
+
+class SourceTests(IdentityPatchMixin, unittest.TestCase):
+    def test_missing_functions_table_is_an_identity_error(self) -> None:
+        fixture = CorpusFixture()
+        self.addCleanup(fixture.close)
+        fixture.write_index([_function_row(FIXTURE, "Only")])
+        conn = sqlite3.connect(fixture.exp / "index.sqlite")
+        conn.execute("DROP TABLE functions")
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.commit()
+        conn.close()
+        for name in ("index.sqlite-wal", "index.sqlite-shm"):
+            sidecar = fixture.exp / name
+            if sidecar.exists():
+                sidecar.unlink()
+        ctx, _plan = fixture.context([FIXTURE])
+        code, doc = _run(ctx, ["resolve", "Only"])
+        self.assertEqual(code, 0)
+        self.assertEqual(doc["status"], "identity_error")
+        self.assertEqual(doc["reason"], "identity")
+        self.assertNotIn("/", doc.get("detail") or "")
+
+    def test_malformed_frozen_manifest_returns_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scope = Path(tmp)
+            (scope / "manifest-summary.json").write_text("{")
+            with self.assertRaises(json.JSONDecodeError):
+                load_summary(scope)
+
+            def loader(_baseline: str | None):
+                load_summary(scope)
+                return None, None
+
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                code = research.main(["status"], loader=loader)
+        doc = json.loads(buf.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(doc["status"], "identity_error")
+        self.assertEqual(doc["reason"], "identity")
+
+    def test_read_errors_stay_structured(self) -> None:
+        fixture = CorpusFixture()
+        self.addCleanup(fixture.close)
+        inventory, static, decomp = _simple_static(FIXTURE, "90")
+        fixture.write_index([inventory])
+        fixture.write_callsites([_census_row("0x0000000000001000", FIXTURE)])
+        ctx, plan = fixture.context([FIXTURE])
+        self._seal(fixture, plan, [static], [decomp])
+        with unittest.mock.patch(
+            "reverse_engineering.research.index_db.function_row",
+            side_effect=sqlite3.OperationalError("no such table: functions"),
+        ):
+            code, doc = _run(ctx, ["function", FIXTURE])
+        self.assertEqual(code, 0)
+        self.assertEqual(doc["status"], "identity_error")
+        self.assertEqual(doc["reason"], "identity")
+
+        (fixture.exp / "inventory" / "functions.jsonl").unlink()
+        code, missing = _run(ctx, ["function", FIXTURE])
+        self.assertEqual(code, 0)
+        self.assertEqual(missing["status"], "unavailable")
+        self.assertEqual(missing["reason"], "missing_source")
+
+        (fixture.exp / "audits" / "callsites-v1.jsonl").write_text('{"caller_rva":"%s"\n' % FIXTURE)
+        code, invalid = _run(ctx, ["xrefs", FIXTURE])
+        self.assertEqual(code, 0)
+        self.assertEqual(invalid["status"], "identity_error")
+        self.assertEqual(invalid["reason"], "identity")
+
+    def test_status_closes_the_index(self) -> None:
+        fixture = CorpusFixture()
+        self.addCleanup(fixture.close)
+        fixture.write_index([_function_row(FIXTURE, "Only")])
+        ctx, _plan = fixture.context([FIXTURE])
+        closed: list[bool] = []
+        real = research.index_db.connect_readonly
+
+        class _Closing:
+            def __init__(self, conn: sqlite3.Connection) -> None:
+                self._conn = conn
+
+            def execute(self, *args, **kwargs):
+                return self._conn.execute(*args, **kwargs)
+
+            def close(self) -> None:
+                closed.append(True)
+                self._conn.close()
+
+        def wrapped(path: Path) -> _Closing:
+            return _Closing(real(path))
+
+        with unittest.mock.patch("reverse_engineering.research.index_db.connect_readonly", wrapped):
+            code, doc = _run(ctx, ["status"])
+        self.assertEqual(code, 0)
+        self.assertEqual(doc["status"], "ok")
+        self.assertEqual(closed, [True])
+
+    def _seal(self, fixture: CorpusFixture, plan: dict, static_rows: list[dict], decomp_rows: list[dict]) -> None:
+        static_text = _jsonl(static_rows)
+        decomp_text = _jsonl(decomp_rows)
+        rvas = [row["entry_rva"] for row in static_rows]
+        receipt = renderer_extract.build_receipt(
+            static_bytes=static_text.encode(),
+            decomp_bytes=decomp_text.encode(),
+            batch_id="gfx-batch-00001",
+            rvas=rvas,
+            plan=plan,
+            summary=_summary(),
+            meta={"program_name": "eu4", "image_base": 1, "executable_sha256": SHA},
+            ghidra_version="12.1.4",
+            binary_sha=SHA,
+        )
+        path = renderer_extract.batch_zip_path(fixture.exp, "gfx-batch-00001")
+        path.write_bytes(renderer_extract.write_batch_zip(static_text, decomp_text, receipt))
+
+
+class BudgetTests(IdentityPatchMixin, unittest.TestCase):
+    def _package(self, static: dict, decomp: dict, inventory: dict):
+        fixture = CorpusFixture()
+        self.addCleanup(fixture.close)
+        fixture.write_index([inventory])
+        fixture.write_callsites([])
+        ctx, plan = fixture.context([inventory["entry_rva"]])
+        static_text = _jsonl([static])
+        decomp_text = _jsonl([decomp])
+        receipt = renderer_extract.build_receipt(
+            static_bytes=static_text.encode(),
+            decomp_bytes=decomp_text.encode(),
+            batch_id="gfx-batch-00001",
+            rvas=[inventory["entry_rva"]],
+            plan=plan,
+            summary=_summary(),
+            meta={"program_name": "eu4", "image_base": 1, "executable_sha256": SHA},
+            ghidra_version="12.1.4",
+            binary_sha=SHA,
+        )
+        path = renderer_extract.batch_zip_path(fixture.exp, "gfx-batch-00001")
+        path.write_bytes(renderer_extract.write_batch_zip(static_text, decomp_text, receipt))
+        return ctx
+
+    def test_oversized_instruction_is_a_budget_failure(self) -> None:
+        inventory, static, decomp = _simple_static(FIXTURE, "90")
+        static["instructions"][0]["operands"] = "X" * 100000
+        ctx = self._package(static, decomp, inventory)
+        code, doc = _run(ctx, ["function", FIXTURE, "--view", "static", "--max-bytes", str(research.MIN_MAX_BYTES)])
+        self.assertEqual(code, 0)
+        self.assertLessEqual(research._nbytes(doc), research.MIN_MAX_BYTES)
+        self.assertEqual(doc["status"], "unavailable")
+        self.assertEqual(doc["reason"], "response_budget")
+        self.assertNotIn("next_static_offset", doc)
+        self.assertNotIn("next_decompile_offset", doc)
+
+    def test_oversized_identity_stays_within_the_budget(self) -> None:
+        inventory, static, decomp = _simple_static(FIXTURE, "90")
+        inventory["name_demangled"] = "N" * 20000
+        inventory["name_mangled"] = "N" * 20000
+        ctx = self._package(static, decomp, inventory)
+        budget = 4096
+        code, doc = _run(ctx, ["function", FIXTURE, "--view", "static", "--max-bytes", str(budget)])
+        self.assertEqual(code, 0)
+        self.assertLessEqual(research._nbytes(doc), budget)
+        self.assertEqual(doc["status"], "ok")
+        self.assertEqual(doc["evidence"]["instructions"][0]["bytes_hex"], "90")
+        self.assertLess(len(doc["identity"]["name_demangled"]), 20000)
+
+    def test_xref_pages_reconstruct_every_list(self) -> None:
+        fixture = CorpusFixture()
+        self.addCleanup(fixture.close)
+        callers = [format_rva(parse_rva("0x5000") + index) for index in range(8)]
+        functions = [_function_row(FIXTURE, "Target")] + [_function_row(caller, f"Caller{index}") for index, caller in enumerate(callers)]
+        edges = []
+        for index, caller in enumerate(callers):
+            edges.append({
+                "callsite_rva": format_rva(parse_rva("0x6000") + index),
+                "caller_rva": caller,
+                "callee_internal_rva": FIXTURE,
+                "callee_external_symbol": None,
+                "resolution": "direct_internal",
+            })
+        for index in range(3):
+            edges.append({
+                "callsite_rva": format_rva(parse_rva("0x7000") + index),
+                "caller_rva": FIXTURE,
+                "callee_internal_rva": None,
+                "callee_external_symbol": f"ext_{index}",
+                "resolution": "direct_external",
+            })
+        fixture.write_index(functions, edges)
+        callsites = [{
+            "callsite_rva": format_rva(parse_rva("0x8000") + index),
+            "caller_rva": FIXTURE,
+            "instruction_class": "indirect",
+            "flow_instruction_class": "indirect",
+            "classifier_status": "agreement",
+            "pcode_kind": "CALLIND",
+        } for index in range(3)]
+        fixture.write_callsites(callsites)
+        ctx, _plan = fixture.context([FIXTURE])
+        _code, full = _run(ctx, ["xrefs", FIXTURE])
+        self.assertFalse(full["truncated"])
+        self.assertNotIn("incoming_total", full["evidence"])
+        budget = None
+        first = None
+        for candidate in range(research.MIN_MAX_BYTES, 12000, 64):
+            _code, doc = _run(ctx, ["xrefs", FIXTURE, "--max-bytes", str(candidate)])
+            evidence = doc["evidence"]
+            if (
+                doc["status"] == "ok"
+                and evidence["incoming"]
+                and not evidence["outgoing"]
+                and not evidence["callsites"]
+                and doc["truncated"]
+            ):
+                budget = candidate
+                first = doc
+                break
+        self.assertIsNotNone(budget)
+        assert first is not None and budget is not None
+        self.assertTrue(first["evidence"]["outgoing_blocked"])
+        self.assertTrue(first["evidence"]["callsites_blocked"])
+        self.assertNotIn("next_outgoing_offset", first)
+        self.assertNotIn("next_callsite_offset", first)
+        self.assertEqual(first["evidence"]["incoming_total"], len(full["evidence"]["incoming"]))
+        self.assertEqual(first["next_incoming_offset"], len(first["evidence"]["incoming"]))
+
+        collected = {"incoming": [], "outgoing": [], "callsites": []}
+        offsets = {"incoming": 0, "outgoing": 0, "callsites": 0}
+        for _page in range(30):
+            code, doc = _run(ctx, [
+                "xrefs", FIXTURE, "--max-bytes", str(budget),
+                "--incoming-offset", str(offsets["incoming"]),
+                "--outgoing-offset", str(offsets["outgoing"]),
+                "--callsite-offset", str(offsets["callsites"]),
+            ])
+            self.assertEqual(code, 0)
+            self.assertLessEqual(research._nbytes(doc), budget)
+            self.assertEqual(doc["status"], "ok")
+            evidence = doc["evidence"]
+            for key, flag in (
+                ("incoming", "next_incoming_offset"),
+                ("outgoing", "next_outgoing_offset"),
+                ("callsites", "next_callsite_offset"),
+            ):
+                returned = evidence[key]
+                collected[key].extend(returned)
+                if flag in doc:
+                    self.assertEqual(doc[flag], offsets[key] + len(returned))
+                    self.assertGreater(doc[flag], offsets[key])
+                offsets[key] += len(returned)
+            if not doc["truncated"]:
+                break
+        self.assertEqual(collected["incoming"], full["evidence"]["incoming"])
+        self.assertEqual(collected["outgoing"], full["evidence"]["outgoing"])
+        self.assertEqual(collected["callsites"], full["evidence"]["callsites"])
 
 
 if __name__ == "__main__":

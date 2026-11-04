@@ -177,7 +177,7 @@ python3 -m reverse_engineering.research xrefs 0x15ec154
 
 Each response is one JSON object with schema `eu4.research.v1`. `status` is `ok`, `not_found`, `ambiguous`, `not_in_snapshot`, `unavailable`, or `identity_error`. A missing source stays missing. A batch plan that parses but does not match the frozen partition, or an index whose recorded binary SHA-256, baseline revision, or inventory bundle digest disagrees, is `identity_error`.
 
-`function` pages static instructions and decompiler text separately with `--static-offset` and `--decompile-offset`. The default budget is 24 KiB. `--max-bytes` cannot exceed 256 KiB. The printed JSON object is always complete. Decompiler text is returned as stored.
+`function` pages static instructions and decompiler text separately with `--static-offset` and `--decompile-offset`. `xrefs` pages with `--incoming-offset`, `--outgoing-offset`, and `--callsite-offset`. The default budget is 24 KiB. `--max-bytes` must be from 1024 bytes through 256 KiB. Every response, including a compact error, fits that budget after serialization and the trailing newline. A continuation offset moves only past instructions, characters, or rows that were returned. When nothing useful fits, the status is `unavailable` and the reason is `response_budget`. A truncated xref response reports each list's total. A list left out because another list filled the budget is marked blocked and has no next offset. Decompiler text is returned as stored.
 
 ## Frozen renderer scope (Stage 1)
 

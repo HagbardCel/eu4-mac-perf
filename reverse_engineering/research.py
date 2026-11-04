@@ -8,6 +8,7 @@ launch EU4. EU4_RE_EXPORT selects the corpus root that contains exports/.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import sqlite3
@@ -32,18 +33,20 @@ from reverse_engineering.renderer_scope import DEFAULT_SCOPE_DIR
 
 SCHEMA = "eu4.research.v1"
 DEFAULT_MAX_BYTES = 24 * 1024
+MIN_MAX_BYTES = 1024
 HARD_MAX_BYTES = 256 * 1024
 DEFAULT_RESOLVE_LIMIT = 20
 _RVA_RE = re.compile(r"0x[0-9a-fA-F]+$")
-_PACKAGE_MARKERS = (
-    "corrupt zip",
-    "expected members",
-    "static_sha256",
-    "decompiled_sha256",
-    "decode error",
-    "receipt JSON",
-    "jsonl",
-    "JSON",
+_LOADER_ERRORS = (ReError, json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError)
+_PACKAGE_ERRORS = (ReError, sqlite3.DatabaseError, json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError)
+_XREF_KEYS = ("callsites", "outgoing", "incoming")
+_XREF_META = (
+    "incoming_total",
+    "outgoing_total",
+    "callsites_total",
+    "incoming_blocked",
+    "outgoing_blocked",
+    "callsites_blocked",
 )
 _XREF_LIMITS = (
     "unresolved indirect dispatch is not enumerated beyond the recorded unresolved rows",
@@ -93,7 +96,7 @@ def load_production_context(baseline: str | None) -> tuple[ResearchContext | Non
     try:
         exp, summary, plan, bundle, ordered, revision = load_frozen_context(DEFAULT_SCOPE_DIR, baseline)
         return assemble_context(exp, summary, plan, bundle, ordered, revision), None
-    except ReError as exc:
+    except _LOADER_ERRORS as exc:
         return None, exc
 
 
@@ -104,10 +107,17 @@ def main(argv: list[str] | None = None, *, loader: Loader | None = None) -> int:
     except SystemExit as exc:
         code = exc.code
         return code if isinstance(code, int) else 2
-    if args.max_bytes < 1 or args.max_bytes > HARD_MAX_BYTES:
-        print(f"max-bytes must be from 1 to {HARD_MAX_BYTES}", file=sys.stderr)
+    if args.max_bytes < MIN_MAX_BYTES or args.max_bytes > HARD_MAX_BYTES:
+        print(f"max-bytes must be from {MIN_MAX_BYTES} to {HARD_MAX_BYTES}", file=sys.stderr)
         return 2
-    if getattr(args, "static_offset", 0) < 0 or getattr(args, "decompile_offset", 0) < 0:
+    offsets = (
+        getattr(args, "static_offset", 0),
+        getattr(args, "decompile_offset", 0),
+        getattr(args, "incoming_offset", 0),
+        getattr(args, "outgoing_offset", 0),
+        getattr(args, "callsite_offset", 0),
+    )
+    if any(offset < 0 for offset in offsets):
         print("offsets must be zero or positive", file=sys.stderr)
         return 2
     if getattr(args, "limit", None) is not None and args.limit < 1:
@@ -116,10 +126,10 @@ def main(argv: list[str] | None = None, *, loader: Loader | None = None) -> int:
     load = loader or load_production_context
     try:
         context, err = load(args.baseline_revision)
-    except ReError as exc:
+    except _LOADER_ERRORS as exc:
         context, err = None, exc
     if err is not None or context is None:
-        _emit(_failure(args.command, err or ReError("missing research context")))
+        _emit(_source_error(args.command, err or ReError("missing research context")), args.max_bytes)
         return 0
     if args.command == "status":
         document = cmd_status(context)
@@ -136,60 +146,68 @@ def main(argv: list[str] | None = None, *, loader: Loader | None = None) -> int:
             budget=args.max_bytes,
         )
     else:
-        document = cmd_xrefs(context, args.rva, args.max_bytes)
-    _emit(document)
+        document = cmd_xrefs(
+            context,
+            args.rva,
+            args.max_bytes,
+            incoming_offset=args.incoming_offset,
+            outgoing_offset=args.outgoing_offset,
+            callsite_offset=args.callsite_offset,
+        )
+    _emit(document, args.max_bytes)
     return 0
 
 
 def cmd_status(ctx: ResearchContext) -> dict[str, Any]:
-    index_state, _conn = _open_index(ctx)
-    ghidra = ghidra_project_meta_path(ctx.exp.parent.parent)
-    evidence = {
-        "pinned_sha256": ctx.summary.get("binary_sha256"),
-        "baseline_revision": ctx.revision,
-        "function_count": ctx.plan.get("selected_function_count"),
-        "index": index_state,
-        "snapshot": "valid",
-        "ghidra_project_metadata": "present" if ghidra.is_file() else "unavailable",
-        "manifest_provenance": "pass",
-    }
-    if index_state == "identity_error":
-        status, reason = "identity_error", "identity"
-    elif index_state == "unavailable":
-        status, reason = "unavailable", "missing_index"
-    else:
-        status, reason = "ok", None
-    return _document(
-        "status",
-        status,
-        provenance=_provenance(ctx, index_state),
-        evidence=evidence,
-        reason=reason,
-    )
+    index_state, conn, detail = _open_index(ctx)
+    try:
+        ghidra = ghidra_project_meta_path(ctx.exp.parent.parent)
+        evidence = {
+            "pinned_sha256": ctx.summary.get("binary_sha256"),
+            "baseline_revision": ctx.revision,
+            "function_count": ctx.plan.get("selected_function_count"),
+            "index": index_state,
+            "snapshot": "valid",
+            "ghidra_project_metadata": "present" if ghidra.is_file() else "unavailable",
+            "manifest_provenance": "pass",
+        }
+        if index_state == "identity_error":
+            status, reason = "identity_error", "identity"
+        elif index_state == "unavailable":
+            status, reason = "unavailable", "missing_index"
+        else:
+            status, reason = "ok", None
+        return _document(
+            "status",
+            status,
+            provenance=_provenance(ctx, index_state),
+            evidence=evidence,
+            reason=reason,
+            detail=detail if status == "identity_error" else None,
+        )
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def cmd_resolve(ctx: ResearchContext, query: str, limit: int, budget: int) -> dict[str, Any]:
-    state, conn = _open_index(ctx)
+    state, conn, detail = _open_index(ctx)
     if state != "present" or conn is None:
-        return _index_blocked("resolve", ctx, state)
+        return _index_blocked("resolve", ctx, state, detail)
     try:
         if _RVA_RE.match(query.strip()):
             try:
                 rva = _normalize_rva(query)
             except (ValueError, ReError) as exc:
-                return _document(
-                    "resolve",
-                    "identity_error",
-                    provenance=_provenance(ctx, state),
-                    reason="identity",
-                    detail=str(exc),
-                )
+                return _source_error("resolve", exc, provenance=_provenance(ctx, state), identity={"query": query})
             row = index_db.function_row(conn, rva)
             matches = [_match_record(row, "exact", ctx)] if row is not None else []
             kind = "exact"
             truncated = False
         else:
             matches, kind, truncated = _name_matches(conn, query, limit, ctx)
+    except sqlite3.DatabaseError as exc:
+        return _source_error("resolve", exc, provenance=_provenance(ctx, "present"), identity={"query": query})
     finally:
         conn.close()
     if not matches:
@@ -245,12 +263,14 @@ def cmd_function(
             reason="identity",
             detail=str(exc),
         )
-    state, conn = _open_index(ctx)
+    state, conn, detail = _open_index(ctx)
     if state != "present" or conn is None:
-        return _index_blocked("function", ctx, state)
+        return _index_blocked("function", ctx, state, detail)
     try:
         found = index_db.function_row(conn, rva)
         row = dict(found) if found is not None else None
+    except sqlite3.DatabaseError as exc:
+        return _source_error("function", exc, provenance=_provenance(ctx, "present"), identity={"entry_rva": rva})
     finally:
         conn.close()
     in_snapshot = rva in ctx.rva_to_batch
@@ -265,16 +285,15 @@ def cmd_function(
         )
     try:
         static_row, decomp_row, receipt, batch_id = _read_function(ctx, rva)
-    except ReError as exc:
-        return _failure("function", exc, provenance=_provenance(ctx, "present"), identity={"entry_rva": rva})
     except FileNotFoundError as exc:
-        return _document(
+        return _source_error("function", exc, provenance=_provenance(ctx, "present"), identity={"entry_rva": rva})
+    except _PACKAGE_ERRORS as exc:
+        return _source_error(
             "function",
-            "unavailable",
-            identity={"entry_rva": rva},
+            exc,
             provenance=_provenance(ctx, "present"),
-            reason="missing_source",
-            detail=exc.filename or "missing source",
+            identity={"entry_rva": rva},
+            package=True,
         )
     identity = _match_record(row, "exact", ctx) if row is not None else {"entry_rva": rva, "in_snapshot": True}
     return _page_function(
@@ -292,7 +311,15 @@ def cmd_function(
     )
 
 
-def cmd_xrefs(ctx: ResearchContext, raw_rva: str, budget: int) -> dict[str, Any]:
+def cmd_xrefs(
+    ctx: ResearchContext,
+    raw_rva: str,
+    budget: int,
+    *,
+    incoming_offset: int = 0,
+    outgoing_offset: int = 0,
+    callsite_offset: int = 0,
+) -> dict[str, Any]:
     if not _RVA_RE.match(raw_rva.strip()):
         return _document(
             "xrefs",
@@ -306,14 +333,16 @@ def cmd_xrefs(ctx: ResearchContext, raw_rva: str, budget: int) -> dict[str, Any]
         rva = _normalize_rva(raw_rva)
     except (ValueError, ReError) as exc:
         return _document("xrefs", "identity_error", provenance=_provenance(ctx, "unchecked"), reason="identity", detail=str(exc))
-    state, conn = _open_index(ctx)
+    state, conn, detail = _open_index(ctx)
     if state != "present" or conn is None:
-        return _index_blocked("xrefs", ctx, state)
+        return _index_blocked("xrefs", ctx, state, detail)
     try:
         found = index_db.function_row(conn, rva)
         row = dict(found) if found is not None else None
         incoming = [_edge(item) for item in index_db.callers(conn, rva)]
         outgoing = [_edge(item) for item in index_db.callees(conn, rva)]
+    except sqlite3.DatabaseError as exc:
+        return _source_error("xrefs", exc, provenance=_provenance(ctx, "present"), identity={"entry_rva": rva})
     finally:
         conn.close()
     census_path = ctx.exp / "audits" / "callsites-v1.jsonl"
@@ -335,15 +364,10 @@ def cmd_xrefs(ctx: ResearchContext, raw_rva: str, budget: int) -> dict[str, Any]
         )
     try:
         callsites = _stream_callsites(census_path, {rva}).get(rva, [])
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        return _document(
-            "xrefs",
-            "identity_error",
-            identity={"entry_rva": rva},
-            provenance=_provenance(ctx, "present"),
-            reason="package",
-            detail=str(exc),
-        )
+    except FileNotFoundError as exc:
+        return _source_error("xrefs", exc, provenance=_provenance(ctx, "present"), identity={"entry_rva": rva})
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError) as exc:
+        return _source_error("xrefs", exc, provenance=_provenance(ctx, "present"), identity={"entry_rva": rva})
     document = _document(
         "xrefs",
         "ok",
@@ -356,7 +380,12 @@ def cmd_xrefs(ctx: ResearchContext, raw_rva: str, budget: int) -> dict[str, Any]
             "limits": list(_XREF_LIMITS),
         },
     )
-    return _trim_lists(document, budget, ("callsites", "outgoing", "incoming"))
+    return _page_xrefs(
+        document,
+        budget,
+        starts={"incoming": incoming_offset, "outgoing": outgoing_offset, "callsites": callsite_offset},
+        totals={"incoming": len(incoming), "outgoing": len(outgoing), "callsites": len(callsites)},
+    )
 
 
 def _read_function(ctx: ResearchContext, rva: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], str]:
@@ -433,12 +462,12 @@ def _page_function(
         if view != "decompiled":
             evidence["instructions"] = instructions[ins_start : ins_start + n_ins]
             evidence["instruction_total"] = total_ins
-            if ins_start + n_ins < total_ins:
+            if n_ins > 0 and ins_start + n_ins < total_ins:
                 next_static = ins_start + n_ins
         if view != "static":
             evidence["pseudocode"] = pseudocode[text_start : text_start + n_chars]
             evidence["pseudocode_total"] = total_chars
-            if text_start + n_chars < total_chars:
+            if n_chars > 0 and text_start + n_chars < total_chars:
                 next_decompile = text_start + n_chars
         truncated = next_static is not None or next_decompile is not None
         return _document(
@@ -452,7 +481,9 @@ def _page_function(
             next_decompile_offset=next_decompile,
         )
 
-    return _fit(build, ins_budget, text_budget, budget)
+    want_ins = view != "decompiled" and ins_start < total_ins and ins_budget > 0
+    want_chars = view != "static" and text_start < total_chars and text_budget > 0
+    return _fit(build, ins_budget, text_budget, budget, want_ins=want_ins, want_chars=want_chars)
 
 
 def _fit(
@@ -460,33 +491,51 @@ def _fit(
     n_ins: int,
     n_chars: int,
     budget: int,
+    *,
+    want_ins: bool,
+    want_chars: bool,
 ) -> dict[str, Any]:
-    if _nbytes(build(n_ins, n_chars)) <= budget:
-        return build(n_ins, n_chars)
-    chars = n_chars
-    ins = n_ins
-    if chars:
-        low, high, best = 0, chars, 0
-        while low <= high:
-            mid = (low + high) // 2
-            if _nbytes(build(ins, mid)) <= budget:
-                best = mid
-                low = mid + 1
-            else:
-                high = mid - 1
-        chars = best
-    if _nbytes(build(ins, chars)) > budget:
-        chars = 0
-        low, high, best = 0, ins, 0
-        while low <= high:
-            mid = (low + high) // 2
-            if _nbytes(build(mid, 0)) <= budget:
-                best = mid
-                low = mid + 1
-            else:
-                high = mid - 1
-        ins = best
-    return build(ins, chars)
+    def acceptable(ins: int, chars: int) -> dict[str, Any] | None:
+        return _within(build(ins, chars), budget)
+
+    chosen = acceptable(n_ins, n_chars)
+    if chosen is None:
+        chars = n_chars
+        ins = n_ins
+        if chars:
+            low, high, best = 0, chars, -1
+            while low <= high:
+                mid = (low + high) // 2
+                if acceptable(ins, mid) is not None:
+                    best = mid
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            chars = max(best, 0)
+        if acceptable(ins, chars) is None:
+            chars = 0
+            low, high, best = 0, ins, -1
+            while low <= high:
+                mid = (low + high) // 2
+                if acceptable(mid, 0) is not None:
+                    best = mid
+                    low = mid + 1
+                else:
+                    high = mid - 1
+            ins = max(best, 0)
+        chosen = acceptable(ins, chars)
+    if chosen is None or ((want_ins or want_chars) and not _page_has_progress(chosen, want_ins, want_chars)):
+        return _budget_document("function")
+    return chosen
+
+
+def _page_has_progress(document: dict[str, Any], want_ins: bool, want_chars: bool) -> bool:
+    evidence = document.get("evidence") or {}
+    if want_ins and evidence.get("instructions"):
+        return True
+    if want_chars and evidence.get("pseudocode"):
+        return True
+    return not want_ins and not want_chars
 
 
 def _name_matches(
@@ -527,20 +576,23 @@ def _name_matches(
     return [_match_record(row, "partial", ctx) for row in partial[:limit]], "partial", truncated
 
 
-def _open_index(ctx: ResearchContext) -> tuple[str, sqlite3.Connection | None]:
+def _open_index(ctx: ResearchContext) -> tuple[str, sqlite3.Connection | None, str | None]:
     path = ctx.exp / "index.sqlite"
     if not path.is_file():
-        return "unavailable", None
+        return "unavailable", None, None
     try:
         conn = index_db.connect_readonly(path)
-    except (sqlite3.DatabaseError, FileNotFoundError):
-        return "identity_error", None
+    except FileNotFoundError:
+        return "unavailable", None, None
+    except sqlite3.DatabaseError:
+        return "identity_error", None, "incomplete index schema"
     try:
         rows = conn.execute("SELECT key, value FROM provenance")
         stored = {row["key"]: row["value"] for row in rows}
+        names = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     except sqlite3.DatabaseError:
         conn.close()
-        return "identity_error", None
+        return "identity_error", None, "incomplete index schema"
     expected = {
         "binary_sha256": ctx.summary.get("binary_sha256"),
         "baseline_revision": ctx.revision,
@@ -548,8 +600,11 @@ def _open_index(ctx: ResearchContext) -> tuple[str, sqlite3.Connection | None]:
     }
     if any(not value or stored.get(key) != value for key, value in expected.items()):
         conn.close()
-        return "identity_error", None
-    return "present", conn
+        return "identity_error", None, "stale index provenance"
+    if "functions" not in names or "call_edges" not in names:
+        conn.close()
+        return "identity_error", None, "incomplete index schema"
+    return "present", conn, None
 
 
 def _stream_callsites(path: Path, callers: set[str]) -> dict[str, list[dict[str, Any]]]:
@@ -566,14 +621,14 @@ def _stream_callsites(path: Path, callers: set[str]) -> dict[str, list[dict[str,
     return grouped
 
 
-def _index_blocked(operation: str, ctx: ResearchContext, state: str) -> dict[str, Any]:
+def _index_blocked(operation: str, ctx: ResearchContext, state: str, detail: str | None) -> dict[str, Any]:
     if state == "identity_error":
         return _document(
             operation,
             "identity_error",
             provenance=_provenance(ctx, state),
             reason="identity",
-            detail="stale index provenance",
+            detail=detail or "stale index provenance",
         )
     return _document(
         operation,
@@ -584,22 +639,32 @@ def _index_blocked(operation: str, ctx: ResearchContext, state: str) -> dict[str
     )
 
 
-def _failure(
+def _source_error(
     operation: str,
     exc: Exception,
     *,
     provenance: dict[str, Any] | None = None,
     identity: dict[str, Any] | None = None,
+    package: bool = False,
 ) -> dict[str, Any]:
-    text = str(exc)
-    lowered = text.lower()
-    if isinstance(exc, FileNotFoundError) or "missing" in lowered or "no exports" in lowered or "no export revisions" in lowered:
-        status, reason = "unavailable", "missing_source"
-    elif any(marker in text for marker in _PACKAGE_MARKERS):
-        status, reason = "identity_error", "package"
-    else:
-        status, reason = "identity_error", "identity"
-    return _document(operation, status, identity=identity, provenance=provenance, reason=reason, detail=text)
+    if isinstance(exc, FileNotFoundError):
+        detail = exc.filename or str(exc) or "missing source"
+        return _document(
+            operation,
+            "unavailable",
+            identity=identity,
+            provenance=provenance,
+            reason="missing_source",
+            detail=detail,
+        )
+    return _document(
+        operation,
+        "identity_error",
+        identity=identity,
+        provenance=provenance,
+        reason="package" if package else "identity",
+        detail=str(exc),
+    )
 
 
 def _match_record(row: sqlite3.Row, match: str, ctx: ResearchContext) -> dict[str, Any]:
@@ -685,6 +750,9 @@ def _document(
     detail: str | None = None,
     next_static_offset: int | None = None,
     next_decompile_offset: int | None = None,
+    next_incoming_offset: int | None = None,
+    next_outgoing_offset: int | None = None,
+    next_callsite_offset: int | None = None,
 ) -> dict[str, Any]:
     body: dict[str, Any] = {
         "schema": SCHEMA,
@@ -699,34 +767,91 @@ def _document(
         body["reason"] = reason
     if detail:
         body["detail"] = _redact(detail)
-    if next_static_offset is not None:
-        body["next_static_offset"] = next_static_offset
-    if next_decompile_offset is not None:
-        body["next_decompile_offset"] = next_decompile_offset
+    for name, value in (
+        ("next_static_offset", next_static_offset),
+        ("next_decompile_offset", next_decompile_offset),
+        ("next_incoming_offset", next_incoming_offset),
+        ("next_outgoing_offset", next_outgoing_offset),
+        ("next_callsite_offset", next_callsite_offset),
+    ):
+        if value is not None:
+            body[name] = value
     return body
 
 
 def _shrink_matches(document: dict[str, Any], budget: int) -> dict[str, Any]:
-    matches = document["evidence"]["matches"]
-    while matches and _nbytes(document) > budget:
+    while True:
+        fitted = _within(document, budget)
+        if fitted is not None:
+            return fitted
+        matches = document["evidence"]["matches"]
+        if not matches:
+            return _budget_document("resolve")
         matches.pop()
         document["truncated"] = True
         document["reason"] = "truncated"
         if len(matches) != 1:
             document["status"] = "ambiguous"
             document["identity"] = {"query": document["identity"].get("query")}
-    return document
 
 
-def _trim_lists(document: dict[str, Any], budget: int, keys: tuple[str, ...]) -> dict[str, Any]:
+def _page_xrefs(
+    document: dict[str, Any],
+    budget: int,
+    *,
+    starts: dict[str, int],
+    totals: dict[str, int],
+) -> dict[str, Any]:
     evidence = document["evidence"]
-    while _nbytes(document) > budget and any(evidence[key] for key in keys):
-        for key in keys:
+    for key in _XREF_KEYS:
+        evidence[key] = list(evidence[key][starts[key] :])
+    while True:
+        _annotate_xrefs(document, starts, totals)
+        fitted = _within(document, budget)
+        if fitted is not None:
+            kept = fitted["evidence"]
+            useful = any(kept[key] for key in _XREF_KEYS)
+            pending = any(starts[key] < totals[key] for key in _XREF_KEYS)
+            if pending and not useful:
+                return _budget_document("xrefs")
+            return fitted
+        dropped = False
+        for key in _XREF_KEYS:
             if evidence[key]:
                 evidence[key].pop()
-                document["truncated"] = True
+                dropped = True
                 break
-    return document
+        if not dropped:
+            return _budget_document("xrefs")
+
+
+def _annotate_xrefs(document: dict[str, Any], starts: dict[str, int], totals: dict[str, int]) -> None:
+    evidence = document["evidence"]
+    for key in _XREF_META:
+        evidence.pop(key, None)
+    for key in ("next_incoming_offset", "next_outgoing_offset", "next_callsite_offset"):
+        document.pop(key, None)
+    specs = (
+        ("incoming", "incoming_blocked", "next_incoming_offset"),
+        ("outgoing", "outgoing_blocked", "next_outgoing_offset"),
+        ("callsites", "callsites_blocked", "next_callsite_offset"),
+    )
+    truncated = False
+    for key, blocked_key, next_key in specs:
+        returned = len(evidence[key])
+        start = starts[key]
+        if start + returned < totals[key]:
+            truncated = True
+            if returned > 0:
+                document[next_key] = start + returned
+            else:
+                evidence[blocked_key] = True
+    document["truncated"] = truncated
+    if not truncated:
+        return
+    evidence["incoming_total"] = totals["incoming"]
+    evidence["outgoing_total"] = totals["outgoing"]
+    evidence["callsites_total"] = totals["callsites"]
 
 
 def _nbytes(document: dict[str, Any]) -> int:
@@ -737,8 +862,62 @@ def _serialize(document: dict[str, Any]) -> str:
     return json.dumps(document, sort_keys=True, separators=(",", ":"))
 
 
-def _emit(document: dict[str, Any]) -> None:
-    sys.stdout.write(_serialize(document) + "\n")
+def _budget_document(operation: str) -> dict[str, Any]:
+    return _document(operation, "unavailable", reason="response_budget")
+
+
+def _within(document: dict[str, Any], budget: int) -> dict[str, Any] | None:
+    if _nbytes(document) <= budget:
+        return document
+    fitted = copy.deepcopy(document)
+    _shrink_text(fitted, budget)
+    if _nbytes(fitted) <= budget:
+        return fitted
+    return None
+
+
+def _shrink_text(document: dict[str, Any], budget: int) -> None:
+    while _nbytes(document) > budget:
+        detail = document.get("detail")
+        longest = _longest_text(document.get("identity"))
+        if isinstance(detail, str) and detail and (longest is None or len(detail) >= longest[0]):
+            document["detail"] = detail[: len(detail) // 2]
+            if not document["detail"]:
+                del document["detail"]
+            continue
+        if longest is None:
+            return
+        _length, parent, key = longest
+        value = parent[key]
+        shortened = value[: len(value) // 2]
+        if shortened == value:
+            return
+        parent[key] = shortened
+
+
+def _longest_text(value: Any, parent: Any = None, key: Any = None) -> tuple[int, Any, Any] | None:
+    best: tuple[int, Any, Any] | None = None
+    if isinstance(value, str):
+        if value and parent is not None:
+            best = (len(value), parent, key)
+    elif isinstance(value, dict):
+        for child_key, child in value.items():
+            found = _longest_text(child, value, child_key)
+            if found is not None and (best is None or found[0] > best[0]):
+                best = found
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            found = _longest_text(child, value, index)
+            if found is not None and (best is None or found[0] > best[0]):
+                best = found
+    return best
+
+
+def _emit(document: dict[str, Any], budget: int) -> None:
+    fitted = _within(document, budget)
+    if fitted is None:
+        fitted = _budget_document(str(document.get("operation") or "research"))
+    sys.stdout.write(_serialize(fitted) + "\n")
 
 
 def _literal_like(needle: str) -> str:
@@ -778,6 +957,9 @@ def _parser() -> argparse.ArgumentParser:
     xrefs = sub.add_parser("xrefs")
     _add_common(xrefs)
     xrefs.add_argument("rva")
+    xrefs.add_argument("--incoming-offset", type=int, default=0)
+    xrefs.add_argument("--outgoing-offset", type=int, default=0)
+    xrefs.add_argument("--callsite-offset", type=int, default=0)
     return parser
 
 
