@@ -228,3 +228,29 @@ Unresolved assumptions:
   `[master+0x170]` byte, is not settled by this function.
 - The caller's extra `R9D` and stack argument have no observed use in this body; their
   source-level meaning is unknown.
+
+## Follow-up
+
+Implementation notes (additions only; nothing above changed):
+
+- `eu4_gfx_update_vertex_buffer_multiple` lives in `benchmark/eu4_gfx_buffers.mm`; the entry is
+  registered as `GFX_ENTRY(update_vertex_buffer_multiple, 0x15ebe5f, 0x15ebf41, ...)` with the
+  original eight-byte prefix `55 48 89 e5 41 57 41 56`.
+- The replacement updates the existing shared `MTLBuffer` in place, validating every range
+  before copying so a stop leaves both the buffer and `[master+0x170]` untouched. It never
+  replaces or resizes the buffer.
+- `[header+8] == 0` returns silently before any effect, matching the observed guard.
+- The attribute-disable loop is recorded as deferred state in the existing `g_disabled_attribs`
+  via `record_disabled_attribs`; the future consumer is the draw/encoder path reading
+  `eu4_gfx_disabled_vertex_attrib*` and `master+0x170`.
+- Deliberate safety reasons remain `thread`, `missing`, `released`, `master`, `range`, `size`,
+  `bounds`, `null_data`, and `attrib`.
+- Host tests cover `case:multiple-range`, `case:multiple-unchanged`, `case:multiple-lifecycle`,
+  and `case:multiple-error` (all nine stop reasons) against real Metal buffers.
+- `python3 -m unittest tests.test_gfx_buffers tests.test_gfx_entry_registry` passes (24 tests).
+
+Correction after the first validation fail: the `GFX_ENTRY` name must be the engine symbol
+`_GfxUpdateVertexBufferMultiple` (matching the index-buffer entries), not the short
+`update_vertex_buffer_multiple`; the checker reported the short name as "missing
+_GfxUpdateVertexBufferMultiple registration". Renamed in `benchmark/eu4_gfx_entries.def` and the
+registry test baseline. Rebuilt tests pass.

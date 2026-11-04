@@ -10,6 +10,7 @@ GFX_ENTRY(on_reset_master, 0x15ea49b, 0x15ea4f2, eu4_gfx_on_reset_master, "\x55\
 GFX_ENTRY(create_vertex_buffer, 0x15ebcb3, 0x15ebd4c, eu4_gfx_create_vertex_buffer, "\x55\x48\x89\xe5\x41\x57")
 GFX_ENTRY(destroy_vertex_buffer, 0x15ebd4c, 0x15ebd81, eu4_gfx_destroy_vertex_buffer, "\x48\x85\xff\x74\x2f")
 GFX_ENTRY(update_vertex_buffer, 0x15ebd81, 0x15ebe5f, eu4_gfx_update_vertex_buffer, "\x55\x48\x89\xe5\x41\x57")
+GFX_ENTRY(_GfxUpdateVertexBufferMultiple, 0x15ebe5f, 0x15ebf41, eu4_gfx_update_vertex_buffer_multiple, "\x55\x48\x89\xe5\x41\x57\x41\x56")
 GFX_ENTRY(viewport, 0x15ea4f8, 0x15ea52c, eu4_gfx_set_viewport, "\x55\x48\x89\xe5\xf3\x0f\x6f\x06")
 // _GfxClear. End is _GfxGetMasterContext. The live glScissor return is 0x15ea5ec.
 GFX_ENTRY(clear, 0x15ea552, 0x15ea6b5, eu4_gfx_clear, "\x55\x48\x89\xe5\x41\x57")
