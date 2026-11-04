@@ -341,7 +341,7 @@ class IntegrationTests(unittest.TestCase):
             )
             try:
                 note = worktree / NOTE
-                note.parent.mkdir(parents=True)
+                note.parent.mkdir(parents=True, exist_ok=True)
                 note.write_text(f"{symbol} {entry}\n", encoding="utf-8")
                 result = accept.check(worktree, {
                     "id": "eu4-integration",
