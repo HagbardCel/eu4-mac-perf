@@ -627,6 +627,9 @@ int eu4_gfx_current_index_read(void *dest, size_t n) {
     if (entry == nil || entry.buffer == nil || g_index_current_buffer != entry.buffer || entry.length != n) {
         return -1;
     }
+    if (n > 0 && dest == NULL) {
+        return -1;
+    }
     if (n > 0) {
         memcpy(dest, g_index_current_buffer.contents, n);
     }

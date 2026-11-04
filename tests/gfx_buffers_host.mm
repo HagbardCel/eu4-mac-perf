@@ -744,7 +744,8 @@ __attribute__((noinline)) static void index_success(void) {
     eu4_gfx_update_index_buffer(NULL, header, rebound, 4);
     if (eu4_gfx_current_index_header() != header || eu4_gfx_index_buffer_length(header) != 8 ||
         eu4_gfx_index_buffer_read(header, got, 8) != 0 || memcmp(got, rebound, 8) != 0 ||
-        eu4_gfx_current_index_read(got, 8) != 0 || memcmp(got, rebound, 8) != 0) {
+        eu4_gfx_current_index_read(got, 8) != 0 || memcmp(got, rebound, 8) != 0 ||
+        eu4_gfx_current_index_read(NULL, 8) == 0) {
         fail("index bound replace");
     }
     written = 4;
@@ -794,7 +795,7 @@ __attribute__((noinline)) static void index_success(void) {
     }
     eu4_gfx_set_index_buffer(&g_master, empty);
     if (eu4_gfx_current_index_header() != empty || eu4_gfx_current_index_read(got, 0) != 0 ||
-        eu4_gfx_current_index_read(got, 1) == 0) {
+        eu4_gfx_current_index_read(NULL, 0) != 0 || eu4_gfx_current_index_read(got, 1) == 0) {
         fail("index empty binding");
     }
     void *blank = eu4_gfx_create_index_buffer(NULL, NULL, 3);
