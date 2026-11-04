@@ -209,6 +209,19 @@ class ExecutionTests(unittest.TestCase):
             quiet = accept.run_modules(root, ["tests.toy"])
             self.assertTrue(quiet.startswith("unavailable:"))
 
+    def test_metal_validation_environment(self) -> None:
+        body = (
+            "import os, unittest\n"
+            "class T(unittest.TestCase):\n"
+            " def test_env(self):\n"
+            "  self.assertEqual(os.environ.get('MTL_DEBUG_LAYER'), '1')\n"
+            "  self.assertEqual(os.environ.get('MTL_DEBUG_LAYER_ERROR_MODE'), 'assert')\n"
+        )
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self._module(root, body)
+            self.assertIsNone(accept.run_modules(root, ["tests.toy"]))
+
 
 class BlobTests(unittest.TestCase):
     def test_committed_checker_and_pinned_target(self) -> None:

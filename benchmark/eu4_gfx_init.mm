@@ -791,41 +791,67 @@ void eu4_gfx_set_viewport(void *master, const void *rect) {
     memcpy((uint8_t *)master + 0xac, rect, 24);
 }
 
+eu4_gfx_scissor_status eu4_gfx_scissor_for_attachment(
+    int set, int32_t gl_x, int32_t gl_y, int32_t width, int32_t height,
+    uint32_t attachment_width, uint32_t attachment_height, eu4_gfx_metal_scissor *out) {
+    if (!set) {
+        return EU4_GFX_SCISSOR_UNSET;
+    }
+    if (out == NULL || width <= 0 || height <= 0) {
+        return EU4_GFX_SCISSOR_EMPTY;
+    }
+    int64_t metal_y = (int64_t)attachment_height - ((int64_t)gl_y + (int64_t)height);
+    int64_t x0 = gl_x;
+    int64_t y0 = metal_y;
+    int64_t x1 = x0 + (int64_t)width;
+    int64_t y1 = y0 + (int64_t)height;
+    int64_t ix0 = x0 > 0 ? x0 : 0;
+    int64_t iy0 = y0 > 0 ? y0 : 0;
+    int64_t ix1 = x1 < (int64_t)attachment_width ? x1 : (int64_t)attachment_width;
+    int64_t iy1 = y1 < (int64_t)attachment_height ? y1 : (int64_t)attachment_height;
+    if (ix1 <= ix0 || iy1 <= iy0) {
+        return EU4_GFX_SCISSOR_EMPTY;
+    }
+    out->x = (uint32_t)ix0;
+    out->y = (uint32_t)iy0;
+    out->width = (uint32_t)(ix1 - ix0);
+    out->height = (uint32_t)(iy1 - iy0);
+    return EU4_GFX_SCISSOR_VALID;
+}
+
 void eu4_gfx_set_scissor_rectangle(void *handle, const void *rect) {
+    const void *caller = __builtin_return_address(0);
     if (handle == NULL || rect == NULL) {
         return;
     }
     void *master = NULL;
     memcpy(&master, handle, sizeof master);
-    if (master == NULL) {
+    if (master == NULL || !g_succeeded || master != g_master) {
         return;
     }
     void *raw = load_ptr(master, 0x180);
     if (raw == NULL) {
-        return;
+        eu4_gfx_stop("_GfxSetScissorRectangle", "missing_backend", caller);
     }
     int16_t fields[4];
     memcpy(fields, rect, sizeof fields);
-    /* Original: width = x2-x1, height = y2-y1, both clamped when negative.
-       Metal's setScissorRect is top-left-origin, so it consumes y1 directly. */
-    int32_t width = (int32_t)fields[2] - (int32_t)fields[0];
-    int32_t height = (int32_t)fields[3] - (int32_t)fields[1];
-    if (width < 0) {
-        width = 0;
-    }
-    if (height < 0) {
-        height = 0;
-    }
+    int32_t span_w = (int32_t)fields[2] - (int32_t)fields[0];
+    int32_t span_h = (int32_t)fields[3] - (int32_t)fields[1];
+    uint32_t viewport_height = 0;
+    memcpy(&viewport_height, (const uint8_t *)master + 0xac, sizeof viewport_height);
+    uint32_t bits = viewport_height - (uint32_t)(int32_t)fields[3];
+    int32_t gl_y = 0;
+    memcpy(&gl_y, &bits, sizeof gl_y);
     EU4GfxBackend *backend = (__bridge EU4GfxBackend *)raw;
     backend.scissorValid = YES;
-    backend.scissorX = fields[0];
-    backend.scissorY = fields[1];
-    backend.scissorWidth = width;
-    backend.scissorHeight = height;
+    backend.scissorGlX = fields[0];
+    backend.scissorGlY = gl_y;
+    backend.scissorWidth = span_w < 0 ? 0 : span_w;
+    backend.scissorHeight = span_h < 0 ? 0 : span_h;
 }
 
 int eu4_gfx_scissor_rectangle(void *master, int32_t out[4]) {
-    if (master == NULL || out == NULL) {
+    if (master == NULL || out == NULL || !g_succeeded || master != g_master) {
         return 0;
     }
     void *raw = load_ptr(master, 0x180);
@@ -836,8 +862,8 @@ int eu4_gfx_scissor_rectangle(void *master, int32_t out[4]) {
     if (!backend.scissorValid) {
         return 0;
     }
-    out[0] = backend.scissorX;
-    out[1] = backend.scissorY;
+    out[0] = backend.scissorGlX;
+    out[1] = backend.scissorGlY;
     out[2] = backend.scissorWidth;
     out[3] = backend.scissorHeight;
     return 1;

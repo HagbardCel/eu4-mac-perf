@@ -7,7 +7,11 @@
 #import <stdlib.h>
 #import <string.h>
 #import <sys/mman.h>
+#import <spawn.h>
+#import <sys/wait.h>
 #import <unistd.h>
+
+extern char **environ;
 
 static void fail(const char *message) {
     fprintf(stderr, "%s\n", message);
@@ -385,7 +389,14 @@ static void test_depth_cases(const char *dir) {
     munmap(page_bytes, (size_t)page);
 }
 
-static void check_scissor(void *handle, void *master, const int16_t *rect, int32_t x, int32_t y,
+static void set_viewport_height(void *master, uint32_t height) {
+    uint8_t view[24];
+    memset(view, 0, sizeof view);
+    memcpy(view, &height, sizeof height);
+    eu4_gfx_set_viewport(master, view);
+}
+
+static void check_scissor(void *handle, void *master, const int16_t *rect, int32_t gl_x, int32_t gl_y,
                           int32_t width, int32_t height) {
     int16_t saved[4];
     memcpy(saved, rect, sizeof saved);
@@ -394,11 +405,33 @@ static void check_scissor(void *handle, void *master, const int16_t *rect, int32
     if (!eu4_gfx_scissor_rectangle(master, got)) {
         fail("scissor state was not recorded");
     }
-    if (got[0] != x || got[1] != y || got[2] != width || got[3] != height) {
+    if (got[0] != gl_x || got[1] != gl_y || got[2] != width || got[3] != height) {
         fail("scissor rectangle");
     }
     if (memcmp(saved, rect, sizeof saved) != 0) {
         fail("scissor changed the source rectangle");
+    }
+}
+
+static void expect_metal(int set, int32_t gl_x, int32_t gl_y, int32_t width, int32_t height,
+                         eu4_gfx_scissor_status want, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    eu4_gfx_metal_scissor out;
+    eu4_gfx_metal_scissor poison;
+    memset(&out, 0x5a, sizeof out);
+    memset(&poison, 0x5a, sizeof poison);
+    eu4_gfx_scissor_status got = eu4_gfx_scissor_for_attachment(
+        set, gl_x, gl_y, width, height, 64, 64, &out);
+    if (got != want) {
+        fail("scissor status");
+    }
+    if (want != EU4_GFX_SCISSOR_VALID) {
+        if (memcmp(&out, &poison, sizeof out) != 0) {
+            fail("empty scissor became a rectangle");
+        }
+        return;
+    }
+    if (out.x != x || out.y != y || out.width != w || out.height != h) {
+        fail("scissor metal rect");
     }
 }
 
@@ -407,46 +440,58 @@ static void test_scissor(void *master, id<MTLDevice> device) {
     if (eu4_gfx_scissor_rectangle(master, got) != 0) {
         fail("scissor was set before any call");
     }
+    set_viewport_height(master, 0);
     void *handle_slot = master;
     void *handle = &handle_slot;
+    /* Viewport height is still 0, so gl_y is the 32-bit subtract 0 - y2. */
     int16_t a[4] = {10, 20, 110, 70};
-    check_scissor(handle, master, a, 10, 20, 100, 50);
+    check_scissor(handle, master, a, 10, -70, 100, 50);
     int16_t b[4] = {-5, -10, 25, 40};
-    check_scissor(handle, master, b, -5, -10, 30, 50);
+    check_scissor(handle, master, b, -5, -40, 30, 50);
     int16_t inverted[4] = {90, 80, 40, 30};
-    check_scissor(handle, master, inverted, 90, 80, 0, 0);
+    check_scissor(handle, master, inverted, 90, -30, 0, 0);
     int16_t narrow[4] = {7, 9, 7, 9};
-    check_scissor(handle, master, narrow, 7, 9, 0, 0);
-    /* Changing the viewport height must not move the top-left rectangle. */
-    uint8_t view[24];
-    memset(view, 0, sizeof view);
-    int32_t height = 300, width = 400, zero = 0;
-    memcpy(view, &height, 4);
-    memcpy(view + 4, &width, 4);
-    memcpy(view + 0x10, &zero, 4);
-    memcpy(view + 0x14, &zero, 4);
-    eu4_gfx_set_viewport(master, view);
+    check_scissor(handle, master, narrow, 7, -9, 0, 0);
+    int16_t wrapped[4] = {0, 0, 1, -1};
+    check_scissor(handle, master, wrapped, 0, 1, 1, 0);
+    set_viewport_height(master, 300);
     int16_t c[4] = {1, 2, 3, 4};
-    check_scissor(handle, master, c, 1, 2, 2, 2);
-    /* Safety policy: null inputs and a master without a backend are no-ops. */
+    check_scissor(handle, master, c, 1, 296, 2, 2);
+    set_viewport_height(master, 999);
+    if (!eu4_gfx_scissor_rectangle(master, got) || got[0] != 1 || got[1] != 296 || got[2] != 2 ||
+        got[3] != 2) {
+        fail("viewport change recomputed the stored scissor");
+    }
+    set_viewport_height(master, 0x80000000u);
+    int16_t high[4] = {0, 0, 1, 0};
+    check_scissor(handle, master, high, 0, (int32_t)0x80000000, 1, 0);
     eu4_gfx_set_scissor_rectangle(NULL, c);
     eu4_gfx_set_scissor_rectangle(handle, NULL);
-    void *empty = NULL;
-    eu4_gfx_set_scissor_rectangle(&empty, c);
+    void *empty_handle = NULL;
+    eu4_gfx_set_scissor_rectangle(&empty_handle, c);
     uint8_t fake[EU4_GFX_MASTER_SIZE];
     memset(fake, 0, sizeof fake);
+    *(void **)(fake + 0x180) = (void *)0x1;
     void *fake_slot = fake;
     eu4_gfx_set_scissor_rectangle(&fake_slot, c);
     if (eu4_gfx_scissor_rectangle(fake, got) != 0) {
-        fail("a master without a backend held scissor state");
+        fail("a noncurrent master held scissor state");
     }
-    if (!eu4_gfx_scissor_rectangle(master, got) || got[0] != 1 || got[1] != 2 ||
-        got[2] != 2 || got[3] != 2) {
+    if (!eu4_gfx_scissor_rectangle(master, got) || got[0] != 0 || got[1] != (int32_t)0x80000000 ||
+        got[2] != 1 || got[3] != 0) {
         fail("null scissor input changed the pending rectangle");
     }
-    /* Encoder-facing consumer: a real MTLRenderCommandEncoder accepts the state. */
-    int16_t visible[4] = {4, 6, 44, 26};
-    check_scissor(handle, master, visible, 4, 6, 40, 20);
+    expect_metal(0, 4, 38, 40, 20, EU4_GFX_SCISSOR_UNSET, 0, 0, 0, 0);
+    expect_metal(1, 4, 38, 40, 20, EU4_GFX_SCISSOR_VALID, 4, 6, 40, 20);
+    expect_metal(1, -5, -10, 30, 50, EU4_GFX_SCISSOR_VALID, 0, 24, 25, 40);
+    expect_metal(1, 50, 10, 30, 20, EU4_GFX_SCISSOR_VALID, 50, 34, 14, 20);
+    expect_metal(1, 100, 0, 10, 10, EU4_GFX_SCISSOR_EMPTY, 0, 0, 0, 0);
+    expect_metal(1, 7, 9, 0, 0, EU4_GFX_SCISSOR_EMPTY, 0, 0, 0, 0);
+    expect_metal(1, 1, 296, 2, 2, EU4_GFX_SCISSOR_EMPTY, 0, 0, 0, 0);
+    eu4_gfx_metal_scissor metal;
+    if (eu4_gfx_scissor_for_attachment(1, 4, 38, 40, 20, 64, 64, &metal) != EU4_GFX_SCISSOR_VALID) {
+        fail("encoder scissor was not valid");
+    }
     MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
                                                                                      width:64
                                                                                     height:64
@@ -469,11 +514,7 @@ static void test_scissor(void *master, id<MTLDevice> device) {
     if (encoder == nil) {
         fail("scissor encoder");
     }
-    if (!eu4_gfx_scissor_rectangle(master, got)) {
-        fail("scissor state disappeared");
-    }
-    [encoder setScissorRect:(MTLScissorRect){(NSUInteger)got[0], (NSUInteger)got[1],
-                                            (NSUInteger)got[2], (NSUInteger)got[3]}];
+    [encoder setScissorRect:(MTLScissorRect){metal.x, metal.y, metal.width, metal.height}];
     [encoder endEncoding];
     [command commit];
     [command waitUntilCompleted];
@@ -569,6 +610,13 @@ static void test_backend(void) {
     if (ok != 0 || partial == NULL || *(void **)((uint8_t *)partial + 0x180) != NULL ||
         *(void **)((uint8_t *)partial + 0x80) != NULL || *(void **)((uint8_t *)partial + 0x88) != NULL) {
         fail("header failure left a live pointer");
+    }
+    int16_t pending[4] = {1, 2, 3, 4};
+    void *partial_slot = partial;
+    eu4_gfx_set_scissor_rectangle(&partial_slot, pending);
+    int32_t scissor_out[4] = {9, 9, 9, 9};
+    if (eu4_gfx_scissor_rectangle(partial, scissor_out) != 0) {
+        fail("failed init recorded a scissor");
     }
     if (eu4_gfx_backend_releases() != releases + 1) {
         fail("header failure did not release the backend once");
@@ -835,7 +883,72 @@ static void test_clear(void) {
     }
 }
 
-int main(void) {
+static char *g_argv0;
+
+static void run_missing_backend(const char *dir) {
+    eu4_metal_events_set_dir(dir);
+    eu4_gfx_set_terminate(on_stop);
+    eu4_gfx_set_sdl(fake_window, fake_size);
+    eu4_gfx_set_default_writers(eu4_gfx_write_default_blend, write_depth, eu4_gfx_write_default_raster);
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device == nil) {
+        fail("no Metal device");
+    }
+    CAMetalLayer *layer = [CAMetalLayer layer];
+    layer.device = device;
+    eu4_gfx_set_layer((__bridge void *)layer);
+    uint8_t handle_bytes[0x20];
+    memset(handle_bytes, 0, sizeof handle_bytes);
+    uint32_t window_id = 7, source = 9;
+    memcpy(handle_bytes, &window_id, 4);
+    memcpy(handle_bytes + 0x18, &source, 4);
+    uint8_t ok = 0;
+    void *master = eu4_gfx_init(handle_bytes, &ok);
+    if (ok != 1 || master == NULL) {
+        fail("missing-backend init");
+    }
+    *(void **)((uint8_t *)master + 0x180) = NULL;
+    void *slot = master;
+    int16_t rect[4] = {0, 0, 1, 1};
+    eu4_gfx_set_scissor_rectangle(&slot, rect);
+    fail("missing backend returned");
+}
+
+static void expect_missing_backend(void) {
+    char dir[] = "/tmp/eu4-scissor-XXXXXX";
+    if (mkdtemp(dir) == NULL) {
+        fail("child dir");
+    }
+    char *argv[] = {g_argv0, (char *)"missing-backend", dir, NULL};
+    pid_t pid = 0;
+    if (posix_spawn(&pid, g_argv0, NULL, NULL, argv, environ) != 0) {
+        fail("spawn");
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 2) {
+        fail("missing-backend exit");
+    }
+    char path[80];
+    snprintf(path, sizeof path, "%s/stop.json", dir);
+    FILE *file = fopen(path, "r");
+    char body[1280];
+    if (file == NULL || fgets(body, sizeof body, file) == NULL) {
+        fail("stop.json");
+    }
+    fclose(file);
+    if (strstr(body, "\"symbol\":\"_GfxSetScissorRectangle\"") == NULL ||
+        strstr(body, "\"reason\":\"missing_backend\"") == NULL ||
+        strstr(body, "\"phase\":\"after_init\"") == NULL) {
+        fail("missing-backend diagnostic");
+    }
+}
+
+int main(int argc, char **argv) {
+    g_argv0 = argv[0];
+    if (argc > 2 && strcmp(argv[1], "missing-backend") == 0) {
+        run_missing_backend(argv[2]);
+        return 0;
+    }
     uint8_t desc[EU4_GFX_DEPTH_DESC_SIZE];
     memset(desc, 0xa5, sizeof desc);
     test_viewport();
@@ -845,5 +958,6 @@ int main(void) {
     test_view(desc);
     test_state(desc);
     test_backend();
+    expect_missing_backend();
     return 0;
 }
