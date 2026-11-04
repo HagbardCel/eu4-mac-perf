@@ -1,0 +1,18 @@
+{
+  "symbol": "_GfxSetScissorRectangle",
+  "note": "analysis/automation/pilot-gfx-set-scissor-rectangle/note.md",
+  "allowed_paths": [
+    "analysis/automation/pilot-gfx-set-scissor-rectangle/note.md",
+    "progress.md",
+    "benchmark/eu4_gfx_init.h",
+    "benchmark/eu4_gfx_init.mm",
+    "benchmark/eu4_gfx_entries.def",
+    "tests/gfx_init_host.mm",
+    "tests/test_gfx_init.py",
+    "tests/test_gfx_entry_registry.py"
+  ],
+  "test_modules": [
+    "tests.test_gfx_init",
+    "tests.test_gfx_entry_registry"
+  ]
+}
