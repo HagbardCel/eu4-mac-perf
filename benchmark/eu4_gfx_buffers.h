@@ -10,6 +10,10 @@ extern "C" {
 
 /* nGLVBCount. Twelve bytes after gMasterContext. */
 #define EU4_GFX_VB_COUNT_RVA 0x223857c
+/* bOutputError. The null-header path in _GfxSetVertexBuffers. */
+#define EU4_GFX_VB_ERROR_RVA 0x2238580
+/* Slots whose +0x130/+0x150/+0x160 stores fit in the 0x198-byte master. */
+#define EU4_GFX_VERTEX_SLOTS 13
 
 /* nGLIBCount. Four bytes after nGLVBCount. */
 #define EU4_GFX_IB_COUNT_RVA 0x2238584
@@ -61,6 +65,14 @@ int eu4_gfx_index_buffer_read(void *header, void *dest, size_t n);
 int eu4_gfx_index_buffer_shared(void *header);
 void *eu4_gfx_current_index_header(void);
 int eu4_gfx_current_index_read(void *dest, size_t n);
+
+/* Vertex selection. Headers only; the MTLBuffer is resolved from the registry. */
+void eu4_gfx_set_vertex_buffers(void *handle, int32_t count, void **headers, int32_t start,
+                                const int32_t *offsets, const int32_t *words);
+void *eu4_gfx_vertex_slot_header(int slot);
+int eu4_gfx_vertex_slot_read(int slot, void *dest, size_t n);
+int eu4_gfx_disabled_vertex_attrib_count(void);
+int eu4_gfx_disabled_vertex_attrib(int index, int32_t *out);
 
 #ifdef __cplusplus
 }

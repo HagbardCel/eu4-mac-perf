@@ -66,3 +66,24 @@ Safety policy, not from the instructions: a null handle or a null master stops w
 - The dword at `header+8` is only a zero test. It is not shown to be a GL name by these instructions alone.
 - The object at `[master+0x70]` is only known as the base for `+0x10` and `+0x18`. Calling it a shader is the decompiler's neighbor evidence (`___glewDisableVertexAttribArrayARB`), not a type record.
 - Whether a draw consumes the disabled attribute indices themselves, or only the `[master+0x170]` byte, is not settled by this function.
+
+## Follow-up
+
+The sections above are the committed evidence. This section records the commands, the decisions that are not in those instructions, and the host-test result. It does not replace that evidence.
+
+Commands, with `JAVA_HOME` on JDK 25, `GHIDRA_INSTALL=$HOME/ghidra_12.2_PUBLIC`, `GHIDRA_HEADLESS_MAXMEM=4G`, and `EU4_RE_EXPORT` pointed at the sealed corpus:
+
+- `python3 -m reverse_engineering.research resolve _GfxSetVertexBuffers`
+- `python3 -m reverse_engineering.research function 0x15ebf41 --view static --max-bytes 262144`
+- `python3 -m reverse_engineering.research function 0x15ebf41 --view decompiled --max-bytes 262144`
+- `python3 -m reverse_engineering.research xrefs 0x15ebf41 --max-bytes 262144`
+- `python3 -m reverse_engineering.ghidra_query address 0x2253678 --max-bytes 65536`
+- `python3 -m reverse_engineering.ghidra_query address 0x2238580 --max-bytes 65536`
+- `python3 -m reverse_engineering.ghidra_query address 0x1bb6a90 --max-bytes 65536`
+- `python3 -m reverse_engineering.ghidra_query function 0x15ebf41 --max-bytes 262144`
+
+Human decisions, stated as policy rather than recovered instructions: a null handle or null master stops with `master`; a negative count, a null header array when the count is positive, or a slot whose three stores would leave the `0x198`-byte master stops with `range` before any store; an attribute count above 32, or a null attribute base when the count is positive, stops with `attrib` before any store; another thread stops with `thread`. The logger and locale calls are not called. The GLEW slot is not called. A header that is not in the vertex registry still receives the engine-memory write, and a later read returns no `MTLBuffer`. Slots are 0 through 12 because that is the last index whose three stores fit.
+
+Unresolved questions are the open assumptions above. The bytes at the bad-buffer `LEA` `0x15ec02d` (`0x1bb6bb5`) were not read back. The host tests are evidence for review. They are not a claim that the replacement is semantically equivalent.
+
+`python3 -m unittest tests.test_gfx_buffers tests.test_gfx_entry_registry` passed, 24 tests. The replacement, the entry row, and the host tests add 381 lines.
