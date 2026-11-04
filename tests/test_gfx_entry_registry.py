@@ -21,6 +21,7 @@ _INDEX_CREATE = bytes.fromhex("554889e54157")
 _INDEX_UPDATE = bytes.fromhex("554889e54156")
 _INDEX_DESTROY = bytes.fromhex("4885ff7450")
 _INDEX_SET = bytes.fromhex("4885f67428")
+_MULTI = bytes.fromhex("554889e541574156")
 _FIVE = r"\x55\x48\x89\xe5\x53"
 BASELINE = (
     ("settings", 0x15ED388, 0x15ED9FC, "eu4_gfx_settings", _P6),
@@ -34,6 +35,7 @@ BASELINE = (
     ("create_vertex_buffer", 0x15EBCB3, 0x15EBD4C, "eu4_gfx_create_vertex_buffer", _P6),
     ("destroy_vertex_buffer", 0x15EBD4C, 0x15EBD81, "eu4_gfx_destroy_vertex_buffer", _DESTROY),
     ("update_vertex_buffer", 0x15EBD81, 0x15EBE5F, "eu4_gfx_update_vertex_buffer", _P6),
+    ("_GfxUpdateVertexBufferMultiple", 0x15EBE5F, 0x15EBF41, "eu4_gfx_update_vertex_buffer_multiple", _MULTI),
     ("viewport", 0x15EA4F8, 0x15EA52C, "eu4_gfx_set_viewport", _VIEW),
     ("_GfxCreateIndexBuffer", 0x15EC154, 0x15EC1E6, "eu4_gfx_create_index_buffer", _INDEX_CREATE),
     ("_GfxDestroyIndexBuffer", 0x15EC1E6, 0x15EC23C, "eu4_gfx_destroy_index_buffer", _INDEX_DESTROY),

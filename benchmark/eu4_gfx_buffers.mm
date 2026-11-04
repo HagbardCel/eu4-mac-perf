@@ -320,6 +320,80 @@ void eu4_gfx_update_vertex_buffer(void *handle, void *header, const void *data, 
     ((uint8_t *)master)[0x170] = 1;
 }
 
+/* RDX is a qword data-pointer array and RCX a dword element-count array. The
+   original binds GL_ARRAY_BUFFER once and subdata-copies each range at a running
+   byte offset that starts at zero. The buffer is never replaced here. */
+static void record_disabled_attribs(void *master, const char *symbol, const void *caller);
+
+void eu4_gfx_update_vertex_buffer_multiple(void *handle, void *header,
+                                           const void *const *data, const int32_t *counts,
+                                           int32_t ranges) {
+    const void *caller = __builtin_return_address(0);
+    const char *symbol = "_GfxUpdateVertexBufferMultiple";
+    require_thread(symbol, caller);
+    if (header == NULL) {
+        eu4_gfx_stop(symbol, "missing", caller);
+    }
+    int32_t name = 0;
+    memcpy(&name, (uint8_t *)header + 8, 4);
+    if (name == 0) {
+        return;
+    }
+    EU4VertexBuffer *entry = find_entry(header);
+    if (entry == nil) {
+        eu4_gfx_stop(symbol, "missing", caller);
+    }
+    if (entry.buffer == nil) {
+        eu4_gfx_stop(symbol, "released", caller);
+    }
+    void *master = NULL;
+    if (handle != NULL) {
+        memcpy(&master, handle, sizeof master);
+    }
+    if (master == NULL) {
+        eu4_gfx_stop(symbol, "master", caller);
+    }
+    int32_t stride = 0;
+    memcpy(&stride, header, 4);
+    if (stride < 0) {
+        eu4_gfx_stop(symbol, "size", caller);
+    }
+    if (ranges > 0 && (data == NULL || counts == NULL)) {
+        eu4_gfx_stop(symbol, "range", caller);
+    }
+    uint64_t offset = 0;
+    for (int32_t i = 0; i < ranges; i++) {
+        int32_t elements = 0;
+        memcpy(&elements, counts + i, 4);
+        if (elements < 0) {
+            eu4_gfx_stop(symbol, "size", caller);
+        }
+        int64_t size = (int64_t)stride * (int64_t)elements;
+        if (size > 0x7fffffff) {
+            eu4_gfx_stop(symbol, "size", caller);
+        }
+        if (offset > entry.length || (uint64_t)size > entry.length - offset) {
+            eu4_gfx_stop(symbol, "bounds", caller);
+        }
+        if (size > 0 && data[i] == NULL) {
+            eu4_gfx_stop(symbol, "null_data", caller);
+        }
+        offset += (uint64_t)size;
+    }
+    record_disabled_attribs(master, symbol, caller);
+    uint64_t at = 0;
+    for (int32_t i = 0; i < ranges; i++) {
+        int32_t elements = 0;
+        memcpy(&elements, counts + i, 4);
+        size_t size = (size_t)stride * (size_t)elements;
+        if (size > 0) {
+            memcpy((uint8_t *)entry.buffer.contents + at, data[i], size);
+        }
+        at += size;
+    }
+    ((uint8_t *)master)[0x170] = 1;
+}
+
 void eu4_gfx_destroy_vertex_buffer(void *header) {
     const void *caller = __builtin_return_address(0);
     if (header == NULL) {
@@ -641,7 +715,7 @@ int eu4_gfx_index_buffer_shared(void *header) {
 
 void *eu4_gfx_current_index_header(void) { return g_index_current_header; }
 
-static void record_disabled_attribs(void *master, const void *caller) {
+static void record_disabled_attribs(void *master, const char *symbol, const void *caller) {
     g_disabled_count = 0;
     void *shader = NULL;
     memcpy(&shader, (uint8_t *)master + 0x70, sizeof shader);
@@ -654,12 +728,12 @@ static void record_disabled_attribs(void *master, const void *caller) {
         return;
     }
     if (count > 32) {
-        eu4_gfx_stop("_GfxSetVertexBuffers", "attrib", caller);
+        eu4_gfx_stop(symbol, "attrib", caller);
     }
     void *base = NULL;
     memcpy(&base, (uint8_t *)shader + 0x10, sizeof base);
     if (base == NULL) {
-        eu4_gfx_stop("_GfxSetVertexBuffers", "attrib", caller);
+        eu4_gfx_stop(symbol, "attrib", caller);
     }
     int32_t offset = count * 0x28 - 0x1c;
     for (int left = count + 1; left > 1; left--) {
@@ -701,7 +775,7 @@ void eu4_gfx_set_vertex_buffers(void *handle, int32_t count, void **headers, int
             eu4_gfx_stop("_GfxSetVertexBuffers", "range", caller);
         }
     }
-    record_disabled_attribs(master, caller);
+    record_disabled_attribs(master, "_GfxSetVertexBuffers", caller);
     for (int32_t i = 0; i < count; i++) {
         void *header = headers[i];
         int32_t slot = start + i;

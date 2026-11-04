@@ -61,6 +61,8 @@ static int g_check_master_count;
 static int32_t g_expect_master_count;
 static int g_check_master_span;
 static uint8_t g_master_span[0x58];
+static int g_check_master_flag;
+static uint8_t g_expect_master_flag;
 
 static int32_t *counter(void) { return (int32_t *)(g_image + EU4_GFX_VB_COUNT_RVA); }
 
@@ -142,9 +144,14 @@ static void child_stop(const char *reason) {
         memcmp(g_master_span, (uint8_t *)g_master + 0x130, sizeof g_master_span) != 0) {
         _exit(3);
     }
+    if (g_check_master_flag && ((uint8_t *)g_master)[0x170] != g_expect_master_flag) {
+        _exit(3);
+    }
     if (g_kept != NULL) {
-        uint8_t back = 0;
-        if (eu4_gfx_vertex_buffer_read(g_kept, &back, 1) != 0 || back != g_kept_byte) {
+        size_t length = eu4_gfx_vertex_buffer_length(g_kept);
+        uint8_t back[64];
+        if (length == 0 || length > sizeof back ||
+            eu4_gfx_vertex_buffer_read(g_kept, back, length) != 0 || back[0] != g_kept_byte) {
             _exit(3);
         }
     }
@@ -863,6 +870,203 @@ __attribute__((noinline)) static void vertex_set_success(void) {
     }
 }
 
+/* count 2 reads base+0x34, then base+0x0c. The record is [9, 4]. */
+static void install_two_attribs(uint8_t *shader) {
+    memset(shader, 0, 0x40);
+    void *base = shader;
+    int32_t count = 2;
+    int32_t low = 4;
+    int32_t high = 9;
+    memcpy(shader + 0x0c, &low, 4);
+    memcpy(shader + 0x34, &high, 4);
+    memcpy(shader + 0x10, &base, sizeof base);
+    memcpy(shader + 0x18, &count, 4);
+    void *shader_ptr = shader;
+    memcpy((uint8_t *)g_master + 0x70, &shader_ptr, sizeof shader_ptr);
+}
+
+static void clear_shader_pointer(void) {
+    void *no_shader = NULL;
+    memcpy((uint8_t *)g_master + 0x70, &no_shader, sizeof no_shader);
+}
+
+static void empty_disabled_attribs(void) {
+    clear_shader_pointer();
+    eu4_gfx_set_vertex_buffers(&g_master, 0, NULL, 0, NULL, NULL);
+    ((uint8_t *)g_master)[0x170] = 0;
+}
+
+static int attribs_are(int32_t first, int32_t second) {
+    int32_t got0 = 0;
+    int32_t got1 = 0;
+    return eu4_gfx_disabled_vertex_attrib_count() == 2 &&
+        eu4_gfx_disabled_vertex_attrib(0, &got0) == 0 && got0 == first &&
+        eu4_gfx_disabled_vertex_attrib(1, &got1) == 0 && got1 == second;
+}
+
+/* case:multiple-range, case:multiple-unchanged, case:multiple-lifecycle. The
+   case:multiple-error paths run in the child modes below. */
+__attribute__((noinline)) static void multiple_success(void) {
+    if (g_master == NULL) {
+        boot(1);
+    }
+    void *no_shader = NULL;
+    memcpy((uint8_t *)g_master + 0x70, &no_shader, sizeof no_shader);
+
+    /* case:multiple-range: two ranges start at byte 0 and at stride*2. */
+    uint8_t initial[32];
+    memset(initial, 0x11, sizeof initial);
+    void *header = eu4_gfx_create_vertex_buffer(NULL, initial, 8, 4, 0);
+    if (header == NULL || *counter() != 1) {
+        fail("case:multiple-range setup");
+    }
+    eu4_gfx_set_vertex_buffers(&g_master, 1, &header, 0, NULL, NULL);
+    void *same = eu4_gfx_vertex_slot_buffer(0);
+    uint8_t first[8];
+    uint8_t second[4];
+    memset(first, 0x22, sizeof first);
+    memset(second, 0x33, sizeof second);
+    const void *parts[2] = {first, second};
+    int32_t counts[2] = {2, 1};
+    ((uint8_t *)g_master)[0x170] = 0;
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, parts, counts, 2);
+    uint8_t got[32];
+    if (same == NULL || eu4_gfx_vertex_slot_buffer(0) != same ||
+        eu4_gfx_vertex_buffer_length(header) != 32 ||
+        eu4_gfx_vertex_buffer_read(header, got, 32) != 0 ||
+        memcmp(got, first, 8) != 0 || memcmp(got + 8, second, 4) != 0 ||
+        memcmp(got + 12, initial + 12, 20) != 0 ||
+        ((uint8_t *)g_master)[0x170] != 1) {
+        fail("case:multiple-range");
+    }
+
+    /* case:multiple-attribs: a populated shader records [9, 4], sets the dirty
+       byte, and copies a payload the earlier range test did not write. */
+    uint8_t shader[0x40];
+    uint8_t attrib_first[8];
+    uint8_t attrib_second[4];
+    memset(attrib_first, 0x99, sizeof attrib_first);
+    memset(attrib_second, 0xaa, sizeof attrib_second);
+    const void *attrib_parts[2] = {attrib_first, attrib_second};
+    int32_t attrib_counts[2] = {2, 1};
+    empty_disabled_attribs();
+    if (eu4_gfx_disabled_vertex_attrib_count() != 0) {
+        fail("case:multiple-attribs clear");
+    }
+    install_two_attribs(shader);
+    ((uint8_t *)g_master)[0x170] = 0;
+    eu4_gfx_update_vertex_buffer_multiple(
+        &g_master, header, attrib_parts, attrib_counts, 2);
+    uint8_t attrib_got[32];
+    if (eu4_gfx_vertex_buffer_read(header, attrib_got, 32) != 0 ||
+        memcmp(attrib_got, attrib_first, 8) != 0 ||
+        memcmp(attrib_got + 8, attrib_second, 4) != 0 ||
+        memcmp(attrib_got + 12, initial + 12, 20) != 0 ||
+        ((uint8_t *)g_master)[0x170] != 1 || !attribs_are(9, 4)) {
+        fail("case:multiple-attribs");
+    }
+
+    /* case:multiple-zero-token: a zero presence token returns before every effect. */
+    uint32_t saved_token = 0;
+    memcpy(&saved_token, (uint8_t *)header + 8, 4);
+    uint32_t zero_token = 0;
+    memcpy((uint8_t *)header + 8, &zero_token, 4);
+    ((uint8_t *)g_master)[0x170] = 0;
+    uint8_t before_token[32];
+    uint8_t after_token[32];
+    uint8_t differ[8];
+    memset(differ, 0xab, sizeof differ);
+    const void *differ_parts[1] = {differ};
+    int32_t differ_counts[1] = {2};
+    if (eu4_gfx_vertex_buffer_read(header, before_token, 32) != 0) {
+        fail("case:multiple-zero-token read");
+    }
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, differ_parts, differ_counts, 1);
+    if (eu4_gfx_vertex_buffer_read(header, after_token, 32) != 0 ||
+        memcmp(before_token, after_token, 32) != 0 ||
+        ((uint8_t *)g_master)[0x170] != 0 || !attribs_are(9, 4)) {
+        memcpy((uint8_t *)header + 8, &saved_token, 4);
+        fail("case:multiple-zero-token");
+    }
+    memcpy((uint8_t *)header + 8, &saved_token, 4);
+
+    /* case:multiple-zero-range and a negative count skip the copy and still record attributes. */
+    int32_t quiet_ranges[2] = {0, -1};
+    for (int quiet = 0; quiet < 2; quiet++) {
+        uint8_t before_quiet[32];
+        uint8_t after_quiet[32];
+        empty_disabled_attribs();
+        if (eu4_gfx_disabled_vertex_attrib_count() != 0 || ((uint8_t *)g_master)[0x170] != 0) {
+            fail("case:multiple-zero-range clear");
+        }
+        install_two_attribs(shader);
+        if (eu4_gfx_vertex_buffer_read(header, before_quiet, 32) != 0) {
+            fail("case:multiple-zero-range read");
+        }
+        eu4_gfx_update_vertex_buffer_multiple(
+            &g_master, header, NULL, NULL, quiet_ranges[quiet]);
+        if (eu4_gfx_vertex_buffer_read(header, after_quiet, 32) != 0 ||
+            memcmp(before_quiet, after_quiet, 32) != 0 ||
+            ((uint8_t *)g_master)[0x170] != 1 || !attribs_are(9, 4)) {
+            fail(quiet == 0 ? "case:multiple-zero-range" : "case:multiple-negative-range");
+        }
+    }
+    clear_shader_pointer();
+
+    /* case:multiple-unchanged: a zero-size range does not advance the offset and
+       the bytes past the ranges stay as they were. */
+    uint8_t keep[16];
+    memset(keep, 0x44, sizeof keep);
+    void *unchanged = eu4_gfx_create_vertex_buffer(NULL, keep, 4, 4, 0);
+    if (unchanged == NULL || *counter() != 2) {
+        fail("case:multiple-unchanged setup");
+    }
+    uint8_t patch_a[4];
+    uint8_t patch_b[4];
+    memset(patch_a, 0x55, sizeof patch_a);
+    memset(patch_b, 0x66, sizeof patch_b);
+    const void *three[3] = {patch_a, NULL, patch_b};
+    int32_t three_counts[3] = {1, 0, 1};
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, unchanged, three, three_counts, 3);
+    uint8_t keep_got[16];
+    if (eu4_gfx_vertex_buffer_read(unchanged, keep_got, 16) != 0 ||
+        memcmp(keep_got, patch_a, 4) != 0 || memcmp(keep_got + 4, patch_b, 4) != 0 ||
+        memcmp(keep_got + 8, keep + 8, 8) != 0) {
+        fail("case:multiple-unchanged");
+    }
+
+    /* case:multiple-lifecycle: update keeps the buffer, release drops only the
+       buffer, and destroy removes the header and counter. */
+    uint8_t life_bytes[16];
+    memset(life_bytes, 0x77, sizeof life_bytes);
+    void *life = eu4_gfx_create_vertex_buffer(NULL, life_bytes, 4, 4, 0);
+    if (life == NULL || *counter() != 3) {
+        fail("case:multiple-lifecycle setup");
+    }
+    uint8_t life_patch[8];
+    memset(life_patch, 0x88, sizeof life_patch);
+    const void *life_parts[1] = {life_patch};
+    int32_t life_counts[1] = {2};
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, life, life_parts, life_counts, 1);
+    if (eu4_gfx_vertex_buffer_read(life, got, 16) != 0 || memcmp(got, life_patch, 8) != 0 ||
+        memcmp(got + 8, life_bytes + 8, 8) != 0) {
+        fail("case:multiple-lifecycle update");
+    }
+    eu4_gfx_release_vertex_buffers(eu4_gfx_backend_token(), (const void *)multiple_success);
+    if (eu4_gfx_vertex_records() != 3 || eu4_gfx_vertex_gpus() != 0 || *counter() != 3 ||
+        eu4_gfx_vertex_slot_buffer(0) != NULL) {
+        fail("case:multiple-lifecycle release");
+    }
+    eu4_gfx_destroy_vertex_buffer(life);
+    eu4_gfx_destroy_vertex_buffer(unchanged);
+    eu4_gfx_destroy_vertex_buffer(header);
+    if (*counter() != 0 || eu4_gfx_vertex_records() != 0) {
+        fail("case:multiple-lifecycle destroy");
+    }
+    eu4_gfx_shutdown(g_master);
+    g_master = NULL;
+}
+
 __attribute__((noinline)) static void run_vb_range(void) {
     /* Safety policy in the research note: a negative count stops with range before any store. */
     boot(1);
@@ -918,6 +1122,187 @@ __attribute__((noinline)) static void run_vb_thread(void) {
     }
     pthread_join(thread, NULL);
     fail("vertex wrong thread returned");
+}
+
+__attribute__((noinline)) static void run_multiple_missing(void) {
+    /* case:multiple-error: a nonzero token outside the registry stops missing. */
+    boot(1);
+    uint8_t raw[12];
+    memset(raw, 0, sizeof raw);
+    int32_t stride = 4, count = 1;
+    uint32_t token = 1;
+    memcpy(raw, &stride, 4);
+    memcpy(raw + 4, &count, 4);
+    memcpy(raw + 8, &token, 4);
+    uint8_t byte = 0x11;
+    const void *parts[1] = {&byte};
+    int32_t counts[1] = {1};
+    arm((const void *)run_multiple_missing, 0, 0, 0);
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, raw, parts, counts, 1);
+    fail("case:multiple-error missing returned");
+}
+
+__attribute__((noinline)) static void run_multiple_range(void) {
+    /* case:multiple-error: a positive range count needs both arrays. */
+    boot(1);
+    uint8_t bytes[8];
+    memset(bytes, 0x11, sizeof bytes);
+    void *header = eu4_gfx_create_vertex_buffer(NULL, bytes, 2, 4, 0);
+    if (header == NULL) {
+        fail("case:multiple-error range setup");
+    }
+    arm((const void *)run_multiple_range, 1, 1, 1);
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, NULL, NULL, 1);
+    fail("case:multiple-error range returned");
+}
+
+__attribute__((noinline)) static void run_multiple_size(void) {
+    /* case:multiple-error: stride * count above 0x7fffffff stops size. */
+    boot(1);
+    uint8_t bytes[8];
+    memset(bytes, 0x11, sizeof bytes);
+    void *header = eu4_gfx_create_vertex_buffer(NULL, bytes, 2, 4, 0);
+    if (header == NULL) {
+        fail("case:multiple-error size setup");
+    }
+    uint8_t patch = 0x22;
+    const void *parts[1] = {&patch};
+    int32_t counts[1] = {0x40000000};
+    g_kept = header;
+    g_kept_byte = 0x11;
+    g_check_master_flag = 1;
+    g_expect_master_flag = 0;
+    ((uint8_t *)g_master)[0x170] = 0;
+    arm((const void *)run_multiple_size, 1, 1, 1);
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, parts, counts, 1);
+    fail("case:multiple-error size returned");
+}
+
+__attribute__((noinline)) static void run_multiple_bounds(void) {
+    /* case:multiple-error: a range past the registered length stops bounds before
+       changing the buffer or the master flag. */
+    boot(1);
+    uint8_t bytes[8];
+    memset(bytes, 0x11, sizeof bytes);
+    void *header = eu4_gfx_create_vertex_buffer(NULL, bytes, 2, 4, 0);
+    if (header == NULL) {
+        fail("case:multiple-error bounds setup");
+    }
+    uint8_t patch[16];
+    memset(patch, 0x22, sizeof patch);
+    const void *parts[1] = {patch};
+    int32_t counts[1] = {4};
+    g_kept = header;
+    g_kept_byte = 0x11;
+    g_check_master_flag = 1;
+    g_expect_master_flag = 0;
+    ((uint8_t *)g_master)[0x170] = 0;
+    arm((const void *)run_multiple_bounds, 1, 1, 1);
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, parts, counts, 1);
+    fail("case:multiple-error bounds returned");
+}
+
+__attribute__((noinline)) static void run_multiple_null_data(void) {
+    /* case:multiple-error: a nonzero range needs a data pointer. */
+    boot(1);
+    uint8_t bytes[8];
+    memset(bytes, 0x11, sizeof bytes);
+    void *header = eu4_gfx_create_vertex_buffer(NULL, bytes, 2, 4, 0);
+    if (header == NULL) {
+        fail("case:multiple-error null-data setup");
+    }
+    const void *parts[1] = {NULL};
+    int32_t counts[1] = {1};
+    g_kept = header;
+    g_kept_byte = 0x11;
+    g_check_master_flag = 1;
+    g_expect_master_flag = 0;
+    ((uint8_t *)g_master)[0x170] = 0;
+    arm((const void *)run_multiple_null_data, 1, 1, 1);
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, parts, counts, 1);
+    fail("case:multiple-error null-data returned");
+}
+
+__attribute__((noinline)) static void run_multiple_released(void) {
+    /* case:multiple-error: a released entry stops before touching the master. */
+    boot(1);
+    uint8_t bytes[8];
+    memset(bytes, 0x11, sizeof bytes);
+    void *header = eu4_gfx_create_vertex_buffer(NULL, bytes, 2, 4, 0);
+    if (header == NULL) {
+        fail("case:multiple-error released setup");
+    }
+    eu4_gfx_release_vertex_buffers(eu4_gfx_backend_token(), __builtin_return_address(0));
+    if (eu4_gfx_vertex_records() != 1 || eu4_gfx_vertex_gpus() != 0) {
+        fail("case:multiple-error released drop");
+    }
+    uint8_t patch = 0x22;
+    const void *parts[1] = {&patch};
+    int32_t counts[1] = {1};
+    g_check_master_flag = 1;
+    g_expect_master_flag = 0;
+    ((uint8_t *)g_master)[0x170] = 0;
+    arm((const void *)run_multiple_released, 1, 0, 1);
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, parts, counts, 1);
+    fail("case:multiple-error released returned");
+}
+
+__attribute__((noinline)) static void run_multiple_attrib(void) {
+    /* case:multiple-error: an attribute count above 32 stops before the copy. */
+    boot(1);
+    uint8_t bytes[8];
+    memset(bytes, 0x11, sizeof bytes);
+    void *header = eu4_gfx_create_vertex_buffer(NULL, bytes, 2, 4, 0);
+    if (header == NULL) {
+        fail("case:multiple-error attrib setup");
+    }
+    uint8_t shader[0x20];
+    memset(shader, 0, sizeof shader);
+    int32_t attribs = 33;
+    void *base = shader;
+    memcpy(shader + 0x10, &base, sizeof base);
+    memcpy(shader + 0x18, &attribs, 4);
+    void *shader_ptr = shader;
+    memcpy((uint8_t *)g_master + 0x70, &shader_ptr, sizeof shader_ptr);
+    uint8_t patch = 0x22;
+    const void *parts[1] = {&patch};
+    int32_t counts[1] = {1};
+    g_kept = header;
+    g_kept_byte = 0x11;
+    g_check_master_flag = 1;
+    g_expect_master_flag = 0;
+    ((uint8_t *)g_master)[0x170] = 0;
+    arm((const void *)run_multiple_attrib, 1, 1, 1);
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, parts, counts, 1);
+    fail("case:multiple-error attrib returned");
+}
+
+static void *g_multiple_header;
+
+__attribute__((noinline)) static void *wrong_multiple(void *unused) {
+    (void)unused;
+    uint8_t patch = 0x22;
+    const void *parts[1] = {&patch};
+    int32_t counts[1] = {1};
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, g_multiple_header, parts, counts, 1);
+    return NULL;
+}
+
+__attribute__((noinline)) static void run_multiple_thread(void) {
+    /* case:multiple-error: another thread stops with thread before any effect. */
+    boot(1);
+    uint8_t bytes[4] = {0x11, 0x11, 0x11, 0x11};
+    g_multiple_header = eu4_gfx_create_vertex_buffer(NULL, bytes, 1, 4, 0);
+    if (g_multiple_header == NULL) {
+        fail("case:multiple-error thread setup");
+    }
+    arm((const void *)wrong_multiple, 1, 1, 1);
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, wrong_multiple, NULL) != 0) {
+        fail("pthread");
+    }
+    pthread_join(thread, NULL);
+    fail("case:multiple-error thread returned");
 }
 
 static void read_named(const char *name, char *body, size_t cap) {
@@ -1163,6 +1548,22 @@ int main(int argc, char **argv) {
             run_vb_attrib();
         } else if (strcmp(argv[1], "vb-thread") == 0) {
             run_vb_thread();
+        } else if (strcmp(argv[1], "multiple-missing") == 0) {
+            run_multiple_missing();
+        } else if (strcmp(argv[1], "multiple-range") == 0) {
+            run_multiple_range();
+        } else if (strcmp(argv[1], "multiple-size") == 0) {
+            run_multiple_size();
+        } else if (strcmp(argv[1], "multiple-bounds") == 0) {
+            run_multiple_bounds();
+        } else if (strcmp(argv[1], "multiple-null-data") == 0) {
+            run_multiple_null_data();
+        } else if (strcmp(argv[1], "multiple-released") == 0) {
+            run_multiple_released();
+        } else if (strcmp(argv[1], "multiple-attrib") == 0) {
+            run_multiple_attrib();
+        } else if (strcmp(argv[1], "multiple-thread") == 0) {
+            run_multiple_thread();
         }
         fail("unknown child");
     }
@@ -1176,6 +1577,7 @@ int main(int argc, char **argv) {
     success();
     index_success();
     vertex_set_success();
+    multiple_success();
     expect_child("fail-metal", "_GfxCreateVertexBuffer", "metal", "after_init");
     expect_child("fail-metal-throw", "_GfxUpdateVertexBuffer", "metal", "after_init");
     expect_child("fail-entry", "_GfxCreateVertexBuffer", "entry", "after_init");
@@ -1203,5 +1605,13 @@ int main(int argc, char **argv) {
     expect_child("vb-slot4", "_GfxSetVertexBuffers", "range", "after_init");
     expect_child("vb-attrib", "_GfxSetVertexBuffers", "attrib", "after_init");
     expect_child("vb-thread", "_GfxSetVertexBuffers", "thread", "after_init");
+    expect_child("multiple-missing", "_GfxUpdateVertexBufferMultiple", "missing", "after_init");
+    expect_child("multiple-range", "_GfxUpdateVertexBufferMultiple", "range", "after_init");
+    expect_child("multiple-size", "_GfxUpdateVertexBufferMultiple", "size", "after_init");
+    expect_child("multiple-bounds", "_GfxUpdateVertexBufferMultiple", "bounds", "after_init");
+    expect_child("multiple-null-data", "_GfxUpdateVertexBufferMultiple", "null_data", "after_init");
+    expect_child("multiple-released", "_GfxUpdateVertexBufferMultiple", "released", "after_init");
+    expect_child("multiple-attrib", "_GfxUpdateVertexBufferMultiple", "attrib", "after_init");
+    expect_child("multiple-thread", "_GfxUpdateVertexBufferMultiple", "thread", "after_init");
     return 0;
 }

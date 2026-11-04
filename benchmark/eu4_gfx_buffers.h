@@ -38,6 +38,11 @@ void *eu4_gfx_create_vertex_buffer(void *ignored, const void *data, int32_t coun
                                    int32_t usage);
 void eu4_gfx_update_vertex_buffer(void *handle, void *header, const void *data, int32_t count,
                                   uint32_t offset, int32_t partial);
+/* data is a qword pointer array, counts a dword element-count array. Ranges are
+   copied into the existing buffer at running byte offsets starting at zero. */
+void eu4_gfx_update_vertex_buffer_multiple(void *handle, void *header,
+                                           const void *const *data, const int32_t *counts,
+                                           int32_t ranges);
 void eu4_gfx_destroy_vertex_buffer(void *header);
 
 int eu4_gfx_vertex_records(void);
