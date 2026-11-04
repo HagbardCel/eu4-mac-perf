@@ -65,6 +65,22 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def connect_readonly(db_path: Path) -> sqlite3.Connection:
+    """Open an existing index without creating files or writing it.
+
+    The builder's connect() creates the parent directory and a writable database.
+    Research reads must not do either.
+    """
+    if not db_path.is_file():
+        raise FileNotFoundError(db_path.name)
+    # immutable avoids creating WAL sidecars for a database left in WAL mode.
+    uri = f"{db_path.resolve().as_uri()}?mode=ro&immutable=1"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA query_only=ON")
+    return conn
+
+
 def rebuild_index(
     db_path: Path,
     inventory_dir: Path,
