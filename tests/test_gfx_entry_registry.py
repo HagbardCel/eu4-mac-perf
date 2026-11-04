@@ -22,6 +22,7 @@ _INDEX_UPDATE = bytes.fromhex("554889e54156")
 _INDEX_DESTROY = bytes.fromhex("4885ff7450")
 _INDEX_SET = bytes.fromhex("4885f67428")
 _MULTI = bytes.fromhex("554889e541574156")
+_SCISSOR = bytes.fromhex("554889e50fbf5604")
 _FIVE = r"\x55\x48\x89\xe5\x53"
 BASELINE = (
     ("settings", 0x15ED388, 0x15ED9FC, "eu4_gfx_settings", _P6),
@@ -42,6 +43,7 @@ BASELINE = (
     ("_GfxUpdateIndexBuffer", 0x15EC23C, 0x15EC28E, "eu4_gfx_update_index_buffer", _INDEX_UPDATE),
     ("_GfxSetIndexBuffer", 0x15EC28E, 0x15EC2BC, "eu4_gfx_set_index_buffer", _INDEX_SET),
     ("_GfxSetVertexBuffers", 0x15EBF41, 0x15EC11C, "eu4_gfx_set_vertex_buffers", _P6),
+    ("_GfxSetScissorRectangle", 0x15ED0AA, 0x15ED0E2, "eu4_gfx_set_scissor_rectangle", _SCISSOR),
 )
 _ROOT = Path(__file__).resolve().parents[1]
 _PR5 = _ROOT / "results/20261102T100321Z-metal-init"

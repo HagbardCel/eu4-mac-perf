@@ -385,6 +385,103 @@ static void test_depth_cases(const char *dir) {
     munmap(page_bytes, (size_t)page);
 }
 
+static void check_scissor(void *handle, void *master, const int16_t *rect, int32_t x, int32_t y,
+                          int32_t width, int32_t height) {
+    int16_t saved[4];
+    memcpy(saved, rect, sizeof saved);
+    eu4_gfx_set_scissor_rectangle(handle, rect);
+    int32_t got[4] = {-1, -1, -1, -1};
+    if (!eu4_gfx_scissor_rectangle(master, got)) {
+        fail("scissor state was not recorded");
+    }
+    if (got[0] != x || got[1] != y || got[2] != width || got[3] != height) {
+        fail("scissor rectangle");
+    }
+    if (memcmp(saved, rect, sizeof saved) != 0) {
+        fail("scissor changed the source rectangle");
+    }
+}
+
+static void test_scissor(void *master, id<MTLDevice> device) {
+    int32_t got[4] = {-1, -1, -1, -1};
+    if (eu4_gfx_scissor_rectangle(master, got) != 0) {
+        fail("scissor was set before any call");
+    }
+    void *handle_slot = master;
+    void *handle = &handle_slot;
+    int16_t a[4] = {10, 20, 110, 70};
+    check_scissor(handle, master, a, 10, 20, 100, 50);
+    int16_t b[4] = {-5, -10, 25, 40};
+    check_scissor(handle, master, b, -5, -10, 30, 50);
+    int16_t inverted[4] = {90, 80, 40, 30};
+    check_scissor(handle, master, inverted, 90, 80, 0, 0);
+    int16_t narrow[4] = {7, 9, 7, 9};
+    check_scissor(handle, master, narrow, 7, 9, 0, 0);
+    /* Changing the viewport height must not move the top-left rectangle. */
+    uint8_t view[24];
+    memset(view, 0, sizeof view);
+    int32_t height = 300, width = 400, zero = 0;
+    memcpy(view, &height, 4);
+    memcpy(view + 4, &width, 4);
+    memcpy(view + 0x10, &zero, 4);
+    memcpy(view + 0x14, &zero, 4);
+    eu4_gfx_set_viewport(master, view);
+    int16_t c[4] = {1, 2, 3, 4};
+    check_scissor(handle, master, c, 1, 2, 2, 2);
+    /* Safety policy: null inputs and a master without a backend are no-ops. */
+    eu4_gfx_set_scissor_rectangle(NULL, c);
+    eu4_gfx_set_scissor_rectangle(handle, NULL);
+    void *empty = NULL;
+    eu4_gfx_set_scissor_rectangle(&empty, c);
+    uint8_t fake[EU4_GFX_MASTER_SIZE];
+    memset(fake, 0, sizeof fake);
+    void *fake_slot = fake;
+    eu4_gfx_set_scissor_rectangle(&fake_slot, c);
+    if (eu4_gfx_scissor_rectangle(fake, got) != 0) {
+        fail("a master without a backend held scissor state");
+    }
+    if (!eu4_gfx_scissor_rectangle(master, got) || got[0] != 1 || got[1] != 2 ||
+        got[2] != 2 || got[3] != 2) {
+        fail("null scissor input changed the pending rectangle");
+    }
+    /* Encoder-facing consumer: a real MTLRenderCommandEncoder accepts the state. */
+    int16_t visible[4] = {4, 6, 44, 26};
+    check_scissor(handle, master, visible, 4, 6, 40, 20);
+    MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                                                     width:64
+                                                                                    height:64
+                                                                                 mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> target = [device newTextureWithDescriptor:desc];
+    if (target == nil) {
+        fail("scissor render target");
+    }
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = target;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)*(void **)((uint8_t *)master + 0x180);
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    id<MTLRenderCommandEncoder> encoder =
+        command != nil ? [command renderCommandEncoderWithDescriptor:pass] : nil;
+    if (encoder == nil) {
+        fail("scissor encoder");
+    }
+    if (!eu4_gfx_scissor_rectangle(master, got)) {
+        fail("scissor state disappeared");
+    }
+    [encoder setScissorRect:(MTLScissorRect){(NSUInteger)got[0], (NSUInteger)got[1],
+                                            (NSUInteger)got[2], (NSUInteger)got[3]}];
+    [encoder endEncoding];
+    [command commit];
+    [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted || command.error != nil) {
+        fail("scissor encoder rejected the rectangle");
+    }
+}
+
 static void test_backend(void) {
     char dir[] = "/tmp/eu4-pr3-XXXXXX";
     if (mkdtemp(dir) == NULL) {
@@ -547,6 +644,7 @@ static void test_backend(void) {
             fail("fallback texels");
         }
     }
+    test_scissor(master, device);
     void *blend = *(void **)((uint8_t *)master + 0x80);
     void *depth_header = *(void **)((uint8_t *)master + 0x88);
     void *raster = *(void **)((uint8_t *)master + 0x90);

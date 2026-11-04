@@ -791,6 +791,58 @@ void eu4_gfx_set_viewport(void *master, const void *rect) {
     memcpy((uint8_t *)master + 0xac, rect, 24);
 }
 
+void eu4_gfx_set_scissor_rectangle(void *handle, const void *rect) {
+    if (handle == NULL || rect == NULL) {
+        return;
+    }
+    void *master = NULL;
+    memcpy(&master, handle, sizeof master);
+    if (master == NULL) {
+        return;
+    }
+    void *raw = load_ptr(master, 0x180);
+    if (raw == NULL) {
+        return;
+    }
+    int16_t fields[4];
+    memcpy(fields, rect, sizeof fields);
+    /* Original: width = x2-x1, height = y2-y1, both clamped when negative.
+       Metal's setScissorRect is top-left-origin, so it consumes y1 directly. */
+    int32_t width = (int32_t)fields[2] - (int32_t)fields[0];
+    int32_t height = (int32_t)fields[3] - (int32_t)fields[1];
+    if (width < 0) {
+        width = 0;
+    }
+    if (height < 0) {
+        height = 0;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)raw;
+    backend.scissorValid = YES;
+    backend.scissorX = fields[0];
+    backend.scissorY = fields[1];
+    backend.scissorWidth = width;
+    backend.scissorHeight = height;
+}
+
+int eu4_gfx_scissor_rectangle(void *master, int32_t out[4]) {
+    if (master == NULL || out == NULL) {
+        return 0;
+    }
+    void *raw = load_ptr(master, 0x180);
+    if (raw == NULL) {
+        return 0;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)raw;
+    if (!backend.scissorValid) {
+        return 0;
+    }
+    out[0] = backend.scissorX;
+    out[1] = backend.scissorY;
+    out[2] = backend.scissorWidth;
+    out[3] = backend.scissorHeight;
+    return 1;
+}
+
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
     (void)handle;
     (void)flags;
