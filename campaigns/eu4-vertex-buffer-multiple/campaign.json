@@ -1,0 +1,16 @@
+{
+  "id": "eu4-vertex-buffer-multiple",
+  "objective": "objective.md",
+  "runtime": "opencode",
+  "model": "opencode/big-pickle",
+  "opencode_version": "2.2.5",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/automation/eu4-vertex-buffer-multiple/workspace",
+    "commit": "97ffb65d0e3f1e14332d7a53c84f9fa6f1155d41"
+  },
+  "accept": ["python3", "accept.py"],
+  "max_rounds": 5,
+  "max_seconds": 3600,
+  "accept_timeout_seconds": 900
+}
