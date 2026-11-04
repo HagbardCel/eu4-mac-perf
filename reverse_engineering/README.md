@@ -179,6 +179,22 @@ Each response is one JSON object with schema `eu4.research.v1`. `status` is `ok`
 
 `function` pages static instructions and decompiler text separately with `--static-offset` and `--decompile-offset`. `xrefs` pages with `--incoming-offset`, `--outgoing-offset`, and `--callsite-offset`. The default budget is 24 KiB. `--max-bytes` must be from 1024 bytes through 256 KiB. Every response, including a compact error, fits that budget after serialization and the trailing newline. A continuation offset moves only past instructions, characters, or rows that were returned. A requested function stream that still has data is truncated, and is marked blocked with no continuation when it returned nothing; symbol names are not shortened to fit, and the page is `unavailable` with reason `response_budget` only when requested evidence remains and it returns neither a new instruction nor a new decompiler character. A truncated xref response reports each list's total. A list left out because another list filled the budget is marked blocked and has no next offset. Decompiler text is returned as stored.
 
+## On-demand Ghidra
+
+`python3 -m reverse_engineering.ghidra_query` asks the Ghidra project recorded in `ghidra_project.json` one question, then the process exits. It does not import a binary, create a project, or rebuild the sealed snapshot. `EU4_RE_EXPORT` selects the corpus root that contains `ghidra_project.json`. The project directory is the recorded `project_dir`, not a path derived from that variable.
+
+```bash
+python3 -m reverse_engineering.ghidra_query function 0x15ec28e
+python3 -m reverse_engineering.ghidra_query function _GfxSetIndexBuffer
+python3 -m reverse_engineering.ghidra_query address 0x2253610
+```
+
+Each response is one JSON object with schema `eu4.ghidra_query.v1`. `function` returns `absent` when that exact entry or exact symbol name is missing, and `ambiguous` when the name matches more than one function. A name may be the symbol (`_GfxSetIndexBuffer`) or the namespace-qualified symbol (`CGraphics::BeginScene`). It is not a partial search. A mapped `address` stays `present` when it has no references. `unmapped` means the address is outside the program's memory map. An unresolved call or data target is a flag on that reference. `value_kind` is `static_image` for initialized image bytes or `unavailable` when those bytes are not initialized. The tool does not report a runtime pointer.
+
+Each function instruction includes `references_from`: Ghidra's outgoing `ref_type` and `target_rva`, or `target_external` when the target is outside the program address space. An instruction with no outgoing references has an empty list. `function` pages instructions, decompiler text, callers, and callees with `--instruction-offset`, `--decompile-offset`, `--caller-offset`, and `--callee-offset`. `address` pages code references, data references, and P-code with `--code-ref-offset`, `--data-ref-offset`, and `--pcode-offset`. The byte budget matches `research`. A continuation offset moves only past rows or decompiler characters actually returned. A collection that still has data but returned nothing is marked blocked and has no next offset. One instruction, reference, or P-code record that cannot fit is `unavailable` with reason `response_budget`. Calling convention, parameters, return type, and decompiler text are under `hypothesis` or `decompile_status` and are Ghidra's recovery, not a separate proof. P-code is under `lifting`.
+
+The headless invocation is `-process -noanalysis -readOnly` with the fixed script `QueryProgram.java`. `-readOnly` discards in-process program changes. It is not a filesystem sandbox. OpenCode's shell permissions are not one either.
+
 ## Frozen renderer scope (Stage 1)
 
 The graphics extraction list is frozen under [`analysis/renderer-corpus/scope/v1/`](../analysis/renderer-corpus/scope/v1/). Later exporters read this explicit RVA list; they do not walk the call graph or select functions by name. Rows tagged `dependency` are static graph inclusions, not verified renderer roles.
