@@ -67,9 +67,9 @@ def _worktree_problem(workspace: Path, root: Path, commit: str) -> tuple[str, st
     try:
         require_worktree(workspace, root, commit)
         if _git(workspace, "rev-parse", "--abbrev-ref", "HEAD") != "HEAD":
-            return ("fail", "worktree is not detached")
+            return ("unavailable", "worktree is not detached")
     except RuntimeError as exc:
-        return ("fail", str(exc))
+        return ("unavailable", str(exc))
     except OSError as exc:
         return ("unavailable", f"worktree unavailable: {exc}")
     return None
@@ -384,9 +384,12 @@ def run_modules(workspace: Path, names: list[str]) -> str | None:
         "result=unittest.TextTestRunner(stream=sys.stderr,verbosity=0).run("
         "unittest.defaultTestLoader.loadTestsFromModule(module))\n"
         "failed=result.failures+result.errors\n"
+        "detail='\\n'.join(item[1] for item in failed)[:2000]\n"
+        "if result.unexpectedSuccesses and not detail:\n"
+        " detail='unexpected success'\n"
         "json.dump({'file':module.__file__,'ran':result.testsRun,"
         "'skipped':len(result.skipped),'failed':len(failed),"
-        "'detail':'\\n'.join(item[1] for item in failed)[:2000]},sys.stdout)\n"
+        "'successful':result.wasSuccessful(),'detail':detail},sys.stdout)\n"
     )
     for name in names:
         try:
@@ -408,7 +411,10 @@ def run_modules(workspace: Path, names: list[str]) -> str | None:
         ran_count = int(payload.get("ran") or 0) - int(payload.get("skipped") or 0)
         if ran_count < 1:
             return f"unavailable: {name} did not run a test"
-        if ran.returncode != 0 or int(payload.get("failed") or 0):
+        if (
+            ran.returncode != 0 or int(payload.get("failed") or 0)
+            or payload.get("successful") is not True
+        ):
             return f"candidate tests failed: {name}: {payload.get('detail') or ''}"[:2000]
     return None
 
@@ -443,13 +449,13 @@ def check(workspace: Path, campaign: dict, config: dict) -> dict:
         pinned = str(campaign["workspace"]["commit"])
         campaign_id = str(campaign["id"])
     except (KeyError, TypeError, RuntimeError, ValueError) as exc:
-        return emit("fail", str(exc))
+        return emit("unavailable", str(exc))
     problem = _worktree_problem(workspace, root, pinned)
     if problem:
         return emit(problem[0], problem[1])
     blob = checker_blob_problem(workspace, pinned)
     if blob:
-        return emit("fail", blob)
+        return emit("unavailable", blob)
     try:
         paths = changed_paths(workspace)
         baseline = pinned_show(workspace, pinned, "benchmark/eu4_gfx_entries.def")
@@ -463,7 +469,7 @@ def check(workspace: Path, campaign: dict, config: dict) -> dict:
     if error:
         return emit("unavailable", error)
     if str(target.get("sha256", "")).lower() != exe.lower():
-        return emit("fail", "executable identity does not match the pinned metadata")
+        return emit("unavailable", "executable identity does not match the pinned metadata")
     research_only = set(paths) <= {note_rel, "progress.md"}
     saved_path = checkpoint_path(workspace)
     saved = None
@@ -471,20 +477,20 @@ def check(workspace: Path, campaign: dict, config: dict) -> dict:
         try:
             saved = json.loads(saved_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
-            return emit("fail", "research checkpoint was modified")
+            return emit("unavailable", "research checkpoint was modified")
         if not isinstance(saved, dict):
-            return emit("fail", "research checkpoint was modified")
+            return emit("unavailable", "research checkpoint was modified")
     note_path = workspace / note_rel
     note_bytes = note_path.read_bytes() if note_path.is_file() else None
     if saved is not None:
         if saved.get("reconstruction_sha256") != config_sha256(config):
-            return emit("fail", "reconstruction configuration changed")
+            return emit("unavailable", "reconstruction configuration changed")
         if (
             saved.get("version") != 1 or saved.get("campaign_id") != campaign_id
             or saved.get("commit") != pinned or saved.get("executable_sha256") != exe
             or (saved.get("function") or {}).get("symbol") != symbol
         ):
-            return emit("fail", "research checkpoint identity changed")
+            return emit("unavailable", "research checkpoint identity changed")
         if note_bytes is None:
             return emit("fail", "research note is missing")
         preserved = _preservation(note_bytes, str(saved.get("note") or ""))
@@ -501,9 +507,9 @@ def check(workspace: Path, campaign: dict, config: dict) -> dict:
                 or function["instructions"] != instructions
             )
         except (KeyError, TypeError, ValueError):
-            return emit("fail", "research checkpoint identity changed")
+            return emit("unavailable", "research checkpoint identity changed")
         if changed:
-            return emit("fail", "original instruction span changed")
+            return emit("unavailable", "original instruction span changed")
     elif not research_only:
         return emit(
             "fail",

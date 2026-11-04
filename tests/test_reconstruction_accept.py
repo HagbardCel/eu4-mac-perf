@@ -93,19 +93,22 @@ class CheckTests(unittest.TestCase):
         note = f"{SYMBOL} 0x1000\n"
         with tempfile.TemporaryDirectory() as raw:
             workspace = self.workspace(Path(raw), "BLOCKER: encoder required\n")
-            with patch.object(
-                accept, "_worktree_problem",
-                return_value=("fail", "worktree HEAD is not the pinned commit"),
-            ):
-                wrong_head = accept.check(workspace, campaign(), configuration())
-            self.assertEqual(wrong_head["verdict"], "fail")
-            self.assertIn("pinned commit", wrong_head["diagnostics"])
+            self.patches[0].stop()
+            try:
+                with patch.object(
+                    accept, "require_worktree",
+                    side_effect=RuntimeError("worktree HEAD is not the pinned commit"),
+                ):
+                    problem = accept._worktree_problem(workspace, REPO, PIN)
+                self.assertEqual(problem, ("unavailable", "worktree HEAD is not the pinned commit"))
+            finally:
+                self.patches[0].start()
             with patch.object(
                 accept, "checker_blob_problem",
                 return_value="shared checker does not match the pinned commit",
             ):
                 wrong_blob = accept.check(workspace, campaign(), configuration())
-            self.assertEqual(wrong_blob["verdict"], "fail")
+            self.assertEqual(wrong_blob["verdict"], "unavailable")
             self.paths = ["benchmark/evil.c"]
             unauthorized = accept.check(workspace, campaign(), configuration())
             self.assertEqual(unauthorized["verdict"], "fail")
@@ -145,7 +148,7 @@ class CheckTests(unittest.TestCase):
             (workspace / NOTE).write_text(text, encoding="utf-8")
             changed = configuration(test_modules=["tests.other"])
             drifted = accept.check(workspace, campaign(), changed)
-            self.assertEqual(drifted["verdict"], "fail")
+            self.assertEqual(drifted["verdict"], "unavailable")
             self.assertIn("reconstruction configuration changed", drifted["diagnostics"])
 
     def test_entry_authenticity(self) -> None:
@@ -198,6 +201,8 @@ class ExecutionTests(unittest.TestCase):
         passing = "import unittest\nclass T(unittest.TestCase):\n def test_a(self):\n  pass\n"
         failing = "import unittest\nclass T(unittest.TestCase):\n def test_a(self):\n  self.fail('nope')\n"
         skipped = "import unittest\nclass T(unittest.TestCase):\n @unittest.skip('x')\n def test_a(self):\n  pass\n"
+        unexpected = "import unittest\nclass T(unittest.TestCase):\n @unittest.expectedFailure\n def test_a(self):\n  pass\n"
+        expected = "import unittest\nclass T(unittest.TestCase):\n @unittest.expectedFailure\n def test_a(self):\n  self.fail('expected')\n"
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             self._module(root, passing)
@@ -208,6 +213,12 @@ class ExecutionTests(unittest.TestCase):
             self._module(root, skipped)
             quiet = accept.run_modules(root, ["tests.toy"])
             self.assertTrue(quiet.startswith("unavailable:"))
+            self._module(root, unexpected)
+            surprise = accept.run_modules(root, ["tests.toy"])
+            self.assertTrue(surprise.startswith("candidate tests failed"))
+            self.assertIn("unexpected success", surprise)
+            self._module(root, expected)
+            self.assertIsNone(accept.run_modules(root, ["tests.toy"]))
 
 
 class BlobTests(unittest.TestCase):
