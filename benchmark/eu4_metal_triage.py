@@ -417,6 +417,9 @@ def index_buffer_receipt(index_create: dict | None, stop: dict | None, init: dic
         and _nonnegative_int(index_create.get("count"))
         and image_ok
         and isinstance(init, dict)
+        and _positive_int(init.get("pid"))
+        and init.get("pid") == index_create.get("pid")
+        and _positive_int(init.get("thread"))
         and init.get("thread") == index_create.get("thread")
     )
     if not created:

@@ -34,6 +34,7 @@ size_t eu4_gfx_index_buffer_length(void *header);
 int eu4_gfx_index_buffer_read(void *header, void *dest, size_t n);
 int eu4_gfx_index_buffer_shared(void *header);
 void *eu4_gfx_current_index_header(void);
+int eu4_gfx_current_index_read(void *dest, size_t n);
 }
 
 static void fail(const char *message) {
@@ -51,6 +52,8 @@ static int g_expect_gpus;
 static int32_t g_expect_counter;
 static void *g_kept;
 static uint8_t g_kept_byte;
+static void *g_kept_index;
+static uint8_t g_kept_index_bytes[2];
 static int g_expect_index_records;
 static int g_expect_index_gpus;
 static int32_t g_expect_ib;
@@ -136,6 +139,15 @@ static void child_stop(const char *reason) {
     if (g_kept != NULL) {
         uint8_t back = 0;
         if (eu4_gfx_vertex_buffer_read(g_kept, &back, 1) != 0 || back != g_kept_byte) {
+            _exit(3);
+        }
+    }
+    if (g_kept_index != NULL) {
+        uint8_t registry[2];
+        uint8_t bound[2];
+        if (eu4_gfx_index_buffer_read(g_kept_index, registry, 2) != 0 ||
+            memcmp(registry, g_kept_index_bytes, 2) != 0 ||
+            eu4_gfx_current_index_read(bound, 2) != 0 || memcmp(bound, g_kept_index_bytes, 2) != 0) {
             _exit(3);
         }
     }
@@ -597,6 +609,51 @@ __attribute__((noinline)) static void run_ib_thread(void) {
     fail("index wrong thread returned");
 }
 
+__attribute__((noinline)) static void run_ib_bound_metal(void) {
+    boot(1);
+    uint16_t index = 0x5a;
+    void *header = eu4_gfx_create_index_buffer(NULL, &index, 1);
+    if (header == NULL) {
+        fail("bound metal setup");
+    }
+    eu4_gfx_set_index_buffer(&g_master, header);
+    memcpy(g_kept_index_bytes, &index, 2);
+    g_kept_index = header;
+    arm_index((const void *)run_ib_bound_metal, 1, 1, 1);
+    eu4_gfx_buffer_test_fail_metal(1);
+    eu4_gfx_update_index_buffer(NULL, header, &index, 4);
+    fail("bound metal update returned");
+}
+
+__attribute__((noinline)) static void run_ib_unknown(void) {
+    boot(1);
+    uint8_t header[8];
+    memset(header, 0, sizeof header);
+    arm_index((const void *)run_ib_unknown, 0, 0, 0);
+    eu4_gfx_update_index_buffer(NULL, header, header, 1);
+    fail("unknown zero header returned");
+}
+
+__attribute__((noinline)) static void run_ib_released_set(void) {
+    boot(1);
+    uint16_t index = 1;
+    void *header = eu4_gfx_create_index_buffer(NULL, &index, 1);
+    if (header == NULL || *ib_counter() != 1) {
+        fail("released set setup");
+    }
+    int32_t sentinel = 7;
+    memcpy((uint8_t *)g_master + 0x68, &sentinel, 4);
+    eu4_gfx_release_vertex_buffers(eu4_gfx_backend_token(), __builtin_return_address(0));
+    if (eu4_gfx_index_records() != 1 || eu4_gfx_index_gpus() != 0) {
+        fail("released set did not drop the buffer");
+    }
+    arm_index((const void *)run_ib_released_set, 1, 0, 1);
+    g_check_master_count = 1;
+    g_expect_master_count = 7;
+    eu4_gfx_set_index_buffer(&g_master, header);
+    fail("released set returned");
+}
+
 __attribute__((noinline)) static void run_ib_missing(void) {
     boot(1);
     arm_index((const void *)run_ib_missing, 0, 0, 0);
@@ -683,6 +740,13 @@ __attribute__((noinline)) static void index_success(void) {
     if (written != 4 || eu4_gfx_current_index_header() != header) {
         fail("index bind");
     }
+    uint16_t rebound[4] = {40, 41, 42, 43};
+    eu4_gfx_update_index_buffer(NULL, header, rebound, 4);
+    if (eu4_gfx_current_index_header() != header || eu4_gfx_index_buffer_length(header) != 8 ||
+        eu4_gfx_index_buffer_read(header, got, 8) != 0 || memcmp(got, rebound, 8) != 0 ||
+        eu4_gfx_current_index_read(got, 8) != 0 || memcmp(got, rebound, 8) != 0) {
+        fail("index bound replace");
+    }
     written = 4;
     eu4_gfx_set_index_buffer(&g_master, NULL);
     memcpy(&written, (uint8_t *)g_master + 0x68, 4);
@@ -695,7 +759,8 @@ __attribute__((noinline)) static void index_success(void) {
     memcpy((uint8_t *)header + 4, &zero, 4);
     uint16_t ignored[2] = {15, 16};
     eu4_gfx_update_index_buffer(NULL, header, ignored, 2);
-    if (eu4_gfx_index_buffer_read(header, got, 4) != 0 || memcmp(got, shorter, 4) != 0) {
+    if (eu4_gfx_index_buffer_length(header) != 8 || eu4_gfx_index_buffer_read(header, got, 8) != 0 ||
+        memcmp(got, rebound, 8) != 0) {
         fail("index zero name update");
     }
     memcpy((uint8_t *)header + 4, &name, 4);
@@ -726,6 +791,11 @@ __attribute__((noinline)) static void index_success(void) {
     expect_index_header(empty, 0);
     if (eu4_gfx_index_buffer_length(empty) != 0 || !eu4_gfx_index_buffer_shared(empty)) {
         fail("index zero length");
+    }
+    eu4_gfx_set_index_buffer(&g_master, empty);
+    if (eu4_gfx_current_index_header() != empty || eu4_gfx_current_index_read(got, 0) != 0 ||
+        eu4_gfx_current_index_read(got, 1) == 0) {
+        fail("index empty binding");
     }
     void *blank = eu4_gfx_create_index_buffer(NULL, NULL, 3);
     expect_index_header(blank, 3);
@@ -823,6 +893,12 @@ int main(int argc, char **argv) {
             run_ib_thread();
         } else if (strcmp(argv[1], "ib-missing") == 0) {
             run_ib_missing();
+        } else if (strcmp(argv[1], "ib-bound-metal") == 0) {
+            run_ib_bound_metal();
+        } else if (strcmp(argv[1], "ib-unknown") == 0) {
+            run_ib_unknown();
+        } else if (strcmp(argv[1], "ib-released-set") == 0) {
+            run_ib_released_set();
         }
         fail("unknown child");
     }
@@ -855,5 +931,8 @@ int main(int argc, char **argv) {
     expect_child("ib-released", "_GfxUpdateIndexBuffer", "released", "after_init");
     expect_child("ib-thread", "_GfxCreateIndexBuffer", "thread", "after_init");
     expect_child("ib-missing", "_GfxSetIndexBuffer", "missing", "after_init");
+    expect_child("ib-bound-metal", "_GfxUpdateIndexBuffer", "metal", "after_init");
+    expect_child("ib-unknown", "_GfxUpdateIndexBuffer", "missing", "after_init");
+    expect_child("ib-released-set", "_GfxSetIndexBuffer", "released", "after_init");
     return 0;
 }

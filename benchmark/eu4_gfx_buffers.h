@@ -60,6 +60,7 @@ size_t eu4_gfx_index_buffer_length(void *header);
 int eu4_gfx_index_buffer_read(void *header, void *dest, size_t n);
 int eu4_gfx_index_buffer_shared(void *header);
 void *eu4_gfx_current_index_header(void);
+int eu4_gfx_current_index_read(void *dest, size_t n);
 
 #ifdef __cplusplus
 }

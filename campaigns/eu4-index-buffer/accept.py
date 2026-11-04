@@ -23,7 +23,7 @@ ALLOWED = {
 }
 TRUSTED_SHA256 = {
     "analysis/metal-init/index-buffers/note.md": "7f41abf232cbb1b6b2bc7edba7d90978c41fc28c6adba81329f33f77f157dcde",
-    "tests/gfx_buffers_host.mm": "48ca9188c97854049bbd037eee2be511bc5651967dc34f95954a8820fc7efc5d",
+    "tests/gfx_buffers_host.mm": "d6386212af18d83a6820bf16f32a912659674c82b6165cd99575dd60220dc6cd",
     "tests/test_gfx_buffers.py": "9145f289a2abfc5075648946fbb40d2a95e70e3b77d503c621f2c7c41c04fa6f",
     "campaigns/eu4-index-buffer/entry_probe.c": "9a19c14b4c684c5481e18ccb63e12aa674c1d7039921ec0ce98611d190c76914",
 }

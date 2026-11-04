@@ -77,14 +77,37 @@ class IndexReceiptTests(unittest.TestCase):
 
     def test_create_log_alone_is_not_a_return(self) -> None:
         self.assertEqual(
-            triage.index_buffer_receipt(self._create(), None, {"thread": 20}, image_ok=True),
+            triage.index_buffer_receipt(
+                self._create(), None, {"pid": 10, "thread": 20}, image_ok=True),
+            "unvalidated",
+        )
+
+    def test_matching_pid_without_a_later_stop_is_unvalidated(self) -> None:
+        self.assertEqual(
+            triage.index_buffer_receipt(
+                self._create(), None, {"pid": 10, "thread": 20}, image_ok=True),
+            "unvalidated",
+        )
+
+    def test_mismatched_init_pid_is_unvalidated(self) -> None:
+        self.assertEqual(
+            triage.index_buffer_receipt(
+                self._create(),
+                {"pid": 10, "reason": "missing"},
+                {"pid": 11, "thread": 20},
+                image_ok=True,
+            ),
             "unvalidated",
         )
 
     def test_later_stop_from_the_same_process_is_a_return(self) -> None:
         self.assertEqual(
             triage.index_buffer_receipt(
-                self._create(), {"pid": 10, "reason": "missing"}, {"thread": 20}, image_ok=True),
+                self._create(),
+                {"pid": 10, "reason": "missing"},
+                {"pid": 10, "thread": 20},
+                image_ok=True,
+            ),
             "returned",
         )
 
@@ -93,7 +116,7 @@ class IndexReceiptTests(unittest.TestCase):
             triage.index_buffer_receipt(
                 self._create(),
                 {"pid": 10, "reason": "gl", "symbol": "_GfxCreateVertexBuffer"},
-                {"thread": 20},
+                {"pid": 10, "thread": 20},
                 image_ok=True,
             ),
             "unrelated_gl",

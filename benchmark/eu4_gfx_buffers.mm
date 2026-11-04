@@ -498,17 +498,14 @@ void eu4_gfx_update_index_buffer(void *ignored, void *header, const void *data, 
     const void *caller = __builtin_return_address(0);
     (void)ignored;
     require_thread("_GfxUpdateIndexBuffer", caller);
-    if (header == NULL) {
+    EU4IndexBuffer *entry = find_index_entry(header);
+    if (entry == nil) {
         eu4_gfx_stop("_GfxUpdateIndexBuffer", "missing", caller);
     }
     uint32_t name = 0;
     memcpy(&name, (uint8_t *)header + 4, 4);
     if (name == 0) {
         return;
-    }
-    EU4IndexBuffer *entry = find_index_entry(header);
-    if (entry == nil) {
-        eu4_gfx_stop("_GfxUpdateIndexBuffer", "missing", caller);
     }
     if (entry.buffer == nil) {
         eu4_gfx_stop("_GfxUpdateIndexBuffer", "released", caller);
@@ -531,6 +528,9 @@ void eu4_gfx_update_index_buffer(void *ignored, void *header, const void *data, 
     }
     entry.buffer = fresh;
     entry.length = length;
+    if (g_index_current_header == header) {
+        g_index_current_buffer = fresh;
+    }
 }
 
 void eu4_gfx_destroy_index_buffer(void *header) {
@@ -571,6 +571,9 @@ void eu4_gfx_set_index_buffer(void *handle, void *header) {
     EU4IndexBuffer *entry = find_index_entry(header);
     if (entry == nil) {
         eu4_gfx_stop("_GfxSetIndexBuffer", "missing", caller);
+    }
+    if (entry.buffer == nil) {
+        eu4_gfx_stop("_GfxSetIndexBuffer", "released", caller);
     }
     g_index_current_header = header;
     g_index_current_buffer = entry.buffer;
@@ -618,6 +621,17 @@ int eu4_gfx_index_buffer_shared(void *header) {
 }
 
 void *eu4_gfx_current_index_header(void) { return g_index_current_header; }
+
+int eu4_gfx_current_index_read(void *dest, size_t n) {
+    EU4IndexBuffer *entry = find_index_entry(g_index_current_header);
+    if (entry == nil || entry.buffer == nil || g_index_current_buffer != entry.buffer || entry.length != n) {
+        return -1;
+    }
+    if (n > 0) {
+        memcpy(dest, g_index_current_buffer.contents, n);
+    }
+    return 0;
+}
 
 void eu4_gfx_buffer_test_fail_metal(int on) { g_fail_metal = on; }
 void eu4_gfx_buffer_test_fail_metal_throw(int on) { g_fail_metal_throw = on; }
