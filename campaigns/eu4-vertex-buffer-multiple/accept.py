@@ -449,17 +449,6 @@ def check(workspace: Path) -> dict:
     workspace = Path(workspace).resolve()
     note_file = workspace / NOTE_REL
     saved_path = checkpoint_path(workspace)
-    note_bytes = note_file.read_bytes() if note_file.is_file() else None
-    if note_bytes is not None:
-        try:
-            note_text = note_bytes.decode()
-        except UnicodeError:
-            return emit("fail", "research note is not utf-8")
-        blocker = blocker_line(note_text)
-        if blocker:
-            return emit("blocker", blocker)
-    else:
-        note_text = ""
     try:
         head = _git(workspace, "rev-parse", "HEAD")
         if head != pinned_commit():
@@ -473,13 +462,25 @@ def check(workspace: Path) -> dict:
     if scope:
         return emit("fail", scope)
     research_only = set(paths) <= RESEARCH_PATHS
-    if saved_path.is_file():
-        saved = saved_path.read_bytes()
+    note_bytes = note_file.read_bytes() if note_file.is_file() else None
+    if note_bytes is None:
+        note_text = ""
+    else:
+        try:
+            note_text = note_bytes.decode()
+        except UnicodeError:
+            return emit("fail", "research note is not utf-8")
+    saved = saved_path.read_bytes() if saved_path.is_file() else None
+    if saved is not None:
         if note_bytes is None:
             return emit("fail", "research note is missing")
         problem = preservation_problem(note_bytes, saved)
         if problem:
             return emit("fail", problem)
+    blocker = blocker_line(note_text) if note_text else None
+    if blocker:
+        return emit("blocker", blocker)
+    if saved is not None:
         digest = checkpoint_sha256(saved_path)
         if research_only:
             return emit(

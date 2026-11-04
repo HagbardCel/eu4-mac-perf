@@ -123,10 +123,29 @@ class BlockerTests(unittest.TestCase):
         note.write_text(text, encoding="utf-8")
         return workspace
 
+    def _pin(self, paths: list[str], *, head: str | None = None):
+        pinned = head if head is not None else accept.pinned_commit()
+        common = "/tmp/eu4-vertex-buffer-multiple-common"
+
+        def fake_git(_path, *args):
+            if args == ("rev-parse", "HEAD"):
+                return pinned
+            if args == ("rev-parse", "--git-common-dir"):
+                return common
+            raise OSError("unexpected git")
+
+        accept._git = fake_git
+        accept.changed_paths = lambda _workspace: list(paths)
+
+    def tearDown(self) -> None:
+        accept._git = load_accept()._git
+        accept.changed_paths = load_accept().changed_paths
+
     def test_blocker_before_checkpoint_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             parent = Path(raw)
             workspace = self._workspace(parent, "BLOCKER: shader compiler required\n")
+            self._pin([accept.NOTE_REL])
             first = accept.check(workspace)
             second = accept.check(workspace)
             self.assertEqual(first["verdict"], "blocker")
@@ -142,12 +161,42 @@ class BlockerTests(unittest.TestCase):
             path, digest = accept.capture_checkpoint(parent, saved)
             workspace = self._workspace(
                 parent, saved.decode() + "\n## Follow-up\nBLOCKER: command encoder required\n")
+            self._pin([accept.NOTE_REL])
             result = accept.check(workspace)
             self.assertEqual(result["verdict"], "blocker")
             self.assertIn("BLOCKER:", result["diagnostics"])
             self.assertIn("command encoder required", result["diagnostics"])
             self.assertEqual(path.read_bytes(), saved)
             self.assertEqual(accept.checkpoint_sha256(path), digest)
+
+    def test_modified_checkpoint_beats_blocker(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            parent = Path(raw)
+            saved = b"## Entry\n0x10\n"
+            path, digest = accept.capture_checkpoint(parent, saved)
+            workspace = self._workspace(parent, "rewritten\nBLOCKER: shader compiler required\n")
+            self._pin([accept.NOTE_REL])
+            result = accept.check(workspace)
+            self.assertEqual(result["verdict"], "fail")
+            self.assertIn("research checkpoint was modified", result["diagnostics"])
+            self.assertNotIn("BLOCKER:", result["diagnostics"])
+            self.assertEqual(path.read_bytes(), saved)
+            self.assertEqual(accept.checkpoint_sha256(path), digest)
+
+    def test_invalid_worktree_beats_blocker(self) -> None:
+        note = "BLOCKER: shader compiler required\n"
+        with tempfile.TemporaryDirectory() as raw:
+            parent = Path(raw)
+            workspace = self._workspace(parent, note)
+            self._pin([accept.NOTE_REL], head="0" * 40)
+            wrong_head = accept.check(workspace)
+            self.assertEqual(wrong_head["verdict"], "fail")
+            self.assertIn("worktree HEAD is not the pinned commit", wrong_head["diagnostics"])
+            self._pin(["benchmark/evil.c"])
+            unauthorized = accept.check(workspace)
+            self.assertEqual(unauthorized["verdict"], "fail")
+            self.assertIn("source scope violated", unauthorized["diagnostics"])
+            self.assertFalse((parent / accept.CHECKPOINT_NAME).exists())
 
 
 class RegistrationTests(unittest.TestCase):

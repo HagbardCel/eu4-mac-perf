@@ -870,6 +870,40 @@ __attribute__((noinline)) static void vertex_set_success(void) {
     }
 }
 
+/* count 2 reads base+0x34, then base+0x0c. The record is [9, 4]. */
+static void install_two_attribs(uint8_t *shader) {
+    memset(shader, 0, 0x40);
+    void *base = shader;
+    int32_t count = 2;
+    int32_t low = 4;
+    int32_t high = 9;
+    memcpy(shader + 0x0c, &low, 4);
+    memcpy(shader + 0x34, &high, 4);
+    memcpy(shader + 0x10, &base, sizeof base);
+    memcpy(shader + 0x18, &count, 4);
+    void *shader_ptr = shader;
+    memcpy((uint8_t *)g_master + 0x70, &shader_ptr, sizeof shader_ptr);
+}
+
+static void clear_shader_pointer(void) {
+    void *no_shader = NULL;
+    memcpy((uint8_t *)g_master + 0x70, &no_shader, sizeof no_shader);
+}
+
+static void empty_disabled_attribs(void) {
+    clear_shader_pointer();
+    eu4_gfx_set_vertex_buffers(&g_master, 0, NULL, 0, NULL, NULL);
+    ((uint8_t *)g_master)[0x170] = 0;
+}
+
+static int attribs_are(int32_t first, int32_t second) {
+    int32_t got0 = 0;
+    int32_t got1 = 0;
+    return eu4_gfx_disabled_vertex_attrib_count() == 2 &&
+        eu4_gfx_disabled_vertex_attrib(0, &got0) == 0 && got0 == first &&
+        eu4_gfx_disabled_vertex_attrib(1, &got1) == 0 && got1 == second;
+}
+
 /* case:multiple-range, case:multiple-unchanged, case:multiple-lifecycle. The
    case:multiple-error paths run in the child modes below. */
 __attribute__((noinline)) static void multiple_success(void) {
@@ -905,6 +939,66 @@ __attribute__((noinline)) static void multiple_success(void) {
         ((uint8_t *)g_master)[0x170] != 1) {
         fail("case:multiple-range");
     }
+
+    /* case:multiple-attribs: a populated shader records [9, 4] and sets the dirty byte. */
+    uint8_t shader[0x40];
+    empty_disabled_attribs();
+    if (eu4_gfx_disabled_vertex_attrib_count() != 0) {
+        fail("case:multiple-attribs clear");
+    }
+    install_two_attribs(shader);
+    ((uint8_t *)g_master)[0x170] = 0;
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, parts, counts, 2);
+    if (((uint8_t *)g_master)[0x170] != 1 || !attribs_are(9, 4)) {
+        fail("case:multiple-attribs");
+    }
+
+    /* case:multiple-zero-token: a zero presence token returns before every effect. */
+    uint32_t saved_token = 0;
+    memcpy(&saved_token, (uint8_t *)header + 8, 4);
+    uint32_t zero_token = 0;
+    memcpy((uint8_t *)header + 8, &zero_token, 4);
+    ((uint8_t *)g_master)[0x170] = 0;
+    uint8_t before_token[32];
+    uint8_t after_token[32];
+    uint8_t differ[8];
+    memset(differ, 0xab, sizeof differ);
+    const void *differ_parts[1] = {differ};
+    int32_t differ_counts[1] = {2};
+    if (eu4_gfx_vertex_buffer_read(header, before_token, 32) != 0) {
+        fail("case:multiple-zero-token read");
+    }
+    eu4_gfx_update_vertex_buffer_multiple(&g_master, header, differ_parts, differ_counts, 1);
+    if (eu4_gfx_vertex_buffer_read(header, after_token, 32) != 0 ||
+        memcmp(before_token, after_token, 32) != 0 ||
+        ((uint8_t *)g_master)[0x170] != 0 || !attribs_are(9, 4)) {
+        memcpy((uint8_t *)header + 8, &saved_token, 4);
+        fail("case:multiple-zero-token");
+    }
+    memcpy((uint8_t *)header + 8, &saved_token, 4);
+
+    /* case:multiple-zero-range and a negative count skip the copy and still record attributes. */
+    int32_t quiet_ranges[2] = {0, -1};
+    for (int quiet = 0; quiet < 2; quiet++) {
+        uint8_t before_quiet[32];
+        uint8_t after_quiet[32];
+        empty_disabled_attribs();
+        if (eu4_gfx_disabled_vertex_attrib_count() != 0 || ((uint8_t *)g_master)[0x170] != 0) {
+            fail("case:multiple-zero-range clear");
+        }
+        install_two_attribs(shader);
+        if (eu4_gfx_vertex_buffer_read(header, before_quiet, 32) != 0) {
+            fail("case:multiple-zero-range read");
+        }
+        eu4_gfx_update_vertex_buffer_multiple(
+            &g_master, header, NULL, NULL, quiet_ranges[quiet]);
+        if (eu4_gfx_vertex_buffer_read(header, after_quiet, 32) != 0 ||
+            memcmp(before_quiet, after_quiet, 32) != 0 ||
+            ((uint8_t *)g_master)[0x170] != 1 || !attribs_are(9, 4)) {
+            fail(quiet == 0 ? "case:multiple-zero-range" : "case:multiple-negative-range");
+        }
+    }
+    clear_shader_pointer();
 
     /* case:multiple-unchanged: a zero-size range does not advance the offset and
        the bytes past the ranges stay as they were. */
