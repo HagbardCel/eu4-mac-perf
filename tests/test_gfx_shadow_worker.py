@@ -1,4 +1,5 @@
 import base64
+import os
 import subprocess
 import sys
 import unittest
@@ -64,6 +65,8 @@ class ShadowWorkerTests(unittest.TestCase):
         settings = self.ok("settings", {"display": 1, "windowed": 0, "samples": samples})
         result = settings["result"]
         self.assertFalse(settings["state"]["initialized"])
+        self.assertEqual(settings["state"]["vertex_records"], 0)
+        self.assertEqual(settings["state"]["vertex_gpus"], 0)
         self.assertEqual(result["return"], 0)
         self.assertEqual(result["byte_10"], 1)
         self.assertEqual(result["anisotropy"], 0)
@@ -107,6 +110,8 @@ class ShadowWorkerTests(unittest.TestCase):
         self.assertTrue(created["result"]["buffer"]["shared"])
         self.assertNotIn("bytes_base64", created["result"]["buffer"])
         self.assertEqual(created["state"]["live_count"], 1)
+        self.assertEqual(created["state"]["vertex_records"], 1)
+        self.assertEqual(created["state"]["vertex_gpus"], 1)
         bound = self.ok("set_vertex_buffers", {"start": 0, "resources": ["A"]})
         self.assertEqual(bound["state"]["dirty"], 1)
         self.assertEqual(bound["state"]["slots"][0]["resource_id"], "A")
@@ -139,7 +144,11 @@ class ShadowWorkerTests(unittest.TestCase):
         self.ok("update_vertex_buffer", {
             "resource_id": "A", "count": 2, "offset": 0, "partial": 0, "data_base64": b64(replaced),
         })
-        seen = self.observe(["A"], [0])
+        replaced_obs = self.ok("observe", {"resources": ["A"], "slots": [0]})
+        seen = replaced_obs["result"]
+        self.assertEqual(replaced_obs["state"]["live_count"], 1)
+        self.assertEqual(replaced_obs["state"]["vertex_records"], 1)
+        self.assertEqual(replaced_obs["state"]["vertex_gpus"], 1)
         self.assertEqual(seen["slots"][0]["resource_id"], "A")
         self.assertEqual(seen["slots"][0]["length"], 8)
         self.assertEqual(base64.b64decode(seen["slots"][0]["bytes_base64"]), replaced)
@@ -176,7 +185,10 @@ class ShadowWorkerTests(unittest.TestCase):
         self.assertEqual(followed["state"]["backend_releases"], releases)
         self.assertEqual(base64.b64decode(followed["result"]["slots"][0]["bytes_base64"]), replaced)
 
-        self.ok("destroy_vertex_buffer", {"resource_id": "A"})
+        destroyed = self.ok("destroy_vertex_buffer", {"resource_id": "A"})
+        self.assertEqual(destroyed["state"]["live_count"], 0)
+        self.assertEqual(destroyed["state"]["vertex_records"], 0)
+        self.assertEqual(destroyed["state"]["vertex_gpus"], 0)
         stale = self.call("set_vertex_buffers", {"start": 0, "resources": ["A"]})
         self.assertFalse(stale["ok"])
         self.assertEqual(stale["error"], "stale_resource")
@@ -185,6 +197,9 @@ class ShadowWorkerTests(unittest.TestCase):
         self.assertFalse(shut["result"]["initialized"])
         self.assertEqual(shut["result"]["backend_releases"], releases + 1)
         self.assertFalse(shut["state"]["initialized"])
+        self.assertEqual(shut["state"]["live_count"], 0)
+        self.assertEqual(shut["state"]["vertex_records"], 0)
+        self.assertEqual(shut["state"]["vertex_gpus"], 0)
         rejected = self.call("create_vertex_buffer", create_args("B", 1, 4, b"\x01\x02\x03\x04"))
         self.assertFalse(rejected["ok"])
         self.assertEqual(rejected["error"], "already_shutdown")
@@ -291,3 +306,56 @@ class ShadowWorkerTests(unittest.TestCase):
         self.assertFalse(failed["ok"])
         self.assertEqual(failed["error"], "init_failed")
         self.assertEqual(self.worker.proc.wait(timeout=5), 1)
+
+    def test_failed_read_stays_up(self):
+        self.worker.close()
+        self.worker = shadow.Worker(env={"EU4_SHADOW_FAIL_READ": "1"})
+        self.boot()
+        self.ok("create_vertex_buffer", create_args("A", 4, 4, bytes([0x11]) * 16))
+        self.ok("set_vertex_buffers", {"start": 0, "resources": ["A"]})
+        resource = self.call("observe", {"resources": ["A"]})
+        self.assertFalse(resource["ok"])
+        self.assertEqual(resource["error"], "observation_failed")
+        self.assertNotIn("executed", resource)
+        slot = self.call("observe", {"slots": [0]})
+        self.assertFalse(slot["ok"])
+        self.assertEqual(slot["error"], "observation_failed")
+        followed = self.ok("set_viewport", {"words": [1, 2, 3, 4, 5, 6]})
+        self.assertEqual(followed["state"]["viewport"], [1, 2, 3, 4, 5, 6])
+
+    def test_state_length_failure_exits(self):
+        self._state_failure("length")
+
+    def test_state_map_failure_exits(self):
+        self._state_failure("map")
+
+    def _state_failure(self, mode):
+        self.worker.close()
+        self.worker = shadow.Worker(env={"EU4_SHADOW_FAIL_STATE": mode})
+        self.boot()
+        self.ok("create_vertex_buffer", create_args("A", 4, 4, bytes([0x11]) * 16))
+        failed = self.call("set_vertex_buffers", {"start": 0, "resources": ["A"]})
+        self.assertFalse(failed["ok"])
+        self.assertEqual(failed["error"], "observation_failed")
+        self.assertIs(failed.get("executed"), True)
+        self.assertNotIn("state", failed)
+        self.assertEqual(self.worker.proc.wait(timeout=5), 1)
+
+    def test_reader_keeps_surplus(self):
+        one = b'{"schema":"metal-shadow/v0","ok":true,"seq":1,"next":2}\n'
+        two = b'{"schema":"metal-shadow/v0","ok":true,"seq":2,"next":3}\n'
+        self.worker._buf = bytearray(one + two)
+        first = self.worker.read(timeout=0.05)
+        second = self.worker.read(timeout=0.05)
+        self.assertEqual(first["seq"], 1)
+        self.assertEqual(second["seq"], 2)
+
+    def test_reader_incomplete_eof(self):
+        read_fd, write_fd = os.pipe()
+        os.close(write_fd)
+        self.worker.proc.stdout.close()
+        self.worker.proc.stdout = os.fdopen(read_fd, "rb", buffering=0)
+        self.worker._buf = bytearray(b'{"ok":')
+        with self.assertRaises(RuntimeError) as caught:
+            self.worker.read(timeout=0.2)
+        self.assertIn("incomplete", str(caught.exception))

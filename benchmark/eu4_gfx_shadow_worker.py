@@ -3,6 +3,7 @@ import os
 import select
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,37 +43,55 @@ def build():
 
 
 class Worker:
-    def __init__(self, binary=None):
-        self.err_file = tempfile.TemporaryFile(mode="w+")
-        env = os.environ.copy()
-        env["MTL_DEBUG_LAYER"] = "1"
-        env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
+    def __init__(self, binary=None, env=None):
+        self.err_file = tempfile.TemporaryFile(mode="w+b")
+        child = os.environ.copy()
+        child["MTL_DEBUG_LAYER"] = "1"
+        child["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
+        if env:
+            child.update(env)
         self.proc = subprocess.Popen(
             [str(binary or BINARY)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=self.err_file,
-            env=env,
-            text=True,
+            env=child,
+            bufsize=0,
         )
+        self._buf = bytearray()
         self.next_seq = 1
 
     def stderr_text(self):
         self.err_file.flush()
         self.err_file.seek(0)
-        return self.err_file.read()
+        return self.err_file.read().decode()
 
     def read(self, timeout=30):
-        ready, _, _ = select.select([self.proc.stdout], [], [], timeout)
-        if not ready:
-            raise TimeoutError(self.stderr_text() or "shadow worker timed out")
-        line = self.proc.stdout.readline()
-        if line == "":
-            return None
-        return json.loads(line)
+        deadline = time.monotonic() + timeout
+        while True:
+            nl = self._buf.find(b"\n")
+            if nl >= 0:
+                raw = bytes(self._buf[:nl])
+                del self._buf[: nl + 1]
+                if raw.endswith(b"\r"):
+                    raw = raw[:-1]
+                return json.loads(raw.decode())
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(self.stderr_text() or "shadow worker timed out")
+            ready, _, _ = select.select([self.proc.stdout], [], [], remaining)
+            if not ready:
+                raise TimeoutError(self.stderr_text() or "shadow worker timed out")
+            chunk = os.read(self.proc.stdout.fileno(), 65536)
+            if chunk == b"":
+                if self._buf:
+                    raise RuntimeError("incomplete response")
+                return None
+            self._buf.extend(chunk)
 
     def line(self, text):
-        self.proc.stdin.write(text if text.endswith("\n") else text + "\n")
+        payload = text if text.endswith("\n") else text + "\n"
+        self.proc.stdin.write(payload.encode())
         self.proc.stdin.flush()
         resp = self.read()
         if isinstance(resp, dict) and isinstance(resp.get("next"), int):

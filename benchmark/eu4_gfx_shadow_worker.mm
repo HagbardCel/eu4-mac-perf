@@ -40,6 +40,8 @@ static int g_down;
 static long long g_expect = 1;
 static NSMutableDictionary<NSString *, ShadowBuf *> *g_live;
 static NSMutableSet<NSString *> *g_ever;
+static int g_fail_read;
+static int g_fail_state;
 
 static void write_depth(void *dest) { eu4_gfx_write_default_depth_stencil((uint8_t *)dest); }
 
@@ -161,6 +163,9 @@ static int logical_size(int32_t count, int32_t stride, size_t *out) {
 }
 
 static NSString *id_for_header(void *header) {
+    if (g_fail_state == 2) {
+        return nil;
+    }
     for (NSString *ident in g_live) {
         if (g_live[ident].header == header) {
             return ident;
@@ -169,20 +174,25 @@ static NSString *id_for_header(void *header) {
     return nil;
 }
 
+static size_t observed_length(void *header) {
+    if (g_fail_state == 1) {
+        return (size_t)-1;
+    }
+    return eu4_gfx_vertex_buffer_length(header);
+}
+
 static NSString *hex_bytes(const uint8_t *bytes, size_t n) {
     static const char digits[] = "0123456789abcdef";
-    char *text = (char *)malloc(n * 2 + 1);
-    if (text == NULL) {
-        return @"";
+    if (n > 36) {
+        return nil;
     }
+    char text[36 * 2 + 1];
     for (size_t i = 0; i < n; i++) {
         text[i * 2] = digits[bytes[i] >> 4];
         text[i * 2 + 1] = digits[bytes[i] & 0xf];
     }
     text[n * 2] = 0;
-    NSString *out = [NSString stringWithUTF8String:text];
-    free(text);
-    return out;
+    return [NSString stringWithUTF8String:text];
 }
 
 static int32_t load_i32(const void *base, int offset) {
@@ -198,6 +208,8 @@ static NSDictionary *state_now(void) {
         @"backend_releases": @(eu4_gfx_backend_releases()),
         @"backend_present": @(eu4_gfx_backend_token() != NULL ? YES : NO),
         @"live_count": @(g_live.count),
+        @"vertex_records": @(eu4_gfx_vertex_records()),
+        @"vertex_gpus": @(eu4_gfx_vertex_gpus()),
     } mutableCopy];
     if (!g_up || g_master == NULL) {
         return state;
@@ -212,20 +224,31 @@ static NSDictionary *state_now(void) {
     memcpy(blend, (uint8_t *)g_master + 0xc, sizeof blend);
     memcpy(depth, (uint8_t *)g_master + 0x30, sizeof depth);
     memcpy(raster, (uint8_t *)g_master + 0x54, sizeof raster);
+    NSString *blend_snap = hex_bytes(blend, sizeof blend);
+    NSString *depth_snap = hex_bytes(depth, sizeof depth);
+    NSString *raster_snap = hex_bytes(raster, sizeof raster);
+    if (blend_snap == nil || depth_snap == nil || raster_snap == nil) {
+        return nil;
+    }
     NSMutableArray *slots = [NSMutableArray arrayWithCapacity:4];
     for (int slot = 0; slot < EU4_GFX_VERTEX_SLOTS; slot++) {
         void *header = eu4_gfx_vertex_slot_header(slot);
-        size_t length = 0;
-        if (header != NULL) {
-            size_t got = eu4_gfx_vertex_buffer_length(header);
-            if (got != (size_t)-1) {
-                length = got;
-            }
+        if (header == NULL) {
+            [slots addObject:@{
+                @"slot": @(slot),
+                @"resource_id": [NSNull null],
+                @"length": @0,
+            }];
+            continue;
         }
-        NSString *ident = header == NULL ? nil : id_for_header(header);
+        size_t length = observed_length(header);
+        NSString *ident = id_for_header(header);
+        if (length == (size_t)-1 || ident == nil) {
+            return nil;
+        }
         [slots addObject:@{
             @"slot": @(slot),
-            @"resource_id": ident ?: [NSNull null],
+            @"resource_id": ident,
             @"length": @(length),
         }];
     }
@@ -237,14 +260,33 @@ static NSDictionary *state_now(void) {
     state[@"texture_lod"] = @(((uint8_t *)g_master)[0x18e]);
     state[@"dirty"] = @(((uint8_t *)g_master)[0x170]);
     state[@"viewport"] = viewport;
-    state[@"blend_snap"] = hex_bytes(blend, sizeof blend);
-    state[@"depth_snap"] = hex_bytes(depth, sizeof depth);
-    state[@"raster_snap"] = hex_bytes(raster, sizeof raster);
+    state[@"blend_snap"] = blend_snap;
+    state[@"depth_snap"] = depth_snap;
+    state[@"raster_snap"] = raster_snap;
     state[@"slots"] = slots;
     return state;
 }
 
+static void fail_executed(long long seq, NSString *op) __attribute__((noreturn));
+static void fail_executed(long long seq, NSString *op) {
+    g_expect = seq + 1;
+    reply(@{
+        @"schema": @"metal-shadow/v0",
+        @"ok": @NO,
+        @"seq": @(seq),
+        @"next": @(g_expect),
+        @"op": op,
+        @"error": @"observation_failed",
+        @"executed": @YES,
+    });
+    exit(1);
+}
+
 static void succeed(long long seq, NSString *op, NSDictionary *result) {
+    NSDictionary *state = state_now();
+    if (state == nil) {
+        fail_executed(seq, op);
+    }
     g_expect = seq + 1;
     reply(@{
         @"schema": @"metal-shadow/v0",
@@ -253,7 +295,7 @@ static void succeed(long long seq, NSString *op, NSDictionary *result) {
         @"next": @(g_expect),
         @"op": op,
         @"result": result ?: @{},
-        @"state": state_now(),
+        @"state": state,
     });
 }
 
@@ -754,29 +796,39 @@ static void op_destroy(NSDictionary *args, long long seq) {
 }
 
 static NSDictionary *bytes_view(void *header, BOOL known, int (*read)(void *, void *, size_t)) {
-    size_t length = eu4_gfx_vertex_buffer_length(header);
+    size_t length = observed_length(header);
     if (length == (size_t)-1) {
-        length = 0;
-        known = NO;
+        return nil;
     }
     NSMutableDictionary *view = [@{
         @"contents_known": @(known),
         @"length": @(length),
     } mutableCopy];
-    if (known) {
-        NSMutableData *data = [NSMutableData dataWithLength:length];
-        if (read(header, data.mutableBytes, length) == 0) {
-            view[@"bytes_base64"] = [data base64EncodedStringWithOptions:0];
-        }
+    if (!known) {
+        return view;
     }
+    NSMutableData *data = [NSMutableData dataWithLength:length];
+    void *dest = length == 0 ? NULL : data.mutableBytes;
+    if (read(header, dest, length) != 0) {
+        return nil;
+    }
+    view[@"bytes_base64"] = [data base64EncodedStringWithOptions:0];
     return view;
 }
 
 static int read_header(void *header, void *dest, size_t n) {
+    if (g_fail_read) {
+        return -1;
+    }
     return eu4_gfx_vertex_buffer_read(header, dest, n);
 }
 
-static int read_slot(int slot, void *dest, size_t n) { return eu4_gfx_vertex_slot_read(slot, dest, n); }
+static int read_slot(int slot, void *dest, size_t n) {
+    if (g_fail_read) {
+        return -1;
+    }
+    return eu4_gfx_vertex_slot_read(slot, dest, n);
+}
 
 static void op_observe(NSDictionary *args, long long seq) {
     NSString *why = require_up();
@@ -823,9 +875,14 @@ static void op_observe(NSDictionary *args, long long seq) {
         NSMutableDictionary *views = [NSMutableDictionary dictionary];
         for (NSArray *pair in resolved) {
             ShadowBuf *buf = pair[1];
+            NSDictionary *buffer = bytes_view(buf.header, buf.known, read_header);
+            if (buffer == nil) {
+                fail_sem(seq, @"observe", @"observation_failed");
+                return;
+            }
             views[pair[0]] = @{
                 @"header": header_view(buf.header),
-                @"buffer": bytes_view(buf.header, buf.known, read_header),
+                @"buffer": buffer,
             };
         }
         result[@"resources"] = views;
@@ -835,29 +892,37 @@ static void op_observe(NSDictionary *args, long long seq) {
         for (NSNumber *number in slot_ids) {
             int slot = number.intValue;
             void *header = eu4_gfx_vertex_slot_header(slot);
-            NSString *ident = header == NULL ? nil : id_for_header(header);
-            ShadowBuf *buf = ident == nil ? nil : g_live[ident];
+            if (header == NULL) {
+                [views addObject:@{
+                    @"slot": @(slot),
+                    @"resource_id": [NSNull null],
+                    @"contents_known": @NO,
+                    @"length": @0,
+                }];
+                continue;
+            }
+            size_t length = observed_length(header);
+            NSString *ident = id_for_header(header);
+            if (length == (size_t)-1 || ident == nil) {
+                fail_sem(seq, @"observe", @"observation_failed");
+                return;
+            }
+            ShadowBuf *buf = g_live[ident];
             BOOL known = buf != nil && buf.known;
             NSMutableDictionary *view = [@{
                 @"slot": @(slot),
-                @"resource_id": ident ?: [NSNull null],
+                @"resource_id": ident,
                 @"contents_known": @(known),
+                @"length": @(length),
             } mutableCopy];
-            if (header == NULL) {
-                view[@"length"] = @0;
-            } else if (known) {
-                NSMutableData *data = [NSMutableData dataWithLength:0];
-                size_t length = eu4_gfx_vertex_buffer_length(header);
-                view[@"length"] = @(length == (size_t)-1 ? 0 : length);
-                if (length != (size_t)-1) {
-                    data.length = length;
-                    if (read_slot(slot, data.mutableBytes, length) == 0) {
-                        view[@"bytes_base64"] = [data base64EncodedStringWithOptions:0];
-                    }
+            if (known) {
+                NSMutableData *data = [NSMutableData dataWithLength:length];
+                void *dest = length == 0 ? NULL : data.mutableBytes;
+                if (read_slot(slot, dest, length) != 0) {
+                    fail_sem(seq, @"observe", @"observation_failed");
+                    return;
                 }
-            } else {
-                size_t length = eu4_gfx_vertex_buffer_length(header);
-                view[@"length"] = @(length == (size_t)-1 ? 0 : length);
+                view[@"bytes_base64"] = [data base64EncodedStringWithOptions:0];
             }
             [views addObject:view];
         }
@@ -973,14 +1038,14 @@ static void handle_line(char *line) {
     dispatch_op(op, args, seq);
 }
 
-enum { kLineOK = 0, kLineEOF = 1, kLineLong = 2 };
+enum { kLineOK = 0, kLineEOF = 1, kLineLong = 2, kLineAlloc = 3, kLineIO = 4 };
 
 static int read_line(char **out) {
     size_t cap = 4096;
     size_t n = 0;
     char *buf = (char *)malloc(cap);
     if (buf == NULL) {
-        return kLineEOF;
+        return kLineAlloc;
     }
     int c;
     while ((c = fgetc(stdin)) != EOF) {
@@ -990,13 +1055,16 @@ static int read_line(char **out) {
                 while (c != '\n' && c != EOF) {
                     c = fgetc(stdin);
                 }
+                if (ferror(stdin)) {
+                    return kLineIO;
+                }
                 return kLineLong;
             }
             cap *= 2;
             char *grown = (char *)realloc(buf, cap);
             if (grown == NULL) {
                 free(buf);
-                return kLineEOF;
+                return kLineAlloc;
             }
             buf = grown;
         }
@@ -1004,6 +1072,10 @@ static int read_line(char **out) {
         if (c == '\n') {
             break;
         }
+    }
+    if (ferror(stdin)) {
+        free(buf);
+        return kLineIO;
     }
     if (n == 0) {
         free(buf);
@@ -1039,6 +1111,14 @@ static int boot(void) {
     }
     eu4_metal_events_set_dir(dir);
     fprintf(stderr, "receipt_dir %s\n", dir);
+    const char *fail_read = getenv("EU4_SHADOW_FAIL_READ");
+    g_fail_read = fail_read != NULL && strcmp(fail_read, "1") == 0;
+    const char *fail_state = getenv("EU4_SHADOW_FAIL_STATE");
+    if (fail_state != NULL && strcmp(fail_state, "length") == 0) {
+        g_fail_state = 1;
+    } else if (fail_state != NULL && strcmp(fail_state, "map") == 0) {
+        g_fail_state = 2;
+    }
     g_live = [NSMutableDictionary dictionary];
     g_ever = [NSMutableSet set];
     return 0;
@@ -1055,6 +1135,14 @@ int main(void) {
                 int kind = read_line(&line);
                 if (kind == kLineEOF) {
                     break;
+                }
+                if (kind == kLineAlloc) {
+                    fprintf(stderr, "read allocation\n");
+                    return 1;
+                }
+                if (kind == kLineIO) {
+                    fprintf(stderr, "read error\n");
+                    return 1;
                 }
                 if (kind == kLineLong) {
                     fail_env(@"malformed", nil);

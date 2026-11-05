@@ -31,3 +31,11 @@ A normal response has `result`, `live_count`, and compact master fields: dimensi
 `observe` lists every live ID and reads requested resources and slots through the existing inspectors. `header` is the 12-byte engine header: stride at `+0`, count at `+4`, token at `+8`. `buffer` is the MTLBuffer length and, only when `contents_known` is true, its bytes. A null create is not known. A full `partial` 0 update, or a multiple-range update that covers the buffer from byte 0, marks it known. A partial update does not change the flag.
 
 There is no command-buffer hook and no per-byte validity map.
+
+A failed read of a known buffer, or a mapped header whose length cannot be read, is `observation_failed`. That reply is recoverable: the process stays up and the next command is answered. An empty slot is still a successful empty observation. Unknown contents omit bytes only after the length lookup succeeds.
+
+If a command has already called the graphics function and the following state capture finds a selected header missing from the production registry or the logical map, the reply is `ok: false`, `error: observation_failed`, `executed: true`, and the process exits 1. That reply has no `state`.
+
+`state` includes `vertex_records` and `vertex_gpus` from the production registry, including before init and after shutdown.
+
+A failure to allocate the input line, or an I/O error on stdin, prints `read allocation` or `read error` to stderr and exits 1. A clean EOF exits 0.
