@@ -26,6 +26,46 @@ from automation.telemetry import append, redact
 
 _INSTRUCTIONS = (Path(__file__).parent / "prompts" / "agent.md").read_text(encoding="utf-8")
 _OUTPUT_CAP = 65536
+_SKILL_REL = ".opencode/skills/opengl-metal-reconstruction/SKILL.md"
+_SKILL_ID = "opengl-metal-reconstruction"
+
+
+def skill_trust(live: Path, commit: str | None) -> str:
+    """Return trusted, absent, mismatch, or unavailable for the pinned skill.
+
+    An untracked copy is absent. A pinned blob whose live bytes differ is a mismatch.
+    A Git failure that is not a missing path is unavailable.
+    """
+    if not commit:
+        return "absent"
+    try:
+        probe = subprocess.run(
+            ["git", "-C", str(live), "cat-file", "-e", f"{commit}:{_SKILL_REL}"],
+            capture_output=True,
+        )
+    except OSError:
+        return "unavailable"
+    if probe.returncode != 0:
+        err = probe.stderr.decode("utf-8", "replace")
+        if "does not exist in" in err or "exists on disk, but not in" in err:
+            return "absent"
+        return "unavailable"
+    try:
+        blob = subprocess.run(
+            ["git", "-C", str(live), "show", f"{commit}:{_SKILL_REL}"],
+            capture_output=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return "unavailable"
+    path = live / _SKILL_REL
+    try:
+        live_bytes = path.read_bytes() if path.is_file() else None
+    except OSError:
+        return "unavailable"
+    if live_bytes != blob:
+        return "mismatch"
+    return "trusted"
 
 
 class Runner:
@@ -42,6 +82,7 @@ class Runner:
         self.state_path = self.run_root / "state.json"
         self.log_path = self.run_root / "events.jsonl"
         self.live = self.run_root / "workspace"
+        self._skill_trusted = False
         self._tick = self.clock()
         self._unknown = 0
 
@@ -89,6 +130,8 @@ class Runner:
             return
         state["status"] = "running"
         state["pause_reason"] = None
+        if not self._apply_skill(state):
+            return
         while state["status"] == "running":
             self._charge(state)
             if state["elapsed_seconds"] >= self.campaign.max_seconds:
@@ -158,6 +201,8 @@ class Runner:
         if state["rounds"] >= self.campaign.max_rounds:
             self._pause(state, "round_limit")
             return
+        if not self._apply_skill(state):
+            return
         brief = bool(state.get("needs_brief"))
         if fresh_id or not state.get("pending_submission_id"):
             state["pending_submission_id"] = "msg_" + uuid.uuid4().hex
@@ -183,6 +228,8 @@ class Runner:
     def _validate(self, state: dict) -> None:
         if not self._digest_matches(state):
             self._pause(state, "checker_modified")
+            return
+        if not self._apply_skill(state):
             return
         started = self.clock()
         outcome = run_accept(self.campaign, self.live)
@@ -212,7 +259,22 @@ class Runner:
         else:
             self._pause(state, "validation_unavailable")
 
+    def _apply_skill(self, state: dict) -> bool:
+        trust = skill_trust(self.live, self.campaign.worktree_commit)
+        if trust == "unavailable":
+            self._pause(state, "runtime_unavailable")
+            return False
+        if trust == "mismatch":
+            self._pause(state, "skill_mismatch")
+            return False
+        self._skill_trusted = trust == "trusted"
+        if hasattr(self.agent, "allow_skill"):
+            self.agent.allow_skill = self._skill_trusted
+        return True
+
     def _ensure_session(self, state: dict, *, replacement: bool) -> bool:
+        if not self._apply_skill(state):
+            return False
         try:
             session_id = self.agent.create(self.live, self._prompt(replacement))
         except ContractError as exc:
@@ -243,6 +305,18 @@ class Runner:
 
     def _prompt(self, replacement: bool) -> str:
         text = _INSTRUCTIONS + "\n\n" + self.campaign.objective_text
+        if self._skill_trusted:
+            text += (
+                "\n\nFor OpenGL-to-Metal reconstruction, load the `"
+                + _SKILL_ID
+                + "` skill before research or implementation."
+            )
+        else:
+            text += (
+                "\n\nThis workspace has no trusted `"
+                + _SKILL_ID
+                + "` skill. Do not call the skill tool."
+            )
         if replacement or (self.live / "progress.md").exists():
             text += "\n\nRead progress.md and continue. Do not repeat completed work."
         return text

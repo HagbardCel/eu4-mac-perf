@@ -37,6 +37,7 @@ class OpenCodeAgent:
         self.model = model
         self.observed_model: str | None = None
         self.protected_root: Path | None = None
+        self.allow_skill = False
         token = None
         if password:
             token = base64.b64encode(f"{username}:{password}".encode()).decode()
@@ -51,7 +52,8 @@ class OpenCodeAgent:
             "title": (prompt or "automation").splitlines()[0][:80],
             "location": {"directory": str(workspace)},
             "model": {"providerID": provider, "id": model_id},
-            "permissions": permission_rules(workspace, self.protected_root),
+            "permissions": permission_rules(
+                workspace, self.protected_root, skill=self.allow_skill),
         })
         if status != 200 or not isinstance(payload, dict):
             raise TransportError(f"create failed: {status}")
@@ -206,12 +208,13 @@ class OpenCodeAgent:
             raise TransportError(str(exc)) from exc
 
 
-def permission_rules(workspace: Path, protected: Path | None = None) -> list[dict]:
+def permission_rules(workspace: Path, protected: Path | None = None, *, skill: bool = False) -> list[dict]:
     """State the intended scope. This is not a filesystem sandbox.
 
     A leading deny of ``*`` matches relative tool paths such as ``progress.md``
     and blocks the workspace. The protected directory is denied by its absolute
-    prefix; relative workspace paths are allowed by ``**``.
+    prefix; relative workspace paths are allowed by ``**``. ``skill`` allows the
+    reconstruction skill only when the caller has already matched it to the pin.
     """
     root = str(workspace.resolve())
     rules = []
@@ -225,6 +228,11 @@ def permission_rules(workspace: Path, protected: Path | None = None) -> list[dic
         {"action": "read", "resource": root + "/**", "effect": "allow"},
         {"action": "edit", "resource": root + "/**", "effect": "allow"},
         {"action": "bash", "resource": "*", "effect": "allow"},
+        {
+            "action": "skill",
+            "resource": "opengl-metal-reconstruction",
+            "effect": "allow" if skill else "deny",
+        },
     ])
     return rules
 

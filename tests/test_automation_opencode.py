@@ -137,6 +137,17 @@ class PermissionRuleTests(unittest.TestCase):
         self.assertEqual(rules[0], {
             "action": "read", "resource": str(protected) + "/**", "effect": "deny"})
         self.assertIn({"action": "read", "resource": "**", "effect": "allow"}, rules)
+        self.assertIn({
+            "action": "skill",
+            "resource": "opengl-metal-reconstruction",
+            "effect": "deny",
+        }, rules)
+        allowed = permission_rules(Path("/tmp/ws"), Path("/tmp/campaign"), skill=True)
+        self.assertIn({
+            "action": "skill",
+            "resource": "opengl-metal-reconstruction",
+            "effect": "allow",
+        }, allowed)
 
 
 class OpenCodeHttpTests(unittest.TestCase):

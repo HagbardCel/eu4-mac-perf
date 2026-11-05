@@ -19,9 +19,11 @@ Three independent conditions are enforced:
    files (excluding itself), with no duplicates and with sizes and SHA-256 values
    derived from the pinned blobs. Its own bytes are covered by condition 2.
 
-A tracked root-level OpenCode activation is also rejected; untracked local
-configuration is ignored, since OpenCode only loads a repository-root
-``.opencode/``.
+The only permitted tracked root-level OpenCode activation is
+``.opencode/skills/opengl-metal-reconstruction/SKILL.md``. It is reconstruction
+instructions, not this preserved blueprint. Every other tracked ``.opencode/``
+path and root ``opencode.json`` is rejected. Untracked local configuration is
+ignored.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ PRESERVATION_COMMIT = "56207cc3a2bfc28e6bb3719c04125ed42f5b0a97"
 # Regular-file modes: value is whether the executable bit is expected.
 REGULAR_MODES = {"100644": False, "100755": True}
 ROOT_ACTIVATION = (".opencode", "opencode.json")
+ALLOWED_ROOT_OPENCODE = ".opencode/skills/opengl-metal-reconstruction/SKILL.md"
 
 
 class BundleError(RuntimeError):
@@ -293,6 +296,8 @@ def check_no_root_opencode_activation(root: Path) -> list[str]:
     out = _git("ls-files", "-z", "--", *ROOT_ACTIVATION, cwd=root)
     errors: list[str] = []
     for path in (p.decode("utf-8", "surrogateescape") for p in out.split(b"\x00") if p):
+        if path == ALLOWED_ROOT_OPENCODE:
+            continue
         if path == ".opencode" or path.startswith(".opencode/") or path == "opencode.json":
             errors.append(f"tracked root OpenCode activation: {path}")
     return errors
