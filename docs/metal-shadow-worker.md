@@ -8,7 +8,7 @@ Build and speak the protocol through [benchmark/eu4_gfx_shadow_worker.py](../ben
 
 Schema `metal-shadow/v0`. The first valid envelope uses `seq` 1. Each later valid envelope uses the previous response's `next`.
 
-A valid envelope has that schema, an integer `seq` equal to the expected value, a string `op`, and an object `args`. Integers are JSON numbers with no fraction and no boolean. Malformed JSON, a wrong schema, a non-integer `seq`, or the wrong `seq` returns `ok: false` and leaves `next` unchanged. A valid envelope whose operation is rejected also returns `ok: false`, and `next` advances. The graphics function is not called.
+A valid envelope has that schema, an integer `seq` equal to the expected value, a string `op`, and an object `args`. Integers are JSON numbers with no fraction and no boolean. Malformed JSON, a wrong schema, a non-integer `seq`, the wrong `seq`, or an input line with an embedded NUL returns `ok: false` and leaves `next` unchanged. A valid envelope whose operation is rejected also returns `ok: false`, and `next` advances. The graphics function is not called.
 
 ## Calls
 

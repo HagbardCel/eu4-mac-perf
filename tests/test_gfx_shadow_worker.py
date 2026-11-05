@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import subprocess
 import sys
@@ -359,3 +360,58 @@ class ShadowWorkerTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as caught:
             self.worker.read(timeout=0.2)
         self.assertIn("incomplete", str(caught.exception))
+
+    def test_embedded_nul_rejected(self):
+        prefix = json.dumps({
+            "schema": "metal-shadow/v0",
+            "seq": 1,
+            "op": "settings",
+            "args": {"display": 1, "windowed": 0, "samples": []},
+        }).encode()
+        self.worker.write(prefix + b"\0garbage\n")
+        bad = self.worker.read()
+        self.assertFalse(bad["ok"])
+        self.assertEqual(bad["error"], "malformed")
+        self.assertEqual(bad["next"], 1)
+        self.assertEqual(self.worker.next_seq, 1)
+        good = self.ok("settings", {"display": 1, "windowed": 0, "samples": []})
+        self.assertEqual(good["seq"], 1)
+
+    def test_pipeline_keeps_sequence(self):
+        args = {"display": 1, "windowed": 0, "samples": []}
+        for seq in (1, 2):
+            body = {"schema": "metal-shadow/v0", "seq": seq, "op": "settings", "args": args}
+            self.worker.write((json.dumps(body) + "\n").encode())
+        first = self.worker.read()
+        second = self.worker.read()
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["seq"], 1)
+        self.assertTrue(second["ok"])
+        self.assertEqual(second["seq"], 2)
+        self.assertEqual(self.worker.next_seq, 3)
+        third = self.worker.call("settings", args)
+        self.assertTrue(third["ok"])
+        self.assertEqual(third["seq"], 3)
+
+    def test_write_all_short_writes(self):
+        class ShortWriter:
+            def __init__(self):
+                self.chunks = []
+
+            def write(self, view):
+                data = bytes(view[:3])
+                self.chunks.append(data)
+                return len(data)
+
+            def flush(self):
+                return None
+
+        fake = ShortWriter()
+        real = self.worker.proc.stdin
+        self.worker.proc.stdin = fake
+        try:
+            payload = b"abcdefghijklmnop"
+            self.worker.write(payload)
+            self.assertEqual(b"".join(fake.chunks), payload)
+        finally:
+            self.worker.proc.stdin = real

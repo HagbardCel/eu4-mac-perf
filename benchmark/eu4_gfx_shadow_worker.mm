@@ -994,12 +994,11 @@ static void dispatch_op(NSString *op, NSDictionary *args, long long seq) {
     }
 }
 
-static void handle_line(char *line) {
-    size_t n = strlen(line);
+static void handle_line(char *line, size_t n) {
     while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
         line[--n] = 0;
     }
-    if (n == 0) {
+    if (n == 0 || memchr(line, 0, n) != NULL) {
         fail_env(@"malformed", nil);
         return;
     }
@@ -1040,7 +1039,7 @@ static void handle_line(char *line) {
 
 enum { kLineOK = 0, kLineEOF = 1, kLineLong = 2, kLineAlloc = 3, kLineIO = 4 };
 
-static int read_line(char **out) {
+static int read_line(char **out, size_t *out_n) {
     size_t cap = 4096;
     size_t n = 0;
     char *buf = (char *)malloc(cap);
@@ -1083,6 +1082,7 @@ static int read_line(char **out) {
     }
     buf[n] = 0;
     *out = buf;
+    *out_n = n;
     return kLineOK;
 }
 
@@ -1132,7 +1132,8 @@ int main(void) {
         for (;;) {
             @autoreleasepool {
                 char *line = NULL;
-                int kind = read_line(&line);
+                size_t n = 0;
+                int kind = read_line(&line, &n);
                 if (kind == kLineEOF) {
                     break;
                 }
@@ -1148,7 +1149,7 @@ int main(void) {
                     fail_env(@"malformed", nil);
                     continue;
                 }
-                handle_line(line);
+                handle_line(line, n);
                 free(line);
             }
         }

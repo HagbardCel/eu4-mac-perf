@@ -66,6 +66,15 @@ class Worker:
         self.err_file.seek(0)
         return self.err_file.read().decode()
 
+    def write(self, data):
+        view = memoryview(data)
+        while view:
+            written = self.proc.stdin.write(view)
+            if written is None or written <= 0:
+                raise RuntimeError("stdin write failed")
+            view = view[written:]
+        self.proc.stdin.flush()
+
     def read(self, timeout=30):
         deadline = time.monotonic() + timeout
         while True:
@@ -75,7 +84,10 @@ class Worker:
                 del self._buf[: nl + 1]
                 if raw.endswith(b"\r"):
                     raw = raw[:-1]
-                return json.loads(raw.decode())
+                resp = json.loads(raw.decode())
+                if isinstance(resp, dict) and isinstance(resp.get("next"), int):
+                    self.next_seq = resp["next"]
+                return resp
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(self.stderr_text() or "shadow worker timed out")
@@ -91,12 +103,8 @@ class Worker:
 
     def line(self, text):
         payload = text if text.endswith("\n") else text + "\n"
-        self.proc.stdin.write(payload.encode())
-        self.proc.stdin.flush()
-        resp = self.read()
-        if isinstance(resp, dict) and isinstance(resp.get("next"), int):
-            self.next_seq = resp["next"]
-        return resp
+        self.write(payload.encode())
+        return self.read()
 
     def call(self, op, args=None, seq=None):
         if seq is None:
