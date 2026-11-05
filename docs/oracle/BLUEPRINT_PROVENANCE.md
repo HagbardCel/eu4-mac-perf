@@ -49,6 +49,9 @@ match `MANIFEST.json` (kind `eu4_oracle_v2_blueprint`, status `offline design, N
 - `examples/` contains **inactive** OpenCode templates. They are nested under
   `examples/.opencode/` and are never loaded as project configuration; no root `.opencode/`
   is activated by this preservation.
+- `.opencode/skills/opengl-metal-reconstruction/SKILL.md` is a later reconstruction
+  skill, not part of this blueprint. It is the only tracked root OpenCode file the
+  repository allows. This preservation still did not activate root OpenCode configuration.
 - The executable prototype (`oracle_proto/core.py`, `tests/test_core.py`) is the *seed*
   migrated to a living package during P2; the copies here remain verbatim. It is an offline
   contract demonstration, not a runtime recorder, ABI emulator, or secure sandbox.

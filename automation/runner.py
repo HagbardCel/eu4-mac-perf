@@ -26,6 +26,32 @@ from automation.telemetry import append, redact
 
 _INSTRUCTIONS = (Path(__file__).parent / "prompts" / "agent.md").read_text(encoding="utf-8")
 _OUTPUT_CAP = 65536
+_SKILL_REL = ".opencode/skills/opengl-metal-reconstruction/SKILL.md"
+_SKILL_ID = "opengl-metal-reconstruction"
+
+
+def skill_trust(live: Path, commit: str | None) -> str:
+    """Return trusted, absent, or mismatch for the pinned reconstruction skill.
+
+    An untracked copy is absent. A pinned blob whose live bytes differ is a mismatch.
+    """
+    if not commit:
+        return "absent"
+    probe = subprocess.run(
+        ["git", "-C", str(live), "cat-file", "-e", f"{commit}:{_SKILL_REL}"],
+        capture_output=True,
+    )
+    if probe.returncode != 0:
+        return "absent"
+    blob = subprocess.run(
+        ["git", "-C", str(live), "show", f"{commit}:{_SKILL_REL}"],
+        capture_output=True,
+        check=True,
+    ).stdout
+    path = live / _SKILL_REL
+    if not path.is_file() or path.read_bytes() != blob:
+        return "mismatch"
+    return "trusted"
 
 
 class Runner:
@@ -42,6 +68,7 @@ class Runner:
         self.state_path = self.run_root / "state.json"
         self.log_path = self.run_root / "events.jsonl"
         self.live = self.run_root / "workspace"
+        self._skill_trusted = False
         self._tick = self.clock()
         self._unknown = 0
 
@@ -213,6 +240,13 @@ class Runner:
             self._pause(state, "validation_unavailable")
 
     def _ensure_session(self, state: dict, *, replacement: bool) -> bool:
+        trust = skill_trust(self.live, self.campaign.worktree_commit)
+        if trust == "mismatch":
+            self._pause(state, "skill_mismatch")
+            return False
+        self._skill_trusted = trust == "trusted"
+        if hasattr(self.agent, "allow_skill"):
+            self.agent.allow_skill = self._skill_trusted
         try:
             session_id = self.agent.create(self.live, self._prompt(replacement))
         except ContractError as exc:
@@ -243,6 +277,18 @@ class Runner:
 
     def _prompt(self, replacement: bool) -> str:
         text = _INSTRUCTIONS + "\n\n" + self.campaign.objective_text
+        if self._skill_trusted:
+            text += (
+                "\n\nFor OpenGL-to-Metal reconstruction, load the `"
+                + _SKILL_ID
+                + "` skill before research or implementation."
+            )
+        else:
+            text += (
+                "\n\nThis workspace has no trusted `"
+                + _SKILL_ID
+                + "` skill. Do not call the skill tool."
+            )
         if replacement or (self.live / "progress.md").exists():
             text += "\n\nRead progress.md and continue. Do not repeat completed work."
         return text

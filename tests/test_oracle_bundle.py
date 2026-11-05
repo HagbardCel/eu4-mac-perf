@@ -209,6 +209,42 @@ class RepositoryInvariantTests(unittest.TestCase):
     def test_no_root_opencode_activation(self) -> None:
         self.assertEqual(cob.check_no_root_opencode_activation(cob.repo_root()), [])
 
+    def test_only_the_reconstruction_skill_file_is_allowed(self) -> None:
+        allowed = cob.ALLOWED_ROOT_OPENCODE
+        rejected = (
+            ".opencode/skills/opengl-metal-reconstruction/extra.md",
+            ".opencode/skills/another-skill/SKILL.md",
+            ".opencode/agents/extra.md",
+            "opencode.json",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def git(*args: str) -> None:
+                completed = _git(root, *args)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+
+            git("init", "-q")
+            git("config", "user.email", "tester@example.invalid")
+            git("config", "user.name", "Tester")
+            skill = root / allowed
+            skill.parent.mkdir(parents=True)
+            skill.write_text("skill\n", encoding="utf-8")
+            git("add", "--", allowed)
+            git("commit", "-q", "-m", "skill")
+            self.assertEqual(cob.check_no_root_opencode_activation(root), [])
+            for rel in rejected:
+                path = root / rel
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("no\n", encoding="utf-8")
+                git("add", "--", rel)
+                git("commit", "-q", "-m", rel)
+                errors = cob.check_no_root_opencode_activation(root)
+                self.assertTrue(any(rel in error for error in errors), errors)
+                self.assertFalse(any(error.endswith(allowed) for error in errors), errors)
+                git("rm", "-q", "--", rel)
+                git("commit", "-q", "-m", "drop")
+            self.assertEqual(cob.check_no_root_opencode_activation(root), [])
+
     def test_pinned_tree_matches_real_repository(self) -> None:
         self.assertEqual(cob.check_pinned_tree_identity(cob.repo_root()), [])
         self.assertEqual(cob.check_worktree_integrity(cob.repo_root()), [])

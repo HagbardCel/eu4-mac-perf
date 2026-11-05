@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from automation.agents import ContractError
-from automation.runner import Runner
+from automation.runner import Runner, skill_trust
 from automation.state import file_sha256, load_campaign, load_state, save_state
 from automation_fake import FakeAgent
 
@@ -350,6 +351,137 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(state["pause_reason"], "checker_modified")
             self.assertEqual(state["checker_sha256"], original)
             self.assertNotEqual(state["status"], "complete")
+
+
+_SKILL = ".opencode/skills/opengl-metal-reconstruction/SKILL.md"
+
+
+def _git(path: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(path), "-c", "user.email=t@example.com", "-c", "user.name=Test", *args],
+        check=True, capture_output=True, text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _pin(repo: Path, worktree: Path, commit: str) -> Path:
+    (repo / "objective.md").write_text("Make marker.txt contain exactly ready.\n", encoding="utf-8")
+    path = repo / "campaign.json"
+    path.write_text(json.dumps({
+        "id": "skill-trust",
+        "objective": "objective.md",
+        "runtime": "opencode",
+        "model": "fake/model",
+        "opencode_version": "2.2.5",
+        "workspace": {"mode": "worktree", "path": "../wt", "commit": commit},
+        "accept": ["python3", str(SMOKE_ACCEPT)],
+        "max_rounds": 2,
+        "max_seconds": 100,
+        "accept_timeout_seconds": 5,
+    }), encoding="utf-8")
+    return path
+
+
+def _worktree(root: Path, *, skill: bool) -> tuple[Path, Path, str]:
+    repo = root / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "README").write_text("seed\n", encoding="utf-8")
+    if skill:
+        path = repo / _SKILL
+        path.parent.mkdir(parents=True)
+        path.write_text("trusted\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+    commit = _git(repo, "rev-parse", "HEAD")
+    worktree = root / "wt"
+    _git(repo, "worktree", "add", "--detach", str(worktree), commit)
+    return repo, worktree, commit
+
+
+def _skill_ready(workspace: Path) -> None:
+    (workspace / "marker.txt").write_text("ready\n", encoding="utf-8")
+    (workspace / "progress.md").write_text("# Progress\n\n## Next\ndone\n", encoding="utf-8")
+
+
+class SkillTrustTests(unittest.TestCase):
+    def _run(self, repo: Path, commit: str) -> tuple[FakeAgent, dict]:
+        agent = FakeAgent()
+        agent.allow_skill = False
+        agent.on_submit = _skill_ready
+        clock = Clock()
+        runner = Runner(
+            load_campaign(_pin(repo, repo.parent / "wt", commit)),
+            agent, repo / "run", clock=clock.monotonic, sleep=clock.sleep,
+        )
+        return agent, runner.execute(resume_only=False)
+
+    def test_pinned_matching_skill_is_loaded_and_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo, worktree, commit = _worktree(Path(raw), skill=True)
+            self.assertEqual(skill_trust(worktree, commit), "trusted")
+            agent, state = self._run(repo, commit)
+            self.assertTrue(agent.allow_skill)
+            self.assertIn("load the `opengl-metal-reconstruction` skill", agent.prompts[0])
+            self.assertEqual(state["status"], "complete")
+
+    def test_older_pin_does_not_load_or_permit_the_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo, worktree, commit = _worktree(Path(raw), skill=False)
+            self.assertEqual(skill_trust(worktree, commit), "absent")
+            agent, state = self._run(repo, commit)
+            self.assertFalse(agent.allow_skill)
+            self.assertIn("no trusted `opengl-metal-reconstruction` skill", agent.prompts[0])
+            self.assertNotIn("load the `opengl-metal-reconstruction` skill", agent.prompts[0])
+            self.assertEqual(state["status"], "complete")
+
+    def test_untracked_skill_in_an_older_worktree_is_not_trusted(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo, worktree, commit = _worktree(Path(raw), skill=False)
+            planted = worktree / _SKILL
+            planted.parent.mkdir(parents=True)
+            planted.write_text("untracked\n", encoding="utf-8")
+            self.assertEqual(skill_trust(worktree, commit), "absent")
+            agent, _state = self._run(repo, commit)
+            self.assertFalse(agent.allow_skill)
+            self.assertIn("no trusted `opengl-metal-reconstruction` skill", agent.prompts[0])
+
+    def test_seed_campaign_has_no_trusted_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            campaign = load_campaign(write_campaign(root, max_rounds=2))
+            self.assertIsNone(campaign.worktree_commit)
+            self.assertEqual(skill_trust(root / "seed", campaign.worktree_commit), "absent")
+            agent = FakeAgent()
+            agent.allow_skill = True
+            agent.on_submit = _ready
+            clock = Clock()
+            runner = Runner(
+                campaign, agent, root / "run", clock=clock.monotonic, sleep=clock.sleep)
+            state = runner.execute(resume_only=False)
+            self.assertFalse(agent.allow_skill)
+            self.assertIn("no trusted `opengl-metal-reconstruction` skill", agent.prompts[0])
+            self.assertEqual(state["status"], "complete")
+
+    def test_missing_live_skill_pauses_before_create(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo, worktree, commit = _worktree(Path(raw), skill=True)
+            (worktree / _SKILL).unlink()
+            self.assertEqual(skill_trust(worktree, commit), "mismatch")
+            agent, state = self._run(repo, commit)
+            self.assertEqual(state["pause_reason"], "skill_mismatch")
+            self.assertEqual(state["status"], "paused")
+            self.assertEqual(agent.prompts, [])
+
+    def test_modified_pinned_skill_pauses_before_create(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo, worktree, commit = _worktree(Path(raw), skill=True)
+            (worktree / _SKILL).write_text("changed\n", encoding="utf-8")
+            self.assertEqual(skill_trust(worktree, commit), "mismatch")
+            agent, state = self._run(repo, commit)
+            self.assertEqual(state["pause_reason"], "skill_mismatch")
+            self.assertEqual(state["status"], "paused")
+            self.assertEqual(agent.prompts, [])
 
 
 if __name__ == "__main__":

@@ -140,8 +140,14 @@ class PermissionRuleTests(unittest.TestCase):
         self.assertIn({
             "action": "skill",
             "resource": "opengl-metal-reconstruction",
-            "effect": "allow",
+            "effect": "deny",
         }, rules)
+        allowed = permission_rules(Path("/tmp/ws"), Path("/tmp/campaign"), skill=True)
+        self.assertIn({
+            "action": "skill",
+            "resource": "opengl-metal-reconstruction",
+            "effect": "allow",
+        }, allowed)
 
 
 class OpenCodeHttpTests(unittest.TestCase):

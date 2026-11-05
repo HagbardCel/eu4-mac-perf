@@ -30,7 +30,8 @@
         "Metal.framework/Headers/MTLCommandEncoder.h"
       ],
       "urls": [
-        "https://developer.apple.com/documentation/metal/mtlrenderpassattachmentdescriptor/loadaction"
+        "https://developer.apple.com/documentation/metal/mtlrenderpassattachmentdescriptor/loadaction",
+        "https://developer.apple.com/documentation/metal/mtlrenderpassattachmentdescriptor/storeaction"
       ]
     },
     {

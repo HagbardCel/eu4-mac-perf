@@ -10,4 +10,4 @@ Keep `progress.md` updated when the objective, findings, blockers, test results,
 
 Saying that the task is done does not finish it. An external check decides that.
 
-When the objective replaces an OpenGL graphics call with Metal, do not treat a similarly named function as the same operation. For OpenGL-to-Metal reconstruction, load the `opengl-metal-reconstruction` skill before research or implementation.
+When the objective replaces an OpenGL graphics call with Metal, do not treat a similarly named function as the same operation.

@@ -25,4 +25,4 @@ If a material constraint is still unresolved and a faithful replacement would ha
 
 An official Apple page may be opened when the network is available. A failed fetch stays `Unresolved`. Do not copy Apple's pages or headers into the repository.
 
-This skill and `analysis/metal-api/` are present only in a checkout whose commit contains them. A boundary test needs an input the original call accepts and the Metal call does not.
+This skill and `analysis/metal-api/` are present only in a checkout whose commit contains them. Where an input is valid for the original call and not directly valid for Metal, test that input. Otherwise derive the test from lifetime, synchronization, or state order. Do not invent an unsupported value just to have one.
