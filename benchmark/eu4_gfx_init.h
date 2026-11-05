@@ -126,8 +126,8 @@ typedef struct {
    A later encoder must recover GL_SCISSOR_TEST separately:
    disabled: do not restrict drawing with the pending box;
    enabled and valid: apply the returned rectangle;
-   enabled and empty: suppress fragment draws for that region, rather than
-   drawing the whole attachment;
+   enabled and empty: no pixels may be modified by scissor-affected draws or
+   clears, rather than drawing or clearing the whole attachment;
    enabled and unset: the box was never overridden, so recover the real GL
    initial box before using a full-target default. */
 eu4_gfx_scissor_status eu4_gfx_scissor_for_attachment(

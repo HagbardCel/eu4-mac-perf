@@ -33,7 +33,7 @@ A later encoder, which this tree does not implement, must recover enablement sep
 
 - Scissor testing disabled: do not restrict drawing with the pending box.
 - Enabled and `valid`: apply the returned rectangle.
-- Enabled and `empty`: suppress fragment-producing draws for that region. `empty` is not permission to skip the scissor and draw the whole attachment.
+- Enabled and `empty`: no pixels may be modified by scissor-affected draws or clears. `empty` is not permission to skip the scissor and draw or clear the whole attachment.
 - Enabled and `unset`: the original box was never overridden. Recover the real GL initial box before using a full-target default.
 
 ## API validation
