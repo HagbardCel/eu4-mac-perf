@@ -488,8 +488,18 @@ static void test_scissor(void *master, id<MTLDevice> device) {
     expect_metal(1, 100, 0, 10, 10, EU4_GFX_SCISSOR_EMPTY, 0, 0, 0, 0);
     expect_metal(1, 7, 9, 0, 0, EU4_GFX_SCISSOR_EMPTY, 0, 0, 0, 0);
     expect_metal(1, 1, 296, 2, 2, EU4_GFX_SCISSOR_EMPTY, 0, 0, 0, 0);
+    set_viewport_height(master, 64);
+    int16_t chain[4] = {4, 6, 44, 26};
+    eu4_gfx_set_scissor_rectangle(handle, chain);
+    int32_t stored[4] = {-1, -1, -1, -1};
+    int set = eu4_gfx_scissor_rectangle(master, stored);
+    if (!set || stored[0] != 4 || stored[1] != 38 || stored[2] != 40 || stored[3] != 20) {
+        fail("encoder scissor was not stored");
+    }
     eu4_gfx_metal_scissor metal;
-    if (eu4_gfx_scissor_for_attachment(1, 4, 38, 40, 20, 64, 64, &metal) != EU4_GFX_SCISSOR_VALID) {
+    if (eu4_gfx_scissor_for_attachment(
+            set, stored[0], stored[1], stored[2], stored[3], 64, 64, &metal) != EU4_GFX_SCISSOR_VALID ||
+        metal.x != 4 || metal.y != 6 || metal.width != 40 || metal.height != 20) {
         fail("encoder scissor was not valid");
     }
     MTLTextureDescriptor *desc = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm

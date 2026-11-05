@@ -39,7 +39,7 @@ int64_t metal_y = (int64_t)attachment_height - ((int64_t)gl_y + (int64_t)height)
 
 - Scissor testing disabled: do not restrict drawing with the pending box.
 - Enabled and `valid`: apply the returned rectangle.
-- Enabled and `empty`: suppress fragment-producing draws for that region. `empty` is not permission to skip the scissor and draw the whole attachment.
+- Enabled and `empty`: no pixels may be modified by scissor-affected draws or clears. `empty` is not permission to skip the scissor and draw or clear the whole attachment.
 - Enabled and `unset`: the original box was never overridden. Recover the real GL initial box before using a full-target default.
 
 ## API validation
