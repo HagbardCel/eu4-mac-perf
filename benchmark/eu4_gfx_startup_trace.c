@@ -584,11 +584,17 @@ static bool write_text_file(const char *path, int (*body)(FILE *, void *), void 
     if (file == NULL) {
         return false;
     }
-    if (body(file, ctx) != 0 || fflush(file) != 0 || fsync(fileno(file)) != 0 ||
-        fclose(file) != 0) {
-        return false;
+    bool ok = body(file, ctx) == 0;
+    if (ok) {
+        ok = fflush(file) == 0;
     }
-    return true;
+    if (ok) {
+        ok = fsync(fileno(file)) == 0;
+    }
+    if (fclose(file) != 0) {
+        ok = false;
+    }
+    return ok;
 }
 
 typedef struct {
