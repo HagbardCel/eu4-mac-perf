@@ -483,6 +483,90 @@ class SkillTrustTests(unittest.TestCase):
             self.assertEqual(state["status"], "paused")
             self.assertEqual(agent.prompts, [])
 
+    def _interrupted(self, repo: Path, commit: str):
+        agent = FakeAgent()
+        agent.allow_skill = False
+        agent.interrupt = True
+        campaign = load_campaign(_pin(repo, repo.parent / "wt", commit))
+        clock = Clock()
+        runner = Runner(
+            campaign, agent, repo / "run", clock=clock.monotonic, sleep=clock.sleep)
+        with self.assertRaises(KeyboardInterrupt):
+            runner.execute(resume_only=False)
+        saved = load_state(repo / "run" / "state.json")
+        self.assertNotEqual(saved["status"], "complete")
+        self.assertTrue(saved["pending_submission_id"])
+        self.assertTrue(saved["pending_text"])
+        return agent, campaign, clock, saved
+
+    def test_resume_keeps_the_pending_submission_and_restores_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo, _tree, commit = _worktree(Path(raw), skill=True)
+            agent, campaign, clock, saved = self._interrupted(repo, commit)
+            agent.interrupt = False
+            resumed = Runner(
+                campaign, agent, repo / "run", clock=clock.monotonic, sleep=clock.sleep)
+            state = resumed.execute(resume_only=True)
+            self.assertNotEqual(state["status"], "complete")
+            self.assertTrue(agent.allow_skill)
+            self.assertEqual(agent.submits[0], saved["pending_submission_id"])
+            self.assertEqual(agent.messages[0][2], saved["pending_text"])
+
+    def test_resume_pauses_when_the_pending_skill_no_longer_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo, worktree, commit = _worktree(Path(raw), skill=True)
+            agent, campaign, clock, saved = self._interrupted(repo, commit)
+            (worktree / _SKILL).write_text("changed\n", encoding="utf-8")
+            agent.interrupt = False
+            resumed = Runner(
+                campaign, agent, repo / "run", clock=clock.monotonic, sleep=clock.sleep)
+            state = resumed.execute(resume_only=True)
+            kept = load_state(repo / "run" / "state.json")
+            self.assertEqual(state["pause_reason"], "skill_mismatch")
+            self.assertNotEqual(state["status"], "complete")
+            self.assertEqual(agent.submits, [])
+            self.assertEqual(kept["pending_submission_id"], saved["pending_submission_id"])
+            self.assertEqual(kept["pending_text"], saved["pending_text"])
+
+    def test_between_submissions_uses_restored_skill_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            repo, worktree, commit = _worktree(Path(raw), skill=True)
+            agent = FakeAgent()
+            agent.allow_skill = False
+            session = agent.create(worktree, "existing")
+            campaign = load_campaign(_pin(repo, repo.parent / "wt", commit))
+            save_state(repo / "run" / "state.json", {
+                "campaign_id": campaign.id,
+                "checker_sha256": file_sha256(campaign.checker),
+                "elapsed_seconds": 0.0,
+                "last_diagnostics": None,
+                "last_observation": None,
+                "last_verdict": None,
+                "model": None,
+                "pause_reason": "interrupted",
+                "pending_submission_id": None,
+                "pending_text": None,
+                "rounds": 0,
+                "runtime": "opencode",
+                "session_id": session,
+                "started_at": "2026-11-05T00:00:00+00:00",
+                "status": "paused",
+                "validated_submission_id": None,
+                "workspace": str(worktree),
+            })
+            clock = Clock()
+            resumed = Runner(
+                campaign, agent, repo / "run", clock=clock.monotonic, sleep=clock.sleep)
+            state = resumed.execute(resume_only=True)
+            self.assertNotEqual(state["status"], "complete")
+            self.assertTrue(agent.allow_skill)
+            self.assertIn("load the `opengl-metal-reconstruction` skill", agent.messages[0][2])
+            self.assertNotIn("no trusted `opengl-metal-reconstruction` skill", agent.messages[0][2])
+
+    def test_git_lookup_failure_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            self.assertEqual(skill_trust(Path(raw), "not-a-commit"), "unavailable")
+
 
 if __name__ == "__main__":
     unittest.main()
