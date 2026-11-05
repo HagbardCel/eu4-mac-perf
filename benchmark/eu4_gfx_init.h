@@ -20,6 +20,13 @@
 @property (nonatomic) void *textureHeader;
 /* Textures created by _GfxInitializeTexture. Released with the backend. */
 @property (nonatomic, strong) NSMutableDictionary *textures;
+/* Pending _GfxSetScissorRectangle in top-left pixels. The consumer is
+   -[MTLRenderCommandEncoder setScissorRect:]; no encoder exists yet. */
+@property (nonatomic) BOOL scissorValid;
+@property (nonatomic) int32_t scissorX;
+@property (nonatomic) int32_t scissorY;
+@property (nonatomic) int32_t scissorWidth;
+@property (nonatomic) int32_t scissorHeight;
 @end
 #endif
 
@@ -92,6 +99,14 @@ int eu4_gfx_reset(void *master);
 void eu4_gfx_on_reset_master(void *master);
 /* rdi is the master. rsi is 24 bytes at CGraphics+0x2c57c, disjoint from the master. */
 void eu4_gfx_set_viewport(void *master, const void *rect);
+/* _GfxSetScissorRectangle at 0x15ed0aa. rdi is the immediate-context handle and
+   (%rdi) is the master. rsi is four int16_t in top-left pixels: x1, y1, x2, y2.
+   The original clamps negative spans and calls glScissor(x1, master_height - y2,
+   x2-x1, y2-y1). This replacement defers the equivalent top-left rectangle for a
+   later MTLRenderCommandEncoder -setScissorRect:. It does not call GL. */
+void eu4_gfx_set_scissor_rectangle(void *handle, const void *rect);
+/* Returns 1 and writes x, y, width, height when a rectangle is pending. */
+int eu4_gfx_scissor_rectangle(void *master, int32_t out[4]);
 /* _GfxClear at 0x15ea552. rdi is the handle and (%rdi) is the state object.
    esi is the flag dword: bit 0 is color (0x4000), bit 1 is depth (0x100), and
    bit 2 is stencil (0x400). rdx is an optional color; null is (0, 0, 0, 1).

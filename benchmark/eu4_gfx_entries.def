@@ -33,3 +33,5 @@ GFX_ENTRY(_GfxDestroyIndexBuffer, 0x15ec1e6, 0x15ec23c, eu4_gfx_destroy_index_bu
 GFX_ENTRY(_GfxUpdateIndexBuffer, 0x15ec23c, 0x15ec28e, eu4_gfx_update_index_buffer, "\x55\x48\x89\xe5\x41\x56")
 GFX_ENTRY(_GfxSetIndexBuffer, 0x15ec28e, 0x15ec2bc, eu4_gfx_set_index_buffer, "\x48\x85\xf6\x74\x28")
 GFX_ENTRY(_GfxSetVertexBuffers, 0x15ebf41, 0x15ec11c, eu4_gfx_set_vertex_buffers, "\x55\x48\x89\xe5\x41\x57")
+// _GfxSetScissorRectangle. The tail call is _glScissor at 0x15ed0dd.
+GFX_ENTRY(_GfxSetScissorRectangle, 0x15ed0aa, 0x15ed0e2, eu4_gfx_set_scissor_rectangle, "\x55\x48\x89\xe5\x0f\xbf\x56\x04")
