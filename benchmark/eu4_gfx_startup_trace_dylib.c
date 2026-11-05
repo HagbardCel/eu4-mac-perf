@@ -260,9 +260,12 @@ __attribute__((constructor)) static void initialize_startup_trace(void) {
 __attribute__((destructor)) static void finalize_startup_trace(void) {
     eu4_gfx_startup_request_drain();
     (void)eu4_gfx_startup_wait_sealed(2000);
+    if (g_finalizer != 0) {
+        (void)pthread_join(g_finalizer, NULL);
+        g_finalizer = 0;
+        return;
+    }
+    /* Finalizer never started: this thread owns a single finalize. */
     (void)eu4_gfx_startup_finalize(g_run_dir, g_session, g_sha, g_pid,
                                    g_image_base);
-    if (g_finalizer != NULL) {
-        (void)pthread_join(g_finalizer, NULL);
-    }
 }
