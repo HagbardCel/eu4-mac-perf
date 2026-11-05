@@ -583,13 +583,16 @@ static void op_create(NSDictionary *args, long long seq) {
     buf.known = known;
     g_live[ident] = buf;
     [g_ever addObject:ident];
-    size_t length = eu4_gfx_vertex_buffer_length(header);
+    size_t length = observed_length(header);
+    if (length == (size_t)-1) {
+        fail_executed(seq, @"create_vertex_buffer");
+    }
     succeed(seq, @"create_vertex_buffer", @{
         @"resource_id": ident,
         @"header": header_view(header),
         @"contents_known": @(known),
         @"buffer": @{
-            @"length": @(length == (size_t)-1 ? 0 : length),
+            @"length": @(length),
             @"shared": @(eu4_gfx_vertex_buffer_shared(header) ? YES : NO),
         },
     });
@@ -651,11 +654,14 @@ static void op_update(NSDictionary *args, long long seq) {
     if (partial == 0) {
         buf.known = YES;
     }
-    size_t now = eu4_gfx_vertex_buffer_length(buf.header);
+    size_t now = observed_length(buf.header);
+    if (now == (size_t)-1) {
+        fail_executed(seq, @"update_vertex_buffer");
+    }
     succeed(seq, @"update_vertex_buffer", @{
         @"resource_id": args[@"resource_id"],
         @"contents_known": @(buf.known),
-        @"length": @(now == (size_t)-1 ? 0 : now),
+        @"length": @(now),
     });
 }
 
@@ -727,10 +733,14 @@ static void op_update_multiple(NSDictionary *args, long long seq) {
         /* shortcut: whole-buffer contents_known only, until a differential validator needs partial ranges. */
         buf.known = YES;
     }
+    size_t now = observed_length(buf.header);
+    if (now == (size_t)-1) {
+        fail_executed(seq, @"update_vertex_buffer_multiple");
+    }
     succeed(seq, @"update_vertex_buffer_multiple", @{
         @"resource_id": args[@"resource_id"],
         @"contents_known": @(buf.known),
-        @"length": @(length),
+        @"length": @(now),
     });
 }
 

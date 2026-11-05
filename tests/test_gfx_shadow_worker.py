@@ -325,14 +325,19 @@ class ShadowWorkerTests(unittest.TestCase):
         self.assertEqual(followed["state"]["viewport"], [1, 2, 3, 4, 5, 6])
 
     def test_state_length_failure_exits(self):
-        self._state_failure("length")
+        self.worker.close()
+        self.worker = shadow.Worker(env={"EU4_SHADOW_FAIL_STATE": "length"})
+        self.boot()
+        failed = self.call("create_vertex_buffer", create_args("A", 4, 4, bytes([0x11]) * 16))
+        self.assertFalse(failed["ok"])
+        self.assertEqual(failed["error"], "observation_failed")
+        self.assertIs(failed.get("executed"), True)
+        self.assertNotIn("state", failed)
+        self.assertEqual(self.worker.proc.wait(timeout=5), 1)
 
     def test_state_map_failure_exits(self):
-        self._state_failure("map")
-
-    def _state_failure(self, mode):
         self.worker.close()
-        self.worker = shadow.Worker(env={"EU4_SHADOW_FAIL_STATE": mode})
+        self.worker = shadow.Worker(env={"EU4_SHADOW_FAIL_STATE": "map"})
         self.boot()
         self.ok("create_vertex_buffer", create_args("A", 4, 4, bytes([0x11]) * 16))
         failed = self.call("set_vertex_buffers", {"start": 0, "resources": ["A"]})

@@ -34,7 +34,7 @@ There is no command-buffer hook and no per-byte validity map.
 
 A failed read of a known buffer, or a mapped header whose length cannot be read, is `observation_failed`. That reply is recoverable: the process stays up and the next command is answered. An empty slot is still a successful empty observation. Unknown contents omit bytes only after the length lookup succeeds.
 
-If a command has already called the graphics function and the following state capture finds a selected header missing from the production registry or the logical map, the reply is `ok: false`, `error: observation_failed`, `executed: true`, and the process exits 1. That reply has no `state`.
+If a command has already called the graphics function and the following state capture finds a selected header missing from the production registry or the logical map, the reply is `ok: false`, `error: observation_failed`, `executed: true`, and the process exits 1. That reply has no `state`. The same terminal reply applies after create or update when the production length for that header is missing.
 
 `state` includes `vertex_records` and `vertex_gpus` from the production registry, including before init and after shutdown.
 
