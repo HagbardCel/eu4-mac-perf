@@ -225,6 +225,7 @@ def permission_rules(workspace: Path, protected: Path | None = None) -> list[dic
         {"action": "read", "resource": root + "/**", "effect": "allow"},
         {"action": "edit", "resource": root + "/**", "effect": "allow"},
         {"action": "bash", "resource": "*", "effect": "allow"},
+        {"action": "skill", "resource": "opengl-metal-reconstruction", "effect": "allow"},
     ])
     return rules
 

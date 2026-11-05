@@ -1,0 +1,64 @@
+{
+  "discovery": {
+    "reviewed": "2026-11-05",
+    "sdk_version": "27.0",
+    "developer_dir": "CommandLineTools",
+    "xcodebuild": "unavailable",
+    "offline_apple_docs": "none"
+  },
+  "contracts": [
+    {
+      "file": "scissor.md",
+      "status": "reviewed",
+      "sdk_version": "27.0",
+      "reviewed": "2026-11-05",
+      "headers": [
+        "Metal.framework/Headers/MTLRenderCommandEncoder.h"
+      ],
+      "urls": [
+        "https://developer.apple.com/documentation/metal/mtlrendercommandencoder/setscissorrect(_:)",
+        "https://developer.apple.com/documentation/metal/mtlscissorrect"
+      ]
+    },
+    {
+      "file": "render-pass.md",
+      "status": "reviewed",
+      "sdk_version": "27.0",
+      "reviewed": "2026-11-05",
+      "headers": [
+        "Metal.framework/Headers/MTLRenderPass.h",
+        "Metal.framework/Headers/MTLCommandEncoder.h"
+      ],
+      "urls": [
+        "https://developer.apple.com/documentation/metal/mtlrenderpassattachmentdescriptor/loadaction"
+      ]
+    },
+    {
+      "file": "buffers.md",
+      "status": "reviewed",
+      "sdk_version": "27.0",
+      "reviewed": "2026-11-05",
+      "headers": [
+        "Metal.framework/Headers/MTLBuffer.h",
+        "Metal.framework/Headers/MTLResource.h"
+      ],
+      "urls": [
+        "https://developer.apple.com/documentation/metal/mtlbuffer"
+      ]
+    },
+    {
+      "file": "textures.md",
+      "status": "reviewed",
+      "sdk_version": "27.0",
+      "reviewed": "2026-11-05",
+      "headers": [
+        "Metal.framework/Headers/MTLTexture.h",
+        "Metal.framework/Headers/MTLPixelFormat.h",
+        "Metal.framework/Headers/MTLDevice.h"
+      ],
+      "urls": [
+        "https://developer.apple.com/documentation/metal/mtltexturedescriptor"
+      ]
+    }
+  ]
+}
