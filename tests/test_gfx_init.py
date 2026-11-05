@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import unittest
@@ -23,7 +24,10 @@ class GfxInitTests(unittest.TestCase):
         built = subprocess.run(command, capture_output=True, text=True, check=False)
         if built.returncode:
             self.fail(built.stderr.strip() or "gfx init host failed to build")
-        ran = subprocess.run([str(HOST)], capture_output=True, text=True, check=False)
+        env = os.environ.copy()
+        env["MTL_DEBUG_LAYER"] = "1"
+        env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
+        ran = subprocess.run([str(HOST)], capture_output=True, text=True, check=False, env=env)
         if ran.returncode:
             self.fail(ran.stderr.strip() or ran.stdout.strip() or "gfx init host failed")
 

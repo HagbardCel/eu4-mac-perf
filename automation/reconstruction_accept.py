@@ -378,6 +378,8 @@ def run_modules(workspace: Path, names: list[str]) -> str | None:
     workspace = Path(workspace).resolve()
     env = os.environ.copy()
     env["PYTHONPATH"] = str(workspace)
+    env["MTL_DEBUG_LAYER"] = "1"
+    env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
     driver = (
         "import importlib,json,sys,unittest\n"
         "module=importlib.import_module(sys.argv[1])\n"

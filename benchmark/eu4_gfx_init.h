@@ -20,11 +20,10 @@
 @property (nonatomic) void *textureHeader;
 /* Textures created by _GfxInitializeTexture. Released with the backend. */
 @property (nonatomic, strong) NSMutableDictionary *textures;
-/* Pending _GfxSetScissorRectangle in top-left pixels. The consumer is
-   -[MTLRenderCommandEncoder setScissorRect:]; no encoder exists yet. */
+/* Pending GL scissor box, fixed at the call. Signed. Not a Metal rectangle. */
 @property (nonatomic) BOOL scissorValid;
-@property (nonatomic) int32_t scissorX;
-@property (nonatomic) int32_t scissorY;
+@property (nonatomic) int32_t scissorGlX;
+@property (nonatomic) int32_t scissorGlY;
 @property (nonatomic) int32_t scissorWidth;
 @property (nonatomic) int32_t scissorHeight;
 @end
@@ -100,13 +99,40 @@ void eu4_gfx_on_reset_master(void *master);
 /* rdi is the master. rsi is 24 bytes at CGraphics+0x2c57c, disjoint from the master. */
 void eu4_gfx_set_viewport(void *master, const void *rect);
 /* _GfxSetScissorRectangle at 0x15ed0aa. rdi is the immediate-context handle and
-   (%rdi) is the master. rsi is four int16_t in top-left pixels: x1, y1, x2, y2.
-   The original clamps negative spans and calls glScissor(x1, master_height - y2,
-   x2-x1, y2-y1). This replacement defers the equivalent top-left rectangle for a
-   later MTLRenderCommandEncoder -setScissorRect:. It does not call GL. */
+   (%rdi) is the master. rsi is four int16_t: x1, y1, x2, y2. The original clamps
+   negative spans and calls glScissor(x1, master_height - y2, x2-x1, y2-y1). This
+   replacement stores that signed GL box. It does not call GL or Metal, and it
+   does not enable scissor testing. */
 void eu4_gfx_set_scissor_rectangle(void *handle, const void *rect);
-/* Returns 1 and writes x, y, width, height when a rectangle is pending. */
+/* Returns 1 and writes gl_x, gl_y, width, height when a box is pending. */
 int eu4_gfx_scissor_rectangle(void *master, int32_t out[4]);
+
+typedef enum {
+    EU4_GFX_SCISSOR_UNSET = 0,
+    EU4_GFX_SCISSOR_EMPTY = 1,
+    EU4_GFX_SCISSOR_VALID = 2,
+} eu4_gfx_scissor_status;
+
+typedef struct {
+    uint32_t x;
+    uint32_t y;
+    uint32_t width;
+    uint32_t height;
+} eu4_gfx_metal_scissor;
+
+/* Intersect the stored GL box with one attachment. set is 0 when no box was
+   recorded. A valid result is nonempty and inside the attachment. Empty and
+   unset leave *out unchanged. This does not apply the rectangle.
+   A later encoder must recover GL_SCISSOR_TEST separately:
+   disabled: do not restrict drawing with the pending box;
+   enabled and valid: apply the returned rectangle;
+   enabled and empty: no pixels may be modified by scissor-affected draws or
+   clears, rather than drawing or clearing the whole attachment;
+   enabled and unset: the box was never overridden, so recover the real GL
+   initial box before using a full-target default. */
+eu4_gfx_scissor_status eu4_gfx_scissor_for_attachment(
+    int set, int32_t gl_x, int32_t gl_y, int32_t width, int32_t height,
+    uint32_t attachment_width, uint32_t attachment_height, eu4_gfx_metal_scissor *out);
 /* _GfxClear at 0x15ea552. rdi is the handle and (%rdi) is the state object.
    esi is the flag dword: bit 0 is color (0x4000), bit 1 is depth (0x100), and
    bit 2 is stencil (0x400). rdx is an optional color; null is (0, 0, 0, 1).
