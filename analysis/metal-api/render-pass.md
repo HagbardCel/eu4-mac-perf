@@ -33,7 +33,7 @@ Reviewed 2026-11-05 against macOS SDK 27.0. Both headers above were read. The `l
 
 ## Backend implications
 
-[Project-derived] [`eu4_gfx_clear`](../../benchmark/eu4_gfx_init.h) does not create a render target or a render pass, and it does not implement GPU clearing. The GL clear is deferred, not applied. A later pass that must keep a previous attachment sets `loadAction` itself. A value this backend writes on a descriptor is not the framework default.
+[Project-derived] [`eu4_gfx_clear`](../../benchmark/eu4_gfx_init.h) does not create a render target or a render pass, and it does not implement GPU clearing. It is not implemented and is currently a no-op, so the call is discarded. A future reconstruction must preserve the original clear's ordering, flags, masks, and scissor interactions. A later pass that must keep a previous attachment sets `loadAction` itself. A value this backend writes on a descriptor is not the framework default.
 
 ## Validation
 
