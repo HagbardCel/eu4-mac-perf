@@ -317,6 +317,40 @@ static void record_view_points(NSView *view) {
     g_view_points_h = view.bounds.size.height;
 }
 
+/* Tracks the parent content bounds and backing scale. Runs on the main thread
+   only; publication swaps an immutable snapshot and takes no renderer lock. */
+@interface EU4MetalChildView : NSView
+@property (nonatomic, weak) CAMetalLayer *metalLayer;
+@end
+
+@implementation EU4MetalChildView
+- (void)syncDrawableGeometry {
+    CAMetalLayer *layer = self.metalLayer;
+    if (layer == nil) {
+        return;
+    }
+    NSRect backing = [self convertRectToBacking:self.bounds];
+    if (backing.size.width <= 0 || backing.size.height <= 0) {
+        return;
+    }
+    layer.drawableSize = backing.size;
+    eu4_gfx_publish_physical_geometry((uint32_t)backing.size.width,
+                                      (uint32_t)backing.size.height);
+}
+- (void)setFrameSize:(NSSize)newSize {
+    [super setFrameSize:newSize];
+    [self syncDrawableGeometry];
+}
+- (void)layout {
+    [super layout];
+    [self syncDrawableGeometry];
+}
+- (void)viewDidChangeBackingProperties {
+    [super viewDidChangeBackingProperties];
+    [self syncDrawableGeometry];
+}
+@end
+
 static void boot_window(void *window, uint32_t incoming, uint32_t passed) {
     uint32_t reported = g_get_flags(window);
     if ((reported & kOpenGL) != 0) {
@@ -358,21 +392,22 @@ static void boot_window(void *window, uint32_t incoming, uint32_t passed) {
         finish("metal_window_boot_failed", "no_metal_device", incoming, passed, 1, reported, 0, 0,
                0, 0, NULL, -1);
     }
-    NSView *child = [[NSView alloc] initWithFrame:content.bounds];
+    EU4MetalChildView *child = [[EU4MetalChildView alloc] initWithFrame:content.bounds];
     CAMetalLayer *layer = [CAMetalLayer layer];
     layer.device = device;
     layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
     layer.framebufferOnly = NO;
     child.layer = layer;
     child.wantsLayer = YES;
+    child.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    child.metalLayer = layer;
     [content addSubview:child];
     if (child.layer != layer) {
         finish("metal_window_boot_failed", "metal_layer_attach_failed", incoming, passed, 1,
                reported, 1, 0, 0, 0, NULL, -1);
     }
     record_view_points(child);
-    NSRect backing = [child convertRectToBacking:child.bounds];
-    layer.drawableSize = backing.size;
+    [child syncDrawableGeometry];
     if (g_mode == 3) {
         g_layer = layer;
         g_child = child;
