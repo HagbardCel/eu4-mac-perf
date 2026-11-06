@@ -679,8 +679,117 @@ static void run_monotonic_generation(void) {
     (void)layer;
 }
 
-/* A -> B -> A with a pending clear: after the GPU drain, present stays stale
-   until a new clear completes at the new generation. */
+static void *load_ptr_host(void *master, int offset) {
+    void *value = NULL;
+    memcpy(&value, (uint8_t *)master + offset, sizeof value);
+    return value;
+}
+
+/* Pending clear at A + Cocoa phase 1 for B: production clear skips as stale
+   without treating same-gen pending as fatal. */
+static void run_phase1_pending_clear_stale(void) {
+    CAMetalLayer *layer = nil;
+    boot_layer(&layer, 16, 16, 16, 16);
+    void *master = g_master_handle;
+    EU4GfxBackend *backend = backend_of(master);
+    select_default_target(master);
+    clear_game(master, 1.f, 0.f, 0.f);
+    id pending = backend.pendingGameCommand;
+    uint64_t pending_generation = backend.pendingGameGeneration;
+    if (pending == nil) {
+        fail("expected pending clear before phase 1");
+    }
+    publish_transition(32, 32);
+    expect_snapshot(16, 16, 1);
+    clear_stale(master, pending, pending_generation);
+    eu4_gfx_shutdown(master);
+    (void)layer;
+}
+
+/* Phase-1 SetRT: checked returns GEOMETRY_STALE, sets deferred flag, no master
+   mutation; production returns without stopping. */
+static void run_phase1_setrt_defers(void) {
+    CAMetalLayer *layer = nil;
+    boot_layer(&layer, 16, 16, 16, 16);
+    void *master = g_master_handle;
+    EU4GfxBackend *backend = backend_of(master);
+    select_default_target(master);
+    clear_game(master, 1.f, 0.f, 0.f);
+    id pending = backend.pendingGameCommand;
+    uint64_t pending_generation = backend.pendingGameGeneration;
+    uint32_t vp_w = 0, vp_h = 0;
+    memcpy(&vp_w, (uint8_t *)master + 0xb0, sizeof vp_w);
+    memcpy(&vp_h, (uint8_t *)master + 0xac, sizeof vp_h);
+    publish_transition(32, 32);
+    if (eu4_gfx_set_render_target_checked(master, NULL) != EU4_GFX_CLEAR_GEOMETRY_STALE) {
+        fail("phase-1 SetRT checked was not GEOMETRY_STALE");
+    }
+    if (!backend.deferredDefaultTargetSelect) {
+        fail("phase-1 SetRT did not record deferredDefaultTargetSelect");
+    }
+    uint32_t vp_w2 = 0, vp_h2 = 0;
+    memcpy(&vp_w2, (uint8_t *)master + 0xb0, sizeof vp_w2);
+    memcpy(&vp_h2, (uint8_t *)master + 0xac, sizeof vp_h2);
+    if (vp_w2 != vp_w || vp_h2 != vp_h || load_ptr_host(master, 0x78) != NULL) {
+        fail("phase-1 SetRT mutated master");
+    }
+    if (backend.pendingGameCommand != pending ||
+        backend.pendingGameGeneration != pending_generation) {
+        fail("phase-1 SetRT touched pending");
+    }
+    g_stopped = 0;
+    eu4_gfx_set_render_target(master, NULL);
+    if (g_stopped) {
+        fail("production SetRT stopped during phase 1");
+    }
+    eu4_gfx_shutdown(master);
+    (void)layer;
+}
+
+/* Logical resize during phase 1 with skipped SetRT: after commit, next clear
+   without another SetRT must succeed with the new viewport. */
+static void run_deferred_setrt_logical_resize(void) {
+    CAMetalLayer *layer = nil;
+    boot_layer(&layer, 16, 16, 16, 16);
+    void *master = g_master_handle;
+    EU4GfxBackend *backend = backend_of(master);
+    id<MTLDevice> device = backend.device;
+    select_default_target(master);
+    clear_game(master, 1.f, 0.f, 0.f);
+    complete_game(master);
+
+    publish_transition(32, 32);
+    int32_t logical_w = 24, logical_h = 20;
+    memcpy((uint8_t *)master + 0xa0, &logical_w, sizeof logical_w);
+    memcpy((uint8_t *)master + 0xa4, &logical_h, sizeof logical_h);
+    g_logical_width = logical_w;
+    g_logical_height = logical_h;
+    if (eu4_gfx_set_render_target_checked(master, NULL) != EU4_GFX_CLEAR_GEOMETRY_STALE ||
+        !backend.deferredDefaultTargetSelect) {
+        fail("deferred SetRT was not recorded");
+    }
+    uint32_t old_vp_w = 0, old_vp_h = 0;
+    memcpy(&old_vp_w, (uint8_t *)master + 0xb0, sizeof old_vp_w);
+    memcpy(&old_vp_h, (uint8_t *)master + 0xac, sizeof old_vp_h);
+    if (old_vp_w != 16 || old_vp_h != 16) {
+        fail("unexpected pre-defer viewport");
+    }
+
+    commit_physical(layer, 32, 32);
+    clear_game(master, 0.f, 1.f, 0.f);
+    uint32_t vp_w = 0, vp_h = 0;
+    memcpy(&vp_w, (uint8_t *)master + 0xb0, sizeof vp_w);
+    memcpy(&vp_h, (uint8_t *)master + 0xac, sizeof vp_h);
+    if (vp_w != 24 || vp_h != 20 || backend.deferredDefaultTargetSelect) {
+        fail("deferred SetRT was not applied before clear");
+    }
+    present_injected(master, device, 32, 32, 0x00, 0xff, 0x00, 0xff);
+    eu4_gfx_shutdown(master);
+    (void)layer;
+}
+
+/* A -> B -> A with the original A command still pending through both
+   transitions; drain only after both reconciles. */
 static void run_aba_pending_clear(void) {
     CAMetalLayer *layer = nil;
     boot_layer(&layer, 16, 16, 16, 16);
@@ -694,29 +803,28 @@ static void run_aba_pending_clear(void) {
     uint64_t generation_a = backend.geometryGeneration;
 
     publish_physical(layer, 32, 32);
-    present_stale(master, 32, 32);
+    clear_stale(master, pending, pending_generation);
     uint64_t generation_b = backend.geometryGeneration;
-    if (generation_b <= generation_a) {
-        fail("A -> B did not advance generation");
+    if (generation_b <= generation_a || backend.pendingGameCommand != pending) {
+        fail("A -> B did not keep pending across reconcile");
     }
     publish_physical(layer, 16, 16);
-    present_stale(master, 16, 16);
+    clear_stale(master, pending, pending_generation);
     uint64_t generation_a2 = backend.geometryGeneration;
     if (generation_a2 <= generation_b || generation_a2 == generation_a) {
         fail("B -> A reclaimed an old generation");
     }
-    if (pending_generation != generation_a || backend.pendingGameCommand != nil) {
-        fail("A -> B present did not drain the original pending clear");
+    if (backend.pendingGameCommand != pending) {
+        fail("pending was drained before both transitions reconciled");
     }
-    if (!backend.gameContentsKnown || backend.readyForPresent ||
-        backend.clearedGeneration == backend.geometryGeneration) {
+    complete_game(master);
+    if (backend.readyForPresent || backend.clearedGeneration == backend.geometryGeneration) {
         fail("old-generation contents presented as current");
     }
     clear_game(master, 0.f, 1.f, 0.f);
     present_injected(master, device, 16, 16, 0x00, 0xff, 0x00, 0xff);
     eu4_gfx_shutdown(master);
     (void)layer;
-    (void)pending;
 }
 
 /* With current geometry, a missing drawable is a failure, not a stale skip. */
@@ -795,9 +903,10 @@ static int run_appkit_window(void) {
         child.metalLayer = layer;
         [content addSubview:child];
         [window makeKeyAndOrderFront:nil];
+        [content layoutSubtreeIfNeeded];
         [window displayIfNeeded];
-        [child syncDrawableGeometry];
-
+        /* Do not call setFrameSize/syncDrawableGeometry on the child: production
+           autoresizing + layout must publish geometry. */
         if (child.layer != layer) {
             fail("production view did not attach the CAMetalLayer");
         }
@@ -833,10 +942,8 @@ static int run_appkit_window(void) {
         present_real(master, first_width, first_height, 0x00, 0x00, 0xff, 0xff);
 
         [window setContentSize:NSMakeSize(32, 32)];
-        [content setFrameSize:NSMakeSize(32, 32)];
-        [child setFrameSize:NSMakeSize(32, 32)];
-        [child layoutSubtreeIfNeeded];
-        [child syncDrawableGeometry];
+        [content layoutSubtreeIfNeeded];
+        [window displayIfNeeded];
         NSRect second_backing = [child convertRectToBacking:child.bounds];
         uint32_t second_width = (uint32_t)second_backing.size.width;
         uint32_t second_height = (uint32_t)second_backing.size.height;
@@ -844,10 +951,11 @@ static int run_appkit_window(void) {
             (second_width == first_width && second_height == first_height)) {
             fail("window resize did not change backing geometry");
         }
-        if (child.frame.size.width != 32 || child.frame.size.height != 32 ||
+        if ((int)child.frame.size.width != (int)content.bounds.size.width ||
+            (int)child.frame.size.height != (int)content.bounds.size.height ||
             layer.drawableSize.width != (CGFloat)second_width ||
             layer.drawableSize.height != (CGFloat)second_height) {
-            fail("production view did not track the resized bounds");
+            fail("production view did not autoresize with the parent");
         }
         expect_snapshot(second_width, second_height, 0);
         present_stale(master, second_width, second_height);
@@ -892,6 +1000,9 @@ int main(int argc, char **argv) {
     run_set_render_target_alloc_failure();
     run_setrt_drains_obsolete_pending();
     run_two_phase_interleavings();
+    run_phase1_pending_clear_stale();
+    run_phase1_setrt_defers();
+    run_deferred_setrt_logical_resize();
     run_identical_reobserve_unchanged();
     run_logical_only_generation_bump();
     run_monotonic_generation();
