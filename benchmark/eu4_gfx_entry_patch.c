@@ -11,8 +11,8 @@
 typedef struct {
     uintptr_t address;
     int length;
-    uint8_t saved[8];
-    uint8_t encoded[8];
+    uint8_t saved[11];
+    uint8_t encoded[11];
     void *relay;
     int live;
 } entry_slot;
@@ -87,7 +87,7 @@ static void forget(void) {
 }
 
 static bool encode_jump(const void *site, const void *dest, int length, uint8_t *out) {
-    if (!eu4_metal_boot_rel32_fits(site, dest) || length < 5 || length > 8) {
+    if (!eu4_metal_boot_rel32_fits(site, dest) || length < 5 || length > 11) {
         return false;
     }
     int32_t relative = (int32_t)((int64_t)(intptr_t)dest - ((int64_t)(intptr_t)site + 5));
@@ -114,7 +114,7 @@ bool eu4_gfx_entry_prepare(const eu4_gfx_entry_request *requests, int count) {
     for (int i = 0; i < count; i++) {
         int length = requests[i].length;
         if (requests[i].site == NULL || requests[i].expected == NULL ||
-            requests[i].replacement == NULL || length < 5 || length > 8) {
+            requests[i].replacement == NULL || length < 5 || length > 11) {
             return false;
         }
         uintptr_t address = (uintptr_t)requests[i].site;

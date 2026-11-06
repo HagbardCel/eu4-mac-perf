@@ -409,7 +409,7 @@ static void test_gl_forward(void) {
 }
 
 static uint8_t *map_entries(size_t page, int count, eu4_gfx_entry_request *entries,
-                            eu4_metal_boot_request calls[2], uint8_t prefixes[][8],
+                            eu4_metal_boot_request calls[2], uint8_t prefixes[][11],
                             uint8_t call_expected[2][5], const uint8_t *special, int special_at,
                             int wide_at) {
     uint8_t *mapping = mmap(NULL, page * 2, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -419,12 +419,17 @@ static uint8_t *map_entries(size_t page, int count, eu4_gfx_entry_request *entri
     static const uint8_t prefix6[6] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57};
     static const uint8_t prefix5[5] = {0x55, 0x48, 0x89, 0xe5, 0x53};
     static const uint8_t viewport[8] = {0x55, 0x48, 0x89, 0xe5, 0xf3, 0x0f, 0x6f, 0x06};
+    static const uint8_t present[11] = {0x55, 0x48, 0x89, 0xe5, 0x48, 0x8b,
+                                        0xbf, 0x78, 0x01, 0x00, 0x00};
     for (int i = 0; i < count; i++) {
         int length = i >= 5 ? 5 : 6;
-        memset(prefixes[i], 0, 8);
+        memset(prefixes[i], 0, 11);
         if (i == special_at && special != NULL) {
             length = 5;
             memcpy(prefixes[i], special, 5);
+        } else if (wide_at == -2) {
+            length = 11;
+            memcpy(prefixes[i], present, 11);
         } else if (i == wide_at) {
             length = 8;
             memcpy(prefixes[i], viewport, 8);
@@ -462,7 +467,7 @@ static void test_entry_transaction(void) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     eu4_gfx_entry_request entries[6];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[6][8];
+    uint8_t prefixes[6][11];
     uint8_t call_expected[2][5];
     uint8_t *mapping = map_entries(page, 6, entries, calls, prefixes, call_expected, NULL, -1, -1);
     uint8_t bad[6];
@@ -542,7 +547,7 @@ static void test_eleven_entry_transaction(void) {
     static const uint8_t destroy_prefix[5] = {0x48, 0x85, 0xff, 0x74, 0x2f};
     eu4_gfx_entry_request entries[11];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[11][8];
+    uint8_t prefixes[11][11];
     uint8_t call_expected[2][5];
     uint8_t *mapping = map_entries(page, 11, entries, calls, prefixes, call_expected, destroy_prefix, 10,
                                    -1);
@@ -590,7 +595,7 @@ static void test_twelve_entry_transaction(void) {
     static const uint8_t destroy_prefix[5] = {0x48, 0x85, 0xff, 0x74, 0x2f};
     eu4_gfx_entry_request entries[12];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[12][8];
+    uint8_t prefixes[12][11];
     uint8_t call_expected[2][5];
     uint8_t *mapping = map_entries(page, 12, entries, calls, prefixes, call_expected, destroy_prefix, 10,
                                    0);
@@ -656,11 +661,79 @@ static void test_twelve_entry_transaction(void) {
     }
 }
 
+static void test_present_prologue_transaction(void) {
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    eu4_gfx_entry_request entries[3];
+    eu4_metal_boot_request calls[2];
+    uint8_t prefixes[3][11];
+    uint8_t call_expected[2][5];
+    uint8_t *mapping = map_entries(page, 3, entries, calls, prefixes, call_expected, NULL, -1, -2);
+    for (int i = 0; i < 3; i++) {
+        if (entries[i].length != 11) {
+            fail("present prologue slot is not eleven bytes");
+        }
+    }
+    eu4_metal_boot_patch patches[2] = {0};
+    uint8_t bad[11];
+    memcpy(bad, prefixes[0], 11);
+    bad[10] ^= 0xff;
+    entries[0].expected = bad;
+    if (eu4_gfx_install_all(entries, 3, calls, 2, patches)) {
+        fail("flipped present prologue was installed");
+    }
+    entries[0].expected = prefixes[0];
+    for (int i = 0; i < 3; i++) {
+        if (memcmp(entries[i].site, prefixes[i], 11) != 0) {
+            fail("flipped present prologue changed an entry");
+        }
+    }
+    if (eu4_metal_boot_restore()) {
+        fail("flipped present prologue left a call install committed");
+    }
+    if (!eu4_gfx_install_all(entries, 3, calls, 2, patches)) {
+        fail("present prologue install failed");
+    }
+    entry_hits = 0;
+    call_hits = 0;
+    for (int i = 0; i < 3; i++) {
+        ((void (*)(void))entries[i].site)();
+    }
+    ((void (*)(void))calls[0].callsite)();
+    ((void (*)(void))calls[1].callsite)();
+    if (entry_hits != 3 || call_hits != 2) {
+        fail("installed present prologue did not reach the replacements");
+    }
+    if (!eu4_gfx_entry_restore() || !eu4_metal_boot_restore()) {
+        fail("could not restore a present prologue install");
+    }
+    for (int i = 0; i < 3; i++) {
+        if (memcmp(entries[i].site, prefixes[i], 11) != 0) {
+            fail("restore changed a present prologue");
+        }
+    }
+    eu4_gfx_entry_test_fail_commit(1);
+    if (eu4_gfx_install_all(entries, 3, calls, 2, patches)) {
+        fail("second present write reported success");
+    }
+    eu4_gfx_entry_test_fail_commit(0);
+    for (int i = 0; i < 3; i++) {
+        if (memcmp(entries[i].site, prefixes[i], 11) != 0) {
+            fail("present rollback left an entry patched");
+        }
+    }
+    if (eu4_metal_boot_restore()) {
+        fail("present rollback left the call install committed");
+    }
+    if (munmap(mapping, page * 2) != 0) {
+        fail("present prologue munmap failed");
+    }
+}
+
 static void test_one_exact_prefix(const uint8_t prefix[5]) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     eu4_gfx_entry_request entries[1];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[1][8];
+    uint8_t prefixes[1][11];
     uint8_t call_expected[2][5];
     uint8_t *mapping = map_entries(page, 1, entries, calls, prefixes, call_expected, prefix, 0, -1);
     eu4_metal_boot_patch patches[2] = {0};
@@ -687,7 +760,7 @@ static void test_index_entry_prefixes(void) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     eu4_gfx_entry_request entries[1];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[1][8];
+    uint8_t prefixes[1][11];
     uint8_t call_expected[2][5];
     uint8_t *mapping = map_entries(page, 1, entries, calls, prefixes, call_expected, not_set, 0, -1);
     eu4_metal_boot_patch patches[2] = {0};
@@ -710,7 +783,7 @@ static void test_reject_destroy_prefix(void) {
     static const uint8_t bad[5] = {0x48, 0x85, 0xff, 0x74, 0x00};
     eu4_gfx_entry_request entries[1];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[1][8];
+    uint8_t prefixes[1][11];
     uint8_t call_expected[2][5];
     uint8_t *mapping = map_entries(page, 1, entries, calls, prefixes, call_expected, bad, 0, -1);
     eu4_metal_boot_patch patches[2] = {0};
@@ -737,7 +810,7 @@ static void test_failed_call_once(void) {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     eu4_gfx_entry_request entries[6];
     eu4_metal_boot_request calls[2];
-    uint8_t prefixes[6][8];
+    uint8_t prefixes[6][11];
     uint8_t call_expected[2][5];
     uint8_t *mapping = map_entries(page, 6, entries, calls, prefixes, call_expected, NULL, -1, -1);
     eu4_metal_boot_patch patches[2] = {0};
@@ -825,6 +898,7 @@ int main(void) {
     test_entry_transaction();
     test_eleven_entry_transaction();
     test_twelve_entry_transaction();
+    test_present_prologue_transaction();
     test_reject_destroy_prefix();
     test_index_entry_prefixes();
     return 0;

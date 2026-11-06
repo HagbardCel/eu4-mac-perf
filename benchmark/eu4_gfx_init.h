@@ -207,7 +207,10 @@ int eu4_gfx_ready_for_present(void *master);
    Non-null is unsupported and does not mutate the master. */
 eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *target);
 void eu4_gfx_set_render_target(void *handle, void *target);
-/* _GfxPresent at 0x15ea6cb. rdi is the master. Returns 1 on success. */
+/* _GfxPresent at 0x15ea6cb. rdi is the master. Returns 1 on success.
+   The destination must be exactly the game backbuffer size and BGRA8Unorm;
+   otherwise the call fails before submit and keeps gameContentsKnown and
+   readyForPresent unchanged. */
 eu4_gfx_clear_status eu4_gfx_present_checked(void *master);
 int eu4_gfx_present(void *master);
 int eu4_gfx_settings(int display, int windowed, int count, void *settings);

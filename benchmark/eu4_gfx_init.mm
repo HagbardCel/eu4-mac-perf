@@ -1355,8 +1355,14 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
         }
         destination = drawable.texture;
     }
-    if (destination == nil || destination.width < backend.gameWidth ||
-        destination.height < backend.gameHeight) {
+    /* Frozen policy: the game backbuffer stays at SDL_GetWindowSize dimensions.
+       The original Present only swaps, and the layer is not resized to hide a
+       point/pixel mismatch. A smaller destination would leave drawable pixels
+       unwritten, so present fails closed before submit unless the destination
+       exactly matches and uses the backbuffer format. */
+    if (destination == nil || destination.width != backend.gameWidth ||
+        destination.height != backend.gameHeight ||
+        destination.pixelFormat != MTLPixelFormatBGRA8Unorm) {
         return EU4_GFX_CLEAR_FAILED;
     }
 

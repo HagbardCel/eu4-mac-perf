@@ -13,7 +13,7 @@ Instruction-verified against the pinned x86_64 `eu4` image (`__TEXT.__text` file
 | Function | Entry | End (exclusive) | Replacement | Prefix |
 | --- | --- | --- | --- | --- |
 | `_GfxSetRenderTarget` | `0x15ed004` | `0x15ed09d` | `eu4_gfx_set_render_target` | `\x55\x48\x89\xe5\x41\x57` |
-| `_GfxPresent` | `0x15ea6cb` | `0x15ea6df` | `eu4_gfx_present` | `\x55\x48\x89\xe5\x48\x8b` |
+| `_GfxPresent` | `0x15ea6cb` | `0x15ea6df` | `eu4_gfx_present` | `\x55\x48\x89\xe5\x48\x8b\xbf\x78\x01\x00\x00` |
 
 ### `_GfxSetRenderTarget`
 
@@ -28,6 +28,30 @@ Allocate or validate the game backbuffer **before** those master writes.
 ### `_GfxPresent`
 
 SysV: `int f(void *master)`. `rdi` is the master (loads window at `+0x178`). Original returns `1` after `SDL_GL_SwapWindow`.
+
+The registered prefix is the complete 11-byte prologue (`push rbp; mov rsp,rbp; mov 0x178(%rdi),rdi`); the next byte is the call. Instruction boundaries inside `_GfxPresent` are 1, 4, 11, 16, 18, 20, so 11 is the shortest complete prefix that covers the body's own `push`/`mov` without splitting an instruction. The entry patcher therefore accepts 5–11 byte prefixes: a 5-byte `jmp rel32` plus `NOP` padding, with 11-byte saved/encoded slots. This is the single justified widening of the previous 5–8 range.
+
+## Present dimension and format gate (F2)
+
+Present fails closed **before** submit unless the destination is exactly the game backbuffer:
+
+```
+destination.width  == backend.gameWidth
+destination.height == backend.gameHeight
+destination.pixelFormat == MTLPixelFormatBGRA8Unorm
+```
+
+No upscale, crop, or larger-destination acceptance: the original `_GfxInit` sizes the backbuffer from `SDL_GetWindowSize` and `_GfxPresent` only calls `SDL_GL_SwapWindow`, so a destination of another size or format has no defined mapping. A pre-submit rejection preserves `gameContentsKnown`/`readyForPresent` so a retry after the destination matches is allowed.
+
+Coverage policy: the native host asserts the exact-match success path (game size, `BGRA8Unorm`) through the production `eu4_gfx_set_render_target(NULL)` and `eu4_gfx_present` wrappers, and asserts rejection for unequal width, larger height, and a non-`BGRA8Unorm` pixel format, checking both flags survive each rejection.
+
+## Present and drawable verification (F2)
+
+Production: blit game → drawable → `presentDrawable` → commit → wait. No staging alloc.
+
+Test-only opt-in (same command buffer): blit game → drawable (or injected destination texture) → blit destination → staging → present when using a real drawable → commit → wait → validate staging. Requires `layer.framebufferOnly = NO` on the Metal boot path. Host uses deterministic seams for nil-drawable and staging-alloc failure.
+
+Limitation (not a live-drawable claim): every automated size/format check uses a host-injected `MTLTexture` destination, because `CAMetalDrawable` texture dimensions are fixed by the layer (`drawableSize` from `convertRectToBacking:`) and cannot be authored at an arbitrary size by the test. The production drawable path is verified for a same-size/`BGRA8Unorm` destination plus the blit/present ordering.
 
 ## Activation
 
@@ -85,12 +109,6 @@ return present_game_backbuffer();
 | Present completed OK | Known, **not** ready |
 | Committed GPU failure | Poisoned; no further ops |
 | Shutdown | Drain game and diagnostic pending, then release |
-
-## Present and drawable verification (F2)
-
-Production: blit game → drawable → `presentDrawable` → commit → wait. No staging alloc.
-
-Test-only opt-in (same command buffer): blit game → drawable (or injected destination texture) → blit destination → staging → present when using a real drawable → commit → wait → validate staging. Requires `layer.framebufferOnly = NO` on the Metal boot path. Host uses deterministic seams for nil-drawable and staging-alloc failure.
 
 ## Shutdown
 

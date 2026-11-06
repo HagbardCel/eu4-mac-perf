@@ -23,6 +23,7 @@ _INDEX_DESTROY = bytes.fromhex("4885ff7450")
 _INDEX_SET = bytes.fromhex("4885f67428")
 _MULTI = bytes.fromhex("554889e541574156")
 _SCISSOR = bytes.fromhex("554889e50fbf5604")
+_PRESENT_COMPLETE = bytes.fromhex("554889e5488bbf78010000")
 _FIVE = r"\x55\x48\x89\xe5\x53"
 BASELINE = (
     ("settings", 0x15ED388, 0x15ED9FC, "eu4_gfx_settings", _P6),
@@ -86,10 +87,18 @@ class GfxEntryRegistryTests(unittest.TestCase):
         for _name, entry, end, _fn, prefix in entries:
             self.assertLess(entry, end)
             self.assertGreaterEqual(len(prefix), 5)
-            self.assertLessEqual(len(prefix), 8)
+            self.assertLessEqual(len(prefix), 11)
         order = sorted(entries, key=lambda item: item[1])
         for prev, nxt in zip(order, order[1:]):
             self.assertGreaterEqual(nxt[1], prev[2])
+
+    def test_present_prefix_is_the_complete_prologue(self) -> None:
+        found = [item for item in probe.GFX_ENTRIES if item[0] == "present"]
+        self.assertEqual(len(found), 1)
+        _name, entry, end, replacement, prefix = found[0]
+        self.assertEqual((entry, end, replacement), (0x15EA6CB, 0x15EA6DF, "eu4_gfx_present"))
+        self.assertEqual(prefix, _PRESENT_COMPLETE)
+        self.assertEqual(len(prefix), 11)
 
     def test_rejects_malformed_records(self) -> None:
         samples = [
@@ -100,7 +109,7 @@ class GfxEntryRegistryTests(unittest.TestCase):
             _line("a", "0x1100", "0x1100", "fn_a", _FIVE),
             _line("a", "0x1100", "0x1000", "fn_a", _FIVE),
             _line("a", "0x1000", "0x1100", "fn_a", r"\x55\x48\x89\xe5"),
-            _line("a", "0x1000", "0x1100", "fn_a", r"\x55\x48\x89\xe5\x53\x90\x90\x90\x90"),
+            _line("a", "0x1000", "0x1100", "fn_a", r"\x55\x48\x89\xe5\x53\x90\x90\x90\x90\x90\x90\x90"),
             _line("a", "0x1000", "0x1100", "fn_a", r"\x55\x48\n\x90\x90"),
             _line("a", "nope", "0x1100", "fn_a", _FIVE),
             _line("a", "0x1000", "0x1100", "fn_a", _FIVE) + " " + _line("b", "0x2000", "0x2100", "fn_b", _FIVE),

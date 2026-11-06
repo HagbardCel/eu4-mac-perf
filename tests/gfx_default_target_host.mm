@@ -48,15 +48,20 @@ static void expect_uniform_bgra(const uint8_t *bytes, size_t len, uint8_t b, uin
     }
 }
 
-static id<MTLTexture> make_drawable(id<MTLDevice> device, uint32_t width, uint32_t height) {
+static id<MTLTexture> make_drawable_format(id<MTLDevice> device, uint32_t width, uint32_t height,
+                                          MTLPixelFormat format) {
     MTLTextureDescriptor *desc =
-        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
                                                            width:width
                                                           height:height
                                                        mipmapped:NO];
     desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite | MTLTextureUsageRenderTarget;
     desc.storageMode = MTLStorageModeShared;
     return [device newTextureWithDescriptor:desc];
+}
+
+static id<MTLTexture> make_drawable(id<MTLDevice> device, uint32_t width, uint32_t height) {
+    return make_drawable_format(device, width, height, MTLPixelFormatBGRA8Unorm);
 }
 
 static void *boot(CAMetalLayer *layer) {
@@ -108,6 +113,7 @@ static void test_lifecycle(void) {
     if (eu4_gfx_set_render_target_checked(&handle, NULL) != EU4_GFX_CLEAR_OK) {
         fail("SetRT null");
     }
+    eu4_gfx_set_render_target(&handle, NULL);
     if (load_rt(master) != NULL) {
         fail("SetRT did not clear +0x78");
     }
@@ -193,6 +199,17 @@ static void test_lifecycle(void) {
 
     eu4_gfx_clear(&handle, 1, red);
     if (eu4_gfx_complete_game(master, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("clear for production present");
+    }
+    eu4_gfx_test_set_present_drawable((__bridge void *)dest);
+    eu4_gfx_test_set_present_readback(presented, sizeof presented);
+    if (eu4_gfx_present(master) != 1) {
+        fail("production present");
+    }
+    expect_uniform_bgra(presented, sizeof presented, 0x00, 0x00, 0xff, 0xff);
+
+    eu4_gfx_clear(&handle, 1, red);
+    if (eu4_gfx_complete_game(master, NULL) != EU4_GFX_CLEAR_OK) {
         fail("clear before seams");
     }
     eu4_gfx_test_set_present_drawable(NULL);
@@ -211,6 +228,34 @@ static void test_lifecycle(void) {
     eu4_gfx_test_set_present_readback(presented, sizeof presented);
     if (eu4_gfx_present_checked(master) != EU4_GFX_CLEAR_OK) {
         fail("present after seams");
+    }
+    expect_uniform_bgra(presented, sizeof presented, 0x00, 0x00, 0xff, 0xff);
+
+    eu4_gfx_clear(&handle, 1, red);
+    if (eu4_gfx_complete_game(master, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("clear before destination failures");
+    }
+    id<MTLTexture> unequal_destination = make_drawable(device, 32, 16);
+    id<MTLTexture> oversize_destination = make_drawable(device, 32, 32);
+    id<MTLTexture> bad_format_destination =
+        make_drawable_format(device, 16, 16, MTLPixelFormatRGBA8Unorm);
+    if (unequal_destination == nil || oversize_destination == nil ||
+        bad_format_destination == nil) {
+        fail("destination failure textures");
+    }
+    id<MTLTexture> rejected[3] = {unequal_destination, oversize_destination,
+                                  bad_format_destination};
+    for (int i = 0; i < 3; i++) {
+        eu4_gfx_test_set_present_drawable((__bridge void *)rejected[i]);
+        if (eu4_gfx_present_checked(master) != EU4_GFX_CLEAR_FAILED ||
+            !eu4_gfx_game_contents_known(master) || !eu4_gfx_ready_for_present(master)) {
+            fail("destination size/format gate");
+        }
+    }
+    eu4_gfx_test_set_present_drawable((__bridge void *)dest);
+    eu4_gfx_test_set_present_readback(presented, sizeof presented);
+    if (eu4_gfx_present_checked(master) != EU4_GFX_CLEAR_OK) {
+        fail("present after destination failures");
     }
     expect_uniform_bgra(presented, sizeof presented, 0x00, 0x00, 0xff, 0xff);
 
