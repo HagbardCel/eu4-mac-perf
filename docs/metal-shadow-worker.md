@@ -24,6 +24,22 @@ Resource IDs match `[A-Za-z0-9_]{1,64}` and are never reused, including after de
 
 Init succeeds only when the success byte is 1, the return value is the published slot, phase is 2, and the backend token is present. Any other result is `init_failed`: the process exits non-zero and does not retry. `configure_window` with `window_id` 0 makes the stand-in window return NULL, which is how a test reaches that path. Shutdown does not clear phase.
 
+## Offscreen clear
+
+Bounded color-only clear through the production helpers. Contract: [analysis/gfx-render/v0/clear-contract.md](../analysis/gfx-render/v0/clear-contract.md). The worker never waits inside `eu4_gfx_clear`; it calls `eu4_gfx_clear_checked` then `eu4_gfx_complete_offscreen`. Cap is 64×64 in the worker. Production still validates device limits.
+
+| Op | Args | Successful `result` |
+| --- | --- | --- |
+| `configure_offscreen` | integer `width`, `height` in 1..64 | `width`, `height`, `contents_known: false` |
+| `clear` | integer `flags`; optional `color` length-4 numbers in `[0,1]` (omit/`null` → opaque black) | `submitted: true`, `command_buffer_status: "completed"`, `contents_known: true` |
+| `read_offscreen` | none | `width`, `height`, `bytes_base64` |
+
+Preflight rejects (bad dims/flags/color, missing target, unsupported state, second clear while pending) use `ok: false` and stay recoverable. Read before a successful complete returns `contents_unknown` with no bytes. A committed GPU failure returns `ok: false`, `executed: true`, `error: gpu_failed`, and exits. Buffer observation failures still use `observation_failed`.
+
+Non-claims (untested `gpu_failed`, no full `_GfxClear` equivalence, no live EU4 draw/frame): [clear-contract.md](../analysis/gfx-render/v0/clear-contract.md#non-claims).
+
+Live EU4 launchers that never configure an offscreen target hit fail-closed `_GfxClear` and stop. That is not live-startup progress.
+
 ## Observations
 
 A normal response has `result`, `live_count`, and compact master fields: dimensions, primitive, max texture, lod, viewport, dirty byte, and the three snap images. Slots carry a resource ID and length. Buffer bytes are not included.

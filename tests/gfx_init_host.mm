@@ -533,6 +533,25 @@ static void test_scissor(void *master, id<MTLDevice> device) {
     }
 }
 
+static void set_full_viewport(void *master, uint32_t width, uint32_t height) {
+    int32_t rect[6] = {0, 0, 0, 0, 0, 0};
+    rect[0] = (int32_t)height;
+    rect[1] = (int32_t)width;
+    eu4_gfx_set_viewport(master, rect);
+}
+
+static void expect_uniform_bgra(const uint8_t *bytes, size_t len, uint8_t b, uint8_t g, uint8_t r,
+                                uint8_t a) {
+    if (len % 4 != 0) {
+        fail("readback length");
+    }
+    for (size_t i = 0; i + 3 < len; i += 4) {
+        if (bytes[i] != b || bytes[i + 1] != g || bytes[i + 2] != r || bytes[i + 3] != a) {
+            fail("clear readback pixels");
+        }
+    }
+}
+
 static void test_backend(void) {
     char dir[] = "/tmp/eu4-pr3-XXXXXX";
     if (mkdtemp(dir) == NULL) {
@@ -702,7 +721,130 @@ static void test_backend(void) {
             fail("fallback texels");
         }
     }
+    uint8_t viewport_before_clear[24];
+    memcpy(viewport_before_clear, (uint8_t *)master + 0xac, sizeof viewport_before_clear);
+    void *null_master = NULL;
+    if (eu4_gfx_clear_checked(NULL, 1, NULL) != EU4_GFX_CLEAR_UNSUPPORTED ||
+        eu4_gfx_clear_checked(&null_master, 1, NULL) != EU4_GFX_CLEAR_UNSUPPORTED) {
+        fail("null handle clear accepted");
+    }
+    uint8_t foreign[EU4_GFX_MASTER_SIZE];
+    memset(foreign, 0, sizeof foreign);
+    void *foreign_slot = foreign;
+    if (eu4_gfx_clear_checked(&foreign_slot, 1, NULL) != EU4_GFX_CLEAR_UNSUPPORTED) {
+        fail("noncurrent master clear accepted");
+    }
+    set_full_viewport(master, 16, 16);
+    if (eu4_gfx_configure_offscreen(master, 16, 16) != EU4_GFX_CLEAR_OK) {
+        fail("configure offscreen in backend");
+    }
+    void *clear_handle = master;
+    float red[4] = {1.f, 0.f, 0.f, 1.f};
+    uint32_t mask_saved = 0;
+    memcpy(&mask_saved, (uint8_t *)master + 0x2c, sizeof mask_saved);
+    uint32_t bad_mask = 0;
+    memcpy((uint8_t *)master + 0x2c, &bad_mask, sizeof bad_mask);
+    int known_before_mask = eu4_gfx_offscreen_contents_known(master);
+    if (eu4_gfx_clear_checked(&clear_handle, 1, NULL) != EU4_GFX_CLEAR_UNSUPPORTED) {
+        fail("bad color mask clear accepted");
+    }
+    if (eu4_gfx_complete_offscreen(master, NULL) != EU4_GFX_CLEAR_UNSUPPORTED ||
+        eu4_gfx_offscreen_contents_known(master) != known_before_mask) {
+        fail("bad color mask submitted GPU work");
+    }
+    memcpy((uint8_t *)master + 0x2c, &mask_saved, sizeof mask_saved);
+
+    uint8_t before[EU4_GFX_MASTER_SIZE];
+    memcpy(before, master, sizeof before);
+    g_stopped = 0;
+    eu4_gfx_clear(&clear_handle, 1, red);
+    if (g_stopped) {
+        fail("production clear stopped");
+    }
+    if (memcmp(master, before, sizeof before) != 0) {
+        fail("production clear modified master");
+    }
+    int clear_status = 0;
+    if (eu4_gfx_complete_offscreen(master, &clear_status) != EU4_GFX_CLEAR_OK ||
+        clear_status != (int)MTLCommandBufferStatusCompleted) {
+        fail("production clear completion");
+    }
+    if (memcmp(master, before, sizeof before) != 0) {
+        fail("completion modified master");
+    }
+    uint8_t cleared[16 * 16 * 4];
+    size_t cleared_len = 0;
+    if (eu4_gfx_read_offscreen(master, cleared, sizeof cleared, &cleared_len) != EU4_GFX_CLEAR_OK) {
+        fail("backend clear readback");
+    }
+    expect_uniform_bgra(cleared, cleared_len, 0x00, 0x00, 0xff, 0xff);
+    if (eu4_gfx_clear_checked(&clear_handle, 1, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("backend clear submit");
+    }
+    if (eu4_gfx_clear_checked(&clear_handle, 1, red) != EU4_GFX_CLEAR_UNSUPPORTED) {
+        fail("pending clear accepted a second submit");
+    }
+    if (eu4_gfx_complete_offscreen(master, &clear_status) != EU4_GFX_CLEAR_OK) {
+        fail("backend clear complete");
+    }
+    if (eu4_gfx_read_offscreen(master, cleared, sizeof cleared, &cleared_len) != EU4_GFX_CLEAR_OK) {
+        fail("backend black clear readback");
+    }
+    expect_uniform_bgra(cleared, cleared_len, 0x00, 0x00, 0x00, 0xff);
+    eu4_gfx_test_fail_offscreen_alloc(1);
+    if (eu4_gfx_configure_offscreen(master, 32, 32) != EU4_GFX_CLEAR_FAILED) {
+        fail("backend alloc failure");
+    }
+    eu4_gfx_test_fail_offscreen_alloc(0);
+    if (eu4_gfx_clear_checked(&clear_handle, 1, NULL) != EU4_GFX_CLEAR_OK ||
+        eu4_gfx_complete_offscreen(master, &clear_status) != EU4_GFX_CLEAR_OK ||
+        eu4_gfx_read_offscreen(master, cleared, sizeof cleared, &cleared_len) != EU4_GFX_CLEAR_OK) {
+        fail("prior target lost after failed configure");
+    }
+    expect_uniform_bgra(cleared, cleared_len, 0x00, 0x00, 0x00, 0xff);
+    if (eu4_gfx_clear_checked(&clear_handle, 1, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("submit before shutdown drain");
+    }
+    /* Drain happens inside shutdown; recreate a live master afterward. */
+    int releases_before_drain = eu4_gfx_backend_releases();
+    backend = nil;
+    owned = nil;
+    queue = nil;
+    depth = nil;
+    texture = nil;
+    eu4_gfx_shutdown(master);
+    int releases_after_drain = eu4_gfx_backend_releases();
+    if (eu4_gfx_backend_token() != NULL || releases_after_drain < releases_before_drain + 1) {
+        char msg[96];
+        snprintf(msg, sizeof msg, "drained shutdown did not release %d->%d", releases_before_drain,
+                 releases_after_drain);
+        fail(msg);
+    }
+    ok = 0;
+    master = eu4_gfx_init(handle, &ok);
+    if (ok != 1 || master == NULL) {
+        fail("reinit after drained shutdown");
+    }
+    backend = (__bridge EU4GfxBackend *)*(void **)((uint8_t *)master + 0x180);
+    device = backend.device;
+    clear_handle = master;
+    set_full_viewport(master, 16, 16);
+    if (eu4_gfx_configure_offscreen(master, 16, 16) != EU4_GFX_CLEAR_OK ||
+        eu4_gfx_clear_checked(&clear_handle, 1, NULL) != EU4_GFX_CLEAR_OK ||
+        eu4_gfx_complete_offscreen(master, &clear_status) != EU4_GFX_CLEAR_OK) {
+        fail("clear after reinit");
+    }
+    memcpy((uint8_t *)master + 0xac, viewport_before_clear, sizeof viewport_before_clear);
     test_scissor(master, device);
+    if (eu4_gfx_configure_offscreen(master, 16, 16) != EU4_GFX_CLEAR_OK) {
+        fail("configure after scissor");
+    }
+    set_full_viewport(master, 16, 16);
+    clear_handle = master;
+    if (eu4_gfx_clear_checked(&clear_handle, 1, NULL) != EU4_GFX_CLEAR_UNSUPPORTED) {
+        fail("clear with pending scissor");
+    }
+    memcpy((uint8_t *)master + 0xac, viewport_before_clear, sizeof viewport_before_clear);
     void *blend = *(void **)((uint8_t *)master + 0x80);
     void *depth_header = *(void **)((uint8_t *)master + 0x88);
     void *raster = *(void **)((uint8_t *)master + 0x90);
@@ -877,22 +1019,6 @@ static void test_viewport(void) {
     }
 }
 
-static void test_clear(void) {
-    uint8_t object[EU4_GFX_MASTER_SIZE];
-    uint8_t saved[EU4_GFX_MASTER_SIZE];
-    memset(object, 0x5a, sizeof object);
-    memcpy(saved, object, sizeof saved);
-    void *handle = object;
-    eu4_gfx_clear(&handle, 0, NULL);
-    if (memcmp(object, saved, sizeof saved) != 0) {
-        fail("clear wrote the object");
-    }
-    eu4_gfx_clear(&handle, 7, reinterpret_cast<const float *>(1));
-    if (memcmp(object, saved, sizeof saved) != 0) {
-        fail("clear wrote the object with flags");
-    }
-}
-
 static char *g_argv0;
 
 static void run_missing_backend(const char *dir) {
@@ -962,7 +1088,6 @@ int main(int argc, char **argv) {
     uint8_t desc[EU4_GFX_DEPTH_DESC_SIZE];
     memset(desc, 0xa5, sizeof desc);
     test_viewport();
-    test_clear();
     test_writes();
     eu4_gfx_write_default_depth_stencil(desc);
     test_view(desc);

@@ -1,6 +1,7 @@
 #ifndef EU4_GFX_INIT_H
 #define EU4_GFX_INIT_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __OBJC__
@@ -20,6 +21,12 @@
 @property (nonatomic) void *textureHeader;
 /* Textures created by _GfxInitializeTexture. Released with the backend. */
 @property (nonatomic, strong) NSMutableDictionary *textures;
+/* Optional offscreen clear target. Shared BGRA8Unorm render target. */
+@property (nonatomic, strong) id colorTarget;
+@property (nonatomic) uint32_t colorWidth;
+@property (nonatomic) uint32_t colorHeight;
+@property (nonatomic) BOOL contentsKnown;
+@property (nonatomic, strong) id pendingClear;
 /* Pending GL scissor box, fixed at the call. Signed. Not a Metal rectangle. */
 @property (nonatomic) BOOL scissorValid;
 @property (nonatomic) int32_t scissorGlX;
@@ -73,6 +80,8 @@ void eu4_gfx_set_default_writers(void (*blend)(void *dest), void (*depth)(void *
 void eu4_gfx_set_terminate(void (*fn)(const char *reason));
 void eu4_gfx_test_throw_on_alloc(int n);
 void eu4_gfx_test_no_device(int on);
+/* When non-zero, the next offscreen texture allocation fails once. */
+void eu4_gfx_test_fail_offscreen_alloc(int on);
 
 /* Records the caller, writes stop.json, then terminates. A callback that
    returns still ends in _exit. */
@@ -133,15 +142,37 @@ typedef struct {
 eu4_gfx_scissor_status eu4_gfx_scissor_for_attachment(
     int set, int32_t gl_x, int32_t gl_y, int32_t width, int32_t height,
     uint32_t attachment_width, uint32_t attachment_height, eu4_gfx_metal_scissor *out);
+typedef enum {
+    EU4_GFX_CLEAR_OK = 0,
+    EU4_GFX_CLEAR_UNSUPPORTED = 1,
+    EU4_GFX_CLEAR_FAILED = 2,
+} eu4_gfx_clear_status;
+
+/* Create or replace the offscreen BGRA8Unorm color target. Rejects while a
+   clear is pending. Allocates before publishing so a failed allocate leaves
+   the prior target intact. Resets contentsKnown. */
+eu4_gfx_clear_status eu4_gfx_configure_offscreen(void *master, uint32_t width,
+                                                 uint32_t height);
+/* Returns 1 when contentsKnown is set. */
+int eu4_gfx_offscreen_contents_known(void *master);
 /* _GfxClear at 0x15ea552. rdi is the handle and (%rdi) is the state object.
    esi is the flag dword: bit 0 is color (0x4000), bit 1 is depth (0x100), and
    bit 2 is stencil (0x400). rdx is an optional color; null is (0, 0, 0, 1).
    The glScissor at 0x15ea5e7 uses the viewport image: x at +0xbc, y at +0xc0,
-   width at +0xb0, height at +0xac. D1a-only no-op. The original function
-   performs GL state changes and a conditional clear but does not modify the
-   master object. No Metal render target or render pass is available. This
-   does not implement GPU clearing. */
+   width at +0xb0, height at +0xac. The production path submits a bounded
+   color-only full-attachment Metal clear asynchronously. Unsupported or
+   failed cases stop. The master engine object is not written. */
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color);
+/* Validate and commit without waiting. ok means submitted. Rejects a second
+   clear while one is pending. Invalidates contentsKnown on submit. */
+eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags,
+                                           const float *color);
+/* Wait for the pending clear, check terminal status, update contentsKnown.
+   Writes the Metal command-buffer status when command_status is non-null. */
+eu4_gfx_clear_status eu4_gfx_complete_offscreen(void *master, int *command_status);
+/* Read known BGRA8 bytes. capacity must be at least width*height*4. */
+eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t capacity,
+                                            size_t *out_len);
 int eu4_gfx_settings(int display, int windowed, int count, void *settings);
 
 #ifdef __cplusplus

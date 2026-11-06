@@ -33,8 +33,8 @@ Reviewed 2026-11-05 against macOS SDK 27.0. Both headers above were read. The `l
 
 ## Backend implications
 
-[Project-derived] [`eu4_gfx_clear`](../../benchmark/eu4_gfx_init.h) does not create a render target or a render pass, and it does not implement GPU clearing. It is not implemented and is currently a no-op, so the call is discarded. A future reconstruction must preserve the original clear's ordering, flags, masks, and scissor interactions. A later pass that must keep a previous attachment sets `loadAction` itself. A value this backend writes on a descriptor is not the framework default.
+[Project-derived] The production path keeps `void eu4_gfx_clear`. A checked helper submits a bounded color-only full-attachment clear with `MTLLoadActionClear` / `MTLStoreActionStore` on an explicit offscreen BGRA8Unorm target, commits asynchronously, and invalidates known contents. Diagnostic completion (`eu4_gfx_complete_offscreen`) waits and may mark contents known. Unsupported states fail closed; see [clear-contract.md](../gfx-render/v0/clear-contract.md). `MTLLoadActionClear` is not a general substitute for mid-frame or scissored `glClear`. A later pass that must keep a previous attachment sets `loadAction` itself.
 
 ## Validation
 
-[Project-derived] [`tests/gfx_init_host.mm`](../../tests/gfx_init_host.mm) builds a color attachment and sets `loadAction` to `MTLLoadActionClear` before encoding. That test does not show a depth or stencil default, and it does not show that `eu4_gfx_clear` cleared the GPU.
+[Project-derived] [`tests/gfx_init_host.mm`](../../tests/gfx_init_host.mm) and [`tests/test_gfx_shadow_render.py`](../../tests/test_gfx_shadow_render.py) configure an offscreen target, submit and complete a clear, and read BGRA bytes. An independent GL reference clears with a full-target scissor. This does not prove complete `_GfxClear` equivalence.

@@ -132,6 +132,7 @@ static void (*g_terminate)(const char *);
 static int g_throw_at;
 static int g_allocs;
 static int g_no_device;
+static int g_fail_offscreen_alloc;
 static int g_phase;
 static int g_succeeded;
 static void *g_master;
@@ -228,6 +229,8 @@ void eu4_gfx_set_terminate(void (*fn)(const char *)) { g_terminate = fn; }
 void eu4_gfx_test_throw_on_alloc(int n) { g_throw_at = n; }
 
 void eu4_gfx_test_no_device(int on) { g_no_device = on; }
+
+void eu4_gfx_test_fail_offscreen_alloc(int on) { g_fail_offscreen_alloc = on; }
 
 int eu4_gfx_phase(void) { return g_phase; }
 
@@ -661,10 +664,21 @@ void *eu4_gfx_init(void *handle, uint8_t *success) {
     return master;
 }
 
+static eu4_gfx_clear_status drain_pending_clear(__unsafe_unretained EU4GfxBackend *backend,
+                                                int *command_status);
+
 void eu4_gfx_shutdown(void *master) {
     const void *caller = __builtin_return_address(0);
     if (master != NULL) {
         void *raw = load_ptr(master, 0x180);
+        if (raw != NULL) {
+            __unsafe_unretained EU4GfxBackend *backend = (__bridge EU4GfxBackend *)raw;
+            if (backend.pendingClear != nil) {
+                if (drain_pending_clear(backend, NULL) == EU4_GFX_CLEAR_FAILED) {
+                    eu4_gfx_stop("_GfxShutdown", "gpu_failed", caller);
+                }
+            }
+        }
         eu4_gfx_release_vertex_buffers(raw, caller);
         store_ptr(master, 0x180, NULL);
         if (raw != NULL) {
@@ -869,10 +883,212 @@ int eu4_gfx_scissor_rectangle(void *master, int32_t out[4]) {
     return 1;
 }
 
+static void *backend_raw_for_master(void *master) {
+    if (master == NULL || !g_succeeded || master != g_master) {
+        return NULL;
+    }
+    return load_ptr(master, 0x180);
+}
+
+static void *master_from_handle(void *handle) {
+    if (handle == NULL) {
+        return NULL;
+    }
+    void *master = NULL;
+    memcpy(&master, handle, sizeof master);
+    return master;
+}
+
+static int color_in_range(const float *color) {
+    static const float opaque_black[4] = {0.f, 0.f, 0.f, 1.f};
+    const float *src = color != NULL ? color : opaque_black;
+    for (int i = 0; i < 4; i++) {
+        float value = src[i];
+        if (!(value >= 0.f) || value > 1.f) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int viewport_covers_attachment(void *master, uint32_t width, uint32_t height) {
+    uint32_t view_h = 0, view_w = 0, view_x = 0, view_y = 0;
+    memcpy(&view_h, (uint8_t *)master + 0xac, sizeof view_h);
+    memcpy(&view_w, (uint8_t *)master + 0xb0, sizeof view_w);
+    memcpy(&view_x, (uint8_t *)master + 0xbc, sizeof view_x);
+    memcpy(&view_y, (uint8_t *)master + 0xc0, sizeof view_y);
+    return view_x == 0 && view_y == 0 && view_w == width && view_h == height;
+}
+
+static int color_mask_accepted(void *master) {
+    uint32_t mask = 0;
+    memcpy(&mask, (uint8_t *)master + 0x2c, sizeof mask);
+    return mask == 0x01010101u;
+}
+
+static eu4_gfx_clear_status drain_pending_clear(__unsafe_unretained EU4GfxBackend *backend,
+                                                int *command_status) {
+    id<MTLCommandBuffer> command = backend.pendingClear;
+    if (command == nil) {
+        if (command_status != NULL) {
+            *command_status = (int)MTLCommandBufferStatusNotEnqueued;
+        }
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    [command waitUntilCompleted];
+    MTLCommandBufferStatus status = command.status;
+    if (command_status != NULL) {
+        *command_status = (int)status;
+    }
+    backend.pendingClear = nil;
+    if (status != MTLCommandBufferStatusCompleted || command.error != nil) {
+        backend.contentsKnown = NO;
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    backend.contentsKnown = YES;
+    return EU4_GFX_CLEAR_OK;
+}
+
+eu4_gfx_clear_status eu4_gfx_configure_offscreen(void *master, uint32_t width, uint32_t height) {
+    void *raw = backend_raw_for_master(master);
+    __unsafe_unretained EU4GfxBackend *backend = (__bridge EU4GfxBackend *)raw;
+    if (backend == nil || backend.device == nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (backend.pendingClear != nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (width == 0 || height == 0) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    uint64_t pixels = (uint64_t)width * (uint64_t)height;
+    if (pixels > (uint64_t)UINT32_MAX / 4u) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    uint32_t texture_limit = max_texture(backend.device);
+    if (width > texture_limit || height > texture_limit) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:width
+                                                          height:height
+                                                       mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> next = nil;
+    if (!g_fail_offscreen_alloc) {
+        next = [backend.device newTextureWithDescriptor:desc];
+    } else {
+        g_fail_offscreen_alloc = 0;
+    }
+    if (next == nil) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    backend.colorTarget = next;
+    backend.colorWidth = width;
+    backend.colorHeight = height;
+    backend.contentsKnown = NO;
+    return EU4_GFX_CLEAR_OK;
+}
+
+int eu4_gfx_offscreen_contents_known(void *master) {
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    return backend != nil && backend.contentsKnown ? 1 : 0;
+}
+
+eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags, const float *color) {
+    void *master = master_from_handle(handle);
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    if (backend == nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (backend.pendingClear != nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (flags != 1u) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (backend.colorTarget == nil || backend.colorWidth == 0 || backend.colorHeight == 0) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (backend.scissorValid) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (!viewport_covers_attachment(master, backend.colorWidth, backend.colorHeight)) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (!color_mask_accepted(master)) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (!color_in_range(color)) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    static const float opaque_black[4] = {0.f, 0.f, 0.f, 1.f};
+    const float *src = color != NULL ? color : opaque_black;
+    id<MTLCommandQueue> queue = backend.queue;
+    id<MTLCommandBuffer> command = queue != nil ? [queue commandBuffer] : nil;
+    if (command == nil) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = backend.colorTarget;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(src[0], src[1], src[2], src[3]);
+    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+    if (encoder == nil) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    [encoder endEncoding];
+    backend.contentsKnown = NO;
+    backend.pendingClear = command;
+    [command commit];
+    return EU4_GFX_CLEAR_OK;
+}
+
+eu4_gfx_clear_status eu4_gfx_complete_offscreen(void *master, int *command_status) {
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    if (backend == nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    return drain_pending_clear(backend, command_status);
+}
+
+eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t capacity,
+                                            size_t *out_len) {
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    if (backend == nil || backend.colorTarget == nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (!backend.contentsKnown || backend.pendingClear != nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    uint64_t need = (uint64_t)backend.colorWidth * (uint64_t)backend.colorHeight * 4u;
+    if (need == 0 || need > SIZE_MAX || dest == NULL || capacity < (size_t)need) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    id<MTLTexture> target = backend.colorTarget;
+    [target getBytes:dest
+         bytesPerRow:(NSUInteger)backend.colorWidth * 4u
+          fromRegion:MTLRegionMake2D(0, 0, backend.colorWidth, backend.colorHeight)
+         mipmapLevel:0];
+    if (out_len != NULL) {
+        *out_len = (size_t)need;
+    }
+    return EU4_GFX_CLEAR_OK;
+}
+
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
-    (void)handle;
-    (void)flags;
-    (void)color;
+    eu4_gfx_clear_status status = eu4_gfx_clear_checked(handle, flags, color);
+    if (status != EU4_GFX_CLEAR_OK) {
+        eu4_gfx_stop("_GfxClear", status == EU4_GFX_CLEAR_UNSUPPORTED ? "unsupported" : "failed",
+                     __builtin_return_address(0));
+    }
 }
 
 int eu4_gfx_settings(int display, int windowed, int count, void *settings) {

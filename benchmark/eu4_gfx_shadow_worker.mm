@@ -267,8 +267,8 @@ static NSDictionary *state_now(void) {
     return state;
 }
 
-static void fail_executed(long long seq, NSString *op) __attribute__((noreturn));
-static void fail_executed(long long seq, NSString *op) {
+static void fail_terminal(long long seq, NSString *op, NSString *error) __attribute__((noreturn));
+static void fail_terminal(long long seq, NSString *op, NSString *error) {
     g_expect = seq + 1;
     reply(@{
         @"schema": @"metal-shadow/v0",
@@ -276,10 +276,15 @@ static void fail_executed(long long seq, NSString *op) {
         @"seq": @(seq),
         @"next": @(g_expect),
         @"op": op,
-        @"error": @"observation_failed",
+        @"error": error,
         @"executed": @YES,
     });
     exit(1);
+}
+
+static void fail_executed(long long seq, NSString *op) __attribute__((noreturn));
+static void fail_executed(long long seq, NSString *op) {
+    fail_terminal(seq, op, @"observation_failed");
 }
 
 static void succeed(long long seq, NSString *op, NSDictionary *result) {
@@ -941,6 +946,141 @@ static void op_observe(NSDictionary *args, long long seq) {
     succeed(seq, @"observe", result);
 }
 
+enum { kMaxOffscreen = 64 };
+
+static BOOL json_f32(id value, float *out) {
+    if (![value isKindOfClass:[NSNumber class]]) {
+        return NO;
+    }
+    if (CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID()) {
+        return NO;
+    }
+    double got = [value doubleValue];
+    float narrowed = (float)got;
+    if (!(narrowed >= 0.f) || narrowed > 1.f) {
+        return NO;
+    }
+    *out = narrowed;
+    return YES;
+}
+
+static void op_configure_offscreen(NSDictionary *args, long long seq) {
+    NSString *why = require_up();
+    if (why != nil) {
+        fail_sem(seq, @"configure_offscreen", why);
+        return;
+    }
+    uint32_t width = 0, height = 0;
+    if (!json_u32(args[@"width"], &width) || !json_u32(args[@"height"], &height)) {
+        fail_sem(seq, @"configure_offscreen", @"bad_dims");
+        return;
+    }
+    if (width == 0 || height == 0 || width > kMaxOffscreen || height > kMaxOffscreen) {
+        fail_sem(seq, @"configure_offscreen", @"bad_dims");
+        return;
+    }
+    eu4_gfx_clear_status status = eu4_gfx_configure_offscreen(g_master, width, height);
+    if (status == EU4_GFX_CLEAR_UNSUPPORTED) {
+        fail_sem(seq, @"configure_offscreen", @"unsupported");
+        return;
+    }
+    if (status != EU4_GFX_CLEAR_OK) {
+        fail_sem(seq, @"configure_offscreen", @"failed");
+        return;
+    }
+    succeed(seq, @"configure_offscreen", @{
+        @"width": @(width),
+        @"height": @(height),
+        @"contents_known": @NO,
+    });
+}
+
+static void op_clear(NSDictionary *args, long long seq) {
+    NSString *why = require_up();
+    if (why != nil) {
+        fail_sem(seq, @"clear", why);
+        return;
+    }
+    uint32_t flags = 0;
+    if (!json_u32(args[@"flags"], &flags)) {
+        fail_sem(seq, @"clear", @"bad_flags");
+        return;
+    }
+    const float *color_ptr = NULL;
+    float color[4];
+    id color_arg = args[@"color"];
+    if (color_arg != nil && color_arg != [NSNull null]) {
+        if (![color_arg isKindOfClass:[NSArray class]] || [color_arg count] != 4) {
+            fail_sem(seq, @"clear", @"bad_color");
+            return;
+        }
+        for (NSUInteger i = 0; i < 4; i++) {
+            if (!json_f32(color_arg[i], &color[i])) {
+                fail_sem(seq, @"clear", @"bad_color");
+                return;
+            }
+        }
+        color_ptr = color;
+    }
+    eu4_gfx_clear_status submitted = eu4_gfx_clear_checked(&g_master, flags, color_ptr);
+    if (submitted == EU4_GFX_CLEAR_UNSUPPORTED) {
+        fail_sem(seq, @"clear", @"unsupported");
+        return;
+    }
+    if (submitted != EU4_GFX_CLEAR_OK) {
+        fail_sem(seq, @"clear", @"failed");
+        return;
+    }
+    int command_status = 0;
+    eu4_gfx_clear_status completed = eu4_gfx_complete_offscreen(g_master, &command_status);
+    if (completed != EU4_GFX_CLEAR_OK) {
+        fail_terminal(seq, @"clear", @"gpu_failed");
+    }
+    succeed(seq, @"clear", @{
+        @"submitted": @YES,
+        @"command_buffer_status": @"completed",
+        @"contents_known": @YES,
+    });
+}
+
+static void op_read_offscreen(NSDictionary *args, long long seq) {
+    (void)args;
+    NSString *why = require_up();
+    if (why != nil) {
+        fail_sem(seq, @"read_offscreen", why);
+        return;
+    }
+    if (!eu4_gfx_offscreen_contents_known(g_master)) {
+        fail_sem(seq, @"read_offscreen", @"contents_unknown");
+        return;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.colorTarget == nil) {
+        fail_sem(seq, @"read_offscreen", @"unsupported");
+        return;
+    }
+    uint32_t width = backend.colorWidth;
+    uint32_t height = backend.colorHeight;
+    uint64_t need = (uint64_t)width * (uint64_t)height * 4u;
+    if (need == 0 || need > SIZE_MAX) {
+        fail_sem(seq, @"read_offscreen", @"failed");
+        return;
+    }
+    NSMutableData *data = [NSMutableData dataWithLength:(NSUInteger)need];
+    size_t got = 0;
+    eu4_gfx_clear_status status =
+        eu4_gfx_read_offscreen(g_master, data.mutableBytes, (size_t)need, &got);
+    if (status != EU4_GFX_CLEAR_OK || got != (size_t)need) {
+        fail_sem(seq, @"read_offscreen", @"failed");
+        return;
+    }
+    succeed(seq, @"read_offscreen", @{
+        @"width": @(width),
+        @"height": @(height),
+        @"bytes_base64": [data base64EncodedStringWithOptions:0],
+    });
+}
+
 static void op_shutdown(NSDictionary *args, long long seq) {
     (void)args;
     if (g_down) {
@@ -985,6 +1125,12 @@ static void dispatch_op(NSString *op, NSDictionary *args, long long seq) {
         op_on_reset(args, seq);
     } else if ([op isEqual:@"set_viewport"]) {
         op_viewport(args, seq);
+    } else if ([op isEqual:@"configure_offscreen"]) {
+        op_configure_offscreen(args, seq);
+    } else if ([op isEqual:@"clear"]) {
+        op_clear(args, seq);
+    } else if ([op isEqual:@"read_offscreen"]) {
+        op_read_offscreen(args, seq);
     } else if ([op isEqual:@"create_vertex_buffer"]) {
         op_create(args, seq);
     } else if ([op isEqual:@"update_vertex_buffer"]) {
