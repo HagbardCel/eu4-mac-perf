@@ -146,17 +146,32 @@ static void *g_master;
 static int g_releases;
 static uint64_t g_init_thread;
 
-/* Immutable snapshot published by Cocoa/main. Guarded separately from the
-   renderer; publication never reads the engine master. */
+/* Committed snapshot plus the in-progress transition published by Cocoa/main.
+   Guarded separately from the renderer; publication never reads the engine
+   master and the renderer never writes this state. */
 typedef struct {
     uint32_t width;
     uint32_t height;
     uint64_t epoch;
     int valid;
+    int transitioning;
+    uint32_t transition_width;
+    uint32_t transition_height;
 } eu4_physical_geometry;
 
 static eu4_physical_geometry g_physical_geometry;
 static pthread_mutex_t g_physical_geometry_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void eu4_gfx_publish_geometry_transition(uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) {
+        return;
+    }
+    pthread_mutex_lock(&g_physical_geometry_lock);
+    g_physical_geometry.transitioning = 1;
+    g_physical_geometry.transition_width = width;
+    g_physical_geometry.transition_height = height;
+    pthread_mutex_unlock(&g_physical_geometry_lock);
+}
 
 void eu4_gfx_publish_physical_geometry(uint32_t width, uint32_t height) {
     if (width == 0 || height == 0) {
@@ -167,10 +182,29 @@ void eu4_gfx_publish_physical_geometry(uint32_t width, uint32_t height) {
     g_physical_geometry.height = height;
     g_physical_geometry.epoch += 1;
     g_physical_geometry.valid = 1;
+    g_physical_geometry.transitioning = 0;
     pthread_mutex_unlock(&g_physical_geometry_lock);
 }
 
-static int read_physical_geometry(uint32_t *width, uint32_t *height, uint64_t *epoch) {
+int eu4_gfx_physical_geometry_snapshot(eu4_gfx_physical_geometry_state *out) {
+    if (out == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_physical_geometry_lock);
+    out->width = g_physical_geometry.width;
+    out->height = g_physical_geometry.height;
+    out->epoch = g_physical_geometry.epoch;
+    out->valid = g_physical_geometry.valid;
+    out->transition_in_progress = g_physical_geometry.transitioning;
+    out->transition_width = g_physical_geometry.transition_width;
+    out->transition_height = g_physical_geometry.transition_height;
+    int valid = g_physical_geometry.valid;
+    pthread_mutex_unlock(&g_physical_geometry_lock);
+    return valid;
+}
+
+static int read_physical_geometry(uint32_t *width, uint32_t *height, uint64_t *epoch,
+                                  int *transitioning) {
     int valid;
     pthread_mutex_lock(&g_physical_geometry_lock);
     valid = g_physical_geometry.valid;
@@ -182,6 +216,9 @@ static int read_physical_geometry(uint32_t *width, uint32_t *height, uint64_t *e
     }
     if (epoch != NULL) {
         *epoch = g_physical_geometry.epoch;
+    }
+    if (transitioning != NULL) {
+        *transitioning = g_physical_geometry.transitioning;
     }
     pthread_mutex_unlock(&g_physical_geometry_lock);
     return valid;
@@ -299,22 +336,7 @@ int eu4_gfx_phase(void) { return g_phase; }
 
 int eu4_gfx_backend_releases(void) { return g_releases; }
 
-typedef struct {
-    uint32_t logicalWidth;
-    uint32_t logicalHeight;
-    uint32_t physicalWidth;
-    uint32_t physicalHeight;
-    uint64_t generation;
-} eu4_seen_geometry;
-
-@interface EU4GfxBackend () {
-@public
-    /* Small intern table: returning to a previously seen effective tuple
-       recovers its generation (1x -> 2x -> 1x identity). */
-    eu4_seen_geometry _seenGeometry[8];
-    int _seenGeometryCount;
-    uint64_t _nextGeneration;
-}
+@interface EU4GfxBackend ()
 @end
 
 @implementation EU4GfxBackend
@@ -567,28 +589,8 @@ static eu4_gfx_clear_status allocate_game_backbuffer(__unsafe_unretained EU4GfxB
     return EU4_GFX_CLEAR_OK;
 }
 
-static uint64_t intern_generation(EU4GfxBackend *backend, uint32_t logical_width,
-                                  uint32_t logical_height, uint32_t physical_width,
-                                  uint32_t physical_height) {
-    for (int i = 0; i < backend->_seenGeometryCount; i++) {
-        eu4_seen_geometry *seen = &backend->_seenGeometry[i];
-        if (seen->logicalWidth == logical_width && seen->logicalHeight == logical_height &&
-            seen->physicalWidth == physical_width && seen->physicalHeight == physical_height) {
-            return seen->generation;
-        }
-    }
-    uint64_t generation = ++backend->_nextGeneration;
-    int slot = backend->_seenGeometryCount < 8 ? backend->_seenGeometryCount++
-                                               : (int)(generation % 8u);
-    eu4_seen_geometry *seen = &backend->_seenGeometry[slot];
-    seen->logicalWidth = logical_width;
-    seen->logicalHeight = logical_height;
-    seen->physicalWidth = physical_width;
-    seen->physicalHeight = physical_height;
-    seen->generation = generation;
-    return generation;
-}
-
+/* Content generations are strictly monotonic. A repeated tuple gets a new
+   generation after an intervening change; it never reclaims an old value. */
 static void commit_game_geometry(EU4GfxBackend *backend, uint32_t logical_width,
                                  uint32_t logical_height, uint32_t physical_width,
                                  uint32_t physical_height) {
@@ -596,12 +598,13 @@ static void commit_game_geometry(EU4GfxBackend *backend, uint32_t logical_width,
     backend.logicalHeight = logical_height;
     backend.physicalWidth = physical_width;
     backend.physicalHeight = physical_height;
-    backend.geometryGeneration = intern_generation(backend, logical_width, logical_height,
-                                                   physical_width, physical_height);
+    backend.geometryGeneration += 1;
 }
 
-/* Combines master logical +0xa0/+0xa4 with the published physical snapshot.
-   Returns 1 when the effective tuple changed. Never allocates or waits. */
+/* Combines master logical +0xa0/+0xa4 with the committed physical snapshot.
+   A transition still in progress is reported separately; its intended size is
+   not used for allocation or present. Returns 1 when the effective tuple
+   changed. Never allocates or waits. */
 static int reconcile_game_geometry(__unsafe_unretained EU4GfxBackend *backend, void *master) {
     if (backend == nil || master == NULL) {
         return 0;
@@ -613,7 +616,7 @@ static int reconcile_game_geometry(__unsafe_unretained EU4GfxBackend *backend, v
     uint32_t physical_height = backend.physicalHeight;
     uint32_t published_width = 0, published_height = 0;
     uint64_t epoch = 0;
-    if (read_physical_geometry(&published_width, &published_height, &epoch) &&
+    if (read_physical_geometry(&published_width, &published_height, &epoch, NULL) &&
         published_width != 0 && published_height != 0) {
         physical_width = published_width;
         physical_height = published_height;
@@ -626,6 +629,20 @@ static int reconcile_game_geometry(__unsafe_unretained EU4GfxBackend *backend, v
     backend.awaitingFreshClear = YES;
     backend.readyForPresent = NO;
     return 1;
+}
+
+/* A pending command belongs to an older content generation. The predicate is a
+   property of the command, not of the current call's reconcile result. */
+static int pending_is_obsolete(__unsafe_unretained EU4GfxBackend *backend) {
+    return backend.pendingGameCommand != nil &&
+           backend.pendingGameGeneration != backend.geometryGeneration;
+}
+
+/* Phase 1 has published an intended size but the layer has not committed it. */
+static int geometry_transition_in_progress(void) {
+    int transitioning = 0;
+    (void)read_physical_geometry(NULL, NULL, NULL, &transitioning);
+    return transitioning;
 }
 
 static int install_one(EU4GfxBackend *backend, void *master, int slot, void *header) {
@@ -801,7 +818,7 @@ static int fill_master(void *master, void *handle) {
         uint32_t physical_height = (uint32_t)height;
         uint32_t published_width = 0, published_height = 0;
         uint64_t epoch = 0;
-        if (read_physical_geometry(&published_width, &published_height, &epoch) &&
+        if (read_physical_geometry(&published_width, &published_height, &epoch, NULL) &&
             published_width != 0 && published_height != 0) {
             physical_width = published_width;
             physical_height = published_height;
@@ -1318,6 +1335,32 @@ eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags, const f
     return EU4_GFX_CLEAR_OK;
 }
 
+static void write_default_viewport(void *master);
+
+static eu4_gfx_clear_status apply_deferred_default_target(
+    __unsafe_unretained EU4GfxBackend *backend, void *master) {
+    if (backend == nil || !backend.deferredDefaultTargetSelect) {
+        return EU4_GFX_CLEAR_OK;
+    }
+    if (geometry_transition_in_progress() || pending_is_obsolete(backend) ||
+        backend.pendingGameCommand != nil) {
+        /* No wait inside clear; leave the deferral for a drain-capable path. */
+        return EU4_GFX_CLEAR_GEOMETRY_STALE;
+    }
+    if (backend.gameColorTarget == nil || backend.gameWidth != backend.physicalWidth ||
+        backend.gameHeight != backend.physicalHeight) {
+        eu4_gfx_clear_status allocated =
+            allocate_game_backbuffer(backend, backend.physicalWidth, backend.physicalHeight);
+        if (allocated != EU4_GFX_CLEAR_OK) {
+            return allocated;
+        }
+    }
+    write_default_viewport(master);
+    store_ptr(master, 0x78, NULL);
+    backend.deferredDefaultTargetSelect = NO;
+    return EU4_GFX_CLEAR_OK;
+}
+
 static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, const float *color) {
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
@@ -1328,13 +1371,24 @@ static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, con
     if (load_ptr(master, 0x78) != NULL) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
-    int transitioned = reconcile_game_geometry(backend, master);
-    if (transitioned && backend.pendingGameCommand != nil) {
-        /* No wait, no submit, and no clear into the obsolete attachment. */
+    (void)reconcile_game_geometry(backend, master);
+    if (pending_is_obsolete(backend)) {
+        /* No wait, no submit, no clear into the obsolete attachment, and no
+           write to the pending command or its generation. */
+        return EU4_GFX_CLEAR_GEOMETRY_STALE;
+    }
+    if (geometry_transition_in_progress()) {
+        /* Phase 1: intended size published, committed generation unchanged.
+           Same-gen pending must not become a fatal UNSUPPORTED. */
         return EU4_GFX_CLEAR_GEOMETRY_STALE;
     }
     if (backend.pendingGameCommand != nil) {
+        /* Same generation: the P5.1 ordinary second-clear rejection. */
         return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    eu4_gfx_clear_status deferred = apply_deferred_default_target(backend, master);
+    if (deferred != EU4_GFX_CLEAR_OK) {
+        return deferred;
     }
     eu4_gfx_clear_status allocated =
         allocate_game_backbuffer(backend, backend.physicalWidth, backend.physicalHeight);
@@ -1467,18 +1521,26 @@ eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *targe
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     int transitioned = reconcile_game_geometry(backend, master);
-    if (transitioned && backend.pendingGameCommand != nil) {
+    if (geometry_transition_in_progress()) {
+        /* Phase 1: do not mutate master or allocate for uncommitted size.
+           Record that default-target selection must complete after commit. */
+        backend.deferredDefaultTargetSelect = YES;
+        return EU4_GFX_CLEAR_GEOMETRY_STALE;
+    }
+    if (pending_is_obsolete(backend)) {
         /* Waiting is allowed here, not inside clear. */
         eu4_gfx_clear_status drained = drain_pending_game(backend, NULL);
         if (drained != EU4_GFX_CLEAR_OK) {
             return drained;
         }
     } else if (backend.pendingGameCommand != nil) {
+        /* Same generation: the P5.1 unrelated-SetRT rejection. */
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     if (transitioned || backend.gameColorTarget == nil ||
         backend.gameWidth != backend.physicalWidth ||
-        backend.gameHeight != backend.physicalHeight) {
+        backend.gameHeight != backend.physicalHeight ||
+        backend.deferredDefaultTargetSelect) {
         /* Allocate before mutating the master. A failure keeps the old texture
            and every engine-visible field intact. */
         eu4_gfx_clear_status allocated =
@@ -1489,11 +1551,16 @@ eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *targe
     }
     write_default_viewport(master);
     store_ptr(master, 0x78, NULL);
+    backend.deferredDefaultTargetSelect = NO;
     return EU4_GFX_CLEAR_OK;
 }
 
 void eu4_gfx_set_render_target(void *handle, void *target) {
     eu4_gfx_clear_status status = eu4_gfx_set_render_target_checked(handle, target);
+    if (status == EU4_GFX_CLEAR_GEOMETRY_STALE) {
+        /* Phase-1 deferral: intentional skip, engine continues. */
+        return;
+    }
     if (status != EU4_GFX_CLEAR_OK) {
         eu4_gfx_stop("_GfxSetRenderTarget",
                      status == EU4_GFX_CLEAR_UNSUPPORTED ? "unsupported" : "failed",
@@ -1508,7 +1575,7 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     uint64_t observed_epoch = 0;
-    (void)read_physical_geometry(NULL, NULL, &observed_epoch);
+    (void)read_physical_geometry(NULL, NULL, &observed_epoch, NULL);
     if (backend.pendingGameCommand != nil) {
         eu4_gfx_clear_status drained = drain_pending_game(backend, NULL);
         if (drained != EU4_GFX_CLEAR_OK) {
@@ -1516,7 +1583,7 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
         }
     }
     (void)reconcile_game_geometry(backend, master);
-    if (backend.awaitingFreshClear ||
+    if (geometry_transition_in_progress() || backend.awaitingFreshClear ||
         (backend.gameContentsKnown &&
          backend.clearedGeneration != backend.geometryGeneration)) {
         /* Geometry changed since available contents: no drawable, no blit. */
@@ -1544,11 +1611,20 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
         }
         destination = drawable.texture;
     }
-    /* Recheck the published epoch after acquisition. A resize must not leave a
-       drawable of the previous generation blitted. */
+    /* Recheck the committed epoch, transition phase, and acquired drawable
+       after acquisition. A resize must not leave a drawable of the previous
+       generation blitted. */
+    uint32_t committed_width = 0, committed_height = 0;
     uint64_t rechecked_epoch = 0;
-    if (read_physical_geometry(NULL, NULL, &rechecked_epoch) &&
-        rechecked_epoch != observed_epoch) {
+    int rechecked_transition = 0;
+    int have_committed = read_physical_geometry(&committed_width, &committed_height,
+                                                &rechecked_epoch, &rechecked_transition);
+    if (rechecked_transition) {
+        /* Phase 1 arrived during acquisition; the layer is not committed. */
+        (void)reconcile_game_geometry(backend, master);
+        return EU4_GFX_CLEAR_GEOMETRY_STALE;
+    }
+    if (have_committed && rechecked_epoch != observed_epoch) {
         (void)reconcile_game_geometry(backend, master);
     }
     if (backend.awaitingFreshClear ||
@@ -1558,11 +1634,15 @@ eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
     }
     /* Frozen policy: the game backbuffer and the destination are both physical
        drawable pixels. The original Present only swaps, so present fails closed
-       before submit unless the destination exactly matches and uses the
-       backbuffer format. */
+       before submit unless the destination exactly matches the stable committed
+       geometry, the effective backbuffer, and the backbuffer format. */
     if (destination == nil || destination.width != backend.gameWidth ||
         destination.height != backend.gameHeight ||
         destination.pixelFormat != MTLPixelFormatBGRA8Unorm) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    if (have_committed &&
+        (destination.width != committed_width || destination.height != committed_height)) {
         return EU4_GFX_CLEAR_FAILED;
     }
 

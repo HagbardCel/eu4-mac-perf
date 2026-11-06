@@ -1,0 +1,19 @@
+{
+  "id": "eu4-p511-phase1",
+  "objective": "objective.md",
+  "runtime": "opencode",
+  "model": "opencode/big-pickle",
+  "opencode_version": "2.2.5",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/automation/eu4-p511-phase1/workspace",
+    "commit": "5b5545e9aee316f333430b37a5889b77b13a533d"
+  },
+  "accept": [
+    "python3",
+    "accept.py"
+  ],
+  "max_rounds": 12,
+  "max_seconds": 7200,
+  "accept_timeout_seconds": 1800
+}

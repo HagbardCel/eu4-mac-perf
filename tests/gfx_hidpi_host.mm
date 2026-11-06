@@ -1,6 +1,8 @@
 #import "../benchmark/eu4_gfx_init.h"
 #import "../benchmark/eu4_metal_events.h"
+#import "../benchmark/eu4_metal_geometry_view.h"
 
+#import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <stdio.h>
@@ -141,9 +143,27 @@ static void boot_layer(CAMetalLayer **out_layer, uint32_t logical_width, uint32_
     boot((__bridge void *)layer, logical_width, logical_height, physical_width, physical_height);
 }
 
-static void publish_physical(CAMetalLayer *layer, uint32_t width, uint32_t height) {
+static void publish_transition(uint32_t width, uint32_t height) {
+    eu4_gfx_publish_geometry_transition(width, height);
+}
+
+static void commit_physical(CAMetalLayer *layer, uint32_t width, uint32_t height) {
     layer.drawableSize = CGSizeMake(width, height);
     eu4_gfx_publish_physical_geometry(width, height);
+}
+
+static void publish_physical(CAMetalLayer *layer, uint32_t width, uint32_t height) {
+    publish_transition(width, height);
+    commit_physical(layer, width, height);
+}
+
+static void expect_snapshot(uint32_t width, uint32_t height, int transition_in_progress) {
+    eu4_gfx_physical_geometry_state state;
+    if (!eu4_gfx_physical_geometry_snapshot(&state) || !state.valid ||
+        state.width != width || state.height != height ||
+        state.transition_in_progress != transition_in_progress) {
+        fail("physical geometry snapshot mismatch");
+    }
 }
 
 static void clear_game(void *master, float r, float g, float b) {
@@ -152,6 +172,33 @@ static void clear_game(void *master, float r, float g, float b) {
     eu4_gfx_clear(master, 1, color);
     if (g_stopped) {
         fail("production clear stopped");
+    }
+}
+
+/* Production clear that must skip as stale and leave a pending command alone. */
+static void clear_stale(void *master, id pending, uint64_t pending_generation) {
+    float color[4] = {0.f, 0.f, 1.f, 1.f};
+    g_stopped = 0;
+    eu4_gfx_clear(master, 1, color);
+    if (g_stopped) {
+        fail("stale clear stopped");
+    }
+    EU4GfxBackend *backend = backend_of(master);
+    if (backend.pendingGameCommand != pending ||
+        backend.pendingGameGeneration != pending_generation) {
+        fail("stale clear modified the pending command");
+    }
+}
+
+static void clear_stale_idle(void *master) {
+    float color[4] = {0.f, 0.f, 1.f, 1.f};
+    g_stopped = 0;
+    eu4_gfx_clear(master, 1, color);
+    if (g_stopped) {
+        fail("idle stale clear stopped");
+    }
+    if (backend_of(master).pendingGameCommand != nil) {
+        fail("idle stale clear submitted a command");
     }
 }
 
@@ -340,6 +387,9 @@ static void run_pending_resize_then_clear_skips(void) {
     if (backend.geometryGeneration == generation || !backend.awaitingFreshClear) {
         fail("resize did not advance generation");
     }
+    /* Still obsolete on a repeated clear: the predicate is a property of the
+       pending command, not of this call's transition result. */
+    clear_stale(master, pending, pending_generation);
     present_stale(master, 32, 32);
     if (backend.pendingGameCommand != nil) {
         fail("old pending command not drained");
@@ -460,6 +510,123 @@ static void run_set_render_target_alloc_failure(void) {
     (void)layer;
 }
 
+/* An obsolete pending clear makes SetRT drain and replace even when the current
+   call's reconcile saw no new transition. */
+static void run_setrt_drains_obsolete_pending(void) {
+    CAMetalLayer *layer = nil;
+    boot_layer(&layer, 16, 16, 16, 16);
+    void *master = g_master_handle;
+    EU4GfxBackend *backend = backend_of(master);
+    id<MTLDevice> device = backend.device;
+    select_default_target(master);
+    clear_game(master, 1.f, 0.f, 0.f);
+    id pending = backend.pendingGameCommand;
+    uint64_t pending_generation = backend.pendingGameGeneration;
+    id old_target = backend.gameColorTarget;
+    publish_physical(layer, 32, 32);
+    /* First clear reconciles A -> B and leaves the obsolete command pending. */
+    clear_stale(master, pending, pending_generation);
+    if (backend.pendingGameCommand == nil ||
+        backend.pendingGameGeneration == backend.geometryGeneration) {
+        fail("pending command was not obsolete");
+    }
+    g_stopped = 0;
+    eu4_gfx_set_render_target(master, NULL);
+    if (g_stopped) {
+        fail("SetRT refused an obsolete pending command");
+    }
+    if (backend.gameColorTarget == old_target || backend.pendingGameCommand != nil) {
+        fail("SetRT did not drain and replace the obsolete command");
+    }
+    expect_physical_backbuffer(backend, 32, 32);
+    expect_master_logical(master, 16, 16);
+    clear_game(master, 0.f, 1.f, 0.f);
+    present_injected(master, device, 32, 32, 0x00, 0xff, 0x00, 0xff);
+    eu4_gfx_shutdown(master);
+    (void)layer;
+}
+
+/* Two-phase transition: phase 1 makes present stale without changing the
+   effective generation; phase 2 commits and a new clear is required. */
+static void two_phase_case(int layer_first) {
+    CAMetalLayer *layer = nil;
+    boot_layer(&layer, 16, 16, 16, 16);
+    void *master = g_master_handle;
+    EU4GfxBackend *backend = backend_of(master);
+    id<MTLDevice> device = backend.device;
+    select_default_target(master);
+    clear_game(master, 1.f, 0.f, 0.f);
+    complete_game(master);
+    uint64_t generation = backend.geometryGeneration;
+
+    if (layer_first) {
+        layer.drawableSize = CGSizeMake(32, 32);
+        publish_transition(32, 32);
+    } else {
+        publish_transition(32, 32);
+    }
+    expect_snapshot(16, 16, 1);
+    if (backend.physicalWidth != 16 || backend.physicalHeight != 16) {
+        fail("phase 1 committed the intended size");
+    }
+    present_stale(master, 32, 32);
+    if (backend.geometryGeneration != generation ||
+        backend.physicalWidth != 16 || backend.physicalHeight != 16) {
+        fail("phase 1 changed content geometry");
+    }
+    clear_stale_idle(master);
+
+    if (!layer_first) {
+        layer.drawableSize = CGSizeMake(32, 32);
+    }
+    commit_physical(layer, 32, 32);
+    expect_snapshot(32, 32, 0);
+    if (backend.geometryGeneration != generation) {
+        fail("phase 2 advanced generation before reconcile");
+    }
+    present_stale(master, 32, 32);
+    if (backend.geometryGeneration <= generation || !backend.awaitingFreshClear) {
+        fail("committed transition did not advance generation");
+    }
+    clear_game(master, 0.f, 1.f, 0.f);
+    present_injected(master, device, 32, 32, 0x00, 0xff, 0x00, 0xff);
+    eu4_gfx_shutdown(master);
+    (void)layer;
+}
+
+static void run_two_phase_interleavings(void) {
+    two_phase_case(0);
+    two_phase_case(1);
+}
+
+/* An identical committed reobserve advances the publication epoch but not the
+   content generation, and present keeps working. */
+static void run_identical_reobserve_unchanged(void) {
+    CAMetalLayer *layer = nil;
+    boot_layer(&layer, 16, 16, 16, 16);
+    void *master = g_master_handle;
+    EU4GfxBackend *backend = backend_of(master);
+    id<MTLDevice> device = backend.device;
+    select_default_target(master);
+    clear_game(master, 1.f, 0.f, 0.f);
+    complete_game(master);
+    uint64_t generation = backend.geometryGeneration;
+    eu4_gfx_physical_geometry_state before;
+    eu4_gfx_physical_geometry_snapshot(&before);
+    commit_physical(layer, 16, 16);
+    eu4_gfx_physical_geometry_state after;
+    eu4_gfx_physical_geometry_snapshot(&after);
+    if (after.epoch <= before.epoch) {
+        fail("identical commit did not advance the publication epoch");
+    }
+    present_injected(master, device, 16, 16, 0x00, 0x00, 0xff, 0xff);
+    if (backend.geometryGeneration != generation) {
+        fail("identical reobserve changed the content generation");
+    }
+    eu4_gfx_shutdown(master);
+    (void)layer;
+}
+
 /* A logical-only change advances the generation and refreshes the viewport
    without touching the physical backbuffer. */
 static void run_logical_only_generation_bump(void) {
@@ -490,8 +657,8 @@ static void run_logical_only_generation_bump(void) {
     (void)layer;
 }
 
-/* Returning to a seen tuple recovers its generation: 1x -> 2x -> 1x. */
-static void run_generation_identity(void) {
+/* Content generations are strictly monotonic: 1x -> 2x -> 1x never reclaims. */
+static void run_monotonic_generation(void) {
     CAMetalLayer *layer = nil;
     boot_layer(&layer, 16, 16, 16, 16);
     void *master = g_master_handle;
@@ -499,15 +666,163 @@ static void run_generation_identity(void) {
     publish_physical(layer, 32, 32);
     present_stale(master, 32, 32);
     uint64_t second = eu4_gfx_geometry_generation(master);
-    if (first == 0 || second == first) {
-        fail("2x generation did not change");
+    if (first == 0 || second <= first) {
+        fail("2x generation did not strictly advance");
     }
     publish_physical(layer, 16, 16);
     present_stale(master, 16, 16);
     uint64_t third = eu4_gfx_geometry_generation(master);
-    if (third != first) {
-        fail("1x -> 2x -> 1x generation identity");
+    if (third <= second || third == first) {
+        fail("1x -> 2x -> 1x generation identity was reclaimed");
     }
+    eu4_gfx_shutdown(master);
+    (void)layer;
+}
+
+static void *load_ptr_host(void *master, int offset) {
+    void *value = NULL;
+    memcpy(&value, (uint8_t *)master + offset, sizeof value);
+    return value;
+}
+
+/* Pending clear at A + Cocoa phase 1 for B: production clear skips as stale
+   without treating same-gen pending as fatal. */
+static void run_phase1_pending_clear_stale(void) {
+    CAMetalLayer *layer = nil;
+    boot_layer(&layer, 16, 16, 16, 16);
+    void *master = g_master_handle;
+    EU4GfxBackend *backend = backend_of(master);
+    select_default_target(master);
+    clear_game(master, 1.f, 0.f, 0.f);
+    id pending = backend.pendingGameCommand;
+    uint64_t pending_generation = backend.pendingGameGeneration;
+    if (pending == nil) {
+        fail("expected pending clear before phase 1");
+    }
+    publish_transition(32, 32);
+    expect_snapshot(16, 16, 1);
+    clear_stale(master, pending, pending_generation);
+    eu4_gfx_shutdown(master);
+    (void)layer;
+}
+
+/* Phase-1 SetRT: checked returns GEOMETRY_STALE, sets deferred flag, no master
+   mutation; production returns without stopping. */
+static void run_phase1_setrt_defers(void) {
+    CAMetalLayer *layer = nil;
+    boot_layer(&layer, 16, 16, 16, 16);
+    void *master = g_master_handle;
+    EU4GfxBackend *backend = backend_of(master);
+    select_default_target(master);
+    clear_game(master, 1.f, 0.f, 0.f);
+    id pending = backend.pendingGameCommand;
+    uint64_t pending_generation = backend.pendingGameGeneration;
+    uint32_t vp_w = 0, vp_h = 0;
+    memcpy(&vp_w, (uint8_t *)master + 0xb0, sizeof vp_w);
+    memcpy(&vp_h, (uint8_t *)master + 0xac, sizeof vp_h);
+    publish_transition(32, 32);
+    if (eu4_gfx_set_render_target_checked(master, NULL) != EU4_GFX_CLEAR_GEOMETRY_STALE) {
+        fail("phase-1 SetRT checked was not GEOMETRY_STALE");
+    }
+    if (!backend.deferredDefaultTargetSelect) {
+        fail("phase-1 SetRT did not record deferredDefaultTargetSelect");
+    }
+    uint32_t vp_w2 = 0, vp_h2 = 0;
+    memcpy(&vp_w2, (uint8_t *)master + 0xb0, sizeof vp_w2);
+    memcpy(&vp_h2, (uint8_t *)master + 0xac, sizeof vp_h2);
+    if (vp_w2 != vp_w || vp_h2 != vp_h || load_ptr_host(master, 0x78) != NULL) {
+        fail("phase-1 SetRT mutated master");
+    }
+    if (backend.pendingGameCommand != pending ||
+        backend.pendingGameGeneration != pending_generation) {
+        fail("phase-1 SetRT touched pending");
+    }
+    g_stopped = 0;
+    eu4_gfx_set_render_target(master, NULL);
+    if (g_stopped) {
+        fail("production SetRT stopped during phase 1");
+    }
+    eu4_gfx_shutdown(master);
+    (void)layer;
+}
+
+/* Logical resize during phase 1 with skipped SetRT: after commit, next clear
+   without another SetRT must succeed with the new viewport. */
+static void run_deferred_setrt_logical_resize(void) {
+    CAMetalLayer *layer = nil;
+    boot_layer(&layer, 16, 16, 16, 16);
+    void *master = g_master_handle;
+    EU4GfxBackend *backend = backend_of(master);
+    id<MTLDevice> device = backend.device;
+    select_default_target(master);
+    clear_game(master, 1.f, 0.f, 0.f);
+    complete_game(master);
+
+    publish_transition(32, 32);
+    int32_t logical_w = 24, logical_h = 20;
+    memcpy((uint8_t *)master + 0xa0, &logical_w, sizeof logical_w);
+    memcpy((uint8_t *)master + 0xa4, &logical_h, sizeof logical_h);
+    g_logical_width = logical_w;
+    g_logical_height = logical_h;
+    if (eu4_gfx_set_render_target_checked(master, NULL) != EU4_GFX_CLEAR_GEOMETRY_STALE ||
+        !backend.deferredDefaultTargetSelect) {
+        fail("deferred SetRT was not recorded");
+    }
+    uint32_t old_vp_w = 0, old_vp_h = 0;
+    memcpy(&old_vp_w, (uint8_t *)master + 0xb0, sizeof old_vp_w);
+    memcpy(&old_vp_h, (uint8_t *)master + 0xac, sizeof old_vp_h);
+    if (old_vp_w != 16 || old_vp_h != 16) {
+        fail("unexpected pre-defer viewport");
+    }
+
+    commit_physical(layer, 32, 32);
+    clear_game(master, 0.f, 1.f, 0.f);
+    uint32_t vp_w = 0, vp_h = 0;
+    memcpy(&vp_w, (uint8_t *)master + 0xb0, sizeof vp_w);
+    memcpy(&vp_h, (uint8_t *)master + 0xac, sizeof vp_h);
+    if (vp_w != 24 || vp_h != 20 || backend.deferredDefaultTargetSelect) {
+        fail("deferred SetRT was not applied before clear");
+    }
+    present_injected(master, device, 32, 32, 0x00, 0xff, 0x00, 0xff);
+    eu4_gfx_shutdown(master);
+    (void)layer;
+}
+
+/* A -> B -> A with the original A command still pending through both
+   transitions; drain only after both reconciles. */
+static void run_aba_pending_clear(void) {
+    CAMetalLayer *layer = nil;
+    boot_layer(&layer, 16, 16, 16, 16);
+    void *master = g_master_handle;
+    EU4GfxBackend *backend = backend_of(master);
+    id<MTLDevice> device = backend.device;
+    select_default_target(master);
+    clear_game(master, 1.f, 0.f, 0.f);
+    id pending = backend.pendingGameCommand;
+    uint64_t pending_generation = backend.pendingGameGeneration;
+    uint64_t generation_a = backend.geometryGeneration;
+
+    publish_physical(layer, 32, 32);
+    clear_stale(master, pending, pending_generation);
+    uint64_t generation_b = backend.geometryGeneration;
+    if (generation_b <= generation_a || backend.pendingGameCommand != pending) {
+        fail("A -> B did not keep pending across reconcile");
+    }
+    publish_physical(layer, 16, 16);
+    clear_stale(master, pending, pending_generation);
+    uint64_t generation_a2 = backend.geometryGeneration;
+    if (generation_a2 <= generation_b || generation_a2 == generation_a) {
+        fail("B -> A reclaimed an old generation");
+    }
+    if (backend.pendingGameCommand != pending) {
+        fail("pending was drained before both transitions reconciled");
+    }
+    complete_game(master);
+    if (backend.readyForPresent || backend.clearedGeneration == backend.geometryGeneration) {
+        fail("old-generation contents presented as current");
+    }
+    clear_game(master, 0.f, 1.f, 0.f);
+    present_injected(master, device, 16, 16, 0x00, 0xff, 0x00, 0xff);
     eu4_gfx_shutdown(master);
     (void)layer;
 }
@@ -535,58 +850,121 @@ static void run_missing_drawable_is_failure(void) {
     (void)layer;
 }
 
-static int real_drawable_unavailable(void) {
-    CAMetalLayer *layer = [CAMetalLayer layer];
-    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-    if (device == nil) {
-        return 1;
-    }
-    layer.device = device;
-    layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
-    layer.framebufferOnly = NO;
-    layer.drawableSize = CGSizeMake(16, 16);
-    id<CAMetalDrawable> drawable = [layer nextDrawable];
-    return drawable == nil ? 1 : 0;
-}
-
-/* Opt-in: acquire real CAMetalLayer drawables across a scale change. */
-static void run_real_drawable(void) {
-    CAMetalLayer *layer = nil;
-    boot_layer(&layer, 16, 16, 16, 16);
-    void *master = g_master_handle;
-    EU4GfxBackend *backend = backend_of(master);
-    select_default_target(master);
-    clear_game(master, 1.f, 0.f, 0.f);
-
-    uint8_t *pixels = (uint8_t *)malloc(32 * 32 * 4);
+/* Production present to a real [CAMetalLayer nextDrawable] texture. Pixels are
+   read back through a GPU blit to a shared staging texture. */
+static void present_real(void *master, uint32_t width, uint32_t height, uint8_t b, uint8_t g,
+                         uint8_t r, uint8_t a) {
+    size_t len = (size_t)width * height * 4u;
+    uint8_t *pixels = (uint8_t *)calloc(len, 1);
     if (pixels == NULL) {
-        fail("real readback");
+        fail("real drawable readback");
     }
-    memset(pixels, 0x5a, 16 * 16 * 4);
+    memset(pixels, 0x5a, len);
     eu4_gfx_test_set_present_drawable(NULL);
-    eu4_gfx_test_set_present_readback(pixels, 16 * 16 * 4);
+    eu4_gfx_test_set_present_readback(pixels, len);
     g_stopped = 0;
     if (eu4_gfx_present(master) != 1 || g_stopped) {
-        fail("real drawable present before update");
+        fail("real drawable present failed");
     }
-    expect_uniform_bgra(pixels, 16 * 16 * 4, 0x00, 0x00, 0xff, 0xff);
-    eu4_gfx_test_set_present_readback(NULL, 0);
-
-    publish_physical(layer, 32, 32);
-    present_stale(master, 32, 32);
-    clear_game(master, 0.f, 1.f, 0.f);
-    memset(pixels, 0x5a, 32 * 32 * 4);
-    eu4_gfx_test_set_present_readback(pixels, 32 * 32 * 4);
-    g_stopped = 0;
-    if (eu4_gfx_present(master) != 1 || g_stopped) {
-        fail("real drawable present after update");
-    }
-    expect_uniform_bgra(pixels, 32 * 32 * 4, 0x00, 0xff, 0x00, 0xff);
+    expect_uniform_bgra(pixels, len, b, g, r, a);
     eu4_gfx_test_set_present_readback(NULL, 0);
     free(pixels);
-    eu4_gfx_shutdown(master);
-    (void)backend;
-    (void)layer;
+}
+
+/* Window-backed production path: EU4MetalChildView in a real NSWindow, bounds
+   changed on the main thread, real drawables presented before and after. */
+static int run_appkit_window(void) {
+    @autoreleasepool {
+        NSApplication *app = [NSApplication sharedApplication];
+        if (app == nil) {
+            fprintf(stderr, "unavailable: NSApplication unavailable\n");
+            return 77;
+        }
+        [app setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 16, 16)
+                                                       styleMask:NSWindowStyleMaskBorderless
+                                                         backing:NSBackingStoreBuffered
+                                                           defer:NO];
+        NSView *content = window != nil ? window.contentView : nil;
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (window == nil || content == nil || device == nil) {
+            fprintf(stderr, "unavailable: NSWindow or Metal device unavailable\n");
+            return 77;
+        }
+        [window setReleasedWhenClosed:NO];
+        EU4MetalChildView *child = [[EU4MetalChildView alloc] initWithFrame:content.bounds];
+        CAMetalLayer *layer = [CAMetalLayer layer];
+        layer.device = device;
+        layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        layer.framebufferOnly = NO;
+        child.layer = layer;
+        child.wantsLayer = YES;
+        child.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        child.metalLayer = layer;
+        [content addSubview:child];
+        [window makeKeyAndOrderFront:nil];
+        [content layoutSubtreeIfNeeded];
+        [window displayIfNeeded];
+        /* Do not call setFrameSize/syncDrawableGeometry on the child: production
+           autoresizing + layout must publish geometry. */
+        if (child.layer != layer) {
+            fail("production view did not attach the CAMetalLayer");
+        }
+
+        NSRect first_backing = [child convertRectToBacking:child.bounds];
+        uint32_t first_width = (uint32_t)first_backing.size.width;
+        uint32_t first_height = (uint32_t)first_backing.size.height;
+        if (first_width == 0 || first_height == 0) {
+            fprintf(stderr, "unavailable: empty backing bounds\n");
+            [window close];
+            return 77;
+        }
+        if (child.frame.size.width != content.bounds.size.width ||
+            child.frame.size.height != content.bounds.size.height ||
+            layer.drawableSize.width != (CGFloat)first_width ||
+            layer.drawableSize.height != (CGFloat)first_height) {
+            fail("production view frame/drawableSize mismatch");
+        }
+        expect_snapshot(first_width, first_height, 0);
+        id<CAMetalDrawable> probe = [layer nextDrawable];
+        if (probe == nil) {
+            fprintf(stderr, "unavailable: window-backed CAMetalDrawable returned nil\n");
+            [window close];
+            return 77;
+        }
+        probe = nil;
+
+        boot((__bridge void *)layer, (uint32_t)child.bounds.size.width,
+             (uint32_t)child.bounds.size.height, first_width, first_height);
+        void *master = g_master_handle;
+        select_default_target(master);
+        clear_game(master, 1.f, 0.f, 0.f);
+        present_real(master, first_width, first_height, 0x00, 0x00, 0xff, 0xff);
+
+        [window setContentSize:NSMakeSize(32, 32)];
+        [content layoutSubtreeIfNeeded];
+        [window displayIfNeeded];
+        NSRect second_backing = [child convertRectToBacking:child.bounds];
+        uint32_t second_width = (uint32_t)second_backing.size.width;
+        uint32_t second_height = (uint32_t)second_backing.size.height;
+        if (second_width == 0 || second_height == 0 ||
+            (second_width == first_width && second_height == first_height)) {
+            fail("window resize did not change backing geometry");
+        }
+        if ((int)child.frame.size.width != (int)content.bounds.size.width ||
+            (int)child.frame.size.height != (int)content.bounds.size.height ||
+            layer.drawableSize.width != (CGFloat)second_width ||
+            layer.drawableSize.height != (CGFloat)second_height) {
+            fail("production view did not autoresize with the parent");
+        }
+        expect_snapshot(second_width, second_height, 0);
+        present_stale(master, second_width, second_height);
+        clear_game(master, 0.f, 1.f, 0.f);
+        present_real(master, second_width, second_height, 0x00, 0xff, 0x00, 0xff);
+        eu4_gfx_shutdown(master);
+        [window close];
+        return 0;
+    }
 }
 
 /* Separate process mode: an ordinary pending second clear is fatal (exit 2),
@@ -605,13 +983,8 @@ static int run_pending_double_clear_fatal(void) {
 }
 
 int main(int argc, char **argv) {
-    if (argc > 1 && strcmp(argv[1], "real") == 0) {
-        if (real_drawable_unavailable()) {
-            fprintf(stderr, "unavailable: CAMetalLayer.nextDrawable returned nil\n");
-            return 77;
-        }
-        run_real_drawable();
-        return 0;
+    if (argc > 1 && strcmp(argv[1], "appkit") == 0) {
+        return run_appkit_window();
     }
     if (argc > 1 && strcmp(argv[1], "pending-double-clear") == 0) {
         return run_pending_double_clear_fatal();
@@ -625,8 +998,15 @@ int main(int argc, char **argv) {
     run_repeated_present_stays_stale();
     run_set_render_target_drains_pending_resize();
     run_set_render_target_alloc_failure();
+    run_setrt_drains_obsolete_pending();
+    run_two_phase_interleavings();
+    run_phase1_pending_clear_stale();
+    run_phase1_setrt_defers();
+    run_deferred_setrt_logical_resize();
+    run_identical_reobserve_unchanged();
     run_logical_only_generation_bump();
-    run_generation_identity();
+    run_monotonic_generation();
+    run_aba_pending_clear();
     run_missing_drawable_is_failure();
     return 0;
 }
