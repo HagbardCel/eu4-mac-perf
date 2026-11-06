@@ -43,6 +43,8 @@
 @property (nonatomic) uint64_t pendingGameGeneration;
 @property (nonatomic) uint64_t clearedGeneration;
 @property (nonatomic) BOOL awaitingFreshClear;
+/* SetRT(null) skipped during Cocoa phase 1; apply after commit when safe. */
+@property (nonatomic) BOOL deferredDefaultTargetSelect;
 @property (nonatomic) BOOL gameContentsKnown;
 @property (nonatomic) BOOL readyForPresent;
 @property (nonatomic, strong) id pendingGameCommand;

@@ -113,12 +113,18 @@ of the current call. An ordinary second clear (same generation) stays `UNSUPPORT
 ## Game clear
 
 1. Reconcile.
-2. Obsolete pending command, or a published transition in progress -> `GEOMETRY_STALE` without
-   waiting, submitting, or clearing the obsolete attachment. Pending state is not modified.
-3. Same-generation pending without a transition -> `UNSUPPORTED` (P5.1 fatal policy).
-4. Allocate/reuse the backbuffer at the current physical size.
-5. Existing logical viewport, color-mask, flags, scissor, and color gates apply.
-6. Encode, commit, set `pendingGameGeneration = geometryGeneration`.
+2. Obsolete pending (`pending_is_obsolete`) -> `GEOMETRY_STALE` without waiting, submitting,
+   or modifying the pending command.
+3. **`geometry_transition_in_progress` (Cocoa phase 1)** -> `GEOMETRY_STALE` even when a
+   same-generation command is still pending. Pending state is not modified.
+4. Same-generation pending without a transition -> `UNSUPPORTED` (P5.1 fatal policy).
+5. If `deferredDefaultTargetSelect` is set and it is safe (committed geometry, no pending),
+   apply the deferred SetRT(null) selection (viewport from `+0xa0/+0xa4`, null at `+0x78`,
+   allocate physical BB as needed) without waiting on the GPU. If unsafe, return
+   `GEOMETRY_STALE` and leave the deferral for a drain-capable path.
+6. Allocate/reuse the backbuffer at the current physical size.
+7. Existing logical viewport, color-mask, flags, scissor, and color gates apply.
+8. Encode, commit, set `pendingGameGeneration = geometryGeneration`.
 
 Waiting is prohibited inside clear. Allocation and encoding happen only after the stale and
 pending rejections.
@@ -145,14 +151,20 @@ completes at the current generation.
 ## `_GfxSetRenderTarget(null)`
 
 - Non-null stays `UNSUPPORTED` and does not mutate the master.
+- **Phase 1 (`geometry_transition_in_progress`)**: return `GEOMETRY_STALE` without drain,
+  allocate, viewport write, or `+0x78` mutation. Set `deferredDefaultTargetSelect`. Production
+  wrapper returns normally (no `eu4_gfx_stop`), matching clear/present.
 - Obsolete pending (`pending_is_obsolete`): waiting is allowed; drain it, then allocate the
   replacement before any master write.
-- Same-generation pending: keeps the P5.1 `UNSUPPORTED` rejection, even without a transition in
-  the current call.
+- Same-generation pending outside phase 1: keeps the P5.1 `UNSUPPORTED` rejection.
 - Allocation failure returns `FAILED`; the engine-visible master image is unchanged and the
   old texture is retained. Production stops.
-- Only after a successful allocation: write the logical viewport from `+0xa0/+0xa4` and
-  store null at `+0x78`.
+- On success: write the logical viewport from `+0xa0/+0xa4`, store null at `+0x78`, clear
+  `deferredDefaultTargetSelect`.
+
+Deferred recovery is required for logical window resizes where EU4 may not re-call SetRT
+after Cocoa commits the new size. A skipped SetRT must not permanently leave a stale
+viewport that fails `viewport_covers_attachment` on the next clear.
 
 ## Cocoa lifecycle
 

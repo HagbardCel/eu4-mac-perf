@@ -1335,6 +1335,32 @@ eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags, const f
     return EU4_GFX_CLEAR_OK;
 }
 
+static void write_default_viewport(void *master);
+
+static eu4_gfx_clear_status apply_deferred_default_target(
+    __unsafe_unretained EU4GfxBackend *backend, void *master) {
+    if (backend == nil || !backend.deferredDefaultTargetSelect) {
+        return EU4_GFX_CLEAR_OK;
+    }
+    if (geometry_transition_in_progress() || pending_is_obsolete(backend) ||
+        backend.pendingGameCommand != nil) {
+        /* No wait inside clear; leave the deferral for a drain-capable path. */
+        return EU4_GFX_CLEAR_GEOMETRY_STALE;
+    }
+    if (backend.gameColorTarget == nil || backend.gameWidth != backend.physicalWidth ||
+        backend.gameHeight != backend.physicalHeight) {
+        eu4_gfx_clear_status allocated =
+            allocate_game_backbuffer(backend, backend.physicalWidth, backend.physicalHeight);
+        if (allocated != EU4_GFX_CLEAR_OK) {
+            return allocated;
+        }
+    }
+    write_default_viewport(master);
+    store_ptr(master, 0x78, NULL);
+    backend.deferredDefaultTargetSelect = NO;
+    return EU4_GFX_CLEAR_OK;
+}
+
 static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, const float *color) {
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
@@ -1351,13 +1377,18 @@ static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, con
            write to the pending command or its generation. */
         return EU4_GFX_CLEAR_GEOMETRY_STALE;
     }
+    if (geometry_transition_in_progress()) {
+        /* Phase 1: intended size published, committed generation unchanged.
+           Same-gen pending must not become a fatal UNSUPPORTED. */
+        return EU4_GFX_CLEAR_GEOMETRY_STALE;
+    }
     if (backend.pendingGameCommand != nil) {
         /* Same generation: the P5.1 ordinary second-clear rejection. */
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
-    if (geometry_transition_in_progress()) {
-        /* Cocoa has announced the intended size but has not committed it. */
-        return EU4_GFX_CLEAR_GEOMETRY_STALE;
+    eu4_gfx_clear_status deferred = apply_deferred_default_target(backend, master);
+    if (deferred != EU4_GFX_CLEAR_OK) {
+        return deferred;
     }
     eu4_gfx_clear_status allocated =
         allocate_game_backbuffer(backend, backend.physicalWidth, backend.physicalHeight);
@@ -1490,6 +1521,12 @@ eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *targe
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     int transitioned = reconcile_game_geometry(backend, master);
+    if (geometry_transition_in_progress()) {
+        /* Phase 1: do not mutate master or allocate for uncommitted size.
+           Record that default-target selection must complete after commit. */
+        backend.deferredDefaultTargetSelect = YES;
+        return EU4_GFX_CLEAR_GEOMETRY_STALE;
+    }
     if (pending_is_obsolete(backend)) {
         /* Waiting is allowed here, not inside clear. */
         eu4_gfx_clear_status drained = drain_pending_game(backend, NULL);
@@ -1502,7 +1539,8 @@ eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *targe
     }
     if (transitioned || backend.gameColorTarget == nil ||
         backend.gameWidth != backend.physicalWidth ||
-        backend.gameHeight != backend.physicalHeight) {
+        backend.gameHeight != backend.physicalHeight ||
+        backend.deferredDefaultTargetSelect) {
         /* Allocate before mutating the master. A failure keeps the old texture
            and every engine-visible field intact. */
         eu4_gfx_clear_status allocated =
@@ -1513,11 +1551,16 @@ eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *targe
     }
     write_default_viewport(master);
     store_ptr(master, 0x78, NULL);
+    backend.deferredDefaultTargetSelect = NO;
     return EU4_GFX_CLEAR_OK;
 }
 
 void eu4_gfx_set_render_target(void *handle, void *target) {
     eu4_gfx_clear_status status = eu4_gfx_set_render_target_checked(handle, target);
+    if (status == EU4_GFX_CLEAR_GEOMETRY_STALE) {
+        /* Phase-1 deferral: intentional skip, engine continues. */
+        return;
+    }
     if (status != EU4_GFX_CLEAR_OK) {
         eu4_gfx_stop("_GfxSetRenderTarget",
                      status == EU4_GFX_CLEAR_UNSUPPORTED ? "unsupported" : "failed",
