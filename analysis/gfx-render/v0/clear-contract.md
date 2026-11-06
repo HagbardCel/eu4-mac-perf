@@ -38,7 +38,7 @@ At most one outstanding clear per backend. `clear_checked` while a command is pe
 
 ## Production entry
 
-`void eu4_gfx_clear` keeps the reconstructed ABI. It calls `clear_checked` and stops on non-ok. Live launchers that never configure an offscreen target therefore stop at the first clear instead of the former silent no-op. That is intentional for PR4 and is not live-startup progress.
+`void eu4_gfx_clear` keeps the reconstructed ABI. With game-window mode disabled it calls `clear_checked` (diagnostic offscreen) and stops on non-ok. With game-window mode enabled and master `+0x78` null it clears the game backbuffer instead; see [default-target-contract.md](default-target-contract.md). Live launchers that never enable game mode and never configure an offscreen target therefore stop at the first clear. That is intentional for PR4 and is not live-startup progress.
 
 ## Worker evidence
 

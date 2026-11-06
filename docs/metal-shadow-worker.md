@@ -26,7 +26,7 @@ Init succeeds only when the success byte is 1, the return value is the published
 
 ## Offscreen clear
 
-Bounded color-only clear through the production helpers. Contract: [analysis/gfx-render/v0/clear-contract.md](../analysis/gfx-render/v0/clear-contract.md). The worker never waits inside `eu4_gfx_clear`; it calls `eu4_gfx_clear_checked` then `eu4_gfx_complete_offscreen`. Cap is 64×64 in the worker. Production still validates device limits.
+Bounded color-only clear through the production helpers. Contract: [analysis/gfx-render/v0/clear-contract.md](../analysis/gfx-render/v0/clear-contract.md). The worker stays on the diagnostic offscreen path (no `eu4_gfx_enable_game_window`). It never waits inside `eu4_gfx_clear`; it calls `eu4_gfx_clear_checked` then `eu4_gfx_complete_offscreen`. Cap is 64×64 in the worker. Production still validates device limits. Game-window clear/present: [default-target-contract.md](../analysis/gfx-render/v0/default-target-contract.md).
 
 | Op | Args | Successful `result` |
 | --- | --- | --- |

@@ -14,6 +14,8 @@ GFX_ENTRY(_GfxUpdateVertexBufferMultiple, 0x15ebe5f, 0x15ebf41, eu4_gfx_update_v
 GFX_ENTRY(viewport, 0x15ea4f8, 0x15ea52c, eu4_gfx_set_viewport, "\x55\x48\x89\xe5\xf3\x0f\x6f\x06")
 // _GfxClear. End is _GfxGetMasterContext. The live glScissor return is 0x15ea5ec.
 GFX_ENTRY(clear, 0x15ea552, 0x15ea6b5, eu4_gfx_clear, "\x55\x48\x89\xe5\x41\x57")
+// _GfxPresent. End is _GfxBeginScene.
+GFX_ENTRY(present, 0x15ea6cb, 0x15ea6df, eu4_gfx_present, "\x55\x48\x89\xe5\x48\x8b")
 // Eligible draws. Each replacement is an entry shim, not a C function.
 GFX_ENTRY(draw, 0x15ea789, 0x15eaa77, eu4_gfx_draw_entry, "\x55\x48\x89\xe5\x41\x57")
 GFX_ENTRY(draw_indexed, 0x15eaa77, 0x15eac96, eu4_gfx_draw_indexed_entry, "\x55\x48\x89\xe5\x41\x57")
@@ -33,5 +35,7 @@ GFX_ENTRY(_GfxDestroyIndexBuffer, 0x15ec1e6, 0x15ec23c, eu4_gfx_destroy_index_bu
 GFX_ENTRY(_GfxUpdateIndexBuffer, 0x15ec23c, 0x15ec28e, eu4_gfx_update_index_buffer, "\x55\x48\x89\xe5\x41\x56")
 GFX_ENTRY(_GfxSetIndexBuffer, 0x15ec28e, 0x15ec2bc, eu4_gfx_set_index_buffer, "\x48\x85\xf6\x74\x28")
 GFX_ENTRY(_GfxSetVertexBuffers, 0x15ebf41, 0x15ec11c, eu4_gfx_set_vertex_buffers, "\x55\x48\x89\xe5\x41\x57")
+// _GfxSetRenderTarget. End is _GfxGetRenderTarget. Null selects the default backbuffer.
+GFX_ENTRY(set_render_target, 0x15ed004, 0x15ed09d, eu4_gfx_set_render_target, "\x55\x48\x89\xe5\x41\x57")
 // _GfxSetScissorRectangle. The tail call is _glScissor at 0x15ed0dd.
 GFX_ENTRY(_GfxSetScissorRectangle, 0x15ed0aa, 0x15ed0e2, eu4_gfx_set_scissor_rectangle, "\x55\x48\x89\xe5\x0f\xbf\x56\x04")
