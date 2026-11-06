@@ -280,6 +280,53 @@ class NormalizeTests(unittest.TestCase):
             with self.assertRaises(diff.DiffError):
                 diff.normalize_capture(directory, expected_hashes=diff.EXPECTED_HASHES)
 
+    def test_call_id_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            events = base_events()
+            events[1]["call_id"] = 99
+            hashes = write_capture(directory, events)
+            with self.assertRaisesRegex(diff.DiffError, "call_id"):
+                diff.normalize_capture(directory, expected_hashes=hashes)
+
+    def test_sample_values_must_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            events = base_events()
+            events[1]["sample_values"] = [2, 4, 9]
+            hashes = write_capture(directory, events)
+            with self.assertRaisesRegex(diff.DiffError, "sample_values"):
+                diff.normalize_capture(directory, expected_hashes=hashes)
+
+    def test_fields_ok_required(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            events = base_events()
+            events[0]["fields_ok"] = False
+            hashes = write_capture(directory, events)
+            with self.assertRaises(diff.DiffError):
+                diff.normalize_capture(directory, expected_hashes=hashes)
+
+    def test_incomplete_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            events = base_events()
+            summary = {
+                "complete": False,
+                "state": 2,
+                "settings_calls": 1,
+                "init_calls": 1,
+                "event_count": 4,
+                "overflow": 0,
+                "unmatched": 0,
+                "unavailable": 0,
+                "in_flight": 0,
+                "events_copied": True,
+            }
+            hashes = write_capture(directory, events, summary=summary)
+            with self.assertRaises(diff.DiffError):
+                diff.normalize_capture(directory, expected_hashes=hashes)
+
 
 class ReferenceValidationTests(unittest.TestCase):
     def test_mutated_sha_raises(self):
@@ -303,6 +350,19 @@ class ReferenceValidationTests(unittest.TestCase):
         ref["init"]["output"]["width"] = True
         with self.assertRaises(diff.DiffError):
             diff.validate_reference(ref)
+
+    def test_nested_section_not_dict(self):
+        ref = committed_like_ref()
+        ref["settings"]["input"] = []
+        with self.assertRaises(diff.DiffError):
+            diff.validate_reference(ref)
+
+    def test_malformed_json_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "bad.json"
+            path.write_text("{not-json")
+            with self.assertRaises(diff.DiffError):
+                diff._load_json(path)
 
     def test_compare_uses_committed_hashes_on_synthetic_ref(self):
         # Synthetic normalize refs use local hashes; validate_reference requires
@@ -348,6 +408,18 @@ class CompareTests(unittest.TestCase):
         self.assertFalse(comparison["contract_pass"])
         row = next(r for r in comparison["fields"] if r["field"] == "init.success")
         self.assertEqual(row["classification"], "unavailable")
+
+    def test_fifth_response_no_crash(self):
+        responses = ok_responses(self.ref) + [ok_responses(self.ref)[0]]
+        comparison = diff.compare(self.ref, responses)
+        self.assertFalse(comparison["contract_pass"])
+        self.assertEqual(comparison["stream_outcome"], "invalid_stream")
+
+    def test_fifth_none_no_crash(self):
+        responses = ok_responses(self.ref) + [None]
+        comparison = diff.compare(self.ref, responses)
+        self.assertFalse(comparison["contract_pass"])
+        self.assertEqual(comparison["stream_outcome"], "invalid_stream")
 
     def test_reordered_responses(self):
         responses = ok_responses(self.ref)

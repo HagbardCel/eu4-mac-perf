@@ -255,8 +255,16 @@ def validate_reference(reference: dict) -> None:
         s_out = reference["settings"]["output"]
         i_in = reference["init"]["input"]
         i_out = reference["init"]["output"]
-    except (KeyError, TypeError) as exc:
+    except (KeyError, TypeError, AttributeError) as exc:
         raise DiffError("missing reference sections") from exc
+    for section, name in (
+        (s_in, "settings.input"),
+        (s_out, "settings.output"),
+        (i_in, "init.input"),
+        (i_out, "init.output"),
+    ):
+        if not isinstance(section, dict):
+            raise DiffError(f"{name} not an object")
 
     for key in ("display", "windowed", "sample_count"):
         if not is_exact_int(s_in.get(key)):
@@ -485,14 +493,15 @@ def compare(reference: dict, responses: list[Any]) -> dict:
         strict_ok = False
 
     by_op: dict[str, Any] = {}
-    for index, resp in enumerate(responses):
-        if resp is None:
-            by_op[EXPECTED_OPS[index]] = None
-            break
-        if isinstance(resp, dict) and resp.get("op") in EXPECTED_OPS:
-            by_op[resp["op"]] = resp
-        if isinstance(resp, dict) and resp.get("ok") is False:
-            break
+    if isinstance(responses, list):
+        for index, resp in enumerate(responses[: len(EXPECTED_OPS)]):
+            if resp is None:
+                by_op[EXPECTED_OPS[index]] = None
+                break
+            if isinstance(resp, dict) and resp.get("op") in EXPECTED_OPS:
+                by_op[resp["op"]] = resp
+            if isinstance(resp, dict) and resp.get("ok") is False:
+                break
 
     s_in = reference["settings"]["input"]
     s_out = reference["settings"]["output"]
@@ -1004,17 +1013,31 @@ def cmd_normalize(args: argparse.Namespace) -> int:
     return 0
 
 
+def _load_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise DiffError(f"invalid json: {path}") from exc
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
-    reference = json.loads(Path(args.reference).read_text())
+    reference = _load_json(Path(args.reference))
     validate_reference(reference)
     responses_raw = []
-    for line in Path(args.responses).read_text().splitlines():
+    try:
+        lines = Path(args.responses).read_text().splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise DiffError(f"invalid responses file: {args.responses}") from exc
+    for line in lines:
         if not line.strip():
             continue
         if line.strip() == "null":
             responses_raw.append(None)
-        else:
+            continue
+        try:
             responses_raw.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise DiffError("invalid responses jsonl") from exc
     comparison = compare(reference, responses_raw)
     out = Path(args.out) if args.out else None
     text = dumps(comparison)
@@ -1030,7 +1053,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.source:
         reference = normalize_capture(Path(args.source))
     else:
-        reference = json.loads(Path(args.reference or REFERENCE_PATH).read_text())
+        reference = _load_json(Path(args.reference or REFERENCE_PATH))
     validate_reference(reference)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = Path(args.out) if args.out else ROOT / "results" / f"{stamp}-gfx-startup-diff"
