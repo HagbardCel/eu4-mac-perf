@@ -30,8 +30,19 @@
 /* Game-owned intermediate backbuffer. Distinct from colorTarget. */
 @property (nonatomic) BOOL gameWindow;
 @property (nonatomic, strong) id gameColorTarget;
+/* Physical drawable dimensions of gameColorTarget. */
 @property (nonatomic) uint32_t gameWidth;
 @property (nonatomic) uint32_t gameHeight;
+/* Logical master +0xa0/+0xa4 and physical drawable tuple of the current
+   effective generation. */
+@property (nonatomic) uint32_t logicalWidth;
+@property (nonatomic) uint32_t logicalHeight;
+@property (nonatomic) uint32_t physicalWidth;
+@property (nonatomic) uint32_t physicalHeight;
+@property (nonatomic) uint64_t geometryGeneration;
+@property (nonatomic) uint64_t pendingGameGeneration;
+@property (nonatomic) uint64_t clearedGeneration;
+@property (nonatomic) BOOL awaitingFreshClear;
 @property (nonatomic) BOOL gameContentsKnown;
 @property (nonatomic) BOOL readyForPresent;
 @property (nonatomic, strong) id pendingGameCommand;
@@ -107,6 +118,13 @@ void eu4_gfx_test_set_present_readback(void *dest, size_t capacity);
    omit it stay on the diagnostic offscreen path. */
 void eu4_gfx_enable_game_window(void);
 
+/* Cocoa/main publishes immutable physical drawable dimensions plus an epoch.
+   Never reads the engine master. The Gfx path combines this with master
+   +0xa0/+0xa4 inside reconcile_game_geometry. */
+void eu4_gfx_publish_physical_geometry(uint32_t width, uint32_t height);
+/* Effective generation of the current logical+physical tuple. 0 before init. */
+uint64_t eu4_gfx_geometry_generation(void *master);
+
 /* Records the caller, writes stop.json, then terminates. A callback that
    returns still ends in _exit. */
 __attribute__((noreturn)) void eu4_gfx_stop(const char *symbol, const char *reason,
@@ -170,6 +188,9 @@ typedef enum {
     EU4_GFX_CLEAR_OK = 0,
     EU4_GFX_CLEAR_UNSUPPORTED = 1,
     EU4_GFX_CLEAR_FAILED = 2,
+    /* Geometry changed since the last known contents. Distinct from
+       unsupported/failed: nothing was waited on, submitted, or presented. */
+    EU4_GFX_CLEAR_GEOMETRY_STALE = 3,
 } eu4_gfx_clear_status;
 
 /* Create or replace the offscreen BGRA8Unorm color target. Rejects while a
@@ -182,10 +203,11 @@ int eu4_gfx_offscreen_contents_known(void *master);
 /* _GfxClear at 0x15ea552. rdi is the handle and (%rdi) is the state object.
    esi is the flag dword: bit 0 is color (0x4000), bit 1 is depth (0x100), and
    bit 2 is stencil (0x400). rdx is an optional color; null is (0, 0, 0, 1).
-   The glScissor at 0x15ea5e7 uses the viewport image: x at +0xbc, y at +0xc0,
-   width at +0xb0, height at +0xac. Production routes to the game backbuffer
-   when game mode is on and +0x78 is null; otherwise to the diagnostic
-   offscreen when configured. Unsupported or failed cases stop. */
+   The glScissor at 0x15ea5e7 uses the logical viewport image: x at +0xbc, y at
+   +0xc0, width at +0xb0, height at +0xac. Production routes to the game
+   backbuffer when game mode is on and +0x78 is null; otherwise to the
+   diagnostic offscreen when configured. A geometry-transition stale skip
+   returns normally; unsupported or failed cases stop. */
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color);
 /* Diagnostic offscreen only. Validate and commit without waiting. ok means
    submitted. Rejects a second clear while one is pending. Invalidates
@@ -199,18 +221,21 @@ eu4_gfx_clear_status eu4_gfx_complete_offscreen(void *master, int *command_statu
 eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t capacity,
                                             size_t *out_len);
 /* Wait for the pending game clear. On OK sets gameContentsKnown and
-   readyForPresent together. */
+   readyForPresent only when the pending generation is still current. */
 eu4_gfx_clear_status eu4_gfx_complete_game(void *master, int *command_status);
 int eu4_gfx_game_contents_known(void *master);
 int eu4_gfx_ready_for_present(void *master);
 /* _GfxSetRenderTarget at 0x15ed004. null selects the default game backbuffer.
-   Non-null is unsupported and does not mutate the master. */
+   Non-null is unsupported, does not mutate the master, and does not drain.
+   On a verified geometry transition a pending clear may be drained and the
+   replacement allocated before the master viewport/+0x78 writes. */
 eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *target);
 void eu4_gfx_set_render_target(void *handle, void *target);
 /* _GfxPresent at 0x15ea6cb. rdi is the master. Returns 1 on success.
-   The destination must be exactly the game backbuffer size and BGRA8Unorm;
-   otherwise the call fails before submit and keeps gameContentsKnown and
-   readyForPresent unchanged. */
+   The destination must be exactly the game backbuffer physical size and
+   BGRA8Unorm; otherwise, with unchanged geometry, the call fails before submit
+   and keeps gameContentsKnown and readyForPresent unchanged. A geometry
+   transition returns GEOMETRY_STALE before acquiring a drawable. */
 eu4_gfx_clear_status eu4_gfx_present_checked(void *master);
 int eu4_gfx_present(void *master);
 int eu4_gfx_settings(int display, int windowed, int count, void *settings);

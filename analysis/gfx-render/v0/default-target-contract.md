@@ -117,3 +117,9 @@ Drain `pendingGameCommand` and `pendingClear` before releasing the backend. GPU 
 ## Non-goals / non-claims
 
 Draws, shaders, custom RTs, depth/stencil, worker protocol changes, multi-frame present, live EU4 as offline gate. GPU-failure poisoning is implemented; fault-injection coverage is host-seam based for pre-submit failures only.
+
+HiDPI follow-up: [PR5.1.1](hidpi-contract.md) keeps the 1:1 present blit and this
+fail-closed exact-match gate, and separates the engine's logical `+0xa0/+0xa4` window size
+from the physical `drawableSize` backbuffer. Where the two contracts differ, the HiDPI
+contract governs the dual geometry; the P5.1 present and state-machine invariants still
+apply.
