@@ -1,27 +1,421 @@
-#include "eu4_gfx_shader.h"
+#import "eu4_gfx_shader.h"
 
-#include <new>
-#include <stdint.h>
-#include <string.h>
+#import <Metal/Metal.h>
+#import <new>
+#import <pthread.h>
+#import <string.h>
+#import <stdlib.h>
+
+extern "C" void *eu4_gfx_backend_token(void);
+
+/* P5.2a target: gfx/FX/simple.lua technique Simple (asset-maincode-v0).
+   Metal translation of VertexShaderSimple / PixelShaderSimple. Not Color. */
+
+static const char kSimpleMSL[] = R"(
+#include <metal_stdlib>
+using namespace metal;
+
+struct VSIn {
+    float4 position [[attribute(0)]];
+    float2 texcoord [[attribute(1)]];
+    float4 color    [[attribute(2)]];
+};
+
+struct VSOut {
+    float4 position [[position]];
+    float2 texcoord;
+    float4 color;
+};
+
+struct Uniforms {
+    float4 UNIFORM0[4];
+};
+
+vertex VSOut simple_vs(VSIn in [[stage_in]],
+                       constant Uniforms &u [[buffer(1)]]) {
+    float4x4 Matrix = float4x4(u.UNIFORM0[0], u.UNIFORM0[1],
+                               u.UNIFORM0[2], u.UNIFORM0[3]);
+    VSOut out;
+    out.position = Matrix * in.position;
+    out.texcoord = in.texcoord;
+    out.color = in.color;
+    return out;
+}
+
+fragment float4 simple_fs(VSOut in [[stage_in]],
+                          texture2d<float> SimpleTexture [[texture(0)]],
+                          sampler SimpleSampler [[sampler(0)]]) {
+    float4 tex = SimpleTexture.sample(SimpleSampler, in.texcoord);
+    return tex * in.color;
+}
+)";
+
+static const char kSimpleVertexSource[] =
+    EU4_GFX_SHADER_SIMPLE_VS_MARKER "\n"
+    "/* asset-maincode-v0 VertexShaderSimple from gfx/FX/simple.shader */\n"
+    "VS_OUTPUT main(const VS_INPUT v)\n"
+    "{\n"
+    "    VS_OUTPUT Out;\n"
+    "    Out.vPosition = mul( Matrix, v.vPosition );\n"
+    "    Out.vTexCoord = v.vTexCoord;\n"
+    "    Out.vColor = v.vColor;\n"
+    "    return Out;\n"
+    "}\n";
+
+static const char kSimplePixelSource[] =
+    EU4_GFX_SHADER_SIMPLE_PS_MARKER "\n"
+    "/* asset-maincode-v0 PixelShaderSimple from gfx/FX/simple.shader */\n"
+    "float4 main( VS_OUTPUT v ) : PDX_COLOR\n"
+    "{\n"
+    "    float4 OutColor = tex2D( SimpleTexture, v.vTexCoord );\n"
+    "    OutColor = OutColor * v.vColor;\n"
+    "    return OutColor;\n"
+    "}\n";
+
+@interface EU4ShaderRecord : NSObject
+@property (nonatomic) uint64_t lifetimeId;
+@property (nonatomic) void *engineObject;
+@property (nonatomic) BOOL hasVertex;
+@property (nonatomic) BOOL hasPixel;
+@property (nonatomic) BOOL linked;
+@property (nonatomic, copy) NSString *identity;
+@property (nonatomic, strong) id<MTLLibrary> library;
+@property (nonatomic, strong) id<MTLFunction> vertexFunction;
+@property (nonatomic, strong) id<MTLFunction> fragmentFunction;
+@property (nonatomic, strong) id<MTLRenderPipelineState> pipeline;
+@end
+
+@implementation EU4ShaderRecord
+@end
+
+static NSMutableArray<EU4ShaderRecord *> *g_shaders;
+static uint64_t g_next_lifetime = 1;
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+static id<MTLDevice> g_device;
+
+static void ensure_registry(void) {
+    if (g_shaders == nil) {
+        g_shaders = [NSMutableArray array];
+    }
+}
+
+static EU4ShaderRecord *find_record(const void *object) {
+    ensure_registry();
+    for (EU4ShaderRecord *record in g_shaders) {
+        if (record.engineObject == object) {
+            return record;
+        }
+    }
+    return nil;
+}
+
+static id<MTLDevice> metal_device(void) {
+    if (g_device != nil) {
+        return g_device;
+    }
+    void *token = eu4_gfx_backend_token();
+    if (token != NULL) {
+        id backend = (__bridge id)token;
+        id device = [backend valueForKey:@"device"];
+        if (device != nil) {
+            g_device = device;
+            return g_device;
+        }
+    }
+    g_device = MTLCreateSystemDefaultDevice();
+    return g_device;
+}
+
+static int source_is_simple_vertex(const char *source) {
+    if (source == NULL) {
+        return 0;
+    }
+    if (strstr(source, EU4_GFX_SHADER_SIMPLE_VS_MARKER) != NULL) {
+        return 1;
+    }
+    /* Surviving markers from the asset MainCode / BuildGLSL expansion. */
+    return strstr(source, "Out.vPosition") != NULL &&
+           strstr(source, "v.vTexCoord") != NULL &&
+           strstr(source, "v.vColor") != NULL &&
+           strstr(source, "mul") != NULL;
+}
+
+static int source_is_simple_pixel(const char *source) {
+    if (source == NULL) {
+        return 0;
+    }
+    if (strstr(source, EU4_GFX_SHADER_SIMPLE_PS_MARKER) != NULL) {
+        return 1;
+    }
+    return strstr(source, "SimpleTexture") != NULL &&
+           strstr(source, "v.vTexCoord") != NULL &&
+           strstr(source, "v.vColor") != NULL;
+}
+
+static int compile_simple_library(EU4ShaderRecord *record) {
+    id<MTLDevice> device = metal_device();
+    if (device == nil) {
+        return 0;
+    }
+    NSError *error = nil;
+    NSString *source = [[NSString alloc] initWithUTF8String:kSimpleMSL];
+    id<MTLLibrary> library =
+        [device newLibraryWithSource:source options:nil error:&error];
+    if (library == nil) {
+        return 0;
+    }
+    id<MTLFunction> vs = [library newFunctionWithName:@"simple_vs"];
+    id<MTLFunction> fs = [library newFunctionWithName:@"simple_fs"];
+    if (vs == nil || fs == nil) {
+        return 0;
+    }
+    record.library = library;
+    record.vertexFunction = vs;
+    record.fragmentFunction = fs;
+    record.identity = @"simple-lua-Simple/asset-maincode-v0";
+    return 1;
+}
+
+const char *eu4_gfx_simple_vertex_source(void) { return kSimpleVertexSource; }
+const char *eu4_gfx_simple_pixel_source(void) { return kSimplePixelSource; }
+
+void eu4_gfx_shader_test_reset(void) {
+    pthread_mutex_lock(&g_lock);
+    [g_shaders removeAllObjects];
+    g_next_lifetime = 1;
+    g_device = nil;
+    pthread_mutex_unlock(&g_lock);
+}
+
+uint64_t eu4_gfx_shader_lifetime_id(const void *shader) {
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    uint64_t id = record != nil ? record.lifetimeId : 0;
+    pthread_mutex_unlock(&g_lock);
+    return id;
+}
+
+int eu4_gfx_shader_is_linked(const void *shader) {
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    int linked = record != nil && record.linked ? 1 : 0;
+    pthread_mutex_unlock(&g_lock);
+    return linked;
+}
+
+const char *eu4_gfx_shader_identity(const void *shader) {
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    const char *identity =
+        record != nil && record.identity != nil ? record.identity.UTF8String : NULL;
+    pthread_mutex_unlock(&g_lock);
+    return identity;
+}
 
 void *eu4_gfx_create_shader(void) {
-    auto *object = static_cast<uint8_t *>(::operator new(0x78));
-    *reinterpret_cast<uint32_t *>(object) = 0;
-    uint64_t zero = 0;
-    memcpy(object + 4, &zero, sizeof zero);
+    auto *object = static_cast<uint8_t *>(::operator new(EU4_GFX_SHADER_OBJECT_SIZE));
+    memset(object, 0, EU4_GFX_SHADER_OBJECT_SIZE);
+
+    EU4ShaderRecord *record = [EU4ShaderRecord new];
+    pthread_mutex_lock(&g_lock);
+    ensure_registry();
+    record.lifetimeId = g_next_lifetime++;
+    record.engineObject = object;
+    [g_shaders addObject:record];
+    pthread_mutex_unlock(&g_lock);
     return object;
 }
 
 int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
     (void)unused;
-    (void)shader;
-    (void)source;
-    return 0;
+    if (shader == NULL || source == NULL) {
+        return 0;
+    }
+    if (!source_is_simple_vertex(source)) {
+        return 0;
+    }
+
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    if (record == nil) {
+        /* Address reuse without create: reject rather than fabricate. */
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    if (record.library == nil && !compile_simple_library(record)) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    if (record.vertexFunction == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    record.hasVertex = YES;
+    record.linked = NO;
+    record.pipeline = nil;
+    /* Keep +4 as zero: not a GL name and not a Metal handle. */
+    memset(static_cast<uint8_t *>(shader) + 4, 0, 4);
+    pthread_mutex_unlock(&g_lock);
+    return 1;
 }
 
 int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
     (void)unused;
-    (void)shader;
-    (void)source;
-    return 0;
+    if (shader == NULL || source == NULL) {
+        return 0;
+    }
+    if (!source_is_simple_pixel(source)) {
+        return 0;
+    }
+
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    if (record == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    if (record.library == nil && !compile_simple_library(record)) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    if (record.fragmentFunction == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    record.hasPixel = YES;
+    record.linked = NO;
+    record.pipeline = nil;
+    memset(static_cast<uint8_t *>(shader) + 8, 0, 4);
+    pthread_mutex_unlock(&g_lock);
+    return 1;
+}
+
+int eu4_gfx_link_shader(void *unused, void *shader) {
+    (void)unused;
+    if (shader == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    if (record == nil || !record.hasVertex || !record.hasPixel ||
+        record.vertexFunction == nil || record.fragmentFunction == nil) {
+        if (record != nil) {
+            record.linked = NO;
+        }
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    record.linked = YES;
+    /* Program name field stays 0 — not a fabricated GL name. */
+    *reinterpret_cast<uint32_t *>(shader) = 0;
+    pthread_mutex_unlock(&g_lock);
+    return 1;
+}
+
+void eu4_gfx_set_shader(void *immediate_context, void *shader) {
+    if (shader == NULL) {
+        return;
+    }
+    if (immediate_context == NULL) {
+        return;
+    }
+    void **context = static_cast<void **>(immediate_context);
+    uint8_t *master = static_cast<uint8_t *>(context[0]);
+    if (master == NULL) {
+        return;
+    }
+    void **current = reinterpret_cast<void **>(master + 0x70);
+    if (*current == shader) {
+        return;
+    }
+
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    int ok = record != nil && record.linked;
+    pthread_mutex_unlock(&g_lock);
+    if (!ok) {
+        /* Do not publish an unlinked shader as current. */
+        return;
+    }
+
+    /* Skip original GL attrib-disable / SetAll. Preserve master pointer + dirty. */
+    *current = shader;
+    master[0x128] = 1;
+    master[0x170] = 1;
+}
+
+void eu4_gfx_destroy_shader(void *shader) {
+    if (shader == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    if (record != nil) {
+        [g_shaders removeObject:record];
+    }
+    pthread_mutex_unlock(&g_lock);
+    ::operator delete(shader);
+}
+
+void *eu4_gfx_shader_pipeline(const void *shader, void *mtl_device) {
+    if (shader == NULL) {
+        return NULL;
+    }
+    id<MTLDevice> device =
+        mtl_device != NULL ? (__bridge id<MTLDevice>)mtl_device : metal_device();
+    if (device == nil) {
+        return NULL;
+    }
+
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    if (record == nil || !record.linked || record.vertexFunction == nil ||
+        record.fragmentFunction == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return NULL;
+    }
+    if (record.pipeline != nil) {
+        void *out = (__bridge void *)record.pipeline;
+        pthread_mutex_unlock(&g_lock);
+        return out;
+    }
+
+    MTLVertexDescriptor *vertex = [[MTLVertexDescriptor alloc] init];
+    vertex.attributes[0].format = MTLVertexFormatFloat4;
+    vertex.attributes[0].offset = 0;
+    vertex.attributes[0].bufferIndex = 0;
+    vertex.attributes[1].format = MTLVertexFormatFloat2;
+    vertex.attributes[1].offset = 16;
+    vertex.attributes[1].bufferIndex = 0;
+    vertex.attributes[2].format = MTLVertexFormatFloat4;
+    vertex.attributes[2].offset = 24;
+    vertex.attributes[2].bufferIndex = 0;
+    vertex.layouts[0].stride = 40;
+    vertex.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
+
+    MTLRenderPipelineDescriptor *desc = [[MTLRenderPipelineDescriptor alloc] init];
+    desc.vertexFunction = record.vertexFunction;
+    desc.fragmentFunction = record.fragmentFunction;
+    desc.vertexDescriptor = vertex;
+    desc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
+    desc.colorAttachments[0].blendingEnabled = YES;
+    desc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+    desc.colorAttachments[0].destinationRGBBlendFactor =
+        MTLBlendFactorOneMinusSourceAlpha;
+    desc.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
+    desc.colorAttachments[0].destinationAlphaBlendFactor =
+        MTLBlendFactorOneMinusSourceAlpha;
+    desc.colorAttachments[0].writeMask = MTLColorWriteMaskAll;
+
+    NSError *error = nil;
+    id<MTLRenderPipelineState> pipeline =
+        [device newRenderPipelineStateWithDescriptor:desc error:&error];
+    if (pipeline == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return NULL;
+    }
+    record.pipeline = pipeline;
+    void *out = (__bridge void *)pipeline;
+    pthread_mutex_unlock(&g_lock);
+    return out;
 }

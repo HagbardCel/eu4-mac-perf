@@ -1,0 +1,16 @@
+{
+  "id": "eu4-p52c-shader-pipeline",
+  "objective": "objective.md",
+  "runtime": "opencode",
+  "model": "opencode/big-pickle",
+  "opencode_version": "2.2.5",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/automation/eu4-p52c-shader-pipeline/workspace",
+    "commit": "PIN_AFTER_P52B_MERGE"
+  },
+  "accept": ["python3", "accept.py"],
+  "max_rounds": 10,
+  "max_seconds": 7200,
+  "accept_timeout_seconds": 1800
+}
