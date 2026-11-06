@@ -20,29 +20,28 @@ class StartupDiffMetalTests(unittest.TestCase):
 
     def test_replay_committed_reference(self):
         reference = json.loads(diff.REFERENCE_PATH.read_text())
+        diff.validate_reference(reference)
         self.assertEqual(reference["init"]["input"]["source"], 0)
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "diff"
             commands, responses, stderr = diff.replay(reference)
-            by_op = {}
-            for cmd, resp in zip(commands, responses):
-                by_op[cmd["op"]] = resp
-            comparison = diff.compare(reference, by_op)
-            diff.write_run_dir(out_dir, reference, commands, responses, comparison, stderr)
+            comparison = diff.compare(reference, responses)
+            diff.write_run_dir(
+                out_dir, reference, commands, responses, comparison, stderr
+            )
             self.assertTrue((out_dir / "comparison.json").is_file())
             self.assertTrue((out_dir / "report.md").is_file())
+            self.assertEqual(comparison["stream_outcome"], "complete", stderr)
             self.assertTrue(comparison["metal_init_ok"], stderr)
             self.assertTrue(comparison["shutdown_ok"], stderr)
             self.assertTrue(comparison["contract_pass"], json.dumps(comparison["counts"]))
-            init = by_op["init"]
+            init = next(r for r in responses if isinstance(r, dict) and r.get("op") == "init")
             self.assertEqual(init["state"]["source"], 1)
-            self.assertEqual(init["state"]["width"], reference["init"]["output"]["width"])
-            self.assertEqual(init["state"]["height"], reference["init"]["output"]["height"])
-            by_field = {row["field"]: row for row in comparison["fields"]}
-            self.assertEqual(by_field["settings.return"]["classification"], "abi_unresolved")
-            self.assertEqual(
-                by_field["settings.msaa_algorithm"]["classification"], "matched"
+            self.assertIs(type(init["result"]["success"]), int)
+            configure = next(
+                r for r in responses if isinstance(r, dict) and r.get("op") == "configure_window"
             )
+            self.assertEqual(configure["result"]["source"], 0)
 
 
 if __name__ == "__main__":

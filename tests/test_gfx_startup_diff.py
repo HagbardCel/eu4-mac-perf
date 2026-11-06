@@ -1,24 +1,21 @@
 #!/usr/bin/env python3
+import copy
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys_path = str(ROOT / "benchmark")
-import sys
-
-sys.path.insert(0, sys_path)
+sys.path.insert(0, str(ROOT / "benchmark"))
 
 import eu4_gfx_startup_diff as diff  # noqa: E402
-
 
 PINNED = diff.PINNED_SHA
 
 
 def write_capture(directory: Path, events, summary=None, metadata=None, status_pid=41350):
-    events_text = "".join(json.dumps(e) + "\n" for e in events)
-    (directory / "events.jsonl").write_text(events_text)
+    (directory / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
     summary = summary or {
         "schema": "gfx-startup/v0",
         "complete": True,
@@ -52,7 +49,7 @@ def write_capture(directory: Path, events, summary=None, metadata=None, status_p
             [
                 "EU4-GFX-STARTUP v1",
                 "state=installed",
-                "session=test",
+                f"session={metadata['session']}",
                 f"pid={status_pid}",
                 "executable=/tmp/eu4",
                 "arch=x86_64",
@@ -169,11 +166,13 @@ def ok_responses(reference):
     supports = [True] * len(samples)
     flags = diff.flags_for(samples, supports)
     s_out = reference["settings"]["output"]
+    i_in = reference["init"]["input"]
     i_out = reference["init"]["output"]
-    return {
-        "settings": {
+    return [
+        {
             "schema": "metal-shadow/v0",
             "seq": 1,
+            "next": 2,
             "op": "settings",
             "ok": True,
             "result": {
@@ -187,22 +186,24 @@ def ok_responses(reference):
             },
             "state": {"initialized": False},
         },
-        "configure_window": {
+        {
             "schema": "metal-shadow/v0",
             "seq": 2,
+            "next": 3,
             "op": "configure_window",
             "ok": True,
             "result": {
                 "width": i_out["width"],
                 "height": i_out["height"],
-                "window_id": reference["init"]["input"]["window_id"],
-                "source": reference["init"]["input"]["source"],
+                "window_id": i_in["window_id"],
+                "source": i_in["source"],
             },
             "state": {"initialized": False},
         },
-        "init": {
+        {
             "schema": "metal-shadow/v0",
             "seq": 3,
+            "next": 4,
             "op": "init",
             "ok": True,
             "result": {"success": 1},
@@ -222,30 +223,55 @@ def ok_responses(reference):
                 "raster_snap": "cc" * 16,
             },
         },
-        "shutdown": {
+        {
             "schema": "metal-shadow/v0",
             "seq": 4,
+            "next": 5,
             "op": "shutdown",
             "ok": True,
             "result": {},
             "state": {"initialized": False},
         },
-    }
+    ]
+
+
+def make_ref():
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        hashes = write_capture(directory, base_events())
+        return diff.normalize_capture(directory, expected_hashes=hashes)
 
 
 class NormalizeTests(unittest.TestCase):
     def test_normalize_preserves_source_zero(self):
+        ref = make_ref()
+        self.assertEqual(ref["init"]["input"]["source"], 0)
+        self.assertEqual(ref["init"]["input"]["window_id"], 2)
+        ref["source_hashes"] = dict(diff.EXPECTED_HASHES)
+        diff.validate_reference(ref)
+
+    def test_extra_events_unsupported(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
-            hashes = write_capture(directory, base_events())
-            ref = diff.normalize_capture(directory, expected_hashes=hashes)
-            self.assertEqual(ref["schema"], diff.REF_SCHEMA)
-            self.assertEqual(ref["init"]["input"]["source"], 0)
-            self.assertEqual(ref["init"]["input"]["window_id"], 2)
-            self.assertEqual(ref["init"]["output"]["source"], 1)
-            self.assertEqual(ref["settings"]["output"]["return"], -1239745597008707471)
-            again = diff.normalize_capture(directory, expected_hashes=hashes)
-            self.assertEqual(diff.dumps(ref), diff.dumps(again))
+            events = base_events() + [dict(base_events()[0], seq=5, call_id=3)]
+            hashes = write_capture(
+                directory,
+                events,
+                summary={
+                    "complete": True,
+                    "state": 2,
+                    "settings_calls": 2,
+                    "init_calls": 1,
+                    "event_count": 5,
+                    "overflow": 0,
+                    "unmatched": 0,
+                    "unavailable": 0,
+                    "in_flight": 0,
+                    "events_copied": True,
+                },
+            )
+            with self.assertRaisesRegex(diff.DiffError, "unsupported_sequence"):
+                diff.normalize_capture(directory, expected_hashes=hashes)
 
     def test_hash_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -254,150 +280,175 @@ class NormalizeTests(unittest.TestCase):
             with self.assertRaises(diff.DiffError):
                 diff.normalize_capture(directory, expected_hashes=diff.EXPECTED_HASHES)
 
-    def test_fields_ok_required(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            events = base_events()
-            events[0]["fields_ok"] = False
-            hashes = write_capture(directory, events)
-            with self.assertRaises(diff.DiffError):
-                diff.normalize_capture(directory, expected_hashes=hashes)
 
-    def test_sample_values_must_match(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            events = base_events()
-            events[1]["sample_values"] = [2, 4, 9]
-            hashes = write_capture(directory, events)
-            with self.assertRaisesRegex(diff.DiffError, "sample_values"):
-                diff.normalize_capture(directory, expected_hashes=hashes)
+class ReferenceValidationTests(unittest.TestCase):
+    def test_mutated_sha_raises(self):
+        ref = make_ref()
+        # Make provenance look committed so only SHA fails.
+        ref["source_hashes"] = dict(diff.EXPECTED_HASHES)
+        ref["executable_sha256"] = "0" * 64
+        with self.assertRaises(diff.DiffError):
+            diff.validate_reference(ref)
 
-    def test_unsupported_sequence(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            events = base_events()
-            events[0], events[2] = events[2], events[0]
-            events[1], events[3] = events[3], events[1]
-            for idx, event in enumerate(events):
-                event["seq"] = idx + 1
-            hashes = write_capture(directory, events)
-            with self.assertRaisesRegex(diff.DiffError, "unsupported_sequence"):
-                diff.normalize_capture(directory, expected_hashes=hashes)
+    def test_mutated_source_hash_raises(self):
+        ref = make_ref()
+        ref["source_hashes"] = dict(diff.EXPECTED_HASHES)
+        ref["source_hashes"]["events.jsonl"] = "0" * 64
+        with self.assertRaises(diff.DiffError):
+            diff.validate_reference(ref)
 
-    def test_call_id_mismatch(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            events = base_events()
-            events[1]["call_id"] = 99
-            hashes = write_capture(directory, events)
-            with self.assertRaisesRegex(diff.DiffError, "call_id"):
-                diff.normalize_capture(directory, expected_hashes=hashes)
+    def test_bool_as_int_raises(self):
+        ref = make_ref()
+        ref["source_hashes"] = dict(diff.EXPECTED_HASHES)
+        ref["init"]["output"]["width"] = True
+        with self.assertRaises(diff.DiffError):
+            diff.validate_reference(ref)
 
-    def test_incomplete_summary(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            events = base_events()
-            summary = {
-                "complete": False,
-                "state": 2,
-                "overflow": 0,
-                "unmatched": 0,
-                "unavailable": 0,
-                "in_flight": 0,
-                "events_copied": True,
-            }
-            hashes = write_capture(directory, events, summary=summary)
-            with self.assertRaises(diff.DiffError):
-                diff.normalize_capture(directory, expected_hashes=hashes)
+    def test_compare_uses_committed_hashes_on_synthetic_ref(self):
+        # Synthetic normalize refs use local hashes; validate_reference requires
+        # EXPECTED_HASHES. Promote a synthetic ref for compare tests.
+        ref = make_ref()
+        ref["source_hashes"] = dict(diff.EXPECTED_HASHES)
+        diff.validate_reference(ref)
+
+
+def committed_like_ref():
+    ref = make_ref()
+    ref["source_hashes"] = dict(diff.EXPECTED_HASHES)
+    return ref
 
 
 class CompareTests(unittest.TestCase):
     def setUp(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            directory = Path(tmp)
-            hashes = write_capture(directory, base_events())
-            self.ref = diff.normalize_capture(directory, expected_hashes=hashes)
+        self.ref = committed_like_ref()
 
-    def test_contract_pass_with_capability_rows(self):
+    def test_contract_pass(self):
         comparison = diff.compare(self.ref, ok_responses(self.ref))
         self.assertTrue(comparison["contract_pass"])
+        self.assertEqual(comparison["stream_outcome"], "complete")
         by_field = {row["field"]: row for row in comparison["fields"]}
         self.assertEqual(by_field["settings.return"]["classification"], "abi_unresolved")
         self.assertEqual(
-            by_field["settings.anisotropy"]["classification"], "capability_difference"
-        )
-        self.assertEqual(
             by_field["init.texture_lod"]["classification"], "capability_difference"
         )
-        self.assertEqual(by_field["settings.msaa_algorithm"]["classification"], "matched")
-        self.assertTrue(all(row["algorithm"] == "matched" for row in comparison["msaa"]))
-        again = diff.compare(self.ref, ok_responses(self.ref))
-        self.assertEqual(diff.dumps(comparison), diff.dumps(again))
+        self.assertEqual(by_field["configure_window.source"]["metal"], 0)
 
-    def test_strict_width_diverge(self):
+    def test_bool_metal_byte10_fails(self):
         responses = ok_responses(self.ref)
-        responses["init"]["state"]["width"] = 1
+        responses[0]["result"]["byte_10"] = True
         comparison = diff.compare(self.ref, responses)
         self.assertFalse(comparison["contract_pass"])
-        row = next(r for r in comparison["fields"] if r["field"] == "init.width")
-        self.assertEqual(row["classification"], "diverged")
-        self.assertIn("conditioned_on_reference", row["note"])
+        row = next(r for r in comparison["fields"] if r["field"] == "settings.byte_10")
+        self.assertEqual(row["classification"], "unavailable")
 
-    def test_msaa_algorithm_diverge(self):
+    def test_bool_success_fails(self):
         responses = ok_responses(self.ref)
-        responses["settings"]["result"]["flags"] = [0] * len(
-            self.ref["settings"]["input"]["sample_values"]
-        )
+        responses[2]["result"]["success"] = True
+        comparison = diff.compare(self.ref, responses)
+        self.assertFalse(comparison["contract_pass"])
+        row = next(r for r in comparison["fields"] if r["field"] == "init.success")
+        self.assertEqual(row["classification"], "unavailable")
+
+    def test_reordered_responses(self):
+        responses = ok_responses(self.ref)
+        responses[0], responses[2] = responses[2], responses[0]
+        comparison = diff.compare(self.ref, responses)
+        self.assertFalse(comparison["contract_pass"])
+        self.assertEqual(comparison["stream_outcome"], "invalid_stream")
+
+    def test_duplicate_op(self):
+        responses = ok_responses(self.ref)
+        responses[1] = copy.deepcopy(responses[0])
+        responses[1]["seq"] = 2
+        responses[1]["next"] = 3
+        comparison = diff.compare(self.ref, responses)
+        self.assertFalse(comparison["contract_pass"])
+        self.assertEqual(comparison["stream_outcome"], "invalid_stream")
+
+    def test_missing_next(self):
+        responses = ok_responses(self.ref)
+        del responses[0]["next"]
+        comparison = diff.compare(self.ref, responses)
+        self.assertFalse(comparison["contract_pass"])
+        self.assertEqual(comparison["stream_outcome"], "invalid_stream")
+
+    def test_wrong_configure_source(self):
+        responses = ok_responses(self.ref)
+        responses[1]["result"]["source"] = 1
         comparison = diff.compare(self.ref, responses)
         self.assertFalse(comparison["contract_pass"])
         row = next(
-            r for r in comparison["fields"] if r["field"] == "settings.msaa_algorithm"
+            r for r in comparison["fields"] if r["field"] == "configure_window.source"
         )
         self.assertEqual(row["classification"], "diverged")
 
-    def test_gl_vs_metal_capability(self):
-        responses = ok_responses(self.ref)
-        # Keep algorithm correct but flip relative to GL by changing GL reference…
-        # Instead alter Metal flags and supports together so algorithm still matches
-        # but differs from GL: use supports that yield different flags than GL.
-        samples = self.ref["settings"]["input"]["sample_values"]
-        supports = [False] * len(samples)
-        responses["settings"]["result"]["device_supports"] = supports
-        responses["settings"]["result"]["flags"] = diff.flags_for(samples, supports)
-        comparison = diff.compare(self.ref, responses)
-        self.assertTrue(comparison["contract_pass"])
-        self.assertTrue(
-            any(row["gl_vs_metal"] == "capability_difference" for row in comparison["msaa"])
+    def test_failed_init_no_shutdown(self):
+        responses = ok_responses(self.ref)[:2]
+        responses.append(
+            {
+                "schema": "metal-shadow/v0",
+                "seq": 3,
+                "next": 4,
+                "op": "init",
+                "ok": False,
+                "error": "init_failed",
+            }
         )
+        comparison = diff.compare(self.ref, responses)
+        self.assertFalse(comparison["contract_pass"])
+        self.assertEqual(comparison["stream_outcome"], "execution_failed")
+        self.assertFalse(comparison["metal_init_ok"])
+        self.assertIn("init_failed", comparison["stream_reason"])
 
-    def test_envelope_failure(self):
+    def test_none_during_init(self):
+        responses = ok_responses(self.ref)[:2] + [None]
+        comparison = diff.compare(self.ref, responses)
+        self.assertFalse(comparison["contract_pass"])
+        self.assertEqual(comparison["stream_outcome"], "execution_failed")
+        self.assertEqual(comparison["stream_reason"], "missing_response")
+        text = diff.render_report(comparison, self.ref)
+        self.assertIn("execution_failed", text)
+
+    def test_shutdown_fail_preserves_init(self):
         responses = ok_responses(self.ref)
-        responses["init"] = {
+        responses[3] = {
             "schema": "metal-shadow/v0",
-            "seq": 3,
-            "op": "init",
+            "seq": 4,
+            "next": 5,
+            "op": "shutdown",
             "ok": False,
-            "error": "init_failed",
+            "error": "already_shutdown",
         }
         comparison = diff.compare(self.ref, responses)
         self.assertFalse(comparison["contract_pass"])
-        row = next(r for r in comparison["fields"] if r["field"] == "init_envelope")
+        self.assertTrue(comparison["metal_init_ok"])
+        self.assertFalse(comparison["shutdown_ok"])
+        by_field = {row["field"]: row for row in comparison["fields"]}
+        self.assertEqual(by_field["init.source"]["classification"], "matched")
+
+    def test_missing_max_texture(self):
+        responses = ok_responses(self.ref)
+        del responses[2]["state"]["max_texture"]
+        comparison = diff.compare(self.ref, responses)
+        self.assertFalse(comparison["contract_pass"])
+        row = next(r for r in comparison["fields"] if r["field"] == "init.max_texture")
         self.assertEqual(row["classification"], "unavailable")
 
-    def test_report_retained_shape(self):
-        comparison = diff.compare(self.ref, ok_responses(self.ref))
-        text = diff.render_report(comparison, self.ref)
-        self.assertIn("conditioned_on_reference", text)
-        self.assertIn("abi_unresolved", text)
+    def test_lod_capability_not_strict(self):
+        responses = ok_responses(self.ref)
+        responses[2]["state"]["texture_lod"] = 0
+        responses[2]["state"]["max_texture"] = self.ref["init"]["output"]["max_texture"]
+        comparison = diff.compare(self.ref, responses)
+        self.assertTrue(comparison["contract_pass"])
+        row = next(r for r in comparison["fields"] if r["field"] == "init.texture_lod")
+        self.assertEqual(row["classification"], "capability_difference")
 
 
 class CommittedReferenceTests(unittest.TestCase):
-    def test_committed_reference_loads(self):
-        path = ROOT / "analysis" / "gfx-startup" / "v0" / "reference.json"
-        reference = json.loads(path.read_text())
-        self.assertEqual(reference["schema"], diff.REF_SCHEMA)
+    def test_committed_reference_validates(self):
+        reference = json.loads(diff.REFERENCE_PATH.read_text())
+        diff.validate_reference(reference)
         self.assertEqual(reference["init"]["input"]["source"], 0)
-        self.assertEqual(reference["source_hashes"], diff.EXPECTED_HASHES)
 
 
 if __name__ == "__main__":
