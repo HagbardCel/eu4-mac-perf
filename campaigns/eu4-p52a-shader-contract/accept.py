@@ -31,7 +31,7 @@ ALLOWED = {
     "analysis/gfx-shader/v0/abi-contract.md",
     "analysis/gfx-shader/v0/binding-schema.json",
 }
-FIXTURE_PREFIX = "analysis/gfx-shader/v0/fixtures/"
+FIXTURE_PREFIX = "analysis/gfx-shader/v0/assets/"
 EVIDENCE_LEVELS = {"static_candidate", "statically_determined", "runtime_confirmed"}
 DISPOSITIONS = {"replace-metal", "verified-non-execution", "BLOCKER"}
 PREREQ_CLASSES = {"essential", "deferrable", "unresolved"}
@@ -247,21 +247,29 @@ def check_identity(workspace: Path, data: dict) -> str | None:
                         "status proved|constrained|reconstructed|observed "
                         "or a compiler-input hash"
                     )
-    # Optional recoverable hash verification
+    # Optional recoverable hash verification (install path or repo asset)
     effect = provenance.get("effect_asset") or {}
-    if isinstance(effect, dict) and effect.get("path") and effect.get("hash"):
-        rel = str(effect["path"])
-        if rel.startswith("analysis/gfx-shader/v0/fixtures/"):
-            err = verify_file_hash(workspace, rel, str(effect["hash"]))
-            if err:
-                return err
+    if isinstance(effect, dict) and effect.get("hash"):
+        candidates = []
+        for key in ("path", "install_path"):
+            val = effect.get(key)
+            if isinstance(val, str) and val:
+                candidates.append(Path(val) if val.startswith("/") else workspace / val)
+        for cand in candidates:
+            if cand.is_file():
+                digest = __import__("hashlib").sha256(cand.read_bytes()).hexdigest()
+                expected = str(effect["hash"]).lower()
+                if digest != expected:
+                    return f"hash mismatch for {cand}: expected {expected}, got {digest}"
+                break
     compiler = provenance.get("compiler_input") or {}
     if isinstance(compiler, dict) and compiler.get("path") and compiler.get("hash"):
         rel = str(compiler["path"])
-        if rel.startswith("analysis/gfx-shader/v0/fixtures/"):
+        if rel.startswith("analysis/gfx-shader/v0/"):
             err = verify_file_hash(workspace, rel, str(compiler["hash"]))
             if err:
                 return err
+
     # Corpus call-edge smoke: ShowBasicLoadText must call _GfxDraw and GetGfxEffect
     frame = workspace / "analysis" / "frame-model-static.json"
     if frame.is_file():

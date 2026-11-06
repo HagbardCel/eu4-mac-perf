@@ -98,7 +98,7 @@ can stop-and-reassess. Do not plan a general GLSL→MSL compiler here.
 - `analysis/gfx-shader/v0/consumer-use-def.json`
 - `analysis/gfx-shader/v0/abi-contract.md`
 - `analysis/gfx-shader/v0/binding-schema.json`
-- `analysis/gfx-shader/v0/fixtures/**` (only hashed recovered sources)
+- `analysis/gfx-shader/v0/assets/**` (only hashed recovered sources)
 
 Do not commit, reset, or push. Do not edit the campaign directory, the checker,
 or automation runner state. No production shader replacement. No new

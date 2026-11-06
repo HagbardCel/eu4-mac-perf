@@ -10,7 +10,7 @@
     "symbol": "__ZNK14CEffectHandler12GetGfxEffectEi",
     "index_field_offset": "0x2c660",
     "index_field_owner": "CEU3Graphics",
-    "evidence": "ShowBasicLoadText RVA 0xedfbef–0xedfbfc loads esi from 0x2c660(%rbx) then calls GetGfxEffect"
+    "evidence": "ShowBasicLoadText RVA 0xedfbef\u20130xedfbfc loads esi from 0x2c660(%rbx) then calls GetGfxEffect"
   },
   "decision_0003_notes": {
     "qualifying_live_invocation": false,
@@ -26,10 +26,11 @@
     "effect_asset": {
       "vfs_path": "gfx/FX/simple.lua",
       "on_disk_path": "/Applications/EuropaUniversalisIV/gfx/FX/simple.shader",
-      "path": "analysis/gfx-shader/v0/fixtures/simple.shader",
       "hash": "b40fd8506d6f0fbfa84927a31fb31ca88f1a26c121d49cb379997aed123b8f1a",
       "status": "observed",
-      "evidence": "AddSimpleEffect literal gfx/FX/simple.lua at RVA 0x148c0c6; on-disk Clausewitz script is simple.shader"
+      "evidence": "AddSimpleEffect literal gfx/FX/simple.lua at RVA 0x148c0c6; on-disk Clausewitz script is simple.shader",
+      "install_path": "/Applications/EuropaUniversalisIV/gfx/FX/simple.shader",
+      "repo_copy": "not_committed_preserve_original_bytes"
     },
     "source_generation": {
       "status": "constrained",
