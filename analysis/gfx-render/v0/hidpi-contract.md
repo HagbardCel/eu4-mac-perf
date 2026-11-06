@@ -36,32 +36,23 @@ pass clears the full **physical** attachment.
 ### Publication API
 
 ```c
-void eu4_gfx_publish_geometry_transition(uint32_t width, uint32_t height); /* phase 1 */
-void eu4_gfx_publish_physical_geometry(uint32_t width, uint32_t height);   /* phase 2 */
+void eu4_gfx_publish_physical_geometry(uint32_t width, uint32_t height);
 ```
 
-- Cocoa/main only. Both replace an immutable `{width, height, epoch}` committed snapshot
-  under a short mutex. Neither reads the engine master or dispatches to main.
-- Phase 1 records the intended physical size and marks a transition in progress. Clear and
-  present treat that as a genuine transition and decline as `GEOMETRY_STALE`.
-- Phase 2 is called only after `layer.drawableSize` has reached the intended size. It commits
-  the size, increments the epoch, and clears the in-progress flag.
-- The publication epoch is not the content generation. The epoch advances on every commit; the
-  content generation advances only when the effective tuple changes.
-- The Gfx path never writes the snapshot. It reads the committed snapshot and the logical
-  fields and combines them in `reconcile_game_geometry`. In-progress publication is observed
-  separately and never treated as a committed size.
+- Cocoa/main only. Replaces an immutable `{width, height, epoch}` snapshot under a short
+  mutex and increments the epoch. It never reads the engine master and never dispatches to
+  main.
+- The Gfx path never writes the snapshot. It reads the snapshot and the logical fields and
+  combines them in `reconcile_game_geometry`.
 - If no valid snapshot exists (older boot or a host), init uses `layer.drawableSize`; if that
   is zero, it uses the logical size. This fallback is project-derived, not a Metal promise.
 
 ### Effective generation
 
-- `geometryGeneration` is strictly monotonic: `commit_game_geometry` adds 1 when the effective
-  tuple changes and does nothing when the tuple is identical.
-- A repeated tuple does not reclaim an earlier generation. `1x -> 2x -> 1x` produces three
-  distinct generations; a pending clear from the first `1x` stays obsolete at the second `1x`.
-  A logical-only change gets a new generation even though the physical texture size is
-  unchanged.
+- A per-backend intern table maps an effective tuple to a generation. A new tuple gets the
+  next counter; a tuple seen before returns its earlier generation.
+- `1x -> 2x -> 1x` returns the original generation value. A logical-only change gets a new
+  generation even though the physical texture size is unchanged.
 - A generation change sets `awaitingFreshClear`, clears `readyForPresent`, and records the
   new tuple. It does not allocate, wait, or submit.
 
@@ -72,8 +63,8 @@ void eu4_gfx_publish_physical_geometry(uint32_t width, uint32_t height);   /* ph
 | Call site | Transition handling |
 | --- | --- |
 | `_GfxInit` / game RT create | commit the initial tuple and allocate the physical backbuffer |
-| `_GfxSetRenderTarget(null)` | obsolete pending -> drain, then allocate replacement before master writes |
-| production game `_GfxClear` | obsolete pending or in-progress transition -> stale; transition + idle -> reconcile, allocate/reuse, clear new buffer |
+| `_GfxSetRenderTarget(null)` | may drain pending on a transition; allocate replacement before master writes |
+| production game `_GfxClear` | transition + pending -> stale; transition + idle -> reconcile, allocate/reuse, clear new buffer |
 | `_GfxPresent` | after pending drain; transition -> stale before drawable acquisition |
 
 P4 diagnostic configure/clear/complete does not call it and never emits geometry stale.
@@ -97,14 +88,10 @@ Alongside the P5.1 flags (`gameContentsKnown`, `readyForPresent`, `pendingGameCo
 | Field | Meaning |
 | --- | --- |
 | cached logical/physical tuple | last reconciled effective geometry |
-| `geometryGeneration` | monotonic generation of the current tuple |
+| `geometryGeneration` | interned generation of the current tuple |
 | `pendingGameGeneration` | generation captured when the pending clear was submitted |
 | `clearedGeneration` | generation of the last completed game clear |
 | `awaitingFreshClear` | a transition occurred; current generation has no known contents |
-
-A pending command is **obsolete** when `pendingGameCommand != nil &&
-pendingGameGeneration != geometryGeneration`. That is a property of the pending command, not
-of the current call. An ordinary second clear (same generation) stays `UNSUPPORTED`.
 
 `drain_pending_game` sets `clearedGeneration = pendingGameGeneration`,
 `awaitingFreshClear = (pendingGameGeneration != geometryGeneration)`, and advertises
@@ -113,9 +100,9 @@ of the current call. An ordinary second clear (same generation) stays `UNSUPPORT
 ## Game clear
 
 1. Reconcile.
-2. Obsolete pending command, or a published transition in progress -> `GEOMETRY_STALE` without
-   waiting, submitting, or clearing the obsolete attachment. Pending state is not modified.
-3. Same-generation pending without a transition -> `UNSUPPORTED` (P5.1 fatal policy).
+2. Geometry transition + pending -> `GEOMETRY_STALE` without waiting, submitting, or clearing
+   the obsolete attachment.
+3. Pending without a transition -> `UNSUPPORTED` (P5.1 fatal policy).
 4. Allocate/reuse the backbuffer at the current physical size.
 5. Existing logical viewport, color-mask, flags, scissor, and color gates apply.
 6. Encode, commit, set `pendingGameGeneration = geometryGeneration`.
@@ -125,18 +112,17 @@ pending rejections.
 
 ## Present
 
-1. Observe the committed physical snapshot and the transition flag.
+1. Observe the physical epoch.
 2. Drain a pending game command.
 3. Reconcile.
 4. Awaiting a fresh clear or generation mismatch -> `GEOMETRY_STALE`, before acquiring a
    drawable.
 5. Require `gameContentsKnown` and `readyForPresent`.
 6. Acquire the injected destination or `nextDrawable`.
-7. Recheck the committed epoch and the transition flag; if either moved, reconcile again.
-   Transition/stale -> `GEOMETRY_STALE` and do not present the acquired drawable.
-8. With committed geometry stable, require `destination.width == gameWidth`,
-   `destination.height == gameHeight`, `destination.pixelFormat == MTLPixelFormatBGRA8Unorm`
-   (physical), then blit 1:1.
+7. Recheck the epoch; if it moved, reconcile again. Transition/stale -> `GEOMETRY_STALE` and
+   do not present the acquired drawable.
+8. Require `destination.width == gameWidth`, `destination.height == gameHeight`,
+   `destination.pixelFormat == MTLPixelFormatBGRA8Unorm` (physical), then blit 1:1.
 
 A missing drawable, allocation failure, or size/format mismatch with unchanged geometry stays
 `FAILED`. Repeated present after a transition stays `GEOMETRY_STALE` until a fresh game clear
@@ -145,27 +131,22 @@ completes at the current generation.
 ## `_GfxSetRenderTarget(null)`
 
 - Non-null stays `UNSUPPORTED` and does not mutate the master.
-- Obsolete pending (`pending_is_obsolete`): waiting is allowed; drain it, then allocate the
-  replacement before any master write.
-- Same-generation pending: keeps the P5.1 `UNSUPPORTED` rejection, even without a transition in
-  the current call.
+- On a verified transition, waiting is allowed: drain a pending game command, then allocate
+  the replacement before any master write.
 - Allocation failure returns `FAILED`; the engine-visible master image is unchanged and the
   old texture is retained. Production stops.
+- Without a transition, `pendingGameCommand != nil` keeps the P5.1 `UNSUPPORTED` rejection.
 - Only after a successful allocation: write the logical viewport from `+0xa0/+0xa4` and
   store null at `+0x78`.
 
 ## Cocoa lifecycle
 
-The production `EU4MetalChildView` lives in `benchmark/eu4_metal_geometry_view.{h,m}` and is
-linked by both boot and the test host:
+The boot host uses an `NSView` subclass for the Metal child view:
 
 - `autoresizingMask = NSViewWidthSizable | NSViewHeightSizable` tracks parent content bounds.
 - `setFrameSize:`, `layout`, and `viewDidChangeBackingProperties` recompute
   `[view convertRectToBacking:view.bounds]`.
-- A recompute whose backing size, `layer.drawableSize`, and committed snapshot already match
-  returns without publishing or advancing the content generation.
-- Otherwise the transition is two-phase: publish transition-in-progress at the intended size,
-  set `layer.drawableSize`, then publish the committed epoch.
+- Each recompute sets `layer.drawableSize` and publishes physical dimensions + epoch.
 - Creation publishes once before `_GfxInit` allocates the first game backbuffer.
 
 No synchronous dispatch to main occurs while holding a renderer lock or waiting on the GPU.
@@ -180,7 +161,6 @@ No synchronous dispatch to main occurs while holding a renderer lock or waiting 
 4. A stale outcome submits no command, waits on no GPU, and acquires no drawable.
 5. A failed replacement leaves the previous texture and the engine-visible master intact.
 6. The P4 diagnostic path is unchanged and never emits geometry stale.
-7. Content generations never repeat, so a superseded pending clear cannot become current again.
 
 ## Test coverage
 
@@ -194,20 +174,13 @@ wrappers `eu4_gfx_clear`, `eu4_gfx_set_render_target`, and `eu4_gfx_present`:
 - changed and idle: a clear without SetRT allocates and clears the new physical buffer
 - repeated present remains stale
 - SetRT(null) drains a pending resize and replaces the texture
-- SetRT(null) drains an obsolete pending clear before allocating
 - a failed SetRT replacement keeps the old texture and the master image
 - ordinary pending second clear without a transition is still fatal (`exit 2`)
 - logical-only generation bump
-- strictly monotonic generations, including a repeated tuple not reclaiming an earlier value
-- `1x -> 2x -> 1x` pending clear stays stale until a new clear
-- identical reobserve publishes nothing and keeps the generation
-- both two-phase interleavings: transition before `layer.drawableSize`, and
-  `layer.drawableSize` before commit
+- `1x -> 2x -> 1x` generation identity
 - missing drawable with unchanged geometry stays a failure
-- the production `EU4MetalChildView` in a real `NSWindow` verifies frame, `layer.drawableSize`,
-  and published/committed geometry, and presents to a real `CAMetalDrawable` before and after
-  the bounds change with GPU readback; if no drawable can be acquired the test reports the
-  host's `unavailable` path
+- a real `CAMetalDrawable` present before and after a geometry update when the host can
+  acquire one; otherwise the test reports the host's `unavailable` path
 
 P5.1 exact-match present remains the gate for all non-transition size/format failures.
 

@@ -8,16 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "benchmark" / "eu4_gfx_init.mm"
 BUFFERS = ROOT / "benchmark" / "eu4_gfx_buffers.mm"
 HOST_SOURCE = ROOT / "tests" / "gfx_hidpi_host.mm"
-GEOMETRY_VIEW = ROOT / "benchmark" / "eu4_metal_geometry_view.m"
 EVENTS = ROOT / "benchmark" / "eu4_metal_events.c"
 HOST = ROOT / "benchmark" / ".build" / "gfx_hidpi_host"
 
 BUILD = [
     "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-lc++",
-    "-framework", "AppKit", "-framework", "Foundation", "-framework", "Metal",
-    "-framework", "QuartzCore",
-    "-o", str(HOST), str(HOST_SOURCE), str(SOURCE), str(BUFFERS), str(GEOMETRY_VIEW),
-    str(EVENTS),
+    "-framework", "Foundation", "-framework", "Metal", "-framework", "QuartzCore",
+    "-o", str(HOST), str(HOST_SOURCE), str(SOURCE), str(BUFFERS), str(EVENTS),
 ]
 
 
@@ -51,6 +48,13 @@ class GfxHiDPITests(unittest.TestCase):
         ran = run_host("pending-double-clear")
         self.assertEqual(ran.returncode, 2,
                          ran.stderr.strip() or "ordinary pending clear was not fatal")
+
+    def test_real_drawable_scale_change(self):
+        ran = run_host("real")
+        if ran.returncode == 77:
+            raise unittest.SkipTest("host unavailable: CAMetalLayer.nextDrawable returned nil")
+        if ran.returncode:
+            self.fail(ran.stderr.strip() or ran.stdout.strip() or "real drawable host failed")
 
 
 if __name__ == "__main__":
