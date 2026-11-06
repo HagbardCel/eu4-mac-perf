@@ -44,6 +44,8 @@ At most one outstanding clear per backend. `clear_checked` while a command is pe
 
 Successful `clear` reports submitted, completed command-buffer status, and `contents_known: true` after `complete_offscreen`. `read_offscreen` exports bytes only when contents are known. Committed GPU failure uses `gpu_failed` with `executed: true` and terminates. Preflight rejection stays recoverable.
 
-## Evidence limits
+## Non-claims
 
-An independent GL full-target scissor clear can prove declared color-clear BGRA bytes. It does not certify the complete original `_GfxClear` function. A uniform full-attachment clear does not prove row orientation. Committed command-buffer failure classification (`gpu_failed`, `executed: true`) is implemented in the worker but is not exercised by automated tests in PR4.
+- **GPU failure classification.** The `gpu_failed` terminal path is implemented but not fault-injection-tested, as documented.
+- **Original-engine equivalence.** The independent GL reference demonstrates the bounded color-clear behavior, not equivalence of EU4's entire `_GfxClear` implementation. A uniform full-attachment clear also does not prove row orientation.
+- **Live rendering.** No actual EU4 draw or frame is demonstrated.
