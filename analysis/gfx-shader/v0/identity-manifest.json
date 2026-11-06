@@ -1,0 +1,75 @@
+{
+  "schema": "eu4-gfx-shader-identity/v0",
+  "evidence_level": "static_candidate",
+  "callsite_draw_rva": "0xedfcd1",
+  "callsite_call_rva": "0xedfccc",
+  "owner_symbol": "__ZN12CEU3Graphics17ShowBasicLoadTextERK7CStringbb",
+  "owner_rva": "0xedfaf8",
+  "uses_get_gfx_effect": true,
+  "get_gfx_effect": {
+    "symbol": "__ZNK14CEffectHandler12GetGfxEffectEi",
+    "index_field_offset": "0x2c660",
+    "index_field_owner": "CEU3Graphics",
+    "evidence": "ShowBasicLoadText RVA 0xedfbef\u20130xedfbfc loads esi from 0x2c660(%rbx) then calls GetGfxEffect"
+  },
+  "decision_0003_notes": {
+    "qualifying_live_invocation": false,
+    "cited_sessions": [
+      "results/20261102T210315Z-metal-init",
+      "results/20261102T213704Z-metal-init"
+    ],
+    "primitive_type_set_on_path": 4,
+    "decision_predicate_mode": 5,
+    "mode_tension": "Unresolved: callsite sets GL_TRIANGLES(4); Decision 0003 filters mode 5"
+  },
+  "provenance": {
+    "effect_asset": {
+      "vfs_path": "gfx/FX/simple.lua",
+      "on_disk_path": "/Applications/EuropaUniversalisIV/gfx/FX/simple.shader",
+      "hash": "b40fd8506d6f0fbfa84927a31fb31ca88f1a26c121d49cb379997aed123b8f1a",
+      "status": "observed",
+      "evidence": "AddSimpleEffect literal gfx/FX/simple.lua at RVA 0x148c0c6; on-disk Clausewitz script is simple.shader",
+      "install_path": "/Applications/EuropaUniversalisIV/gfx/FX/simple.shader",
+      "repo_copy": "not_committed_preserve_original_bytes"
+    },
+    "source_generation": {
+      "status": "constrained",
+      "build_glsl": "_GfxBuildAndAddVertexShader / _GfxBuildAndAddPixelShader call BuildGLSL before Add*",
+      "technique": "Simple",
+      "vertex_main": "VertexShaderSimple",
+      "pixel_main": "PixelShaderSimple",
+      "includes": [],
+      "evidence": "simple.shader Effect Simple block; AddGfxEffect technique argument Simple at RVA 0x148c0cd"
+    },
+    "variant_inputs": {
+      "status": "unresolved",
+      "unresolved_selector": "BuildGLSL macros / glGetString(GL_VENDOR) and related capability defines",
+      "evidence": "metal-init sessions stopped on glGetString(GL_VENDOR) in BuildGLSL (e.g. results/20261102T163915Z-metal-init); exact define set not closed offline"
+    },
+    "compiler_input": {
+      "status": "unresolved",
+      "hash": "not_recovered",
+      "note": "Asset MainCode bodies are available in the fixture; byte-identical BuildGLSL output is not recovered"
+    },
+    "metal_translation": {
+      "status": "planned",
+      "hash": "planned",
+      "note": "P5.2b/c; do not key a cache until compiler-input identity is closed"
+    }
+  },
+  "variants": [
+    {
+      "id": "simple-lua-Simple",
+      "effect": "Simple",
+      "asset": "gfx/FX/simple.lua",
+      "vertex": "VertexShaderSimple",
+      "pixel": "PixelShaderSimple",
+      "role": "target_callsite",
+      "build_glsl_macros": "unresolved"
+    }
+  ],
+  "not_color": {
+    "status": "Project-derived",
+    "evidence": "Callsite effect is Simple from simple.lua, not Color from color.lua / Stage D Color pair"
+  }
+}
