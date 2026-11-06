@@ -13,6 +13,10 @@
 #import "eu4_gfx_draw_capture.h"
 #import "eu4_gfx_entry_patch.h"
 #import "eu4_gfx_init.h"
+#import "eu4_metal_geometry_view.h"
+/* The pinned boot build list compiles only this translation unit; include the
+   shared production component instead of a second view implementation. */
+#import "eu4_metal_geometry_view.m"
 #import "eu4_gfx_shader.h"
 #import "eu4_gfx_texture.h"
 #import "eu4_metal_boot_patch.h"
@@ -316,40 +320,6 @@ static void record_view_points(NSView *view) {
     g_view_points_w = view.bounds.size.width;
     g_view_points_h = view.bounds.size.height;
 }
-
-/* Tracks the parent content bounds and backing scale. Runs on the main thread
-   only; publication swaps an immutable snapshot and takes no renderer lock. */
-@interface EU4MetalChildView : NSView
-@property (nonatomic, weak) CAMetalLayer *metalLayer;
-@end
-
-@implementation EU4MetalChildView
-- (void)syncDrawableGeometry {
-    CAMetalLayer *layer = self.metalLayer;
-    if (layer == nil) {
-        return;
-    }
-    NSRect backing = [self convertRectToBacking:self.bounds];
-    if (backing.size.width <= 0 || backing.size.height <= 0) {
-        return;
-    }
-    layer.drawableSize = backing.size;
-    eu4_gfx_publish_physical_geometry((uint32_t)backing.size.width,
-                                      (uint32_t)backing.size.height);
-}
-- (void)setFrameSize:(NSSize)newSize {
-    [super setFrameSize:newSize];
-    [self syncDrawableGeometry];
-}
-- (void)layout {
-    [super layout];
-    [self syncDrawableGeometry];
-}
-- (void)viewDidChangeBackingProperties {
-    [super viewDidChangeBackingProperties];
-    [self syncDrawableGeometry];
-}
-@end
 
 static void boot_window(void *window, uint32_t incoming, uint32_t passed) {
     uint32_t reported = g_get_flags(window);
