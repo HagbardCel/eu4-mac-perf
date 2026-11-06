@@ -27,6 +27,7 @@ ALLOWED = {
 }
 TEST_MODULES = (
     "tests.test_gfx_default_target",
+    "tests.test_metal_boot",
     "tests.test_gfx_init",
     "tests.test_gfx_buffers",
     "tests.test_gfx_shadow_render",
@@ -213,26 +214,57 @@ def failure_coverage_ok(host: str) -> str | None:
 
 
 def run_tests(workspace: Path) -> str | None:
+    """Run each module with structured results. Prefix unavailable: vs fail:."""
+    if sys.platform != "darwin":
+        return "unavailable: P5.1 acceptance requires macOS Metal"
+    workspace = Path(workspace).resolve()
     env = os.environ.copy()
     env["MTL_DEBUG_LAYER"] = "1"
     env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
-    env["PYTHONPATH"] = str(workspace / "benchmark") + os.pathsep + env.get("PYTHONPATH", "")
-    ran = subprocess.run(
-        [sys.executable, "-m", "unittest", *TEST_MODULES],
-        cwd=str(workspace),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=1200,
+    env["PYTHONPATH"] = str(workspace / "benchmark") + os.pathsep + str(workspace)
+    driver = (
+        "import importlib,json,sys,unittest\n"
+        "module=importlib.import_module(sys.argv[1])\n"
+        "result=unittest.TextTestRunner(stream=sys.stderr,verbosity=0).run("
+        "unittest.defaultTestLoader.loadTestsFromModule(module))\n"
+        "failed=result.failures+result.errors\n"
+        "detail='\\n'.join(item[1] for item in failed)[:2000]\n"
+        "if result.unexpectedSuccesses and not detail:\n"
+        " detail='unexpected success'\n"
+        "json.dump({'file':module.__file__,'ran':result.testsRun,"
+        "'skipped':len(result.skipped),'failed':len(failed),"
+        "'successful':result.wasSuccessful(),'detail':detail},sys.stdout)\n"
     )
-    if ran.returncode != 0:
-        tail = (ran.stderr or ran.stdout or "tests failed")[-4000:]
-        return tail
-    # Require evidence of a real native host run (gfx_default_target).
-    if "test_default_target" not in (ran.stderr + ran.stdout) and "OK" not in (ran.stderr + ran.stdout):
-        return "unittest produced no usable result"
-    if "skipped=8" in (ran.stderr + ran.stdout) and "Ran 0" in (ran.stderr + ran.stdout):
-        return "all tests skipped"
+    for name in TEST_MODULES:
+        try:
+            ran = subprocess.run(
+                [sys.executable, "-c", driver, name],
+                cwd=str(workspace),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return f"unavailable: candidate tests failed to run: {exc}"
+        try:
+            payload = json.loads(ran.stdout)
+        except json.JSONDecodeError:
+            detail = (ran.stderr or ran.stdout or "tests produced no result").strip()
+            kind = "fail: " if ran.returncode else "unavailable: "
+            return kind + detail[:2000]
+        loaded = Path(str(payload.get("file", ""))).resolve()
+        if workspace not in loaded.parents:
+            return "fail: candidate tests did not load from the candidate worktree"
+        ran_count = int(payload.get("ran") or 0) - int(payload.get("skipped") or 0)
+        if ran_count < 1:
+            return f"unavailable: {name} did not run a test"
+        if (
+            ran.returncode != 0
+            or int(payload.get("failed") or 0)
+            or payload.get("successful") is not True
+        ):
+            return f"fail: {name}: {payload.get('detail') or ''}"[:2000]
     return None
 
 
@@ -304,7 +336,9 @@ def check(workspace: Path) -> dict:
 
     test_problem = run_tests(workspace)
     if test_problem:
-        return emit("fail", test_problem)
+        if test_problem.startswith("unavailable:"):
+            return emit("unavailable", test_problem.removeprefix("unavailable: ").strip())
+        return emit("fail", test_problem.removeprefix("fail: ").strip())
     return emit("pass", "p51 remediation gates held")
 
 

@@ -51,7 +51,7 @@ Production: blit game → drawable → `presentDrawable` → commit → wait. No
 
 Test-only opt-in (same command buffer): blit game → drawable (or injected destination texture) → blit destination → staging → present when using a real drawable → commit → wait → validate staging. Requires `layer.framebufferOnly = NO` on the Metal boot path. Host uses deterministic seams for nil-drawable and staging-alloc failure.
 
-Limitation (not a live-drawable claim): every automated size/format check uses a host-injected `MTLTexture` destination, because `CAMetalDrawable` texture dimensions are fixed by the layer (`drawableSize` from `convertRectToBacking:`) and cannot be authored at an arbitrary size by the test. The production drawable path is verified for a same-size/`BGRA8Unorm` destination plus the blit/present ordering.
+Limitation (not a live-drawable claim): every automated size/format check uses a host-injected `MTLTexture` destination, because `CAMetalDrawable` texture dimensions are fixed by the layer (`drawableSize` from `convertRectToBacking:`) and cannot be authored at an arbitrary size by the test. Those tests prove the destination-blit path and exact size/`BGRA8Unorm` gates on that injected texture; they do not exercise `nextDrawable` acquisition or `presentDrawable` scheduling.
 
 ## Activation
 
