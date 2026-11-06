@@ -151,7 +151,7 @@ def parse_gfx_entries(text: str) -> tuple[tuple[str, int, int, str, bytes], ...]
         name, entry_text, end_text, fn, encoded = match.groups()
         prefix = bytes.fromhex(encoded.replace("\\x", ""))
         entry, end = int(entry_text, 16), int(end_text, 16)
-        if not 5 <= len(prefix) <= 8 or end <= entry:
+        if not 5 <= len(prefix) <= 11 or end <= entry:
             raise ValueError(f"gfx registry line {number}")
         found.append((name, entry, end, fn, prefix))
     if not found:

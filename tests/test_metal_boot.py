@@ -68,18 +68,20 @@ class MetalBootTests(unittest.TestCase):
             )
             self.assertEqual(replaced["status"], "post_init_failure")
             self.assertTrue(replaced["raises"])
+        # Call site just past _GfxSetVertexBuffers end (exclusive); outside every GFX_ENTRY.
+        outside = "0x15ec11d"
         later = probe.metal_init_outcome(
-            True, "after_init", "stop", 2, 7, 7, False, "gl", image, "0x15ebe60"
+            True, "after_init", "stop", 2, 7, 7, False, "gl", image, outside
         )
         self.assertEqual(later["status"], "complete")
         self.assertFalse(later["raises"])
         blocked = probe.metal_init_outcome(
-            True, "after_init", "stop", 2, 7, 7, False, "blocked_at", image, "0x15ebe60"
+            True, "after_init", "stop", 2, 7, 7, False, "blocked_at", image, outside
         )
         self.assertEqual(blocked["status"], "blocked_at")
         self.assertFalse(blocked["raises"])
         drawn = probe.metal_init_outcome(
-            True, "after_init", "stop", 2, 7, 7, False, "draw", image, "0x15ebe60"
+            True, "after_init", "stop", 2, 7, 7, False, "draw", image, outside
         )
         self.assertEqual(drawn["status"], "draw_reached")
         self.assertFalse(drawn["raises"])

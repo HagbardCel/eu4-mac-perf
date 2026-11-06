@@ -6,8 +6,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* The prefix is a complete-instruction run of 5 to 8 bytes. The patch is
-   e9 rel32 inside that prefix, then nop. The count is eu4_gfx_entries.def. */
+/* The prefix is a complete-instruction run of 5 to 11 bytes. 11 is the
+   complete _GfxPresent prologue (push rbp; mov rsp,rbp; mov 0x178(%rdi),rdi);
+   the next byte there starts a call instruction. The patch is e9 rel32 inside
+   that prefix, then nop. The count is eu4_gfx_entries.def. */
 
 #define GFX_ENTRY(name, entry, end, fn, prefix) +1
 enum { EU4_GFX_ENTRY_MAX = 0

@@ -544,6 +544,7 @@ __attribute__((constructor)) static void eu4_metal_boot_init(void) {
         }
         eu4_metal_events_set_dir(dir);
         eu4_gfx_set_terminate(metal_init_terminate);
+        eu4_gfx_enable_game_window();
     } else {
         const char *path = getenv("EU4_METAL_BOOT_RECEIPT");
         if (path == NULL || path[0] != '/') {

@@ -133,6 +133,13 @@ static int g_throw_at;
 static int g_allocs;
 static int g_no_device;
 static int g_fail_offscreen_alloc;
+static int g_fail_game_alloc;
+static int g_fail_next_drawable;
+static int g_fail_present_staging_alloc;
+static void *g_present_drawable;
+static void *g_present_readback;
+static size_t g_present_readback_cap;
+static int g_enable_game_window;
 static int g_phase;
 static int g_succeeded;
 static void *g_master;
@@ -231,6 +238,21 @@ void eu4_gfx_test_throw_on_alloc(int n) { g_throw_at = n; }
 void eu4_gfx_test_no_device(int on) { g_no_device = on; }
 
 void eu4_gfx_test_fail_offscreen_alloc(int on) { g_fail_offscreen_alloc = on; }
+
+void eu4_gfx_test_fail_game_alloc(int on) { g_fail_game_alloc = on; }
+
+void eu4_gfx_test_fail_next_drawable(int on) { g_fail_next_drawable = on; }
+
+void eu4_gfx_test_fail_present_staging_alloc(int on) { g_fail_present_staging_alloc = on; }
+
+void eu4_gfx_test_set_present_drawable(void *texture) { g_present_drawable = texture; }
+
+void eu4_gfx_test_set_present_readback(void *dest, size_t capacity) {
+    g_present_readback = dest;
+    g_present_readback_cap = capacity;
+}
+
+void eu4_gfx_enable_game_window(void) { g_enable_game_window = 1; }
 
 int eu4_gfx_phase(void) { return g_phase; }
 
@@ -438,6 +460,53 @@ static uint32_t max_texture(id<MTLDevice> device) {
     return 16384;
 }
 
+static eu4_gfx_clear_status allocate_game_backbuffer(__unsafe_unretained EU4GfxBackend *backend,
+                                                     uint32_t width, uint32_t height) {
+    if (backend == nil || backend.device == nil || backend.poisoned) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (backend.pendingGameCommand != nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (width == 0 || height == 0) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    uint64_t pixels = (uint64_t)width * (uint64_t)height;
+    if (pixels > (uint64_t)UINT32_MAX / 4u) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    uint32_t texture_limit = max_texture(backend.device);
+    if (width > texture_limit || height > texture_limit) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (backend.gameColorTarget != nil && backend.gameWidth == width &&
+        backend.gameHeight == height) {
+        return EU4_GFX_CLEAR_OK;
+    }
+    MTLTextureDescriptor *desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                           width:width
+                                                          height:height
+                                                       mipmapped:NO];
+    desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+    desc.storageMode = MTLStorageModeShared;
+    id<MTLTexture> next = nil;
+    if (!g_fail_game_alloc) {
+        next = [backend.device newTextureWithDescriptor:desc];
+    } else {
+        g_fail_game_alloc = 0;
+    }
+    if (next == nil) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    backend.gameColorTarget = next;
+    backend.gameWidth = width;
+    backend.gameHeight = height;
+    backend.gameContentsKnown = NO;
+    backend.readyForPresent = NO;
+    return EU4_GFX_CLEAR_OK;
+}
+
 static int install_one(EU4GfxBackend *backend, void *master, int slot, void *header) {
     if (slot == 0x80) {
         backend.blendHeader = header;
@@ -602,6 +671,16 @@ static int fill_master(void *master, void *handle) {
     [gpu replaceRegion:MTLRegionMake2D(0, 0, 4, 4) mipmapLevel:0 withBytes:white bytesPerRow:16];
     backend.fallback = gpu;
     install_one(backend, master, 0x98, texture);
+    if (g_enable_game_window) {
+        backend.gameWindow = YES;
+        if (width <= 0 || height <= 0) {
+            return -1;
+        }
+        if (allocate_game_backbuffer(backend, (uint32_t)width, (uint32_t)height) !=
+            EU4_GFX_CLEAR_OK) {
+            return -1;
+        }
+    }
     return 0;
 }
 
@@ -666,6 +745,8 @@ void *eu4_gfx_init(void *handle, uint8_t *success) {
 
 static eu4_gfx_clear_status drain_pending_clear(__unsafe_unretained EU4GfxBackend *backend,
                                                 int *command_status);
+static eu4_gfx_clear_status drain_pending_game(__unsafe_unretained EU4GfxBackend *backend,
+                                               int *command_status);
 
 void eu4_gfx_shutdown(void *master) {
     const void *caller = __builtin_return_address(0);
@@ -673,6 +754,11 @@ void eu4_gfx_shutdown(void *master) {
         void *raw = load_ptr(master, 0x180);
         if (raw != NULL) {
             __unsafe_unretained EU4GfxBackend *backend = (__bridge EU4GfxBackend *)raw;
+            if (backend.pendingGameCommand != nil) {
+                if (drain_pending_game(backend, NULL) == EU4_GFX_CLEAR_FAILED) {
+                    eu4_gfx_stop("_GfxShutdown", "gpu_failed", caller);
+                }
+            }
             if (backend.pendingClear != nil) {
                 if (drain_pending_clear(backend, NULL) == EU4_GFX_CLEAR_FAILED) {
                     eu4_gfx_stop("_GfxShutdown", "gpu_failed", caller);
@@ -943,16 +1029,77 @@ static eu4_gfx_clear_status drain_pending_clear(__unsafe_unretained EU4GfxBacken
     backend.pendingClear = nil;
     if (status != MTLCommandBufferStatusCompleted || command.error != nil) {
         backend.contentsKnown = NO;
+        backend.poisoned = YES;
         return EU4_GFX_CLEAR_FAILED;
     }
     backend.contentsKnown = YES;
     return EU4_GFX_CLEAR_OK;
 }
 
+static eu4_gfx_clear_status drain_pending_game(__unsafe_unretained EU4GfxBackend *backend,
+                                               int *command_status) {
+    id<MTLCommandBuffer> command = backend.pendingGameCommand;
+    if (command == nil) {
+        if (command_status != NULL) {
+            *command_status = (int)MTLCommandBufferStatusNotEnqueued;
+        }
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    [command waitUntilCompleted];
+    MTLCommandBufferStatus status = command.status;
+    if (command_status != NULL) {
+        *command_status = (int)status;
+    }
+    backend.pendingGameCommand = nil;
+    if (status != MTLCommandBufferStatusCompleted || command.error != nil) {
+        backend.gameContentsKnown = NO;
+        backend.readyForPresent = NO;
+        backend.poisoned = YES;
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    backend.gameContentsKnown = YES;
+    backend.readyForPresent = YES;
+    return EU4_GFX_CLEAR_OK;
+}
+
+static eu4_gfx_clear_status encode_color_clear(__unsafe_unretained EU4GfxBackend *backend,
+                                               id<MTLTexture> target, const float *color,
+                                               id *out_command) {
+    static const float opaque_black[4] = {0.f, 0.f, 0.f, 1.f};
+    const float *src = color != NULL ? color : opaque_black;
+    id<MTLCommandQueue> queue = backend.queue;
+    id<MTLCommandBuffer> command = queue != nil ? [queue commandBuffer] : nil;
+    if (command == nil) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = target;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(src[0], src[1], src[2], src[3]);
+    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+    if (encoder == nil) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    [encoder endEncoding];
+    *out_command = command;
+    return EU4_GFX_CLEAR_OK;
+}
+
+static int clear_gates(__unsafe_unretained EU4GfxBackend *backend, void *master, unsigned flags,
+                       const float *color, uint32_t width, uint32_t height) {
+    if (backend.poisoned || flags != 1u || backend.scissorValid ||
+        !viewport_covers_attachment(master, width, height) || !color_mask_accepted(master) ||
+        !color_in_range(color)) {
+        return 0;
+    }
+    return 1;
+}
+
 eu4_gfx_clear_status eu4_gfx_configure_offscreen(void *master, uint32_t width, uint32_t height) {
     void *raw = backend_raw_for_master(master);
     __unsafe_unretained EU4GfxBackend *backend = (__bridge EU4GfxBackend *)raw;
-    if (backend == nil || backend.device == nil) {
+    if (backend == nil || backend.device == nil || backend.poisoned) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     if (backend.pendingClear != nil) {
@@ -1002,49 +1149,58 @@ eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags, const f
     void *master = master_from_handle(handle);
     __unsafe_unretained EU4GfxBackend *backend =
         (__bridge EU4GfxBackend *)backend_raw_for_master(master);
-    if (backend == nil) {
+    if (backend == nil || backend.poisoned) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     if (backend.pendingClear != nil) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
-    if (flags != 1u) {
-        return EU4_GFX_CLEAR_UNSUPPORTED;
-    }
     if (backend.colorTarget == nil || backend.colorWidth == 0 || backend.colorHeight == 0) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
-    if (backend.scissorValid) {
+    if (!clear_gates(backend, master, flags, color, backend.colorWidth, backend.colorHeight)) {
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
-    if (!viewport_covers_attachment(master, backend.colorWidth, backend.colorHeight)) {
-        return EU4_GFX_CLEAR_UNSUPPORTED;
+    id command = nil;
+    eu4_gfx_clear_status encoded =
+        encode_color_clear(backend, backend.colorTarget, color, &command);
+    if (encoded != EU4_GFX_CLEAR_OK) {
+        return encoded;
     }
-    if (!color_mask_accepted(master)) {
-        return EU4_GFX_CLEAR_UNSUPPORTED;
-    }
-    if (!color_in_range(color)) {
-        return EU4_GFX_CLEAR_UNSUPPORTED;
-    }
-    static const float opaque_black[4] = {0.f, 0.f, 0.f, 1.f};
-    const float *src = color != NULL ? color : opaque_black;
-    id<MTLCommandQueue> queue = backend.queue;
-    id<MTLCommandBuffer> command = queue != nil ? [queue commandBuffer] : nil;
-    if (command == nil) {
-        return EU4_GFX_CLEAR_FAILED;
-    }
-    MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
-    pass.colorAttachments[0].texture = backend.colorTarget;
-    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    pass.colorAttachments[0].clearColor = MTLClearColorMake(src[0], src[1], src[2], src[3]);
-    id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
-    if (encoder == nil) {
-        return EU4_GFX_CLEAR_FAILED;
-    }
-    [encoder endEncoding];
     backend.contentsKnown = NO;
     backend.pendingClear = command;
+    [command commit];
+    return EU4_GFX_CLEAR_OK;
+}
+
+static eu4_gfx_clear_status clear_game_checked(void *handle, unsigned flags, const float *color) {
+    void *master = master_from_handle(handle);
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    if (backend == nil || backend.poisoned || !backend.gameWindow) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (load_ptr(master, 0x78) != NULL) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (backend.pendingGameCommand != nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (backend.gameColorTarget == nil || backend.gameWidth == 0 || backend.gameHeight == 0) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (!clear_gates(backend, master, flags, color, backend.gameWidth, backend.gameHeight)) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    id command = nil;
+    eu4_gfx_clear_status encoded =
+        encode_color_clear(backend, backend.gameColorTarget, color, &command);
+    if (encoded != EU4_GFX_CLEAR_OK) {
+        return encoded;
+    }
+    backend.gameContentsKnown = NO;
+    backend.readyForPresent = NO;
+    backend.pendingGameCommand = command;
     [command commit];
     return EU4_GFX_CLEAR_OK;
 }
@@ -1056,6 +1212,27 @@ eu4_gfx_clear_status eu4_gfx_complete_offscreen(void *master, int *command_statu
         return EU4_GFX_CLEAR_UNSUPPORTED;
     }
     return drain_pending_clear(backend, command_status);
+}
+
+eu4_gfx_clear_status eu4_gfx_complete_game(void *master, int *command_status) {
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    if (backend == nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    return drain_pending_game(backend, command_status);
+}
+
+int eu4_gfx_game_contents_known(void *master) {
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    return backend != nil && backend.gameContentsKnown ? 1 : 0;
+}
+
+int eu4_gfx_ready_for_present(void *master) {
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    return backend != nil && backend.readyForPresent ? 1 : 0;
 }
 
 eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t capacity,
@@ -1084,11 +1261,195 @@ eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t cap
 }
 
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color) {
-    eu4_gfx_clear_status status = eu4_gfx_clear_checked(handle, flags, color);
+    void *master = master_from_handle(handle);
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    eu4_gfx_clear_status status;
+    if (backend != nil && backend.gameWindow) {
+        status = clear_game_checked(handle, flags, color);
+    } else {
+        status = eu4_gfx_clear_checked(handle, flags, color);
+    }
     if (status != EU4_GFX_CLEAR_OK) {
         eu4_gfx_stop("_GfxClear", status == EU4_GFX_CLEAR_UNSUPPORTED ? "unsupported" : "failed",
                      __builtin_return_address(0));
     }
+}
+
+static void write_default_viewport(void *master) {
+    uint32_t save_b4 = 0, save_b8 = 0, width = 0, height = 0;
+    memcpy(&save_b4, (uint8_t *)master + 0xb4, sizeof save_b4);
+    memcpy(&save_b8, (uint8_t *)master + 0xb8, sizeof save_b8);
+    memcpy(&width, (uint8_t *)master + 0xa0, sizeof width);
+    memcpy(&height, (uint8_t *)master + 0xa4, sizeof height);
+    memcpy((uint8_t *)master + 0xac, &height, sizeof height);
+    memcpy((uint8_t *)master + 0xb0, &width, sizeof width);
+    memcpy((uint8_t *)master + 0xb4, &save_b4, sizeof save_b4);
+    memcpy((uint8_t *)master + 0xb8, &save_b8, sizeof save_b8);
+    uint64_t zero = 0;
+    memcpy((uint8_t *)master + 0xbc, &zero, sizeof zero);
+}
+
+eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *target) {
+    void *master = master_from_handle(handle);
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    if (backend == nil || backend.poisoned || !backend.gameWindow) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (target != NULL) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    uint32_t width = 0, height = 0;
+    memcpy(&width, (uint8_t *)master + 0xa0, sizeof width);
+    memcpy(&height, (uint8_t *)master + 0xa4, sizeof height);
+    eu4_gfx_clear_status allocated = allocate_game_backbuffer(backend, width, height);
+    if (allocated != EU4_GFX_CLEAR_OK) {
+        return allocated;
+    }
+    write_default_viewport(master);
+    store_ptr(master, 0x78, NULL);
+    return EU4_GFX_CLEAR_OK;
+}
+
+void eu4_gfx_set_render_target(void *handle, void *target) {
+    eu4_gfx_clear_status status = eu4_gfx_set_render_target_checked(handle, target);
+    if (status != EU4_GFX_CLEAR_OK) {
+        eu4_gfx_stop("_GfxSetRenderTarget",
+                     status == EU4_GFX_CLEAR_UNSUPPORTED ? "unsupported" : "failed",
+                     __builtin_return_address(0));
+    }
+}
+
+eu4_gfx_clear_status eu4_gfx_present_checked(void *master) {
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)backend_raw_for_master(master);
+    if (backend == nil || backend.poisoned || !backend.gameWindow) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (backend.pendingGameCommand != nil) {
+        eu4_gfx_clear_status drained = drain_pending_game(backend, NULL);
+        if (drained != EU4_GFX_CLEAR_OK) {
+            return drained;
+        }
+    }
+    if (!backend.gameContentsKnown || !backend.readyForPresent) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+    if (backend.gameColorTarget == nil || backend.queue == nil) {
+        return EU4_GFX_CLEAR_UNSUPPORTED;
+    }
+
+    id<MTLTexture> destination = nil;
+    id<CAMetalDrawable> drawable = nil;
+    if (g_present_drawable != NULL) {
+        destination = (__bridge id<MTLTexture>)g_present_drawable;
+    } else if (g_fail_next_drawable) {
+        g_fail_next_drawable = 0;
+        return EU4_GFX_CLEAR_FAILED;
+    } else {
+        CAMetalLayer *layer = backend.layer;
+        drawable = layer != nil ? [layer nextDrawable] : nil;
+        if (drawable == nil) {
+            return EU4_GFX_CLEAR_FAILED;
+        }
+        destination = drawable.texture;
+    }
+    /* Frozen policy: the game backbuffer stays at SDL_GetWindowSize dimensions.
+       The original Present only swaps, and the layer is not resized to hide a
+       point/pixel mismatch. A smaller destination would leave drawable pixels
+       unwritten, so present fails closed before submit unless the destination
+       exactly matches and uses the backbuffer format. */
+    if (destination == nil || destination.width != backend.gameWidth ||
+        destination.height != backend.gameHeight ||
+        destination.pixelFormat != MTLPixelFormatBGRA8Unorm) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+
+    int want_readback = g_present_readback != NULL;
+    id<MTLTexture> staging = nil;
+    if (want_readback) {
+        uint64_t need = (uint64_t)backend.gameWidth * (uint64_t)backend.gameHeight * 4u;
+        if (need == 0 || need > g_present_readback_cap) {
+            return EU4_GFX_CLEAR_FAILED;
+        }
+        MTLTextureDescriptor *desc =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                               width:backend.gameWidth
+                                                              height:backend.gameHeight
+                                                           mipmapped:NO];
+        desc.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+        desc.storageMode = MTLStorageModeShared;
+        if (!g_fail_present_staging_alloc) {
+            staging = [backend.device newTextureWithDescriptor:desc];
+        } else {
+            g_fail_present_staging_alloc = 0;
+        }
+        if (staging == nil) {
+            return EU4_GFX_CLEAR_FAILED;
+        }
+    }
+
+    id<MTLCommandBuffer> command = [backend.queue commandBuffer];
+    if (command == nil) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    id<MTLBlitCommandEncoder> blit = [command blitCommandEncoder];
+    if (blit == nil) {
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    MTLOrigin origin = MTLOriginMake(0, 0, 0);
+    MTLSize size = MTLSizeMake(backend.gameWidth, backend.gameHeight, 1);
+    [blit copyFromTexture:backend.gameColorTarget
+              sourceSlice:0
+              sourceLevel:0
+             sourceOrigin:origin
+               sourceSize:size
+                toTexture:destination
+         destinationSlice:0
+         destinationLevel:0
+        destinationOrigin:origin];
+    if (staging != nil) {
+        [blit copyFromTexture:destination
+                  sourceSlice:0
+                  sourceLevel:0
+                 sourceOrigin:origin
+                   sourceSize:size
+                    toTexture:staging
+             destinationSlice:0
+             destinationLevel:0
+            destinationOrigin:origin];
+    }
+    [blit endEncoding];
+    if (drawable != nil) {
+        [command presentDrawable:drawable];
+    }
+    [command commit];
+    [command waitUntilCompleted];
+    if (command.status != MTLCommandBufferStatusCompleted || command.error != nil) {
+        backend.poisoned = YES;
+        backend.readyForPresent = NO;
+        return EU4_GFX_CLEAR_FAILED;
+    }
+    if (staging != nil) {
+        [staging getBytes:g_present_readback
+              bytesPerRow:(NSUInteger)backend.gameWidth * 4u
+               fromRegion:MTLRegionMake2D(0, 0, backend.gameWidth, backend.gameHeight)
+              mipmapLevel:0];
+        g_present_readback = NULL;
+        g_present_readback_cap = 0;
+    }
+    backend.readyForPresent = NO;
+    return EU4_GFX_CLEAR_OK;
+}
+
+int eu4_gfx_present(void *master) {
+    eu4_gfx_clear_status status = eu4_gfx_present_checked(master);
+    if (status != EU4_GFX_CLEAR_OK) {
+        eu4_gfx_stop("_GfxPresent", status == EU4_GFX_CLEAR_UNSUPPORTED ? "unsupported" : "failed",
+                     __builtin_return_address(0));
+    }
+    return 1;
 }
 
 int eu4_gfx_settings(int display, int windowed, int count, void *settings) {

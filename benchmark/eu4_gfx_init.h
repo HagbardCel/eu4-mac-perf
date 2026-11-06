@@ -27,6 +27,15 @@
 @property (nonatomic) uint32_t colorHeight;
 @property (nonatomic) BOOL contentsKnown;
 @property (nonatomic, strong) id pendingClear;
+/* Game-owned intermediate backbuffer. Distinct from colorTarget. */
+@property (nonatomic) BOOL gameWindow;
+@property (nonatomic, strong) id gameColorTarget;
+@property (nonatomic) uint32_t gameWidth;
+@property (nonatomic) uint32_t gameHeight;
+@property (nonatomic) BOOL gameContentsKnown;
+@property (nonatomic) BOOL readyForPresent;
+@property (nonatomic, strong) id pendingGameCommand;
+@property (nonatomic) BOOL poisoned;
 /* Pending GL scissor box, fixed at the call. Signed. Not a Metal rectangle. */
 @property (nonatomic) BOOL scissorValid;
 @property (nonatomic) int32_t scissorGlX;
@@ -82,6 +91,21 @@ void eu4_gfx_test_throw_on_alloc(int n);
 void eu4_gfx_test_no_device(int on);
 /* When non-zero, the next offscreen texture allocation fails once. */
 void eu4_gfx_test_fail_offscreen_alloc(int on);
+/* When non-zero, the next game-backbuffer allocation fails once. */
+void eu4_gfx_test_fail_game_alloc(int on);
+/* When non-zero, present treats nextDrawable as nil once. */
+void eu4_gfx_test_fail_next_drawable(int on);
+/* When non-zero, present staging texture allocation fails once. */
+void eu4_gfx_test_fail_present_staging_alloc(int on);
+/* Borrowed MTLTexture used as the present destination instead of nextDrawable. */
+void eu4_gfx_test_set_present_drawable(void *texture);
+/* When dest is non-null, present blits the destination into staging and copies
+   BGRA8 bytes into dest after a successful wait. Cleared after one present. */
+void eu4_gfx_test_set_present_readback(void *dest, size_t capacity);
+
+/* Select game-window mode before _GfxInit. metal_init calls this. Hosts that
+   omit it stay on the diagnostic offscreen path. */
+void eu4_gfx_enable_game_window(void);
 
 /* Records the caller, writes stop.json, then terminates. A callback that
    returns still ends in _exit. */
@@ -159,20 +183,36 @@ int eu4_gfx_offscreen_contents_known(void *master);
    esi is the flag dword: bit 0 is color (0x4000), bit 1 is depth (0x100), and
    bit 2 is stencil (0x400). rdx is an optional color; null is (0, 0, 0, 1).
    The glScissor at 0x15ea5e7 uses the viewport image: x at +0xbc, y at +0xc0,
-   width at +0xb0, height at +0xac. The production path submits a bounded
-   color-only full-attachment Metal clear asynchronously. Unsupported or
-   failed cases stop. The master engine object is not written. */
+   width at +0xb0, height at +0xac. Production routes to the game backbuffer
+   when game mode is on and +0x78 is null; otherwise to the diagnostic
+   offscreen when configured. Unsupported or failed cases stop. */
 void eu4_gfx_clear(void *handle, unsigned flags, const float *color);
-/* Validate and commit without waiting. ok means submitted. Rejects a second
-   clear while one is pending. Invalidates contentsKnown on submit. */
+/* Diagnostic offscreen only. Validate and commit without waiting. ok means
+   submitted. Rejects a second clear while one is pending. Invalidates
+   contentsKnown on submit. */
 eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags,
                                            const float *color);
-/* Wait for the pending clear, check terminal status, update contentsKnown.
-   Writes the Metal command-buffer status when command_status is non-null. */
+/* Wait for the pending diagnostic clear, check terminal status, update
+   contentsKnown. Writes the Metal command-buffer status when non-null. */
 eu4_gfx_clear_status eu4_gfx_complete_offscreen(void *master, int *command_status);
-/* Read known BGRA8 bytes. capacity must be at least width*height*4. */
+/* Read known diagnostic BGRA8 bytes. capacity must be at least width*height*4. */
 eu4_gfx_clear_status eu4_gfx_read_offscreen(void *master, void *dest, size_t capacity,
                                             size_t *out_len);
+/* Wait for the pending game clear. On OK sets gameContentsKnown and
+   readyForPresent together. */
+eu4_gfx_clear_status eu4_gfx_complete_game(void *master, int *command_status);
+int eu4_gfx_game_contents_known(void *master);
+int eu4_gfx_ready_for_present(void *master);
+/* _GfxSetRenderTarget at 0x15ed004. null selects the default game backbuffer.
+   Non-null is unsupported and does not mutate the master. */
+eu4_gfx_clear_status eu4_gfx_set_render_target_checked(void *handle, void *target);
+void eu4_gfx_set_render_target(void *handle, void *target);
+/* _GfxPresent at 0x15ea6cb. rdi is the master. Returns 1 on success.
+   The destination must be exactly the game backbuffer size and BGRA8Unorm;
+   otherwise the call fails before submit and keeps gameContentsKnown and
+   readyForPresent unchanged. */
+eu4_gfx_clear_status eu4_gfx_present_checked(void *master);
+int eu4_gfx_present(void *master);
 int eu4_gfx_settings(int display, int windowed, int count, void *settings);
 
 #ifdef __cplusplus
