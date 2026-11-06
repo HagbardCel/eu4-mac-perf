@@ -118,11 +118,28 @@ void eu4_gfx_test_set_present_readback(void *dest, size_t capacity);
    omit it stay on the diagnostic offscreen path. */
 void eu4_gfx_enable_game_window(void);
 
-/* Cocoa/main publishes immutable physical drawable dimensions plus an epoch.
-   Never reads the engine master. The Gfx path combines this with master
-   +0xa0/+0xa4 inside reconcile_game_geometry. */
+/* Two-phase Cocoa geometry publication. Phase 1 records the intended physical
+   size and marks a transition in progress; present/clear decline as stale until
+   phase 2 commits. Phase 2 is called only after layer.drawableSize has reached
+   that size. Neither call reads the engine master. */
+void eu4_gfx_publish_geometry_transition(uint32_t width, uint32_t height);
 void eu4_gfx_publish_physical_geometry(uint32_t width, uint32_t height);
-/* Effective generation of the current logical+physical tuple. 0 before init. */
+
+typedef struct {
+    uint32_t width;
+    uint32_t height;
+    uint64_t epoch;
+    int valid;
+    int transition_in_progress;
+    uint32_t transition_width;
+    uint32_t transition_height;
+} eu4_gfx_physical_geometry_state;
+
+/* Copy the committed physical snapshot. Returns 1 when a committed size exists.
+   transition_in_progress is set between the two publication phases. */
+int eu4_gfx_physical_geometry_snapshot(eu4_gfx_physical_geometry_state *out);
+/* Effective generation of the current logical+physical tuple. 0 before init.
+   Strictly monotonic: a repeated tuple does not reclaim an earlier value. */
 uint64_t eu4_gfx_geometry_generation(void *master);
 
 /* Records the caller, writes stop.json, then terminates. A callback that
