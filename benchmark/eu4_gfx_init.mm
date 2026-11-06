@@ -989,7 +989,6 @@ eu4_gfx_clear_status eu4_gfx_configure_offscreen(void *master, uint32_t width, u
     backend.colorWidth = width;
     backend.colorHeight = height;
     backend.contentsKnown = NO;
-    backend.clearGeneration += 1;
     return EU4_GFX_CLEAR_OK;
 }
 
@@ -1046,7 +1045,6 @@ eu4_gfx_clear_status eu4_gfx_clear_checked(void *handle, unsigned flags, const f
     [encoder endEncoding];
     backend.contentsKnown = NO;
     backend.pendingClear = command;
-    backend.clearGeneration += 1;
     [command commit];
     return EU4_GFX_CLEAR_OK;
 }

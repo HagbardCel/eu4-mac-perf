@@ -27,8 +27,8 @@ At most one outstanding clear per backend. `clear_checked` while a command is pe
 
 ## Sync and validity
 
-- `clear_checked` encodes, commits, invalidates `contentsKnown` immediately, associates the pending buffer with a target generation, and returns without waiting. `ok` means submitted, not GPU-completed.
-- Only `complete_offscreen` waits, checks terminal status and error, and may set `contentsKnown` for that generation.
+- `clear_checked` encodes, commits, invalidates `contentsKnown` immediately, stores the pending command buffer, and returns without waiting. `ok` means submitted, not GPU-completed. Submission identity is that single `pendingClear` pointer; a second clear or configure while pending is rejected.
+- Only `complete_offscreen` waits, checks terminal status and error, and may set `contentsKnown` for the pending buffer.
 - `configure_offscreen` rejects while a clear is pending. Replacement textures are allocated before publishing; a failed allocate leaves the prior target intact.
 - Rejected preflight does not invalidate prior known contents.
 
@@ -46,4 +46,4 @@ Successful `clear` reports submitted, completed command-buffer status, and `cont
 
 ## Evidence limits
 
-An independent GL full-target scissor clear can prove declared color-clear BGRA bytes. It does not certify the complete original `_GfxClear` function. A uniform full-attachment clear does not prove row orientation.
+An independent GL full-target scissor clear can prove declared color-clear BGRA bytes. It does not certify the complete original `_GfxClear` function. A uniform full-attachment clear does not prove row orientation. Committed command-buffer failure classification (`gpu_failed`, `executed: true`) is implemented in the worker but is not exercised by automated tests in PR4.

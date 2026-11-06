@@ -740,15 +740,37 @@ static void test_backend(void) {
     }
     void *clear_handle = master;
     float red[4] = {1.f, 0.f, 0.f, 1.f};
-    if (eu4_gfx_clear_checked(&clear_handle, 1, red) != EU4_GFX_CLEAR_OK) {
-        fail("backend clear submit");
-    }
+    uint32_t mask_saved = 0;
+    memcpy(&mask_saved, (uint8_t *)master + 0x2c, sizeof mask_saved);
+    uint32_t bad_mask = 0;
+    memcpy((uint8_t *)master + 0x2c, &bad_mask, sizeof bad_mask);
+    int known_before_mask = eu4_gfx_offscreen_contents_known(master);
     if (eu4_gfx_clear_checked(&clear_handle, 1, NULL) != EU4_GFX_CLEAR_UNSUPPORTED) {
-        fail("pending clear accepted a second submit");
+        fail("bad color mask clear accepted");
+    }
+    if (eu4_gfx_complete_offscreen(master, NULL) != EU4_GFX_CLEAR_UNSUPPORTED ||
+        eu4_gfx_offscreen_contents_known(master) != known_before_mask) {
+        fail("bad color mask submitted GPU work");
+    }
+    memcpy((uint8_t *)master + 0x2c, &mask_saved, sizeof mask_saved);
+
+    uint8_t before[EU4_GFX_MASTER_SIZE];
+    memcpy(before, master, sizeof before);
+    g_stopped = 0;
+    eu4_gfx_clear(&clear_handle, 1, red);
+    if (g_stopped) {
+        fail("production clear stopped");
+    }
+    if (memcmp(master, before, sizeof before) != 0) {
+        fail("production clear modified master");
     }
     int clear_status = 0;
-    if (eu4_gfx_complete_offscreen(master, &clear_status) != EU4_GFX_CLEAR_OK) {
-        fail("backend clear complete");
+    if (eu4_gfx_complete_offscreen(master, &clear_status) != EU4_GFX_CLEAR_OK ||
+        clear_status != (int)MTLCommandBufferStatusCompleted) {
+        fail("production clear completion");
+    }
+    if (memcmp(master, before, sizeof before) != 0) {
+        fail("completion modified master");
     }
     uint8_t cleared[16 * 16 * 4];
     size_t cleared_len = 0;
@@ -756,6 +778,19 @@ static void test_backend(void) {
         fail("backend clear readback");
     }
     expect_uniform_bgra(cleared, cleared_len, 0x00, 0x00, 0xff, 0xff);
+    if (eu4_gfx_clear_checked(&clear_handle, 1, NULL) != EU4_GFX_CLEAR_OK) {
+        fail("backend clear submit");
+    }
+    if (eu4_gfx_clear_checked(&clear_handle, 1, red) != EU4_GFX_CLEAR_UNSUPPORTED) {
+        fail("pending clear accepted a second submit");
+    }
+    if (eu4_gfx_complete_offscreen(master, &clear_status) != EU4_GFX_CLEAR_OK) {
+        fail("backend clear complete");
+    }
+    if (eu4_gfx_read_offscreen(master, cleared, sizeof cleared, &cleared_len) != EU4_GFX_CLEAR_OK) {
+        fail("backend black clear readback");
+    }
+    expect_uniform_bgra(cleared, cleared_len, 0x00, 0x00, 0x00, 0xff);
     eu4_gfx_test_fail_offscreen_alloc(1);
     if (eu4_gfx_configure_offscreen(master, 32, 32) != EU4_GFX_CLEAR_FAILED) {
         fail("backend alloc failure");

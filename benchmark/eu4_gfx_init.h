@@ -27,7 +27,6 @@
 @property (nonatomic) uint32_t colorHeight;
 @property (nonatomic) BOOL contentsKnown;
 @property (nonatomic, strong) id pendingClear;
-@property (nonatomic) uint64_t clearGeneration;
 /* Pending GL scissor box, fixed at the call. Signed. Not a Metal rectangle. */
 @property (nonatomic) BOOL scissorValid;
 @property (nonatomic) int32_t scissorGlX;

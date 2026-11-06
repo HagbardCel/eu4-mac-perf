@@ -34,7 +34,7 @@ Bounded color-only clear through the production helpers. Contract: [analysis/gfx
 | `clear` | integer `flags`; optional `color` length-4 numbers in `[0,1]` (omit/`null` → opaque black) | `submitted: true`, `command_buffer_status: "completed"`, `contents_known: true` |
 | `read_offscreen` | none | `width`, `height`, `bytes_base64` |
 
-Preflight rejects (bad dims/flags/color, missing target, unsupported state, second clear while pending) use `ok: false` and stay recoverable. Read before a successful complete returns `contents_unknown` with no bytes. A committed GPU failure returns `ok: false`, `executed: true`, `error: gpu_failed`, and exits. Buffer observation failures still use `observation_failed`.
+Preflight rejects (bad dims/flags/color, missing target, unsupported state, second clear while pending) use `ok: false` and stay recoverable. Read before a successful complete returns `contents_unknown` with no bytes. A committed GPU failure returns `ok: false`, `executed: true`, `error: gpu_failed`, and exits. Buffer observation failures still use `observation_failed`. The `gpu_failed` classification is implemented but not exercised by automated tests in PR4.
 
 Live EU4 launchers that never configure an offscreen target hit fail-closed `_GfxClear` and stop. That is not live-startup progress.
 
