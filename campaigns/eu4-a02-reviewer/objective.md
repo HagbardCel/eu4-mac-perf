@@ -4,8 +4,10 @@ Inspect the **pinned candidate worktree** (HEAD is the frozen qualification
 commit). Compare `analysis/qualification/v0/primitive-lookup.candidate.json`
 to frozen evidence `analysis/qualification/v0/primitive-table.evidence.json`.
 
-Look for defects the controlled suite may not cover (notably
-`out_of_range_default`).
+Independently compare the candidate's supported behavior with the frozen
+original evidence, including edge cases and untested observations the
+controlled checker may not cover. Do not assume the controlled suite is
+complete.
 
 Write a validated `eu4-review/v1` JSON report to the path given by the
 environment variable `EU4_REVIEW_REPORT_PATH` (outside this worktree).

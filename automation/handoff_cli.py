@@ -17,7 +17,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-from automation.handoff import HandoffController, write_synthetic_rejection
+from automation.handoff import (
+    HandoffController,
+    ensure_reviewer_worktree,
+    quarantine_report,
+    reviewer_receipt_path_for,
+    verify_reviewer_receipt,
+    write_reviewer_receipt,
+    write_synthetic_rejection,
+    load_reviewer_receipt,
+)
 from automation.opencode import VERIFIED_VERSION, OpenCodeAgent
 from automation.runner import Runner
 from automation.state import load_campaign, repo_root
@@ -25,7 +34,7 @@ from automation.verification_manifest import file_sha256
 
 
 def _export_candidate_into(workspace: Path, repo: Path, candidate_commit: str) -> None:
-    """Materialize allowlisted candidate files from a complete snapshot commit."""
+    """Materialize editable candidate + progress from a complete snapshot commit."""
     rels = subprocess.run(
         [
             "git",
@@ -44,6 +53,10 @@ def _export_candidate_into(workspace: Path, repo: Path, candidate_commit: str) -
         check=True,
     ).stdout.splitlines()
     for rel in rels:
+        # Only editable surface — never overlay protected evidence from snapshot
+        name = Path(rel).name
+        if rel != "progress.md" and name != "primitive-lookup.candidate.json":
+            continue
         blob = subprocess.run(
             ["git", "-C", str(repo), "show", f"{candidate_commit}:{rel}"],
             capture_output=True,
@@ -52,6 +65,74 @@ def _export_candidate_into(workspace: Path, repo: Path, candidate_commit: str) -
         dest = workspace / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(blob)
+
+
+def resolve_oracle_manifest_pin(repo: Path, state: dict) -> Path | None:
+    """Absolute pinned oracle manifest path for campaign JSON + accept env."""
+    raw = state.get("oracle_manifest_path")
+    if not raw:
+        return None
+    pin = Path(str(raw))
+    if not pin.is_absolute():
+        pin = (repo / pin).resolve()
+    else:
+        pin = pin.resolve()
+    if not pin.is_file():
+        raise RuntimeError(f"oracle manifest pin missing: {pin}")
+    expected = state.get("oracle_manifest_sha256")
+    if expected and file_sha256(pin) != expected:
+        raise RuntimeError(
+            f"oracle manifest pin digest mismatch: {pin} != {expected}"
+        )
+    return pin
+
+
+def build_remediation_campaign(
+    repo: Path,
+    campaign_path: Path,
+    state: dict,
+) -> Path:
+    """Materialize a remediation campaign from rejected snapshot + finding brief.
+
+    Pure helper (no OpenCode) so unit tests can exercise the live failure path.
+    """
+    campaign_id = state["remediation_campaign_id"]
+    # Keep generated remediation campaigns out of tracked campaigns/
+    rem_dir = repo / ".local" / "qualification" / "campaigns" / campaign_id
+    rem_dir.mkdir(parents=True, exist_ok=True)
+    data = json.loads(campaign_path.read_text(encoding="utf-8"))
+    data["id"] = campaign_id
+    seed_ws = rem_dir / "seed"
+    if seed_ws.exists():
+        shutil.rmtree(seed_ws)
+    seed_ws.mkdir(parents=True)
+    _export_candidate_into(seed_ws, repo, state["rejected_candidate_commit"])
+    finding = ((state.get("last_review") or {}).get("findings") or [{}])[0]
+    _write_remediation_brief(rem_dir / "objective.md", state=state, finding=finding)
+    data["objective"] = "objective.md"
+    data["workspace"] = "seed"
+    pin = resolve_oracle_manifest_pin(repo, state)
+    if pin is not None:
+        data["verification_manifest"] = str(pin)
+    # Preserve accept checker next to the remediation campaign root
+    accept = data.get("accept") or []
+    for part in accept:
+        src = campaign_path.parent / str(part)
+        if src.is_file() and src.suffix == ".py":
+            dest = rem_dir / src.name
+            if not dest.exists():
+                shutil.copy2(src, dest)
+    out = rem_dir / "campaign.json"
+    out.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return out
+
+
+def pin_qualification_env(repo: Path, state: dict, oracle_dir: Path) -> None:
+    """Set EU4_QUALIFICATION_* so Runner accept children see the absolute pin."""
+    os.environ["EU4_QUALIFICATION_ORACLE"] = str(oracle_dir)
+    pin = resolve_oracle_manifest_pin(repo, state)
+    if pin is not None:
+        os.environ["EU4_QUALIFICATION_MANIFEST"] = str(pin)
 
 
 def _write_remediation_brief(
@@ -307,29 +388,8 @@ def run_opencode(workflow_path: Path, campaign_path: Path) -> int:
         path = campaign_path
         run_root = repo / ".local" / "automation" / campaign_id
         if state.get("state") == "remediating" and state.get("rejected_candidate_commit"):
-            rem_dir = campaign_path.parent / campaign_id
-            rem_dir.mkdir(parents=True, exist_ok=True)
-            data = json.loads(campaign_path.read_text(encoding="utf-8"))
-            data["id"] = campaign_id
-            seed_ws = rem_dir / "seed"
-            if seed_ws.exists():
-                shutil.rmtree(seed_ws)
-            seed_ws.mkdir(parents=True)
-            _export_candidate_into(
-                seed_ws, repo, state["rejected_candidate_commit"]
-            )
-            finding = ((state.get("last_review") or {}).get("findings") or [{}])[0]
-            _write_remediation_brief(
-                rem_dir / "objective.md", state=state, finding=finding
-            )
-            data["objective"] = "objective.md"
-            data["workspace"] = "seed"
-            if state.get("oracle_manifest_path"):
-                data["verification_manifest"] = state["oracle_manifest_path"]
-            path = rem_dir / "campaign.json"
-            path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-            # copy brief next to campaign
-            shutil.copy2(rem_dir / "objective.md", rem_dir / "objective.md")
+            path = build_remediation_campaign(repo, campaign_path, state)
+        pin_qualification_env(repo, state, oracle)
         campaign = load_campaign(path)
         if campaign.opencode_version != VERIFIED_VERSION:
             raise RuntimeError("unsupported opencode version")
@@ -344,32 +404,65 @@ def run_opencode(workflow_path: Path, campaign_path: Path) -> int:
             campaign, agent, run_root, secrets=[password] if password else []
         )
         result = runner.execute(resume_only=run_root.joinpath("state.json").is_file())
-        result["session_id"] = result.get("session_id")
         return result
 
     def run_reviewer(state: dict) -> dict:
         out = reports / f"review-r{state['round']}.json"
+        receipt_path = reviewer_receipt_path_for(out)
+        campaign_id = state["reviewer_campaign_id"]
+        # Resume only with a completed receipt bound to this round's identity.
+        if out.is_file() and receipt_path.is_file():
+            try:
+                receipt = load_reviewer_receipt(receipt_path)
+                errs = verify_reviewer_receipt(
+                    receipt,
+                    campaign_id=campaign_id,
+                    candidate_commit=state["candidate_commit"],
+                    oracle_digest=state["oracle_manifest_sha256"],
+                    report_sha256=file_sha256(out),
+                    require_live=True,
+                )
+            except (OSError, json.JSONDecodeError, ValueError):
+                errs = ["unreadable"]
+            if not errs:
+                return {
+                    "path": out,
+                    "session_id": receipt["reviewer_session_id"],
+                    "receipt_path": str(receipt_path),
+                    "worktree": state.get("reviewer_worktree"),
+                    "qualification_mode": "live",
+                }
+        # Unverified pre-existing report must not become valid later.
         if out.is_file():
-            return {"path": out, "session_id": state.get("reviewer_session_id")}
-        # Detached worktree at candidate commit
-        wt = repo / ".local" / "qualification" / f"review-wt-r{state['round']}"
-        if wt.exists():
-            shutil.rmtree(wt)
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                str(repo),
-                "worktree",
-                "add",
-                "--detach",
-                str(wt),
-                state["candidate_commit"],
-            ],
-            check=True,
-            capture_output=True,
+            quarantine_report(out)
+
+        run_root = repo / ".local" / "automation" / campaign_id
+        runner_state = run_root / "state.json"
+        active = False
+        if runner_state.is_file():
+            try:
+                saved = json.loads(runner_state.read_text(encoding="utf-8"))
+                active = saved.get("status") not in ("complete",) and bool(
+                    saved.get("session_id")
+                )
+            except (OSError, json.JSONDecodeError):
+                active = False
+
+        wt = ensure_reviewer_worktree(
+            repo,
+            workflow_id=state["workflow_id"],
+            round_id=state["round"],
+            candidate_commit=state["candidate_commit"],
+            active_session=active,
+            existing_path=state.get("reviewer_worktree"),
         )
-        review_campaign_dir = campaign_path.parent / "eu4-a02-reviewer-live"
+        review_campaign_dir = (
+            repo
+            / ".local"
+            / "qualification"
+            / "campaigns"
+            / f"eu4-a02-reviewer-live-{state['workflow_id']}"
+        )
         review_campaign_dir.mkdir(parents=True, exist_ok=True)
         obj = review_campaign_dir / "objective.md"
         shutil.copy2(
@@ -385,7 +478,7 @@ def run_opencode(workflow_path: Path, campaign_path: Path) -> int:
         accept_src = repo / "campaigns/eu4-a02-reviewer/accept.py"
         shutil.copy2(accept_src, review_campaign_dir / "accept.py")
         camp = {
-            "id": state["reviewer_campaign_id"],
+            "id": campaign_id,
             "objective": "objective.md",
             "runtime": "opencode",
             "model": load_campaign(campaign_path).model,
@@ -404,10 +497,6 @@ def run_opencode(workflow_path: Path, campaign_path: Path) -> int:
         }
         camp_path = review_campaign_dir / "campaign.json"
         camp_path.write_text(json.dumps(camp, indent=2) + "\n", encoding="utf-8")
-        env = os.environ.copy()
-        env["EU4_REVIEW_REPORT_PATH"] = str(out)
-        env["EU4_REVIEW_EXPECTED_CANDIDATE"] = state["candidate_commit"]
-        env["EU4_REVIEW_EXPECTED_ORACLE"] = state["oracle_manifest_sha256"]
         campaign = load_campaign(camp_path)
         agent = OpenCodeAgent(
             os.environ.get("OPENCODE_URL", "http://127.0.0.1:4096"),
@@ -416,25 +505,38 @@ def run_opencode(workflow_path: Path, campaign_path: Path) -> int:
             timeout=float(os.environ.get("OPENCODE_TIMEOUT", "120")),
             model=campaign.model,
         )
-        run_root = repo / ".local" / "automation" / campaign.id
-        # Inject env for accept child processes via Runner — accept reads os.environ
         os.environ["EU4_REVIEW_REPORT_PATH"] = str(out)
         os.environ["EU4_REVIEW_EXPECTED_CANDIDATE"] = state["candidate_commit"]
         os.environ["EU4_REVIEW_EXPECTED_ORACLE"] = state["oracle_manifest_sha256"]
         runner = Runner(
             campaign, agent, run_root, secrets=[password] if password else []
         )
-        result = runner.execute(resume_only=run_root.joinpath("state.json").is_file())
+        result = runner.execute(resume_only=runner_state.is_file())
         if result.get("status") != "complete" or result.get("last_verdict") != "pass":
             raise RuntimeError(
                 f"reviewer campaign did not complete: {result.get('pause_reason')}"
             )
         if not out.is_file():
             raise RuntimeError("reviewer completed without writing out-of-tree report")
+        session_id = result.get("session_id")
+        if not session_id:
+            raise RuntimeError("reviewer completed without session_id")
+        write_reviewer_receipt(
+            receipt_path,
+            campaign_id=campaign_id,
+            candidate_commit=state["candidate_commit"],
+            oracle_digest=state["oracle_manifest_sha256"],
+            reviewer_session_id=session_id,
+            runner_status="complete",
+            report_sha256=file_sha256(out),
+            qualification_mode="live",
+        )
         return {
             "path": out,
-            "session_id": result.get("session_id"),
+            "session_id": session_id,
             "worktree": str(wt),
+            "receipt_path": str(receipt_path),
+            "qualification_mode": "live",
         }
 
     controller = HandoffController(

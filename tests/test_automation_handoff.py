@@ -13,17 +13,23 @@ from pathlib import Path
 
 from automation.handoff import (
     HandoffController,
+    ensure_reviewer_worktree,
     path_allowlisted,
+    quarantine_report,
+    reviewer_receipt_path_for,
     snapshot_candidate,
     verify_ref_unmodified,
+    write_reviewer_receipt,
     write_synthetic_rejection,
 )
+from automation.handoff_cli import build_remediation_campaign
 from automation.oracle_promote import (
     PromotionDecision,
     classify_finding,
     finding_content_digest,
     promote_grounded_findings,
 )
+from automation.state import load_campaign
 from automation.review_result import validate_review
 from automation.verification_manifest import (
     EU4_EXECUTABLE_SHA256,
@@ -227,6 +233,65 @@ class SnapshotTests(unittest.TestCase):
                     root, snap["candidate_ref"], snap["candidate_commit"]
                 ),
                 [],
+            )
+
+    def test_snapshot_ignores_workspace_protected_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _init_git_repo(root)
+            baseline_qual = root / "analysis" / "qualification" / "v0"
+            baseline_qual.mkdir(parents=True)
+            (baseline_qual / "primitive-table.evidence.json").write_text(
+                '{"trusted":true}\n', encoding="utf-8"
+            )
+            subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "commit", "-m", "evidence"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            pin = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            workspace = root / "ws"
+            qual = workspace / "analysis" / "qualification" / "v0"
+            qual.mkdir(parents=True)
+            (qual / "primitive-lookup.candidate.json").write_text(
+                '{"ok":1}\n', encoding="utf-8"
+            )
+            # Divergent workspace-local evidence must not enter the snapshot overlay
+            (qual / "primitive-table.evidence.json").write_text(
+                '{"trusted":false,"tampered":1}\n', encoding="utf-8"
+            )
+            (workspace / "progress.md").write_text("# p\n", encoding="utf-8")
+            snap = snapshot_candidate(
+                root,
+                workspace,
+                workflow_id="wf-ev",
+                round_id=0,
+                parent_commit=pin,
+            )
+            evidence_blob = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "show",
+                    f"{snap['candidate_commit']}:analysis/qualification/v0/primitive-table.evidence.json",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+            self.assertEqual(evidence_blob, '{"trusted":true}\n')
+            self.assertNotIn(
+                "analysis/qualification/v0/primitive-table.evidence.json",
+                snap["changed_paths"],
             )
 
 
@@ -542,6 +607,385 @@ class HandoffRemediationIdTests(unittest.TestCase):
             self.assertEqual(state["state"], "reviewing")
             state = controller.step(state)
             self.assertEqual(state["state"], "awaiting_merge")
+
+
+class RemediationBuilderTests(unittest.TestCase):
+    def test_build_remediation_campaign_absolute_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pin = _init_git_repo(root)
+            # Parent tree with editable candidate so export has a blob
+            qual = root / "analysis" / "qualification" / "v0"
+            qual.mkdir(parents=True)
+            (qual / "primitive-lookup.candidate.json").write_text(
+                '{"schema":"eu4-primitive-lookup/v1","table":[],'
+                '"engine_enum_4_gl_mode":5,"out_of_range_default":0}\n',
+                encoding="utf-8",
+            )
+            (root / "progress.md").write_text("# ok\n", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "commit", "-m", "cand"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            cand = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            oracle = root / "oracle"
+            _seed_oracle(root, oracle)
+            # Publish a version-local pin path like promote would
+            version_dir = oracle / "oracle_versions" / "v_test"
+            version_dir.mkdir(parents=True)
+            tip = oracle / "verification-manifest.json"
+            version_pin = version_dir / "verification-manifest.json"
+            version_pin.write_bytes(tip.read_bytes())
+            camp_dir = root / "campaigns" / "eu4-a01-trusted-validation"
+            camp_dir.mkdir(parents=True)
+            (camp_dir / "objective.md").write_text("# base\n", encoding="utf-8")
+            (camp_dir / "seed").mkdir()
+            (camp_dir / "campaign.json").write_text(
+                json.dumps(
+                    {
+                        "id": "eu4-a01-trusted-validation",
+                        "objective": "objective.md",
+                        "runtime": "opencode",
+                        "model": "test/model",
+                        "opencode_version": "0.0.0",
+                        "workspace": "seed",
+                        "accept": ["python3", "accept.py"],
+                        "max_rounds": 2,
+                        "max_seconds": 60,
+                        "accept_timeout_seconds": 30,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            state = {
+                "remediation_campaign_id": "eu4-a01-trusted-validation-fix-r1",
+                "rejected_candidate_commit": cand,
+                "oracle_manifest_path": str(
+                    version_pin.relative_to(root)
+                ),
+                "oracle_manifest_sha256": file_sha256(version_pin),
+                "oracle_version": "v_test",
+                "last_review": {
+                    "findings": [
+                        {
+                            "id": "defect-b",
+                            "binding": {
+                                "observation": "out_of_range_default",
+                                "expected": 4,
+                            },
+                        }
+                    ]
+                },
+            }
+            built = build_remediation_campaign(
+                root, camp_dir / "campaign.json", state
+            )
+            data = json.loads(built.read_text(encoding="utf-8"))
+            self.assertTrue(Path(data["verification_manifest"]).is_absolute())
+            self.assertTrue(Path(data["verification_manifest"]).is_file())
+            self.assertEqual(
+                Path(data["verification_manifest"]).resolve(),
+                version_pin.resolve(),
+            )
+            # Relative accept needs a local checker file for load_campaign
+            (built.parent / "accept.py").write_text("# checker\n", encoding="utf-8")
+            campaign = load_campaign(built)
+            self.assertEqual(
+                campaign.verification_manifest.resolve(),
+                version_pin.resolve(),
+            )
+            objective = (built.parent / "objective.md").read_text(encoding="utf-8")
+            self.assertIn("out_of_range_default", objective)
+            self.assertIn("defect-b", objective)
+
+
+class ReviewerWorktreeTests(unittest.TestCase):
+    def test_restart_reuses_registered_worktree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pin = _init_git_repo(root)
+            wt = ensure_reviewer_worktree(
+                root,
+                workflow_id="wf1",
+                round_id=0,
+                candidate_commit=pin,
+            )
+            self.assertTrue(wt.is_dir())
+            head = subprocess.run(
+                ["git", "-C", str(wt), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            self.assertEqual(head, pin)
+            again = ensure_reviewer_worktree(
+                root,
+                workflow_id="wf1",
+                round_id=0,
+                candidate_commit=pin,
+            )
+            self.assertEqual(again.resolve(), wt.resolve())
+
+    def test_progress_md_dirty_is_allowed(self) -> None:
+        from automation.handoff import verify_worktree_clean
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pin = _init_git_repo(root)
+            wt = ensure_reviewer_worktree(
+                root,
+                workflow_id="wf-prog",
+                round_id=0,
+                candidate_commit=pin,
+            )
+            (wt / "progress.md").write_text("# reviewer notes\n", encoding="utf-8")
+            self.assertEqual(verify_worktree_clean(root, wt), [])
+            (wt / "README").write_text("tamper\n", encoding="utf-8")
+            errs = verify_worktree_clean(root, wt)
+            self.assertTrue(any("README" in e for e in errs))
+
+
+class LiveReviewerReceiptTests(unittest.TestCase):
+    def test_preexisting_rejection_without_receipt_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pin = _init_git_repo(root)
+            oracle = root / "oracle"
+            manifest = _seed_oracle(root, oracle)
+            evidence = json.loads(
+                (oracle / "primitive-table.evidence.json").read_text(encoding="utf-8")
+            )
+            workspace = root / "ws"
+            qual = workspace / "analysis" / "qualification" / "v0"
+            qual.mkdir(parents=True)
+            (qual / "primitive-lookup.candidate.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "eu4-primitive-lookup/v1",
+                        "table": evidence["output"]["table"],
+                        "engine_enum_4_gl_mode": 5,
+                        "out_of_range_default": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "progress.md").write_text("# ok\n", encoding="utf-8")
+            reports = root / "reports"
+            reports.mkdir()
+            planted = reports / "review-r0.json"
+
+            def run_implementer(campaign_id: str, state: dict) -> dict:
+                return {
+                    "status": "complete",
+                    "last_verdict": "pass",
+                    "workspace": str(workspace),
+                    "session_id": f"impl-{campaign_id}",
+                }
+
+            def run_reviewer(state: dict) -> dict:
+                # Plant a valid rejection but never emit a completed receipt —
+                # simulates empty/unverified reviewer session.
+                write_synthetic_rejection(
+                    planted,
+                    candidate_commit=state["candidate_commit"],
+                    oracle_manifest_sha256=state["oracle_manifest_sha256"],
+                    binding=_binding(
+                        evidence, oracle / "primitive-table.evidence.json"
+                    ),
+                )
+                return {
+                    "path": planted,
+                    "session_id": "empty-reviewer-session",
+                    # deliberately omit receipt_path
+                }
+
+            workflow = root / "workflow.json"
+            controller = HandoffController(
+                repo=root,
+                workflow_path=workflow,
+                run_implementer=run_implementer,
+                run_reviewer=run_reviewer,
+                oracle_dir=oracle,
+                checker_path=root / "accept.py",
+                trusted_helpers=[
+                    "automation/evidence.py",
+                    "automation/macho_map.py",
+                    "automation/verification_manifest.py",
+                    "automation/replay_primitive.py",
+                ],
+                checker_relpath="accept.py",
+            )
+            state = controller.load_or_init("impl-live", pin)
+            state["require_live_sessions"] = True
+            state = controller.step(state)
+            self.assertEqual(state["state"], "qualified_by_checker")
+            state = controller.step(state)
+            self.assertEqual(state["state"], "reviewing")
+            state = controller.step(state)
+            self.assertEqual(state["state"], "blocked")
+            self.assertIn("live_reviewer_receipt", state["block_reason"])
+
+    def test_matching_receipt_allows_rejection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pin = _init_git_repo(root)
+            oracle = root / "oracle"
+            _seed_oracle(root, oracle)
+            evidence = json.loads(
+                (oracle / "primitive-table.evidence.json").read_text(encoding="utf-8")
+            )
+            workspace = root / "ws"
+            qual = workspace / "analysis" / "qualification" / "v0"
+            qual.mkdir(parents=True)
+            (qual / "primitive-lookup.candidate.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "eu4-primitive-lookup/v1",
+                        "table": evidence["output"]["table"],
+                        "engine_enum_4_gl_mode": 5,
+                        "out_of_range_default": 0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (workspace / "progress.md").write_text("# ok\n", encoding="utf-8")
+            reports = root / "reports"
+            reports.mkdir()
+
+            def run_implementer(campaign_id: str, state: dict) -> dict:
+                return {
+                    "status": "complete",
+                    "last_verdict": "pass",
+                    "workspace": str(workspace),
+                    "session_id": f"impl-{campaign_id}",
+                }
+
+            def run_reviewer(state: dict) -> dict:
+                path = reports / f"review-r{state['round']}.json"
+                write_synthetic_rejection(
+                    path,
+                    candidate_commit=state["candidate_commit"],
+                    oracle_manifest_sha256=state["oracle_manifest_sha256"],
+                    binding=_binding(
+                        evidence, oracle / "primitive-table.evidence.json"
+                    ),
+                )
+                receipt = reviewer_receipt_path_for(path)
+                write_reviewer_receipt(
+                    receipt,
+                    campaign_id=state["reviewer_campaign_id"],
+                    candidate_commit=state["candidate_commit"],
+                    oracle_digest=state["oracle_manifest_sha256"],
+                    reviewer_session_id="reviewer-ses-1",
+                    runner_status="complete",
+                    report_sha256=file_sha256(path),
+                    qualification_mode="live",
+                )
+                return {
+                    "path": path,
+                    "session_id": "reviewer-ses-1",
+                    "receipt_path": str(receipt),
+                    "qualification_mode": "live",
+                }
+
+            workflow = root / "workflow.json"
+            controller = HandoffController(
+                repo=root,
+                workflow_path=workflow,
+                run_implementer=run_implementer,
+                run_reviewer=run_reviewer,
+                oracle_dir=oracle,
+                checker_path=root / "accept.py",
+                trusted_helpers=[
+                    "automation/evidence.py",
+                    "automation/macho_map.py",
+                    "automation/verification_manifest.py",
+                    "automation/replay_primitive.py",
+                ],
+                checker_relpath="accept.py",
+            )
+            state = controller.load_or_init("impl-live2", pin)
+            state["require_live_sessions"] = True
+            state = controller.step(state)
+            state = controller.step(state)
+            state = controller.step(state)
+            self.assertEqual(state["state"], "review_rejected")
+
+    def test_quarantine_preexisting_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report = root / "review.json"
+            report.write_text('{"schema":"eu4-review/v1"}\n', encoding="utf-8")
+            moved = quarantine_report(report)
+            self.assertIsNotNone(moved)
+            self.assertFalse(report.is_file())
+            self.assertTrue(moved.is_file())
+
+
+class OraclePublishOrderTests(unittest.TestCase):
+    def test_version_local_manifest_written_and_recovered(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _init_git_repo(root)
+            oracle = root / "oracle"
+            _seed_oracle(root, oracle)
+            evidence = json.loads(
+                (oracle / "primitive-table.evidence.json").read_text(encoding="utf-8")
+            )
+            helpers = [
+                "automation/evidence.py",
+                "automation/macho_map.py",
+                "automation/verification_manifest.py",
+                "automation/replay_primitive.py",
+            ]
+            binding = _binding(evidence, oracle / "primitive-table.evidence.json")
+            review = _rejection("a" * 40, "b" * 64, binding)
+            review_path = root / "review.json"
+            review_path.write_text(json.dumps(review), encoding="utf-8")
+            first = promote_grounded_findings(
+                repo=root,
+                review=review,
+                oracle_dir=oracle,
+                trusted_helpers=helpers,
+                checker_relpath="accept.py",
+                review_path=review_path,
+            )
+            v1 = first["oracle_version"]
+            pin = oracle / "oracle_versions" / v1 / "verification-manifest.json"
+            self.assertTrue(pin.is_file())
+            tip_bytes = (oracle / "verification-manifest.json").read_bytes()
+            self.assertEqual(pin.read_bytes(), tip_bytes)
+            # Delete version-local pin; reuse must recreate after tip validation
+            pin.unlink()
+            second = promote_grounded_findings(
+                repo=root,
+                review=review,
+                oracle_dir=oracle,
+                trusted_helpers=helpers,
+                checker_relpath="accept.py",
+                review_path=review_path,
+            )
+            self.assertTrue(second["reused"])
+            self.assertTrue(pin.is_file())
+            self.assertEqual(pin.read_bytes(), tip_bytes)
+
+
+class ReviewerObjectiveTests(unittest.TestCase):
+    def test_live_objective_omits_defect_b_hint(self) -> None:
+        text = (
+            REPO / "campaigns/eu4-a02-reviewer/objective.md"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("out_of_range_default", text)
 
 
 @unittest.skipUnless(EXE.is_file(), "pinned EU4 executable not installed")

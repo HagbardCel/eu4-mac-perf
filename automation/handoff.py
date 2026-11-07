@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import uuid
@@ -15,9 +14,13 @@ from automation.state import atomic_write, campaign_lock
 from automation.verification_manifest import digest_manifest, file_sha256, load_manifest
 
 MAX_ROUNDS = 3
-CANDIDATE_ALLOWLIST_PREFIXES = (
-    "analysis/qualification/",
-    "progress.md",
+# Narrow editable surface: only the candidate artifact + progress. Frozen
+# evidence / manifests / helpers stay on the trusted parent tree.
+CANDIDATE_EDITABLE_BASENAME = "primitive-lookup.candidate.json"
+PROTECTED_EVIDENCE_BASENAMES = (
+    "primitive-table.evidence.json",
+    "primitive-lookup.golden.json",
+    "verification-manifest.json",
 )
 
 
@@ -40,6 +43,8 @@ def default_state(workflow_id: str, implementer_campaign_id: str, pin: str) -> d
         "checker_sha256": None,
         "reviewer_campaign_id": None,
         "reviewer_session_id": None,
+        "reviewer_worktree": None,
+        "reviewer_receipt_path": None,
         "implementer_session_id": None,
         "review_path": None,
         "review_digest": None,
@@ -51,9 +56,12 @@ def default_state(workflow_id: str, implementer_campaign_id: str, pin: str) -> d
 
 
 def path_allowlisted(rel: str) -> bool:
+    """True iff *rel* may differ from the trusted parent in a candidate snapshot."""
     if rel == "progress.md":
         return True
-    return any(rel.startswith(prefix) for prefix in CANDIDATE_ALLOWLIST_PREFIXES)
+    if not rel.startswith("analysis/qualification/"):
+        return False
+    return Path(rel).name == CANDIDATE_EDITABLE_BASENAME
 
 
 def load_workflow(path: Path) -> dict:
@@ -79,16 +87,65 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def collect_candidate_rels(workspace: Path) -> list[str]:
+    """Collect only authorized editable candidate + progress files."""
     rels: list[str] = []
     base = workspace / "analysis" / "qualification"
     if base.is_dir():
-        for path in base.rglob("*"):
+        for path in base.rglob(CANDIDATE_EDITABLE_BASENAME):
             if path.is_file():
                 rels.append(path.relative_to(workspace).as_posix())
     progress = workspace / "progress.md"
     if progress.is_file():
         rels.append("progress.md")
     return rels
+
+
+def _blob_at(repo: Path, commit: str, rel: str) -> str | None:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", f"{commit}:{rel}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return completed.stdout.strip()
+
+
+def assert_protected_evidence_matches_parent(
+    repo: Path, *, parent_commit: str, candidate_commit: str
+) -> None:
+    """Protected evidence/checker blobs in the snapshot must equal the trusted parent."""
+    names = subprocess.run(
+        ["git", "-C", str(repo), "ls-tree", "-r", "--name-only", candidate_commit],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    for rel in names:
+        if not rel.startswith("analysis/qualification/"):
+            continue
+        if path_allowlisted(rel):
+            continue
+        name = Path(rel).name
+        if name not in PROTECTED_EVIDENCE_BASENAMES and not rel.endswith(
+            "/accept.py"
+        ):
+            # Still require any non-editable qualification path match parent if present
+            pass
+        parent_blob = _blob_at(repo, parent_commit, rel)
+        cand_blob = _blob_at(repo, candidate_commit, rel)
+        if parent_blob is None:
+            # Candidate must not introduce protected evidence absent from parent
+            if name in PROTECTED_EVIDENCE_BASENAMES:
+                raise RuntimeError(
+                    f"snapshot introduced protected evidence absent from parent: {rel}"
+                )
+            continue
+        if cand_blob != parent_blob:
+            raise RuntimeError(
+                f"protected evidence diverged from trusted parent: {rel}"
+            )
 
 
 def snapshot_candidate(
@@ -100,7 +157,7 @@ def snapshot_candidate(
     parent_commit: str,
     message: str = "qualification candidate snapshot",
 ) -> dict:
-    """Full baseline + allowlisted overlay; parented commit in the original object store."""
+    """Full baseline + editable overlay only; parented commit in the original object store."""
     import os
     import tempfile
 
@@ -117,7 +174,7 @@ def snapshot_candidate(
     index_file.unlink()
     env = {**os.environ, "GIT_INDEX_FILE": str(index_file)}
     try:
-        # Start from pinned baseline tree
+        # Start from pinned baseline tree (frozen evidence stays here)
         subprocess.run(
             ["git", "-C", str(repo), "read-tree", parent_commit],
             check=True,
@@ -183,7 +240,7 @@ def snapshot_candidate(
         if index_file.exists():
             index_file.unlink()
 
-    # Every diff vs parent must stay inside the allowlist
+    # Every diff vs parent must stay inside the editable allowlist
     diff = subprocess.run(
         ["git", "-C", str(repo), "diff", "--name-only", parent_commit, commit],
         capture_output=True,
@@ -193,6 +250,10 @@ def snapshot_candidate(
     for path in diff:
         if not path_allowlisted(path):
             raise RuntimeError(f"snapshot diff outside allowlist: {path}")
+
+    assert_protected_evidence_matches_parent(
+        repo, parent_commit=parent_commit, candidate_commit=commit
+    )
 
     ref = f"refs/qualification/{workflow_id}/r{round_id}"
     subprocess.run(
@@ -210,6 +271,7 @@ def snapshot_candidate(
 
 
 def verify_worktree_clean(repo: Path, worktree: Path) -> list[str]:
+    """Return dirty-path errors. ``progress.md`` updates alone are allowed."""
     completed = subprocess.run(
         ["git", "-C", str(worktree), "status", "--porcelain"],
         capture_output=True,
@@ -218,8 +280,19 @@ def verify_worktree_clean(repo: Path, worktree: Path) -> list[str]:
     )
     if completed.returncode != 0:
         return [f"git status failed in {worktree}: {completed.stderr}"]
-    dirty = [line for line in completed.stdout.splitlines() if line.strip()]
-    return [f"dirty: {line}" for line in dirty] if dirty else []
+    errors: list[str] = []
+    for line in completed.stdout.splitlines():
+        if not line.strip():
+            continue
+        # porcelain: XY PATH or XY ORIG -> PATH
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        path = path.strip().strip('"')
+        if path == "progress.md":
+            continue
+        errors.append(f"dirty: {line}")
+    return errors
 
 
 def verify_ref_unmodified(repo: Path, ref: str, expected_commit: str) -> list[str]:
@@ -240,6 +313,170 @@ def receipt_tuple(state: dict) -> dict:
         "checker_digest": state.get("checker_sha256"),
         "review_digest": state.get("review_digest"),
     }
+
+
+def reviewer_receipt_path_for(report_path: Path) -> Path:
+    return report_path.with_suffix(report_path.suffix + ".receipt.json")
+
+
+def write_reviewer_receipt(
+    path: Path,
+    *,
+    campaign_id: str,
+    candidate_commit: str,
+    oracle_digest: str,
+    reviewer_session_id: str,
+    runner_status: str,
+    report_sha256: str,
+    qualification_mode: str = "live",
+) -> dict:
+    if runner_status != "complete":
+        raise ValueError("reviewer receipt requires completed runner_status")
+    if not reviewer_session_id:
+        raise ValueError("reviewer receipt requires reviewer_session_id")
+    payload = {
+        "schema": "eu4-reviewer-receipt/v1",
+        "campaign_id": campaign_id,
+        "candidate_commit": candidate_commit,
+        "oracle_digest": oracle_digest,
+        "reviewer_session_id": reviewer_session_id,
+        "runner_status": runner_status,
+        "report_sha256": report_sha256,
+        "qualification_mode": qualification_mode,
+    }
+    atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return payload
+
+
+def load_reviewer_receipt(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def verify_reviewer_receipt(
+    receipt: dict,
+    *,
+    campaign_id: str,
+    candidate_commit: str,
+    oracle_digest: str,
+    report_sha256: str,
+    require_live: bool = True,
+) -> list[str]:
+    errors: list[str] = []
+    if receipt.get("schema") != "eu4-reviewer-receipt/v1":
+        errors.append("bad receipt schema")
+    if receipt.get("campaign_id") != campaign_id:
+        errors.append("receipt campaign_id mismatch")
+    if receipt.get("candidate_commit") != candidate_commit:
+        errors.append("receipt candidate_commit mismatch")
+    if receipt.get("oracle_digest") != oracle_digest:
+        errors.append("receipt oracle_digest mismatch")
+    if receipt.get("report_sha256") != report_sha256:
+        errors.append("receipt report_sha256 mismatch")
+    if receipt.get("runner_status") != "complete":
+        errors.append("receipt runner_status not complete")
+    if not receipt.get("reviewer_session_id"):
+        errors.append("receipt missing reviewer_session_id")
+    if require_live and receipt.get("qualification_mode") == "scripted":
+        errors.append("scripted receipt not valid for live qualification")
+    return errors
+
+
+def quarantine_report(path: Path) -> Path | None:
+    """Move an unverified pre-existing report aside; return quarantine path."""
+    if not path.is_file():
+        return None
+    dest = path.with_name(path.name + f".quarantine-{uuid.uuid4().hex[:8]}")
+    path.replace(dest)
+    receipt = reviewer_receipt_path_for(path)
+    if receipt.is_file():
+        receipt.replace(dest.with_name(dest.name + ".receipt.json"))
+    return dest
+
+
+def ensure_reviewer_worktree(
+    repo: Path,
+    *,
+    workflow_id: str,
+    round_id: int,
+    candidate_commit: str,
+    active_session: bool = False,
+    existing_path: str | None = None,
+) -> Path:
+    """Reuse or safely recreate a detached reviewer worktree keyed by workflow+round."""
+    wt = repo / ".local" / "qualification" / f"review-wt-{workflow_id}-r{round_id}"
+    if existing_path:
+        prior = Path(existing_path)
+        if prior.resolve() != wt.resolve() and prior.exists() and active_session:
+            # Active session owns a different path — do not destroy it.
+            return prior
+
+    def _head(path: Path) -> str | None:
+        completed = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return None
+        return completed.stdout.strip()
+
+    def _is_registered(path: Path) -> bool:
+        completed = subprocess.run(
+            ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return False
+        target = str(path.resolve())
+        return any(
+            line.startswith("worktree ") and line[len("worktree ") :] == target
+            for line in completed.stdout.splitlines()
+        )
+
+    if wt.exists() and _is_registered(wt):
+        head = _head(wt)
+        if head == candidate_commit:
+            return wt
+        if active_session:
+            raise RuntimeError(
+                f"active reviewer session worktree HEAD {head} != {candidate_commit}"
+            )
+        subprocess.run(
+            ["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo), "worktree", "prune"],
+            check=False,
+            capture_output=True,
+        )
+    elif wt.exists():
+        if active_session:
+            raise RuntimeError(f"refusing to destroy active reviewer workspace: {wt}")
+        # Orphan path (not a registered worktree) — safe to clear.
+        import shutil
+
+        shutil.rmtree(wt)
+
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "worktree",
+            "add",
+            "--detach",
+            str(wt),
+            candidate_commit,
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return wt
 
 
 class HandoffController:
@@ -378,6 +615,11 @@ class HandoffController:
             state["state"] = "reviewing"
             save_workflow(self.workflow_path, state)
             return self._finish_review(state)
+        # New review round: clear prior reviewer identity so a pre-existing
+        # report cannot inherit a later session id.
+        state["reviewer_session_id"] = None
+        state["reviewer_worktree"] = None
+        state["reviewer_receipt_path"] = None
         if not state.get("reviewer_campaign_id"):
             state["reviewer_campaign_id"] = (
                 f"{state['implementer_campaign_id']}-review-r{state['round']}"
@@ -393,6 +635,10 @@ class HandoffController:
                 state["reviewer_session_id"] = review_result["session_id"]
             if review_result.get("worktree"):
                 state["reviewer_worktree"] = str(review_result["worktree"])
+            if review_result.get("receipt_path"):
+                state["reviewer_receipt_path"] = str(review_result["receipt_path"])
+            if review_result.get("qualification_mode"):
+                state["review_qualification_mode"] = review_result["qualification_mode"]
         else:
             report = Path(review_result)
         if not report.is_file():
@@ -403,6 +649,29 @@ class HandoffController:
         state["review_path"] = str(report)
         save_workflow(self.workflow_path, state)
         return state
+
+    def _require_live_reviewer_receipt(self, state: dict, report_sha: str) -> list[str]:
+        if not state.get("require_live_sessions"):
+            return []
+        receipt_path = state.get("reviewer_receipt_path")
+        if not receipt_path:
+            candidate = reviewer_receipt_path_for(Path(state["review_path"]))
+            if candidate.is_file():
+                receipt_path = str(candidate)
+        if not receipt_path or not Path(receipt_path).is_file():
+            return ["missing_reviewer_receipt"]
+        try:
+            receipt = load_reviewer_receipt(Path(receipt_path))
+        except (OSError, json.JSONDecodeError) as exc:
+            return [f"unreadable_reviewer_receipt: {exc}"]
+        return verify_reviewer_receipt(
+            receipt,
+            campaign_id=state["reviewer_campaign_id"],
+            candidate_commit=state["candidate_commit"],
+            oracle_digest=state["oracle_manifest_sha256"],
+            report_sha256=report_sha,
+            require_live=True,
+        )
 
     def _finish_review(self, state: dict) -> dict:
         if not state.get("review_path"):
@@ -445,13 +714,24 @@ class HandoffController:
             save_workflow(self.workflow_path, state)
             return state
         state["review_digest"] = file_sha256(review_path)
-        outcome = review["outcome"]
-        if outcome == "qualified":
-            if not state.get("reviewer_session_id") and state.get("require_live_sessions"):
+        if state.get("require_live_sessions"):
+            receipt_errs = self._require_live_reviewer_receipt(
+                state, state["review_digest"]
+            )
+            if receipt_errs:
+                state["state"] = "blocked"
+                state["block_reason"] = "live_reviewer_receipt: " + "; ".join(
+                    receipt_errs
+                )
+                save_workflow(self.workflow_path, state)
+                return state
+            if not state.get("reviewer_session_id"):
                 state["state"] = "blocked"
                 state["block_reason"] = "missing_reviewer_session_id"
                 save_workflow(self.workflow_path, state)
                 return state
+        outcome = review["outcome"]
+        if outcome == "qualified":
             state["qualification_receipt"] = receipt_tuple(state)
             state["state"] = "awaiting_merge"
             _note(state, "awaiting_merge")
@@ -518,6 +798,9 @@ class HandoffController:
             )
         state["state"] = "remediating"
         state["reviewer_campaign_id"] = None
+        state["reviewer_session_id"] = None
+        state["reviewer_worktree"] = None
+        state["reviewer_receipt_path"] = None
         state["review_path"] = None
         state["review_digest"] = None
         # Keep rejected_* for remediation seed; clear active candidate for next snapshot

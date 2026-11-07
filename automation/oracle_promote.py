@@ -149,6 +149,40 @@ def _repair_current(oracle_dir: Path, version_name: str) -> None:
     os.replace(tmp, current)
 
 
+def _ensure_version_local_manifest(
+    repo: Path, oracle_dir: Path, tip_manifest: dict
+) -> None:
+    """Recreate a missing version-local pin from a validated active tip only."""
+    version = tip_manifest.get("oracle_version_name")
+    if not isinstance(version, str) or not version:
+        return
+    published = _version_dir(oracle_dir, version)
+    pin = published / "verification-manifest.json"
+    if pin.is_file():
+        return
+    active = _active_manifest(oracle_dir)
+    if not active or active.get("oracle_version_name") != version:
+        raise RuntimeError(
+            f"cannot recover version-local manifest for {version}: active tip mismatch"
+        )
+    if digest_manifest(active) != digest_manifest(tip_manifest):
+        raise RuntimeError(
+            f"cannot recover version-local manifest for {version}: tip digest drift"
+        )
+    errs = verify_manifest(repo, active)
+    if errs:
+        raise RuntimeError(
+            f"cannot recover version-local manifest for {version}: "
+            + "; ".join(errs)
+        )
+    tip_path = oracle_dir / "verification-manifest.json"
+    tip_text = tip_path.read_text(encoding="utf-8")
+    published.mkdir(parents=True, exist_ok=True)
+    tmp = published / "verification-manifest.json.tmp"
+    tmp.write_text(tip_text, encoding="utf-8")
+    os.replace(tmp, pin)
+
+
 def _version_id(parent_manifest_sha256: str, new_payloads: list[dict]) -> str:
     blob = canonical_json(
         {
@@ -251,6 +285,7 @@ def promote_grounded_findings(
         version = parent_version or "v0"
         if parent_manifest:
             _repair_current(oracle_dir, version)
+            _ensure_version_local_manifest(repo, oracle_dir, parent_manifest)
         return {
             "promoted": True,
             "oracle_version": version,
@@ -273,16 +308,17 @@ def promote_grounded_findings(
 
     # Recovery: unpublished complete version already on disk
     if published.is_dir() and (published / "regressions").is_dir():
-        # Build/replace tip manifest pointing at it if needed
         tip = _active_manifest(oracle_dir)
         if tip and tip.get("oracle_version_name") == version_name:
             _repair_current(oracle_dir, version_name)
+            _ensure_version_local_manifest(repo, oracle_dir, tip)
             return {
                 "promoted": True,
                 "oracle_version": version_name,
                 "decisions": decisions,
                 "reused": True,
                 "manifest_sha256": digest_manifest(tip),
+                "version_manifest_path": tip.get("version_manifest_path"),
             }
 
     if staging.exists():
@@ -357,18 +393,20 @@ def promote_grounded_findings(
     if errs:
         raise RuntimeError("promoted manifest invalid: " + "; ".join(errs))
 
-    # 4: atomic tip publish (commit point)
+    # 4: immutable per-version pin BEFORE tip activation
+    text = canonical_json(manifest)
+    version_manifest_path = published / "verification-manifest.json"
+    version_tmp = published / "verification-manifest.json.tmp"
+    version_tmp.write_text(text, encoding="utf-8")
+    os.replace(version_tmp, version_manifest_path)
+
+    # 5: atomic tip publish (activation / commit point)
     tip = oracle_dir / "verification-manifest.json"
     tmp = oracle_dir / "verification-manifest.json.tmp"
-    text = canonical_json(manifest)
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, tip)
 
-    # Immutable per-version snapshot for campaign pins (bytes match tip)
-    version_manifest_path = published / "verification-manifest.json"
-    version_manifest_path.write_text(text, encoding="utf-8")
-
-    # 5: convenience CURRENT mirror
+    # 6: convenience CURRENT mirror
     _repair_current(oracle_dir, version_name)
 
     return {
