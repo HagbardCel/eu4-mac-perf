@@ -1,0 +1,40 @@
+{
+  "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "members": [
+    {
+      "path": "campaigns/eu4-a01-trusted-validation/accept.py",
+      "role": "checker",
+      "sha256": "de77d14add1f3b6b6b0870047d74d2dc06b0edbb47bc0621cd07e3a4a9ab6676"
+    },
+    {
+      "path": "analysis/qualification/v0/primitive-table.evidence.json",
+      "role": "frozen_oracle",
+      "sha256": "b16e464b91439cf74bacdf5fd8424f0df6d72a01dfff25e4ae702133af382491"
+    },
+    {
+      "path": "automation/evidence.py",
+      "role": "trusted_helper",
+      "sha256": "1bed28ae644ecc008c8a5e232be7a94b3ecc5ea0add0beb1f884e0e4a7e826fa"
+    },
+    {
+      "path": "automation/macho_map.py",
+      "role": "trusted_helper",
+      "sha256": "0c1188fe786690d24ea99d17a342617e9b6118fa4a8004b84055032816839328"
+    },
+    {
+      "path": "automation/replay_primitive.py",
+      "role": "trusted_helper",
+      "sha256": "496f3ee00afc91403e35ccda4218bb1966a1cb3f0862063081d68651fb5458a4"
+    },
+    {
+      "path": "automation/verification_manifest.py",
+      "role": "trusted_helper",
+      "sha256": "15f7003ae39c6b06fce7819b92b33503940bf95052b69f87ee06b452ce724018"
+    }
+  ],
+  "oracle_version": 0,
+  "oracle_version_name": "v0",
+  "repo_baseline_commit": "173321b6d3258576060e7941e9bd91f608e8f543",
+  "schema": "eu4-verification-manifest/v1",
+  "target_probe": "GetOpenGLPrimitiveType"
+}

@@ -1,7 +1,8 @@
-"""Offline HTTP tests for the verified OpenCode 2.2.5 shapes."""
+"""Offline HTTP tests for the OpenCode V2 shapes generated against 2.2.5."""
 
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import threading
@@ -167,8 +168,6 @@ class OpenCodeHttpTests(unittest.TestCase):
 
     def agent(self, **kwargs) -> OpenCodeAgent:
         values = {
-            "username": "opencode",
-            "password": "secret",
             "timeout": 1,
             "model": "opencode/big-pickle",
         }
@@ -178,17 +177,26 @@ class OpenCodeHttpTests(unittest.TestCase):
     def test_refuses_a_non_loopback_server(self) -> None:
         with self.assertRaises(ValueError):
             OpenCodeAgent(
-                "http://example.com", username="opencode", password="secret",
-                timeout=1, model="opencode/big-pickle")
+                "http://example.com", timeout=1, model="opencode/big-pickle")
 
-    def test_sends_basic_auth_and_rejects_a_different_directory(self) -> None:
+    def test_sends_basic_auth_when_a_password_is_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.agent(password="local-secret").create(Path(temporary), "hello")
+            expected = base64.b64encode(b"opencode:local-secret").decode()
+            self.assertEqual(self.app.authorization, "Basic " + expected)
+
+    def test_no_authorization_header_without_a_password(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.agent().create(Path(temporary), "hello")
+            self.assertIsNone(self.app.authorization)
+
+    def test_rejects_a_different_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             self.app.force_directory = "/not/the/workspace"
             with self.assertRaises(ContractError) as caught:
                 self.agent().create(workspace, "hello")
             self.assertEqual(caught.exception.reason, "workspace_mismatch")
-            self.assertTrue(self.app.authorization.startswith("Basic "))
 
     def test_malformed_json_is_unknown(self) -> None:
         self.app.malformed = True

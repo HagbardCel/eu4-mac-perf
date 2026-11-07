@@ -4,14 +4,14 @@ One OpenCode session, an external checker, and files under `.local/automation/` 
 
 ```sh
 OPENCODE_URL=http://127.0.0.1:4096 \
-OPENCODE_SERVER_PASSWORD=... \
+OPENCODE_PASSWORD=local-secret \
 python3 -m automation.cli run campaigns/automation-smoke/campaign.json
 python3 -m automation.cli resume campaigns/automation-smoke/campaign.json
 python3 -m automation.cli status campaigns/automation-smoke/campaign.json
 python3 -m automation.cli report campaigns/automation-smoke/campaign.json
 ```
 
-`run` creates or continues. `resume` fails when there is no state file. The server must already be running on a loopback address (`opencode serve --hostname 127.0.0.1`). Basic auth uses `OPENCODE_SERVER_USERNAME` (default `opencode`) and `OPENCODE_SERVER_PASSWORD`.
+`run` creates or continues. `resume` fails when there is no state file. The server must already be running on a loopback address (`OPENCODE_PASSWORD=local-secret opencode serve --hostname 127.0.0.1 --port 4096`), and the runner is given the same password.
 
 Offline tests, with no model and no server:
 
@@ -19,9 +19,18 @@ Offline tests, with no model and no server:
 PYTHONPATH=benchmark:. python3 -m unittest discover -s tests -p 'test_automation_*.py'
 ```
 
-## Verified server
+## Generated against
 
-Preflighted against the installed binary `opencode v2.2.5`. Its OpenAPI is `GET /openapi.json`. There is no JSON health route; `GET /global/health` is the web UI. This adapter only speaks the V2 routes below, and only when `opencode_version` in the campaign file is `2.2.5`.
+The request and response shapes below were generated against the installed binary `opencode v2.2.5`, and that build is recorded in the campaign's `opencode_version`. The version is **not** enforced: any build is accepted, and a live run on a different one should be re-preflighted against its `GET /openapi.json` first. There is no JSON health route; `GET /global/health` is the web UI.
+
+`opencode serve` always requires HTTP Basic auth and generates a password when none is supplied (`OPENCODE_PASSWORD=""` does not disable it). Start it with a fixed, dedicated password and give the runner the same value:
+
+```sh
+OPENCODE_PASSWORD=local-secret opencode serve --hostname 127.0.0.1 --port 4096
+OPENCODE_PASSWORD=local-secret python3 -m automation.handoff_cli run-opencode <workflow.json> <campaign.json>
+```
+
+The adapter sends `Authorization: Basic opencode:<password>` only when `OPENCODE_PASSWORD` is set; with no password it sends no header and a `401` pauses as `runtime_unavailable`. Keep the server on loopback: the server, and any shell an agent runs through it, can read that environment variable.
 
 - `POST /api/session` with `location.directory`, `model` (`providerID` + `id`), and `permissions`. The returned directory must match the live workspace or the run stops.
 - `POST /api/session/{id}/prompt` with a caller-supplied `msg_…` id. A second post of the same id returned the existing admission during preflight; `409` is treated as that same id, not a new prompt.
@@ -47,7 +56,7 @@ On the first live session, a ruleset that denied `read` of `*` rejected `read` o
 
 ## Live session
 
-`integration: verified` against OpenCode 2.2.5 and `opencode/big-pickle` on 3 Nov 2026.
+`integration: verified` against OpenCode 2.2.5 and `opencode/big-pickle` on 3 Nov 2026. That is the build the behaviour below was observed on, not a version gate.
 
 The tracked campaign [campaigns/automation-smoke/campaign.json](../campaigns/automation-smoke/campaign.json) completed in two checker rounds. The first returned `fail` because the checker always fails once. The second returned `pass` after `marker.txt` was `ready`. The recorded model was `opencode/big-pickle`. That run used an earlier ruleset that denied relative `read` calls.
 
@@ -61,7 +70,21 @@ A gfx reconstruction campaign keeps this `campaign.json` schema and adds `recons
 
 The shared checker requires a detached worktree at the pinned commit, pinned `benchmark/eu4_gfx_entries.def` and `reverse_engineering/target.json` blobs, and its own bytes equal to `git show <pinned>:automation/reconstruction_accept.py`. There is no bootstrap exception. It stores one research checkpoint beside the worktree, allows a follow-up only after that text, and accepts a `BLOCKER:` line only when the checkpoint is absent and the edits are still the note and `progress.md`, or when an existing checkpoint is intact. Implementation then checks one new registry entry against the stored instruction span, builds the candidate with `build_library("x86_64")`, and requires each configured module to run at least one non-skipped test.
 
-`pass` is offline qualification for independent review. `fail` and `inconclusive` still continue the campaign. `blocked` pauses `semantic_blocker` and resume does not start another turn. A shared-checker mismatch, a pinned-metadata or campaign-config mismatch, and a checker-owned checkpoint that cannot be read or no longer matches the campaign emit `unavailable`. `run_accept` does not recognize that verdict: it records a null verdict, keeps the diagnostics, and pauses `validation_unavailable`. The runner still calls `require_worktree` before the checker, so a missing worktree, a worktree from another repository, or a HEAD that is not the pin raises before the checker runs. The checker's own worktree result applies only after that preflight, including a branch that is already at the pin but not detached. A fresh worktree does not inherit untracked files. A reused worktree may still contain the previous root `progress.md`; remove that file before the first agent turn. The instruction listing, registry parser, and Metal link stay in the existing research and boot tools. Candidate test subprocesses set `MTL_DEBUG_LAYER=1` and `MTL_DEBUG_LAYER_ERROR_MODE=assert` before a Metal device is created. An OpenGL-to-Metal objective loads the `opengl-metal-reconstruction` skill only when the pinned worktree's copy matches the pinned blob. A later campaign must pin the checker revision that contains this environment; older pins stay on their recorded checker bytes.
+`pass` is offline qualification for independent review. `fail` and `inconclusive` still continue the campaign. `blocked` pauses `semantic_blocker` and resume does not start another turn. `unavailable` is a first-class checker verdict: the runner pauses `validation_unavailable` and does **not** open another remediation turn (environment/integrity gap, not a bad candidate). A shared-checker mismatch, a pinned-metadata or campaign-config mismatch, and a checker-owned checkpoint that cannot be read or no longer matches the campaign also map to that pause. When a campaign declares `verification_manifest`, its digest is stored in campaign state at creation and re-checked before/after accept; a member hash mismatch pauses `verification_manifest_modified`. The runner still calls `require_worktree` before the checker, so a missing worktree, a worktree from another repository, or a HEAD that is not the pin raises before the checker runs. The checker's own worktree result applies only after that preflight, including a branch that is already at the pin but not detached. A fresh worktree does not inherit untracked files. A reused worktree may still contain the previous root `progress.md`; remove that file before the first agent turn. The instruction listing, registry parser, and Metal link stay in the existing research and boot tools. Candidate test subprocesses set `MTL_DEBUG_LAYER=1` and `MTL_DEBUG_LAYER_ERROR_MODE=assert` before a Metal device is created. An OpenGL-to-Metal objective loads the `opengl-metal-reconstruction` skill only when the pinned worktree's copy matches the pinned blob. A later campaign must pin the checker revision that contains this environment; older pins stay on their recorded checker bytes.
+
+## A0 trusted validation and handoff
+
+- Promote grounded evidence: `python3 -m automation.promote_evidence` (writes `analysis/qualification/v0/`; golden only—no workspace candidate under the oracle tree).
+- Smoke campaign: `campaigns/eu4-a01-trusted-validation/` — checker reads the **workspace** candidate at `analysis/qualification/v0/primitive-lookup.candidate.json`; oracle/manifest stay trusted and re-hashed.
+- Outer loop CLI:
+  - `python3 -m automation.handoff_cli run-scripted <workflow.json>` — deterministic two-defect A→B path for **portable tests** (synthetic fixture oracle under the workflow dir; not independent agent review).
+  - `python3 -m automation.handoff_cli run-opencode <workflow.json> <campaign.json>` — real OpenCode implementer **and** reviewer sessions. No synthetic reviewer fallback. Authenticates with `OPENCODE_PASSWORD` when set.
+- Reviewer campaign: `campaigns/eu4-a02-reviewer/` — report path is `EU4_REVIEW_REPORT_PATH` **outside** the candidate worktree; accept returns `pass` when the review operation finished (any outcome). Controller consumes `qualified|rejected|unresolved`.
+- Promotion is append-only and content-addressed: version directory is published before the tip manifest replace; already-applied finding digests prevent duplicate promote after crash; `CURRENT` is a convenience mirror of the tip manifest.
+- Candidate snapshots are full baseline trees (`read-tree` pin + allowlisted overlay) parented on `pin_commit`.
+- Qualification receipt: `(candidate_commit, oracle_digest, checker_digest, review_digest)`. Remediation campaigns seed from the rejected snapshot and pin a version-specific oracle manifest path before the first agent turn.
+- Identity fields stay distinct: `repo_baseline_commit` vs `eu4_executable_sha256`.
+- Portable unittest fixtures live under `tests/fixtures/qualification/`; they must not mutate tracked tip oracle files.
 
 ## Metal API corpus
 

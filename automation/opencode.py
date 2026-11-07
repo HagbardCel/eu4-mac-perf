@@ -1,7 +1,9 @@
-"""OpenCode 2.2.5 V2 HTTP adapter.
+"""OpenCode V2 HTTP adapter.
 
-Verified against the local server's ``/openapi.json`` (binary ``opencode v2.2.5``).
-That spec has no JSON health route; ``GET /global/health`` is the web UI.
+Generated against the local server's ``/openapi.json`` (binary ``opencode v2.2.5``).
+That build is recorded, not enforced: any version is accepted, but a different
+build should be re-preflighted against its ``/openapi.json`` before trusting a
+live run. That spec has no JSON health route; ``GET /global/health`` is the web UI.
 Settlement is the inbox, the active list, and a later idle message. The
 experimental wait route is not called: a 204 arrived while work was still queued.
 """
@@ -18,7 +20,8 @@ from pathlib import Path
 
 from automation.agents import ContractError, History, Observation
 
-VERIFIED_VERSION = "2.2.5"
+# Server build the request/response shapes below were generated against.
+OBSERVED_VERSION = "2.2.5"
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 _TERMINAL = {"succeeded", "failed", "interrupted"}
 _HISTORY_PAGES = 100
@@ -29,8 +32,8 @@ class TransportError(RuntimeError):
 
 
 class OpenCodeAgent:
-    def __init__(self, base_url: str, *, username: str, password: str | None,
-                 timeout: float, model: str):
+    def __init__(self, base_url: str, *, timeout: float, model: str,
+                 password: str | None = None):
         _require_loopback(base_url)
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -38,11 +41,9 @@ class OpenCodeAgent:
         self.observed_model: str | None = None
         self.protected_root: Path | None = None
         self.allow_skill = False
-        token = None
-        if password:
-            token = base64.b64encode(f"{username}:{password}".encode()).decode()
         self._headers = {"Accept": "application/json"}
-        if token:
+        if password:
+            token = base64.b64encode(f"opencode:{password}".encode()).decode()
             self._headers["Authorization"] = "Basic " + token
 
     def create(self, workspace: Path, prompt: str) -> str:

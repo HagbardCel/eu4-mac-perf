@@ -111,12 +111,11 @@ class TelemetryTests(unittest.TestCase):
             append(path, [_record(
                 "m/message", "message", text="x" * 5000,
                 note="OPENCODE_SERVER_PASSWORD=sekret",
-            )], secrets=["sekret"])
+            )])
             row = json.loads(path.read_text())
             self.assertNotIn("sekret", path.read_text())
             hidden = redact(
-                {"token": "secret123", "tokens": {"input": 4}, "note": "PASSWORD=sekret"},
-                [])
+                {"token": "secret123", "tokens": {"input": 4}, "note": "PASSWORD=sekret"})
             self.assertEqual(hidden["token"], "[redacted]")
             self.assertEqual(hidden["tokens"], {"input": 4})
             self.assertNotIn("sekret", hidden["note"])

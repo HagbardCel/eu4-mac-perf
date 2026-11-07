@@ -1,0 +1,7 @@
+{
+  "schema": "eu4-primitive-lookup/v1",
+  "table": [0, 1, 3, 4, 4, 10, 11, 12],
+  "engine_enum_4_gl_mode": 4,
+  "out_of_range_default": 0,
+  "notes": "Seeded defects: A=table[4]/mode wrong (controlled suite); B=out_of_range_default wrong (reviewer-only until promoted)"
+}

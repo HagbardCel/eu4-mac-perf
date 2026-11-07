@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from automation.opencode import VERIFIED_VERSION, OpenCodeAgent
+from automation.opencode import OpenCodeAgent
 from automation.runner import Runner
 from automation.state import load_campaign, load_state, repo_root
 from automation.telemetry import report
@@ -29,22 +29,13 @@ def main(argv: list[str] | None = None) -> int:
     if command == "report":
         _print_report(report(run_root / "events.jsonl"))
         return 0
-    if campaign.opencode_version != VERIFIED_VERSION:
-        print(
-            f"unsupported opencode version {campaign.opencode_version}; "
-            f"this adapter was verified against {VERIFIED_VERSION}",
-            file=sys.stderr,
-        )
-        return 2
-    password = os.environ.get("OPENCODE_SERVER_PASSWORD")
     agent = OpenCodeAgent(
         os.environ.get("OPENCODE_URL", "http://127.0.0.1:4096"),
-        username=os.environ.get("OPENCODE_SERVER_USERNAME", "opencode"),
-        password=password,
+        password=os.environ.get("OPENCODE_PASSWORD"),
         timeout=float(os.environ.get("OPENCODE_TIMEOUT", "120")),
         model=campaign.model,
     )
-    runner = Runner(campaign, agent, run_root, secrets=[password] if password else [])
+    runner = Runner(campaign, agent, run_root)
     try:
         state = runner.execute(resume_only=command == "resume")
     except KeyboardInterrupt:
