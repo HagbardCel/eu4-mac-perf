@@ -450,19 +450,19 @@ def legacy_workflow_layout(repo: Path, state: dict, reports: Path) -> Path | Non
     """Detect pre-namespacing artifacts for an unfinished workflow.
 
     Resuming one would silently start against ambiguous state, so callers block.
+    A workflow that already owns scoped state is never legacy: flat report names
+    from an older workflow must not block it.
     """
     if state.get("state") in ("awaiting_merge", "blocked"):
         return None
-    campaign_id = {
-        "reviewing": state.get("reviewer_campaign_id"),
-        "qualified_by_checker": state.get("reviewer_campaign_id"),
-        "remediating": state.get("remediation_campaign_id"),
-    }.get(state["state"]) or state.get("implementer_campaign_id")
-    if campaign_id:
-        legacy_root = repo / ".local" / "automation" / campaign_id
-        scoped = run_root_for(repo, state["workflow_id"], campaign_id)
-        if legacy_root.exists() and not scoped.exists():
-            return legacy_root
+    implementer = state.get("implementer_campaign_id")
+    if not implementer:
+        return None
+    if run_root_for(repo, state["workflow_id"], implementer).exists():
+        return None
+    legacy_root = repo / ".local" / "automation" / implementer
+    if legacy_root.exists():
+        return legacy_root
     round_id = state.get("round", 0)
     legacy_report = reports / f"review-r{round_id}.json"
     scoped_report = reports / f"{state['workflow_id']}-review-r{round_id}.json"

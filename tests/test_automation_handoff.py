@@ -1403,7 +1403,7 @@ class LegacyLayoutTests(unittest.TestCase):
     def test_unfinished_legacy_workflow_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            legacy_root = root / ".local" / "automation" / "base-review-r0"
+            legacy_root = root / ".local" / "automation" / "base"
             legacy_root.mkdir(parents=True)
             reports = root / "reports"
             reports.mkdir()
@@ -1437,6 +1437,22 @@ class LegacyLayoutTests(unittest.TestCase):
             self.assertEqual(
                 legacy_workflow_layout(root, state, reports), planted
             )
+
+    def test_scoped_workflow_ignores_another_workflows_flat_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reports = root / "reports"
+            reports.mkdir()
+            (reports / "review-r1.json").write_text("{}\n", encoding="utf-8")
+            (root / ".local" / "automation" / "wf_new" / "base").mkdir(parents=True)
+            state = {
+                "state": "reviewing",
+                "workflow_id": "wf_new",
+                "round": 1,
+                "implementer_campaign_id": "base",
+                "reviewer_campaign_id": "base-review-r1-wf_new",
+            }
+            self.assertIsNone(legacy_workflow_layout(root, state, reports))
 
 
 if __name__ == "__main__":
