@@ -36,8 +36,10 @@ void eu4_gfx_shader_set_allow_transitional_markers(int allowed);
 /* 1 if master+0x70 still points at this object (stale-current detection). */
 int eu4_gfx_shader_is_current(const void *immediate_context, const void *shader);
 
-/* Pipeline cache key participants (effective Metal state). */
+/* Pipeline cache key participants (effective Metal state).
+   mtl_device is required in the key so PSOs never cross devices. */
 typedef struct EU4GfxPipelineKey {
+    void *mtl_device;
     void *vertex_function;
     void *fragment_function;
     unsigned pixel_format; /* MTLPixelFormat as unsigned */
@@ -48,6 +50,10 @@ typedef struct EU4GfxPipelineKey {
 
 void *eu4_gfx_shader_pipeline_for_key(const void *shader, void *mtl_device,
                                       const EU4GfxPipelineKey *key);
+
+/* Reflect linked Metal stages; 1 if VS/PS functions expose the expected
+   Simple interface (production validation, not capture/replay). */
+int eu4_gfx_shader_reflect_validate(const void *shader);
 
 /* _GfxCreateShader at 0x15eae97. Allocates 0x78 bytes; +0/+4 qword cleared. */
 void *eu4_gfx_create_shader(void);
@@ -76,6 +82,8 @@ int eu4_gfx_shader_is_linked(const void *shader);
 const char *eu4_gfx_shader_identity(const void *shader);
 void *eu4_gfx_shader_pipeline(const void *shader, void *mtl_device);
 void eu4_gfx_shader_test_reset(void);
+
+/* Capture / GPU-trace helpers are diagnostic-only and must not gate admission. */
 
 /* Reconstructed Simple stage sources used as the asset-maincode-v0 compiler
    input identity when BuildGLSL bytes are not recovered. */

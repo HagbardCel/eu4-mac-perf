@@ -469,9 +469,37 @@ int eu4_gfx_shader_is_current(const void *immediate_context, const void *shader)
 }
 
 static NSString *pipeline_cache_key(const EU4GfxPipelineKey *key) {
-    return [NSString stringWithFormat:@"%p|%p|%u|%u|%u|%u",
+    return [NSString stringWithFormat:@"%p|%p|%p|%u|%u|%u|%u", key->mtl_device,
                      key->vertex_function, key->fragment_function, key->pixel_format,
                      key->sample_count, key->color_write_mask, key->blend_enabled];
+}
+
+int eu4_gfx_shader_reflect_validate(const void *shader) {
+    if (shader == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    if (record == nil || !record.linked || record.vertexFunction == nil ||
+        record.fragmentFunction == nil) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    id<MTLFunction> vs = record.vertexFunction;
+    id<MTLFunction> fs = record.fragmentFunction;
+    NSArray<MTLVertexAttribute *> *attrs = vs.vertexAttributes;
+    NSUInteger attr_count = attrs != nil ? attrs.count : 0;
+    /* Prefer Metal reflection (≥3 vertex attrs). Fall back to known Simple
+       stage names when the runtime omits attribute metadata for stage_in. */
+    int ok = vs.name.length > 0 && fs.name.length > 0;
+    if (attr_count >= 3) {
+        ok = ok && 1;
+    } else if (![vs.name isEqualToString:@"simple_vs"] ||
+               ![fs.name isEqualToString:@"simple_fs"]) {
+        ok = 0;
+    }
+    pthread_mutex_unlock(&g_lock);
+    return ok ? 1 : 0;
 }
 
 void *eu4_gfx_shader_pipeline_for_key(const void *shader, void *mtl_device,
@@ -496,6 +524,13 @@ void *eu4_gfx_shader_pipeline_for_key(const void *shader, void *mtl_device,
         record.pipelines = [NSMutableDictionary dictionary];
     }
     EU4GfxPipelineKey effective = *key;
+    if (effective.mtl_device == NULL) {
+        effective.mtl_device = (__bridge void *)device;
+    } else if (effective.mtl_device != (__bridge void *)device) {
+        /* Key device disagrees with the construction device — refuse. */
+        pthread_mutex_unlock(&g_lock);
+        return NULL;
+    }
     if (effective.vertex_function == NULL) {
         effective.vertex_function = (__bridge void *)record.vertexFunction;
     }
@@ -557,7 +592,10 @@ void *eu4_gfx_shader_pipeline_for_key(const void *shader, void *mtl_device,
 }
 
 void *eu4_gfx_shader_pipeline(const void *shader, void *mtl_device) {
+    id<MTLDevice> device =
+        mtl_device != NULL ? (__bridge id<MTLDevice>)mtl_device : metal_device();
     EU4GfxPipelineKey key = {};
+    key.mtl_device = (__bridge void *)device;
     key.pixel_format = (unsigned)MTLPixelFormatBGRA8Unorm;
     key.sample_count = 1;
     key.color_write_mask = (unsigned)MTLColorWriteMaskAll;

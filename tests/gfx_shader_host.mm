@@ -88,22 +88,32 @@ int main(void) {
         return 27;
     }
 
-    void *pipeline = eu4_gfx_shader_pipeline(object, nullptr);
+    if (!eu4_gfx_shader_reflect_validate(object)) {
+        fprintf(stderr, "reflection validation failed\n");
+        return 32;
+    }
+
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device == nil) {
+        return 33;
+    }
+    void *pipeline = eu4_gfx_shader_pipeline(object, (__bridge void *)device);
     if (pipeline == nullptr) {
         fprintf(stderr, "pipeline construction failed\n");
         return 13;
     }
 
     EU4GfxPipelineKey key_a = {};
+    key_a.mtl_device = (__bridge void *)device;
     key_a.pixel_format = (unsigned)MTLPixelFormatBGRA8Unorm;
     key_a.sample_count = 1;
     key_a.color_write_mask = (unsigned)MTLColorWriteMaskAll;
     key_a.blend_enabled = 1;
-    void *pso_a = eu4_gfx_shader_pipeline_for_key(object, nullptr, &key_a);
+    void *pso_a = eu4_gfx_shader_pipeline_for_key(object, (__bridge void *)device, &key_a);
     if (pso_a == nullptr) {
         return 28;
     }
-    void *pso_a2 = eu4_gfx_shader_pipeline_for_key(object, nullptr, &key_a);
+    void *pso_a2 = eu4_gfx_shader_pipeline_for_key(object, (__bridge void *)device, &key_a);
     if (pso_a2 != pso_a) {
         /* Cache must return the same configuration selection (pointer equality OK
            for our dictionary cache; GPU may dedupe elsewhere). */
@@ -111,12 +121,19 @@ int main(void) {
     }
     EU4GfxPipelineKey key_b = key_a;
     key_b.blend_enabled = 0;
-    void *pso_b = eu4_gfx_shader_pipeline_for_key(object, nullptr, &key_b);
+    void *pso_b = eu4_gfx_shader_pipeline_for_key(object, (__bridge void *)device, &key_b);
     if (pso_b == nullptr) {
         return 30;
     }
     if (pso_b == pso_a) {
         return 31; /* differing effective Metal state must select a different cache entry */
+    }
+    /* Device participates in the PSO key: a mismatched device pointer refuses. */
+    EU4GfxPipelineKey key_wrong_device = key_a;
+    key_wrong_device.mtl_device = reinterpret_cast<void *>(static_cast<uintptr_t>(0x1));
+    if (eu4_gfx_shader_pipeline_for_key(object, (__bridge void *)device, &key_wrong_device) !=
+        nullptr) {
+        return 34;
     }
 
     uintptr_t addr = reinterpret_cast<uintptr_t>(object);
