@@ -133,15 +133,17 @@ bool eu4_gfx_entry_prepare(const eu4_gfx_entry_request *requests, int count) {
             return false;
         }
         /* Prologue is push %rbp; mov %rsp,%rbp. The other accepted prefixes are
-           exact: vertex destroy, index destroy, and index set. A different jz
-           displacement is still rejected. */
+           exact: vertex destroy, index destroy, index set, and shader destroy.
+           A different jz displacement is still rejected. */
         static const uint8_t kVertexDestroy[5] = {0x48, 0x85, 0xff, 0x74, 0x2f};
         static const uint8_t kIndexDestroy[5] = {0x48, 0x85, 0xff, 0x74, 0x50};
         static const uint8_t kIndexSet[5] = {0x48, 0x85, 0xf6, 0x74, 0x28};
+        static const uint8_t kShaderDestroy[5] = {0x48, 0x85, 0xff, 0x74, 0x1c};
         int prologue = requests[i].expected[0] == 0x55 && requests[i].expected[1] == 0x48;
         int exact = length == 5 && (memcmp(requests[i].expected, kVertexDestroy, 5) == 0 ||
                                      memcmp(requests[i].expected, kIndexDestroy, 5) == 0 ||
-                                     memcmp(requests[i].expected, kIndexSet, 5) == 0);
+                                     memcmp(requests[i].expected, kIndexSet, 5) == 0 ||
+                                     memcmp(requests[i].expected, kShaderDestroy, 5) == 0);
         if (!prologue && !exact) {
             return false;
         }
