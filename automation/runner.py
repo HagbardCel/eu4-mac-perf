@@ -23,6 +23,11 @@ from automation.state import (
     save_state,
 )
 from automation.telemetry import append, redact
+from automation.verification_manifest import (
+    digest_manifest,
+    load_manifest,
+    verify_manifest,
+)
 
 _INSTRUCTIONS = (Path(__file__).parent / "prompts" / "agent.md").read_text(encoding="utf-8")
 _OUTPUT_CAP = 65536
@@ -229,6 +234,9 @@ class Runner:
         if not self._digest_matches(state):
             self._pause(state, "checker_modified")
             return
+        if not self._manifest_matches(state):
+            self._pause(state, "verification_manifest_modified")
+            return
         if not self._apply_skill(state):
             return
         started = self.clock()
@@ -236,6 +244,9 @@ class Runner:
         duration = self.clock() - started
         if not self._digest_matches(state):
             self._pause(state, "checker_modified")
+            return
+        if not self._manifest_matches(state):
+            self._pause(state, "verification_manifest_modified")
             return
         state["rounds"] += 1
         state["last_verdict"] = outcome["verdict"]
@@ -256,6 +267,9 @@ class Runner:
             return
         elif outcome["ok"] and outcome["verdict"] == "blocked":
             self._pause(state, "semantic_blocker")
+        elif outcome["ok"] and outcome["verdict"] == "unavailable":
+            # Environment / integrity gap: pause; do not remediate as a bad candidate.
+            self._pause(state, "validation_unavailable")
         else:
             self._pause(state, "validation_unavailable")
 
@@ -322,7 +336,7 @@ class Runner:
         return text
 
     def _fresh(self) -> dict:
-        return {
+        state = {
             "campaign_id": self.campaign.id,
             "checker_sha256": file_sha256(self.campaign.checker),
             "elapsed_seconds": 0.0,
@@ -339,12 +353,34 @@ class Runner:
             "started_at": datetime.now(timezone.utc).isoformat(),
             "status": "running",
             "validated_submission_id": None,
+            "verification_manifest_sha256": None,
             "workspace": str(self.live),
         }
+        manifest_digest = self._capture_manifest_digest()
+        if manifest_digest is not None:
+            state["verification_manifest_sha256"] = manifest_digest
+        return state
+
+    def _capture_manifest_digest(self) -> str | None:
+        path = self.campaign.verification_manifest
+        if path is None:
+            return None
+        if not path.is_file():
+            raise RuntimeError(f"verification manifest missing: {path}")
+        manifest = load_manifest(path)
+        errors = verify_manifest(repo_root(self.campaign.root), manifest)
+        if errors:
+            raise RuntimeError(
+                "verification manifest invalid at campaign start: " + "; ".join(errors)
+            )
+        return digest_manifest(manifest)
 
     def _guard(self, state: dict) -> None:
         if state.get("checker_sha256") and not self._digest_matches(state):
             self._pause(state, "checker_modified")
+            return
+        if state.get("verification_manifest_sha256") and not self._manifest_matches(state):
+            self._pause(state, "verification_manifest_modified")
 
     def _digest_matches(self, state: dict) -> bool:
         try:
@@ -352,6 +388,21 @@ class Runner:
         except OSError:
             return False
         return digest == state["checker_sha256"]
+
+    def _manifest_matches(self, state: dict) -> bool:
+        expected = state.get("verification_manifest_sha256")
+        if not expected:
+            return True
+        path = self.campaign.verification_manifest
+        if path is None or not path.is_file():
+            return False
+        try:
+            manifest = load_manifest(path)
+            if verify_manifest(repo_root(self.campaign.root), manifest):
+                return False
+            return digest_manifest(manifest) == expected
+        except (OSError, json.JSONDecodeError, TypeError):
+            return False
 
     def _charge(self, state: dict) -> None:
         now = self.clock()
@@ -445,7 +496,7 @@ def run_accept(campaign: Campaign, workspace: Path) -> dict:
     diagnostics = ""
     if isinstance(payload, dict) and payload.get("diagnostics") is not None:
         diagnostics = str(payload["diagnostics"])
-    if verdict not in ("pass", "fail", "inconclusive", "blocked"):
+    if verdict not in ("pass", "fail", "inconclusive", "blocked", "unavailable"):
         return _bad(completed.returncode, diagnostics or "unreadable")
     if verdict == "pass" and completed.returncode != 0:
         return _bad(completed.returncode, diagnostics)

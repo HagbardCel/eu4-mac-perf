@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import unittest
@@ -11,19 +12,38 @@ HOST = ROOT / "benchmark" / ".build" / "gfx_shader_host"
 
 @unittest.skipUnless(sys.platform == "darwin", "shader replacement runs on macOS")
 class GfxShaderTests(unittest.TestCase):
-    def test_allocates_the_object_without_a_gl_name(self) -> None:
+    def test_simple_lifecycle_and_pipeline(self) -> None:
         HOST.parent.mkdir(parents=True, exist_ok=True)
+        env = os.environ.copy()
+        env["MTL_DEBUG_LAYER"] = "1"
+        env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
         command = [
-            "clang", "-arch", "x86_64", "-O2", "-Wall", "-Wextra", "-fobjc-arc", "-lc++",
-            "-I", str(ROOT / "benchmark"),
-            "-o", str(HOST), str(HOST_SOURCE), str(SHADER),
+            "clang",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-fobjc-arc",
+            "-lc++",
+            "-framework",
+            "Metal",
+            "-framework",
+            "Foundation",
+            "-I",
+            str(ROOT / "benchmark"),
+            "-o",
+            str(HOST),
+            str(HOST_SOURCE),
+            str(SHADER),
         ]
         built = subprocess.run(command, capture_output=True, text=True, check=False)
         if built.returncode:
             self.fail(built.stderr.strip() or "shader host failed to build")
-        ran = subprocess.run([str(HOST)], capture_output=True, text=True, check=False)
+        ran = subprocess.run(
+            [str(HOST)], capture_output=True, text=True, check=False, env=env
+        )
         if ran.returncode:
             self.fail(ran.stderr.strip() or ran.stdout.strip() or "shader host failed")
+        self.assertIn("ok", ran.stdout)
 
 
 if __name__ == "__main__":
