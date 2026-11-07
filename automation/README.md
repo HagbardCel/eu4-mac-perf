@@ -4,14 +4,13 @@ One OpenCode session, an external checker, and files under `.local/automation/` 
 
 ```sh
 OPENCODE_URL=http://127.0.0.1:4096 \
-OPENCODE_SERVER_PASSWORD=... \
 python3 -m automation.cli run campaigns/automation-smoke/campaign.json
 python3 -m automation.cli resume campaigns/automation-smoke/campaign.json
 python3 -m automation.cli status campaigns/automation-smoke/campaign.json
 python3 -m automation.cli report campaigns/automation-smoke/campaign.json
 ```
 
-`run` creates or continues. `resume` fails when there is no state file. The server must already be running on a loopback address (`opencode serve --hostname 127.0.0.1`). Basic auth uses `OPENCODE_SERVER_USERNAME` (default `opencode`) and `OPENCODE_SERVER_PASSWORD`.
+`run` creates or continues. `resume` fails when there is no state file. The server must already be running on a loopback address (`opencode serve --hostname 127.0.0.1`). The adapter sends no credentials and expects no authentication.
 
 Offline tests, with no model and no server:
 
@@ -69,7 +68,7 @@ The shared checker requires a detached worktree at the pinned commit, pinned `be
 - Smoke campaign: `campaigns/eu4-a01-trusted-validation/` — checker reads the **workspace** candidate at `analysis/qualification/v0/primitive-lookup.candidate.json`; oracle/manifest stay trusted and re-hashed.
 - Outer loop CLI:
   - `python3 -m automation.handoff_cli run-scripted <workflow.json>` — deterministic two-defect A→B path for **portable tests** (synthetic fixture oracle under the workflow dir; not independent agent review).
-  - `python3 -m automation.handoff_cli run-opencode <workflow.json> <campaign.json>` — real OpenCode implementer **and** reviewer sessions (requires `OPENCODE_SERVER_PASSWORD`). No synthetic reviewer fallback.
+  - `python3 -m automation.handoff_cli run-opencode <workflow.json> <campaign.json>` — real OpenCode implementer **and** reviewer sessions. No synthetic reviewer fallback. The adapter sends no credentials.
 - Reviewer campaign: `campaigns/eu4-a02-reviewer/` — report path is `EU4_REVIEW_REPORT_PATH` **outside** the candidate worktree; accept returns `pass` when the review operation finished (any outcome). Controller consumes `qualified|rejected|unresolved`.
 - Promotion is append-only and content-addressed: version directory is published before the tip manifest replace; already-applied finding digests prevent duplicate promote after crash; `CURRENT` is a convenience mirror of the tip manifest.
 - Candidate snapshots are full baseline trees (`read-tree` pin + allowlisted overlay) parented on `pin_commit`.

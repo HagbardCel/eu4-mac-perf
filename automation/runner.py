@@ -75,13 +75,12 @@ def skill_trust(live: Path, commit: str | None) -> str:
 
 class Runner:
     def __init__(self, campaign: Campaign, agent, run_root: Path, *,
-                 clock=None, sleep=None, secrets: list[str] | None = None):
+                 clock=None, sleep=None):
         self.campaign = campaign
         self.agent = agent
         self.run_root = Path(run_root)
         self.clock = clock or time.monotonic
         self.sleep = sleep or time.sleep
-        self.secrets = secrets or []
         if hasattr(agent, "protected_root"):
             agent.protected_root = campaign.root
         self.state_path = self.run_root / "state.json"
@@ -439,7 +438,7 @@ class Runner:
             self._pause(state, "trace_unavailable")
             return False
         raw = self.run_root / "raw" / f"{session_id}.json"
-        atomic_write(raw, json_text(redact(history.raw, self.secrets)))
+        atomic_write(raw, json_text(redact(history.raw)))
         records = []
         for event in history.events:
             record = {
@@ -453,7 +452,7 @@ class Runner:
             records.append(record)
         if history.model and not state.get("model"):
             state["model"] = history.model
-        append(self.log_path, records, self.secrets)
+        append(self.log_path, records)
         return True
 
     def _log(self, state: dict, kind: str, event_id: str, **data) -> None:
@@ -467,7 +466,7 @@ class Runner:
             "type": kind,
         }
         record.update(data)
-        append(self.log_path, [record], self.secrets)
+        append(self.log_path, [record])
 
 
 def run_accept(campaign: Campaign, workspace: Path) -> dict:

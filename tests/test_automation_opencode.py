@@ -16,7 +16,6 @@ from automation.opencode import OpenCodeAgent, permission_rules
 
 class App:
     def __init__(self) -> None:
-        self.authorization = None
         self.directory = ""
         self.force_directory = None
         self.model = {"providerID": "opencode", "id": "big-pickle"}
@@ -48,7 +47,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         app: App = self.server.app  # type: ignore[attr-defined]
-        app.authorization = self.headers.get("Authorization")
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
         body = json.loads(raw) if raw else {}
@@ -167,8 +165,6 @@ class OpenCodeHttpTests(unittest.TestCase):
 
     def agent(self, **kwargs) -> OpenCodeAgent:
         values = {
-            "username": "opencode",
-            "password": "secret",
             "timeout": 1,
             "model": "opencode/big-pickle",
         }
@@ -178,17 +174,15 @@ class OpenCodeHttpTests(unittest.TestCase):
     def test_refuses_a_non_loopback_server(self) -> None:
         with self.assertRaises(ValueError):
             OpenCodeAgent(
-                "http://example.com", username="opencode", password="secret",
-                timeout=1, model="opencode/big-pickle")
+                "http://example.com", timeout=1, model="opencode/big-pickle")
 
-    def test_sends_basic_auth_and_rejects_a_different_directory(self) -> None:
+    def test_rejects_a_different_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             self.app.force_directory = "/not/the/workspace"
             with self.assertRaises(ContractError) as caught:
                 self.agent().create(workspace, "hello")
             self.assertEqual(caught.exception.reason, "workspace_mismatch")
-            self.assertTrue(self.app.authorization.startswith("Basic "))
 
     def test_malformed_json_is_unknown(self) -> None:
         self.app.malformed = True

@@ -17,7 +17,7 @@ _SENSITIVE_KEY = re.compile(
 )
 
 
-def append(path: Path, records: list[dict], secrets: list[str] | None = None) -> None:
+def append(path: Path, records: list[dict]) -> None:
     seen = _existing_ids(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     blobs = path.parent / "blobs"
@@ -26,7 +26,7 @@ def append(path: Path, records: list[dict], secrets: list[str] | None = None) ->
             event_id = record["event_id"]
             if event_id in seen:
                 continue
-            cleaned = _omit_empty(redact(record, secrets or []))
+            cleaned = _omit_empty(redact(record))
             cleaned = _spill(cleaned, blobs)
             handle.write(json.dumps(cleaned, sort_keys=True) + "\n")
             seen.add(event_id)
@@ -101,22 +101,19 @@ def _tool_identity(event: dict) -> str:
     return f"{event.get('session_id') or ''}/{event_id}"
 
 
-def redact(value, secrets: list[str]):
+def redact(value):
     if isinstance(value, dict):
         cleaned = {}
         for key, item in value.items():
             if isinstance(key, str) and _SENSITIVE_KEY.search(key):
                 cleaned[key] = "[redacted]"
             else:
-                cleaned[key] = redact(item, secrets)
+                cleaned[key] = redact(item)
         return cleaned
     if isinstance(value, list):
-        return [redact(item, secrets) for item in value]
+        return [redact(item) for item in value]
     if not isinstance(value, str):
         return value
-    for secret in secrets:
-        if secret:
-            value = value.replace(secret, "[redacted]")
     return _SECRET.sub(r"\1=[redacted]", value)
 
 

@@ -16,13 +16,25 @@ from automation.handoff import (
     ensure_reviewer_worktree,
     path_allowlisted,
     quarantine_report,
+    recover_completed_reviewer_receipt,
+    reviewer_invocation_path_for,
     reviewer_receipt_path_for,
+    reviewer_worktree_path,
+    run_root_for,
     snapshot_candidate,
     verify_ref_unmodified,
+    verify_reviewer_checkout,
+    write_reviewer_invocation,
     write_reviewer_receipt,
     write_synthetic_rejection,
 )
-from automation.handoff_cli import build_remediation_campaign
+from automation.handoff_cli import (
+    build_remediation_campaign,
+    legacy_workflow_layout,
+    materialize_reviewer_campaign,
+    reviewer_report_path,
+)
+from automation.review_result import write_review
 from automation.oracle_promote import (
     PromotionDecision,
     classify_finding,
@@ -468,32 +480,6 @@ class ScriptedTwoDefectTests(unittest.TestCase):
                     shutil.rmtree(oracle_local)
 
 
-class OpenCodeGateTests(unittest.TestCase):
-    def test_run_opencode_requires_password(self) -> None:
-        env = {k: v for k, v in os.environ.items()}
-        env.pop("OPENCODE_SERVER_PASSWORD", None)
-        workflow = REPO / ".local" / "qualification" / "opencode-gate-workflow.json"
-        workflow.parent.mkdir(parents=True, exist_ok=True)
-        workflow.write_text("{}\n", encoding="utf-8")
-        campaign = REPO / "campaigns" / "eu4-a01-trusted-validation" / "campaign.json"
-        ran = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "automation.handoff_cli",
-                "run-opencode",
-                str(workflow),
-                str(campaign),
-            ],
-            cwd=REPO,
-            env=env,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(ran.returncode, 2)
-        self.assertIn("OPENCODE_SERVER_PASSWORD", ran.stderr)
-
-
 class HandoffRemediationIdTests(unittest.TestCase):
     def test_rejection_creates_new_remediation_from_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -545,6 +531,9 @@ class HandoffRemediationIdTests(unittest.TestCase):
                     "last_verdict": "pass",
                     "workspace": str(workspace),
                     "session_id": f"ses-{campaign_id}",
+                    "verification_manifest_sha256": state[
+                        "oracle_manifest_sha256"
+                    ],
                 }
 
             def run_reviewer(state: dict) -> Path:
@@ -600,7 +589,10 @@ class HandoffRemediationIdTests(unittest.TestCase):
             self.assertTrue(state.get("rejected_candidate_commit"))
             state = controller.step(state)
             self.assertEqual(state["state"], "remediating")
-            self.assertEqual(state["remediation_campaign_id"], "impl-main-fix-r1")
+            self.assertEqual(
+                state["remediation_campaign_id"],
+                f"impl-main-fix-r1-{state['workflow_id']}",
+            )
             state = controller.step(state)
             self.assertEqual(state["state"], "qualified_by_checker")
             state = controller.step(state)
@@ -668,6 +660,7 @@ class RemediationBuilderTests(unittest.TestCase):
                 encoding="utf-8",
             )
             state = {
+                "workflow_id": "wf_test",
                 "remediation_campaign_id": "eu4-a01-trusted-validation-fix-r1",
                 "rejected_candidate_commit": cand,
                 "oracle_manifest_path": str(
@@ -707,6 +700,12 @@ class RemediationBuilderTests(unittest.TestCase):
             objective = (built.parent / "objective.md").read_text(encoding="utf-8")
             self.assertIn("out_of_range_default", objective)
             self.assertIn("defect-b", objective)
+            # Same base campaign, different workflow: never share a seed dir.
+            other_state = {**state, "workflow_id": "wf_other"}
+            other = build_remediation_campaign(
+                root, camp_dir / "campaign.json", other_state
+            )
+            self.assertNotEqual(other.parent, built.parent)
 
 
 class ReviewerWorktreeTests(unittest.TestCase):
@@ -790,11 +789,20 @@ class LiveReviewerReceiptTests(unittest.TestCase):
                     "last_verdict": "pass",
                     "workspace": str(workspace),
                     "session_id": f"impl-{campaign_id}",
+                    "verification_manifest_sha256": state[
+                        "oracle_manifest_sha256"
+                    ],
                 }
 
             def run_reviewer(state: dict) -> dict:
                 # Plant a valid rejection but never emit a completed receipt —
                 # simulates empty/unverified reviewer session.
+                wt = ensure_reviewer_worktree(
+                    root,
+                    workflow_id=state["workflow_id"],
+                    round_id=state["round"],
+                    candidate_commit=state["candidate_commit"],
+                )
                 write_synthetic_rejection(
                     planted,
                     candidate_commit=state["candidate_commit"],
@@ -806,6 +814,7 @@ class LiveReviewerReceiptTests(unittest.TestCase):
                 return {
                     "path": planted,
                     "session_id": "empty-reviewer-session",
+                    "worktree": str(wt),
                     # deliberately omit receipt_path
                 }
 
@@ -868,9 +877,18 @@ class LiveReviewerReceiptTests(unittest.TestCase):
                     "last_verdict": "pass",
                     "workspace": str(workspace),
                     "session_id": f"impl-{campaign_id}",
+                    "verification_manifest_sha256": state[
+                        "oracle_manifest_sha256"
+                    ],
                 }
 
             def run_reviewer(state: dict) -> dict:
+                wt = ensure_reviewer_worktree(
+                    root,
+                    workflow_id=state["workflow_id"],
+                    round_id=state["round"],
+                    candidate_commit=state["candidate_commit"],
+                )
                 path = reports / f"review-r{state['round']}.json"
                 write_synthetic_rejection(
                     path,
@@ -895,6 +913,7 @@ class LiveReviewerReceiptTests(unittest.TestCase):
                     "path": path,
                     "session_id": "reviewer-ses-1",
                     "receipt_path": str(receipt),
+                    "worktree": str(wt),
                     "qualification_mode": "live",
                 }
 
@@ -1008,6 +1027,416 @@ class LiveEu4IntegrationTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(json.loads(ran.stdout)["verdict"], "fail")
+
+
+def _candidate_workspace(root: Path, evidence: dict) -> Path:
+    workspace = root / "ws"
+    qual = workspace / "analysis" / "qualification" / "v0"
+    qual.mkdir(parents=True)
+    (qual / "primitive-lookup.candidate.json").write_text(
+        json.dumps(
+            {
+                "schema": "eu4-primitive-lookup/v1",
+                "table": evidence["output"]["table"],
+                "engine_enum_4_gl_mode": 5,
+                "out_of_range_default": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (workspace / "progress.md").write_text("# ok\n", encoding="utf-8")
+    return workspace
+
+
+def _live_controller(
+    root: Path,
+    oracle: Path,
+    workspace: Path,
+    run_reviewer,
+    implementer_digest: str | None = None,
+) -> HandoffController:
+    def run_implementer(campaign_id: str, state: dict) -> dict:
+        return {
+            "status": "complete",
+            "last_verdict": "pass",
+            "workspace": str(workspace),
+            "session_id": f"impl-{campaign_id}",
+            "verification_manifest_sha256": (
+                implementer_digest
+                if implementer_digest is not None
+                else state["oracle_manifest_sha256"]
+            ),
+        }
+
+    return HandoffController(
+        repo=root,
+        workflow_path=root / "workflow.json",
+        run_implementer=run_implementer,
+        run_reviewer=run_reviewer,
+        oracle_dir=oracle,
+        checker_path=root / "accept.py",
+        trusted_helpers=[
+            "automation/evidence.py",
+            "automation/macho_map.py",
+            "automation/verification_manifest.py",
+            "automation/replay_primitive.py",
+        ],
+        checker_relpath="accept.py",
+    )
+
+
+def _qualified_reviewer(root: Path, reports: Path):
+    def run_reviewer(state: dict) -> dict:
+        wt = ensure_reviewer_worktree(
+            root,
+            workflow_id=state["workflow_id"],
+            round_id=state["round"],
+            candidate_commit=state["candidate_commit"],
+        )
+        path = reviewer_report_path(reports, state["workflow_id"], state["round"])
+        write_review(
+            path,
+            {
+                "schema": "eu4-review/v1",
+                "candidate_commit": state["candidate_commit"],
+                "oracle_manifest_sha256": state["oracle_manifest_sha256"],
+                "outcome": "qualified",
+                "findings": [],
+            },
+        )
+        receipt = reviewer_receipt_path_for(path)
+        write_reviewer_receipt(
+            receipt,
+            campaign_id=state["reviewer_campaign_id"],
+            candidate_commit=state["candidate_commit"],
+            oracle_digest=state["oracle_manifest_sha256"],
+            reviewer_session_id="reviewer-ses-1",
+            runner_status="complete",
+            report_sha256=file_sha256(path),
+            qualification_mode="live",
+        )
+        return {
+            "path": path,
+            "session_id": "reviewer-ses-1",
+            "receipt_path": str(receipt),
+            "worktree": str(wt),
+            "qualification_mode": "live",
+        }
+
+    return run_reviewer
+
+
+class WorkflowNamespaceTests(unittest.TestCase):
+    def test_run_roots_and_reports_are_workflow_scoped(self) -> None:
+        repo = Path("/repo")
+        self.assertNotEqual(
+            run_root_for(repo, "wf_a", "base"), run_root_for(repo, "wf_b", "base")
+        )
+        self.assertEqual(
+            run_root_for(repo, "wf_a", "base"), run_root_for(repo, "wf_a", "base")
+        )
+        reports = repo / "reports"
+        self.assertNotEqual(
+            reviewer_report_path(reports, "wf_a", 0),
+            reviewer_report_path(reports, "wf_b", 0),
+        )
+        self.assertNotEqual(
+            reviewer_worktree_path(repo, "wf_a", 0),
+            reviewer_worktree_path(repo, "wf_b", 0),
+        )
+
+
+class ReviewerRecoveryTests(unittest.TestCase):
+    CAMPAIGN = "base-review-r0-wf_x"
+    CANDIDATE = "c" * 40
+    ORACLE = "d" * 64
+
+    def _fixture(self, root: Path) -> tuple[Path, Path, Path]:
+        report = reviewer_report_path(root / "reports", "wf_x", 0)
+        report.parent.mkdir(parents=True)
+        evidence_path = FIXTURE / "primitive-table.evidence.json"
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        write_synthetic_rejection(
+            report,
+            candidate_commit=self.CANDIDATE,
+            oracle_manifest_sha256=self.ORACLE,
+            binding=_binding(evidence, evidence_path),
+        )
+        invocation = reviewer_invocation_path_for(report)
+        run_root = run_root_for(root, "wf_x", self.CAMPAIGN)
+        run_root.mkdir(parents=True)
+        (run_root / "state.json").write_text(
+            json.dumps(
+                {
+                    "campaign_id": self.CAMPAIGN,
+                    "status": "complete",
+                    "last_verdict": "pass",
+                    "session_id": "reviewer-ses-1",
+                    "verification_manifest_sha256": self.ORACLE,
+                    "workspace": str(root / "wt"),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return report, invocation, run_root
+
+    def _recover(self, root, report, invocation, run_root):
+        return recover_completed_reviewer_receipt(
+            root,
+            run_root=run_root,
+            report_path=report,
+            invocation_path=invocation,
+            campaign_id=self.CAMPAIGN,
+            candidate_commit=self.CANDIDATE,
+            oracle_digest=self.ORACLE,
+            worktree=root / "wt",
+        )
+
+    def test_recovers_completed_reviewer_without_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report, invocation, run_root = self._fixture(root)
+            write_reviewer_invocation(
+                invocation,
+                campaign_id=self.CAMPAIGN,
+                candidate_commit=self.CANDIDATE,
+                oracle_digest=self.ORACLE,
+                report_path=report,
+                worktree=root / "wt",
+            )
+            result = self._recover(root, report, invocation, run_root)
+            self.assertIsNotNone(result)
+            self.assertEqual(result["session_id"], "reviewer-ses-1")
+            self.assertTrue(reviewer_receipt_path_for(report).is_file())
+
+    def test_planted_report_with_completed_session_not_attributed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report, invocation, run_root = self._fixture(root)
+            # No launch record: the report may predate the session.
+            self.assertIsNone(self._recover(root, report, invocation, run_root))
+            self.assertFalse(reviewer_receipt_path_for(report).is_file())
+
+    def test_runner_oracle_mismatch_not_recovered(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            report, invocation, run_root = self._fixture(root)
+            write_reviewer_invocation(
+                invocation,
+                campaign_id=self.CAMPAIGN,
+                candidate_commit=self.CANDIDATE,
+                oracle_digest=self.ORACLE,
+                report_path=report,
+                worktree=root / "wt",
+            )
+            saved = json.loads((run_root / "state.json").read_text(encoding="utf-8"))
+            saved["verification_manifest_sha256"] = "e" * 64
+            (run_root / "state.json").write_text(json.dumps(saved), encoding="utf-8")
+            self.assertIsNone(self._recover(root, report, invocation, run_root))
+
+
+class ReviewerCheckoutRecoveryTests(unittest.TestCase):
+    def test_modified_worktree_blocks_qualification(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pin = _init_git_repo(root)
+            oracle = root / "oracle"
+            _seed_oracle(root, oracle)
+            evidence = json.loads(
+                (oracle / "primitive-table.evidence.json").read_text(encoding="utf-8")
+            )
+            workspace = _candidate_workspace(root, evidence)
+            reports = root / "reports"
+            reports.mkdir()
+            controller = _live_controller(
+                root, oracle, workspace, _qualified_reviewer(root, reports)
+            )
+            state = controller.load_or_init("impl-live", pin)
+            state["require_live_sessions"] = True
+            state = controller.step(state)
+            self.assertEqual(state["state"], "qualified_by_checker")
+            state = controller.step(state)
+            self.assertEqual(state["state"], "reviewing")
+            self.assertTrue(state["reviewer_worktree"])
+            # Crash before review_path/worktree are persisted.
+            state["review_path"] = None
+            state["reviewer_worktree"] = None
+            original = controller.run_reviewer
+
+            def reviewer_without_worktree(state_: dict) -> dict:
+                result = original(state_)
+                result.pop("worktree", None)  # simulates the lost state field
+                return result
+
+            controller.run_reviewer = reviewer_without_worktree
+            wt = reviewer_worktree_path(root, state["workflow_id"], state["round"])
+            (wt / "README").write_text("tamper\n", encoding="utf-8")
+            state = controller.step(state)
+            state = controller.step(state)
+            self.assertEqual(state["state"], "blocked")
+            self.assertIn("reviewer_worktree", state["block_reason"])
+
+
+class OracleIdentityTests(unittest.TestCase):
+    def test_missing_oracle_path_backfilled_when_digest_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pin = _init_git_repo(root)
+            oracle = root / "oracle"
+            _seed_oracle(root, oracle)
+            evidence = json.loads(
+                (oracle / "primitive-table.evidence.json").read_text(encoding="utf-8")
+            )
+            workspace = _candidate_workspace(root, evidence)
+            controller = _live_controller(
+                root, oracle, workspace, lambda state: Path("unused")
+            )
+            state = controller.load_or_init("impl-live", pin)
+            state.pop("oracle_manifest_path")
+            (root / "workflow.json").write_text(
+                json.dumps(state), encoding="utf-8"
+            )
+            reloaded = controller.load_or_init("impl-live", pin)
+            self.assertEqual(
+                reloaded["oracle_manifest_path"],
+                str(oracle / "verification-manifest.json"),
+            )
+
+    def test_runner_digest_must_match_workflow_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pin = _init_git_repo(root)
+            oracle = root / "oracle"
+            _seed_oracle(root, oracle)
+            evidence = json.loads(
+                (oracle / "primitive-table.evidence.json").read_text(encoding="utf-8")
+            )
+            workspace = _candidate_workspace(root, evidence)
+            controller = _live_controller(
+                root, oracle, workspace, lambda state: Path("unused"),
+                implementer_digest="f" * 64,
+            )
+            state = controller.load_or_init("impl-live", pin)
+            state = controller.step(state)
+            self.assertEqual(state["state"], "blocked")
+            self.assertIn("oracle_pin_mismatch", state["block_reason"])
+
+    def test_oracle_advance_does_not_relabel_qualification(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pin = _init_git_repo(root)
+            oracle = root / "oracle"
+            manifest = _seed_oracle(root, oracle)
+            pinned = digest_manifest(manifest)
+            evidence = json.loads(
+                (oracle / "primitive-table.evidence.json").read_text(encoding="utf-8")
+            )
+            workspace = _candidate_workspace(root, evidence)
+            controller = _live_controller(
+                root, oracle, workspace, lambda state: Path("unused")
+            )
+            state = controller.load_or_init("impl-live", pin)
+            # Another workflow promotes a new oracle while this run is in flight.
+            advanced = dict(manifest)
+            advanced["oracle_version_name"] = "v_next"
+            save_manifest(oracle / "verification-manifest.json", advanced)
+            self.assertNotEqual(digest_manifest(advanced), pinned)
+            state = controller.step(state)
+            self.assertEqual(state["state"], "qualified_by_checker")
+            self.assertEqual(state["oracle_manifest_sha256"], pinned)
+
+
+class ReviewerCampaignTests(unittest.TestCase):
+    def test_campaign_pins_oracle_and_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reviewer_src = root / "campaigns" / "eu4-a02-reviewer"
+            reviewer_src.mkdir(parents=True)
+            (reviewer_src / "objective.md").write_text("review\n", encoding="utf-8")
+            (reviewer_src / "accept.py").write_text("# checker\n", encoding="utf-8")
+            base = root / "base"
+            (base / "seed").mkdir(parents=True)
+            (base / "accept.py").write_text("# checker\n", encoding="utf-8")
+            (base / "campaign.json").write_text(
+                json.dumps(
+                    {
+                        "id": "base",
+                        "objective": "objective.md",
+                        "runtime": "opencode",
+                        "model": "test/model",
+                        "opencode_version": "0.0.0",
+                        "workspace": "seed",
+                        "accept": ["python3", "accept.py"],
+                        "max_rounds": 2,
+                        "max_seconds": 60,
+                        "accept_timeout_seconds": 30,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (base / "objective.md").write_text("base\n", encoding="utf-8")
+            pin = root / "oracle" / "verification-manifest.json"
+            pin.parent.mkdir()
+            pin.write_text("{}\n", encoding="utf-8")
+            state = {
+                "workflow_id": "wf_x",
+                "reviewer_campaign_id": "base-review-r0-wf_x",
+                "candidate_commit": "c" * 40,
+            }
+            built = materialize_reviewer_campaign(
+                root,
+                state,
+                campaign_path=base / "campaign.json",
+                worktree=root / "wt",
+                report_path=reviewer_report_path(root / "reports", "wf_x", 0),
+                pin=pin,
+            )
+            data = json.loads(built.read_text(encoding="utf-8"))
+            self.assertEqual(data["id"], "base-review-r0-wf_x")
+            self.assertEqual(Path(data["verification_manifest"]), pin)
+            self.assertEqual(data["workspace"]["commit"], "c" * 40)
+
+
+class LegacyLayoutTests(unittest.TestCase):
+    def test_unfinished_legacy_workflow_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy_root = root / ".local" / "automation" / "base-review-r0"
+            legacy_root.mkdir(parents=True)
+            reports = root / "reports"
+            reports.mkdir()
+            state = {
+                "state": "reviewing",
+                "workflow_id": "wf_new",
+                "round": 0,
+                "implementer_campaign_id": "base",
+                "reviewer_campaign_id": "base-review-r0",
+            }
+            self.assertEqual(
+                legacy_workflow_layout(root, state, reports), legacy_root
+            )
+            state["state"] = "awaiting_merge"
+            self.assertIsNone(legacy_workflow_layout(root, state, reports))
+
+    def test_legacy_report_blocks_before_new_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            reports = root / "reports"
+            reports.mkdir()
+            planted = reports / "review-r0.json"
+            planted.write_text("{}\n", encoding="utf-8")
+            state = {
+                "state": "reviewing",
+                "workflow_id": "wf_new",
+                "round": 0,
+                "implementer_campaign_id": "base",
+                "reviewer_campaign_id": "base-review-r0",
+            }
+            self.assertEqual(
+                legacy_workflow_layout(root, state, reports), planted
+            )
 
 
 if __name__ == "__main__":

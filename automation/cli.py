@@ -36,15 +36,12 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    password = os.environ.get("OPENCODE_SERVER_PASSWORD")
     agent = OpenCodeAgent(
         os.environ.get("OPENCODE_URL", "http://127.0.0.1:4096"),
-        username=os.environ.get("OPENCODE_SERVER_USERNAME", "opencode"),
-        password=password,
         timeout=float(os.environ.get("OPENCODE_TIMEOUT", "120")),
         model=campaign.model,
     )
-    runner = Runner(campaign, agent, run_root, secrets=[password] if password else [])
+    runner = Runner(campaign, agent, run_root)
     try:
         state = runner.execute(resume_only=command == "resume")
     except KeyboardInterrupt:

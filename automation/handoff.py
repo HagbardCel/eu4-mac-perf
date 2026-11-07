@@ -295,6 +295,44 @@ def verify_worktree_clean(repo: Path, worktree: Path) -> list[str]:
     return errors
 
 
+def run_root_for(repo: Path, workflow_id: str, campaign_id: str) -> Path:
+    """Runner state is workflow-scoped so independent workflows never share it."""
+    return repo / ".local" / "automation" / workflow_id / campaign_id
+
+
+def verify_reviewer_checkout(
+    repo: Path, worktree: Path, candidate_commit: str
+) -> list[str]:
+    """Reviewer must judge the frozen candidate from a registered, clean checkout."""
+    if not worktree.is_dir():
+        return [f"reviewer worktree missing: {worktree}"]
+    registered = subprocess.run(
+        ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    target = str(worktree.resolve())
+    if registered.returncode != 0 or not any(
+        line == f"worktree {target}" for line in registered.stdout.splitlines()
+    ):
+        return [f"reviewer worktree not registered: {worktree}"]
+    head_run = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if head_run.returncode != 0:
+        return [f"reviewer worktree unusable: {worktree}"]
+    errors: list[str] = []
+    head = head_run.stdout.strip()
+    if head != candidate_commit:
+        errors.append(f"reviewer worktree HEAD {head} != {candidate_commit}")
+    errors.extend(verify_worktree_clean(repo, worktree))
+    return errors
+
+
 def verify_ref_unmodified(repo: Path, ref: str, expected_commit: str) -> list[str]:
     errors = []
     try:
@@ -317,6 +355,36 @@ def receipt_tuple(state: dict) -> dict:
 
 def reviewer_receipt_path_for(report_path: Path) -> Path:
     return report_path.with_suffix(report_path.suffix + ".receipt.json")
+
+
+def reviewer_invocation_path_for(report_path: Path) -> Path:
+    return report_path.with_suffix(report_path.suffix + ".invocation.json")
+
+
+def write_reviewer_invocation(
+    path: Path,
+    *,
+    campaign_id: str,
+    candidate_commit: str,
+    oracle_digest: str,
+    report_path: Path,
+    worktree: Path,
+) -> dict:
+    """Launch record: the report path was absent when this reviewer session began."""
+    payload = {
+        "schema": "eu4-review-invocation/v1",
+        "campaign_id": campaign_id,
+        "candidate_commit": candidate_commit,
+        "oracle_digest": oracle_digest,
+        "report_path": str(report_path),
+        "worktree": str(worktree),
+    }
+    atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    return payload
+
+
+def load_reviewer_invocation(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def write_reviewer_receipt(
@@ -381,6 +449,81 @@ def verify_reviewer_receipt(
     return errors
 
 
+def recover_completed_reviewer_receipt(
+    repo: Path,
+    *,
+    run_root: Path,
+    report_path: Path,
+    invocation_path: Path,
+    campaign_id: str,
+    candidate_commit: str,
+    oracle_digest: str,
+    worktree: Path,
+) -> dict | None:
+    """Reconstruct a receipt only when launch record + completed runner vouch for the report.
+
+    A report alone is untrusted: it may predate the session. The launch record proves
+    the path was clear when the session started.
+    """
+    report_path = Path(report_path)
+    state_path = Path(run_root) / "state.json"
+    if not (
+        report_path.is_file()
+        and Path(invocation_path).is_file()
+        and state_path.is_file()
+    ):
+        return None
+    try:
+        saved = json.loads(state_path.read_text(encoding="utf-8"))
+        invocation = load_reviewer_invocation(Path(invocation_path))
+        review = load_review(report_path)
+    except (OSError, json.JSONDecodeError, ValueError, TypeError):
+        return None
+    if invocation.get("schema") != "eu4-review-invocation/v1":
+        return None
+    if invocation.get("campaign_id") != campaign_id:
+        return None
+    if invocation.get("candidate_commit") != candidate_commit:
+        return None
+    if invocation.get("oracle_digest") != oracle_digest:
+        return None
+    if Path(str(invocation.get("report_path"))) != report_path:
+        return None
+    if saved.get("campaign_id") != campaign_id:
+        return None
+    if saved.get("status") != "complete" or saved.get("last_verdict") != "pass":
+        return None
+    if saved.get("verification_manifest_sha256") != oracle_digest:
+        return None
+    session_id = saved.get("session_id")
+    if not session_id:
+        return None
+    if validate_review(
+        review,
+        expected_candidate_commit=candidate_commit,
+        expected_oracle_manifest_sha256=oracle_digest,
+    ):
+        return None
+    receipt_path = reviewer_receipt_path_for(report_path)
+    write_reviewer_receipt(
+        receipt_path,
+        campaign_id=campaign_id,
+        candidate_commit=candidate_commit,
+        oracle_digest=oracle_digest,
+        reviewer_session_id=session_id,
+        runner_status="complete",
+        report_sha256=file_sha256(report_path),
+        qualification_mode="live",
+    )
+    return {
+        "path": report_path,
+        "session_id": session_id,
+        "receipt_path": str(receipt_path),
+        "worktree": str(saved.get("workspace") or worktree),
+        "qualification_mode": "live",
+    }
+
+
 def quarantine_report(path: Path) -> Path | None:
     """Move an unverified pre-existing report aside; return quarantine path."""
     if not path.is_file():
@@ -390,7 +533,14 @@ def quarantine_report(path: Path) -> Path | None:
     receipt = reviewer_receipt_path_for(path)
     if receipt.is_file():
         receipt.replace(dest.with_name(dest.name + ".receipt.json"))
+    invocation = reviewer_invocation_path_for(path)
+    if invocation.is_file():
+        invocation.replace(dest.with_name(dest.name + ".invocation.json"))
     return dest
+
+
+def reviewer_worktree_path(repo: Path, workflow_id: str, round_id: int) -> Path:
+    return repo / ".local" / "qualification" / f"review-wt-{workflow_id}-r{round_id}"
 
 
 def ensure_reviewer_worktree(
@@ -403,7 +553,7 @@ def ensure_reviewer_worktree(
     existing_path: str | None = None,
 ) -> Path:
     """Reuse or safely recreate a detached reviewer worktree keyed by workflow+round."""
-    wt = repo / ".local" / "qualification" / f"review-wt-{workflow_id}-r{round_id}"
+    wt = reviewer_worktree_path(repo, workflow_id, round_id)
     if existing_path:
         prior = Path(existing_path)
         if prior.resolve() != wt.resolve() and prior.exists() and active_session:
@@ -512,7 +662,20 @@ class HandoffController:
 
     def load_or_init(self, implementer_campaign_id: str, pin: str) -> dict:
         if self.workflow_path.is_file():
-            return load_workflow(self.workflow_path)
+            state = load_workflow(self.workflow_path)
+            # Backfill the pin path for states created before it was recorded,
+            # but only when the file still matches the workflow's pinned digest.
+            if not state.get("oracle_manifest_path"):
+                candidate = self.oracle_dir / "verification-manifest.json"
+                try:
+                    if candidate.is_file() and digest_manifest(
+                        load_manifest(candidate)
+                    ) == state.get("oracle_manifest_sha256"):
+                        state["oracle_manifest_path"] = str(candidate)
+                        save_workflow(self.workflow_path, state)
+                except (OSError, json.JSONDecodeError):
+                    pass
+            return state
         state = default_state(
             workflow_id="wf_" + uuid.uuid4().hex,
             implementer_campaign_id=implementer_campaign_id,
@@ -522,6 +685,9 @@ class HandoffController:
             load_manifest(self.oracle_dir / "verification-manifest.json")
         )
         state["checker_sha256"] = file_sha256(self.checker_path)
+        state["oracle_manifest_path"] = str(
+            self.oracle_dir / "verification-manifest.json"
+        )
         cur = self.oracle_dir / "CURRENT"
         state["oracle_version"] = (
             cur.read_text(encoding="utf-8").strip() if cur.is_file() else "v0"
@@ -564,6 +730,23 @@ class HandoffController:
             save_workflow(self.workflow_path, state)
             return state
         workspace = Path(result["workspace"])
+        # The checker-qualified oracle is the digest the runner started with; never
+        # relabel the candidate from the (mutable) active tip.
+        runner_digest = result.get("verification_manifest_sha256")
+        pinned_digest = state.get("oracle_manifest_sha256")
+        if (
+            not runner_digest
+            or not pinned_digest
+            or runner_digest != pinned_digest
+        ):
+            state["state"] = "blocked"
+            state["block_reason"] = (
+                "oracle_pin_mismatch: "
+                f"runner={runner_digest or 'missing'} "
+                f"workflow={pinned_digest or 'missing'}"
+            )
+            save_workflow(self.workflow_path, state)
+            return state
         # Reuse snapshot if ref already exists for this round
         if state.get("candidate_ref") and state.get("candidate_commit"):
             errs = verify_ref_unmodified(
@@ -588,14 +771,6 @@ class HandoffController:
         state["candidate_tree"] = snap["candidate_tree"]
         state["candidate_ref"] = snap["candidate_ref"]
         state["candidate_parent"] = snap["candidate_parent"]
-        tip_manifest = load_manifest(self.oracle_dir / "verification-manifest.json")
-        state["oracle_manifest_sha256"] = digest_manifest(tip_manifest)
-        state["oracle_version"] = tip_manifest.get("oracle_version_name") or state.get(
-            "oracle_version"
-        )
-        state["oracle_manifest_path"] = tip_manifest.get("version_manifest_path") or str(
-            self.oracle_dir / "verification-manifest.json"
-        )
         state["checker_sha256"] = file_sha256(self.checker_path)
         state["state"] = "qualified_by_checker"
         if state.get("remediation_campaign_id"):
@@ -623,6 +798,7 @@ class HandoffController:
         if not state.get("reviewer_campaign_id"):
             state["reviewer_campaign_id"] = (
                 f"{state['implementer_campaign_id']}-review-r{state['round']}"
+                f"-{state['workflow_id']}"
             )
         # Persist reviewing BEFORE invoking reviewer only with campaign id;
         # review_path stays null until artifact exists (resume re-invokes).
@@ -697,11 +873,20 @@ class HandoffController:
             state["block_reason"] = "candidate_ref_changed: " + "; ".join(ref_errs)
             save_workflow(self.workflow_path, state)
             return state
-        if state.get("reviewer_worktree"):
-            dirty = verify_worktree_clean(self.repo, Path(state["reviewer_worktree"]))
-            if dirty:
+        if state.get("reviewer_worktree") or state.get("require_live_sessions"):
+            wt = state.get("reviewer_worktree") or str(
+                reviewer_worktree_path(
+                    self.repo, state["workflow_id"], state["round"]
+                )
+            )
+            worktree_errs = verify_reviewer_checkout(
+                self.repo, Path(wt), state["candidate_commit"]
+            )
+            if worktree_errs:
                 state["state"] = "blocked"
-                state["block_reason"] = "reviewer_worktree_dirty: " + "; ".join(dirty)
+                state["block_reason"] = "reviewer_worktree: " + "; ".join(
+                    worktree_errs
+                )
                 save_workflow(self.workflow_path, state)
                 return state
         if (
@@ -786,7 +971,10 @@ class HandoffController:
                     state["unresolved_findings"].append(d)
 
         if not state.get("remediation_campaign_id"):
-            new_id = f"{state['implementer_campaign_id']}-fix-r{state['round'] + 1}"
+            new_id = (
+                f"{state['implementer_campaign_id']}-fix-r{state['round'] + 1}"
+                f"-{state['workflow_id']}"
+            )
             state["remediation_campaign_id"] = new_id
             state["round"] = state["round"] + 1
             _note(
