@@ -20,7 +20,15 @@
     ],
     "primitive_type_set_on_path": 4,
     "decision_predicate_mode": 5,
-    "mode_tension": "Unresolved: callsite sets GL_TRIANGLES(4); Decision 0003 filters mode 5"
+    "mode_resolution": {
+      "status": "instruction_static",
+      "evidence": "analysis/qualification/v0/primitive-table.evidence.json",
+      "get_opengl_primitive_type_rva": "0x15edff7",
+      "table_rva": "0x1a79600",
+      "table": [0, 1, 3, 4, 5, 10, 11, 12],
+      "engine_enum_4_gl_mode": 5,
+      "note": "ShowBasicLoadText passes engine enum 4; GetOpenGLPrimitiveType maps table[4] to GL_TRIANGLE_STRIP (5). No mode tension."
+    }
   },
   "provenance": {
     "effect_asset": {

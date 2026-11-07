@@ -19,8 +19,6 @@ class GfxShaderTests(unittest.TestCase):
         env["MTL_DEBUG_LAYER_ERROR_MODE"] = "assert"
         command = [
             "clang",
-            "-arch",
-            "x86_64",
             "-O2",
             "-Wall",
             "-Wextra",

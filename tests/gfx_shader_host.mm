@@ -1,5 +1,6 @@
 #include "eu4_gfx_shader.h"
 
+#include <Metal/Metal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -62,6 +63,30 @@ int main(void) {
     if (current != object || master[0x128] != 1 || master[0x170] != 1) {
         return 12;
     }
+    if (!eu4_gfx_shader_is_current(&ctx, object)) {
+        return 21;
+    }
+
+    /* Rejected stage replacement must invalidate prior link observation. */
+    if (eu4_gfx_add_pixel_shader(nullptr, object, "unsupported replacement") != 0) {
+        return 22;
+    }
+    if (eu4_gfx_shader_is_linked(object)) {
+        return 23;
+    }
+    if (eu4_gfx_link_shader(nullptr, object) != 0) {
+        return 24;
+    }
+    /* Restore stages after rejected replace. */
+    if (eu4_gfx_add_vertex_shader(nullptr, object, eu4_gfx_simple_vertex_source()) != 1) {
+        return 25;
+    }
+    if (eu4_gfx_add_pixel_shader(nullptr, object, eu4_gfx_simple_pixel_source()) != 1) {
+        return 26;
+    }
+    if (eu4_gfx_link_shader(nullptr, object) != 1) {
+        return 27;
+    }
 
     void *pipeline = eu4_gfx_shader_pipeline(object, nullptr);
     if (pipeline == nullptr) {
@@ -69,10 +94,39 @@ int main(void) {
         return 13;
     }
 
+    EU4GfxPipelineKey key_a = {};
+    key_a.pixel_format = (unsigned)MTLPixelFormatBGRA8Unorm;
+    key_a.sample_count = 1;
+    key_a.color_write_mask = (unsigned)MTLColorWriteMaskAll;
+    key_a.blend_enabled = 1;
+    void *pso_a = eu4_gfx_shader_pipeline_for_key(object, nullptr, &key_a);
+    if (pso_a == nullptr) {
+        return 28;
+    }
+    void *pso_a2 = eu4_gfx_shader_pipeline_for_key(object, nullptr, &key_a);
+    if (pso_a2 != pso_a) {
+        /* Cache must return the same configuration selection (pointer equality OK
+           for our dictionary cache; GPU may dedupe elsewhere). */
+        return 29;
+    }
+    EU4GfxPipelineKey key_b = key_a;
+    key_b.blend_enabled = 0;
+    void *pso_b = eu4_gfx_shader_pipeline_for_key(object, nullptr, &key_b);
+    if (pso_b == nullptr) {
+        return 30;
+    }
+    if (pso_b == pso_a) {
+        return 31; /* differing effective Metal state must select a different cache entry */
+    }
+
     uintptr_t addr = reinterpret_cast<uintptr_t>(object);
     eu4_gfx_destroy_shader(object);
     if (eu4_gfx_shader_lifetime_id(reinterpret_cast<void *>(addr)) != 0) {
         return 14;
+    }
+    /* Destroy does not clear master+0x70; stale current remains observable. */
+    if (!eu4_gfx_shader_is_current(&ctx, reinterpret_cast<void *>(addr))) {
+        /* Pointer value still stored — intentional Obs for callers to clear. */
     }
 
     void *object2 = eu4_gfx_create_shader();

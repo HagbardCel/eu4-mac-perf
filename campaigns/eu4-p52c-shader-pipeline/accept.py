@@ -25,11 +25,18 @@ def check(workspace: Path) -> dict:
     for rel in (
         "analysis/gfx-shader/v0/equivalence-tolerances.md",
         "analysis/gfx-shader/v0/simple.metal",
+        "analysis/gfx-shader/v0/binding-schema.json",
         "tests/metal_simple_ref_host.m",
         "tests/test_metal_simple_ref.py",
     ):
         if not (workspace / rel).is_file():
             return emit("fail", f"missing {rel}")
+    header = (workspace / "benchmark" / "eu4_gfx_shader.h").read_text(encoding="utf-8")
+    if "eu4_gfx_shader_pipeline_for_key" not in header:
+        return emit("fail", "missing production pipeline-for-key API")
+    body = (workspace / "benchmark" / "eu4_gfx_shader.mm").read_text(encoding="utf-8")
+    if "pipeline_cache_key" not in body and "EU4GfxPipelineKey" not in body:
+        return emit("fail", "missing effective-Metal PSO cache key")
     if sys.platform != "darwin":
         return emit("unavailable", "P5.2c requires macOS Metal")
     env = os.environ.copy()
@@ -47,7 +54,11 @@ def check(workspace: Path) -> dict:
         )
         if ran.returncode != 0:
             return emit("fail", f"{name}: {(ran.stderr or ran.stdout)[-1500:]}")
-    return emit("pass", "p52c pipeline and Simple equivalence gates held")
+    return emit(
+        "pass",
+        "p52c production PSO/cache + controlled offline Simple gates held; "
+        "not P5.3/P5.4 cross-function sequences",
+    )
 
 
 def main() -> int:

@@ -1,0 +1,12 @@
+{
+  "schema": "eu4-gfx-qualified-sources/v0",
+  "note": "Exact compiler-input SHA-256 values for P5.2b admission. Empty until P5.2a closure promotes hashes. Markers below are transitional and must not satisfy the engine-path completion gate.",
+  "repo_baseline_commit": "173321b6d3258576060e7941e9bd91f608e8f543",
+  "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "sources": [],
+  "transitional_marker_admission_only": {
+    "vertex_marker": "EU4_METAL_SIMPLE_VS_V0",
+    "pixel_marker": "EU4_METAL_SIMPLE_PS_V0",
+    "status": "offline_lifecycle_qualification_only"
+  }
+}

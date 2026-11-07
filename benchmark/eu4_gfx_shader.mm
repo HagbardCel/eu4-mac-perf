@@ -1,5 +1,6 @@
 #import "eu4_gfx_shader.h"
 
+#import <CommonCrypto/CommonDigest.h>
 #import <Metal/Metal.h>
 #import <new>
 #import <pthread.h>
@@ -82,7 +83,7 @@ static const char kSimplePixelSource[] =
 @property (nonatomic, strong) id<MTLLibrary> library;
 @property (nonatomic, strong) id<MTLFunction> vertexFunction;
 @property (nonatomic, strong) id<MTLFunction> fragmentFunction;
-@property (nonatomic, strong) id<MTLRenderPipelineState> pipeline;
+@property (nonatomic, strong) NSMutableDictionary *pipelines; /* key string -> PSO */
 @end
 
 @implementation EU4ShaderRecord
@@ -92,6 +93,64 @@ static NSMutableArray<EU4ShaderRecord *> *g_shaders;
 static uint64_t g_next_lifetime = 1;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static id<MTLDevice> g_device;
+static uint8_t g_qualified_hashes[EU4_GFX_SHADER_MAX_QUALIFIED_HASHES][32];
+static size_t g_qualified_count;
+static int g_allow_transitional_markers = 1; /* offline hosts; engine-path clears */
+
+static void sha256_bytes(const void *data, size_t len, uint8_t out[32]) {
+    CC_SHA256(data, (CC_LONG)len, out);
+}
+
+static int hash_is_qualified(const uint8_t digest[32]) {
+    for (size_t i = 0; i < g_qualified_count; i++) {
+        if (memcmp(g_qualified_hashes[i], digest, 32) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int eu4_gfx_shader_register_qualified_sha256(const uint8_t digest[32]) {
+    if (digest == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_lock);
+    if (hash_is_qualified(digest)) {
+        pthread_mutex_unlock(&g_lock);
+        return 1;
+    }
+    if (g_qualified_count >= EU4_GFX_SHADER_MAX_QUALIFIED_HASHES) {
+        pthread_mutex_unlock(&g_lock);
+        return 0;
+    }
+    memcpy(g_qualified_hashes[g_qualified_count], digest, 32);
+    g_qualified_count++;
+    pthread_mutex_unlock(&g_lock);
+    return 1;
+}
+
+void eu4_gfx_shader_clear_qualified_hashes(void) {
+    pthread_mutex_lock(&g_lock);
+    g_qualified_count = 0;
+    memset(g_qualified_hashes, 0, sizeof(g_qualified_hashes));
+    pthread_mutex_unlock(&g_lock);
+}
+
+static int source_admitted(const char *source, int (*marker_fn)(const char *)) {
+    if (source == NULL) {
+        return 0;
+    }
+    uint8_t digest[32];
+    sha256_bytes(source, strlen(source), digest);
+    if (hash_is_qualified(digest)) {
+        return 1;
+    }
+    /* Transitional offline path only — not engine-path completion. */
+    if (g_allow_transitional_markers && marker_fn(source)) {
+        return 1;
+    }
+    return 0;
+}
 
 static void ensure_registry(void) {
     if (g_shaders == nil) {
@@ -184,6 +243,9 @@ void eu4_gfx_shader_test_reset(void) {
     [g_shaders removeAllObjects];
     g_next_lifetime = 1;
     g_device = nil;
+    g_qualified_count = 0;
+    memset(g_qualified_hashes, 0, sizeof(g_qualified_hashes));
+    g_allow_transitional_markers = 1;
     pthread_mutex_unlock(&g_lock);
 }
 
@@ -231,9 +293,6 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
     if (shader == NULL || source == NULL) {
         return 0;
     }
-    if (!source_is_simple_vertex(source)) {
-        return 0;
-    }
 
     pthread_mutex_lock(&g_lock);
     EU4ShaderRecord *record = find_record(shader);
@@ -242,17 +301,34 @@ int eu4_gfx_add_vertex_shader(void *unused, void *shader, const char *source) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    if (record.library == nil && !compile_simple_library(record)) {
+    if (!source_admitted(source, source_is_simple_vertex)) {
+        /* Rejected replacement: invalidate prior link / PSO observations. */
+        record.linked = NO;
+        record.hasVertex = NO;
+        record.vertexFunction = nil;
+        [record.pipelines removeAllObjects];
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
+    if (record.library == nil || record.vertexFunction == nil) {
+        if (!compile_simple_library(record)) {
+            record.linked = NO;
+            pthread_mutex_unlock(&g_lock);
+            return 0;
+        }
+    }
     if (record.vertexFunction == nil) {
+        record.linked = NO;
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
     record.hasVertex = YES;
     record.linked = NO;
-    record.pipeline = nil;
+    if (record.pipelines == nil) {
+        record.pipelines = [NSMutableDictionary dictionary];
+    } else {
+        [record.pipelines removeAllObjects];
+    }
     /* Keep +4 as zero: not a GL name and not a Metal handle. */
     memset(static_cast<uint8_t *>(shader) + 4, 0, 4);
     pthread_mutex_unlock(&g_lock);
@@ -264,9 +340,6 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
     if (shader == NULL || source == NULL) {
         return 0;
     }
-    if (!source_is_simple_pixel(source)) {
-        return 0;
-    }
 
     pthread_mutex_lock(&g_lock);
     EU4ShaderRecord *record = find_record(shader);
@@ -274,17 +347,33 @@ int eu4_gfx_add_pixel_shader(void *unused, void *shader, const char *source) {
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
-    if (record.library == nil && !compile_simple_library(record)) {
+    if (!source_admitted(source, source_is_simple_pixel)) {
+        record.linked = NO;
+        record.hasPixel = NO;
+        record.fragmentFunction = nil;
+        [record.pipelines removeAllObjects];
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
+    if (record.library == nil || record.fragmentFunction == nil) {
+        if (!compile_simple_library(record)) {
+            record.linked = NO;
+            pthread_mutex_unlock(&g_lock);
+            return 0;
+        }
+    }
     if (record.fragmentFunction == nil) {
+        record.linked = NO;
         pthread_mutex_unlock(&g_lock);
         return 0;
     }
     record.hasPixel = YES;
     record.linked = NO;
-    record.pipeline = nil;
+    if (record.pipelines == nil) {
+        record.pipelines = [NSMutableDictionary dictionary];
+    } else {
+        [record.pipelines removeAllObjects];
+    }
     memset(static_cast<uint8_t *>(shader) + 8, 0, 4);
     pthread_mutex_unlock(&g_lock);
     return 1;
@@ -357,8 +446,28 @@ void eu4_gfx_destroy_shader(void *shader) {
     ::operator delete(shader);
 }
 
-void *eu4_gfx_shader_pipeline(const void *shader, void *mtl_device) {
-    if (shader == NULL) {
+int eu4_gfx_shader_is_current(const void *immediate_context, const void *shader) {
+    if (immediate_context == NULL || shader == NULL) {
+        return 0;
+    }
+    void *const *context = static_cast<void *const *>(immediate_context);
+    const uint8_t *master = static_cast<const uint8_t *>(context[0]);
+    if (master == NULL) {
+        return 0;
+    }
+    void *const *current = reinterpret_cast<void *const *>(master + 0x70);
+    return *current == shader ? 1 : 0;
+}
+
+static NSString *pipeline_cache_key(const EU4GfxPipelineKey *key) {
+    return [NSString stringWithFormat:@"%p|%p|%u|%u|%u|%u",
+                     key->vertex_function, key->fragment_function, key->pixel_format,
+                     key->sample_count, key->color_write_mask, key->blend_enabled];
+}
+
+void *eu4_gfx_shader_pipeline_for_key(const void *shader, void *mtl_device,
+                                      const EU4GfxPipelineKey *key) {
+    if (shader == NULL || key == NULL) {
         return NULL;
     }
     id<MTLDevice> device =
@@ -374,8 +483,20 @@ void *eu4_gfx_shader_pipeline(const void *shader, void *mtl_device) {
         pthread_mutex_unlock(&g_lock);
         return NULL;
     }
-    if (record.pipeline != nil) {
-        void *out = (__bridge void *)record.pipeline;
+    if (record.pipelines == nil) {
+        record.pipelines = [NSMutableDictionary dictionary];
+    }
+    EU4GfxPipelineKey effective = *key;
+    if (effective.vertex_function == NULL) {
+        effective.vertex_function = (__bridge void *)record.vertexFunction;
+    }
+    if (effective.fragment_function == NULL) {
+        effective.fragment_function = (__bridge void *)record.fragmentFunction;
+    }
+    NSString *cacheKey = pipeline_cache_key(&effective);
+    id<MTLRenderPipelineState> cached = record.pipelines[cacheKey];
+    if (cached != nil) {
+        void *out = (__bridge void *)cached;
         pthread_mutex_unlock(&g_lock);
         return out;
     }
@@ -394,18 +515,24 @@ void *eu4_gfx_shader_pipeline(const void *shader, void *mtl_device) {
     vertex.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
 
     MTLRenderPipelineDescriptor *desc = [[MTLRenderPipelineDescriptor alloc] init];
-    desc.vertexFunction = record.vertexFunction;
-    desc.fragmentFunction = record.fragmentFunction;
+    desc.vertexFunction = (__bridge id<MTLFunction>)effective.vertex_function;
+    desc.fragmentFunction = (__bridge id<MTLFunction>)effective.fragment_function;
     desc.vertexDescriptor = vertex;
-    desc.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm;
-    desc.colorAttachments[0].blendingEnabled = YES;
+    desc.colorAttachments[0].pixelFormat =
+        (MTLPixelFormat)(effective.pixel_format ? effective.pixel_format
+                                                : MTLPixelFormatBGRA8Unorm);
+    desc.rasterSampleCount = effective.sample_count ? effective.sample_count : 1;
+    desc.colorAttachments[0].blendingEnabled = effective.blend_enabled ? YES : NO;
     desc.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
     desc.colorAttachments[0].destinationRGBBlendFactor =
         MTLBlendFactorOneMinusSourceAlpha;
     desc.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
     desc.colorAttachments[0].destinationAlphaBlendFactor =
         MTLBlendFactorOneMinusSourceAlpha;
-    desc.colorAttachments[0].writeMask = MTLColorWriteMaskAll;
+    desc.colorAttachments[0].writeMask =
+        effective.color_write_mask
+            ? (MTLColorWriteMask)effective.color_write_mask
+            : MTLColorWriteMaskAll;
 
     NSError *error = nil;
     id<MTLRenderPipelineState> pipeline =
@@ -414,8 +541,17 @@ void *eu4_gfx_shader_pipeline(const void *shader, void *mtl_device) {
         pthread_mutex_unlock(&g_lock);
         return NULL;
     }
-    record.pipeline = pipeline;
+    record.pipelines[cacheKey] = pipeline;
     void *out = (__bridge void *)pipeline;
     pthread_mutex_unlock(&g_lock);
     return out;
+}
+
+void *eu4_gfx_shader_pipeline(const void *shader, void *mtl_device) {
+    EU4GfxPipelineKey key = {};
+    key.pixel_format = (unsigned)MTLPixelFormatBGRA8Unorm;
+    key.sample_count = 1;
+    key.color_write_mask = (unsigned)MTLColorWriteMaskAll;
+    key.blend_enabled = 1;
+    return eu4_gfx_shader_pipeline_for_key(shader, mtl_device, &key);
 }
