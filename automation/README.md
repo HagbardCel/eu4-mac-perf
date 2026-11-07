@@ -68,11 +68,14 @@ The shared checker requires a detached worktree at the pinned commit, pinned `be
 - Promote grounded evidence: `python3 -m automation.promote_evidence` (writes `analysis/qualification/v0/`; golden only—no workspace candidate under the oracle tree).
 - Smoke campaign: `campaigns/eu4-a01-trusted-validation/` — checker reads the **workspace** candidate at `analysis/qualification/v0/primitive-lookup.candidate.json`; oracle/manifest stay trusted and re-hashed.
 - Outer loop CLI:
-  - `python3 -m automation.handoff_cli run-scripted <workflow.json>` — deterministic two-defect A→B path for tests.
-  - `python3 -m automation.handoff_cli run-opencode <workflow.json> <campaign.json>` — real OpenCode implementer sessions (requires `OPENCODE_SERVER_PASSWORD`).
-- Reviewer results use schema `eu4-review/v1`; promotion is evidence-bound and allowlisted (`primitive_lookup_v1` only). Rejection without a grounded binding is reject-only (no oracle promotion).
-- Qualification receipt: `(candidate_commit, oracle_digest, checker_digest, review_digest)`. Each remediation records the oracle version before the first agent turn; promotion creates a new version + new campaign id.
+  - `python3 -m automation.handoff_cli run-scripted <workflow.json>` — deterministic two-defect A→B path for **portable tests** (synthetic fixture oracle under the workflow dir; not independent agent review).
+  - `python3 -m automation.handoff_cli run-opencode <workflow.json> <campaign.json>` — real OpenCode implementer **and** reviewer sessions (requires `OPENCODE_SERVER_PASSWORD`). No synthetic reviewer fallback.
+- Reviewer campaign: `campaigns/eu4-a02-reviewer/` — report path is `EU4_REVIEW_REPORT_PATH` **outside** the candidate worktree; accept returns `pass` when the review operation finished (any outcome). Controller consumes `qualified|rejected|unresolved`.
+- Promotion is append-only and content-addressed: version directory is published before the tip manifest replace; already-applied finding digests prevent duplicate promote after crash; `CURRENT` is a convenience mirror of the tip manifest.
+- Candidate snapshots are full baseline trees (`read-tree` pin + allowlisted overlay) parented on `pin_commit`.
+- Qualification receipt: `(candidate_commit, oracle_digest, checker_digest, review_digest)`. Remediation campaigns seed from the rejected snapshot and pin a version-specific oracle manifest path before the first agent turn.
 - Identity fields stay distinct: `repo_baseline_commit` vs `eu4_executable_sha256`.
+- Portable unittest fixtures live under `tests/fixtures/qualification/`; they must not mutate tracked tip oracle files.
 
 ## Metal API corpus
 

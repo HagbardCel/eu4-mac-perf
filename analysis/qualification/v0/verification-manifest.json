@@ -4,7 +4,7 @@
     {
       "path": "campaigns/eu4-a01-trusted-validation/accept.py",
       "role": "checker",
-      "sha256": "1d66f9051c40ff24fa4bd097c64d18b6e8a036ffbbfeec9a6907bc311a5ab776"
+      "sha256": "de77d14add1f3b6b6b0870047d74d2dc06b0edbb47bc0621cd07e3a4a9ab6676"
     },
     {
       "path": "analysis/qualification/v0/primitive-table.evidence.json",
@@ -24,7 +24,7 @@
     {
       "path": "automation/replay_primitive.py",
       "role": "trusted_helper",
-      "sha256": "eb3dbf7e6de8fbd2d864d10804ba06d59381d3f8ca5ea1fc83c3c18d0d7c4e10"
+      "sha256": "496f3ee00afc91403e35ccda4218bb1966a1cb3f0862063081d68651fb5458a4"
     },
     {
       "path": "automation/verification_manifest.py",

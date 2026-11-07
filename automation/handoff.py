@@ -15,6 +15,10 @@ from automation.state import atomic_write, campaign_lock
 from automation.verification_manifest import digest_manifest, file_sha256, load_manifest
 
 MAX_ROUNDS = 3
+CANDIDATE_ALLOWLIST_PREFIXES = (
+    "analysis/qualification/",
+    "progress.md",
+)
 
 
 def default_state(workflow_id: str, implementer_campaign_id: str, pin: str) -> dict:
@@ -29,10 +33,14 @@ def default_state(workflow_id: str, implementer_campaign_id: str, pin: str) -> d
         "candidate_commit": None,
         "candidate_tree": None,
         "candidate_ref": None,
+        "candidate_parent": None,
         "oracle_manifest_sha256": None,
         "oracle_version": None,
+        "oracle_manifest_path": None,
         "checker_sha256": None,
         "reviewer_campaign_id": None,
+        "reviewer_session_id": None,
+        "implementer_session_id": None,
         "review_path": None,
         "review_digest": None,
         "remediation_campaign_id": None,
@@ -40,6 +48,12 @@ def default_state(workflow_id: str, implementer_campaign_id: str, pin: str) -> d
         "unresolved_findings": [],
         "history": [],
     }
+
+
+def path_allowlisted(rel: str) -> bool:
+    if rel == "progress.md":
+        return True
+    return any(rel.startswith(prefix) for prefix in CANDIDATE_ALLOWLIST_PREFIXES)
 
 
 def load_workflow(path: Path) -> dict:
@@ -64,21 +78,8 @@ def _git(repo: Path, *args: str) -> str:
     return completed.stdout.strip()
 
 
-def snapshot_candidate(
-    repo: Path,
-    workspace: Path,
-    *,
-    workflow_id: str,
-    round_id: int,
-    message: str = "qualification candidate snapshot",
-) -> dict:
-    """Commit workspace tree into the original repo object store; create a stable ref.
-
-    Stages only under analysis/qualification (and progress.md) to avoid sucking in
-    proprietary .local fixtures. Returns candidate_commit, tree, and ref name.
-    """
-    # Build index from selected paths in workspace
-    rels = []
+def collect_candidate_rels(workspace: Path) -> list[str]:
+    rels: list[str] = []
     base = workspace / "analysis" / "qualification"
     if base.is_dir():
         for path in base.rglob("*"):
@@ -87,19 +88,42 @@ def snapshot_candidate(
     progress = workspace / "progress.md"
     if progress.is_file():
         rels.append("progress.md")
-    if not rels:
-        raise RuntimeError("no candidate files to snapshot under analysis/qualification")
+    return rels
 
+
+def snapshot_candidate(
+    repo: Path,
+    workspace: Path,
+    *,
+    workflow_id: str,
+    round_id: int,
+    parent_commit: str,
+    message: str = "qualification candidate snapshot",
+) -> dict:
+    """Full baseline + allowlisted overlay; parented commit in the original object store."""
     import os
     import tempfile
 
-    # GIT_INDEX_FILE must not pre-exist as an empty file — git treats that as corrupt.
+    rels = collect_candidate_rels(workspace)
+    if not rels:
+        raise RuntimeError("no candidate files to snapshot under analysis/qualification")
+    for rel in rels:
+        if not path_allowlisted(rel):
+            raise RuntimeError(f"candidate path outside allowlist: {rel}")
+
     fd, index_name = tempfile.mkstemp(prefix=f"qual-index-{workflow_id}-{round_id}-")
     os.close(fd)
     index_file = Path(index_name)
     index_file.unlink()
     env = {**os.environ, "GIT_INDEX_FILE": str(index_file)}
     try:
+        # Start from pinned baseline tree
+        subprocess.run(
+            ["git", "-C", str(repo), "read-tree", parent_commit],
+            check=True,
+            capture_output=True,
+            env=env,
+        )
         for rel in rels:
             src = workspace / rel
             blob = subprocess.run(
@@ -139,6 +163,8 @@ def snapshot_candidate(
                 str(repo),
                 "commit-tree",
                 tree,
+                "-p",
+                parent_commit,
                 "-m",
                 f"{message} ({workflow_id} r{round_id})",
             ],
@@ -156,6 +182,18 @@ def snapshot_candidate(
     finally:
         if index_file.exists():
             index_file.unlink()
+
+    # Every diff vs parent must stay inside the allowlist
+    diff = subprocess.run(
+        ["git", "-C", str(repo), "diff", "--name-only", parent_commit, commit],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    for path in diff:
+        if not path_allowlisted(path):
+            raise RuntimeError(f"snapshot diff outside allowlist: {path}")
+
     ref = f"refs/qualification/{workflow_id}/r{round_id}"
     subprocess.run(
         ["git", "-C", str(repo), "update-ref", ref, commit],
@@ -166,7 +204,22 @@ def snapshot_candidate(
         "candidate_commit": commit,
         "candidate_tree": tree,
         "candidate_ref": ref,
+        "candidate_parent": parent_commit,
+        "changed_paths": diff,
     }
+
+
+def verify_worktree_clean(repo: Path, worktree: Path) -> list[str]:
+    completed = subprocess.run(
+        ["git", "-C", str(worktree), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return [f"git status failed in {worktree}: {completed.stderr}"]
+    dirty = [line for line in completed.stdout.splitlines() if line.strip()]
+    return [f"dirty: {line}" for line in dirty] if dirty else []
 
 
 def verify_ref_unmodified(repo: Path, ref: str, expected_commit: str) -> list[str]:
@@ -262,6 +315,8 @@ class HandoffController:
         )
         # Pin oracle version into campaign context before the turn.
         result = self.run_implementer(campaign_id, state)
+        if result.get("session_id"):
+            state["implementer_session_id"] = result["session_id"]
         if result.get("status") != "complete" or result.get("last_verdict") != "pass":
             state["last_implementer"] = {
                 "campaign_id": campaign_id,
@@ -281,17 +336,28 @@ class HandoffController:
                 state["state"] = "qualified_by_checker"
                 save_workflow(self.workflow_path, state)
                 return state
+        parent = state.get("candidate_parent") or state.get("pin_commit")
+        if not parent:
+            raise RuntimeError("pin_commit required for complete candidate snapshot")
+        # Snapshot immediately after checker pass — no further agent edits.
         snap = snapshot_candidate(
             self.repo,
             workspace,
             workflow_id=state["workflow_id"],
             round_id=state["round"],
+            parent_commit=parent,
         )
         state["candidate_commit"] = snap["candidate_commit"]
         state["candidate_tree"] = snap["candidate_tree"]
         state["candidate_ref"] = snap["candidate_ref"]
-        state["oracle_manifest_sha256"] = digest_manifest(
-            load_manifest(self.oracle_dir / "verification-manifest.json")
+        state["candidate_parent"] = snap["candidate_parent"]
+        tip_manifest = load_manifest(self.oracle_dir / "verification-manifest.json")
+        state["oracle_manifest_sha256"] = digest_manifest(tip_manifest)
+        state["oracle_version"] = tip_manifest.get("oracle_version_name") or state.get(
+            "oracle_version"
+        )
+        state["oracle_manifest_path"] = tip_manifest.get("version_manifest_path") or str(
+            self.oracle_dir / "verification-manifest.json"
         )
         state["checker_sha256"] = file_sha256(self.checker_path)
         state["state"] = "qualified_by_checker"
@@ -320,13 +386,21 @@ class HandoffController:
         # review_path stays null until artifact exists (resume re-invokes).
         state["state"] = "reviewing"
         save_workflow(self.workflow_path, state)
-        review_path = self.run_reviewer(state)
-        if not Path(review_path).is_file():
+        review_result = self.run_reviewer(state)
+        if isinstance(review_result, dict):
+            report = Path(review_result["path"])
+            if review_result.get("session_id"):
+                state["reviewer_session_id"] = review_result["session_id"]
+            if review_result.get("worktree"):
+                state["reviewer_worktree"] = str(review_result["worktree"])
+        else:
+            report = Path(review_result)
+        if not report.is_file():
             state["block_reason"] = "reviewer_returned_missing_path"
             state["state"] = "blocked"
             save_workflow(self.workflow_path, state)
             return state
-        state["review_path"] = str(review_path)
+        state["review_path"] = str(report)
         save_workflow(self.workflow_path, state)
         return state
 
@@ -354,9 +428,30 @@ class HandoffController:
             state["block_reason"] = "candidate_ref_changed: " + "; ".join(ref_errs)
             save_workflow(self.workflow_path, state)
             return state
+        if state.get("reviewer_worktree"):
+            dirty = verify_worktree_clean(self.repo, Path(state["reviewer_worktree"]))
+            if dirty:
+                state["state"] = "blocked"
+                state["block_reason"] = "reviewer_worktree_dirty: " + "; ".join(dirty)
+                save_workflow(self.workflow_path, state)
+                return state
+        if (
+            state.get("reviewer_session_id")
+            and state.get("implementer_session_id")
+            and state["reviewer_session_id"] == state["implementer_session_id"]
+        ):
+            state["state"] = "blocked"
+            state["block_reason"] = "reviewer_session_id matches implementer"
+            save_workflow(self.workflow_path, state)
+            return state
         state["review_digest"] = file_sha256(review_path)
         outcome = review["outcome"]
         if outcome == "qualified":
+            if not state.get("reviewer_session_id") and state.get("require_live_sessions"):
+                state["state"] = "blocked"
+                state["block_reason"] = "missing_reviewer_session_id"
+                save_workflow(self.workflow_path, state)
+                return state
             state["qualification_receipt"] = receipt_tuple(state)
             state["state"] = "awaiting_merge"
             _note(state, "awaiting_merge")
@@ -370,6 +465,8 @@ class HandoffController:
             return state
         state["state"] = "review_rejected"
         state["last_review"] = review
+        state["rejected_candidate_commit"] = state["candidate_commit"]
+        state["rejected_candidate_ref"] = state["candidate_ref"]
         _note(state, "review_rejected")
         save_workflow(self.workflow_path, state)
         return state
@@ -381,7 +478,7 @@ class HandoffController:
             save_workflow(self.workflow_path, state)
             return state
         review = state.get("last_review") or load_review(Path(state["review_path"]))
-        # Idempotent: if CURRENT already advanced for this review, reuse
+        review_path = Path(state["review_path"]) if state.get("review_path") else None
         try:
             promoted = promote_grounded_findings(
                 repo=self.repo,
@@ -389,6 +486,7 @@ class HandoffController:
                 oracle_dir=self.oracle_dir,
                 trusted_helpers=self.trusted_helpers,
                 checker_relpath=self.checker_relpath,
+                review_path=review_path,
             )
         except (ValueError, FileNotFoundError, RuntimeError) as exc:
             state["state"] = "blocked"
@@ -398,9 +496,10 @@ class HandoffController:
         if promoted.get("promoted"):
             state["oracle_manifest_sha256"] = promoted["manifest_sha256"]
             state["oracle_version"] = promoted["oracle_version"]
+            if promoted.get("version_manifest_path"):
+                state["oracle_manifest_path"] = promoted["version_manifest_path"]
             # New oracle => new campaign; never retarget paused campaign in place.
         else:
-            # Rejection without promotion: still remediate against same oracle
             state.setdefault("unresolved_findings", [])
             for d in promoted.get("decisions") or []:
                 if d.get("decision") != "promote":
@@ -415,11 +514,16 @@ class HandoffController:
                 "remediating",
                 campaign_id=new_id,
                 oracle_version=state.get("oracle_version"),
+                rejected_candidate=state.get("rejected_candidate_commit"),
             )
         state["state"] = "remediating"
         state["reviewer_campaign_id"] = None
         state["review_path"] = None
         state["review_digest"] = None
+        # Keep rejected_* for remediation seed; clear active candidate for next snapshot
+        state["candidate_parent"] = state.get("rejected_candidate_commit") or state.get(
+            "pin_commit"
+        )
         state["candidate_commit"] = None
         state["candidate_tree"] = None
         state["candidate_ref"] = None

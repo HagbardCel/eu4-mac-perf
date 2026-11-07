@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from automation.replay_primitive import (  # noqa: E402
     REL_CANDIDATE,
     evaluate_candidate_against_evidence,
     evaluate_promoted_regressions,
+    resolve_regression_root,
 )
 from automation.verification_manifest import (  # noqa: E402
     EU4_EXECUTABLE_SHA256,
@@ -33,9 +35,7 @@ from automation.verification_manifest import (  # noqa: E402
     verify_manifest,
 )
 
-ORACLE = ROOT / "analysis" / "qualification" / "v0"
-MANIFEST_PATH = ORACLE / "verification-manifest.json"
-EVIDENCE_PATH = ORACLE / "primitive-table.evidence.json"
+DEFAULT_ORACLE = ROOT / "analysis" / "qualification" / "v0"
 DEFAULT_EXE = Path(
     "/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4"
 )
@@ -45,19 +45,41 @@ def emit(verdict: str, diagnostics: str) -> None:
     print(json.dumps({"verdict": verdict, "diagnostics": diagnostics}))
 
 
+def resolve_oracle_and_manifest() -> tuple[Path, Path]:
+    """Prefer campaign-pinned version manifest; else tip under oracle dir."""
+    pinned = os.environ.get("EU4_QUALIFICATION_MANIFEST")
+    oracle_env = os.environ.get("EU4_QUALIFICATION_ORACLE")
+    oracle = Path(oracle_env) if oracle_env else DEFAULT_ORACLE
+    if not oracle.is_absolute():
+        oracle = ROOT / oracle
+    if pinned:
+        path = Path(pinned)
+        if not path.is_absolute():
+            path = ROOT / path
+        # version-dir pin: .../oracle_versions/<id>/verification-manifest.json
+        if path.parent.parent.name == "oracle_versions":
+            oracle = path.parent.parent.parent
+        return oracle, path
+    return oracle, oracle / "verification-manifest.json"
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         emit("unavailable", "usage: accept.py <workspace>")
         return 0
     workspace = Path(argv[1]).resolve()
+    fixture_mode = os.environ.get("EU4_A01_FIXTURE_MODE") == "1"
 
-    if not MANIFEST_PATH.is_file() or not EVIDENCE_PATH.is_file():
+    oracle, manifest_path = resolve_oracle_and_manifest()
+    evidence_path = oracle / "primitive-table.evidence.json"
+
+    if not manifest_path.is_file() or not evidence_path.is_file():
         emit(
             "unavailable",
             "frozen oracle missing; run: python3 -m automation.promote_evidence",
         )
         return 0
-    if not DEFAULT_EXE.is_file():
+    if not fixture_mode and not DEFAULT_EXE.is_file():
         emit(
             "unavailable",
             f"EU4 executable not found at {DEFAULT_EXE}; "
@@ -65,8 +87,11 @@ def main(argv: list[str]) -> int:
         )
         return 0
 
-    manifest = load_manifest(MANIFEST_PATH)
-    errors = verify_manifest(ROOT, manifest)
+    manifest = load_manifest(manifest_path)
+    # Fixture/temp oracles may use absolute member paths; try oracle then ROOT.
+    errors = verify_manifest(oracle, manifest)
+    if errors:
+        errors = verify_manifest(ROOT, manifest)
     if errors:
         emit(
             "unavailable",
@@ -80,22 +105,37 @@ def main(argv: list[str]) -> int:
         emit("unavailable", "manifest missing repo_baseline_commit")
         return 0
 
-    try:
-        live = extract_primitive_table(DEFAULT_EXE)
-    except ValueError as exc:
-        emit("unavailable", f"live extraction failed: {exc}")
-        return 0
-    frozen = json.loads(EVIDENCE_PATH.read_text(encoding="utf-8"))
+    version_name = manifest.get("oracle_version_name")
+    if version_name and version_name not in (None, "v0"):
+        reg_root = resolve_regression_root(oracle, manifest)
+        listed = [
+            m for m in (manifest.get("members") or []) if m.get("role") == "regression"
+        ]
+        if listed and reg_root is None:
+            emit(
+                "unavailable",
+                f"oracle version {version_name} regressions directory missing",
+            )
+            return 0
+
+    frozen = json.loads(evidence_path.read_text(encoding="utf-8"))
     if frozen.get("provenance") != "instruction_static":
         emit("fail", "frozen evidence provenance must be instruction_static")
         return 0
-    if live["output_hash"] != frozen.get("output_hash"):
-        emit(
-            "unavailable",
-            "live extraction output_hash differs from frozen evidence "
-            "(oracle drift or wrong executable)",
-        )
-        return 0
+
+    if not fixture_mode:
+        try:
+            live = extract_primitive_table(DEFAULT_EXE)
+        except ValueError as exc:
+            emit("unavailable", f"live extraction failed: {exc}")
+            return 0
+        if live["output_hash"] != frozen.get("output_hash"):
+            emit(
+                "unavailable",
+                "live extraction output_hash differs from frozen evidence "
+                "(oracle drift or wrong executable)",
+            )
+            return 0
 
     candidate_path = workspace / REL_CANDIDATE
     if not candidate_path.is_file():
@@ -103,8 +143,6 @@ def main(argv: list[str]) -> int:
         return 0
     candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
 
-    # Controlled suite: table + engine_enum_4 only (defect A). Defect B
-    # (out_of_range_default) is intentionally not checked until promoted.
     err = evaluate_candidate_against_evidence(
         candidate, frozen, check_out_of_range_field=False
     )
@@ -115,16 +153,19 @@ def main(argv: list[str]) -> int:
         )
         return 0
 
-    # Promoted regressions (allowlisted adapters) — may include defect B.
-    reg_err = evaluate_promoted_regressions(ROOT, ORACLE, candidate, frozen)
+    reg_err = evaluate_promoted_regressions(
+        ROOT, oracle, candidate, frozen, manifest=manifest
+    )
     if reg_err:
+        if reg_err.startswith("unavailable:"):
+            emit("unavailable", reg_err.removeprefix("unavailable:").strip())
+            return 0
         emit(
             "fail",
             f"{reg_err}; oracle_manifest_sha256={digest_manifest(manifest)}",
         )
         return 0
 
-    # Sanity: table-derived out-of-range still uses length rule.
     table = candidate["table"]
     if lookup_from_table(table, 99) != 4:
         emit("fail", "candidate out-of-range mapping via table length must return 4")

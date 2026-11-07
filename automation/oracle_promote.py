@@ -1,7 +1,8 @@
-"""Transactional, evidence-bound promotion of reviewer counterexamples."""
+"""Transactional, evidence-bound, append-only promotion of reviewer counterexamples."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -17,6 +18,7 @@ from automation.verification_manifest import (
     build_manifest,
     canonical_json,
     digest_manifest,
+    digest_text,
     file_sha256,
     load_manifest,
     member_from_file,
@@ -30,6 +32,28 @@ class PromotionDecision:
     REJECT_ONLY = "reject_only"
     UNRESOLVED = "unresolved"
     CONFLICT = "conflict"
+
+
+def finding_content_digest(finding: dict, *, review_digest: str) -> str:
+    """Stable digest of a qualified finding bound to the source review."""
+    binding = finding.get("binding") or {}
+    payload = {
+        "id": finding.get("id"),
+        "kind": finding.get("kind"),
+        "expected_provenance": finding.get("expected_provenance"),
+        "reproducer": finding.get("reproducer"),
+        "binding": {
+            "replay_id": binding.get("replay_id"),
+            "observation": binding.get("observation"),
+            "expected": binding.get("expected"),
+            "function_rva": binding.get("function_rva"),
+            "executable_sha256": binding.get("executable_sha256"),
+            "evidence_ref": binding.get("evidence_ref"),
+            "sequence": binding.get("sequence"),
+        },
+        "review_digest": review_digest,
+    }
+    return digest_text(canonical_json(payload))
 
 
 def classify_finding(finding: dict, evidence: dict, evidence_path: Path) -> str:
@@ -53,6 +77,88 @@ def classify_finding(finding: dict, evidence: dict, evidence_path: Path) -> str:
     return PromotionDecision.PROMOTE
 
 
+def _active_manifest(oracle_dir: Path) -> dict | None:
+    path = oracle_dir / "verification-manifest.json"
+    if not path.is_file():
+        return None
+    return load_manifest(path)
+
+
+def _version_dir(oracle_dir: Path, version_name: str) -> Path:
+    return oracle_dir / "oracle_versions" / version_name
+
+
+def _load_regression_index(oracle_dir: Path, manifest: dict | None) -> dict[str, dict]:
+    """Map finding id -> regression payload; also index by finding_content_digest."""
+    by_id: dict[str, dict] = {}
+    if not manifest:
+        return by_id
+    version = manifest.get("oracle_version_name")
+    if not isinstance(version, str) or not version:
+        return by_id
+    reg_root = _version_dir(oracle_dir, version) / "regressions"
+    if not reg_root.is_dir():
+        return by_id
+    for path in sorted(reg_root.glob("*.json")):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        fid = payload.get("id")
+        if isinstance(fid, str):
+            by_id[fid] = payload
+    return by_id
+
+
+def _ancestry_digests(oracle_dir: Path, manifest: dict | None) -> dict[str, str]:
+    """finding_content_digest -> version that carries it (active + walk parent)."""
+    found: dict[str, str] = {}
+    current = manifest
+    seen: set[str] = set()
+    while current:
+        version = current.get("oracle_version_name")
+        if not isinstance(version, str) or version in seen:
+            break
+        seen.add(version)
+        reg_root = _version_dir(oracle_dir, version) / "regressions"
+        if reg_root.is_dir():
+            for path in reg_root.glob("*.json"):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                digest = payload.get("finding_content_digest")
+                if isinstance(digest, str):
+                    found.setdefault(digest, version)
+                fid = payload.get("id")
+                # Also key collisions by id for content mismatch detection
+                if isinstance(fid, str):
+                    found.setdefault(f"id:{fid}", version)
+        parent = current.get("parent_manifest_sha256")
+        # Walk only via parent version name stored on disk if present
+        parent_name = current.get("parent_oracle_version_name")
+        if isinstance(parent_name, str) and parent_name:
+            parent_manifest_path = (
+                _version_dir(oracle_dir, parent_name) / "verification-manifest.json"
+            )
+            if parent_manifest_path.is_file():
+                current = load_manifest(parent_manifest_path)
+                continue
+        break
+    return found
+
+
+def _repair_current(oracle_dir: Path, version_name: str) -> None:
+    current = oracle_dir / "CURRENT"
+    tmp = oracle_dir / "CURRENT.tmp"
+    tmp.write_text(version_name + "\n", encoding="utf-8")
+    os.replace(tmp, current)
+
+
+def _version_id(parent_manifest_sha256: str, new_payloads: list[dict]) -> str:
+    blob = canonical_json(
+        {
+            "parent": parent_manifest_sha256,
+            "findings": sorted(new_payloads, key=lambda p: p["id"]),
+        }
+    )
+    return "v_" + hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
 def promote_grounded_findings(
     *,
     repo: Path,
@@ -60,8 +166,9 @@ def promote_grounded_findings(
     oracle_dir: Path,
     trusted_helpers: list[str],
     checker_relpath: str,
+    review_path: Path | None = None,
 ) -> dict:
-    """Attempt transactional promotion. Returns a result object (never label-trusts)."""
+    """Append-only promote. Publication commit point = active manifest replace."""
     errors = validate_review(review)
     if errors:
         raise ValueError("review invalid: " + "; ".join(errors))
@@ -72,6 +179,12 @@ def promote_grounded_findings(
     if not evidence_path.is_file():
         raise FileNotFoundError("frozen primitive evidence missing")
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+    review_digest = (
+        file_sha256(review_path)
+        if review_path and review_path.is_file()
+        else digest_text(canonical_json(review))
+    )
 
     decisions = []
     to_promote = []
@@ -88,30 +201,40 @@ def promote_grounded_findings(
             "reason": "no_promotable_findings",
         }
 
-    # Mutant gate: allowlisted replay must reject a known bad candidate.
     if not mutant_fails_out_of_range(evidence):
         raise RuntimeError("allowlisted replay failed mutant detection gate")
 
-    versions = oracle_dir / "oracle_versions"
-    versions.mkdir(parents=True, exist_ok=True)
-    prior_version = 0
-    current = oracle_dir / "CURRENT"
-    if current.is_file():
-        prior_version = int(current.read_text(encoding="utf-8").strip().lstrip("v") or "0")
-    new_version = prior_version + 1
-    version_name = f"v{new_version}"
-    staging = versions / f".staging-{version_name}"
-    if staging.exists():
-        shutil.rmtree(staging)
-    staging.mkdir(parents=True)
-    reg_dir = staging / "regressions"
-    reg_dir.mkdir()
+    parent_manifest = _active_manifest(oracle_dir)
+    parent_sha = digest_manifest(parent_manifest) if parent_manifest else "none"
+    parent_version = (
+        parent_manifest.get("oracle_version_name") if parent_manifest else None
+    )
+    ancestry = _ancestry_digests(oracle_dir, parent_manifest)
+    active_regs = _load_regression_index(oracle_dir, parent_manifest)
 
+    new_payloads: list[dict] = []
+    already: list[str] = []
     for finding in to_promote:
+        digest = finding_content_digest(finding, review_digest=review_digest)
+        fid = finding["id"]
+        if digest in ancestry:
+            already.append(digest)
+            continue
+        if f"id:{fid}" in ancestry or fid in active_regs:
+            existing = active_regs.get(fid) or {}
+            prior = existing.get("finding_content_digest")
+            if prior and prior != digest:
+                raise ValueError(
+                    f"finding id collision for {fid}: content differs from active oracle"
+                )
+            already.append(digest)
+            continue
         binding = finding["binding"]
         payload = {
             "schema": "eu4-promoted-regression/v1",
-            "id": finding["id"],
+            "id": fid,
+            "finding_content_digest": digest,
+            "review_digest": review_digest,
             "replay_id": binding["replay_id"],
             "observation": binding["observation"],
             "expected": binding["expected"],
@@ -121,43 +244,73 @@ def promote_grounded_findings(
             "sequence": binding.get("sequence") or ["load_candidate", "compare_obs"],
             "promoted_from_review_candidate": review.get("candidate_commit"),
         }
-        (reg_dir / f"{finding['id']}.json").write_text(
-            canonical_json(payload), encoding="utf-8"
-        )
+        new_payloads.append(payload)
 
-    # Copy evidence into version for self-contained oracle
-    shutil.copy2(evidence_path, staging / "primitive-table.evidence.json")
-
-    members = []
-    for rel in trusted_helpers:
-        members.append(member_from_file(repo, rel, "trusted_helper"))
-    members.append(member_from_file(repo, checker_relpath, "checker"))
-    members.append(
-        member_from_file(
-            repo,
-            str((staging / "primitive-table.evidence.json").relative_to(repo))
-            if staging.is_relative_to(repo)
-            else str(staging / "primitive-table.evidence.json"),
-            "frozen_oracle",
-        )
-    )
-    # Prefer relative paths under oracle_dir for regressions once published
-    published = versions / version_name
-    if published.exists():
-        # Idempotent: already published this version name
+    if not new_payloads:
+        # All findings already applied — reuse active version
+        version = parent_version or "v0"
+        if parent_manifest:
+            _repair_current(oracle_dir, version)
         return {
             "promoted": True,
-            "oracle_version": version_name,
+            "oracle_version": version,
             "decisions": decisions,
             "reused": True,
-            "manifest_sha256": digest_manifest(
-                load_manifest(oracle_dir / "verification-manifest.json")
+            "manifest_sha256": parent_sha if parent_manifest else "",
+            "already_applied": already,
+            "version_manifest_path": (
+                parent_manifest.get("version_manifest_path")
+                if parent_manifest
+                else None
             ),
         }
 
-    # Build manifest against final published paths: move staging → published first
+    versions = oracle_dir / "oracle_versions"
+    versions.mkdir(parents=True, exist_ok=True)
+    version_name = _version_id(parent_sha, new_payloads)
+    published = versions / version_name
+    staging = versions / f".staging-{version_name}"
+
+    # Recovery: unpublished complete version already on disk
+    if published.is_dir() and (published / "regressions").is_dir():
+        # Build/replace tip manifest pointing at it if needed
+        tip = _active_manifest(oracle_dir)
+        if tip and tip.get("oracle_version_name") == version_name:
+            _repair_current(oracle_dir, version_name)
+            return {
+                "promoted": True,
+                "oracle_version": version_name,
+                "decisions": decisions,
+                "reused": True,
+                "manifest_sha256": digest_manifest(tip),
+            }
+
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True)
+    reg_dir = staging / "regressions"
+    reg_dir.mkdir()
+
+    # Copy prior regressions (append-only ancestry materialization)
+    if parent_version:
+        prior_root = _version_dir(oracle_dir, parent_version) / "regressions"
+        if prior_root.is_dir():
+            for path in prior_root.glob("*.json"):
+                shutil.copy2(path, reg_dir / path.name)
+
+    for payload in new_payloads:
+        (reg_dir / f"{payload['id']}.json").write_text(
+            canonical_json(payload), encoding="utf-8"
+        )
+
+    shutil.copy2(evidence_path, staging / "primitive-table.evidence.json")
+
+    # 1→2: rename staging to final content-addressed path
+    if published.exists():
+        shutil.rmtree(published)
     staging.rename(published)
-    # Fix member paths for published regressions
+
+    # 3: build manifest against final published paths only
     members = []
     for rel in trusted_helpers:
         members.append(member_from_file(repo, rel, "trusted_helper"))
@@ -165,53 +318,64 @@ def promote_grounded_findings(
     members.append(
         member_from_file(
             repo,
-            str((oracle_dir / "primitive-table.evidence.json").relative_to(repo)),
+            str((oracle_dir / "primitive-table.evidence.json").relative_to(repo))
+            if (oracle_dir / "primitive-table.evidence.json").is_relative_to(repo)
+            else str(oracle_dir / "primitive-table.evidence.json"),
             "frozen_oracle",
         )
     )
-    members.append(
-        member_from_file(
-            repo,
-            "automation/replay_primitive.py",
-            "trusted_helper",
-        )
-    )
-    for path in sorted((published / "regressions").glob("*.json")):
+    if "automation/replay_primitive.py" not in trusted_helpers:
         members.append(
-            member_from_file(repo, str(path.relative_to(repo)), "regression")
+            member_from_file(repo, "automation/replay_primitive.py", "trusted_helper")
         )
+    for path in sorted((published / "regressions").glob("*.json")):
+        rel = (
+            str(path.relative_to(repo))
+            if path.is_relative_to(repo)
+            else str(path)
+        )
+        members.append(member_from_file(repo, rel, "regression"))
 
-    parent_manifest = None
-    if (oracle_dir / "verification-manifest.json").is_file():
-        parent_manifest = load_manifest(oracle_dir / "verification-manifest.json")
-
+    version_rel = (
+        str(published.relative_to(repo))
+        if published.is_relative_to(repo)
+        else str(published)
+    )
+    version_manifest_rel = f"{version_rel}/verification-manifest.json"
     manifest = build_manifest(
         members=members,
         extra={
-            "oracle_version": new_version,
             "oracle_version_name": version_name,
+            "oracle_version_dir": version_rel,
+            "version_manifest_path": version_manifest_rel,
             "promoted_from_review_candidate": review.get("candidate_commit"),
-            "parent_manifest_sha256": (
-                digest_manifest(parent_manifest) if parent_manifest else None
-            ),
+            "parent_manifest_sha256": parent_sha if parent_manifest else None,
+            "parent_oracle_version_name": parent_version,
         },
     )
     errs = verify_manifest(repo, manifest)
     if errs:
-        # Roll back published version directory
-        shutil.rmtree(published, ignore_errors=True)
         raise RuntimeError("promoted manifest invalid: " + "; ".join(errs))
 
-    # Atomic publish: write manifest temp then replace; then CURRENT pointer
-    save_manifest(oracle_dir / "verification-manifest.json", manifest)
-    tmp_current = oracle_dir / "CURRENT.tmp"
-    tmp_current.write_text(version_name + "\n", encoding="utf-8")
-    os.replace(tmp_current, current)
+    # 4: atomic tip publish (commit point)
+    tip = oracle_dir / "verification-manifest.json"
+    tmp = oracle_dir / "verification-manifest.json.tmp"
+    text = canonical_json(manifest)
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, tip)
+
+    # Immutable per-version snapshot for campaign pins (bytes match tip)
+    version_manifest_path = published / "verification-manifest.json"
+    version_manifest_path.write_text(text, encoding="utf-8")
+
+    # 5: convenience CURRENT mirror
+    _repair_current(oracle_dir, version_name)
 
     return {
         "promoted": True,
         "oracle_version": version_name,
         "decisions": decisions,
         "reused": False,
-        "manifest_sha256": digest_manifest(manifest),
+        "manifest_sha256": digest_text(text),
+        "version_manifest_path": version_manifest_rel,
     }

@@ -19,6 +19,8 @@ test_build_report_writes_candidates/
 
 # Local fixtures (not tracked; see results/README.md)
 fixtures/
+!tests/fixtures/
+!tests/fixtures/**
 
 # E2 pinned RE1 production harness (see docs/oracle/audits/E2.md)
 !tests/oracle_certify_acceptance/fixtures/
