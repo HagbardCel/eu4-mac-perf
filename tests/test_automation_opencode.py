@@ -1,4 +1,4 @@
-"""Offline HTTP tests for the verified OpenCode 2.2.5 shapes."""
+"""Offline HTTP tests for the OpenCode V2 shapes generated against 2.2.5."""
 
 from __future__ import annotations
 

@@ -18,9 +18,11 @@ Offline tests, with no model and no server:
 PYTHONPATH=benchmark:. python3 -m unittest discover -s tests -p 'test_automation_*.py'
 ```
 
-## Verified server
+## Generated against
 
-Preflighted against the installed binary `opencode v2.2.5`. Its OpenAPI is `GET /openapi.json`. There is no JSON health route; `GET /global/health` is the web UI. This adapter only speaks the V2 routes below, and only when `opencode_version` in the campaign file is `2.2.5`.
+The request and response shapes below were generated against the installed binary `opencode v2.2.5`, and that build is recorded in the campaign's `opencode_version`. The version is **not** enforced: any build is accepted, and a live run on a different one should be re-preflighted against its `GET /openapi.json` first. There is no JSON health route; `GET /global/health` is the web UI.
+
+The adapter sends no credentials. Note that `opencode serve` on 2.2.5 and 2.2.6 always generates a server password and requires HTTP Basic auth, with no option to disable it. Pointing the runner at `serve` from those builds therefore returns `401` (recorded as `runtime_unavailable`); it needs a server that does not require auth.
 
 - `POST /api/session` with `location.directory`, `model` (`providerID` + `id`), and `permissions`. The returned directory must match the live workspace or the run stops.
 - `POST /api/session/{id}/prompt` with a caller-supplied `msg_…` id. A second post of the same id returned the existing admission during preflight; `409` is treated as that same id, not a new prompt.
@@ -46,7 +48,7 @@ On the first live session, a ruleset that denied `read` of `*` rejected `read` o
 
 ## Live session
 
-`integration: verified` against OpenCode 2.2.5 and `opencode/big-pickle` on 3 Nov 2026.
+`integration: verified` against OpenCode 2.2.5 and `opencode/big-pickle` on 3 Nov 2026. That is the build the behaviour below was observed on, not a version gate.
 
 The tracked campaign [campaigns/automation-smoke/campaign.json](../campaigns/automation-smoke/campaign.json) completed in two checker rounds. The first returned `fail` because the checker always fails once. The second returned `pass` after `marker.txt` was `ready`. The recorded model was `opencode/big-pickle`. That run used an earlier ruleset that denied relative `read` calls.
 

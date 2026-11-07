@@ -33,7 +33,7 @@ from automation.handoff import (
     write_synthetic_rejection,
     load_reviewer_receipt,
 )
-from automation.opencode import VERIFIED_VERSION, OpenCodeAgent
+from automation.opencode import OBSERVED_VERSION, OpenCodeAgent
 from automation.runner import Runner
 from automation.state import load_campaign, repo_root
 from automation.verification_manifest import file_sha256
@@ -427,7 +427,7 @@ def materialize_reviewer_campaign(
         "objective": "objective.md",
         "runtime": "opencode",
         "model": load_campaign(campaign_path).model,
-        "opencode_version": VERIFIED_VERSION,
+        "opencode_version": OBSERVED_VERSION,
         "workspace": {
             "mode": "worktree",
             "path": str(worktree.relative_to(repo))
@@ -485,8 +485,6 @@ def run_opencode(workflow_path: Path, campaign_path: Path) -> int:
             path = build_remediation_campaign(repo, campaign_path, state)
         pin_qualification_env(repo, state, oracle)
         campaign = load_campaign(path)
-        if campaign.opencode_version != VERIFIED_VERSION:
-            raise RuntimeError("unsupported opencode version")
         agent = OpenCodeAgent(
             os.environ.get("OPENCODE_URL", "http://127.0.0.1:4096"),
             timeout=float(os.environ.get("OPENCODE_TIMEOUT", "120")),

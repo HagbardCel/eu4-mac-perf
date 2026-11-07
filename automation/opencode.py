@@ -1,7 +1,9 @@
-"""OpenCode 2.2.5 V2 HTTP adapter.
+"""OpenCode V2 HTTP adapter.
 
-Verified against the local server's ``/openapi.json`` (binary ``opencode v2.2.5``).
-That spec has no JSON health route; ``GET /global/health`` is the web UI.
+Generated against the local server's ``/openapi.json`` (binary ``opencode v2.2.5``).
+That build is recorded, not enforced: any version is accepted, but a different
+build should be re-preflighted against its ``/openapi.json`` before trusting a
+live run. That spec has no JSON health route; ``GET /global/health`` is the web UI.
 Settlement is the inbox, the active list, and a later idle message. The
 experimental wait route is not called: a 204 arrived while work was still queued.
 """
@@ -17,7 +19,8 @@ from pathlib import Path
 
 from automation.agents import ContractError, History, Observation
 
-VERIFIED_VERSION = "2.2.5"
+# Server build the request/response shapes below were generated against.
+OBSERVED_VERSION = "2.2.5"
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 _TERMINAL = {"succeeded", "failed", "interrupted"}
 _HISTORY_PAGES = 100
