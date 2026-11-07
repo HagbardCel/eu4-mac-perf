@@ -29,6 +29,7 @@ class Campaign:
     max_rounds: int
     max_seconds: float
     accept_timeout: float
+    verification_manifest: Path | None = None
 
 
 def load_campaign(path: Path) -> Campaign:
@@ -49,6 +50,13 @@ def load_campaign(path: Path) -> Campaign:
     root = path.parent
     checker = _checker_file(root, data["accept"])
     seed, worktree, commit = _workspace(root, data["workspace"])
+    manifest = None
+    raw_manifest = data.get("verification_manifest")
+    if raw_manifest:
+        candidate = Path(str(raw_manifest))
+        if not candidate.is_absolute():
+            candidate = (root / candidate).resolve()
+        manifest = candidate
     return Campaign(
         id=str(data["id"]),
         root=root,
@@ -64,6 +72,7 @@ def load_campaign(path: Path) -> Campaign:
         max_rounds=int(data["max_rounds"]),
         max_seconds=float(data["max_seconds"]),
         accept_timeout=float(data["accept_timeout_seconds"]),
+        verification_manifest=manifest,
     )
 
 
