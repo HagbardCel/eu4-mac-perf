@@ -4,13 +4,14 @@ One OpenCode session, an external checker, and files under `.local/automation/` 
 
 ```sh
 OPENCODE_URL=http://127.0.0.1:4096 \
+OPENCODE_PASSWORD=local-secret \
 python3 -m automation.cli run campaigns/automation-smoke/campaign.json
 python3 -m automation.cli resume campaigns/automation-smoke/campaign.json
 python3 -m automation.cli status campaigns/automation-smoke/campaign.json
 python3 -m automation.cli report campaigns/automation-smoke/campaign.json
 ```
 
-`run` creates or continues. `resume` fails when there is no state file. The server must already be running on a loopback address (`opencode serve --hostname 127.0.0.1`). The adapter sends no credentials and expects no authentication.
+`run` creates or continues. `resume` fails when there is no state file. The server must already be running on a loopback address (`OPENCODE_PASSWORD=local-secret opencode serve --hostname 127.0.0.1 --port 4096`), and the runner is given the same password.
 
 Offline tests, with no model and no server:
 
@@ -22,7 +23,14 @@ PYTHONPATH=benchmark:. python3 -m unittest discover -s tests -p 'test_automation
 
 The request and response shapes below were generated against the installed binary `opencode v2.2.5`, and that build is recorded in the campaign's `opencode_version`. The version is **not** enforced: any build is accepted, and a live run on a different one should be re-preflighted against its `GET /openapi.json` first. There is no JSON health route; `GET /global/health` is the web UI.
 
-The adapter sends no credentials. Note that `opencode serve` on 2.2.5 and 2.2.6 always generates a server password and requires HTTP Basic auth, with no option to disable it. Pointing the runner at `serve` from those builds therefore returns `401` (recorded as `runtime_unavailable`); it needs a server that does not require auth.
+`opencode serve` always requires HTTP Basic auth and generates a password when none is supplied (`OPENCODE_PASSWORD=""` does not disable it). Start it with a fixed, dedicated password and give the runner the same value:
+
+```sh
+OPENCODE_PASSWORD=local-secret opencode serve --hostname 127.0.0.1 --port 4096
+OPENCODE_PASSWORD=local-secret python3 -m automation.handoff_cli run-opencode <workflow.json> <campaign.json>
+```
+
+The adapter sends `Authorization: Basic opencode:<password>` only when `OPENCODE_PASSWORD` is set; with no password it sends no header and a `401` pauses as `runtime_unavailable`. Keep the server on loopback: the server, and any shell an agent runs through it, can read that environment variable.
 
 - `POST /api/session` with `location.directory`, `model` (`providerID` + `id`), and `permissions`. The returned directory must match the live workspace or the run stops.
 - `POST /api/session/{id}/prompt` with a caller-supplied `msg_…` id. A second post of the same id returned the existing admission during preflight; `409` is treated as that same id, not a new prompt.
@@ -70,7 +78,7 @@ The shared checker requires a detached worktree at the pinned commit, pinned `be
 - Smoke campaign: `campaigns/eu4-a01-trusted-validation/` — checker reads the **workspace** candidate at `analysis/qualification/v0/primitive-lookup.candidate.json`; oracle/manifest stay trusted and re-hashed.
 - Outer loop CLI:
   - `python3 -m automation.handoff_cli run-scripted <workflow.json>` — deterministic two-defect A→B path for **portable tests** (synthetic fixture oracle under the workflow dir; not independent agent review).
-  - `python3 -m automation.handoff_cli run-opencode <workflow.json> <campaign.json>` — real OpenCode implementer **and** reviewer sessions. No synthetic reviewer fallback. The adapter sends no credentials.
+  - `python3 -m automation.handoff_cli run-opencode <workflow.json> <campaign.json>` — real OpenCode implementer **and** reviewer sessions. No synthetic reviewer fallback. Authenticates with `OPENCODE_PASSWORD` when set.
 - Reviewer campaign: `campaigns/eu4-a02-reviewer/` — report path is `EU4_REVIEW_REPORT_PATH` **outside** the candidate worktree; accept returns `pass` when the review operation finished (any outcome). Controller consumes `qualified|rejected|unresolved`.
 - Promotion is append-only and content-addressed: version directory is published before the tip manifest replace; already-applied finding digests prevent duplicate promote after crash; `CURRENT` is a convenience mirror of the tip manifest.
 - Candidate snapshots are full baseline trees (`read-tree` pin + allowlisted overlay) parented on `pin_commit`.

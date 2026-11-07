@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import threading
@@ -16,6 +17,7 @@ from automation.opencode import OpenCodeAgent, permission_rules
 
 class App:
     def __init__(self) -> None:
+        self.authorization = None
         self.directory = ""
         self.force_directory = None
         self.model = {"providerID": "opencode", "id": "big-pickle"}
@@ -47,6 +49,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle(self) -> None:
         app: App = self.server.app  # type: ignore[attr-defined]
+        app.authorization = self.headers.get("Authorization")
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b""
         body = json.loads(raw) if raw else {}
@@ -175,6 +178,17 @@ class OpenCodeHttpTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             OpenCodeAgent(
                 "http://example.com", timeout=1, model="opencode/big-pickle")
+
+    def test_sends_basic_auth_when_a_password_is_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.agent(password="local-secret").create(Path(temporary), "hello")
+            expected = base64.b64encode(b"opencode:local-secret").decode()
+            self.assertEqual(self.app.authorization, "Basic " + expected)
+
+    def test_no_authorization_header_without_a_password(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.agent().create(Path(temporary), "hello")
+            self.assertIsNone(self.app.authorization)
 
     def test_rejects_a_different_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

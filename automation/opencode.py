@@ -10,6 +10,7 @@ experimental wait route is not called: a 204 arrived while work was still queued
 
 from __future__ import annotations
 
+import base64
 import json
 import socket
 import urllib.error
@@ -31,7 +32,8 @@ class TransportError(RuntimeError):
 
 
 class OpenCodeAgent:
-    def __init__(self, base_url: str, *, timeout: float, model: str):
+    def __init__(self, base_url: str, *, timeout: float, model: str,
+                 password: str | None = None):
         _require_loopback(base_url)
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -40,6 +42,9 @@ class OpenCodeAgent:
         self.protected_root: Path | None = None
         self.allow_skill = False
         self._headers = {"Accept": "application/json"}
+        if password:
+            token = base64.b64encode(f"opencode:{password}".encode()).decode()
+            self._headers["Authorization"] = "Basic " + token
 
     def create(self, workspace: Path, prompt: str) -> str:
         workspace = workspace.resolve()

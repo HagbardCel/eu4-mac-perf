@@ -487,6 +487,7 @@ def run_opencode(workflow_path: Path, campaign_path: Path) -> int:
         campaign = load_campaign(path)
         agent = OpenCodeAgent(
             os.environ.get("OPENCODE_URL", "http://127.0.0.1:4096"),
+            password=os.environ.get("OPENCODE_PASSWORD"),
             timeout=float(os.environ.get("OPENCODE_TIMEOUT", "120")),
             model=campaign.model,
         )
@@ -582,6 +583,7 @@ def run_opencode(workflow_path: Path, campaign_path: Path) -> int:
         campaign = load_campaign(camp_path)
         agent = OpenCodeAgent(
             os.environ.get("OPENCODE_URL", "http://127.0.0.1:4096"),
+            password=os.environ.get("OPENCODE_PASSWORD"),
             timeout=float(os.environ.get("OPENCODE_TIMEOUT", "120")),
             model=campaign.model,
         )
