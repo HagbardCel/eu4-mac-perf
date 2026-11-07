@@ -1,0 +1,48 @@
+{
+  "schema": "eu4-gfx-shader-prerequisites/v0",
+  "supported_path": "CEU3Graphics::ShowBasicLoadText loading-screen branch → _GfxDraw @ 0xedfcd1",
+  "scope_control": {
+    "essential_bounded": true,
+    "essential_count": 4,
+    "reassess_p52b_if_expanded": true,
+    "note": "Essential set is the Simple effect plus draw resources for this callsite. Do not expand P5.2b into a general effect-library migration."
+  },
+  "entries": [
+    {
+      "id": "effect-simple",
+      "name": "gfx/FX/simple.lua technique Simple",
+      "classification": "essential",
+      "evidence": "AddSimpleEffect → AddGfxEffect(simple.lua, Simple) writes CEU3Graphics+0x2c660; ShowBasicLoadText GetGfxEffect reads that index then SetShader(*(effect+0))"
+    },
+    {
+      "id": "loading-screen-texture",
+      "name": "CEU3Graphics+0x2c650 loading-screen texture",
+      "classification": "essential",
+      "evidence": "LoadLoadingScreens creates texture via GfxCreateTexture into +0x2c650; ShowBasicLoadText calls _GfxSetTextures when non-null; Simple pixel shader samples SimpleTexture"
+    },
+    {
+      "id": "simple-constant-buffer",
+      "name": "CEU3Graphics+0x2c670 constant buffer (Matrix / UNIFORM0[4])",
+      "classification": "essential",
+      "evidence": "LoadLoadingScreens creates 0x40-byte constant buffer; ShowBasicLoadText Update/SetConstantBuffer slot 2 before draw"
+    },
+    {
+      "id": "simple-vertex-buffer",
+      "name": "CEU3Graphics+0x2c668 vertex buffer",
+      "classification": "essential",
+      "evidence": "LoadLoadingScreens GfxCreateVertexBuffer into +0x2c668; ShowBasicLoadText GfxSetVertexBuffers before draw"
+    },
+    {
+      "id": "effect-simple3d",
+      "name": "gfx/FX/simple.lua technique Simple3D",
+      "classification": "deferrable",
+      "evidence": "AddSimpleEffect also constructs Simple3D; LoadLoadingScreens writes that handle only to a stack temporary unused by ShowBasicLoadText"
+    },
+    {
+      "id": "other-init-effects",
+      "name": "Other effects constructed during CGraphics / game graphics init",
+      "classification": "unresolved",
+      "evidence": "CreateEffectFromFileNew soft-fails on Add* failure (logs, continues). Full essential set for a later qualifying Decision 0003 draw beyond this callsite is not closed offline. Do not assume only Simple is constructed."
+    }
+  ]
+}

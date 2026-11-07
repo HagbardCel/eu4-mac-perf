@@ -1,0 +1,73 @@
+{
+  "schema": "eu4-gfx-shader-lifecycle/v0",
+  "functions": {
+    "_GfxCreateShader": {
+      "rva": "0x15eae97",
+      "disposition": "replace-metal",
+      "evidence": "Already registered; allocates 0x78 object. Original stores glCreateProgram name at +0 via glew. Metal-only path cannot leave CreateProgram as original."
+    },
+    "_GfxAddVertexShader": {
+      "rva": "0x15eafae",
+      "disposition": "replace-metal",
+      "evidence": "Already registered as failure stub. Original compiles/attaches GL vertex shader; required for Simple VertexShaderSimple construction."
+    },
+    "_GfxAddPixelShader": {
+      "rva": "0x15eb425",
+      "disposition": "replace-metal",
+      "evidence": "Already registered as failure stub. Original compiles/attaches GL pixel shader; required for Simple PixelShaderSimple construction."
+    },
+    "_GfxLinkShader": {
+      "rva": "0x15eb884",
+      "disposition": "replace-metal",
+      "evidence": "Forwards to SShaderOpenGL::LinkProgram (OpenGL-dependent). Invoked from CreateEffectFromFileNew after Add*. Not registered today. Cannot remain original in Metal-only process on the supported construction path."
+    },
+    "_GfxSetShader": {
+      "rva": "0x15ebbb0",
+      "disposition": "replace-metal",
+      "evidence": "Called from ShowBasicLoadText before _GfxDraw. Original calls SShaderOpenGL::SetAll and writes master+0x70 / dirty flags. OpenGL-dependent; on the supported draw path."
+    },
+    "_GfxDestroyShader": {
+      "rva": "0x15ebb1c",
+      "disposition": "replace-metal",
+      "evidence": "Calls SShaderOpenGL::UnloadAll then operator.delete. OpenGL-dependent teardown; required for lifetime-safe Metal registry cleanup when effects are destroyed."
+    }
+  },
+  "broader_callees": [
+    {
+      "name": "_GfxBuildAndAddVertexShader",
+      "role": "calls BuildGLSL then _GfxAddVertexShader",
+      "note": "Still original; BuildGLSL issues glGetString(GL_VENDOR). P5.2b must address vendor/capability queries or feed reconstructed sources without OpenGL."
+    },
+    {
+      "name": "_GfxBuildAndAddPixelShader",
+      "role": "pixel twin of BuildAndAddVertex"
+    },
+    {
+      "name": "BuildGLSL",
+      "role": "preprocessor / define expansion before Add*",
+      "note": "Unresolved exact define set; blocks statically_determined compiler-input identity"
+    },
+    {
+      "name": "SShaderOpenGL::LinkProgram",
+      "role": "callee of _GfxLinkShader"
+    },
+    {
+      "name": "SShaderOpenGL::SetAll",
+      "role": "callee of _GfxSetShader"
+    },
+    {
+      "name": "SShaderOpenGL::UnloadAll",
+      "role": "callee of _GfxDestroyShader"
+    },
+    {
+      "name": "_GfxSetConstantBuffer",
+      "role": "CPU slot + dirty byte; reconstructed dossier reusable",
+      "note": "retain-original / already reconstructed elsewhere; draw path uses slot 2"
+    }
+  ],
+  "logical_link_vs_pso": {
+    "logical_link": "P5.2b — engine-visible stage interface and success/failure",
+    "mtl_render_pipeline_state": "P5.2c — may require vertex layout and attachment formats",
+    "note": "Metal does not perform GLSL-style glLinkProgram"
+  }
+}
