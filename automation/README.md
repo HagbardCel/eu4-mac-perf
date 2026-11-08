@@ -111,6 +111,51 @@ records at most `--max-events` completed observations, keeps observing for
 `--duration` seconds after the first matching invocation, and terminates only
 the process it launched. `--timeout` is the total launch and capture deadline.
 
+### L3.2a draw probe
+
+`_GfxDraw` and `_GfxSetPrimitiveType` are registered passive targets. The draw
+probe stops on the first qualifying Decision 0003 invocation rather than on a
+duration or event quota:
+
+```sh
+python3 -m automation.live_gfx capture \
+  --target _GfxDraw --target _GfxSetPrimitiveType \
+  --until-target-draw --caller-rva 0xedfcd1 --timeout 120 \
+  --output .local/gfx-captures/simple-draw-probe --authorize-live
+
+python3 -m automation.live_gfx packet \
+  --capture .local/gfx-captures/simple-draw-probe \
+  --output .local/gfx-packets/simple-draw-probe
+```
+
+The qualifying predicate is the caller return RVA, a complete 0x171-byte
+master read, a non-null shader at `master+0x70`, GL mode 5 at `master+8`, and
+an effective count of at least 3 (`esi` when positive, otherwise the signed
+dword at `master+0x64`). Non-qualifying draws are recorded or aggregated, not
+silently promoted.
+
+`--until-target-draw` selects `retention=state`: the observer still runs every
+selected callback, but only retained records consume the 1,024-record array.
+Caller-matching draws are retained (64-draw cap), the first eight other draws
+are retained as diagnostics, and the remaining draws update summary aggregates
+only. Resource and primitive observations can be folded into bounded state by
+later targets without exhausting the historical record budget.
+
+Capture statuses are distinct:
+
+| Status | Meaning |
+| --- | --- |
+| `complete` | sealed, integrity ok, qualifying draw retained |
+| `draw_not_qualified` | sealed and valid, but no qualifying draw |
+| `budget_exhausted` | a retention/payload bound prevented completion; never `packet_ready` |
+| `unavailable` | unsealed, integrity failure, or reader failure |
+
+The packet carries the capture's session, PID, executable SHA and image base.
+L3.2a is expected to be `incomplete`: shader identity/sources, vertex contents
+and layout, texture and sampler, constants, render state and scissor are
+reported missing rather than invented. `packet_ready` is true only when every
+required input is established.
+
 ### Campaign launch accounting
 
 Campaign JSON may declare:

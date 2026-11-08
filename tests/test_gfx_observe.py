@@ -232,6 +232,97 @@ class ObserveHostTests(unittest.TestCase):
             self.assertTrue(self._events(directory)[0]["overlap"])
 
 
+    def test_draw_qualified_capture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-draw-qualified", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            events = self._events(directory)
+            self.assertEqual(len(events), 1)
+            draw = events[0]
+            self.assertEqual(draw["kind"], "draw")
+            self.assertEqual(draw["mode"], 5)
+            self.assertEqual(draw["effective_count"], 4)
+            self.assertEqual(draw["raw_count"], 0)
+            self.assertEqual(draw["primitive_enum"], 4)
+            self.assertTrue(draw["qualified"])
+            self.assertEqual(draw["payload"]["size"], 0x171)
+            summary = self._summary(directory)
+            self.assertTrue(summary["target_draw_qualified"])
+            self.assertEqual(summary["retention"], "state")
+            self.assertEqual(summary["stop_policy"], "target_draw")
+            self.assertEqual(summary["observed"], 2)
+            self.assertEqual(summary["events"], 1)
+            self.assertEqual(summary["primitive_sets"], 1)
+            self.assertEqual(summary["draw_modes"][5], 1)
+
+    def test_draw_insufficient_then_qualified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-draw-two", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            events = self._events(directory)
+            self.assertEqual(len(events), 2)
+            self.assertFalse(events[0]["qualified"])
+            self.assertTrue(events[1]["qualified"])
+            self.assertEqual(events[0]["effective_count"], 2)
+            self.assertEqual(events[1]["effective_count"], 4)
+            summary = self._summary(directory)
+            self.assertEqual(summary["draw_observed"], 2)
+            self.assertEqual(summary["draw_qualified"], 1)
+
+    def test_draw_nonqualified_and_caller_filter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-draw-none", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            summary = self._summary(directory)
+            self.assertFalse(summary["target_draw_qualified"])
+            self.assertEqual(summary["draw_at_caller"], 1)
+            self.assertEqual(summary["draw_qualified"], 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-draw-caller", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            events = self._events(directory)
+            self.assertFalse(events[0]["caller_match"])
+            self.assertFalse(events[0]["qualified"])
+            summary = self._summary(directory)
+            self.assertFalse(summary["target_draw_qualified"])
+            self.assertEqual(summary["draw_at_caller"], 0)
+
+    def test_draw_mode_mismatch_and_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-draw-mode", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            events = self._events(directory)
+            self.assertEqual(events[0]["mode"], 4)
+            self.assertFalse(events[0]["qualified"])
+            summary = self._summary(directory)
+            self.assertEqual(summary["draw_modes"][4], 1)
+            self.assertFalse(summary["target_draw_qualified"])
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-draw-budget", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            summary = self._summary(directory)
+            self.assertTrue(summary["retention_budget_exhausted"])
+            self.assertFalse(summary["target_draw_qualified"])
+            self.assertEqual(summary["events"], 65)
+
+    def test_state_retention_does_not_consume_record_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-draw-retention", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            summary = self._summary(directory)
+            self.assertEqual(summary["retention"], "state")
+            self.assertGreaterEqual(summary["observed"], 2001)
+            self.assertEqual(summary["events"], 1)
+            self.assertTrue(summary["target_draw_qualified"])
+            self.assertFalse(summary["retention_budget_exhausted"])
+
 class CaptureReaderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -272,6 +363,23 @@ class CaptureReaderTests(unittest.TestCase):
             self.assertEqual(len(artifact.operations), 2)
             self.assertEqual(artifact.coverage["distinct_inputs"], 2)
             self.assertEqual(artifact.operations[0].input_words[0], 1920)
+
+    def test_accepts_host_draw_capture_for_packet(self):
+        import eu4_gfx_draw_packet as packet
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = self._artifact(Path(tmp), "observe-draw-qualified")
+            artifact = capture.load_capture(directory, require_events=False)
+            caller = artifact.op_summary["target_draw_caller"]
+            built = packet.build_packet(directory, expected_caller=caller)
+            self.assertEqual(built["status"], "incomplete")
+            self.assertFalse(built["packet_ready"])
+            self.assertEqual(built["target"]["effective_count"], 4)
+            self.assertEqual(built["target"]["mode"], 5)
+            output = Path(tmp) / "packet"
+            packet.write_packet(directory, output, expected_caller=caller)
+            written = json.loads((output / "draw-packet.json").read_text())
+            self.assertIn("shader_identity", written["missing"])
 
     def test_rejects_removed_observation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -338,6 +446,44 @@ class PreflightObserveTests(unittest.TestCase):
         self.assertEqual(evidence["ops"][0]["symbol"], "_GfxSetViewPort")
         self.assertEqual(evidence["ops"][0]["prefix"], "554889e5f30f6f06")
         self.assertEqual(evidence["ops"][0]["rva"], "0x15ea4f8")
+
+    def test_accepts_draw_probe_targets_and_caller(self):
+        mapper = MagicMock()
+        prefixes = {
+            0x15EA789: bytes.fromhex("554889e54157"),
+            0x15EA76F: bytes.fromhex("554889e553"),
+            0xEDFCD1: bytes.fromhex("554889e54157"),
+        }
+        mapper.__enter__.return_value.read_bytes_at_rva.side_effect = (
+            lambda _base, rva, length, _p=prefixes: _p[rva][:length]
+        )
+        with patch.object(
+            startup,
+            "preflight",
+            return_value={"executable_sha256": "a", "library_sha256": "b"},
+        ), patch.object(startup, "MachOMapper", return_value=mapper), patch.object(
+            startup.paths, "load_target", return_value={"image_base": 0x100000000}
+        ):
+            evidence = startup.preflight_ops(
+                ["_GfxDraw", "_GfxSetPrimitiveType"],
+                max_events=1024,
+                until_target_draw=True,
+                target_caller_rva=0xEDFCD1,
+            )
+        self.assertEqual(evidence["until_target_draw"], True)
+        self.assertEqual(evidence["target_caller_rva"], "0xedfcd1")
+        self.assertEqual(evidence["caller_site_hex"], "554889e54157")
+        self.assertEqual(evidence["ops"][0]["symbol"], "_GfxDraw")
+
+    def test_draw_probe_requires_draw_target_and_caller(self):
+        with self.assertRaises(startup.StartupError):
+            startup.preflight_ops(["_GfxSetPrimitiveType"],
+                                  until_target_draw=True,
+                                  target_caller_rva=0xEDFCD1)
+        with self.assertRaises(startup.StartupError):
+            startup.preflight_ops(["_GfxDraw"], until_target_draw=True)
+        with self.assertRaises(startup.StartupError):
+            startup.preflight_ops(["_GfxDraw"], target_caller_rva=0xEDFCD1)
 
 
 class ReplayOutputTests(unittest.TestCase):

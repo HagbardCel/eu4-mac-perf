@@ -1,0 +1,29 @@
+{
+  "schema": "live-gfx-capture-request/v0",
+  "session": "d5af7baf-cc1e-4def-a5f4-96e1d5325641",
+  "targets": [
+    {
+      "symbol": "_GfxDraw",
+      "rva": "0x15ea789",
+      "prefix": "554889e54157",
+      "length": 6,
+      "relocation": "safe"
+    },
+    {
+      "symbol": "_GfxSetPrimitiveType",
+      "rva": "0x15ea76f",
+      "prefix": "554889e553",
+      "length": 5,
+      "relocation": "safe"
+    }
+  ],
+  "max_events": 1024,
+  "duration_ms": 0,
+  "stop_policy": "target_draw",
+  "retention": "state",
+  "target_caller_rva": "0xedfcd1",
+  "caller_site_hex": "4889df31f6e8a7d3",
+  "timeout_s": 120.0,
+  "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "library_sha256": "dc5ca8c44bc7d00ade729c60b2b17140c06079914d023b52d9a35dba794676a9"
+}

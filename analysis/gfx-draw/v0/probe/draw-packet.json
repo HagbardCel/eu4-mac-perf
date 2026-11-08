@@ -1,0 +1,314 @@
+{
+  "schema": "gfx-draw-packet/v0",
+  "status": "incomplete",
+  "reason": "missing_inputs",
+  "packet_ready": false,
+  "target": {
+    "symbol": "_GfxDraw",
+    "rva": "0x15ea789",
+    "caller_rva": "0xedfcd1",
+    "qualified": true,
+    "invocation": {
+      "call_id": 4,
+      "completion_seq": 1,
+      "thread_id": 10792846
+    },
+    "mode": 5,
+    "raw_count": 0,
+    "first": 0,
+    "effective_count": 4,
+    "count_source": "master",
+    "shader_non_null": true,
+    "primitive_enum": 4,
+    "primitive_call_id": 3,
+    "master_sha256": "adeb931f2c57dfe4fb88d46084a1b19eae46424c80033ef6f16c52a6bbf0a227"
+  },
+  "inputs": {
+    "draw_invocation": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "draw_snapshot",
+          "call_id": 4,
+          "payload": "payloads/4-4.bin",
+          "sha256": "adeb931f2c57dfe4fb88d46084a1b19eae46424c80033ef6f16c52a6bbf0a227",
+          "size": 369
+        },
+        {
+          "type": "draw_record",
+          "call_id": 4,
+          "completion_seq": 1,
+          "thread_id": 10792846,
+          "caller_rva": 15596753
+        }
+      ]
+    },
+    "primitive_semantics": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "primitive_set",
+          "source": "draw meta (thread-local last primitive)",
+          "call_id": 3,
+          "primitive_enum": 4
+        },
+        {
+          "type": "static_table",
+          "path": "analysis/qualification/v0/primitive-table.evidence.json",
+          "engine_enum": 4,
+          "gl_mode": 5
+        }
+      ]
+    },
+    "viewport": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "draw_snapshot",
+          "call_id": 4,
+          "payload": "payloads/4-4.bin",
+          "sha256": "adeb931f2c57dfe4fb88d46084a1b19eae46424c80033ef6f16c52a6bbf0a227",
+          "size": 369
+        }
+      ],
+      "value": {
+        "words": [
+          1117,
+          1728,
+          1065353216,
+          0,
+          0,
+          0
+        ],
+        "gl_viewport": {
+          "x": 0,
+          "y": 0,
+          "width": 1728,
+          "height": 1117
+        }
+      }
+    },
+    "render_target": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "draw_snapshot",
+          "call_id": 4,
+          "payload": "payloads/4-4.bin",
+          "sha256": "adeb931f2c57dfe4fb88d46084a1b19eae46424c80033ef6f16c52a6bbf0a227",
+          "size": 369
+        }
+      ],
+      "assumptions": [
+        "default backbuffer format is project-derived BGRA8Unorm (P5.1 contract)",
+        "render-target contents before the draw are not captured in L3.2a"
+      ],
+      "value": {
+        "kind": "default_backbuffer",
+        "width": 1728,
+        "height": 1117,
+        "format": "BGRA8Unorm",
+        "format_evidence": "project_derived"
+      }
+    },
+    "vertex_buffer_bindings": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "draw_snapshot",
+          "call_id": 4,
+          "payload": "payloads/4-4.bin",
+          "sha256": "adeb931f2c57dfe4fb88d46084a1b19eae46424c80033ef6f16c52a6bbf0a227",
+          "size": 369
+        }
+      ],
+      "value": {
+        "slot_0_count": 4,
+        "slot_0_stride_word": 24,
+        "slots": [
+          {
+            "slot": 0,
+            "session_local_header": "0x60000125a750",
+            "offset": 0,
+            "stride": 24
+          }
+        ],
+        "identity": "session_local_only"
+      }
+    },
+    "shader_identity": {
+      "status": "missing",
+      "evidence": []
+    },
+    "shader_stage_sources": {
+      "status": "missing",
+      "evidence": []
+    },
+    "vertex_buffer_contents": {
+      "status": "missing",
+      "evidence": []
+    },
+    "vertex_attribute_layout": {
+      "status": "missing",
+      "evidence": []
+    },
+    "texture_slot_0_identity": {
+      "status": "missing",
+      "evidence": []
+    },
+    "texture_slot_0_contents": {
+      "status": "missing",
+      "evidence": []
+    },
+    "sampler_state": {
+      "status": "missing",
+      "evidence": []
+    },
+    "matrix_constant": {
+      "status": "missing",
+      "evidence": []
+    },
+    "render_state_blend": {
+      "status": "missing",
+      "evidence": []
+    },
+    "render_state_depth_stencil": {
+      "status": "missing",
+      "evidence": []
+    },
+    "render_state_rasterizer": {
+      "status": "missing",
+      "evidence": []
+    },
+    "scissor_state": {
+      "status": "missing",
+      "evidence": []
+    }
+  },
+  "missing": [
+    "shader_identity",
+    "shader_stage_sources",
+    "vertex_buffer_contents",
+    "vertex_attribute_layout",
+    "texture_slot_0_identity",
+    "texture_slot_0_contents",
+    "sampler_state",
+    "matrix_constant",
+    "render_state_blend",
+    "render_state_depth_stencil",
+    "render_state_rasterizer",
+    "scissor_state"
+  ],
+  "unsupported": [],
+  "diagnostics": {
+    "observed_draws": 1,
+    "retained_draws": 1,
+    "at_caller": 1,
+    "qualified": 1,
+    "modes": {
+      "5": 1
+    },
+    "counts": {
+      "zero": 0,
+      "one": 0,
+      "two": 0,
+      "at_least_three": 1
+    },
+    "callers": [
+      {
+        "rva": 15596753,
+        "count": 1
+      }
+    ],
+    "caller_overflow": 0,
+    "samples": [
+      {
+        "call_id": 4,
+        "completion_seq": 1,
+        "thread_id": 10792846,
+        "caller_rva": 15596753,
+        "mode": 5,
+        "raw_count": 0,
+        "effective_count": 4,
+        "qualified": true
+      }
+    ],
+    "qualification_predicate": "caller_known && caller_rva == target_caller && master_complete && shader(master+0x70) != 0 && mode(master+8) == 5 && effective_count >= 3",
+    "decision_0003": {
+      "caller_rva": "0xedfcd1",
+      "mode": 5,
+      "minimum_effective_count": 3
+    }
+  },
+  "provenance": {
+    "session": "d5af7baf-cc1e-4def-a5f4-96e1d5325641",
+    "pid": 34926,
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "image_base": "0x100000000",
+    "capture": "analysis/gfx-draw/v0/probe/capture",
+    "source_hashes": {
+      "startup.status": "f95238c439e9dd2fa560b80a8f3adc6fb296decef3a8e3115e6e0e955ffb82c0",
+      "metadata.json": "d14caa6bd5b2fa9f21f21c472d7648fbc1503e96864511488a7a65fcfc929861",
+      "summary.json": "3a09ce8073b7010a318d87e8a3b5eaebcbba6a819f00638a7e9b3238bad0c82a",
+      "events.jsonl": "19dd7f1ab66c33ead8e674ac16758ad8f31faf727f73215bf86b6984f838cf46",
+      "operations-summary.json": "74372b24b65efbac922431b5f36ec274a4b6e07f929fbe224fcb7f2d5b6f0e15",
+      "operations.jsonl": "76aaa86fe7e0566c746c301da5e676791718c80edf73fd784c096a40b3ca783a",
+      "payloads/4-4.bin": "adeb931f2c57dfe4fb88d46084a1b19eae46424c80033ef6f16c52a6bbf0a227",
+      "payloads/4-draw.bin": "adeb931f2c57dfe4fb88d46084a1b19eae46424c80033ef6f16c52a6bbf0a227"
+    },
+    "targets": [
+      {
+        "symbol": "_GfxDraw",
+        "rva": "0x15ea789",
+        "length": 6,
+        "relocation": "safe"
+      },
+      {
+        "symbol": "_GfxSetPrimitiveType",
+        "rva": "0x15ea76f",
+        "length": 5,
+        "relocation": "safe"
+      }
+    ],
+    "retention": "state",
+    "stop_policy": "target_draw",
+    "observed": 2,
+    "retained_events": 1,
+    "retention_budget_exhausted": false,
+    "payload_gaps": 0,
+    "capture_request": {
+      "schema": "live-gfx-capture-request/v0",
+      "session": "d5af7baf-cc1e-4def-a5f4-96e1d5325641",
+      "targets": [
+        {
+          "symbol": "_GfxDraw",
+          "rva": "0x15ea789",
+          "prefix": "554889e54157",
+          "length": 6,
+          "relocation": "safe"
+        },
+        {
+          "symbol": "_GfxSetPrimitiveType",
+          "rva": "0x15ea76f",
+          "prefix": "554889e553",
+          "length": 5,
+          "relocation": "safe"
+        }
+      ],
+      "max_events": 1024,
+      "duration_ms": 0,
+      "stop_policy": "target_draw",
+      "retention": "state",
+      "target_caller_rva": "0xedfcd1",
+      "caller_site_hex": "4889df31f6e8a7d3",
+      "timeout_s": 120.0,
+      "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "library_sha256": "dc5ca8c44bc7d00ade729c60b2b17140c06079914d023b52d9a35dba794676a9"
+    }
+  },
+  "assumptions": [
+    "default backbuffer format is project-derived BGRA8Unorm (P5.1 contract)",
+    "render-target contents before the draw are not captured in L3.2a"
+  ],
+  "ready_definition": "the selected draw's required source inputs and effective bindings are captured and qualified, with render-target assumptions listed"
+}

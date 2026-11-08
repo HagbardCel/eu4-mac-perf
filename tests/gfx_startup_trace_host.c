@@ -2,6 +2,7 @@
 
 #include "eu4_gfx_observe.h"
 #include "eu4_gfx_observe_buffers.h"
+#include "eu4_gfx_observe_draw.h"
 #include "eu4_gfx_observe_viewport.h"
 #include "eu4_gfx_site_patch.h"
 
@@ -25,6 +26,13 @@ extern void gfx_startup_stub_vb_create(void);
 extern void gfx_startup_stub_vb_update(void);
 extern void gfx_startup_stub_vb_bind(void);
 extern uint8_t gfx_startup_stub_vb_header[];
+extern void gfx_startup_stub_draw(void);
+extern void gfx_startup_stub_draw_caller(void);
+extern void gfx_startup_stub_draw_caller_return(void);
+extern void gfx_startup_stub_primitive(void);
+extern int gfx_startup_stub_draw_calls;
+extern int gfx_startup_stub_primitive_calls;
+extern int gfx_startup_stub_primitive_value;
 
 static const uint8_t kExpected[EU4_GFX_CAPTURE_PATCH_SIZE] = {
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53,
@@ -1153,6 +1161,314 @@ static int scenario_observe_overlap(const char *dir) {
     return 0;
 }
 
+
+static const uint8_t kDrawPrefix[6] = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57,
+};
+static const uint8_t kPrimitivePrefix[5] = {
+    0x55, 0x48, 0x89, 0xe5, 0x53,
+};
+
+static const eu4_gfx_observe_spec kDrawSpec = {
+    "_GfxDraw",
+    (uint64_t)(uintptr_t)gfx_startup_stub_draw,
+    kDrawPrefix,
+    sizeof(kDrawPrefix),
+    EU4_GFX_OBSERVE_RELOC_SAFE,
+    eu4_gfx_observe_draw_entry,
+    eu4_gfx_observe_draw_exit,
+};
+
+static const eu4_gfx_observe_spec kPrimitiveSpec = {
+    "_GfxSetPrimitiveType",
+    (uint64_t)(uintptr_t)gfx_startup_stub_primitive,
+    kPrimitivePrefix,
+    sizeof(kPrimitivePrefix),
+    EU4_GFX_OBSERVE_RELOC_SAFE,
+    eu4_gfx_observe_primitive_entry,
+    eu4_gfx_observe_primitive_exit,
+};
+
+static uint64_t draw_expected_caller(void) {
+    return (uint64_t)(uintptr_t)gfx_startup_stub_draw_caller_return;
+}
+
+static void fill_draw_master(int count, int mode, int shader_non_null) {
+    memset(gfx_startup_stub_master, 0, 0x198);
+    int32_t width = 800;
+    int32_t height = 600;
+    int32_t value = mode;
+    memcpy(gfx_startup_stub_master + 0x08, &value, 4);
+    value = count;
+    memcpy(gfx_startup_stub_master + 0x64, &value, 4);
+    uint64_t shader = shader_non_null ? 0x1234u : 0;
+    memcpy(gfx_startup_stub_master + 0x70, &shader, sizeof(shader));
+    memcpy(gfx_startup_stub_master + 0xa0, &width, 4);
+    memcpy(gfx_startup_stub_master + 0xa4, &height, 4);
+    value = height;
+    memcpy(gfx_startup_stub_master + 0xac, &value, 4);
+    value = width;
+    memcpy(gfx_startup_stub_master + 0xb0, &value, 4);
+}
+
+static void call_primitive(int primitive) {
+    void *handle = gfx_startup_stub_master;
+    void (*fn)(void *, int) =
+        (void (*)(void *, int))gfx_startup_stub_primitive;
+    fn(&handle, primitive);
+}
+
+static void call_draw(int count, int first) {
+    void *handle = gfx_startup_stub_master;
+    void (*fn)(void *, int, int) =
+        (void (*)(void *, int, int))gfx_startup_stub_draw_caller;
+    fn(&handle, count, first);
+}
+
+static const eu4_gfx_observe_spec kDrawPrimitiveSpecs[2] = {
+    kDrawSpec, kPrimitiveSpec};
+static const eu4_gfx_observe_spec kDrawScalarSpecs[2] = {
+    kDrawSpec, kScalarSpec};
+
+static int arm_draw_observe(uint32_t stop_policy, uint64_t target_caller,
+                            uint32_t retention, int with_scalar) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    const eu4_gfx_observe_spec *specs =
+        with_scalar ? kDrawScalarSpecs : kDrawPrimitiveSpecs;
+    if (arm_observe(specs, 2) != 0) {
+        return 1;
+    }
+    if (!eu4_gfx_observe_configure_policy(stop_policy, target_caller,
+                                          retention)) {
+        return fail("draw policy");
+    }
+    return 0;
+}
+
+static int scenario_observe_draw_qualified(const char *dir) {
+    if (arm_draw_observe(EU4_GFX_OBSERVE_STOP_TARGET_DRAW,
+                         draw_expected_caller(),
+                         EU4_GFX_OBSERVE_RETENTION_STATE, 0) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    fill_draw_master(4, 5, 1);
+    call_primitive(4);
+    call_draw(0, 0);
+    if (!eu4_gfx_observe_should_stop()) {
+        return fail("qualified draw did not stop");
+    }
+    if (gfx_startup_stub_draw_calls != 1 ||
+        gfx_startup_stub_primitive_value != 4) {
+        return fail("draw or primitive body did not execute");
+    }
+    if (finish_observe(dir, "host-draw-qualified") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || !snap.target_draw_qualified ||
+        snap.events != 1 || snap.observed != 2 ||
+        snap.draw_observed != 1 || snap.draw_qualified != 1 ||
+        snap.primitive_sets != 1 || snap.records[0].kind !=
+                                         EU4_GFX_OBSERVE_KIND_DRAW ||
+        snap.records[0].payload_size != EU4_GFX_OBSERVE_DRAW_MASTER_SIZE ||
+        snap.target_draw_call_id != snap.records[0].call_id) {
+        return fail("qualified draw snapshot");
+    }
+    if (strstr(snap.records[0].meta, "\"effective_count\":4") == NULL ||
+        strstr(snap.records[0].meta, "\"mode\":5") == NULL ||
+        strstr(snap.records[0].meta, "\"primitive_enum\":4") == NULL ||
+        strstr(snap.records[0].meta, "\"qualified\":true") == NULL) {
+        return fail("qualified draw meta");
+    }
+    return 0;
+}
+
+static int scenario_observe_draw_insufficient_then_qualified(const char *dir) {
+    if (arm_draw_observe(EU4_GFX_OBSERVE_STOP_TARGET_DRAW,
+                         draw_expected_caller(),
+                         EU4_GFX_OBSERVE_RETENTION_STATE, 0) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    fill_draw_master(2, 5, 1);
+    call_draw(0, 0);
+    if (eu4_gfx_observe_should_stop()) {
+        return fail("insufficient count stopped the capture");
+    }
+    fill_draw_master(4, 5, 1);
+    call_draw(0, 0);
+    if (!eu4_gfx_observe_should_stop()) {
+        return fail("second draw did not qualify");
+    }
+    if (finish_observe(dir, "host-draw-two") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || !snap.target_draw_qualified ||
+        snap.events != 2 || snap.draw_observed != 2 ||
+        snap.draw_qualified != 1 ||
+        strstr(snap.records[0].meta, "\"qualified\":false") == NULL ||
+        strstr(snap.records[1].meta, "\"qualified\":true") == NULL) {
+        return fail("two-draw capture");
+    }
+    return 0;
+}
+
+static int scenario_observe_draw_nonqualified(const char *dir) {
+    if (arm_draw_observe(EU4_GFX_OBSERVE_STOP_TARGET_DRAW,
+                         draw_expected_caller(),
+                         EU4_GFX_OBSERVE_RETENTION_STATE, 0) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    fill_draw_master(2, 5, 1);
+    call_draw(0, 0);
+    if (eu4_gfx_observe_should_stop()) {
+        return fail("nonqualifying draw stopped the capture");
+    }
+    if (finish_observe(dir, "host-draw-none") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.target_draw_qualified ||
+        snap.events != 1 || snap.draw_observed != 1 ||
+        snap.draw_at_caller != 1 || snap.draw_qualified != 0) {
+        return fail("nonqualified draw snapshot");
+    }
+    return 0;
+}
+
+static int scenario_observe_draw_caller_filter(const char *dir) {
+    if (arm_draw_observe(EU4_GFX_OBSERVE_STOP_TARGET_DRAW,
+                         draw_expected_caller() + 0x10000,
+                         EU4_GFX_OBSERVE_RETENTION_STATE, 0) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    fill_draw_master(4, 5, 1);
+    call_draw(0, 0);
+    if (eu4_gfx_observe_should_stop()) {
+        return fail("wrong caller qualified");
+    }
+    if (finish_observe(dir, "host-draw-caller") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.target_draw_qualified ||
+        snap.draw_observed != 1 || snap.draw_at_caller != 0 ||
+        strstr(snap.records[0].meta, "\"caller_match\":false") == NULL) {
+        return fail("caller filter");
+    }
+    return 0;
+}
+
+static int scenario_observe_draw_mode_mismatch(const char *dir) {
+    if (arm_draw_observe(EU4_GFX_OBSERVE_STOP_TARGET_DRAW,
+                         draw_expected_caller(),
+                         EU4_GFX_OBSERVE_RETENTION_STATE, 0) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    fill_draw_master(4, 4, 1);
+    call_draw(0, 0);
+    if (eu4_gfx_observe_should_stop()) {
+        return fail("mode 4 qualified");
+    }
+    if (finish_observe(dir, "host-draw-mode") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.target_draw_qualified ||
+        snap.draw_observed != 1 ||
+        strstr(snap.records[0].meta, "\"mode\":4") == NULL) {
+        return fail("mode mismatch");
+    }
+    return 0;
+}
+
+static int scenario_observe_draw_budget(const char *dir) {
+    if (arm_draw_observe(EU4_GFX_OBSERVE_STOP_TARGET_DRAW,
+                         draw_expected_caller(),
+                         EU4_GFX_OBSERVE_RETENTION_STATE, 0) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    fill_draw_master(2, 5, 1);
+    for (int i = 0; i < 65; i++) {
+        call_draw(0, 0);
+    }
+    if (!eu4_gfx_observe_should_stop() ||
+        !eu4_gfx_observe_test_budget_exhausted()) {
+        return fail("retention budget not exhausted");
+    }
+    if (finish_observe(dir, "host-draw-budget") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.target_draw_qualified ||
+        !snap.retention_budget_exhausted || snap.events != 65) {
+        return fail("draw budget snapshot");
+    }
+    return 0;
+}
+
+static int scenario_observe_state_retention(const char *dir) {
+    if (arm_draw_observe(EU4_GFX_OBSERVE_STOP_TARGET_DRAW,
+                         draw_expected_caller(),
+                         EU4_GFX_OBSERVE_RETENTION_STATE, 1) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    for (int i = 0; i < 2000; i++) {
+        (void)call_scalar(i);
+    }
+    fill_draw_master(4, 5, 1);
+    call_draw(0, 0);
+    if (!eu4_gfx_observe_should_stop()) {
+        return fail("retention draw did not stop");
+    }
+    if (eu4_gfx_observe_test_observed() < 2001 ||
+        eu4_gfx_observe_test_events() != 1) {
+        return fail("state retention counters");
+    }
+    if (finish_observe(dir, "host-draw-retention") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || !snap.target_draw_qualified ||
+        snap.events != 1 || snap.observed < 2001 ||
+        snap.draw_observed != 1 || snap.retention !=
+                                      EU4_GFX_OBSERVE_RETENTION_STATE) {
+        return fail("state retention snapshot");
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) {
         return fail("usage: host <scenario> <dir>");
@@ -1242,6 +1558,27 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "unsafe-read") == 0) {
         return scenario_unsafe_read(dir);
+    }
+    if (strcmp(scenario, "observe-draw-qualified") == 0) {
+        return scenario_observe_draw_qualified(dir);
+    }
+    if (strcmp(scenario, "observe-draw-two") == 0) {
+        return scenario_observe_draw_insufficient_then_qualified(dir);
+    }
+    if (strcmp(scenario, "observe-draw-none") == 0) {
+        return scenario_observe_draw_nonqualified(dir);
+    }
+    if (strcmp(scenario, "observe-draw-caller") == 0) {
+        return scenario_observe_draw_caller_filter(dir);
+    }
+    if (strcmp(scenario, "observe-draw-mode") == 0) {
+        return scenario_observe_draw_mode_mismatch(dir);
+    }
+    if (strcmp(scenario, "observe-draw-budget") == 0) {
+        return scenario_observe_draw_budget(dir);
+    }
+    if (strcmp(scenario, "observe-draw-retention") == 0) {
+        return scenario_observe_state_retention(dir);
     }
     return fail("unknown scenario");
 }

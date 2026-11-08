@@ -140,3 +140,59 @@ _gfx_startup_stub_vb_bind:
 .align 4
 _gfx_startup_stub_vb_header:
     .space 0x20, 0
+
+.section __TEXT,__text
+
+# _GfxDraw-shaped stub. Six-byte safe prologue; the body consumes rdi/rsi/rdx,
+# tail-jumps to a GL-shaped ret, and returns to the gateway continuation.
+.globl _gfx_startup_stub_draw
+.p2align 4
+_gfx_startup_stub_draw:
+    .byte 0x55, 0x48, 0x89, 0xe5, 0x41, 0x57
+    incq _gfx_startup_stub_draw_calls(%rip)
+    popq %r15
+    popq %rbp
+    jmp _gfx_startup_stub_gl_draw
+
+.globl _gfx_startup_stub_gl_draw
+.p2align 4
+_gfx_startup_stub_gl_draw:
+    ret
+
+# Native caller with an exact return-address label. The observer's caller RVA
+# for the draw is this label.
+.globl _gfx_startup_stub_draw_caller
+.p2align 4
+_gfx_startup_stub_draw_caller:
+    pushq %rbp
+    movq %rsp, %rbp
+    callq _gfx_startup_stub_draw
+.globl _gfx_startup_stub_draw_caller_return
+_gfx_startup_stub_draw_caller_return:
+    popq %rbp
+    ret
+
+# _GfxSetPrimitiveType-shaped stub. Five-byte safe prologue.
+.globl _gfx_startup_stub_primitive
+.p2align 4
+_gfx_startup_stub_primitive:
+    .byte 0x55, 0x48, 0x89, 0xe5, 0x53
+    incl _gfx_startup_stub_primitive_calls(%rip)
+    movl %esi, _gfx_startup_stub_primitive_value(%rip)
+    popq %rbx
+    popq %rbp
+    ret
+
+.section __DATA,__data
+.globl _gfx_startup_stub_draw_calls
+.align 4
+_gfx_startup_stub_draw_calls:
+    .long 0
+.globl _gfx_startup_stub_primitive_calls
+.align 4
+_gfx_startup_stub_primitive_calls:
+    .long 0
+.globl _gfx_startup_stub_primitive_value
+.align 4
+_gfx_startup_stub_primitive_value:
+    .long 0

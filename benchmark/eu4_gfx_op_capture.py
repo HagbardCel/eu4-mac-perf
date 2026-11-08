@@ -272,7 +272,7 @@ def _validate_summary(root: Path, metadata: dict, status: dict[str, str]) -> dic
 
 
 def _validate_op_summary(
-    root: Path, metadata: dict, init_call_id: int
+    root: Path, metadata: dict, init_call_id: int, *, require_events: bool = True
 ) -> dict:
     summary = _read_json(root / "operations-summary.json")
     _require(summary.get("schema") == OP_SUMMARY_SCHEMA, "bad_op_summary_schema")
@@ -290,9 +290,54 @@ def _validate_op_summary(
     _require(summary.get("state") == "sealed", "op_not_sealed")
     _require(summary.get("integrity_ok") is True, "op_integrity", str(summary.get("reason", "")))
     _require(summary.get("records_copied") is True, "op_records_not_copied")
-    _require(_exact_int(summary.get("events")) and summary["events"] >= 1, "op_no_events")
+    _require(_exact_int(summary.get("events")), "op_events_type")
+    _require(require_events is False or summary["events"] >= 1, "op_no_events")
     for key in ("unmatched", "unavailable", "overflow", "in_flight"):
         _require(summary.get(key) == 0, "op_counter", key)
+    retention = summary.get("retention", "legacy")
+    _require(retention in ("legacy", "state"), "op_retention", str(retention))
+    stop_policy = summary.get("stop_policy", "quota")
+    _require(stop_policy in ("quota", "target_draw"), "op_stop_policy", str(stop_policy))
+    _require(_exact_int(summary.get("observed", summary["events"])), "op_observed_type")
+    _require(
+        _exact_bool(summary.get("retention_budget_exhausted", False)),
+        "op_retention_budget",
+    )
+    _require(_exact_int(summary.get("payload_gaps", 0)), "op_payload_gaps")
+    _require(
+        _exact_bool(summary.get("target_draw_qualified", False)),
+        "op_target_qualified_type",
+    )
+    target_caller = summary.get("target_draw_caller", 0)
+    _require(_exact_int(target_caller) and target_caller >= 0, "op_target_caller")
+    target_call = summary.get("target_draw_call_id", 0)
+    _require(_exact_int(target_call) and target_call >= 0, "op_target_call")
+    for key in (
+        "draw_observed",
+        "draw_at_caller",
+        "draw_qualified",
+        "primitive_sets",
+        "draw_caller_overflow",
+    ):
+        _require(_exact_int(summary.get(key, 0)) and summary.get(key, 0) >= 0, "op_draw_counter", key)
+    modes = summary.get("draw_modes")
+    if modes is None:
+        modes = [0] * 16
+    _require(
+        isinstance(modes, list)
+        and len(modes) == 16
+        and all(_exact_int(value) and value >= 0 for value in modes),
+        "op_draw_modes",
+    )
+    counts = summary.get("draw_counts", {})
+    _require(isinstance(counts, dict), "op_draw_counts")
+    for key in ("zero", "one", "two", "at_least_three"):
+        _require(_exact_int(counts.get(key, 0)) and counts.get(key, 0) >= 0, "op_draw_count", key)
+    callers = summary.get("draw_callers", [])
+    _require(isinstance(callers, list), "op_draw_callers")
+    for item in callers:
+        _require(isinstance(item, dict), "op_draw_caller_shape")
+        _require(_exact_int(item.get("rva")) and _exact_int(item.get("count")), "op_draw_caller_value")
     _require(summary.get("init_seen") is True, "op_init_not_seen")
     _require(summary.get("init_call_id") == init_call_id, "op_init_call_id")
     _require(_exact_int(summary.get("overlaps")), "op_overlaps_type")
@@ -427,9 +472,36 @@ def _validate_records(
                 "offsets_null",
                 "words_null",
                 "header_non_null",
+                "mode",
+                "raw_count",
+                "first",
+                "effective_count",
+                "count_source",
+                "shader_non_null",
+                "master_complete",
+                "caller_match",
+                "qualified",
+                "primitive_enum",
+                "primitive_call_id",
             )
             if key in row
         }
+        if symbol == "_GfxDraw":
+            _require(kind == "draw", "op_draw_kind", str(index))
+            for key in ("mode", "raw_count", "first", "effective_count",
+                        "primitive_enum", "primitive_call_id"):
+                _require(_exact_int(meta.get(key)), "op_draw_int", key)
+            for key in ("shader_non_null", "master_complete", "caller_match",
+                        "qualified"):
+                _require(_exact_bool(meta.get(key)), "op_draw_bool", key)
+            _require(meta.get("count_source") in ("esi", "master", "unknown"),
+                     "op_draw_count_source", str(index))
+            _require(payload_bytes is not None and payload_size == 0x171,
+                     "op_draw_payload", str(index))
+        elif symbol == "_GfxSetPrimitiveType":
+            _require(kind == "primitive_set", "op_primitive_kind", str(index))
+            _require(_exact_int(meta.get("primitive_enum")), "op_primitive_enum",
+                     str(index))
         records.append(
             OperationRecord(
                 index=index,
@@ -464,10 +536,29 @@ def _validate_records(
     if summary["overlaps"] == 0:
         call_ids = [record.call_id for record in records]
         _require(call_ids == sorted(call_ids), "op_call_order")
+    draw_rows = [record for record in records if record.symbol == "_GfxDraw"]
+    qualifying = [
+        record for record in draw_rows if record.meta.get("qualified") is True
+    ]
+    _require(
+        len(qualifying) <= 1,
+        "op_draw_qualified_ambiguous",
+        str(len(qualifying)),
+    )
+    if summary.get("target_draw_qualified") is True:
+        _require(bool(qualifying), "op_draw_qualified_missing")
+        _require(
+            qualifying[0].call_id == summary.get("target_draw_call_id"),
+            "op_draw_qualified_call_id",
+        )
+    _require(
+        summary.get("draw_observed", 0) >= len(draw_rows),
+        "op_draw_observed",
+    )
     return tuple(records)
 
 
-def load_capture(path: Path | str) -> CaptureArtifact:
+def load_capture(path: Path | str, *, require_events: bool = True) -> CaptureArtifact:
     root = Path(path).expanduser().resolve()
     _require(root.is_dir(), "missing_capture", str(root))
     hashes: dict[str, str] = {}
@@ -491,13 +582,17 @@ def load_capture(path: Path | str) -> CaptureArtifact:
         context.init_call_id > 0,
         "init_call_id",
     )
-    op_summary = _validate_op_summary(root, metadata, context.init_call_id)
+    op_summary = _validate_op_summary(
+        root, metadata, context.init_call_id, require_events=require_events
+    )
     operations = _validate_records(root, op_summary, context.init_call_id)
     for record in operations:
         if record.payload_file is not None and record.payload_sha256 is not None:
             hashes[record.payload_file] = record.payload_sha256
     coverage = {
         "events": len(operations),
+        "observed": op_summary.get("observed", len(operations)),
+        "retention": op_summary.get("retention", "legacy"),
         "targets_seen": sorted({record.symbol for record in operations}),
         "distinct_inputs": len(
             {(record.symbol, record.input_hex) for record in operations}

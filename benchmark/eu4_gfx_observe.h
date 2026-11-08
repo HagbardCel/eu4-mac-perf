@@ -14,11 +14,27 @@
 #define EU4_GFX_OBSERVE_DEFAULT_DURATION_MS 10000u
 #define EU4_GFX_OBSERVE_PAYLOAD_CAP (16u * 1024u * 1024u)
 #define EU4_GFX_OBSERVE_PAYLOAD_MAX (1024u * 1024u)
+#define EU4_GFX_OBSERVE_READ_MAX (32u * 1024u * 1024u)
 #define EU4_GFX_OBSERVE_RESOURCE_ID_SIZE 24u
-#define EU4_GFX_OBSERVE_META_SIZE 256u
+#define EU4_GFX_OBSERVE_META_SIZE 512u
+#define EU4_GFX_OBSERVE_CALLER_SLOTS 16u
+#define EU4_GFX_OBSERVE_MODE_SLOTS 16u
+#define EU4_GFX_OBSERVE_MATCHING_DRAW_CAP 64u
+#define EU4_GFX_OBSERVE_NONMATCH_SAMPLE_CAP 8u
+#define EU4_GFX_OBSERVE_DRAW_MASTER_SIZE 0x171u
 
 #define EU4_GFX_OBSERVE_RELOC_UNSAFE 0
 #define EU4_GFX_OBSERVE_RELOC_SAFE 1
+
+enum {
+    EU4_GFX_OBSERVE_RETENTION_LEGACY = 0,
+    EU4_GFX_OBSERVE_RETENTION_STATE = 1,
+};
+
+enum {
+    EU4_GFX_OBSERVE_STOP_QUOTA = 0,
+    EU4_GFX_OBSERVE_STOP_TARGET_DRAW = 1,
+};
 
 enum {
     EU4_GFX_OBSERVE_KIND_OPERATION = 0,
@@ -26,6 +42,7 @@ enum {
     EU4_GFX_OBSERVE_KIND_VERTEX_UPDATE = 2,
     EU4_GFX_OBSERVE_KIND_VERTEX_BIND = 3,
     EU4_GFX_OBSERVE_KIND_DRAW = 4,
+    EU4_GFX_OBSERVE_KIND_PRIMITIVE_SET = 5,
 };
 
 typedef struct eu4_gfx_observe_call {
@@ -47,6 +64,8 @@ typedef struct eu4_gfx_observe_call {
     uint32_t kind;
     int fields_ok;
     int contents_known;
+    int target_hit;
+    int retain;
     char resource_id[EU4_GFX_OBSERVE_RESOURCE_ID_SIZE];
     char meta[EU4_GFX_OBSERVE_META_SIZE];
     uint32_t payload_offset;
@@ -91,6 +110,11 @@ typedef struct {
 } eu4_gfx_observe_spec;
 
 typedef struct {
+    uint64_t rva;
+    uint32_t count;
+} eu4_gfx_observe_caller_count;
+
+typedef struct {
     uint32_t state; /* 0 armed, 1 draining, 2 sealed */
     uint32_t enabled;
     uint32_t events;
@@ -112,6 +136,23 @@ typedef struct {
     char reason[64];
     const eu4_gfx_observe_record *records;
     uint32_t record_count;
+    /* L3.2 retention and draw-probe aggregates. */
+    uint32_t retention;
+    uint32_t observed;
+    uint32_t stop_policy;
+    uint64_t target_draw_caller;
+    int target_draw_qualified;
+    uint64_t target_draw_call_id;
+    uint32_t draw_observed;
+    uint32_t draw_at_caller;
+    uint32_t draw_qualified;
+    uint32_t draw_mode_counts[EU4_GFX_OBSERVE_MODE_SLOTS];
+    uint32_t draw_count_buckets[4];
+    uint32_t draw_caller_overflow;
+    eu4_gfx_observe_caller_count draw_callers[EU4_GFX_OBSERVE_CALLER_SLOTS];
+    uint32_t primitive_sets;
+    int retention_budget_exhausted;
+    uint32_t payload_gaps;
 } eu4_gfx_observe_snapshot;
 
 bool eu4_gfx_observe_configure_from_env(void);
@@ -126,12 +167,25 @@ bool eu4_gfx_observe_enabled(void);
 void eu4_gfx_observe_mark_init(uint64_t call_id);
 uint32_t eu4_gfx_observe_in_flight(void);
 void eu4_gfx_observe_copy_snapshot(eu4_gfx_observe_snapshot *out);
+
+/* L3.2 retention and target-draw policy. */
+bool eu4_gfx_observe_configure_policy(uint32_t stop_policy, uint64_t target_caller,
+                                      uint32_t retention);
+void eu4_gfx_observe_mark_target_draw(uint64_t call_id);
+bool eu4_gfx_observe_target_draw_hit(void);
+uint32_t eu4_gfx_observe_retention(void);
+uint64_t eu4_gfx_observe_target_caller(void);
+void eu4_gfx_observe_note_payload_gap(void);
+void eu4_gfx_observe_count_draw(uint64_t caller_rva, int caller_known,
+                                int32_t mode, int32_t effective_count);
+void eu4_gfx_observe_count_primitive(void);
 bool eu4_gfx_observe_finalize(const char *run_dir, const char *session,
                               const char *executable_sha, int pid,
                               uintptr_t image_base);
 
 /* Callback helpers. */
 bool eu4_gfx_observe_read(const void *src, void *dest, size_t n);
+bool eu4_gfx_observe_read_bytes(const void *src, void *dest, size_t n);
 void eu4_gfx_observe_set_output_base(eu4_gfx_observe_call *call, void *base);
 void eu4_gfx_observe_set_input(eu4_gfx_observe_call *call, const void *src,
                                size_t n);
@@ -144,10 +198,16 @@ void eu4_gfx_observe_set_resource(eu4_gfx_observe_call *call, const char *id,
 void eu4_gfx_observe_set_meta(eu4_gfx_observe_call *call, const char *json);
 void eu4_gfx_observe_set_payload(eu4_gfx_observe_call *call, const void *src,
                                  size_t n);
+bool eu4_gfx_observe_try_payload(eu4_gfx_observe_call *call, const void *src,
+                                 size_t n);
 void eu4_gfx_observe_fail_fields(eu4_gfx_observe_call *call);
 
 /* Test hooks. */
 void eu4_gfx_observe_test_reset(void);
+void eu4_gfx_observe_test_set_policy(uint32_t stop_policy, uint64_t target_caller,
+                                     uint32_t retention);
+uint32_t eu4_gfx_observe_test_observed(void);
+bool eu4_gfx_observe_test_budget_exhausted(void);
 void eu4_gfx_observe_test_force_unpaired(void);
 void eu4_gfx_observe_test_fail_next_output_read(void);
 void eu4_gfx_observe_test_force_install_failure(int after_sites);
