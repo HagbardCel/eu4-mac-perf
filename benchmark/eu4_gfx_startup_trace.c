@@ -1,5 +1,7 @@
 #include "eu4_gfx_startup_trace.h"
 
+#include "eu4_gfx_observe.h"
+
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <pthread.h>
@@ -31,6 +33,7 @@ typedef struct {
 
 static _Atomic uint32_t g_state = EU4_GFX_STARTUP_ARMED;
 static _Atomic uint64_t g_next_call = 1;
+static _Atomic int g_startup_frozen;
 static _Atomic uint32_t g_in_flight = 0;
 static _Atomic uint32_t g_overflow = 0;
 static _Atomic uint32_t g_unmatched = 0;
@@ -149,7 +152,7 @@ static void refuse_entry(void) {
     atomic_fetch_add_explicit(&g_refused, 1, memory_order_relaxed);
 }
 
-static void withdraw_admission(void) {
+void eu4_gfx_startup_withdraw_hook(void) {
     atomic_fetch_sub_explicit(&g_in_flight, 1, memory_order_seq_cst);
     refuse_entry();
     try_seal();
@@ -248,19 +251,36 @@ static int read_master(eu4_gfx_startup_event *event, void *master) {
     return 1;
 }
 
-static int begin_admit(void) {
+bool eu4_gfx_startup_admit_hook(void) {
     atomic_fetch_add_explicit(&g_in_flight, 1, memory_order_seq_cst);
     uint32_t state = atomic_load_explicit(&g_state, memory_order_seq_cst);
     if (state != EU4_GFX_STARTUP_ARMED) {
-        withdraw_admission();
-        return 0;
+        eu4_gfx_startup_withdraw_hook();
+        return false;
     }
     maybe_pause_after_admit();
-    return 1;
+    return true;
+}
+
+void eu4_gfx_startup_finish_hook(void) {
+    atomic_fetch_sub_explicit(&g_in_flight, 1, memory_order_seq_cst);
+    try_seal();
+}
+
+uint64_t eu4_gfx_startup_next_call_id(void) {
+    return atomic_fetch_add_explicit(&g_next_call, 1, memory_order_relaxed);
+}
+
+static bool begin_startup_admit(void) {
+    if (atomic_load_explicit(&g_startup_frozen, memory_order_seq_cst)) {
+        refuse_entry();
+        return false;
+    }
+    return eu4_gfx_startup_admit_hook();
 }
 
 static void on_settings_entry(eu4_gfx_capture_frame *frame) {
-    if (!begin_admit()) {
+    if (!begin_startup_admit()) {
         return;
     }
     eu4_gfx_startup_event event;
@@ -283,7 +303,7 @@ static void on_settings_entry(eu4_gfx_capture_frame *frame) {
         .admitted = 1,
     };
     if (!push_tls(inv)) {
-        withdraw_admission();
+        eu4_gfx_startup_withdraw_hook();
         return;
     }
     maybe_caller(&event, frame);
@@ -312,12 +332,11 @@ static void on_settings_exit(eu4_gfx_capture_frame *frame) {
     event.fields_ok = read_settings_blob(&event, inv.settings, inv.sample_count);
     maybe_caller(&event, frame);
     (void)commit_event(&event);
-    atomic_fetch_sub_explicit(&g_in_flight, 1, memory_order_seq_cst);
-    try_seal();
+    eu4_gfx_startup_finish_hook();
 }
 
 static void on_init_entry(eu4_gfx_capture_frame *frame) {
-    if (!begin_admit()) {
+    if (!begin_startup_admit()) {
         return;
     }
     eu4_gfx_startup_event event;
@@ -337,7 +356,7 @@ static void on_init_entry(eu4_gfx_capture_frame *frame) {
         .admitted = 1,
     };
     if (!push_tls(inv)) {
-        withdraw_admission();
+        eu4_gfx_startup_withdraw_hook();
         return;
     }
     maybe_caller(&event, frame);
@@ -388,10 +407,17 @@ static void on_init_exit(eu4_gfx_capture_frame *frame) {
     if (event.success_readable && event.success == 1 && event.master_non_null &&
         event.master_ok) {
         atomic_fetch_add_explicit(&g_qualifying, 1, memory_order_relaxed);
-        atomic_store_explicit(&g_state, EU4_GFX_STARTUP_DRAINING, memory_order_seq_cst);
+        eu4_gfx_observe_mark_init(inv.call_id);
+        if (eu4_gfx_observe_enabled()) {
+            /* Keep the session armed for graphics operations. The startup
+               stream itself is frozen: later settings/init calls are refused. */
+            atomic_store_explicit(&g_startup_frozen, 1, memory_order_seq_cst);
+        } else {
+            atomic_store_explicit(&g_state, EU4_GFX_STARTUP_DRAINING,
+                                  memory_order_seq_cst);
+        }
     }
-    atomic_fetch_sub_explicit(&g_in_flight, 1, memory_order_seq_cst);
-    try_seal();
+    eu4_gfx_startup_finish_hook();
 }
 
 void eu4_gfx_startup_arm(void) {
@@ -424,6 +450,10 @@ bool eu4_gfx_startup_wait_sealed(unsigned timeout_ms) {
     for (unsigned i = 0; i < timeout_ms; i++) {
         if (eu4_gfx_startup_state() == EU4_GFX_STARTUP_SEALED) {
             return true;
+        }
+        eu4_gfx_observe_poll();
+        if (eu4_gfx_observe_enabled() && eu4_gfx_observe_should_stop()) {
+            eu4_gfx_startup_request_drain();
         }
         try_seal();
         nanosleep(&step, NULL);
@@ -695,6 +725,10 @@ static bool finalize_owner(const char *run_dir, const char *session,
     if (rename(summary_tmp, summary_path) != 0) {
         return false;
     }
+    if (!eu4_gfx_observe_finalize(run_dir, session, executable_sha, pid,
+                                  image_base)) {
+        return false;
+    }
     return true;
 }
 
@@ -754,6 +788,7 @@ void eu4_gfx_startup_test_fail_next_writes(unsigned count) {
 
 void eu4_gfx_startup_test_reset(void) {
     atomic_store_explicit(&g_state, EU4_GFX_STARTUP_ARMED, memory_order_seq_cst);
+    atomic_store(&g_startup_frozen, 0);
     atomic_store(&g_next_call, 1);
     atomic_store(&g_in_flight, 0);
     atomic_store(&g_overflow, 0);

@@ -86,16 +86,58 @@ The shared checker requires a detached worktree at the pinned commit, pinned `be
 - Identity fields stay distinct: `repo_baseline_commit` vs `eu4_executable_sha256`.
 - Portable unittest fixtures live under `tests/fixtures/qualification/`; they must not mutate tracked tip oracle files.
 
-## Metal API corpus
+## Live graphics operation capture
 
-The contracts live in [analysis/metal-api/](../analysis/metal-api/README.md). `index.md` is the lookup table. Search it with `rg`, for example `rg -n -i 'setScissorRect|glScissor' analysis/metal-api`. The skill [`.opencode/skills/opengl-metal-reconstruction/SKILL.md`](../.opencode/skills/opengl-metal-reconstruction/SKILL.md) tells the agent to read that index and the named contract. `agent.md` does not order the load by itself.
+One bounded command captures an authentic original-EU4 observation for the
+existing offline comparison path. There is no new agent framework, no MCP
+server, and no second Metal execution engine.
 
-The runner compares the live skill file with `git show <pinned>:.opencode/skills/opengl-metal-reconstruction/SKILL.md` when it starts or resumes, before a new session or submission, and before it accepts the candidate. It does not compare on each poll. A match allows that skill id. A pin without the file, including an untracked copy on disk, denies the skill id, so a global skill of the same name is not available. If the pin contains the file and the live file is missing or its bytes differ, the run pauses `skill_mismatch` before reconciling or submitting. A saved pending submission keeps its id and text. A Git failure that is not a missing path pauses `runtime_unavailable`. A campaign with no worktree pin is the absent case. `resume` checks again after the file is restored.
+```sh
+# One operator-authorized live capture (opens the original game briefly)
+python3 -m automation.live_gfx capture \
+  --target _GfxSetViewPort --max-events 16 --duration 5 --timeout 120 \
+  --output .local/gfx-captures/viewport-01 --authorize-live
+```
 
-`sources.json` records the SDK version, the review date, the headers read, and the Apple URLs opened for each contract. `reviewed` means those fields were filled after that reading. A sentence inside the contract is labeled `SDK`, `Apple docs`, `Project-derived`, or `Unresolved`. The checker does not prove that a source supports a sentence.
+`capture` requires exactly one of `--authorize-live` (manual experiment) or
+`--campaign-run-root` (campaign mode). The launcher verifies the pinned
+executable SHA, refuses an existing output directory or another running EU4,
+records at most `--max-events` completed observations, keeps observing for
+`--duration` seconds after the first matching invocation, and terminates only
+the process it launched. `--timeout` is the total launch and capture deadline.
 
-To update a contract, re-read the header from `xcrun --sdk macosx --show-sdk-path`, re-open each URL you still cite, and set `sdk_version` and `reviewed` to what you used. A missing page or header leaves the sentence `Unresolved`. The agent reports that with the existing `BLOCKER:` line when the gap blocks a faithful replacement.
+### Campaign launch accounting
 
-`.local/metal-docs/` is optional and is already ignored by `.local/`. The contracts do not need it. A campaign worktree sees the skill and the corpus only when its pinned commit contains them and the live file still matches that blob. Historical campaign JSON, notes, and pinned checker bytes stay as recorded. The next reconstruction campaign is the evaluation that the skill was loaded, the relevant contract was read, and a test came from a documented mismatch. This checker does not enforce that.
+Campaign JSON may declare:
 
-The session denies `opengl-metal-reconstruction` unless that pinned match succeeded. Other skills stay unmatched and would ask. Unmatched asks pause the campaign.
+```json
+"live_observation": {"launch_limit": 3, "deadline_seconds": 120}
+```
+
+The existing runner initializes `.local/automation/<campaign-id>/live-launch.json`
+once and never rewrites it. The launcher updates that file under its own
+`live-launch.lock`, **not** the runner's `campaign.lock` (the runner holds that
+lock for the whole session) and **not** `state.json` (the runner keeps an
+in-memory copy). A claim is written before spawning, so a failed launch still
+consumes the count. The checker reads the counter and requires
+`used <= limit`.
+
+### Capture artifact
+
+The unchanged `gfx-startup/v0` session provides the initialization context.
+The sidecar adds:
+
+- `operations.jsonl`: one paired record per completed call with `call_id`
+  (invocation order), `completion_seq` (commit order), symbol/RVA, thread,
+  caller RVA, overlap flag, `fields_ok`, and raw input/output bytes.
+- `operations-summary.json`: targets, limits, sealed state, `integrity_ok`,
+  `records_copied`, counters, and coverage (`events`, `overlaps`).
+
+`integrity_ok` is structural validity, not behavioral coverage. A one-event
+capture can be valid; coverage is reported separately. If the session cannot
+seal, `operations.jsonl` is empty, `operations.partial.jsonl` carries the
+mutable records for diagnosis, and the summary is incomplete; partial records
+are never completed evidence.
+
+The first authenticated pilot is tracked at
+[`analysis/gfx-ops/v0/`](../analysis/gfx-ops/v0/note.md).

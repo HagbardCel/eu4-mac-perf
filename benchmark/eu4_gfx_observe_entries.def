@@ -1,0 +1,5 @@
+// OBS_ENTRY(symbol, entry_rva, prefix, relocation_class, entry_cb, exit_cb)
+// The prefix must be a complete-instruction run of 5 to 13 bytes and must be
+// safe to replay from a freshly allocated trampoline: no RIP-relative memory
+// operand and no relative branch or call in the displaced bytes.
+OBS_ENTRY("_GfxSetViewPort", 0x15ea4f8, "\x55\x48\x89\xe5\xf3\x0f\x6f\x06", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_observe_viewport_entry, eu4_gfx_observe_viewport_exit)

@@ -1,4 +1,5 @@
 #include "eu4_gfx_startup_trace.h"
+#include "eu4_gfx_observe.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -186,11 +187,17 @@ static void *finalizer_main(void *arg) {
     }
     unsigned waited = 0;
     while (waited < deadline_s * 1000u) {
-        if (eu4_gfx_startup_state() == EU4_GFX_STARTUP_SEALED) {
+        uint32_t state = eu4_gfx_startup_state();
+        if (state == EU4_GFX_STARTUP_SEALED) {
             break;
         }
-        if (eu4_gfx_startup_state() == EU4_GFX_STARTUP_ARMED &&
-            waited > deadline_s * 500u) {
+        if (eu4_gfx_observe_enabled()) {
+            eu4_gfx_observe_poll();
+            if (eu4_gfx_observe_should_stop()) {
+                eu4_gfx_startup_request_drain();
+            }
+        } else if (state == EU4_GFX_STARTUP_ARMED &&
+                   waited > deadline_s * 500u) {
             eu4_gfx_startup_request_drain();
         }
         usleep(1000);
@@ -246,6 +253,17 @@ __attribute__((constructor)) static void initialize_startup_trace(void) {
                                  kPatch)) {
         (void)write_status(run_dir, "error", session, actual, image_base,
                            settings_site, init_site, "install-failed");
+        return;
+    }
+    if (!eu4_gfx_observe_configure_from_env()) {
+        (void)write_status(run_dir, "error", session, actual, image_base,
+                           settings_site, init_site, "ops-config");
+        return;
+    }
+    if (eu4_gfx_observe_enabled() &&
+        !eu4_gfx_observe_install(image_base, text_begin, text_end)) {
+        (void)write_status(run_dir, "error", session, actual, image_base,
+                           settings_site, init_site, "ops-install");
         return;
     }
     if (pthread_create(&g_finalizer, NULL, finalizer_main, NULL) != 0) {
