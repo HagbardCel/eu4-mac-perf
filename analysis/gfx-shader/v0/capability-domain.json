@@ -1,0 +1,27 @@
+{
+  "schema": "eu4-gfx-shader-capability-domain/v0",
+  "target_environment": {
+    "id": "simple-loading-screen-desktop-gl",
+    "effect": "Simple",
+    "asset": "gfx/FX/simple.lua",
+    "notes": "ShowBasicLoadText / Decision 0003 loading-screen slice"
+  },
+  "supported_configurations": [
+    {
+      "id": "simple-loading-screen-desktop-gl",
+      "variant_id": "simple-lua-Simple",
+      "predicates": {
+        "api": "desktop_gl",
+        "pdx_opengl": true,
+        "vendor_query_affects_simple": "unresolved"
+      },
+      "sha256_vs": "pending_buildglsl_closure_vs",
+      "sha256_ps": "pending_buildglsl_closure_ps",
+      "status": "unresolved",
+      "note": "Replace sha256_vs/sha256_ps with fixture-backed SHA-256 pairs once BuildGLSL oracle qualifies outputs; unsupported configs must fail closed. statically_determined evidence_level requires real hex digests under analysis/gfx-shader/v0/assets/."
+    }
+  ],
+  "unsupported_policy": "explicit_fail",
+  "repo_baseline_commit": "173321b6d3258576060e7941e9bd91f608e8f543",
+  "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d"
+}

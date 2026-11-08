@@ -1,0 +1,17 @@
+{
+  "id": "eu4-p52a-closure",
+  "objective": "objective.md",
+  "runtime": "opencode",
+  "model": "opencode/big-pickle",
+  "opencode_version": "2.2.5",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/automation/eu4-p52a-closure/workspace",
+    "commit": "44e29cd18e63491c725f607fb62baf70a53f4c63"
+  },
+  "accept": ["python3", "accept.py"],
+  "max_rounds": 12,
+  "max_seconds": 10800,
+  "accept_timeout_seconds": 1800,
+  "verification_manifest": "../../analysis/qualification/v0/verification-manifest.json"
+}

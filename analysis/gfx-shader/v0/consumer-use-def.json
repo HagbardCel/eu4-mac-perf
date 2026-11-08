@@ -1,0 +1,122 @@
+{
+  "schema": "eu4-gfx-shader-consumer-use-def/v0",
+  "object_size": "0x78",
+  "unsupported_opengl_use_silently_harmless": false,
+  "closure_statement": "On the supported ShowBasicLoadText path, every OpenGL-oriented consumer of the 0x78 shader object identified so far is either already replaced (Create/Add stubs — inadequate) or reached through original Link/Set/Destroy helpers that must be replace-metal. No unsupported original OpenGL use may be treated as harmless. Metal handles must not be stored in +0/+4/+8 while any original GL consumer remains reachable.",
+  "fields": [
+    {
+      "offset": 0,
+      "name": "program_name",
+      "representation": "OpenGL program object name (GLuint) in original; current Metal create stores 0",
+      "writers": [
+        {
+          "symbol": "_GfxCreateShader",
+          "status": "replaced-stub",
+          "evidence": "Original stores glewCreateProgramObjectARB result at +0; replacement writes 0"
+        }
+      ],
+      "readers": [
+        {
+          "symbol": "SShaderOpenGL::LinkProgram / SetAll / UnloadAll (via Link/Set/Destroy)",
+          "status": "original-opengl",
+          "evidence": "Frozen dossiers: Link forwards to LinkProgram; Set calls SetAll; Destroy calls UnloadAll"
+        }
+      ],
+      "consumers": [
+        {
+          "symbol": "_GfxLinkShader",
+          "disposition": "must-replace-metal"
+        },
+        {
+          "symbol": "_GfxSetShader",
+          "disposition": "must-replace-metal"
+        },
+        {
+          "symbol": "_GfxDestroyShader",
+          "disposition": "must-replace-metal"
+        }
+      ],
+      "reader_disposition": "replace-all-original-gl-consumers-before-repurposing-field"
+    },
+    {
+      "offset": 4,
+      "name": "vertex_shader_name",
+      "representation": "OpenGL shader object name (GLuint) in original",
+      "writers": [
+        {
+          "symbol": "_GfxAddVertexShader",
+          "status": "replaced-failure-stub",
+          "evidence": "Header/docs: dword at +4 is vertex-shader name; stub writes nothing"
+        }
+      ],
+      "readers": [
+        {
+          "symbol": "_GfxAddVertexShader detach path",
+          "status": "not-reconstructed",
+          "evidence": "Original detaches prior nonzero +4 before replace; stub leaves unchanged"
+        },
+        {
+          "symbol": "SShaderOpenGL helpers",
+          "status": "original-opengl",
+          "evidence": "Inferred attach/link uses stage names"
+        }
+      ],
+      "consumers": [
+        {
+          "symbol": "_GfxAddVertexShader",
+          "disposition": "replace-metal"
+        },
+        {
+          "symbol": "_GfxLinkShader",
+          "disposition": "must-replace-metal"
+        }
+      ],
+      "reader_disposition": "gl-name-not-metal-handle"
+    },
+    {
+      "offset": 8,
+      "name": "pixel_shader_name",
+      "representation": "OpenGL shader object name (GLuint) in original",
+      "writers": [
+        {
+          "symbol": "_GfxAddPixelShader",
+          "status": "replaced-failure-stub",
+          "evidence": "Header: dword at +8 is pixel-shader name; stub writes nothing"
+        }
+      ],
+      "readers": [
+        {
+          "symbol": "_GfxAddPixelShader detach path",
+          "status": "not-reconstructed",
+          "evidence": "Original detaches prior nonzero +8"
+        },
+        {
+          "symbol": "SShaderOpenGL helpers",
+          "status": "original-opengl",
+          "evidence": "Inferred attach/link uses stage names"
+        }
+      ],
+      "consumers": [
+        {
+          "symbol": "_GfxAddPixelShader",
+          "disposition": "replace-metal"
+        },
+        {
+          "symbol": "_GfxLinkShader",
+          "disposition": "must-replace-metal"
+        }
+      ],
+      "reader_disposition": "gl-name-not-metal-handle"
+    }
+  ],
+  "master_fields": [
+    {
+      "offset": "master+0x70",
+      "representation": "current shader object pointer",
+      "writers": ["_GfxSetShader"],
+      "readers": ["_GfxBeginScene shader-current branch (attrib disable)", "draw path effective shader"],
+      "note": "SetShader replacement must preserve pointer semantics at +0x70 and dirty bytes +0x128/+0x170 per dossier"
+    }
+  ],
+  "unresolved_fields": "Remaining bytes inside 0x78 beyond +0/+4/+8 are not fully mapped offline; treat as unknown and fail closed if an original consumer of an unmapped field is discovered on the supported path."
+}

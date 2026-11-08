@@ -1,0 +1,70 @@
+{
+  "schema": "eu4-gfx-shader-binding-schema/v0",
+  "effect": "Simple",
+  "asset": "gfx/FX/simple.lua",
+  "runtime_binds_owned_by": "P5.3",
+  "pipeline_state_owned_by": "P5.2c/lazy",
+  "attributes": [
+    {
+      "semantic": "POSITION",
+      "shader_input": "vPosition",
+      "type": "float4",
+      "note": "VS_INPUT in simple.shader; Metal attribute index assigned at normalization time"
+    },
+    {
+      "semantic": "TEXCOORD0",
+      "shader_input": "vTexCoord",
+      "type": "float2"
+    },
+    {
+      "semantic": "PDX_COLOR",
+      "shader_input": "vColor",
+      "type": "float4"
+    }
+  ],
+  "constant_buffers": [
+    {
+      "name": "Matrix",
+      "glsl_uniform": "UNIFORM0[4]",
+      "engine_slot_on_path": 2,
+      "size_bytes": 64,
+      "update": "_GfxUpdateConstantBuffer then _GfxSetConstantBuffer",
+      "alignment_note": "float4x4 / four vec4 columns"
+    }
+  ],
+  "textures_samplers": [
+    {
+      "name": "SimpleTexture",
+      "slot_index": 0,
+      "filter": "linear",
+      "address": "wrap",
+      "engine_path": "CEU3Graphics+0x2c650 via _GfxSetTextures when non-null",
+      "note": "Active sampler in Simple pixel shader; texture-state call is not merely incidental"
+    }
+  ],
+  "render_state": {
+    "blend": {
+      "enable": true,
+      "src": "SRC_ALPHA",
+      "dst": "INV_SRC_ALPHA",
+      "alpha_test": false,
+      "source": "simple.shader BlendState"
+    },
+    "depth_stencil": {
+      "from_asset": "unspecified in simple.shader",
+      "note": "Effective depth state still comes from engine SetDepthStencil on the path; qualify in P5.2c"
+    },
+    "rasterizer": {
+      "from_asset": "unspecified",
+      "primitive_set_on_path": 4
+    },
+    "color_target": {
+      "format": "BGRA8Unorm",
+      "note": "Game backbuffer compatibility from P5.1.1"
+    }
+  },
+  "coordinate_semantics": {
+    "note": "Validate at 1x and 2x backing scales in P5.2c; do not naively multiply positions by display scale",
+    "matrix": "orthographic-style loading quad written in LoadLoadingScreens vertex setup"
+  }
+}
