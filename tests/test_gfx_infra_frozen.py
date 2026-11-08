@@ -937,7 +937,15 @@ class CoordinatorTests(unittest.TestCase):
             state["state"] = "reviewing"
             state["review_target"] = "candidate"
             state["candidate"] = {"commit": "c" * 40}
+            state["contract"] = {"commit": "u1"}
             state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            seen = []
+
+            def integrate(candidate, contract, state, kind=None):
+                seen.append((kind, (contract or {}).get("commit")))
+                return {"ok": True, "commit": "e" * 40, "kind": kind}
+
+            hooks.integrate = integrate
             with mock.patch.object(
                 hooks, "run_reviewer", lambda target, state: {"path": str(report)}
             ):
@@ -945,8 +953,7 @@ class CoordinatorTests(unittest.TestCase):
             self.assertEqual(state["promotion_kind"], "implementation")
             state = coordinator.step(state)
             self.assertEqual(state["state"], "continuation")
-            kinds = [row.get("kind") for row in state["history"] if row["event"] == "integrated"]
-            self.assertEqual(kinds, ["implementation"])
+            self.assertEqual(seen, [("implementation", "t1")])
 
     def test_qualified_contract_without_cases_blocks(self):
         from automation.gfx_l32b_complete import Coordinator

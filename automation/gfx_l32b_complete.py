@@ -501,8 +501,11 @@ class Coordinator:
             state["state"] = "blocked"
             state["blocker"] = {"reason": "promotion_invalid", "errors": errors}
             return state
+        contract = state["contract"] if kind == "contract" else (
+            state.get("trusted_contract") or state["contract"]
+        )
         result = self.hooks.integrate(
-            state["candidate"], state["contract"], state, kind=kind
+            state["candidate"], contract, state, kind=kind
         )
         state["integration"] = result
         if not result.get("ok"):
