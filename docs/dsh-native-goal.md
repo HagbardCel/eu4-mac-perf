@@ -33,6 +33,44 @@ calls in this profile; only the plugin's finalize tool completes a goal, by
 calling the goal service. Human `/goal` commands reach the goal service directly
 and are unaffected, so pausing or clearing a goal remains an operator control.
 
+## Trusted bridge
+
+`python3 -m automation.dsh_bridge {prepare,status,validate,goal-prompt} --sidecar <path>`
+does the deterministic project work and nothing else. It reuses
+`automation.runner.run_accept` for execution and verdict parsing, so the checker
+vocabulary has one source of truth, and it never invents a verdict.
+
+Two axes are reported separately:
+
+| Axis | Values | Meaning |
+|---|---|---|
+| `checker_verdict` | `pass` `fail` `inconclusive` `blocked` `unavailable` | emitted by the checker, passed through unchanged |
+| `bridge_classification` | `verdict` `policy_stop` `infrastructure_error` `integrity_refusal` | what the bridge itself concluded |
+
+A timeout, truncated output, unreadable JSON, an invalid verdict enum or `pass`
+with a non-zero exit is an `infrastructure_error` mapped to goal policy
+`unavailable` — never a pass and never a remediable `fail`. Exhausting the retry
+allowance is `policy_stop`/`no_progress`, which is not a checker `blocked`.
+
+The retry policy is checker-aware, because some checkers legitimately depend on
+trusted external state across runs:
+
+```json
+"checker_retry": { "mode": "stateful", "confirmation_rounds": 1 }
+```
+
+`campaigns/automation-smoke/accept.py` is exactly that case: it deliberately
+fails once even when the candidate is already correct, so its DSH sidecar
+declares `stateful` with one confirmation round. A deterministic checker declares
+`mode: "deterministic"` and is refused on an identical repeat. An identical
+verified `pass` is reused rather than re-run — idempotency applies to success,
+not to failure.
+
+`prepare` records an anchor of the trusted material (checker, sidecar, source
+campaign, verification manifest, policy, objective, candidate baseline). Every
+`validate` re-derives the current identity and refuses on any drift, so editing a
+checker after preparation is a hard failure rather than a silently new identity.
+
 ## Execution roots
 
 Three roots are kept distinct and are asserted before a checker runs.

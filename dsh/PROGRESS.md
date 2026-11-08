@@ -8,7 +8,7 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
 | Milestone | State |
 |---|---|
 | M1 profile, pinning, skill parity, Ghidra probe | done at composition level; one live-session check pending |
-| M2 minimal bridge | not started |
+| M2 minimal bridge, retry policy, classification | done |
 | M3 seed-only native goal loop | not started |
 | M4 delta snapshot, evidence binding, journal | not started |
 | M5 recovery, limits, isolation | not started |
@@ -54,13 +54,68 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
   truncates its failure detail at ~1000 characters, so the pristine message was
   captured by running `analyzeHeadless` directly.
 
+## M2 -- established
+
+- `automation/dsh_campaign.py` reads a campaign that has no `runtime` or
+  `opencode_version` field at all, proving the reader is backend-neutral:
+  `automation.state.load_campaign` is untouched and still rejects anything but
+  `opencode`. Objective, accept/checker, optional verification manifest and the
+  DSH execution config (mode, policy, retry, limits) are resolved and validated;
+  a policy may be inline or reference a generic pattern document such as
+  `campaigns/eu4-l32b-bootstrap/infra.json`, so no campaign or symbol is
+  hardcoded in DSH code.
+- `automation/dsh_receipts.py` stores receipts, a `current.json` pointer and
+  counters, and digests seed trees (symlinks recorded by target, not followed).
+- `automation/dsh_bridge.py` exposes `prepare`, `status`, `validate` and
+  `goal-prompt`. It reuses `automation.runner.run_accept` for checkout-free
+  execution and verdict parsing, so the verdict vocabulary has one source of
+  truth, and never invents a verdict.
+- Classification is two-axis. `checker_verdict` is only ever what the checker
+  emitted. `bridge_classification` is `verdict`, `policy_stop`,
+  `infrastructure_error` or `integrity_refusal`. An unreadable or timed-out
+  checker becomes `infrastructure_error` with `goal_policy: unavailable`; a
+  repeated identical failure becomes `policy_stop`/`no_progress` and is never
+  reported as a checker `blocked`.
+- The retry policy is checker-aware. `stateful` checkers declare
+  `confirmation_rounds`; `deterministic` ones may declare
+  `max_identical_retries`. Admission uses only prior state (previous candidate
+  digest, previous verdict, stored counters), never a diagnostics digest that
+  cannot exist before the run.
+- Verified, in order:
+  - fixture acceptance test: an **unchanged, already-correct** candidate
+    produces `fail` then `pass` under `stateful`/1, with an identical candidate
+    digest across both runs and 2 validations recorded;
+  - `deterministic`/0 refuses the identical retry as `policy_stop`;
+  - a checker emitting non-JSON yields `infrastructure_error`/`unreadable` with
+    `goal_policy: unavailable` (recorded for audit, but carrying no verdict);
+  - a checker modified after `prepare` fails closed on `checker_sha256` drift
+    (exit 3); a candidate path outside the allowlist fails closed on `policy`;
+  - an identical verified `pass` is reused, not re-run (the checker's own
+    invocation counter stays at 1);
+  - end-to-end on the real `campaigns/automation-smoke` campaign and checker:
+    `fail` then `pass`, receipt `abfa9369-r2.json`, `status` reports
+    `current: true`.
+- Review finding 2 is applied where it matters: the receipt is not treated as
+  authority. `prepare` anchors the trusted material (checker, sidecar, source
+  campaign, manifest, policy, objective, baseline) and every `validate` compares
+  against that anchor, so editing the checker is drift, not a new identity.
+- Correction to an earlier draft of this bridge: it recorded
+  `sandbox_mode: "workspace-write"` and `ok: true` for the workspace assertion.
+  The bridge cannot observe DSH's sandbox, so it now records what the host
+  declared (`EU4_DSH_WORKSPACE`, `EU4_DSH_SANDBOX_MODE`) and reports
+  `verified: false` when nothing was declared. M4 turns a verified assertion
+  into a hard gate.
+
 ## Pending / caveats
 
 - The profile and plugin are verified at composition level. A live interactive
   session has not yet been booted, so "session loads
   `opengl-metal-reconstruction`" still needs one human-run check.
-- The plugin is plain ESM JavaScript in M1 (no build step, no npm dependency);
-  the TypeScript toolchain and real tool surface arrive with M2/M3.
+- The plugin is still plain ESM JavaScript (no build step, no npm dependency);
+  the real tool surface and completion guard arrive with M3.
+- Evidence-input binding is declared but not yet enforced as a gate; M4 adds it
+  together with the generic candidate-delta snapshot and the append-only
+  journal.
 - `~/.dsh` is untouched by the scripts, but the interactive DSH session that runs
   them exports `DSH_HOME=~/.dsh`; `run.sh`/`preflight.sh`/`provision.sh`
   deliberately override it.
