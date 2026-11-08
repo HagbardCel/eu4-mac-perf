@@ -8,3 +8,4 @@ OBS_ENTRY("_GfxUpdateVertexBuffer", 0x15ebd81, "\x55\x48\x89\xe5\x41\x57", EU4_G
 OBS_ENTRY("_GfxSetVertexBuffers", 0x15ebf41, "\x55\x48\x89\xe5\x41\x57", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_observe_vb_bind_entry, NULL)
 OBS_ENTRY("_GfxSetPrimitiveType", 0x15ea76f, "\x55\x48\x89\xe5\x53", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_observe_primitive_entry, eu4_gfx_observe_primitive_exit)
 OBS_ENTRY("_GfxDraw", 0x15ea789, "\x55\x48\x89\xe5\x41\x57", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_observe_draw_entry, eu4_gfx_observe_draw_exit)
+OBS_ENTRY("_GfxSetConstantBuffer", 0x15ec36a, "\x55\x48\x89\xe5\x48\x8b\x07\x89\xc9", EU4_GFX_OBSERVE_RELOC_SAFE, eu4_gfx_observe_cb_entry, NULL)

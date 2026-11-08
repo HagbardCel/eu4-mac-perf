@@ -43,6 +43,7 @@ enum {
     EU4_GFX_OBSERVE_KIND_VERTEX_BIND = 3,
     EU4_GFX_OBSERVE_KIND_DRAW = 4,
     EU4_GFX_OBSERVE_KIND_PRIMITIVE_SET = 5,
+    EU4_GFX_OBSERVE_KIND_CONSTANT_SET = 6,
 };
 
 typedef struct eu4_gfx_observe_call {

@@ -1016,6 +1016,8 @@ static const char *kind_name(uint32_t kind) {
         return "draw";
     case EU4_GFX_OBSERVE_KIND_PRIMITIVE_SET:
         return "primitive_set";
+    case EU4_GFX_OBSERVE_KIND_CONSTANT_SET:
+        return "constant_set";
     default:
         return "operation";
     }

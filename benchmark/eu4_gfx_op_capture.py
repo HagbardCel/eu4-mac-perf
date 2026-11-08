@@ -483,6 +483,16 @@ def _validate_records(
                 "qualified",
                 "primitive_enum",
                 "primitive_call_id",
+                "header",
+                "slot",
+                "selector",
+                "data_ptr",
+                "data_size",
+                "vec4_count",
+                "constant_slot0_vec4",
+                "constant_slot0_header",
+                "constant_slot0_match",
+                "constant_slot0_call_id",
             )
             if key in row
         }
