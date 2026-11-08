@@ -198,7 +198,7 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
         run_result = json.loads(runner.stdout or "{}")
     except json.JSONDecodeError:
         return emit("fail", "contract runner output is unreadable")
-    if not run_result.get("ok"):
+    if not run_result.get("positive_ok"):
         return emit(
             "fail",
             "candidate validator does not accept the checkpoint evidence: "

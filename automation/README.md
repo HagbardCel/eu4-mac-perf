@@ -201,7 +201,16 @@ byte-identical. v2 classifies every required input as `validated`,
 - `packet_ready=true` is recomputed by the checker and contradicted by any
   unresolved input.
 
-When a campaign has structurally valid original evidence for one or more
+A field is `provisional` only when it has field-relevant original evidence, not
+merely a recognized evidence type. `automation/gfx_evidence_policy.py` defines
+the minimum provenance per field: shader sources need captured or reconstructed
+source bytes, texture contents need an original payload with resource identity,
+render state needs the relevant master bytes or a verified state observation,
+and a draw record alone is never shader or texture evidence. The checkpoint
+validator re-runs the policy against the bundle packet and original capture, so
+an empty or unrelated evidence list cannot enter a trusted checkpoint.
+
+When a campaign has field-relevant original evidence for one or more
 provisional fields, v2 writes a durable checkpoint bundle under the workflow
 root's `checkpoints/<campaign>-<session>-<candidate-digest>/`. The bundle
 contains `checkpoint.json`, `bundle-manifest.json`, the candidate packet, every
@@ -222,10 +231,22 @@ outcome is required; the reviewer campaign's `pass` is not sufficient.
 
 Each campaign records two identities: `candidate_base_commit` (the worktree
 parent) and `trusted_contract_commit` (the immutable checker/contract/tests/
-oracle used for acceptance). Promotion applies the accepted candidate changes
-to the trusted revision, rejects conflicts or trusted-file changes, creates one
-integration commit, re-runs the checker/tests against it, and pins the next
-campaign to that commit. No active campaign is retargeted or rebased.
+oracle used for acceptance). Promotion has an explicit kind:
+
+- `contract` requires the reviewed contract commit, a passing adversarial-case
+  artifact, and a qualification receipt binding the contract, checkpoint,
+  reviewer report, case artifact and runner results;
+- `implementation` requires a qualified implementation commit and the unchanged
+  trusted contract identity; it does not trigger contract requalification;
+- `final` requires the checker `pass`, the trusted qualification receipt, and
+  the independent final review.
+
+The coordinator re-hashes the receipt-bound artifacts immediately before
+integration; a changed contract, checkpoint, report or case artifact blocks
+promotion. Promotion applies the accepted candidate changes to the trusted
+revision, rejects conflicts or trusted-file changes, creates one integration
+commit, re-runs the checker/tests against it, and pins the next campaign to that
+commit. No active campaign is retargeted or rebased.
 
 The dynamic coordinator is
 [`automation/gfx_l32b_complete.py`](../automation/gfx_l32b_complete.py). It

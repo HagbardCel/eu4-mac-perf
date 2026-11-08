@@ -14,6 +14,7 @@ import hashlib
 import importlib.util
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,7 @@ import eu4_gfx_draw_packet as trusted_packet  # noqa: E402
 import eu4_gfx_op_capture as trusted_capture  # noqa: E402
 from automation.gfx_checkpoint import validate_checkpoint  # noqa: E402
 from automation.gfx_contracts import ContractContext  # noqa: E402
+from automation.gfx_contracts.api import verify_static_span  # noqa: E402
 
 
 def _sha(path: Path) -> str:
@@ -98,40 +100,128 @@ def _context(
     ), packet
 
 
-def _structurally_valid(
-    evidence: list, packet_dir: Path, capture_dir: Path
-) -> str | None:
-    """A forged case must remain structurally admissible."""
+def _resolve_evidence(
+    evidence: list,
+    *,
+    artifact,
+    target,
+    packet_dir: Path,
+    capture_dir: Path,
+    base_ctx: ContractContext,
+) -> tuple[dict[str, Path], str | None]:
+    """Resolve forged evidence and require genuine original records.
+
+    A case that references a nonexistent call id, mismatched payload or
+    unverifiable static span is an invalid test, not a semantic rejection.
+    """
+    paths: dict[str, Path] = {}
+    target_payload = target.payload_bytes
     for item in evidence:
         if not isinstance(item, dict):
-            return "forged evidence is not an object"
+            return {}, "forged evidence is not an object"
         kind = item.get("type")
-        if kind not in {
-            "draw_snapshot", "resource_observation", "draw_record",
-            "primitive_set", "static_table", "static_reconstruction",
-        }:
-            return f"forged evidence type is unsupported: {kind!r}"
-        payload = item.get("payload")
-        if isinstance(payload, str) and payload:
-            candidate = Path(payload)
+        if kind == "draw_snapshot":
+            if item.get("call_id") != target.call_id:
+                return {}, "draw snapshot is not the selected draw"
+            if target_payload is None:
+                return {}, "selected draw has no captured payload"
+            offset = item.get("offset", 0)
+            length = item.get("length", len(target_payload))
+            if type(offset) is not int or type(length) is not int \
+                    or offset < 0 or length < 0 or offset + length > len(target_payload):
+                return {}, "draw snapshot slice is invalid"
+            payload = _resolve_path(str(item.get("payload", "")), [packet_dir, capture_dir])
+            if payload is None:
+                return {}, "draw snapshot payload is missing"
+            data = payload.read_bytes()
+            if item.get("sha256") and _sha(payload) != item["sha256"]:
+                return {}, "draw snapshot payload hash differs"
+            if item.get("size") is not None and len(data) != item["size"]:
+                return {}, "draw snapshot payload size differs"
+            if data != target_payload[offset:offset + length]:
+                return {}, "draw snapshot differs from the selected draw"
+            paths[str(item.get("payload"))] = payload
+        elif kind == "resource_observation":
+            record = next(
+                (row for row in artifact.operations
+                 if row.call_id == item.get("call_id")),
+                None,
+            )
+            if record is None:
+                return {}, "forged resource call is not in the capture"
+            if record.symbol != item.get("symbol") \
+                    or record.resource_id != item.get("resource_id"):
+                return {}, "forged resource identity differs from the original record"
+            if not record.fields_ok or record.payload_bytes is None:
+                return {}, "forged resource record is not structurally valid"
+            payload = _resolve_path(str(item.get("payload", "")), [packet_dir, capture_dir])
+            if payload is None:
+                return {}, "forged resource payload is missing"
+            if item.get("sha256") and _sha(payload) != item["sha256"]:
+                return {}, "forged resource payload hash differs"
+            if item.get("size") is not None and payload.stat().st_size != item["size"]:
+                return {}, "forged resource payload size differs"
+            if payload.read_bytes() != record.payload_bytes:
+                return {}, "forged resource payload differs from the original record"
+            paths[str(item.get("payload"))] = payload
+        elif kind == "draw_record":
+            record = next(
+                (row for row in artifact.operations
+                 if row.call_id == item.get("call_id")),
+                None,
+            )
+            if record is None or record.symbol != "_GfxDraw":
+                return {}, "forged draw record is not a genuine draw"
+        elif kind == "primitive_set":
+            record = next(
+                (row for row in artifact.operations
+                 if row.call_id == item.get("call_id")),
+                None,
+            )
+            if record is None or record.symbol != "_GfxSetPrimitiveType":
+                return {}, "forged primitive record is not genuine"
+            if record.call_id >= target.call_id:
+                return {}, "forged primitive record does not precede the draw"
+        elif kind == "static_table":
+            rel = item.get("path")
+            if not isinstance(rel, str) or not rel:
+                return {}, "forged static table has no path"
+            candidate = Path(rel)
             if candidate.is_absolute() or ".." in candidate.parts:
-                return "forged evidence payload path is invalid"
-            found = None
-            for base in (packet_dir, capture_dir):
-                path = (base / candidate).resolve()
-                try:
-                    path.relative_to(base.resolve())
-                except ValueError:
-                    continue
-                if path.is_file():
-                    found = path
-                    break
-            if found is None:
-                return "forged evidence payload is missing"
-            if item.get("sha256") and _sha(found) != item["sha256"]:
-                return "forged evidence payload hash differs"
-            if item.get("size") is not None and found.stat().st_size != item["size"]:
-                return "forged evidence payload size differs"
+                return {}, "forged static table path is invalid"
+            path = (ROOT / candidate).resolve()
+            try:
+                path.relative_to(ROOT.resolve())
+            except ValueError:
+                return {}, "forged static table path escapes the repository"
+            if not path.is_file():
+                return {}, "forged static table is missing"
+            if item.get("sha256") and _sha(path) != item["sha256"]:
+                return {}, "forged static table hash differs"
+            paths[rel] = path
+        elif kind == "static_reconstruction":
+            error = verify_static_span(item, base_ctx)
+            if error:
+                return {}, error
+        elif kind == "unresolved":
+            return {}, "unresolved evidence cannot support a case"
+        else:
+            return {}, f"unsupported forged evidence type: {kind!r}"
+    return paths, None
+
+
+def _resolve_path(text: str, bases: list[Path]) -> Path | None:
+    candidate = Path(text)
+    if not text or candidate.is_absolute() or ".." in candidate.parts:
+        return None
+    for base in bases:
+        path = (base.resolve() / candidate).resolve()
+        try:
+            path.relative_to(base.resolve())
+        except ValueError:
+            continue
+        if path.is_file():
+            return path
     return None
 
 
@@ -145,7 +235,7 @@ def run(
 ) -> dict:
     workspace = Path(workspace).resolve()
     checkpoint_path = Path(checkpoint_path).resolve()
-    errors = validate_checkpoint(checkpoint_path)
+    errors = validate_checkpoint(checkpoint_path, artifact_loader=artifact_loader)
     if errors:
         return {
             "schema": "eu4-gfx-contract-run/v1",
@@ -177,20 +267,46 @@ def run(
             continue
         validator = validators.get(name)
         if not callable(validator):
-            fields.append({"field": name, "ok": False, "error": "validator is missing"})
+            fields.append({"field": name, "ok": False, "outcome": "validator_missing"})
             continue
         item = inputs.get(name) or {}
         value = item.get("value")
         if not isinstance(value, dict):
-            fields.append({"field": name, "ok": False, "error": "positive value is missing"})
+            fields.append({"field": name, "ok": False, "outcome": "positive_value_missing"})
             continue
+        evidence = item.get("evidence") or []
+        paths, structural = _resolve_evidence(
+            evidence,
+            artifact=ctx.artifact,
+            target=ctx.target,
+            packet_dir=ctx.packet_dir,
+            capture_dir=ctx.capture_dir,
+            base_ctx=ctx,
+        )
+        if structural:
+            fields.append(
+                {"field": name, "ok": False, "outcome": "invalid_evidence",
+                 "error": structural}
+            )
+            continue
+        field_ctx = replace(
+            ctx,
+            field_name=name,
+            field_evidence=list(evidence),
+            field_evidence_paths=paths,
+            evidence_paths=paths,
+        )
         try:
-            error = validator(value, ctx)
+            error = validator(value, field_ctx)
         except Exception as exc:  # noqa: BLE001 - qualification report, not control flow
-            fields.append({"field": name, "ok": False, "error": f"validator_error: {exc}"})
+            fields.append(
+                {"field": name, "ok": False, "outcome": "validator_error",
+                 "error": str(exc)}
+            )
             continue
         fields.append(
-            {"field": name, "ok": error is None, "error": error}
+            {"field": name, "ok": error is None, "outcome": "positive",
+             "error": error}
         )
 
     cases = []
@@ -215,45 +331,68 @@ def run(
             forged_evidence = case.get("forged_evidence", item.get("evidence"))
             if not callable(validator):
                 cases.append(
-                    {"field": name, "ok": False, "error": "validator is missing"}
+                    {"field": name, "ok": False, "outcome": "validator_missing"}
                 )
                 continue
-            structural = _structurally_valid(
-                forged_evidence or [], bundle / "packet", ctx.capture_dir
+            paths, structural = _resolve_evidence(
+                forged_evidence or [],
+                artifact=ctx.artifact,
+                target=ctx.target,
+                packet_dir=ctx.packet_dir,
+                capture_dir=ctx.capture_dir,
+                base_ctx=ctx,
             )
             if structural:
                 cases.append(
-                    {"field": name, "ok": False,
-                     "error": f"case is not structurally admissible: {structural}"}
+                    {"field": name, "ok": False, "outcome": "invalid_test",
+                     "error": structural}
                 )
                 continue
-            forged = dict(item)
-            forged["value"] = forged_value
-            forged["evidence"] = forged_evidence
+            case_ctx = replace(
+                ctx,
+                field_name=name,
+                field_evidence=list(forged_evidence or []),
+                field_evidence_paths=paths,
+                evidence_paths=paths,
+            )
             try:
-                error = validator(forged_value, ctx)
+                error = validator(forged_value, case_ctx)
             except Exception as exc:  # noqa: BLE001
                 cases.append(
-                    {"field": name, "ok": False, "error": f"validator_error: {exc}"}
+                    {"field": name, "ok": False, "outcome": "validator_error",
+                     "error": str(exc)}
                 )
                 continue
             expected = str(case.get("expected_error_prefix") or "")
-            ok = bool(error) and (not expected or str(error).startswith(expected))
+            if error and (not expected or str(error).startswith(expected)):
+                outcome = "semantic_rejection"
+                ok = True
+            elif error:
+                outcome = "wrong_rejection"
+                ok = False
+            else:
+                outcome = "false_pass"
+                ok = False
             cases.append(
                 {
                     "field": name,
                     "mutation_class": case.get("mutation_class"),
                     "ok": ok,
+                    "outcome": outcome,
                     "error": error,
                     "expected_error_prefix": expected,
                 }
             )
-    ok = all(row["ok"] for row in fields) and all(row["ok"] for row in cases)
+    positive_ok = bool(fields) and all(row["ok"] for row in fields)
+    negative_ok = bool(cases) and all(row["ok"] for row in cases)
+    ok = positive_ok and negative_ok
     return {
         "schema": "eu4-gfx-contract-run/v1",
         "version": version,
         "checkpoint_sha256": _sha(checkpoint_path),
         "ok": ok,
+        "positive_ok": positive_ok,
+        "negative_ok": negative_ok,
         "fields": fields,
         "cases": cases,
         "errors": [],

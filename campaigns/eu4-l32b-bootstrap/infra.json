@@ -19,7 +19,9 @@
     "campaigns/eu4-l32b-complete/**",
     "campaigns/eu4-l32b-contract/**",
     "analysis/gfx-draw/v0/l32b/complete/**",
-    "automation/manifest_revision.py"
+    "automation/manifest_revision.py",
+    "automation/gfx_evidence_policy.py",
+    "automation/gfx_adversarial.py"
   ],
   "forbidden_paths": [
     "automation/gfx_draw_accept.py",

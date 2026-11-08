@@ -10,10 +10,12 @@ OpenCode ``Runner``; the state machine is also testable with injected hooks.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -22,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from automation import launch_ledger  # noqa: E402
+from automation.gfx_adversarial import cases_digest, validate_cases  # noqa: E402
 from automation.gfx_checkpoint import validate_checkpoint  # noqa: E402
 from automation.review_result import load_review, validate_review  # noqa: E402
 from automation.state import atomic_write, load_campaign, repo_root  # noqa: E402
@@ -42,7 +45,9 @@ class Hooks:
     snapshot: Callable[[Path, dict], dict]
     run_contract: Callable[[dict, dict], dict]
     run_reviewer: Callable[[dict, dict], dict]
-    integrate: Callable[[dict, dict, dict], dict]
+    integrate: Callable[..., dict]
+    snapshot_contract: Callable[[Path, dict], dict] | None = None
+    run_adversarial_cases: Callable[[dict, dict, Path, dict], dict] | None = None
     run_research: Callable[[dict], dict] | None = None
     run_remediation: Callable[[dict], dict] | None = None
 
@@ -71,6 +76,18 @@ def default_state(workflow: dict) -> dict:
         "contract": None,
         "review": None,
         "integration": None,
+        "review_target": None,
+        "remediation_target": None,
+        "promotion_kind": None,
+        "contract_review": None,
+        "candidate_review": None,
+        "final_review": None,
+        "trusted_contract": workflow.get("trusted_contract"),
+        "contract_workspace": None,
+        "contract_version": None,
+        "contract_checkpoint": None,
+        "contract_sha256": None,
+        "adversarial_cases": None,
         "last_implementer": None,
         "last_contract": None,
         "blocker": None,
@@ -122,6 +139,31 @@ def _review_outcome(
     return str(review.get("outcome")), []
 
 
+def _file_sha(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _canonical_sha(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _git_blob_sha(repo: Path, commit: str, rel: str) -> str | None:
+    completed = subprocess.run(
+        ["git", "-C", str(repo), "show", f"{commit}:{rel}"],
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    return hashlib.sha256(completed.stdout).hexdigest()
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 class Coordinator:
     def __init__(self, *, repo: Path, workflow: dict, state_path: Path, hooks: Hooks):
         self.repo = Path(repo).resolve()
@@ -151,7 +193,7 @@ class Coordinator:
         if current in ("qualifying_review", "reviewing", "final_review"):
             return self._review(state)
         if current == "promote":
-            return self._integrate(state)
+            return self._promote(state)
         if current == "remediating":
             return self._remediation(state)
         if current == "researching":
@@ -236,8 +278,10 @@ class Coordinator:
                 state["blocker"] = {"reason": "snapshot_failed", "detail": str(exc)}
                 return state
             if state["stage"] == "final":
+                state["review_target"] = "final"
                 state["state"] = "final_review"
             else:
+                state["review_target"] = "candidate"
                 state["state"] = "reviewing"
             return state
         if status == "paused" and result.get("pause_reason") in (
@@ -259,24 +303,55 @@ class Coordinator:
     def _contract(self, state: dict) -> dict:
         result = self.hooks.run_contract(state["checkpoint"], state)
         state["last_contract"] = result
-        if result.get("status") != "complete":
+        if result.get("status") != "complete" or result.get("last_verdict") != "pass":
             state["state"] = "blocked"
             state["blocker"] = {
                 "reason": "contract_campaign_incomplete",
-                "detail": result.get("pause_reason"),
+                "detail": result.get("pause_reason") or result.get("last_diagnostics"),
             }
             return state
-        state["contract"] = result.get("candidate") or result
+        workspace = result.get("workspace")
+        if not workspace or self.hooks.snapshot_contract is None:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "contract_snapshot_unavailable"}
+            return state
+        try:
+            contract = self.hooks.snapshot_contract(Path(workspace), state)
+        except (OSError, RuntimeError, KeyError) as exc:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "contract_snapshot_failed", "detail": str(exc)}
+            return state
+        if not isinstance(contract, dict) or not contract.get("commit"):
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "contract_snapshot_incomplete"}
+            return state
+        state["contract"] = contract
+        state["contract_workspace"] = str(workspace)
+        state["contract_version"] = str(
+            result.get("contract_version") or result.get("version") or ""
+        )
+        module = Path(workspace) / "automation" / "gfx_contracts" / (
+            f"{state['contract_version']}.py"
+        )
+        if module.is_file():
+            state["contract_sha256"] = hashlib.sha256(module.read_bytes()).hexdigest()
+        else:
+            state["contract_sha256"] = (
+                result.get("contract_sha256") or contract.get("contract_sha256")
+            )
+        state["contract_checkpoint"] = result.get("checkpoint") or state["checkpoint"]
+        state["review_target"] = "contract"
         state["state"] = "qualifying_review"
         return state
 
     def _review(self, state: dict) -> dict:
-        target = state["contract"] if state["state"] == "qualifying_review" else state["candidate"]
+        target_key = state.get("review_target") or (
+            "contract" if state["state"] == "qualifying_review" else "candidate"
+        )
+        target = state.get(target_key)
         result = self.hooks.run_reviewer(target, state)
         path = Path(str(result.get("path") or ""))
-        expected_candidate = (
-            target.get("commit") if isinstance(target, dict) else None
-        )
+        expected_candidate = target.get("commit") if isinstance(target, dict) else None
         outcome, errors = _review_outcome(
             path,
             expected_candidate=expected_candidate,
@@ -287,20 +362,45 @@ class Coordinator:
             "outcome": outcome,
             "errors": errors,
             "session_id": result.get("session_id"),
+            "target": target_key,
         }
         if errors:
             state["state"] = "blocked"
             state["blocker"] = {"reason": "invalid_review", "errors": errors}
             return state
         if outcome == "qualified":
-            if state["state"] == "qualifying_review":
+            if target_key == "contract":
+                qualification_errors = self._qualify_contract(state, path)
+                if qualification_errors:
+                    state["state"] = "blocked"
+                    state["blocker"] = {
+                        "reason": "adversarial_qualification_failed",
+                        "errors": qualification_errors,
+                    }
+                    return state
+                state["promotion_kind"] = "contract"
                 state["state"] = "promote"
-            elif state["state"] == "final_review":
-                state["state"] = "awaiting_merge"
+            elif target_key == "candidate":
+                state["candidate_review"] = self._candidate_receipt(state, path)
+                state["promotion_kind"] = "implementation"
+                state["state"] = "promote"
+            elif target_key == "final":
+                final_errors = self._final_receipt(state, path)
+                if final_errors:
+                    state["state"] = "blocked"
+                    state["blocker"] = {
+                        "reason": "final_qualification_failed",
+                        "errors": final_errors,
+                    }
+                    return state
+                state["promotion_kind"] = "final"
+                state["state"] = "promote"
             else:
-                state["state"] = "promote"
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": f"unknown_review_target_{target_key}"}
             return state
         if outcome == "rejected":
+            state["remediation_target"] = target_key
             state["state"] = "remediating"
             return state
         if outcome == "unresolved":
@@ -310,8 +410,100 @@ class Coordinator:
         state["blocker"] = {"reason": f"review_outcome_{outcome}"}
         return state
 
-    def _integrate(self, state: dict) -> dict:
-        result = self.hooks.integrate(state["candidate"], state["contract"], state)
+    def _qualify_contract(self, state: dict, report_path: Path) -> list[str]:
+        cases_path = report_path.with_name("review-adversarial.json")
+        if not cases_path.is_file():
+            return ["reviewer-authored adversarial cases are missing"]
+        checkpoint_path = Path(
+            str(state.get("contract_checkpoint") or state.get("checkpoint") or "")
+        )
+        if not checkpoint_path.is_file():
+            return ["checkpoint is missing"]
+        checkpoint_sha = _file_sha(checkpoint_path)
+        try:
+            checkpoint_doc = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return [f"checkpoint is unreadable: {exc}"]
+        required = {
+            gap.get("name")
+            for gap in checkpoint_doc.get("contract_gaps") or []
+            if isinstance(gap, dict) and isinstance(gap.get("name"), str)
+        }
+        try:
+            document = json.loads(cases_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return [f"adversarial cases are unreadable: {exc}"]
+        errors = validate_cases(
+            document,
+            candidate_commit=str(state["contract"].get("commit")),
+            contract_version=str(state.get("contract_version") or ""),
+            checkpoint_sha256=checkpoint_sha,
+            required_fields=required,
+        )
+        if errors:
+            return errors
+        if self.hooks.run_adversarial_cases is None:
+            return ["adversarial-case runner is unavailable"]
+        result = self.hooks.run_adversarial_cases(
+            checkpoint_path, state["contract"], cases_path, state
+        )
+        if not result.get("ok") or not result.get("positive_ok")                 or not result.get("negative_ok"):
+            return [
+                "adversarial qualification did not pass: "
+                + json.dumps(result.get("cases") or result.get("errors") or [])[:2000]
+            ]
+        state["adversarial_cases"] = str(cases_path)
+        state["adversarial_report"] = result
+        state["contract_review"] = {
+            "contract_commit": state["contract"].get("commit"),
+            "contract_version": state.get("contract_version"),
+            "contract_sha256": state.get("contract_sha256"),
+            "checkpoint_sha256": checkpoint_sha,
+            "reviewer_report_sha256": _file_sha(report_path),
+            "adversarial_cases_sha256": cases_digest(cases_path),
+            "positive_ok": True,
+            "negative_ok": True,
+            "runner_report_sha256": _canonical_sha(result),
+            "qualified_at": _now(),
+        }
+        return []
+
+    def _candidate_receipt(self, state: dict, report_path: Path) -> dict:
+        trusted = state.get("trusted_contract") or {}
+        return {
+            "candidate_commit": state["candidate"].get("commit"),
+            "reviewer_report_sha256": _file_sha(report_path),
+            "trusted_contract_commit": trusted.get("commit"),
+            "trusted_contract_sha256": trusted.get("sha256"),
+            "qualified_at": _now(),
+        }
+
+    def _final_receipt(self, state: dict, report_path: Path) -> list[str]:
+        implementer = state.get("last_implementer") or {}
+        if implementer.get("last_verdict") != "pass":
+            return ["final checker did not pass"]
+        receipt = implementer.get("qualification_receipt")
+        if not receipt or not Path(str(receipt)).is_file():
+            return ["final qualification receipt is missing"]
+        state["final_review"] = {
+            "candidate_commit": state["candidate"].get("commit"),
+            "reviewer_report_sha256": _file_sha(report_path),
+            "qualification_receipt_sha256": _file_sha(Path(str(receipt))),
+            "checker_verdict": "pass",
+            "qualified_at": _now(),
+        }
+        return []
+
+    def _promote(self, state: dict) -> dict:
+        kind = state.get("promotion_kind")
+        errors = self._validate_promotion(state, kind)
+        if errors:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "promotion_invalid", "errors": errors}
+            return state
+        result = self.hooks.integrate(
+            state["candidate"], state["contract"], state, kind=kind
+        )
         state["integration"] = result
         if not result.get("ok"):
             state["state"] = "blocked"
@@ -320,9 +512,84 @@ class Coordinator:
                 "detail": result.get("detail"),
             }
             return state
-        _note(state, "integrated", commit=result.get("commit"))
-        state["state"] = "continuation"
+        _note(state, "integrated", commit=result.get("commit"), kind=kind)
+        if kind == "contract":
+            state["trusted_contract"] = {
+                "commit": state["contract"].get("commit"),
+                "version": state.get("contract_version"),
+                "sha256": state.get("contract_sha256"),
+            }
+            state["state"] = "continuation"
+        elif kind == "implementation":
+            state["state"] = "continuation"
+        elif kind == "final":
+            state["state"] = "awaiting_merge"
         return state
+
+    def _validate_promotion(self, state: dict, kind: str | None) -> list[str]:
+        if kind == "contract":
+            receipt = state.get("contract_review")
+            if not isinstance(receipt, dict):
+                return ["contract qualification receipt is missing"]
+            contract = state.get("contract") or {}
+            if receipt.get("contract_commit") != contract.get("commit"):
+                return ["contract receipt does not match the contract commit"]
+            if receipt.get("contract_version") != state.get("contract_version"):
+                return ["contract receipt version differs"]
+            if receipt.get("contract_sha256") != state.get("contract_sha256"):
+                return ["contract receipt hash differs"]
+            checkpoint = Path(str(state.get("contract_checkpoint") or state.get("checkpoint") or ""))
+            if not checkpoint.is_file() or receipt.get("checkpoint_sha256") != _file_sha(checkpoint):
+                return ["contract receipt checkpoint is stale"]
+            report = Path(str((state.get("review") or {}).get("path") or ""))
+            if not report.is_file() or receipt.get("reviewer_report_sha256") != _file_sha(report):
+                return ["contract reviewer report changed after qualification"]
+            cases = Path(str(state.get("adversarial_cases") or ""))
+            if not cases.is_file() or receipt.get("adversarial_cases_sha256") != cases_digest(cases):
+                return ["adversarial cases changed after qualification"]
+            if receipt.get("positive_ok") is not True or receipt.get("negative_ok") is not True:
+                return ["adversarial qualification did not pass"]
+            if receipt.get("runner_report_sha256") != _canonical_sha(
+                state.get("adversarial_report") or {}
+            ):
+                return ["adversarial runner report changed after qualification"]
+            module = f"automation/gfx_contracts/{state.get('contract_version')}.py"
+            actual = _git_blob_sha(self.repo, str(contract.get("commit")), module)
+            if actual is None or actual != state.get("contract_sha256"):
+                return ["contract module changed after qualification"]
+            return []
+        if kind == "implementation":
+            receipt = state.get("candidate_review")
+            if not isinstance(receipt, dict):
+                return ["implementation review receipt is missing"]
+            candidate = state.get("candidate") or {}
+            if receipt.get("candidate_commit") != candidate.get("commit"):
+                return ["implementation receipt does not match the candidate commit"]
+            trusted = state.get("trusted_contract") or {}
+            if receipt.get("trusted_contract_commit") != trusted.get("commit")                     or receipt.get("trusted_contract_sha256") != trusted.get("sha256"):
+                return ["trusted contract changed without requalification"]
+            report = Path(str((state.get("review") or {}).get("path") or ""))
+            if not report.is_file() or receipt.get("reviewer_report_sha256") != _file_sha(report):
+                return ["implementation reviewer report changed after qualification"]
+            return []
+        if kind == "final":
+            receipt = state.get("final_review")
+            if not isinstance(receipt, dict):
+                return ["final review receipt is missing"]
+            candidate = state.get("candidate") or {}
+            if receipt.get("candidate_commit") != candidate.get("commit"):
+                return ["final receipt does not match the candidate commit"]
+            if receipt.get("checker_verdict") != "pass":
+                return ["final checker did not pass"]
+            implementer = state.get("last_implementer") or {}
+            qualification = Path(str(implementer.get("qualification_receipt") or ""))
+            if not qualification.is_file()                     or receipt.get("qualification_receipt_sha256") != _file_sha(qualification):
+                return ["final qualification receipt changed after review"]
+            report = Path(str((state.get("review") or {}).get("path") or ""))
+            if not report.is_file() or receipt.get("reviewer_report_sha256") != _file_sha(report):
+                return ["final reviewer report changed after qualification"]
+            return []
+        return ["unknown promotion kind"]
 
     def _remediation(self, state: dict) -> dict:
         if self.hooks.run_remediation is None:
@@ -331,11 +598,54 @@ class Coordinator:
             return state
         result = self.hooks.run_remediation(state)
         state["last_implementer"] = result
-        if result.get("status") == "complete":
-            state["state"] = "reviewing"
-        else:
+        if result.get("status") != "complete" or result.get("last_verdict") != "pass":
             state["state"] = "blocked"
-            state["blocker"] = {"reason": "remediation_incomplete"}
+            state["blocker"] = {
+                "reason": "remediation_incomplete",
+                "detail": result.get("last_diagnostics"),
+            }
+            return state
+        workspace = result.get("workspace")
+        if not workspace:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "remediation_workspace_missing"}
+            return state
+        target = state.get("remediation_target")
+        try:
+            if target == "contract":
+                if self.hooks.snapshot_contract is None:
+                    state["state"] = "blocked"
+                    state["blocker"] = {"reason": "contract_snapshot_unavailable"}
+                    return state
+                contract = self.hooks.snapshot_contract(Path(workspace), state)
+                state["contract"] = contract
+                version = result.get("contract_version") or state.get("contract_version")
+                module = Path(workspace) / "automation" / "gfx_contracts" / (
+                    f"{version}.py"
+                )
+                state["contract_sha256"] = (
+                    hashlib.sha256(module.read_bytes()).hexdigest()
+                    if module.is_file()
+                    else (result.get("contract_sha256") or contract.get("contract_sha256"))
+                )
+                state["contract_version"] = (
+                    result.get("contract_version") or state.get("contract_version")
+                )
+                state["contract_checkpoint"] = (
+                    result.get("checkpoint") or state.get("contract_checkpoint")
+                )
+                state["review_target"] = "contract"
+                state["state"] = "qualifying_review"
+            elif target in ("candidate", "final"):
+                state["candidate"] = self.hooks.snapshot(Path(workspace), state)
+                state["review_target"] = target
+                state["state"] = "reviewing" if target == "candidate" else "final_review"
+            else:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "remediation_target_missing"}
+        except (OSError, RuntimeError, KeyError) as exc:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "remediation_snapshot_failed", "detail": str(exc)}
         return state
 
     def _research(self, state: dict) -> dict:

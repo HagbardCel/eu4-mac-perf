@@ -56,7 +56,9 @@
     "automation/gfx_l32b_complete.py",
     "campaigns",
     "benchmark/eu4_gfx_shader.mm",
-    "benchmark/eu4_gfx_shadow_worker.mm"
+    "benchmark/eu4_gfx_shadow_worker.mm",
+    "automation/gfx_evidence_policy.py",
+    "automation/gfx_adversarial.py"
   ],
   "test_modules": [
     "tests.test_gfx_observe",

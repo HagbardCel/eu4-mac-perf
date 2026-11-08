@@ -13,9 +13,18 @@ import hashlib
 import json
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "benchmark"))
+
+import eu4_gfx_draw_packet as trusted_packet  # noqa: E402
+import eu4_gfx_op_capture as trusted_capture  # noqa: E402
+from automation.gfx_evidence_policy import evidence_relevant  # noqa: E402
 
 SCHEMA = "eu4-gfx-provisional-checkpoint/v1"
 BUNDLE_SCHEMA = "eu4-gfx-checkpoint-bundle/v1"
@@ -264,6 +273,7 @@ def validate_checkpoint(
     expected_trusted_contract: str | None = None,
     expected_checker_sha256: str | None = None,
     expected_manifest_sha256: str | None = None,
+    artifact_loader: Callable[[Path], Any] | None = None,
 ) -> list[str]:
     """Validate a checkpoint bundle; return human-readable errors."""
     path = Path(path)
@@ -322,6 +332,7 @@ def validate_checkpoint(
             if _sha(member) != item.get("sha256"):
                 errors.append(f"bundle member hash differs: {rel}")
     packet = checkpoint.get("packet")
+    packet_value = None
     if not isinstance(packet, dict):
         errors.append("packet identity is missing")
     else:
@@ -330,6 +341,11 @@ def validate_checkpoint(
             errors.append("checkpoint packet is missing from the bundle")
         elif _sha(member) != packet.get("sha256"):
             errors.append("checkpoint packet hash differs")
+        else:
+            try:
+                packet_value = json.loads(member.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                errors.append(f"checkpoint packet is unreadable: {exc}")
     reference = checkpoint.get("capture")
     if not isinstance(reference, dict):
         errors.append("capture reference is missing")
@@ -347,4 +363,57 @@ def validate_checkpoint(
     fields = checkpoint.get("fields")
     if not isinstance(fields, list) or not fields:
         errors.append("checkpoint has no fields")
+    if isinstance(reference, dict) and isinstance(fields, list) and packet_value is not None:
+        capture_dir = Path(str(reference.get("capture_dir") or ""))
+        artifact = None
+        if capture_dir.is_dir():
+            try:
+                if artifact_loader is not None:
+                    artifact = artifact_loader(capture_dir)
+                else:
+                    artifact = trusted_capture.load_capture(
+                        capture_dir, require_events=False
+                    )
+            except (OSError, RuntimeError, ValueError) as exc:
+                errors.append(f"checkpoint capture cannot be revalidated: {exc}")
+        if artifact is not None:
+            target_id = (checkpoint.get("target") or {}).get("call_id")
+            target = next(
+                (row for row in artifact.operations if row.call_id == target_id),
+                None,
+            )
+            if target is None or target.symbol != "_GfxDraw" or target.payload_bytes is None:
+                errors.append("checkpoint target draw is not in the capture")
+            else:
+                try:
+                    master = trusted_packet.parse_master(target.payload_bytes)
+                except trusted_packet.PacketError as exc:
+                    errors.append(f"checkpoint target master is invalid: {exc}")
+                else:
+                    ctx = {
+                        "artifact": artifact,
+                        "target": target,
+                        "master": master,
+                        "packet_dir": bundle / "packet",
+                    }
+                    for field in fields:
+                        if not isinstance(field, dict) or field.get("state") != "provisional":
+                            continue
+                        name = field.get("name")
+                        item = (packet_value.get("inputs") or {}).get(name) or {}
+                        relevant, basis = evidence_relevant(
+                            str(name), item.get("evidence") or [], ctx
+                        )
+                        if not relevant:
+                            errors.append(
+                                f"provisional field {name} has no field-relevant evidence: {basis}"
+                            )
+                        if field.get("evidence_relevant") is not True:
+                            errors.append(
+                                f"provisional field {name} is not marked evidence-relevant"
+                            )
+                        if field.get("evidence_basis") != basis:
+                            errors.append(
+                                f"provisional field {name} evidence basis differs"
+                            )
     return errors

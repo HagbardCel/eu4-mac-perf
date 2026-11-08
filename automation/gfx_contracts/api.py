@@ -40,6 +40,9 @@ class ContractContext:
     evidence_paths: dict[str, Path] = field(default_factory=dict)
     frozen_evidence: dict[str, Any] = field(default_factory=dict)
     manifest_members: dict[str, str] = field(default_factory=dict)
+    field_name: str | None = None
+    field_evidence: list[dict] = field(default_factory=list)
+    field_evidence_paths: dict[str, Path] = field(default_factory=dict)
 
 
 def sha256_bytes(data: bytes) -> str:

@@ -42,6 +42,7 @@ from automation.gfx_contracts import (  # noqa: E402
     load_contract,
     merge_validators,
 )
+from automation.gfx_evidence_policy import evidence_relevant  # noqa: E402
 from automation.gfx_contracts.api import (  # noqa: E402
     record_for,
     require_precedes,
@@ -1114,7 +1115,15 @@ def _field_digest(item: dict) -> str | None:
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _contract_context(ctx: dict, packet_dir: Path, config: dict) -> ContractContext:
+def _contract_context(
+    ctx: dict,
+    packet_dir: Path,
+    config: dict,
+    *,
+    field_name: str | None = None,
+    field_evidence: list | None = None,
+) -> ContractContext:
+    paths = ctx.setdefault("evidence_paths", {})
     return ContractContext(
         artifact=ctx["artifact"],
         target=ctx["target"],
@@ -1124,9 +1133,12 @@ def _contract_context(ctx: dict, packet_dir: Path, config: dict) -> ContractCont
         config=config,
         repo=ROOT,
         target_metadata=ctx.get("target_metadata") or {},
-        evidence_paths=ctx.get("evidence_paths") or {},
+        evidence_paths=paths,
         frozen_evidence=ctx.get("frozen_evidence") or {},
         manifest_members=ctx.get("manifest_members") or {},
+        field_name=field_name,
+        field_evidence=list(field_evidence or []),
+        field_evidence_paths=paths,
     )
 
 
@@ -1166,7 +1178,7 @@ def validate_packet(
     except ContractError as exc:
         return None, f"contract registry: {exc}"
     ctx["packet_dir"] = Path(packet_dir)
-    contract_ctx = _contract_context(ctx, packet_dir, config)
+    ctx.setdefault("evidence_paths", {})
     states: dict[str, str] = {}
     established: list[str] = []
     missing: list[str] = []
@@ -1181,9 +1193,13 @@ def validate_packet(
         value = item.get("value")
         if not isinstance(value, dict):
             return None, f"{name} has no value"
-        _, error = _evidence_bytes(item.get("evidence") or [], ctx, packet_dir)
+        evidence = item.get("evidence") or []
+        _, error = _evidence_bytes(evidence, ctx, packet_dir)
         if error:
             return None, f"{name}: {error}"
+        relevant, basis = evidence_relevant(name, evidence, ctx)
+        if not relevant:
+            return None, f"{name}: established without field-relevant evidence: {basis}"
         validator = validators.get(name)
         if validator is None:
             states[name] = "provisional"
@@ -1193,7 +1209,14 @@ def validate_packet(
             if name in BASE_VALIDATORS:
                 error = validator(value, ctx)
             else:
-                error = validator(value, contract_ctx)
+                field_ctx = _contract_context(
+                    ctx,
+                    packet_dir,
+                    config,
+                    field_name=name,
+                    field_evidence=evidence,
+                )
+                error = validator(value, field_ctx)
         except Exception as exc:
             return None, f"{name}: validator_error: {exc}"
         if error:
@@ -1301,12 +1324,17 @@ def _evidence_types(item: dict) -> list[str]:
     return sorted(types)
 
 
-def _checkpoint_fields(inputs: dict, required: list[str], states: dict) -> list[dict]:
+def _checkpoint_fields(
+    inputs: dict, required: list[str], states: dict, ctx: dict
+) -> list[dict]:
     rows = []
     for name in required:
         item = inputs.get(name)
         if not isinstance(item, dict):
             item = {}
+        relevant, basis = evidence_relevant(
+            name, item.get("evidence") or [], ctx
+        )
         rows.append(
             {
                 "name": name,
@@ -1314,6 +1342,8 @@ def _checkpoint_fields(inputs: dict, required: list[str], states: dict) -> list[
                 "state": states.get(name),
                 "value_sha256": _field_digest(item),
                 "evidence_types": _evidence_types(item),
+                "evidence_relevant": bool(relevant),
+                "evidence_basis": basis,
             }
         )
     return rows
@@ -1498,7 +1528,7 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
                 "capture_plan_sha256": selection.get("plan_sha256") if selection else None,
             }
             if provisional:
-                fields = _checkpoint_fields(packet.get("inputs") or {}, required, states)
+                fields = _checkpoint_fields(packet.get("inputs") or {}, required, states, ctx)
                 gaps = []
                 for name in provisional:
                     item = (packet.get("inputs") or {}).get(name) or {}
@@ -1598,7 +1628,7 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
                         ),
                     ),
                 )
-            fields = _checkpoint_fields(packet.get("inputs") or {}, required, states)
+            fields = _checkpoint_fields(packet.get("inputs") or {}, required, states, ctx)
             try:
                 receipt_path = _write_receipt(
                     run_root,

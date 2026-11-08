@@ -21,7 +21,9 @@
     "analysis/gfx-draw/v0/probe/**",
     "analysis/qualification/v0/**",
     "reverse_engineering/target.json",
-    "benchmark/eu4_gfx_observe_gateway.S"
+    "benchmark/eu4_gfx_observe_gateway.S",
+    "automation/gfx_evidence_policy.py",
+    "automation/gfx_adversarial.py"
   ],
   "test_modules": [
     "tests.test_gfx_contract_v1"

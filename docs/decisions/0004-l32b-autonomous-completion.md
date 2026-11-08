@@ -28,24 +28,35 @@ the implementer weaken its own acceptance criteria.
    `validated`, `provisional`, `missing` or `invalid`. No required input may be
    accepted without a field-specific validator. The v1 checker stays
    byte-identical because the completed L3.2b-I manifest pins it.
-2. **Provisional checkpoints.** When structurally valid original evidence
-   exists for one or more fields but no validator exists, the checker writes a
-   durable, immutable checkpoint bundle outside the candidate worktree and the
-   temporary packet directory. Partial checkpoints are permitted while other
-   fields are still missing. A checkpoint is a qualification work order, never
-   acceptance of L3.2b.
+2. **Provisional checkpoints.** When field-relevant original evidence exists
+   for one or more fields but no validator exists, the checker writes a durable,
+   immutable checkpoint bundle outside the candidate worktree and the temporary
+   packet directory. A recognized evidence type is not enough: the shared
+   evidence policy requires the minimum provenance for the claimed field, and
+   the checkpoint validator re-runs it against the packet and capture. Partial
+   checkpoints are permitted while other fields are still missing. A checkpoint
+   is a qualification work order, never acceptance of L3.2b.
 3. **Independently qualified contracts.** New validators are proposed in a
    separate campaign, executed in a separate process, and reviewed by an
    independent reviewer who authors field-specific adversarial cases. The
-   validator must accept the checkpoint's original evidence and reject
-   incorrect-but-structurally-valid evidence. Promotion is append-only and
-   creates a new integration commit.
+   runner resolves every forged evidence item against genuine original records;
+   a nonexistent call id is an invalid test, not a semantic rejection. The
+   validator must accept the checkpoint's original evidence and reject every
+   genuine but incorrect case for the stated reason. A qualification receipt
+   binds the contract, checkpoint, reviewer report, case artifact and runner
+   results, and is re-hashed immediately before integration. Promotion is
+   append-only and creates a new integration commit.
 4. **Two identities.** Every campaign records a `candidate_base_commit` (the
    implementation worktree parent) and a `trusted_contract_commit` (the
    immutable checker, contract, tests and oracle used for acceptance). Trusted
    files are verified at the trusted revision; candidate changes are verified
-   against the candidate base. Promotion combines the accepted histories in one
-   integration commit; no active campaign is retargeted or rebased.
+   against the candidate base. Promotion has an explicit kind: `contract`
+   requires the reviewed contract and adversarial qualification receipt;
+   `implementation` requires the qualified implementation and the unchanged
+   trusted contract; `final` requires the checker pass, the trusted
+   qualification receipt and the independent final review. Promotion combines
+   the accepted histories in one integration commit; no active campaign is
+   retargeted or rebased.
 5. **One global launch ledger.** The workflow-level ledger is the only
    authority. Receipts are `reserved`, `started`, `completed`, `failed` or
    `abandoned`; every claim counts and there is no automatic refund. Capture

@@ -16,12 +16,15 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 
 # The candidate workspace is first on PYTHONPATH. Do not put the trusted
 # checkout ahead of it: these tests must exercise the candidate modules.
 import eu4_gfx_draw_packet as packet_mod  # noqa: E402
+
+EXE_SHA = "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d"
 
 
 def _master() -> bytes:
@@ -37,31 +40,35 @@ def _master() -> bytes:
     return bytes(raw)
 
 
-def _artifact(capture_dir: Path, master: bytes):
-    draw = SimpleNamespace(
-        call_id=11,
-        symbol="_GfxDraw",
-        caller_rva=0xEDFCD1,
-        thread_id=7,
-        completion_seq=3,
-        payload_bytes=master,
-        payload_file="draw.bin",
-        payload_sha256=hashlib.sha256(master).hexdigest(),
-        payload_size=len(master),
-        meta={"qualified": True, "raw_count": 4, "effective_count": 4},
+def _record(call_id, symbol, resource_id, payload, *, caller=0, thread=7, seq=0):
+    return SimpleNamespace(
+        call_id=call_id,
+        symbol=symbol,
+        caller_rva=caller,
+        thread_id=thread,
+        completion_seq=seq,
+        payload_bytes=payload,
+        payload_file=f"payloads/{call_id}.bin",
+        payload_sha256=hashlib.sha256(payload).hexdigest(),
+        payload_size=len(payload),
+        meta={},
         fields_ok=True,
-        resource_id="",
+        resource_id=resource_id,
         contents_known=True,
     )
+
+
+def _artifact(capture_dir: Path, master: bytes):
+    draw = _record(11, "_GfxDraw", "", master, caller=0xEDFCD1, seq=3)
+    draw.meta = {"qualified": True, "raw_count": 4, "effective_count": 4}
+    shader = _record(9, "_GfxSetShader", "shader_1", b"shader-object", seq=2)
     return SimpleNamespace(
         session="session",
         pid=123,
-        executable_sha256=(
-            "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d"
-        ),
+        executable_sha256=EXE_SHA,
         image_base=0x100000000,
         root=capture_dir,
-        operations=[draw],
+        operations=[shader, draw],
     ), draw
 
 
@@ -79,16 +86,45 @@ def _packet(master: bytes) -> dict:
         "provenance": {
             "session": "session",
             "pid": 123,
-            "executable_sha256": (
-                "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d"
-            ),
+            "executable_sha256": EXE_SHA,
             "image_base": "0x100000000",
         },
         "inputs": {},
     }
 
 
-def _checkpoint(tmp: Path, *, field: str = "shader_identity") -> dict:
+def _shader_evidence(packet_dir: Path, master: bytes) -> list[dict]:
+    (packet_dir / "draw.bin").write_bytes(master)
+    (packet_dir / "shader.bin").write_bytes(b"shader-object")
+    return [
+        {
+            "type": "draw_snapshot",
+            "call_id": 11,
+            "payload": "draw.bin",
+            "sha256": hashlib.sha256(master).hexdigest(),
+            "size": len(master),
+            "offset": 0,
+            "length": len(master),
+        },
+        {
+            "type": "resource_observation",
+            "call_id": 9,
+            "symbol": "_GfxSetShader",
+            "resource_id": "shader_1",
+            "payload": "shader.bin",
+            "sha256": hashlib.sha256(b"shader-object").hexdigest(),
+            "size": len(b"shader-object"),
+        },
+    ]
+
+
+def _checkpoint(
+    tmp: Path,
+    *,
+    field: str = "draw_invocation",
+    evidence: list | None = None,
+    basis: str = "generic substantive evidence",
+) -> dict:
     from automation.gfx_checkpoint import write_checkpoint
 
     capture = tmp / "capture"
@@ -98,10 +134,12 @@ def _checkpoint(tmp: Path, *, field: str = "shader_identity") -> dict:
     packet_dir.mkdir()
     master = _master()
     packet = _packet(master)
+    if evidence is None:
+        evidence = [{"type": "draw_record", "call_id": 11}]
     packet["inputs"][field] = {
         "status": "established",
         "value": {},
-        "evidence": [],
+        "evidence": evidence,
     }
     (packet_dir / "draw-packet.json").write_text(
         json.dumps(packet, indent=2), encoding="utf-8"
@@ -120,16 +158,22 @@ def _checkpoint(tmp: Path, *, field: str = "shader_identity") -> dict:
         capture={
             "session": "session",
             "pid": 123,
-            "executable_sha256": (
-                "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d"
-            ),
+            "executable_sha256": EXE_SHA,
             "library_sha256": "f" * 64,
         },
         packet=packet,
         packet_dir=packet_dir,
         capture_dir=capture,
         target={"call_id": 11, "caller_rva": "0xedfcd1", "mode": 5, "effective_count": 4},
-        fields=[{"name": field, "state": "provisional"}],
+        fields=[
+            {
+                "name": field,
+                "status": "established",
+                "state": "provisional",
+                "evidence_relevant": True,
+                "evidence_basis": basis,
+            }
+        ],
         contract_gaps=[{"name": field}],
         checkpoint_kind="partial",
         blocked_reason="unsupported_evidence_contract",
@@ -138,6 +182,34 @@ def _checkpoint(tmp: Path, *, field: str = "shader_identity") -> dict:
 
 class FailClosedTests(unittest.TestCase):
     def test_unknown_validator_is_provisional_not_pass(self):
+        import automation.gfx_draw_accept_v2 as accept
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            capture = tmp / "capture"
+            capture.mkdir()
+            master = _master()
+            artifact, draw = _artifact(capture, master)
+            packet = _packet(master)
+            packet["inputs"]["shader_identity"] = {
+                "status": "established",
+                "value": {},
+                "evidence": _shader_evidence(tmp, master),
+            }
+            ctx = {
+                "artifact": artifact,
+                "target": draw,
+                "master": packet_mod.parse_master(master),
+                "effective_count": 4,
+            }
+            validated, error = accept.validate_packet(
+                packet, tmp, ctx, {"required_inputs": ["shader_identity"]}
+            )
+            self.assertIsNone(error)
+            self.assertEqual(validated["provisional"], ["shader_identity"])
+            self.assertEqual(validated["established"], [])
+
+    def test_empty_evidence_is_not_provisional(self):
         import automation.gfx_draw_accept_v2 as accept
 
         with tempfile.TemporaryDirectory() as raw:
@@ -159,9 +231,62 @@ class FailClosedTests(unittest.TestCase):
             validated, error = accept.validate_packet(
                 packet, tmp, ctx, {"required_inputs": ["shader_identity"]}
             )
-            self.assertIsNone(error)
-            self.assertEqual(validated["provisional"], ["shader_identity"])
-            self.assertEqual(validated["established"], [])
+            self.assertIsNone(validated)
+            self.assertIn("field-relevant evidence", error or "")
+
+    def test_unresolved_only_evidence_is_not_provisional(self):
+        import automation.gfx_draw_accept_v2 as accept
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            capture = tmp / "capture"
+            capture.mkdir()
+            master = _master()
+            artifact, draw = _artifact(capture, master)
+            packet = _packet(master)
+            packet["inputs"]["shader_identity"] = {
+                "status": "established",
+                "value": {},
+                "evidence": [{"type": "unresolved", "reason_code": "x"}],
+            }
+            ctx = {
+                "artifact": artifact,
+                "target": draw,
+                "master": packet_mod.parse_master(master),
+                "effective_count": 4,
+            }
+            validated, error = accept.validate_packet(
+                packet, tmp, ctx, {"required_inputs": ["shader_identity"]}
+            )
+            self.assertIsNone(validated)
+            self.assertIn("field-relevant evidence", error or "")
+
+    def test_shader_source_backed_only_by_draw_record_is_rejected(self):
+        import automation.gfx_draw_accept_v2 as accept
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            capture = tmp / "capture"
+            capture.mkdir()
+            master = _master()
+            artifact, draw = _artifact(capture, master)
+            packet = _packet(master)
+            packet["inputs"]["shader_stage_sources"] = {
+                "status": "established",
+                "value": {},
+                "evidence": [{"type": "draw_record", "call_id": 11}],
+            }
+            ctx = {
+                "artifact": artifact,
+                "target": draw,
+                "master": packet_mod.parse_master(master),
+                "effective_count": 4,
+            }
+            validated, error = accept.validate_packet(
+                packet, tmp, ctx, {"required_inputs": ["shader_stage_sources"]}
+            )
+            self.assertIsNone(validated)
+            self.assertIn("shader source", error or "")
 
     def test_base_draw_invocation_validator_accepts_authentic_shape(self):
         import automation.gfx_draw_accept_v2 as accept
@@ -206,6 +331,43 @@ class FailClosedTests(unittest.TestCase):
             self.assertIsNone(error)
             self.assertEqual(validated["established"], ["draw_invocation"])
 
+    def test_validator_sees_resolved_evidence_paths(self):
+        import automation.gfx_draw_accept_v2 as accept
+        from automation.gfx_contracts import Contract
+
+        def validator(value, ctx):
+            path = ctx.field_evidence_paths.get("draw.bin")
+            if path is None or not path.is_file():
+                return "shader_identity: resolved evidence path is missing"
+            if path.read_bytes() != _master():
+                return "shader_identity: resolved evidence bytes differ"
+            return None
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            capture = tmp / "capture"
+            capture.mkdir()
+            master = _master()
+            artifact, draw = _artifact(capture, master)
+            packet = _packet(master)
+            packet["inputs"]["shader_identity"] = {
+                "status": "established",
+                "value": {},
+                "evidence": _shader_evidence(tmp, master),
+            }
+            ctx = {
+                "artifact": artifact,
+                "target": draw,
+                "master": packet_mod.parse_master(master),
+                "effective_count": 4,
+                "contract": Contract("v1", {"shader_identity": validator}),
+            }
+            validated, error = accept.validate_packet(
+                packet, tmp, ctx, {"required_inputs": ["shader_identity"]}
+            )
+            self.assertIsNone(error)
+            self.assertEqual(validated["established"], ["shader_identity"])
+
 
 class CheckpointTests(unittest.TestCase):
     def test_bundle_survives_temporary_packet_cleanup(self):
@@ -214,19 +376,43 @@ class CheckpointTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             tmp = Path(raw)
             checkpoint = _checkpoint(tmp)
+            capture = tmp / "capture"
+            artifact, _draw = _artifact(capture, _master())
             self.assertTrue(Path(checkpoint["path"]).is_file())
             errors = validate_checkpoint(
                 Path(checkpoint["path"]),
                 expected_campaign_id="c1",
                 expected_candidate_base="a" * 40,
+                artifact_loader=lambda _path: artifact,
             )
             self.assertEqual(errors, [])
-            # The original packet directory is not part of the bundle's identity.
             import shutil
 
             shutil.rmtree(tmp / "packet")
-            errors = validate_checkpoint(Path(checkpoint["path"]))
+            errors = validate_checkpoint(
+                Path(checkpoint["path"]),
+                artifact_loader=lambda _path: artifact,
+            )
             self.assertEqual(errors, [])
+
+    def test_unrelated_evidence_is_rejected_by_checkpoint(self):
+        from automation.gfx_checkpoint import validate_checkpoint
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(
+                tmp,
+                field="shader_stage_sources",
+                evidence=[{"type": "draw_record", "call_id": 11}],
+                basis="captured shader source bytes",
+            )
+            capture = tmp / "capture"
+            artifact, _draw = _artifact(capture, _master())
+            errors = validate_checkpoint(
+                Path(checkpoint["path"]),
+                artifact_loader=lambda _path: artifact,
+            )
+            self.assertTrue(any("field-relevant evidence" in error for error in errors))
 
 
 class LedgerTests(unittest.TestCase):
@@ -313,166 +499,19 @@ class LedgerSelectionTests(unittest.TestCase):
             self.assertEqual(metadata["plan"]["question"], "q")
 
 
-class CoordinatorTests(unittest.TestCase):
-    def _report(self, path: Path, outcome: str) -> Path:
-        from automation.review_result import write_review
-
-        findings = []
-        if outcome == "rejected":
-            findings = [
-                {
-                    "id": "F1",
-                    "severity": "P1",
-                    "kind": "evidence_gap",
-                }
-            ]
-        write_review(
-            path,
-            {
-                "schema": "eu4-review/v1",
-                "candidate_commit": "c" * 40,
-                "oracle_manifest_sha256": "d" * 64,
-                "outcome": outcome,
-                "findings": findings,
-                "summary": "test",
-            },
-        )
-        return path
-
-    def _report_for(self, path: Path, outcome: str, candidate: str) -> Path:
-        from automation.review_result import write_review
-
-        write_review(
-            path,
-            {
-                "schema": "eu4-review/v1",
-                "candidate_commit": candidate,
-                "oracle_manifest_sha256": "d" * 64,
-                "outcome": outcome,
-                "findings": [],
-                "summary": "test",
-            },
-        )
-        return path
-
-    def test_fake_path_reaches_awaiting_merge(self):
-        from automation.gfx_l32b_complete import Coordinator, Hooks, default_state
-
-        with tempfile.TemporaryDirectory() as raw:
-            tmp = Path(raw)
-            checkpoint = _checkpoint(tmp)
-            workspace = tmp / "workspace"
-            workspace.mkdir()
-            report = self._report(tmp / "review.json", "qualified")
-            calls = {"implementer": 0, "reviewer": 0}
-
-            def implementer(state):
-                calls["implementer"] += 1
-                if calls["implementer"] == 1:
-                    return {
-                        "status": "paused",
-                        "last_verdict": "blocked",
-                        "workspace": str(workspace),
-                        "checkpoint": checkpoint["path"],
-                        "campaign_id": "c1",
-                        "candidate_base_commit": "a" * 40,
-                        "trusted_contract_commit": "b" * 40,
-                    }
-                state["stage"] = "final"
-                return {
-                    "status": "complete",
-                    "last_verdict": "pass",
-                    "workspace": str(workspace),
-                }
-
-            hooks = Hooks(
-                run_implementer=implementer,
-                snapshot=lambda workspace, state: {"commit": "c" * 40},
-                run_contract=lambda checkpoint, state: {
-                    "status": "complete",
-                    "candidate": {"commit": "d" * 40},
-                },
-                run_reviewer=lambda target, state: {
-                    "path": str(self._report_for(
-                        tmp / f"review-{calls['reviewer']}.json",
-                        "qualified",
-                        (target or {}).get("commit", "c" * 40),
-                    )),
-                    "session_id": f"rev{calls['reviewer']}",
-                },
-                integrate=lambda candidate, contract, state: {
-                    "ok": True, "commit": "e" * 40
-                },
-            )
-            workflow = {
-                "schema": "eu4-l32b-workflow/v1",
-                "workflow_id": "wf",
-                "baseline_commit": "a" * 40,
-            }
-            coordinator = Coordinator(
-                repo=tmp,
-                workflow=workflow,
-                state_path=tmp / "workflow.json",
-                hooks=hooks,
-            )
-            state = coordinator.run()
-            self.assertEqual(state["state"], "awaiting_merge")
-            events = [row["event"] for row in state["history"]]
-            self.assertIn("checkpoint", events)
-            self.assertIn("integrated", events)
-
-    def test_rejected_review_does_not_promote(self):
-        from automation.gfx_l32b_complete import Coordinator, Hooks
-
-        with tempfile.TemporaryDirectory() as raw:
-            tmp = Path(raw)
-            report = self._report(tmp / "review.json", "rejected")
-            state_path = tmp / "workflow.json"
-            hooks = Hooks(
-                run_implementer=lambda state: {
-                    "status": "complete", "last_verdict": "pass",
-                    "workspace": str(tmp),
-                },
-                snapshot=lambda workspace, state: {"commit": "c" * 40},
-                run_contract=lambda checkpoint, state: {"status": "complete"},
-                run_reviewer=lambda target, state: {"path": str(report)},
-                integrate=lambda candidate, contract, state: {
-                    "ok": True, "commit": "e" * 40
-                },
-                run_remediation=lambda state: {
-                    "status": "complete", "last_verdict": "pass",
-                    "workspace": str(tmp),
-                },
-            )
-            workflow = {
-                "schema": "eu4-l32b-workflow/v1",
-                "workflow_id": "wf2",
-                "baseline_commit": "a" * 40,
-            }
-            coordinator = Coordinator(
-                repo=tmp, workflow=workflow, state_path=state_path, hooks=hooks
-            )
-            state = coordinator.load_or_init()
-            state["state"] = "reviewing"
-            state["candidate"] = {"commit": "c" * 40}
-            state = coordinator.step(state)
-            self.assertEqual(state["state"], "remediating")
-            self.assertEqual(state["review"]["outcome"], "rejected")
-
-
 class ContractRunnerTests(unittest.TestCase):
     def test_weak_validator_is_rejected_by_an_adversarial_case(self):
         from automation.gfx_contract_runner import run
 
         with tempfile.TemporaryDirectory() as raw:
             tmp = Path(raw)
-            checkpoint = _checkpoint(tmp)
+            checkpoint = _checkpoint(tmp, field="draw_invocation")
             workspace = tmp / "candidate"
             (workspace / "automation" / "gfx_contracts").mkdir(parents=True)
             (workspace / "automation" / "__init__.py").write_text("")
             (workspace / "automation" / "gfx_contracts" / "__init__.py").write_text("")
             (workspace / "automation" / "gfx_contracts" / "v1.py").write_text(
-                "VALIDATORS = {'shader_identity': lambda value, ctx: None}\n"
+                "VALIDATORS = {'draw_invocation': lambda value, ctx: None}\n"
             )
             cases = tmp / "cases.json"
             cases.write_text(
@@ -480,22 +519,28 @@ class ContractRunnerTests(unittest.TestCase):
                     {
                         "schema": "eu4-gfx-adversarial-cases/v1",
                         "candidate_commit": "c" * 40,
+                        "contract_version": "v1",
+                        "checkpoint_sha256": hashlib.sha256(
+                            Path(checkpoint["path"]).read_bytes()
+                        ).hexdigest(),
                         "fields": [
                             {
-                                "field": "shader_identity",
+                                "field": "draw_invocation",
                                 "mutation_class": "wrong_selected_object",
                                 "structural_validity": "valid",
                                 "forged_value": {},
-                                "forged_evidence": [],
-                                "expected_error_prefix": "shader_identity",
+                                "forged_evidence": [
+                                    {"type": "draw_record", "call_id": 11}
+                                ],
+                                "why_semantically_wrong": "not the selected draw",
+                                "expected_error_prefix": "draw_invocation",
                             }
                         ],
                     }
                 )
             )
-            master = _master()
             capture = tmp / "capture"
-            artifact, draw = _artifact(capture, master)
+            artifact, _draw = _artifact(capture, _master())
             result = run(
                 workspace,
                 "v1",
@@ -504,7 +549,547 @@ class ContractRunnerTests(unittest.TestCase):
                 artifact_loader=lambda _path: artifact,
             )
             self.assertFalse(result["ok"])
-            self.assertEqual(result["cases"][0]["ok"], False)
+            self.assertEqual(result["cases"][0]["outcome"], "false_pass")
+
+    def test_nonexistent_forged_resource_is_an_invalid_test(self):
+        from automation.gfx_contract_runner import run
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp, field="draw_invocation")
+            workspace = tmp / "candidate"
+            (workspace / "automation" / "gfx_contracts").mkdir(parents=True)
+            (workspace / "automation" / "__init__.py").write_text("")
+            (workspace / "automation" / "gfx_contracts" / "__init__.py").write_text("")
+            (workspace / "automation" / "gfx_contracts" / "v1.py").write_text(
+                "VALIDATORS = {'draw_invocation': lambda value, ctx: None}\n"
+            )
+            cases = tmp / "cases.json"
+            cases.write_text(
+                json.dumps(
+                    {
+                        "schema": "eu4-gfx-adversarial-cases/v1",
+                        "candidate_commit": "c" * 40,
+                        "contract_version": "v1",
+                        "checkpoint_sha256": hashlib.sha256(
+                            Path(checkpoint["path"]).read_bytes()
+                        ).hexdigest(),
+                        "fields": [
+                            {
+                                "field": "draw_invocation",
+                                "mutation_class": "wrong_selected_object",
+                                "structural_validity": "valid",
+                                "forged_value": {},
+                                "forged_evidence": [
+                                    {"type": "draw_record", "call_id": 999}
+                                ],
+                                "why_semantically_wrong": "nonexistent record",
+                                "expected_error_prefix": "draw_invocation",
+                            }
+                        ],
+                    }
+                )
+            )
+            capture = tmp / "capture"
+            artifact, _draw = _artifact(capture, _master())
+            result = run(
+                workspace,
+                "v1",
+                Path(checkpoint["path"]),
+                cases_path=cases,
+                artifact_loader=lambda _path: artifact,
+            )
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["cases"][0]["outcome"], "invalid_test")
+
+    def test_evidence_only_association_mutation_is_rejected_by_real_runner(self):
+        from automation.gfx_checkpoint import write_checkpoint
+        from automation.gfx_contract_runner import run
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            capture = tmp / "capture"
+            capture.mkdir()
+            master = _master()
+            artifact, draw = _artifact(capture, master)
+            payload = b"same source bytes"
+            shader_a = _record(7, "_GfxAddVertexShader", "shader_a", payload)
+            shader_b = _record(8, "_GfxAddVertexShader", "shader_b", payload)
+            artifact.operations = [shader_a, shader_b, draw]
+            packet_dir = tmp / "packet"
+            (packet_dir / "payloads").mkdir(parents=True)
+            (packet_dir / "payloads" / "7.bin").write_bytes(payload)
+            (packet_dir / "payloads" / "8.bin").write_bytes(payload)
+            packet = _packet(master)
+            packet["inputs"]["shader_stage_sources"] = {
+                "status": "established",
+                "value": {"resource_id": "shader_a", "sha256": hashlib.sha256(payload).hexdigest()},
+                "evidence": [
+                    {
+                        "type": "resource_observation",
+                        "call_id": 7,
+                        "symbol": "_GfxAddVertexShader",
+                        "resource_id": "shader_a",
+                        "payload": "payloads/7.bin",
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "size": len(payload),
+                    }
+                ],
+            }
+            (packet_dir / "draw-packet.json").write_text(json.dumps(packet), encoding="utf-8")
+            checkpoint = write_checkpoint(
+                tmp,
+                campaign_id="c1",
+                candidate_base_commit="a" * 40,
+                trusted_contract_commit="b" * 40,
+                checker_sha256="c" * 64,
+                contract_version="v1",
+                contract_sha256=None,
+                manifest_sha256="d" * 64,
+                candidate_digest="e" * 64,
+                observer_library_sha256="f" * 64,
+                capture={
+                    "session": "session",
+                    "pid": 123,
+                    "executable_sha256": EXE_SHA,
+                    "library_sha256": "f" * 64,
+                },
+                packet=packet,
+                packet_dir=packet_dir,
+                capture_dir=capture,
+                target={"call_id": 11, "caller_rva": "0xedfcd1", "mode": 5, "effective_count": 4},
+                fields=[
+                    {
+                        "name": "shader_stage_sources",
+                        "status": "established",
+                        "state": "provisional",
+                        "evidence_relevant": True,
+                        "evidence_basis": "captured shader source bytes",
+                    }
+                ],
+                contract_gaps=[{"name": "shader_stage_sources"}],
+                checkpoint_kind="partial",
+                blocked_reason="unsupported_evidence_contract",
+            )
+            workspace = tmp / "candidate"
+            (workspace / "automation" / "gfx_contracts").mkdir(parents=True)
+            (workspace / "automation" / "__init__.py").write_text("")
+            (workspace / "automation" / "gfx_contracts" / "__init__.py").write_text("")
+            (workspace / "automation" / "gfx_contracts" / "v1.py").write_text(
+                "def validate(value, ctx):\n"
+                "    evidence = ctx.field_evidence or []\n"
+                "    if not evidence:\n"
+                "        return 'shader_stage_sources: no evidence'\n"
+                "    if evidence[0].get('resource_id') != value.get('resource_id'):\n"
+                "        return 'shader_stage_sources: association differs'\n"
+                "    return None\n"
+                "VALIDATORS = {'shader_stage_sources': validate}\n"
+            )
+            cases = tmp / "cases.json"
+            cases.write_text(
+                json.dumps(
+                    {
+                        "schema": "eu4-gfx-adversarial-cases/v1",
+                        "candidate_commit": "c" * 40,
+                        "contract_version": "v1",
+                        "checkpoint_sha256": hashlib.sha256(
+                            Path(checkpoint["path"]).read_bytes()
+                        ).hexdigest(),
+                        "fields": [
+                            {
+                                "field": "shader_stage_sources",
+                                "mutation_class": "cross_resource",
+                                "structural_validity": "valid",
+                                "forged_value": {
+                                    "resource_id": "shader_a",
+                                    "sha256": hashlib.sha256(payload).hexdigest(),
+                                },
+                                "forged_evidence": [
+                                    {
+                                        "type": "resource_observation",
+                                        "call_id": 8,
+                                        "symbol": "_GfxAddVertexShader",
+                                        "resource_id": "shader_b",
+                                        "payload": "payloads/8.bin",
+                                        "sha256": hashlib.sha256(payload).hexdigest(),
+                                        "size": len(payload),
+                                    }
+                                ],
+                                "why_semantically_wrong": "source bytes belong to another shader object",
+                                "expected_error_prefix": "shader_stage_sources",
+                            }
+                        ],
+                    }
+                )
+            )
+            result = run(
+                workspace,
+                "v1",
+                Path(checkpoint["path"]),
+                cases_path=cases,
+                artifact_loader=lambda _path: artifact,
+            )
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(result["cases"][0]["outcome"], "semantic_rejection")
+
+
+class CoordinatorTests(unittest.TestCase):
+    def _review(self, path: Path, outcome: str, candidate: str) -> Path:
+        from automation.review_result import write_review
+
+        findings = []
+        if outcome == "rejected":
+            findings = [{"id": "F1", "severity": "P1", "kind": "evidence_gap"}]
+        write_review(
+            path,
+            {
+                "schema": "eu4-review/v1",
+                "candidate_commit": candidate,
+                "oracle_manifest_sha256": "d" * 64,
+                "outcome": outcome,
+                "findings": findings,
+                "summary": "test",
+            },
+        )
+        return path
+
+    def _cases(self, path: Path, candidate: str, checkpoint: Path, field: str = "draw_invocation"):
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "eu4-gfx-adversarial-cases/v1",
+                    "candidate_commit": candidate,
+                    "contract_version": "v1",
+                    "checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+                    "fields": [
+                        {
+                            "field": field,
+                            "mutation_class": "wrong_selected_object",
+                            "structural_validity": "valid",
+                            "forged_value": {},
+                            "forged_evidence": [{"type": "draw_record", "call_id": 11}],
+                            "why_semantically_wrong": "not the selected draw",
+                            "expected_error_prefix": field,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def _hooks(self, tmp: Path, checkpoint: dict, *, contract_reject_once: bool = False):
+        from automation.gfx_l32b_complete import Hooks
+
+        report_calls = {"n": 0}
+        contract_calls = {"n": 0}
+        snapshots = {"n": 0}
+        impl_calls = {"n": 0}
+
+        def implementer(state):
+            impl_calls["n"] += 1
+            if impl_calls["n"] > 1:
+                state["stage"] = "final"
+                receipt = tmp / "qualification.json"
+                receipt.write_text("{}")
+                return {
+                    "status": "complete",
+                    "last_verdict": "pass",
+                    "workspace": str(tmp),
+                    "qualification_receipt": str(receipt),
+                }
+            return {
+                "status": "paused",
+                "last_verdict": "blocked",
+                "workspace": str(tmp),
+                "checkpoint": checkpoint["path"],
+                "campaign_id": "c1",
+                "candidate_base_commit": "a" * 40,
+                "trusted_contract_commit": "b" * 40,
+            }
+
+        def snapshot(workspace, state):
+            snapshots["n"] += 1
+            return {"commit": "c" * 40}
+
+        def snapshot_contract(workspace, state):
+            contract_calls["n"] += 1
+            commit = "d" * 40 if contract_calls["n"] == 1 else "e" * 40
+            return {"commit": commit, "contract_sha256": "1" * 64}
+
+        def run_contract(checkpoint_path, state):
+            return {
+                "status": "complete",
+                "last_verdict": "pass",
+                "workspace": str(tmp),
+                "contract_version": "v1",
+                "contract_sha256": "1" * 64,
+                "checkpoint": checkpoint_path,
+            }
+
+        def reviewer(target, state):
+            report_calls["n"] += 1
+            target_commit = (target or {}).get("commit", "c" * 40)
+            path = tmp / f"review-{report_calls['n']}.json"
+            outcome = "qualified"
+            if contract_reject_once and report_calls["n"] == 1:
+                outcome = "rejected"
+            self._review(path, outcome, target_commit)
+            if outcome == "qualified" and target_commit in ("d" * 40, "e" * 40):
+                self._cases(path.with_name("review-adversarial.json"), target_commit,
+                            Path(checkpoint["path"]))
+            return {"path": str(path), "session_id": f"rev{report_calls['n']}"}
+
+        def adversarial(checkpoint_path, contract, cases_path, state):
+            return {"ok": True, "positive_ok": True, "negative_ok": True, "cases": []}
+
+        def integrate(candidate, contract, state, kind=None):
+            return {"ok": True, "commit": "e" * 40, "kind": kind}
+
+        def remediation(state):
+            return {
+                "status": "complete",
+                "last_verdict": "pass",
+                "workspace": str(tmp),
+            }
+
+        return Hooks(
+            run_implementer=implementer,
+            snapshot=snapshot,
+            run_contract=run_contract,
+            run_reviewer=reviewer,
+            integrate=integrate,
+            snapshot_contract=snapshot_contract,
+            run_adversarial_cases=adversarial,
+            run_remediation=remediation,
+        )
+
+    def _workflow(self):
+        return {
+            "schema": "eu4-l32b-workflow/v1",
+            "workflow_id": "wf",
+            "baseline_commit": "a" * 40,
+            "trusted_contract": {"commit": "t1", "version": "v0", "sha256": "2" * 64},
+        }
+
+    def test_fake_path_reaches_awaiting_merge(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            with mock.patch(
+                "automation.gfx_l32b_complete.validate_checkpoint", return_value=[]
+            ), mock.patch(
+                "automation.gfx_l32b_complete._git_blob_sha", return_value="1" * 64
+            ):
+                state = coordinator.run()
+            self.assertEqual(state["state"], "awaiting_merge")
+            kinds = [row.get("kind") for row in state["history"] if row["event"] == "integrated"]
+            self.assertEqual(kinds, ["contract", "final"])
+
+    def test_contract_rejection_remediates_contract_not_candidate(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint, contract_reject_once=True)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            with mock.patch(
+                "automation.gfx_l32b_complete.validate_checkpoint", return_value=[]
+            ), mock.patch(
+                "automation.gfx_l32b_complete._git_blob_sha", return_value="1" * 64
+            ):
+                state = coordinator.run()
+            self.assertEqual(state["state"], "awaiting_merge")
+            self.assertEqual(state["contract"]["commit"], "e" * 40)
+            kinds = [row.get("kind") for row in state["history"] if row["event"] == "integrated"]
+            self.assertEqual(kinds, ["contract", "final"])
+
+    def test_implementation_continuation_does_not_require_contract(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            report = self._review(tmp / "review.json", "qualified", "c" * 40)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.load_or_init()
+            state["state"] = "reviewing"
+            state["review_target"] = "candidate"
+            state["candidate"] = {"commit": "c" * 40}
+            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            with mock.patch.object(
+                hooks, "run_reviewer", lambda target, state: {"path": str(report)}
+            ):
+                state = coordinator.step(state)
+            self.assertEqual(state["promotion_kind"], "implementation")
+            state = coordinator.step(state)
+            self.assertEqual(state["state"], "continuation")
+            kinds = [row.get("kind") for row in state["history"] if row["event"] == "integrated"]
+            self.assertEqual(kinds, ["implementation"])
+
+    def test_qualified_contract_without_cases_blocks(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            report = self._review(tmp / "review.json", "qualified", "d" * 40)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.load_or_init()
+            state["contract"] = {"commit": "d" * 40}
+            state["contract_version"] = "v1"
+            state["contract_sha256"] = "1" * 64
+            state["contract_checkpoint"] = checkpoint["path"]
+            state["state"] = "qualifying_review"
+            state["review_target"] = "contract"
+            with mock.patch.object(
+                hooks, "run_reviewer", lambda target, state: {"path": str(report)}
+            ):
+                state = coordinator.step(state)
+            self.assertEqual(state["state"], "blocked")
+            self.assertEqual(state["blocker"]["reason"], "adversarial_qualification_failed")
+
+    def test_cases_bound_to_wrong_contract_commit_block(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.load_or_init()
+            state["contract"] = {"commit": "d" * 40}
+            state["contract_version"] = "v1"
+            state["contract_sha256"] = "1" * 64
+            state["contract_checkpoint"] = checkpoint["path"]
+            report = self._review(tmp / "review.json", "qualified", "d" * 40)
+            self._cases(
+                tmp / "review-adversarial.json", "c" * 40, Path(checkpoint["path"])
+            )
+            errors = coordinator._qualify_contract(state, report)
+            self.assertTrue(
+                any("not bound to the reviewed contract commit" in error for error in errors)
+            )
+
+    def test_changed_report_or_cases_block_promotion(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            report = self._review(tmp / "review.json", "qualified", "d" * 40)
+            cases = self._cases(
+                tmp / "review-adversarial.json", "d" * 40, Path(checkpoint["path"])
+            )
+            hooks = self._hooks(tmp, checkpoint)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.load_or_init()
+            state["contract"] = {"commit": "d" * 40}
+            state["contract_version"] = "v1"
+            state["contract_sha256"] = "1" * 64
+            state["contract_checkpoint"] = checkpoint["path"]
+            state["review"] = {"path": str(report)}
+            state["adversarial_cases"] = str(cases)
+            state["adversarial_report"] = {"ok": True}
+            state["contract_review"] = {
+                "contract_commit": "d" * 40,
+                "contract_version": "v1",
+                "contract_sha256": "1" * 64,
+                "checkpoint_sha256": hashlib.sha256(
+                    Path(checkpoint["path"]).read_bytes()
+                ).hexdigest(),
+                "reviewer_report_sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+                "adversarial_cases_sha256": hashlib.sha256(cases.read_bytes()).hexdigest(),
+                "positive_ok": True,
+                "negative_ok": True,
+                "runner_report_sha256": hashlib.sha256(
+                    json.dumps({"ok": True}, sort_keys=True).encode()
+                ).hexdigest(),
+            }
+            with mock.patch(
+                "automation.gfx_l32b_complete._git_blob_sha", return_value="1" * 64
+            ):
+                self.assertEqual(coordinator._validate_promotion(state, "contract"), [])
+                report.write_text(report.read_text() + "\n", encoding="utf-8")
+                errors = coordinator._validate_promotion(state, "contract")
+            self.assertTrue(any("reviewer report changed" in error for error in errors))
+
+    def test_rejected_review_does_not_promote(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            report = self._review(tmp / "review.json", "rejected", "c" * 40)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.load_or_init()
+            state["state"] = "reviewing"
+            state["review_target"] = "candidate"
+            state["candidate"] = {"commit": "c" * 40}
+            with mock.patch.object(
+                hooks, "run_reviewer", lambda target, state: {"path": str(report)}
+            ):
+                state = coordinator.step(state)
+            self.assertEqual(state["state"], "remediating")
+            self.assertEqual(state["review"]["outcome"], "rejected")
+
+
+@unittest.skipUnless(
+    (ROOT / ".local/automation/eu4-l32b-effective-state/workspace").is_dir(),
+    "authentic L3.2b-I capture/worktree is not available",
+)
+class LegacyRequalificationTests(unittest.TestCase):
+    def test_v2_accepts_the_existing_l3_2b_i_capture(self):
+        import automation.gfx_draw_accept_v2 as accept
+
+        result = accept.check(
+            ROOT / ".local/automation/eu4-l32b-effective-state/workspace",
+            ROOT / "campaigns/eu4-l32b-effective-state",
+        )
+        self.assertEqual(result["verdict"], "pass", result["diagnostics"])
 
 
 if __name__ == "__main__":

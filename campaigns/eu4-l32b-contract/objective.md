@@ -28,6 +28,31 @@ The independent reviewer will author additional field-specific adversarial
 cases outside this worktree. A validator that only rejects its own synthetic
 fixtures is not qualified.
 
+## Reviewer adversarial artifact
+
+The reviewer must write `review-adversarial.json` next to `review.json`, with:
+
+- `schema: "eu4-gfx-adversarial-cases/v1"`;
+- the exact reviewed contract commit, contract version and checkpoint SHA-256;
+- at least one case per newly qualified field.
+
+Each case must have a meaningful `mutation_class` (for example
+`wrong_selected_object`, `cross_resource`, `wrong_pixels`, `stale_call`,
+`cross_session`, `malformed_association`, `wrong_state_decode`), a
+`structural_validity` of `valid`, forged value and evidence that reference
+genuine original records, an explanation of why the case is semantically wrong,
+and the expected error prefix.
+
+The trusted runner resolves every forged evidence item against genuine original
+records. A case with a nonexistent call id or mismatched payload is an invalid
+test, not a semantic rejection. The coordinator requires every case to be
+rejected for the stated reason, and it reruns the cases immediately before
+integration; a changed contract, checkpoint, report or case artifact blocks
+promotion.
+
+Validators must inspect `ctx.field_evidence` / `ctx.field_evidence_paths` for
+association checks. A `draw_record` alone is not shader-source evidence.
+
 ## Scope and hygiene
 
 Editable paths are in `contract.json`. The candidate version must not modify
