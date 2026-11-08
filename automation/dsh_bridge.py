@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from automation import dsh_receipts as receipts
+from automation import dsh_snapshot as snapshot
 from automation.dsh_campaign import (
     Sidecar,
     SidecarError,
@@ -103,6 +104,20 @@ def _roots(sidecar: Sidecar) -> dict:
         problems.append("checker is outside the campaign root")
     if (candidate / "automation" / "dsh_bridge.py").exists():
         problems.append("candidate ships automation/dsh_bridge.py and could shadow it")
+
+    # A host that declares its effective workspace is held to it; one that does
+    # not is recorded as unverified rather than assumed correct.
+    declared = os.environ.get("EU4_DSH_WORKSPACE")
+    if declared is not None and Path(declared).resolve() != candidate:
+        problems.append(
+            f"declared DSH workspace {declared} is not the campaign workspace {candidate}"
+        )
+    sandbox = os.environ.get("EU4_DSH_SANDBOX_MODE")
+    if sandbox == "danger-full-access":
+        problems.append(
+            "qualification requires workspace-write or stricter; "
+            "danger-full-access provides no boundary for qualification state"
+        )
     if problems:
         raise Refusal("execution_root", "; ".join(problems))
     return {
@@ -152,30 +167,35 @@ def _candidate(sidecar: Sidecar) -> dict:
         )
         if detached.returncode == 0:
             raise Refusal("worktree", "candidate worktree is not detached")
-        changed = _changed_paths(sidecar.workspace)
-        for entry in changed:
-            _require_allowed(sidecar, entry["path"])
-        payload = {
-            "mode": "worktree",
-            "commit": commit,
-            "changed": [
-                {
-                    "path": entry["path"],
-                    "status": entry["status"],
-                    "sha256": (
-                        receipts.digest_file(sidecar.workspace / entry["path"])
-                        if (sidecar.workspace / entry["path"]).is_file()
-                        else None
-                    ),
-                }
-                for entry in changed
-            ],
-        }
+        delta = snapshot.enumerate_delta(sidecar.workspace)
+        problems = snapshot.validate_delta(
+            delta,
+            sidecar.allowed_paths,
+            sidecar.forbidden_paths,
+            allow_symlinks=sidecar.allow_symlinks,
+        )
+        if problems:
+            raise Refusal("policy", "; ".join(problems[:6]))
+        rows = [
+            {
+                "path": entry["path"],
+                "old_path": entry.get("old_path"),
+                "kind": entry["kind"],
+                "mode": entry["mode"],
+                "sha256": (
+                    receipts.digest_file(sidecar.workspace / entry["path"])
+                    if entry["exists"] and not entry["symlink"]
+                    else None
+                ),
+            }
+            for entry in delta
+        ]
+        payload = {"mode": "worktree", "commit": commit, "delta": rows}
         return {
             "mode": "worktree",
             "commit": commit,
             "digest": receipts.digest_text(receipts.canonical_json(payload)),
-            "changed_paths": [entry["path"] for entry in changed],
+            "changed_paths": [entry["path"] for entry in delta],
         }
 
     digest, entries = receipts.tree_digest(sidecar.workspace)
@@ -587,6 +607,81 @@ def op_validate(args) -> int:
         lock.__exit__(None, None, None)
 
 
+def _freeze(sidecar: Sidecar) -> dict:
+    """Materialize the exact candidate delta as a commit and verify it.
+
+    The snapshot must reproduce the change that was on disk — no more and no
+    less — or the review evidence would describe a candidate nobody validated.
+    """
+    if sidecar.mode != "worktree":
+        digest, entries = receipts.tree_digest(sidecar.workspace)
+        return {"mode": "seed", "digest": digest, "entries": len(entries),
+                "commit": None}
+
+    infra = infra_root().resolve()
+    baseline = sidecar.candidate_baseline_commit or ""
+    delta = snapshot.enumerate_delta(sidecar.workspace)
+    problems = snapshot.validate_delta(
+        delta, sidecar.allowed_paths, sidecar.forbidden_paths,
+        allow_symlinks=sidecar.allow_symlinks,
+    )
+    if problems:
+        raise Refusal("policy", "; ".join(problems[:6]))
+    before = snapshot.fingerprint(sidecar.workspace)
+    built = snapshot.build_candidate(
+        sidecar.workspace, infra, baseline, delta,
+        message=f"eu4 DSH candidate snapshot ({sidecar.campaign_id})",
+    )
+    problems = snapshot.verify_round_trip(infra, baseline, built["candidate"], delta)
+    if problems:
+        raise Refusal("snapshot", "; ".join(problems[:6]))
+    problems = snapshot.recheck(sidecar.workspace, before)
+    if problems:
+        raise Refusal("snapshot_moved", "; ".join(problems))
+    ref = f"refs/dsh-candidate/{sidecar.campaign_id}/{built['candidate'][:12]}"
+    _git(infra, "update-ref", ref, built["candidate"])
+    return {
+        "mode": "worktree",
+        "commit": built["candidate"],
+        "tree": built["tree"],
+        "baseline": baseline,
+        "ref": ref,
+        "paths": built["paths"],
+    }
+
+
+def op_snapshot(args) -> int:
+    sidecar = load_sidecar(Path(args.sidecar))
+    _roots(sidecar)
+    stored = _setup(sidecar.run_root)
+    try:
+        lock = campaign_lock(stored.lock)
+        lock.__enter__()
+    except RuntimeError as exc:
+        emit({"ok": True, "operation": "snapshot", "campaign_id": sidecar.campaign_id,
+              "classification": "policy_stop", "kind": "busy", "detail": str(exc)})
+        return EXIT_OK
+    try:
+        current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
+        _check_anchor(_prepared_identities(sidecar), current)
+        frozen = _freeze(sidecar)
+        receipts.append_journal(sidecar.run_root, {
+            "kind": "snapshot",
+            "campaign_id": sidecar.campaign_id,
+            "candidate": frozen,
+        })
+        emit({
+            "ok": True,
+            "operation": "snapshot",
+            "campaign_id": sidecar.campaign_id,
+            "candidate": frozen,
+            "candidate_digest": current["candidate"]["digest"],
+        })
+        return EXIT_OK
+    finally:
+        lock.__exit__(None, None, None)
+
+
 FINALIZE_VALIDATION_LIMIT = 2
 
 
@@ -622,6 +717,9 @@ def op_finalize(args) -> int:
         problems = receipts.verify_receipt_digest(receipt)
         if problems:
             raise Refusal("receipt_corrupt", "; ".join(problems))
+        problems = receipts.journal_problem(sidecar.run_root, receipt)
+        if problems:
+            raise Refusal("journal_mismatch", "; ".join(problems[:4]))
 
         stored_ids = receipt.get("identities") or {}
         if receipts.identity_digest(stored_ids) != receipts.identity_digest(current):
@@ -684,8 +782,10 @@ def op_finalize(args) -> int:
                 f"completion (see {path.name})",
             )
 
+        frozen = _freeze(sidecar)
         record = {
             "schema": "eu4-dsh-finalization/v1",
+            "frozen_candidate": frozen,
             "campaign_id": sidecar.campaign_id,
             "identity_digest": receipts.identity_digest(current),
             "candidate": current["candidate"],
@@ -699,6 +799,13 @@ def op_finalize(args) -> int:
         receipts.atomic_write(
             record_path, receipts.canonical_json(record)
         )
+        receipts.append_journal(sidecar.run_root, {
+            "kind": "finalization",
+            "campaign_id": sidecar.campaign_id,
+            "identity_digest": receipts.identity_digest(current),
+            "candidate_digest": current["candidate"]["digest"],
+            "frozen_candidate": frozen,
+        })
         receipts.append_event(sidecar.run_root, {
             "ts": _now(), "event": "finalized",
             "candidate_digest": current["candidate"]["digest"],
@@ -710,7 +817,7 @@ def op_finalize(args) -> int:
             "classification": "verdict",
             "checker_verdict": verdict,
             "goal_policy": "qualified",
-            "frozen_candidate": current["candidate"],
+            "frozen_candidate": frozen,
             "identity_digest": receipts.identity_digest(current),
             "finalization": str(record_path.name),
             "finalizations_used": counters["finalizations"],
@@ -746,7 +853,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="operation", required=True)
 
-    for name in ("prepare", "status", "validate", "finalize", "goal-prompt"):
+    for name in ("prepare", "status", "validate", "snapshot", "finalize", "goal-prompt"):
         child = sub.add_parser(name)
         child.add_argument("--sidecar", required=True)
         if name in ("validate", "finalize"):
@@ -758,6 +865,7 @@ OPERATIONS = {
     "prepare": op_prepare,
     "status": op_status,
     "validate": op_validate,
+    "snapshot": op_snapshot,
     "finalize": op_finalize,
     "goal-prompt": op_goal_prompt,
 }

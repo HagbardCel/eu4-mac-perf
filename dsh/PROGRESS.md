@@ -10,7 +10,7 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
 | M1 profile, pinning, skill parity, Ghidra probe | done at composition level; one live-session check pending |
 | M2 minimal bridge, retry policy, classification | done |
 | M3 seed-only native goal loop | bridge + plugin done; live run needs an operator-created goal |
-| M4 delta snapshot, evidence binding, journal | not started |
+| M4 delta snapshot, evidence binding, journal, replica | done |
 | M5 recovery, limits, isolation | not started |
 | M6 independent reviewer | not started |
 | M7 genuine qualification (A0 + frozen offline) | not started |
@@ -158,6 +158,48 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
 - `dsh/scripts/smoke-goal.sh` prints the operator steps, including the `/goal`
   objective. **The autonomous end-to-end run is human-gated**: creating a goal
   requires direct-human authority, so the loop cannot be started by a script.
+
+## M4 -- generic delta, journal, assertions, replica
+
+- `automation/dsh_snapshot.py` enumerates a candidate delta from porcelain v2,
+  because v1 discards the status letter: a deletion, a mode change and a rename
+  were previously indistinguishable from a modification, and
+  `handoff.collect_candidate_rels` can only see one filename under
+  `analysis/qualification`. Adds, deletes, renames, mode changes, typechanges,
+  untracked files and symlinks are all represented.
+- Every entry must be permitted. An out-of-allowlist path, a frozen path, or a
+  symlink the policy did not allow is a refusal; nothing is silently dropped.
+- `build_candidate` reproduces exactly the delta on top of the pinned baseline
+  in a throw-away index, and `verify_round_trip` re-derives the diff from the
+  built commit and requires it to match the intended delta in paths, kinds and
+  modes, in both directions (no missing change, no unintended change). A rename
+  removes the old path as well as adding the new one -- the first version did
+  not, and the round-trip check caught it.
+- `fingerprint`/`recheck` detect the worktree changing while the snapshot is
+  built.
+- The bridge now identifies a worktree candidate by that delta, exposes a
+  `snapshot` op, and **freezes the candidate at finalization**: the commit
+  recorded in `finalization.json` is the one the fresh passing run saw.
+- The journal is append-only and hash-chained, and every receipt is written
+  through it. `finalize` refuses `journal_mismatch` when the current receipt is
+  not the journalled one. This is tamper evidence, not authority: the required
+  Amendment-B test now covers both layers -- forging the receipt alone is caught
+  by the journal, and forging the receipt *and* rebuilding the journal chain is
+  still refused by the fresh run (`fresh_validation_failed`).
+- Execution roots are asserted before any run: the candidate may not be the
+  infrastructure root or nested inside it, the campaign and checker must live in
+  the trusted checkout, a candidate may not ship `automation/dsh_bridge.py`, a
+  declared `EU4_DSH_WORKSPACE` must equal the campaign workspace, and
+  `EU4_DSH_SANDBOX_MODE=danger-full-access` refuses qualification outright.
+- Ghidra contention is solved by a private replica rather than a lock, because a
+  DSH-only lock cannot coordinate with pinned OpenCode worktrees or a GUI.
+  Measured: `--create` clones the 701 MB project to
+  `~/GhidraEU4/<sha>-dsh`, a query with `EU4_RE_EXPORT` pointed at the replica
+  returns the same evidence (`_GfxDraw` at `0x15ea789`), and a shared-project
+  query and a replica query run **concurrently** with both exiting 0 -- which
+  two shared-project queries cannot do.
+- Verified: 55 Python DSH tests, 11 node tests, preflight green, OpenCode suite
+  86/86.
 
 ## Pending / caveats
 

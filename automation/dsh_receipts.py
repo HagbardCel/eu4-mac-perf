@@ -18,6 +18,7 @@ from automation.state import atomic_write
 SCHEMA = "eu4-dsh-receipt/v1"
 CURRENT_SCHEMA = "eu4-dsh-current/v1"
 COUNTERS_SCHEMA = "eu4-dsh-counters/v1"
+JOURNAL_SCHEMA = "eu4-dsh-journal/v1"
 DEFAULT_COUNTERS = {
     "schema": COUNTERS_SCHEMA,
     "validations": 0,
@@ -98,6 +99,10 @@ class RunPaths:
         return self.run_root / "dsh.lock"
 
     @property
+    def journal(self) -> Path:
+        return self.run_root / "journal.jsonl"
+
+    @property
     def events(self) -> Path:
         return self.run_root / "events.jsonl"
 
@@ -160,6 +165,14 @@ def write_receipt(run_root: Path, receipt: dict) -> tuple[Path, dict]:
     )
     target = paths(run_root).receipts / name
     atomic_write(target, canonical_json(body))
+    append_journal(run_root, {
+        "kind": "receipt",
+        "name": target.name,
+        "receipt_digest": body["receipt_digest"],
+        "identity_digest": identity_digest(identities),
+        "verdict": (body.get("outcome") or {}).get("checker_verdict"),
+        "classification": (body.get("outcome") or {}).get("bridge_classification"),
+    })
     atomic_write(
         paths(run_root).current,
         canonical_json({
@@ -189,4 +202,75 @@ def verify_receipt_digest(receipt: dict) -> list[str]:
     actual = digest_text(canonical_json(body))
     if claimed != actual:
         return ["receipt_digest mismatch: claimed %s, computed %s" % (claimed, actual)]
+    return []
+
+
+def load_journal(run_root: Path) -> list[dict]:
+    path = paths(run_root).journal
+    if not path.is_file():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            rows.append({"corrupt": line})
+    return rows
+
+
+def append_journal(run_root: Path, entry: dict) -> dict:
+    """Append one linked record. Any party able to append can also forge, so this
+    is tamper *evidence* for the ordinary case, not a security boundary."""
+    rows = load_journal(run_root)
+    previous = rows[-1] if rows else None
+    body = dict(entry)
+    body["schema"] = JOURNAL_SCHEMA
+    body["seq"] = (previous or {}).get("seq", 0) + 1
+    body["prev"] = (previous or {}).get("link")
+    body["link"] = digest_text(canonical_json(body))
+    path = paths(run_root).journal
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(body, sort_keys=True) + "\n")
+    return body
+
+
+def verify_journal(run_root: Path) -> list[str]:
+    """Recompute the chain; report the first structural inconsistency."""
+    problems: list[str] = []
+    previous_link = None
+    expected_seq = 1
+    for index, row in enumerate(load_journal(run_root)):
+        if "corrupt" in row:
+            problems.append(f"journal line {index + 1} is not JSON")
+            continue
+        claimed = row.get("link")
+        body = {k: v for k, v in row.items() if k != "link"}
+        if digest_text(canonical_json(body)) != claimed:
+            problems.append(f"journal line {index + 1} does not match its link")
+        if row.get("prev") != previous_link:
+            problems.append(f"journal line {index + 1} breaks the chain")
+        if row.get("seq") != expected_seq:
+            problems.append(f"journal line {index + 1} has sequence {row.get('seq')}")
+        previous_link = claimed
+        expected_seq += 1
+    return problems
+
+
+def journal_problem(run_root: Path, receipt: dict) -> list[str]:
+    """The current receipt must be the one the journal recorded."""
+    problems = verify_journal(run_root)
+    if problems:
+        return problems
+    pointer = load_current(run_root) or {}
+    name = str(pointer.get("receipt") or "")
+    rows = [row for row in load_journal(run_root)
+            if row.get("kind") == "receipt" and row.get("name") == name]
+    if not rows:
+        return [f"receipt {name} is not recorded in the append-only journal"]
+    if rows[-1].get("receipt_digest") != receipt.get("receipt_digest"):
+        return [f"receipt {name} does not match its journal record"]
     return []

@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -175,6 +176,47 @@ class IntegrityTests(BridgeTestCase):
         self.assertEqual(out["kind"], "not_prepared")
 
 
+class ExecutionRootTests(BridgeTestCase):
+    def test_the_primary_checkout_is_not_an_acceptable_candidate(self) -> None:
+        sidecar = self.sidecar(
+            self.campaign("smoke-campaign"),
+            # Rewrite the candidate to point at the checkout itself.
+        )
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["candidate"] = {"mode": "worktree", "workspace": str(REPO),
+                             "policy": {"allowed_paths": ["*"]}}
+        data["candidate_baseline_commit"] = "6fa1888c8d1cf0f3a6e8205a03ae171d4ce1ba36"
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "execution_root")
+        self.assertIn("nested", out["detail"])
+
+    def test_danger_full_access_cannot_run_qualification(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        os.environ["EU4_DSH_SANDBOX_MODE"] = "danger-full-access"
+        self.addCleanup(os.environ.pop, "EU4_DSH_SANDBOX_MODE", None)
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "execution_root")
+        self.assertIn("danger-full-access", out["detail"])
+
+    def test_a_declared_workspace_mismatch_is_refused(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        os.environ["EU4_DSH_WORKSPACE"] = str(self.root / "elsewhere")
+        self.addCleanup(os.environ.pop, "EU4_DSH_WORKSPACE", None)
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertIn("not the campaign workspace", out["detail"])
+
+    def test_a_matching_declared_workspace_is_accepted(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        os.environ["EU4_DSH_WORKSPACE"] = str(self.workspace)
+        self.addCleanup(os.environ.pop, "EU4_DSH_WORKSPACE", None)
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+
+
 class IdempotencyTests(BridgeTestCase):
     def test_an_identical_verified_pass_is_not_rerun(self) -> None:
         sidecar = self.sidecar(self.campaign("pass-campaign"))
@@ -201,6 +243,18 @@ class StatusTests(BridgeTestCase):
         _, stale = self.run_bridge("status", sidecar)
         self.assertFalse(stale["current"])
         self.assertIn("candidate.digest", stale["stale"])
+
+
+class SnapshotOpTests(BridgeTestCase):
+    def test_snapshot_freezes_a_seed_candidate(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.run_bridge("prepare", sidecar)
+        code, out = self.run_bridge("snapshot", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["candidate"]["mode"], "seed")
+        self.assertEqual(len(out["candidate"]["digest"]), 64)
+        kinds = [row["kind"] for row in receipts.load_journal(self.run_root)]
+        self.assertIn("snapshot", kinds)
 
 
 class GoalPromptTests(BridgeTestCase):
@@ -247,15 +301,8 @@ class FinalizeTests(BridgeTestCase):
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
         self.assertEqual(out["kind"], "not_qualified")
 
-    def test_a_rehashed_forged_pass_receipt_cannot_authorize_completion(self) -> None:
-        """Amendment B: the receipt is a record, the fresh run is the authority."""
-        sidecar = self.sidecar(self.campaign("failing-campaign"))
-        self.run_bridge("prepare", sidecar)
-        _, first = self.run_bridge("validate", sidecar)
-        self.assertEqual(first["checker_verdict"], "fail")
-
-        # Forge a pass and re-hash it, so the tamper is invisible to any check
-        # that trusts the stored receipt or its self-digest.
+    def _forge_receipt(self) -> dict:
+        """Rewrite the current receipt to pass and re-hash it, so it verifies."""
         pointer = receipts.load_current(self.run_root)
         path = receipts.paths(self.run_root).receipts / pointer["receipt"]
         body = json.loads(path.read_text(encoding="utf-8"))
@@ -265,6 +312,49 @@ class FinalizeTests(BridgeTestCase):
         path.write_text(json.dumps(body), encoding="utf-8")
         self.assertEqual(receipts.verify_receipt_digest(body), [],
                          "the forgery must look self-consistent")
+        return body
+
+    def _rechain_journal(self, receipt_name: str, receipt_digest: str) -> None:
+        """Rewrite the whole journal so its links are valid again."""
+        path = receipts.paths(self.run_root).journal
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()]
+        previous = None
+        rebuilt = []
+        for index, row in enumerate(rows, start=1):
+            row.pop("link", None)
+            row["seq"] = index
+            row["prev"] = previous
+            if row.get("kind") == "receipt" and row.get("name") == receipt_name:
+                row["receipt_digest"] = receipt_digest
+            row["link"] = receipts.digest_text(receipts.canonical_json(row))
+            previous = row["link"]
+            rebuilt.append(row)
+        path.write_text(
+            "\n".join(json.dumps(row, sort_keys=True) for row in rebuilt) + "\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(receipts.verify_journal(self.run_root), [])
+
+    def test_a_rehashed_forged_pass_is_caught_by_the_journal(self) -> None:
+        sidecar = self.sidecar(self.campaign("failing-campaign"))
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        self._forge_receipt()
+        code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "journal_mismatch")
+        self.assertFalse((self.run_root / "finalization.json").exists())
+
+    def test_a_forged_receipt_and_journal_still_cannot_authorize_completion(self) -> None:
+        """Amendment B: with tamper evidence defeated, the fresh run decides."""
+        sidecar = self.sidecar(self.campaign("failing-campaign"))
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        body = self._forge_receipt()
+        self._rechain_journal(
+            receipts.load_current(self.run_root)["receipt"], body["receipt_digest"]
+        )
 
         code, out = self.run_bridge("finalize", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)

@@ -85,5 +85,65 @@ class ReceiptTests(unittest.TestCase):
         self.assertIsNone(receipts.load_current_receipt(self.run_root))
 
 
+class JournalTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.run_root = Path(self.tmp.name) / "run"
+        receipts.paths(self.run_root).ensure()
+
+    def test_receipts_are_chained_into_the_journal(self) -> None:
+        receipts.write_receipt(self.run_root, {
+            "schema": receipts.SCHEMA,
+            "identities": {"campaign_id": "c", "candidate": {"digest": "a" * 64}},
+            "outcome": {"checker_verdict": "pass", "bridge_classification": "verdict"},
+            "validation_round": 1,
+        })
+        rows = receipts.load_journal(self.run_root)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["kind"], "receipt")
+        self.assertEqual(rows[0]["seq"], 1)
+        self.assertIsNone(rows[0]["prev"])
+        self.assertEqual(receipts.verify_journal(self.run_root), [])
+
+    def test_a_plain_receipt_is_not_in_the_journal(self) -> None:
+        body = {
+            "schema": receipts.SCHEMA,
+            "identities": {"campaign_id": "c", "candidate": {"digest": "b" * 64}},
+            "outcome": {"checker_verdict": "pass"},
+            "validation_round": 1,
+        }
+        body["receipt_digest"] = receipts.digest_text(receipts.canonical_json(body))
+        target = receipts.paths(self.run_root).receipts / "forged-r1.json"
+        target.write_text(json.dumps(body), encoding="utf-8")
+        receipts.atomic_write(
+            receipts.paths(self.run_root).current,
+            receipts.canonical_json({"schema": receipts.CURRENT_SCHEMA,
+                                     "receipt": target.name}),
+        )
+        problems = receipts.journal_problem(self.run_root, body)
+        self.assertTrue(any("not recorded" in problem for problem in problems))
+
+    def test_a_broken_chain_is_detected(self) -> None:
+        for round_number in (1, 2):
+            receipts.write_receipt(self.run_root, {
+                "schema": receipts.SCHEMA,
+                "identities": {"campaign_id": "c", "candidate": {"digest": "c" * 64}},
+                "outcome": {"checker_verdict": "fail"},
+                "validation_round": round_number,
+            })
+        self.assertEqual(receipts.verify_journal(self.run_root), [])
+        path = receipts.paths(self.run_root).journal
+        lines = path.read_text(encoding="utf-8").splitlines()
+        path.write_text("\n".join([lines[0]]) + "\n", encoding="utf-8")
+        # Truncation leaves a short but internally valid chain: detect it by the
+        # receipt no longer being the last recorded one.
+        self.assertEqual(receipts.verify_journal(self.run_root), [])
+        pointer = receipts.load_current(self.run_root)
+        body = receipts.load_current_receipt(self.run_root)
+        problems = receipts.journal_problem(self.run_root, body)
+        self.assertTrue(problems, f"truncated journal still matched {pointer}")
+
+
 if __name__ == "__main__":
     unittest.main()

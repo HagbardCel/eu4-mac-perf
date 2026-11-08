@@ -95,6 +95,30 @@ digest are recorded per session in `<run-root>/plugin-binding.json`; editing or
 replacing the goal invalidates prior qualification instead of authorizing a
 different objective.
 
+## Candidate snapshots and the journal
+
+A candidate is identified by its complete delta against the pinned baseline, not
+by a list of filenames: additions, deletions, renames, mode changes, typechanges
+and symlinks are enumerated from porcelain v2 and every one of them must be
+permitted by the campaign policy. The snapshot is then rebuilt from the baseline
+and re-diffed, and the rebuild must reproduce the intended delta exactly — no
+missing change and no unintended one — before it is accepted. Finalization
+freezes that commit, so review evidence always describes the candidate the
+passing run actually saw.
+
+Receipts are written through an append-only hash-chained journal, and
+finalization refuses when the current receipt is not the journalled one. That is
+tamper evidence, not authority: authority remains the fresh checker run, which
+is why a forged receipt *and* a rebuilt journal chain still cannot authorize
+completion.
+
+Before any run the bridge asserts its execution roots: the candidate may not be
+the infrastructure root or nested inside it, the campaign and checker must live
+in the trusted checkout, a candidate may not ship `automation/dsh_bridge.py`, a
+declared `EU4_DSH_WORKSPACE` must equal the campaign workspace, and
+`danger-full-access` refuses qualification outright because it provides no
+boundary for qualification state.
+
 ## Execution roots
 
 Three roots are kept distinct and are asserted before a checker runs.
@@ -131,6 +155,12 @@ Consequences:
 - the chosen approach is a read-only project replica for DSH queries, which
   needs no cross-process protocol;
 - a shared lock remains a multi-party follow-up, not part of this work.
+
+`ghidra-replica.sh --create` clones the project to `~/GhidraEU4/<sha>-dsh` and
+rewrites the replica's metadata so queries cannot silently reopen the shared
+project. Use `EU4_RE_EXPORT=<replica>` for DSH queries. Measured on this
+machine: a shared-project query and a replica query run at the same time both
+exit 0 and return the same evidence, which was impossible before the replica.
 
 [`dsh/scripts/ghidra-probe.sh`](../dsh/scripts/ghidra-probe.sh) reproduces the
 measurement.
