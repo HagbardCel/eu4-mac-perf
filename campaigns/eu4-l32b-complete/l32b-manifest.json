@@ -17,6 +17,11 @@
       "sha256": "10e2269d4c4388152411bf557acc9f155a7dc2239fec55d7ab7686971d58d571"
     },
     {
+      "path": "campaigns/eu4-l32b-complete/workflow.json",
+      "role": "campaign",
+      "sha256": "c23e29bfca5e7b118913c4c65e050fe610be3563a5f9139e3b2f3bde039afca3"
+    },
+    {
       "path": "automation/gfx_adversarial.py",
       "role": "checker",
       "sha256": "fb2df10d350fd6946c8c2329f998f5bf029807e1f826660b64980aa20dbbd5e3"

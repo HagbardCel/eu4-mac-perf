@@ -154,6 +154,20 @@ def _canonical_sha(value: Any) -> str:
     ).hexdigest()
 
 
+def _absorb_snapshot(state: dict, snapshot: Any) -> None:
+    if isinstance(snapshot, dict) and isinstance(
+        snapshot.get("oracle_manifest_sha256"), str
+    ):
+        state["oracle_manifest_sha256"] = snapshot["oracle_manifest_sha256"]
+
+
+def _candidate_commit(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    commit = value.get("commit") or value.get("candidate_commit")
+    return commit if isinstance(commit, str) and commit else None
+
+
 def _git_blob_sha(repo: Path, commit: str, rel: str) -> str | None:
     completed = subprocess.run(
         ["git", "-C", str(repo), "show", f"{commit}:{rel}"],
@@ -215,6 +229,8 @@ class Coordinator:
             before = state["state"]
             state = self.step(state)
             save_state(self.state_path, state)
+            if state["state"] in TERMINAL:
+                break
             if state["state"] == before:
                 state["state"] = "blocked"
                 state["blocker"] = {"reason": "no_progress"}
@@ -263,8 +279,12 @@ class Coordinator:
         checkpoint = result.get("checkpoint")
         if isinstance(checkpoint, str):
             trusted_commit = (state.get("trusted_contract") or {}).get("commit")
+            if not trusted_commit:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "trusted_contract_missing"}
+                return state
             reported = result.get("trusted_contract_commit")
-            if trusted_commit and reported and reported != trusted_commit:
+            if reported and reported != trusted_commit:
                 state["state"] = "blocked"
                 state["blocker"] = {"reason": "checkpoint_trusted_contract_mismatch"}
                 return state
@@ -272,7 +292,7 @@ class Coordinator:
                 Path(checkpoint),
                 expected_campaign_id=result.get("campaign_id"),
                 expected_candidate_base=result.get("candidate_base_commit"),
-                expected_trusted_contract=trusted_commit or reported,
+                expected_trusted_contract=trusted_commit,
             )
             if errors:
                 state["state"] = "blocked"
@@ -283,9 +303,9 @@ class Coordinator:
                 return state
             state["checkpoint"] = checkpoint
             try:
-                state["candidate"] = self.hooks.snapshot(
-                    Path(result["workspace"]), state
-                )
+                snapshot = self.hooks.snapshot(Path(result["workspace"]), state)
+                _absorb_snapshot(state, snapshot)
+                state["candidate"] = snapshot
             except (OSError, RuntimeError, KeyError) as exc:
                 state["state"] = "blocked"
                 state["blocker"] = {"reason": "snapshot_failed", "detail": str(exc)}
@@ -297,9 +317,9 @@ class Coordinator:
         status = result.get("status")
         if status == "complete" and verdict == "pass":
             try:
-                state["candidate"] = self.hooks.snapshot(
-                    Path(result["workspace"]), state
-                )
+                snapshot = self.hooks.snapshot(Path(result["workspace"]), state)
+                _absorb_snapshot(state, snapshot)
+                state["candidate"] = snapshot
             except (OSError, RuntimeError, KeyError) as exc:
                 state["state"] = "blocked"
                 state["blocker"] = {"reason": "snapshot_failed", "detail": str(exc)}
@@ -344,11 +364,12 @@ class Coordinator:
             return state
         try:
             contract = self.hooks.snapshot_contract(Path(workspace), state)
+            _absorb_snapshot(state, contract)
         except (OSError, RuntimeError, KeyError) as exc:
             state["state"] = "blocked"
             state["blocker"] = {"reason": "contract_snapshot_failed", "detail": str(exc)}
             return state
-        if not isinstance(contract, dict) or not contract.get("commit"):
+        if not isinstance(contract, dict) or not _candidate_commit(contract):
             state["state"] = "blocked"
             state["blocker"] = {"reason": "contract_snapshot_incomplete"}
             return state
@@ -373,13 +394,18 @@ class Coordinator:
 
     def _review(self, state: dict) -> dict:
         target_key = state.get("review_target") or (
-            "contract" if state["state"] == "qualifying_review" else "candidate"
+            "contract" if state["state"] == "qualifying_review"
+            else ("final" if state["state"] == "final_review" else "candidate")
         )
         target = state.get("candidate") if target_key in ("candidate", "final") \
             else state.get("contract")
+        expected_candidate = _candidate_commit(target)
+        if expected_candidate is None:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "review_target_has_no_candidate_commit"}
+            return state
         result = self.hooks.run_reviewer(target, state)
         path = Path(str(result.get("path") or ""))
-        expected_candidate = target.get("commit") if isinstance(target, dict) else None
         outcome, errors = _review_outcome(
             path,
             expected_candidate=expected_candidate,
@@ -463,7 +489,7 @@ class Coordinator:
             return [f"adversarial cases are unreadable: {exc}"]
         errors = validate_cases(
             document,
-            candidate_commit=str(state["contract"].get("commit")),
+            candidate_commit=str(_candidate_commit(state["contract"])),
             contract_version=str(state.get("contract_version") or ""),
             checkpoint_sha256=checkpoint_sha,
             required_fields=required,
@@ -483,7 +509,7 @@ class Coordinator:
         state["adversarial_cases"] = str(cases_path)
         state["adversarial_report"] = result
         state["contract_review"] = {
-            "contract_commit": state["contract"].get("commit"),
+            "contract_commit": _candidate_commit(state["contract"]),
             "contract_version": state.get("contract_version"),
             "contract_sha256": state.get("contract_sha256"),
             "checkpoint_sha256": checkpoint_sha,
@@ -499,7 +525,7 @@ class Coordinator:
     def _candidate_receipt(self, state: dict, report_path: Path) -> dict:
         trusted = state.get("trusted_contract") or {}
         return {
-            "candidate_commit": state["candidate"].get("commit"),
+            "candidate_commit": _candidate_commit(state["candidate"]),
             "reviewer_report_sha256": _file_sha(report_path),
             "trusted_contract_commit": trusted.get("commit"),
             "trusted_contract_sha256": trusted.get("sha256"),
@@ -520,8 +546,12 @@ class Coordinator:
         if document.get("schema") != "eu4-gfx-qualification-receipt/v1":
             return ["final qualification receipt has the wrong schema"]
         trusted = state.get("trusted_contract") or {}
+        if not trusted.get("commit") or not trusted.get("sha256"):
+            return ["final trusted contract identity is missing"]
         if document.get("trusted_contract_commit") != trusted.get("commit"):
             return ["final receipt trusted contract differs"]
+        if not report_path.is_file():
+            return ["final reviewer report is missing"]
         checker = _git_blob_sha(
             self.repo, str(trusted.get("commit")),
             "automation/gfx_draw_accept_v2.py",
@@ -530,12 +560,12 @@ class Coordinator:
             return ["final receipt checker identity differs"]
         candidate = state.get("candidate") or {}
         candidate_digest = candidate.get("candidate_digest")
-        if not candidate_digest and candidate.get("candidate_commit") \
+        if not candidate_digest and _candidate_commit(candidate) \
                 and isinstance(candidate.get("changed_paths"), list):
             try:
                 candidate_digest = source_tree_digest_at_commit(
                     self.repo,
-                    str(candidate["candidate_commit"]),
+                    str(_candidate_commit(candidate)),
                     list(candidate["changed_paths"]),
                 )
             except CheckpointError as exc:
@@ -551,7 +581,7 @@ class Coordinator:
         if any(not isinstance(row, dict) or row.get("state") != "validated" for row in fields):
             return ["final receipt has unvalidated fields"]
         state["final_review"] = {
-            "candidate_commit": state["candidate"].get("commit"),
+            "candidate_commit": _candidate_commit(state["candidate"]),
             "reviewer_report_sha256": _file_sha(report_path),
             "qualification_receipt_sha256": _file_sha(Path(str(receipt))),
             "checker_verdict": "pass",
@@ -566,9 +596,19 @@ class Coordinator:
             state["state"] = "blocked"
             state["blocker"] = {"reason": "promotion_invalid", "errors": errors}
             return state
-        contract = state["contract"] if kind == "contract" else (
-            state.get("trusted_contract") or state["contract"]
-        )
+        if kind == "contract":
+            contract = state["contract"]
+        elif kind in ("implementation", "final"):
+            contract = state.get("trusted_contract")
+            if not isinstance(contract, dict) or not _candidate_commit(contract) \
+                    or not contract.get("sha256"):
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "trusted_contract_missing"}
+                return state
+        else:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "unknown_promotion_kind"}
+            return state
         result = self.hooks.integrate(
             state["candidate"], contract, state, kind=kind
         )
@@ -583,7 +623,7 @@ class Coordinator:
         _note(state, "integrated", commit=result.get("commit"), kind=kind)
         if kind == "contract":
             state["trusted_contract"] = {
-                "commit": state["contract"].get("commit"),
+                "commit": _candidate_commit(state["contract"]),
                 "version": state.get("contract_version"),
                 "sha256": state.get("contract_sha256"),
             }
@@ -600,7 +640,7 @@ class Coordinator:
             if not isinstance(receipt, dict):
                 return ["contract qualification receipt is missing"]
             contract = state.get("contract") or {}
-            if receipt.get("contract_commit") != contract.get("commit"):
+            if receipt.get("contract_commit") != _candidate_commit(contract):
                 return ["contract receipt does not match the contract commit"]
             if receipt.get("contract_version") != state.get("contract_version"):
                 return ["contract receipt version differs"]
@@ -622,7 +662,7 @@ class Coordinator:
             ):
                 return ["adversarial runner report changed after qualification"]
             module = f"automation/gfx_contracts/{state.get('contract_version')}.py"
-            actual = _git_blob_sha(self.repo, str(contract.get("commit")), module)
+            actual = _git_blob_sha(self.repo, str(_candidate_commit(contract)), module)
             if actual is None or actual != state.get("contract_sha256"):
                 return ["contract module changed after qualification"]
             return []
@@ -631,7 +671,7 @@ class Coordinator:
             if not isinstance(receipt, dict):
                 return ["implementation review receipt is missing"]
             candidate = state.get("candidate") or {}
-            if receipt.get("candidate_commit") != candidate.get("commit"):
+            if receipt.get("candidate_commit") != _candidate_commit(candidate):
                 return ["implementation receipt does not match the candidate commit"]
             trusted = state.get("trusted_contract") or {}
             if not trusted.get("commit") or not trusted.get("sha256"):
@@ -644,11 +684,14 @@ class Coordinator:
                 return ["implementation reviewer report changed after qualification"]
             return []
         if kind == "final":
+            trusted = state.get("trusted_contract") or {}
+            if not trusted.get("commit") or not trusted.get("sha256"):
+                return ["final trusted contract identity is missing"]
             receipt = state.get("final_review")
             if not isinstance(receipt, dict):
                 return ["final review receipt is missing"]
             candidate = state.get("candidate") or {}
-            if receipt.get("candidate_commit") != candidate.get("commit"):
+            if receipt.get("candidate_commit") != _candidate_commit(candidate):
                 return ["final receipt does not match the candidate commit"]
             if receipt.get("checker_verdict") != "pass":
                 return ["final checker did not pass"]
@@ -689,6 +732,7 @@ class Coordinator:
                     state["blocker"] = {"reason": "contract_snapshot_unavailable"}
                     return state
                 contract = self.hooks.snapshot_contract(Path(workspace), state)
+                _absorb_snapshot(state, contract)
                 state["contract"] = contract
                 version = result.get("contract_version") or state.get("contract_version")
                 module = Path(workspace) / "automation" / "gfx_contracts" / (
@@ -708,7 +752,9 @@ class Coordinator:
                 state["review_target"] = "contract"
                 state["state"] = "qualifying_review"
             elif target in ("candidate", "final"):
-                state["candidate"] = self.hooks.snapshot(Path(workspace), state)
+                snapshot = self.hooks.snapshot(Path(workspace), state)
+                _absorb_snapshot(state, snapshot)
+                state["candidate"] = snapshot
                 state["review_target"] = target
                 state["state"] = "reviewing" if target == "candidate" else "final_review"
             else:

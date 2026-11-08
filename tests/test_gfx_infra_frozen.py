@@ -443,6 +443,29 @@ class CheckpointPolicyTests(unittest.TestCase):
             self.assertTrue(any("field-relevant evidence" in error for error in errors))
 
 
+class CheckpointPolicyTests2(unittest.TestCase):
+    def test_unrelated_draw_snapshot_is_rejected_for_sampler(self):
+        from automation.gfx_checkpoint import validate_checkpoint
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(
+                tmp,
+                field="sampler_state",
+                evidence=[
+                    {"type": "draw_snapshot", "call_id": 999, "sampler": {"filter": "linear"}}
+                ],
+                basis="draw-time sampler state",
+            )
+            capture = tmp / "capture"
+            artifact, _draw = _artifact(capture, _master())
+            errors = validate_checkpoint(
+                Path(checkpoint["path"]),
+                artifact_loader=lambda _path: artifact,
+            )
+            self.assertTrue(any("field-relevant evidence" in error for error in errors))
+
+
 class LedgerTests(unittest.TestCase):
     def test_global_ledger_cannot_be_reset(self):
         from automation import launch_ledger
@@ -1237,6 +1260,161 @@ class CoordinatorTests(unittest.TestCase):
             ]
         )
         self.assertEqual(code, 1)
+
+    def test_review_uses_snapshot_candidate_commit_shape(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            report = self._review(tmp / "review.json", "qualified", "f" * 40)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.load_or_init()
+            state["state"] = "reviewing"
+            state["review_target"] = "candidate"
+            state["candidate"] = {"candidate_commit": "c" * 40}
+            with mock.patch.object(
+                hooks, "run_reviewer", lambda target, state: {"path": str(report)}
+            ):
+                state = coordinator.step(state)
+            self.assertEqual(state["state"], "blocked")
+            self.assertEqual(state["blocker"]["reason"], "invalid_review")
+
+    def test_checkpoint_trusted_contract_mismatch_blocks(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.load_or_init()
+            state["state"] = "investigating"
+            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+
+            def implementer(state):
+                return {
+                    "status": "paused",
+                    "last_verdict": "blocked",
+                    "workspace": str(tmp),
+                    "checkpoint": checkpoint["path"],
+                    "campaign_id": "c1",
+                    "candidate_base_commit": "a" * 40,
+                    "trusted_contract_commit": "other",
+                }
+
+            with mock.patch.object(hooks, "run_implementer", implementer):
+                state = coordinator.step(state)
+            self.assertEqual(state["state"], "blocked")
+            self.assertEqual(
+                state["blocker"]["reason"], "checkpoint_trusted_contract_mismatch"
+            )
+
+    def test_implementer_requires_trusted_contract(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.load_or_init()
+            state["state"] = "investigating"
+            state["trusted_contract"] = None
+            state = coordinator.step(state)
+            self.assertEqual(state["state"], "blocked")
+            self.assertEqual(state["blocker"]["reason"], "trusted_contract_missing")
+
+    def test_final_promotion_requires_trusted_contract(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.load_or_init()
+            state["candidate"] = {"commit": "c" * 40}
+            state["final_review"] = {"candidate_commit": "c" * 40}
+            state["trusted_contract"] = None
+            errors = coordinator._validate_promotion(state, "final")
+            self.assertTrue(
+                any("final trusted contract identity is missing" in error for error in errors)
+            )
+
+    def test_run_terminal_on_last_step_is_preserved(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            workflow = dict(self._workflow())
+            workflow["max_steps"] = 1
+
+            class Done(Coordinator):
+                def step(self, state):
+                    state["state"] = "awaiting_merge"
+                    return state
+
+            coordinator = Done(
+                repo=tmp,
+                workflow=workflow,
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.run()
+            self.assertEqual(state["state"], "awaiting_merge")
+
+    def test_preflight_populates_oracle_digest(self):
+        from automation.gfx_l32b_complete import Coordinator, default_state
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            manifest = tmp / "manifest.json"
+            manifest.write_text("{}")
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            workflow = dict(self._workflow())
+            workflow["trusted_contract"] = {
+                "commit": "t1",
+                "version": "v0",
+                "sha256": "2" * 64,
+                "manifest": str(manifest),
+            }
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=workflow,
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = default_state(workflow)
+            state = coordinator._preflight(state)
+            self.assertEqual(
+                state["oracle_manifest_sha256"],
+                hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            )
 
     def test_rejected_review_does_not_promote(self):
         from automation.gfx_l32b_complete import Coordinator
