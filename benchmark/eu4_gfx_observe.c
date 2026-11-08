@@ -827,7 +827,7 @@ static void emit_record(FILE *file, const eu4_gfx_observe_record *record,
         }
     }
     if (partial) {
-        fputs(",\"partial\":true", file);
+        fputs(",\"partial_record\":true", file);
     }
     fputs("}\n", file);
 }

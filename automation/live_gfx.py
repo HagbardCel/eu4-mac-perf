@@ -289,7 +289,9 @@ def replay(args: argparse.Namespace) -> int:
         print(f"replay output already exists: {output}", file=sys.stderr)
         return EXIT_INCOMPLETE
     try:
-        result = eu4_gfx_op_diff.run(capture_path, output)
+        result = eu4_gfx_op_diff.run(
+            capture_path, output, skip_unknown=args.skip_unknown
+        )
     except capture_reader.CaptureIncomplete as exc:
         result = {
             "status": "incomplete",
@@ -336,6 +338,7 @@ def _parser() -> argparse.ArgumentParser:
     rep = sub.add_parser("replay", description="offline Metal differential replay")
     rep.add_argument("--capture", required=True)
     rep.add_argument("--output")
+    rep.add_argument("--skip-unknown", action="store_true")
     rep.set_defaults(func=replay)
     return parser
 

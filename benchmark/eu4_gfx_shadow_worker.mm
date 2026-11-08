@@ -14,9 +14,10 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-/* shortcut: 64KiB per buffer allocation, raise if a later capture needs more. */
-static const size_t kMaxBytes = 64 * 1024;
-static const size_t kMaxLine = 256 * 1024;
+/* Offline harness bound. The authentic loading path creates buffers up to
+   ~220 KiB; keep headroom for the first resource-capture experiment. */
+static const size_t kMaxBytes = 4 * 1024 * 1024;
+static const size_t kMaxLine = 8 * 1024 * 1024;
 
 @interface ShadowBuf : NSObject
 @property (nonatomic) void *header;

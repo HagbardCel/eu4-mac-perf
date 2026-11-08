@@ -422,6 +422,7 @@ class OpDiffTests(unittest.TestCase):
 
 
 COMMITTED = ROOT / "analysis" / "gfx-ops" / "v0" / "capture"
+RESOURCE_CAPTURE = ROOT / "analysis" / "gfx-resources" / "v0" / "capture"
 
 
 class CommittedCaptureTests(unittest.TestCase):
@@ -454,6 +455,37 @@ class CommittedCaptureTests(unittest.TestCase):
             comparison = json.loads(Path(result["comparison"]).read_text())
             self.assertEqual(comparison["startup"]["status"], "matched")
             self.assertEqual(comparison["counts"].get("matched"), 7)
+            self.assertTrue(comparison["shutdown_ok"])
+
+
+@unittest.skipUnless(
+    RESOURCE_CAPTURE.is_dir(), "authentic resource capture is absent"
+)
+class AuthenticResourceTests(unittest.TestCase):
+    def test_capture_loads(self):
+        artifact = capture.load_capture(RESOURCE_CAPTURE)
+        self.assertEqual(len(artifact.operations), 256)
+        self.assertEqual(artifact.coverage["overlaps"], 0)
+        unknown = [
+            record
+            for record in artifact.operations
+            if record.kind in ("vertex_buffer_create", "vertex_buffer_update")
+            and not record.contents_known
+        ]
+        self.assertEqual(len(unknown), 5)
+        self.assertIn("payloads/6-1.bin", artifact.source_hashes)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Metal replay is macOS")
+    def test_known_resources_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "resources"
+            result = diff.run(RESOURCE_CAPTURE, output, skip_unknown=True)
+            self.assertEqual(result["status"], "pass")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertTrue(comparison["skip_unknown"])
+            self.assertEqual(comparison["counts"].get("matched"), 250)
+            self.assertEqual(comparison["counts"].get("skipped"), 6)
+            self.assertTrue(comparison["teardown_ok"])
             self.assertTrue(comparison["shutdown_ok"])
 
 

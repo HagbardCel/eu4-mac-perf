@@ -761,6 +761,7 @@ def run(
     output: Path | str,
     *,
     worker_factory=None,
+    skip_unknown: bool = False,
 ) -> dict:
     artifact = capture.load_capture(Path(capture_path))
     output = Path(output).expanduser().resolve()
@@ -785,7 +786,11 @@ def run(
     for record in artifact.operations:
         adapter = ADAPTERS.get(record.symbol)
         adapters[record.index] = adapter
-        if adapter is not None:
+        if adapter is not None and not (
+            skip_unknown
+            and record.kind in ("vertex_buffer_create", "vertex_buffer_update")
+            and not record.contents_known
+        ):
             shape = adapter.validate(record)
             if shape is not None:
                 comparison = _base_comparison(artifact)
@@ -810,6 +815,7 @@ def run(
     diagnostics: list[dict] = []
     worker_failure: str | None = None
     worker_unsupported: str | None = None
+    skipped_resources: set[str] = set()
     teardown_ok = True
     shutdown_ok = False
     worker = None
@@ -856,6 +862,42 @@ def run(
                             record,
                             status="unsupported",
                             reason="adapter_missing",
+                        )
+                    )
+                    continue
+                if skip_unknown and (
+                    (
+                        record.kind in ("vertex_buffer_create", "vertex_buffer_update")
+                        and not record.contents_known
+                    )
+                    or (
+                        record.resource_id is not None
+                        and record.resource_id in skipped_resources
+                    )
+                ):
+                    if record.resource_id is not None:
+                        skipped_resources.add(record.resource_id)
+                    operation_results.append(
+                        _operation_result(
+                            record,
+                            adapter=adapter,
+                            status="skipped",
+                            reason="unknown_original_contents",
+                            context=context,
+                        )
+                    )
+                    continue
+                if record.kind == "vertex_buffer_bind" and any(
+                    resource_id in skipped_resources
+                    for resource_id in record.meta.get("ids", [])
+                ):
+                    operation_results.append(
+                        _operation_result(
+                            record,
+                            adapter=adapter,
+                            status="skipped",
+                            reason="binding_uses_skipped_resource",
+                            context=context,
                         )
                     )
                     continue
@@ -1074,11 +1116,19 @@ def run(
             for result in operation_results
             if result["status"] in ("unsupported", "unavailable")
         )
-    elif startup_status == "matched" and all(
-        result["status"] == "matched" for result in operation_results
+    elif (
+        startup_status == "matched"
+        and any(result["status"] == "matched" for result in operation_results)
+        and all(
+            result["status"] in ("matched", "skipped")
+            for result in operation_results
+        )
     ):
         status = "pass"
         reason = ""
+    elif all(result["status"] in ("matched", "skipped") for result in operation_results):
+        status = "incomplete"
+        reason = "no_comparable_operations"
     else:
         status = "unavailable"
         reason = "worker_session_incomplete"
@@ -1096,6 +1146,7 @@ def run(
             "diagnostics": diagnostics,
             "shutdown_ok": shutdown_ok,
             "teardown_ok": teardown_ok,
+            "skip_unknown": skip_unknown,
             "next_action": NEXT_ACTION[status],
             "counts": _counts(operation_results),
         }

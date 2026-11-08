@@ -153,7 +153,7 @@ class ObserveHostTests(unittest.TestCase):
             partial = directory / "operations.partial.jsonl"
             self.assertGreater(partial.stat().st_size, 0)
             record = json.loads(partial.read_text().splitlines()[0])
-            self.assertTrue(record["partial"])
+            self.assertTrue(record["partial_record"])
             self.assertFalse(record["fields_ok"])
 
     def test_two_operation_shapes(self):

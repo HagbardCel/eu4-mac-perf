@@ -91,6 +91,13 @@ void eu4_gfx_observe_vb_create_entry(eu4_gfx_capture_frame *frame,
     }
     size_t size = (size_t)count * (size_t)stride;
     if (size > 0) {
+        if (data == NULL) {
+            /* A null source is an unknown-capacity buffer, not a read failure. */
+            call->payload_ok = 1;
+            call->payload_size = 0;
+            eu4_gfx_observe_set_resource(call, "", 0);
+            return;
+        }
         eu4_gfx_observe_set_payload(call, data, size);
         if (!call->payload_ok) {
             eu4_gfx_observe_set_resource(call, "", 0);
@@ -155,8 +162,14 @@ void eu4_gfx_observe_vb_update_entry(eu4_gfx_capture_frame *frame,
     }
     size_t size = (size_t)count * (size_t)stride;
     if (size > 0) {
-        eu4_gfx_observe_set_payload(call, (const void *)(uintptr_t)frame->rdx,
-                                    size);
+        const void *data = (const void *)(uintptr_t)frame->rdx;
+        if (data == NULL) {
+            call->payload_ok = 1;
+            call->payload_size = 0;
+            eu4_gfx_observe_set_resource(call, resource->id, 0);
+            return;
+        }
+        eu4_gfx_observe_set_payload(call, data, size);
         if (!call->payload_ok) {
             eu4_gfx_observe_fail_fields(call);
             return;
