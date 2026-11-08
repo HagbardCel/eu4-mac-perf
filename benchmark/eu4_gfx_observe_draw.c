@@ -1,5 +1,7 @@
 #include "eu4_gfx_observe_draw.h"
 
+#include "eu4_gfx_observe_buffers.h"
+
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,6 +15,9 @@ enum {
     DRAW_MODE_OFFSET = 0x08,
     DRAW_COUNT_OFFSET = 0x64,
     DRAW_SHADER_OFFSET = 0x70,
+    DRAW_CONSTANT_COUNT_OFFSET = 0xC8,
+    DRAW_CONSTANT_POINTER_OFFSET = 0xD0,
+    DRAW_CONSTANT_MIN_VEC4 = 4,
     DRAW_MODE_TRIANGLE_STRIP = 5,
     DRAW_MIN_VERTICES = 3,
 };
@@ -100,6 +105,29 @@ void eu4_gfx_observe_draw_entry(eu4_gfx_capture_frame *frame,
         shader = load_u64(snapshot, DRAW_SHADER_OFFSET);
     }
 
+    int32_t constant_vec4 = 0;
+    uint64_t constant_header = 0;
+    int constant_match = 0;
+    uint64_t constant_call_id = 0;
+    if (snapshot_ok) {
+        constant_vec4 = load_i32(snapshot, DRAW_CONSTANT_COUNT_OFFSET);
+        constant_header = load_u64(snapshot, DRAW_CONSTANT_POINTER_OFFSET);
+        if (constant_header != 0 && constant_vec4 >= DRAW_CONSTANT_MIN_VEC4) {
+            uint64_t data = 0;
+            uint8_t bytes[64];
+            if (eu4_gfx_observe_read(
+                    (const void *)(uintptr_t)(constant_header + 8), &data,
+                    sizeof(data)) &&
+                data != 0 &&
+                eu4_gfx_observe_read_bytes((const void *)(uintptr_t)data, bytes,
+                                           sizeof(bytes))) {
+                constant_match = eu4_gfx_observe_constant_matches(
+                    (uintptr_t)constant_header, bytes, sizeof(bytes),
+                    &constant_call_id);
+            }
+        }
+    }
+
     const int32_t effective_count = raw_count > 0 ? raw_count : master_count;
     const char *count_source = raw_count > 0 ? "esi" : "master";
     if (!snapshot_ok && raw_count <= 0) {
@@ -168,11 +196,16 @@ void eu4_gfx_observe_draw_entry(eu4_gfx_capture_frame *frame,
         ",\"mode\":%d,\"raw_count\":%d,\"first\":%d,\"effective_count\":%d,"
         "\"count_source\":\"%s\",\"shader_non_null\":%s,"
         "\"master_complete\":%s,\"caller_match\":%s,\"qualified\":%s,"
-        "\"primitive_enum\":%d,\"primitive_call_id\":%llu",
+        "\"primitive_enum\":%d,\"primitive_call_id\":%llu,"
+        "\"constant_slot0_vec4\":%d,\"constant_slot0_header\":%llu,"
+        "\"constant_slot0_match\":%s,\"constant_slot0_call_id\":%llu",
         mode, raw_count, first, effective_count, count_source,
         shader != 0 ? "true" : "false", snapshot_ok ? "true" : "false",
         caller_match ? "true" : "false", qualified ? "true" : "false",
-        primitive, (unsigned long long)primitive_call_id);
+        primitive, (unsigned long long)primitive_call_id, constant_vec4,
+        (unsigned long long)constant_header,
+        constant_match ? "true" : "false",
+        (unsigned long long)constant_call_id);
     eu4_gfx_observe_set_meta(call, meta);
 
     eu4_gfx_observe_count_draw(call->caller_rva, call->caller_known,

@@ -36,6 +36,47 @@ def _master(mode: int = 5, count: int = 4, shader: int = 0x1234) -> bytes:
     return bytes(raw)
 
 
+VB_HEADER = 0x60000125A750
+CB_HEADER = 0x60000125A580
+VB_BYTES = bytes(range(96))
+CB_BYTES = bytes(range(64))
+
+
+def _full_master() -> bytes:
+    raw = bytearray(_master())
+    struct.pack_into("<I", raw, 0xC8, 4)
+    struct.pack_into("<Q", raw, 0xD0, CB_HEADER)
+    struct.pack_into("<Q", raw, 0x130, VB_HEADER)
+    struct.pack_into("<I", raw, 0x150, 0)
+    struct.pack_into("<I", raw, 0x160, 24)
+    return bytes(raw)
+
+
+def _resource_row(
+    call_id: int, symbol: str, rva: str, **fields
+) -> dict:
+    row = {
+        "schema": "gfx-op/v0",
+        "call_id": call_id,
+        "completion_seq": call_id - 2,
+        "symbol": symbol,
+        "rva": rva,
+        "thread_id": 7,
+        "caller_rva": CALLER,
+        "caller_known": True,
+        "overlap": False,
+        "fields_ok": True,
+        "output_base_non_null": False,
+        "input_size": 0,
+        "output_size": 0,
+        "input_hex": "",
+        "output_hex": "",
+        "return": None,
+    }
+    row.update(fields)
+    return row
+
+
 def _draw_row(
     call_id: int,
     *,
@@ -87,6 +128,8 @@ def _write_capture(
     summary_overrides: dict | None = None,
     payload: bytes | None = None,
     payload_path: str = "payloads/4-4.bin",
+    payloads: dict[str, bytes] | None = None,
+    targets: list[dict] | None = None,
 ) -> Path:
     target = directory / "capture"
     shutil.copytree(BASE_CAPTURE, target)
@@ -99,6 +142,8 @@ def _write_capture(
     metadata = json.loads((target / "metadata.json").read_text())
     if payload is not None:
         (target / payload_path).write_bytes(payload)
+    for name, data in (payloads or {}).items():
+        (target / name).write_bytes(data)
     (target / "operations.jsonl").write_text(
         "".join(json.dumps(row) + "\n" for row in rows)
     )
@@ -115,7 +160,7 @@ def _write_capture(
         "executable_sha256": metadata["executable_sha256"],
         "image_base": metadata["image_base"],
         "enabled": True,
-        "targets": [
+        "targets": targets or [
             {"symbol": "_GfxDraw", "rva": DRAW_RVA, "length": 6,
              "relocation": "safe"},
             {"symbol": "_GfxSetPrimitiveType", "rva": "0x15ea76f", "length": 5,
@@ -375,6 +420,106 @@ class DrawPacketTests(unittest.TestCase):
             self.assertEqual(result, live_gfx.EXIT_INCOMPLETE)
             packet = json.loads((output / "draw-packet.json").read_text())
             self.assertEqual(packet["status"], "incomplete")
+
+    def _full_capture(self, directory: Path) -> Path:
+        draw = _draw_row(5, payload="payloads/5-5.bin")
+        draw["completion_seq"] = 3
+        draw["constant_slot0_vec4"] = 4
+        draw["constant_slot0_header"] = CB_HEADER
+        draw["constant_slot0_match"] = True
+        draw["constant_slot0_call_id"] = 4
+        rows = [
+            _resource_row(
+                3,
+                "_GfxCreateVertexBuffer",
+                "0x15ebcb3",
+                kind="vertex_buffer_create",
+                resource_id="vb_1",
+                contents_known=True,
+                count=4,
+                stride=24,
+                usage=0,
+                header_non_null=True,
+                header=VB_HEADER,
+                payload={"size": len(VB_BYTES), "file": "payloads/3-1.bin"},
+            ),
+            _resource_row(
+                4,
+                "_GfxSetConstantBuffer",
+                "0x15ec36a",
+                kind="constant_set",
+                resource_id="cb_1",
+                contents_known=True,
+                slot=0,
+                selector=16,
+                header=CB_HEADER,
+                data_ptr=0x60000125A5C0,
+                data_size=64,
+                vec4_count=4,
+                payload={"size": len(CB_BYTES), "file": "payloads/4-1.bin"},
+            ),
+            draw,
+        ]
+        return _write_capture(
+            directory,
+            rows=rows,
+            payload=_full_master(),
+            payload_path="payloads/5-5.bin",
+            payloads={
+                "payloads/3-1.bin": VB_BYTES,
+                "payloads/4-1.bin": CB_BYTES,
+            },
+            targets=[
+                {"symbol": "_GfxDraw", "rva": DRAW_RVA, "length": 6,
+                 "relocation": "safe"},
+                {"symbol": "_GfxSetPrimitiveType", "rva": "0x15ea76f",
+                 "length": 5, "relocation": "safe"},
+                {"symbol": "_GfxCreateVertexBuffer", "rva": "0x15ebcb3",
+                 "length": 6, "relocation": "safe"},
+                {"symbol": "_GfxSetConstantBuffer", "rva": "0x15ec36a",
+                 "length": 9, "relocation": "safe"},
+            ],
+            summary_overrides={
+                "target_draw_call_id": 5,
+                "draw_observed": len(rows),
+                "draw_qualified": 1,
+            },
+        )
+
+    def test_lifecycle_and_constant_inputs_are_established(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capture_dir = self._full_capture(Path(tmp))
+            packet = packet_builder.build_packet(capture_dir)
+            for name in ("vertex_buffer_bindings", "vertex_buffer_contents",
+                         "matrix_constant"):
+                self.assertEqual(packet["inputs"][name]["status"],
+                                 "established", name)
+            self.assertNotIn("matrix_constant", packet["missing"])
+            buffer = packet["inputs"]["vertex_buffer_contents"]["value"][
+                "buffers"
+            ][0]
+            self.assertEqual(buffer["resource_id"], "vb_1")
+            self.assertEqual(buffer["count"], 4)
+            self.assertEqual(buffer["stride"], 24)
+            self.assertEqual(buffer["sidecar"], "payloads/vb_1.bin")
+            matrix = packet["inputs"]["matrix_constant"]["value"]
+            self.assertEqual(matrix["hex"], CB_BYTES.hex())
+            self.assertTrue(matrix["draw_time_match"])
+            self.assertEqual(matrix["last_call_id"], 4)
+
+    def test_writer_emits_resource_and_matrix_sidecars(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            capture_dir = self._full_capture(directory)
+            output = directory / "packet"
+            result = packet_builder.write_packet(capture_dir, output)
+            self.assertEqual((output / "payloads" / "vb_1.bin").read_bytes(),
+                             VB_BYTES)
+            self.assertEqual((output / "payloads" / "matrix.bin").read_bytes(),
+                             CB_BYTES)
+            hashes = result["packet"]["provenance"]["source_hashes"]
+            self.assertIn("payloads/vb_1.bin", hashes)
+            self.assertIn("payloads/matrix.bin", hashes)
 
     def test_writer_emits_snapshot_and_refuses_existing_output(self):
         with tempfile.TemporaryDirectory() as tmp:
