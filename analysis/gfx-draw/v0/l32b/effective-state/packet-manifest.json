@@ -48,7 +48,29 @@
   "review": {
     "path": "analysis/gfx-draw/v0/l32b/effective-state/review.json",
     "outcome": "qualified",
-    "candidate_commit": "27d9e98e368016eaf840a522728b6c74fee3cf86",
-    "oracle_manifest_sha256": "b89dd1847bffda48fccd39135a6e135217fa65c357e2157beb0e02fe5add44c1"
+    "campaign": "eu4-l32b-review-eu4-l32b-effective-state-r2",
+    "reviewed_code_commit": "8f154e4a810b93c03d8a8d35ac7d97ea0ab6ae18",
+    "oracle_manifest_sha256": "f3c87a4af7c28f1382907aa86d80f4b756c6df5c4483d00d2325d22abdb55015",
+    "supersedes": "eu4-l32b-review-eu4-l32b-effective-state-r1"
+  },
+  "requalification": {
+    "schema": "eu4-l32b-requalification/v1",
+    "campaign_id": "eu4-l32b-effective-state",
+    "original_campaign_verdict": "pass",
+    "original_campaign_manifest_sha256": "d8f4dac6b2d6d68c45a19a195720da37ee371a254a0ace1d0eb27c60882d4d80",
+    "corrected_checker_commit": "8f154e4a810b93c03d8a8d35ac7d97ea0ab6ae18",
+    "corrected_manifest_sha256": "f3c87a4af7c28f1382907aa86d80f4b756c6df5c4483d00d2325d22abdb55015",
+    "workspace_pin": "1b5a82ab734b850ad444a1dc845a74d04c72c226",
+    "capture_session": "9a8a50c4-c42c-40da-b3db-9472820ce477",
+    "observer_library_sha256": "0f53b00e4036208225671b85527c4e4adea4530db8d2971f1a67e42f38bdc69e",
+    "capture_target_call_id": 11,
+    "packet_sha256": "7f227ad43e269576d7650672d515ed441dbced4f142dea23bc05bf6f0f8f46af",
+    "established": [
+      "vertex_buffer_bindings",
+      "vertex_buffer_contents",
+      "matrix_constant"
+    ],
+    "verdict": "pass",
+    "note": "Post-campaign requalification of the existing authentic capture in the original pinned agent workspace under the corrected checker. No EU4 launch; packet bytes unchanged. The original first-round campaign acceptance remains a historical event."
   }
 }

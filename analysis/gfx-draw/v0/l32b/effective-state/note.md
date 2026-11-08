@@ -10,8 +10,10 @@
 - One authorized launch of three; launch receipt and capture plan are in the campaign run root (`.local`).
 - Capture: `.local/automation/eu4-l32b-effective-state/captures/l32b-i-effective-state`
 - Packet: [packet/](packet/) and [packet-manifest.json](packet-manifest.json)
-- Independent reviewer: `eu4-l32b-review-eu4-l32b-effective-state-r1`,
-  `opencode/iceman-free`, outcome `qualified`; report [review.json](review.json)
+- Independent reviewer: `eu4-l32b-review-eu4-l32b-effective-state-r2`,
+  `opencode/iceman-free`, outcome `qualified`; report [review.json](review.json).
+  It reviewed the corrected checker/candidate commit `8f154e4…` and supersedes
+  the earlier `r1` review, which ran under the pre-remediation checker.
 
 ## Established inputs
 
@@ -50,22 +52,44 @@ The agent independently selected the observation rather than receiving a hook li
 - The packet builder resolves bindings/contents/matrix and writes hash-verified
   sidecars. No shader, texture, render-state or scissor input is invented.
 
+## Corrected trusted checker
+
+The initial checker accepted a packet if its own matrix/vertex bytes and hashes
+were internally consistent. Post-campaign remediation binds the packet to the
+original capture:
+
+- matrix bytes must equal the preceding `_GfxSetConstantBuffer` record selected
+  by the draw’s constant-slot pointer and draw-time call id;
+- vertex contents must use `resource_lifecycle`; the draw master’s slot header
+  resolves to the preceding create record, and the binding’s resource id/call id
+  must match it;
+- resource-observation and draw-snapshot evidence bytes must equal the original
+  operation payload/master bytes;
+- forged-but-rehashed matrix/vertex/binding/evidence cases now fail.
+
+The existing capture was re-validated in the original pinned agent workspace
+(HEAD `1b5a82a`, candidate changes in the worktree) without relaunching EU4. See
+[requalification.json](requalification.json); verdict `pass`, packet SHA-256
+unchanged at `7f227ad4…`. The original first-round campaign acceptance remains
+historical.
+
 ## Campaign evidence
 
 - Agent-selected investigation: yes (constant cross-check and lifecycle identity).
 - Autonomous checker remediation: none; the first checker round passed. No defect
   was introduced to demonstrate remediation.
 - Captures: 1 of 3.
-- Independent review: qualified (separate reviewer session; no candidate edits).
+- Independent review: qualified (`r2`, corrected checker/candidate commit;
+  supersedes `r1`).
 - Human interventions: reviewer model fallback from `opencode/big-pickle` after the
   provider free limit, and the final PR/merge decision.
 - Restartability after a completed capture was not exercised in this run; the
   campaign state and launch counter preserve the completed capture for resume.
 
-A post-campaign path-handling fix in `automation/gfx_candidate_snapshot.py` changed
-the verification-manifest digest from `d8f4dac6…` to `b89dd184…`. The trusted
-checker was re-run under the final manifest and still passed; candidate code and
-capture are unchanged.
+The verification manifest changed through the post-campaign snapshot-helper
+path fix and the corrected checker; the final digest is `f3c87a4a…`. The
+corrected checker re-ran against the original workspace and passed; candidate
+code and capture are unchanged, and the packet bytes are unchanged.
 
 ## Scope
 

@@ -23,14 +23,23 @@
   },
   "restartability": "not exercised after the capture (the first turn completed); the runner/CAPTURE counter leave the completed capture reusable on resume.",
   "independent_review": {
-    "campaign": "eu4-l32b-review-eu4-l32b-effective-state-r1",
+    "campaign": "eu4-l32b-review-eu4-l32b-effective-state-r2",
     "model": "opencode/iceman-free",
     "outcome": "qualified",
-    "report": "analysis/gfx-draw/v0/l32b/effective-state/review.json"
+    "reviewed_code_commit": "8f154e4a810b93c03d8a8d35ac7d97ea0ab6ae18",
+    "report": "analysis/gfx-draw/v0/l32b/effective-state/review.json",
+    "supersedes": "eu4-l32b-review-eu4-l32b-effective-state-r1"
   },
   "human_interventions": [
     "reviewer model fallback from opencode/big-pickle to opencode/iceman-free after the provider free limit",
     "final PR/merge decision"
   ],
-  "note": "A post-campaign path-handling fix in automation/gfx_candidate_snapshot.py changed the verification-manifest digest from d8f4dac6... to b89dd184...; the trusted checker was re-run under the final manifest and still passed. Candidate code and capture are unchanged."
+  "note": "The first review (r1) qualified under the pre-remediation checker and is superseded by r2, which reviewed the corrected checker commit 8f154e4. The existing capture was re-validated under that checker without relaunch; packet bytes are unchanged. A post-campaign snapshot-helper path fix changed the earlier manifest digest; the final corrected manifest is f3c87a4a\u2026.",
+  "verification_manifest_sha256": "f3c87a4af7c28f1382907aa86d80f4b756c6df5c4483d00d2325d22abdb55015",
+  "post_campaign_requalification": {
+    "verdict": "pass",
+    "capture_session": "9a8a50c4-c42c-40da-b3db-9472820ce477",
+    "corrected_checker_commit": "8f154e4a810b93c03d8a8d35ac7d97ea0ab6ae18",
+    "note": "Existing authentic capture re-validated in the original pinned worktree; no relaunch; packet unchanged."
+  }
 }
