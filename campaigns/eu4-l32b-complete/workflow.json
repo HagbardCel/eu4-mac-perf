@@ -1,0 +1,32 @@
+{
+  "schema": "eu4-l32b-workflow/v1",
+  "workflow_id": "eu4-l32b-complete",
+  "baseline_commit": "956fb7b736b1025b2888d352d4437d350c2373f3",
+  "integration_branch": "l32b/complete",
+  "initial_stage": "investigation",
+  "max_steps": 40,
+  "required_inputs": [
+    "draw_invocation",
+    "primitive_semantics",
+    "shader_identity",
+    "shader_stage_sources",
+    "vertex_buffer_bindings",
+    "vertex_buffer_contents",
+    "vertex_attribute_layout",
+    "texture_slot_0_identity",
+    "texture_slot_0_contents",
+    "sampler_state",
+    "matrix_constant",
+    "render_state_blend",
+    "render_state_depth_stencil",
+    "render_state_rasterizer",
+    "scissor_state",
+    "viewport",
+    "render_target"
+  ],
+  "launch_ledger": {
+    "path": ".local/automation/eu4-l32b-complete/live-launch-ledger.json",
+    "limit": 6,
+    "deadline_seconds": 120
+  }
+}

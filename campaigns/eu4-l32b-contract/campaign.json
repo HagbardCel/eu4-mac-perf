@@ -1,0 +1,19 @@
+{
+  "id": "eu4-l32b-contract",
+  "objective": "objective.md",
+  "runtime": "opencode",
+  "model": "opencode/big-pickle",
+  "opencode_version": "2.2.5",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/automation/eu4-l32b-contract/workspace",
+    "commit": "PIN_AT_RUNTIME"
+  },
+  "accept": ["python3", "accept.py"],
+  "max_rounds": 6,
+  "max_seconds": 7200,
+  "accept_timeout_seconds": 900,
+  "live_observation": {
+    "launch_limit": 0
+  }
+}

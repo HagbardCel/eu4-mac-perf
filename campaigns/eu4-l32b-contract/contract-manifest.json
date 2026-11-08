@@ -1,0 +1,57 @@
+{
+  "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "members": [
+    {
+      "path": "campaigns/eu4-l32b-contract/campaign.json",
+      "role": "campaign",
+      "sha256": "bd72d47990289e8c4a8224da85ed2c40fb7e53866c67fc97186f320b9209abb2"
+    },
+    {
+      "path": "campaigns/eu4-l32b-contract/contract.json",
+      "role": "campaign",
+      "sha256": "93c64fa9e70984a72d817996cababb7b33c71a18a2f420c2e3f6f87004066146"
+    },
+    {
+      "path": "campaigns/eu4-l32b-contract/objective.md",
+      "role": "campaign",
+      "sha256": "1c31594c81b3e308578ccc83508fe6052fdb02e73af9075ff5c1d4bfdb67da00"
+    },
+    {
+      "path": "automation/gfx_checkpoint.py",
+      "role": "checker",
+      "sha256": "67fa33ad8b0f2f8130145dcf562daeb53c44ab14c2996184b86d323d00bd05e0"
+    },
+    {
+      "path": "automation/gfx_contract_accept.py",
+      "role": "checker",
+      "sha256": "a76375b8c5f9ff18264fb3593fcc453da77e5260070d0ad1e7cc76574ad816b6"
+    },
+    {
+      "path": "automation/gfx_contract_runner.py",
+      "role": "checker",
+      "sha256": "3fe07432fc1b017e910f23d9b32445cbba047029fdb6f8e57bf4fa45bfc94f38"
+    },
+    {
+      "path": "automation/gfx_draw_accept_v2.py",
+      "role": "checker",
+      "sha256": "eb9e6f42bd4a80ca82cf1f27e99144798fcb9f16520134ea0a14b95cd940a512"
+    },
+    {
+      "path": "automation/manifest_revision.py",
+      "role": "checker",
+      "sha256": "1264608587cdd3670fd9d313436093ce3493a57b83f9246f5e9c6e2fe1a660ab"
+    },
+    {
+      "path": "campaigns/eu4-l32b-contract/accept.py",
+      "role": "checker",
+      "sha256": "00f77021c2a6186ab6c92b250343ff9cd260b7037261c351d3d1f16fe58aac14"
+    },
+    {
+      "path": "reverse_engineering/target.json",
+      "role": "oracle",
+      "sha256": "ad9e9730eda2f3f51165157bc5ae2585e9fd4a4a5a6921d7ba234e35054621c4"
+    }
+  ],
+  "repo_baseline_commit": "956fb7b736b1025b2888d352d4437d350c2373f3",
+  "schema": "eu4-verification-manifest/v1"
+}

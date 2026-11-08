@@ -1,0 +1,77 @@
+{
+  "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "members": [
+    {
+      "path": "campaigns/eu4-l32b-complete/campaign.json",
+      "role": "campaign",
+      "sha256": "d04e799efb52ae9cf4a18d6e0ccb9dfc5a8ad35e7a2e510eec6f2aec2c310058"
+    },
+    {
+      "path": "campaigns/eu4-l32b-complete/l32b.json",
+      "role": "campaign",
+      "sha256": "9e0c7f4c611a0e07ff470daff204bfe5893b37b492b44c548d7553d12dc80ae8"
+    },
+    {
+      "path": "campaigns/eu4-l32b-complete/objective.md",
+      "role": "campaign",
+      "sha256": "10e2269d4c4388152411bf557acc9f155a7dc2239fec55d7ab7686971d58d571"
+    },
+    {
+      "path": "automation/gfx_checkpoint.py",
+      "role": "checker",
+      "sha256": "67fa33ad8b0f2f8130145dcf562daeb53c44ab14c2996184b86d323d00bd05e0"
+    },
+    {
+      "path": "automation/gfx_contracts/api.py",
+      "role": "checker",
+      "sha256": "cab1618f9ebf93510507f03f23939cb7f3e7255afef746e609670793cd315256"
+    },
+    {
+      "path": "automation/gfx_contracts/v0.py",
+      "role": "checker",
+      "sha256": "a8c8154c72f15301626ecc9a5ec5069617c62871224c86a1da99ed67854fc5f4"
+    },
+    {
+      "path": "automation/gfx_draw_accept_v2.py",
+      "role": "checker",
+      "sha256": "eb9e6f42bd4a80ca82cf1f27e99144798fcb9f16520134ea0a14b95cd940a512"
+    },
+    {
+      "path": "automation/launch_ledger.py",
+      "role": "checker",
+      "sha256": "4725ce0cfad3307d419042502847b091273dade09498020d9d9c7d84559c616c"
+    },
+    {
+      "path": "automation/manifest_revision.py",
+      "role": "checker",
+      "sha256": "1264608587cdd3670fd9d313436093ce3493a57b83f9246f5e9c6e2fe1a660ab"
+    },
+    {
+      "path": "campaigns/eu4-l32b-complete/accept.py",
+      "role": "checker",
+      "sha256": "739544950e0177aeaad0e15c4f4998708f56110fb0578371db3429d924bc7f0a"
+    },
+    {
+      "path": "campaigns/eu4-l32b-complete/frozen/gfx_startup_trace_host.c",
+      "role": "frozen_test",
+      "sha256": "fe72b2ff31ab79578265c53e0ba8d910b22905c2b944063dcf67b344ebd00a1e"
+    },
+    {
+      "path": "campaigns/eu4-l32b-complete/frozen/gfx_startup_trace_stubs.S",
+      "role": "frozen_test",
+      "sha256": "11d4e55c39ab91859e1b5f34610ac4656ec80de0d99751b0b8449ef8c0d0cb5d"
+    },
+    {
+      "path": "analysis/qualification/v0/primitive-table.evidence.json",
+      "role": "oracle",
+      "sha256": "b16e464b91439cf74bacdf5fd8424f0df6d72a01dfff25e4ae702133af382491"
+    },
+    {
+      "path": "reverse_engineering/target.json",
+      "role": "oracle",
+      "sha256": "ad9e9730eda2f3f51165157bc5ae2585e9fd4a4a5a6921d7ba234e35054621c4"
+    }
+  ],
+  "repo_baseline_commit": "956fb7b736b1025b2888d352d4437d350c2373f3",
+  "schema": "eu4-verification-manifest/v1"
+}

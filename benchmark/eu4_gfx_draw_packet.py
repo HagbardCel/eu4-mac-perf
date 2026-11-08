@@ -468,6 +468,15 @@ def build_packet(
             },
         ],
     )
+    inputs["draw_invocation"]["value"] = {
+        "call_id": target.call_id,
+        "caller_rva": f"0x{target.caller_rva:x}",
+        "mode": master["mode"],
+        "effective_count": expected_effective,
+        "master_sha256": master["sha256"],
+        "thread_id": target.thread_id,
+        "completion_seq": target.completion_seq,
+    }
 
     primitive_enum = target.meta.get("primitive_enum")
     mapping = _primitive_mapping()
@@ -503,6 +512,13 @@ def build_packet(
                     },
                 ],
             )
+            inputs["primitive_semantics"]["value"] = {
+                "engine_enum": primitive_enum,
+                "gl_mode": expected_mode,
+                "draw_mode": master["mode"],
+                "primitive_call_id": target.meta.get("primitive_call_id"),
+                "table_path": str(PRIMITIVE_EVIDENCE.relative_to(ROOT)),
+            }
             primitive_detail = None
         else:
             inputs["primitive_semantics"] = _input(
@@ -534,11 +550,25 @@ def build_packet(
             assumptions=assumptions,
         )
         render_target["value"] = {
-            "kind": "default_backbuffer",
-            "width": master["window"]["width"],
-            "height": master["window"]["height"],
-            "format": "BGRA8Unorm",
-            "format_evidence": "project_derived",
+            "observed": {
+                "kind": "default_backbuffer",
+                "master_render_target": master["render_target"],
+                "window": master["window"],
+            },
+            "assumptions": [
+                {
+                    "property": "format",
+                    "value": "BGRA8Unorm",
+                    "evidence": "project_derived",
+                    "scope": "L3.3 replay",
+                },
+                {
+                    "property": "initial_contents",
+                    "value": "not captured",
+                    "evidence": "unestablished",
+                    "scope": "L3.3 replay",
+                },
+            ],
         }
     else:
         render_target = _input(
