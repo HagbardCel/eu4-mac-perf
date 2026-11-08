@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import base64
 import json
 import platform
 import subprocess
@@ -11,8 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "benchmark"))
 
+import copy  # noqa: E402
+
 import eu4_gfx_op_capture as capture  # noqa: E402
 import eu4_gfx_op_diff as diff  # noqa: E402
+import eu4_gfx_shadow_worker as shadow  # noqa: E402
 import eu4_gfx_startup_trace as startup  # noqa: E402
 
 
@@ -190,6 +194,140 @@ class OpDiffTests(unittest.TestCase):
             self.assertEqual(diagnostic["original"], 1080)
             self.assertEqual(diagnostic["metal"], 720)
 
+    def test_resource_lifecycle_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-buffers")
+            output = root / "diff-resources"
+            result = diff.run(artifact, output)
+            self.assertEqual(result["status"], "pass")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertTrue(comparison["teardown_ok"])
+            self.assertTrue(comparison["shutdown_ok"])
+            self.assertEqual(comparison["counts"].get("matched"), 3)
+            commands = (output / "worker-commands.jsonl").read_text().splitlines()
+            self.assertTrue(
+                any(json.loads(line).get("harness_teardown") is True for line in commands)
+            )
+
+    def test_explicit_binding_words_are_declined(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-bind-explicit")
+            output = root / "diff-explicit-words"
+            result = diff.run(artifact, output)
+            self.assertEqual(result["status"], "unsupported")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            bind = next(
+                op for op in comparison["operations"] if op["symbol"] == "_GfxSetVertexBuffers"
+            )
+            self.assertEqual(bind["status"], "unsupported")
+            self.assertIn("explicit_binding_words", bind["reason"])
+            self.assertTrue(comparison["teardown_ok"])
+            self.assertTrue(comparison["shutdown_ok"])
+
+    def test_full_update_recovers_unknown_contents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-unknown-update")
+            output = root / "diff-recovered"
+            result = diff.run(artifact, output, skip_unknown=True)
+            self.assertEqual(result["status"], "unsupported")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertTrue(comparison["partial"])
+            statuses = [
+                (op["symbol"], op["input"].get("resource_id"), op["status"])
+                for op in comparison["operations"]
+            ]
+            self.assertIn(("_GfxCreateVertexBuffer", "vb_1", "skipped"), statuses)
+            self.assertIn(("_GfxUpdateVertexBuffer", "vb_1", "matched"), statuses)
+            self.assertIn(("_GfxCreateVertexBuffer", "vb_2", "skipped"), statuses)
+            self.assertIn(("_GfxUpdateVertexBuffer", "vb_2", "skipped"), statuses)
+
+    def test_zero_length_known_resource(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-zero-length")
+            output = root / "diff-zero"
+            result = diff.run(artifact, output)
+            self.assertEqual(result["status"], "pass")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertEqual(comparison["counts"].get("matched"), 1)
+            self.assertTrue(comparison["teardown_ok"])
+            self.assertTrue(comparison["shutdown_ok"])
+
+    def test_resource_corruption_is_precise(self):
+        class CorruptObserve:
+            def __init__(self):
+                self.inner = shadow.Worker()
+
+            @property
+            def next_seq(self):
+                return self.inner.next_seq
+
+            def call(self, op, args=None, seq=None):
+                response = self.inner.call(op, args, seq)
+                if op == "observe" and args and args.get("resources") == ["vb_1"]:
+                    response = copy.deepcopy(response)
+                    entry = response["result"]["resources"]["vb_1"]
+                    data = bytearray(base64.b64decode(entry["buffer"]["bytes_base64"]))
+                    data[0] ^= 0xFF
+                    entry["buffer"]["bytes_base64"] = base64.b64encode(data).decode("ascii")
+                return response
+
+            def stderr_text(self):
+                return self.inner.stderr_text()
+
+            def close(self):
+                self.inner.close()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-buffers")
+            output = root / "diff-corrupt-resource"
+            result = diff.run(
+                artifact, output, worker_factory=lambda: CorruptObserve()
+            )
+            self.assertEqual(result["status"], "mismatch")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            diagnostic = comparison["diagnostics"][0]
+            self.assertEqual(diagnostic["symbol"], "_GfxCreateVertexBuffer")
+            self.assertEqual(diagnostic["field"], "contents.contents")
+            self.assertIn("first_difference_offset=0", diagnostic.get("note", ""))
+
+    def test_unknown_contents_are_declined(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-buffers")
+            lines = (artifact / "operations.jsonl").read_text().splitlines()
+            record = json.loads(lines[0])
+            record["contents_known"] = False
+            lines[0] = json.dumps(record)
+            (artifact / "operations.jsonl").write_text("\n".join(lines) + "\n")
+            output = root / "diff-unknown"
+            result = diff.run(artifact, output)
+            self.assertEqual(result["status"], "unsupported")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertIn("unknown_original_contents", comparison["operations"][0]["reason"])
+
+    def test_nondefault_binding_offsets_are_declined(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-buffers")
+            lines = (artifact / "operations.jsonl").read_text().splitlines()
+            record = json.loads(lines[2])
+            record["offsets"] = [4]
+            lines[2] = json.dumps(record)
+            (artifact / "operations.jsonl").write_text("\n".join(lines) + "\n")
+            output = root / "diff-offsets"
+            result = diff.run(artifact, output)
+            self.assertEqual(result["status"], "unsupported")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertIn(
+                "binding_offsets_not_reproducible",
+                comparison["operations"][2]["reason"],
+            )
+
     def test_malformed_worker_response_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -330,6 +468,7 @@ class OpDiffTests(unittest.TestCase):
 
 
 COMMITTED = ROOT / "analysis" / "gfx-ops" / "v0" / "capture"
+RESOURCE_CAPTURE = ROOT / "analysis" / "gfx-resources" / "v0" / "capture"
 
 
 class CommittedCaptureTests(unittest.TestCase):
@@ -362,6 +501,52 @@ class CommittedCaptureTests(unittest.TestCase):
             comparison = json.loads(Path(result["comparison"]).read_text())
             self.assertEqual(comparison["startup"]["status"], "matched")
             self.assertEqual(comparison["counts"].get("matched"), 7)
+            self.assertTrue(comparison["shutdown_ok"])
+
+
+@unittest.skipUnless(
+    RESOURCE_CAPTURE.is_dir(), "authentic resource capture is absent"
+)
+class AuthenticResourceTests(unittest.TestCase):
+    def test_capture_loads(self):
+        artifact = capture.load_capture(RESOURCE_CAPTURE)
+        self.assertEqual(len(artifact.operations), 256)
+        self.assertEqual(artifact.coverage["overlaps"], 0)
+        unknown = [
+            record
+            for record in artifact.operations
+            if record.kind in ("vertex_buffer_create", "vertex_buffer_update")
+            and not record.contents_known
+        ]
+        self.assertEqual(len(unknown), 5)
+        self.assertIn("payloads/6-1.bin", artifact.source_hashes)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Metal replay is macOS")
+    def test_known_resources_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "resources"
+            result = diff.run(RESOURCE_CAPTURE, output, skip_unknown=True)
+            self.assertEqual(result["status"], "unsupported")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertTrue(comparison["skip_unknown"])
+            self.assertTrue(comparison["partial"])
+            self.assertEqual(comparison["counts"].get("matched"), 250)
+            self.assertEqual(comparison["counts"].get("skipped"), 5)
+            self.assertEqual(comparison["counts"].get("unsupported"), 1)
+            unknown = next(
+                op
+                for op in comparison["operations"]
+                if op["symbol"] == "_GfxCreateVertexBuffer"
+                and op["input"].get("resource_id") == "vb_126"
+            )
+            update = next(
+                op
+                for op in comparison["operations"]
+                if op["symbol"] == "_GfxUpdateVertexBuffer"
+            )
+            self.assertEqual(unknown["status"], "skipped")
+            self.assertEqual(update["status"], "matched")
+            self.assertTrue(comparison["teardown_ok"])
             self.assertTrue(comparison["shutdown_ok"])
 
 

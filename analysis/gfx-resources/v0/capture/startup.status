@@ -1,0 +1,12 @@
+EU4-GFX-STARTUP v1
+state=installed
+session=138b97bc-d055-48e5-b7ea-71debebce5e0
+pid=62033
+executable=/Applications/EuropaUniversalisIV/eu4.app/Contents/MacOS/eu4
+arch=x86_64
+image_base=0x100000000
+settings_site=0x1015ed388
+init_site=0x1015e8ea0
+module=b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d
+error=
+END

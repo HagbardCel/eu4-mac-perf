@@ -107,3 +107,36 @@ _gfx_startup_stub_scalar:
     popq %rbx
     popq %rbp
     ret
+
+# Vertex-buffer observation stubs. Six-byte safe prologue; the bodies return a
+# shared header so the observer can assign a capture-local resource identity.
+.globl _gfx_startup_stub_vb_create
+.p2align 4
+_gfx_startup_stub_vb_create:
+    .byte 0x55, 0x48, 0x89, 0xe5, 0x41, 0x57
+    leaq _gfx_startup_stub_vb_header(%rip), %rax
+    popq %r15
+    popq %rbp
+    ret
+
+.globl _gfx_startup_stub_vb_update
+.p2align 4
+_gfx_startup_stub_vb_update:
+    .byte 0x55, 0x48, 0x89, 0xe5, 0x41, 0x57
+    popq %r15
+    popq %rbp
+    ret
+
+.globl _gfx_startup_stub_vb_bind
+.p2align 4
+_gfx_startup_stub_vb_bind:
+    .byte 0x55, 0x48, 0x89, 0xe5, 0x41, 0x57
+    popq %r15
+    popq %rbp
+    ret
+
+.section __DATA,__data
+.globl _gfx_startup_stub_vb_header
+.align 4
+_gfx_startup_stub_vb_header:
+    .space 0x20, 0

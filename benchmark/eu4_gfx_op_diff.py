@@ -7,6 +7,8 @@ worker failure is never reported as a rendering mismatch.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import sys
 from dataclasses import dataclass, field
@@ -68,6 +70,10 @@ class ReplayContext:
     startup_status: str
     startup_fields: list[FieldDiff] = field(default_factory=list)
     prior: list[dict] = field(default_factory=list)
+    resources: dict[str, dict] = field(default_factory=dict)
+    created: list[str] = field(default_factory=list)
+    teardown_done: set[str] = field(default_factory=set)
+    bindings: dict[int, str] = field(default_factory=dict)
 
 
 class Adapter(Protocol):
@@ -76,11 +82,29 @@ class Adapter(Protocol):
     equivalence_scope: str
 
     def validate(self, record: capture.OperationRecord) -> str | None: ...
-    def qualify(self, context: ReplayContext) -> Qualification: ...
-    def command(self, record: capture.OperationRecord) -> tuple[str, dict]: ...
+    def qualify(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> Qualification: ...
+    def command(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> tuple[str, dict]: ...
+    def followups(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> list[tuple[str, dict]]: ...
     def compare(
-        self, record: capture.OperationRecord, state: dict
+        self,
+        record: capture.OperationRecord,
+        state: dict,
+        followups: list[tuple[str, dict]],
+        context: ReplayContext,
     ) -> list[FieldDiff]: ...
+    def report(
+        self,
+        record: capture.OperationRecord,
+        state: dict,
+        followups: list[tuple[str, dict]],
+        context: ReplayContext,
+    ) -> dict: ...
 
 
 class ViewportAdapter:
@@ -95,16 +119,29 @@ class ViewportAdapter:
             return "viewport_shape"
         return None
 
-    def qualify(self, context: ReplayContext) -> Qualification:
+    def qualify(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> Qualification:
         if context.startup_status != "matched":
             return Qualification(False, "startup_context_not_qualified")
         return Qualification(True)
 
-    def command(self, record: capture.OperationRecord) -> tuple[str, dict]:
+    def command(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> tuple[str, dict]:
         return "set_viewport", {"words": list(record.input_words)}
 
+    def followups(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> list[tuple[str, dict]]:
+        return []
+
     def compare(
-        self, record: capture.OperationRecord, state: dict
+        self,
+        record: capture.OperationRecord,
+        state: dict,
+        followups: list[tuple[str, dict]],
+        context: ReplayContext,
     ) -> list[FieldDiff]:
         viewport = state.get("viewport")
         if (
@@ -123,9 +160,460 @@ class ViewportAdapter:
             for index, expected in enumerate(record.output_words)
         ]
 
+    def report(
+        self,
+        record: capture.OperationRecord,
+        state: dict,
+        followups: list[tuple[str, dict]],
+        context: ReplayContext,
+    ) -> dict:
+        viewport = state.get("viewport") if isinstance(state, dict) else None
+        return {
+            "input": list(record.input_words),
+            "expected": list(record.output_words),
+            "metal": list(viewport) if isinstance(viewport, list) else None,
+        }
+
+
+def _payload(record: capture.OperationRecord) -> bytes | None:
+    return record.payload_bytes
+
+
+def _b64(data: bytes | None) -> str | None:
+    if data is None:
+        return None
+    return base64.b64encode(data).decode("ascii")
+
+
+def _digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _observed_resource(
+    followups: list[tuple[str, dict]], resource_id: str
+) -> dict | None:
+    for op, response in followups:
+        if op != "observe":
+            continue
+        result = response.get("result") if isinstance(response, dict) else None
+        resources = result.get("resources") if isinstance(result, dict) else None
+        entry = resources.get(resource_id) if isinstance(resources, dict) else None
+        if isinstance(entry, dict):
+            return entry
+    return None
+
+
+def _observed_buffer(entry: dict | None) -> tuple[bool, bytes | None]:
+    if not isinstance(entry, dict):
+        return False, None
+    buffer = entry.get("buffer")
+    if not isinstance(buffer, dict):
+        return False, None
+    known = buffer.get("contents_known") is True
+    text = buffer.get("bytes_base64")
+    if not known or not isinstance(text, str):
+        return known, None
+    try:
+        return True, base64.b64decode(text)
+    except (ValueError, TypeError):
+        return False, None
+
+
+def _content_fields(
+    prefix: str, expected: bytes | None, metal: bytes | None
+) -> list[FieldDiff]:
+    if expected is None or metal is None:
+        return [
+            FieldDiff(
+                field=f"{prefix}.contents",
+                original=None if expected is None else _digest(expected),
+                metal=None if metal is None else _digest(metal),
+                matched=False,
+                note="unknown or unavailable contents",
+            )
+        ]
+    fields = [
+        FieldDiff(
+            field=f"{prefix}.length",
+            original=len(expected),
+            metal=len(metal),
+            matched=len(expected) == len(metal),
+        )
+    ]
+    if expected == metal:
+        fields.append(
+            FieldDiff(
+                field=f"{prefix}.contents",
+                original=_digest(expected),
+                metal=_digest(metal),
+                matched=True,
+            )
+        )
+        return fields
+    limit = min(len(expected), len(metal))
+    offset = next((i for i in range(limit) if expected[i] != metal[i]), limit)
+    fields.append(
+        FieldDiff(
+            field=f"{prefix}.contents",
+            original=_digest(expected),
+            metal=_digest(metal),
+            matched=False,
+            note=(
+                f"first_difference_offset={offset} "
+                f"original_byte={expected[offset] if offset < len(expected) else None} "
+                f"metal_byte={metal[offset] if offset < len(metal) else None}"
+            ),
+        )
+    )
+    return fields
+
+
+class VertexBufferCreateAdapter:
+    symbol = "_GfxCreateVertexBuffer"
+    worker_op = "create_vertex_buffer"
+    equivalence_scope = "vertex_buffer_cpu_contents"
+
+    def validate(self, record: capture.OperationRecord) -> str | None:
+        if record.kind != "vertex_buffer_create":
+            return "vertex_create_kind"
+        count = record.meta.get("count")
+        stride = record.meta.get("stride")
+        if type(count) is not int or type(stride) is not int:
+            return "vertex_create_meta"
+        if count < 0 or stride < 0 or record.resource_id is None:
+            return "vertex_create_meta"
+        if record.payload_size != count * stride:
+            return "vertex_create_payload"
+        if (
+            record.contents_known
+            and record.payload_bytes is None
+            and record.payload_size > 0
+        ):
+            return "vertex_create_payload"
+        return None
+
+    def qualify(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> Qualification:
+        if context.startup_status != "matched":
+            return Qualification(False, "startup_context_not_qualified")
+        if not record.contents_known:
+            return Qualification(False, "unknown_original_contents")
+        return Qualification(True)
+
+    def command(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> tuple[str, dict]:
+        count = record.meta["count"]
+        stride = record.meta["stride"]
+        data = _payload(record) if record.contents_known else None
+        if record.contents_known and data is None and record.payload_size == 0:
+            data = b""
+        context.resources[record.resource_id] = {
+            "bytes": data,
+            "count": count,
+            "stride": stride,
+            "known": record.contents_known,
+        }
+        if record.resource_id not in context.created:
+            context.created.append(record.resource_id)
+        return "create_vertex_buffer", {
+            "resource_id": record.resource_id,
+            "count": count,
+            "stride": stride,
+            "usage": record.meta.get("usage", 0),
+            "data_base64": _b64(data),
+        }
+
+    def followups(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> list[tuple[str, dict]]:
+        return [("observe", {"resources": [record.resource_id]})]
+
+    def compare(
+        self,
+        record: capture.OperationRecord,
+        state: dict,
+        followups: list[tuple[str, dict]],
+        context: ReplayContext,
+    ) -> list[FieldDiff]:
+        known, metal = _observed_buffer(_observed_resource(followups, record.resource_id))
+        if not known:
+            raise DiffUnavailable("worker_contents_unknown", record.resource_id)
+        expected = record.payload_bytes if record.contents_known else None
+        if record.contents_known and expected is None and record.payload_size == 0:
+            expected = b""
+        if expected is None:
+            raise DiffUnavailable("original_contents_unknown", record.resource_id)
+        return _content_fields("contents", expected, metal)
+
+    def report(
+        self,
+        record: capture.OperationRecord,
+        state: dict,
+        followups: list[tuple[str, dict]],
+        context: ReplayContext,
+    ) -> dict:
+        known, metal = _observed_buffer(_observed_resource(followups, record.resource_id))
+        expected = record.payload_bytes if record.contents_known else None
+        if record.contents_known and expected is None and record.payload_size == 0:
+            expected = b""
+        entry = {
+            "resource_id": record.resource_id,
+            "count": record.meta.get("count"),
+            "stride": record.meta.get("stride"),
+            "usage": record.meta.get("usage"),
+        }
+        return {
+            "input": entry,
+            "expected": {
+                "contents_known": expected is not None,
+                "length": None if expected is None else len(expected),
+                "sha256": None if expected is None else _digest(expected),
+            },
+            "metal": {
+                "contents_known": known,
+                "length": None if metal is None else len(metal),
+                "sha256": None if metal is None else _digest(metal),
+            },
+        }
+
+
+class VertexBufferUpdateAdapter:
+    symbol = "_GfxUpdateVertexBuffer"
+    worker_op = "update_vertex_buffer"
+    equivalence_scope = "vertex_buffer_cpu_contents"
+
+    def validate(self, record: capture.OperationRecord) -> str | None:
+        if record.kind != "vertex_buffer_update":
+            return "vertex_update_kind"
+        for key in ("count", "stride", "offset", "partial"):
+            if type(record.meta.get(key)) is not int:
+                return "vertex_update_meta"
+        if record.resource_id is None:
+            return "vertex_update_resource"
+        if record.meta["count"] < 0 or record.meta["stride"] < 0:
+            return "vertex_update_meta"
+        if record.payload_size != record.meta["count"] * record.meta["stride"]:
+            return "vertex_update_payload"
+        return None
+
+    def qualify(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> Qualification:
+        if context.startup_status != "matched":
+            return Qualification(False, "startup_context_not_qualified")
+        resource = context.resources.get(record.resource_id)
+        if resource is None:
+            return Qualification(False, "unknown_original_contents")
+        if not record.contents_known:
+            return Qualification(False, "unknown_original_contents")
+        if record.payload_bytes is None:
+            return Qualification(False, "missing_update_payload")
+        if not resource.get("known") and record.meta["partial"] != 0:
+            return Qualification(False, "unknown_original_contents")
+        offset = record.meta["offset"]
+        if record.meta["partial"] == 1:
+            if offset < 0 or offset > len(resource["bytes"]):
+                return Qualification(False, "update_bounds")
+            if offset + len(record.payload_bytes) > len(resource["bytes"]):
+                return Qualification(False, "update_bounds")
+        return Qualification(True)
+
+    def command(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> tuple[str, dict]:
+        return "update_vertex_buffer", {
+            "resource_id": record.resource_id,
+            "count": record.meta["count"],
+            "offset": record.meta["offset"],
+            "partial": record.meta["partial"],
+            "data_base64": _b64(record.payload_bytes),
+        }
+
+    def followups(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> list[tuple[str, dict]]:
+        return [("observe", {"resources": [record.resource_id]})]
+
+    def compare(
+        self,
+        record: capture.OperationRecord,
+        state: dict,
+        followups: list[tuple[str, dict]],
+        context: ReplayContext,
+    ) -> list[FieldDiff]:
+        resource = context.resources[record.resource_id]
+        payload = record.payload_bytes
+        if payload is None:
+            raise DiffUnavailable("missing_update_payload", record.resource_id)
+        if record.meta["partial"] == 1:
+            offset = record.meta["offset"]
+            updated = (
+                resource["bytes"][:offset] + payload + resource["bytes"][offset + len(payload):]
+            )
+        else:
+            updated = payload
+            resource["known"] = True
+        known, metal = _observed_buffer(_observed_resource(followups, record.resource_id))
+        if not known:
+            raise DiffUnavailable("worker_contents_unknown", record.resource_id)
+        resource["bytes"] = updated
+        resource["count"] = record.meta["count"]
+        resource["stride"] = record.meta["stride"]
+        return _content_fields("contents", updated, metal)
+
+    def report(
+        self,
+        record: capture.OperationRecord,
+        state: dict,
+        followups: list[tuple[str, dict]],
+        context: ReplayContext,
+    ) -> dict:
+        known, metal = _observed_buffer(_observed_resource(followups, record.resource_id))
+        resource = context.resources.get(record.resource_id, {})
+        expected = resource.get("bytes")
+        return {
+            "input": {
+                "resource_id": record.resource_id,
+                "count": record.meta.get("count"),
+                "stride": record.meta.get("stride"),
+                "offset": record.meta.get("offset"),
+                "partial": record.meta.get("partial"),
+                "sha256": None if record.payload_bytes is None else _digest(record.payload_bytes),
+            },
+            "expected": {
+                "length": None if expected is None else len(expected),
+                "sha256": None if expected is None else _digest(expected),
+            },
+            "metal": {
+                "contents_known": known,
+                "length": None if metal is None else len(metal),
+                "sha256": None if metal is None else _digest(metal),
+            },
+        }
+
+
+class VertexBufferBindAdapter:
+    symbol = "_GfxSetVertexBuffers"
+    worker_op = "set_vertex_buffers"
+    equivalence_scope = "vertex_buffer_binding"
+
+    def validate(self, record: capture.OperationRecord) -> str | None:
+        if record.kind != "vertex_buffer_bind":
+            return "vertex_bind_kind"
+        if type(record.meta.get("count")) is not int or type(record.meta.get("start")) is not int:
+            return "vertex_bind_meta"
+        ids = record.meta.get("ids")
+        if not isinstance(ids, list) or len(ids) != record.meta["count"]:
+            return "vertex_bind_ids"
+        return None
+
+    def qualify(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> Qualification:
+        if context.startup_status != "matched":
+            return Qualification(False, "startup_context_not_qualified")
+        for resource_id in record.meta["ids"]:
+            if resource_id not in context.resources:
+                return Qualification(False, "unknown_bound_resource")
+        words_null = record.meta.get("words_null")
+        offsets_null = record.meta.get("offsets_null")
+        if words_null is not True:
+            return Qualification(
+                False,
+                "explicit_binding_words"
+                if words_null is False
+                else "binding_words_unknown",
+            )
+        if offsets_null is None:
+            return Qualification(False, "binding_offsets_unknown")
+        offsets = record.meta.get("offsets") or []
+        if any(
+            type(value) is not int or value != 0 for value in offsets
+        ):
+            return Qualification(False, "binding_offsets_not_reproducible")
+        return Qualification(True)
+
+    def command(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> tuple[str, dict]:
+        return "set_vertex_buffers", {
+            "start": record.meta["start"],
+            "resources": list(record.meta["ids"]),
+        }
+
+    def followups(
+        self, record: capture.OperationRecord, context: ReplayContext
+    ) -> list[tuple[str, dict]]:
+        return []
+
+    def compare(
+        self,
+        record: capture.OperationRecord,
+        state: dict,
+        followups: list[tuple[str, dict]],
+        context: ReplayContext,
+    ) -> list[FieldDiff]:
+        slots = state.get("slots")
+        if not isinstance(slots, list):
+            raise DiffUnavailable("worker_state_shape", "slots")
+        start = record.meta["start"]
+        fields: list[FieldDiff] = []
+        for index, resource_id in enumerate(record.meta["ids"]):
+            slot = start + index
+            entry = next(
+                (item for item in slots if isinstance(item, dict) and item.get("slot") == slot),
+                None,
+            )
+            metal = entry.get("resource_id") if isinstance(entry, dict) else None
+            fields.append(
+                FieldDiff(
+                    field=f"binding[{slot}]",
+                    original=resource_id,
+                    metal=metal,
+                    matched=metal == resource_id,
+                )
+            )
+            if metal == resource_id:
+                context.bindings[slot] = resource_id
+        return fields
+
+    def report(
+        self,
+        record: capture.OperationRecord,
+        state: dict,
+        followups: list[tuple[str, dict]],
+        context: ReplayContext,
+    ) -> dict:
+        slots = state.get("slots") if isinstance(state, dict) else None
+        start = record.meta.get("start")
+        metal = []
+        if isinstance(slots, list) and type(start) is int:
+            for index, _resource_id in enumerate(record.meta.get("ids", [])):
+                slot = start + index
+                entry = next(
+                    (item for item in slots if isinstance(item, dict) and item.get("slot") == slot),
+                    None,
+                )
+                metal.append(entry.get("resource_id") if isinstance(entry, dict) else None)
+        return {
+            "input": {
+                "start": start,
+                "ids": list(record.meta.get("ids", [])),
+                "offsets": list(record.meta.get("offsets", [])),
+                "words": list(record.meta.get("words", [])),
+            },
+            "expected": list(record.meta.get("ids", [])),
+            "metal": metal,
+        }
+
 
 ADAPTERS: dict[str, Adapter] = {
     "_GfxSetViewPort": ViewportAdapter(),
+    "_GfxCreateVertexBuffer": VertexBufferCreateAdapter(),
+    "_GfxUpdateVertexBuffer": VertexBufferUpdateAdapter(),
+    "_GfxSetVertexBuffers": VertexBufferBindAdapter(),
 }
 
 
@@ -288,6 +776,42 @@ def _call(
     return response, None
 
 
+def _execute_record(
+    worker,
+    record: capture.OperationRecord,
+    adapter: Adapter,
+    context: ReplayContext,
+    commands: list[dict],
+    responses: list[Any],
+) -> tuple[dict | None, list[tuple[str, dict]], tuple[str, str] | None]:
+    op, args = adapter.command(record, context)
+    seq = worker.next_seq
+    command = {"schema": WORKER_SCHEMA, "seq": seq, "op": op, "args": args}
+    commands.append(command)
+    response, failure = _call(worker, op, args, seq)
+    responses.append(response)
+    if failure is not None:
+        return None, [], failure
+    followups: list[tuple[str, dict]] = []
+    for follow_op, follow_args in adapter.followups(record, context):
+        follow_seq = worker.next_seq
+        follow_command = {
+            "schema": WORKER_SCHEMA,
+            "seq": follow_seq,
+            "op": follow_op,
+            "args": follow_args,
+        }
+        commands.append(follow_command)
+        follow_response, follow_error = _call(
+            worker, follow_op, follow_args, follow_seq
+        )
+        responses.append(follow_response)
+        if follow_error is not None:
+            return response, followups, follow_error
+        followups.append((follow_op, follow_response))
+    return response, followups, None
+
+
 def _default_worker_factory():
     shadow.build()
     return shadow.Worker()
@@ -298,6 +822,7 @@ def run(
     output: Path | str,
     *,
     worker_factory=None,
+    skip_unknown: bool = False,
 ) -> dict:
     artifact = capture.load_capture(Path(capture_path))
     output = Path(output).expanduser().resolve()
@@ -322,7 +847,11 @@ def run(
     for record in artifact.operations:
         adapter = ADAPTERS.get(record.symbol)
         adapters[record.index] = adapter
-        if adapter is not None:
+        if adapter is not None and not (
+            skip_unknown
+            and record.kind in ("vertex_buffer_create", "vertex_buffer_update")
+            and not record.contents_known
+        ):
             shape = adapter.validate(record)
             if shape is not None:
                 comparison = _base_comparison(artifact)
@@ -347,6 +876,7 @@ def run(
     diagnostics: list[dict] = []
     worker_failure: str | None = None
     worker_unsupported: str | None = None
+    teardown_ok = True
     shutdown_ok = False
     worker = None
 
@@ -395,35 +925,95 @@ def run(
                         )
                     )
                     continue
-                qualification = adapter.qualify(context)
+                if (
+                    skip_unknown
+                    and record.kind == "vertex_buffer_create"
+                    and not record.contents_known
+                ):
+                    response, followup_results, failure = _execute_record(
+                        worker, record, adapter, context, commands, responses
+                    )
+                    if failure is not None:
+                        kind, detail = failure
+                        if kind == "unsupported":
+                            operation_results.append(
+                                _operation_result(
+                                    record,
+                                    adapter=adapter,
+                                    status="unsupported",
+                                    reason=detail,
+                                    context=context,
+                                )
+                            )
+                            continue
+                        worker_failure = detail
+                        operation_results.append(
+                            _operation_result(
+                                record,
+                                adapter=adapter,
+                                status="unavailable",
+                                reason=detail,
+                                context=context,
+                            )
+                        )
+                        break
+                    operation_results.append(
+                        _operation_result(
+                            record,
+                            adapter=adapter,
+                            status="skipped",
+                            reason="unknown_initial_contents",
+                            state=response["state"],
+                            followups=followup_results,
+                            context=context,
+                        )
+                    )
+                    continue
+                if skip_unknown and record.kind == "vertex_buffer_update":
+                    resource = context.resources.get(record.resource_id)
+                    if (
+                        not record.contents_known
+                        or (
+                            resource is not None
+                            and not resource.get("known")
+                            and record.meta.get("partial") != 0
+                        )
+                    ):
+                        operation_results.append(
+                            _operation_result(
+                                record,
+                                adapter=adapter,
+                                status="skipped",
+                                reason="unknown_original_contents",
+                                context=context,
+                            )
+                        )
+                        continue
+                qualification = adapter.qualify(record, context)
                 if not qualification.qualified:
                     operation_results.append(
                         _operation_result(
                             record,
+                            adapter=adapter,
                             status="unsupported",
                             reason=f"unqualified_dependency: {qualification.reason}",
+                            context=context,
                         )
                     )
                     continue
-                op, args = adapter.command(record)
-                seq = worker.next_seq
-                command = {
-                    "schema": WORKER_SCHEMA,
-                    "seq": seq,
-                    "op": op,
-                    "args": args,
-                }
-                commands.append(command)
-                response, failure = _call(worker, op, args, seq)
-                responses.append(response)
+                response, followup_results, failure = _execute_record(
+                    worker, record, adapter, context, commands, responses
+                )
                 if failure is not None:
                     kind, detail = failure
                     if kind == "unsupported":
                         operation_results.append(
                             _operation_result(
                                 record,
+                                adapter=adapter,
                                 status="unsupported",
                                 reason=detail,
+                                context=context,
                             )
                         )
                         continue
@@ -431,31 +1021,38 @@ def run(
                     operation_results.append(
                         _operation_result(
                             record,
+                            adapter=adapter,
                             status="unavailable",
                             reason=detail,
+                            context=context,
                         )
                     )
                     break
                 state = response["state"]
                 try:
-                    fields = adapter.compare(record, state)
+                    fields = adapter.compare(record, state, followup_results, context)
                 except DiffUnavailable as exc:
                     worker_failure = f"{exc.reason}: {exc.detail}"
                     operation_results.append(
                         _operation_result(
                             record,
+                            adapter=adapter,
                             status="unavailable",
                             reason=worker_failure,
+                            context=context,
                         )
                     )
                     break
                 status = "matched" if all(item.matched for item in fields) else "mismatch"
                 result = _operation_result(
                     record,
+                    adapter=adapter,
                     status=status,
                     reason="",
                     fields=fields,
                     state=state,
+                    followups=followup_results,
+                    context=context,
                     command=(op, args),
                 )
                 operation_results.append(result)
@@ -463,17 +1060,41 @@ def run(
                 if status == "mismatch":
                     for item in fields:
                         if not item.matched:
-                            diagnostics.append(
-                                {
-                                    "status": "mismatch",
-                                    "symbol": record.symbol,
-                                    "call_id": record.call_id,
-                                    "field": item.field,
-                                    "original": item.original,
-                                    "metal": item.metal,
-                                }
-                            )
-        if worker_failure is None and isinstance(worker, object):
+                            diagnostic = {
+                                "status": "mismatch",
+                                "symbol": record.symbol,
+                                "call_id": record.call_id,
+                                "field": item.field,
+                                "original": item.original,
+                                "metal": item.metal,
+                            }
+                            if item.note:
+                                diagnostic["note"] = item.note
+                            diagnostics.append(diagnostic)
+            if worker_failure is None and context is not None:
+                for resource_id in context.created:
+                    if resource_id in context.teardown_done:
+                        continue
+                    seq = worker.next_seq
+                    teardown_args = {"resource_id": resource_id}
+                    command = {
+                        "schema": WORKER_SCHEMA,
+                        "seq": seq,
+                        "op": "destroy_vertex_buffer",
+                        "args": teardown_args,
+                        "harness_teardown": True,
+                    }
+                    commands.append(command)
+                    response, failure = _call(
+                        worker, "destroy_vertex_buffer", teardown_args, seq
+                    )
+                    responses.append(response)
+                    if failure is not None:
+                        teardown_ok = False
+                        worker_failure = f"teardown: {failure[1]}"
+                        break
+                    context.teardown_done.add(resource_id)
+        if worker_failure is None and worker_unsupported is None and isinstance(worker, object):
             try:
                 seq = worker.next_seq
                 command = {"schema": WORKER_SCHEMA, "seq": seq, "op": "shutdown", "args": {}}
@@ -532,11 +1153,21 @@ def run(
             for result in operation_results
             if result["status"] in ("unsupported", "unavailable")
         )
-    elif startup_status == "matched" and all(
-        result["status"] == "matched" for result in operation_results
+    elif (
+        startup_status == "matched"
+        and any(result["status"] == "matched" for result in operation_results)
+        and all(result["status"] == "matched" for result in operation_results)
     ):
         status = "pass"
         reason = ""
+    elif any(result["status"] == "skipped" for result in operation_results) and all(
+        result["status"] in ("matched", "skipped") for result in operation_results
+    ):
+        status = "unsupported"
+        reason = "partial_evidence"
+    elif all(result["status"] in ("matched", "skipped") for result in operation_results):
+        status = "incomplete"
+        reason = "no_comparable_operations"
     else:
         status = "unavailable"
         reason = "worker_session_incomplete"
@@ -553,6 +1184,11 @@ def run(
             "operations": operation_results,
             "diagnostics": diagnostics,
             "shutdown_ok": shutdown_ok,
+            "teardown_ok": teardown_ok,
+            "skip_unknown": skip_unknown,
+            "partial": any(
+                result["status"] == "skipped" for result in operation_results
+            ),
             "next_action": NEXT_ACTION[status],
             "counts": _counts(operation_results),
         }
@@ -569,17 +1205,31 @@ def _operation_result(
     fields: list[FieldDiff] | None = None,
     state: dict | None = None,
     command: tuple[str, dict] | None = None,
+    adapter: Adapter | None = None,
+    followups: list[tuple[str, dict]] | None = None,
+    context: ReplayContext | None = None,
 ) -> dict:
+    projection: dict = {}
+    if adapter is not None:
+        try:
+            projection = adapter.report(
+                record,
+                state if isinstance(state, dict) else {},
+                followups or [],
+                context if context is not None else ReplayContext(startup_status="unavailable"),
+            )
+        except Exception:  # noqa: BLE001
+            projection = {}
     value = {
         "symbol": record.symbol,
         "call_id": record.call_id,
         "completion_seq": record.completion_seq,
-        "scope": getattr(ADAPTERS.get(record.symbol), "equivalence_scope", None),
+        "scope": adapter.equivalence_scope if adapter is not None else None,
         "status": status,
         "reason": reason,
-        "input": list(record.input_words),
-        "expected": list(record.output_words),
-        "metal": list(state.get("viewport", [])) if isinstance(state, dict) else None,
+        "input": projection.get("input", list(record.input_words)),
+        "expected": projection.get("expected", list(record.output_words)),
+        "metal": projection.get("metal"),
         "fields": [_field_json(item) for item in fields or []],
     }
     if command is not None:
