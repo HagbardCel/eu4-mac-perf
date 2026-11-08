@@ -1,0 +1,132 @@
+{
+  "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "members": [
+    {
+      "path": "campaigns/eu4-l32b-effective-state/campaign.json",
+      "role": "campaign",
+      "sha256": "d563892c500b15adabd21c69604dc64031dd8b1d3d9a792e7e971fc3704b5e55"
+    },
+    {
+      "path": "campaigns/eu4-l32b-effective-state/l32b.json",
+      "role": "campaign",
+      "sha256": "853c3e6684be765542b4a9d5b939ecd1da7bb1642a1db71843ddf469851eba7c"
+    },
+    {
+      "path": "campaigns/eu4-l32b-effective-state/objective.md",
+      "role": "campaign",
+      "sha256": "d0328528e0ce0f7cdec5321506ef4983ab869b6802ee16231287e06ccc1128e8"
+    },
+    {
+      "path": "campaigns/eu4-l32b-reviewer/campaign.json",
+      "role": "campaign",
+      "sha256": "80503ed35cdaffcd17d2ad43f3a82a913cc54c31b108bbd0c20d5ac6c190c2a1"
+    },
+    {
+      "path": "campaigns/eu4-l32b-reviewer/objective.md",
+      "role": "campaign",
+      "sha256": "3edb0ee7b76574d450e2831bb4a1ee4ed2357dd0750148aa2c64a32b8a91b6b4"
+    },
+    {
+      "path": "automation/gfx_candidate_snapshot.py",
+      "role": "checker",
+      "sha256": "fad239aa20aba6a8f3140b8fca4ace7a3607434b493c371f7f8c10a327132f10"
+    },
+    {
+      "path": "automation/gfx_draw_accept.py",
+      "role": "checker",
+      "sha256": "1abcb8b572814c65c7a7f9bc0fe3f83e02ec77c02395208f8153c7648dfcf329"
+    },
+    {
+      "path": "campaigns/eu4-l32b-effective-state/accept.py",
+      "role": "checker",
+      "sha256": "dda93decb6e94b027239316be1a0056c88431b6aedd69f1af446ffa53b7ec94d"
+    },
+    {
+      "path": "campaigns/eu4-l32b-reviewer/accept.py",
+      "role": "checker",
+      "sha256": "85e2165b78074c2298e03e7e0a27fecd8232e29e6e8f226cc41299b6ae40aa83"
+    },
+    {
+      "path": "campaigns/eu4-l32b-effective-state/frozen/gfx_startup_trace_host.c",
+      "role": "frozen_test",
+      "sha256": "fe72b2ff31ab79578265c53e0ba8d910b22905c2b944063dcf67b344ebd00a1e"
+    },
+    {
+      "path": "campaigns/eu4-l32b-effective-state/frozen/gfx_startup_trace_stubs.S",
+      "role": "frozen_test",
+      "sha256": "11d4e55c39ab91859e1b5f34610ac4656ec80de0d99751b0b8449ef8c0d0cb5d"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/note.md",
+      "role": "oracle",
+      "sha256": "1641c67802fcd23566e682efc4a95d4f0fed356e10cfa726f99a0e7d7a198ea5"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/capture/capture-request.json",
+      "role": "oracle",
+      "sha256": "fd2f6c3815d6657425175e31ab6dca97e5b92084a4adb9249e976660e9cf278a"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/capture/events.jsonl",
+      "role": "oracle",
+      "sha256": "19dd7f1ab66c33ead8e674ac16758ad8f31faf727f73215bf86b6984f838cf46"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/capture/metadata.json",
+      "role": "oracle",
+      "sha256": "d14caa6bd5b2fa9f21f21c472d7648fbc1503e96864511488a7a65fcfc929861"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/capture/operations-summary.json",
+      "role": "oracle",
+      "sha256": "74372b24b65efbac922431b5f36ec274a4b6e07f929fbe224fcb7f2d5b6f0e15"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/capture/operations.jsonl",
+      "role": "oracle",
+      "sha256": "76aaa86fe7e0566c746c301da5e676791718c80edf73fd784c096a40b3ca783a"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/capture/payloads/4-4.bin",
+      "role": "oracle",
+      "sha256": "adeb931f2c57dfe4fb88d46084a1b19eae46424c80033ef6f16c52a6bbf0a227"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/capture/startup.status",
+      "role": "oracle",
+      "sha256": "f95238c439e9dd2fa560b80a8f3adc6fb296decef3a8e3115e6e0e955ffb82c0"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/capture/summary.json",
+      "role": "oracle",
+      "sha256": "3a09ce8073b7010a318d87e8a3b5eaebcbba6a819f00638a7e9b3238bad0c82a"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/draw-packet.json",
+      "role": "oracle",
+      "sha256": "a131765097e5a63705119899287a59be3e20372731f90f39d32fc6d8626ffd2a"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/note.md",
+      "role": "oracle",
+      "sha256": "640268977740cdb85d7dca5bceda3701080ea5193fe3a16a4bec708062a81f08"
+    },
+    {
+      "path": "analysis/gfx-draw/v0/probe/payloads/4-draw.bin",
+      "role": "oracle",
+      "sha256": "adeb931f2c57dfe4fb88d46084a1b19eae46424c80033ef6f16c52a6bbf0a227"
+    },
+    {
+      "path": "analysis/qualification/v0/primitive-table.evidence.json",
+      "role": "oracle",
+      "sha256": "b16e464b91439cf74bacdf5fd8424f0df6d72a01dfff25e4ae702133af382491"
+    },
+    {
+      "path": "reverse_engineering/target.json",
+      "role": "oracle",
+      "sha256": "ad9e9730eda2f3f51165157bc5ae2585e9fd4a4a5a6921d7ba234e35054621c4"
+    }
+  ],
+  "repo_baseline_commit": "1b5a82ab734b850ad444a1dc845a74d04c72c226",
+  "schema": "eu4-verification-manifest/v1"
+}

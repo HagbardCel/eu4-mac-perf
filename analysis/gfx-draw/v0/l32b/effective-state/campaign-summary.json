@@ -1,0 +1,36 @@
+{
+  "schema": "eu4-l32b-campaign-summary/v1",
+  "campaign_id": "eu4-l32b-effective-state",
+  "result": "pass",
+  "rounds": 1,
+  "max_rounds": 8,
+  "checker_verdict": "pass",
+  "checker_diagnostics": {
+    "established": [
+      "vertex_buffer_bindings",
+      "vertex_buffer_contents",
+      "matrix_constant"
+    ],
+    "captures_used": 1
+  },
+  "agent_selected_investigation": "Draw-time slot-0 constant cross-check plus L3.1 lifecycle reconstruction for the selected vertex buffer; no fixed hook list was supplied.",
+  "autonomous_remediation": "none (first checker round passed; no defect was introduced to force one)",
+  "captures": {
+    "used": 1,
+    "limit": 3,
+    "path": ".local/automation/eu4-l32b-effective-state/captures/l32b-i-effective-state",
+    "plan": ".local/automation/eu4-l32b-effective-state/capture-plans/l32b-i-effective-state.json"
+  },
+  "restartability": "not exercised after the capture (the first turn completed); the runner/CAPTURE counter leave the completed capture reusable on resume.",
+  "independent_review": {
+    "campaign": "eu4-l32b-review-eu4-l32b-effective-state-r1",
+    "model": "opencode/iceman-free",
+    "outcome": "qualified",
+    "report": "analysis/gfx-draw/v0/l32b/effective-state/review.json"
+  },
+  "human_interventions": [
+    "reviewer model fallback from opencode/big-pickle to opencode/iceman-free after the provider free limit",
+    "final PR/merge decision"
+  ],
+  "note": "A post-campaign path-handling fix in automation/gfx_candidate_snapshot.py changed the verification-manifest digest from d8f4dac6... to b89dd184...; the trusted checker was re-run under the final manifest and still passed. Candidate code and capture are unchanged."
+}

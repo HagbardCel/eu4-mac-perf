@@ -162,6 +162,31 @@ and layout, texture and sampler, constants, render state and scissor are
 reported missing rather than invented. `packet_ready` is true only when every
 required input is established.
 
+### L3.2b agent-driven draw-input campaigns
+
+L3.2b uses the existing OpenCode runner with a fixed objective and a trusted
+draw-input checker. The first campaign is
+[`campaigns/eu4-l32b-effective-state/`](../campaigns/eu4-l32b-effective-state/).
+The checker `automation/gfx_draw_accept.py` builds/tests the candidate worktree,
+runs frozen observer fixtures, validates the campaign launch receipts, and
+independently verifies the candidate packet's bytes, hashes and same-session
+identity. It never launches EU4 and never trusts candidate `packet_ready`.
+
+The campaign pins the detached worktree to the L3.2a merge; campaign/checker
+files live on the trusted branch and its `verification_manifest` freezes the
+L3.2a oracle and trusted helpers. A capture is accepted only from the current
+candidate observer build, under the campaign run root's `captures/`, with a
+`capture-plans/<slug>.json` question and a `live-launch.json` receipt.
+
+After a checker `pass`, run the documented manual review sequence in
+[`campaigns/eu4-l32b-effective-state/REVIEW.md`](../campaigns/eu4-l32b-effective-state/REVIEW.md):
+`automation.gfx_candidate_snapshot` creates the allowlisted candidate commit and
+materializes the reviewer campaign; the separate OpenCode reviewer writes an
+out-of-tree `eu4-review/v1` report. Rejected findings seed a new remediation
+campaign; the completed campaign is never mutated. The first campaign uses this
+manual handoff; generic reviewer orchestration is deferred until a successful
+campaign shows where automation is actually needed.
+
 ### Campaign launch accounting
 
 Campaign JSON may declare:

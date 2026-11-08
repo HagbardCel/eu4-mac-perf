@@ -1,0 +1,40 @@
+{
+  "candidate_commit": "27d9e98e368016eaf840a522728b6c74fee3cf86",
+  "findings": [],
+  "oracle_manifest_sha256": "b89dd1847bffda48fccd39135a6e135217fa65c357e2157beb0e02fe5add44c1",
+  "outcome": "qualified",
+  "schema": "eu4-review/v1",
+  "summary": "Qualified L3.2b-I effective-state capture for authentic Simple draw caller RVA 0xedfcd1 (Decision 0003). Independently verified against frozen L3.2a probe oracle and producer same-session capture/packet: selected draw qualified (call 11, mode 5, effective_count 4, shader non-null, master complete); vertex_buffer_bindings/vertex_buffer_contents/matrix_constant supported by original-execution evidence with exact bytes/hashes and draw-associated identities (master slot 0 vb header 0x7fce16f742e0 matches vb_3/create call 5; master constant slot 0 pointer 0x7fce16f0beb0 matches cb_1 call 8 with draw meta constant_slot0_match/call_id 8; sidecars match capture payloads); provenance coherent (session 9a8a50c4-c42c-40da-b3db-9472820ce477, exe b3d38876\u2026, integrity_ok, launch accepted/campaign); probe oracle unchanged in candidate commit; no Metal execution, no rendering gateway expansion, packet_ready false/incomplete.",
+  "verified": {
+    "candidate_capture": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/automation/eu4-l32b-effective-state/captures/l32b-i-effective-state",
+    "candidate_packet": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/automation/eu4-l32b-effective-state/analysis/gfx-draw/v0/l32b/effective-state/packet/draw-packet.json",
+    "decision_0003": {
+      "caller_rva": "0xedfcd1",
+      "minimum_effective_count": 3,
+      "mode": 5,
+      "satisfied": true
+    },
+    "draw_identity": {
+      "call_id": 11,
+      "cb_call": 8,
+      "cb_resource": "cb_1",
+      "master_slot0_const_ptr": "0x7fce16f0beb0",
+      "master_slot0_vb_header": "0x7fce16f742e0",
+      "vb_create_call": 5,
+      "vb_resource": "vb_3"
+    },
+    "frozen_l3_2a_oracle": "analysis/gfx-draw/v0/probe (unchanged in 27d9e98)",
+    "sidecar_hashes": {
+      "11-draw.bin": "0d0337f4a4c448222c8453a224a2b76546ed73810904a606893fb2c455592373",
+      "matrix.bin": "e00f5824739f2976ef02dbc5019f54cf89260b8f882a96b8989eab888b7d5671",
+      "vb_3.bin": "f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab"
+    },
+    "tests_in_candidate_worktree": {
+      "exit": 0,
+      "suites": [
+        "tests.test_gfx_draw_packet",
+        "tests.test_gfx_observe"
+      ]
+    }
+  }
+}
