@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Agent-facing bounded live observation of the original executable.
+"""Agent-facing bounded live observation and offline Metal replay.
 
     python3 -m automation.live_gfx capture --target _GfxSetViewPort ...
+    python3 -m automation.live_gfx replay --capture ... --output ...
 
 Live capture is authorized once by the operator: either the manual
 ``--authorize-live`` flag or a campaign-launch counter initialized by the
@@ -258,6 +259,55 @@ def capture(args: argparse.Namespace) -> int:
     return EXIT_COMPLETE if status == "complete" else EXIT_INCOMPLETE
 
 
+def _default_replay_output(capture_path: Path) -> Path:
+    stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return ROOT / ".local" / "gfx-diffs" / f"{capture_path.name}-{stamp}"
+
+
+def replay(args: argparse.Namespace) -> int:
+    import eu4_gfx_op_diff
+
+    capture_path = Path(args.capture).expanduser().resolve()
+    output = (
+        Path(args.output).expanduser().resolve()
+        if args.output
+        else _default_replay_output(capture_path)
+    )
+    try:
+        result = eu4_gfx_op_diff.run(capture_path, output)
+    except capture_reader.CaptureIncomplete as exc:
+        result = {
+            "status": "incomplete",
+            "reason": exc.reason,
+            "detail": exc.detail,
+            "capture": str(capture_path),
+            "output": str(output),
+        }
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "comparison.json").write_text(
+            json.dumps(result, indent=2) + "\n"
+        )
+    except eu4_gfx_op_diff.DiffUsage as exc:
+        print(f"replay refused: {exc}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    except eu4_gfx_op_diff.DiffUnavailable as exc:
+        result = {
+            "status": "unavailable",
+            "reason": exc.reason,
+            "detail": exc.detail,
+            "capture": str(capture_path),
+            "output": str(output),
+        }
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "comparison.json").write_text(
+            json.dumps(result, indent=2) + "\n"
+        )
+        print(json.dumps(result, indent=2))
+        return EXIT_UNAVAILABLE
+    print(json.dumps(result, indent=2))
+    return eu4_gfx_op_diff.EXIT_CODES.get(result.get("status"), EXIT_UNAVAILABLE)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -272,6 +322,10 @@ def _parser() -> argparse.ArgumentParser:
     cap.add_argument("--campaign-run-root")
     cap.set_defaults(func=capture)
 
+    rep = sub.add_parser("replay", description="offline Metal differential replay")
+    rep.add_argument("--capture", required=True)
+    rep.add_argument("--output")
+    rep.set_defaults(func=replay)
     return parser
 
 

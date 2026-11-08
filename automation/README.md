@@ -86,17 +86,22 @@ The shared checker requires a detached worktree at the pinned commit, pinned `be
 - Identity fields stay distinct: `repo_baseline_commit` vs `eu4_executable_sha256`.
 - Portable unittest fixtures live under `tests/fixtures/qualification/`; they must not mutate tracked tip oracle files.
 
-## Live graphics operation capture
+## Live graphics operation capture and replay
 
-One bounded command captures an authentic original-EU4 observation for the
-existing offline comparison path. There is no new agent framework, no MCP
-server, and no second Metal execution engine.
+Two bounded commands connect an authentic original-EU4 observation to the
+existing Metal shadow worker. There is no new agent framework, no MCP server,
+and no second Metal execution engine.
 
 ```sh
-# One operator-authorized live capture (opens the original game briefly)
+# L1: one operator-authorized live capture (opens the original game briefly)
 python3 -m automation.live_gfx capture \
   --target _GfxSetViewPort --max-events 16 --duration 5 --timeout 120 \
   --output .local/gfx-captures/viewport-01 --authorize-live
+
+# L2: offline replay through the existing worker; no EU4 launch
+python3 -m automation.live_gfx replay \
+  --capture .local/gfx-captures/viewport-01 \
+  --output .local/gfx-diffs/viewport-01
 ```
 
 `capture` requires exactly one of `--authorize-live` (manual experiment) or
@@ -141,3 +146,33 @@ are never completed evidence.
 
 The first authenticated pilot is tracked at
 [`analysis/gfx-ops/v0/`](../analysis/gfx-ops/v0/note.md).
+
+### Replay verdicts
+
+| Verdict | Meaning | Exit |
+| --- | --- | --- |
+| `pass` | every declared field matched for the captured invocations | 0 |
+| `mismatch` | a successfully executed, qualified comparison differed | 1 |
+| `incomplete` | the capture cannot establish expected behavior | 2 |
+| `unsupported` | adapter/worker lacks the operation, ordering is unprovable, or qualification declined | 3 |
+| `unavailable` | worker or environment failed; do not change Metal blindly | 4 |
+
+The viewport adapter's scope is `function_cpu_state`: the six CPU-visible
+viewport words after the original call. A pass does not establish GPU state,
+pixels, or complete engine-path equivalence. Adapters decide qualification from
+their own prerequisites; there is no function-name dependency graph. A worker
+failure, missing state, or protocol error is `unavailable`, never `mismatch`.
+
+## Metal API corpus
+
+The contracts live in [analysis/metal-api/](../analysis/metal-api/README.md). `index.md` is the lookup table. Search it with `rg`, for example `rg -n -i 'setScissorRect|glScissor' analysis/metal-api`. The skill [`.opencode/skills/opengl-metal-reconstruction/SKILL.md`](../.opencode/skills/opengl-metal-reconstruction/SKILL.md) tells the agent to read that index and the named contract. `agent.md` does not order the load by itself.
+
+The runner compares the live skill file with `git show <pinned>:.opencode/skills/opengl-metal-reconstruction/SKILL.md` when it starts or resumes, before a new session or submission, and before it accepts the candidate. It does not compare on each poll. A match allows that skill id. A pin without the file, including an untracked copy on disk, denies the skill id, so a global skill of the same name is not available. If the pin contains the file and the live file is missing or its bytes differ, the run pauses `skill_mismatch` before reconciling or submitting. A saved pending submission keeps its id and text. A Git failure that is not a missing path pauses `runtime_unavailable`. A campaign with no worktree pin is the absent case. `resume` checks again after the file is restored.
+
+`sources.json` records the SDK version, the review date, the headers read, and the Apple URLs opened for each contract. `reviewed` means those fields were filled after that reading. A sentence inside the contract is labeled `SDK`, `Apple docs`, `Project-derived`, or `Unresolved`. The checker does not prove that a source supports a sentence.
+
+To update a contract, re-read the header from `xcrun --sdk macosx --show-sdk-path`, re-open each URL you still cite, and set `sdk_version` and `reviewed` to what you used. A missing page or header leaves the sentence `Unresolved`. The agent reports that with the existing `BLOCKER:` line when the gap blocks a faithful replacement.
+
+`.local/metal-docs/` is optional and is already ignored by `.local/`. The contracts do not need it. A campaign worktree sees the skill and the corpus only when its pinned commit contains them and the live file still matches that blob. Historical campaign JSON, notes, and pinned checker bytes stay as recorded. The next reconstruction campaign is the evaluation that the skill was loaded, the relevant contract was read, and a test came from a documented mismatch. This checker does not enforce that.
+
+The session denies `opengl-metal-reconstruction` unless that pinned match succeeded. Other skills stay unmatched and would ask. Unmatched asks pause the campaign.
