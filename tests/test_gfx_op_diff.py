@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import base64
 import json
 import platform
 import subprocess
@@ -11,8 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "benchmark"))
 
+import copy  # noqa: E402
+
 import eu4_gfx_op_capture as capture  # noqa: E402
 import eu4_gfx_op_diff as diff  # noqa: E402
+import eu4_gfx_shadow_worker as shadow  # noqa: E402
 import eu4_gfx_startup_trace as startup  # noqa: E402
 
 
@@ -189,6 +193,94 @@ class OpDiffTests(unittest.TestCase):
             self.assertEqual(diagnostic["field"], "viewport[1]")
             self.assertEqual(diagnostic["original"], 1080)
             self.assertEqual(diagnostic["metal"], 720)
+
+    def test_resource_lifecycle_replay(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-buffers")
+            output = root / "diff-resources"
+            result = diff.run(artifact, output)
+            self.assertEqual(result["status"], "pass")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertTrue(comparison["teardown_ok"])
+            self.assertTrue(comparison["shutdown_ok"])
+            self.assertEqual(comparison["counts"].get("matched"), 3)
+            commands = (output / "worker-commands.jsonl").read_text().splitlines()
+            self.assertTrue(
+                any(json.loads(line).get("harness_teardown") is True for line in commands)
+            )
+
+    def test_resource_corruption_is_precise(self):
+        class CorruptObserve:
+            def __init__(self):
+                self.inner = shadow.Worker()
+
+            @property
+            def next_seq(self):
+                return self.inner.next_seq
+
+            def call(self, op, args=None, seq=None):
+                response = self.inner.call(op, args, seq)
+                if op == "observe" and args and args.get("resources") == ["vb_1"]:
+                    response = copy.deepcopy(response)
+                    entry = response["result"]["resources"]["vb_1"]
+                    data = bytearray(base64.b64decode(entry["buffer"]["bytes_base64"]))
+                    data[0] ^= 0xFF
+                    entry["buffer"]["bytes_base64"] = base64.b64encode(data).decode("ascii")
+                return response
+
+            def stderr_text(self):
+                return self.inner.stderr_text()
+
+            def close(self):
+                self.inner.close()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-buffers")
+            output = root / "diff-corrupt-resource"
+            result = diff.run(
+                artifact, output, worker_factory=lambda: CorruptObserve()
+            )
+            self.assertEqual(result["status"], "mismatch")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            diagnostic = comparison["diagnostics"][0]
+            self.assertEqual(diagnostic["symbol"], "_GfxCreateVertexBuffer")
+            self.assertEqual(diagnostic["field"], "contents.contents")
+            self.assertIn("first_difference_offset=0", diagnostic.get("note", ""))
+
+    def test_unknown_contents_are_declined(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-buffers")
+            lines = (artifact / "operations.jsonl").read_text().splitlines()
+            record = json.loads(lines[0])
+            record["contents_known"] = False
+            lines[0] = json.dumps(record)
+            (artifact / "operations.jsonl").write_text("\n".join(lines) + "\n")
+            output = root / "diff-unknown"
+            result = diff.run(artifact, output)
+            self.assertEqual(result["status"], "unsupported")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertIn("unknown_original_contents", comparison["operations"][0]["reason"])
+
+    def test_nondefault_binding_offsets_are_declined(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-buffers")
+            lines = (artifact / "operations.jsonl").read_text().splitlines()
+            record = json.loads(lines[2])
+            record["offsets"] = [4]
+            lines[2] = json.dumps(record)
+            (artifact / "operations.jsonl").write_text("\n".join(lines) + "\n")
+            output = root / "diff-offsets"
+            result = diff.run(artifact, output)
+            self.assertEqual(result["status"], "unsupported")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertIn(
+                "binding_offsets_not_reproducible",
+                comparison["operations"][2]["reason"],
+            )
 
     def test_malformed_worker_response_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:

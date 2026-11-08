@@ -74,6 +74,24 @@ class ObserveHostTests(unittest.TestCase):
     def _summary(self, directory: Path) -> dict:
         return json.loads((directory / "operations-summary.json").read_text())
 
+    def test_vertex_buffer_capture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-buffers", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            events = self._events(directory)
+            self.assertEqual(len(events), 3)
+            self.assertEqual(events[0]["kind"], "vertex_buffer_create")
+            self.assertEqual(events[0]["resource_id"], "vb_1")
+            self.assertTrue(events[0]["contents_known"])
+            self.assertEqual(events[0]["payload"]["size"], 256)
+            self.assertEqual(events[1]["resource_id"], "vb_1")
+            self.assertEqual(events[1]["payload"]["size"], 64)
+            self.assertEqual(events[1]["offset"], 32)
+            self.assertEqual(events[2]["ids"], ["vb_1"])
+            self.assertTrue((directory / events[0]["payload"]["file"]).is_file())
+            self.assertTrue((directory / events[1]["payload"]["file"]).is_file())
+
     def test_viewport_basic(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
@@ -200,6 +218,20 @@ class CaptureReaderTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         _pin_artifact(directory)
         return directory
+
+    def test_accepts_resource_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = self._artifact(Path(tmp), "observe-buffers")
+            artifact = capture.load_capture(directory)
+            self.assertEqual(len(artifact.operations), 3)
+            create = artifact.operations[0]
+            self.assertEqual(create.kind, "vertex_buffer_create")
+            self.assertEqual(create.resource_id, "vb_1")
+            self.assertTrue(create.contents_known)
+            self.assertEqual(create.payload_size, 256)
+            self.assertIsNotNone(create.payload_sha256)
+            self.assertEqual(len(create.payload_bytes or b""), 256)
+            self.assertIn(create.payload_file, artifact.source_hashes)
 
     def test_accepts_complete_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:

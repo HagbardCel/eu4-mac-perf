@@ -1,5 +1,6 @@
 #include "eu4_gfx_observe.h"
 
+#include "eu4_gfx_observe_buffers.h"
 #include "eu4_gfx_observe_viewport.h"
 #include "eu4_gfx_site_patch.h"
 #include "eu4_gfx_startup_trace.h"
@@ -13,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -48,6 +50,8 @@ static _Atomic int g_test_fail_install_after = -1;
 static _Atomic int g_finalized;
 static _Atomic int g_finalized_ok;
 static eu4_gfx_observe_record g_records[EU4_GFX_OBSERVE_RECORD_CAP];
+static uint8_t g_payload[EU4_GFX_OBSERVE_PAYLOAD_CAP];
+static _Atomic uint32_t g_payload_used;
 static const eu4_gfx_observe_spec *g_selected[EU4_GFX_OBSERVE_MAX_SPECS];
 static size_t g_selected_count;
 static eu4_gfx_site g_sites[EU4_GFX_OBSERVE_MAX_SPECS];
@@ -172,6 +176,83 @@ void eu4_gfx_observe_set_return(eu4_gfx_observe_call *call, int64_t value) {
     }
 }
 
+void eu4_gfx_observe_set_kind(eu4_gfx_observe_call *call, uint32_t kind) {
+    if (call != NULL) {
+        call->kind = kind;
+    }
+}
+
+void eu4_gfx_observe_set_resource(eu4_gfx_observe_call *call, const char *id,
+                                  int contents_known) {
+    if (call == NULL) {
+        return;
+    }
+    if (id != NULL) {
+        (void)snprintf(call->resource_id, sizeof(call->resource_id), "%s", id);
+    }
+    call->contents_known = contents_known ? 1 : 0;
+}
+
+void eu4_gfx_observe_set_meta(eu4_gfx_observe_call *call, const char *json) {
+    if (call != NULL && json != NULL) {
+        (void)snprintf(call->meta, sizeof(call->meta), "%s", json);
+    }
+}
+
+static bool read_payload_range(const void *src, void *dest, size_t n) {
+    if (src == NULL || dest == NULL || n == 0) {
+        return false;
+    }
+    uintptr_t address = (uintptr_t)src;
+    if (address > UINTPTR_MAX - (n - 1)) {
+        return false;
+    }
+    mach_vm_size_t got = 0;
+    kern_return_t result = mach_vm_read_overwrite(
+        mach_task_self(), (mach_vm_address_t)address, (mach_vm_size_t)n,
+        (mach_vm_address_t)(uintptr_t)dest, &got);
+    return result == KERN_SUCCESS && got == n;
+}
+
+void eu4_gfx_observe_set_payload(eu4_gfx_observe_call *call, const void *src,
+                                 size_t n) {
+    if (call == NULL) {
+        return;
+    }
+    if (n == 0) {
+        call->payload_size = 0;
+        call->payload_ok = 1;
+        return;
+    }
+    if (src == NULL || n > EU4_GFX_OBSERVE_PAYLOAD_MAX) {
+        call->payload_ok = 0;
+        call->fields_ok = 0;
+        return;
+    }
+    uint32_t aligned = (uint32_t)((n + 15u) & ~(size_t)15u);
+    uint32_t offset = atomic_fetch_add_explicit(&g_payload_used, aligned,
+                                                memory_order_relaxed);
+    if (offset > EU4_GFX_OBSERVE_PAYLOAD_CAP - aligned) {
+        call->payload_ok = 0;
+        call->fields_ok = 0;
+        return;
+    }
+    if (!read_payload_range(src, g_payload + offset, n)) {
+        call->payload_ok = 0;
+        call->fields_ok = 0;
+        return;
+    }
+    call->payload_offset = offset;
+    call->payload_size = (uint32_t)n;
+    call->payload_ok = 1;
+}
+
+void eu4_gfx_observe_fail_fields(eu4_gfx_observe_call *call) {
+    if (call != NULL) {
+        call->fields_ok = 0;
+    }
+}
+
 static void refuse(uint32_t slot) {
     if (slot < EU4_GFX_OBSERVE_MAX_SPECS) {
         g_tls.refuse_depth[slot] += 1;
@@ -238,6 +319,8 @@ static void on_entry(eu4_gfx_capture_frame *frame, uint64_t slot64) {
     entry->call.entry_time_ns = now_ns();
     entry->call.input_ok = 1;
     entry->call.output_ok = 1;
+    entry->call.fields_ok = 1;
+    entry->call.payload_ok = 1;
     entry->call.overlap = active > 1;
     if (atomic_exchange_explicit(&g_test_unpaired, 0, memory_order_relaxed)) {
         entry->abandoned = 1;
@@ -288,7 +371,16 @@ static void on_exit(eu4_gfx_capture_frame *frame, uint64_t slot64) {
     record.caller_rva = entry->call.caller_rva;
     record.caller_known = entry->call.caller_known;
     record.overlap = entry->call.overlap;
-    record.fields_ok = entry->call.input_ok && entry->call.output_ok;
+    record.fields_ok = entry->call.fields_ok && entry->call.input_ok &&
+                       entry->call.output_ok && entry->call.payload_ok;
+    record.kind = entry->call.kind;
+    record.contents_known = entry->call.contents_known;
+    record.payload_offset = entry->call.payload_offset;
+    record.payload_size = entry->call.payload_size;
+    record.payload_ok = entry->call.payload_ok;
+    (void)snprintf(record.resource_id, sizeof(record.resource_id), "%s",
+                   entry->call.resource_id);
+    (void)snprintf(record.meta, sizeof(record.meta), "%s", entry->call.meta);
     record.return_valid = entry->call.return_valid;
     record.return_value = entry->call.return_value;
     record.output_base_non_null = entry->call.output_base != NULL;
@@ -608,8 +700,79 @@ static void emit_hex(FILE *file, const char *name, const uint8_t *bytes,
     fputc('"', file);
 }
 
+static const char *kind_name(uint32_t kind) {
+    switch (kind) {
+    case EU4_GFX_OBSERVE_KIND_VERTEX_CREATE:
+        return "vertex_buffer_create";
+    case EU4_GFX_OBSERVE_KIND_VERTEX_UPDATE:
+        return "vertex_buffer_update";
+    case EU4_GFX_OBSERVE_KIND_VERTEX_BIND:
+        return "vertex_buffer_bind";
+    case EU4_GFX_OBSERVE_KIND_DRAW:
+        return "draw";
+    default:
+        return "operation";
+    }
+}
+
+typedef struct {
+    const eu4_gfx_observe_snapshot *snap;
+    const char *session;
+    const char *executable_sha;
+    int pid;
+    uintptr_t image_base;
+    int partial;
+    const char *run_dir;
+    const char *payload_prefix;
+    int payload_failed;
+} write_ctx;
+
+static bool write_payload_file(const write_ctx *ctx,
+                               const eu4_gfx_observe_record *record,
+                               char *relative, size_t relative_size) {
+    if (!record->payload_ok || record->payload_size == 0) {
+        return true;
+    }
+    if (ctx->run_dir == NULL || ctx->payload_prefix == NULL ||
+        record->payload_offset > EU4_GFX_OBSERVE_PAYLOAD_CAP ||
+        record->payload_size >
+            EU4_GFX_OBSERVE_PAYLOAD_CAP - record->payload_offset) {
+        return false;
+    }
+    char directory[1024];
+    char path[1024];
+    if (snprintf(directory, sizeof(directory), "%s/%s", ctx->run_dir,
+                 ctx->payload_prefix) >= (int)sizeof(directory) ||
+        snprintf(relative, relative_size, "%s/%llu-%u.bin",
+                 ctx->payload_prefix, (unsigned long long)record->call_id,
+                 record->kind) >= (int)relative_size ||
+        snprintf(path, sizeof(path), "%s/%s", ctx->run_dir, relative) >=
+            (int)sizeof(path)) {
+        return false;
+    }
+    if (mkdir(directory, 0755) != 0 && errno != EEXIST) {
+        return false;
+    }
+    FILE *file = fopen(path, "wb");
+    if (file == NULL) {
+        return false;
+    }
+    bool ok = fwrite(g_payload + record->payload_offset, 1,
+                     record->payload_size, file) == record->payload_size;
+    if (ok && fflush(file) != 0) {
+        ok = false;
+    }
+    if (ok && fsync(fileno(file)) != 0) {
+        ok = false;
+    }
+    if (fclose(file) != 0) {
+        ok = false;
+    }
+    return ok;
+}
+
 static void emit_record(FILE *file, const eu4_gfx_observe_record *record,
-                        int partial) {
+                        int partial, write_ctx *ctx) {
     const eu4_gfx_observe_spec *spec =
         record->slot < g_selected_count ? g_selected[record->slot] : NULL;
     const char *symbol =
@@ -644,25 +807,35 @@ static void emit_record(FILE *file, const eu4_gfx_observe_record *record,
     } else {
         fputs(",\"return\":null", file);
     }
+    fprintf(file, ",\"kind\":\"%s\"", kind_name(record->kind));
+    if (record->resource_id[0] != 0) {
+        fprintf(file, ",\"resource_id\":\"%s\"", record->resource_id);
+    }
+    fprintf(file, ",\"contents_known\":%s",
+            record->contents_known ? "true" : "false");
+    if (record->meta[0] != 0) {
+        fputs(record->meta, file);
+    }
+    char relative[512];
+    if (record->payload_ok && record->payload_size > 0) {
+        if (write_payload_file(ctx, record, relative, sizeof(relative))) {
+            fprintf(file, ",\"payload\":{\"size\":%u,\"file\":\"%s\"}",
+                    record->payload_size, relative);
+        } else {
+            ctx->payload_failed = 1;
+            fputs(",\"payload\":null", file);
+        }
+    }
     if (partial) {
         fputs(",\"partial\":true", file);
     }
     fputs("}\n", file);
 }
 
-typedef struct {
-    const eu4_gfx_observe_snapshot *snap;
-    const char *session;
-    const char *executable_sha;
-    int pid;
-    uintptr_t image_base;
-    int partial;
-} write_ctx;
-
 static int write_records_body(FILE *file, void *opaque) {
     write_ctx *ctx = opaque;
     for (uint32_t i = 0; i < ctx->snap->record_count; i++) {
-        emit_record(file, &ctx->snap->records[i], ctx->partial);
+        emit_record(file, &ctx->snap->records[i], ctx->partial, ctx);
     }
     return 0;
 }
@@ -778,6 +951,9 @@ bool eu4_gfx_observe_finalize(const char *run_dir, const char *session,
         .pid = pid,
         .image_base = image_base,
         .partial = 0,
+        .run_dir = run_dir,
+        .payload_prefix = "payloads",
+        .payload_failed = 0,
     };
     char summary_path[1024];
     char records_path[1024];
@@ -808,10 +984,28 @@ bool eu4_gfx_observe_finalize(const char *run_dir, const char *session,
     if (ok && !snap.records_copied && snap.record_count > 0) {
         write_ctx partial_ctx = ctx;
         partial_ctx.partial = 1;
+        partial_ctx.payload_prefix = "payloads.partial";
+        partial_ctx.payload_failed = 0;
         (void)write_text_file(partial_path, write_records_body, &partial_ctx, 1);
     }
-    if (ok) {
-        ok = write_text_file(summary_path, write_summary_body, &ctx, 1);
+    eu4_gfx_observe_snapshot summary_snap = snap;
+    write_ctx summary_ctx = ctx;
+    if (ctx.payload_failed) {
+        summary_snap.integrity_ok = 0;
+        summary_snap.records_copied = 0;
+        (void)snprintf(summary_snap.reason, sizeof(summary_snap.reason),
+                       "payload_write");
+        summary_ctx.snap = &summary_snap;
+        ok = false;
+    } else if (!ok) {
+        summary_snap.integrity_ok = 0;
+        summary_snap.records_copied = 0;
+        (void)snprintf(summary_snap.reason, sizeof(summary_snap.reason),
+                       "write_failed");
+        summary_ctx.snap = &summary_snap;
+    }
+    if (write_text_file(summary_path, write_summary_body, &summary_ctx, 1) == false) {
+        ok = false;
     }
     atomic_store_explicit(&g_finalized_ok, ok ? 1 : 0, memory_order_release);
     atomic_store_explicit(&g_finalized, 2, memory_order_release);
@@ -845,6 +1039,8 @@ void eu4_gfx_observe_test_reset(void) {
     atomic_store(&g_test_unpaired, 0);
     atomic_store(&g_test_fail_output, 0);
     atomic_store(&g_test_overlap, 0);
+    atomic_store(&g_payload_used, 0);
+    eu4_gfx_observe_buffers_reset();
     atomic_store(&g_test_fail_install_after, -1);
     atomic_store(&g_finalized, 0);
     atomic_store(&g_finalized_ok, 0);
@@ -871,6 +1067,11 @@ void eu4_gfx_observe_test_force_install_failure(int after_sites) {
 
 void eu4_gfx_observe_test_set_init_seen(int on) {
     atomic_store(&g_init_seen, on ? 1 : 0);
+}
+
+void eu4_gfx_observe_test_reset_resources(void) {
+    eu4_gfx_observe_buffers_reset();
+    atomic_store(&g_payload_used, 0);
 }
 
 void eu4_gfx_observe_test_set_limits(uint32_t max_events,

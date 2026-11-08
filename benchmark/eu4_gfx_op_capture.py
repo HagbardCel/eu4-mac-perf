@@ -146,6 +146,14 @@ class OperationRecord:
     output_words: tuple[int, ...]
     return_value: int | None
     output_base_non_null: bool
+    kind: str
+    resource_id: str | None
+    contents_known: bool
+    meta: dict
+    payload_file: str | None
+    payload_size: int
+    payload_sha256: str | None
+    payload_bytes: bytes | None
     raw: dict
 
 
@@ -314,6 +322,7 @@ def _validate_records(
     }
     records: list[OperationRecord] = []
     seen_calls: set[int] = set()
+    payload_hashes: dict[str, str] = {}
     for index, row in enumerate(rows, 1):
         _require(row.get("schema") == OP_SCHEMA, "op_schema", str(index))
         call_id = row.get("call_id")
@@ -360,6 +369,65 @@ def _validate_records(
             "op_return_type",
             str(index),
         )
+        kind = row.get("kind", "operation")
+        _require(isinstance(kind, str) and kind, "op_kind", str(index))
+        resource_id = row.get("resource_id")
+        _require(resource_id is None or isinstance(resource_id, str), "op_resource", str(index))
+        contents = row.get("contents_known", True)
+        _require(_exact_bool(contents), "op_contents_known", str(index))
+        payload = row.get("payload")
+        payload_file = None
+        payload_size = 0
+        payload_sha = None
+        payload_bytes = None
+        if payload is not None:
+            _require(isinstance(payload, dict), "op_payload", str(index))
+            payload_file = payload.get("file")
+            payload_size = payload.get("size")
+            _require(
+                isinstance(payload_file, str) and payload_file,
+                "op_payload_file",
+                str(index),
+            )
+            _require(_exact_int(payload_size) and payload_size >= 0, "op_payload_size", str(index))
+            relative = Path(payload_file)
+            _require(
+                not relative.is_absolute()
+                and ".." not in relative.parts
+                and relative.parts
+                and relative.parts[0] == "payloads",
+                "op_payload_path",
+                str(index),
+            )
+            path = (root / relative).resolve()
+            _require(
+                str(path).startswith(str(root.resolve()) + "/"),
+                "op_payload_path",
+                str(index),
+            )
+            _require(path.is_file(), "op_payload_missing", str(index))
+            data = path.read_bytes()
+            _require(len(data) == payload_size, "op_payload_length", str(index))
+            payload_bytes = data
+            import hashlib
+            payload_sha = hashlib.sha256(data).hexdigest()
+            payload_hashes[payload_file] = payload_sha
+        meta = {
+            key: row[key]
+            for key in (
+                "count",
+                "stride",
+                "usage",
+                "offset",
+                "partial",
+                "start",
+                "ids",
+                "offsets",
+                "words",
+                "header_non_null",
+            )
+            if key in row
+        }
         records.append(
             OperationRecord(
                 index=index,
@@ -380,6 +448,14 @@ def _validate_records(
                 output_words=decode_words(output_hex, output_size),
                 return_value=return_value,
                 output_base_non_null=row.get("output_base_non_null"),
+                kind=kind,
+                resource_id=resource_id,
+                contents_known=contents,
+                meta=meta,
+                payload_file=payload_file,
+                payload_size=payload_size,
+                payload_sha256=payload_sha,
+                payload_bytes=payload_bytes,
                 raw=row,
             )
         )
@@ -415,6 +491,9 @@ def load_capture(path: Path | str) -> CaptureArtifact:
     )
     op_summary = _validate_op_summary(root, metadata, context.init_call_id)
     operations = _validate_records(root, op_summary, context.init_call_id)
+    for record in operations:
+        if record.payload_file is not None and record.payload_sha256 is not None:
+            hashes[record.payload_file] = record.payload_sha256
     coverage = {
         "events": len(operations),
         "targets_seen": sorted({record.symbol for record in operations}),
