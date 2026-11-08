@@ -1,0 +1,19 @@
+{
+  "id": "eu4-p52b-shader-lifecycle",
+  "objective": "objective.md",
+  "runtime": "opencode",
+  "model": "opencode/big-pickle",
+  "opencode_version": "2.2.5",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/automation/eu4-p52b-shader-lifecycle/workspace",
+    "commit": "b65a1fd32e624c59d5711e251a8ce61493e3648c"
+  },
+  "accept": [
+    "python3",
+    "accept.py"
+  ],
+  "max_rounds": 12,
+  "max_seconds": 10800,
+  "accept_timeout_seconds": 1800
+}

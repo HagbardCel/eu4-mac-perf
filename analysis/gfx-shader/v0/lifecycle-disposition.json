@@ -36,16 +36,22 @@
     {
       "name": "_GfxBuildAndAddVertexShader",
       "role": "calls BuildGLSL then _GfxAddVertexShader",
-      "note": "Still original; BuildGLSL issues glGetString(GL_VENDOR). P5.2b must address vendor/capability queries or feed reconstructed sources without OpenGL."
+      "disposition": "replace-metal",
+      "evidence": "Construction root for Simple VS; still original and reaches BuildGLSL/glGetString on the live path. P5.2b completion requires Metal replacement or a proved non-execution bypass that never touches OpenGL.",
+      "note": "BuildGLSL issues glGetString(GL_VENDOR). Engine-path completion cannot leave this original while GL-reachable."
     },
     {
       "name": "_GfxBuildAndAddPixelShader",
-      "role": "pixel twin of BuildAndAddVertex"
+      "role": "pixel twin of BuildAndAddVertex",
+      "disposition": "replace-metal",
+      "evidence": "Construction root for Simple PS; same OpenGL-reachable BuildGLSL dependency as the vertex twin."
     },
     {
       "name": "BuildGLSL",
       "role": "preprocessor / define expansion before Add*",
-      "note": "Unresolved exact define set; blocks statically_determined compiler-input identity"
+      "disposition": "replace-metal",
+      "evidence": "Unrooted direct-GL helper; unresolved exact define set blocks statically_determined compiler-input identity. Must not remain GL-reachable on a completed Metal Simple construction path.",
+      "note": "Disposition is replace-metal (or feed reconstructed sources without calling BuildGLSL). verified-non-execution only if a proved alternate construction never invokes it."
     },
     {
       "name": "SShaderOpenGL::LinkProgram",

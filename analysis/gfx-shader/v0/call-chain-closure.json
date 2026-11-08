@@ -1,0 +1,8 @@
+{
+  "schema": "eu4-call-chain-closure/v0",
+  "status": "offline_lifecycle_qualification_only",
+  "engine_path_complete": false,
+  "note": "BuildGLSL still reaches glGetString(GL_VENDOR) on the original path. P5.2b completion requires ABI-qualified BuildAndAdd/BuildGLSL disposition clearing reachable GL, or an explicit human scope change. Offline lifecycle tests are intermediate only.",
+  "repo_baseline_commit": "173321b6d3258576060e7941e9bd91f608e8f543",
+  "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d"
+}
