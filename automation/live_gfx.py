@@ -321,6 +321,18 @@ def replay(args: argparse.Namespace) -> int:
     return eu4_gfx_op_diff.EXIT_CODES.get(result.get("status"), EXIT_UNAVAILABLE)
 
 
+def next_blocker(args: argparse.Namespace) -> int:
+    from automation.next_blocker import classify
+
+    result = classify(Path(args.run))
+    print(json.dumps(result, indent=2))
+    if result["status"] in ("actionable", "advanced"):
+        return 0
+    if result["status"] == "needs_evidence":
+        return EXIT_INCOMPLETE
+    return EXIT_UNAVAILABLE
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -340,6 +352,13 @@ def _parser() -> argparse.ArgumentParser:
     rep.add_argument("--output")
     rep.add_argument("--skip-unknown", action="store_true")
     rep.set_defaults(func=replay)
+
+    nxt = sub.add_parser(
+        "next-blocker", description="classify the next actionable Metal-only blocker"
+    )
+    nxt.add_argument("--run", required=True)
+    nxt.add_argument("--json", action="store_true")
+    nxt.set_defaults(func=next_blocker)
     return parser
 
 
