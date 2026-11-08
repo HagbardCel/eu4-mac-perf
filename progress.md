@@ -1,3 +1,32 @@
+# L3.2b infrastructure bootstrap — current progress
+
+## Objective
+
+Build the thin fail-closed infrastructure for autonomous L3.2b-II completion:
+v2 checker, provisional checkpoints, versioned contracts, two identities, one
+global launch ledger, contract qualification and the dynamic coordinator.
+
+## Established
+
+- `automation/gfx_draw_accept_v2.py` is the new immutable checker; the v1
+  module is byte-identical because the completed L3.2b-I manifest pins it.
+- Fail-closed dispatch: unknown required fields are `provisional`, never pass.
+- Durable checkpoint bundles, single global ledger, ledger-authoritative
+  capture selection, contract runner/checker and the coordinator state machine.
+- The frozen bootstrap suite `tests/test_gfx_infra_frozen.py` passes against a
+  simulated candidate worktree; the bootstrap checker
+  `automation/gfx_infra_accept.py` returns `pass` for that worktree.
+- The A0 trusted-validation manifest still passes; `verification_manifest.py`
+  was left byte-identical and the revision helpers live in
+  `automation/manifest_revision.py`.
+
+## Next
+
+Run the bootstrap campaign, obtain independent review, merge PR 1, then start
+the dynamic completion loop with the six-launch ledger.
+
+---
+
 # L3.2b-I — Effective input state at `_GfxDraw` caller `0xedfcd1`
 
 ## Objective

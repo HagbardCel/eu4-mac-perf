@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "benchmark"))
 
 import eu4_gfx_op_capture as capture_reader  # noqa: E402
 import eu4_gfx_startup_trace as startup  # noqa: E402
+from automation import launch_ledger  # noqa: E402
 
 LAUNCH_SCHEMA = "live-launch/v0"
 EXIT_COMPLETE = 0
@@ -67,6 +68,24 @@ def _claim_launch(
     run_root = run_root.expanduser().resolve()
     if not run_root.is_dir():
         raise LaunchLimit("missing", f"campaign run root does not exist: {run_root}")
+    try:
+        pointer = launch_ledger.read_pointer(run_root)
+    except launch_ledger.LedgerError as exc:
+        raise LaunchLimit("malformed", str(exc)) from exc
+    if pointer is not None:
+        try:
+            token = launch_ledger.claim(
+                Path(pointer["ledger"]),
+                campaign_id=run_root.name,
+                run_root=run_root,
+                output=output,
+                targets=targets,
+                requested_timeout=requested_timeout,
+            )
+        except launch_ledger.LedgerError as exc:
+            raise LaunchLimit(exc.kind, exc.detail) from exc
+        _mirror_claim(run_root, token, output, targets)
+        return token
     lock_path = run_root / "live-launch.lock"
     counter_path = run_root / "live-launch.json"
     with lock_path.open("a+") as handle:
@@ -125,10 +144,92 @@ def _claim_launch(
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
+def _mirror_claim(
+    run_root: Path, token: str, output: Path, targets: list[str]
+) -> None:
+    """Best-effort compatibility mirror; never a second authority."""
+    counter_path = run_root / "live-launch.json"
+    if not counter_path.is_file():
+        return
+    lock_path = run_root / "live-launch.lock"
+    try:
+        with lock_path.open("a+") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            try:
+                data = json.loads(counter_path.read_text())
+                if not isinstance(data, dict):
+                    return
+                data["used"] = int(data.get("used", 0)) + 1
+                receipts = data.setdefault("launches", [])
+                if not isinstance(receipts, list):
+                    return
+                receipts.append(
+                    {
+                        "token": token,
+                        "at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        "output": str(output),
+                        "targets": list(targets),
+                        "status": "claimed",
+                    }
+                )
+                _atomic_json(counter_path, data)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return
+
+
+def _mirror_finish(
+    run_root: Path, token: str, *, pid: int | None, status: str
+) -> None:
+    counter_path = run_root / "live-launch.json"
+    if not counter_path.is_file():
+        return
+    lock_path = run_root / "live-launch.lock"
+    try:
+        with lock_path.open("a+") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            try:
+                data = json.loads(counter_path.read_text())
+                receipts = data.get("launches") if isinstance(data, dict) else None
+                if not isinstance(receipts, list):
+                    return
+                for receipt in receipts:
+                    if isinstance(receipt, dict) and receipt.get("token") == token:
+                        receipt["pid"] = pid
+                        receipt["status"] = status
+                        _atomic_json(counter_path, data)
+                        return
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+        return
+
+
 def _finish_launch(
     run_root: Path, token: str, *, pid: int | None, status: str
 ) -> None:
     run_root = run_root.expanduser().resolve()
+    try:
+        pointer = launch_ledger.read_pointer(run_root)
+    except launch_ledger.LedgerError:
+        pointer = None
+    if pointer is not None:
+        ledger_status = "failed" if status.startswith("failed") else "completed"
+        try:
+            launch_ledger.finish(
+                Path(pointer["ledger"]), token, pid=pid, status=ledger_status
+            )
+        except launch_ledger.LedgerError:
+            pass
+        _mirror_finish(run_root, token, pid=pid, status=status)
+        return
     lock_path = run_root / "live-launch.lock"
     counter_path = run_root / "live-launch.json"
     if not counter_path.is_file():

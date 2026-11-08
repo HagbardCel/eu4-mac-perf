@@ -1,0 +1,42 @@
+{
+  "schema": "eu4-l32b-infra/v1",
+  "allowed_paths": [
+    "progress.md",
+    "automation/gfx_draw_accept_v2.py",
+    "automation/gfx_contracts/**",
+    "automation/gfx_checkpoint.py",
+    "automation/launch_ledger.py",
+    "automation/live_gfx.py",
+    "automation/state.py",
+    "automation/gfx_contract_runner.py",
+    "automation/gfx_contract_accept.py",
+    "automation/gfx_l32b_complete.py",
+    "benchmark/eu4_gfx_draw_packet.py",
+    "tests/**",
+    "docs/decisions/0004-*.md",
+    "docs/status.md",
+    "automation/README.md",
+    "campaigns/eu4-l32b-complete/**",
+    "campaigns/eu4-l32b-contract/**",
+    "analysis/gfx-draw/v0/l32b/complete/**",
+    "automation/manifest_revision.py",
+    "automation/gfx_evidence_policy.py",
+    "automation/gfx_adversarial.py"
+  ],
+  "forbidden_paths": [
+    "automation/gfx_draw_accept.py",
+    "campaigns/eu4-l32b-effective-state/**",
+    "campaigns/eu4-l32b-reviewer/**",
+    "analysis/gfx-draw/v0/probe/**",
+    "analysis/qualification/v0/**",
+    "reverse_engineering/target.json",
+    "benchmark/eu4_gfx_observe_gateway.S",
+    "benchmark/eu4_gfx_shader.mm",
+    "benchmark/eu4_gfx_shadow_worker.mm",
+    "automation/gfx_infra_accept.py"
+  ],
+  "test_modules": [
+    "tests.test_gfx_draw_packet",
+    "tests.test_gfx_observe"
+  ]
+}

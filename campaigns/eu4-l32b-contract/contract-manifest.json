@@ -1,0 +1,67 @@
+{
+  "eu4_executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+  "members": [
+    {
+      "path": "campaigns/eu4-l32b-contract/campaign.json",
+      "role": "campaign",
+      "sha256": "bd72d47990289e8c4a8224da85ed2c40fb7e53866c67fc97186f320b9209abb2"
+    },
+    {
+      "path": "campaigns/eu4-l32b-contract/contract.json",
+      "role": "campaign",
+      "sha256": "cc842cb5a10d5cb2eb14cb9581bfdb2a1db86c64c3363608248b8d09d17c4c32"
+    },
+    {
+      "path": "campaigns/eu4-l32b-contract/objective.md",
+      "role": "campaign",
+      "sha256": "c3f0557e6e88991b6d812a62e76ed77af5f4a3dcde108ced175511aeb24ee0cf"
+    },
+    {
+      "path": "automation/gfx_adversarial.py",
+      "role": "checker",
+      "sha256": "fb2df10d350fd6946c8c2329f998f5bf029807e1f826660b64980aa20dbbd5e3"
+    },
+    {
+      "path": "automation/gfx_checkpoint.py",
+      "role": "checker",
+      "sha256": "1aeeefaef3699c2bb0b2850c84a23ca32253dabbc1abf3d19cf97b483f8b8d6e"
+    },
+    {
+      "path": "automation/gfx_contract_accept.py",
+      "role": "checker",
+      "sha256": "cf015c6f81eba5d18eea3112378aa28fe524f8f872edffa273dc1cd1ba79aae0"
+    },
+    {
+      "path": "automation/gfx_contract_runner.py",
+      "role": "checker",
+      "sha256": "4b2ce68457d6c591e5beb58aa52d93989d3ef7433a6796620eba70ea6f2deda7"
+    },
+    {
+      "path": "automation/gfx_draw_accept_v2.py",
+      "role": "checker",
+      "sha256": "fce4a4bc1be326e907ebb4a0d9930a1a8998a24eda574c6a9df88817ff697863"
+    },
+    {
+      "path": "automation/gfx_evidence_policy.py",
+      "role": "checker",
+      "sha256": "fefaec0e84d7f5d171419cd6dd1fe7e4f7ff6fd186b05c2581e9e4709be68d18"
+    },
+    {
+      "path": "automation/manifest_revision.py",
+      "role": "checker",
+      "sha256": "1264608587cdd3670fd9d313436093ce3493a57b83f9246f5e9c6e2fe1a660ab"
+    },
+    {
+      "path": "campaigns/eu4-l32b-contract/accept.py",
+      "role": "checker",
+      "sha256": "00f77021c2a6186ab6c92b250343ff9cd260b7037261c351d3d1f16fe58aac14"
+    },
+    {
+      "path": "reverse_engineering/target.json",
+      "role": "oracle",
+      "sha256": "ad9e9730eda2f3f51165157bc5ae2585e9fd4a4a5a6921d7ba234e35054621c4"
+    }
+  ],
+  "repo_baseline_commit": "956fb7b736b1025b2888d352d4437d350c2373f3",
+  "schema": "eu4-verification-manifest/v1"
+}

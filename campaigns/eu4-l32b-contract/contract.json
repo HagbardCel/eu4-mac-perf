@@ -1,0 +1,31 @@
+{
+  "schema": "eu4-l32b-contract-campaign/v1",
+  "candidate_version": "v1",
+  "checkpoint": "PIN_AT_RUNTIME",
+  "manifest": "contract-manifest.json",
+  "allowed_paths": [
+    "progress.md",
+    "automation/gfx_contracts/v1.py",
+    "automation/gfx_contracts/v1.spec.json",
+    "tests/test_gfx_contract_v1.py",
+    "analysis/gfx-draw/v0/l32b/contracts/v1/**"
+  ],
+  "forbidden_paths": [
+    "automation/gfx_draw_accept.py",
+    "automation/gfx_draw_accept_v2.py",
+    "automation/gfx_contracts/api.py",
+    "automation/gfx_contracts/v0.py",
+    "automation/gfx_checkpoint.py",
+    "automation/launch_ledger.py",
+    "campaigns/**",
+    "analysis/gfx-draw/v0/probe/**",
+    "analysis/qualification/v0/**",
+    "reverse_engineering/target.json",
+    "benchmark/eu4_gfx_observe_gateway.S",
+    "automation/gfx_evidence_policy.py",
+    "automation/gfx_adversarial.py"
+  ],
+  "test_modules": [
+    "tests.test_gfx_contract_v1"
+  ]
+}

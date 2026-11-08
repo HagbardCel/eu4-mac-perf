@@ -167,9 +167,9 @@ required input is established.
 L3.2b uses the existing OpenCode runner with a fixed objective and a trusted
 draw-input checker. The first campaign is
 [`campaigns/eu4-l32b-effective-state/`](../campaigns/eu4-l32b-effective-state/).
-The checker `automation/gfx_draw_accept.py` builds/tests the candidate worktree,
-runs frozen observer fixtures, validates the campaign launch receipts, and
-independently verifies the candidate packet's bytes, hashes and same-session
+The v1 checker `automation/gfx_draw_accept.py` builds/tests the candidate
+worktree, runs frozen observer fixtures, validates the campaign launch receipts,
+and independently verifies the candidate packet's bytes, hashes and same-session
 identity. It never launches EU4 and never trusts candidate `packet_ready`.
 
 The campaign pins the detached worktree to the L3.2a merge; campaign/checker
@@ -187,6 +187,101 @@ campaign; the completed campaign is never mutated. The first campaign uses this
 manual handoff; generic reviewer orchestration is deferred until a successful
 campaign shows where automation is actually needed.
 
+### L3.2b-II fail-closed completion infrastructure
+
+The v1 checker is frozen by the completed L3.2b-I manifest. The new immutable
+revision is `automation/gfx_draw_accept_v2.py`; the v1 module must stay
+byte-identical. v2 classifies every required input as `validated`,
+`provisional`, `missing` or `invalid`:
+
+- an established field with no trusted validator is `provisional` and can never
+  pass;
+- a validator exception, missing sidecar, unknown evidence type or
+  executable-mismatched static span is `invalid`;
+- `packet_ready=true` is recomputed by the checker and contradicted by any
+  unresolved input.
+
+A field is `provisional` only when it has field-relevant original evidence, not
+merely a recognized evidence type. `automation/gfx_evidence_policy.py` defines
+the minimum provenance per field: shader sources need captured or reconstructed
+source bytes, texture contents need an original payload with resource identity,
+render state needs the relevant master bytes or a verified state observation,
+and a draw record alone is never shader or texture evidence. The checkpoint
+validator re-runs the policy against the bundle packet and original capture, so
+an empty or unrelated evidence list cannot enter a trusted checkpoint.
+
+When a campaign has field-relevant original evidence for one or more
+provisional fields, v2 writes a durable checkpoint bundle under the workflow
+root's `checkpoints/<campaign>-<session>-<candidate-digest>/`. The bundle
+contains `checkpoint.json`, `bundle-manifest.json`, the candidate packet, every
+referenced sidecar, and a capture reference. A partial checkpoint is expected
+while other fields are still missing; it is a qualification work order, not
+acceptance.
+
+Contract qualification uses
+[`campaigns/eu4-l32b-contract/`](../campaigns/eu4-l32b-contract/). The candidate
+proposes a versioned `automation/gfx_contracts/vN.py`, its spec and tests; the
+trusted checker verifies scope, provenance, the spec's original-code evidence
+and that the candidate validator accepts the checkpoint's original evidence. The
+independent reviewer authors `review-adversarial.json` outside the candidate
+worktree; the coordinator runs those cases in a separate process
+(`automation.gfx_contract_runner`) and requires every structurally valid forged
+case to be rejected for the stated semantic reason. A reviewer `qualified`
+outcome is required; the reviewer campaign's `pass` is not sufficient.
+
+Each campaign records two identities: `candidate_base_commit` (the worktree
+parent) and `trusted_contract_commit` (the immutable checker/contract/tests/
+oracle used for acceptance). Promotion has an explicit kind:
+
+- `contract` requires the reviewed contract commit, a passing adversarial-case
+  artifact, and a qualification receipt binding the contract, checkpoint,
+  reviewer report, case artifact and runner results;
+- `implementation` requires a qualified implementation commit and the unchanged
+  trusted contract identity; it does not trigger contract requalification;
+- `final` requires the checker `pass`, the trusted qualification receipt, and
+  the independent final review.
+
+The coordinator re-hashes the receipt-bound artifacts immediately before
+integration; a changed contract, checkpoint, report or case artifact blocks
+promotion. Promotion applies the accepted candidate changes to the trusted
+revision, rejects conflicts or trusted-file changes, creates one integration
+commit, re-runs the checker/tests against it, and pins the next campaign to that
+commit. No active campaign is retargeted or rebased.
+
+Integration returns a structured, commit-bound verification
+(`eu4-l32b-integration-verification/v1`), not a bare boolean. Contract and
+implementation integration require build/tests success and no regression of
+previously qualified evidence; the full checker may remain `inconclusive` while
+unresolved fields are explicitly tracked. Final integration requires the full
+checker `pass`, `packet_ready=true`, no unresolved fields and a matching
+qualification receipt. A missing, mismatched or failed verification blocks
+continuation. The real post-integration checker hook belongs to L3.2b-II; the
+bootstrap tests use mocked verifications.
+
+Content fields are stricter than identity or state fields. `shader_stage_sources`
+and `texture_slot_0_contents` require captured original payloads with resource
+identity; a verified static instruction span may support the interpretation but
+cannot qualify the contents by itself. Render-state snapshots must cover the
+field's documented master range: blend `[0x0c,0x30)`, depth/stencil
+`[0x30,0x54)`, rasterizer `[0x54,0x64)`. Coverage establishes that the bytes are
+present; the versioned validator still establishes their meaning.
+
+The dynamic coordinator is
+[`automation/gfx_l32b_complete.py`](../automation/gfx_l32b_complete.py). It
+validates a checkpoint, snapshots the candidate, chains contract qualification
+and independent review, integrates the accepted histories, and continues with a
+new campaign. It maintains a dynamic queue of unresolved fields rather than a
+fixed shader → texture → state sequence. The bootstrap campaign is
+[`campaigns/eu4-l32b-bootstrap/`](../campaigns/eu4-l32b-bootstrap/); its frozen
+acceptance suite is `tests/test_gfx_infra_frozen.py`.
+
+```sh
+python3 -m automation.gfx_l32b_complete status \
+  --workflow campaigns/eu4-l32b-complete/workflow.json
+python3 -m automation.gfx_l32b_complete report \
+  --workflow campaigns/eu4-l32b-complete/workflow.json
+```
+
 ### Campaign launch accounting
 
 Campaign JSON may declare:
@@ -200,8 +295,17 @@ once and never rewrites it. The launcher updates that file under its own
 `live-launch.lock`, **not** the runner's `campaign.lock` (the runner holds that
 lock for the whole session) and **not** `state.json` (the runner keeps an
 in-memory copy). A claim is written before spawning, so a failed launch still
-consumes the count. The checker reads the counter and requires
-`used <= limit`.
+consumes the count.
+
+The completion workflow adds one authoritative global ledger at
+`.local/automation/<workflow-id>/live-launch-ledger.json`, with a
+`workflow-ledger.json` pointer in each campaign run root. Receipts are
+`reserved`, `started`, `completed`, `failed` or `abandoned`; `used` counts every
+claim and there is no automatic refund. The per-campaign counter remains a
+compatibility mirror only. Capture selection reads the global ledger, so a
+stale mirror cannot hide a completed capture. The ledger is an authorization
+and accounting control, not a sandbox: unrestricted local shell access can still
+launch the game outside it.
 
 ### Capture artifact
 

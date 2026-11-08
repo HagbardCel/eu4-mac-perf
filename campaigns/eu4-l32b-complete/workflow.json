@@ -1,0 +1,38 @@
+{
+  "schema": "eu4-l32b-workflow/v1",
+  "workflow_id": "eu4-l32b-complete",
+  "baseline_commit": "956fb7b736b1025b2888d352d4437d350c2373f3",
+  "integration_branch": "l32b/complete",
+  "initial_stage": "investigation",
+  "max_steps": 40,
+  "required_inputs": [
+    "draw_invocation",
+    "primitive_semantics",
+    "shader_identity",
+    "shader_stage_sources",
+    "vertex_buffer_bindings",
+    "vertex_buffer_contents",
+    "vertex_attribute_layout",
+    "texture_slot_0_identity",
+    "texture_slot_0_contents",
+    "sampler_state",
+    "matrix_constant",
+    "render_state_blend",
+    "render_state_depth_stencil",
+    "render_state_rasterizer",
+    "scissor_state",
+    "viewport",
+    "render_target"
+  ],
+  "launch_ledger": {
+    "path": ".local/automation/eu4-l32b-complete/live-launch-ledger.json",
+    "limit": 6,
+    "deadline_seconds": 120
+  },
+  "trusted_contract": {
+    "commit": "PIN_AT_RUNTIME",
+    "version": "v0",
+    "sha256": "a8c8154c72f15301626ecc9a5ec5069617c62871224c86a1da99ed67854fc5f4",
+    "manifest": "campaigns/eu4-l32b-complete/l32b-manifest.json"
+  }
+}
