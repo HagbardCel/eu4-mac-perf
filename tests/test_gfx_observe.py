@@ -277,6 +277,66 @@ class PreflightObserveTests(unittest.TestCase):
         self.assertEqual(evidence["ops"][0]["rva"], "0x15ea4f8")
 
 
+class ReplayOutputTests(unittest.TestCase):
+    def test_existing_output_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "out"
+            output.mkdir()
+            sentinel = '{"sentinel": true}\n'
+            (output / "comparison.json").write_text(sentinel)
+            bad = root / "capture"
+            bad.mkdir()
+            result = live_gfx.main(
+                [
+                    "replay",
+                    "--capture",
+                    str(bad),
+                    "--output",
+                    str(output),
+                ]
+            )
+            self.assertEqual(result, live_gfx.EXIT_INCOMPLETE)
+            self.assertEqual((output / "comparison.json").read_text(), sentinel)
+
+    def test_existing_output_is_refused_for_valid_capture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "out"
+            output.mkdir()
+            sentinel = '{"sentinel": true}\n'
+            (output / "comparison.json").write_text(sentinel)
+            result = live_gfx.main(
+                [
+                    "replay",
+                    "--capture",
+                    str(ROOT / "analysis" / "gfx-ops" / "v0" / "capture"),
+                    "--output",
+                    str(output),
+                ]
+            )
+            self.assertEqual(result, live_gfx.EXIT_INCOMPLETE)
+            self.assertEqual((output / "comparison.json").read_text(), sentinel)
+
+    def test_incomplete_replay_creates_new_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "out"
+            bad = root / "capture"
+            bad.mkdir()
+            result = live_gfx.main(
+                [
+                    "replay",
+                    "--capture",
+                    str(bad),
+                    "--output",
+                    str(output),
+                ]
+            )
+            self.assertEqual(result, live_gfx.EXIT_INCOMPLETE)
+            comparison = json.loads((output / "comparison.json").read_text())
+            self.assertEqual(comparison["status"], "incomplete")
+
+
 class RegistryTests(unittest.TestCase):
     def test_production_registry(self):
         entries = registry.load_entries()

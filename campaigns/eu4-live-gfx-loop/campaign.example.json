@@ -1,0 +1,16 @@
+{
+  "id": "eu4-live-gfx-loop",
+  "objective": "objective.md",
+  "runtime": "opencode",
+  "model": "opencode/big-pickle",
+  "opencode_version": "2.2.5",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/automation/eu4-live-gfx-loop/workspace",
+    "commit": "REPLACE_WITH_A_PIN_CONTAINING_THE_TOOLS_CAPTURE_AND_SEEDED_BUG"
+  },
+  "accept": ["python3", "accept.py"],
+  "max_rounds": 4,
+  "max_seconds": 3600,
+  "accept_timeout_seconds": 900
+}
