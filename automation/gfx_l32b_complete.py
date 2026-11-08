@@ -155,10 +155,10 @@ def _canonical_sha(value: Any) -> str:
 
 
 def _absorb_snapshot(state: dict, snapshot: Any) -> None:
-    if isinstance(snapshot, dict) and isinstance(
-        snapshot.get("oracle_manifest_sha256"), str
-    ):
-        state["oracle_manifest_sha256"] = snapshot["oracle_manifest_sha256"]
+    digest = snapshot.get("oracle_manifest_sha256") if isinstance(snapshot, dict) else None
+    if isinstance(digest, str) and len(digest) == 64 \
+            and all(char in "0123456789abcdef" for char in digest):
+        state["oracle_manifest_sha256"] = digest
 
 
 def _candidate_commit(value: Any) -> str | None:
@@ -260,6 +260,19 @@ class Coordinator:
                 "limit": limit,
                 "used": len(launch_ledger.load_ledger(path)["launches"]),
             }
+        trusted = state.get("trusted_contract")
+        if isinstance(trusted, dict) and trusted.get("commit") == "PIN_AT_RUNTIME":
+            completed = subprocess.run(
+                ["git", "-C", str(self.repo), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if completed.returncode != 0 or not completed.stdout.strip():
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "trusted_contract_pin_unresolved"}
+                return state
+            trusted["commit"] = completed.stdout.strip()
         if not state.get("oracle_manifest_sha256"):
             trusted = state.get("trusted_contract") or {}
             manifest = trusted.get("manifest")
@@ -399,6 +412,10 @@ class Coordinator:
         )
         target = state.get("candidate") if target_key in ("candidate", "final") \
             else state.get("contract")
+        if not state.get("oracle_manifest_sha256"):
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "oracle_manifest_missing"}
+            return state
         expected_candidate = _candidate_commit(target)
         if expected_candidate is None:
             state["state"] = "blocked"

@@ -19,7 +19,7 @@
     {
       "path": "campaigns/eu4-l32b-complete/workflow.json",
       "role": "campaign",
-      "sha256": "c23e29bfca5e7b118913c4c65e050fe610be3563a5f9139e3b2f3bde039afca3"
+      "sha256": "67cc280eca247f1bca400071945e6169bd8cc450ce95e71ec6413891f6e59a7e"
     },
     {
       "path": "automation/gfx_adversarial.py",

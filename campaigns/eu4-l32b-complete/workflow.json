@@ -30,7 +30,7 @@
     "deadline_seconds": 120
   },
   "trusted_contract": {
-    "commit": "956fb7b736b1025b2888d352d4437d350c2373f3",
+    "commit": "PIN_AT_RUNTIME",
     "version": "v0",
     "sha256": "a8c8154c72f15301626ecc9a5ec5069617c62871224c86a1da99ed67854fc5f4",
     "manifest": "campaigns/eu4-l32b-complete/l32b-manifest.json"

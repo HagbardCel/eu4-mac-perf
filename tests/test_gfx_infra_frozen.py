@@ -873,7 +873,7 @@ class CoordinatorTests(unittest.TestCase):
 
         def snapshot(workspace, state):
             snapshots["n"] += 1
-            return {"commit": "c" * 40, "candidate_digest": "9" * 64}
+            return {"candidate_commit": "c" * 40, "candidate_digest": "9" * 64}
 
         def snapshot_contract(workspace, state):
             contract_calls["n"] += 1
@@ -932,6 +932,7 @@ class CoordinatorTests(unittest.TestCase):
             "schema": "eu4-l32b-workflow/v1",
             "workflow_id": "wf",
             "baseline_commit": "a" * 40,
+            "oracle_manifest_sha256": "d" * 64,
             "trusted_contract": {"commit": "t1", "version": "v0", "sha256": "2" * 64},
         }
 
@@ -1397,6 +1398,7 @@ class CoordinatorTests(unittest.TestCase):
             checkpoint = _checkpoint(tmp)
             hooks = self._hooks(tmp, checkpoint)
             workflow = dict(self._workflow())
+            workflow.pop("oracle_manifest_sha256", None)
             workflow["trusted_contract"] = {
                 "commit": "t1",
                 "version": "v0",
@@ -1415,6 +1417,49 @@ class CoordinatorTests(unittest.TestCase):
                 state["oracle_manifest_sha256"],
                 hashlib.sha256(manifest.read_bytes()).hexdigest(),
             )
+
+    def test_snapshot_candidate_commit_success_path(self):
+        from automation.gfx_l32b_complete import Coordinator
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(tmp)
+            hooks = self._hooks(tmp, checkpoint)
+            report = self._review(tmp / "review.json", "qualified", "c" * 40)
+            coordinator = Coordinator(
+                repo=tmp,
+                workflow=self._workflow(),
+                state_path=tmp / "workflow.json",
+                hooks=hooks,
+            )
+            state = coordinator.load_or_init()
+            state["state"] = "reviewing"
+            state["review_target"] = "candidate"
+            state["candidate"] = {"candidate_commit": "c" * 40}
+            with mock.patch.object(
+                hooks, "run_reviewer", lambda target, state: {"path": str(report)}
+            ):
+                state = coordinator.step(state)
+            self.assertEqual(state["promotion_kind"], "implementation")
+            self.assertEqual(state["candidate_review"]["candidate_commit"], "c" * 40)
+
+    def test_shipped_workflow_resolves_trusted_pin_and_oracle(self):
+        from automation.gfx_l32b_complete import Coordinator, default_state
+
+        workflow_path = ROOT / "campaigns/eu4-l32b-complete/workflow.json"
+        workflow = json.loads(workflow_path.read_text())
+        checkpoint = _checkpoint(Path(tempfile.mkdtemp()))
+        hooks = self._hooks(Path(tempfile.mkdtemp()), checkpoint)
+        coordinator = Coordinator(
+            repo=ROOT,
+            workflow=workflow,
+            state_path=Path(tempfile.mkdtemp()) / "workflow.json",
+            hooks=hooks,
+        )
+        state = default_state(workflow)
+        state = coordinator._preflight(state)
+        self.assertNotEqual(state["trusted_contract"]["commit"], "PIN_AT_RUNTIME")
+        self.assertEqual(len(state["oracle_manifest_sha256"] or ""), 64)
 
     def test_rejected_review_does_not_promote(self):
         from automation.gfx_l32b_complete import Coordinator
