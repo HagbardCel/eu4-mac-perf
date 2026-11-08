@@ -271,6 +271,20 @@ class ObserveHostTests(unittest.TestCase):
             self.assertEqual(summary["draw_observed"], 2)
             self.assertEqual(summary["draw_qualified"], 1)
 
+    def test_first_qualifying_draw_remains_the_unique_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-draw-two-qualified", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            events = self._events(directory)
+            self.assertEqual(len(events), 1)
+            summary = self._summary(directory)
+            self.assertTrue(summary["target_draw_qualified"])
+            self.assertEqual(summary["target_draw_call_id"], events[0]["call_id"])
+            self.assertEqual(summary["draw_observed"], 2)
+            self.assertEqual(summary["draw_qualified"], 2)
+            self.assertEqual(summary["events"], 1)
+
     def test_draw_nonqualified_and_caller_filter(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)

@@ -65,6 +65,7 @@ typedef struct eu4_gfx_observe_call {
     int fields_ok;
     int contents_known;
     int target_hit;
+    int target_selected;
     int retain;
     char resource_id[EU4_GFX_OBSERVE_RESOURCE_ID_SIZE];
     char meta[EU4_GFX_OBSERVE_META_SIZE];
@@ -171,6 +172,7 @@ void eu4_gfx_observe_copy_snapshot(eu4_gfx_observe_snapshot *out);
 /* L3.2 retention and target-draw policy. */
 bool eu4_gfx_observe_configure_policy(uint32_t stop_policy, uint64_t target_caller,
                                       uint32_t retention);
+bool eu4_gfx_observe_claim_target(void);
 void eu4_gfx_observe_mark_target_draw(uint64_t call_id);
 bool eu4_gfx_observe_target_draw_hit(void);
 uint32_t eu4_gfx_observe_retention(void);

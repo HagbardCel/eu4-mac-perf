@@ -266,6 +266,74 @@ class DrawPacketTests(unittest.TestCase):
                 packet["inputs"]["primitive_semantics"]["status"], "unsupported"
             )
 
+    def test_positive_incoming_count_overrides_master_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capture_dir = _write_capture(
+                Path(tmp),
+                rows=[_draw_row(4, raw_count=3, effective=3)],
+                payload=_master(count=4),
+            )
+            packet = packet_builder.build_packet(capture_dir)
+            self.assertEqual(packet["status"], "incomplete")
+            self.assertEqual(packet["target"]["effective_count"], 3)
+            self.assertEqual(packet["target"]["raw_count"], 3)
+            self.assertEqual(packet["target"]["count_source"], "esi")
+
+    def test_nonpositive_incoming_count_uses_master_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capture_dir = _write_capture(
+                Path(tmp),
+                rows=[_draw_row(4, raw_count=-1, effective=4)],
+                payload=_master(count=4),
+            )
+            packet = packet_builder.build_packet(capture_dir)
+            self.assertEqual(packet["status"], "incomplete")
+            self.assertEqual(packet["target"]["effective_count"], 4)
+            self.assertEqual(packet["target"]["count_source"], "master")
+
+    def test_inconsistent_count_source_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row = _draw_row(4, raw_count=3, effective=3)
+            row["count_source"] = "master"
+            capture_dir = _write_capture(
+                Path(tmp), rows=[row], payload=_master(count=4)
+            )
+            packet = packet_builder.build_packet(capture_dir)
+            self.assertEqual(packet["status"], "unavailable")
+            self.assertEqual(packet["reason"], "draw_meta_mismatch")
+
+    def test_qualified_record_without_summary_target_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capture_dir = _write_capture(
+                Path(tmp),
+                rows=[_draw_row(4)],
+                payload=_master(),
+                summary_overrides={
+                    "target_draw_qualified": False,
+                    "target_draw_call_id": 0,
+                },
+            )
+            packet = packet_builder.build_packet(capture_dir)
+            self.assertEqual(packet["status"], "unavailable")
+            self.assertEqual(packet["reason"], "op_draw_qualified_without_target")
+            with self.assertRaises(capture.CaptureIncomplete) as caught:
+                capture.load_capture(capture_dir)
+            self.assertEqual(
+                caught.exception.reason, "op_draw_qualified_without_target"
+            )
+
+    def test_summary_target_call_id_mismatch_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            capture_dir = _write_capture(
+                Path(tmp),
+                rows=[_draw_row(4)],
+                payload=_master(),
+                summary_overrides={"target_draw_call_id": 99},
+            )
+            packet = packet_builder.build_packet(capture_dir)
+            self.assertEqual(packet["status"], "unavailable")
+            self.assertEqual(packet["reason"], "op_draw_qualified_call_id")
+
     def test_meta_master_contradiction_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
             row = _draw_row(4)
@@ -405,6 +473,29 @@ class DrawReaderTests(unittest.TestCase):
             artifact = capture.load_capture(capture_dir, require_events=False)
             self.assertEqual(artifact.operations, ())
             self.assertEqual(artifact.op_summary["retention"], "state")
+
+    def test_legacy_capture_allows_multiple_qualifying_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            second = _draw_row(5)
+            second["completion_seq"] = 2
+            capture_dir = _write_capture(
+                Path(tmp),
+                rows=[_draw_row(4), second],
+                payload=_master(),
+                summary_overrides={
+                    "stop_policy": "quota",
+                    "retention": "legacy",
+                    "events": 2,
+                    "observed": 2,
+                    "target_draw_qualified": False,
+                    "target_draw_call_id": 0,
+                    "draw_observed": 2,
+                    "draw_qualified": 2,
+                },
+            )
+            artifact = capture.load_capture(capture_dir)
+            self.assertEqual(len(artifact.operations), 2)
+            self.assertEqual(artifact.op_summary["stop_policy"], "quota")
 
     def test_reader_rejects_draw_payload_length(self):
         with tempfile.TemporaryDirectory() as tmp:

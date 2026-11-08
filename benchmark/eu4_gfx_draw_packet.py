@@ -281,11 +281,6 @@ def build_packet(
     ]
     diagnostics = _diagnostics(summary, draws)
     if not qualifying:
-        if summary.get("target_draw_qualified") is True:
-            return _unavailable(
-                "qualified_record_missing",
-                "summary claims a qualifying draw but no retained record matches",
-            )
         packet = {
             "schema": SCHEMA,
             "status": "draw_not_qualified",
@@ -309,10 +304,6 @@ def build_packet(
         }
         return packet
 
-    if len(qualifying) > 1:
-        return _unavailable(
-            "qualified_draw_ambiguous", f"{len(qualifying)} qualifying records"
-        )
     target = qualifying[0]
     raw = target.payload_bytes
     if raw is None:
@@ -322,15 +313,34 @@ def build_packet(
     except PacketError as exc:
         return _unavailable("draw_payload_invalid", str(exc))
 
-    for key, expected in (
-        ("mode", master["mode"]),
-        ("effective_count", master["effective_count"]),
-        ("shader_non_null", master["shader"] != 0),
-    ):
-        if target.meta.get(key) != expected:
-            return _unavailable(
-                "draw_meta_mismatch", f"{key}: meta {target.meta.get(key)} != snapshot {expected}"
-            )
+    raw_count = target.meta.get("raw_count")
+    if type(raw_count) is not int:
+        return _unavailable("draw_meta_mismatch", "raw_count is not an integer")
+    master_count = master["effective_count"]
+    expected_effective = raw_count if raw_count > 0 else master_count
+    expected_source = "esi" if raw_count > 0 else "master"
+    if target.meta.get("mode") != master["mode"]:
+        return _unavailable(
+            "draw_meta_mismatch",
+            f"mode: meta {target.meta.get('mode')} != snapshot {master['mode']}",
+        )
+    if target.meta.get("effective_count") != expected_effective:
+        return _unavailable(
+            "draw_meta_mismatch",
+            f"effective_count: meta {target.meta.get('effective_count')} != "
+            f"recomputed {expected_effective}",
+        )
+    if target.meta.get("count_source") != expected_source:
+        return _unavailable(
+            "draw_meta_mismatch",
+            f"count_source: meta {target.meta.get('count_source')} != "
+            f"recomputed {expected_source}",
+        )
+    if target.meta.get("shader_non_null") != (master["shader"] != 0):
+        return _unavailable(
+            "draw_meta_mismatch",
+            "shader_non_null disagrees with the master snapshot",
+        )
 
     snapshot_name = target.payload_file
     provenance = _provenance(artifact, snapshot_name)
@@ -501,7 +511,7 @@ def build_packet(
             "mode": master["mode"],
             "raw_count": target.meta.get("raw_count"),
             "first": target.meta.get("first"),
-            "effective_count": master["effective_count"],
+            "effective_count": expected_effective,
             "count_source": target.meta.get("count_source"),
             "shader_non_null": master["shader"] != 0,
             "primitive_enum": primitive_enum,

@@ -54,6 +54,7 @@ static _Atomic uint32_t g_retention = EU4_GFX_OBSERVE_RETENTION_LEGACY;
 static _Atomic uint32_t g_stop_policy = EU4_GFX_OBSERVE_STOP_QUOTA;
 static _Atomic uint64_t g_target_caller;
 static _Atomic uint64_t g_target_draw_call_id;
+static _Atomic uint32_t g_target_claimed;
 static _Atomic uint32_t g_target_hit;
 static _Atomic uint32_t g_observed;
 static _Atomic uint32_t g_draw_observed;
@@ -535,10 +536,13 @@ static void on_exit(eu4_gfx_capture_frame *frame, uint64_t slot64) {
         atomic_fetch_add_explicit(&g_unavailable, 1, memory_order_relaxed);
     }
 
+    if (entry->call.target_hit) {
+        atomic_fetch_add_explicit(&g_draw_qualified, 1, memory_order_relaxed);
+    }
     uint32_t retention =
         atomic_load_explicit(&g_retention, memory_order_relaxed);
     int retain = retention == EU4_GFX_OBSERVE_RETENTION_LEGACY ||
-                 entry->call.retain || entry->call.target_hit;
+                 entry->call.retain;
     uint32_t capacity = atomic_load_explicit(&g_capacity, memory_order_relaxed);
     int stored = 0;
     if (!retain) {
@@ -571,11 +575,10 @@ static void on_exit(eu4_gfx_capture_frame *frame, uint64_t slot64) {
     }
     atomic_store_explicit(&g_last_event_ns, now_ns(), memory_order_relaxed);
     atomic_fetch_sub_explicit(&g_active, 1, memory_order_relaxed);
-    if (entry->call.target_hit) {
+    if (entry->call.target_selected) {
         if (stored) {
             atomic_store_explicit(&g_target_draw_call_id, entry->call.call_id,
                                   memory_order_relaxed);
-            atomic_fetch_add_explicit(&g_draw_qualified, 1, memory_order_relaxed);
             atomic_store_explicit(&g_target_hit, 1, memory_order_release);
         } else {
             atomic_store_explicit(&g_retention_budget, 1, memory_order_relaxed);
@@ -709,6 +712,13 @@ bool eu4_gfx_observe_configure_policy(uint32_t stop_policy, uint64_t target_call
     atomic_store_explicit(&g_retention, retention, memory_order_relaxed);
     eu4_gfx_observe_draw_configure(target_caller);
     return true;
+}
+
+bool eu4_gfx_observe_claim_target(void) {
+    uint32_t expected = 0;
+    return atomic_compare_exchange_strong_explicit(
+        &g_target_claimed, &expected, 1, memory_order_acq_rel,
+        memory_order_relaxed);
 }
 
 void eu4_gfx_observe_mark_target_draw(uint64_t call_id) {
@@ -1379,6 +1389,7 @@ void eu4_gfx_observe_test_reset(void) {
     atomic_store(&g_stop_policy, EU4_GFX_OBSERVE_STOP_QUOTA);
     atomic_store(&g_target_caller, 0);
     atomic_store(&g_target_draw_call_id, 0);
+    atomic_store(&g_target_claimed, 0);
     atomic_store(&g_target_hit, 0);
     atomic_store(&g_observed, 0);
     atomic_store(&g_draw_observed, 0);

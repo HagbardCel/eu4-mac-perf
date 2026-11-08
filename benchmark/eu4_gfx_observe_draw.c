@@ -114,8 +114,10 @@ void eu4_gfx_observe_draw_entry(eu4_gfx_capture_frame *frame,
                           effective_count >= DRAW_MIN_VERTICES && caller_match;
 
     call->target_hit = qualified ? 1 : 0;
+    call->target_selected =
+        qualified && eu4_gfx_observe_claim_target() ? 1 : 0;
     if (qualified) {
-        call->retain = 1;
+        call->retain = call->target_selected;
     } else if (caller_match) {
         call->retain = 1;
     } else {

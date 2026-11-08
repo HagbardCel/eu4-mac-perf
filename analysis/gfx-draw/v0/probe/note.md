@@ -16,9 +16,11 @@
   ```
 
 - Session: `d5af7baf-cc1e-4def-a5f4-96e1d5325641`; PID: `34926`; image base `0x100000000`
-- Observer library SHA-256: `dc5ca8c44bc7d00ade729c60b2b17140c06079914d023b52d9a35dba794676a9`.
-  Rebuilding the observer from this tree reproduces that digest, so the capture
-  provenance and the tracked source are consistent.
+- Observer library SHA-256 at capture time: `dc5ca8c44bc7d00ade729c60b2b17140c06079914d023b52d9a35dba794676a9`.
+  This is the build that produced the capture. The subsequent L3.2a remediation
+  (unique-target selection and positive-count validation) builds as
+  `5bac2f9dbd2568f45272b74730502014adfdb971f49a5856c21e42d75b5b3811`; it does
+  not change this capture's single zero-count qualifying draw or its evidence.
 - Startup context: `complete`, one settings pair, one qualifying init; operations `state=sealed`,
   `integrity_ok=true`, `records_copied=true`, `observed=2`, `events=1`, no overlaps,
   no refused/unmatched/unavailable/overflow/in-flight records.

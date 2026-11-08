@@ -540,17 +540,20 @@ def _validate_records(
     qualifying = [
         record for record in draw_rows if record.meta.get("qualified") is True
     ]
-    _require(
-        len(qualifying) <= 1,
-        "op_draw_qualified_ambiguous",
-        str(len(qualifying)),
-    )
-    if summary.get("target_draw_qualified") is True:
-        _require(bool(qualifying), "op_draw_qualified_missing")
+    if summary.get("stop_policy", "quota") == "target_draw":
         _require(
-            qualifying[0].call_id == summary.get("target_draw_call_id"),
-            "op_draw_qualified_call_id",
+            len(qualifying) <= 1,
+            "op_draw_qualified_ambiguous",
+            str(len(qualifying)),
         )
+        if summary.get("target_draw_qualified") is True:
+            _require(bool(qualifying), "op_draw_qualified_missing")
+            _require(
+                qualifying[0].call_id == summary.get("target_draw_call_id"),
+                "op_draw_qualified_call_id",
+            )
+        else:
+            _require(not qualifying, "op_draw_qualified_without_target")
     _require(
         summary.get("draw_observed", 0) >= len(draw_rows),
         "op_draw_observed",

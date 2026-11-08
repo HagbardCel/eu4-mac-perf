@@ -1290,6 +1290,36 @@ static int scenario_observe_draw_qualified(const char *dir) {
     return 0;
 }
 
+static int scenario_observe_draw_two_qualified(const char *dir) {
+    if (arm_draw_observe(EU4_GFX_OBSERVE_STOP_TARGET_DRAW,
+                         draw_expected_caller(),
+                         EU4_GFX_OBSERVE_RETENTION_STATE, 0) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    fill_draw_master(4, 5, 1);
+    call_draw(0, 0);
+    call_draw(0, 0);
+    if (!eu4_gfx_observe_should_stop()) {
+        return fail("two qualified draws did not stop");
+    }
+    if (finish_observe(dir, "host-draw-two-qualified") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || !snap.target_draw_qualified ||
+        snap.events != 1 || snap.draw_observed != 2 ||
+        snap.draw_qualified != 2 ||
+        snap.target_draw_call_id != snap.records[0].call_id ||
+        strstr(snap.records[0].meta, "\"qualified\":true") == NULL) {
+        return fail("two qualified draw snapshot");
+    }
+    return 0;
+}
+
 static int scenario_observe_draw_insufficient_then_qualified(const char *dir) {
     if (arm_draw_observe(EU4_GFX_OBSERVE_STOP_TARGET_DRAW,
                          draw_expected_caller(),
@@ -1564,6 +1594,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "observe-draw-two") == 0) {
         return scenario_observe_draw_insufficient_then_qualified(dir);
+    }
+    if (strcmp(scenario, "observe-draw-two-qualified") == 0) {
+        return scenario_observe_draw_two_qualified(dir);
     }
     if (strcmp(scenario, "observe-draw-none") == 0) {
         return scenario_observe_draw_nonqualified(dir);

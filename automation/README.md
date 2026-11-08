@@ -131,15 +131,21 @@ python3 -m automation.live_gfx packet \
 The qualifying predicate is the caller return RVA, a complete 0x171-byte
 master read, a non-null shader at `master+0x70`, GL mode 5 at `master+8`, and
 an effective count of at least 3 (`esi` when positive, otherwise the signed
-dword at `master+0x64`). Non-qualifying draws are recorded or aggregated, not
-silently promoted.
+dword at `master+0x64`). The packet applies the same rule, so a positive
+incoming count overrides the master word. Non-qualifying draws are recorded or
+aggregated, not silently promoted.
+
+The first qualifying invocation wins a one-shot selection claim. Later
+qualifying invocations still execute and increment the `draw_qualified`
+diagnostic count, but they are neither selected nor retained.
 
 `--until-target-draw` selects `retention=state`: the observer still runs every
 selected callback, but only retained records consume the 1,024-record array.
-Caller-matching draws are retained (64-draw cap), the first eight other draws
-are retained as diagnostics, and the remaining draws update summary aggregates
-only. Resource and primitive observations can be folded into bounded state by
-later targets without exhausting the historical record budget.
+Caller-matching non-qualifying draws are retained (64-draw cap), the selected
+qualifying draw is always retained, the first eight other draws are retained as
+diagnostics, and the remaining draws update summary aggregates only. Resource
+and primitive observations can be folded into bounded state by later targets
+without exhausting the historical record budget.
 
 Capture statuses are distinct:
 
