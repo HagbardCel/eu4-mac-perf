@@ -180,6 +180,33 @@ def _checkpoint(
     )
 
 
+def _hooks_for(tmp: Path, checkpoint: dict):
+    """Minimal hooks for coordinator unit tests."""
+    from automation.gfx_l32b_complete import Hooks
+
+    def implementer(state):
+        return {
+            "status": "paused",
+            "last_verdict": "blocked",
+            "workspace": str(tmp),
+            "checkpoint": checkpoint["path"],
+            "campaign_id": "c1",
+            "candidate_base_commit": "a" * 40,
+            "trusted_contract_commit": "t1",
+        }
+
+    return Hooks(
+        run_implementer=implementer,
+        snapshot=lambda workspace, state: {"candidate_commit": "c" * 40},
+        run_contract=lambda checkpoint, state: {"status": "paused"},
+        run_reviewer=lambda target, state: {"path": str(tmp / "review.json")},
+        integrate=lambda candidate, contract, state, kind=None: {
+            "ok": True, "commit": "e" * 40, "kind": kind,
+            "verification": {},
+        },
+    )
+
+
 class FailClosedTests(unittest.TestCase):
     def test_unknown_validator_is_provisional_not_pass(self):
         import automation.gfx_draw_accept_v2 as accept
@@ -464,6 +491,200 @@ class CheckpointPolicyTests2(unittest.TestCase):
                 artifact_loader=lambda _path: artifact,
             )
             self.assertTrue(any("field-relevant evidence" in error for error in errors))
+
+
+class CheckpointContentPolicyTests(unittest.TestCase):
+    def test_static_only_shader_source_is_rejected_by_checkpoint(self):
+        from automation.gfx_checkpoint import validate_checkpoint
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(
+                tmp,
+                field="shader_stage_sources",
+                evidence=[
+                    {"type": "static_reconstruction", "symbol": "_GfxAddVertexShader"}
+                ],
+                basis="captured shader source bytes",
+            )
+            capture = tmp / "capture"
+            artifact, _draw = _artifact(capture, _master())
+            errors = validate_checkpoint(
+                Path(checkpoint["path"]),
+                artifact_loader=lambda _path: artifact,
+            )
+            self.assertTrue(any("field-relevant evidence" in error for error in errors))
+
+    def test_selected_draw_wrong_range_is_rejected_by_checkpoint(self):
+        from automation.gfx_checkpoint import validate_checkpoint
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            checkpoint = _checkpoint(
+                tmp,
+                field="render_state_blend",
+                evidence=[
+                    {"type": "draw_snapshot", "call_id": 11, "offset": 0x30, "length": 0x24}
+                ],
+                basis="draw-master state bytes",
+            )
+            capture = tmp / "capture"
+            artifact, _draw = _artifact(capture, _master())
+            errors = validate_checkpoint(
+                Path(checkpoint["path"]),
+                artifact_loader=lambda _path: artifact,
+            )
+            self.assertTrue(any("field-relevant evidence" in error for error in errors))
+
+
+class EvidencePolicyTests(unittest.TestCase):
+    def test_shader_source_static_only_is_rejected(self):
+        from automation.gfx_evidence_policy import evidence_relevant
+
+        ctx = {"target": SimpleNamespace(call_id=11)}
+        relevant, _basis = evidence_relevant(
+            "shader_stage_sources",
+            [{"type": "static_reconstruction", "symbol": "_GfxAddVertexShader"}],
+            ctx,
+        )
+        self.assertFalse(relevant)
+
+    def test_texture_contents_static_only_is_rejected(self):
+        from automation.gfx_evidence_policy import evidence_relevant
+
+        ctx = {"target": SimpleNamespace(call_id=11)}
+        relevant, _basis = evidence_relevant(
+            "texture_slot_0_contents",
+            [{"type": "static_reconstruction", "symbol": "_GfxInitializeTexture"}],
+            ctx,
+        )
+        self.assertFalse(relevant)
+
+    def test_render_state_requires_the_field_range(self):
+        from automation.gfx_evidence_policy import evidence_relevant
+
+        ctx = {"target": SimpleNamespace(call_id=11)}
+        wrong = [
+            {"type": "draw_snapshot", "call_id": 11, "offset": 0x30, "length": 0x24}
+        ]
+        right = [
+            {"type": "draw_snapshot", "call_id": 11, "offset": 0x0C, "length": 0x24}
+        ]
+        self.assertFalse(evidence_relevant("render_state_blend", wrong, ctx)[0])
+        self.assertTrue(evidence_relevant("render_state_blend", right, ctx)[0])
+        self.assertFalse(
+            evidence_relevant("render_state_depth_stencil", right, ctx)[0]
+        )
+        self.assertTrue(
+            evidence_relevant(
+                "render_state_depth_stencil",
+                [{"type": "draw_snapshot", "call_id": 11, "offset": 0x30, "length": 0x24}],
+                ctx,
+            )[0]
+        )
+
+
+class IntegrationVerificationTests(unittest.TestCase):
+    def _coordinator(self, tmp: Path):
+        from automation.gfx_l32b_complete import Coordinator
+
+        checkpoint = _checkpoint(tmp)
+        hooks = _hooks_for(tmp, checkpoint)
+        return Coordinator(
+            repo=tmp,
+            workflow={
+                "schema": "eu4-l32b-workflow/v1",
+                "workflow_id": "wf",
+                "baseline_commit": "a" * 40,
+                "oracle_manifest_sha256": "d" * 64,
+                "trusted_contract": {"commit": "t1", "version": "v0", "sha256": "2" * 64},
+            },
+            state_path=tmp / "workflow.json",
+            hooks=hooks,
+        )
+
+    def _result(self, kind: str, **overrides):
+        commit = "e" * 40
+        verification = {
+            "schema": "eu4-l32b-integration-verification/v1",
+            "commit": commit,
+            "kind": kind,
+            "build_ok": True,
+            "tests_ok": True,
+            "checker": "inconclusive",
+            "established_fields": ["draw_invocation"],
+            "unresolved_fields": ["texture_slot_0_contents"],
+            "regressions": [],
+            "packet_ready": False,
+            "qualification_receipt_sha256": None,
+        }
+        verification.update(overrides)
+        return {"ok": True, "commit": commit, "kind": kind, "verification": verification}
+
+    def test_contract_regression_blocks(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            coordinator = self._coordinator(tmp)
+            result = self._result("contract", regressions=["vertex_buffer_bindings"])
+            errors = coordinator._validate_integration_verification(
+                {}, result, "contract"
+            )
+            self.assertTrue(any("regressed" in error for error in errors))
+
+    def test_implementation_with_unresolved_texture_is_allowed(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            coordinator = self._coordinator(tmp)
+            result = self._result("implementation")
+            errors = coordinator._validate_integration_verification(
+                {}, result, "implementation"
+            )
+            self.assertEqual(errors, [])
+
+    def test_final_inconclusive_blocks(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            coordinator = self._coordinator(tmp)
+            result = self._result("final")
+            errors = coordinator._validate_integration_verification({}, result, "final")
+            self.assertTrue(any("did not pass" in error for error in errors))
+
+    def test_final_pass_requires_packet_ready_and_receipt(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            coordinator = self._coordinator(tmp)
+            receipt = tmp / "receipt.json"
+            receipt.write_text("{}")
+            state = {"last_implementer": {"qualification_receipt": str(receipt)}}
+            result = self._result(
+                "final",
+                checker="pass",
+                packet_ready=True,
+                unresolved_fields=[],
+                qualification_receipt_sha256=hashlib.sha256(
+                    receipt.read_bytes()
+                ).hexdigest(),
+            )
+            errors = coordinator._validate_integration_verification(
+                state, result, "final"
+            )
+            self.assertEqual(errors, [])
+            result["verification"]["packet_ready"] = False
+            errors = coordinator._validate_integration_verification(
+                state, result, "final"
+            )
+            self.assertTrue(any("packet_ready" in error for error in errors))
+
+    def test_verification_commit_mismatch_blocks(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            coordinator = self._coordinator(tmp)
+            result = self._result("implementation")
+            result["verification"]["commit"] = "f" * 40
+            errors = coordinator._validate_integration_verification(
+                {}, result, "implementation"
+            )
+            self.assertTrue(any("not bound" in error for error in errors))
 
 
 class LedgerTests(unittest.TestCase):
@@ -907,7 +1128,44 @@ class CoordinatorTests(unittest.TestCase):
             return {"ok": True, "positive_ok": True, "negative_ok": True, "cases": []}
 
         def integrate(candidate, contract, state, kind=None):
-            return {"ok": True, "commit": "e" * 40, "kind": kind}
+            commit = "e" * 40
+            if kind == "final":
+                receipt = Path(str((state.get("last_implementer") or {}).get(
+                    "qualification_receipt") or ""))
+                verification = {
+                    "schema": "eu4-l32b-integration-verification/v1",
+                    "commit": commit,
+                    "kind": "final",
+                    "build_ok": True,
+                    "tests_ok": True,
+                    "checker": "pass",
+                    "established_fields": ["draw_invocation"],
+                    "unresolved_fields": [],
+                    "regressions": [],
+                    "packet_ready": True,
+                    "qualification_receipt_sha256": (
+                        hashlib.sha256(receipt.read_bytes()).hexdigest()
+                        if receipt.is_file() else None
+                    ),
+                }
+            else:
+                verification = {
+                    "schema": "eu4-l32b-integration-verification/v1",
+                    "commit": commit,
+                    "kind": kind,
+                    "build_ok": True,
+                    "tests_ok": True,
+                    "checker": "inconclusive",
+                    "established_fields": ["draw_invocation"],
+                    "unresolved_fields": ["texture_slot_0_contents"],
+                    "regressions": [],
+                    "packet_ready": False,
+                    "qualification_receipt_sha256": None,
+                }
+            return {
+                "ok": True, "commit": commit, "kind": kind,
+                "verification": verification,
+            }
 
         def remediation(state):
             return {
@@ -1007,7 +1265,23 @@ class CoordinatorTests(unittest.TestCase):
 
             def integrate(candidate, contract, state, kind=None):
                 seen.append((kind, (contract or {}).get("commit")))
-                return {"ok": True, "commit": "e" * 40, "kind": kind}
+                commit = "e" * 40
+                return {
+                    "ok": True, "commit": commit, "kind": kind,
+                    "verification": {
+                        "schema": "eu4-l32b-integration-verification/v1",
+                        "commit": commit,
+                        "kind": kind,
+                        "build_ok": True,
+                        "tests_ok": True,
+                        "checker": "inconclusive",
+                        "established_fields": ["draw_invocation"],
+                        "unresolved_fields": ["texture_slot_0_contents"],
+                        "regressions": [],
+                        "packet_ready": False,
+                        "qualification_receipt_sha256": None,
+                    },
+                }
 
             hooks.integrate = integrate
             with mock.patch.object(
@@ -1018,6 +1292,9 @@ class CoordinatorTests(unittest.TestCase):
             state = coordinator.step(state)
             self.assertEqual(state["state"], "continuation")
             self.assertEqual(seen, [("implementation", "t1")])
+            self.assertEqual(
+                state["integration_unresolved"], ["texture_slot_0_contents"]
+            )
 
     def test_qualified_contract_without_cases_blocks(self):
         from automation.gfx_l32b_complete import Coordinator

@@ -44,7 +44,7 @@
     {
       "path": "automation/gfx_evidence_policy.py",
       "role": "checker",
-      "sha256": "561d873f0688262d6342140f98526f3484e2c0598eebbfbd241ab9e31a71f536"
+      "sha256": "bdf8ad018f52918b7d3d6d86e6b59ddb8e8eb8c6c96e82ae69773f8234ddc4ab"
     },
     {
       "path": "automation/manifest_revision.py",

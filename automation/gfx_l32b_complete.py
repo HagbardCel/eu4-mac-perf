@@ -34,6 +34,7 @@ from automation.review_result import load_review, validate_review  # noqa: E402
 from automation.state import atomic_write, load_campaign, repo_root  # noqa: E402
 
 SCHEMA = "eu4-l32b-completion/v1"
+INTEGRATION_VERIFICATION_SCHEMA = "eu4-l32b-integration-verification/v1"
 TERMINAL = frozenset({"awaiting_merge", "blocked", "complete"})
 
 
@@ -637,6 +638,21 @@ class Coordinator:
                 "detail": result.get("detail"),
             }
             return state
+        verification_errors = self._validate_integration_verification(
+            state, result, kind
+        )
+        if verification_errors:
+            state["state"] = "blocked"
+            state["blocker"] = {
+                "reason": "integration_not_requalified",
+                "errors": verification_errors,
+            }
+            return state
+        state["integration_verification"] = result.get("verification")
+        if kind == "implementation":
+            state["integration_unresolved"] = list(
+                result["verification"].get("unresolved_fields") or []
+            )
         _note(state, "integrated", commit=result.get("commit"), kind=kind)
         if kind == "contract":
             state["trusted_contract"] = {
@@ -650,6 +666,58 @@ class Coordinator:
         elif kind == "final":
             state["state"] = "awaiting_merge"
         return state
+
+    def _validate_integration_verification(
+        self, state: dict, result: dict, kind: str | None
+    ) -> list[str]:
+        if not isinstance(result, dict):
+            return ["integration result is not an object"]
+        commit = result.get("commit")
+        if not isinstance(commit, str) or not commit:
+            return ["integration commit is missing"]
+        verification = result.get("verification")
+        if not isinstance(verification, dict):
+            return ["integration verification is missing"]
+        if verification.get("schema") != INTEGRATION_VERIFICATION_SCHEMA:
+            return ["integration verification has the wrong schema"]
+        if verification.get("commit") != commit:
+            return ["integration verification is not bound to the integration commit"]
+        if verification.get("kind") != kind:
+            return ["integration verification kind differs from the promotion kind"]
+        if verification.get("build_ok") is not True:
+            return ["integrated build did not pass"]
+        if verification.get("tests_ok") is not True:
+            return ["integrated tests did not pass"]
+        regressions = verification.get("regressions")
+        if not isinstance(regressions, list) or regressions:
+            return ["integrated tree regressed previously qualified evidence"]
+        checker = verification.get("checker")
+        if checker not in ("pass", "inconclusive", "not_run", "fail"):
+            return ["integration checker verdict is invalid"]
+        if checker == "fail":
+            return ["integrated checker failed"]
+        if not isinstance(verification.get("established_fields"), list) \
+                or not isinstance(verification.get("unresolved_fields"), list):
+            return ["integration verification field lists are missing"]
+        if kind in ("contract", "implementation"):
+            if checker not in ("pass", "inconclusive"):
+                return ["integrated checker did not run for an intermediate promotion"]
+            return []
+        if kind == "final":
+            if checker != "pass":
+                return ["final integration checker did not pass"]
+            if verification.get("packet_ready") is not True:
+                return ["final integration did not establish packet_ready"]
+            if verification.get("unresolved_fields"):
+                return ["final integration still has unresolved fields"]
+            implementer = state.get("last_implementer") or {}
+            receipt = Path(str(implementer.get("qualification_receipt") or ""))
+            if not receipt.is_file():
+                return ["final qualification receipt is missing"]
+            if verification.get("qualification_receipt_sha256") != _file_sha(receipt):
+                return ["final integration receipt hash differs"]
+            return []
+        return ["unknown promotion kind"]
 
     def _validate_promotion(self, state: dict, kind: str | None) -> list[str]:
         if kind == "contract":

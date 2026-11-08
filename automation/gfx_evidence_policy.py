@@ -74,13 +74,7 @@ def _shader_stage_sources(evidence: list, ctx: dict) -> tuple[bool, str]:
         for item in items
     ):
         return True, "captured shader source bytes"
-    if any(
-        item.get("type") == "static_reconstruction"
-        and item.get("symbol") in symbols
-        for item in items
-    ):
-        return True, "verified static shader source"
-    return False, "no captured or reconstructed shader source bytes"
+    return False, "no captured shader source bytes; a static span is supporting evidence only"
 
 
 def _texture_identity(evidence: list, ctx: dict) -> tuple[bool, str]:
@@ -113,13 +107,7 @@ def _texture_contents(evidence: list, ctx: dict) -> tuple[bool, str]:
         for item in items
     ):
         return True, "original texture upload payload"
-    if any(
-        item.get("type") == "static_reconstruction"
-        and item.get("symbol") in symbols
-        for item in items
-    ):
-        return True, "verified static texture upload"
-    return False, "no original texture payload with resource identity"
+    return False, "no original texture payload; a static span is supporting evidence only"
 
 
 def _sampler_state(evidence: list, ctx: dict) -> tuple[bool, str]:
@@ -148,10 +136,29 @@ def _sampler_state(evidence: list, ctx: dict) -> tuple[bool, str]:
     return False, "no sampler observation or verified default"
 
 
-def _state_slice(evidence: list, ctx: dict, symbols: set[str]) -> tuple[bool, str]:
+STATE_RANGES = {
+    "render_state_blend": (0x0C, 0x30),
+    "render_state_depth_stencil": (0x30, 0x54),
+    "render_state_rasterizer": (0x54, 0x64),
+}
+
+
+def _state_slice(
+    evidence: list, ctx: dict, symbols: set[str], field: str
+) -> tuple[bool, str]:
     items = _items(evidence)
     target = ctx.get("target")
     call_id = getattr(target, "call_id", None)
+    range_start, range_end = STATE_RANGES[field]
+    for item in items:
+        if item.get("type") != "draw_snapshot" or item.get("call_id") != call_id:
+            continue
+        offset = item.get("offset")
+        length = item.get("length")
+        if type(offset) is not int or type(length) is not int or length <= 0:
+            continue
+        if offset <= range_start and offset + length >= range_end:
+            return True, "draw-master state bytes covering the field range"
     if any(
         item.get("type") == "draw_snapshot"
         and item.get("call_id") == call_id
@@ -159,7 +166,7 @@ def _state_slice(evidence: list, ctx: dict, symbols: set[str]) -> tuple[bool, st
         and item.get("length")
         for item in items
     ):
-        return True, "draw-master state bytes"
+        return False, "draw-master snapshot does not cover the field range"
     if any(
         item.get("type") == "resource_observation"
         and item.get("symbol") in symbols
@@ -176,18 +183,20 @@ def _state_slice(evidence: list, ctx: dict, symbols: set[str]) -> tuple[bool, st
 
 
 def _blend(evidence: list, ctx: dict) -> tuple[bool, str]:
-    return _state_slice(evidence, ctx, {"_GfxSetBlendState", "_GfxCreateBlendState"})
+    return _state_slice(evidence, ctx, {"_GfxSetBlendState", "_GfxCreateBlendState"}, "render_state_blend")
 
 
 def _depth(evidence: list, ctx: dict) -> tuple[bool, str]:
     return _state_slice(
-        evidence, ctx, {"_GfxSetDepthStencilState", "_GfxCreateDepthStencilState"}
+        evidence, ctx, {"_GfxSetDepthStencilState", "_GfxCreateDepthStencilState"},
+        "render_state_depth_stencil",
     )
 
 
 def _rasterizer(evidence: list, ctx: dict) -> tuple[bool, str]:
     return _state_slice(
-        evidence, ctx, {"_GfxSetRasterizerState", "_GfxCreateRasterizerState"}
+        evidence, ctx, {"_GfxSetRasterizerState", "_GfxCreateRasterizerState"},
+        "render_state_rasterizer",
     )
 
 

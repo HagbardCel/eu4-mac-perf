@@ -33,8 +33,11 @@ the implementer weaken its own acceptance criteria.
    immutable checkpoint bundle outside the candidate worktree and the temporary
    packet directory. A recognized evidence type is not enough: the shared
    evidence policy requires the minimum provenance for the claimed field, and
-   the checkpoint validator re-runs it against the packet and capture. Partial
-   checkpoints are permitted while other fields are still missing. A checkpoint
+   the checkpoint validator re-runs it against the packet and capture. Shader
+   stage sources and texture contents require captured original payloads; a
+   static span is supporting evidence only. Render-state snapshots must cover
+   the field's documented master range. Partial checkpoints are permitted while
+   other fields are still missing. A checkpoint
    is a qualification work order, never acceptance of L3.2b.
 3. **Independently qualified contracts.** New validators are proposed in a
    separate campaign, executed in a separate process, and reviewed by an
@@ -44,8 +47,13 @@ the implementer weaken its own acceptance criteria.
    validator must accept the checkpoint's original evidence and reject every
    genuine but incorrect case for the stated reason. A qualification receipt
    binds the contract, checkpoint, reviewer report, case artifact and runner
-   results, and is re-hashed immediately before integration. Promotion is
-   append-only and creates a new integration commit.
+   results, and is re-hashed immediately before integration. Integration
+   returns a structured, commit-bound verification: contract and implementation
+   promotion require build/tests success and no regression, but may remain
+   `inconclusive` while unresolved fields are tracked; final promotion requires
+   the full checker pass, `packet_ready=true`, no unresolved fields and the
+   matching qualification receipt. A bare success boolean is not accepted.
+   Promotion is append-only and creates a new integration commit.
 4. **Two identities.** Every campaign records a `candidate_base_commit` (the
    implementation worktree parent) and a `trusted_contract_commit` (the
    immutable checker, contract, tests and oracle used for acceptance). Trusted

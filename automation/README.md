@@ -248,6 +248,24 @@ revision, rejects conflicts or trusted-file changes, creates one integration
 commit, re-runs the checker/tests against it, and pins the next campaign to that
 commit. No active campaign is retargeted or rebased.
 
+Integration returns a structured, commit-bound verification
+(`eu4-l32b-integration-verification/v1`), not a bare boolean. Contract and
+implementation integration require build/tests success and no regression of
+previously qualified evidence; the full checker may remain `inconclusive` while
+unresolved fields are explicitly tracked. Final integration requires the full
+checker `pass`, `packet_ready=true`, no unresolved fields and a matching
+qualification receipt. A missing, mismatched or failed verification blocks
+continuation. The real post-integration checker hook belongs to L3.2b-II; the
+bootstrap tests use mocked verifications.
+
+Content fields are stricter than identity or state fields. `shader_stage_sources`
+and `texture_slot_0_contents` require captured original payloads with resource
+identity; a verified static instruction span may support the interpretation but
+cannot qualify the contents by itself. Render-state snapshots must cover the
+field's documented master range: blend `[0x0c,0x30)`, depth/stencil
+`[0x30,0x54)`, rasterizer `[0x54,0x64)`. Coverage establishes that the bytes are
+present; the versioned validator still establishes their meaning.
+
 The dynamic coordinator is
 [`automation/gfx_l32b_complete.py`](../automation/gfx_l32b_complete.py). It
 validates a checkpoint, snapshots the candidate, chains contract qualification
