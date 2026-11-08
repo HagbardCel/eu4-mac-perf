@@ -512,20 +512,37 @@ def _resolve_payload(path_text: str, bases: list[Path]) -> Path | None:
     return None
 
 
-def _evidence_bytes(evidence: list, capture_dir: Path, packet_dir: Path, artifact, target_call_id: int) -> tuple[list[Path], str | None]:
+def _evidence_bytes(evidence: list, ctx: dict, packet_dir: Path) -> tuple[list[Path], str | None]:
+    artifact = ctx["artifact"]
+    target = ctx["target"]
+    capture_dir = artifact.root
     payloads: list[Path] = []
+    target_payload = target.payload_bytes
     for item in evidence:
         if not isinstance(item, dict):
             return [], "evidence entry is not an object"
         kind = item.get("type")
         if kind == "draw_snapshot":
-            if item.get("call_id") != target_call_id:
+            if item.get("call_id") != target.call_id:
                 return [], "draw snapshot evidence is not the selected draw"
+            if target_payload is None:
+                return [], "selected draw has no captured master payload"
+            offset = item.get("offset", 0)
+            length = item.get("length", len(target_payload))
+            if type(offset) is not int or type(length) is not int \
+                    or offset < 0 or length < 0:
+                return [], "draw snapshot offset/length is invalid"
+            if offset + length > len(target_payload):
+                return [], "draw snapshot slice is outside the selected draw payload"
             payload = _resolve_payload(str(item.get("payload", "")), [capture_dir, packet_dir])
             if payload is None:
                 return [], "draw snapshot payload is missing"
-            if _sha(payload) != item.get("sha256") or payload.stat().st_size != item.get("size"):
+            data = payload.read_bytes()
+            if hashlib.sha256(data).hexdigest() != item.get("sha256") \
+                    or len(data) != item.get("size"):
                 return [], "draw snapshot hash/size mismatch"
+            if data != target_payload[offset:offset + length]:
+                return [], "draw snapshot bytes differ from the selected draw record"
             payloads.append(payload)
         elif kind == "resource_observation":
             call_id = item.get("call_id")
@@ -536,10 +553,17 @@ def _evidence_bytes(evidence: list, capture_dir: Path, packet_dir: Path, artifac
                 return [], "resource observation identity mismatch"
             if not record.fields_ok:
                 return [], "resource observation is not structurally valid"
+            if record.payload_bytes is None:
+                return [], "resource observation has no original payload"
             payload = _resolve_payload(str(item.get("payload", "")), [capture_dir, packet_dir])
-            if payload is None or _sha(payload) != item.get("sha256") \
-                    or payload.stat().st_size != item.get("size"):
+            if payload is None:
+                return [], "resource observation payload is missing"
+            data = payload.read_bytes()
+            if hashlib.sha256(data).hexdigest() != item.get("sha256") \
+                    or len(data) != item.get("size"):
                 return [], "resource observation payload hash/size mismatch"
+            if data != record.payload_bytes:
+                return [], "resource observation payload differs from the original operation"
             payloads.append(payload)
         elif kind == "static_reconstruction":
             digest = item.get("span_sha256")
@@ -582,6 +606,18 @@ def _effective_buffer(artifact, resource_id: str, draw_call_id: int) -> bytes | 
     return data
 
 
+def _create_for_header(artifact, header: int, draw_call_id: int):
+    found = None
+    for record in artifact.operations:
+        if record.call_id >= draw_call_id:
+            continue
+        if record.symbol != "_GfxCreateVertexBuffer":
+            continue
+        if record.meta.get("header") == header:
+            found = record
+    return found
+
+
 def _validate_vertex_contents(value: dict, ctx: dict, packet_dir: Path) -> str | None:
     buffers = value.get("buffers")
     if not isinstance(buffers, list) or not buffers:
@@ -602,6 +638,14 @@ def _validate_vertex_contents(value: dict, ctx: dict, packet_dir: Path) -> str |
         master_slot = master_slots.get(slot)
         if master_slot is None:
             return f"slot {slot} is not bound in the draw master"
+        create = _create_for_header(ctx["artifact"], master_slot["header"], ctx["target"].call_id)
+        if create is None or not create.resource_id:
+            return f"slot {slot} header has no preceding create record"
+        if resource_id != create.resource_id:
+            return f"slot {slot} resource_id differs from the header's create record"
+        resource_call_id = item.get("resource_call_id", item.get("first_call_id"))
+        if resource_call_id is not None and resource_call_id != create.call_id:
+            return f"slot {slot} resource call id differs from the create record"
         stride = item.get("stride")
         offset = item.get("offset")
         count = item.get("count")
@@ -626,18 +670,19 @@ def _validate_vertex_contents(value: dict, ctx: dict, packet_dir: Path) -> str |
             return f"slot {slot} sidecar hash/size mismatch"
         if size < offset + count * stride:
             return f"slot {slot} contents do not cover the bound range"
-        if method == "resource_lifecycle":
-            expected = _effective_buffer(ctx["artifact"], resource_id, ctx["target"].call_id)
-            if expected is None or expected != data:
-                return f"slot {slot} resource bytes do not match the capture lifecycle"
-        elif method != "draw_time":
-            return f"slot {slot} has an unsupported contents method"
+        if method != "resource_lifecycle":
+            return f"slot {slot} uses unsupported contents method {method!r}"
+        expected = _effective_buffer(ctx["artifact"], resource_id, ctx["target"].call_id)
+        if expected is None or expected != data:
+            return f"slot {slot} resource bytes do not match the capture lifecycle"
     if 0 not in seen:
         return "slot 0 vertex contents are required"
     return None
 
 
 def _validate_matrix(value: dict, ctx: dict, packet_dir: Path) -> str | None:
+    if value.get("method") != "resource_observation":
+        return "matrix_constant must use a resource_observation"
     if value.get("slot") != 0 or value.get("size") != 64:
         return "matrix_constant must be slot 0 and 64 bytes"
     hex_text = value.get("hex")
@@ -657,6 +702,27 @@ def _validate_matrix(value: dict, ctx: dict, packet_dir: Path) -> str | None:
     constants = [item for item in ctx["master"]["constants"] if item.get("slot") == 0]
     if not constants or int(constants[0].get("vec4_count", 0)) < 4:
         return "draw master has no 64-byte constant slot 0"
+    record = next(
+        (row for row in ctx["artifact"].operations
+         if row.call_id == value.get("last_call_id")),
+        None,
+    )
+    if record is None or record.symbol != "_GfxSetConstantBuffer":
+        return "matrix_constant has no original constant-buffer record"
+    if not record.fields_ok or not record.contents_known \
+            or record.call_id >= ctx["target"].call_id:
+        return "matrix_constant record is not a usable preceding observation"
+    if record.meta.get("slot") != 0:
+        return "matrix_constant record is not slot 0"
+    if record.meta.get("header") != constants[0].get("pointer"):
+        return "matrix_constant record header differs from the draw master"
+    if ctx["target"].meta.get("constant_slot0_match") is not True:
+        return "draw did not cross-check constant slot 0 at draw time"
+    if ctx["target"].meta.get("constant_slot0_call_id") != record.call_id:
+        return "matrix_constant record is not the draw-time-matched call"
+    if record.payload_bytes is None or len(record.payload_bytes) < 64 \
+            or record.payload_bytes[:64] != raw:
+        return "matrix_constant bytes differ from the original constant record"
     return None
 
 
@@ -664,18 +730,34 @@ def _validate_bindings(value: dict, ctx: dict) -> str | None:
     slots = value.get("slots")
     if not isinstance(slots, list):
         return "vertex_buffer_bindings has no slots"
-    slot0 = next((item for item in slots if isinstance(item, dict) and item.get("slot") == 0), None)
-    if slot0 is None or not isinstance(slot0.get("resource_id"), str) or not slot0["resource_id"]:
-        return "vertex_buffer_bindings slot 0 has no resource_id"
-    master_slot = next(
-        (item for item in ctx["master"]["vertex_buffers"] if item["slot"] == 0), None
-    )
-    if master_slot is None:
-        return "draw master has no slot 0 vertex buffer"
-    if slot0.get("stride") != master_slot["stride"] or slot0.get("offset") != master_slot["offset"]:
-        return "vertex_buffer_bindings slot 0 differs from the draw master"
-    if slot0.get("count") != ctx["effective_count"]:
-        return "vertex_buffer_bindings slot 0 count differs from the effective count"
+    master_slots = {item["slot"]: item for item in ctx["master"]["vertex_buffers"]}
+    claimed = {}
+    for item in slots:
+        if not isinstance(item, dict):
+            return "vertex_buffer_bindings slot is not an object"
+        slot = item.get("slot")
+        if type(slot) is not int or slot < 0 or slot > 3 or slot in claimed:
+            return "vertex_buffer_bindings slot is invalid or duplicated"
+        master_slot = master_slots.get(slot)
+        if master_slot is None:
+            return f"vertex_buffer_bindings slot {slot} is not bound in the draw master"
+        create = _create_for_header(ctx["artifact"], master_slot["header"], ctx["target"].call_id)
+        if create is None or not create.resource_id:
+            return f"vertex_buffer_bindings slot {slot} header has no create record"
+        if item.get("resource_id") != create.resource_id:
+            return f"vertex_buffer_bindings slot {slot} resource_id differs from its header"
+        if item.get("resource_call_id") != create.call_id:
+            return f"vertex_buffer_bindings slot {slot} resource_call_id differs from its header"
+        if item.get("stride") != master_slot["stride"] or item.get("offset") != master_slot["offset"]:
+            return f"vertex_buffer_bindings slot {slot} differs from the draw master"
+        if slot == 0 and item.get("count") != ctx["effective_count"]:
+            return "vertex_buffer_bindings slot 0 count differs from the effective count"
+        claimed[slot] = item
+    if 0 not in claimed:
+        return "vertex_buffer_bindings slot 0 is missing"
+    for slot in master_slots:
+        if slot not in claimed:
+            return f"vertex_buffer_bindings omits bound slot {slot}"
     return None
 
 
@@ -721,8 +803,7 @@ def validate_packet(
         if not isinstance(value, dict):
             return None, f"{name} has no value"
         payloads, error = _evidence_bytes(
-            item.get("evidence") or [], ctx["artifact"].root, packet_dir,
-            ctx["artifact"], ctx["target"].call_id,
+            item.get("evidence") or [], ctx, packet_dir
         )
         if error:
             return None, f"{name}: {error}"
@@ -736,6 +817,29 @@ def validate_packet(
             error = None
         if error:
             return None, error
+    bindings_item = inputs.get("vertex_buffer_bindings") or {}
+    contents_item = inputs.get("vertex_buffer_contents") or {}
+    if bindings_item.get("status") == "established" \
+            and contents_item.get("status") == "established":
+        binding_slots = {
+            item.get("slot"): item
+            for item in (bindings_item.get("value") or {}).get("slots", [])
+            if isinstance(item, dict)
+        }
+        content_slots = {
+            item.get("slot"): item
+            for item in (contents_item.get("value") or {}).get("buffers", [])
+            if isinstance(item, dict)
+        }
+        if set(binding_slots) != set(content_slots):
+            return None, "vertex buffer bindings and contents cover different slots"
+        for slot, binding in binding_slots.items():
+            content = content_slots[slot]
+            if binding.get("resource_id") != content.get("resource_id"):
+                return None, f"slot {slot} binding and contents resource ids differ"
+            if content.get("resource_call_id", content.get("first_call_id")) \
+                    != binding.get("resource_call_id"):
+                return None, f"slot {slot} binding and contents creation calls differ"
     if missing:
         return {"established": established, "missing": missing}, None
     if packet.get("packet_ready") is True:

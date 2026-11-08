@@ -24,7 +24,7 @@
     {
       "path": "campaigns/eu4-l32b-reviewer/objective.md",
       "role": "campaign",
-      "sha256": "3edb0ee7b76574d450e2831bb4a1ee4ed2357dd0750148aa2c64a32b8a91b6b4"
+      "sha256": "e729d143935e487a5c750f62624eefd29fa076076b8ac00ecd78f4b9f6414c67"
     },
     {
       "path": "automation/gfx_candidate_snapshot.py",
@@ -34,7 +34,7 @@
     {
       "path": "automation/gfx_draw_accept.py",
       "role": "checker",
-      "sha256": "1abcb8b572814c65c7a7f9bc0fe3f83e02ec77c02395208f8153c7648dfcf329"
+      "sha256": "89c9f62948b254f036fa97e8ae570bebc647780321dc372a0aa670b531ea42af"
     },
     {
       "path": "campaigns/eu4-l32b-effective-state/accept.py",
@@ -55,6 +55,11 @@
       "path": "campaigns/eu4-l32b-effective-state/frozen/gfx_startup_trace_stubs.S",
       "role": "frozen_test",
       "sha256": "11d4e55c39ab91859e1b5f34610ac4656ec80de0d99751b0b8449ef8c0d0cb5d"
+    },
+    {
+      "path": "tests/test_gfx_draw_accept.py",
+      "role": "frozen_test",
+      "sha256": "d352aebcad4f50b35c22498fae9822b5b2399ac6da0d5587b072d855a8724260"
     },
     {
       "path": "analysis/gfx-draw/v0/note.md",
