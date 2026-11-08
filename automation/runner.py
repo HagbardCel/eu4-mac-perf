@@ -122,7 +122,7 @@ class Runner:
                 save_state(self.state_path, state)
             self._guard(state)
             if state["status"] == "complete" or state.get("pause_reason") in (
-                "checker_modified", "semantic_blocker"):
+                "checker_modified", "semantic_blocker", "checkpoint_yield"):
                 return state
             self._log(state, "runner.resumed" if existed else "runner.started", _rid("runner"))
             try:
@@ -272,6 +272,8 @@ class Runner:
             self._complete(state)
         elif outcome["ok"] and outcome["verdict"] in ("fail", "inconclusive"):
             return
+        elif outcome["ok"] and outcome["verdict"] == "checkpoint":
+            self._pause(state, "checkpoint_yield")
         elif outcome["ok"] and outcome["verdict"] == "blocked":
             self._pause(state, "semantic_blocker")
         elif outcome["ok"] and outcome["verdict"] == "unavailable":
@@ -503,7 +505,7 @@ def run_accept(campaign: Campaign, workspace: Path) -> dict:
     diagnostics = ""
     if isinstance(payload, dict) and payload.get("diagnostics") is not None:
         diagnostics = str(payload["diagnostics"])
-    if verdict not in ("pass", "fail", "inconclusive", "blocked", "unavailable"):
+    if verdict not in ("pass", "fail", "inconclusive", "blocked", "checkpoint", "unavailable"):
         return _bad(completed.returncode, diagnostics or "unreadable")
     if verdict == "pass" and completed.returncode != 0:
         return _bad(completed.returncode, diagnostics)

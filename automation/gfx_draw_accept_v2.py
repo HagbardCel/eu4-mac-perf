@@ -35,6 +35,7 @@ from automation.gfx_checkpoint import (  # noqa: E402
     source_tree_digest,
     validate_checkpoint,
     write_checkpoint,
+    write_qualified_bundle,
 )
 from automation.gfx_contracts import (  # noqa: E402
     ContractContext,
@@ -1285,28 +1286,34 @@ def _load_trusted_contract(campaign: dict, config: dict):
         contract = load_contract(version)
     except ContractError as exc:
         return None, None, emit("unavailable", f"contract unavailable: {exc}")
-    module_path = ROOT / "automation" / "gfx_contracts" / f"{version}.py"
-    if not module_path.is_file():
-        return None, None, emit("unavailable", "contract module is missing from the checkout")
-    actual = _sha(module_path)
-    if trusted.get("sha256") and actual != trusted["sha256"]:
-        return None, None, emit(
-            "unavailable", "contract module hash differs from the campaign pin"
+    for current in contract.versions:
+        module_path = ROOT / "automation" / "gfx_contracts" / f"{current}.py"
+        if not module_path.is_file():
+            return None, None, emit(
+                "unavailable", f"contract module {current} is missing from the checkout"
+            )
+        actual = _sha(module_path)
+        if current == version and trusted.get("sha256") \
+                and actual != trusted["sha256"]:
+            return None, None, emit(
+                "unavailable", "contract module hash differs from the campaign pin"
+            )
+        completed = subprocess.run(
+            ["git", "-C", str(ROOT), "show",
+             f"{trusted['commit']}:automation/gfx_contracts/{current}.py"],
+            capture_output=True,
+            check=False,
         )
-    completed = subprocess.run(
-        ["git", "-C", str(ROOT), "show",
-         f"{trusted['commit']}:automation/gfx_contracts/{version}.py"],
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        return None, None, emit(
-            "unavailable", "contract module is not present at the trusted revision"
-        )
-    if hashlib.sha256(completed.stdout).hexdigest() != actual:
-        return None, None, emit(
-            "unavailable", "contract module differs from the trusted revision"
-        )
+        if completed.returncode != 0:
+            return None, None, emit(
+                "unavailable",
+                f"contract module {current} is not present at the trusted revision",
+            )
+        if hashlib.sha256(completed.stdout).hexdigest() != actual:
+            return None, None, emit(
+                "unavailable",
+                f"contract module {current} differs from the trusted revision",
+            )
     return contract, trusted, None
 
 
@@ -1365,8 +1372,7 @@ def _write_receipt(
     capture: dict,
     fields: list[dict],
 ) -> Path:
-    receipt = {
-        "schema": "eu4-gfx-qualification-receipt/v1",
+    receipt_fields = {
         "campaign_id": campaign_id,
         "milestone": config.get("milestone"),
         "contract_version": trusted.get("version"),
@@ -1375,19 +1381,6 @@ def _write_receipt(
         "checker_sha256": _sha(Path(__file__)),
         "candidate_digest": candidate_digest,
         "observer_library_sha256": candidate_sha,
-        "capture": capture,
-        "target": {
-            "call_id": target.call_id,
-            "caller_rva": f"0x{target.caller_rva:x}",
-            "mode": master.get("mode"),
-            "effective_count": master.get("effective_count"),
-        },
-        "packet": {
-            "sha256": _sha(packet_dir / "draw-packet.json"),
-            "schema": packet.get("schema"),
-            "packet_ready": packet.get("packet_ready"),
-        },
-        "fields": fields,
         "packet_ready": bool(packet.get("packet_ready")),
         "scope": "L3.2b source-input qualification under the declared replay contract",
         "not_claimed": [
@@ -1398,11 +1391,24 @@ def _write_receipt(
         ],
         "assumptions": packet.get("assumptions") or [],
     }
-    directory = run_root / "qualification"
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{campaign_id}-{candidate_digest[:16]}.json"
-    path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
+    bundle = write_qualified_bundle(
+        run_root,
+        campaign_id=campaign_id,
+        candidate_digest=candidate_digest,
+        capture=capture,
+        packet=packet,
+        packet_dir=packet_dir,
+        capture_dir=Path(artifact.root),
+        target={
+            "call_id": target.call_id,
+            "caller_rva": f"0x{target.caller_rva:x}",
+            "mode": master.get("mode"),
+            "effective_count": master.get("effective_count"),
+        },
+        fields=fields,
+        receipt_fields=receipt_fields,
+    )
+    return Path(bundle["receipt"])
 
 
 def check(workspace: Path, campaign_dir: Path) -> dict:
@@ -1577,9 +1583,8 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
                     )
                 except CheckpointError as exc:
                     return emit("unavailable", f"checkpoint could not be written: {exc}")
-                verdict = "blocked" if not missing else "inconclusive"
                 return emit(
-                    verdict,
+                    "checkpoint",
                     _diagnostic(
                         reason="unsupported_evidence_contract",
                         provisional=provisional,

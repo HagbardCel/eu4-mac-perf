@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from automation.gfx_checkpoint import validate_checkpoint  # noqa: E402
+from automation.gfx_contracts import ContractError, load_contract  # noqa: E402
 from automation.gfx_draw_accept_v2 import (  # noqa: E402
     changed_paths,
     path_allowed,
@@ -204,8 +205,25 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
             "candidate validator does not accept the checkpoint evidence: "
             + json.dumps(run_result.get("fields") or run_result.get("errors") or [])[:2000],
         )
+    base_version = str(config.get("base_contract_version", "v0"))
+    try:
+        base_contract = load_contract(base_version)
+    except ContractError as exc:
+        return emit("unavailable", f"base contract is unavailable: {exc}")
+    base_fields = set(base_contract.validators)
+    validator_fields = set(run_result.get("validator_fields") or [])
+    if not base_fields <= validator_fields:
+        return emit(
+            "fail",
+            "candidate contract drops previously qualified fields: "
+            + ", ".join(sorted(base_fields - validator_fields)),
+        )
+    retained = [
+        (workspace / "automation" / "gfx_contracts" / f"{current}.py").read_bytes()
+        for current in base_contract.versions + (version,)
+    ]
     digest = hashlib.sha256(
-        (workspace / module_rel).read_bytes()
+        b"".join(retained)
         + (workspace / spec_rel).read_bytes()
         + (workspace / tests_rel).read_bytes()
     ).hexdigest()

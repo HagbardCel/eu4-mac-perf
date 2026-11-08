@@ -2,7 +2,7 @@
   "schema": "eu4-l32b-workflow/v1",
   "workflow_id": "eu4-l32b-complete",
   "baseline_commit": "956fb7b736b1025b2888d352d4437d350c2373f3",
-  "integration_branch": "l32b/complete",
+  "integration_branch": "l32b/autonomous-completion",
   "initial_stage": "investigation",
   "max_steps": 40,
   "required_inputs": [

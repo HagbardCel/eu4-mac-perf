@@ -316,6 +316,7 @@ class Coordinator:
                 }
                 return state
             state["checkpoint"] = checkpoint
+            state["campaign_dir"] = result.get("campaign_dir")
             try:
                 snapshot = self.hooks.snapshot(Path(result["workspace"]), state)
                 _absorb_snapshot(state, snapshot)
@@ -330,6 +331,7 @@ class Coordinator:
         verdict = result.get("last_verdict")
         status = result.get("status")
         if status == "complete" and verdict == "pass":
+            state["campaign_dir"] = result.get("campaign_dir")
             try:
                 snapshot = self.hooks.snapshot(Path(result["workspace"]), state)
                 _absorb_snapshot(state, snapshot)
@@ -376,6 +378,7 @@ class Coordinator:
             state["state"] = "blocked"
             state["blocker"] = {"reason": "contract_snapshot_unavailable"}
             return state
+        state["contract_campaign_dir"] = result.get("campaign_dir")
         try:
             contract = self.hooks.snapshot_contract(Path(workspace), state)
             _absorb_snapshot(state, contract)
@@ -810,6 +813,8 @@ class Coordinator:
             state["blocker"] = {"reason": "remediation_workspace_missing"}
             return state
         target = state.get("remediation_target")
+        state["campaign_dir"] = result.get("campaign_dir")
+        state["contract_campaign_dir"] = result.get("campaign_dir")
         try:
             if target == "contract":
                 if self.hooks.snapshot_contract is None:
@@ -901,12 +906,18 @@ def main(argv: list[str] | None = None) -> int:
         state = load_state(state_path)
         print(json.dumps(state or {"state": "absent"}, indent=2, sort_keys=True))
         return 0
-    print(
-        "run requires the completion campaign's Runner-backed hooks; none are "
-        "configured in this bootstrap CLI.",
-        file=sys.stderr,
+    from automation.gfx_l32b_hooks import L32bHooks
+
+    hooks = L32bHooks(repo=repo, workflow=workflow, run_root=run_root)
+    coordinator = Coordinator(
+        repo=repo,
+        workflow=workflow,
+        state_path=state_path,
+        hooks=hooks.hooks(),
     )
-    return 1
+    state = coordinator.run()
+    print(json.dumps(state, indent=2, sort_keys=True))
+    return 0 if state["state"] in ("awaiting_merge", "complete") else 1
 
 
 if __name__ == "__main__":

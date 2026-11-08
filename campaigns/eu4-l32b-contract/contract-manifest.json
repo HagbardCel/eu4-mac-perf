@@ -24,22 +24,27 @@
     {
       "path": "automation/gfx_checkpoint.py",
       "role": "checker",
-      "sha256": "1aeeefaef3699c2bb0b2850c84a23ca32253dabbc1abf3d19cf97b483f8b8d6e"
+      "sha256": "fa439759006df285f7e6f67247639259d6b82fde70c67532cec23cfbce05de28"
     },
     {
       "path": "automation/gfx_contract_accept.py",
       "role": "checker",
-      "sha256": "cf015c6f81eba5d18eea3112378aa28fe524f8f872edffa273dc1cd1ba79aae0"
+      "sha256": "278b766cc16f0e4857a145b44711db2dca5f1858dde5546f865f9d92215f2c0c"
     },
     {
       "path": "automation/gfx_contract_runner.py",
       "role": "checker",
-      "sha256": "4b2ce68457d6c591e5beb58aa52d93989d3ef7433a6796620eba70ea6f2deda7"
+      "sha256": "3c6bb9a9d6094f46a4954ae6e31c23530601143dac06027ca85d1df9248b1c5a"
+    },
+    {
+      "path": "automation/gfx_contracts/__init__.py",
+      "role": "checker",
+      "sha256": "69be104c5c60747526ff67f3abfab6638cc0dab3c55e5eb06fe915fdad15c539"
     },
     {
       "path": "automation/gfx_draw_accept_v2.py",
       "role": "checker",
-      "sha256": "fce4a4bc1be326e907ebb4a0d9930a1a8998a24eda574c6a9df88817ff697863"
+      "sha256": "4ff366ddcb04f836b8b9d3b7cba57d22de0ce306a92347c98d000fe706159a96"
     },
     {
       "path": "automation/gfx_evidence_policy.py",

@@ -288,6 +288,122 @@ def write_checkpoint(
     }
 
 
+def write_qualified_bundle(
+    run_root: Path,
+    *,
+    campaign_id: str,
+    candidate_digest: str,
+    capture: dict,
+    packet: dict,
+    packet_dir: Path,
+    capture_dir: Path,
+    target: dict,
+    fields: list[dict],
+    receipt_fields: dict,
+) -> dict:
+    """Persist the exact validated packet and receipt before temp cleanup.
+
+    The bundle manifest hashes the packet, copied payloads/sidecars and the
+    capture reference. The receipt binds the manifest; the manifest never
+    hashes itself or the receipt.
+    """
+    session = str(capture.get("session") or "unknown")
+    root = Path(run_root) / "qualified"
+    final = root / f"{session}-{candidate_digest}"
+    receipt_path = final / "qualification-receipt.json"
+    if final.exists():
+        if receipt_path.is_file():
+            return {
+                "bundle": str(final),
+                "receipt": str(receipt_path),
+                "receipt_sha256": _sha(receipt_path),
+            }
+        raise CheckpointError("existing qualified bundle has no receipt")
+    root.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix="qualified-", dir=str(root)))
+    try:
+        packet_root = temporary / "packet"
+        packet_root.mkdir()
+        packet_path = Path(packet_dir) / "draw-packet.json"
+        if not packet_path.is_file():
+            raise CheckpointError("candidate packet is missing")
+        shutil.copy2(packet_path, packet_root / "draw-packet.json")
+        source_payloads = Path(packet_dir) / "payloads"
+        if source_payloads.is_dir():
+            shutil.copytree(source_payloads, packet_root / "payloads")
+
+        sidecars = _referenced_sidecars(packet, Path(packet_dir), Path(capture_dir))
+        sidecar_dir = temporary / "sidecars"
+        sidecar_dir.mkdir()
+        for index, item in enumerate(sidecars):
+            source = Path(item["source_path"])
+            target_name = f"{index:03d}-{source.name}"
+            shutil.copy2(source, sidecar_dir / target_name)
+            item["bundle_path"] = f"sidecars/{target_name}"
+        (temporary / "sidecar-map.json").write_text(
+            _canonical({"schema": "eu4-gfx-checkpoint-sidecars/v1", "sidecars": sidecars}),
+            encoding="utf-8",
+        )
+        reference = {
+            "schema": CAPTURE_REFERENCE_SCHEMA,
+            "capture_dir": str(Path(capture_dir).resolve()),
+            "session": capture.get("session"),
+            "pid": capture.get("pid"),
+            "executable_sha256": capture.get("executable_sha256"),
+            "library_sha256": capture.get("library_sha256"),
+            "receipt_token": capture.get("receipt_token"),
+            "capture_plan": capture.get("capture_plan"),
+            "capture_plan_sha256": capture.get("capture_plan_sha256"),
+        }
+        (temporary / "capture-reference.json").write_text(
+            _canonical(reference), encoding="utf-8"
+        )
+        files = []
+        for path in sorted(temporary.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(temporary).as_posix()
+            if rel in ("bundle-manifest.json", "qualification-receipt.json"):
+                continue
+            files.append(
+                {
+                    "path": rel,
+                    "size": path.stat().st_size,
+                    "sha256": _sha(path),
+                }
+            )
+        manifest = {"schema": BUNDLE_SCHEMA, "files": files}
+        manifest_path = temporary / "bundle-manifest.json"
+        _write_json(manifest_path, manifest)
+        receipt = dict(receipt_fields)
+        receipt.update(
+            {
+                "schema": "eu4-gfx-qualification-receipt/v1",
+                "bundle": str(final),
+                "bundle_manifest_sha256": _sha(manifest_path),
+                "packet": {
+                    "path": "packet/draw-packet.json",
+                    "sha256": _sha(packet_root / "draw-packet.json"),
+                    "schema": packet.get("schema"),
+                    "packet_ready": bool(packet.get("packet_ready")),
+                },
+                "capture": reference,
+                "target": target,
+                "fields": fields,
+            }
+        )
+        _write_json(temporary / "qualification-receipt.json", receipt)
+        os.replace(temporary, final)
+    except Exception:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
+    return {
+        "bundle": str(final),
+        "receipt": str(final / "qualification-receipt.json"),
+        "receipt_sha256": _sha(final / "qualification-receipt.json"),
+    }
+
+
 def validate_checkpoint(
     path: Path,
     *,

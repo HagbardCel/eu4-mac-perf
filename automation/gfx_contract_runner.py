@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT / "benchmark"))
 import eu4_gfx_draw_packet as trusted_packet  # noqa: E402
 import eu4_gfx_op_capture as trusted_capture  # noqa: E402
 from automation.gfx_checkpoint import validate_checkpoint  # noqa: E402
-from automation.gfx_contracts import ContractContext  # noqa: E402
+from automation.gfx_contracts import ContractContext, retained_versions  # noqa: E402
 from automation.gfx_contracts.api import verify_static_span  # noqa: E402
 
 
@@ -37,27 +37,36 @@ def _json(path: Path) -> dict:
 
 
 def load_candidate_validator(workspace: Path, version: str):
-    path = Path(workspace) / "automation" / "gfx_contracts" / f"{version}.py"
-    if not path.is_file():
-        raise RuntimeError(f"candidate contract module is missing: {path}")
-    spec = importlib.util.spec_from_file_location(
-        f"candidate_contract_{version}", str(path)
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("candidate contract module cannot be loaded")
-    module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(Path(workspace)))
-    try:
-        spec.loader.exec_module(module)
-    finally:
+    workspace = Path(workspace)
+    merged: dict = {}
+    for current in retained_versions(version):
+        path = workspace / "automation" / "gfx_contracts" / f"{current}.py"
+        if not path.is_file():
+            raise RuntimeError(f"candidate contract module is missing: {path}")
+        spec = importlib.util.spec_from_file_location(
+            f"candidate_contract_{current}", str(path)
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"candidate contract module {current} cannot be loaded")
+        module = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(workspace))
         try:
-            sys.path.remove(str(Path(workspace)))
-        except ValueError:
-            pass
-    validators = getattr(module, "VALIDATORS", None)
-    if not isinstance(validators, dict):
-        raise RuntimeError("candidate contract has no VALIDATORS mapping")
-    return validators
+            spec.loader.exec_module(module)
+        finally:
+            try:
+                sys.path.remove(str(workspace))
+            except ValueError:
+                pass
+        validators = getattr(module, "VALIDATORS", None)
+        if not isinstance(validators, dict):
+            raise RuntimeError(f"candidate contract {current} has no VALIDATORS mapping")
+        overlap = sorted(set(merged) & set(validators))
+        if overlap:
+            raise RuntimeError(
+                f"candidate contract {current} redefines fields: " + ", ".join(overlap)
+            )
+        merged.update(validators)
+    return merged
 
 
 def _artifact_for(checkpoint: dict, loader=None):
@@ -393,6 +402,7 @@ def run(
         "ok": ok,
         "positive_ok": positive_ok,
         "negative_ok": negative_ok,
+        "validator_fields": sorted(validators),
         "fields": fields,
         "cases": cases,
         "errors": [],

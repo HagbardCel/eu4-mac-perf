@@ -900,6 +900,9 @@ class ContractRunnerTests(unittest.TestCase):
             (workspace / "automation" / "gfx_contracts").mkdir(parents=True)
             (workspace / "automation" / "__init__.py").write_text("")
             (workspace / "automation" / "gfx_contracts" / "__init__.py").write_text("")
+            (workspace / "automation" / "gfx_contracts" / "v0.py").write_text(
+                "VALIDATORS = {}\n"
+            )
             (workspace / "automation" / "gfx_contracts" / "v1.py").write_text(
                 "VALIDATORS = {'draw_invocation': lambda value, ctx: None}\n"
             )
@@ -951,6 +954,9 @@ class ContractRunnerTests(unittest.TestCase):
             (workspace / "automation" / "gfx_contracts").mkdir(parents=True)
             (workspace / "automation" / "__init__.py").write_text("")
             (workspace / "automation" / "gfx_contracts" / "__init__.py").write_text("")
+            (workspace / "automation" / "gfx_contracts" / "v0.py").write_text(
+                "VALIDATORS = {}\n"
+            )
             (workspace / "automation" / "gfx_contracts" / "v1.py").write_text(
                 "VALIDATORS = {'draw_invocation': lambda value, ctx: None}\n"
             )
@@ -1065,6 +1071,9 @@ class ContractRunnerTests(unittest.TestCase):
             (workspace / "automation" / "gfx_contracts").mkdir(parents=True)
             (workspace / "automation" / "__init__.py").write_text("")
             (workspace / "automation" / "gfx_contracts" / "__init__.py").write_text("")
+            (workspace / "automation" / "gfx_contracts" / "v0.py").write_text(
+                "VALIDATORS = {}\n"
+            )
             (workspace / "automation" / "gfx_contracts" / "v1.py").write_text(
                 "def validate(value, ctx):\n"
                 "    evidence = ctx.field_evidence or []\n"
@@ -1645,17 +1654,17 @@ class CoordinatorTests(unittest.TestCase):
             self.assertEqual(state["state"], "blocked")
             self.assertEqual(state["blocker"]["reason"], "no_progress")
 
-    def test_main_run_requires_hooks(self):
+    def test_main_status_is_available_without_hooks(self):
         from automation.gfx_l32b_complete import main
 
         code = main(
             [
-                "run",
+                "status",
                 "--workflow",
                 str(ROOT / "campaigns/eu4-l32b-complete/workflow.json"),
             ]
         )
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0)
 
     def test_review_uses_snapshot_candidate_commit_shape(self):
         from automation.gfx_l32b_complete import Coordinator
