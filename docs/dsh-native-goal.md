@@ -71,6 +71,30 @@ campaign, verification manifest, policy, objective, candidate baseline). Every
 `validate` re-derives the current identity and refuses on any drift, so editing a
 checker after preparation is a hard failure rather than a silently new identity.
 
+## Completion
+
+Completion is two-phase, because a synchronous guard cannot run a checker.
+
+1. `eu4_finalize_candidate` re-verifies through the bridge, which re-runs the
+   checker, and only on a fresh pass calls `ctx.goals.complete(agent, ref)`.
+2. A monotonic guard denies **every** model-initiated
+   `update_goal(action="complete")`, with no dependence on binding state.
+
+The guard is deliberately unconditional. Consulting a binding would leave the
+first autonomous round unguarded, before any campaign tool has run, and would
+fail open if binding state were lost across a restart. It is registered on the
+plain context, which `ToolRuntime` evaluates before any agent-scoped guard
+layer, so it covers the preset-registered `tool-goal`; and it performs no I/O,
+so it cannot stall the loop.
+
+Operator control is unaffected: `/goal` and the goal bar reach the goal service
+directly rather than through the tool pipeline.
+
+Qualification is bound to one goal. `goal_id`, `revision` and an objective
+digest are recorded per session in `<run-root>/plugin-binding.json`; editing or
+replacing the goal invalidates prior qualification instead of authorizing a
+different objective.
+
 ## Execution roots
 
 Three roots are kept distinct and are asserted before a checker runs.

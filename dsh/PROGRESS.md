@@ -9,7 +9,7 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
 |---|---|
 | M1 profile, pinning, skill parity, Ghidra probe | done at composition level; one live-session check pending |
 | M2 minimal bridge, retry policy, classification | done |
-| M3 seed-only native goal loop | bridge side done; plugin tooling next |
+| M3 seed-only native goal loop | bridge + plugin done; live run needs an operator-created goal |
 | M4 delta snapshot, evidence binding, journal | not started |
 | M5 recovery, limits, isolation | not started |
 | M6 independent reviewer | not started |
@@ -124,6 +124,40 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
   `fail`. A receipt edited without re-hashing is rejected as `receipt_corrupt`.
 - `finalize` also refuses `stale` when the candidate moved after the passing
   validation, and `not_qualified` when the latest validation never passed.
+
+## M3 (in progress) -- plugin and completion gate
+
+- `dsh/eu4-goal-plugin` exposes `eu4_campaign_status`, `eu4_validate_candidate`
+  and `eu4_finalize_candidate`, and registers exactly one monotonic guard.
+- The guard denies **every** model-initiated `update_goal(action="complete")`
+  with no dependence on binding, receipt or session state, which closes the
+  first-round gap the review found: binding cannot be consulted before any
+  campaign tool has run. Verified from `dsh-tools/lib/index.js` that
+  `guardReason` consults `layers.global` before the agent scope chain, so a
+  plain-context guard does cover the preset-registered `tool-goal`; the plugin
+  registers on the plain context for that reason and performs no I/O.
+- Human control is intact: `dsh-command-goal` and the GoalBar reach the goal
+  domain through `ctx.goals.*` from a command invocation, not through the tool
+  pipeline, so the guard does not restrict an operator pausing, clearing or
+  completing a goal.
+- Completion is two-phase: the finalize tool re-verifies through the bridge and
+  only then calls `ctx.goals.complete(agent, ref)` itself. The goal that gets
+  completed is the one bound at bind time: `goal_id`, `revision` and an
+  objective digest are persisted to `<run-root>/plugin-binding.json`, so editing
+  or replacing the goal invalidates prior qualification.
+- The plugin registers tools with a plain JSON Schema rather than importing
+  `defineTool`, because a strict pnpm layout does not make
+  `@deepseek-ai/dsh-tools` resolvable from an out-of-tree plugin. That keeps the
+  plugin dependency-free and installable without network access.
+- Bridge invocations use an explicit interpreter, `cwd` and `PYTHONPATH` with
+  `-P`, so ambient module resolution cannot pick up a candidate's copy.
+- Verified: 11 node tests (`pnpm -C dsh/eu4-goal-plugin test`) covering the
+  guard matrix, tool registration against a fake context, and the goal-binding
+  refusal, including that a live goal with no prior binding is not completable;
+  preflight still green; 37 Python DSH tests; OpenCode suite 86/86.
+- `dsh/scripts/smoke-goal.sh` prints the operator steps, including the `/goal`
+  objective. **The autonomous end-to-end run is human-gated**: creating a goal
+  requires direct-human authority, so the loop cannot be started by a script.
 
 ## Pending / caveats
 
