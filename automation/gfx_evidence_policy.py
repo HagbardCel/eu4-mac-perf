@@ -130,8 +130,11 @@ def _sampler_state(evidence: list, ctx: dict) -> tuple[bool, str]:
         for item in items
     ):
         return True, "sampler observation"
+    target = ctx.get("target")
+    call_id = getattr(target, "call_id", None)
     if any(
         item.get("type") == "draw_snapshot"
+        and item.get("call_id") == call_id
         and (item.get("sampler") is not None or item.get("field") == "sampler_state")
         for item in items
     ):
@@ -147,8 +150,11 @@ def _sampler_state(evidence: list, ctx: dict) -> tuple[bool, str]:
 
 def _state_slice(evidence: list, ctx: dict, symbols: set[str]) -> tuple[bool, str]:
     items = _items(evidence)
+    target = ctx.get("target")
+    call_id = getattr(target, "call_id", None)
     if any(
         item.get("type") == "draw_snapshot"
+        and item.get("call_id") == call_id
         and item.get("offset") is not None
         and item.get("length")
         for item in items

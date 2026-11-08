@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -58,6 +59,28 @@ def source_tree_digest(workspace: Path, changed: list[str]) -> str:
         if not path.is_file():
             raise CheckpointError(f"changed path is not a file: {rel}")
         rows.append({"path": rel, "sha256": _sha(path), "size": path.stat().st_size})
+    return hashlib.sha256(_canonical(rows).encode("utf-8")).hexdigest()
+
+
+def source_tree_digest_at_commit(repo: Path, commit: str, changed: list[str]) -> str:
+    """Recompute the candidate source digest from a committed tree."""
+    rows = []
+    for rel in sorted(changed):
+        completed = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{commit}:{rel}"],
+            capture_output=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise CheckpointError(f"changed path is not at the candidate commit: {rel}")
+        data = completed.stdout
+        rows.append(
+            {
+                "path": rel,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "size": len(data),
+            }
+        )
     return hashlib.sha256(_canonical(rows).encode("utf-8")).hexdigest()
 
 

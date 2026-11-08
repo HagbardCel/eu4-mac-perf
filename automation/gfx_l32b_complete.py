@@ -25,7 +25,11 @@ sys.path.insert(0, str(ROOT))
 
 from automation import launch_ledger  # noqa: E402
 from automation.gfx_adversarial import cases_digest, validate_cases  # noqa: E402
-from automation.gfx_checkpoint import validate_checkpoint  # noqa: E402
+from automation.gfx_checkpoint import (  # noqa: E402
+    CheckpointError,
+    source_tree_digest_at_commit,
+    validate_checkpoint,
+)
 from automation.review_result import load_review, validate_review  # noqa: E402
 from automation.state import atomic_write, load_campaign, repo_root  # noqa: E402
 
@@ -83,6 +87,7 @@ def default_state(workflow: dict) -> dict:
         "candidate_review": None,
         "final_review": None,
         "trusted_contract": workflow.get("trusted_contract"),
+        "oracle_manifest_sha256": workflow.get("oracle_manifest_sha256"),
         "contract_workspace": None,
         "contract_version": None,
         "contract_checkpoint": None,
@@ -211,7 +216,14 @@ class Coordinator:
             state = self.step(state)
             save_state(self.state_path, state)
             if state["state"] == before:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "no_progress"}
+                save_state(self.state_path, state)
                 break
+        else:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "step_limit"}
+            save_state(self.state_path, state)
         return state
 
     def _preflight(self, state: dict) -> dict:
@@ -232,6 +244,15 @@ class Coordinator:
                 "limit": limit,
                 "used": len(launch_ledger.load_ledger(path)["launches"]),
             }
+        if not state.get("oracle_manifest_sha256"):
+            trusted = state.get("trusted_contract") or {}
+            manifest = trusted.get("manifest")
+            if isinstance(manifest, str) and manifest:
+                path = Path(manifest)
+                if not path.is_absolute():
+                    path = (self.repo / path).resolve()
+                if path.is_file():
+                    state["oracle_manifest_sha256"] = _file_sha(path)
         _note(state, "preflight", ledger=state.get("ledger"))
         state["state"] = "investigating"
         return state
@@ -241,11 +262,17 @@ class Coordinator:
         state["last_implementer"] = result
         checkpoint = result.get("checkpoint")
         if isinstance(checkpoint, str):
+            trusted_commit = (state.get("trusted_contract") or {}).get("commit")
+            reported = result.get("trusted_contract_commit")
+            if trusted_commit and reported and reported != trusted_commit:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "checkpoint_trusted_contract_mismatch"}
+                return state
             errors = validate_checkpoint(
                 Path(checkpoint),
                 expected_campaign_id=result.get("campaign_id"),
                 expected_candidate_base=result.get("candidate_base_commit"),
-                expected_trusted_contract=result.get("trusted_contract_commit"),
+                expected_trusted_contract=trusted_commit or reported,
             )
             if errors:
                 state["state"] = "blocked"
@@ -348,7 +375,8 @@ class Coordinator:
         target_key = state.get("review_target") or (
             "contract" if state["state"] == "qualifying_review" else "candidate"
         )
-        target = state.get(target_key)
+        target = state.get("candidate") if target_key in ("candidate", "final") \
+            else state.get("contract")
         result = self.hooks.run_reviewer(target, state)
         path = Path(str(result.get("path") or ""))
         expected_candidate = target.get("commit") if isinstance(target, dict) else None
@@ -485,6 +513,43 @@ class Coordinator:
         receipt = implementer.get("qualification_receipt")
         if not receipt or not Path(str(receipt)).is_file():
             return ["final qualification receipt is missing"]
+        try:
+            document = json.loads(Path(str(receipt)).read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return [f"final qualification receipt is unreadable: {exc}"]
+        if document.get("schema") != "eu4-gfx-qualification-receipt/v1":
+            return ["final qualification receipt has the wrong schema"]
+        trusted = state.get("trusted_contract") or {}
+        if document.get("trusted_contract_commit") != trusted.get("commit"):
+            return ["final receipt trusted contract differs"]
+        checker = _git_blob_sha(
+            self.repo, str(trusted.get("commit")),
+            "automation/gfx_draw_accept_v2.py",
+        )
+        if checker is None or document.get("checker_sha256") != checker:
+            return ["final receipt checker identity differs"]
+        candidate = state.get("candidate") or {}
+        candidate_digest = candidate.get("candidate_digest")
+        if not candidate_digest and candidate.get("candidate_commit") \
+                and isinstance(candidate.get("changed_paths"), list):
+            try:
+                candidate_digest = source_tree_digest_at_commit(
+                    self.repo,
+                    str(candidate["candidate_commit"]),
+                    list(candidate["changed_paths"]),
+                )
+            except CheckpointError as exc:
+                return [f"final candidate digest cannot be recomputed: {exc}"]
+        if not candidate_digest or document.get("candidate_digest") != candidate_digest:
+            return ["final receipt candidate digest differs"]
+        packet = document.get("packet") or {}
+        if packet.get("packet_ready") is not True:
+            return ["final receipt does not establish packet_ready"]
+        fields = document.get("fields")
+        if not isinstance(fields, list) or not fields:
+            return ["final receipt has no field results"]
+        if any(not isinstance(row, dict) or row.get("state") != "validated" for row in fields):
+            return ["final receipt has unvalidated fields"]
         state["final_review"] = {
             "candidate_commit": state["candidate"].get("commit"),
             "reviewer_report_sha256": _file_sha(report_path),
@@ -569,7 +634,10 @@ class Coordinator:
             if receipt.get("candidate_commit") != candidate.get("commit"):
                 return ["implementation receipt does not match the candidate commit"]
             trusted = state.get("trusted_contract") or {}
-            if receipt.get("trusted_contract_commit") != trusted.get("commit")                     or receipt.get("trusted_contract_sha256") != trusted.get("sha256"):
+            if not trusted.get("commit") or not trusted.get("sha256"):
+                return ["trusted contract identity is missing"]
+            if receipt.get("trusted_contract_commit") != trusted.get("commit") \
+                    or receipt.get("trusted_contract_sha256") != trusted.get("sha256"):
                 return ["trusted contract changed without requalification"]
             report = Path(str((state.get("review") or {}).get("path") or ""))
             if not report.is_file() or receipt.get("reviewer_report_sha256") != _file_sha(report):
@@ -703,14 +771,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(state or {"state": "absent"}, indent=2, sort_keys=True))
         return 0
     print(
-        "The real Runner-backed hooks are configured by the completion campaign; "
-        "this bootstrap CLI validates the workflow state machine and ledger.",
+        "run requires the completion campaign's Runner-backed hooks; none are "
+        "configured in this bootstrap CLI.",
         file=sys.stderr,
     )
-    state = load_state(state_path) or default_state(workflow)
-    save_state(state_path, state)
-    print(json.dumps(state, indent=2, sort_keys=True))
-    return 0
+    return 1
 
 
 if __name__ == "__main__":

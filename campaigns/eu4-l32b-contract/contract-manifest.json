@@ -24,7 +24,7 @@
     {
       "path": "automation/gfx_checkpoint.py",
       "role": "checker",
-      "sha256": "de78cd9d8b957f02641d4b8b61d261a1635ed62720f324b4bae70528c7d5ff21"
+      "sha256": "1aeeefaef3699c2bb0b2850c84a23ca32253dabbc1abf3d19cf97b483f8b8d6e"
     },
     {
       "path": "automation/gfx_contract_accept.py",
@@ -44,7 +44,7 @@
     {
       "path": "automation/gfx_evidence_policy.py",
       "role": "checker",
-      "sha256": "db81745fc48a3e11623c8e72f011eb6469bf3849cfa5541c1d9193cb3d38be2f"
+      "sha256": "561d873f0688262d6342140f98526f3484e2c0598eebbfbd241ab9e31a71f536"
     },
     {
       "path": "automation/manifest_revision.py",
