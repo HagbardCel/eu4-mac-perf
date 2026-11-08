@@ -215,3 +215,71 @@ class GoalPromptTests(BridgeTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FinalizeTests(BridgeTestCase):
+    def test_finalize_confirms_with_a_fresh_run_and_records_a_freeze(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["checker_verdict"], "pass")
+        self.assertEqual(out["goal_policy"], "qualified")
+        self.assertTrue((self.run_root / "finalization.json").is_file())
+        self.assertEqual(len(out["frozen_candidate"]["digest"]), 64)
+
+    def test_finalize_refuses_when_the_candidate_moved(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        (self.workspace / "marker.txt").write_text("moved\n", encoding="utf-8")
+        code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "stale")
+
+    def test_finalize_refuses_without_a_passing_validation(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"), retry=("stateful", 1))
+        self.run_bridge("prepare", sidecar)
+        _, first = self.run_bridge("validate", sidecar)
+        self.assertEqual(first["checker_verdict"], "fail")
+        code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "not_qualified")
+
+    def test_a_rehashed_forged_pass_receipt_cannot_authorize_completion(self) -> None:
+        """Amendment B: the receipt is a record, the fresh run is the authority."""
+        sidecar = self.sidecar(self.campaign("failing-campaign"))
+        self.run_bridge("prepare", sidecar)
+        _, first = self.run_bridge("validate", sidecar)
+        self.assertEqual(first["checker_verdict"], "fail")
+
+        # Forge a pass and re-hash it, so the tamper is invisible to any check
+        # that trusts the stored receipt or its self-digest.
+        pointer = receipts.load_current(self.run_root)
+        path = receipts.paths(self.run_root).receipts / pointer["receipt"]
+        body = json.loads(path.read_text(encoding="utf-8"))
+        body["outcome"]["checker_verdict"] = "pass"
+        body.pop("receipt_digest", None)
+        body["receipt_digest"] = receipts.digest_text(receipts.canonical_json(body))
+        path.write_text(json.dumps(body), encoding="utf-8")
+        self.assertEqual(receipts.verify_receipt_digest(body), [],
+                         "the forgery must look self-consistent")
+
+        code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "fresh_validation_failed")
+        self.assertFalse((self.run_root / "finalization.json").exists())
+
+    def test_finalize_detects_an_inconsistent_receipt(self) -> None:
+        sidecar = self.sidecar(self.campaign("failing-campaign"))
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        pointer = receipts.load_current(self.run_root)
+        path = receipts.paths(self.run_root).receipts / pointer["receipt"]
+        body = json.loads(path.read_text(encoding="utf-8"))
+        body["outcome"]["checker_verdict"] = "pass"
+        path.write_text(json.dumps(body), encoding="utf-8")
+        code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "receipt_corrupt")

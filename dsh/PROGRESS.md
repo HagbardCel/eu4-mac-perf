@@ -9,7 +9,7 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
 |---|---|
 | M1 profile, pinning, skill parity, Ghidra probe | done at composition level; one live-session check pending |
 | M2 minimal bridge, retry policy, classification | done |
-| M3 seed-only native goal loop | not started |
+| M3 seed-only native goal loop | bridge side done; plugin tooling next |
 | M4 delta snapshot, evidence binding, journal | not started |
 | M5 recovery, limits, isolation | not started |
 | M6 independent reviewer | not started |
@@ -105,6 +105,25 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
   declared (`EU4_DSH_WORKSPACE`, `EU4_DSH_SANDBOX_MODE`) and reports
   `verified: false` when nothing was declared. M4 turns a verified assertion
   into a hard gate.
+
+## M3 (in progress) -- finalize authority
+
+- `dsh_bridge finalize` implements Amendment B: a stored receipt is never
+  authority. Under the run-root lock it re-checks the prepared anchor, requires
+  a current receipt whose identity digest matches the freshly derived one,
+  refuses if that receipt is not a pass, and then **re-runs the checker**. Only
+  that fresh run can authorize completion; the confirmation is bounded by
+  `FINALIZE_VALIDATION_LIMIT = 2` and counted separately from the model's
+  validation budget.
+- A failing fresh run writes an auditable receipt for the attempt and refuses
+  with `fresh_validation_failed`; nothing is frozen and no `finalization.json`
+  is produced.
+- The required adversarial test exists and passes: a `fail` receipt is edited to
+  `pass` **and re-hashed**, so it is self-consistent and passes digest
+  verification, and `finalize` still refuses because the fresh run returns
+  `fail`. A receipt edited without re-hashing is rejected as `receipt_corrupt`.
+- `finalize` also refuses `stale` when the candidate moved after the passing
+  validation, and `not_qualified` when the latest validation never passed.
 
 ## Pending / caveats
 

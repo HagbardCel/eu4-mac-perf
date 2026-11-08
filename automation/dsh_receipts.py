@@ -27,6 +27,8 @@ DEFAULT_COUNTERS = {
     "last_verdict": None,
     "last_diagnostics_digest": None,
     "last_candidate_digest": None,
+    "finalizations": 0,
+    "last_finalize_verdict": None,
     "elapsed_seconds": 0.0,
     "started_at": None,
 }

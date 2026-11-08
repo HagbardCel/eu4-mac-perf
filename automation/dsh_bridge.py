@@ -587,6 +587,139 @@ def op_validate(args) -> int:
         lock.__exit__(None, None, None)
 
 
+FINALIZE_VALIDATION_LIMIT = 2
+
+
+def op_finalize(args) -> int:
+    """Confirm a candidate against a FRESH checker run, then report a freeze.
+
+    A stored receipt is never authority: it can be edited by anything that can
+    write the state root, and a self-hash cannot tell a real pass from a
+    re-hashed forgery. The checker is therefore re-run here, and only that
+    result can authorize completion.
+    """
+    sidecar = load_sidecar(Path(args.sidecar))
+    _roots(sidecar)
+    stored_paths = _setup(sidecar.run_root)
+
+    try:
+        lock = campaign_lock(stored_paths.lock)
+        lock.__enter__()
+    except RuntimeError as exc:
+        emit({"ok": True, "operation": "finalize", "campaign_id": sidecar.campaign_id,
+              "classification": "policy_stop", "kind": "busy", "detail": str(exc)})
+        return EXIT_OK
+
+    try:
+        counters = receipts.load_counters(sidecar.run_root)
+        infra_commit = _git(infra_root(), "rev-parse", "HEAD")
+        current = _identity(sidecar, infra_commit)
+        _check_anchor(_prepared_identities(sidecar), current)
+
+        receipt = receipts.load_current_receipt(sidecar.run_root)
+        if receipt is None:
+            raise Refusal("not_qualified", "no validation receipt; run validate first")
+        problems = receipts.verify_receipt_digest(receipt)
+        if problems:
+            raise Refusal("receipt_corrupt", "; ".join(problems))
+
+        stored_ids = receipt.get("identities") or {}
+        if receipts.identity_digest(stored_ids) != receipts.identity_digest(current):
+            raise Refusal(
+                "stale",
+                "the qualification receipt does not describe the current candidate; "
+                "re-run validate",
+            )
+        if (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
+            raise Refusal(
+                "not_qualified",
+                "the latest validation did not pass; there is nothing to finalize",
+            )
+
+        if counters["finalizations"] >= FINALIZE_VALIDATION_LIMIT:
+            emit({"ok": True, "operation": "finalize",
+                  "campaign_id": sidecar.campaign_id,
+                  "classification": "policy_stop", "kind": "finalize_budget",
+                  "detail": f"{counters['finalizations']}/{FINALIZE_VALIDATION_LIMIT} "
+                            "finalization confirmations used"})
+            return EXIT_OK
+
+        started = time.monotonic()
+        outcome = run_accept(_AcceptShim(sidecar), sidecar.workspace)
+        duration_ms = int((time.monotonic() - started) * 1000)
+        classification, kind, verdict = classify(outcome)
+
+        after = _identity(sidecar, infra_commit)
+        counters["finalizations"] += 1
+        counters["last_finalize_verdict"] = verdict
+        receipts.save_counters(sidecar.run_root, counters)
+
+        if after != current:
+            raise Refusal("identity_drift",
+                          "identity changed during the finalization run")
+
+        if classification != "verdict" or verdict != "pass":
+            fresh = dict(receipt)
+            fresh.pop("receipt_digest", None)
+            fresh["outcome"] = {
+                "checker_verdict": verdict,
+                "bridge_classification": classification,
+                "kind": kind,
+                "diagnostics_digest": receipts.digest_text(
+                    str(outcome.get("diagnostics") or "")),
+                "diagnostics_excerpt": str(outcome.get("diagnostics") or "")[:2000],
+                "exit_code": outcome.get("exit_code"),
+                "duration_ms": duration_ms,
+            }
+            fresh["validation_round"] = counters["validations"]
+            path, sealed = receipts.write_receipt(sidecar.run_root, fresh)
+            receipts.append_event(sidecar.run_root, {
+                "ts": _now(), "event": "finalize_refused",
+                "verdict": verdict, "classification": classification,
+            })
+            raise Refusal(
+                "fresh_validation_failed",
+                "the confirmation run for this candidate returned "
+                f"{verdict or classification}; a stored receipt cannot authorize "
+                f"completion (see {path.name})",
+            )
+
+        record = {
+            "schema": "eu4-dsh-finalization/v1",
+            "campaign_id": sidecar.campaign_id,
+            "identity_digest": receipts.identity_digest(current),
+            "candidate": current["candidate"],
+            "fresh_receipt_digest": receipt.get("receipt_digest"),
+            "fresh_verdict": verdict,
+            "duration_ms": duration_ms,
+            "session": {"session_id": getattr(args, "session_id", None)},
+            "created_at": _now(),
+        }
+        record_path = sidecar.run_root / "finalization.json"
+        receipts.atomic_write(
+            record_path, receipts.canonical_json(record)
+        )
+        receipts.append_event(sidecar.run_root, {
+            "ts": _now(), "event": "finalized",
+            "candidate_digest": current["candidate"]["digest"],
+        })
+        emit({
+            "ok": True,
+            "operation": "finalize",
+            "campaign_id": sidecar.campaign_id,
+            "classification": "verdict",
+            "checker_verdict": verdict,
+            "goal_policy": "qualified",
+            "frozen_candidate": current["candidate"],
+            "identity_digest": receipts.identity_digest(current),
+            "finalization": str(record_path.name),
+            "finalizations_used": counters["finalizations"],
+        })
+        return EXIT_OK
+    finally:
+        lock.__exit__(None, None, None)
+
+
 def op_goal_prompt(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     objective = sidecar.objective_text.strip()
@@ -613,10 +746,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="operation", required=True)
 
-    for name in ("prepare", "status", "validate", "goal-prompt"):
+    for name in ("prepare", "status", "validate", "finalize", "goal-prompt"):
         child = sub.add_parser(name)
         child.add_argument("--sidecar", required=True)
-        if name == "validate":
+        if name in ("validate", "finalize"):
             child.add_argument("--session-id", default=None)
     return parser
 
@@ -625,6 +758,7 @@ OPERATIONS = {
     "prepare": op_prepare,
     "status": op_status,
     "validate": op_validate,
+    "finalize": op_finalize,
     "goal-prompt": op_goal_prompt,
 }
 
