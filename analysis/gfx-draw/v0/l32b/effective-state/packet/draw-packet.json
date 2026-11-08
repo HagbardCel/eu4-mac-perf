@@ -1,0 +1,438 @@
+{
+  "schema": "gfx-draw-packet/v0",
+  "status": "incomplete",
+  "reason": "missing_inputs",
+  "packet_ready": false,
+  "target": {
+    "symbol": "_GfxDraw",
+    "rva": "0x15ea789",
+    "caller_rva": "0xedfcd1",
+    "qualified": true,
+    "invocation": {
+      "call_id": 11,
+      "completion_seq": 8,
+      "thread_id": 10934424
+    },
+    "mode": 5,
+    "raw_count": 0,
+    "first": 0,
+    "effective_count": 4,
+    "count_source": "master",
+    "shader_non_null": true,
+    "primitive_enum": 4,
+    "primitive_call_id": 10,
+    "master_sha256": "0d0337f4a4c448222c8453a224a2b76546ed73810904a606893fb2c455592373"
+  },
+  "inputs": {
+    "draw_invocation": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "draw_snapshot",
+          "call_id": 11,
+          "payload": "payloads/11-4.bin",
+          "sha256": "0d0337f4a4c448222c8453a224a2b76546ed73810904a606893fb2c455592373",
+          "size": 369
+        },
+        {
+          "type": "draw_record",
+          "call_id": 11,
+          "completion_seq": 8,
+          "thread_id": 10934424,
+          "caller_rva": 15596753
+        }
+      ]
+    },
+    "primitive_semantics": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "primitive_set",
+          "source": "draw meta (thread-local last primitive)",
+          "call_id": 10,
+          "primitive_enum": 4
+        },
+        {
+          "type": "static_table",
+          "path": "analysis/qualification/v0/primitive-table.evidence.json",
+          "engine_enum": 4,
+          "gl_mode": 5
+        }
+      ]
+    },
+    "viewport": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "draw_snapshot",
+          "call_id": 11,
+          "payload": "payloads/11-4.bin",
+          "sha256": "0d0337f4a4c448222c8453a224a2b76546ed73810904a606893fb2c455592373",
+          "size": 369
+        }
+      ],
+      "value": {
+        "words": [
+          1117,
+          1728,
+          1065353216,
+          0,
+          0,
+          0
+        ],
+        "gl_viewport": {
+          "x": 0,
+          "y": 0,
+          "width": 1728,
+          "height": 1117
+        }
+      }
+    },
+    "render_target": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "draw_snapshot",
+          "call_id": 11,
+          "payload": "payloads/11-4.bin",
+          "sha256": "0d0337f4a4c448222c8453a224a2b76546ed73810904a606893fb2c455592373",
+          "size": 369
+        }
+      ],
+      "assumptions": [
+        "default backbuffer format is project-derived BGRA8Unorm (P5.1 contract)",
+        "render-target contents before the draw are not captured in L3.2a"
+      ],
+      "value": {
+        "kind": "default_backbuffer",
+        "width": 1728,
+        "height": 1117,
+        "format": "BGRA8Unorm",
+        "format_evidence": "project_derived"
+      }
+    },
+    "vertex_buffer_bindings": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "draw_snapshot",
+          "call_id": 11,
+          "payload": "payloads/11-4.bin",
+          "sha256": "0d0337f4a4c448222c8453a224a2b76546ed73810904a606893fb2c455592373",
+          "size": 369
+        },
+        {
+          "type": "resource_observation",
+          "call_id": 5,
+          "symbol": "_GfxCreateVertexBuffer",
+          "resource_id": "vb_3",
+          "fields_ok": true,
+          "payload": "payloads/5-1.bin",
+          "sha256": "f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab",
+          "size": 96
+        }
+      ],
+      "value": {
+        "slot_0_count": 4,
+        "slot_0_stride_word": 24,
+        "slots": [
+          {
+            "slot": 0,
+            "session_local_header": "0x7fce16f742e0",
+            "offset": 0,
+            "stride": 24,
+            "count": 4,
+            "resource_id": "vb_3",
+            "resource_call_id": 5
+          }
+        ],
+        "identity": "capture_local_resource_id"
+      }
+    },
+    "vertex_buffer_contents": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "resource_observation",
+          "call_id": 5,
+          "symbol": "_GfxCreateVertexBuffer",
+          "resource_id": "vb_3",
+          "fields_ok": true,
+          "payload": "payloads/5-1.bin",
+          "sha256": "f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab",
+          "size": 96
+        }
+      ],
+      "value": {
+        "buffers": [
+          {
+            "slot": 0,
+            "resource_id": "vb_3",
+            "stride": 24,
+            "offset": 0,
+            "count": 4,
+            "contents_size": 96,
+            "contents_sha256": "f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab",
+            "sidecar": "payloads/vb_3.bin",
+            "method": "resource_lifecycle",
+            "first_call_id": 5,
+            "last_call_id": 5
+          }
+        ]
+      }
+    },
+    "matrix_constant": {
+      "status": "established",
+      "evidence": [
+        {
+          "type": "resource_observation",
+          "call_id": 8,
+          "symbol": "_GfxSetConstantBuffer",
+          "resource_id": "cb_1",
+          "fields_ok": true,
+          "payload": "payloads/8-6.bin",
+          "sha256": "e00f5824739f2976ef02dbc5019f54cf89260b8f882a96b8989eab888b7d5671",
+          "size": 64
+        },
+        {
+          "type": "draw_snapshot",
+          "call_id": 11,
+          "payload": "payloads/11-4.bin",
+          "sha256": "0d0337f4a4c448222c8453a224a2b76546ed73810904a606893fb2c455592373",
+          "size": 369
+        }
+      ],
+      "value": {
+        "slot": 0,
+        "size": 64,
+        "vec4_count": 4,
+        "hex": "0000003b00000000000000000000000000000000224b463b000000000000000000000000000000000000803f000000000000000000000000000000800000803f",
+        "sha256": "e00f5824739f2976ef02dbc5019f54cf89260b8f882a96b8989eab888b7d5671",
+        "sidecar": "payloads/matrix.bin",
+        "method": "resource_observation",
+        "last_call_id": 8,
+        "header": "0x7fce16f0beb0",
+        "draw_time_match": true,
+        "draw_time_call_id": 8
+      }
+    },
+    "shader_identity": {
+      "status": "missing",
+      "evidence": []
+    },
+    "shader_stage_sources": {
+      "status": "missing",
+      "evidence": []
+    },
+    "vertex_attribute_layout": {
+      "status": "missing",
+      "evidence": []
+    },
+    "texture_slot_0_identity": {
+      "status": "missing",
+      "evidence": []
+    },
+    "texture_slot_0_contents": {
+      "status": "missing",
+      "evidence": []
+    },
+    "sampler_state": {
+      "status": "missing",
+      "evidence": []
+    },
+    "render_state_blend": {
+      "status": "missing",
+      "evidence": []
+    },
+    "render_state_depth_stencil": {
+      "status": "missing",
+      "evidence": []
+    },
+    "render_state_rasterizer": {
+      "status": "missing",
+      "evidence": []
+    },
+    "scissor_state": {
+      "status": "missing",
+      "evidence": []
+    }
+  },
+  "missing": [
+    "shader_identity",
+    "shader_stage_sources",
+    "vertex_attribute_layout",
+    "texture_slot_0_identity",
+    "texture_slot_0_contents",
+    "sampler_state",
+    "render_state_blend",
+    "render_state_depth_stencil",
+    "render_state_rasterizer",
+    "scissor_state"
+  ],
+  "unsupported": [],
+  "diagnostics": {
+    "observed_draws": 1,
+    "retained_draws": 1,
+    "at_caller": 1,
+    "qualified": 1,
+    "modes": {
+      "5": 1
+    },
+    "counts": {
+      "zero": 0,
+      "one": 0,
+      "two": 0,
+      "at_least_three": 1
+    },
+    "callers": [
+      {
+        "rva": 15596753,
+        "count": 1
+      }
+    ],
+    "caller_overflow": 0,
+    "samples": [
+      {
+        "call_id": 11,
+        "completion_seq": 8,
+        "thread_id": 10934424,
+        "caller_rva": 15596753,
+        "mode": 5,
+        "raw_count": 0,
+        "effective_count": 4,
+        "qualified": true
+      }
+    ],
+    "qualification_predicate": "caller_known && caller_rva == target_caller && master_complete && shader(master+0x70) != 0 && mode(master+8) == 5 && effective_count >= 3",
+    "decision_0003": {
+      "caller_rva": "0xedfcd1",
+      "mode": 5,
+      "minimum_effective_count": 3
+    }
+  },
+  "provenance": {
+    "session": "9a8a50c4-c42c-40da-b3db-9472820ce477",
+    "pid": 44927,
+    "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+    "image_base": "0x100000000",
+    "capture": "/Users/fabian/Projects/MiniProjects/eu4-mac-perf/eu4-mac-perf/.local/automation/eu4-l32b-effective-state/captures/l32b-i-effective-state",
+    "source_hashes": {
+      "startup.status": "940d8e6861ed55a5639ce8b15e3dbd5e1c733fc207183b4c0be0817f9ca31c14",
+      "metadata.json": "559ae88a42efec1f15eee28f44dc472bef3938df28beecfa150849daa6d7da13",
+      "summary.json": "3a09ce8073b7010a318d87e8a3b5eaebcbba6a819f00638a7e9b3238bad0c82a",
+      "events.jsonl": "d802608021e4919471936aafbf93410b94de85bd182709175de14a873fdd5cd0",
+      "operations-summary.json": "9acaeca89db1cff52db6417cd39a081c25089c169fe96dc857254f57243d587f",
+      "operations.jsonl": "34ec305465bd21bcedacb0c80ded3e00349c4c74db8e1c14c2f4814d48bb7f31",
+      "payloads/11-4.bin": "0d0337f4a4c448222c8453a224a2b76546ed73810904a606893fb2c455592373",
+      "payloads/11-draw.bin": "0d0337f4a4c448222c8453a224a2b76546ed73810904a606893fb2c455592373",
+      "payloads/vb_3.bin": "f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab",
+      "payloads/matrix.bin": "e00f5824739f2976ef02dbc5019f54cf89260b8f882a96b8989eab888b7d5671"
+    },
+    "targets": [
+      {
+        "symbol": "_GfxDraw",
+        "rva": "0x15ea789",
+        "length": 6,
+        "relocation": "safe"
+      },
+      {
+        "symbol": "_GfxSetPrimitiveType",
+        "rva": "0x15ea76f",
+        "length": 5,
+        "relocation": "safe"
+      },
+      {
+        "symbol": "_GfxCreateVertexBuffer",
+        "rva": "0x15ebcb3",
+        "length": 6,
+        "relocation": "safe"
+      },
+      {
+        "symbol": "_GfxUpdateVertexBuffer",
+        "rva": "0x15ebd81",
+        "length": 6,
+        "relocation": "safe"
+      },
+      {
+        "symbol": "_GfxSetVertexBuffers",
+        "rva": "0x15ebf41",
+        "length": 6,
+        "relocation": "safe"
+      },
+      {
+        "symbol": "_GfxSetConstantBuffer",
+        "rva": "0x15ec36a",
+        "length": 9,
+        "relocation": "safe"
+      }
+    ],
+    "retention": "state",
+    "stop_policy": "target_draw",
+    "observed": 9,
+    "retained_events": 8,
+    "retention_budget_exhausted": false,
+    "payload_gaps": 0,
+    "capture_request": {
+      "schema": "live-gfx-capture-request/v0",
+      "session": "9a8a50c4-c42c-40da-b3db-9472820ce477",
+      "targets": [
+        {
+          "symbol": "_GfxDraw",
+          "rva": "0x15ea789",
+          "prefix": "554889e54157",
+          "length": 6,
+          "relocation": "safe"
+        },
+        {
+          "symbol": "_GfxSetPrimitiveType",
+          "rva": "0x15ea76f",
+          "prefix": "554889e553",
+          "length": 5,
+          "relocation": "safe"
+        },
+        {
+          "symbol": "_GfxCreateVertexBuffer",
+          "rva": "0x15ebcb3",
+          "prefix": "554889e54157",
+          "length": 6,
+          "relocation": "safe"
+        },
+        {
+          "symbol": "_GfxUpdateVertexBuffer",
+          "rva": "0x15ebd81",
+          "prefix": "554889e54157",
+          "length": 6,
+          "relocation": "safe"
+        },
+        {
+          "symbol": "_GfxSetVertexBuffers",
+          "rva": "0x15ebf41",
+          "prefix": "554889e54157",
+          "length": 6,
+          "relocation": "safe"
+        },
+        {
+          "symbol": "_GfxSetConstantBuffer",
+          "rva": "0x15ec36a",
+          "prefix": "554889e5488b0789c9",
+          "length": 9,
+          "relocation": "safe"
+        }
+      ],
+      "max_events": 1024,
+      "duration_ms": 0,
+      "stop_policy": "target_draw",
+      "retention": "state",
+      "target_caller_rva": "0xedfcd1",
+      "caller_site_hex": "4889df31f6e8a7d3",
+      "timeout_s": 110.0,
+      "executable_sha256": "b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d",
+      "library_sha256": "0f53b00e4036208225671b85527c4e4adea4530db8d2971f1a67e42f38bdc69e"
+    }
+  },
+  "assumptions": [
+    "default backbuffer format is project-derived BGRA8Unorm (P5.1 contract)",
+    "render-target contents before the draw are not captured in L3.2a"
+  ],
+  "ready_definition": "the selected draw's required source inputs and effective bindings are captured and qualified, with render-target assumptions listed"
+}

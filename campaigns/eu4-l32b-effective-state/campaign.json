@@ -1,0 +1,21 @@
+{
+  "id": "eu4-l32b-effective-state",
+  "objective": "objective.md",
+  "runtime": "opencode",
+  "model": "opencode/big-pickle",
+  "opencode_version": "2.2.5",
+  "workspace": {
+    "mode": "worktree",
+    "path": ".local/automation/eu4-l32b-effective-state/workspace",
+    "commit": "1b5a82ab734b850ad444a1dc845a74d04c72c226"
+  },
+  "accept": ["python3", "accept.py"],
+  "max_rounds": 8,
+  "max_seconds": 7200,
+  "accept_timeout_seconds": 900,
+  "verification_manifest": "l32b-manifest.json",
+  "live_observation": {
+    "launch_limit": 3,
+    "deadline_seconds": 120
+  }
+}

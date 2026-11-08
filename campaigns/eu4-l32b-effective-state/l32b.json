@@ -1,0 +1,51 @@
+{
+  "schema": "eu4-l32b-campaign-config/v1",
+  "milestone": "effective-state",
+  "pinned_commit": "1b5a82ab734b850ad444a1dc845a74d04c72c226",
+  "required_inputs": [
+    "vertex_buffer_bindings",
+    "vertex_buffer_contents",
+    "matrix_constant"
+  ],
+  "optional_inputs": [
+    "vertex_attribute_layout",
+    "render_state_blend",
+    "render_state_depth_stencil",
+    "render_state_rasterizer",
+    "scissor_state"
+  ],
+  "allowed_paths": [
+    "progress.md",
+    "benchmark/eu4_gfx_observe*.c",
+    "benchmark/eu4_gfx_observe*.h",
+    "benchmark/eu4_gfx_observe_entries.def",
+    "benchmark/eu4_gfx_startup_trace.py",
+    "benchmark/eu4_gfx_op_capture.py",
+    "benchmark/eu4_gfx_draw_packet.py",
+    "automation/live_gfx.py",
+    "tests/gfx_startup_trace_host.c",
+    "tests/gfx_startup_trace_stubs.S",
+    "tests/test_gfx_observe.py",
+    "tests/test_gfx_draw_packet.py",
+    "analysis/gfx-draw/v0/l32b/effective-state/**"
+  ],
+  "forbidden_paths": [
+    "analysis/gfx-draw/v0/probe",
+    "analysis/qualification/v0",
+    "reverse_engineering/target.json",
+    "benchmark/eu4_gfx_observe_gateway.S",
+    "benchmark/eu4_gfx_shader.mm",
+    "benchmark/eu4_gfx_shadow_worker.mm",
+    "campaigns",
+    "automation/gfx_draw_accept.py"
+  ],
+  "test_modules": [
+    "tests.test_gfx_observe",
+    "tests.test_gfx_draw_packet"
+  ],
+  "manifest": "l32b-manifest.json",
+  "capture_root": "captures",
+  "capture_plans": "capture-plans",
+  "launch_limit": 3,
+  "blocker_path": "analysis/gfx-draw/v0/l32b/effective-state/blockers.json"
+}

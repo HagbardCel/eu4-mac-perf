@@ -1,0 +1,45 @@
+{
+  "schema": "eu4-l32b-campaign-summary/v1",
+  "campaign_id": "eu4-l32b-effective-state",
+  "result": "pass",
+  "rounds": 1,
+  "max_rounds": 8,
+  "checker_verdict": "pass",
+  "checker_diagnostics": {
+    "established": [
+      "vertex_buffer_bindings",
+      "vertex_buffer_contents",
+      "matrix_constant"
+    ],
+    "captures_used": 1
+  },
+  "agent_selected_investigation": "Draw-time slot-0 constant cross-check plus L3.1 lifecycle reconstruction for the selected vertex buffer; no fixed hook list was supplied.",
+  "autonomous_remediation": "none (first checker round passed; no defect was introduced to force one)",
+  "captures": {
+    "used": 1,
+    "limit": 3,
+    "path": ".local/automation/eu4-l32b-effective-state/captures/l32b-i-effective-state",
+    "plan": ".local/automation/eu4-l32b-effective-state/capture-plans/l32b-i-effective-state.json"
+  },
+  "restartability": "not exercised after the capture (the first turn completed); the runner/CAPTURE counter leave the completed capture reusable on resume.",
+  "independent_review": {
+    "campaign": "eu4-l32b-review-eu4-l32b-effective-state-r2",
+    "model": "opencode/iceman-free",
+    "outcome": "qualified",
+    "reviewed_code_commit": "8f154e4a810b93c03d8a8d35ac7d97ea0ab6ae18",
+    "report": "analysis/gfx-draw/v0/l32b/effective-state/review.json",
+    "supersedes": "eu4-l32b-review-eu4-l32b-effective-state-r1"
+  },
+  "human_interventions": [
+    "reviewer model fallback from opencode/big-pickle to opencode/iceman-free after the provider free limit",
+    "final PR/merge decision"
+  ],
+  "note": "The first review (r1) qualified under the pre-remediation checker and is superseded by r2, which reviewed the corrected checker commit 8f154e4. The existing capture was re-validated under that checker without relaunch; packet bytes are unchanged. A post-campaign snapshot-helper path fix changed the earlier manifest digest; the final corrected manifest is f3c87a4a\u2026.",
+  "verification_manifest_sha256": "f3c87a4af7c28f1382907aa86d80f4b756c6df5c4483d00d2325d22abdb55015",
+  "post_campaign_requalification": {
+    "verdict": "pass",
+    "capture_session": "9a8a50c4-c42c-40da-b3db-9472820ce477",
+    "corrected_checker_commit": "8f154e4a810b93c03d8a8d35ac7d97ea0ab6ae18",
+    "note": "Existing authentic capture re-validated in the original pinned worktree; no relaunch; packet unchanged."
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "schema": "eu4-review/v1",
+  "candidate_commit": "8f154e4a810b93c03d8a8d35ac7d97ea0ab6ae18",
+  "oracle_manifest_sha256": "f3c87a4af7c28f1382907aa86d80f4b756c6df5c4483d00d2325d22abdb55015",
+  "outcome": "qualified",
+  "findings": [],
+  "summary": "Qualified L3.2b-I effective-state capture for authentic Simple draw caller RVA 0xedfcd1 (Decision 0003) at HEAD 8f154e4. Verified against frozen L3.2a probe oracle (analysis/gfx-draw/v0/probe unchanged from pin 1b5a82a) and same-session capture 9a8a50c4-c42c-40da-b3db-9472820ce477 (pid 44927, exe b3d38876, observer library 0f53b00e, campaign launch 1/3, complete). Selected draw call 11 (mode 5, effective_count 4, shader non-null, master complete, caller 0xedfcd1) satisfies Decision 0003. The three claimed inputs are supported by original-execution evidence with exact bytes/hashes and draw-associated identities: vertex_buffer_bindings resolves draw master slot 0 header 0x7fce16f742e0 to preceding _GfxCreateVertexBuffer vb_3/call 5 (96 bytes, stride 24, offset 0, count 4); vertex_buffer_contents is resource_lifecycle bytes from that create record with matching sidecar/payload hashes; matrix_constant is _GfxSetConstantBuffer cb_1/call 8 slot 0 (header 0x7fce16f0beb0, 64 bytes, vec4 4) matching draw master constant pointer and draw-time cross-check (constant_slot0_match=true, call_id 8). Resource/draw evidence payloads match original captured operation/master bytes. No synthesis, no unrelated-object promotion, no gateway expansion in candidate diff, no Metal execution, packet_ready=false/incomplete with 10 required inputs still missing. Corrected checker (gfx_draw_accept.py) and forged-evidence negative tests cover rehashed matrix, wrong constant call/header linkage, draw_time contents, unknown/different resource binding, unrelated original-record bytes, and draw-snapshot mismatch; tests.test_gfx_draw_accept+tests.test_gfx_draw_packet pass in worktree.",
+  "verified": {
+    "l3_2a_probe_oracle_unchanged": true,
+    "frozen_assets_unchanged": true,
+    "decision_0003": {"satisfied": true, "call_id": 11, "mode": 5, "effective_count": 4, "shader_non_null": true},
+    "identities": {"vb_resource": "vb_3", "vb_create_call": 5, "cb_resource": "cb_1", "cb_call": 8, "draw_call": 11},
+    "payload_hashes": {
+      "11-draw/master": "0d0337f4a4c448222c8453a224a2b76546ed73810904a606893fb2c455592373",
+      "vb_3": "f13dea22399b9649d84a09965ec6b21bc13b72db3c17049916a675922a39c8ab",
+      "matrix": "e00f5824739f2976ef02dbc5019f54cf89260b8f882a96b8989eab888b7d5671"
+    },
+    "packet_manifest_note": "packet-manifest.json records candidate_commit 27d9e98 (generation time) and stale embedded review metadata; capture/packet evidence is unchanged and valid for HEAD 8f154e4."
+  }
+}

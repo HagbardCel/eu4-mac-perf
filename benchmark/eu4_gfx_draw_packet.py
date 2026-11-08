@@ -140,6 +140,109 @@ def parse_master(raw: bytes) -> dict:
     }
 
 
+def _meta_int(record: capture.OperationRecord, key: str) -> int | None:
+    value = record.meta.get(key)
+    return value if type(value) is int else None
+
+
+def _resource_evidence(record: capture.OperationRecord) -> dict:
+    return {
+        "type": "resource_observation",
+        "call_id": record.call_id,
+        "symbol": record.symbol,
+        "resource_id": record.resource_id,
+        "fields_ok": bool(record.fields_ok),
+        "payload": record.payload_file,
+        "sha256": record.payload_sha256,
+        "size": record.payload_size,
+    }
+
+
+def _lifecycle_records(
+    artifact: capture.CaptureArtifact, resource_id: str, draw_call_id: int
+) -> list[capture.OperationRecord]:
+    return [
+        record
+        for record in artifact.operations
+        if record.call_id < draw_call_id
+        and record.resource_id == resource_id
+        and record.symbol in ("_GfxCreateVertexBuffer", "_GfxUpdateVertexBuffer")
+    ]
+
+
+def _effective_buffer(records: list[capture.OperationRecord]) -> bytes | None:
+    """Mirror the trusted checker's lifecycle replay for one resource."""
+    data: bytes | None = None
+    for record in records:
+        if record.symbol == "_GfxCreateVertexBuffer":
+            data = record.payload_bytes if record.contents_known else None
+            continue
+        payload = record.payload_bytes
+        if payload is None:
+            data = None
+            continue
+        if record.meta.get("partial") == 1:
+            offset = record.meta.get("offset")
+            if data is None or type(offset) is not int or offset < 0:
+                data = None
+            else:
+                data = data[:offset] + payload + data[offset + len(payload):]
+        else:
+            data = payload
+    return data
+
+
+def _create_for_header(
+    artifact: capture.CaptureArtifact, header: int, draw_call_id: int
+) -> capture.OperationRecord | None:
+    found = None
+    for record in artifact.operations:
+        if record.call_id >= draw_call_id:
+            continue
+        if record.symbol != "_GfxCreateVertexBuffer":
+            continue
+        if _meta_int(record, "header") == header:
+            found = record
+    return found
+
+
+def _constant_for_draw(
+    artifact: capture.CaptureArtifact,
+    draw_call_id: int,
+    master: dict,
+    target: capture.OperationRecord,
+) -> tuple[capture.OperationRecord, dict] | None:
+    slot0 = next(
+        (item for item in master["constants"] if item["slot"] == 0), None
+    )
+    if slot0 is None or slot0["vec4_count"] < 4:
+        return None
+    if target.meta.get("constant_slot0_match") is not True:
+        return None
+    if _meta_int(target, "constant_slot0_header") != slot0["pointer"]:
+        return None
+    chosen = None
+    for record in artifact.operations:
+        if record.call_id >= draw_call_id:
+            continue
+        if record.symbol != "_GfxSetConstantBuffer":
+            continue
+        if _meta_int(record, "slot") != 0:
+            continue
+        if _meta_int(record, "header") != slot0["pointer"]:
+            continue
+        if not record.contents_known:
+            continue
+        if record.payload_bytes is None or len(record.payload_bytes) < 64:
+            continue
+        chosen = record
+    if chosen is None:
+        return None
+    if _meta_int(target, "constant_slot0_call_id") != chosen.call_id:
+        return None
+    return chosen, slot0
+
+
 def _primitive_mapping() -> dict | None:
     try:
         value = json.loads(PRIMITIVE_EVIDENCE.read_text())
@@ -450,25 +553,124 @@ def build_packet(
         )
     inputs["render_target"] = render_target
 
-    bindings = _input(
-        "established",
-        [snapshot_evidence],
-    )
-    bindings["value"] = {
-        "slot_0_count": master["effective_count"],
-        "slot_0_stride_word": master["stride_word"],
-        "slots": [
+    resolved: dict[int, capture.OperationRecord] = {}
+    for item in master["vertex_buffers"]:
+        create = _create_for_header(artifact, item["header"], target.call_id)
+        if create is not None and create.resource_id:
+            resolved[item["slot"]] = create
+
+    binding_evidence = [snapshot_evidence]
+    binding_slots = []
+    for item in master["vertex_buffers"]:
+        create = resolved.get(item["slot"])
+        slot_value = {
+            "slot": item["slot"],
+            "session_local_header": f"0x{item['header']:x}",
+            "offset": item["offset"],
+            "stride": item["stride"],
+        }
+        if item["slot"] == 0:
+            slot_value["count"] = expected_effective
+        if create is not None:
+            slot_value["resource_id"] = create.resource_id
+            slot_value["resource_call_id"] = create.call_id
+            binding_evidence.append(_resource_evidence(create))
+        binding_slots.append(slot_value)
+
+    if 0 in resolved:
+        inputs["vertex_buffer_bindings"] = _input("established", binding_evidence)
+        inputs["vertex_buffer_bindings"]["value"] = {
+            "slot_0_count": expected_effective,
+            "slot_0_stride_word": master["stride_word"],
+            "slots": binding_slots,
+            "identity": "capture_local_resource_id",
+        }
+    else:
+        inputs["vertex_buffer_bindings"] = _input(
+            "missing",
+            detail="no observed create record matches the draw's slot 0 header",
+        )
+
+    contents_buffers = []
+    contents_evidence = []
+    contents_detail = None
+    for item in master["vertex_buffers"]:
+        create = resolved.get(item["slot"])
+        if create is None:
+            continue
+        records = _lifecycle_records(artifact, create.resource_id, target.call_id)
+        data = _effective_buffer(records)
+        if not data:
+            if item["slot"] == 0:
+                contents_detail = "slot 0 lifecycle payload is not fully known"
+            continue
+        stride = item["stride"]
+        offset = item["offset"]
+        if stride <= 0:
+            if item["slot"] == 0:
+                contents_detail = "slot 0 has no usable stride"
+            continue
+        if item["slot"] == 0:
+            count = expected_effective
+        else:
+            count = _meta_int(create, "count")
+            if type(count) is not int or count <= 0:
+                count = len(data) // stride
+        if count <= 0 or len(data) < offset + count * stride:
+            if item["slot"] == 0:
+                contents_detail = "slot 0 lifecycle bytes do not cover the bound range"
+            continue
+        contents_buffers.append(
             {
                 "slot": item["slot"],
-                "session_local_header": f"0x{item['header']:x}",
-                "offset": item["offset"],
-                "stride": item["stride"],
+                "resource_id": create.resource_id,
+                "stride": stride,
+                "offset": offset,
+                "count": count,
+                "contents_size": len(data),
+                "contents_sha256": _sha256(data),
+                "sidecar": f"payloads/{create.resource_id}.bin",
+                "method": "resource_lifecycle",
+                "first_call_id": records[0].call_id,
+                "last_call_id": records[-1].call_id,
             }
-            for item in master["vertex_buffers"]
-        ],
-        "identity": "session_local_only",
-    }
-    inputs["vertex_buffer_bindings"] = bindings
+        )
+        contents_evidence.extend(_resource_evidence(record) for record in records)
+
+    if any(item["slot"] == 0 for item in contents_buffers):
+        inputs["vertex_buffer_contents"] = _input("established", contents_evidence)
+        inputs["vertex_buffer_contents"]["value"] = {"buffers": contents_buffers}
+    else:
+        inputs["vertex_buffer_contents"] = _input(
+            "missing",
+            detail=contents_detail or "no lifecycle bytes for slot 0",
+        )
+
+    constant = _constant_for_draw(artifact, target.call_id, master, target)
+    if constant is not None:
+        record, slot0 = constant
+        matrix = record.payload_bytes[:64]
+        inputs["matrix_constant"] = _input(
+            "established", [_resource_evidence(record), snapshot_evidence]
+        )
+        inputs["matrix_constant"]["value"] = {
+            "slot": 0,
+            "size": 64,
+            "vec4_count": slot0["vec4_count"],
+            "hex": matrix.hex(),
+            "sha256": _sha256(matrix),
+            "sidecar": "payloads/matrix.bin",
+            "method": "resource_observation",
+            "last_call_id": record.call_id,
+            "header": f"0x{slot0['pointer']:x}",
+            "draw_time_match": True,
+            "draw_time_call_id": _meta_int(target, "constant_slot0_call_id"),
+        }
+    else:
+        inputs["matrix_constant"] = _input(
+            "missing",
+            detail="no draw-time-matched slot-0 constant observation",
+        )
 
     for name in REQUIRED_INPUTS:
         if name in inputs:
@@ -532,6 +734,49 @@ def build_packet(
     return packet
 
 
+def _sidecars(
+    packet: dict, artifact: capture.CaptureArtifact, target_call: int
+) -> list[tuple[str, bytes]]:
+    """Re-derive every sidecar from the capture and verify it against the packet."""
+    result: list[tuple[str, bytes]] = []
+    inputs = packet.get("inputs") or {}
+    contents = (inputs.get("vertex_buffer_contents") or {}).get("value") or {}
+    for item in contents.get("buffers") or []:
+        records = _lifecycle_records(artifact, item["resource_id"], target_call)
+        data = _effective_buffer(records)
+        if (
+            data is None
+            or len(data) != item.get("contents_size")
+            or _sha256(data) != item.get("contents_sha256")
+        ):
+            raise PacketError(
+                f"{item.get('resource_id')} lifecycle bytes disagree with the packet"
+            )
+        result.append((str(item["sidecar"]), data))
+    matrix = (inputs.get("matrix_constant") or {}).get("value")
+    if isinstance(matrix, dict):
+        raw = bytes.fromhex(str(matrix.get("hex", "")))
+        if len(raw) != matrix.get("size") or _sha256(raw) != matrix.get("sha256"):
+            raise PacketError("matrix sidecar bytes disagree with the packet")
+        record = next(
+            (
+                row
+                for row in artifact.operations
+                if row.call_id == matrix.get("last_call_id")
+            ),
+            None,
+        )
+        if (
+            record is None
+            or record.symbol != "_GfxSetConstantBuffer"
+            or record.payload_bytes is None
+            or record.payload_bytes[:64] != raw
+        ):
+            raise PacketError("matrix bytes do not match the capture record")
+        result.append((str(matrix["sidecar"]), raw))
+    return result
+
+
 def write_packet(
     capture_path: Path | str,
     output: Path | str,
@@ -542,7 +787,6 @@ def write_packet(
     if destination.exists():
         raise PacketError(f"packet output already exists: {destination}")
     destination.mkdir(parents=True, exist_ok=False)
-    snapshot_name = None
     target = packet.get("target") or {}
     if target.get("qualified") is True:
         artifact = capture.load_capture(capture_path, require_events=False)
@@ -553,16 +797,18 @@ def write_packet(
         )
         if record is None or record.payload_bytes is None:
             raise PacketError("qualifying draw payload is unavailable")
-        payload_dir = destination / "payloads"
-        payload_dir.mkdir(exist_ok=True)
         snapshot_name = f"payloads/{target_call}-draw.bin"
-        snapshot_path = destination / snapshot_name
-        temporary = snapshot_path.with_name(snapshot_path.name + ".tmp")
-        temporary.write_bytes(record.payload_bytes)
-        os.replace(temporary, snapshot_path)
-        packet.setdefault("provenance", {}).setdefault("source_hashes", {})[
-            snapshot_name
-        ] = _sha256(record.payload_bytes)
+        sidecars = [(snapshot_name, record.payload_bytes)]
+        sidecars.extend(_sidecars(packet, artifact, target_call))
+        for name, data in sidecars:
+            path = destination / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_bytes(data)
+            os.replace(temporary, path)
+            packet.setdefault("provenance", {}).setdefault("source_hashes", {})[
+                name
+            ] = _sha256(data)
     packet_path = destination / PACKET_FILE
     temporary = packet_path.with_name(packet_path.name + ".tmp")
     temporary.write_text(json.dumps(packet, indent=2) + "\n")
