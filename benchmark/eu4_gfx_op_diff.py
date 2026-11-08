@@ -263,7 +263,13 @@ def _call(
 ) -> tuple[dict | None, tuple[str, str] | None]:
     try:
         response = worker.call(op, args, seq)
-    except (TimeoutError, OSError, RuntimeError) as exc:
+    except (
+        TimeoutError,
+        OSError,
+        RuntimeError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
         return None, ("unavailable", f"worker_failure: {exc}")
     if response is None:
         return None, ("unavailable", "worker_eof")

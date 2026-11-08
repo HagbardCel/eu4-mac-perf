@@ -264,6 +264,18 @@ def _default_replay_output(capture_path: Path) -> Path:
     return ROOT / ".local" / "gfx-diffs" / f"{capture_path.name}-{stamp}"
 
 
+def _write_replay_error(output: Path, result: dict) -> bool:
+    try:
+        output.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        print(f"replay output already exists: {output}", file=sys.stderr)
+        return False
+    (output / "comparison.json").write_text(
+        json.dumps(result, indent=2) + "\n"
+    )
+    return True
+
+
 def replay(args: argparse.Namespace) -> int:
     import eu4_gfx_op_diff
 
@@ -273,6 +285,9 @@ def replay(args: argparse.Namespace) -> int:
         if args.output
         else _default_replay_output(capture_path)
     )
+    if output.exists():
+        print(f"replay output already exists: {output}", file=sys.stderr)
+        return EXIT_INCOMPLETE
     try:
         result = eu4_gfx_op_diff.run(capture_path, output)
     except capture_reader.CaptureIncomplete as exc:
@@ -283,10 +298,8 @@ def replay(args: argparse.Namespace) -> int:
             "capture": str(capture_path),
             "output": str(output),
         }
-        output.mkdir(parents=True, exist_ok=True)
-        (output / "comparison.json").write_text(
-            json.dumps(result, indent=2) + "\n"
-        )
+        if not _write_replay_error(output, result):
+            return EXIT_INCOMPLETE
     except eu4_gfx_op_diff.DiffUsage as exc:
         print(f"replay refused: {exc}", file=sys.stderr)
         return EXIT_INCOMPLETE
@@ -298,10 +311,8 @@ def replay(args: argparse.Namespace) -> int:
             "capture": str(capture_path),
             "output": str(output),
         }
-        output.mkdir(parents=True, exist_ok=True)
-        (output / "comparison.json").write_text(
-            json.dumps(result, indent=2) + "\n"
-        )
+        if not _write_replay_error(output, result):
+            return EXIT_INCOMPLETE
         print(json.dumps(result, indent=2))
         return EXIT_UNAVAILABLE
     print(json.dumps(result, indent=2))

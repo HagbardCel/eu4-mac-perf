@@ -190,6 +190,24 @@ class OpDiffTests(unittest.TestCase):
             self.assertEqual(diagnostic["original"], 1080)
             self.assertEqual(diagnostic["metal"], 720)
 
+    def test_malformed_worker_response_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root)
+
+            class Malformed(FakeWorker):
+                def call(self, op, args=None, seq=None):
+                    if op == "set_viewport":
+                        raise UnicodeDecodeError(
+                            "utf-8", b"\xff", 0, 1, "invalid start byte"
+                        )
+                    return super().call(op, args, seq)
+
+            result = diff.run(
+                artifact, root / "diff-malformed", worker_factory=lambda: Malformed()
+            )
+            self.assertEqual(result["status"], "unavailable")
+
     def test_shutdown_failure_is_diagnostic_not_mismatch(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
