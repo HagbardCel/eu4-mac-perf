@@ -1,6 +1,7 @@
 #include "eu4_gfx_observe.h"
 
 #include "eu4_gfx_observe_buffers.h"
+#include "eu4_gfx_observe_draw.h"
 #include "eu4_gfx_observe_viewport.h"
 #include "eu4_gfx_site_patch.h"
 #include "eu4_gfx_startup_trace.h"
@@ -49,6 +50,25 @@ static _Atomic int g_test_overlap;
 static _Atomic int g_test_fail_install_after = -1;
 static _Atomic int g_finalized;
 static _Atomic int g_finalized_ok;
+static _Atomic uint32_t g_retention = EU4_GFX_OBSERVE_RETENTION_LEGACY;
+static _Atomic uint32_t g_stop_policy = EU4_GFX_OBSERVE_STOP_QUOTA;
+static _Atomic uint64_t g_target_caller;
+static _Atomic uint64_t g_target_draw_call_id;
+static _Atomic uint32_t g_target_claimed;
+static _Atomic uint32_t g_target_hit;
+static _Atomic uint32_t g_observed;
+static _Atomic uint32_t g_draw_observed;
+static _Atomic uint32_t g_draw_at_caller;
+static _Atomic uint32_t g_draw_qualified;
+static _Atomic uint32_t g_draw_mode_counts[EU4_GFX_OBSERVE_MODE_SLOTS];
+static _Atomic uint32_t g_draw_count_buckets[4];
+static _Atomic uint64_t g_draw_caller_rva[EU4_GFX_OBSERVE_CALLER_SLOTS];
+static _Atomic uint32_t g_draw_caller_count[EU4_GFX_OBSERVE_CALLER_SLOTS];
+static _Atomic uint32_t g_draw_caller_overflow;
+static _Atomic uint32_t g_primitive_sets;
+static _Atomic uint32_t g_matching_retained;
+static _Atomic uint32_t g_retention_budget;
+static _Atomic uint32_t g_payload_gaps;
 static eu4_gfx_observe_record g_records[EU4_GFX_OBSERVE_RECORD_CAP];
 static uint8_t g_payload[EU4_GFX_OBSERVE_PAYLOAD_CAP];
 static _Atomic uint32_t g_payload_used;
@@ -113,9 +133,8 @@ static uint64_t thread_id(void) {
     return value;
 }
 
-bool eu4_gfx_observe_read(const void *src, void *dest, size_t n) {
-    if (src == NULL || dest == NULL || n == 0 ||
-        n > EU4_GFX_OBSERVE_BLOB_SIZE) {
+static bool read_range(const void *src, void *dest, size_t n, size_t limit) {
+    if (src == NULL || dest == NULL || n == 0 || n > limit) {
         return false;
     }
     uintptr_t address = (uintptr_t)src;
@@ -127,6 +146,14 @@ bool eu4_gfx_observe_read(const void *src, void *dest, size_t n) {
         mach_task_self(), (mach_vm_address_t)address, (mach_vm_size_t)n,
         (mach_vm_address_t)(uintptr_t)dest, &got);
     return result == KERN_SUCCESS && got == n;
+}
+
+bool eu4_gfx_observe_read(const void *src, void *dest, size_t n) {
+    return read_range(src, dest, n, EU4_GFX_OBSERVE_BLOB_SIZE);
+}
+
+bool eu4_gfx_observe_read_bytes(const void *src, void *dest, size_t n) {
+    return read_range(src, dest, n, EU4_GFX_OBSERVE_READ_MAX);
 }
 
 void eu4_gfx_observe_set_output_base(eu4_gfx_observe_call *call, void *base) {
@@ -253,6 +280,113 @@ void eu4_gfx_observe_fail_fields(eu4_gfx_observe_call *call) {
     }
 }
 
+void eu4_gfx_observe_note_payload_gap(void) {
+    atomic_fetch_add_explicit(&g_payload_gaps, 1, memory_order_relaxed);
+}
+
+/* Optional resource payload. A gap is coverage, not record corruption: the
+   observation stays structurally valid so the packet can report the missing
+   bytes instead of rejecting the whole capture. */
+bool eu4_gfx_observe_try_payload(eu4_gfx_observe_call *call, const void *src,
+                                 size_t n) {
+    if (call == NULL) {
+        return false;
+    }
+    if (n == 0) {
+        call->payload_size = 0;
+        call->payload_ok = 1;
+        return true;
+    }
+    if (src == NULL || n > EU4_GFX_OBSERVE_PAYLOAD_MAX) {
+        call->payload_ok = 1;
+        call->payload_size = 0;
+        call->contents_known = 0;
+        eu4_gfx_observe_note_payload_gap();
+        return false;
+    }
+    uint32_t aligned = (uint32_t)((n + 15u) & ~(size_t)15u);
+    uint32_t offset = atomic_fetch_add_explicit(&g_payload_used, aligned,
+                                                memory_order_relaxed);
+    if (offset > EU4_GFX_OBSERVE_PAYLOAD_CAP - aligned) {
+        call->payload_ok = 1;
+        call->payload_size = 0;
+        call->contents_known = 0;
+        eu4_gfx_observe_note_payload_gap();
+        return false;
+    }
+    if (!read_payload_range(src, g_payload + offset, n)) {
+        call->payload_ok = 1;
+        call->payload_size = 0;
+        call->contents_known = 0;
+        eu4_gfx_observe_note_payload_gap();
+        return false;
+    }
+    call->payload_offset = offset;
+    call->payload_size = (uint32_t)n;
+    call->payload_ok = 1;
+    return true;
+}
+
+void eu4_gfx_observe_count_primitive(void) {
+    atomic_fetch_add_explicit(&g_primitive_sets, 1, memory_order_relaxed);
+}
+
+static void note_caller(uint64_t rva) {
+    if (rva == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < EU4_GFX_OBSERVE_CALLER_SLOTS; i++) {
+        uint64_t slot =
+            atomic_load_explicit(&g_draw_caller_rva[i], memory_order_relaxed);
+        if (slot == rva) {
+            atomic_fetch_add_explicit(&g_draw_caller_count[i], 1,
+                                      memory_order_relaxed);
+            return;
+        }
+        if (slot == 0) {
+            uint64_t expected = 0;
+            if (atomic_compare_exchange_strong_explicit(
+                    &g_draw_caller_rva[i], &expected, rva,
+                    memory_order_relaxed, memory_order_relaxed)) {
+                atomic_fetch_add_explicit(&g_draw_caller_count[i], 1,
+                                          memory_order_relaxed);
+                return;
+            }
+            if (expected == rva) {
+                atomic_fetch_add_explicit(&g_draw_caller_count[i], 1,
+                                          memory_order_relaxed);
+                return;
+            }
+        }
+    }
+    atomic_fetch_add_explicit(&g_draw_caller_overflow, 1, memory_order_relaxed);
+}
+
+void eu4_gfx_observe_count_draw(uint64_t caller_rva, int caller_known,
+                                int32_t mode, int32_t effective_count) {
+    atomic_fetch_add_explicit(&g_draw_observed, 1, memory_order_relaxed);
+    uint64_t target = atomic_load_explicit(&g_target_caller, memory_order_relaxed);
+    if (caller_known && target != 0 && caller_rva == target) {
+        atomic_fetch_add_explicit(&g_draw_at_caller, 1, memory_order_relaxed);
+    }
+    uint32_t mode_index =
+        mode >= 0 && mode < (int32_t)EU4_GFX_OBSERVE_MODE_SLOTS
+            ? (uint32_t)mode
+            : (uint32_t)EU4_GFX_OBSERVE_MODE_SLOTS - 1;
+    atomic_fetch_add_explicit(&g_draw_mode_counts[mode_index], 1,
+                              memory_order_relaxed);
+    uint32_t bucket = effective_count <= 0
+                          ? 0
+                          : effective_count == 1
+                                ? 1
+                                : effective_count == 2 ? 2 : 3;
+    atomic_fetch_add_explicit(&g_draw_count_buckets[bucket], 1,
+                              memory_order_relaxed);
+    if (caller_known) {
+        note_caller(caller_rva);
+    }
+}
+
 static void refuse(uint32_t slot) {
     if (slot < EU4_GFX_OBSERVE_MAX_SPECS) {
         g_tls.refuse_depth[slot] += 1;
@@ -292,14 +426,20 @@ static void on_entry(eu4_gfx_capture_frame *frame, uint64_t slot64) {
         refuse(slot);
         return;
     }
-    uint32_t admitted =
-        atomic_fetch_add_explicit(&g_admitted, 1, memory_order_relaxed) + 1;
-    if (admitted > atomic_load_explicit(&g_max_events, memory_order_relaxed) ||
-        admitted > atomic_load_explicit(&g_capacity, memory_order_relaxed)) {
-        atomic_fetch_sub_explicit(&g_admitted, 1, memory_order_relaxed);
-        eu4_gfx_startup_withdraw_hook();
-        refuse(slot);
-        return;
+    uint32_t retention =
+        atomic_load_explicit(&g_retention, memory_order_relaxed);
+    if (retention == EU4_GFX_OBSERVE_RETENTION_LEGACY) {
+        uint32_t admitted =
+            atomic_fetch_add_explicit(&g_admitted, 1, memory_order_relaxed) + 1;
+        if (admitted > atomic_load_explicit(&g_max_events, memory_order_relaxed) ||
+            admitted > atomic_load_explicit(&g_capacity, memory_order_relaxed)) {
+            atomic_fetch_sub_explicit(&g_admitted, 1, memory_order_relaxed);
+            eu4_gfx_startup_withdraw_hook();
+            refuse(slot);
+            return;
+        }
+    } else {
+        atomic_fetch_add_explicit(&g_observed, 1, memory_order_relaxed);
     }
     uint32_t active =
         atomic_fetch_add_explicit(&g_active, 1, memory_order_relaxed) + 1;
@@ -396,16 +536,54 @@ static void on_exit(eu4_gfx_capture_frame *frame, uint64_t slot64) {
         atomic_fetch_add_explicit(&g_unavailable, 1, memory_order_relaxed);
     }
 
+    if (entry->call.target_hit) {
+        atomic_fetch_add_explicit(&g_draw_qualified, 1, memory_order_relaxed);
+    }
+    uint32_t retention =
+        atomic_load_explicit(&g_retention, memory_order_relaxed);
+    int retain = retention == EU4_GFX_OBSERVE_RETENTION_LEGACY ||
+                 entry->call.retain;
+    uint32_t capacity = atomic_load_explicit(&g_capacity, memory_order_relaxed);
+    int stored = 0;
+    if (!retain) {
+        atomic_store_explicit(&g_last_event_ns, now_ns(), memory_order_relaxed);
+        atomic_fetch_sub_explicit(&g_active, 1, memory_order_relaxed);
+        eu4_gfx_startup_finish_hook();
+        return;
+    }
+    if (retention == EU4_GFX_OBSERVE_RETENTION_STATE &&
+        entry->call.caller_known && entry->call.caller_rva ==
+                                        atomic_load_explicit(&g_target_caller,
+                                                             memory_order_relaxed)) {
+        uint32_t matching =
+            atomic_fetch_add_explicit(&g_matching_retained, 1,
+                                      memory_order_relaxed) + 1;
+        if (matching > EU4_GFX_OBSERVE_MATCHING_DRAW_CAP) {
+            atomic_store_explicit(&g_retention_budget, 1, memory_order_relaxed);
+        }
+    }
     uint32_t index = atomic_fetch_add_explicit(&g_committed, 1,
                                                memory_order_relaxed);
-    if (index < atomic_load_explicit(&g_capacity, memory_order_relaxed)) {
+    if (index < capacity) {
         record.completion_seq = (uint64_t)index + 1;
         g_records[index] = record;
+        stored = 1;
+    } else if (retention == EU4_GFX_OBSERVE_RETENTION_STATE) {
+        atomic_store_explicit(&g_retention_budget, 1, memory_order_relaxed);
     } else {
         atomic_fetch_add_explicit(&g_overflow, 1, memory_order_relaxed);
     }
     atomic_store_explicit(&g_last_event_ns, now_ns(), memory_order_relaxed);
     atomic_fetch_sub_explicit(&g_active, 1, memory_order_relaxed);
+    if (entry->call.target_selected) {
+        if (stored) {
+            atomic_store_explicit(&g_target_draw_call_id, entry->call.call_id,
+                                  memory_order_relaxed);
+            atomic_store_explicit(&g_target_hit, 1, memory_order_release);
+        } else {
+            atomic_store_explicit(&g_retention_budget, 1, memory_order_relaxed);
+        }
+    }
     eu4_gfx_startup_finish_hook();
 }
 
@@ -470,11 +648,94 @@ bool eu4_gfx_observe_configure_from_env(void) {
         }
         duration_ms = (uint32_t)value;
     }
+    uint32_t retention = EU4_GFX_OBSERVE_RETENTION_LEGACY;
+    const char *retention_text = getenv("EU4_GFX_OPS_RETENTION");
+    if (retention_text != NULL) {
+        if (strcmp(retention_text, "state") == 0) {
+            retention = EU4_GFX_OBSERVE_RETENTION_STATE;
+        } else if (strcmp(retention_text, "legacy") != 0) {
+            return false;
+        }
+    }
+    uint32_t stop_policy = EU4_GFX_OBSERVE_STOP_QUOTA;
+    const char *stop_text = getenv("EU4_GFX_OPS_STOP_POLICY");
+    if (stop_text != NULL) {
+        if (strcmp(stop_text, "target_draw") == 0) {
+            stop_policy = EU4_GFX_OBSERVE_STOP_TARGET_DRAW;
+        } else if (strcmp(stop_text, "quota") != 0) {
+            return false;
+        }
+    }
+    uint64_t target_caller = 0;
+    const char *caller_text = getenv("EU4_GFX_OPS_TARGET_CALLER");
+    if (caller_text != NULL) {
+        char *end = NULL;
+        unsigned long long value = strtoull(caller_text, &end, 0);
+        if (end == NULL || *end != '\0' || value == 0 ||
+            value > 0xffffffffull) {
+            return false;
+        }
+        target_caller = (uint64_t)value;
+    }
+    if (stop_policy == EU4_GFX_OBSERVE_STOP_TARGET_DRAW && target_caller == 0) {
+        return false;
+    }
     g_selected_count = count;
     atomic_store_explicit(&g_max_events, max_events, memory_order_relaxed);
     atomic_store_explicit(&g_duration_ms, duration_ms, memory_order_relaxed);
+    if (!eu4_gfx_observe_configure_policy(stop_policy, target_caller,
+                                          retention)) {
+        return false;
+    }
     atomic_store_explicit(&g_enabled, 1, memory_order_relaxed);
     return true;
+}
+
+bool eu4_gfx_observe_configure_policy(uint32_t stop_policy, uint64_t target_caller,
+                                      uint32_t retention) {
+    if (stop_policy != EU4_GFX_OBSERVE_STOP_QUOTA &&
+        stop_policy != EU4_GFX_OBSERVE_STOP_TARGET_DRAW) {
+        return false;
+    }
+    if (retention != EU4_GFX_OBSERVE_RETENTION_LEGACY &&
+        retention != EU4_GFX_OBSERVE_RETENTION_STATE) {
+        return false;
+    }
+    if (stop_policy == EU4_GFX_OBSERVE_STOP_TARGET_DRAW) {
+        if (target_caller == 0) {
+            return false;
+        }
+        retention = EU4_GFX_OBSERVE_RETENTION_STATE;
+    }
+    atomic_store_explicit(&g_stop_policy, stop_policy, memory_order_relaxed);
+    atomic_store_explicit(&g_target_caller, target_caller, memory_order_relaxed);
+    atomic_store_explicit(&g_retention, retention, memory_order_relaxed);
+    eu4_gfx_observe_draw_configure(target_caller);
+    return true;
+}
+
+bool eu4_gfx_observe_claim_target(void) {
+    uint32_t expected = 0;
+    return atomic_compare_exchange_strong_explicit(
+        &g_target_claimed, &expected, 1, memory_order_acq_rel,
+        memory_order_relaxed);
+}
+
+void eu4_gfx_observe_mark_target_draw(uint64_t call_id) {
+    atomic_store_explicit(&g_target_draw_call_id, call_id, memory_order_relaxed);
+    atomic_store_explicit(&g_target_hit, 1, memory_order_release);
+}
+
+bool eu4_gfx_observe_target_draw_hit(void) {
+    return atomic_load_explicit(&g_target_hit, memory_order_acquire) != 0;
+}
+
+uint32_t eu4_gfx_observe_retention(void) {
+    return atomic_load_explicit(&g_retention, memory_order_relaxed);
+}
+
+uint64_t eu4_gfx_observe_target_caller(void) {
+    return atomic_load_explicit(&g_target_caller, memory_order_relaxed);
 }
 
 static bool validate_specs(const eu4_gfx_observe_spec *specs, size_t count) {
@@ -595,6 +856,12 @@ bool eu4_gfx_observe_should_stop(void) {
     if (!atomic_load_explicit(&g_enabled, memory_order_relaxed)) {
         return false;
     }
+    if (atomic_load_explicit(&g_stop_policy, memory_order_relaxed) ==
+        EU4_GFX_OBSERVE_STOP_TARGET_DRAW) {
+        return atomic_load_explicit(&g_target_hit, memory_order_acquire) != 0 ||
+               atomic_load_explicit(&g_retention_budget, memory_order_relaxed) !=
+                   0;
+    }
     if (atomic_load_explicit(&g_admitted, memory_order_relaxed) >=
         atomic_load_explicit(&g_max_events, memory_order_relaxed)) {
         return true;
@@ -663,6 +930,41 @@ void eu4_gfx_observe_copy_snapshot(eu4_gfx_observe_snapshot *out) {
     out->events = committed;
     out->record_count = committed;
     out->records = g_records;
+    out->retention = atomic_load_explicit(&g_retention, memory_order_relaxed);
+    out->observed = atomic_load_explicit(&g_observed, memory_order_relaxed);
+    out->stop_policy = atomic_load_explicit(&g_stop_policy, memory_order_relaxed);
+    out->target_draw_caller =
+        atomic_load_explicit(&g_target_caller, memory_order_relaxed);
+    out->target_draw_qualified =
+        atomic_load_explicit(&g_target_hit, memory_order_acquire) != 0;
+    out->target_draw_call_id =
+        atomic_load_explicit(&g_target_draw_call_id, memory_order_relaxed);
+    out->draw_observed = atomic_load_explicit(&g_draw_observed, memory_order_relaxed);
+    out->draw_at_caller =
+        atomic_load_explicit(&g_draw_at_caller, memory_order_relaxed);
+    out->draw_qualified =
+        atomic_load_explicit(&g_draw_qualified, memory_order_relaxed);
+    for (uint32_t i = 0; i < EU4_GFX_OBSERVE_MODE_SLOTS; i++) {
+        out->draw_mode_counts[i] =
+            atomic_load_explicit(&g_draw_mode_counts[i], memory_order_relaxed);
+    }
+    for (uint32_t i = 0; i < 4; i++) {
+        out->draw_count_buckets[i] =
+            atomic_load_explicit(&g_draw_count_buckets[i], memory_order_relaxed);
+    }
+    out->draw_caller_overflow =
+        atomic_load_explicit(&g_draw_caller_overflow, memory_order_relaxed);
+    for (uint32_t i = 0; i < EU4_GFX_OBSERVE_CALLER_SLOTS; i++) {
+        out->draw_callers[i].rva =
+            atomic_load_explicit(&g_draw_caller_rva[i], memory_order_relaxed);
+        out->draw_callers[i].count =
+            atomic_load_explicit(&g_draw_caller_count[i], memory_order_relaxed);
+    }
+    out->primitive_sets =
+        atomic_load_explicit(&g_primitive_sets, memory_order_relaxed);
+    out->retention_budget_exhausted =
+        atomic_load_explicit(&g_retention_budget, memory_order_relaxed) != 0;
+    out->payload_gaps = atomic_load_explicit(&g_payload_gaps, memory_order_relaxed);
     out->integrity_ok = evaluate_integrity(out);
     out->records_copied = out->integrity_ok;
     if (out->state != EU4_GFX_STARTUP_SEALED) {
@@ -675,6 +977,8 @@ void eu4_gfx_observe_copy_snapshot(eu4_gfx_observe_snapshot *out) {
         snprintf(out->reason, sizeof(out->reason), "unavailable");
     } else if (out->overflow != 0) {
         snprintf(out->reason, sizeof(out->reason), "overflow");
+    } else if (out->retention_budget_exhausted) {
+        snprintf(out->reason, sizeof(out->reason), "retention_budget");
     }
 }
 
@@ -710,6 +1014,8 @@ static const char *kind_name(uint32_t kind) {
         return "vertex_buffer_bind";
     case EU4_GFX_OBSERVE_KIND_DRAW:
         return "draw";
+    case EU4_GFX_OBSERVE_KIND_PRIMITIVE_SET:
+        return "primitive_set";
     default:
         return "operation";
     }
@@ -863,26 +1169,65 @@ static int write_summary_body(FILE *file, void *opaque) {
     }
     fprintf(file,
             "],\"max_events\":%u,\"capacity\":%u,\"duration_ms\":%u,"
+            "\"retention\":\"%s\",\"stop_policy\":\"%s\",\"observed\":%u,"
             "\"state\":\"%s\",\"events\":%u,\"integrity_ok\":%s,"
             "\"records_copied\":%s,\"overlaps\":%u,\"refused\":%u,"
             "\"unmatched\":%u,\"unavailable\":%u,\"overflow\":%u,"
             "\"in_flight\":%u,\"init_seen\":%s,\"init_call_id\":%llu,"
-            "\"first_event_ms\":%llu,\"last_event_ms\":%llu,"
-            "\"coverage\":{\"events\":%u,\"overlaps\":%u},\"reason\":\"%s\"}\n",
+            "\"target_draw_caller\":%llu,\"target_draw_qualified\":%s,"
+            "\"target_draw_call_id\":%llu,\"draw_observed\":%u,"
+            "\"draw_at_caller\":%u,\"draw_qualified\":%u,"
+            "\"retention_budget_exhausted\":%s,\"payload_gaps\":%u,"
+            "\"primitive_sets\":%u,\"draw_caller_overflow\":%u,"
+            "\"first_event_ms\":%llu,\"last_event_ms\":%llu,\"draw_modes\":[",
             snap->max_events, snap->capacity, snap->duration_ms,
-            state_name(snap->state), snap->events,
+            snap->retention == EU4_GFX_OBSERVE_RETENTION_STATE ? "state"
+                                                               : "legacy",
+            snap->stop_policy == EU4_GFX_OBSERVE_STOP_TARGET_DRAW
+                ? "target_draw"
+                : "quota",
+            snap->observed, state_name(snap->state), snap->events,
             snap->integrity_ok ? "true" : "false",
             snap->records_copied ? "true" : "false", snap->overlaps,
             snap->refused, snap->unmatched, snap->unavailable, snap->overflow,
             snap->in_flight, snap->init_seen ? "true" : "false",
-            (unsigned long long)snap->init_call_id, 0ull,
+            (unsigned long long)snap->init_call_id,
+            (unsigned long long)snap->target_draw_caller,
+            snap->target_draw_qualified ? "true" : "false",
+            (unsigned long long)snap->target_draw_call_id, snap->draw_observed,
+            snap->draw_at_caller, snap->draw_qualified,
+            snap->retention_budget_exhausted ? "true" : "false",
+            snap->payload_gaps, snap->primitive_sets, snap->draw_caller_overflow,
+            0ull,
             (unsigned long long)(snap->first_event_ns == 0 ||
                                          snap->last_event_ns < snap->first_event_ns
                                      ? 0
                                      : (snap->last_event_ns -
                                         snap->first_event_ns) /
-                                           1000000ull),
-            snap->events, snap->overlaps, snap->reason);
+                                           1000000ull));
+    for (uint32_t i = 0; i < EU4_GFX_OBSERVE_MODE_SLOTS; i++) {
+        fprintf(file, "%s%u", i == 0 ? "" : ",", snap->draw_mode_counts[i]);
+    }
+    fprintf(file,
+            "],\"draw_counts\":{\"zero\":%u,\"one\":%u,\"two\":%u,"
+            "\"at_least_three\":%u},\"draw_callers\":[",
+            snap->draw_count_buckets[0], snap->draw_count_buckets[1],
+            snap->draw_count_buckets[2], snap->draw_count_buckets[3]);
+    int first_caller = 1;
+    for (uint32_t i = 0; i < EU4_GFX_OBSERVE_CALLER_SLOTS; i++) {
+        if (snap->draw_callers[i].rva == 0) {
+            continue;
+        }
+        fprintf(file, "%s{\"rva\":%llu,\"count\":%u}",
+                first_caller ? "" : ",",
+                (unsigned long long)snap->draw_callers[i].rva,
+                snap->draw_callers[i].count);
+        first_caller = 0;
+    }
+    fprintf(file,
+            "],\"coverage\":{\"events\":%u,\"observed\":%u,\"overlaps\":%u},"
+            "\"reason\":\"%s\"}\n",
+            snap->events, snap->observed, snap->overlaps, snap->reason);
     return 0;
 }
 
@@ -1040,7 +1385,33 @@ void eu4_gfx_observe_test_reset(void) {
     atomic_store(&g_test_fail_output, 0);
     atomic_store(&g_test_overlap, 0);
     atomic_store(&g_payload_used, 0);
+    atomic_store(&g_retention, EU4_GFX_OBSERVE_RETENTION_LEGACY);
+    atomic_store(&g_stop_policy, EU4_GFX_OBSERVE_STOP_QUOTA);
+    atomic_store(&g_target_caller, 0);
+    atomic_store(&g_target_draw_call_id, 0);
+    atomic_store(&g_target_claimed, 0);
+    atomic_store(&g_target_hit, 0);
+    atomic_store(&g_observed, 0);
+    atomic_store(&g_draw_observed, 0);
+    atomic_store(&g_draw_at_caller, 0);
+    atomic_store(&g_draw_qualified, 0);
+    for (uint32_t i = 0; i < EU4_GFX_OBSERVE_MODE_SLOTS; i++) {
+        atomic_store(&g_draw_mode_counts[i], 0);
+    }
+    for (uint32_t i = 0; i < 4; i++) {
+        atomic_store(&g_draw_count_buckets[i], 0);
+    }
+    for (uint32_t i = 0; i < EU4_GFX_OBSERVE_CALLER_SLOTS; i++) {
+        atomic_store(&g_draw_caller_rva[i], 0);
+        atomic_store(&g_draw_caller_count[i], 0);
+    }
+    atomic_store(&g_draw_caller_overflow, 0);
+    atomic_store(&g_primitive_sets, 0);
+    atomic_store(&g_matching_retained, 0);
+    atomic_store(&g_retention_budget, 0);
+    atomic_store(&g_payload_gaps, 0);
     eu4_gfx_observe_buffers_reset();
+    eu4_gfx_observe_draw_reset();
     atomic_store(&g_test_fail_install_after, -1);
     atomic_store(&g_finalized, 0);
     atomic_store(&g_finalized_ok, 0);
@@ -1091,4 +1462,17 @@ uint32_t eu4_gfx_observe_test_events(void) {
     uint32_t committed = atomic_load_explicit(&g_committed, memory_order_relaxed);
     uint32_t capacity = atomic_load_explicit(&g_capacity, memory_order_relaxed);
     return committed > capacity ? capacity : committed;
+}
+
+void eu4_gfx_observe_test_set_policy(uint32_t stop_policy, uint64_t target_caller,
+                                     uint32_t retention) {
+    (void)eu4_gfx_observe_configure_policy(stop_policy, target_caller, retention);
+}
+
+uint32_t eu4_gfx_observe_test_observed(void) {
+    return atomic_load_explicit(&g_observed, memory_order_relaxed);
+}
+
+bool eu4_gfx_observe_test_budget_exhausted(void) {
+    return atomic_load_explicit(&g_retention_budget, memory_order_relaxed) != 0;
 }

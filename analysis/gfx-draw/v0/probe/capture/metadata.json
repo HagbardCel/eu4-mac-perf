@@ -1,0 +1,1 @@
+{"schema":"gfx-startup/v0","recorder_version":"1","session":"d5af7baf-cc1e-4def-a5f4-96e1d5325641","pid":34926,"executable_sha256":"b3d38876abf4e61cdae57509186d7cb7dcb03bfeaca4c95c10c713794715141d","image_base":"0x100000000","hook_rvas":{"settings":"0x15ed388","init":"0x15e8ea0"}}

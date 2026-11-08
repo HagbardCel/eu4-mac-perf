@@ -58,6 +58,7 @@ def build_library() -> Path:
         str(BENCH / "eu4_gfx_site_patch.c"),
         str(BENCH / "eu4_gfx_observe.c"),
         str(BENCH / "eu4_gfx_observe_buffers.c"),
+        str(BENCH / "eu4_gfx_observe_draw.c"),
         str(BENCH / "eu4_gfx_observe_viewport.c"),
         str(BENCH / "eu4_gfx_observe_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace.c"),
@@ -87,6 +88,7 @@ def build_host() -> Path:
         str(BENCH / "eu4_gfx_site_patch.c"),
         str(BENCH / "eu4_gfx_observe.c"),
         str(BENCH / "eu4_gfx_observe_buffers.c"),
+        str(BENCH / "eu4_gfx_observe_draw.c"),
         str(BENCH / "eu4_gfx_observe_viewport.c"),
         str(BENCH / "eu4_gfx_observe_gateway.S"),
         str(BENCH / "eu4_gfx_startup_trace.c"),
@@ -239,7 +241,12 @@ def run(*, authorize_live: bool, wait_seconds: float = 180.0) -> dict:
 
 
 def preflight_ops(
-    targets: list[str], *, max_events: int = 256, duration_s: float = 10.0
+    targets: list[str],
+    *,
+    max_events: int = 256,
+    duration_s: float = 10.0,
+    until_target_draw: bool = False,
+    target_caller_rva: int | None = None,
 ) -> dict:
     """Pin the executable and verify every selected observation prefix."""
     if not targets:
@@ -250,6 +257,15 @@ def preflight_ops(
         raise StartupError("--max-events must be between 1 and 1024")
     if not 0.0 <= duration_s <= 600.0:
         raise StartupError("--duration must be between 0 and 600 seconds")
+    if until_target_draw:
+        if "_GfxDraw" not in targets:
+            raise StartupError("--until-target-draw requires --target _GfxDraw")
+        if target_caller_rva is None:
+            raise StartupError("--until-target-draw requires --caller-rva")
+        if not 0 < target_caller_rva <= 0xFFFFFFFF:
+            raise StartupError("--caller-rva must be a non-zero 32-bit RVA")
+    elif target_caller_rva is not None:
+        raise StartupError("--caller-rva requires --until-target-draw")
     entries = observe_registry.load_entries()
     by_symbol = {entry.symbol: entry for entry in entries}
     selected = []
@@ -270,6 +286,7 @@ def preflight_ops(
     image_base = target["image_base"]
     if isinstance(image_base, str):
         image_base = int(image_base, 16)
+    caller_site_hex = None
     with MachOMapper(base.GOG_EXE) as mapper:
         for entry in selected:
             window = mapper.read_bytes_at_rva(image_base, entry.rva, len(entry.prefix))
@@ -277,6 +294,15 @@ def preflight_ops(
                 raise StartupError(
                     f"Observation prefix mismatch for {entry.symbol}: {window.hex()}"
                 )
+        if target_caller_rva is not None:
+            try:
+                caller_site_hex = mapper.read_bytes_at_rva(
+                    image_base, target_caller_rva, 8
+                ).hex()
+            except Exception as exc:  # noqa: BLE001
+                raise StartupError(
+                    f"--caller-rva is not file-backed in the pinned image: {exc}"
+                ) from exc
     evidence["ops"] = [
         {
             "symbol": entry.symbol,
@@ -289,6 +315,11 @@ def preflight_ops(
     ]
     evidence["max_events"] = max_events
     evidence["duration_ms"] = int(duration_s * 1000)
+    evidence["until_target_draw"] = until_target_draw
+    evidence["target_caller_rva"] = (
+        f"0x{target_caller_rva:x}" if target_caller_rva is not None else None
+    )
+    evidence["caller_site_hex"] = caller_site_hex
     return evidence
 
 
@@ -333,14 +364,22 @@ def run_ops(
     output: Path,
     authorize_live: bool,
     evidence: dict | None = None,
+    until_target_draw: bool = False,
+    target_caller_rva: int | None = None,
 ) -> dict:
     """Launch one bounded original-process observation session."""
     if not authorize_live:
         raise StartupError("Live capture requires --authorize-live or a campaign")
     if not 1 <= timeout_s <= 600:
         raise StartupError("--timeout must be between 1 and 600 seconds")
+    if until_target_draw and target_caller_rva is None:
+        raise StartupError("--until-target-draw requires --caller-rva")
     evidence = evidence or preflight_ops(
-        targets, max_events=max_events, duration_s=duration_s
+        targets,
+        max_events=max_events,
+        duration_s=duration_s,
+        until_target_draw=until_target_draw,
+        target_caller_rva=target_caller_rva,
     )
     run_dir = Path(output).expanduser().resolve()
     if run_dir.exists():
@@ -358,6 +397,12 @@ def run_ops(
     env["EU4_GFX_OPS_TARGETS"] = ",".join(targets)
     env["EU4_GFX_OPS_MAX_EVENTS"] = str(max_events)
     env["EU4_GFX_OPS_DURATION_MS"] = str(int(duration_s * 1000))
+    env["EU4_GFX_OPS_STOP_POLICY"] = (
+        "target_draw" if until_target_draw else "quota"
+    )
+    env["EU4_GFX_OPS_RETENTION"] = "state" if until_target_draw else "legacy"
+    if target_caller_rva is not None:
+        env["EU4_GFX_OPS_TARGET_CALLER"] = f"0x{target_caller_rva:x}"
     env.pop("EU4_METAL_BOOT_MODE", None)
     env.pop("EU4_METAL_INIT_DIR", None)
     request = {
@@ -366,6 +411,10 @@ def run_ops(
         "targets": evidence["ops"],
         "max_events": max_events,
         "duration_ms": int(duration_s * 1000),
+        "stop_policy": "target_draw" if until_target_draw else "quota",
+        "retention": "state" if until_target_draw else "legacy",
+        "target_caller_rva": evidence.get("target_caller_rva"),
+        "caller_site_hex": evidence.get("caller_site_hex"),
         "timeout_s": timeout_s,
         "executable_sha256": evidence["executable_sha256"],
         "library_sha256": evidence["library_sha256"],

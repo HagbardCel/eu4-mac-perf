@@ -41,6 +41,16 @@ class LaunchLimit(RuntimeError):
         self.detail = detail
 
 
+def _rva_value(text: str) -> int:
+    try:
+        value = int(text, 0)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid RVA: {text}") from exc
+    if not 0 < value <= 0xFFFFFFFF:
+        raise argparse.ArgumentTypeError(f"RVA out of range: {text}")
+    return value
+
+
 def _atomic_json(path: Path, value: dict) -> None:
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n")
@@ -146,18 +156,100 @@ def _finish_launch(
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def _capture_status(report: dict) -> tuple[str, str]:
+def _capture_status(report: dict, *, until_target_draw: bool = False) -> tuple[str, str]:
     status = report.get("status")
     if not isinstance(status, dict) or status.get("state") != "installed":
         return "unavailable", "startup attestation was not installed"
     operations = report.get("operations")
     if not isinstance(operations, dict):
         return "unavailable", "operations summary was not written"
+    if until_target_draw:
+        if operations.get("state") != "sealed":
+            return "unavailable", "capture did not seal"
+        if operations.get("integrity_ok") is not True:
+            return "unavailable", str(operations.get("reason") or "integrity")
+        if operations.get("retention_budget_exhausted") is True:
+            return "budget_exhausted", "retention_budget"
+        if operations.get("target_draw_qualified") is True:
+            return "complete", ""
+        return "draw_not_qualified", "no_target_draw"
     if operations.get("reason"):
         return "incomplete", str(operations["reason"])
     if operations.get("events") == 0:
         return "empty", "no matching operation was observed"
     return "complete", ""
+
+
+def _draw_records(output: Path) -> list[dict]:
+    path = output / "operations.jsonl"
+    if not path.is_file():
+        return []
+    rows: list[dict] = []
+    try:
+        for line in path.read_text().splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if isinstance(row, dict) and row.get("symbol") == "_GfxDraw":
+                rows.append(row)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return []
+    return rows
+
+
+def _draw_block(report: dict, output: Path) -> dict:
+    operations = report.get("operations") or {}
+    target = operations.get("target_draw_caller")
+    block: dict = {
+        "qualified": operations.get("target_draw_qualified") is True,
+        "caller_rva": f"0x{target:x}" if isinstance(target, int) and target else None,
+        "observed": operations.get("draw_observed", 0),
+        "at_caller": operations.get("draw_at_caller", 0),
+        "qualified_count": operations.get("draw_qualified", 0),
+        "modes": {
+            str(index): count
+            for index, count in enumerate(operations.get("draw_modes") or [])
+            if count
+        },
+        "counts": operations.get("draw_counts") or {},
+        "callers": operations.get("draw_callers") or [],
+        "retention_budget_exhausted": operations.get("retention_budget_exhausted")
+        is True,
+    }
+    records = _draw_records(output)
+    samples = []
+    for row in records[-8:]:
+        samples.append(
+            {
+                "call_id": row.get("call_id"),
+                "completion_seq": row.get("completion_seq"),
+                "caller_rva": row.get("caller_rva"),
+                "mode": row.get("mode"),
+                "raw_count": row.get("raw_count"),
+                "effective_count": row.get("effective_count"),
+                "qualified": row.get("qualified"),
+            }
+        )
+    block["samples"] = samples
+    target_call = operations.get("target_draw_call_id")
+    if block["qualified"] and isinstance(target_call, int):
+        for row in records:
+            if row.get("call_id") == target_call:
+                block["target"] = {
+                    "call_id": row.get("call_id"),
+                    "completion_seq": row.get("completion_seq"),
+                    "thread_id": row.get("thread_id"),
+                    "caller_rva": row.get("caller_rva"),
+                    "mode": row.get("mode"),
+                    "raw_count": row.get("raw_count"),
+                    "first": row.get("first"),
+                    "effective_count": row.get("effective_count"),
+                    "count_source": row.get("count_source"),
+                    "primitive_enum": row.get("primitive_enum"),
+                    "primitive_call_id": row.get("primitive_call_id"),
+                }
+                break
+    return block
 
 
 def capture(args: argparse.Namespace) -> int:
@@ -172,11 +264,32 @@ def capture(args: argparse.Namespace) -> int:
     if output.exists():
         print(f"capture output already exists: {output}", file=sys.stderr)
         return EXIT_INCOMPLETE
+    until_target_draw = bool(args.until_target_draw)
+    if until_target_draw:
+        if args.max_events is not None or args.duration is not None:
+            print(
+                "--until-target-draw does not accept --max-events or --duration",
+                file=sys.stderr,
+            )
+            return EXIT_INCOMPLETE
+        if not args.caller_rva:
+            print("--until-target-draw requires --caller-rva", file=sys.stderr)
+            return EXIT_INCOMPLETE
+        max_events = 1024
+        duration = 0.0
+    else:
+        if args.caller_rva:
+            print("--caller-rva requires --until-target-draw", file=sys.stderr)
+            return EXIT_INCOMPLETE
+        max_events = 256 if args.max_events is None else args.max_events
+        duration = 10.0 if args.duration is None else args.duration
     try:
         evidence = startup.preflight_ops(
             args.target,
-            max_events=args.max_events,
-            duration_s=args.duration,
+            max_events=max_events,
+            duration_s=duration,
+            until_target_draw=until_target_draw,
+            target_caller_rva=args.caller_rva,
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
         print(f"capture preflight failed: {exc}", file=sys.stderr)
@@ -198,12 +311,14 @@ def capture(args: argparse.Namespace) -> int:
     try:
         report = startup.run_ops(
             targets=args.target,
-            max_events=args.max_events,
-            duration_s=args.duration,
+            max_events=max_events,
+            duration_s=duration,
             timeout_s=args.timeout,
             output=output,
             authorize_live=True,
             evidence=evidence,
+            until_target_draw=until_target_draw,
+            target_caller_rva=args.caller_rva,
         )
     except (startup.StartupError, OSError, RuntimeError) as exc:
         if token is not None:
@@ -216,22 +331,29 @@ def capture(args: argparse.Namespace) -> int:
         print(f"capture failed: {exc}", file=sys.stderr)
         return EXIT_UNAVAILABLE
 
-    status, reason = _capture_status(report)
+    status, reason = _capture_status(
+        report, until_target_draw=until_target_draw
+    )
     coverage: dict = {}
     validation: dict = {}
-    if status == "complete":
+    draw_block: dict = {}
+    if status in ("complete", "draw_not_qualified", "budget_exhausted"):
+        draw_block = _draw_block(report, output)
         try:
-            artifact = capture_reader.load_capture(output)
+            artifact = capture_reader.load_capture(
+                output, require_events=status == "complete"
+            )
         except capture_reader.CaptureIncomplete as exc:
-            status = "incomplete" if exc.reason != "op_no_events" else "empty"
-            reason = exc.reason
+            if status == "complete":
+                status = "unavailable"
+                reason = exc.reason
             validation = {"reason": exc.reason, "detail": exc.detail}
         else:
             coverage = artifact.coverage
             validation = {
-                "ok": True,
+                "ok": status != "budget_exhausted",
                 "source_hashes": artifact.source_hashes,
-                "scope": "function_cpu_state",
+                "scope": "draw_probe" if until_target_draw else "function_cpu_state",
             }
     if token is not None:
         _finish_launch(
@@ -248,6 +370,7 @@ def capture(args: argparse.Namespace) -> int:
         "pid": report.get("pid"),
         "coverage": coverage,
         "validation": validation,
+        "draw": draw_block,
         "launch": {
             "mode": "campaign" if token is not None else "manual",
         },
@@ -256,7 +379,11 @@ def capture(args: argparse.Namespace) -> int:
         json.dumps(result, indent=2) + "\n"
     )
     print(json.dumps(result, indent=2))
-    return EXIT_COMPLETE if status == "complete" else EXIT_INCOMPLETE
+    if status == "complete":
+        return EXIT_COMPLETE
+    if status == "budget_exhausted":
+        return EXIT_UNAVAILABLE
+    return EXIT_INCOMPLETE
 
 
 def _default_replay_output(capture_path: Path) -> Path:
@@ -321,6 +448,32 @@ def replay(args: argparse.Namespace) -> int:
     return eu4_gfx_op_diff.EXIT_CODES.get(result.get("status"), EXIT_UNAVAILABLE)
 
 
+def packet(args: argparse.Namespace) -> int:
+    import eu4_gfx_draw_packet
+
+    capture_path = Path(args.capture).expanduser().resolve()
+    output = Path(args.output).expanduser().resolve()
+    if output.exists():
+        print(f"packet output already exists: {output}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    try:
+        result = eu4_gfx_draw_packet.write_packet(
+            capture_path, output, expected_caller=args.caller_rva
+        )
+    except eu4_gfx_draw_packet.PacketError as exc:
+        print(f"packet refused: {exc}", file=sys.stderr)
+        return EXIT_INCOMPLETE
+    print(json.dumps(result["packet"], indent=2))
+    status = result["packet"].get("status")
+    if status == "ready":
+        return EXIT_COMPLETE
+    if status == "unsupported":
+        return EXIT_LIMIT
+    if status == "unavailable":
+        return EXIT_UNAVAILABLE
+    return EXIT_INCOMPLETE
+
+
 def next_blocker(args: argparse.Namespace) -> int:
     from automation.next_blocker import classify
 
@@ -339,8 +492,10 @@ def _parser() -> argparse.ArgumentParser:
 
     cap = sub.add_parser("capture", description="bounded live original capture")
     cap.add_argument("--target", action="append", required=True)
-    cap.add_argument("--max-events", type=int, default=256)
-    cap.add_argument("--duration", type=float, default=10.0)
+    cap.add_argument("--max-events", type=int)
+    cap.add_argument("--duration", type=float)
+    cap.add_argument("--until-target-draw", action="store_true")
+    cap.add_argument("--caller-rva", type=_rva_value)
     cap.add_argument("--timeout", type=float, default=120.0)
     cap.add_argument("--output", required=True)
     cap.add_argument("--authorize-live", action="store_true")
@@ -352,6 +507,14 @@ def _parser() -> argparse.ArgumentParser:
     rep.add_argument("--output")
     rep.add_argument("--skip-unknown", action="store_true")
     rep.set_defaults(func=replay)
+
+    pkt = sub.add_parser(
+        "packet", description="build the L3.2a draw packet from one capture"
+    )
+    pkt.add_argument("--capture", required=True)
+    pkt.add_argument("--output", required=True)
+    pkt.add_argument("--caller-rva", type=_rva_value, default=0xEDFCD1)
+    pkt.set_defaults(func=packet)
 
     nxt = sub.add_parser(
         "next-blocker", description="classify the next actionable Metal-only blocker"
