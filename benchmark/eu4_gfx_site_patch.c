@@ -4,12 +4,14 @@
 #include <limits.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
 static size_t page_size;
+static _Atomic int g_fail_next_rx;
 
 static size_t page_bytes(void) {
     if (page_size == 0) {
@@ -33,7 +35,14 @@ static bool set_site_rw(uintptr_t begin) {
 }
 
 static bool set_site_rx(uintptr_t begin) {
+    if (atomic_exchange_explicit(&g_fail_next_rx, 0, memory_order_relaxed)) {
+        return false;
+    }
     return set_site_protection(begin, VM_PROT_READ | VM_PROT_EXECUTE);
+}
+
+void eu4_gfx_site_test_fail_next_rx(void) {
+    atomic_store_explicit(&g_fail_next_rx, 1, memory_order_relaxed);
 }
 
 bool eu4_gfx_site_rel32_fits(const void *site, const void *target) {
@@ -156,6 +165,7 @@ bool eu4_gfx_site_patch(eu4_gfx_site *site, void *address,
     site->gateway = gateway;
     memcpy(site->saved, address, (size_t)length);
     *trampoline_slot = trampoline;
+    site->written = true;
 
     uint8_t *patch = (uint8_t *)address;
     patch[0] = 0xe9;
@@ -167,7 +177,8 @@ bool eu4_gfx_site_patch(eu4_gfx_site *site, void *address,
 
     if (!set_site_rx(begin)) {
         if (!eu4_gfx_site_restore(site)) {
-            site->installed = true;
+            /* The patch is still live; keep the relay mapped and let the
+               caller abort the session. */
             return false;
         }
         eu4_gfx_site_release(site);
@@ -179,7 +190,8 @@ bool eu4_gfx_site_patch(eu4_gfx_site *site, void *address,
 }
 
 bool eu4_gfx_site_restore(eu4_gfx_site *site) {
-    if (site == NULL || site->address == 0 || !site->installed) {
+    if (site == NULL || site->address == 0 ||
+        (!site->installed && !site->written)) {
         return true;
     }
     size_t page = page_bytes();
@@ -196,11 +208,12 @@ bool eu4_gfx_site_restore(eu4_gfx_site *site) {
         return false;
     }
     site->installed = false;
+    site->written = false;
     return true;
 }
 
 void eu4_gfx_site_release(eu4_gfx_site *site) {
-    if (site == NULL) {
+    if (site == NULL || site->installed || site->written) {
         return;
     }
     size_t page = page_bytes();

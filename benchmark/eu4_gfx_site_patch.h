@@ -20,6 +20,7 @@ typedef struct {
     void **trampoline_slot;
     void *gateway;
     bool installed;
+    bool written;
 } eu4_gfx_site;
 
 bool eu4_gfx_site_rel32_fits(const void *site, const void *target);
@@ -28,5 +29,8 @@ bool eu4_gfx_site_patch(eu4_gfx_site *site, void *address,
                         void **trampoline_slot);
 bool eu4_gfx_site_restore(eu4_gfx_site *site);
 void eu4_gfx_site_release(eu4_gfx_site *site);
+
+/* Test hook: the next RX-protection change fails after the patch is written. */
+void eu4_gfx_site_test_fail_next_rx(void);
 
 #endif

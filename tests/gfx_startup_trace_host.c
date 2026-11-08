@@ -2,6 +2,7 @@
 
 #include "eu4_gfx_observe.h"
 #include "eu4_gfx_observe_viewport.h"
+#include "eu4_gfx_site_patch.h"
 
 #include <mach-o/dyld.h>
 #include <mach-o/getsect.h>
@@ -892,6 +893,29 @@ static int scenario_observe_reject(void) {
     return 0;
 }
 
+static int scenario_observe_rx_failure(void) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_test_reset();
+    uintptr_t lo = 0;
+    uintptr_t hi = 0;
+    observe_text_range(&lo, &hi);
+    eu4_gfx_site_test_fail_next_rx();
+    if (eu4_gfx_observe_install_specs(&kViewportSpec, 1, 0, lo, hi)) {
+        return fail("rx failure accepted");
+    }
+    if (memcmp((const void *)gfx_startup_stub_viewport, kViewportPrefix,
+               sizeof(kViewportPrefix)) != 0) {
+        return fail("rx failure did not restore");
+    }
+    if (eu4_gfx_observe_test_events() != 0) {
+        return fail("rx failure produced events");
+    }
+    return 0;
+}
+
 static int scenario_observe_overlap(const char *dir) {
     if (arm_and_install((void *)gfx_startup_stub_settings,
                         (void *)gfx_startup_stub_init) != 0) {
@@ -989,6 +1013,9 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "observe-reject") == 0) {
         return scenario_observe_reject();
+    }
+    if (strcmp(scenario, "observe-rx-failure") == 0) {
+        return scenario_observe_rx_failure();
     }
     if (strcmp(scenario, "unsafe-read") == 0) {
         return scenario_unsafe_read(dir);

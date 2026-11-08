@@ -46,7 +46,13 @@ def _atomic_json(path: Path, value: dict) -> None:
     os.replace(temporary, path)
 
 
-def _claim_launch(run_root: Path, output: Path, targets: list[str]) -> str:
+def _claim_launch(
+    run_root: Path,
+    output: Path,
+    targets: list[str],
+    *,
+    requested_timeout: float,
+) -> str:
     run_root = run_root.expanduser().resolve()
     if not run_root.is_dir():
         raise LaunchLimit("missing", f"campaign run root does not exist: {run_root}")
@@ -78,6 +84,16 @@ def _claim_launch(run_root: Path, output: Path, targets: list[str]) -> str:
                     "exhausted",
                     f"{used}/{limit} campaign launches already used",
                 )
+            deadline = data.get("deadline_seconds")
+            if deadline is not None:
+                if type(deadline) not in (int, float) or deadline < 0:
+                    raise LaunchLimit("malformed", "invalid deadline_seconds")
+                if requested_timeout > float(deadline):
+                    raise LaunchLimit(
+                        "deadline",
+                        f"requested {requested_timeout:g}s exceeds campaign "
+                        f"limit {float(deadline):g}s",
+                    )
             token = f"{time.time_ns()}-{os.getpid()}"
             data["used"] = used + 1
             receipts = data.setdefault("launches", [])
@@ -169,7 +185,10 @@ def capture(args: argparse.Namespace) -> int:
     if args.campaign_run_root:
         try:
             token = _claim_launch(
-                Path(args.campaign_run_root), output, args.target
+                Path(args.campaign_run_root),
+                output,
+                args.target,
+                requested_timeout=args.timeout,
             )
         except LaunchLimit as exc:
             print(f"campaign launch refused: {exc}", file=sys.stderr)

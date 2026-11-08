@@ -168,6 +168,11 @@ class ObserveHostTests(unittest.TestCase):
             result = self._run("observe-reject", Path(tmp))
             self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
+    def test_rx_failure_restores_original_bytes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run("observe-rx-failure", Path(tmp))
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
     def test_overlap_detected(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
@@ -298,7 +303,7 @@ class RegistryTests(unittest.TestCase):
 
 
 class CampaignLaunchTests(unittest.TestCase):
-    def _root(self, limit: int = 3, used: int = 0) -> Path:
+    def _root(self, limit: int = 3, used: int = 0, deadline=120) -> Path:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
@@ -308,7 +313,7 @@ class CampaignLaunchTests(unittest.TestCase):
                     "schema": state.LAUNCH_SCHEMA,
                     "campaign_id": "test",
                     "limit": limit,
-                    "deadline_seconds": 120,
+                    "deadline_seconds": deadline,
                     "used": used,
                     "launches": [],
                 }
@@ -323,7 +328,10 @@ class CampaignLaunchTests(unittest.TestCase):
         before = (root / "state.json").read_text()
         with state.campaign_lock(root / "campaign.lock"):
             token = live_gfx._claim_launch(
-                root, root / "capture", ["_GfxSetViewPort"]
+                root,
+                root / "capture",
+                ["_GfxSetViewPort"],
+                requested_timeout=120.0,
             )
         counter = json.loads((root / "live-launch.json").read_text())
         self.assertEqual(counter["used"], 1)
@@ -333,8 +341,47 @@ class CampaignLaunchTests(unittest.TestCase):
     def test_exhausted_counter_refuses(self):
         root = self._root(limit=1, used=1)
         with self.assertRaises(live_gfx.LaunchLimit) as caught:
-            live_gfx._claim_launch(root, root / "capture", ["_GfxSetViewPort"])
+            live_gfx._claim_launch(
+                root,
+                root / "capture",
+                ["_GfxSetViewPort"],
+                requested_timeout=120.0,
+            )
         self.assertEqual(caught.exception.kind, "exhausted")
+
+    def test_campaign_deadline_is_enforced(self):
+        root = self._root(limit=3, used=0, deadline=120)
+        with self.assertRaises(live_gfx.LaunchLimit) as caught:
+            live_gfx._claim_launch(
+                root,
+                root / "capture",
+                ["_GfxSetViewPort"],
+                requested_timeout=600.0,
+            )
+        self.assertEqual(caught.exception.kind, "deadline")
+        counter = json.loads((root / "live-launch.json").read_text())
+        self.assertEqual(counter["used"], 0)
+        token = live_gfx._claim_launch(
+            root,
+            root / "capture",
+            ["_GfxSetViewPort"],
+            requested_timeout=120.0,
+        )
+        self.assertTrue(token)
+        counter = json.loads((root / "live-launch.json").read_text())
+        self.assertEqual(counter["used"], 1)
+
+    def test_campaign_without_deadline_allows_request(self):
+        root = self._root(limit=3, used=0, deadline=None)
+        token = live_gfx._claim_launch(
+            root,
+            root / "capture",
+            ["_GfxSetViewPort"],
+            requested_timeout=600.0,
+        )
+        self.assertTrue(token)
+        counter = json.loads((root / "live-launch.json").read_text())
+        self.assertEqual(counter["used"], 1)
 
     def test_initialization_preserves_used_count(self):
         root = self._root(used=2)

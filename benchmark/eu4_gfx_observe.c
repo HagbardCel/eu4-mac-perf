@@ -411,7 +411,7 @@ static bool validate_specs(const eu4_gfx_observe_spec *specs, size_t count) {
 static void rollback_sites(size_t patched) {
     while (patched > 0) {
         patched -= 1;
-        if (g_sites[patched].installed) {
+        if (g_sites[patched].installed || g_sites[patched].written) {
             (void)eu4_gfx_site_restore(&g_sites[patched]);
         }
         eu4_gfx_site_release(&g_sites[patched]);
@@ -820,7 +820,7 @@ bool eu4_gfx_observe_finalize(const char *run_dir, const char *session,
 
 void eu4_gfx_observe_test_reset(void) {
     for (size_t i = 0; i < EU4_GFX_OBSERVE_MAX_SPECS; i++) {
-        if (g_sites[i].installed) {
+        if (g_sites[i].installed || g_sites[i].written) {
             (void)eu4_gfx_site_restore(&g_sites[i]);
         }
         eu4_gfx_site_release(&g_sites[i]);
