@@ -225,6 +225,31 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
   re-arms it, and live capture is refused outright, so a restored session cannot
   resume capture.
 
+## M6 -- reviewer interface established (not implemented yet)
+
+Checked against the installed CLI rather than assumed:
+
+- `headless` is a **shipped profile**, not an app argument. `dsh --profile eu4-web
+  headless ...` boots the web app and silently ignores the word, so the reviewer
+  must be a separate `dsh --profile headless` process.
+- `--from-default-profile headless` is rejected: shipped profiles cannot be
+  customisation targets, so there is no `eu4-review` profile to create from it.
+- `dsh --profile headless [--json] [--session-id <id>] "<task>"` is the one-shot
+  interface. `--json` emits newline-delimited run events instead of the final
+  message, which is what lets the host capture the reviewer's structured output
+  and its session identity; `--session-id` adopts a persisted session and errors
+  on an unknown id.
+- The headless bundle layers directly over `dsh-base`, which keeps the
+  host-plane `skill-filesystem` row that `web-app` disables. Running the
+  reviewer with `cwd` set to the candidate worktree therefore discovers the
+  repository's own `.opencode/skills` without any profile work.
+
+Consequence for the design: the reviewer is a separate headless process in a
+detached worktree at the frozen candidate commit, the host parses its NDJSON
+events, validates the final message as `eu4-review/v1`, and writes both the
+report and the reviewer receipt itself, using the host-observed session id. The
+reviewer supplies no identity and writes nothing protected.
+
 ## Pending / caveats
 
 - The profile and plugin are verified at composition level. A live interactive
