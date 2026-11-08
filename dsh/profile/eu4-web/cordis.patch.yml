@@ -1,0 +1,28 @@
+# EU4 DSH profile overlay -- tracked authoritative copy.
+# Synced into $DSH_HOME/profiles/eu4-web/cordis.patch.yml by dsh/scripts/provision.sh.
+#
+# Two deliberate deviations from the shipped web profile:
+#
+# 1. skill-filesystem: the web-app bundle disables the host-plane row because its
+#    presets own local discovery. This profile needs a host-plane skill root that
+#    points at the repository's existing .opencode/skills tree, so the row is
+#    re-enabled with customSkillDirs instead of duplicating skill content.
+# 2. eu4-goal: the out-of-tree plugin that owns campaign binding, trusted
+#    validation and the completion guard. Patch entries address an EXISTING id,
+#    so a new row requires the top-level `insert` form.
+#
+# Absolute machine paths are never committed; both values arrive from the
+# environment that dsh/scripts/run.sh and preflight.sh export.
+
+- id: skill-filesystem
+  disabled: false
+  config:
+    customSkillDirs:
+      - !!js process.env.EU4_DSH_SKILL_ROOT
+
+- insert:
+    - id: eu4-goal
+      name: '@eu4/dsh-goal'
+      config:
+        sidecar: !!js process.env.EU4_DSH_SIDECAR ?? ""
+        python: !!js process.env.EU4_DSH_PYTHON ?? ""

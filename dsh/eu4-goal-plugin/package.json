@@ -1,0 +1,19 @@
+{
+  "name": "@eu4/dsh-goal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EU4 campaign binding, trusted validation and completion guard for DeepSeek Harness",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/*.js"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

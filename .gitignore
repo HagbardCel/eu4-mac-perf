@@ -57,3 +57,9 @@ results/**/trace.bin
 !results/20261003T210202Z-intrusive-diagnostic/powermetrics.stderr
 results/.autonomous.lock
 results/.autonomous-recovery.json
+
+# DSH native-goal infrastructure: local installs and build metadata.
+# The plugin's lib/ is committed (DSH convention: shipped output is tracked).
+dsh/**/node_modules/
+dsh/**/*.tsbuildinfo
+dsh/**/.pnpm-debug.log

@@ -1,0 +1,45 @@
+{
+  "schema": "eu4-dsh-runtime/v1",
+  "profile": "eu4-web",
+  "dsh": {
+    "version": "0.2.0-rc.2",
+    "package_json_sha256": "0a85203e3e907dd2e3bec34324a2494758ca6cdee234b07090a7c8df0b11acac"
+  },
+  "node": { "version": "v26.13.0" },
+  "pnpm": { "version": "12.18.0" },
+  "required_plugins": {
+    "goal": {
+      "name": "@deepseek-ai/dsh-goal",
+      "package_json_sha256": "652c79f11bba8eb891fe2e8ebe4de46d16cb3781df458b73f35dc31ed9eadb97"
+    },
+    "goal-round-driver": {
+      "name": "@deepseek-ai/dsh-goal-round-driver",
+      "package_json_sha256": "9df8dbb3332dc317a758c8edc2666ba2c9ed48dcae4ee6089b42cb50722f49b6"
+    },
+    "tool-goal": {
+      "name": "@deepseek-ai/dsh-tool-goal",
+      "package_json_sha256": "9b921fa34e7bb7858c973644dd1d87958e45df96d79d534f573e479297838c3d"
+    },
+    "command-goal": {
+      "name": "@deepseek-ai/dsh-command-goal",
+      "package_json_sha256": "fb6c0b40eb1573c62b60bcee350fddfc50d05dbedd053e426ef076efb390995c"
+    },
+    "skill-filesystem": {
+      "name": "@deepseek-ai/dsh-skill-filesystem",
+      "package_json_sha256": "cdff73a6f1ce37b6209ac9ac31542f1e374e32a21f27b4cec3fb07837b9eb92a"
+    },
+    "eu4-goal": { "name": "@eu4/dsh-goal", "package_json_sha256": null }
+  },
+  "skill": {
+    "id": "opengl-metal-reconstruction",
+    "path": ".opencode/skills/opengl-metal-reconstruction/SKILL.md"
+  },
+  "state_root": "~/.local/share/eu4-dsh/state",
+  "installed_by": "dsh/scripts/provision.sh",
+  "notes": [
+    "No absolute machine paths are tracked. preflight.sh resolves the DSH install",
+    "root and the infrastructure checkout at run time and prints them.",
+    "package_json_sha256 values pin the identity of the DSH release this profile was",
+    "verified against; a mismatch is a preflight failure, not a warning."
+  ]
+}
