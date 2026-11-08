@@ -62,13 +62,15 @@ def _artifact(capture_dir: Path, master: bytes):
     draw = _record(11, "_GfxDraw", "", master, caller=0xEDFCD1, seq=3)
     draw.meta = {"qualified": True, "raw_count": 4, "effective_count": 4}
     shader = _record(9, "_GfxSetShader", "shader_1", b"shader-object", seq=2)
+    source = _record(8, "_GfxAddVertexShader", "shader_1", b"shader-source", seq=1)
+    texture = _record(7, "_GfxInitializeTexture", "texture_1", b"texture-bytes", seq=0)
     return SimpleNamespace(
         session="session",
         pid=123,
         executable_sha256=EXE_SHA,
         image_base=0x100000000,
         root=capture_dir,
-        operations=[shader, draw],
+        operations=[texture, source, shader, draw],
     ), draw
 
 
@@ -315,6 +317,82 @@ class FailClosedTests(unittest.TestCase):
             self.assertIsNone(validated)
             self.assertIn("shader source", error or "")
 
+    def test_captured_shader_source_payload_is_provisional(self):
+        import automation.gfx_draw_accept_v2 as accept
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            capture = tmp / "capture"
+            capture.mkdir()
+            master = _master()
+            artifact, draw = _artifact(capture, master)
+            (tmp / "source.bin").write_bytes(b"shader-source")
+            packet = _packet(master)
+            packet["inputs"]["shader_stage_sources"] = {
+                "status": "established",
+                "value": {},
+                "evidence": [
+                    {
+                        "type": "resource_observation",
+                        "call_id": 8,
+                        "symbol": "_GfxAddVertexShader",
+                        "resource_id": "shader_1",
+                        "payload": "source.bin",
+                        "sha256": hashlib.sha256(b"shader-source").hexdigest(),
+                        "size": len(b"shader-source"),
+                    }
+                ],
+            }
+            ctx = {
+                "artifact": artifact,
+                "target": draw,
+                "master": packet_mod.parse_master(master),
+                "effective_count": 4,
+            }
+            validated, error = accept.validate_packet(
+                packet, tmp, ctx, {"required_inputs": ["shader_stage_sources"]}
+            )
+            self.assertIsNone(error)
+            self.assertEqual(validated["provisional"], ["shader_stage_sources"])
+
+    def test_captured_texture_contents_payload_is_provisional(self):
+        import automation.gfx_draw_accept_v2 as accept
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            capture = tmp / "capture"
+            capture.mkdir()
+            master = _master()
+            artifact, draw = _artifact(capture, master)
+            (tmp / "texture.bin").write_bytes(b"texture-bytes")
+            packet = _packet(master)
+            packet["inputs"]["texture_slot_0_contents"] = {
+                "status": "established",
+                "value": {},
+                "evidence": [
+                    {
+                        "type": "resource_observation",
+                        "call_id": 7,
+                        "symbol": "_GfxInitializeTexture",
+                        "resource_id": "texture_1",
+                        "payload": "texture.bin",
+                        "sha256": hashlib.sha256(b"texture-bytes").hexdigest(),
+                        "size": len(b"texture-bytes"),
+                    }
+                ],
+            }
+            ctx = {
+                "artifact": artifact,
+                "target": draw,
+                "master": packet_mod.parse_master(master),
+                "effective_count": 4,
+            }
+            validated, error = accept.validate_packet(
+                packet, tmp, ctx, {"required_inputs": ["texture_slot_0_contents"]}
+            )
+            self.assertIsNone(error)
+            self.assertEqual(validated["provisional"], ["texture_slot_0_contents"])
+
     def test_base_draw_invocation_validator_accepts_authentic_shape(self):
         import automation.gfx_draw_accept_v2 as accept
 
@@ -560,6 +638,24 @@ class EvidencePolicyTests(unittest.TestCase):
         )
         self.assertFalse(relevant)
 
+    def test_shader_source_requires_resource_identity(self):
+        from automation.gfx_evidence_policy import evidence_relevant
+
+        ctx = {"target": SimpleNamespace(call_id=11)}
+        without = [
+            {"type": "resource_observation", "symbol": "_GfxAddVertexShader", "payload": "p"}
+        ]
+        with_id = [
+            {
+                "type": "resource_observation",
+                "symbol": "_GfxAddVertexShader",
+                "payload": "p",
+                "resource_id": "shader_1",
+            }
+        ]
+        self.assertFalse(evidence_relevant("shader_stage_sources", without, ctx)[0])
+        self.assertTrue(evidence_relevant("shader_stage_sources", with_id, ctx)[0])
+
     def test_render_state_requires_the_field_range(self):
         from automation.gfx_evidence_policy import evidence_relevant
 
@@ -674,6 +770,28 @@ class IntegrationVerificationTests(unittest.TestCase):
                 state, result, "final"
             )
             self.assertTrue(any("packet_ready" in error for error in errors))
+
+    def test_promote_blocks_when_integration_verification_is_missing(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            coordinator = self._coordinator(tmp)
+            report = tmp / "review.json"
+            report.write_text("{}")
+            state = coordinator.load_or_init()
+            state["state"] = "promote"
+            state["promotion_kind"] = "implementation"
+            state["candidate"] = {"candidate_commit": "c" * 40}
+            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            state["review"] = {"path": str(report)}
+            state["candidate_review"] = {
+                "candidate_commit": "c" * 40,
+                "reviewer_report_sha256": hashlib.sha256(report.read_bytes()).hexdigest(),
+                "trusted_contract_commit": "t1",
+                "trusted_contract_sha256": "2" * 64,
+            }
+            state = coordinator._promote(state)
+            self.assertEqual(state["state"], "blocked")
+            self.assertEqual(state["blocker"]["reason"], "integration_not_requalified")
 
     def test_verification_commit_mismatch_blocks(self):
         with tempfile.TemporaryDirectory() as raw:

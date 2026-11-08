@@ -71,6 +71,7 @@ def _shader_stage_sources(evidence: list, ctx: dict) -> tuple[bool, str]:
         item.get("type") == "resource_observation"
         and item.get("symbol") in symbols
         and item.get("payload")
+        and item.get("resource_id")
         for item in items
     ):
         return True, "captured shader source bytes"
@@ -156,6 +157,8 @@ def _state_slice(
         offset = item.get("offset")
         length = item.get("length")
         if type(offset) is not int or type(length) is not int or length <= 0:
+            continue
+        if offset < 0 or offset + length > 0x171:
             continue
         if offset <= range_start and offset + length >= range_end:
             return True, "draw-master state bytes covering the field range"
