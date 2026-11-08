@@ -101,6 +101,10 @@ bool eu4_gfx_startup_install(void *settings_site, void *init_site,
                              const uint8_t settings_expected[EU4_GFX_CAPTURE_PATCH_SIZE],
                              const uint8_t init_expected[EU4_GFX_CAPTURE_PATCH_SIZE]);
 bool eu4_gfx_startup_installed(void);
+uint64_t eu4_gfx_startup_next_call_id(void);
+bool eu4_gfx_startup_admit_hook(void);
+void eu4_gfx_startup_withdraw_hook(void);
+void eu4_gfx_startup_finish_hook(void);
 void eu4_gfx_startup_arm(void);
 void eu4_gfx_startup_request_drain(void);
 uint32_t eu4_gfx_startup_state(void);

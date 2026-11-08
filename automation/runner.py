@@ -17,6 +17,7 @@ from automation.state import (
     campaign_lock,
     ensure_workspace,
     file_sha256,
+    initialize_launch_counter,
     load_state,
     repo_root,
     require_worktree,
@@ -99,6 +100,13 @@ class Runner:
         else:
             self.live = self.run_root / "workspace"
         with campaign_lock(self.run_root / "campaign.lock"):
+            if self.campaign.live_launch_limit is not None:
+                initialize_launch_counter(
+                    self.run_root,
+                    self.campaign.id,
+                    self.campaign.live_launch_limit,
+                    self.campaign.live_deadline_seconds,
+                )
             existed = self.state_path.exists()
             if resume_only and not existed:
                 raise RuntimeError("no campaign state to resume")

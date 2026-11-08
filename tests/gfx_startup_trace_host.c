@@ -1,15 +1,24 @@
 #include "eu4_gfx_startup_trace.h"
 
+#include "eu4_gfx_observe.h"
+#include "eu4_gfx_observe_viewport.h"
+
+#include <mach-o/dyld.h>
+#include <mach-o/getsect.h>
+#include <mach-o/loader.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 extern void gfx_startup_stub_settings(void);
 extern void gfx_startup_stub_init(void);
 extern void gfx_startup_stub_init_fail(void);
 extern uint8_t gfx_startup_stub_master[];
+extern void gfx_startup_stub_viewport(void);
+extern void gfx_startup_stub_scalar(void);
 
 static const uint8_t kExpected[EU4_GFX_CAPTURE_PATCH_SIZE] = {
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53,
@@ -472,6 +481,443 @@ static int scenario_unsafe_read(const char *dir) {
     return 0;
 }
 
+
+static const uint8_t kViewportPrefix[8] = {
+    0x55, 0x48, 0x89, 0xe5, 0xf3, 0x0f, 0x6f, 0x06,
+};
+static const uint8_t kScalarPrefix[5] = {
+    0x55, 0x48, 0x89, 0xe5, 0x53,
+};
+
+static void observe_text_range(uintptr_t *lo, uintptr_t *hi) {
+    const struct segment_command_64 *text = getsegbyname("__TEXT");
+    intptr_t slide = _dyld_get_image_vmaddr_slide(0);
+    *lo = (uintptr_t)(text->vmaddr + slide);
+    *hi = *lo + (uintptr_t)text->vmsize;
+}
+
+static void scalar_entry(eu4_gfx_capture_frame *frame,
+                         eu4_gfx_observe_call *call) {
+    uint32_t value = (uint32_t)frame->rdi;
+    eu4_gfx_observe_set_input(call, &value, sizeof(value));
+}
+
+static void scalar_exit(eu4_gfx_capture_frame *frame,
+                        eu4_gfx_observe_call *call,
+                        eu4_gfx_observe_record *record) {
+    (void)record;
+    eu4_gfx_observe_set_return(call, (int64_t)frame->rax);
+}
+
+static const eu4_gfx_observe_spec kViewportSpec = {
+    "_GfxSetViewPort",
+    (uint64_t)(uintptr_t)gfx_startup_stub_viewport,
+    kViewportPrefix,
+    sizeof(kViewportPrefix),
+    EU4_GFX_OBSERVE_RELOC_SAFE,
+    eu4_gfx_observe_viewport_entry,
+    eu4_gfx_observe_viewport_exit,
+};
+
+static const eu4_gfx_observe_spec kScalarSpec = {
+    "_GfxObserveScalar",
+    (uint64_t)(uintptr_t)gfx_startup_stub_scalar,
+    kScalarPrefix,
+    sizeof(kScalarPrefix),
+    EU4_GFX_OBSERVE_RELOC_SAFE,
+    scalar_entry,
+    scalar_exit,
+};
+
+static int arm_observe(const eu4_gfx_observe_spec *specs, size_t count) {
+    eu4_gfx_observe_test_reset();
+    uintptr_t lo = 0;
+    uintptr_t hi = 0;
+    observe_text_range(&lo, &hi);
+    if (!eu4_gfx_observe_install_specs(specs, count, 0, lo, hi)) {
+        return fail("observe install");
+    }
+    return 0;
+}
+
+static int run_startup(void) {
+    uint8_t settings[0x28];
+    uint8_t records[12];
+    make_settings(settings, records, 1);
+    int rc = ((settings_fn)gfx_startup_stub_settings)(1, 0, 1, settings);
+    if (rc != 7 || records[4] != 1) {
+        return fail("settings body");
+    }
+    uint8_t window[32] = {0};
+    uint32_t window_id = 7, source = 9;
+    memcpy(window, &window_id, 4);
+    memcpy(window + 0x18, &source, 4);
+    uint8_t success = 0;
+    void *master = ((init_fn)gfx_startup_stub_init)(window, &success);
+    if (master != gfx_startup_stub_master || success != 1) {
+        return fail("init body");
+    }
+    return 0;
+}
+
+static void call_viewport(const int32_t rect[6]) {
+    void (*fn)(void *, const void *) =
+        (void (*)(void *, const void *))gfx_startup_stub_viewport;
+    fn(gfx_startup_stub_master, rect);
+}
+
+static int call_scalar(int value) {
+    int (*fn)(int) = (int (*)(int))gfx_startup_stub_scalar;
+    return fn(value);
+}
+
+static int finalize_observe(const char *dir, const char *name) {
+    if (!eu4_gfx_startup_finalize(dir, name, "test", getpid(), 0)) {
+        return fail("observe finalize");
+    }
+    return 0;
+}
+
+static int finish_observe(const char *dir, const char *name) {
+    eu4_gfx_startup_request_drain();
+    if (!eu4_gfx_startup_wait_sealed(2000)) {
+        return fail("observe not sealed");
+    }
+    return finalize_observe(dir, name);
+}
+
+static long file_size(const char *dir, const char *name) {
+    char path[1024];
+    if (snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path)) {
+        return -1;
+    }
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        return -1;
+    }
+    return (long)st.st_size;
+}
+
+static int scenario_observe_basic(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    if (arm_observe(&kViewportSpec, 1) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    int32_t first[6] = {1920, 1080, 0, 0, 10, 20};
+    int32_t second[6] = {1728, 1117, 0, 0, 0, 0};
+    call_viewport(first);
+    call_viewport(second);
+    if (finish_observe(dir, "host-observe") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.events != 2 || !snap.init_seen ||
+        snap.overlaps != 0) {
+        return fail("observe basic incomplete");
+    }
+    if (snap.records[0].call_id != 3 || snap.records[1].call_id != 4 ||
+        snap.records[0].completion_seq != 1 ||
+        snap.records[1].completion_seq != 2) {
+        return fail("observe ordering");
+    }
+    if (!snap.records[0].fields_ok || snap.records[0].input_size != 24 ||
+        snap.records[0].output_size != 24 ||
+        memcmp(snap.records[0].input, first, 24) != 0 ||
+        memcmp(snap.records[0].output, first, 24) != 0 ||
+        memcmp(snap.records[1].input, second, 24) != 0 ||
+        memcmp(snap.records[1].output, second, 24) != 0) {
+        return fail("observe words");
+    }
+    if (!snap.records[0].caller_known) {
+        return fail("observe caller");
+    }
+    if (memcmp(gfx_startup_stub_master + 0xac, second, 24) != 0) {
+        return fail("original body did not run");
+    }
+    eu4_gfx_startup_snapshot v0;
+    eu4_gfx_startup_copy_snapshot(&v0);
+    if (!v0.complete || v0.event_count != 4) {
+        return fail("v0 context");
+    }
+    return 0;
+}
+
+static int scenario_observe_freeze(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    if (arm_observe(&kViewportSpec, 1) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    uint8_t settings[0x28];
+    uint8_t records[12];
+    make_settings(settings, records, 1);
+    (void)((settings_fn)gfx_startup_stub_settings)(1, 0, 1, settings);
+    uint8_t window[32] = {0};
+    uint8_t success = 0;
+    (void)((init_fn)gfx_startup_stub_init)(window, &success);
+    int32_t rect[6] = {800, 600, 0, 0, 0, 0};
+    call_viewport(rect);
+    if (finish_observe(dir, "host-freeze") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.events != 1) {
+        return fail("observe freeze ops");
+    }
+    eu4_gfx_startup_snapshot v0;
+    eu4_gfx_startup_copy_snapshot(&v0);
+    if (!v0.complete || v0.event_count != 4 || v0.settings_calls != 1 ||
+        v0.init_calls != 1) {
+        return fail("observe freeze startup stream");
+    }
+    return 0;
+}
+
+static int scenario_observe_quota(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    if (arm_observe(&kViewportSpec, 1) != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_test_set_limits(1, 10000);
+    if (run_startup() != 0) {
+        return 1;
+    }
+    int32_t first[6] = {800, 600, 0, 0, 0, 0};
+    int32_t second[6] = {640, 480, 0, 0, 0, 0};
+    call_viewport(first);
+    call_viewport(second);
+    if (finish_observe(dir, "host-quota") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.events != 1 || snap.refused < 1) {
+        return fail("observe quota");
+    }
+    if (memcmp(snap.records[0].input, first, 24) != 0) {
+        return fail("observe quota record");
+    }
+    return 0;
+}
+
+static int scenario_observe_unpaired(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    if (arm_observe(&kViewportSpec, 1) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_test_force_unpaired();
+    int32_t rect[6] = {800, 600, 0, 0, 0, 0};
+    call_viewport(rect);
+    if (finish_observe(dir, "host-unpaired") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (snap.events != 0 || snap.unmatched != 1 || snap.integrity_ok ||
+        snap.records_copied) {
+        return fail("observe unpaired");
+    }
+    if (file_size(dir, "operations.jsonl") != 0) {
+        return fail("unpaired completed stream");
+    }
+    return 0;
+}
+
+static int scenario_observe_invalid_output(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    if (arm_observe(&kViewportSpec, 1) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_test_fail_next_output_read();
+    int32_t rect[6] = {800, 600, 0, 0, 0, 0};
+    call_viewport(rect);
+    if (finish_observe(dir, "host-invalid") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (snap.events != 1 || snap.unavailable < 1 || snap.integrity_ok ||
+        snap.records_copied || snap.records[0].fields_ok) {
+        return fail("observe invalid output");
+    }
+    if (file_size(dir, "operations.jsonl") != 0 ||
+        file_size(dir, "operations.partial.jsonl") <= 0) {
+        return fail("observe partial stream");
+    }
+    return 0;
+}
+
+static int scenario_observe_scalar(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    const eu4_gfx_observe_spec specs[2] = {kViewportSpec, kScalarSpec};
+    if (arm_observe(specs, 2) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    int32_t rect[6] = {800, 600, 0, 0, 0, 0};
+    call_viewport(rect);
+    if (call_scalar(5) != 12) {
+        return fail("scalar body");
+    }
+    if (finish_observe(dir, "host-scalar") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.events != 2) {
+        return fail("observe scalar events");
+    }
+    if (snap.records[1].slot != 1 || snap.records[1].input_size != 4 ||
+        snap.records[1].return_value != 12 || !snap.records[1].return_valid) {
+        return fail("observe scalar record");
+    }
+    uint32_t value = 0;
+    memcpy(&value, snap.records[1].input, 4);
+    if (value != 5) {
+        return fail("observe scalar input");
+    }
+    return 0;
+}
+
+static int scenario_observe_rollback(void) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_test_reset();
+    uintptr_t lo = 0;
+    uintptr_t hi = 0;
+    observe_text_range(&lo, &hi);
+    const eu4_gfx_observe_spec specs[2] = {kViewportSpec, kScalarSpec};
+    eu4_gfx_observe_test_force_install_failure(1);
+    if (eu4_gfx_observe_install_specs(specs, 2, 0, lo, hi)) {
+        return fail("rollback install should fail");
+    }
+    if (memcmp((const void *)gfx_startup_stub_viewport, kViewportPrefix,
+               sizeof(kViewportPrefix)) != 0) {
+        return fail("rollback did not restore");
+    }
+    if (eu4_gfx_observe_test_events() != 0) {
+        return fail("rollback produced events");
+    }
+    return 0;
+}
+
+static int scenario_observe_duration(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    if (arm_observe(&kViewportSpec, 1) != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_test_set_limits(100, 20);
+    if (run_startup() != 0) {
+        return 1;
+    }
+    int32_t rect[6] = {800, 600, 0, 0, 0, 0};
+    call_viewport(rect);
+    if (!eu4_gfx_startup_wait_sealed(2000)) {
+        return fail("duration did not seal");
+    }
+    if (finalize_observe(dir, "host-duration") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.events != 1) {
+        return fail("observe duration");
+    }
+    return 0;
+}
+
+static int scenario_observe_reject(void) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_test_reset();
+    uintptr_t lo = 0;
+    uintptr_t hi = 0;
+    observe_text_range(&lo, &hi);
+    eu4_gfx_observe_spec unsafe = kViewportSpec;
+    unsafe.relocation = EU4_GFX_OBSERVE_RELOC_UNSAFE;
+    if (eu4_gfx_observe_install_specs(&unsafe, 1, 0, lo, hi)) {
+        return fail("unsafe relocation accepted");
+    }
+    static const uint8_t wrong_prefix[8] = {
+        0x55, 0x48, 0x89, 0xe5, 0xf3, 0x0f, 0x6f, 0x07,
+    };
+    eu4_gfx_observe_spec wrong = kViewportSpec;
+    wrong.prefix = wrong_prefix;
+    if (eu4_gfx_observe_install_specs(&wrong, 1, 0, lo, hi)) {
+        return fail("wrong prefix accepted");
+    }
+    if (eu4_gfx_observe_test_events() != 0) {
+        return fail("rejected install produced events");
+    }
+    return 0;
+}
+
+static int scenario_observe_overlap(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0) {
+        return 1;
+    }
+    if (arm_observe(&kViewportSpec, 1) != 0) {
+        return 1;
+    }
+    if (run_startup() != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_test_force_overlap();
+    int32_t rect[6] = {800, 600, 0, 0, 0, 0};
+    call_viewport(rect);
+    if (finish_observe(dir, "host-overlap") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (snap.overlaps != 1 || !snap.records[0].overlap ||
+        !snap.integrity_ok) {
+        return fail("observe overlap");
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) {
         return fail("usage: host <scenario> <dir>");
@@ -513,6 +959,36 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "bad-bytes") == 0) {
         return scenario_bad_bytes();
+    }
+    if (strcmp(scenario, "observe-basic") == 0) {
+        return scenario_observe_basic(dir);
+    }
+    if (strcmp(scenario, "observe-freeze") == 0) {
+        return scenario_observe_freeze(dir);
+    }
+    if (strcmp(scenario, "observe-quota") == 0) {
+        return scenario_observe_quota(dir);
+    }
+    if (strcmp(scenario, "observe-unpaired") == 0) {
+        return scenario_observe_unpaired(dir);
+    }
+    if (strcmp(scenario, "observe-invalid-output") == 0) {
+        return scenario_observe_invalid_output(dir);
+    }
+    if (strcmp(scenario, "observe-scalar") == 0) {
+        return scenario_observe_scalar(dir);
+    }
+    if (strcmp(scenario, "observe-rollback") == 0) {
+        return scenario_observe_rollback();
+    }
+    if (strcmp(scenario, "observe-duration") == 0) {
+        return scenario_observe_duration(dir);
+    }
+    if (strcmp(scenario, "observe-overlap") == 0) {
+        return scenario_observe_overlap(dir);
+    }
+    if (strcmp(scenario, "observe-reject") == 0) {
+        return scenario_observe_reject();
     }
     if (strcmp(scenario, "unsafe-read") == 0) {
         return scenario_unsafe_read(dir);

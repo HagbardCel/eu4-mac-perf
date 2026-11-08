@@ -30,6 +30,8 @@ class Campaign:
     max_seconds: float
     accept_timeout: float
     verification_manifest: Path | None = None
+    live_launch_limit: int | None = None
+    live_deadline_seconds: float | None = None
 
 
 def load_campaign(path: Path) -> Campaign:
@@ -50,6 +52,22 @@ def load_campaign(path: Path) -> Campaign:
     root = path.parent
     checker = _checker_file(root, data["accept"])
     seed, worktree, commit = _workspace(root, data["workspace"])
+    live_limit = None
+    live_deadline = None
+    raw_live = data.get("live_observation")
+    if raw_live is not None:
+        if not isinstance(raw_live, dict):
+            raise ValueError("live_observation must be an object")
+        if raw_live.get("launch_limit") is not None:
+            live_limit = int(raw_live["launch_limit"])
+            if live_limit < 0 or live_limit > 10:
+                raise ValueError("live_observation.launch_limit must be 0..10")
+        if raw_live.get("deadline_seconds") is not None:
+            live_deadline = float(raw_live["deadline_seconds"])
+            if live_deadline < 1 or live_deadline > 600:
+                raise ValueError(
+                    "live_observation.deadline_seconds must be 1..600"
+                )
     manifest = None
     raw_manifest = data.get("verification_manifest")
     if raw_manifest:
@@ -73,6 +91,8 @@ def load_campaign(path: Path) -> Campaign:
         max_seconds=float(data["max_seconds"]),
         accept_timeout=float(data["accept_timeout_seconds"]),
         verification_manifest=manifest,
+        live_launch_limit=live_limit,
+        live_deadline_seconds=live_deadline,
     )
 
 
@@ -185,3 +205,49 @@ def repo_root(start: Path) -> Path:
         if (parent / ".git").exists():
             return parent
     raise RuntimeError("repository root not found")
+
+
+LAUNCH_SCHEMA = "live-launch/v0"
+
+
+def launch_counter_path(run_root: Path) -> Path:
+    return Path(run_root) / "live-launch.json"
+
+
+def initialize_launch_counter(
+    run_root: Path,
+    campaign_id: str,
+    limit: int,
+    deadline_seconds: float | None,
+) -> Path:
+    """Create the campaign launch counter once; preserve usage on resume.
+
+    This file is separate from state.json: the campaign runner holds
+    campaign.lock for the whole execution, so the child launcher must never
+    touch that lock or the runner's in-memory state. The launcher updates this
+    file under live-launch.lock.
+    """
+    path = launch_counter_path(run_root)
+    if path.exists():
+        return path
+    atomic_write(
+        path,
+        json.dumps(
+            {
+                "schema": LAUNCH_SCHEMA,
+                "campaign_id": campaign_id,
+                "limit": int(limit),
+                "deadline_seconds": (
+                    float(deadline_seconds)
+                    if deadline_seconds is not None
+                    else None
+                ),
+                "used": 0,
+                "launches": [],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )
+    return path

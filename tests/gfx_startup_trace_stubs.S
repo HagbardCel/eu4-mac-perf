@@ -73,3 +73,37 @@ _gfx_startup_stub_init_fail:
 .align 4
 _gfx_startup_stub_master:
     .space 0x198, 0
+
+.section __TEXT,__text
+
+# _GfxSetViewPort-shaped stub. Eight-byte complete prologue, 24-byte copy to
+# master+0xac, then a tail jump to a GL-shaped stub that returns to the
+# gateway continuation.
+.globl _gfx_startup_stub_viewport
+.p2align 4
+_gfx_startup_stub_viewport:
+    .byte 0x55, 0x48, 0x89, 0xe5, 0xf3, 0x0f, 0x6f, 0x06
+    movdqu %xmm0, 0xac(%rdi)
+    movl 0x10(%rsi), %eax
+    movl %eax, 0xbc(%rdi)
+    movl 0x14(%rsi), %esi
+    movl %esi, 0xc0(%rdi)
+    popq %rbp
+    jmp _gfx_startup_stub_gl_viewport
+
+.globl _gfx_startup_stub_gl_viewport
+.p2align 4
+_gfx_startup_stub_gl_viewport:
+    ret
+
+# A scalar-return stub with a different shape: five-byte prologue, one 32-bit
+# input in rdi, an integer return in rax, and no output memory.
+.globl _gfx_startup_stub_scalar
+.p2align 4
+_gfx_startup_stub_scalar:
+    .byte 0x55, 0x48, 0x89, 0xe5, 0x53
+    movl %edi, %eax
+    addl $7, %eax
+    popq %rbx
+    popq %rbp
+    ret
