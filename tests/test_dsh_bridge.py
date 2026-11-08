@@ -5,6 +5,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 import uuid
@@ -255,6 +256,75 @@ class SnapshotOpTests(BridgeTestCase):
         self.assertEqual(len(out["candidate"]["digest"]), 64)
         kinds = [row["kind"] for row in receipts.load_journal(self.run_root)]
         self.assertIn("snapshot", kinds)
+
+
+class RecoveryTests(BridgeTestCase):
+    def test_an_interrupted_validation_is_quarantined_and_never_passes(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        self.run_bridge("prepare", sidecar)
+        validation = receipts.paths(self.run_root).validation
+        validation.mkdir(parents=True, exist_ok=True)
+        (validation / "r1-deadbeef.intent.json").write_text("{}", encoding="utf-8")
+
+        code, out = self.run_bridge("recover", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["quarantined"], ["r1-deadbeef.intent.json"])
+        self.assertFalse(out["receipt_current"])
+        self.assertIsNone(receipts.load_current_receipt(self.run_root))
+        quarantined = receipts.paths(self.run_root).quarantine
+        self.assertTrue((quarantined / "r1-deadbeef.intent.json").is_file())
+
+    def test_a_completed_validation_leaves_no_intent(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"), retry=("stateful", 1))
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        leftovers = list(receipts.paths(self.run_root).validation.glob("*.intent.json"))
+        self.assertEqual(leftovers, [])
+
+    def test_recover_reports_a_current_receipt_after_a_pass(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        code, out = self.run_bridge("recover", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertTrue(out["receipt_current"])
+        self.assertEqual(out["quarantined"], [])
+        self.assertEqual(out["journal_problems"], [])
+
+    def test_two_concurrent_validations_yield_one_receipt(self) -> None:
+        """Real processes: the run-root lock must serialize actual contenders."""
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(REPO),
+            "PYTHONNOUSERSITE": "1",
+        }
+        command = [str(REPO / ".venv" / "bin" / "python3"), "-P", "-m",
+                   "automation.dsh_bridge", "validate", "--sidecar", str(sidecar)]
+        processes = [
+            subprocess.Popen(command, cwd=str(REPO), env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            for _ in range(2)
+        ]
+        outputs = []
+        for process in processes:
+            stdout, _stderr = process.communicate(timeout=120)
+            outputs.append(json.loads(stdout))
+
+        busy = [out for out in outputs if out.get("kind") == "busy"]
+        self.assertLessEqual(len(busy), 1, "the run-root lock must serialize runs")
+        receipts_dir = receipts.paths(self.run_root).receipts
+        written = list(receipts_dir.glob("*.json"))
+        self.assertGreaterEqual(len(written), 1)
+        for path in written:
+            json.loads(path.read_text(encoding="utf-8"))
+        pointer = json.loads(
+            receipts.paths(self.run_root).current.read_text(encoding="utf-8")
+        )
+        self.assertTrue((receipts_dir / pointer["receipt"]).is_file())
+        self.assertEqual(receipts.verify_journal(self.run_root), [])
 
 
 class GoalPromptTests(BridgeTestCase):

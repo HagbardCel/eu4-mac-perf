@@ -11,7 +11,7 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
 | M2 minimal bridge, retry policy, classification | done |
 | M3 seed-only native goal loop | bridge + plugin done; live run needs an operator-created goal |
 | M4 delta snapshot, evidence binding, journal, replica | done |
-| M5 recovery, limits, isolation | not started |
+| M5 recovery, limits, isolation | done |
 | M6 independent reviewer | not started |
 | M7 genuine qualification (A0 + frozen offline) | not started |
 | M8 launch-safety verification | not started |
@@ -200,6 +200,30 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
   two shared-project queries cannot do.
 - Verified: 55 Python DSH tests, 11 node tests, preflight green, OpenCode suite
   86/86.
+
+## M5 -- recovery, limits and isolation
+
+- A validation writes `<run-root>/validation/<id>.intent.json` before the checker
+  starts and removes it only after the receipt is durable. An interrupted run
+  therefore leaves a visible marker rather than a candidate that merely looks
+  unvalidated.
+- `recover` takes the run-root lock, moves every surviving intent to
+  `validation/quarantine/`, journals the quarantine, and reports whether the
+  current receipt still describes the current candidate. It never writes a
+  receipt, so it cannot manufacture a pass.
+- Limits are enforced where they cannot be laundered by a restart, because the
+  counters live in the run root rather than in the session: `max_validations`,
+  `wall_clock_seconds`, the checker-aware retry allowance, and a separate
+  bounded finalization budget (two confirmation runs).
+- Isolation: two concurrent `validate` processes against one run root produce at
+  most one `busy` refusal and exactly one valid `current.json` pointing at a
+  parseable receipt with an intact journal. This is a real two-process test, not
+  two threads: `redirect_stdout` is process-global, so the first version of that
+  test could not have detected a race.
+- Session isolation: `goals` stay authoritative for goal lifecycle and the run
+  root for evidence. DSH disarms a goal on restart by design, so nothing here
+  re-arms it, and live capture is refused outright, so a restored session cannot
+  resume capture.
 
 ## Pending / caveats
 

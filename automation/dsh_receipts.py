@@ -110,8 +110,13 @@ class RunPaths:
     def validation(self) -> Path:
         return self.run_root / "validation"
 
+    @property
+    def quarantine(self) -> Path:
+        return self.run_root / "validation" / "quarantine"
+
     def ensure(self) -> None:
-        for directory in (self.run_root, self.receipts, self.validation):
+        for directory in (self.run_root, self.receipts, self.validation,
+                          self.quarantine):
             directory.mkdir(parents=True, exist_ok=True)
 
 

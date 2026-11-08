@@ -119,6 +119,20 @@ declared `EU4_DSH_WORKSPACE` must equal the campaign workspace, and
 `danger-full-access` refuses qualification outright because it provides no
 boundary for qualification state.
 
+## Interruption and recovery
+
+A validation records an intent before the checker starts and clears it only once
+the receipt is durable. `recover` quarantines any surviving intent and reports
+whether the current receipt still describes the current candidate; it never
+writes a receipt, so recovery cannot manufacture a pass. Limits (validation
+count, wall clock, retry allowance, finalization confirmations) are counted in
+the run root rather than in the session, so restarting or forking a session
+cannot reset them.
+
+DSH disarms an active goal on session restart, and nothing in this
+infrastructure re-arms it: continuation after a restart is an explicit operator
+decision.
+
 ## Execution roots
 
 Three roots are kept distinct and are asserted before a checker runs.
