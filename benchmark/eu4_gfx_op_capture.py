@@ -424,6 +424,8 @@ def _validate_records(
                 "ids",
                 "offsets",
                 "words",
+                "offsets_null",
+                "words_null",
                 "header_non_null",
             )
             if key in row

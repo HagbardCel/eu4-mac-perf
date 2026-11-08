@@ -210,6 +210,52 @@ class OpDiffTests(unittest.TestCase):
                 any(json.loads(line).get("harness_teardown") is True for line in commands)
             )
 
+    def test_explicit_binding_words_are_declined(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-bind-explicit")
+            output = root / "diff-explicit-words"
+            result = diff.run(artifact, output)
+            self.assertEqual(result["status"], "unsupported")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            bind = next(
+                op for op in comparison["operations"] if op["symbol"] == "_GfxSetVertexBuffers"
+            )
+            self.assertEqual(bind["status"], "unsupported")
+            self.assertIn("explicit_binding_words", bind["reason"])
+            self.assertTrue(comparison["teardown_ok"])
+            self.assertTrue(comparison["shutdown_ok"])
+
+    def test_full_update_recovers_unknown_contents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-unknown-update")
+            output = root / "diff-recovered"
+            result = diff.run(artifact, output, skip_unknown=True)
+            self.assertEqual(result["status"], "unsupported")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertTrue(comparison["partial"])
+            statuses = [
+                (op["symbol"], op["input"].get("resource_id"), op["status"])
+                for op in comparison["operations"]
+            ]
+            self.assertIn(("_GfxCreateVertexBuffer", "vb_1", "skipped"), statuses)
+            self.assertIn(("_GfxUpdateVertexBuffer", "vb_1", "matched"), statuses)
+            self.assertIn(("_GfxCreateVertexBuffer", "vb_2", "skipped"), statuses)
+            self.assertIn(("_GfxUpdateVertexBuffer", "vb_2", "skipped"), statuses)
+
+    def test_zero_length_known_resource(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = self._artifact(root, "observe-zero-length")
+            output = root / "diff-zero"
+            result = diff.run(artifact, output)
+            self.assertEqual(result["status"], "pass")
+            comparison = json.loads(Path(result["comparison"]).read_text())
+            self.assertEqual(comparison["counts"].get("matched"), 1)
+            self.assertTrue(comparison["teardown_ok"])
+            self.assertTrue(comparison["shutdown_ok"])
+
     def test_resource_corruption_is_precise(self):
         class CorruptObserve:
             def __init__(self):
@@ -480,11 +526,26 @@ class AuthenticResourceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "resources"
             result = diff.run(RESOURCE_CAPTURE, output, skip_unknown=True)
-            self.assertEqual(result["status"], "pass")
+            self.assertEqual(result["status"], "unsupported")
             comparison = json.loads(Path(result["comparison"]).read_text())
             self.assertTrue(comparison["skip_unknown"])
+            self.assertTrue(comparison["partial"])
             self.assertEqual(comparison["counts"].get("matched"), 250)
-            self.assertEqual(comparison["counts"].get("skipped"), 6)
+            self.assertEqual(comparison["counts"].get("skipped"), 5)
+            self.assertEqual(comparison["counts"].get("unsupported"), 1)
+            unknown = next(
+                op
+                for op in comparison["operations"]
+                if op["symbol"] == "_GfxCreateVertexBuffer"
+                and op["input"].get("resource_id") == "vb_126"
+            )
+            update = next(
+                op
+                for op in comparison["operations"]
+                if op["symbol"] == "_GfxUpdateVertexBuffer"
+            )
+            self.assertEqual(unknown["status"], "skipped")
+            self.assertEqual(update["status"], "matched")
             self.assertTrue(comparison["teardown_ok"])
             self.assertTrue(comparison["shutdown_ok"])
 

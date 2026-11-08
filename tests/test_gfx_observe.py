@@ -92,6 +92,37 @@ class ObserveHostTests(unittest.TestCase):
             self.assertTrue((directory / events[0]["payload"]["file"]).is_file())
             self.assertTrue((directory / events[1]["payload"]["file"]).is_file())
 
+    def test_binding_pointer_flags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-bind-explicit", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            events = self._events(directory)
+            self.assertFalse(events[1]["words_null"])
+            self.assertFalse(events[1]["offsets_null"])
+
+    def test_unknown_then_full_update(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-unknown-update", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            events = self._events(directory)
+            self.assertEqual(len(events), 4)
+            self.assertFalse(events[0]["contents_known"])
+            self.assertTrue(events[1]["contents_known"])
+            self.assertFalse(events[2]["contents_known"])
+            self.assertFalse(events[3]["contents_known"])
+            self.assertEqual(events[3]["partial"], 1)
+
+    def test_zero_length_known(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            result = self._run("observe-zero-length", directory)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+            events = self._events(directory)
+            self.assertTrue(events[0]["contents_known"])
+            self.assertNotIn("payload", events[0])
+
     def test_viewport_basic(self):
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)

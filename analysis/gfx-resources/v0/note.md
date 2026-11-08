@@ -30,10 +30,21 @@ They are reported as `skipped`, not silently compared.
 
 `python3 -m automation.live_gfx replay --capture analysis/gfx-resources/v0/capture --output <dir> --skip-unknown`
 
-- 250 operations matched: known vertex-buffer contents (byte length + SHA-256),
-  the binding `vb_3` at slot 0, and the two viewport observations.
-- 6 operations skipped: 5 creates with unknown original contents and 1 update
-  on a skipped resource.
+- 250 operations matched: 247 known creates, the `vb_126` full update, and
+  the two viewport observations.
+- 5 operations skipped: null-source creates whose initial contents remain
+  unknown. They are replayed as allocations and retain identity, but are not
+  content-qualified.
+- 1 operation unsupported: the bind predates the `words_null` flag. Its
+  explicit-versus-null semantics cannot be established from this artifact, so
+  it is not compared. Do not retroactively invent pointer-nullness; a recapture
+  with the corrected observer can qualify it.
+- `vb_126` demonstrates the intended transition: unknown initial allocation
+  followed by a full known update becomes comparable after the update. A
+  partial update on an unknown resource remains unqualified.
+- The aggregate is `unsupported` / `partial_evidence`, not a full-sequence
+  `pass`; the 250 matched observations remain available as known-resource
+  evidence.
 - Harness teardown destroyed the worker-owned resources; `shutdown_ok=true`.
 - The known-resource subset is CPU-resource/binding equivalence for the
   captured sequence. It is not GPU-resource, destruction, or render equivalence.

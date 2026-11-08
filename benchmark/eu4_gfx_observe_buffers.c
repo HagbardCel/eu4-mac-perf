@@ -8,7 +8,7 @@
    passive gateway cannot observe _GfxDestroyVertexBuffer (its entry prefix has
    a relative branch), so identity is guaranteed only across observed creates.
    A later create returning a previously seen pointer retires the old label. */
-#define OBSERVE_RESOURCE_MAX 256u
+#define OBSERVE_RESOURCE_MAX 4096u
 
 typedef struct {
     uintptr_t header;
@@ -194,8 +194,11 @@ void eu4_gfx_observe_vb_bind_entry(eu4_gfx_capture_frame *frame,
         return;
     }
     char meta[EU4_GFX_OBSERVE_META_SIZE];
-    int used = snprintf(meta, sizeof(meta), ",\"count\":%d,\"start\":%d,\"ids\":[",
-                        count, start);
+    int used = snprintf(meta, sizeof(meta),
+                        ",\"count\":%d,\"start\":%d,\"offsets_null\":%s,"
+                        "\"words_null\":%s,\"ids\":[",
+                        count, start, offsets == NULL ? "true" : "false",
+                        words == NULL ? "true" : "false");
     if (used < 0 || (size_t)used >= sizeof(meta)) {
         eu4_gfx_observe_fail_fields(call);
         return;

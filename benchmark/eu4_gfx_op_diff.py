@@ -284,7 +284,11 @@ class VertexBufferCreateAdapter:
             return "vertex_create_meta"
         if record.payload_size != count * stride:
             return "vertex_create_payload"
-        if record.contents_known and record.payload_bytes is None:
+        if (
+            record.contents_known
+            and record.payload_bytes is None
+            and record.payload_size > 0
+        ):
             return "vertex_create_payload"
         return None
 
@@ -303,6 +307,8 @@ class VertexBufferCreateAdapter:
         count = record.meta["count"]
         stride = record.meta["stride"]
         data = _payload(record) if record.contents_known else None
+        if record.contents_known and data is None and record.payload_size == 0:
+            data = b""
         context.resources[record.resource_id] = {
             "bytes": data,
             "count": count,
@@ -335,6 +341,8 @@ class VertexBufferCreateAdapter:
         if not known:
             raise DiffUnavailable("worker_contents_unknown", record.resource_id)
         expected = record.payload_bytes if record.contents_known else None
+        if record.contents_known and expected is None and record.payload_size == 0:
+            expected = b""
         if expected is None:
             raise DiffUnavailable("original_contents_unknown", record.resource_id)
         return _content_fields("contents", expected, metal)
@@ -348,6 +356,8 @@ class VertexBufferCreateAdapter:
     ) -> dict:
         known, metal = _observed_buffer(_observed_resource(followups, record.resource_id))
         expected = record.payload_bytes if record.contents_known else None
+        if record.contents_known and expected is None and record.payload_size == 0:
+            expected = b""
         entry = {
             "resource_id": record.resource_id,
             "count": record.meta.get("count"),
@@ -394,12 +404,14 @@ class VertexBufferUpdateAdapter:
         if context.startup_status != "matched":
             return Qualification(False, "startup_context_not_qualified")
         resource = context.resources.get(record.resource_id)
-        if resource is None or not resource.get("known"):
+        if resource is None:
             return Qualification(False, "unknown_original_contents")
         if not record.contents_known:
             return Qualification(False, "unknown_original_contents")
         if record.payload_bytes is None:
             return Qualification(False, "missing_update_payload")
+        if not resource.get("known") and record.meta["partial"] != 0:
+            return Qualification(False, "unknown_original_contents")
         offset = record.meta["offset"]
         if record.meta["partial"] == 1:
             if offset < 0 or offset > len(resource["bytes"]):
@@ -442,6 +454,7 @@ class VertexBufferUpdateAdapter:
             )
         else:
             updated = payload
+            resource["known"] = True
         known, metal = _observed_buffer(_observed_resource(followups, record.resource_id))
         if not known:
             raise DiffUnavailable("worker_contents_unknown", record.resource_id)
@@ -504,9 +517,21 @@ class VertexBufferBindAdapter:
         for resource_id in record.meta["ids"]:
             if resource_id not in context.resources:
                 return Qualification(False, "unknown_bound_resource")
+        words_null = record.meta.get("words_null")
+        offsets_null = record.meta.get("offsets_null")
+        if words_null is not True:
+            return Qualification(
+                False,
+                "explicit_binding_words"
+                if words_null is False
+                else "binding_words_unknown",
+            )
+        if offsets_null is None:
+            return Qualification(False, "binding_offsets_unknown")
         offsets = record.meta.get("offsets") or []
-        words = record.meta.get("words") or []
-        if any(type(value) is not int or value != 0 for value in [*offsets, *words]):
+        if any(
+            type(value) is not int or value != 0 for value in offsets
+        ):
             return Qualification(False, "binding_offsets_not_reproducible")
         return Qualification(True)
 
@@ -751,6 +776,42 @@ def _call(
     return response, None
 
 
+def _execute_record(
+    worker,
+    record: capture.OperationRecord,
+    adapter: Adapter,
+    context: ReplayContext,
+    commands: list[dict],
+    responses: list[Any],
+) -> tuple[dict | None, list[tuple[str, dict]], tuple[str, str] | None]:
+    op, args = adapter.command(record, context)
+    seq = worker.next_seq
+    command = {"schema": WORKER_SCHEMA, "seq": seq, "op": op, "args": args}
+    commands.append(command)
+    response, failure = _call(worker, op, args, seq)
+    responses.append(response)
+    if failure is not None:
+        return None, [], failure
+    followups: list[tuple[str, dict]] = []
+    for follow_op, follow_args in adapter.followups(record, context):
+        follow_seq = worker.next_seq
+        follow_command = {
+            "schema": WORKER_SCHEMA,
+            "seq": follow_seq,
+            "op": follow_op,
+            "args": follow_args,
+        }
+        commands.append(follow_command)
+        follow_response, follow_error = _call(
+            worker, follow_op, follow_args, follow_seq
+        )
+        responses.append(follow_response)
+        if follow_error is not None:
+            return response, followups, follow_error
+        followups.append((follow_op, follow_response))
+    return response, followups, None
+
+
 def _default_worker_factory():
     shadow.build()
     return shadow.Worker()
@@ -815,7 +876,6 @@ def run(
     diagnostics: list[dict] = []
     worker_failure: str | None = None
     worker_unsupported: str | None = None
-    skipped_resources: set[str] = set()
     teardown_ok = True
     shutdown_ok = False
     worker = None
@@ -865,42 +925,70 @@ def run(
                         )
                     )
                     continue
-                if skip_unknown and (
-                    (
-                        record.kind in ("vertex_buffer_create", "vertex_buffer_update")
-                        and not record.contents_known
-                    )
-                    or (
-                        record.resource_id is not None
-                        and record.resource_id in skipped_resources
-                    )
+                if (
+                    skip_unknown
+                    and record.kind == "vertex_buffer_create"
+                    and not record.contents_known
                 ):
-                    if record.resource_id is not None:
-                        skipped_resources.add(record.resource_id)
+                    response, followup_results, failure = _execute_record(
+                        worker, record, adapter, context, commands, responses
+                    )
+                    if failure is not None:
+                        kind, detail = failure
+                        if kind == "unsupported":
+                            operation_results.append(
+                                _operation_result(
+                                    record,
+                                    adapter=adapter,
+                                    status="unsupported",
+                                    reason=detail,
+                                    context=context,
+                                )
+                            )
+                            continue
+                        worker_failure = detail
+                        operation_results.append(
+                            _operation_result(
+                                record,
+                                adapter=adapter,
+                                status="unavailable",
+                                reason=detail,
+                                context=context,
+                            )
+                        )
+                        break
                     operation_results.append(
                         _operation_result(
                             record,
                             adapter=adapter,
                             status="skipped",
-                            reason="unknown_original_contents",
+                            reason="unknown_initial_contents",
+                            state=response["state"],
+                            followups=followup_results,
                             context=context,
                         )
                     )
                     continue
-                if record.kind == "vertex_buffer_bind" and any(
-                    resource_id in skipped_resources
-                    for resource_id in record.meta.get("ids", [])
-                ):
-                    operation_results.append(
-                        _operation_result(
-                            record,
-                            adapter=adapter,
-                            status="skipped",
-                            reason="binding_uses_skipped_resource",
-                            context=context,
+                if skip_unknown and record.kind == "vertex_buffer_update":
+                    resource = context.resources.get(record.resource_id)
+                    if (
+                        not record.contents_known
+                        or (
+                            resource is not None
+                            and not resource.get("known")
+                            and record.meta.get("partial") != 0
                         )
-                    )
-                    continue
+                    ):
+                        operation_results.append(
+                            _operation_result(
+                                record,
+                                adapter=adapter,
+                                status="skipped",
+                                reason="unknown_original_contents",
+                                context=context,
+                            )
+                        )
+                        continue
                 qualification = adapter.qualify(record, context)
                 if not qualification.qualified:
                     operation_results.append(
@@ -913,17 +1001,9 @@ def run(
                         )
                     )
                     continue
-                op, args = adapter.command(record, context)
-                seq = worker.next_seq
-                command = {
-                    "schema": WORKER_SCHEMA,
-                    "seq": seq,
-                    "op": op,
-                    "args": args,
-                }
-                commands.append(command)
-                response, failure = _call(worker, op, args, seq)
-                responses.append(response)
+                response, followup_results, failure = _execute_record(
+                    worker, record, adapter, context, commands, responses
+                )
                 if failure is not None:
                     kind, detail = failure
                     if kind == "unsupported":
@@ -949,49 +1029,6 @@ def run(
                     )
                     break
                 state = response["state"]
-                followup_results: list[tuple[str, dict]] = []
-                followup_failure = None
-                for follow_op, follow_args in adapter.followups(record, context):
-                    follow_seq = worker.next_seq
-                    follow_command = {
-                        "schema": WORKER_SCHEMA,
-                        "seq": follow_seq,
-                        "op": follow_op,
-                        "args": follow_args,
-                    }
-                    commands.append(follow_command)
-                    follow_response, follow_error = _call(
-                        worker, follow_op, follow_args, follow_seq
-                    )
-                    responses.append(follow_response)
-                    if follow_error is not None:
-                        followup_failure = follow_error
-                        break
-                    followup_results.append((follow_op, follow_response))
-                if followup_failure is not None:
-                    kind, detail = followup_failure
-                    if kind == "unsupported":
-                        operation_results.append(
-                            _operation_result(
-                                record,
-                                adapter=adapter,
-                                status="unsupported",
-                                reason=detail,
-                                context=context,
-                            )
-                        )
-                        continue
-                    worker_failure = detail
-                    operation_results.append(
-                        _operation_result(
-                            record,
-                            adapter=adapter,
-                            status="unavailable",
-                            reason=detail,
-                            context=context,
-                        )
-                    )
-                    break
                 try:
                     fields = adapter.compare(record, state, followup_results, context)
                 except DiffUnavailable as exc:
@@ -1119,13 +1156,15 @@ def run(
     elif (
         startup_status == "matched"
         and any(result["status"] == "matched" for result in operation_results)
-        and all(
-            result["status"] in ("matched", "skipped")
-            for result in operation_results
-        )
+        and all(result["status"] == "matched" for result in operation_results)
     ):
         status = "pass"
         reason = ""
+    elif any(result["status"] == "skipped" for result in operation_results) and all(
+        result["status"] in ("matched", "skipped") for result in operation_results
+    ):
+        status = "unsupported"
+        reason = "partial_evidence"
     elif all(result["status"] in ("matched", "skipped") for result in operation_results):
         status = "incomplete"
         reason = "no_comparable_operations"
@@ -1147,6 +1186,9 @@ def run(
             "shutdown_ok": shutdown_ok,
             "teardown_ok": teardown_ok,
             "skip_unknown": skip_unknown,
+            "partial": any(
+                result["status"] == "skipped" for result in operation_results
+            ),
             "next_action": NEXT_ACTION[status],
             "counts": _counts(operation_results),
         }

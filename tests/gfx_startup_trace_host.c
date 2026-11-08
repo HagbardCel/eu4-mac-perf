@@ -632,6 +632,119 @@ static const eu4_gfx_observe_spec kBufferSpecs[3] = {
      NULL},
 };
 
+static int scenario_observe_bind_explicit(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0 ||
+        arm_observe(kBufferSpecs, 3) != 0 || run_startup() != 0) {
+        return 1;
+    }
+    uint8_t data[96];
+    for (size_t i = 0; i < sizeof(data); i++) {
+        data[i] = (uint8_t)i;
+    }
+    int32_t stride = 24, count = 4;
+    memcpy(gfx_startup_stub_vb_header, &stride, 4);
+    memcpy(gfx_startup_stub_vb_header + 4, &count, 4);
+    void *(*create)(void *, const void *, int32_t, int32_t, int32_t) =
+        (void *(*)(void *, const void *, int32_t, int32_t, int32_t))
+            gfx_startup_stub_vb_create;
+    void (*bind)(void *, int32_t, void **, int32_t, const int32_t *,
+                 const int32_t *) =
+        (void (*)(void *, int32_t, void **, int32_t, const int32_t *,
+                  const int32_t *))gfx_startup_stub_vb_bind;
+    void *header = create(NULL, data, 4, 24, 0);
+    int32_t offsets[1] = {0};
+    int32_t words[1] = {0};
+    void *headers[1] = {header};
+    bind(NULL, 1, headers, 0, offsets, words);
+    if (finish_observe(dir, "host-bind-explicit") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.events != 2 ||
+        snap.records[1].kind != EU4_GFX_OBSERVE_KIND_VERTEX_BIND ||
+        strstr(snap.records[1].meta, "\"words_null\":false") == NULL ||
+        strstr(snap.records[1].meta, "\"offsets_null\":false") == NULL) {
+        return fail("observe bind explicit");
+    }
+    return 0;
+}
+
+static int scenario_observe_unknown_update(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0 ||
+        arm_observe(kBufferSpecs, 3) != 0 || run_startup() != 0) {
+        return 1;
+    }
+    uint8_t full[16];
+    uint8_t partial[8];
+    for (size_t i = 0; i < sizeof(full); i++) {
+        full[i] = (uint8_t)(0x10u + i);
+    }
+    for (size_t i = 0; i < sizeof(partial); i++) {
+        partial[i] = (uint8_t)(0x40u + i);
+    }
+    int32_t stride = 8, count = 2;
+    memcpy(gfx_startup_stub_vb_header, &stride, 4);
+    memcpy(gfx_startup_stub_vb_header + 4, &count, 4);
+    void *(*create)(void *, const void *, int32_t, int32_t, int32_t) =
+        (void *(*)(void *, const void *, int32_t, int32_t, int32_t))
+            gfx_startup_stub_vb_create;
+    void (*update)(void *, void *, const void *, int32_t, uint32_t, int32_t) =
+        (void (*)(void *, void *, const void *, int32_t, uint32_t, int32_t))
+            gfx_startup_stub_vb_update;
+    void *header = create(NULL, NULL, 2, 8, 0);
+    update(NULL, header, full, 2, 0, 0);
+    void *header2 = create(NULL, NULL, 2, 8, 0);
+    update(NULL, header2, partial, 1, 0, 1);
+    if (finish_observe(dir, "host-unknown-update") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.events != 4) {
+        return fail("observe unknown update");
+    }
+    if (snap.records[0].contents_known || snap.records[1].kind !=
+            EU4_GFX_OBSERVE_KIND_VERTEX_UPDATE || !snap.records[1].contents_known ||
+        strcmp(snap.records[0].resource_id, "vb_1") != 0 ||
+        strcmp(snap.records[1].resource_id, "vb_1") != 0) {
+        return fail("observe unknown update first");
+    }
+    if (snap.records[2].contents_known ||
+        strcmp(snap.records[2].resource_id, "vb_2") != 0 ||
+        snap.records[3].kind != EU4_GFX_OBSERVE_KIND_VERTEX_UPDATE ||
+        snap.records[3].contents_known ||
+        strcmp(snap.records[3].resource_id, "vb_2") != 0) {
+        return fail("observe unknown update second");
+    }
+    return 0;
+}
+
+static int scenario_observe_zero_length(const char *dir) {
+    if (arm_and_install((void *)gfx_startup_stub_settings,
+                        (void *)gfx_startup_stub_init) != 0 ||
+        arm_observe(kBufferSpecs, 3) != 0 || run_startup() != 0) {
+        return 1;
+    }
+    void *(*create)(void *, const void *, int32_t, int32_t, int32_t) =
+        (void *(*)(void *, const void *, int32_t, int32_t, int32_t))
+            gfx_startup_stub_vb_create;
+    (void)create(NULL, NULL, 0, 0, 0);
+    if (finish_observe(dir, "host-zero-length") != 0) {
+        return 1;
+    }
+    eu4_gfx_observe_snapshot snap;
+    eu4_gfx_observe_copy_snapshot(&snap);
+    if (!snap.integrity_ok || snap.events != 1 ||
+        snap.records[0].kind != EU4_GFX_OBSERVE_KIND_VERTEX_CREATE ||
+        !snap.records[0].contents_known || snap.records[0].payload_size != 0) {
+        return fail("observe zero length");
+    }
+    return 0;
+}
+
 static int scenario_observe_buffers(const char *dir) {
     if (arm_and_install((void *)gfx_startup_stub_settings,
                         (void *)gfx_startup_stub_init) != 0) {
@@ -1117,6 +1230,15 @@ int main(int argc, char **argv) {
     }
     if (strcmp(scenario, "observe-buffers") == 0) {
         return scenario_observe_buffers(dir);
+    }
+    if (strcmp(scenario, "observe-bind-explicit") == 0) {
+        return scenario_observe_bind_explicit(dir);
+    }
+    if (strcmp(scenario, "observe-unknown-update") == 0) {
+        return scenario_observe_unknown_update(dir);
+    }
+    if (strcmp(scenario, "observe-zero-length") == 0) {
+        return scenario_observe_zero_length(dir);
     }
     if (strcmp(scenario, "unsafe-read") == 0) {
         return scenario_unsafe_read(dir);
