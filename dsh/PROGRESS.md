@@ -596,6 +596,25 @@ A second consequence worth noting: a failed boot leaves no campaign state, so
 read. `smoke-boot.sh` already catches this class of failure for the profile; the
 operator-facing path is now resistant to it too.
 
+### A second stumble was waiting behind the first
+
+`validate` refuses an unprepared campaign (`not_prepared`), and `prepare` had no
+model-facing tool -- so even after a successful boot, the first validate would
+have stalled and the agent could only have reported a blocker it could not act
+on. `eu4_validate_candidate` and `eu4_finalize_candidate` now run `prepare`
+first: it is idempotent and anchors only trusted material (never the candidate),
+so a fresh goal no longer needs a manual preparation step.
+
+Making that testable needed one change of shape: `apply()` accepts an optional
+`bridge` in its config, defaulting to the real `runBridge`, so a test can script
+the operation sequence. That immediately caught a wiring mistake of mine -- the
+`status` call still used the real bridge, so the injected one never saw it -- and
+then a substring rename that clobbered the exported `runBridge` declaration. Both
+were caught by the tests before any live run.
+
+Measured after the change: 15 node tests pass (up from 11), and a live boot still
+reports 3 tools and 1 guard.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

@@ -155,6 +155,7 @@ export function apply(ctx, config = {}) {
   const sidecar = config.sidecar || ''
   const infra = resolveInfra(config)
   const python = config.python || path.join(infra, '.venv', 'bin', 'python3')
+  const bridge = config.bridge || runBridge
   const bindings = new Map()
   let registeredTools = 0
   let registeredGuards = 0
@@ -230,7 +231,7 @@ export function apply(ctx, config = {}) {
         requireSidecar()
         const sessionId = exec?.agent?.sessionId ?? 'unknown'
         const goal = exec?.agent ? ctx.goals.get(exec.agent) : undefined
-        const result = await runBridge(infra, python, 'status', sidecar)
+        const result = await bridge(infra, python, 'status', sidecar)
         if (result && result.run_root) {
           persistBiding(sessionId, exec?.agent?.id, goal, result.run_root)
         }
@@ -249,7 +250,12 @@ export function apply(ctx, config = {}) {
         requireSidecar()
         const sessionId = exec?.agent?.sessionId ?? 'unknown'
         const goal = exec?.agent ? ctx.goals.get(exec.agent) : undefined
-        const result = await runBridge(infra, python, 'validate', sidecar, [
+        // `validate` refuses an unprepared campaign and the model has no tool
+        // to prepare one, so a fresh goal would stall here. `prepare` is
+        // idempotent and anchors only trusted material, never the candidate.
+        const prepared = await bridge(infra, python, 'prepare', sidecar)
+        if (prepared && prepared.ok === false) return prepared
+        const result = await bridge(infra, python, 'validate', sidecar, [
           '--session-id',
           sessionId,
         ])
@@ -273,7 +279,7 @@ export function apply(ctx, config = {}) {
         if (!agent) throw new Error('finalization requires an owning agent')
         const sessionId = agent.sessionId
         const live = ctx.goals.get(agent)
-        const status = await runBridge(infra, python, 'status', sidecar)
+        const status = await bridge(infra, python, 'status', sidecar)
         const runRoot = status && status.run_root
         if (live) {
           persistBiding(sessionId, agent.id, live, runRoot)
@@ -292,7 +298,9 @@ export function apply(ctx, config = {}) {
             detail: problems.join('; '),
           }
         }
-        const result = await runBridge(infra, python, 'finalize', sidecar, [
+        const prepared = await bridge(infra, python, 'prepare', sidecar)
+        if (prepared && prepared.ok === false) return prepared
+        const result = await bridge(infra, python, 'finalize', sidecar, [
           '--session-id',
           sessionId,
         ])
