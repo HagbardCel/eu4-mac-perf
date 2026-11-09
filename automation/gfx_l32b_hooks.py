@@ -897,6 +897,16 @@ class L32bHooks:
         )
         if head.stdout.strip() != commit or status.stdout.strip():
             return {"status": "failed", "detail": "requalification worktree is not clean"}
+        checker_root = self.run_root / "checker" / commit
+        if not checker_root.exists():
+            checker_root.parent.mkdir(parents=True, exist_ok=True)
+            added = subprocess.run(
+                ["git", "-C", str(self.repo), "worktree", "add", "--detach",
+                 str(checker_root), commit],
+                capture_output=True, text=True, check=False,
+            )
+            if added.returncode != 0:
+                return {"status": "failed", "detail": added.stderr.strip()}
         checker_commit = str(
             state.get("checker_freeze_commit")
             or self.workflow.get("checker_freeze_commit")
@@ -928,7 +938,7 @@ class L32bHooks:
         if diff.returncode != 0:
             return {"status": "failed", "detail": "integration diff failed"}
         changed = [line for line in diff.stdout.splitlines() if line]
-        template = worktree / "campaigns" / "eu4-l32b-complete"
+        template = checker_root / "campaigns" / "eu4-l32b-complete"
         config = _json(template / "l32b.json")
         allowed = [str(item) for item in config.get("allowed_paths", [])]
         kind = state.get("promotion_kind")
@@ -1068,7 +1078,7 @@ class L32bHooks:
                      json.dumps(campaign, indent=2) + "\n")
         env = {
             **os.environ,
-            "PYTHONPATH": f"{worktree / 'benchmark'}:{worktree}",
+            "PYTHONPATH": f"{checker_root / 'benchmark'}:{checker_root}",
         }
         completed = subprocess.run(
             [*campaign["accept"], str(worktree)],
@@ -1088,7 +1098,9 @@ class L32bHooks:
             return {
                 "status": "failed",
                 "checker": verdict or "fail",
-                "detail": diagnostics.get("reason") or "requalification failed",
+                "detail": diagnostics.get("reason")
+                          or str(payload.get("diagnostics"))
+                          or "requalification failed",
             }
         established = diagnostics.get("established") or []
         unresolved = list(diagnostics.get("missing") or []) \
