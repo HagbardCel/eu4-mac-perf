@@ -488,56 +488,79 @@ class L32bHooks:
         if not directories:
             return {"detail": "capture campaign produced no capture directory"}
         capture = directories[-1]
-        problem = self._verify_capture(campaign["run_root"], capture, receipt)
+        reference, problem = self._verify_capture(
+            campaign["run_root"], capture, receipt
+        )
         if problem:
             return {"detail": problem}
         return {
             "capture": str(capture),
             "capture_receipt": str(receipt),
+            "capture_reference": reference,
             "candidate_commit": commit,
         }
 
-    def _verify_capture(self, run_root: Path, capture: Path, receipt_path: Path) -> str | None:
-        try:
-            counter = _json(receipt_path)
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            return f"capture receipt is unreadable: {exc}"
-        token = counter.get("token")
-        if not token:
-            return "capture receipt has no ledger token"
+    def _verify_capture(
+        self, run_root: Path, capture: Path, receipt_path: Path
+    ) -> tuple[dict | None, str | None]:
+        counter = {}
+        if receipt_path.is_file():
+            try:
+                counter = _json(receipt_path)
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                counter = {}
+        mirror_tokens = [
+            item.get("token")
+            for item in counter.get("launches") or []
+            if isinstance(item, dict) and item.get("token")
+        ]
         try:
             pointer = launch_ledger.read_pointer(run_root)
         except launch_ledger.LedgerError as exc:
-            return f"capture ledger pointer is invalid: {exc}"
+            return None, f"capture ledger pointer is invalid: {exc}"
         if pointer is None:
-            return "capture ledger pointer is missing"
+            return None, "capture ledger pointer is missing"
         try:
             ledger = launch_ledger.load_ledger(Path(pointer["ledger"]))
         except launch_ledger.LedgerError as exc:
-            return f"capture ledger is invalid: {exc}"
-        matches = [
+            return None, f"capture ledger is invalid: {exc}"
+        candidates = [
             item for item in ledger.get("launches") or []
-            if isinstance(item, dict) and item.get("token") == token
+            if isinstance(item, dict)
+            and item.get("campaign_id") == run_root.name
+            and item.get("status") == "completed"
+            and Path(str(item.get("output") or "")).resolve() == capture.resolve()
         ]
-        if len(matches) != 1:
-            return "capture ledger token is not unique"
-        record = matches[0]
-        if record.get("campaign_id") != run_root.name:
-            return "capture ledger campaign differs"
-        if record.get("status") != "completed":
-            return "capture launch is not completed"
+        if mirror_tokens:
+            candidates = [
+                item for item in candidates if item.get("token") in mirror_tokens
+            ]
+        if len(candidates) != 1:
+            return None, "capture ledger entry is missing or ambiguous"
+        record = candidates[0]
         request = capture / "capture-request.json"
         if not request.is_file():
-            return "capture request is missing"
+            return None, "capture request is missing"
         try:
             document = _json(request)
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            return f"capture request is unreadable: {exc}"
+            return None, f"capture request is unreadable: {exc}"
         if not document.get("library_sha256"):
-            return "capture request has no observer identity"
+            return None, "capture request has no observer identity"
         if not (capture / "operations-summary.json").is_file():
-            return "capture summary is missing"
-        return None
+            return None, "capture summary is missing"
+        return {
+            "token": record.get("token"),
+            "capture": str(capture),
+            "campaign_id": record.get("campaign_id"),
+            "output": record.get("output"),
+            "library_sha256": document.get("library_sha256"),
+            "selection": {
+                "receipt": record,
+                "plan_path": str(capture / "capture-plan.json"),
+                "plan_sha256": None,
+            },
+        }, None
 
     def run_research(self, state: dict) -> dict:
         trusted = self._trusted(state)
@@ -773,9 +796,43 @@ class L32bHooks:
         template = worktree / "campaigns" / "eu4-l32b-complete"
         config = _json(template / "l32b.json")
         allowed = [str(item) for item in config.get("allowed_paths", [])]
+        kind = state.get("promotion_kind")
+        trusted = self._trusted(state)
+        contract_paths: list[str] = []
+        if kind == "contract":
+            version = str(state.get("contract_version") or "")
+            contract_sha = str(state.get("contract_sha256") or "")
+            contract = state.get("contract") or {}
+            wanted = {
+                f"automation/gfx_contracts/{version}.py",
+                f"automation/gfx_contracts/{version}.spec.json",
+                f"tests/test_gfx_contract_{version}.py",
+            }
+            contract_paths = [
+                path for path in (contract.get("changed_paths") or [])
+                if path in wanted
+                or path.startswith(f"analysis/gfx-draw/v0/l32b/contracts/{version}/")
+            ]
+            module = f"automation/gfx_contracts/{version}.py"
+            actual = subprocess.run(
+                ["git", "-C", str(self.repo), "show", f"{commit}:{module}"],
+                capture_output=True, check=False,
+            )
+            if actual.returncode != 0 or hashlib.sha256(actual.stdout).hexdigest() != contract_sha:
+                return {
+                    "status": "failed",
+                    "checker": "fail",
+                    "detail": "qualified contract module differs at the integration commit",
+                }
+            version_effective = version
+            sha_effective = contract_sha
+        else:
+            version_effective = str(trusted.get("contract_version", "v0"))
+            sha_effective = trusted.get("contract_sha256")
+        effective_allowed = allowed + contract_paths
         from automation.gfx_draw_accept_v2 import path_allowed
 
-        outside = [path for path in changed if not path_allowed(path, allowed)]
+        outside = [path for path in changed if not path_allowed(path, effective_allowed)]
         if outside:
             return {
                 "status": "failed",
@@ -800,8 +857,6 @@ class L32bHooks:
                 "capture_required": True,
                 "observer_library_sha256": candidate_sha,
             }
-        trusted = self._trusted(state)
-        version = str(trusted.get("contract_version", "v0"))
         campaign_dir = self.run_root / "requalification" / commit / "campaign"
         campaign_dir.mkdir(parents=True, exist_ok=True)
         campaign = {
@@ -821,15 +876,18 @@ class L32bHooks:
             "template": str(template),
             "trusted_contract": {
                 "commit": commit,
-                "contract_version": version,
-                "contract_sha256": trusted.get("contract_sha256"),
+                "contract_version": version_effective,
+                "contract_sha256": sha_effective,
                 "manifest": trusted.get("manifest"),
             },
             "requalification": {
                 "capture": str(capture),
                 "changed_paths": changed,
                 "candidate_digest": digest,
-                "selection": {},
+                "allowed_paths": effective_allowed,
+                "selection": (
+                    (state.get("capture_reference") or {}).get("selection") or {}
+                ),
             },
         }
         atomic_write(campaign_dir / "campaign.json",

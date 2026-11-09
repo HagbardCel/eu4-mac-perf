@@ -698,11 +698,20 @@ class Coordinator:
         verification = result.get("verification") or {}
         if verification.get("status") == "pending_capture" \
                 and not result.get("published"):
-            state["pending_integration"] = {
+            pending = {
                 "integration_id": result.get("integration_id"),
                 "base_head": result.get("base_head"),
                 "staged_commit": result.get("commit"),
             }
+            if not pending["integration_id"] or not pending["base_head"] \
+                    or not pending["staged_commit"]:
+                state["state"] = "blocked"
+                state["blocker"] = {
+                    "reason": "pending_integration_identity_missing",
+                    "pending": pending,
+                }
+                return state
+            state["pending_integration"] = pending
             state["state"] = "capture_required"
             state["capture_requirement"] = verification
             return state
@@ -943,6 +952,7 @@ class Coordinator:
             return state
         state["capture_receipt"] = receipt
         state["capture"] = result.get("capture")
+        state["capture_reference"] = result.get("capture_reference")
         _note(state, "capture", receipt=receipt)
         return self._promote(state)
 

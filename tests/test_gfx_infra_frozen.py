@@ -1941,6 +1941,31 @@ class CoordinatorTests(unittest.TestCase):
     "authentic L3.2b-I capture/worktree is not available",
 )
 class LegacyRequalificationTests(unittest.TestCase):
+    def test_committed_requalification_uses_the_real_pipeline(self):
+        import automation.gfx_draw_accept_v2 as accept
+        from automation.gfx_checkpoint import source_tree_digest
+        import shutil
+
+        root = ROOT / ".local/automation/eu4-l32b-effective-state"
+        workspace = root / "workspace"
+        captures = sorted(
+            path for path in (root / "captures").iterdir() if path.is_dir()
+        )
+        self.assertTrue(captures, "authentic capture is missing")
+        shutil.rmtree(root / "qualified", ignore_errors=True)
+        paths = accept.changed_paths(workspace)
+        result = accept.check(
+            workspace,
+            ROOT / "campaigns/eu4-l32b-effective-state",
+            requalification={
+                "capture": str(captures[-1]),
+                "changed_paths": paths,
+                "candidate_digest": source_tree_digest(workspace, paths),
+                "selection": {},
+            },
+        )
+        self.assertEqual(result["verdict"], "pass", result["diagnostics"])
+
     def test_v2_accepts_the_existing_l3_2b_i_capture(self):
         import automation.gfx_draw_accept_v2 as accept
         import shutil
