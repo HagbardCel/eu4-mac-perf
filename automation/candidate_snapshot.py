@@ -1,4 +1,4 @@
-"""Content-addressed candidate deltas for DSH campaigns.
+"""Content-addressed candidate deltas, for both backends.
 
 ``automation.gfx_draw_accept.changed_paths`` returns names only: the porcelain
 status letter is discarded, so a deletion, a mode change and a rename all look
@@ -20,7 +20,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-SCHEMA = "eu4-dsh-snapshot/v1"
+SCHEMA = "eu4-candidate-snapshot/v1"
 KINDS = ("add", "modify", "delete", "rename", "typechange")
 MODE_FILE = "100644"
 MODE_EXEC = "100755"
@@ -176,9 +176,18 @@ def _hash_bytes(repo: Path, payload: bytes, env: dict) -> str:
     return completed.stdout.decode().strip()
 
 
+DEFAULT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "eu4-candidate-snapshot",
+    "GIT_AUTHOR_EMAIL": "eu4-candidate-snapshot@local",
+    "GIT_COMMITTER_NAME": "eu4-candidate-snapshot",
+    "GIT_COMMITTER_EMAIL": "eu4-candidate-snapshot@local",
+}
+
+
 def build_candidate(
     workspace: Path, repo: Path, baseline: str, delta: list[dict],
-    message: str = "eu4 DSH candidate snapshot",
+    message: str = "candidate snapshot",
+    identity: dict | None = None,
 ) -> dict:
     """Materialize exactly *delta* on top of *baseline* as a commit."""
     workspace = Path(workspace)
@@ -214,16 +223,10 @@ def build_candidate(
             _git(repo, "update-index", "--add", "--cacheinfo",
                  f"{mode},{blob},{path}", env=env)
         tree = _git(repo, "write-tree", env=env).strip()
-        identity = {
-            **os.environ,
-            "GIT_AUTHOR_NAME": "eu4-dsh-snapshot",
-            "GIT_AUTHOR_EMAIL": "eu4-dsh-snapshot@local",
-            "GIT_COMMITTER_NAME": "eu4-dsh-snapshot",
-            "GIT_COMMITTER_EMAIL": "eu4-dsh-snapshot@local",
-        }
+        authorship = {**os.environ, **(identity or DEFAULT_IDENTITY)}
         commit = subprocess.run(
             ["git", "-C", str(repo), "commit-tree", tree, "-p", baseline, "-m", message],
-            capture_output=True, text=True, check=False, env=identity,
+            capture_output=True, text=True, check=False, env=authorship,
         )
         if commit.returncode != 0:
             raise SnapshotError(commit.stderr.strip() or "commit-tree failed")

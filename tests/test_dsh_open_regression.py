@@ -17,7 +17,9 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-DSH_MODULES = sorted((REPO / "automation").glob("dsh_*.py"))
+DSH_MODULES = sorted((REPO / "automation").glob("dsh_*.py")) + [
+    REPO / "automation" / "candidate_snapshot.py"
+]
 PLUGIN_SOURCES = sorted((REPO / "dsh" / "eu4-goal-plugin").glob("lib/*.js"))
 FORBIDDEN_IMPORTS = {"automation.opencode", "automation.cli"}
 

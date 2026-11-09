@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from automation import dsh_snapshot as snapshot
+from automation import candidate_snapshot as snapshot
 
 
 class RepoCase(unittest.TestCase):

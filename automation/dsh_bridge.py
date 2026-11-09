@@ -21,7 +21,7 @@ from pathlib import Path
 
 from automation import dsh_receipts as receipts
 from automation import dsh_review as review
-from automation import dsh_snapshot as snapshot
+from automation import candidate_snapshot as snapshot
 from automation import handoff as handoff_primitives
 from automation.review_result import validate_review
 from automation.dsh_campaign import (

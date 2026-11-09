@@ -876,6 +876,29 @@ worktree behind while its report and receipt survive.
 Verified: 91 DSH tests, 24 node tests, 86 OpenCode tests, doc links and compileall
 clean.
 
+## Phase 5 -- one snapshot implementation
+
+`automation/dsh_snapshot.py` became `automation/candidate_snapshot.py` and is now
+used by both backends: the DSH freeze path and `automation.handoff`'s
+`snapshot_candidate`, which previously carried its own copy of the
+read-tree/hash-object/write-tree/commit-tree dance. What stayed in `handoff` is
+A0's *policy* -- which files are editable, the protected-evidence check, the
+`refs/qualification/**` namespace and the commit authorship -- because those are
+A0's rules, not snapshot mechanics.
+
+`build_candidate` gained an injectable commit identity so A0's `qualification`
+authorship is preserved; the shared default is neutral.
+
+The delegation immediately found a latent difference between the two
+implementations: A0 included *unchanged* allowlisted files in the delta
+(`progress.md` in the fixture), which the shared builder's round-trip check
+correctly rejects, because a snapshot must reproduce exactly the changes that
+exist. The delta is now filtered to files whose content differs from the parent,
+and a candidate with no changes refuses rather than committing an empty overlay.
+
+Verified: 29 handoff tests, 86 OpenCode tests, 82 DSH tests (the 9 snapshot tests
+now live under their new name), 24 node tests.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not
