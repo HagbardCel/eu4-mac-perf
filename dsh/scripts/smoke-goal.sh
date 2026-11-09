@@ -18,7 +18,8 @@ export EU4_DSH_PYTHON=$INFRA/.venv/bin/python3
 echo "1. prepare the campaign (seeds the workspace, records the anchor)"
 echo "   $EU4_DSH_PYTHON -m automation.dsh_bridge prepare --sidecar $SIDECAR"
 echo
-echo "2. boot the profile:  $INFRA/dsh/scripts/run.sh"
+echo "2. boot the profile:  $INFRA/dsh/scripts/run.sh   (binds a free port;"
+echo "   pass --port N or set EU4_DSH_PORT to pin one, and use the URL it prints)"
 echo
 echo "3. paste this after /goal (a human action; the model cannot create a goal):"
 echo '---8<---'

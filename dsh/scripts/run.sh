@@ -27,4 +27,19 @@ if [ "${1:-}" = "--goal" ]; then
   exec "$EU4_DSH_PYTHON" -m automation.dsh_bridge goal-prompt --sidecar "$EU4_DSH_SIDECAR"
 fi
 
+# Never collide with a DSH that is already running. The composed web default is
+# 127.0.0.1:3080, which is exactly where the operator's ordinary DSH GUI usually
+# listens -- so an unqualified `dsh --profile eu4-web` fails with EADDRINUSE on
+# the most likely occasion it is used. Bind an OS-chosen port unless the caller
+# asked for one (or set EU4_DSH_PORT explicitly to pin it).
+seen_port=0
+for argument in "$@"; do
+  case "$argument" in
+    --port|--port=*) seen_port=1 ;;
+  esac
+done
+if [ "$seen_port" -eq 0 ]; then
+  set -- --port "${EU4_DSH_PORT:-0}" "$@"
+fi
+
 exec dsh --profile eu4-web "$@"

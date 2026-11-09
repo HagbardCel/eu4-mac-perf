@@ -277,6 +277,12 @@ receipt cannot authorize completion.
 they cost nothing and are safe to run at any time. Creating a goal is a human
 action; `smoke-goal.sh` only prints what to paste.
 
+`run.sh` binds an OS-chosen port unless you pass `--port` or set `EU4_DSH_PORT`.
+The composed web default is `127.0.0.1:3080`, which is where an ordinary DSH GUI
+usually listens, so an unqualified boot collides with a running DSH and fails
+with `EADDRINUSE` — verified the hard way; the script now avoids it and prints
+the URL it chose.
+
 ## Bridge operations
 
 `python3 -m automation.dsh_bridge <operation> --sidecar <path>` prints exactly one

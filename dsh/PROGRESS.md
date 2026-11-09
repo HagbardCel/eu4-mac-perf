@@ -570,6 +570,32 @@ Writing it caught one more thing of mine: the exit-code assertion was brittle
 about line wrapping and failed on correct prose, so it now compares collapsed
 whitespace.
 
+## Round 12 -- the smoke run never started
+
+The operator reported conducting the smoke test. It had not run: the dedicated
+home contained no `dsh-offline-smoke` state at all, and the only startup log
+(the boot at 12:15) recorded
+
+```
+StartupError: dsh: startup failed: 2 required plugins did not activate
+  webserver (required)  Package: @deepseek-ai/dsh-host-webserver
+  Error: listen EADDRINUSE: address already in use 127.0.0.1:3080
+```
+
+`run.sh` passed no `--port`, so the profile inherited the composed web default
+3080 -- the port the operator's ordinary DSH GUI was already using. The most
+likely moment to boot this profile is while a DSH is running, so this was a
+predictable defect in my script, not operator error.
+
+`run.sh` now binds an OS-chosen port unless `--port` or `EU4_DSH_PORT` is given,
+and the docs say so. Verified: the same command now prints
+`http://127.0.0.1:51608` and no `EADDRINUSE`.
+
+A second consequence worth noting: a failed boot leaves no campaign state, so
+"nothing happened" looks identical to "never attempted" unless the startup log is
+read. `smoke-boot.sh` already catches this class of failure for the profile; the
+operator-facing path is now resistant to it too.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not
