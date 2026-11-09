@@ -283,6 +283,22 @@ usually listens, so an unqualified boot collides with a running DSH and fails
 with `EADDRINUSE` — verified the hard way; the script now avoids it and prints
 the URL it chose.
 
+## Provider and credentials
+
+The `eu4-web` profile is derived from the shipped `web` template, which mounts
+`llm-pi-ai` with no providers and leaves the base default model
+(`deepseek-official`/`deepseek-flash`) in place. A dedicated `DSH_HOME` has no
+credentials for that model, so the web UI asks for an API key — the profile is
+correct but unconfigured.
+
+The tracked overlay therefore mirrors the host profile's own user layer: it
+declares the `opencode-go` provider (`apiKeyEnv: OPENCODE_GO_API_KEY`) and an
+`agent-default-model`, both env-overridable via `EU4_DSH_PROVIDER` and
+`EU4_DSH_MODEL`. `provision.sh` copies the host's `.credentials.yaml` into the
+dedicated home at mode `0600`, and `--refresh-credentials` re-copies after the
+host rotates a key. Copying rather than symlinking means a key saved through the
+UI cannot write back into the host store.
+
 ## Bridge operations
 
 `python3 -m automation.dsh_bridge <operation> --sidecar <path>` prints exactly one

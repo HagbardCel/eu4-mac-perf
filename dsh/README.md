@@ -48,6 +48,30 @@ receipt.
 passes `--from-default-profile`, because doing so later would replace the
 profile and its local configuration.
 
+## Provider and credentials
+
+The shipped `web` bundle mounts `llm-pi-ai` with no providers and leaves the base
+default model (`deepseek-official`/`deepseek-flash`) in place. A dedicated home
+has no credentials for that, so the UI asks for an API key. Three things fix it,
+and `provision.sh` handles all three:
+
+1. the tracked overlay declares the `opencode-go` provider
+   (`apiKeyEnv: OPENCODE_GO_API_KEY`) and an `agent-default-model`;
+2. `provision.sh` copies `~/.dsh/.credentials.yaml` into the dedicated home
+   (mode `0600`), so the key is shared with the host installation;
+3. re-provisioning refreshes it — `--refresh-credentials` forces a re-copy after
+   the host rotates a key.
+
+Copying is deliberate: a key saved through the UI then cannot write back into the
+host's credential store. If you would rather supply the key at run time, export
+`OPENCODE_GO_API_KEY` in the shell that launches `run.sh` and skip the file.
+
+Override the model without editing tracked config:
+
+```sh
+EU4_DSH_PROVIDER=opencode-go EU4_DSH_MODEL=deepseek-v4.1-flash ./dsh/scripts/run.sh
+```
+
 ## Pinned runtime
 
 [runtime.json](runtime.json) records the verified DSH release, Node and pnpm

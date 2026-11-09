@@ -25,6 +25,25 @@
     customSkillDirs:
       - !!js process.env.EU4_DSH_SKILL_ROOT
 
+# Provider and model. The shipped web bundle mounts `llm-pi-ai` without any
+# providers and leaves the base default model (deepseek-official/deepseek-flash)
+# in place, which this dedicated home has no credentials for -- so the UI asks
+# for an API key. These two rows mirror the host profile's own user layer, and
+# the secret itself is shared by provision.sh. Both are env-overridable so a
+# different provider can be used without editing tracked config.
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: !!js process.env.EU4_DSH_PROVIDER ?? 'opencode-go'
+    model: !!js process.env.EU4_DSH_MODEL ?? 'deepseek-v4.1-flash'
+
 - insert:
     - id: eu4-goal
       name: '@eu4/dsh-goal'

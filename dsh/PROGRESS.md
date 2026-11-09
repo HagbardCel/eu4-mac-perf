@@ -615,6 +615,35 @@ were caught by the tests before any live run.
 Measured after the change: 15 node tests pass (up from 11), and a live boot still
 reports 3 tools and 1 guard.
 
+## Round 13 -- the profile was unconfigured, so the UI asked for a key
+
+The operator booted the profile (the port fix worked) and the web UI asked for an
+API key. Cause, established from the composed tree rather than guessed: the
+shipped `web` bundle mounts `llm-pi-ai` with **no providers**, and
+`agent-default-model` falls back to the base default
+`deepseek-official`/`deepseek-flash`. A dedicated home has no credentials for
+that provider, so there is nothing to select and the UI prompts. The host has all
+three pieces -- provider wiring, a default model, and a credential store -- and
+none of them had been carried into the dedicated profile.
+
+Fixed in three parts:
+
+- the tracked overlay now declares the `opencode-go` provider
+  (`apiKeyEnv: OPENCODE_GO_API_KEY`) and an `agent-default-model`, matching the
+  host, both overridable through `EU4_DSH_PROVIDER` / `EU4_DSH_MODEL`;
+- `provision.sh` copies `~/.dsh/.credentials.yaml` into the dedicated home at mode
+  `0600` when it lacks provider keys, and `--refresh-credentials` re-copies after
+  a key rotation. Copy rather than symlink, so a UI-saved key cannot write back
+  into the host store;
+- the README and docs describe the three pieces and the env-var alternative.
+
+Verified: the composed tree now shows the provider config and the chosen model;
+the dedicated credential store is 298 bytes at mode 600 holding both
+`DEEPSEEK_API_KEY` and `OPENCODE_GO_API_KEY`; preflight still passes; and a boot
+prints a URL with no `StartupError`. The host path this mirrors is known-working:
+the round-10 live reviewer ran through it with no API key in the environment,
+which is why the shared credential store is the right mechanism.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

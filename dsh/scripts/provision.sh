@@ -27,9 +27,11 @@ PROFILE_DIR=$DSH_HOME/profiles/$PROFILE
 OVERLAY=$INFRA/dsh/profile/$PROFILE
 
 INIT=0
+FORCE_CREDS=0
 for arg in "$@"; do
   case "$arg" in
     --init) INIT=1 ;;
+    --refresh-credentials) FORCE_CREDS=1 ;;
     -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "provision: unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -54,6 +56,27 @@ fi
 
 install -m 0644 "$OVERLAY/cordis.patch.yml" "$PROFILE_DIR/cordis.patch.yml"
 echo "provision: synced cordis.patch.yml"
+
+# Share the host installation's credentials with this dedicated home. The
+# profile's provider reads its key from OPENCODE_GO_API_KEY or this file; without
+# either, the web UI asks for an API key. Copying (rather than symlinking) keeps
+# a UI-saved key from writing back into the host's credential store.
+HOST_HOME=${EU4_DSH_HOST_HOME:-$HOME/.dsh}
+HOST_CREDS=$HOST_HOME/.credentials.yaml
+CREDS=$DSH_HOME/.credentials.yaml
+have_keys=0
+if [ -f "$CREDS" ] && grep -qE 'OPENCODE_GO_API_KEY|DEEPSEEK_API_KEY' "$CREDS" 2>/dev/null; then
+  have_keys=1
+fi
+if [ -f "$HOST_CREDS" ] && { [ "$FORCE_CREDS" -eq 1 ] || [ "$have_keys" -eq 0 ]; }; then
+  install -m 0600 "$HOST_CREDS" "$CREDS"
+  echo "provision: copied host credentials into $DSH_HOME"
+elif [ "$have_keys" -eq 1 ]; then
+  echo "provision: credentials already present (use --refresh-credentials to re-copy)"
+else
+  echo "provision: no host credentials found at $HOST_CREDS" >&2
+  echo "provision: export OPENCODE_GO_API_KEY in the shell that runs run.sh" >&2
+fi
 
 if [ ! -e "$PROFILE_DIR/node_modules/@eu4/dsh-goal" ]; then
   echo "provision: installing plugin via link:$PLUGIN"
