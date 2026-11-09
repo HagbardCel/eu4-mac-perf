@@ -20,7 +20,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from automation import dsh_receipts as receipts
+from automation import dsh_review as review
 from automation import dsh_snapshot as snapshot
+from automation import handoff as handoff_primitives
+from automation.review_result import validate_review
 from automation.dsh_campaign import (
     Sidecar,
     SidecarError,
@@ -103,8 +106,18 @@ def _roots(sidecar: Sidecar) -> dict:
         problems.append("campaign root is outside the infrastructure root")
     if not inside(sidecar.checker, campaign):
         problems.append("checker is outside the campaign root")
-    if (candidate / "automation" / "dsh_bridge.py").exists():
-        problems.append("candidate ships automation/dsh_bridge.py and could shadow it")
+    # Anti-shadowing is a property of what Python actually imported, not of
+    # what files exist: a candidate worktree of this very repository legitimately
+    # contains automation/dsh_bridge.py. What must never happen is the bridge
+    # itself importing that copy.
+    import automation as automation_package  # noqa: PLC0415
+
+    package_dir = Path(automation_package.__file__).resolve().parent
+    if inside(package_dir, candidate) or candidate == package_dir:
+        problems.append(
+            f"the running automation package ({package_dir}) is inside the "
+            "candidate workspace, so the bridge could be shadowed"
+        )
 
     # A host that declares its effective workspace is held to it; one that does
     # not is recorded as unverified rather than assumed correct.
@@ -666,6 +679,350 @@ def _freeze(sidecar: Sidecar) -> dict:
     }
 
 
+def _oracle_digest(identities: dict) -> str:
+    """What the reviewer must hold the candidate to.
+
+    A campaign with a verification manifest uses its digest. One without uses
+    the sealed evidence-input digest, because ``eu4-review/v1`` requires a
+    64-hex oracle identity and inventing a constant would be worse.
+    """
+    return (
+        identities.get("verification_manifest_digest")
+        or identities.get("evidence_inputs_digest")
+        or ""
+    )
+
+
+def _freeze_once(sidecar: Sidecar, identities: dict) -> dict:
+    """Freeze the validated candidate once; reuse it while the identity holds."""
+    path = sidecar.run_root / "freeze.json"
+    digest = receipts.identity_digest(identities)
+    existing = receipts.read_json(path)
+    if existing and existing.get("identity_digest") == digest:
+        return existing["frozen"]
+    frozen = _freeze(sidecar)
+    receipts.atomic_write(path, receipts.canonical_json({
+        "schema": "eu4-dsh-freeze/v1",
+        "campaign_id": sidecar.campaign_id,
+        "identity_digest": digest,
+        "frozen": frozen,
+        "created_at": _now(),
+    }))
+    receipts.append_journal(sidecar.run_root, {
+        "kind": "freeze", "campaign_id": sidecar.campaign_id,
+        "identity_digest": digest, "frozen": frozen,
+    })
+    return frozen
+
+
+def _review_paths(sidecar: Sidecar) -> dict:
+    base = sidecar.run_root / "review"
+    report = base / "review.json"
+    return {
+        "base": base,
+        "report": report,
+        "receipt": handoff_primitives.reviewer_receipt_path_for(report),
+        "invocation": handoff_primitives.reviewer_invocation_path_for(report),
+        "worktree": base / "worktree",
+    }
+
+
+def _review_problem(sidecar: Sidecar, frozen: dict, *, require_live: bool = True) -> list[str]:
+    """Whether an existing review qualifies this frozen candidate."""
+    paths = _review_paths(sidecar)
+    if not paths["report"].is_file():
+        return ["no independent review report exists for this candidate"]
+    try:
+        report = json.loads(paths["report"].read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"review report unreadable: {exc}"]
+    oracle = _oracle_digest((receipts.load_current_receipt(sidecar.run_root) or {}).get("identities") or {})
+    problems = validate_review(
+        report,
+        expected_candidate_commit=frozen.get("commit") or None,
+        expected_oracle_manifest_sha256=oracle or None,
+    )
+    if problems:
+        return [f"review report invalid: {p}" for p in problems[:4]]
+    if report.get("outcome") != "qualified":
+        findings = report.get("findings") or []
+        detail = ", ".join(str(f.get("id")) for f in findings[:4]) or "none"
+        return [f"review outcome was {report.get('outcome')} (findings: {detail})"]
+    if not paths["receipt"].is_file():
+        return ["the reviewer receipt is missing"]
+    receipt = handoff_primitives.load_reviewer_receipt(paths["receipt"])
+    report_sha = receipts.digest_file(paths["report"])
+    problems = handoff_primitives.verify_reviewer_receipt(
+        receipt,
+        campaign_id=sidecar.campaign_id,
+        candidate_commit=frozen.get("commit") or "",
+        oracle_digest=oracle,
+        report_sha256=report_sha,
+        require_live=require_live,
+    )
+    return problems[:4]
+
+
+def op_review_preflight(args) -> int:
+    sidecar = load_sidecar(Path(args.sidecar))
+    _roots(sidecar)
+    stored = _setup(sidecar.run_root)
+    try:
+        lock = campaign_lock(stored.lock)
+        lock.__enter__()
+    except RuntimeError as exc:
+        emit({"ok": True, "operation": "review-preflight",
+              "campaign_id": sidecar.campaign_id, "classification": "policy_stop",
+              "kind": "busy", "detail": str(exc)})
+        return EXIT_OK
+    try:
+        current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
+        _check_anchor(_prepared_identities(sidecar), current)
+        receipt = receipts.load_current_receipt(sidecar.run_root)
+        if receipt is None or (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
+            raise Refusal("not_qualified", "no passing validation to review")
+        _check_anchor(_prepared_identities(sidecar), current)
+
+        frozen = _freeze_once(sidecar, current)
+        paths = _review_paths(sidecar)
+        paths["base"].mkdir(parents=True, exist_ok=True)
+        if not paths["worktree"].exists():
+            review.prepare_worktree(
+                infra_root().resolve(), paths["worktree"], frozen["commit"]
+            )
+        oracle = _oracle_digest(current)
+        handoff_primitives.write_reviewer_invocation(
+            paths["invocation"],
+            campaign_id=sidecar.campaign_id,
+            candidate_commit=frozen["commit"],
+            oracle_digest=oracle,
+            report_path=paths["report"],
+            worktree=paths["worktree"],
+        )
+        task = review.build_task(
+            frozen["commit"], oracle or None,
+            "Review the candidate for correctness against the pinned evidence. "
+            "Reject it if it modifies protected evidence, invents observations, "
+            "or claims more than its checker establishes.",
+        )
+        emit({
+            "ok": True, "operation": "review-preflight",
+            "campaign_id": sidecar.campaign_id,
+            "frozen": frozen,
+            "oracle_digest": oracle,
+            "worktree": str(paths["worktree"]),
+            "report": str(paths["report"]),
+            "task": task,
+            "command": ["dsh", "--profile", "headless", "--json", task],
+        })
+        return EXIT_OK
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def op_review_run(args) -> int:
+    sidecar = load_sidecar(Path(args.sidecar))
+    _roots(sidecar)
+    stored = _setup(sidecar.run_root)
+    try:
+        lock = campaign_lock(stored.lock)
+        lock.__enter__()
+    except RuntimeError as exc:
+        emit({"ok": True, "operation": "review-run", "campaign_id": sidecar.campaign_id,
+              "classification": "policy_stop", "kind": "busy", "detail": str(exc)})
+        return EXIT_OK
+    try:
+        current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
+        _check_anchor(_prepared_identities(sidecar), current)
+        receipt = receipts.load_current_receipt(sidecar.run_root)
+        if receipt is None or (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
+            raise Refusal("not_qualified", "no passing validation to review")
+        frozen = _freeze_once(sidecar, current)
+        paths = _review_paths(sidecar)
+        paths["base"].mkdir(parents=True, exist_ok=True)
+        if not paths["worktree"].exists():
+            review.prepare_worktree(
+                infra_root().resolve(), paths["worktree"], frozen["commit"]
+            )
+        oracle = _oracle_digest(current)
+        handoff_primitives.write_reviewer_invocation(
+            paths["invocation"],
+            campaign_id=sidecar.campaign_id,
+            candidate_commit=frozen["commit"],
+            oracle_digest=oracle,
+            report_path=paths["report"],
+            worktree=paths["worktree"],
+        )
+        if paths["report"].exists():
+            # A report that predates this invocation was not produced for it.
+            raise Refusal(
+                "review_stale",
+                "a review report already exists for this candidate; use "
+                "review-verify or clear the review directory",
+            )
+
+        task = review.build_task(
+            frozen["commit"], oracle or None,
+            "Review the candidate for correctness against the pinned evidence. "
+            "Reject it if it modifies protected evidence, invents observations, "
+            "or claims more than its checker establishes.",
+        )
+        command = review.reviewer_command(args.reviewer_cmd, task)
+        mode = "scripted" if args.reviewer_cmd else "live"
+        outcome = review.run_reviewer(
+            command, cwd=paths["worktree"], timeout=args.timeout
+        )
+        if outcome["exit_code"] != 0:
+            raise Refusal(
+                "review_failed",
+                f"the reviewer exited {outcome['exit_code']}: "
+                f"{outcome['stderr'][:400]}",
+            )
+        payload = review.extract_review_payload(outcome["stdout"])
+        if payload is None:
+            raise Refusal("review_unparseable",
+                          "no eu4-review/v1 object in the reviewer output")
+        session_id = review.session_id_from(outcome["stdout"])
+        if not session_id:
+            raise Refusal(
+                "review_identity",
+                "the reviewer output carries no session identity; a receipt "
+                "cannot be written without the host-observed session",
+            )
+
+        problems = validate_review(
+            payload,
+            expected_candidate_commit=frozen["commit"],
+            expected_oracle_manifest_sha256=oracle or None,
+        )
+        receipts.atomic_write(paths["report"], receipts.canonical_json(payload))
+        if problems:
+            receipts.append_journal(sidecar.run_root, {
+                "kind": "review_invalid", "campaign_id": sidecar.campaign_id,
+                "candidate": frozen["commit"], "problems": problems[:4],
+            })
+            emit({
+                "ok": False, "operation": "review-run",
+                "campaign_id": sidecar.campaign_id,
+                "classification": "integrity_refusal", "kind": "review_invalid",
+                "detail": "; ".join(problems[:6]),
+                "report": str(paths["report"]),
+            })
+            return EXIT_INTEGRITY
+
+        report_sha = receipts.digest_file(paths["report"])
+        handoff_primitives.write_reviewer_receipt(
+            paths["receipt"],
+            campaign_id=sidecar.campaign_id,
+            candidate_commit=frozen["commit"],
+            oracle_digest=oracle,
+            reviewer_session_id=session_id,
+            runner_status="complete",
+            report_sha256=report_sha,
+            qualification_mode=mode,
+        )
+        receipts.append_journal(sidecar.run_root, {
+            "kind": "review", "campaign_id": sidecar.campaign_id,
+            "candidate": frozen["commit"], "outcome": payload.get("outcome"),
+            "receipt": receipts.digest_file(paths["receipt"]),
+            "qualification_mode": mode,
+        })
+        emit({
+            "ok": True, "operation": "review-run",
+            "campaign_id": sidecar.campaign_id,
+            "candidate_commit": frozen["commit"],
+            "outcome": payload.get("outcome"),
+            "findings": len(payload.get("findings") or []),
+            "reviewer_session_id": session_id,
+            "qualification_mode": mode,
+            "report": str(paths["report"]),
+            "receipt": str(paths["receipt"]),
+            # A completed review task is not the same as a qualified candidate.
+            "qualified": payload.get("outcome") == "qualified",
+        })
+        return EXIT_OK
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def op_review_clean(args) -> int:
+    """Remove the reviewer worktree once its evidence is no longer needed.
+
+    The worktree is deliberately kept while a review is live so the report,
+    receipt and invocation can be reconciled against it. It is also a registered
+    git worktree, so leaving it forever accumulates registry entries and disk;
+    this op is the explicit way to drop it, and it never deletes the report.
+    """
+    sidecar = load_sidecar(Path(args.sidecar))
+    _roots(sidecar)
+    stored = _setup(sidecar.run_root)
+    paths = _review_paths(sidecar)
+    worktree = paths["worktree"]
+    if not worktree.exists():
+        emit({"ok": True, "operation": "review-clean",
+              "campaign_id": sidecar.campaign_id, "removed": False,
+              "detail": "no reviewer worktree"})
+        return EXIT_OK
+    try:
+        lock = campaign_lock(stored.lock)
+        lock.__enter__()
+    except RuntimeError as exc:
+        emit({"ok": True, "operation": "review-clean",
+              "campaign_id": sidecar.campaign_id, "classification": "policy_stop",
+              "kind": "busy", "detail": str(exc)})
+        return EXIT_OK
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(infra_root()), "worktree", "remove",
+             "--force", "--force", str(worktree)],
+            capture_output=True, text=True, check=False,
+        )
+        if completed.returncode != 0 and worktree.exists():
+            raise Refusal("worktree", completed.stderr.strip() or "worktree removal failed")
+        receipts.append_journal(sidecar.run_root, {
+            "kind": "review_clean", "campaign_id": sidecar.campaign_id,
+            "worktree": str(worktree),
+        })
+        emit({"ok": True, "operation": "review-clean",
+              "campaign_id": sidecar.campaign_id, "removed": True,
+              "worktree": str(worktree)})
+        return EXIT_OK
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def op_review_verify(args) -> int:
+    sidecar = load_sidecar(Path(args.sidecar))
+    _roots(sidecar)
+    _setup(sidecar.run_root)
+    current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
+    _check_anchor(_prepared_identities(sidecar), current)
+    frozen = (_freeze_or_existing(sidecar, current))
+    # Strict by default: a scripted (test double) receipt never authorizes
+    # completion. --allow-scripted exists so the pipeline itself can be
+    # inspected without a live model run.
+    problems = _review_problem(
+        sidecar, frozen, require_live=not getattr(args, "allow_scripted", False)
+    )
+    emit({
+        "ok": not problems,
+        "operation": "review-verify",
+        "campaign_id": sidecar.campaign_id,
+        "candidate_commit": frozen.get("commit"),
+        "qualified": not problems,
+        "problems": problems,
+    })
+    return EXIT_OK if not problems else EXIT_INTEGRITY
+
+
+def _freeze_or_existing(sidecar: Sidecar, identities: dict) -> dict:
+    existing = receipts.read_json(sidecar.run_root / "freeze.json")
+    digest = receipts.identity_digest(identities)
+    if existing and existing.get("identity_digest") == digest:
+        return existing["frozen"]
+    return _freeze_once(sidecar, identities)
+
+
 def op_snapshot(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
@@ -806,7 +1163,11 @@ def op_finalize(args) -> int:
                 f"completion (see {path.name})",
             )
 
-        frozen = _freeze(sidecar)
+        frozen = _freeze_once(sidecar, current)
+        if sidecar.require_independent_review:
+            problems = _review_problem(sidecar, frozen, require_live=True)
+            if problems:
+                raise Refusal("review_required", "; ".join(problems))
         record = {
             "schema": "eu4-dsh-finalization/v1",
             "frozen_candidate": frozen,
@@ -939,11 +1300,17 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="operation", required=True)
 
     for name in ("prepare", "status", "validate", "snapshot", "finalize",
-                 "recover", "goal-prompt"):
+                 "recover", "review-preflight", "review-run", "review-verify",
+                 "review-clean", "goal-prompt"):
         child = sub.add_parser(name)
         child.add_argument("--sidecar", required=True)
         if name in ("validate", "finalize"):
             child.add_argument("--session-id", default=None)
+        if name == "review-verify":
+            child.add_argument("--allow-scripted", action="store_true")
+        if name == "review-run":
+            child.add_argument("--reviewer-cmd", default=None)
+            child.add_argument("--timeout", type=float, default=900.0)
     return parser
 
 
@@ -954,6 +1321,10 @@ OPERATIONS = {
     "snapshot": op_snapshot,
     "finalize": op_finalize,
     "recover": op_recover,
+    "review-preflight": op_review_preflight,
+    "review-run": op_review_run,
+    "review-verify": op_review_verify,
+    "review-clean": op_review_clean,
     "goal-prompt": op_goal_prompt,
 }
 

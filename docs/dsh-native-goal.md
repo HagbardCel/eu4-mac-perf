@@ -133,6 +133,31 @@ DSH disarms an active goal on session restart, and nothing in this
 infrastructure re-arms it: continuation after a restart is an explicit operator
 decision.
 
+## Independent review
+
+The reviewer is a separate `dsh --profile headless` process in a detached
+worktree at the candidate commit the bridge froze — not a subagent and not a
+role switch. It has no goal, no completion authority, and no write access to
+protected state.
+
+The channel is host-mediated. The bridge spawns the reviewer, parses its
+newline-delimited run events, recovers the single `eu4-review/v1` object, takes
+the reviewer's session identity from the stream rather than from anything the
+reviewer says, validates the report against the candidate and oracle digests,
+and writes the report and the reviewer receipt itself.
+
+Four conditions stay separate: the process exited 0, the report is schema-valid,
+the outcome is `qualified` / `rejected` / `unresolved`, and a receipt exists. A
+completed review task is not a qualified candidate.
+
+With `require_independent_review`, finalization additionally requires a
+`qualified` review whose receipt matches the frozen candidate and is verified as
+live. A scripted test double is marked `qualification_mode: scripted` and can
+never authorize completion.
+
+`review-clean` removes the reviewer worktree once its evidence is no longer
+needed; the report, receipt and invocation live outside it and survive.
+
 ## Execution roots
 
 Three roots are kept distinct and are asserted before a checker runs.

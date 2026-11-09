@@ -12,7 +12,7 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
 | M3 seed-only native goal loop | bridge + plugin done; live run needs an operator-created goal |
 | M4 delta snapshot, evidence binding, journal, replica | done |
 | M5 recovery, limits, isolation | done |
-| M6 independent reviewer | not started |
+| M6 independent reviewer | pipeline done; live model run pending |
 | M7 genuine qualification (A0 + frozen offline) | not started |
 | M8 launch-safety verification | not started |
 | M9 docs and PR | not started |
@@ -225,7 +225,49 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
   re-arms it, and live capture is refused outright, so a restored session cannot
   resume capture.
 
-## M6 -- reviewer interface established (not implemented yet)
+## M6 -- independent reviewer, host-mediated channel
+
+- The reviewer is a separate process with no goal and no completion authority:
+  `dsh --profile headless --json "<task>"` in a detached worktree created at the
+  candidate commit frozen by the bridge. It writes nothing protected.
+- `review-preflight` freezes the validated candidate (once, reused while the
+  identity holds), creates the worktree at that exact commit, and writes the
+  invocation record with the existing handoff primitive. `review-run` spawns the
+  reviewer, and the **host** parses the event stream, recovers the
+  `eu4-review/v1` object, takes the session identity from the stream (never from
+  the reviewer's own claim), validates the report, and writes both the report
+  and the reviewer receipt itself.
+- Four conditions are reported separately and never conflated: the process
+  exited 0, a schema-valid report was recovered, the outcome is
+  `qualified|rejected|unresolved`, and a receipt was created. A completed review
+  task is not a qualified candidate.
+- `finalize` now honours `goal.require_independent_review`: with it set, the
+  frozen candidate must have a `qualified` review whose receipt matches the
+  candidate and oracle digests, verified with `require_live=True`. A scripted
+  reviewer (the test double) is marked `qualification_mode: scripted` and can
+  never authorize completion; `review-verify --allow-scripted` exists only to
+  inspect the pipeline.
+- The oracle identity is the verification-manifest digest when the campaign has
+  one, otherwise the sealed evidence-input digest, because `eu4-review/v1`
+  requires a 64-hex oracle and inventing a constant would be worse.
+- Verified end to end with a scripted reviewer process: a seeded defect is
+  rejected with a finding, `finalize` refuses (`review_required`), the candidate
+  is corrected, a second review qualifies it, and `finalize` **still** refuses
+  because a scripted receipt is not a live qualification. Also verified: review
+  is refused without a passing validation, a reviewer without a session identity
+  is refused and gets no receipt, and unparseable output is refused.
+- Two defects found and fixed while wiring this:
+  - the anti-shadowing root check rejected any candidate worktree of this
+    repository for *containing* `automation/dsh_bridge.py`; it now checks that
+    the running `automation` package is not resolved inside the candidate, which
+    is the property that actually matters;
+  - the reviewer worktree was never removed, leaking a registered git worktree
+    per review. `review-clean` now removes it explicitly (the report and receipt
+    live outside it and survive), and the tests deregister theirs.
+- Still pending: an actual live reviewer run against a real model, which needs
+  provider credentials and spends tokens, so it remains an operator step.
+
+## M6 interface notes (established from the installed CLI)
 
 Checked against the installed CLI rather than assumed:
 

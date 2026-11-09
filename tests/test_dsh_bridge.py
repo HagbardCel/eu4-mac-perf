@@ -62,7 +62,13 @@ class BridgeTestCase(unittest.TestCase):
     def run_bridge(self, operation: str, sidecar: Path, **extra):
         argv = [operation, "--sidecar", str(sidecar)]
         for key, value in extra.items():
-            argv.extend(["--" + key.replace("_", "-"), str(value)])
+            flag = "--" + key.replace("_", "-")
+            if value is True:
+                argv.append(flag)
+            elif value in (False, None):
+                continue
+            else:
+                argv.extend([flag, str(value)])
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             code = dsh_bridge.main(argv)
