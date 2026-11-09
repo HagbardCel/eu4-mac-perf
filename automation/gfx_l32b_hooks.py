@@ -457,13 +457,12 @@ class L32bHooks:
 
     def run_capture(self, state: dict) -> dict:
         requirement = state.get("capture_requirement") or {}
-        commit = str(
-            (state.get("integration") or {}).get("commit")
-            or requirement.get("commit")
-            or ""
-        )
-        if not commit:
-            return {"detail": "capture requirement has no staged commit"}
+        pending = state.get("pending_integration") or {}
+        staged = str(pending.get("staged_commit") or "")
+        required = str(requirement.get("commit") or "")
+        if not staged or staged != required:
+            return {"detail": "capture target is not the pending staged commit"}
+        commit = staged
         operation_id = str(
             (state.get("active_campaign") or {}).get("operation_id")
             or f"capture-{int(state.get('campaign_sequence', 0)) + 1}"

@@ -218,6 +218,8 @@ class Coordinator:
             return self._review(state)
         if current == "promote":
             return self._promote(state)
+        if current == "capture_required":
+            return self._capture_required(state)
         if current == "remediating":
             return self._remediation(state)
         if current == "researching":
