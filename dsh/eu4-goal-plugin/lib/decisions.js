@@ -33,6 +33,43 @@ export function completionDenialReason(exec) {
   )
 }
 
+/**
+ * Whether the campaign workspace is reachable from the session's workspace.
+ *
+ * The DSH file sandbox confines writes to the session workspace, so a campaign
+ * workspace outside it can never be edited: the agent would see tool failures
+ * with no explanation of why. `sessionCwd` comes from the harness's validated
+ * session header, not from an environment variable the agent could influence.
+ *
+ * @param {string|undefined} sessionCwd trusted session working directory
+ * @param {string|undefined} campaignWorkspace workspace the campaign edits
+ * @param {string} [sep] path separator, injectable for testing
+ * @returns {string|undefined} refusal reason, or undefined when reachable
+ */
+export function workspaceRefusal(sessionCwd, campaignWorkspace, sep = '/') {
+  if (!sessionCwd) {
+    return (
+      'the session working directory is unavailable, so the campaign workspace ' +
+      'cannot be shown to be inside the sandbox'
+    )
+  }
+  if (!campaignWorkspace) {
+    return 'the campaign workspace is unknown; prepare or status must run first'
+  }
+  const clean = (value) => String(value).replace(/\/+$/, '')
+  const root = clean(sessionCwd)
+  const target = clean(campaignWorkspace)
+  if (target === root) return undefined
+  if (!target.startsWith(root + sep)) {
+    return (
+      `the campaign workspace (${campaignWorkspace}) is outside the session ` +
+      `workspace (${sessionCwd}), where the sandbox confines writes; create the ` +
+      'session in a directory that contains the campaign workspace'
+    )
+  }
+  return undefined
+}
+
 /** sha256 of a goal objective, for binding qualification to one objective. */
 export function digestObjective(text) {
   return createHash('sha256').update(String(text ?? ''), 'utf8').digest('hex')

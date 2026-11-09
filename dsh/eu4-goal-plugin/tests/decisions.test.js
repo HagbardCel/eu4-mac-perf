@@ -6,6 +6,7 @@ import {
   digestObjective,
   goalBindingProblems,
   qualificationRefusal,
+  workspaceRefusal,
 } from '../lib/decisions.js'
 
 test('every model-initiated completion is denied, bound or not', () => {
@@ -53,4 +54,24 @@ test('only a fresh passing finalize may authorize completion', () => {
   assert.ok(qualificationRefusal({ ...good, operation: 'validate' }))
   assert.ok(qualificationRefusal({ ...good, ok: false, kind: 'stale' }))
   assert.ok(qualificationRefusal(undefined))
+})
+
+test('a campaign workspace inside the session workspace is reachable', () => {
+  assert.equal(workspaceRefusal('/repo', '/repo/.local/dsh/x/workspace'), undefined)
+  assert.equal(workspaceRefusal('/repo/', '/repo/.local/'), undefined)
+  assert.equal(workspaceRefusal('/repo', '/repo'), undefined)
+})
+
+test('a campaign workspace outside the sandbox is refused with a reason', () => {
+  const reason = workspaceRefusal('/repo', '/Users/someone/.local/share/state/x/workspace')
+  assert.match(reason, /outside the session workspace/)
+})
+
+test('a sibling with a shared prefix is not mistaken for a child', () => {
+  assert.ok(workspaceRefusal('/repo', '/repo-other/workspace'))
+})
+
+test('an unknown session cwd or campaign workspace is refused', () => {
+  assert.ok(workspaceRefusal(undefined, '/repo/ws'))
+  assert.ok(workspaceRefusal('/repo', undefined))
 })

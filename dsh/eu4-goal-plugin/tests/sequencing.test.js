@@ -42,11 +42,11 @@ function tool(ctx, name) {
   return ctx._state.tools.find((entry) => entry.name === name)
 }
 
-const agent = { sessionId: 's1', id: 'a1' }
+const agent = { sessionId: 's1', id: 'a1', session: { header: { cwd: '/tmp' } } }
 
 test('validate prepares the campaign first', async () => {
   const { ctx, ops } = harness({
-    prepare: { ok: true },
+    prepare: { ok: true, workspace: '/tmp/ws' },
     status: { ok: true, run_root: '/tmp/run', workspace: '/tmp/ws' },
     validate: { ok: true, classification: 'verdict', checker_verdict: 'fail' },
   })
@@ -68,7 +68,7 @@ test('a failed prepare does not proceed to validate', async () => {
 
 test('finalize prepares first and completes only on a fresh pass', async () => {
   const { ctx, ops } = harness({
-    prepare: { ok: true },
+    prepare: { ok: true, workspace: '/tmp/ws' },
     status: { ok: true, run_root: '/tmp/run', workspace: '/tmp/ws' },
     finalize: {
       ok: true,
@@ -85,7 +85,7 @@ test('finalize prepares first and completes only on a fresh pass', async () => {
 
 test('a finalize that is not a fresh pass does not complete the goal', async () => {
   const { ctx } = harness({
-    prepare: { ok: true },
+    prepare: { ok: true, workspace: '/tmp/ws' },
     status: { ok: true, run_root: '/tmp/run', workspace: '/tmp/ws' },
     finalize: {
       ok: false,
@@ -97,4 +97,27 @@ test('a finalize that is not a fresh pass does not complete the goal', async () 
   const result = await tool(ctx, 'eu4_finalize_candidate').execute({}, { agent })
   assert.equal(result.completion, 'refused')
   assert.equal(ctx._state.completed.length, 0)
+})
+
+test('a session rooted outside the campaign workspace is refused', async () => {
+  const { ctx, ops } = harness({
+    prepare: { ok: true, workspace: '/elsewhere/ws' },
+    validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
+  })
+  const result = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.deepEqual(ops, ['prepare'])
+  assert.equal(result.kind, 'workspace_mismatch')
+  assert.match(result.detail, /outside the session workspace/)
+})
+
+test('an unavailable session cwd is refused rather than assumed', async () => {
+  const { ctx } = harness({
+    prepare: { ok: true, workspace: '/tmp/ws' },
+    validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
+  })
+  const result = await tool(ctx, 'eu4_validate_candidate').execute(
+    {}, { agent: { sessionId: 's2', id: 'a2' } }
+  )
+  assert.equal(result.kind, 'workspace_mismatch')
+  assert.match(result.detail, /session working directory is unavailable/)
 })

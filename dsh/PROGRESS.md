@@ -671,6 +671,54 @@ Verified on a throwaway run root against the real `automation-smoke` checker:
 `fail` -> write `ready` -> `pass` -> `finalize` `pass`/`qualified`. The shipped
 campaign is prepared and clean: workspace seeded, 0 validations.
 
+## Round 15 -- Phase 0 gate checked, and it has not been met
+
+The refactor directive makes a genuine autonomous run the gate for everything
+else, so I checked for one instead of assuming.
+
+Evidence, from the dedicated home:
+
+- `~/.local/share/eu4-dsh/sessions/--Users-fabian-Documents-deepseek-harness-default-workspace--/session-5ffdc432.../`
+  exists, but decompressing it shows only `session`, `permission/preset`
+  (`workspace-write`), `sandbox/mode` (`workspace-write`), `approval/policy`
+  (`ask`) and `session/end-seed`. No user message, no goal, no tool call.
+- The smoke campaign run root reports `validations: 0`, `current: false`, no
+  receipts.
+
+So no `/goal` was created; the UI was opened and a session seeded, nothing more.
+
+The session also reveals the structural reason a run would have failed: its
+workspace is `~/Documents/deepseek-harness/default-workspace` -- DSH's first-use
+workspace under Documents -- not this checkout, and workspaces are chosen in the
+browser, not from the process cwd. The campaign workspace is
+`<checkout>/.local/dsh/dsh-offline-smoke/workspace`, outside that session's
+sandbox, so edits would have been denied.
+
+### What I changed instead of refactoring
+
+The gate forbids starting structural work, and the blocker was a silent
+mismatch, so I made it explicit: `workspaceRefusal()` in the plugin compares the
+harness's validated session `cwd` (`agent.session.header.cwd`) with the campaign
+workspace the bridge reports, and refuses with `workspace_mismatch` before any
+checker runs. It is a pure function with unit tests (inside, outside,
+shared-prefix sibling, missing values) and it is wired into both
+`eu4_validate_candidate` and `eu4_finalize_candidate`.
+
+This deliberately reads the trusted session header rather than an environment
+variable, which the directive requires and which the earlier `EU4_DSH_WORKSPACE`
+check could not satisfy.
+
+Verified: 21 node tests pass (up from 15), 108 Python DSH tests, 86 OpenCode
+tests, and a live boot still reports 3 tools and 1 guard.
+
+### What unblocks the gate
+
+The operator must open a session whose workspace contains the campaign
+workspace -- i.e. add `/Users/fabian/Projects/MiniProjects/eu4-dsh-infra` as a
+workspace in the UI and create the session there -- then paste the printed
+objective. Until that session exists, every later phase stays blocked by the
+directive's own gate.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

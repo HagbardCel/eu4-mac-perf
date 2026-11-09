@@ -21,6 +21,7 @@ import {
   digestObjective,
   goalBindingProblems,
   qualificationRefusal,
+  workspaceRefusal,
 } from './decisions.js'
 
 export const name = 'eu4-goal'
@@ -164,6 +165,18 @@ export function apply(ctx, config = {}) {
     ctx.logger?.warn?.('[eu4-goal] no sidecar configured; campaign tools are unavailable')
   }
 
+  /** The harness's validated session working directory; never an env var. */
+  function sessionCwd(agent) {
+    const header = agent && agent.session && agent.session.header
+    return header && typeof header.cwd === 'string' ? header.cwd : undefined
+  }
+
+  function workspaceProblem(agent, campaignWorkspace) {
+    return workspaceRefusal(sessionCwd(agent), campaignWorkspace, path.sep)
+  }
+
+  const agentOf = (exec) => exec && exec.agent
+
   function requireSidecar() {
     if (!sidecar) {
       throw new Error('no EU4 campaign sidecar is configured for this profile')
@@ -255,6 +268,17 @@ export function apply(ctx, config = {}) {
         // idempotent and anchors only trusted material, never the candidate.
         const prepared = await bridge(infra, python, 'prepare', sidecar)
         if (prepared && prepared.ok === false) return prepared
+        const mismatch = workspaceProblem(agentOf(exec), prepared && prepared.workspace)
+        if (mismatch) {
+          return {
+            ok: false,
+            operation: 'validate',
+            classification: 'refused',
+            kind: 'workspace_mismatch',
+            goal_policy: 'unavailable',
+            detail: mismatch,
+          }
+        }
         const result = await bridge(infra, python, 'validate', sidecar, [
           '--session-id',
           sessionId,
@@ -300,6 +324,17 @@ export function apply(ctx, config = {}) {
         }
         const prepared = await bridge(infra, python, 'prepare', sidecar)
         if (prepared && prepared.ok === false) return prepared
+        const mismatch = workspaceProblem(agentOf(exec), prepared && prepared.workspace)
+        if (mismatch) {
+          return {
+            ok: false,
+            operation: 'validate',
+            classification: 'refused',
+            kind: 'workspace_mismatch',
+            goal_policy: 'unavailable',
+            detail: mismatch,
+          }
+        }
         const result = await bridge(infra, python, 'finalize', sidecar, [
           '--session-id',
           sessionId,
