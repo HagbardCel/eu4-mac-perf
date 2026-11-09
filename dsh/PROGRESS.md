@@ -381,6 +381,23 @@ pin), which is why the worktree count is 35 rather than 34.
 - Draft PR: https://github.com/HagbardCel/eu4-mac-perf/pull/181 -- opened, deliberately not
   merged.
 
+## Round 5 additions
+
+- **Live mount proof.** Composition could not distinguish "row present" from
+  "plugin installed". The web app does not surface plugin INFO logs, so an
+  opt-in `EU4_DSH_BOOT_PROOF` path is written at the end of `apply()` with the
+  registration counts, and `smoke-boot.sh` boots a real session to read it.
+  Measured: 3 tools, 1 guard, correct sidecar/infra/python.
+- **Frozen campaign scope corrected.** The `eu4-vertex-buffer-multiple` sidecar
+  allowed 2 of the checker's 8 `IMPLEMENTATION_PATHS`, so a DSH agent would have
+  been refused the moment it edited replacement code. The sidecar now mirrors the
+  checker exactly, forbids the campaign directory and the frozen documents, and
+  `tests/test_dsh_campaign_scope.py` compares the two declarations directly so
+  they cannot drift again.
+- A malformed edit of my own (duplicated helper blocks while moving the mount
+  proof) was caught by `node` before it reached a session; the tools section was
+  rewritten rather than patched around.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not
@@ -404,9 +421,13 @@ executed here:
 
 ## Pending / caveats
 
-- The profile and plugin are verified at composition level. A live interactive
-  session has not yet been booted, so "session loads
-  `opengl-metal-reconstruction`" still needs one human-run check.
+- **Live mount is now proven** (round 5). `dsh/scripts/smoke-boot.sh` boots a real
+  `eu4-web` session with `EU4_DSH_BOOT_PROOF` set and reads the record the plugin
+  writes at the end of `apply()`: `registered_tools: 3`, `registered_guards: 1`,
+  with the sidecar, infra root and interpreter it resolved. No model request is
+  sent, so it costs no tokens. This replaces the previous composition-only claim.
+- Still not proven live: that the model actually *sees* the shared
+  `opengl-metal-reconstruction` skill in a conversation, which needs a real turn.
 - The plugin is still plain ESM JavaScript (no build step, no npm dependency);
   the real tool surface and completion guard arrive with M3.
 - Evidence-input binding is declared but not yet enforced as a gate; M4 adds it

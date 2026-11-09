@@ -152,6 +152,8 @@ export function apply(ctx, config = {}) {
   const infra = resolveInfra(config)
   const python = config.python || path.join(infra, '.venv', 'bin', 'python3')
   const bindings = new Map()
+  let registeredTools = 0
+  let registeredGuards = 0
 
   if (!sidecar) {
     ctx.logger?.warn?.('[eu4-goal] no sidecar configured; campaign tools are unavailable')
@@ -201,94 +203,128 @@ export function apply(ctx, config = {}) {
   // --- completion gate -----------------------------------------------------
   // On the plain context, so it applies globally and is evaluated before any
   // agent-scoped guard layer, and with no I/O so it cannot stall the loop.
-  ctx.effect(() => ctx.tools.guard((exec) => completionDenialReason(exec)))
+  ctx.effect(() => {
+    const dispose = ctx.tools.guard((exec) => completionDenialReason(exec))
+    registeredGuards += 1
+    return dispose
+  })
 
   // --- model-facing tools --------------------------------------------------
-  ctx.effect(() =>
-    ctx.tools.register(
-      tool(
-        'eu4_campaign_status',
-        'Report the bound EU4 campaign: identities, validation counters, the ' +
-          'current receipt, and whether it is stale relative to the candidate.',
-        async (_args, exec) => {
-          requireSidecar()
-          const sessionId = exec?.agent?.sessionId ?? 'unknown'
-          const goal = exec?.agent ? ctx.goals.get(exec.agent) : undefined
-          const result = await runBridge(infra, python, 'status', sidecar)
-          if (result && result.run_root) {
-            persistBiding(sessionId, exec?.agent?.id, goal, result.run_root)
-          }
-          return result
+  const register = (definition) =>
+    ctx.effect(() => {
+      const dispose = ctx.tools.register(definition)
+      registeredTools += 1
+      return dispose
+    })
+
+  register(
+    tool(
+      'eu4_campaign_status',
+      'Report the bound EU4 campaign: identities, validation counters, the ' +
+        'current receipt, and whether it is stale relative to the candidate.',
+      async (_args, exec) => {
+        requireSidecar()
+        const sessionId = exec?.agent?.sessionId ?? 'unknown'
+        const goal = exec?.agent ? ctx.goals.get(exec.agent) : undefined
+        const result = await runBridge(infra, python, 'status', sidecar)
+        if (result && result.run_root) {
+          persistBiding(sessionId, exec?.agent?.id, goal, result.run_root)
         }
-      )
+        return result
+      }
     )
   )
 
-  ctx.effect(() =>
-    ctx.tools.register(
-      tool(
-        'eu4_validate_candidate',
-        'Run the campaign trusted checker against the current candidate and ' +
-          'return its verdict and diagnostics. A pass is necessary but not ' +
-          'sufficient: completion also requires eu4_finalize_candidate.',
-        async (_args, exec) => {
-          requireSidecar()
-          const sessionId = exec?.agent?.sessionId ?? 'unknown'
-          const goal = exec?.agent ? ctx.goals.get(exec.agent) : undefined
-          const result = await runBridge(infra, python, 'validate', sidecar, [
-            '--session-id',
-            sessionId,
-          ])
-          if (result && result.run_root) {
-            persistBiding(sessionId, exec?.agent?.id, goal, result.run_root)
-          }
-          return result
+  register(
+    tool(
+      'eu4_validate_candidate',
+      'Run the campaign trusted checker against the current candidate and ' +
+        'return its verdict and diagnostics. A pass is necessary but not ' +
+        'sufficient: completion also requires eu4_finalize_candidate.',
+      async (_args, exec) => {
+        requireSidecar()
+        const sessionId = exec?.agent?.sessionId ?? 'unknown'
+        const goal = exec?.agent ? ctx.goals.get(exec.agent) : undefined
+        const result = await runBridge(infra, python, 'validate', sidecar, [
+          '--session-id',
+          sessionId,
+        ])
+        if (result && result.run_root) {
+          persistBiding(sessionId, exec?.agent?.id, goal, result.run_root)
         }
-      )
+        return result
+      }
     )
   )
 
-  ctx.effect(() =>
-    ctx.tools.register(
-      tool(
-        'eu4_finalize_candidate',
-        'Confirm the candidate with a fresh trusted checker run and, only if ' +
-          'that run passes, complete the campaign goal. This is the sole way ' +
-          'an EU4 campaign goal can be completed.',
-        async (_args, exec) => {
-          requireSidecar()
-          const agent = exec?.agent
-          if (!agent) throw new Error('finalization requires an owning agent')
-          const sessionId = agent.sessionId
-          const live = ctx.goals.get(agent)
-          const status = await runBridge(infra, python, 'status', sidecar)
-          const runRoot = status && status.run_root
-          if (live) {
-            persistBiding(sessionId, agent.id, live, runRoot)
-          }
-          const problems = goalBindingProblems(live ? bindingFor(sessionId, runRoot) : null, live)
-          if (problems.length) {
-            return {
-              ok: false,
-              operation: 'finalize',
-              classification: 'refused',
-              kind: 'goal_binding',
-              completion: 'refused',
-              detail: problems.join('; '),
-            }
-          }
-          const result = await runBridge(infra, python, 'finalize', sidecar, [
-            '--session-id',
-            sessionId,
-          ])
-          const refusal = qualificationRefusal(result)
-          if (refusal) {
-            return { ...result, completion: 'refused', reason: refusal }
-          }
-          ctx.goals.complete(agent, { id: live.id, revision: live.revision })
-          return { ...result, completion: 'completed', goal_id: live.id }
+  register(
+    tool(
+      'eu4_finalize_candidate',
+      'Confirm the candidate with a fresh trusted checker run and, only if ' +
+        'that run passes, complete the campaign goal. This is the sole way ' +
+        'an EU4 campaign goal can be completed.',
+      async (_args, exec) => {
+        requireSidecar()
+        const agent = exec?.agent
+        if (!agent) throw new Error('finalization requires an owning agent')
+        const sessionId = agent.sessionId
+        const live = ctx.goals.get(agent)
+        const status = await runBridge(infra, python, 'status', sidecar)
+        const runRoot = status && status.run_root
+        if (live) {
+          persistBiding(sessionId, agent.id, live, runRoot)
         }
-      )
+        const problems = goalBindingProblems(
+          live ? bindingFor(sessionId, runRoot) : null,
+          live
+        )
+        if (problems.length) {
+          return {
+            ok: false,
+            operation: 'finalize',
+            classification: 'refused',
+            kind: 'goal_binding',
+            completion: 'refused',
+            detail: problems.join('; '),
+          }
+        }
+        const result = await runBridge(infra, python, 'finalize', sidecar, [
+          '--session-id',
+          sessionId,
+        ])
+        const refusal = qualificationRefusal(result)
+        if (refusal) {
+          return { ...result, completion: 'refused', reason: refusal }
+        }
+        ctx.goals.complete(agent, { id: live.id, revision: live.revision })
+        return { ...result, completion: 'completed', goal_id: live.id }
+      }
     )
   )
+
+  // Opt-in proof that the plugin mounted AND registered. The web app does not
+  // surface plugin INFO logs, so composition-level checks cannot tell "row
+  // present" from "guards and tools installed"; with EU4_DSH_BOOT_PROOF set the
+  // registration counts are written here, after every ctx.effect has run.
+  const bootProof = process.env.EU4_DSH_BOOT_PROOF
+  if (bootProof) {
+    try {
+      const record = {
+        schema: 'eu4-dsh-boot-proof/v1',
+        mounted: true,
+        registered_tools: registeredTools,
+        registered_guards: registeredGuards,
+        plugin: name,
+        sidecar,
+        infra,
+        python,
+        pid: process.pid,
+        mounted_at: new Date().toISOString(),
+      }
+      fs.mkdirSync(path.dirname(bootProof), { recursive: true })
+      fs.writeFileSync(bootProof, JSON.stringify(record, null, 2))
+    } catch (error) {
+      ctx.logger?.warn?.(`[eu4-goal] could not write boot proof: ${error.message}`)
+    }
+  }
 }

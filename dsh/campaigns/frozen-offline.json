@@ -13,7 +13,19 @@
     "policy": {
       "allowed_paths": [
         "analysis/automation/pilot-gfx-update-vertex-buffer-multiple/note.md",
+        "benchmark/eu4_gfx_buffers.h",
+        "benchmark/eu4_gfx_buffers.mm",
+        "benchmark/eu4_gfx_entries.def",
+        "tests/gfx_buffers_host.mm",
+        "tests/test_gfx_buffers.py",
+        "tests/test_gfx_entry_registry.py",
         "progress.md"
+      ],
+      "forbidden_paths": [
+        "campaigns/eu4-vertex-buffer-multiple",
+        "automation/reconstruction_accept.py",
+        "reverse_engineering/target.json",
+        "analysis/reconstruction/gfx-semantic"
       ]
     }
   },
