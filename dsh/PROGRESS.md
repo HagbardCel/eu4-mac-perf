@@ -445,6 +445,22 @@ part of that review is now encoded rather than asserted.
 Audit results, for the record: no OpenCode imports, no `shell=True`, no OpenCode
 state writes, and `run_accept` as the single runner dependency.
 
+## Round 8 additions
+
+- **The skill catalog is verified, not inferred.** `skill-catalog.sh` boots the
+  profile with a `--patch`-injected probe and reads `ctx.skills.list({cwd})` --
+  the same merged catalog the agent's scope selects. It reports the skill,
+  `modelInvocable`, and its path, and exits non-zero if it is absent. That closes
+  the last gap I had twice deferred to "needs a real turn": what a real turn still
+  can't prove is that the model *chooses* to load the skill, which is a model
+  behaviour, not an infrastructure property.
+- **Cross-contamination found and removed.** The first probe showed **23** skills
+  in the catalog: our reconstruction skill plus 22 unrelated personal ones from
+  `~/.agents/skills`. A dedicated EU4 migration profile has no business offering
+  the agent Superset and browser-automation skills. `skill-filesystem` now sets
+  `includeDefaultRoots: false`, so the catalog is exactly the project root's
+  skills -- measured after the change: 1 skill.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not
@@ -473,8 +489,14 @@ executed here:
   writes at the end of `apply()`: `registered_tools: 3`, `registered_guards: 1`,
   with the sidecar, infra root and interpreter it resolved. No model request is
   sent, so it costs no tokens. This replaces the previous composition-only claim.
-- Still not proven live: that the model actually *sees* the shared
-  `opengl-metal-reconstruction` skill in a conversation, which needs a real turn.
+- **Skill visibility is now proven too** (round 8). `preflight.sh` can only show
+  that the `skill-filesystem` row is configured; whether the *registry view* the
+  agent's scope selects contains the skill is a different question. A committed
+  one-shot probe (`dsh/scripts/skill-catalog.sh` with
+  `dsh/scripts/probe/skill-catalog/`) injects `skills`, reads the same merged
+  catalog the model sees at boot, and asserts the skill is present. Measured:
+  exactly one skill, `opengl-metal-reconstruction`, `modelInvocable: true`, from
+  this repository's `.opencode/skills`. No model request is sent.
 - The plugin is still plain ESM JavaScript (no build step, no npm dependency);
   the real tool surface and completion guard arrive with M3.
 - Evidence-input binding is declared but not yet enforced as a gate; M4 adds it

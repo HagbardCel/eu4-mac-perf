@@ -14,9 +14,14 @@
 # Absolute machine paths are never committed; both values arrive from the
 # environment that dsh/scripts/run.sh and preflight.sh export.
 
+# A dedicated migration profile: keep this repository's reconstruction skill and
+# exclude the operator's personal skill roots. Without this, the EU4 agent sees
+# every unrelated skill under ~/.agents/skills -- 22 of them on this machine,
+# which bloats context and invites the wrong skill for the task.
 - id: skill-filesystem
   disabled: false
   config:
+    includeDefaultRoots: false
     customSkillDirs:
       - !!js process.env.EU4_DSH_SKILL_ROOT
 
