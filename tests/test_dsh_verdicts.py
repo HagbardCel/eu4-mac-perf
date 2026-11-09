@@ -88,31 +88,16 @@ class GoalPolicyTests(BridgeTestCase):
                 stored = receipts.load_current_receipt(self.run_root)
                 self.assertEqual(stored["outcome"]["checker_verdict"], verdict)
 
-    def test_the_validation_budget_stops_instead_of_running_again(self) -> None:
-        sidecar = self.verdict_sidecar(max_validations=1)
+    def test_a_repeated_verdict_is_requested_again_rather_than_cached(self) -> None:
+        """No retry scheduler: a second validate simply asks the checker again."""
+        sidecar = self.verdict_sidecar()
         self.run_bridge("prepare", sidecar)
         self.request("inconclusive")
-        first = self.run_bridge("validate", sidecar)
-        self.assertEqual(first[1]["checker_verdict"], "inconclusive")
-        code, second = self.run_bridge("validate", sidecar)
-        self.assertEqual(code, dsh_bridge.EXIT_OK)
-        self.assertEqual(second["classification"], "policy_stop")
-        self.assertEqual(second["kind"], "validation_budget")
-        self.assertEqual(second["goal_policy"], "unavailable")
-
-    def test_the_finalization_budget_stops_instead_of_confirming_again(self) -> None:
-        sidecar = self.sidecar(self.campaign("pass-campaign"))
-        self.run_bridge("prepare", sidecar)
-        self.run_bridge("validate", sidecar)
-        first = self.run_bridge("finalize", sidecar)
-        self.assertEqual(first[1]["checker_verdict"], "pass")
-        second = self.run_bridge("finalize", sidecar)
-        self.assertEqual(second[1]["finalizations_used"], 2)
-        code, third = self.run_bridge("finalize", sidecar)
-        self.assertEqual(code, dsh_bridge.EXIT_OK)
-        self.assertEqual(third["classification"], "policy_stop")
-        self.assertEqual(third["kind"], "finalize_budget")
-
+        first = self.run_bridge("validate", sidecar)[1]
+        second = self.run_bridge("validate", sidecar)[1]
+        self.assertEqual(first["checker_verdict"], "inconclusive")
+        self.assertEqual(second["checker_verdict"], "inconclusive")
+        self.assertEqual(second["classification"], "verdict")
 
 if __name__ == "__main__":
     unittest.main()

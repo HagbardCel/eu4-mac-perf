@@ -1,4 +1,4 @@
-"""Receipt storage, digests and current-pointer behaviour."""
+"""The qualification record, and the candidate identities beside it."""
 
 import json
 import os
@@ -33,14 +33,14 @@ class TreeDigestTests(unittest.TestCase):
         self.assertEqual(len(digest), 64)
 
 
-class ReceiptTests(unittest.TestCase):
+class QualificationRecordTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.run_root = Path(self.tmp.name) / "run"
         receipts.paths(self.run_root).ensure()
 
-    def receipt(self, verdict="fail") -> dict:
+    def record(self, verdict="fail") -> dict:
         return {
             "schema": receipts.SCHEMA,
             "identities": {
@@ -49,24 +49,32 @@ class ReceiptTests(unittest.TestCase):
                 "candidate": {"mode": "seed", "digest": "b" * 64},
             },
             "outcome": {"checker_verdict": verdict, "bridge_classification": "verdict"},
-            "validation_round": 1,
             "created_at": "2026-01-01T00:00:00+00:00",
         }
 
     def test_identity_digest_ignores_key_order(self) -> None:
-        one = {"b": 2, "a": 1}
-        two = {"a": 1, "b": 2}
-        self.assertEqual(receipts.identity_digest(one), receipts.identity_digest(two))
+        self.assertEqual(
+            receipts.identity_digest({"b": 2, "a": 1}),
+            receipts.identity_digest({"a": 1, "b": 2}),
+        )
 
-    def test_write_and_read_back_through_the_pointer(self) -> None:
-        path, sealed = receipts.write_receipt(self.run_root, self.receipt())
+    def test_one_record_round_trips_and_is_replaced_in_place(self) -> None:
+        path, sealed = receipts.write_receipt(self.run_root, self.record("fail"))
         self.assertTrue(path.is_file())
-        loaded = receipts.load_current_receipt(self.run_root)
-        self.assertEqual(loaded["receipt_digest"], sealed["receipt_digest"])
-        self.assertEqual(receipts.verify_receipt_digest(loaded), [])
+        self.assertEqual(
+            receipts.load_current_receipt(self.run_root)["receipt_digest"],
+            sealed["receipt_digest"],
+        )
+        # A second validation replaces the record: there is no attempt history.
+        receipts.write_receipt(self.run_root, self.record("pass"))
+        self.assertEqual(
+            receipts.load_current_receipt(self.run_root)["outcome"]["checker_verdict"],
+            "pass",
+        )
+        self.assertEqual(len(list(self.run_root.glob("*.json"))), 1)
 
     def test_tampering_is_detected(self) -> None:
-        path, _ = receipts.write_receipt(self.run_root, self.receipt("fail"))
+        path, _ = receipts.write_receipt(self.run_root, self.record("fail"))
         body = json.loads(path.read_text(encoding="utf-8"))
         body["outcome"]["checker_verdict"] = "pass"
         path.write_text(json.dumps(body), encoding="utf-8")
@@ -74,75 +82,8 @@ class ReceiptTests(unittest.TestCase):
         self.assertTrue(problems)
         self.assertIn("receipt_digest mismatch", problems[0])
 
-    def test_counters_defaults_survive_unknown_keys(self) -> None:
-        receipts.save_counters(self.run_root, {"validations": 3, "surprise": 1})
-        counters = receipts.load_counters(self.run_root)
-        self.assertEqual(counters["validations"], 3)
-        self.assertEqual(counters["policy_stops"], 0)
-        self.assertNotIn("surprise", counters)
-
-    def test_missing_pointer_reads_as_absent(self) -> None:
+    def test_absent_record_reads_as_none(self) -> None:
         self.assertIsNone(receipts.load_current_receipt(self.run_root))
-
-
-class JournalTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.run_root = Path(self.tmp.name) / "run"
-        receipts.paths(self.run_root).ensure()
-
-    def test_receipts_are_chained_into_the_journal(self) -> None:
-        receipts.write_receipt(self.run_root, {
-            "schema": receipts.SCHEMA,
-            "identities": {"campaign_id": "c", "candidate": {"digest": "a" * 64}},
-            "outcome": {"checker_verdict": "pass", "bridge_classification": "verdict"},
-            "validation_round": 1,
-        })
-        rows = receipts.load_journal(self.run_root)
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["kind"], "receipt")
-        self.assertEqual(rows[0]["seq"], 1)
-        self.assertIsNone(rows[0]["prev"])
-        self.assertEqual(receipts.verify_journal(self.run_root), [])
-
-    def test_a_plain_receipt_is_not_in_the_journal(self) -> None:
-        body = {
-            "schema": receipts.SCHEMA,
-            "identities": {"campaign_id": "c", "candidate": {"digest": "b" * 64}},
-            "outcome": {"checker_verdict": "pass"},
-            "validation_round": 1,
-        }
-        body["receipt_digest"] = receipts.digest_text(receipts.canonical_json(body))
-        target = receipts.paths(self.run_root).receipts / "forged-r1.json"
-        target.write_text(json.dumps(body), encoding="utf-8")
-        receipts.atomic_write(
-            receipts.paths(self.run_root).current,
-            receipts.canonical_json({"schema": receipts.CURRENT_SCHEMA,
-                                     "receipt": target.name}),
-        )
-        problems = receipts.journal_problem(self.run_root, body)
-        self.assertTrue(any("not recorded" in problem for problem in problems))
-
-    def test_a_broken_chain_is_detected(self) -> None:
-        for round_number in (1, 2):
-            receipts.write_receipt(self.run_root, {
-                "schema": receipts.SCHEMA,
-                "identities": {"campaign_id": "c", "candidate": {"digest": "c" * 64}},
-                "outcome": {"checker_verdict": "fail"},
-                "validation_round": round_number,
-            })
-        self.assertEqual(receipts.verify_journal(self.run_root), [])
-        path = receipts.paths(self.run_root).journal
-        lines = path.read_text(encoding="utf-8").splitlines()
-        path.write_text("\n".join([lines[0]]) + "\n", encoding="utf-8")
-        # Truncation leaves a short but internally valid chain: detect it by the
-        # receipt no longer being the last recorded one.
-        self.assertEqual(receipts.verify_journal(self.run_root), [])
-        pointer = receipts.load_current(self.run_root)
-        body = receipts.load_current_receipt(self.run_root)
-        problems = receipts.journal_problem(self.run_root, body)
-        self.assertTrue(problems, f"truncated journal still matched {pointer}")
 
 
 if __name__ == "__main__":

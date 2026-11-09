@@ -373,18 +373,11 @@ def op_prepare(args) -> int:
         "workspace": str(sidecar.workspace),
         "run_root": str(sidecar.run_root),
     })
-    counters = receipts.load_counters(sidecar.run_root)
-    if counters["started_at"] is None:
-        counters["started_at"] = _now()
-    receipts.save_counters(sidecar.run_root, counters)
-    receipts.append_event(sidecar.run_root, {
-        "ts": _now(), "event": "prepare", "campaign_id": sidecar.campaign_id,
-        "infrastructure_commit": infra_commit,
-    })
     emit({
         "ok": True,
         "operation": "prepare",
         "campaign_id": sidecar.campaign_id,
+        "objective": sidecar.objective_text,
         "execution_roots": roots,
         "workspace": str(sidecar.workspace),
         "run_root": str(sidecar.run_root),
@@ -394,163 +387,28 @@ def op_prepare(args) -> int:
     return EXIT_OK
 
 
-def op_status(args) -> int:
-    sidecar = load_sidecar(Path(args.sidecar))
-    receipt = receipts.load_current_receipt(sidecar.run_root)
-    counters = receipts.load_counters(sidecar.run_root)
-    stale: list[str] = []
-    fresh = None
-    if receipt:
-        try:
-            fresh = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
-        except Refusal as exc:
-            stale.append(f"identity unavailable: {exc}")
-        else:
-            stored_ids = receipt.get("identities") or {}
-            for key in (
-                "source_campaign_sha256", "sidecar_sha256", "policy_digest",
-                "objective_digest", "checker_sha256",
-                "verification_manifest_digest", "evidence_inputs_digest",
-                "candidate_baseline_commit",
-            ):
-                if stored_ids.get(key) != fresh.get(key):
-                    stale.append(key)
-            if (stored_ids.get("candidate") or {}).get("digest") != fresh["candidate"]["digest"]:
-                stale.append("candidate.digest")
-    emit({
-        "ok": True,
-        "operation": "status",
-        "campaign_id": sidecar.campaign_id,
-        "workspace": str(sidecar.workspace),
-        "run_root": str(sidecar.run_root),
-        "counters": counters,
-        "receipt": None if receipt is None else {
-            "path": str(receipts.paths(sidecar.run_root).current),
-            "receipt_digest": receipt.get("receipt_digest"),
-            "outcome": receipt.get("outcome"),
-            "validation_round": receipt.get("validation_round"),
-        },
-        "stale": stale,
-        "current": bool(receipt) and not stale,
-        "limits": {
-            "max_validations": sidecar.max_validations,
-            "retry_mode": sidecar.retry_mode,
-            "confirmation_rounds": sidecar.confirmation_rounds,
-            "max_identical_retries": sidecar.max_identical_retries,
-        },
-    })
-    return EXIT_OK
-
-
 def op_validate(args) -> int:
+    """Run the trusted checker once and record the qualification.
+
+    No attempt history, retry scheduler or budget: a caller that wants another
+    check asks again, and DSH's own round cap bounds the campaign.
+    """
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
-
     try:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
     except RuntimeError as exc:
-        emit({
-            "ok": True, "operation": "validate", "campaign_id": sidecar.campaign_id,
-            "classification": "policy_stop", "kind": "busy",
-            "goal_policy": "unavailable", "detail": str(exc),
-        })
+        emit({"ok": True, "operation": "validate", "campaign_id": sidecar.campaign_id,
+              "classification": "policy_stop", "kind": "busy",
+              "goal_policy": "unavailable", "detail": str(exc)})
         return EXIT_OK
-
     try:
-        counters = receipts.load_counters(sidecar.run_root)
         infra_commit = _git(infra_root(), "rev-parse", "HEAD")
         before = _identity(sidecar, infra_commit)
         _check_anchor(_prepared_identities(sidecar), before)
         digest = before["candidate"]["digest"]
-        round_number = counters["validations"] + 1
-
-        # Idempotency applies to success only: an identical, verified pass
-        # receipt is reused instead of re-running the checker. Failure
-        # repetition is governed by the checker-aware retry policy below.
-        prior = receipts.load_current_receipt(sidecar.run_root)
-        if prior is not None:
-            problems = receipts.verify_receipt_digest(prior)
-            if problems:
-                raise Refusal("receipt_corrupt", "; ".join(problems))
-            prior_ids = prior.get("identities") or {}
-            if (
-                receipts.identity_digest(prior_ids) == receipts.identity_digest(before)
-                and (prior.get("outcome") or {}).get("checker_verdict") == "pass"
-            ):
-                emit({
-                    "ok": True,
-                    "operation": "validate",
-                    "campaign_id": sidecar.campaign_id,
-                    "classification": "verdict",
-                    "kind": None,
-                    "checker_verdict": "pass",
-                    "goal_policy": "qualified",
-                    "reused": True,
-                    "diagnostics": (prior.get("outcome") or {}).get("diagnostics_excerpt"),
-                    "receipt_digest": prior.get("receipt_digest"),
-                    "identity_digest": receipts.identity_digest(before),
-                    "candidate_digest": digest,
-                    "validation_round": prior.get("validation_round"),
-                })
-                return EXIT_OK
-
-        if counters["validations"] >= sidecar.max_validations:
-            counters["policy_stops"] += 1
-            receipts.save_counters(sidecar.run_root, counters)
-            emit({
-                "ok": True, "operation": "validate", "campaign_id": sidecar.campaign_id,
-                "classification": "policy_stop", "kind": "validation_budget",
-                "goal_policy": "unavailable",
-                "detail": f"{counters['validations']}/{sidecar.max_validations} validations used",
-            })
-            return EXIT_OK
-
-        identical = (
-            counters["last_candidate_digest"] == digest
-            and counters["last_verdict"] == "fail"
-        )
-        allowance = (
-            sidecar.confirmation_rounds
-            if sidecar.retry_mode == "stateful"
-            else sidecar.max_identical_retries
-        )
-        if identical and counters["identical_retries"] >= allowance:
-            counters["policy_stops"] += 1
-            receipts.save_counters(sidecar.run_root, counters)
-            receipts.append_event(sidecar.run_root, {
-                "ts": _now(), "event": "policy_stop", "kind": "no_progress",
-                "candidate_digest": digest,
-            })
-            emit({
-                "ok": True, "operation": "validate", "campaign_id": sidecar.campaign_id,
-                "classification": "policy_stop", "kind": "no_progress",
-                "goal_policy": "unavailable",
-                "detail": (
-                    "the candidate is unchanged since the last identical failure and the "
-                    "declared retry allowance is exhausted; change the candidate or report "
-                    "a BLOCKER rather than re-running the same check"
-                ),
-                "candidate_digest": digest,
-                "retry_mode": sidecar.retry_mode,
-                "identical_retries": counters["identical_retries"],
-            })
-            return EXIT_OK
-
-        # An intent record makes an interrupted run visible instead of leaving
-        # a candidate that looks unvalidated-but-clean. It is removed only after
-        # the receipt is durable; `recover` quarantines any survivor and never
-        # turns one into a pass.
-        intent = stored.validation / f"{uuid.uuid4().hex[:8]}.intent.json"
-        receipts.atomic_write(intent, receipts.canonical_json({
-            "schema": "eu4-dsh-validation-intent/v1",
-            "campaign_id": sidecar.campaign_id,
-            "candidate_digest": digest,
-            "identity_digest": receipts.identity_digest(before),
-            "round": round_number,
-            "started_at": _now(),
-        }))
 
         started = time.monotonic()
         outcome = run_accept(_AcceptShim(sidecar), sidecar.workspace)
@@ -558,31 +416,15 @@ def op_validate(args) -> int:
 
         after = _identity(sidecar, infra_commit)
         if after != before:
-            counters["integrity_refusals"] += 1
-            receipts.save_counters(sidecar.run_root, counters)
-            changed = [k for k in before if before[k] != after.get(k)]
-            raise Refusal(
-                "identity_drift",
-                "identity changed during the checker run: " + ", ".join(changed),
-            )
+            changed = [key for key in before if before[key] != after.get(key)]
+            raise Refusal("identity_drift",
+                          "identity changed during the checker run: " + ", ".join(changed))
 
         classification, kind, verdict = classify(outcome)
         diagnostics = str(outcome.get("diagnostics") or "")
         receipt = {
             "schema": receipts.SCHEMA,
             "identities": before,
-            # The bridge cannot observe DSH's sandbox. It records what the host
-            # told it (if anything) and marks the assertion unverified rather
-            # than claiming a mode it has not checked. M4 promotes a verified
-            # assertion into a hard gate.
-            "workspace_assertion": {
-                "declared": str(sidecar.workspace),
-                "effective": os.environ.get("EU4_DSH_WORKSPACE"),
-                "cwd": str(Path.cwd()),
-                "sandbox_mode": os.environ.get("EU4_DSH_SANDBOX_MODE"),
-                "verified": os.environ.get("EU4_DSH_WORKSPACE") is not None,
-                "ok": _workspace_ok(sidecar),
-            },
             "outcome": {
                 "checker_verdict": verdict,
                 "bridge_classification": classification,
@@ -592,36 +434,10 @@ def op_validate(args) -> int:
                 "exit_code": outcome.get("exit_code"),
                 "duration_ms": duration_ms,
             },
-            "validation_round": round_number,
-            "attempts": {
-                "validations": round_number,
-                "identical_retries": counters["identical_retries"] + (1 if identical else 0),
-            },
             "session": {"session_id": args.session_id or None},
             "created_at": _now(),
         }
         path, sealed = receipts.write_receipt(sidecar.run_root, receipt)
-        intent.unlink(missing_ok=True)
-
-        counters["validations"] = round_number
-        counters["elapsed_seconds"] = round(
-            counters["elapsed_seconds"] + duration_ms / 1000.0, 6
-        )
-        counters["last_candidate_digest"] = digest
-        counters["last_verdict"] = verdict
-        counters["last_diagnostics_digest"] = receipt["outcome"]["diagnostics_digest"]
-        if verdict == "pass":
-            counters["identical_retries"] = 0
-        elif identical:
-            counters["identical_retries"] += 1
-        else:
-            counters["identical_retries"] = 0
-        receipts.save_counters(sidecar.run_root, counters)
-        receipts.append_event(sidecar.run_root, {
-            "ts": _now(), "event": "validate", "classification": classification,
-            "verdict": verdict, "kind": kind, "receipt": path.name,
-        })
-
         emit({
             "ok": True,
             "operation": "validate",
@@ -637,7 +453,6 @@ def op_validate(args) -> int:
             "receipt_digest": sealed["receipt_digest"],
             "identity_digest": receipts.identity_digest(before),
             "candidate_digest": digest,
-            "validation_round": round_number,
         })
         return EXIT_OK
     finally:
@@ -721,10 +536,6 @@ def _freeze_once(sidecar: Sidecar, identities: dict) -> dict:
         "frozen": frozen,
         "created_at": _now(),
     }))
-    receipts.append_journal(sidecar.run_root, {
-        "kind": "freeze", "campaign_id": sidecar.campaign_id,
-        "identity_digest": digest, "frozen": frozen,
-    })
     return frozen
 
 
@@ -909,11 +720,6 @@ def op_checker_compat(args) -> int:
                     )
 
     compat = "ok" if not problems else "unsupported"
-    receipts.append_journal(sidecar.run_root, {
-        "kind": "checker_compat", "campaign_id": sidecar.campaign_id,
-        "compat": compat, "checker_sha256": receipts.digest_file(sidecar.checker),
-        "imports": rows, "baseline": baseline,
-    })
     emit({
         "ok": compat == "ok",
         "operation": "checker-compat",
@@ -1066,10 +872,6 @@ def op_review_run(args) -> int:
             # Not an integrity refusal: nothing was proven about the candidate,
             # the reviewer simply could not produce a result. Report it on the
             # infrastructure axis so the goal pauses instead of being blocked.
-            receipts.append_journal(sidecar.run_root, {
-                "kind": "review_failed", "campaign_id": sidecar.campaign_id,
-                "candidate": frozen["commit"], "detail": str(exc)[:300],
-            })
             emit({
                 "ok": False,
                 "operation": "review-run",
@@ -1106,10 +908,6 @@ def op_review_run(args) -> int:
         )
         receipts.atomic_write(paths["report"], receipts.canonical_json(payload))
         if problems:
-            receipts.append_journal(sidecar.run_root, {
-                "kind": "review_invalid", "campaign_id": sidecar.campaign_id,
-                "candidate": frozen["commit"], "problems": problems[:4],
-            })
             emit({
                 "ok": False, "operation": "review-run",
                 "campaign_id": sidecar.campaign_id,
@@ -1130,12 +928,6 @@ def op_review_run(args) -> int:
             report_sha256=report_sha,
             qualification_mode=mode,
         )
-        receipts.append_journal(sidecar.run_root, {
-            "kind": "review", "campaign_id": sidecar.campaign_id,
-            "candidate": frozen["commit"], "outcome": payload.get("outcome"),
-            "receipt": receipts.digest_file(paths["receipt"]),
-            "qualification_mode": mode,
-        })
         emit({
             "ok": True, "operation": "review-run",
             "campaign_id": sidecar.campaign_id,
@@ -1188,10 +980,6 @@ def op_review_clean(args) -> int:
         )
         if completed.returncode != 0 and worktree.exists():
             raise Refusal("worktree", completed.stderr.strip() or "worktree removal failed")
-        receipts.append_journal(sidecar.run_root, {
-            "kind": "review_clean", "campaign_id": sidecar.campaign_id,
-            "worktree": str(worktree),
-        })
         emit({"ok": True, "operation": "review-clean",
               "campaign_id": sidecar.campaign_id, "removed": True,
               "worktree": str(worktree)})
@@ -1232,7 +1020,13 @@ def _freeze_or_existing(sidecar: Sidecar, identities: dict) -> dict:
     return _freeze_once(sidecar, identities)
 
 
-def op_snapshot(args) -> int:
+def op_finalize(args) -> int:
+    """Confirm the candidate with a fresh checker run, then freeze and gate.
+
+    A stored pass is not authority: it can be edited by anything that can write
+    the run root. The checker is re-run here and only that result may complete a
+    goal.
+    """
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
     stored = _setup(sidecar.run_root)
@@ -1240,111 +1034,35 @@ def op_snapshot(args) -> int:
         lock = campaign_lock(stored.lock)
         lock.__enter__()
     except RuntimeError as exc:
-        emit({"ok": True, "operation": "snapshot", "campaign_id": sidecar.campaign_id,
+        emit({"ok": True, "operation": "finalize", "campaign_id": sidecar.campaign_id,
               "classification": "policy_stop", "kind": "busy", "detail": str(exc)})
         return EXIT_OK
     try:
         current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
         _check_anchor(_prepared_identities(sidecar), current)
-        frozen = _freeze(sidecar)
-        receipts.append_journal(sidecar.run_root, {
-            "kind": "snapshot",
-            "campaign_id": sidecar.campaign_id,
-            "candidate": frozen,
-        })
-        emit({
-            "ok": True,
-            "operation": "snapshot",
-            "campaign_id": sidecar.campaign_id,
-            "candidate": frozen,
-            "candidate_digest": current["candidate"]["digest"],
-        })
-        return EXIT_OK
-    finally:
-        lock.__exit__(None, None, None)
-
-
-FINALIZE_VALIDATION_LIMIT = 2
-
-
-def op_finalize(args) -> int:
-    """Confirm a candidate against a FRESH checker run, then report a freeze.
-
-    A stored receipt is never authority: it can be edited by anything that can
-    write the state root, and a self-hash cannot tell a real pass from a
-    re-hashed forgery. The checker is therefore re-run here, and only that
-    result can authorize completion.
-    """
-    sidecar = load_sidecar(Path(args.sidecar))
-    _roots(sidecar)
-    stored_paths = _setup(sidecar.run_root)
-
-    try:
-        lock = campaign_lock(stored_paths.lock)
-        lock.__enter__()
-    except RuntimeError as exc:
-        emit({"ok": True, "operation": "finalize", "campaign_id": sidecar.campaign_id,
-              "classification": "policy_stop", "kind": "busy", "detail": str(exc)})
-        return EXIT_OK
-
-    try:
-        counters = receipts.load_counters(sidecar.run_root)
-        infra_commit = _git(infra_root(), "rev-parse", "HEAD")
-        current = _identity(sidecar, infra_commit)
-        _check_anchor(_prepared_identities(sidecar), current)
 
         receipt = receipts.load_current_receipt(sidecar.run_root)
         if receipt is None:
-            raise Refusal("not_qualified", "no validation receipt; run validate first")
+            raise Refusal("not_qualified", "no validation record; run validate first")
         problems = receipts.verify_receipt_digest(receipt)
         if problems:
             raise Refusal("receipt_corrupt", "; ".join(problems))
-        problems = receipts.journal_problem(sidecar.run_root, receipt)
-        if problems:
-            raise Refusal("journal_mismatch", "; ".join(problems[:4]))
-
         stored_ids = receipt.get("identities") or {}
         if receipts.identity_digest(stored_ids) != receipts.identity_digest(current):
-            raise Refusal(
-                "stale",
-                "the qualification receipt does not describe the current candidate; "
-                "re-run validate",
-            )
+            raise Refusal("stale",
+                          "the qualification does not describe the current candidate; "
+                          "re-run validate")
         if (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
-            raise Refusal(
-                "not_qualified",
-                "the latest validation did not pass; there is nothing to finalize",
-            )
+            raise Refusal("not_qualified", "the latest validation did not pass")
 
-        if counters["finalizations"] >= FINALIZE_VALIDATION_LIMIT:
-            emit({"ok": True, "operation": "finalize",
-                  "campaign_id": sidecar.campaign_id,
-                  "classification": "policy_stop", "kind": "finalize_budget",
-                  "detail": f"{counters['finalizations']}/{FINALIZE_VALIDATION_LIMIT} "
-                            "finalization confirmations used"})
-            return EXIT_OK
-
-        intent = stored_paths.validation / f"finalize-{uuid.uuid4().hex[:8]}.intent.json"
-        receipts.atomic_write(intent, receipts.canonical_json({
-            "schema": "eu4-dsh-validation-intent/v1",
-            "campaign_id": sidecar.campaign_id,
-            "kind": "finalize",
-            "candidate_digest": current["candidate"]["digest"],
-            "started_at": _now(),
-        }))
         started = time.monotonic()
         outcome = run_accept(_AcceptShim(sidecar), sidecar.workspace)
         duration_ms = int((time.monotonic() - started) * 1000)
         classification, kind, verdict = classify(outcome)
 
-        after = _identity(sidecar, infra_commit)
-        counters["finalizations"] += 1
-        counters["last_finalize_verdict"] = verdict
-        receipts.save_counters(sidecar.run_root, counters)
-
+        after = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
         if after != current:
-            raise Refusal("identity_drift",
-                          "identity changed during the finalization run")
+            raise Refusal("identity_drift", "identity changed during the finalization run")
 
         if classification != "verdict" or verdict != "pass":
             fresh = dict(receipt)
@@ -1353,23 +1071,16 @@ def op_finalize(args) -> int:
                 "checker_verdict": verdict,
                 "bridge_classification": classification,
                 "kind": kind,
-                "diagnostics_digest": receipts.digest_text(
-                    str(outcome.get("diagnostics") or "")),
+                "diagnostics_digest": receipts.digest_text(str(outcome.get("diagnostics") or "")),
                 "diagnostics_excerpt": str(outcome.get("diagnostics") or "")[:2000],
                 "exit_code": outcome.get("exit_code"),
                 "duration_ms": duration_ms,
             }
-            fresh["validation_round"] = counters["validations"]
-            path, sealed = receipts.write_receipt(sidecar.run_root, fresh)
-            receipts.append_event(sidecar.run_root, {
-                "ts": _now(), "event": "finalize_refused",
-                "verdict": verdict, "classification": classification,
-            })
+            receipts.write_receipt(sidecar.run_root, fresh)
             raise Refusal(
                 "fresh_validation_failed",
                 "the confirmation run for this candidate returned "
-                f"{verdict or classification}; a stored receipt cannot authorize "
-                f"completion (see {path.name})",
+                f"{verdict or classification}; a stored pass cannot authorize completion",
             )
 
         frozen = _freeze_once(sidecar, current)
@@ -1377,34 +1088,19 @@ def op_finalize(args) -> int:
             problems = _review_problem(sidecar, frozen, require_live=True)
             if problems:
                 raise Refusal("review_required", "; ".join(problems))
+
         record = {
             "schema": "eu4-dsh-finalization/v1",
-            "frozen_candidate": frozen,
             "campaign_id": sidecar.campaign_id,
             "identity_digest": receipts.identity_digest(current),
-            "candidate": current["candidate"],
-            "fresh_receipt_digest": receipt.get("receipt_digest"),
+            "frozen_candidate": frozen,
             "fresh_verdict": verdict,
             "duration_ms": duration_ms,
             "session": {"session_id": getattr(args, "session_id", None)},
             "created_at": _now(),
         }
         record_path = sidecar.run_root / "finalization.json"
-        receipts.atomic_write(
-            record_path, receipts.canonical_json(record)
-        )
-        intent.unlink(missing_ok=True)
-        receipts.append_journal(sidecar.run_root, {
-            "kind": "finalization",
-            "campaign_id": sidecar.campaign_id,
-            "identity_digest": receipts.identity_digest(current),
-            "candidate_digest": current["candidate"]["digest"],
-            "frozen_candidate": frozen,
-        })
-        receipts.append_event(sidecar.run_root, {
-            "ts": _now(), "event": "finalized",
-            "candidate_digest": current["candidate"]["digest"],
-        })
+        receipts.atomic_write(record_path, receipts.canonical_json(record))
         emit({
             "ok": True,
             "operation": "finalize",
@@ -1414,91 +1110,11 @@ def op_finalize(args) -> int:
             "goal_policy": "qualified",
             "frozen_candidate": frozen,
             "identity_digest": receipts.identity_digest(current),
-            "finalization": str(record_path.name),
-            "finalizations_used": counters["finalizations"],
+            "finalization": record_path.name,
         })
         return EXIT_OK
     finally:
         lock.__exit__(None, None, None)
-
-
-def op_recover(args) -> int:
-    """Quarantine interrupted runs and report state. Never produces a pass."""
-    sidecar = load_sidecar(Path(args.sidecar))
-    _roots(sidecar)
-    stored = _setup(sidecar.run_root)
-    try:
-        lock = campaign_lock(stored.lock)
-        lock.__enter__()
-    except RuntimeError as exc:
-        emit({"ok": True, "operation": "recover", "campaign_id": sidecar.campaign_id,
-              "classification": "policy_stop", "kind": "busy", "detail": str(exc)})
-        return EXIT_OK
-    try:
-        quarantined = []
-        for intent in sorted(stored.validation.glob("*.intent.json")):
-            target = stored.quarantine / intent.name
-            os.replace(intent, target)
-            quarantined.append(intent.name)
-            receipts.append_journal(sidecar.run_root, {
-                "kind": "quarantine",
-                "name": intent.name,
-                "reason": "validation was interrupted before a receipt was written",
-            })
-
-        receipt = receipts.load_current_receipt(sidecar.run_root)
-        journal_problems = receipts.verify_journal(sidecar.run_root)
-        current = False
-        stale: list[str] = []
-        if receipt is not None:
-            problems = receipts.verify_receipt_digest(receipt)
-            problems += receipts.journal_problem(sidecar.run_root, receipt)
-            if problems:
-                stale.extend(problems[:4])
-            else:
-                try:
-                    fresh = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
-                except Refusal as exc:
-                    stale.append(f"identity unavailable: {exc}")
-                else:
-                    stored_ids = receipt.get("identities") or {}
-                    if receipts.identity_digest(stored_ids) != receipts.identity_digest(fresh):
-                        stale.append("the receipt does not describe the current candidate")
-                    else:
-                        current = True
-
-        emit({
-            "ok": True,
-            "operation": "recover",
-            "campaign_id": sidecar.campaign_id,
-            "quarantined": quarantined,
-            "journal_problems": journal_problems,
-            "receipt_current": current,
-            "stale": stale,
-            "counters": receipts.load_counters(sidecar.run_root),
-        })
-        return EXIT_OK
-    finally:
-        lock.__exit__(None, None, None)
-
-
-def op_goal_prompt(args) -> int:
-    sidecar = load_sidecar(Path(args.sidecar))
-    objective = sidecar.objective_text.strip()
-    emit({
-        "operation": "goal-prompt",
-        "campaign_id": sidecar.campaign_id,
-        "max_goal_rounds": sidecar.max_rounds,
-        "objective": (
-            f"{objective}\n\n"
-            f"Campaign: {sidecar.campaign_id}\n"
-            f"Workspace: {sidecar.workspace}\n"
-            "Completion is not self-certified. `update_goal(action=\"complete\")` is denied "
-            "in this profile; call `eu4_finalize_candidate` once "
-            "`eu4_validate_candidate` reports a checker pass."
-        ),
-    })
-    return EXIT_OK
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1508,9 +1124,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="operation", required=True)
 
-    for name in ("prepare", "status", "validate", "snapshot", "finalize",
-                 "recover", "review-preflight", "review-run", "review-verify",
-                 "review-clean", "checker-compat", "goal-prompt"):
+    for name in ("prepare", "validate", "finalize", "checker-compat",
+                 "review-preflight", "review-run", "review-verify", "review-clean"):
         child = sub.add_parser(name)
         child.add_argument("--sidecar", required=True)
         if name in ("validate", "finalize"):
@@ -1525,17 +1140,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 OPERATIONS = {
     "prepare": op_prepare,
-    "status": op_status,
     "validate": op_validate,
-    "snapshot": op_snapshot,
     "finalize": op_finalize,
-    "recover": op_recover,
     "review-preflight": op_review_preflight,
     "review-run": op_review_run,
     "review-verify": op_review_verify,
     "review-clean": op_review_clean,
     "checker-compat": op_checker_compat,
-    "goal-prompt": op_goal_prompt,
 }
 
 

@@ -302,20 +302,17 @@ UI cannot write back into the host store.
 ## Bridge operations
 
 `python3 -m automation.dsh_bridge <operation> --sidecar <path>` prints exactly one
-JSON object. Exit `0` means a classification or status was produced, `2` is a
+JSON object. The interface is deliberately small: resolve, validate, finalize,
+screen a checker, and drive the reviewer. Exit `0` means a classification or status was produced, `2` is a
 usage error, and `3` is a refusal before the checker ran.
 
 | Operation | Purpose |
 |---|---|
 | `prepare` | validate the sidecar, seed or verify the workspace, record the identity anchor |
-| `status` | identities, counters, current receipt, and whether it is stale |
 | `validate` | run the trusted checker under the retry policy and write a receipt |
-| `snapshot` | materialise the candidate delta as a commit and verify the round trip |
 | `finalize` | re-run the checker and complete the goal only on a fresh pass |
-| `recover` | quarantine interrupted runs; never writes a receipt |
 | `review-preflight` | freeze the candidate and create the reviewer worktree |
 | `review-run` | spawn the reviewer, validate its report, write the receipt |
 | `review-verify` | re-check an existing report and receipt against the frozen candidate |
 | `review-clean` | remove the reviewer worktree, keeping its evidence |
 | `checker-compat` | screen a checker before relying on it |
-| `goal-prompt` | print the objective text to paste after `/goal` |

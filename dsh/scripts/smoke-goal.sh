@@ -15,17 +15,15 @@ export EU4_DSH_SKILL_ROOT=$INFRA/.opencode/skills
 export EU4_DSH_SIDECAR=$SIDECAR
 export EU4_DSH_PYTHON=$INFRA/.venv/bin/python3
 
-echo "1. prepare the campaign (seeds the workspace, records the anchor)"
-"$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --sidecar "$SIDECAR" |
-  "$EU4_DSH_PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print("   workspace:", d.get("workspace")) if d.get("ok") else print("   prepare failed:", d)'
+echo "1. the autonomous path is one command:"
+echo "   $INFRA/dsh/scripts/run-campaign.sh $SIDECAR"
+echo "   (it prepares the campaign, binds the workspace and starts headless DSH)"
 echo
-echo "2. boot the profile:  $INFRA/dsh/scripts/run.sh   (binds a free port;"
-echo "   pass --port N or set EU4_DSH_PORT to pin one, and use the URL it prints)"
-echo
-echo "3. paste this after /goal (a human action; the model cannot create a goal):"
+echo "2. for the interactive web UI instead:  $INFRA/dsh/scripts/run.sh"
+echo "   create the session in this checkout, then paste this after /goal:"
 echo '---8<---'
-"$EU4_DSH_PYTHON" -m automation.dsh_bridge goal-prompt --sidecar "$SIDECAR" |
-  "$EU4_DSH_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["objective"])'
+"$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --sidecar "$SIDECAR" |
+  "$EU4_DSH_PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("objective","") if d.get("ok") else d)'
 echo '--->8---'
 echo
 echo "4. expected: round 1 validates and fails, the driver continues, the model"

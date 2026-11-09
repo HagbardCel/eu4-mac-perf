@@ -811,6 +811,47 @@ seed loaders (roughly 60 lines), replaced by thin adapters over the contract.
 Verified: 86 OpenCode tests, 109 DSH tests, 23 node tests, compileall clean, and
 the prepared campaign still reports `current: true` with the pass receipt.
 
+## Phase 3/6 -- the bridge is an interface again
+
+The directive limits the bridge to resolving, validating, finalizing and
+reviewing. Four operations fell outside that and are gone: `status`, `snapshot`,
+`recover` and `goal-prompt`. `prepare` now reports the objective, so the launcher
+builds the task text itself instead of asking the bridge for it.
+
+Deleted with them, because they existed to serve a Python-driven loop rather
+than DSH:
+
+- **counters** (`validations`, `finalizations`, `policy_stops`, elapsed, last
+  verdict) and every budget stop: DSH's own round cap is the outer limit, and a
+  caller that wants another check simply asks again;
+- **the retry policy** (`stateful`/`deterministic`, confirmation rounds,
+  no-progress detection): the smoke checker's designed first-round failure now
+  works by asking twice, which is what it always meant;
+- **the pass-reuse path**: each validate runs the checker;
+- **intent records and quarantine**: an interrupted run leaves no record, which
+  is already safe, and DSH resumes its own sessions;
+- **the journal**: it was tamper *evidence* around a record whose authority is
+  the fresh run, so its absence changes no guarantee. The forged-receipt test now
+  asserts the thing that matters directly -- a re-hashed `pass` is refused with
+  `fresh_validation_failed`.
+
+The record itself collapsed from a receipts directory plus a pointer, counters
+and a journal to one `qualification.json` per campaign.
+
+Sizes: `dsh_bridge.py` 1573 -> 1184 lines, `dsh_receipts.py` 274 -> 114, DSH tests
+109 -> 93 (obsolete machinery removed, essential behaviours rewritten rather than
+dropped: the confirmation round, concurrent validation leaving one record, and the
+forged-receipt refusal all still have tests).
+
+Verified: 93 DSH tests, 86 OpenCode tests, 23 node tests, compileall and doc links
+clean, and a throwaway end-to-end run still reaches `fail -> pass -> qualified`
+with a six-file run root.
+
+Note for the next live run: the existing smoke campaign's run root holds the old
+receipt layout from the Phase 0 evidence, so `finalize` needs a fresh `validate`
+before it will qualify again. The old records are left in place deliberately --
+they are the Phase 0 evidence.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

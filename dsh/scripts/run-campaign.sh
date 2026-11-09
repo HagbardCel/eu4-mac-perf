@@ -36,8 +36,8 @@ PREPARE=$("$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --sidecar "$EU4_DSH
 WORKSPACE=$(printf '%s' "$PREPARE" | "$EU4_DSH_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["workspace"])')
 [ -d "$WORKSPACE" ] || { echo "run-campaign: workspace missing: $WORKSPACE" >&2; exit 1; }
 
-OBJECTIVE=$("$EU4_DSH_PYTHON" -m automation.dsh_bridge goal-prompt --sidecar "$EU4_DSH_SIDECAR" |
-  "$EU4_DSH_PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d["objective"])')
+OBJECTIVE=$(printf '%s' "$PREPARE" |
+  "$EU4_DSH_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["objective"])')
 
 # Overlay: mount this checkout's plugin and skill root into the shipped headless
 # profile, without creating or modifying a profile of its own.

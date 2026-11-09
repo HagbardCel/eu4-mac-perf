@@ -248,16 +248,16 @@ class ReviewPipelineTests(ReviewCase):
         import contextlib
 
         sidecar = self.sidecar(self.campaign("pass-campaign"))
-        original = dsh_bridge.OPERATIONS["status"]
+        original = dsh_bridge.OPERATIONS["validate"]
 
         def explode(_args):
             raise RuntimeError("synthetic failure")
 
-        dsh_bridge.OPERATIONS["status"] = explode
-        self.addCleanup(dsh_bridge.OPERATIONS.__setitem__, "status", original)
+        dsh_bridge.OPERATIONS["validate"] = explode
+        self.addCleanup(dsh_bridge.OPERATIONS.__setitem__, "validate", original)
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
-            code = dsh_bridge.main(["status", "--sidecar", str(sidecar)])
+            code = dsh_bridge.main(["validate", "--sidecar", str(sidecar)])
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
         payload = json.loads(buffer.getvalue())
         self.assertFalse(payload["ok"])
