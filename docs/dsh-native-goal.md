@@ -186,7 +186,7 @@ Three roots are kept distinct and are asserted before a checker runs.
 | `CANDIDATE_ROOT` | the reconstruction source under evaluation |
 
 The bridge is launched with an explicit interpreter and `PYTHONPATH` from
-`INFRA_ROOT` (with `-P`, so the current directory cannot shadow `automation`),
+`INFRA_ROOT` (with cwd pinned to the infrastructure root, so the implicit script directory cannot shadow `automation` (no `-P`: it exists only from Python 3.11)),
 never by ambient module resolution from wherever DSH happens to sit. Candidate
 builds and tests run with `CANDIDATE_ROOT` on the path instead.
 

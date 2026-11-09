@@ -54,7 +54,11 @@ export function resolveInfra(config = {}) {
 export function bridgeInvocation(infra, python, operation, sidecar, extra = []) {
   return {
     command: python,
-    args: ['-P', '-m', 'automation.dsh_bridge', operation, '--sidecar', sidecar, ...extra],
+    // No -P: it only exists from Python 3.11, and it is not needed because cwd
+    // is pinned to the infrastructure root below, so the implicit script
+    // directory is already the intended import location. The bridge's own
+    // root assertion rejects a candidate that could shadow `automation`.
+    args: ['-m', 'automation.dsh_bridge', operation, '--sidecar', sidecar, ...extra],
     options: {
       cwd: infra,
       env: {

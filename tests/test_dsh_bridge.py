@@ -298,6 +298,14 @@ class RecoveryTests(BridgeTestCase):
         self.assertEqual(out["quarantined"], [])
         self.assertEqual(out["journal_problems"], [])
 
+    def test_plugin_invocation_avoids_flags_missing_before_311(self) -> None:
+        """-P is Python 3.11+; the CI matrix includes 3.10, where it is unknown."""
+        source = (REPO / "dsh" / "eu4-goal-plugin" / "lib" / "index.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("'-P'", source)
+        self.assertNotIn("'--safe-path'", source)
+
     def test_two_concurrent_validations_yield_one_receipt(self) -> None:
         """Real processes: the run-root lock must serialize actual contenders."""
         sidecar = self.sidecar(self.campaign("pass-campaign"))
@@ -310,7 +318,7 @@ class RecoveryTests(BridgeTestCase):
         }
         # sys.executable, not a repo-local venv: this test also runs on CI,
         # where there is no .venv.
-        command = [sys.executable, "-P", "-m", "automation.dsh_bridge",
+        command = [sys.executable, "-m", "automation.dsh_bridge",
                    "validate", "--sidecar", str(sidecar)]
         processes = [
             subprocess.Popen(command, cwd=str(REPO), env=env,
