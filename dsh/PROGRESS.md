@@ -150,7 +150,8 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
   `@deepseek-ai/dsh-tools` resolvable from an out-of-tree plugin. That keeps the
   plugin dependency-free and installable without network access.
 - Bridge invocations use an explicit interpreter, `cwd` and `PYTHONPATH` with
-  `-P`, so ambient module resolution cannot pick up a candidate's copy.
+  a pinned cwd, so ambient module resolution cannot pick up a candidate's copy
+  (no `-P`: it exists only from Python 3.11).
 - Verified: 11 node tests (`pnpm -C dsh/eu4-goal-plugin test`) covering the
   guard matrix, tool registration against a fake context, and the goal-binding
   refusal, including that a live goal with no prior binding is not completable;
