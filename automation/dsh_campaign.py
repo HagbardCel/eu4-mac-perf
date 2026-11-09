@@ -19,6 +19,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from automation.verification_manifest import canonical_json, digest_text
+
 SCHEMA = "eu4-dsh-campaign/v1"
 MODES = ("seed", "worktree")
 RETRY_MODES = ("deterministic", "stateful")
@@ -65,14 +67,6 @@ class Sidecar:
     wall_clock_seconds: float
     max_review_attempts: int
     run_root: Path
-
-
-def canonical_json(value) -> str:
-    return json.dumps(value, indent=2, sort_keys=True) + "\n"
-
-
-def digest_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def path_allowed(rel: str, patterns) -> bool:

@@ -7,13 +7,18 @@ lives here is storage and hashing only, so it can be tested without a campaign.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from automation.state import atomic_write
+from automation.verification_manifest import (
+    canonical_json,
+    digest_bytes,
+    digest_text,
+    file_sha256 as digest_file,
+)
 
 SCHEMA = "eu4-dsh-receipt/v1"
 CURRENT_SCHEMA = "eu4-dsh-current/v1"
@@ -33,18 +38,6 @@ DEFAULT_COUNTERS = {
     "elapsed_seconds": 0.0,
     "started_at": None,
 }
-
-
-def canonical_json(value) -> str:
-    return json.dumps(value, indent=2, sort_keys=True) + "\n"
-
-
-def digest_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def digest_file(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def tree_digest(root: Path) -> tuple[str, list[dict]]:

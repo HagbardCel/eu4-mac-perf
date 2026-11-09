@@ -417,6 +417,34 @@ pin), which is why the worktree count is 35 rather than 34.
 - The workflow's own invocation (`discover -s tests`) passes locally: 2313 tests,
   OK, 16 skipped.
 
+## Round 7 additions -- self-review before merge
+
+The plan asks that the infrastructure PR be reviewed for accidental OpenCode
+dependency, duplicated validation logic and unnecessary privilege. The mechanical
+part of that review is now encoded rather than asserted.
+
+- **A planned deliverable was missing.** `tests/test_dsh_open_regression.py` had
+  been listed in the layout and never written. It now exists and asserts: no DSH
+  module imports the OpenCode adapter or CLI; the *only* thing the bridge takes
+  from `automation.runner` is `run_accept`, never the campaign loop; no DSH module
+  spawns a shell (`shell=True`, `os.system`, `os.popen` absent); no DSH module
+  writes OpenCode state (`.local/automation` appears only in the refusal message
+  that forbids it); the plugin never mentions OpenCode; and
+  `automation.state.load_campaign` still rejects a non-`opencode` runtime while
+  the DSH reader accepts the same campaign directory.
+- **Duplication removed where it was real.** `canonical_json`, `digest_text` and
+  the file digest existed in three copies (this module pair plus the frozen
+  `verification_manifest`). The DSH modules now delegate to
+  `automation.verification_manifest`, verified to produce byte-identical output,
+  so receipt and journal digests are unchanged. `verification_manifest` itself is
+  untouched: it is pinned by frozen manifests.
+- What remains deliberately duplicated is `path_allowed`, because importing the
+  L3.2b checker pulls the benchmark packet modules; an equivalence test compares
+  it against the trusted implementation so it cannot drift.
+
+Audit results, for the record: no OpenCode imports, no `shell=True`, no OpenCode
+state writes, and `run_accept` as the single runner dependency.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not
