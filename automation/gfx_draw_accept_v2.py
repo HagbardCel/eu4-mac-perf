@@ -1444,10 +1444,29 @@ def check(workspace: Path, campaign_dir: Path, *, requalification=None) -> dict:
     if illegal:
         return emit("fail", "source scope violated: " + ", ".join(illegal[:8]))
     frozen = [str(item) for item in config.get("forbidden_paths", [])]
+    contract_delta: set[str] = set()
+    if requalification and requalification.get("contract_delta"):
+        version = str(requalification.get("contract_version") or "")
+        contract_sha = str(requalification.get("contract_sha256") or "")
+        delta = [str(item) for item in requalification.get("contract_delta") or []]
+        canonical = {
+            f"automation/gfx_contracts/{version}.py",
+            f"automation/gfx_contracts/{version}.spec.json",
+            f"tests/test_gfx_contract_{version}.py",
+        }
+        analysis_prefix = f"analysis/gfx-draw/v0/l32b/contracts/{version}/"
+        for path in delta:
+            if path not in canonical and not path.startswith(analysis_prefix):
+                return emit("fail", f"unqualified contract delta path: {path}")
+        module = workspace / "automation" / "gfx_contracts" / f"{version}.py"
+        if not version or not module.is_file() \
+                or hashlib.sha256(module.read_bytes()).hexdigest() != contract_sha:
+            return emit("fail", "qualified contract module differs from the receipt")
+        contract_delta = set(delta)
     touched = [path for path in paths if any(
         path == pattern or path.startswith(pattern.rstrip("/") + "/")
         for pattern in frozen
-    )]
+    ) and path not in contract_delta]
     if touched:
         return emit("fail", "frozen path modified: " + ", ".join(touched[:8]))
 

@@ -54,7 +54,7 @@
     {
       "path": "automation/gfx_draw_accept_v2.py",
       "role": "checker",
-      "sha256": "6b5a4012fe1e8273291745388ca8592a9f23602ac6d41f3181b49b5568a0a19b"
+      "sha256": "97f9704b65253bb90d3788096af3502269c5c7adc52f718b6252c1c1441fe830"
     },
     {
       "path": "automation/gfx_evidence_policy.py",
@@ -69,7 +69,7 @@
     {
       "path": "automation/gfx_l32b_hooks.py",
       "role": "checker",
-      "sha256": "8181becb6c08c3f462a5d3babb0874ad9326a68eae8186880e5a7f7bb21fc5ed"
+      "sha256": "b1b0180c5f38a8e35590efde9dbd9d6ca806ed0200e520939cbb72e96635c4df"
     },
     {
       "path": "automation/gfx_reviewer_v2.py",

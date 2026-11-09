@@ -1056,6 +1056,9 @@ class L32bHooks:
                 "changed_paths": changed,
                 "candidate_digest": digest,
                 "allowed_paths": effective_allowed,
+                "contract_delta": contract_paths,
+                "contract_version": version_effective,
+                "contract_sha256": sha_effective,
                 "selection": (
                     (state.get("capture_reference") or {}).get("selection") or {}
                 ),
