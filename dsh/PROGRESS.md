@@ -398,6 +398,24 @@ pin), which is why the worktree count is 35 rather than 34.
   proof) was caught by `node` before it reached a session; the tools section was
   rewritten rather than patched around.
 
+## Round 6 additions
+
+- **Reviewer event contract verified from source, not inferred.** The installed
+  `dsh-headless` json projection writes `{"type":"session","sessionId":...}`
+  first, one `{"type":"text","text":...}` per committed assistant text block,
+  and `{"type":"final","text":...}` when the run finishes (also `thinking`,
+  `status`, `tool_call`, `tool_result`). The extractor now prefers the `final`
+  event, so a review object merely *quoted* in a thinking block or a tool result
+  cannot be mistaken for the answer; it falls back to the whole stream only when
+  there is no final event. Both properties are tested with the real shapes.
+- **CI portability fixed.** The concurrency test spawned the repo-local `.venv`
+  interpreter, which does not exist on the ubuntu runners, so it would have
+  errored instead of testing the run-root lock; it now uses `sys.executable`. The
+  scope-drift test now skips (rather than fails) when a campaign checker cannot
+  be imported in a data-less environment.
+- The workflow's own invocation (`discover -s tests`) passes locally: 2313 tests,
+  OK, 16 skipped.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

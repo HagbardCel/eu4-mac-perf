@@ -96,8 +96,47 @@ def _balanced_objects(text: str) -> list[str]:
     return objects
 
 
+def final_text(text: str) -> str | None:
+    """The ``final`` event's text, which is where the answer is stated.
+
+    Verified against the installed dsh-headless implementation: the stream
+    writes ``{"type":"session","sessionId":...}`` first, then one
+    ``{"type":"text","text":...}`` per committed assistant text block, and
+    ``{"type":"final","text":...}`` when the run finishes.
+    """
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "final":
+            found = event.get("text")
+            return found if isinstance(found, str) else None
+    return None
+
+
 def extract_review_payload(text: str) -> dict | None:
-    """Recover the last eu4-review/v1 object anywhere in the output."""
+    """Recover the eu4-review/v1 object from the run's output.
+
+    The ``final`` event is authoritative when present, so a review object merely
+    quoted in a thinking block or a tool result cannot be picked up ahead of the
+    answer. Falling back to the whole stream keeps the extractor usable for
+    other transports and for truncated runs.
+    """
+    authoritative = final_text(text)
+    if authoritative is not None:
+        for candidate in reversed(_balanced_objects(authoritative)):
+            if REVIEW_SCHEMA not in candidate:
+                continue
+            try:
+                value = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict) and value.get("schema") == REVIEW_SCHEMA:
+                return value
     haystack = "\n".join(_json_strings(text))
     for candidate in reversed(_balanced_objects(haystack)):
         if REVIEW_SCHEMA not in candidate:

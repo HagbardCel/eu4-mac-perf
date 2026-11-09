@@ -31,6 +31,34 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(extract_review_payload(stream)["outcome"], "qualified")
         self.assertEqual(session_id_from(stream), "s-1")
 
+    def test_the_real_event_shape_is_understood(self) -> None:
+        """Shapes verified against the installed dsh-headless json projection."""
+        payload = {"schema": "eu4-review/v1", "outcome": "rejected",
+                   "candidate_commit": "a" * 40, "oracle_manifest_sha256": "b" * 64,
+                   "findings": [{"id": "F1", "severity": "P1", "kind": "evidence_gap"}]}
+        stream = "\n".join([
+            json.dumps({"type": "session", "sessionId": "session-abc", "cwd": "/tmp"}),
+            json.dumps({"type": "status", "status": "running"}),
+            json.dumps({"type": "thinking", "text": "considering the evidence"}),
+            json.dumps({"type": "tool_call", "name": "shell"}),
+            json.dumps({"type": "text", "text": "Here is my review:\n"}),
+            json.dumps({"type": "final", "text": json.dumps(payload)}),
+        ])
+        self.assertEqual(extract_review_payload(stream)["outcome"], "rejected")
+        self.assertEqual(session_id_from(stream), "session-abc")
+
+    def test_the_final_event_wins_over_a_quoted_object(self) -> None:
+        quoted = {"schema": "eu4-review/v1", "outcome": "qualified",
+                  "candidate_commit": "a" * 40, "oracle_manifest_sha256": "b" * 64,
+                  "findings": []}
+        answer = dict(quoted, outcome="rejected")
+        stream = "\n".join([
+            json.dumps({"type": "session", "sessionId": "s"}),
+            json.dumps({"type": "thinking", "text": "the candidate claimed " + json.dumps(quoted)}),
+            json.dumps({"type": "final", "text": json.dumps(answer)}),
+        ])
+        self.assertEqual(extract_review_payload(stream)["outcome"], "rejected")
+
     def test_absent_payload_is_none(self) -> None:
         self.assertIsNone(extract_review_payload('{"type":"message","text":"hello"}'))
         self.assertIsNone(session_id_from('{"type":"message","text":"hello"}'))
