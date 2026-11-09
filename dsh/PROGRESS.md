@@ -467,6 +467,29 @@ state writes, and `run_accept` as the single runner dependency.
   script now composes its output with the interpreter; verified by parsing it:
   `ok: true`, 3 tools, 1 guard.
 
+## Round 9 additions -- the verdict table was under-covered
+
+Auditing my own suite found that the verdicts which steer agent behaviour most
+had **no coverage at all**: every fixture emitted only `pass` or `fail`, so
+`inconclusive`, `blocked` and `unavailable` were never exercised end to end, and
+neither budget stop had ever been reached.
+
+- `tests/test_dsh_verdicts.py` now covers `classify()` as a unit: every verdict
+  passed through; `pass` with a non-zero exit demoted to an infrastructure error;
+  the named kinds `timeout`/`truncated`/`unreadable` preserved; a non-zero exit
+  without a named reason reported as `exit_code`; a clean exit with no verdict as
+  `unreadable`.
+- A new fixture (`verdict-campaign`) emits whichever verdict a file beside the
+  workspace names, so one campaign reaches every row. Each verdict is checked to
+  reach its goal policy -- `qualified`, `remediate`, `investigate`, `block`,
+  `pause` -- and to be recorded unchanged in the receipt.
+- Both budgets are now exercised: the validation budget stops as
+  `policy_stop/validation_budget` after its last permitted run, and the
+  finalization budget stops as `policy_stop/finalize_budget` after the second
+  confirmation rather than confirming a third time.
+- Recovery is now also tested for an interrupted **finalization** (a different
+  intent prefix): it is quarantined and the passing receipt survives untouched.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

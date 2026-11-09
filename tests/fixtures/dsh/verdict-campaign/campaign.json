@@ -1,0 +1,9 @@
+{
+  "id": "dsh-fixture-verdict-campaign",
+  "objective": "objective.md",
+  "workspace": "seed",
+  "accept": ["python3", "accept.py"],
+  "max_rounds": 4,
+  "max_seconds": 600,
+  "accept_timeout_seconds": 30
+}

@@ -281,6 +281,21 @@ class RecoveryTests(BridgeTestCase):
         quarantined = receipts.paths(self.run_root).quarantine
         self.assertTrue((quarantined / "r1-deadbeef.intent.json").is_file())
 
+    def test_an_interrupted_finalization_is_quarantined_too(self) -> None:
+        """A confirmation run writes its own intent; recovery must cover both."""
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        validation = receipts.paths(self.run_root).validation
+        validation.mkdir(parents=True, exist_ok=True)
+        (validation / "finalize-abcd1234.intent.json").write_text("{}", encoding="utf-8")
+
+        code, out = self.run_bridge("recover", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["quarantined"], ["finalize-abcd1234.intent.json"])
+        # The passing receipt survives: recovery never manufactures or drops one.
+        self.assertTrue(out["receipt_current"])
+
     def test_a_completed_validation_leaves_no_intent(self) -> None:
         sidecar = self.sidecar(self.campaign("smoke-campaign"), retry=("stateful", 1))
         self.run_bridge("prepare", sidecar)
