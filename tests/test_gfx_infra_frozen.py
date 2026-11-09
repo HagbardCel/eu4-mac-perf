@@ -202,9 +202,12 @@ def _hooks_for(tmp: Path, checkpoint: dict):
         snapshot=lambda workspace, state: {"candidate_commit": "c" * 40},
         run_contract=lambda checkpoint, state: {"status": "paused"},
         run_reviewer=lambda target, state: {"path": str(tmp / "review.json")},
-        integrate=lambda candidate, contract, state, kind=None: {
+        integrate=lambda candidate, contract, state, kind=None, publish=True: {
             "ok": True, "commit": "e" * 40, "kind": kind,
             "verification": {},
+        },
+        publish_staged=lambda *args, **kwargs: {
+            "ok": True, "published": True, "verification": {},
         },
     )
 
@@ -1526,6 +1529,11 @@ class CoordinatorTests(unittest.TestCase):
             run_adversarial_cases=adversarial,
             run_remediation=remediation,
             publish=publish,
+            publish_staged=lambda *args, **kwargs: {
+                "ok": True,
+                "published": True,
+                "verification": {},
+            },
         )
 
     def _workflow(self):
@@ -1606,7 +1614,7 @@ class CoordinatorTests(unittest.TestCase):
             state["trusted_contract"] = {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64}
             seen = []
 
-            def integrate(candidate, contract, state, kind=None):
+            def integrate(candidate, contract, state, kind=None, publish=True):
                 seen.append((kind, (contract or {}).get("commit")))
                 commit = "e" * 40
                 return {

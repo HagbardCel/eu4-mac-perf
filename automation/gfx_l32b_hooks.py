@@ -102,6 +102,7 @@ class L32bHooks:
             run_capture=self.run_capture,
             integrate=self.integrate,
             publish=self.publish,
+            publish_staged=self.publish_staged,
         )
 
     # ---- campaign materialization -------------------------------------
@@ -475,7 +476,14 @@ class L32bHooks:
             operation_id=operation_id,
             template=self.templates / "eu4-l32b-complete",
             trusted=self._trusted(state),
-            extra={"capture_requirement": requirement},
+            extra={
+                "capture_requirement": requirement,
+                "objective": str(self.templates / "eu4-l32b-complete"
+                                 / "capture-objective.md"),
+                "max_rounds": 1,
+                "max_seconds": 120,
+                "accept_timeout_seconds": 120,
+            },
         )
         self._run(campaign)
         run_root = campaign["run_root"]
@@ -502,6 +510,8 @@ class L32bHooks:
             if problem:
                 last_problem = problem
                 continue
+            reference["staged_commit"] = commit
+            reference["integration_id"] = pending.get("integration_id")
             return {
                 "capture": str(capture),
                 "capture_receipt": str(receipt),
@@ -557,6 +567,14 @@ class L32bHooks:
             return None, f"capture request is unreadable: {exc}"
         if not document.get("library_sha256"):
             return None, "capture request has no observer identity"
+        executable = document.get("executable_sha256")
+        if executable:
+            try:
+                target = _json(self.repo / "reverse_engineering" / "target.json")
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                target = {}
+            if target.get("sha256") and executable != target["sha256"]:
+                return None, "capture executable differs from the pinned original"
         if not (capture / "operations-summary.json").is_file():
             return None, "capture summary is missing"
         plan = capture / "capture-plan.json"
@@ -627,10 +645,15 @@ class L32bHooks:
         journal_path = self.run_root / "integrations" / f"{integration_id}.json"
         journal = _json(journal_path) if journal_path.is_file() else None
         if journal and journal.get("status") == "verified":
+            verification = journal.get("verification") or {}
             return {
                 "ok": True,
-                "commit": journal["commit"],
-                "verification": journal["verification"],
+                "commit": journal.get("new_commit"),
+                "verification": verification,
+                "integration_id": integration_id,
+                "base_head": base,
+                "published": True,
+                "qualification_receipt": verification.get("qualification_receipt"),
             }
         if journal is None:
             journal = {
@@ -795,6 +818,26 @@ class L32bHooks:
         journal["review_receipt_sha256"] = _sha(review)
         journal["qualification_receipt_sha256"] = _sha(qualification)
         atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
+        return self._cas_publish(integration_id, expected_commit, base_head)
+
+    def publish_staged(
+        self, integration_id: str, expected_commit: str, base_head: str
+    ) -> dict:
+        return self._cas_publish(integration_id, expected_commit, base_head)
+
+    def _cas_publish(
+        self, integration_id: str, expected_commit: str, base_head: str
+    ) -> dict:
+        journal_path = self.run_root / "integrations" / f"{integration_id}.json"
+        if not journal_path.is_file():
+            raise HookError("integration journal is missing")
+        journal = _json(journal_path)
+        if journal.get("new_commit") != expected_commit:
+            raise HookError("staged integration commit differs")
+        if journal.get("base_head") != base_head:
+            raise HookError("staged integration base differs")
+        if journal.get("status") not in ("verified_staged", "reviewed", "verified"):
+            raise HookError("staged integration is not verified")
         branch = str(self.workflow.get("integration_branch") or "l32b/autonomous-completion")
         ref = f"refs/heads/{branch}"
         current = subprocess.run(
@@ -1020,6 +1063,20 @@ class L32bHooks:
             return {"status": "failed", "checker": failure.get("verdict", "fail"),
                     "detail": "candidate tests failed offline"}
         reference = state.get("capture_reference") or {}
+        linked = reference.get("staged_commit")
+        if linked and linked != commit:
+            return {
+                "status": "failed",
+                "detail": "capture is not linked to the staged integration commit",
+            }
+        linked_id = reference.get("integration_id")
+        pending = state.get("pending_integration") or {}
+        if linked_id and pending.get("integration_id") \
+                and linked_id != pending.get("integration_id"):
+            return {
+                "status": "failed",
+                "detail": "capture is not linked to the pending integration",
+            }
         capture = reference.get("capture") or state.get("capture")
         if not capture:
             checkpoint_receipt = (

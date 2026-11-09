@@ -58,6 +58,7 @@ class Hooks:
     run_remediation: Callable[[dict], dict] | None = None
     run_capture: Callable[[dict], dict] | None = None
     publish: Callable[..., dict] | None = None
+    publish_staged: Callable[..., dict] | None = None
 
 
 def load_workflow(path: Path) -> dict:
@@ -165,10 +166,13 @@ def _canonical_sha(value: Any) -> str:
 
 
 def _absorb_snapshot(state: dict, snapshot: Any) -> None:
-    digest = snapshot.get("oracle_manifest_sha256") if isinstance(snapshot, dict) else None
-    if isinstance(digest, str) and len(digest) == 64 \
-            and all(char in "0123456789abcdef" for char in digest):
-        state["oracle_manifest_sha256"] = digest
+    """Absorb snapshot identity without overwriting the workflow oracle.
+
+    The reviewed target carries its own ``oracle_manifest_sha256``; the
+    workflow oracle belongs to the completion campaign and must not be
+    replaced by a contract snapshot.
+    """
+    return None
 
 
 def _candidate_commit(value: Any) -> str | None:
@@ -454,13 +458,21 @@ class Coordinator:
             }
             return state
         workspace = result.get("workspace")
-        if not workspace or self.hooks.snapshot_contract is None:
-            state["state"] = "blocked"
-            state["blocker"] = {"reason": "contract_snapshot_unavailable"}
-            return state
+        contract = result.get("candidate")
+        if not isinstance(contract, dict):
+            if not workspace or self.hooks.snapshot_contract is None:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "contract_snapshot_unavailable"}
+                return state
+            try:
+                contract = self.hooks.snapshot_contract(Path(workspace), state)
+            except (OSError, RuntimeError, KeyError) as exc:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "contract_snapshot_failed",
+                                    "detail": str(exc)}
+                return state
         state["contract_campaign_dir"] = result.get("campaign_dir")
         try:
-            contract = self.hooks.snapshot_contract(Path(workspace), state)
             _absorb_snapshot(state, contract)
         except (OSError, RuntimeError, KeyError) as exc:
             state["state"] = "blocked"
@@ -510,6 +522,10 @@ class Coordinator:
             state["state"] = "blocked"
             state["blocker"] = {"reason": "review_target_has_no_candidate_commit"}
             return state
+        expected_oracle = (
+            (target or {}).get("oracle_manifest_sha256")
+            if isinstance(target, dict) else None
+        ) or state.get("oracle_manifest_sha256")
         self._begin_operation(state, "reviewer", str(expected_candidate))
         result = self.hooks.run_reviewer(target, state)
         state["active_campaign"] = None
@@ -517,7 +533,7 @@ class Coordinator:
         outcome, errors = _review_outcome(
             path,
             expected_candidate=expected_candidate,
-            expected_oracle=state.get("oracle_manifest_sha256"),
+            expected_oracle=expected_oracle,
         )
         state["review"] = {
             "path": str(path),
@@ -642,6 +658,9 @@ class Coordinator:
         return {
             "candidate_commit": _candidate_commit(state["candidate"]),
             "reviewer_report_sha256": _file_sha(report_path),
+            "oracle_manifest_sha256": (
+                (state.get("candidate") or {}).get("oracle_manifest_sha256")
+            ),
             "trusted_contract_commit": trusted.get("commit"),
             "trusted_contract_sha256": trusted.get("contract_sha256"),
             "qualified_at": _now(),
@@ -753,7 +772,7 @@ class Coordinator:
             result["qualification_receipt"] = candidate.get("qualification_receipt")
         else:
             result = self.hooks.integrate(
-                state["candidate"], contract, state, kind=kind
+                state["candidate"], contract, state, kind=kind, publish=False
             )
         if not result.get("ok"):
             state["state"] = "blocked"
@@ -782,8 +801,6 @@ class Coordinator:
             state["state"] = "capture_required"
             state["capture_requirement"] = verification
             return state
-        state["integration"] = result
-        state["pending_integration"] = None
         verification_errors = self._validate_integration_verification(
             state, result, "final" if kind == "final_candidate" else kind
         )
@@ -794,6 +811,28 @@ class Coordinator:
                 "errors": verification_errors,
             }
             return state
+        if kind in ("contract", "implementation"):
+            if self.hooks.publish_staged is None:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "publish_staged_hook_missing"}
+                return state
+            try:
+                published = self.hooks.publish_staged(
+                    str(result.get("integration_id")),
+                    str(result.get("commit")),
+                    str(result.get("base_head")),
+                )
+            except (OSError, RuntimeError, KeyError, ValueError) as exc:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "publish_staged_failed",
+                                    "detail": str(exc)}
+                return state
+            result["published"] = True
+            result["verification"] = (
+                published.get("verification") or result.get("verification")
+            )
+        state["integration"] = result
+        state["pending_integration"] = None
         state["integration_verification"] = result.get("verification")
         if kind == "implementation":
             state["integration_unresolved"] = list(
@@ -835,6 +874,7 @@ class Coordinator:
             }
             if isinstance(state.get("contract_review"), dict):
                 state["contract_review"]["integration_commit"] = result.get("commit")
+            state["combined_promotion"] = None
             state["state"] = "continuation"
         elif kind == "implementation":
             state["state"] = "continuation"
@@ -927,6 +967,13 @@ class Coordinator:
                     return ["combined contract promotion requires an implementation review"]
                 if candidate_receipt.get("candidate_commit") != _candidate_commit(candidate):
                     return ["implementation review does not match the contract candidate"]
+                candidate_report = Path(str((state.get("review") or {}).get("path") or ""))
+                if not candidate_report.is_file() \
+                        or candidate_receipt.get("reviewer_report_sha256") != _file_sha(candidate_report):
+                    return ["implementation reviewer report changed after qualification"]
+                expected_oracle = candidate.get("oracle_manifest_sha256")
+                if expected_oracle and candidate_receipt.get("oracle_manifest_sha256") != expected_oracle:
+                    return ["implementation review oracle differs from the candidate"]
             if receipt.get("runner_report_sha256") != _canonical_sha(
                 state.get("adversarial_report") or {}
             ):
