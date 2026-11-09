@@ -48,8 +48,7 @@ const agent = { sessionId: 's1', id: 'a1', session: { header: { cwd: '/tmp' } } 
 
 test('validate prepares the campaign first', async () => {
   const { ctx, ops } = harness({
-    prepare: { ok: true, workspace: '/tmp/ws' },
-    status: { ok: true, run_root: '/tmp/run', workspace: '/tmp/ws' },
+    prepare: { ok: true, workspace: '/tmp/ws', run_root: '/tmp/run' },
     validate: { ok: true, classification: 'verdict', checker_verdict: 'fail' },
   })
   const result = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
@@ -70,8 +69,7 @@ test('a failed prepare does not proceed to validate', async () => {
 
 test('finalize prepares first and completes only on a fresh pass', async () => {
   const { ctx, ops } = harness({
-    prepare: { ok: true, workspace: '/tmp/ws' },
-    status: { ok: true, run_root: '/tmp/run', workspace: '/tmp/ws' },
+    prepare: { ok: true, workspace: '/tmp/ws', run_root: '/tmp/run' },
     finalize: {
       ok: true,
       operation: 'finalize',
@@ -79,16 +77,18 @@ test('finalize prepares first and completes only on a fresh pass', async () => {
       checker_verdict: 'pass',
     },
   })
+  // Finalization requires a prior validation: that is what establishes the
+  // binding and the trusted receipt it confirms.
+  await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
   const result = await tool(ctx, 'eu4_finalize_candidate').execute({}, { agent })
-  assert.deepEqual(ops, ['status', 'prepare', 'finalize'])
+  assert.deepEqual(ops, ['prepare', 'validate', 'prepare', 'finalize'])
   assert.equal(result.completion, 'completed')
   assert.equal(ctx._state.completed.length, 1)
 })
 
 test('a finalize that is not a fresh pass does not complete the goal', async () => {
   const { ctx } = harness({
-    prepare: { ok: true, workspace: '/tmp/ws' },
-    status: { ok: true, run_root: '/tmp/run', workspace: '/tmp/ws' },
+    prepare: { ok: true, workspace: '/tmp/ws', run_root: '/tmp/run' },
     finalize: {
       ok: false,
       operation: 'finalize',
@@ -114,7 +114,7 @@ test('a session rooted outside the campaign workspace is refused', async () => {
 
 test('an unavailable session cwd is refused rather than assumed', async () => {
   const { ctx } = harness({
-    prepare: { ok: true, workspace: '/tmp/ws' },
+    prepare: { ok: true, workspace: '/tmp/ws', run_root: '/tmp/run' },
     validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
   })
   const result = await tool(ctx, 'eu4_validate_candidate').execute(
@@ -126,8 +126,7 @@ test('an unavailable session cwd is refused rather than assumed', async () => {
 
 test('the session identity comes from the harness object, not argv', async () => {
   const { ctx, calls } = harness({
-    prepare: { ok: true, workspace: '/tmp/ws' },
-    status: { ok: true, run_root: '/tmp/run', workspace: '/tmp/ws' },
+    prepare: { ok: true, workspace: '/tmp/ws', run_root: '/tmp/run' },
     validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
   })
   // `agent.sessionId` is absent in headless; the id lives on the session.
@@ -138,11 +137,29 @@ test('the session identity comes from the harness object, not argv', async () =>
 
 test('an agent with no session identity does not send the flag at all', async () => {
   const { ctx, calls } = harness({
-    prepare: { ok: true, workspace: '/tmp/ws' },
+    prepare: { ok: true, workspace: '/tmp/ws', run_root: '/tmp/run' },
     validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
   })
   await tool(ctx, 'eu4_validate_candidate').execute(
     {}, { agent: { session: { header: { cwd: '/tmp' } } } }
   )
   assert.deepEqual(calls, [], 'no --session-id with a missing identity')
+})
+
+test('an objective edited after binding cannot reuse the qualification', async () => {
+  const { ctx, calls } = harness({
+    prepare: { ok: true, workspace: '/tmp/ws', run_root: '/tmp/run' },
+    validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
+    finalize: { ok: true, operation: 'finalize', classification: 'verdict',
+                checker_verdict: 'pass' },
+  })
+  await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  // The human edits the goal after the campaign was bound.
+  ctx.goals.get = () => ({ id: 'g1', revision: 2, objective: 'a different objective' })
+  const result = await tool(ctx, 'eu4_finalize_candidate').execute({}, { agent })
+  assert.equal(result.kind, 'goal_binding')
+  assert.match(result.detail, /objective changed/)
+  assert.equal(ctx._state.completed.length, 0)
+  assert.ok(!calls.some((call) => call[0] === 'finalize'),
+    'finalize must not reach the bridge once the goal changed')
 })

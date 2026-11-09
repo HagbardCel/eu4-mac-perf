@@ -200,7 +200,10 @@ export function apply(ctx, config = {}) {
   }
 
   function persistBiding(sessionId, agentId, goal, runRoot) {
-    if (!runRoot || !goal) return bindings.get(sessionId)
+    // Persistence is best-effort; the in-memory binding is what the current
+    // finalization compares against. Dropping it because the run root could not
+    // be resolved turned a live goal into "no binding recorded".
+    if (!goal) return bindings.get(sessionId)
     const value = {
       schema: 'eu4-dsh-plugin-binding/v1',
       session_id: sessionId,
@@ -211,6 +214,7 @@ export function apply(ctx, config = {}) {
       bound_at: new Date().toISOString(),
     }
     bindings.set(sessionId, value)
+    if (!runRoot) return value
     try {
       fs.writeFileSync(path.join(runRoot, BINDING_FILE), JSON.stringify(value, null, 2))
     } catch (error) {
@@ -253,24 +257,6 @@ export function apply(ctx, config = {}) {
 
   register(
     tool(
-      'eu4_campaign_status',
-      'Report the bound EU4 campaign: identities, validation counters, the ' +
-        'current receipt, and whether it is stale relative to the candidate.',
-      async (_args, exec) => {
-        requireSidecar()
-        const sessionId = sessionIdentity(exec?.agent) || 'unknown'
-        const goal = exec?.agent ? ctx.goals.get(exec.agent) : undefined
-        const result = await bridge(infra, python, 'status', sidecar)
-        if (result && result.run_root) {
-          persistBiding(sessionId, exec?.agent?.id, goal, result.run_root)
-        }
-        return result
-      }
-    )
-  )
-
-  register(
-    tool(
       'eu4_validate_candidate',
       'Run the campaign trusted checker against the current candidate and ' +
         'return its verdict and diagnostics. A pass is necessary but not ' +
@@ -297,9 +283,12 @@ export function apply(ctx, config = {}) {
         }
         const validateArgs = sessionId === 'unknown' ? [] : ['--session-id', sessionId]
         const result = await bridge(infra, python, 'validate', sidecar, validateArgs)
-        if (result && result.run_root) {
-          persistBiding(sessionId, exec?.agent?.id, goal, result.run_root)
-        }
+        persistBiding(
+          sessionId,
+          exec?.agent?.id,
+          goal,
+          (prepared && prepared.run_root) || (result && result.run_root),
+        )
         return result
       }
     )
@@ -317,15 +306,17 @@ export function apply(ctx, config = {}) {
         if (!agent) throw new Error('finalization requires an owning agent')
         const sessionId = sessionIdentity(agent)
         const live = ctx.goals.get(agent)
-        const status = await bridge(infra, python, 'status', sidecar)
-        const runRoot = status && status.run_root
-        if (live) {
-          persistBiding(sessionId, agent.id, live, runRoot)
-        }
-        const problems = goalBindingProblems(
-          live ? bindingFor(sessionId, runRoot) : null,
-          live
-        )
+
+        // `prepare` is idempotent and reports both the workspace and the run
+        // root, so it replaces a separate status call.
+        const prepared = await bridge(infra, python, 'prepare', sidecar)
+        if (prepared && prepared.ok === false) return prepared
+        const runRoot = prepared && prepared.run_root
+        // Never rebind here: a binding established by validation is compared,
+        // not replaced. Rebinding would let an edited objective inherit the
+        // earlier qualification, which is exactly what must not happen.
+        const binding = bindingFor(sessionId, runRoot)
+        const problems = goalBindingProblems(binding, live)
         if (problems.length) {
           return {
             ok: false,
@@ -336,16 +327,14 @@ export function apply(ctx, config = {}) {
             detail: problems.join('; '),
           }
         }
-        const prepared = await bridge(infra, python, 'prepare', sidecar)
-        if (prepared && prepared.ok === false) return prepared
         const mismatch = workspaceProblem(agentOf(exec), prepared && prepared.workspace)
         if (mismatch) {
           return {
             ok: false,
-            operation: 'validate',
+            operation: 'finalize',
             classification: 'refused',
             kind: 'workspace_mismatch',
-            goal_policy: 'unavailable',
+            completion: 'refused',
             detail: mismatch,
           }
         }

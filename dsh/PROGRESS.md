@@ -758,6 +758,31 @@ Two honest observations:
    with an ordered identity chain and covered by tests; the record from this run
    is left as-is because it is the evidence that found the bug.
 
+## Phase 2A / Phase 4 -- shared acceptance, and a smaller plugin
+
+**Checker execution moved to `automation/acceptance.py`.** `runner.py` and the DSH
+bridge now import the same `run_accept`; `automation.runner.run_accept is
+automation.acceptance.run_accept` is asserted by a test, so the verdict
+vocabulary, the output cap and the timeout handling have exactly one home. 42
+lines of checker execution left the runner, which keeps only the campaign loop.
+The OpenCode regression suite is unchanged at 86 passing.
+
+**The plugin is down to two tools.** `eu4_campaign_status` is gone, as approved:
+`get_goal` covers goal state and the bridge covers campaign state, so the tool
+only duplicated both. `prepare` already reports the run root and the workspace,
+so removing the status tool also removed a bridge call from `finalize`.
+
+Two real defects surfaced while doing this, both caught by tests before any live
+run:
+
+- `finalize` **rebound** the session binding to whatever goal was live before
+  comparing it, so a human editing the objective would have inherited the earlier
+  qualification. It no longer rebinds: the binding established by validation is
+  compared, and an edited objective now refuses with `goal_binding`.
+- `validate` never bound anything, because the call was guarded by a `run_root`
+  that the *validate* result does not carry. The binding is now written from the
+  `prepare` result, and kept in memory when it cannot be persisted.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not
