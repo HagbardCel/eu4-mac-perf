@@ -198,7 +198,39 @@ class ExecutionRootTests(BridgeTestCase):
         code, out = self.run_bridge("prepare", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
         self.assertEqual(out["kind"], "execution_root")
-        self.assertIn("nested", out["detail"])
+        self.assertIn("equals the infrastructure root", out["detail"])
+        self.assertIn("could be shadowed", out["detail"])
+
+    def test_a_candidate_under_local_is_allowed(self) -> None:
+        """The agent's sandbox is the session workspace, so the candidate must be
+        inside the checkout -- but only under .local/, never in the trusted tree."""
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        run_root = REPO / ".local" / "dsh-test" / f"roots-{uuid.uuid4().hex[:8]}"
+        data["run_root"] = str(run_root)
+        # Drop the helper's absolute workspace so it defaults to run_root/workspace.
+        data["candidate"].pop("workspace", None)
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        self.addCleanup(shutil.rmtree, run_root, True)
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertTrue(Path(out["workspace"]).is_dir())
+        self.assertTrue(
+            str(out["workspace"]).startswith(str(REPO / ".local")),
+            out["workspace"],
+        )
+
+    def test_a_candidate_elsewhere_in_the_checkout_is_refused(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["candidate"] = {"mode": "seed", "workspace": str(REPO / "dsh"),
+                             "policy": {"allowed_paths": ["*"]}}
+        data["candidate_baseline_commit"] = "6fa1888c8d1cf0f3a6e8205a03ae171d4ce1ba36"
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        code, out = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "execution_root")
+        self.assertIn("must live under .local/", out["detail"])
 
     def test_danger_full_access_cannot_run_qualification(self) -> None:
         sidecar = self.sidecar(self.campaign("smoke-campaign"))

@@ -644,6 +644,33 @@ prints a URL with no `StartupError`. The host path this mirrors is known-working
 the round-10 live reviewer ran through it with no API key in the environment,
 which is why the shared credential store is the right mechanism.
 
+## Round 14 -- the candidate lived outside the agent's write sandbox
+
+With the provider working, the next blocker was structural: the smoke campaign's
+run root defaulted to `~/.local/share/eu4-dsh/state/dsh-offline-smoke`, while a
+DSH session started from the checkout can only write inside its own workspace.
+The agent could never have written `marker.txt`; the run would have failed with
+sandbox denials that look like a tool bug rather than a configuration mistake.
+
+- the smoke sidecar now sets `run_root: ".local/dsh/dsh-offline-smoke"`, so the
+  candidate is `<checkout>/.local/dsh/dsh-offline-smoke/workspace` -- inside the
+  session workspace, and gitignored;
+- the roots assertion allows a candidate **inside the checkout only under
+  `.local/`**, and still refuses the checkout itself, a candidate that contains
+  the checkout, or a candidate anywhere else in the trusted tree;
+- `smoke-goal.sh` runs `prepare` itself, so the workspace exists before the goal
+  is created rather than appearing on the first `validate`.
+
+Trade-off, stated plainly: this pilot's receipts now sit in an agent-writable
+directory. Authority is unaffected -- completion still requires a fresh checker
+run by trusted tooling, and the journal remains tamper evidence rather than
+access control. Production campaigns should keep receipts in the trusted state
+root, which needs the run-root/receipt-root split recorded as a follow-up.
+
+Verified on a throwaway run root against the real `automation-smoke` checker:
+`fail` -> write `ready` -> `pass` -> `finalize` `pass`/`qualified`. The shipped
+campaign is prepared and clean: workspace seeded, 0 validations.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

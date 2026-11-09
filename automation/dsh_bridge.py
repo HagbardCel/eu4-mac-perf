@@ -100,8 +100,16 @@ def _roots(sidecar: Sidecar) -> dict:
     problems: list[str] = []
     if infra == candidate:
         problems.append("candidate root equals the infrastructure root")
-    if inside(candidate, infra) or inside(infra, candidate):
-        problems.append("candidate and infrastructure roots are nested")
+    if inside(infra, candidate):
+        problems.append("the infrastructure root is inside the candidate workspace")
+    # A candidate inside the checkout is legitimate when it sits in .local/:
+    # the agent's write sandbox is the session workspace, so a candidate outside
+    # the checkout is unreachable to it. Anything else inside the checkout would
+    # mean editing the trusted tree itself.
+    if inside(candidate, infra) and not inside(candidate, infra / ".local"):
+        problems.append(
+            "a candidate inside the infrastructure checkout must live under .local/"
+        )
     if not inside(campaign, infra):
         problems.append("campaign root is outside the infrastructure root")
     if not inside(sidecar.checker, campaign):

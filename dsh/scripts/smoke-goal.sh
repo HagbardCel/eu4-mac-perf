@@ -16,7 +16,8 @@ export EU4_DSH_SIDECAR=$SIDECAR
 export EU4_DSH_PYTHON=$INFRA/.venv/bin/python3
 
 echo "1. prepare the campaign (seeds the workspace, records the anchor)"
-echo "   $EU4_DSH_PYTHON -m automation.dsh_bridge prepare --sidecar $SIDECAR"
+"$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --sidecar "$SIDECAR" |
+  "$EU4_DSH_PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print("   workspace:", d.get("workspace")) if d.get("ok") else print("   prepare failed:", d)'
 echo
 echo "2. boot the profile:  $INFRA/dsh/scripts/run.sh   (binds a free port;"
 echo "   pass --port N or set EU4_DSH_PORT to pin one, and use the URL it prints)"
