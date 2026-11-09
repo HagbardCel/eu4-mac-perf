@@ -693,7 +693,7 @@ class IntegrationVerificationTests(unittest.TestCase):
                 "workflow_id": "wf",
                 "baseline_commit": "a" * 40,
                 "oracle_manifest_sha256": "d" * 64,
-                "trusted_contract": {"commit": "t1", "version": "v0", "sha256": "2" * 64},
+                "trusted_contract": {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64},
             },
             state_path=tmp / "workflow.json",
             hooks=hooks,
@@ -781,7 +781,7 @@ class IntegrationVerificationTests(unittest.TestCase):
             state["state"] = "promote"
             state["promotion_kind"] = "implementation"
             state["candidate"] = {"candidate_commit": "c" * 40}
-            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            state["trusted_contract"] = {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64}
             state["review"] = {"path": str(report)}
             state["candidate_review"] = {
                 "candidate_commit": "c" * 40,
@@ -1432,7 +1432,7 @@ class CoordinatorTests(unittest.TestCase):
             state["review_target"] = "candidate"
             state["candidate"] = {"commit": "c" * 40}
             state["contract"] = {"commit": "u1"}
-            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            state["trusted_contract"] = {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64}
             seen = []
 
             def integrate(candidate, contract, state, kind=None):
@@ -1616,7 +1616,7 @@ class CoordinatorTests(unittest.TestCase):
                 "last_verdict": "pass",
                 "qualification_receipt": str(receipt),
             }
-            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            state["trusted_contract"] = {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64}
             state["candidate"] = {"commit": "c" * 40, "candidate_digest": "9" * 64}
             errors = coordinator._final_receipt(state, tmp / "review.json")
             self.assertTrue(any("schema" in error for error in errors))
@@ -1751,7 +1751,7 @@ class CoordinatorTests(unittest.TestCase):
             )
             state = coordinator.load_or_init()
             state["state"] = "investigating"
-            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            state["trusted_contract"] = {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64}
 
             def implementer(state):
                 return {
@@ -1943,7 +1943,12 @@ class CoordinatorTests(unittest.TestCase):
 class LegacyRequalificationTests(unittest.TestCase):
     def test_v2_accepts_the_existing_l3_2b_i_capture(self):
         import automation.gfx_draw_accept_v2 as accept
+        import shutil
 
+        shutil.rmtree(
+            ROOT / ".local/automation/eu4-l32b-effective-state/qualified",
+            ignore_errors=True,
+        )
         result = accept.check(
             ROOT / ".local/automation/eu4-l32b-effective-state/workspace",
             ROOT / "campaigns/eu4-l32b-effective-state",

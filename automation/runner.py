@@ -76,10 +76,11 @@ def skill_trust(live: Path, commit: str | None) -> str:
 
 class Runner:
     def __init__(self, campaign: Campaign, agent, run_root: Path, *,
-                 clock=None, sleep=None):
+                 clock=None, sleep=None, env=None):
         self.campaign = campaign
         self.agent = agent
         self.run_root = Path(run_root)
+        self.env = dict(env) if env is not None else None
         self.clock = clock or time.monotonic
         self.sleep = sleep or time.sleep
         if hasattr(agent, "protected_root"):
@@ -247,7 +248,7 @@ class Runner:
         if not self._apply_skill(state):
             return
         started = self.clock()
-        outcome = run_accept(self.campaign, self.live)
+        outcome = run_accept(self.campaign, self.live, env=self.env)
         duration = self.clock() - started
         if not self._digest_matches(state):
             self._pause(state, "checker_modified")
@@ -479,8 +480,8 @@ class Runner:
         append(self.log_path, [record])
 
 
-def run_accept(campaign: Campaign, workspace: Path) -> dict:
-    env = os.environ.copy()
+def run_accept(campaign: Campaign, workspace: Path, env: dict | None = None) -> dict:
+    env = dict(env) if env is not None else os.environ.copy()
     env.pop("OPENCODE_SERVER_PASSWORD", None)
     env.pop("OPENCODE_SERVER_USERNAME", None)
     try:

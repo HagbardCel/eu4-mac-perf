@@ -1411,7 +1411,7 @@ def _write_receipt(
     return Path(bundle["receipt"])
 
 
-def check(workspace: Path, campaign_dir: Path) -> dict:
+def check(workspace: Path, campaign_dir: Path, *, requalification=None) -> dict:
     workspace = Path(workspace).resolve()
     campaign_dir = Path(campaign_dir).resolve()
     try:
@@ -1426,10 +1426,17 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
     manifest_error = manifest_problem(campaign_dir, config, pin, campaign)
     if manifest_error:
         return emit("unavailable", manifest_error)
-    try:
-        paths = changed_paths(workspace)
-    except OSError as exc:
-        return emit("unavailable", f"worktree status unavailable: {exc}")
+    if requalification is None and isinstance(campaign, dict):
+        requalification = campaign.get("requalification")
+    if requalification:
+        paths = [str(item) for item in requalification.get("changed_paths") or []]
+        if not paths:
+            return emit("fail", "requalification has no approved changed paths")
+    else:
+        try:
+            paths = changed_paths(workspace)
+        except OSError as exc:
+            return emit("unavailable", f"worktree status unavailable: {exc}")
     allowed = [str(item) for item in config["allowed_paths"]]
     illegal = [path for path in paths if not path_allowed(path, allowed)]
     if illegal:
@@ -1478,12 +1485,23 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
 
     run_root = repo_root(campaign_dir) / ".local" / "automation" / campaign_id
     limit = int(config.get("launch_limit", 3))
-    launch, failure = read_launch(run_root, limit, config)
-    if failure and failure["verdict"] != "inconclusive":
-        return failure
-    used = int(launch.get("used", 0)) if launch else 0
-    remaining = max(0, limit - used)
-    if launch is not None:
+    if requalification:
+        capture_dir = Path(str(requalification.get("capture") or ""))
+        selection = requalification.get("selection") or {}
+        launch = requalification.get("launch") or {"used": 0}
+        used = int(launch.get("used", 0))
+        remaining = max(0, limit - used)
+        request = _capture_request(capture_dir) if capture_dir.is_dir() else None
+        if request is None:
+            return emit("unavailable", "requalification capture is missing")
+    else:
+        launch, failure = read_launch(run_root, limit, config)
+        if failure and failure["verdict"] != "inconclusive":
+            return failure
+        used = int(launch.get("used", 0)) if launch else 0
+        remaining = max(0, limit - used)
+        if launch is None:
+            return emit("inconclusive", _diagnostic(reason="no_campaign_launch"))
         capture_dir, selection, failure = select_capture(
             run_root, config, candidate_sha, launch
         )
@@ -1521,7 +1539,10 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
             states = validated.get("states") or {}
             provisional = validated.get("provisional") or []
             missing = validated.get("missing") or []
-            candidate_digest = source_tree_digest(workspace, paths)
+            candidate_digest = (
+                str(requalification.get("candidate_digest") or "")
+                if requalification else source_tree_digest(workspace, paths)
+            )
             receipt = selection.get("receipt") if selection else {}
             capture = {
                 "capture_dir": str(capture_dir),

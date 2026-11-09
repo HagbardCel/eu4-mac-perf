@@ -295,6 +295,8 @@ def validate_qualified_bundle(
     expected_checker_sha256: str | None = None,
     expected_trusted_commit: str | None = None,
     expected_fields: set[str] | None = None,
+    expected_capture: dict | None = None,
+    expected_packet_sha256: str | None = None,
     require_packet_ready: bool = True,
 ) -> list[str]:
     """Validate a persisted qualified bundle and its receipt."""
@@ -348,6 +350,14 @@ def validate_qualified_bundle(
     if not isinstance(capture, dict) or not capture.get("session") \
             or not capture.get("library_sha256"):
         errors.append("qualified receipt capture identity is incomplete")
+    if expected_capture is not None:
+        for key in ("session", "pid", "executable_sha256", "library_sha256",
+                    "receipt_token", "capture_plan_sha256"):
+            if capture.get(key) != expected_capture.get(key):
+                errors.append(f"qualified receipt capture {key} differs")
+    if expected_packet_sha256 is not None \
+            and packet.get("sha256") != expected_packet_sha256:
+        errors.append("qualified receipt packet digest differs")
     files = manifest.get("files")
     if not isinstance(files, list) or not files:
         errors.append("qualified bundle manifest has no files")
@@ -410,6 +420,8 @@ def write_qualified_bundle(
                 for row in fields
                 if isinstance(row, dict) and row.get("state") == "validated"
             },
+            expected_capture=capture,
+            expected_packet_sha256=_sha(Path(packet_dir) / "draw-packet.json"),
             require_packet_ready=bool(packet.get("packet_ready")),
         )
         if errors:

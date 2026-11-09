@@ -19,7 +19,7 @@
     {
       "path": "campaigns/eu4-l32b-complete/workflow.json",
       "role": "campaign",
-      "sha256": "e0531872fce93a6bb0f60d128a134dab8282fc7eeb90c68c15d012fb7dce12fe"
+      "sha256": "d8429ac649ab65509c60f170d064a16ad75893cd149d02c41c8a6fd2e0225a77"
     },
     {
       "path": "automation/gfx_adversarial.py",
@@ -27,9 +27,14 @@
       "sha256": "fb2df10d350fd6946c8c2329f998f5bf029807e1f826660b64980aa20dbbd5e3"
     },
     {
+      "path": "automation/gfx_candidate_snapshot.py",
+      "role": "checker",
+      "sha256": "fad239aa20aba6a8f3140b8fca4ace7a3607434b493c371f7f8c10a327132f10"
+    },
+    {
       "path": "automation/gfx_checkpoint.py",
       "role": "checker",
-      "sha256": "3489bb1cdb53bcd884bfbfeff23a20623efdece0b4e1783f1854af413f079691"
+      "sha256": "eca48eccbfba2ebb796b80934a8e4c39b34056300c725e50ba42a4cda4bfb4ff"
     },
     {
       "path": "automation/gfx_contracts/__init__.py",
@@ -49,7 +54,7 @@
     {
       "path": "automation/gfx_draw_accept_v2.py",
       "role": "checker",
-      "sha256": "4ff366ddcb04f836b8b9d3b7cba57d22de0ce306a92347c98d000fe706159a96"
+      "sha256": "7e3887f805975e65709e1159ac86905d4b84dbd9d1f3128cc34eced065c0e717"
     },
     {
       "path": "automation/gfx_evidence_policy.py",
@@ -59,12 +64,17 @@
     {
       "path": "automation/gfx_l32b_complete.py",
       "role": "checker",
-      "sha256": "a5794ae4a31c39d407e5ed02c9eda605f461c818ad272bab1a9d07bdb67af242"
+      "sha256": "ab48053f0e933ec6b493cef6253a43ea0ea381257668c19799c0ba02f16fab37"
     },
     {
       "path": "automation/gfx_l32b_hooks.py",
       "role": "checker",
-      "sha256": "a1c9c963b94b8ec8450978d0cc63d49e82401c010d1e2d3d07f0632ee72800c0"
+      "sha256": "8e8448990666c6616c01f99319781af5a7d2b3476aabba02b08264a01b310bf7"
+    },
+    {
+      "path": "automation/gfx_reviewer_v2.py",
+      "role": "checker",
+      "sha256": "6ddf98e11a37e7f5b990b1e44cbf63140ffcadee42e0766e95f86bd4da5e5407"
     },
     {
       "path": "automation/gfx_snapshot_v2.py",
@@ -84,7 +94,7 @@
     {
       "path": "automation/runner.py",
       "role": "checker",
-      "sha256": "c158f3a9ae02c0da73932a083cf8fe4fcf0cf0ccc9fe712edc10f472deb9195d"
+      "sha256": "3f8dc3ae4b6753847713f83b1a9a6d0569552c75e5cd47e06bd5689189712f5b"
     },
     {
       "path": "campaigns/eu4-l32b-complete/accept.py",

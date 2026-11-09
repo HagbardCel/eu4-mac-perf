@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from automation import launch_ledger  # noqa: E402
-from automation.gfx_candidate_snapshot import materialize_reviewer  # noqa: E402
+from automation.gfx_reviewer_v2 import materialize_reviewer  # noqa: E402
 from automation.gfx_contract_runner import run as contract_run  # noqa: E402
 from automation.gfx_l32b_complete import Hooks, prepare_campaign_run_root  # noqa: E402
 from automation.gfx_snapshot_v2 import snapshot_contract_v1, snapshot_v2  # noqa: E402
@@ -76,7 +76,7 @@ class L32bHooks:
         self.run_root = Path(run_root).resolve()
         self.workflow_id = str(workflow["workflow_id"])
         self.agent_factory = agent_factory or self._opencode_agent
-        self.checker_runner = checker_runner
+        self.checker_runner = checker_runner or self._post_integration
         self.model = model or str(workflow.get("model", "opencode/big-pickle"))
         self.templates = self.repo / "campaigns"
 
@@ -111,8 +111,13 @@ class L32bHooks:
             commit = self.workflow.get("baseline_commit")
         return {
             "commit": commit,
-            "version": str(trusted.get("version", "v0")),
-            "sha256": trusted.get("sha256"),
+            "contract_version": str(
+                trusted.get("contract_version", trusted.get("version", "v0"))
+            ),
+            "contract_sha256": trusted.get(
+                "contract_sha256", trusted.get("sha256")
+            ),
+            "manifest": trusted.get("manifest"),
         }
 
     def _materialize(
@@ -284,6 +289,14 @@ class L32bHooks:
                 "candidate_version": version,
                 "base_contract_version": base_version,
                 "checkpoint": checkpoint,
+                "allowed_paths": [
+                    "progress.md",
+                    f"automation/gfx_contracts/{version}.py",
+                    f"automation/gfx_contracts/{version}.spec.json",
+                    f"tests/test_gfx_contract_{version}.py",
+                    f"analysis/gfx-draw/v0/l32b/contracts/{version}/**",
+                ],
+                "test_modules": [f"tests.test_gfx_contract_{version}"],
             }
         )
         atomic_write(
@@ -298,7 +311,7 @@ class L32bHooks:
 
     def run_contract(self, checkpoint: str, state: dict) -> dict:
         trusted = self._trusted(state)
-        version = _next_version(str(trusted.get("version", "v0")))
+        version = _next_version(str(trusted.get("contract_version", "v0")))
         operation_id = str(
             (state.get("active_campaign") or {}).get("operation_id")
             or f"contract-{int(state.get('campaign_sequence', 0)) + 1}"
@@ -312,13 +325,13 @@ class L32bHooks:
             trusted=trusted,
             extra={
                 "candidate_version": version,
-                "base_contract_version": trusted.get("version", "v0"),
+                "base_contract_version": trusted.get("contract_version", "v0"),
                 "checkpoint": checkpoint,
             },
         )
         self._write_contract_config(
             campaign, template, version,
-            str(trusted.get("version", "v0")), checkpoint,
+            str(trusted.get("contract_version", "v0")), checkpoint,
         )
         runner_state = self._run(campaign)
         result = self._normalize(runner_state, campaign)
@@ -361,8 +374,15 @@ class L32bHooks:
         campaign_dir = Path(str(target.get("campaign_dir") or state.get("campaign_dir") or ""))
         if not campaign_dir.is_dir():
             raise HookError("reviewer source campaign directory is missing")
-        round_id = int(state.get("round", 0)) + 1
-        review = materialize_reviewer(campaign_dir, target, round_id)
+        operation_id = str(
+            (state.get("active_campaign") or {}).get("operation_id")
+            or f"review-{int(state.get('campaign_sequence', 0)) + 1}"
+        )
+        review_id = f"eu4-l32b-review-{target.get('campaign_id')}-{operation_id}"
+        review = materialize_reviewer(
+            campaign_dir, target, int(state.get("campaign_sequence", 0)) or 1,
+            review_id=review_id,
+        )
         ledger = self.run_root / "live-launch-ledger.json"
         launch_ledger.create_ledger(
             ledger,
@@ -377,15 +397,15 @@ class L32bHooks:
             ledger_path=ledger,
             limit=int(self.workflow.get("global_launch_limit", 6)),
         )
-        for key, value in review["env"].items():
-            os.environ[key] = value
         loaded = load_campaign(Path(review["campaign"]))
+        runner_root = self.repo / ".local" / "automation" / review["review_id"]
         runner = Runner(
             loaded,
             self.agent_factory(self.model),
-            self.repo / ".local" / "automation" / review["review_id"],
+            runner_root,
+            env=review["env"],
         )
-        result = runner.execute(resume_only=False)
+        result = runner.execute(resume_only=(runner_root / "state.json").is_file())
         return {
             "path": review["report"],
             "session_id": result.get("session_id"),
@@ -414,13 +434,13 @@ class L32bHooks:
                 trusted=trusted,
                 extra={
                     "candidate_version": version,
-                    "base_contract_version": trusted.get("version", "v0"),
+                    "base_contract_version": trusted.get("contract_version", "v0"),
                     "checkpoint": state.get("contract_checkpoint"),
                 },
             )
             self._write_contract_config(
                 campaign, template, version,
-                str(trusted.get("version", "v0")),
+                str(trusted.get("contract_version", "v0")),
                 str(state.get("contract_checkpoint")),
             )
         else:
@@ -467,11 +487,57 @@ class L32bHooks:
         )
         if not directories:
             return {"detail": "capture campaign produced no capture directory"}
+        capture = directories[-1]
+        problem = self._verify_capture(campaign["run_root"], capture, receipt)
+        if problem:
+            return {"detail": problem}
         return {
-            "capture": str(directories[-1]),
+            "capture": str(capture),
             "capture_receipt": str(receipt),
             "candidate_commit": commit,
         }
+
+    def _verify_capture(self, run_root: Path, capture: Path, receipt_path: Path) -> str | None:
+        try:
+            counter = _json(receipt_path)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return f"capture receipt is unreadable: {exc}"
+        token = counter.get("token")
+        if not token:
+            return "capture receipt has no ledger token"
+        try:
+            pointer = launch_ledger.read_pointer(run_root)
+        except launch_ledger.LedgerError as exc:
+            return f"capture ledger pointer is invalid: {exc}"
+        if pointer is None:
+            return "capture ledger pointer is missing"
+        try:
+            ledger = launch_ledger.load_ledger(Path(pointer["ledger"]))
+        except launch_ledger.LedgerError as exc:
+            return f"capture ledger is invalid: {exc}"
+        matches = [
+            item for item in ledger.get("launches") or []
+            if isinstance(item, dict) and item.get("token") == token
+        ]
+        if len(matches) != 1:
+            return "capture ledger token is not unique"
+        record = matches[0]
+        if record.get("campaign_id") != run_root.name:
+            return "capture ledger campaign differs"
+        if record.get("status") != "completed":
+            return "capture launch is not completed"
+        request = capture / "capture-request.json"
+        if not request.is_file():
+            return "capture request is missing"
+        try:
+            document = _json(request)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            return f"capture request is unreadable: {exc}"
+        if not document.get("library_sha256"):
+            return "capture request has no observer identity"
+        if not (capture / "operations-summary.json").is_file():
+            return "capture summary is missing"
+        return None
 
     def run_research(self, state: dict) -> dict:
         trusted = self._trusted(state)
@@ -498,22 +564,28 @@ class L32bHooks:
     def integrate(self, candidate: dict, contract: dict, state: dict, kind=None) -> dict:
         candidate_commit = candidate.get("candidate_commit")
         contract_commit = (contract or {}).get("candidate_commit") if isinstance(contract, dict) else None
-        base = (
-            (state.get("integration") or {}).get("commit")
-            or self._trusted(state).get("commit")
-            or self.workflow.get("baseline_commit")
-        )
-        integration_id = hashlib.sha256(
-            json.dumps(
-                {
-                    "kind": kind,
-                    "candidate": candidate_commit,
-                    "contract": contract_commit,
-                    "base": base,
-                },
-                sort_keys=True,
-            ).encode("utf-8")
-        ).hexdigest()
+        pending = state.get("pending_integration") or {}
+        if pending:
+            base = str(pending["base_head"])
+            integration_id = str(pending["integration_id"])
+        else:
+            base = (
+                (state.get("integration") or {}).get("commit")
+                or self._trusted(state).get("commit")
+                or self.workflow.get("baseline_commit")
+            )
+            integration_id = hashlib.sha256(
+                json.dumps(
+                    {
+                        "kind": kind,
+                        "candidate": candidate_commit,
+                        "contract": contract_commit,
+                        "base": base,
+                    },
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+        state["_integration_base"] = base
         journal_path = self.run_root / "integrations" / f"{integration_id}.json"
         journal = _json(journal_path) if journal_path.is_file() else None
         if journal and journal.get("status") == "verified":
@@ -559,6 +631,8 @@ class L32bHooks:
                     "ok": True,
                     "commit": commit,
                     "verification": verification,
+                    "integration_id": integration_id,
+                    "base_head": base,
                     "published": False,
                 }
             if journal.get("status") == "verified_staged":
@@ -615,7 +689,199 @@ class L32bHooks:
         journal["status"] = "verified"
         journal["verification"] = verification
         atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
-        return {"ok": True, "commit": commit, "verification": verification}
+        return {
+            "ok": True,
+            "commit": commit,
+            "verification": verification,
+            "integration_id": integration_id,
+            "base_head": base,
+            "published": True,
+        }
+
+    def _post_integration(self, commit: Path, state: dict) -> dict:
+        from automation.gfx_checkpoint import source_tree_digest_at_commit
+        from automation.gfx_draw_accept_v2 import build_candidate
+
+        commit = str(commit)
+        base = str(
+            state.get("_integration_base")
+            or (state.get("pending_integration") or {}).get("base_head")
+            or (state.get("integration") or {}).get("base_head")
+            or self._trusted(state).get("commit")
+        )
+        capture = state.get("capture")
+        receipt = state.get("capture_receipt")
+        if not capture or not receipt:
+            return {
+                "status": "pending_capture",
+                "commit": commit,
+                "base_head": base,
+                "capture_required": True,
+            }
+        worktree = self.run_root / "requalification" / commit
+        if not worktree.exists():
+            worktree.parent.mkdir(parents=True, exist_ok=True)
+            added = subprocess.run(
+                ["git", "-C", str(self.repo), "worktree", "add", "--detach",
+                 str(worktree), commit],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if added.returncode != 0:
+                return {"status": "failed", "detail": added.stderr.strip()}
+        head = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=False,
+        )
+        status = subprocess.run(
+            ["git", "-C", str(worktree), "status", "--porcelain"],
+            capture_output=True, text=True, check=False,
+        )
+        if head.stdout.strip() != commit or status.stdout.strip():
+            return {"status": "failed", "detail": "requalification worktree is not clean"}
+        checker_commit = str(
+            state.get("checker_freeze_commit")
+            or self.workflow.get("checker_freeze_commit")
+            or self._trusted(state).get("commit")
+            or self.workflow.get("baseline_commit")
+        )
+        for rel in (
+            "automation/gfx_draw_accept_v2.py",
+            "automation/gfx_contracts/api.py",
+            "campaigns/eu4-l32b-complete/accept.py",
+        ):
+            frozen = subprocess.run(
+                ["git", "-C", str(self.repo), "show", f"{checker_commit}:{rel}"],
+                capture_output=True, check=False,
+            )
+            current = (worktree / rel)
+            if frozen.returncode != 0 or not current.is_file() \
+                    or current.read_bytes() != frozen.stdout:
+                return {
+                    "status": "failed",
+                    "checker": "fail",
+                    "detail": f"trusted checker modified: {rel}",
+                }
+        diff = subprocess.run(
+            ["git", "-C", str(self.repo), "diff", "--name-only", base, commit],
+            capture_output=True, text=True, check=False,
+        )
+        if diff.returncode != 0:
+            return {"status": "failed", "detail": "integration diff failed"}
+        changed = [line for line in diff.stdout.splitlines() if line]
+        template = worktree / "campaigns" / "eu4-l32b-complete"
+        config = _json(template / "l32b.json")
+        allowed = [str(item) for item in config.get("allowed_paths", [])]
+        from automation.gfx_draw_accept_v2 import path_allowed
+
+        outside = [path for path in changed if not path_allowed(path, allowed)]
+        if outside:
+            return {
+                "status": "failed",
+                "checker": "fail",
+                "detail": "integration changes outside the allowlist: "
+                          + ", ".join(outside[:6]),
+            }
+        digest = source_tree_digest_at_commit(self.repo, commit, changed)
+        candidate_sha, failure = build_candidate(worktree)
+        if failure:
+            return {"status": "failed", "checker": failure.get("verdict", "fail")}
+        request_path = Path(str(capture)) / "capture-request.json"
+        if not request_path.is_file():
+            return {"status": "failed", "detail": "capture request is missing"}
+        request = _json(request_path)
+        captured_library = str(request.get("library_sha256") or "")
+        if captured_library and captured_library != candidate_sha:
+            return {
+                "status": "pending_capture",
+                "commit": commit,
+                "base_head": base,
+                "capture_required": True,
+                "observer_library_sha256": candidate_sha,
+            }
+        trusted = self._trusted(state)
+        version = str(trusted.get("contract_version", "v0"))
+        campaign_dir = self.run_root / "requalification" / commit / "campaign"
+        campaign_dir.mkdir(parents=True, exist_ok=True)
+        campaign = {
+            "id": f"requalify-{commit[:12]}",
+            "objective": str(template / "objective.md"),
+            "runtime": "opencode",
+            "model": self.model,
+            "opencode_version": "2.2.5",
+            "workspace": {"mode": "worktree", "path": str(worktree), "commit": commit},
+            "accept": ["python3", str(template / "accept.py"),
+                       "--campaign-dir", str(campaign_dir)],
+            "max_rounds": 1,
+            "max_seconds": 120,
+            "accept_timeout_seconds": 120,
+            "verification_manifest": str(template / "l32b-manifest.json"),
+            "live_observation": {"launch_limit": 0, "deadline_seconds": 120},
+            "template": str(template),
+            "trusted_contract": {
+                "commit": commit,
+                "contract_version": version,
+                "contract_sha256": trusted.get("contract_sha256"),
+                "manifest": trusted.get("manifest"),
+            },
+            "requalification": {
+                "capture": str(capture),
+                "changed_paths": changed,
+                "candidate_digest": digest,
+                "selection": {},
+            },
+        }
+        atomic_write(campaign_dir / "campaign.json",
+                     json.dumps(campaign, indent=2) + "\n")
+        env = {
+            **os.environ,
+            "PYTHONPATH": f"{worktree / 'benchmark'}:{worktree}",
+        }
+        completed = subprocess.run(
+            [*campaign["accept"], str(worktree)],
+            cwd=str(campaign_dir),
+            env=env,
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+        try:
+            payload = json.loads(completed.stdout.decode())
+        except (json.JSONDecodeError, UnicodeError):
+            return {"status": "failed", "detail": "requalification output is unreadable"}
+        verdict = payload.get("verdict")
+        diagnostics = _parse_diagnostics(payload.get("diagnostics"))
+        if verdict not in ("pass", "checkpoint", "inconclusive"):
+            return {
+                "status": "failed",
+                "checker": verdict or "fail",
+                "detail": diagnostics.get("reason") or "requalification failed",
+            }
+        established = diagnostics.get("established") or []
+        unresolved = list(diagnostics.get("missing") or []) \
+            + list(diagnostics.get("provisional") or [])
+        previous = set(
+            (state.get("integration_verification") or {}).get("established_fields") or []
+        )
+        regressions = sorted(previous - set(established))
+        receipt_path = diagnostics.get("qualification_receipt")
+        return {
+            "status": "verified",
+            "schema": "eu4-l32b-integration-verification/v1",
+            "commit": commit,
+            "kind": state.get("promotion_kind"),
+            "build_ok": True,
+            "tests_ok": True,
+            "checker": verdict,
+            "established_fields": established,
+            "unresolved_fields": unresolved,
+            "regressions": regressions,
+            "packet_ready": bool(diagnostics.get("packet_ready")),
+            "qualification_receipt_sha256": (
+                _sha(Path(str(receipt_path))) if receipt_path else None
+            ),
+        }
 
     def _staged_commit(
         self,
