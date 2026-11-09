@@ -90,6 +90,7 @@ def create_ledger(
             "limit": int(limit),
             "deadline_seconds": deadline_seconds,
             "used": 0,
+            "campaigns": {},
             "launches": [],
         },
     )
@@ -159,6 +160,30 @@ def _locked(path: Path):
     return handle
 
 
+def register_campaign(path: Path, campaign_id: str, limit: int) -> None:
+    """Register a campaign's launch policy under the ledger lock."""
+    if not isinstance(campaign_id, str) or not campaign_id:
+        raise LedgerError("malformed", "campaign id is missing")
+    if type(limit) is not int or limit < 0:
+        raise LedgerError("malformed", "campaign launch limit is invalid")
+    path = Path(path)
+    handle = _locked(path)
+    try:
+        value = load_ledger(path)
+        campaigns = value.setdefault("campaigns", {})
+        existing = campaigns.get(campaign_id)
+        if isinstance(existing, dict) and existing.get("limit") != limit:
+            raise LedgerError(
+                "malformed",
+                f"campaign {campaign_id} is already registered with a different limit",
+            )
+        campaigns[campaign_id] = {"limit": limit}
+        _atomic(path, value)
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+
 def claim(
     path: Path,
     *,
@@ -172,6 +197,23 @@ def claim(
     handle = _locked(path)
     try:
         value = load_ledger(path)
+        policy = (value.get("campaigns") or {}).get(campaign_id)
+        if not isinstance(policy, dict):
+            raise LedgerError(
+                "unauthorized", f"campaign {campaign_id} has no launch policy"
+            )
+        campaign_limit = policy.get("limit")
+        if type(campaign_limit) is not int:
+            raise LedgerError("malformed", "campaign launch limit is invalid")
+        campaign_used = sum(
+            1 for receipt in value["launches"]
+            if isinstance(receipt, dict) and receipt.get("campaign_id") == campaign_id
+        )
+        if campaign_used >= campaign_limit:
+            raise LedgerError(
+                "campaign_exhausted",
+                f"{campaign_used}/{campaign_limit} campaign launches already used",
+            )
         if value["used"] >= value["limit"]:
             raise LedgerError(
                 "exhausted",

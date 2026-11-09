@@ -2,7 +2,7 @@
   "schema": "eu4-l32b-workflow/v1",
   "workflow_id": "eu4-l32b-complete",
   "baseline_commit": "956fb7b736b1025b2888d352d4437d350c2373f3",
-  "integration_branch": "l32b/complete",
+  "integration_branch": "l32b/autonomous-completion",
   "initial_stage": "investigation",
   "max_steps": 40,
   "required_inputs": [
@@ -31,8 +31,10 @@
   },
   "trusted_contract": {
     "commit": "PIN_AT_RUNTIME",
-    "version": "v0",
-    "sha256": "a8c8154c72f15301626ecc9a5ec5069617c62871224c86a1da99ed67854fc5f4",
+    "contract_version": "v0",
+    "contract_sha256": "a8c8154c72f15301626ecc9a5ec5069617c62871224c86a1da99ed67854fc5f4",
     "manifest": "campaigns/eu4-l32b-complete/l32b-manifest.json"
-  }
+  },
+  "checker_freeze_commit": "PIN_AT_RUNTIME",
+  "checker_freeze_manifest_sha256": null
 }

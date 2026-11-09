@@ -1,8 +1,9 @@
 """Versioned, independently qualified draw-evidence contracts.
 
-The trusted checker loads exactly one contract version. A version is immutable:
-new validators are added in a new module and promoted through a separate
-qualification campaign. The dispatcher in ``automation.gfx_draw_accept`` is
+A contract version is cumulative: loading ``vN`` loads ``v0..vN`` in order and
+merges their validators. A later version may add fields but may not redefine a
+field from an earlier version. Earlier modules remain byte-identical to their
+qualified revisions. The dispatcher in ``automation.gfx_draw_accept`` is
 fail-closed; an unregistered required field is never accepted.
 """
 
@@ -22,12 +23,17 @@ VERSION_RE = re.compile(r"^v[0-9]+$")
 class Contract:
     version: str
     validators: dict[str, Callable[[dict, ContractContext], str | None]]
+    versions: tuple[str, ...] = ()
 
 
-def load_contract(version: str) -> Contract:
+def retained_versions(version: str) -> tuple[str, ...]:
     if not isinstance(version, str) or not VERSION_RE.match(version):
         raise ContractError(f"invalid contract version: {version!r}")
-    module_name = f"automation.gfx_contracts.{version}"
+    number = int(version[1:])
+    return tuple(f"v{index}" for index in range(number + 1))
+
+
+def _module_validators(module_name: str) -> dict[str, Callable]:
     try:
         module = importlib.import_module(module_name)
     except ImportError as exc:
@@ -40,7 +46,23 @@ def load_contract(version: str) -> Contract:
             raise ContractError(f"{module_name} has an invalid field name")
         if not callable(validator):
             raise ContractError(f"{module_name} validator for {name!r} is not callable")
-    return Contract(version=version, validators=dict(validators))
+    return dict(validators)
+
+
+def load_contract(version: str) -> Contract:
+    versions = retained_versions(version)
+    merged: dict[str, Callable] = {}
+    for current in versions:
+        module_name = f"automation.gfx_contracts.{current}"
+        validators = _module_validators(module_name)
+        overlap = sorted(set(merged) & set(validators))
+        if overlap:
+            raise ContractError(
+                f"{module_name} redefines fields from an earlier contract: "
+                + ", ".join(overlap)
+            )
+        merged.update(validators)
+    return Contract(version=version, validators=merged, versions=versions)
 
 
 def merge_validators(
@@ -64,4 +86,5 @@ __all__ = [
     "VERSION_RE",
     "load_contract",
     "merge_validators",
+    "retained_versions",
 ]

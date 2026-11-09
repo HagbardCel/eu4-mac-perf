@@ -24,22 +24,27 @@
     {
       "path": "automation/gfx_checkpoint.py",
       "role": "checker",
-      "sha256": "1aeeefaef3699c2bb0b2850c84a23ca32253dabbc1abf3d19cf97b483f8b8d6e"
+      "sha256": "eca48eccbfba2ebb796b80934a8e4c39b34056300c725e50ba42a4cda4bfb4ff"
     },
     {
       "path": "automation/gfx_contract_accept.py",
       "role": "checker",
-      "sha256": "cf015c6f81eba5d18eea3112378aa28fe524f8f872edffa273dc1cd1ba79aae0"
+      "sha256": "278b766cc16f0e4857a145b44711db2dca5f1858dde5546f865f9d92215f2c0c"
     },
     {
       "path": "automation/gfx_contract_runner.py",
       "role": "checker",
-      "sha256": "4b2ce68457d6c591e5beb58aa52d93989d3ef7433a6796620eba70ea6f2deda7"
+      "sha256": "3c6bb9a9d6094f46a4954ae6e31c23530601143dac06027ca85d1df9248b1c5a"
+    },
+    {
+      "path": "automation/gfx_contracts/__init__.py",
+      "role": "checker",
+      "sha256": "69be104c5c60747526ff67f3abfab6638cc0dab3c55e5eb06fe915fdad15c539"
     },
     {
       "path": "automation/gfx_draw_accept_v2.py",
       "role": "checker",
-      "sha256": "fce4a4bc1be326e907ebb4a0d9930a1a8998a24eda574c6a9df88817ff697863"
+      "sha256": "7e3887f805975e65709e1159ac86905d4b84dbd9d1f3128cc34eced065c0e717"
     },
     {
       "path": "automation/gfx_evidence_policy.py",
@@ -54,7 +59,7 @@
     {
       "path": "campaigns/eu4-l32b-contract/accept.py",
       "role": "checker",
-      "sha256": "00f77021c2a6186ab6c92b250343ff9cd260b7037261c351d3d1f16fe58aac14"
+      "sha256": "3b631bb615b4005b15339b4e36904bf062606602b4b65998ac1b4c577530289c"
     },
     {
       "path": "reverse_engineering/target.json",

@@ -35,6 +35,7 @@ from automation.gfx_checkpoint import (  # noqa: E402
     source_tree_digest,
     validate_checkpoint,
     write_checkpoint,
+    write_qualified_bundle,
 )
 from automation.gfx_contracts import (  # noqa: E402
     ContractContext,
@@ -1285,28 +1286,34 @@ def _load_trusted_contract(campaign: dict, config: dict):
         contract = load_contract(version)
     except ContractError as exc:
         return None, None, emit("unavailable", f"contract unavailable: {exc}")
-    module_path = ROOT / "automation" / "gfx_contracts" / f"{version}.py"
-    if not module_path.is_file():
-        return None, None, emit("unavailable", "contract module is missing from the checkout")
-    actual = _sha(module_path)
-    if trusted.get("sha256") and actual != trusted["sha256"]:
-        return None, None, emit(
-            "unavailable", "contract module hash differs from the campaign pin"
+    for current in contract.versions:
+        module_path = ROOT / "automation" / "gfx_contracts" / f"{current}.py"
+        if not module_path.is_file():
+            return None, None, emit(
+                "unavailable", f"contract module {current} is missing from the checkout"
+            )
+        actual = _sha(module_path)
+        if current == version and trusted.get("sha256") \
+                and actual != trusted["sha256"]:
+            return None, None, emit(
+                "unavailable", "contract module hash differs from the campaign pin"
+            )
+        completed = subprocess.run(
+            ["git", "-C", str(ROOT), "show",
+             f"{trusted['commit']}:automation/gfx_contracts/{current}.py"],
+            capture_output=True,
+            check=False,
         )
-    completed = subprocess.run(
-        ["git", "-C", str(ROOT), "show",
-         f"{trusted['commit']}:automation/gfx_contracts/{version}.py"],
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        return None, None, emit(
-            "unavailable", "contract module is not present at the trusted revision"
-        )
-    if hashlib.sha256(completed.stdout).hexdigest() != actual:
-        return None, None, emit(
-            "unavailable", "contract module differs from the trusted revision"
-        )
+        if completed.returncode != 0:
+            return None, None, emit(
+                "unavailable",
+                f"contract module {current} is not present at the trusted revision",
+            )
+        if hashlib.sha256(completed.stdout).hexdigest() != actual:
+            return None, None, emit(
+                "unavailable",
+                f"contract module {current} differs from the trusted revision",
+            )
     return contract, trusted, None
 
 
@@ -1365,8 +1372,7 @@ def _write_receipt(
     capture: dict,
     fields: list[dict],
 ) -> Path:
-    receipt = {
-        "schema": "eu4-gfx-qualification-receipt/v1",
+    receipt_fields = {
         "campaign_id": campaign_id,
         "milestone": config.get("milestone"),
         "contract_version": trusted.get("version"),
@@ -1375,19 +1381,6 @@ def _write_receipt(
         "checker_sha256": _sha(Path(__file__)),
         "candidate_digest": candidate_digest,
         "observer_library_sha256": candidate_sha,
-        "capture": capture,
-        "target": {
-            "call_id": target.call_id,
-            "caller_rva": f"0x{target.caller_rva:x}",
-            "mode": master.get("mode"),
-            "effective_count": master.get("effective_count"),
-        },
-        "packet": {
-            "sha256": _sha(packet_dir / "draw-packet.json"),
-            "schema": packet.get("schema"),
-            "packet_ready": packet.get("packet_ready"),
-        },
-        "fields": fields,
         "packet_ready": bool(packet.get("packet_ready")),
         "scope": "L3.2b source-input qualification under the declared replay contract",
         "not_claimed": [
@@ -1398,14 +1391,27 @@ def _write_receipt(
         ],
         "assumptions": packet.get("assumptions") or [],
     }
-    directory = run_root / "qualification"
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"{campaign_id}-{candidate_digest[:16]}.json"
-    path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return path
+    bundle = write_qualified_bundle(
+        run_root,
+        campaign_id=campaign_id,
+        candidate_digest=candidate_digest,
+        capture=capture,
+        packet=packet,
+        packet_dir=packet_dir,
+        capture_dir=Path(artifact.root),
+        target={
+            "call_id": target.call_id,
+            "caller_rva": f"0x{target.caller_rva:x}",
+            "mode": master.get("mode"),
+            "effective_count": master.get("effective_count"),
+        },
+        fields=fields,
+        receipt_fields=receipt_fields,
+    )
+    return Path(bundle["receipt"])
 
 
-def check(workspace: Path, campaign_dir: Path) -> dict:
+def check(workspace: Path, campaign_dir: Path, *, requalification=None) -> dict:
     workspace = Path(workspace).resolve()
     campaign_dir = Path(campaign_dir).resolve()
     try:
@@ -1420,19 +1426,47 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
     manifest_error = manifest_problem(campaign_dir, config, pin, campaign)
     if manifest_error:
         return emit("unavailable", manifest_error)
-    try:
-        paths = changed_paths(workspace)
-    except OSError as exc:
-        return emit("unavailable", f"worktree status unavailable: {exc}")
+    if requalification is None and isinstance(campaign, dict):
+        requalification = campaign.get("requalification")
+    if requalification:
+        paths = [str(item) for item in requalification.get("changed_paths") or []]
+        if not paths:
+            return emit("fail", "requalification has no approved changed paths")
+    else:
+        try:
+            paths = changed_paths(workspace)
+        except OSError as exc:
+            return emit("unavailable", f"worktree status unavailable: {exc}")
     allowed = [str(item) for item in config["allowed_paths"]]
+    if requalification and requalification.get("allowed_paths"):
+        allowed = [str(item) for item in requalification["allowed_paths"]]
     illegal = [path for path in paths if not path_allowed(path, allowed)]
     if illegal:
         return emit("fail", "source scope violated: " + ", ".join(illegal[:8]))
     frozen = [str(item) for item in config.get("forbidden_paths", [])]
+    contract_delta: set[str] = set()
+    if requalification and requalification.get("contract_delta"):
+        version = str(requalification.get("contract_version") or "")
+        contract_sha = str(requalification.get("contract_sha256") or "")
+        delta = [str(item) for item in requalification.get("contract_delta") or []]
+        canonical = {
+            f"automation/gfx_contracts/{version}.py",
+            f"automation/gfx_contracts/{version}.spec.json",
+            f"tests/test_gfx_contract_{version}.py",
+        }
+        analysis_prefix = f"analysis/gfx-draw/v0/l32b/contracts/{version}/"
+        for path in delta:
+            if path not in canonical and not path.startswith(analysis_prefix):
+                return emit("fail", f"unqualified contract delta path: {path}")
+        module = workspace / "automation" / "gfx_contracts" / f"{version}.py"
+        if not version or not module.is_file() \
+                or hashlib.sha256(module.read_bytes()).hexdigest() != contract_sha:
+            return emit("fail", "qualified contract module differs from the receipt")
+        contract_delta = set(delta)
     touched = [path for path in paths if any(
         path == pattern or path.startswith(pattern.rstrip("/") + "/")
         for pattern in frozen
-    )]
+    ) and path not in contract_delta]
     if touched:
         return emit("fail", "frozen path modified: " + ", ".join(touched[:8]))
 
@@ -1472,12 +1506,21 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
 
     run_root = repo_root(campaign_dir) / ".local" / "automation" / campaign_id
     limit = int(config.get("launch_limit", 3))
-    launch, failure = read_launch(run_root, limit, config)
-    if failure and failure["verdict"] != "inconclusive":
-        return failure
-    used = int(launch.get("used", 0)) if launch else 0
-    remaining = max(0, limit - used)
-    if launch is not None:
+    if requalification:
+        capture_dir = Path(str(requalification.get("capture") or ""))
+        selection = requalification.get("selection") or {}
+        launch = requalification.get("launch") or {"used": 0}
+        used = int(launch.get("used", 0))
+        remaining = max(0, limit - used)
+        request = _capture_request(capture_dir) if capture_dir.is_dir() else None
+    else:
+        launch, failure = read_launch(run_root, limit, config)
+        if failure and failure["verdict"] != "inconclusive":
+            return failure
+        used = int(launch.get("used", 0)) if launch else 0
+        remaining = max(0, limit - used)
+        if launch is None:
+            return emit("inconclusive", _diagnostic(reason="no_campaign_launch"))
         capture_dir, selection, failure = select_capture(
             run_root, config, candidate_sha, launch
         )
@@ -1494,171 +1537,173 @@ def check(workspace: Path, campaign_dir: Path) -> dict:
                 ),
             )
         request = _capture_request(capture_dir)
-        if request is None:
-            return emit("unavailable", "capture request is missing")
-        ctx, failure = validate_capture(capture_dir, candidate_sha, request)
-        if failure:
-            return failure
-        ctx["contract"] = contract
-        ctx["config"] = config
-        ctx["target_metadata"] = target_metadata
-        ctx["manifest_members"] = manifest_members
-        packet, packet_dir, failure = run_candidate_packet(workspace, capture_dir)
-        if failure:
-            return failure
-        temporary = packet_dir.parent
-        try:
-            validated, error = validate_packet(packet, packet_dir, ctx, config)
-            if error:
-                return emit("fail", error)
-            required = [str(item) for item in config["required_inputs"]]
-            states = validated.get("states") or {}
-            provisional = validated.get("provisional") or []
-            missing = validated.get("missing") or []
-            candidate_digest = source_tree_digest(workspace, paths)
-            receipt = selection.get("receipt") if selection else {}
-            capture = {
-                "capture_dir": str(capture_dir),
-                "session": ctx["artifact"].session,
-                "pid": ctx["artifact"].pid,
-                "executable_sha256": ctx["artifact"].executable_sha256,
-                "library_sha256": str(request.get("library_sha256") or ""),
-                "receipt_token": receipt.get("token"),
-                "capture_plan": str(selection.get("plan_path") or "") if selection else "",
-                "capture_plan_sha256": selection.get("plan_sha256") if selection else None,
-            }
-            if provisional:
-                fields = _checkpoint_fields(packet.get("inputs") or {}, required, states, ctx)
-                gaps = []
-                for name in provisional:
-                    item = (packet.get("inputs") or {}).get(name) or {}
-                    gaps.append(
-                        {
-                            "name": name,
-                            "observed_evidence_types": _evidence_types(item),
-                            "required_semantics": (
-                                "an independently qualified field-specific validator "
-                                "for the original evidence"
-                            ),
-                            "proposed_value_schema": _schema_summary(
-                                item.get("value") or {}
-                            ),
-                        }
-                    )
-                kind = "partial" if missing else "complete_provisional"
-                try:
-                    checkpoint = write_checkpoint(
-                        run_root,
-                        campaign_id=campaign_id,
-                        candidate_base_commit=pin,
-                        trusted_contract_commit=trusted["commit"],
-                        checker_sha256=_sha(Path(__file__)),
-                        contract_version=trusted["version"],
-                        contract_sha256=trusted.get("sha256"),
-                        manifest_sha256=hashlib.sha256(
-                            (template / str(config["manifest"])).read_bytes()
-                        ).hexdigest(),
-                        candidate_digest=candidate_digest,
-                        observer_library_sha256=candidate_sha,
-                        capture=capture,
-                        packet=packet,
-                        packet_dir=packet_dir,
-                        capture_dir=capture_dir,
-                        target={
-                            "call_id": ctx["target"].call_id,
-                            "caller_rva": f"0x{ctx['target'].caller_rva:x}",
-                            "mode": ctx["master"].get("mode"),
-                            "effective_count": ctx["master"].get("effective_count"),
-                        },
-                        fields=fields,
-                        contract_gaps=gaps,
-                        checkpoint_kind=kind,
-                        blocked_reason="unsupported_evidence_contract",
-                    )
-                except CheckpointError as exc:
-                    return emit("unavailable", f"checkpoint could not be written: {exc}")
-                verdict = "blocked" if not missing else "inconclusive"
-                return emit(
-                    verdict,
-                    _diagnostic(
-                        reason="unsupported_evidence_contract",
-                        provisional=provisional,
-                        missing=missing,
-                        established=validated.get("established") or [],
-                        checkpoint=checkpoint["path"],
-                        checkpoint_sha256=checkpoint["sha256"],
-                        checkpoint_kind=kind,
-                        captures_used=used,
-                        captures_remaining=remaining,
-                    ),
-                )
-            if missing:
-                blocker = _blocker(workspace, config)
-                if blocker is not None:
-                    return emit(
-                        "blocked",
-                        _diagnostic(
-                            reason="semantic_blocker",
-                            dependency=blocker.get("dependency"),
-                            missing=missing,
-                            captures_remaining=remaining,
-                        ),
-                    )
-                if used >= limit:
-                    return emit(
-                        "blocked",
-                        _diagnostic(
-                            reason="campaign_budget_exhausted",
-                            missing=missing,
-                            captures_used=used,
-                            captures_remaining=0,
-                        ),
-                    )
-                return emit(
-                    "inconclusive",
-                    _diagnostic(
-                        reason="required_inputs_missing",
-                        established=validated.get("established") or [],
-                        missing=missing,
-                        states=states,
-                        captures_used=used,
-                        captures_remaining=remaining,
-                        next_investigation=INPUT_HINTS.get(
-                            missing[0], "investigate the missing dependency"
-                        ),
-                    ),
-                )
+    if request is None:
+        return emit("unavailable", "capture request is missing")
+    ctx, failure = validate_capture(capture_dir, candidate_sha, request)
+    if failure:
+        return failure
+    ctx["contract"] = contract
+    ctx["config"] = config
+    ctx["target_metadata"] = target_metadata
+    ctx["manifest_members"] = manifest_members
+    packet, packet_dir, failure = run_candidate_packet(workspace, capture_dir)
+    if failure:
+        return failure
+    temporary = packet_dir.parent
+    try:
+        validated, error = validate_packet(packet, packet_dir, ctx, config)
+        if error:
+            return emit("fail", error)
+        required = [str(item) for item in config["required_inputs"]]
+        states = validated.get("states") or {}
+        provisional = validated.get("provisional") or []
+        missing = validated.get("missing") or []
+        candidate_digest = (
+            str(requalification.get("candidate_digest") or "")
+            if requalification else source_tree_digest(workspace, paths)
+        )
+        receipt = selection.get("receipt") if selection else {}
+        capture = {
+            "capture_dir": str(capture_dir),
+            "session": ctx["artifact"].session,
+            "pid": ctx["artifact"].pid,
+            "executable_sha256": ctx["artifact"].executable_sha256,
+            "library_sha256": str(request.get("library_sha256") or ""),
+            "receipt_token": receipt.get("token"),
+            "capture_plan": str(selection.get("plan_path") or "") if selection else "",
+            "capture_plan_sha256": selection.get("plan_sha256") if selection else None,
+        }
+        if provisional:
             fields = _checkpoint_fields(packet.get("inputs") or {}, required, states, ctx)
+            gaps = []
+            for name in provisional:
+                item = (packet.get("inputs") or {}).get(name) or {}
+                gaps.append(
+                    {
+                        "name": name,
+                        "observed_evidence_types": _evidence_types(item),
+                        "required_semantics": (
+                            "an independently qualified field-specific validator "
+                            "for the original evidence"
+                        ),
+                        "proposed_value_schema": _schema_summary(
+                            item.get("value") or {}
+                        ),
+                    }
+                )
+            kind = "partial" if missing else "complete_provisional"
             try:
-                receipt_path = _write_receipt(
+                checkpoint = write_checkpoint(
                     run_root,
                     campaign_id=campaign_id,
-                    config=config,
-                    trusted=trusted,
-                    candidate_sha=candidate_sha,
+                    candidate_base_commit=pin,
+                    trusted_contract_commit=trusted["commit"],
+                    checker_sha256=_sha(Path(__file__)),
+                    contract_version=trusted["version"],
+                    contract_sha256=trusted.get("sha256"),
+                    manifest_sha256=hashlib.sha256(
+                        (template / str(config["manifest"])).read_bytes()
+                    ).hexdigest(),
                     candidate_digest=candidate_digest,
-                    artifact=ctx["artifact"],
-                    target=ctx["target"],
-                    master=ctx["master"],
+                    observer_library_sha256=candidate_sha,
+                    capture=capture,
                     packet=packet,
                     packet_dir=packet_dir,
-                    capture=capture,
+                    capture_dir=capture_dir,
+                    target={
+                        "call_id": ctx["target"].call_id,
+                        "caller_rva": f"0x{ctx['target'].caller_rva:x}",
+                        "mode": ctx["master"].get("mode"),
+                        "effective_count": ctx["master"].get("effective_count"),
+                    },
                     fields=fields,
+                    contract_gaps=gaps,
+                    checkpoint_kind=kind,
+                    blocked_reason="unsupported_evidence_contract",
                 )
-            except OSError as exc:
-                return emit("unavailable", f"qualification receipt could not be written: {exc}")
+            except CheckpointError as exc:
+                return emit("unavailable", f"checkpoint could not be written: {exc}")
             return emit(
-                "pass",
+                "checkpoint",
                 _diagnostic(
-                    milestone=config["milestone"],
+                    reason="unsupported_evidence_contract",
+                    provisional=provisional,
+                    missing=missing,
                     established=validated.get("established") or [],
+                    checkpoint=checkpoint["path"],
+                    checkpoint_sha256=checkpoint["sha256"],
+                    checkpoint_kind=kind,
                     captures_used=used,
-                    qualification_receipt=str(receipt_path),
-                    packet_ready=bool(packet.get("packet_ready")),
+                    captures_remaining=remaining,
                 ),
             )
-        finally:
-            shutil.rmtree(temporary, ignore_errors=True)
+        if missing:
+            blocker = _blocker(workspace, config)
+            if blocker is not None:
+                return emit(
+                    "blocked",
+                    _diagnostic(
+                        reason="semantic_blocker",
+                        dependency=blocker.get("dependency"),
+                        missing=missing,
+                        captures_remaining=remaining,
+                    ),
+                )
+            if used >= limit:
+                return emit(
+                    "blocked",
+                    _diagnostic(
+                        reason="campaign_budget_exhausted",
+                        missing=missing,
+                        captures_used=used,
+                        captures_remaining=0,
+                    ),
+                )
+            return emit(
+                "inconclusive",
+                _diagnostic(
+                    reason="required_inputs_missing",
+                    established=validated.get("established") or [],
+                    missing=missing,
+                    states=states,
+                    captures_used=used,
+                    captures_remaining=remaining,
+                    next_investigation=INPUT_HINTS.get(
+                        missing[0], "investigate the missing dependency"
+                    ),
+                ),
+            )
+        fields = _checkpoint_fields(packet.get("inputs") or {}, required, states, ctx)
+        try:
+            receipt_path = _write_receipt(
+                run_root,
+                campaign_id=campaign_id,
+                config=config,
+                trusted=trusted,
+                candidate_sha=candidate_sha,
+                candidate_digest=candidate_digest,
+                artifact=ctx["artifact"],
+                target=ctx["target"],
+                master=ctx["master"],
+                packet=packet,
+                packet_dir=packet_dir,
+                capture=capture,
+                fields=fields,
+            )
+        except OSError as exc:
+            return emit("unavailable", f"qualification receipt could not be written: {exc}")
+        return emit(
+            "pass",
+            _diagnostic(
+                milestone=config["milestone"],
+                established=validated.get("established") or [],
+                captures_used=used,
+                qualification_receipt=str(receipt_path),
+                packet_ready=bool(packet.get("packet_ready")),
+            ),
+        )
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
 
     return emit(
         "inconclusive",

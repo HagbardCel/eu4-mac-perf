@@ -7,6 +7,11 @@
       "sha256": "d04e799efb52ae9cf4a18d6e0ccb9dfc5a8ad35e7a2e510eec6f2aec2c310058"
     },
     {
+      "path": "campaigns/eu4-l32b-complete/capture-objective.md",
+      "role": "campaign",
+      "sha256": "f76db4d0697d118e3dbcce9ed3b96af29637f33cd51896aea05336becfefc3be"
+    },
+    {
       "path": "campaigns/eu4-l32b-complete/l32b.json",
       "role": "campaign",
       "sha256": "64c86702b11e353aba46cd883ff42edc4ef6ca303c3949fe84be873a9f23a309"
@@ -19,7 +24,7 @@
     {
       "path": "campaigns/eu4-l32b-complete/workflow.json",
       "role": "campaign",
-      "sha256": "67cc280eca247f1bca400071945e6169bd8cc450ce95e71ec6413891f6e59a7e"
+      "sha256": "39d8c6c12e9b570658426532e5c3576bb54d4cb2c3afc3084e467fa0b3ee4df3"
     },
     {
       "path": "automation/gfx_adversarial.py",
@@ -27,9 +32,19 @@
       "sha256": "fb2df10d350fd6946c8c2329f998f5bf029807e1f826660b64980aa20dbbd5e3"
     },
     {
+      "path": "automation/gfx_candidate_snapshot.py",
+      "role": "checker",
+      "sha256": "fad239aa20aba6a8f3140b8fca4ace7a3607434b493c371f7f8c10a327132f10"
+    },
+    {
       "path": "automation/gfx_checkpoint.py",
       "role": "checker",
-      "sha256": "1aeeefaef3699c2bb0b2850c84a23ca32253dabbc1abf3d19cf97b483f8b8d6e"
+      "sha256": "eca48eccbfba2ebb796b80934a8e4c39b34056300c725e50ba42a4cda4bfb4ff"
+    },
+    {
+      "path": "automation/gfx_contracts/__init__.py",
+      "role": "checker",
+      "sha256": "69be104c5c60747526ff67f3abfab6638cc0dab3c55e5eb06fe915fdad15c539"
     },
     {
       "path": "automation/gfx_contracts/api.py",
@@ -44,7 +59,7 @@
     {
       "path": "automation/gfx_draw_accept_v2.py",
       "role": "checker",
-      "sha256": "fce4a4bc1be326e907ebb4a0d9930a1a8998a24eda574c6a9df88817ff697863"
+      "sha256": "97f9704b65253bb90d3788096af3502269c5c7adc52f718b6252c1c1441fe830"
     },
     {
       "path": "automation/gfx_evidence_policy.py",
@@ -52,9 +67,29 @@
       "sha256": "fefaec0e84d7f5d171419cd6dd1fe7e4f7ff6fd186b05c2581e9e4709be68d18"
     },
     {
+      "path": "automation/gfx_l32b_complete.py",
+      "role": "checker",
+      "sha256": "494eba7b1f231545debc0e62917daf2f515c76e48814c1113aabd1aaaf920f3f"
+    },
+    {
+      "path": "automation/gfx_l32b_hooks.py",
+      "role": "checker",
+      "sha256": "0bb7bd74ee62abf4f44faf6352f62e24db059d9f0fc6ce958a7ffcea8916147f"
+    },
+    {
+      "path": "automation/gfx_reviewer_v2.py",
+      "role": "checker",
+      "sha256": "6ddf98e11a37e7f5b990b1e44cbf63140ffcadee42e0766e95f86bd4da5e5407"
+    },
+    {
+      "path": "automation/gfx_snapshot_v2.py",
+      "role": "checker",
+      "sha256": "0f0751f401a98848d78e632f8748c02ff34e834185cfd6d44be55731c2fc1af0"
+    },
+    {
       "path": "automation/launch_ledger.py",
       "role": "checker",
-      "sha256": "4725ce0cfad3307d419042502847b091273dade09498020d9d9c7d84559c616c"
+      "sha256": "b6393210b1c8563f8597c0e58312d58f9a5763fe903674626439aed8458b0938"
     },
     {
       "path": "automation/manifest_revision.py",
@@ -62,9 +97,14 @@
       "sha256": "1264608587cdd3670fd9d313436093ce3493a57b83f9246f5e9c6e2fe1a660ab"
     },
     {
+      "path": "automation/runner.py",
+      "role": "checker",
+      "sha256": "3f8dc3ae4b6753847713f83b1a9a6d0569552c75e5cd47e06bd5689189712f5b"
+    },
+    {
       "path": "campaigns/eu4-l32b-complete/accept.py",
       "role": "checker",
-      "sha256": "739544950e0177aeaad0e15c4f4998708f56110fb0578371db3429d924bc7f0a"
+      "sha256": "0e19e5713a8d9b9cce122acaa69226c92e31d58605ed61622d079761be69fdaf"
     },
     {
       "path": "campaigns/eu4-l32b-complete/frozen/gfx_startup_trace_host.c",

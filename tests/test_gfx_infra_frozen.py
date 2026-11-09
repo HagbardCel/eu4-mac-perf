@@ -202,9 +202,12 @@ def _hooks_for(tmp: Path, checkpoint: dict):
         snapshot=lambda workspace, state: {"candidate_commit": "c" * 40},
         run_contract=lambda checkpoint, state: {"status": "paused"},
         run_reviewer=lambda target, state: {"path": str(tmp / "review.json")},
-        integrate=lambda candidate, contract, state, kind=None: {
+        integrate=lambda candidate, contract, state, kind=None, publish=True: {
             "ok": True, "commit": "e" * 40, "kind": kind,
             "verification": {},
+        },
+        publish_staged=lambda *args, **kwargs: {
+            "ok": True, "published": True, "verification": {},
         },
     )
 
@@ -693,7 +696,7 @@ class IntegrationVerificationTests(unittest.TestCase):
                 "workflow_id": "wf",
                 "baseline_commit": "a" * 40,
                 "oracle_manifest_sha256": "d" * 64,
-                "trusted_contract": {"commit": "t1", "version": "v0", "sha256": "2" * 64},
+                "trusted_contract": {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64},
             },
             state_path=tmp / "workflow.json",
             hooks=hooks,
@@ -751,7 +754,7 @@ class IntegrationVerificationTests(unittest.TestCase):
             coordinator = self._coordinator(tmp)
             receipt = tmp / "receipt.json"
             receipt.write_text("{}")
-            state = {"last_implementer": {"qualification_receipt": str(receipt)}}
+            state = {"final_candidate": {"qualification_receipt": str(receipt)}}
             result = self._result(
                 "final",
                 checker="pass",
@@ -761,6 +764,7 @@ class IntegrationVerificationTests(unittest.TestCase):
                     receipt.read_bytes()
                 ).hexdigest(),
             )
+            result["qualification_receipt"] = str(receipt)
             errors = coordinator._validate_integration_verification(
                 state, result, "final"
             )
@@ -781,7 +785,7 @@ class IntegrationVerificationTests(unittest.TestCase):
             state["state"] = "promote"
             state["promotion_kind"] = "implementation"
             state["candidate"] = {"candidate_commit": "c" * 40}
-            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            state["trusted_contract"] = {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64}
             state["review"] = {"path": str(report)}
             state["candidate_review"] = {
                 "candidate_commit": "c" * 40,
@@ -816,6 +820,7 @@ class LedgerTests(unittest.TestCase):
                 ledger, workflow_id="wf", limit=6, deadline_seconds=120
             )
             for index in range(6):
+                launch_ledger.register_campaign(ledger, f"campaign-{index}", 6)
                 launch_ledger.claim(
                     ledger,
                     campaign_id=f"campaign-{index}",
@@ -840,6 +845,180 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(launch_ledger.load_ledger(ledger)["used"], 6)
 
 
+class ContractScopeTests(unittest.TestCase):
+    def test_contract_scope_authorizes_only_the_qualified_delta(self):
+        import json
+        from automation.gfx_l32b_hooks import L32bHooks
+
+        with tempfile.TemporaryDirectory() as raw:
+            workflow = json.loads(
+                (ROOT / "campaigns/eu4-l32b-complete/workflow.json").read_text()
+            )
+            hooks = L32bHooks(
+                repo=ROOT, workflow=workflow, run_root=Path(raw)
+            )
+            state = {
+                "promotion_kind": "contract",
+                "contract_version": "v1",
+                "contract_sha256": "a" * 64,
+                "contract": {
+                    "changed_paths": [
+                        "automation/gfx_contracts/v1.py",
+                        "automation/gfx_contracts/v1.spec.json",
+                        "tests/test_gfx_contract_v1.py",
+                        "automation/gfx_contracts/v0.py",
+                    ]
+                },
+                "trusted_contract": {
+                    "commit": "t1",
+                    "contract_version": "v0",
+                    "contract_sha256": "b" * 64,
+                },
+            }
+            allowed, version, sha, paths = hooks._contract_scope(
+                "contract", state, {"allowed_paths": ["progress.md"]},
+                ["progress.md"],
+            )
+            self.assertEqual(version, "v1")
+            self.assertEqual(sha, "a" * 64)
+            self.assertIn("automation/gfx_contracts/v1.py", allowed)
+            self.assertIn("tests/test_gfx_contract_v1.py", allowed)
+            self.assertNotIn("automation/gfx_contracts/v0.py", allowed)
+            self.assertEqual(len(paths), 3)
+            allowed2, version2, sha2, paths2 = hooks._contract_scope(
+                "implementation", state, {"allowed_paths": ["progress.md"]},
+                ["progress.md"],
+            )
+            self.assertEqual(version2, "v0")
+            self.assertEqual(sha2, "b" * 64)
+            self.assertEqual(paths2, [])
+
+
+class CheckerFreezeTests(unittest.TestCase):
+    def test_frozen_boundary_rejects_a_modified_trusted_dependency(self):
+        import json
+        import subprocess
+        from automation.gfx_l32b_hooks import L32bHooks
+
+        head = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        frozen = subprocess.run(
+            ["git", "-C", str(ROOT), "show",
+             f"{head}:campaigns/eu4-l32b-complete/l32b-manifest.json"],
+            capture_output=True, check=True,
+        ).stdout
+        manifest_sha = hashlib.sha256(frozen).hexdigest()
+        with tempfile.TemporaryDirectory() as raw:
+            worktree = Path(raw) / "worktree"
+            subprocess.run(
+                ["git", "-C", str(ROOT), "worktree", "add", "--detach",
+                 str(worktree), head],
+                check=True, capture_output=True,
+            )
+            try:
+                workflow = json.loads(
+                    (ROOT / "campaigns/eu4-l32b-complete/workflow.json").read_text()
+                )
+                hooks = L32bHooks(
+                    repo=ROOT, workflow=workflow, run_root=Path(raw) / "run"
+                )
+                target = worktree / "automation" / "gfx_evidence_policy.py"
+                target.write_text(target.read_text() + "\n# tampered\n")
+                problem = hooks._verify_frozen_boundary(worktree, head, manifest_sha)
+                self.assertIsNotNone(problem)
+                self.assertIn("trusted checker modified", problem)
+                target.write_bytes(
+                    subprocess.run(
+                        ["git", "-C", str(ROOT), "show",
+                         f"{head}:automation/gfx_evidence_policy.py"],
+                        capture_output=True, check=True,
+                    ).stdout
+                )
+                self.assertIsNone(
+                    hooks._verify_frozen_boundary(worktree, head, manifest_sha)
+                )
+            finally:
+                subprocess.run(
+                    ["git", "-C", str(ROOT), "worktree", "remove", "--force",
+                     str(worktree)],
+                    check=False, capture_output=True,
+                )
+
+
+class CaptureProvenanceTests(unittest.TestCase):
+    def test_capture_requires_a_completed_ledger_entry(self):
+        import json
+        from automation import launch_ledger
+        from automation.gfx_l32b_hooks import L32bHooks
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            run_root = tmp / "campaign"
+            capture = run_root / "captures" / "s1"
+            capture.mkdir(parents=True)
+            (capture / "capture-request.json").write_text(
+                json.dumps({"library_sha256": "a" * 64})
+            )
+            (capture / "operations-summary.json").write_text("{}")
+            ledger = tmp / "ledger.json"
+            launch_ledger.create_ledger(
+                ledger, workflow_id="wf", limit=6, deadline_seconds=120
+            )
+            launch_ledger.register_campaign(ledger, run_root.name, 3)
+            token = launch_ledger.claim(
+                ledger,
+                campaign_id=run_root.name,
+                run_root=run_root,
+                output=capture,
+                targets=["_GfxDraw"],
+                requested_timeout=120,
+            )
+            launch_ledger.finish(ledger, token, pid=1, status="completed")
+            launch_ledger.write_pointer(
+                run_root, workflow_id="wf", ledger_path=ledger, limit=6
+            )
+            workflow = json.loads(
+                (ROOT / "campaigns/eu4-l32b-complete/workflow.json").read_text()
+            )
+            hooks = L32bHooks(repo=ROOT, workflow=workflow, run_root=tmp / "run")
+            reference, problem = hooks._verify_capture(
+                run_root, capture, run_root / "live-launch.json"
+            )
+            self.assertIsNone(problem)
+            self.assertEqual(reference["token"], token)
+            self.assertEqual(reference["library_sha256"], "a" * 64)
+            launch_ledger.finish(ledger, token, pid=1, status="failed")
+            _reference, problem = hooks._verify_capture(
+                run_root, capture, run_root / "live-launch.json"
+            )
+            self.assertIsNotNone(problem)
+
+
+class LedgerPolicyTests(unittest.TestCase):
+    def test_contract_campaign_is_denied_without_charging_the_ledger(self):
+        from automation import launch_ledger
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            ledger = tmp / "ledger.json"
+            launch_ledger.create_ledger(
+                ledger, workflow_id="wf", limit=6, deadline_seconds=120
+            )
+            launch_ledger.register_campaign(ledger, "contract", 0)
+            with self.assertRaises(launch_ledger.LedgerError):
+                launch_ledger.claim(
+                    ledger,
+                    campaign_id="contract",
+                    run_root=tmp / "contract",
+                    output=tmp / "out",
+                    targets=["_GfxDraw"],
+                    requested_timeout=120,
+                )
+            self.assertEqual(launch_ledger.load_ledger(ledger)["used"], 0)
+
+
 class LedgerSelectionTests(unittest.TestCase):
     def test_completed_capture_is_found_without_the_campaign_mirror(self):
         from automation import launch_ledger
@@ -861,6 +1040,7 @@ class LedgerSelectionTests(unittest.TestCase):
             launch_ledger.create_ledger(
                 ledger, workflow_id="wf", limit=6, deadline_seconds=120
             )
+            launch_ledger.register_campaign(ledger, "campaign", 6)
             token = launch_ledger.claim(
                 ledger,
                 campaign_id="campaign",
@@ -900,6 +1080,9 @@ class ContractRunnerTests(unittest.TestCase):
             (workspace / "automation" / "gfx_contracts").mkdir(parents=True)
             (workspace / "automation" / "__init__.py").write_text("")
             (workspace / "automation" / "gfx_contracts" / "__init__.py").write_text("")
+            (workspace / "automation" / "gfx_contracts" / "v0.py").write_text(
+                "VALIDATORS = {}\n"
+            )
             (workspace / "automation" / "gfx_contracts" / "v1.py").write_text(
                 "VALIDATORS = {'draw_invocation': lambda value, ctx: None}\n"
             )
@@ -951,6 +1134,9 @@ class ContractRunnerTests(unittest.TestCase):
             (workspace / "automation" / "gfx_contracts").mkdir(parents=True)
             (workspace / "automation" / "__init__.py").write_text("")
             (workspace / "automation" / "gfx_contracts" / "__init__.py").write_text("")
+            (workspace / "automation" / "gfx_contracts" / "v0.py").write_text(
+                "VALIDATORS = {}\n"
+            )
             (workspace / "automation" / "gfx_contracts" / "v1.py").write_text(
                 "VALIDATORS = {'draw_invocation': lambda value, ctx: None}\n"
             )
@@ -1065,6 +1251,9 @@ class ContractRunnerTests(unittest.TestCase):
             (workspace / "automation" / "gfx_contracts").mkdir(parents=True)
             (workspace / "automation" / "__init__.py").write_text("")
             (workspace / "automation" / "gfx_contracts" / "__init__.py").write_text("")
+            (workspace / "automation" / "gfx_contracts" / "v0.py").write_text(
+                "VALIDATORS = {}\n"
+            )
             (workspace / "automation" / "gfx_contracts" / "v1.py").write_text(
                 "def validate(value, ctx):\n"
                 "    evidence = ctx.field_evidence or []\n"
@@ -1180,25 +1369,45 @@ class CoordinatorTests(unittest.TestCase):
             impl_calls["n"] += 1
             if impl_calls["n"] > 1:
                 state["stage"] = "final"
-                receipt = tmp / "qualification.json"
+                from automation.gfx_checkpoint import write_qualified_bundle
+
                 trusted = state.get("trusted_contract") or {}
-                receipt.write_text(
-                    json.dumps(
-                        {
-                            "schema": "eu4-gfx-qualification-receipt/v1",
-                            "trusted_contract_commit": trusted.get("commit"),
-                            "checker_sha256": "1" * 64,
-                            "candidate_digest": "9" * 64,
-                            "packet": {"packet_ready": True},
-                            "fields": [{"name": "draw_invocation", "state": "validated"}],
-                        }
-                    )
+                packet_dir = tmp / "final-packet"
+                packet_dir.mkdir(parents=True, exist_ok=True)
+                packet = {
+                    "schema": packet_mod.SCHEMA,
+                    "packet_ready": True,
+                    "inputs": {},
+                }
+                (packet_dir / "draw-packet.json").write_text(
+                    json.dumps(packet), encoding="utf-8"
+                )
+                capture_dir = tmp / "final-capture"
+                capture_dir.mkdir(parents=True, exist_ok=True)
+                bundle = write_qualified_bundle(
+                    tmp,
+                    campaign_id="c1",
+                    candidate_digest="9" * 64,
+                    capture={"session": "session", "pid": 1,
+                             "library_sha256": "f" * 64},
+                    packet=packet,
+                    packet_dir=packet_dir,
+                    capture_dir=capture_dir,
+                    target={"call_id": 11, "caller_rva": "0xedfcd1",
+                            "mode": 5, "effective_count": 4},
+                    fields=[{"name": "draw_invocation", "state": "validated"}],
+                    receipt_fields={
+                        "checker_sha256": "1" * 64,
+                        "trusted_contract_commit": trusted.get("commit"),
+                        "candidate_digest": "9" * 64,
+                        "packet_ready": True,
+                    },
                 )
                 return {
                     "status": "complete",
                     "last_verdict": "pass",
                     "workspace": str(tmp),
-                    "qualification_receipt": str(receipt),
+                    "qualification_receipt": bundle["receipt"],
                 }
             return {
                 "status": "paused",
@@ -1231,7 +1440,11 @@ class CoordinatorTests(unittest.TestCase):
 
         def reviewer(target, state):
             report_calls["n"] += 1
-            target_commit = (target or {}).get("commit", "c" * 40)
+            target_commit = (
+                (target or {}).get("commit")
+                or (target or {}).get("candidate_commit")
+                or "c" * 40
+            )
             path = tmp / f"review-{report_calls['n']}.json"
             outcome = "qualified"
             if contract_reject_once and report_calls["n"] == 1:
@@ -1245,7 +1458,7 @@ class CoordinatorTests(unittest.TestCase):
         def adversarial(checkpoint_path, contract, cases_path, state):
             return {"ok": True, "positive_ok": True, "negative_ok": True, "cases": []}
 
-        def integrate(candidate, contract, state, kind=None):
+        def integrate(candidate, contract, state, kind=None, publish=True):
             commit = "e" * 40
             if kind == "final":
                 receipt = Path(str((state.get("last_implementer") or {}).get(
@@ -1257,6 +1470,7 @@ class CoordinatorTests(unittest.TestCase):
                     "build_ok": True,
                     "tests_ok": True,
                     "checker": "pass",
+                    "candidate_digest": "9" * 64,
                     "established_fields": ["draw_invocation"],
                     "unresolved_fields": [],
                     "regressions": [],
@@ -1265,6 +1479,7 @@ class CoordinatorTests(unittest.TestCase):
                         hashlib.sha256(receipt.read_bytes()).hexdigest()
                         if receipt.is_file() else None
                     ),
+                    "qualification_receipt": str(receipt),
                 }
             else:
                 verification = {
@@ -1283,6 +1498,18 @@ class CoordinatorTests(unittest.TestCase):
             return {
                 "ok": True, "commit": commit, "kind": kind,
                 "verification": verification,
+                "integration_id": "integration-1",
+                "base_head": "b" * 40,
+                "published": False if kind == "final" else True,
+                "qualification_receipt": verification.get("qualification_receipt"),
+            }
+
+        def publish(*args, **kwargs):
+            return {
+                "ok": True,
+                "commit": "e" * 40,
+                "verification": {},
+                "published": True,
             }
 
         def remediation(state):
@@ -1301,6 +1528,12 @@ class CoordinatorTests(unittest.TestCase):
             snapshot_contract=snapshot_contract,
             run_adversarial_cases=adversarial,
             run_remediation=remediation,
+            publish=publish,
+            publish_staged=lambda *args, **kwargs: {
+                "ok": True,
+                "published": True,
+                "verification": {},
+            },
         )
 
     def _workflow(self):
@@ -1309,7 +1542,7 @@ class CoordinatorTests(unittest.TestCase):
             "workflow_id": "wf",
             "baseline_commit": "a" * 40,
             "oracle_manifest_sha256": "d" * 64,
-            "trusted_contract": {"commit": "t1", "version": "v0", "sha256": "2" * 64},
+            "trusted_contract": {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64},
         }
 
     def test_fake_path_reaches_awaiting_merge(self):
@@ -1333,7 +1566,7 @@ class CoordinatorTests(unittest.TestCase):
                 state = coordinator.run()
             self.assertEqual(state["state"], "awaiting_merge")
             kinds = [row.get("kind") for row in state["history"] if row["event"] == "integrated"]
-            self.assertEqual(kinds, ["contract", "final"])
+            self.assertEqual(kinds, ["contract", "final_candidate", "final"])
 
     def test_contract_rejection_remediates_contract_not_candidate(self):
         from automation.gfx_l32b_complete import Coordinator
@@ -1357,7 +1590,7 @@ class CoordinatorTests(unittest.TestCase):
             self.assertEqual(state["state"], "awaiting_merge")
             self.assertEqual(state["contract"]["commit"], "e" * 40)
             kinds = [row.get("kind") for row in state["history"] if row["event"] == "integrated"]
-            self.assertEqual(kinds, ["contract", "final"])
+            self.assertEqual(kinds, ["contract", "final_candidate", "final"])
 
     def test_implementation_continuation_does_not_require_contract(self):
         from automation.gfx_l32b_complete import Coordinator
@@ -1378,10 +1611,10 @@ class CoordinatorTests(unittest.TestCase):
             state["review_target"] = "candidate"
             state["candidate"] = {"commit": "c" * 40}
             state["contract"] = {"commit": "u1"}
-            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            state["trusted_contract"] = {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64}
             seen = []
 
-            def integrate(candidate, contract, state, kind=None):
+            def integrate(candidate, contract, state, kind=None, publish=True):
                 seen.append((kind, (contract or {}).get("commit")))
                 commit = "e" * 40
                 return {
@@ -1534,7 +1767,13 @@ class CoordinatorTests(unittest.TestCase):
             state = coordinator.load_or_init()
             state["state"] = "final_review"
             state["review_target"] = "final"
-            state["candidate"] = {"commit": "c" * 40, "candidate_digest": "9" * 64}
+            state["final_candidate"] = {
+                "candidate_commit": "c" * 40,
+                "candidate_digest": "9" * 64,
+                "campaign_id": "final",
+                "campaign_dir": str(tmp),
+                "oracle_manifest_sha256": "a" * 64,
+            }
             with mock.patch.object(
                 hooks, "run_reviewer", lambda target, state: {"path": str(report)}
             ):
@@ -1558,11 +1797,13 @@ class CoordinatorTests(unittest.TestCase):
             state = coordinator.load_or_init()
             receipt = tmp / "receipt.json"
             receipt.write_text("{}")
-            state["last_implementer"] = {
-                "last_verdict": "pass",
+            state["final_candidate"] = {
+                "candidate_commit": "c" * 40,
+                "candidate_digest": "9" * 64,
                 "qualification_receipt": str(receipt),
+                "verification": {"checker": "pass"},
             }
-            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            state["trusted_contract"] = {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64}
             state["candidate"] = {"commit": "c" * 40, "candidate_digest": "9" * 64}
             errors = coordinator._final_receipt(state, tmp / "review.json")
             self.assertTrue(any("schema" in error for error in errors))
@@ -1645,17 +1886,17 @@ class CoordinatorTests(unittest.TestCase):
             self.assertEqual(state["state"], "blocked")
             self.assertEqual(state["blocker"]["reason"], "no_progress")
 
-    def test_main_run_requires_hooks(self):
+    def test_main_status_is_available_without_hooks(self):
         from automation.gfx_l32b_complete import main
 
         code = main(
             [
-                "run",
+                "status",
                 "--workflow",
                 str(ROOT / "campaigns/eu4-l32b-complete/workflow.json"),
             ]
         )
-        self.assertEqual(code, 1)
+        self.assertEqual(code, 0)
 
     def test_review_uses_snapshot_candidate_commit_shape(self):
         from automation.gfx_l32b_complete import Coordinator
@@ -1697,7 +1938,7 @@ class CoordinatorTests(unittest.TestCase):
             )
             state = coordinator.load_or_init()
             state["state"] = "investigating"
-            state["trusted_contract"] = {"commit": "t1", "version": "v0", "sha256": "2" * 64}
+            state["trusted_contract"] = {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64}
 
             def implementer(state):
                 return {
@@ -1887,9 +2128,39 @@ class CoordinatorTests(unittest.TestCase):
     "authentic L3.2b-I capture/worktree is not available",
 )
 class LegacyRequalificationTests(unittest.TestCase):
+    def test_committed_requalification_uses_the_real_pipeline(self):
+        import automation.gfx_draw_accept_v2 as accept
+        from automation.gfx_checkpoint import source_tree_digest
+        import shutil
+
+        root = ROOT / ".local/automation/eu4-l32b-effective-state"
+        workspace = root / "workspace"
+        captures = sorted(
+            path for path in (root / "captures").iterdir() if path.is_dir()
+        )
+        self.assertTrue(captures, "authentic capture is missing")
+        shutil.rmtree(root / "qualified", ignore_errors=True)
+        paths = accept.changed_paths(workspace)
+        result = accept.check(
+            workspace,
+            ROOT / "campaigns/eu4-l32b-effective-state",
+            requalification={
+                "capture": str(captures[-1]),
+                "changed_paths": paths,
+                "candidate_digest": source_tree_digest(workspace, paths),
+                "selection": {},
+            },
+        )
+        self.assertEqual(result["verdict"], "pass", result["diagnostics"])
+
     def test_v2_accepts_the_existing_l3_2b_i_capture(self):
         import automation.gfx_draw_accept_v2 as accept
+        import shutil
 
+        shutil.rmtree(
+            ROOT / ".local/automation/eu4-l32b-effective-state/qualified",
+            ignore_errors=True,
+        )
         result = accept.check(
             ROOT / ".local/automation/eu4-l32b-effective-state/workspace",
             ROOT / "campaigns/eu4-l32b-effective-state",
