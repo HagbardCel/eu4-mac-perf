@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 import uuid
@@ -307,8 +308,10 @@ class RecoveryTests(BridgeTestCase):
             "PYTHONPATH": str(REPO),
             "PYTHONNOUSERSITE": "1",
         }
-        command = [str(REPO / ".venv" / "bin" / "python3"), "-P", "-m",
-                   "automation.dsh_bridge", "validate", "--sidecar", str(sidecar)]
+        # sys.executable, not a repo-local venv: this test also runs on CI,
+        # where there is no .venv.
+        command = [sys.executable, "-P", "-m", "automation.dsh_bridge",
+                   "validate", "--sidecar", str(sidecar)]
         processes = [
             subprocess.Popen(command, cwd=str(REPO), env=env,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
