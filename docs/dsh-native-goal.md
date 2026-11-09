@@ -158,6 +158,23 @@ never authorize completion.
 `review-clean` removes the reviewer worktree once its evidence is no longer
 needed; the report, receipt and invocation live outside it and survive.
 
+## Campaign compatibility
+
+A historical campaign predates this bridge, and its checker runs from the
+trusted checkout, so it imports modern `automation` helpers rather than the ones
+from its own commit. `checker-compat` records that explicitly: the checker's
+digest, every `automation.*` module it resolves (with digests and whether each
+resolves inside the trusted checkout), and a baseline run against a pristine
+copy of the seed — or, for a worktree-pinned campaign, against a temporary
+worktree at the pin.
+
+The baseline must produce a **remediable** verdict. A checker that already
+passes on its own baseline cannot distinguish a candidate, and one that returns
+`unavailable` or `blocked` there means the checker or its evidence does not match
+the pin; both are `unsupported`. That screening is worth running first: it found
+a completed campaign and a pin whose checker no longer matches its own commit
+before any goal round was spent.
+
 ## Execution roots
 
 Three roots are kept distinct and are asserted before a checker runs.

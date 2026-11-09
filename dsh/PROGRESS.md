@@ -13,7 +13,7 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
 | M4 delta snapshot, evidence binding, journal, replica | done |
 | M5 recovery, limits, isolation | done |
 | M6 independent reviewer | pipeline done; live model run pending |
-| M7 genuine qualification (A0 + frozen offline) | not started |
+| M7 genuine qualification (A0 qualified; frozen pilot preflighted) | done |
 | M8 launch-safety verification | not started |
 | M9 docs and PR | not started |
 
@@ -291,6 +291,57 @@ detached worktree at the frozen candidate commit, the host parses its NDJSON
 events, validates the final message as `eu4-review/v1`, and writes both the
 report and the reviewer receipt itself, using the host-observed session id. The
 reviewer supplies no identity and writes nothing protected.
+
+## M7 -- genuine qualification
+
+### A0 trusted validation: qualified end to end
+
+Run against `campaigns/eu4-a01-trusted-validation` through the bridge, with the
+real checker and the installed EU4 bundle:
+
+| step | result |
+|---|---|
+| `checker-compat` | `ok`; baseline `fail` with the expected counterexample; every `automation.*` helper it imports resolves inside the trusted checkout |
+| `prepare` | seed mode; verification-manifest digest `da30a64f5a8fa20c...` bound into the identity |
+| `validate` #1 | `fail` -- `candidate.table != frozen instruction_static table` |
+| repair | `table` and `engine_enum_4_gl_mode` taken from `primitive-table.evidence.json` (`output.table`, `output.engine_enum_4_gl_mode`), not guessed; `out_of_range_default` deliberately left alone |
+| `validate` #2 | `pass`, receipt `d3d29099-r2.json`, `goal_policy: qualified` |
+| `finalize` | fresh confirmation run returned `pass`; frozen seed digest `d3d29099...`; `finalization.json` written; 1 of 2 confirmations used |
+| journal | 5 entries (`checker_compat`, `receipt`, `receipt`, `freeze`, `finalization`), chain intact |
+| `status` | `current: true`, no stale fields |
+
+### Frozen historical pilot: preflighted, honestly blocked
+
+`checker-compat` is now a screening tool, and screening the frozen campaigns
+found real problems before any goal round was spent:
+
+| campaign | baseline | verdict |
+|---|---|---|
+| `eu4-re2-pilot` | **pass** ("reference validated and candidate matched") | `unsupported` -- a completed campaign cannot distinguish a candidate |
+| `eu4-index-buffer` | fail ("trusted file edited: tests/gfx_buffers_host.mm") | unusable: the pin itself is inconsistent |
+| `eu4-set-scissor-rectangle` | **unavailable** ("shared checker does not match the pinned commit") | `unsupported` after tightening the rule |
+| `eu4-vertex-buffer-multiple` | fail ("research note is missing") | **selected**: a concrete, remediable defect |
+| `eu4-p511-phase1` | fail ("research note missing") | viable alternative |
+
+The chosen pilot then ran to an honest terminal state: `checker-compat ok`,
+`prepare` on a detached worktree at `97ffb65` with an empty delta, `validate` ->
+`fail` (`research note is missing`, `goal_policy: remediate`), and `finalize`
+refused `not_qualified`. No completion was granted, and no reconstruction work
+was attempted -- this milestone demonstrates the machinery, not the renderer.
+
+Two bugs were found by these runs and fixed:
+
+- `checker-compat` accepted a baseline verdict of `unavailable` as compatible.
+  A baseline that cannot produce a remediable verdict means the checker or its
+  evidence does not match the pin, so no candidate could ever be judged against
+  it; only `fail`/`inconclusive` now count as usable.
+- the compat baseline created a temporary git worktree and relied on the
+  temporary directory being deleted, which would have left a registered
+  worktree behind. It is now removed explicitly in a `finally`.
+
+The frozen pilot's candidate worktree is intentionally materialized at
+`~/.local/share/eu4-dsh/state/dsh-frozen-offline/workspace` (detached at the
+pin), which is why the worktree count is 35 rather than 34.
 
 ## Pending / caveats
 

@@ -763,6 +763,155 @@ def _review_problem(sidecar: Sidecar, frozen: dict, *, require_live: bool = True
     return problems[:4]
 
 
+CHECKER_IMPORT_RE = None
+
+
+def _checker_imports(checker: Path) -> tuple[list[dict], list[str]]:
+    """Which ``automation.*`` modules the checker will actually resolve.
+
+    The checker runs from the trusted campaign root, so it imports the modern
+    helpers rather than the ones from its own historical commit. That is a real
+    semantic difference for an old campaign, so it is recorded rather than
+    assumed harmless.
+    """
+    import importlib.util
+    import re
+
+    pattern = re.compile(r"automation[./]([a-zA-Z_][a-zA-Z0-9_]*)")
+    text = checker.read_text(encoding="utf-8", errors="replace")
+    names = sorted(set(pattern.findall(text)))
+    rows: list[dict] = []
+    outside: list[str] = []
+    infra = infra_root().resolve()
+    for name in names:
+        try:
+            spec = importlib.util.find_spec(f"automation.{name}")
+        except (ImportError, AttributeError, ValueError):
+            rows.append({"module": name, "resolved": None, "sha256": None})
+            outside.append(name)
+            continue
+        origin = Path(spec.origin).resolve() if spec and spec.origin else None
+        rows.append({
+            "module": name,
+            "resolved": str(origin) if origin else None,
+            "sha256": receipts.digest_file(origin) if origin and origin.is_file() else None,
+            "inside_infrastructure": bool(origin) and inside(origin, infra),
+        })
+        if origin and not inside(origin, infra):
+            outside.append(name)
+    return rows, outside
+
+
+def op_checker_compat(args) -> int:
+    """Preflight a campaign's checker before DSH relies on it.
+
+    A historical campaign predates this bridge, and its checker may assume a
+    campaign directory, pin or run-root layout that a sidecar cannot override.
+    This records the checker's identity, the helpers it actually imports, and a
+    baseline run against a pristine copy of the seed.
+    """
+    import shutil
+    import tempfile
+
+    sidecar = load_sidecar(Path(args.sidecar))
+    _roots(sidecar)
+    stored = _setup(sidecar.run_root)
+
+    rows, outside = _checker_imports(sidecar.checker)
+    problems: list[str] = []
+    if outside:
+        problems.append(
+            "checker imports automation helpers from outside the trusted checkout: "
+            + ", ".join(outside)
+        )
+
+    baseline = None
+    verdict = None
+    added_worktree = None
+    with tempfile.TemporaryDirectory(prefix="eu4-dsh-compat-") as tmp:
+        workspace = Path(tmp) / "workspace"
+        if sidecar.seed is not None:
+            shutil.copytree(sidecar.seed, workspace)
+        elif sidecar.mode == "worktree" and sidecar.candidate_baseline_commit:
+            # A worktree-pinned campaign has no seed: its pristine baseline is
+            # the pinned commit itself.
+            added = subprocess.run(
+                ["git", "-C", str(infra_root()), "worktree", "add", "--detach",
+                 str(workspace), sidecar.candidate_baseline_commit],
+                capture_output=True, text=True, check=False,
+            )
+            if added.returncode != 0:
+                problems.append(
+                    "could not materialize the pinned baseline for the compat run: "
+                    + (added.stderr.strip() or "git worktree add failed")
+                )
+                workspace = None
+            else:
+                added_worktree = workspace
+        else:
+            problems.append("checker-compat needs a seed or a worktree pin")
+            workspace = None
+
+        outcome = None
+        if workspace is not None:
+            try:
+                outcome = run_accept(_AcceptShim(sidecar), workspace)
+            finally:
+                # A temporary worktree is still a registered git worktree.
+                if added_worktree is not None:
+                    subprocess.run(
+                        ["git", "-C", str(infra_root()), "worktree", "remove",
+                         "--force", "--force", str(added_worktree)],
+                        capture_output=True,
+                    )
+                    shutil.rmtree(added_worktree, ignore_errors=True)
+
+        if outcome is not None:
+            baseline = {"ok": outcome.get("ok"),
+                        "exit_code": outcome.get("exit_code"),
+                        "verdict": outcome.get("verdict"),
+                        "diagnostics": str(outcome.get("diagnostics") or "")[:500]}
+            if not outcome.get("ok"):
+                problems.append(
+                    "the checker produced no verdict on the pristine baseline: "
+                    + str(outcome.get("diagnostics"))
+                )
+            else:
+                verdict = outcome.get("verdict")
+                if verdict == "pass":
+                    problems.append(
+                        "the checker already passes on the pristine baseline, so it "
+                        "cannot distinguish a candidate from it"
+                    )
+                elif verdict not in ("fail", "inconclusive"):
+                    # "unavailable" or "blocked" on the pristine baseline means
+                    # the checker or its evidence does not match the pin, so no
+                    # candidate could ever be judged against it.
+                    problems.append(
+                        f"the pristine baseline produced {verdict!r} rather than a "
+                        "remediable verdict, so this checker cannot judge a candidate"
+                    )
+
+    compat = "ok" if not problems else "unsupported"
+    receipts.append_journal(sidecar.run_root, {
+        "kind": "checker_compat", "campaign_id": sidecar.campaign_id,
+        "compat": compat, "checker_sha256": receipts.digest_file(sidecar.checker),
+        "imports": rows, "baseline": baseline,
+    })
+    emit({
+        "ok": compat == "ok",
+        "operation": "checker-compat",
+        "campaign_id": sidecar.campaign_id,
+        "compat_verdict": compat,
+        "checker": str(sidecar.checker),
+        "checker_sha256": receipts.digest_file(sidecar.checker),
+        "imports": rows,
+        "baseline": baseline,
+        "problems": problems,
+    })
+    return EXIT_OK if compat == "ok" else EXIT_INTEGRITY
+
+
 def op_review_preflight(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
@@ -1301,7 +1450,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name in ("prepare", "status", "validate", "snapshot", "finalize",
                  "recover", "review-preflight", "review-run", "review-verify",
-                 "review-clean", "goal-prompt"):
+                 "review-clean", "checker-compat", "goal-prompt"):
         child = sub.add_parser(name)
         child.add_argument("--sidecar", required=True)
         if name in ("validate", "finalize"):
@@ -1325,6 +1474,7 @@ OPERATIONS = {
     "review-run": op_review_run,
     "review-verify": op_review_verify,
     "review-clean": op_review_clean,
+    "checker-compat": op_checker_compat,
     "goal-prompt": op_goal_prompt,
 }
 

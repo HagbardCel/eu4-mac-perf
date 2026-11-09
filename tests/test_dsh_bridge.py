@@ -333,6 +333,31 @@ class RecoveryTests(BridgeTestCase):
         self.assertEqual(receipts.verify_journal(self.run_root), [])
 
 
+class CheckerCompatTests(BridgeTestCase):
+    def test_a_remediable_baseline_is_compatible(self) -> None:
+        sidecar = self.sidecar(self.campaign("smoke-campaign"))
+        code, out = self.run_bridge("checker-compat", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["compat_verdict"], "ok")
+        self.assertEqual(out["baseline"]["verdict"], "fail")
+        self.assertTrue(all(row.get("inside_infrastructure", True)
+                            for row in out["imports"]))
+
+    def test_a_checker_that_passes_its_own_baseline_is_unsupported(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        code, out = self.run_bridge("checker-compat", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["compat_verdict"], "unsupported")
+        self.assertTrue(any("already passes" in p for p in out["problems"]))
+
+    def test_a_checker_without_a_verdict_is_unsupported(self) -> None:
+        sidecar = self.sidecar(self.campaign("broken-campaign"))
+        code, out = self.run_bridge("checker-compat", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["compat_verdict"], "unsupported")
+        self.assertTrue(any("no verdict" in p for p in out["problems"]))
+
+
 class GoalPromptTests(BridgeTestCase):
     def test_the_prompt_states_the_completion_rule(self) -> None:
         sidecar = self.sidecar(self.campaign("smoke-campaign"))
