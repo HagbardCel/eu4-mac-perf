@@ -62,8 +62,13 @@ cat > "$OVERLAY" <<PATCH
         requireReview: $REQUIRE_REVIEW
 PATCH
 
-TASK="Create a goal for the objective below, then pursue it in this session using the
-eu4_* tools. Call create_goal with exactly this objective and max_goal_rounds 6.
+# dsh --profile headless answers ONE turn and exits, measured: a goal created in
+# that turn keeps no round driver alive afterwards. So the task says so, and the
+# model is expected to finish within the turn.
+TASK="Create a goal for the objective below, then pursue it using the eu4_* tools.
+This run is a single turn: the one-shot runner exits when it ends, so finish the
+campaign now rather than leaving work for a round that will not run. Call
+create_goal with exactly this objective and max_goal_rounds 6.
 
 $OBJECTIVE"
 

@@ -899,6 +899,32 @@ and a candidate with no changes refuses rather than committing an empty overlay.
 Verified: 29 handoff tests, 86 OpenCode tests, 82 DSH tests (the 9 snapshot tests
 now live under their new name), 24 node tests.
 
+## The multi-round question, answered
+
+The standing caveat -- that the Phase 0 run completed in one turn, so the
+goal-round driver had never driven a second round -- is now resolved, and the
+answer is not the one the launcher assumed.
+
+Staged experiment: a fresh campaign whose task instructed the model to create the
+goal, call `eu4_validate_candidate` once, and stop. Measured: exit 0, one turn,
+two tool calls (`create_goal`, `validate`), a `qualification.json` written, and
+**no further round**. `dsh --profile headless` answers one turn and exits; a goal
+created inside that turn keeps no driver alive afterwards.
+
+So headless-first is right for a campaign that finishes in one turn, which is the
+smoke campaign, and wrong for a campaign that needs several rounds. A multi-round
+campaign needs a live session whose process outlives the turn -- the web profile,
+where the round driver does keep running -- or a DSH facility I have not found.
+
+`run-campaign.sh` now says in its task text that the run is a single turn, so the
+model finishes rather than leaving work for a round that will not happen. The web
+path (`run.sh`, goal created in the UI, workspace selected in the browser) remains
+the documented multi-round route.
+
+This is worth deciding before Phase 7's "genuine offline reconstruction
+acceptance test": a reconstruction campaign is the archetypal multi-round task, so
+it belongs on the web path, not through `run-campaign.sh`.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

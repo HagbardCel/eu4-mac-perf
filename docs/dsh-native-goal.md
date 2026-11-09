@@ -282,6 +282,13 @@ receipt cannot authorize completion.
 they cost nothing and are safe to run at any time. Creating a goal is a human
 action; `smoke-goal.sh` only prints what to paste.
 
+`run-campaign.sh` drives the shipped `headless` profile, which answers **one
+turn** and exits: measured, a goal created in that turn gets no further rounds.
+Use it for a campaign that finishes in one turn. A campaign that needs several
+rounds needs a live session -- `run.sh`, with the session created in this
+checkout so the campaign workspace is inside the sandbox, and the goal created in
+the UI.
+
 `run.sh` binds an OS-chosen port unless you pass `--port` or set `EU4_DSH_PORT`.
 The composed web default is `127.0.0.1:3080`, which is where an ordinary DSH GUI
 usually listens, so an unqualified boot collides with a running DSH and fails
