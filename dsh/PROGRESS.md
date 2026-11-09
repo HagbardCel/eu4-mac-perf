@@ -551,6 +551,25 @@ constant"; the reviewer showed that is the same mistake wearing a hash. Review
 now refuses `review_identity_missing` unless the campaign declares a verification
 manifest or evidence paths, so a reviewer is never handed a fake oracle.
 
+## Round 11 -- documentation drift, caught and guarded
+
+Two documentation edits I made in earlier rounds had silently done nothing: a
+`str.replace` whose anchor no longer matched, so `docs/dsh-native-goal.md` still
+listed three operator scripts while eight existed, and `review-run` /
+`review-verify` were described in prose but never named. Worse, `dsh/README.md`
+claimed `DSH_HOME` could be overridden in the environment when the scripts
+deliberately ignore it -- the exact trap that produced the round-1 misprovision.
+
+Both documents are now complete and accurate: all 12 bridge operations and all 8
+scripts are listed, the home-resolution story is corrected, and
+`tests/test_dsh_docs.py` asserts the mapping in both directions so it cannot
+regress. That test also pins the documented exit codes to the bridge's own
+constants rather than to prose.
+
+Writing it caught one more thing of mine: the exit-code assertion was brittle
+about line wrapping and failed on correct prose, so it now compares collapsed
+whitespace.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

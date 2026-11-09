@@ -28,11 +28,21 @@ Two deliberate deviations from the shipped web profile:
 
 ```sh
 ./dsh/scripts/provision.sh --init   # one time: create and populate the profile
-./dsh/scripts/preflight.sh          # fail-closed checks on the effective profile
+./dsh/scripts/preflight.sh          # fail-closed checks on the composed profile
+./dsh/scripts/smoke-boot.sh         # boot a session and prove the plugin mounted
+./dsh/scripts/skill-catalog.sh      # prove the agent's catalog has the skill
 ./dsh/scripts/run.sh                # boot the profile
+./dsh/scripts/smoke-goal.sh [sidecar]  # print the exact /goal objective
+./dsh/scripts/ghidra-probe.sh       # reproduce the shared-project lock failure
+./dsh/scripts/ghidra-replica.sh --check|--create  # private Ghidra replica
 ```
 
-`DSH_HOME` defaults to `~/.local/share/eu4-dsh`; override it in the environment.
+The scripts set `DSH_HOME` themselves from `EU4_DSH_HOME` (default
+`~/.local/share/eu4-dsh`) and **deliberately ignore an inherited `DSH_HOME`**, so
+this profile can never reuse or mutate the interactive `~/.dsh` install. Seven
+tokens are opt-in: `EU4_DSH_SANDBOX_MODE` and `EU4_DSH_WORKSPACE` are recorded by
+the bridge when set, and `EU4_DSH_BOOT_PROOF` makes the plugin write its mount
+receipt.
 
 `provision.sh` is idempotent. Only `--init` (or a missing profile directory)
 passes `--from-default-profile`, because doing so later would replace the
