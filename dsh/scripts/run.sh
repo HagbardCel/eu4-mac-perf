@@ -1,8 +1,10 @@
 #!/bin/sh
 # Boot the eu4-web profile, or print the exact /goal invocation for a campaign.
 #
-#   ./dsh/scripts/run.sh                 # boot the web profile
-#   ./dsh/scripts/run.sh --goal <sidecar>  # print the objective to paste after /goal
+#   ./dsh/scripts/run.sh            # boot the web profile on a free port
+#
+# For an autonomous campaign use run-campaign.sh; for the objective text use
+# smoke-goal.sh. This script only boots the profile.
 set -eu
 
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -20,26 +22,6 @@ export EU4_DSH_PYTHON
 if [ -z "${EU4_DSH_SIDECAR:-}" ] && [ "${1:-}" = "--goal" ] && [ -n "${2:-}" ]; then
   EU4_DSH_SIDECAR=$(CDPATH= cd -- "$(dirname -- "$2")" && pwd)/$(basename -- "$2")
   export EU4_DSH_SIDECAR
-fi
-
-if [ "${1:-}" = "--goal" ]; then
-  [ -n "${2:-}" ] || { echo "usage: run.sh --goal <sidecar.json>" >&2; exit 2; }
-  exec "$EU4_DSH_PYTHON" -m automation.dsh_bridge goal-prompt --sidecar "$EU4_DSH_SIDECAR"
-fi
-
-# Never collide with a DSH that is already running. The composed web default is
-# 127.0.0.1:3080, which is exactly where the operator's ordinary DSH GUI usually
-# listens -- so an unqualified `dsh --profile eu4-web` fails with EADDRINUSE on
-# the most likely occasion it is used. Bind an OS-chosen port unless the caller
-# asked for one (or set EU4_DSH_PORT explicitly to pin it).
-seen_port=0
-for argument in "$@"; do
-  case "$argument" in
-    --port|--port=*) seen_port=1 ;;
-  esac
-done
-if [ "$seen_port" -eq 0 ]; then
-  set -- --port "${EU4_DSH_PORT:-0}" "$@"
 fi
 
 exec dsh --profile eu4-web "$@"

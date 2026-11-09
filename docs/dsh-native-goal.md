@@ -35,7 +35,7 @@ and are unaffected, so pausing or clearing a goal remains an operator control.
 
 ## Trusted bridge
 
-`python3 -m automation.dsh_bridge {prepare,status,validate,goal-prompt} --sidecar <path>`
+`python3 -m automation.dsh_bridge {prepare,validate,finalize} --sidecar <path>`
 does the deterministic project work and nothing else. It reuses
 `automation.runner.run_accept` for execution and verdict parsing, so the checker
 vocabulary has one source of truth, and it never invents a verdict.
