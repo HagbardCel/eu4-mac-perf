@@ -842,6 +842,55 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(launch_ledger.load_ledger(ledger)["used"], 6)
 
 
+class ContractScopeTests(unittest.TestCase):
+    def test_contract_scope_authorizes_only_the_qualified_delta(self):
+        import json
+        from automation.gfx_l32b_hooks import L32bHooks
+
+        with tempfile.TemporaryDirectory() as raw:
+            workflow = json.loads(
+                (ROOT / "campaigns/eu4-l32b-complete/workflow.json").read_text()
+            )
+            hooks = L32bHooks(
+                repo=ROOT, workflow=workflow, run_root=Path(raw)
+            )
+            state = {
+                "promotion_kind": "contract",
+                "contract_version": "v1",
+                "contract_sha256": "a" * 64,
+                "contract": {
+                    "changed_paths": [
+                        "automation/gfx_contracts/v1.py",
+                        "automation/gfx_contracts/v1.spec.json",
+                        "tests/test_gfx_contract_v1.py",
+                        "automation/gfx_contracts/v0.py",
+                    ]
+                },
+                "trusted_contract": {
+                    "commit": "t1",
+                    "contract_version": "v0",
+                    "contract_sha256": "b" * 64,
+                },
+            }
+            allowed, version, sha, paths = hooks._contract_scope(
+                "contract", state, {"allowed_paths": ["progress.md"]},
+                ["progress.md"],
+            )
+            self.assertEqual(version, "v1")
+            self.assertEqual(sha, "a" * 64)
+            self.assertIn("automation/gfx_contracts/v1.py", allowed)
+            self.assertIn("tests/test_gfx_contract_v1.py", allowed)
+            self.assertNotIn("automation/gfx_contracts/v0.py", allowed)
+            self.assertEqual(len(paths), 3)
+            allowed2, version2, sha2, paths2 = hooks._contract_scope(
+                "implementation", state, {"allowed_paths": ["progress.md"]},
+                ["progress.md"],
+            )
+            self.assertEqual(version2, "v0")
+            self.assertEqual(sha2, "b" * 64)
+            self.assertEqual(paths2, [])
+
+
 class CheckerFreezeTests(unittest.TestCase):
     def test_frozen_boundary_rejects_a_modified_trusted_dependency(self):
         import json

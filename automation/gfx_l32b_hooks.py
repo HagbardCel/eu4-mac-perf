@@ -802,6 +802,32 @@ class L32bHooks:
             "published": True,
         }
 
+    def _contract_scope(
+        self, kind: str | None, state: dict, config: dict, allowed: list[str]
+    ) -> tuple[list[str], str, str | None, list[str]]:
+        trusted = self._trusted(state)
+        if kind != "contract":
+            return (
+                list(allowed),
+                str(trusted.get("contract_version", "v0")),
+                trusted.get("contract_sha256"),
+                [],
+            )
+        version = str(state.get("contract_version") or "")
+        contract_sha = str(state.get("contract_sha256") or "")
+        contract = state.get("contract") or {}
+        wanted = {
+            f"automation/gfx_contracts/{version}.py",
+            f"automation/gfx_contracts/{version}.spec.json",
+            f"tests/test_gfx_contract_{version}.py",
+        }
+        contract_paths = [
+            path for path in (contract.get("changed_paths") or [])
+            if path in wanted
+            or path.startswith(f"analysis/gfx-draw/v0/l32b/contracts/{version}/")
+        ]
+        return list(allowed) + contract_paths, version, contract_sha, contract_paths
+
     def _verify_frozen_boundary(
         self, worktree: Path, freeze_commit: str, expected_manifest: str | None
     ) -> str | None:
@@ -907,21 +933,12 @@ class L32bHooks:
         allowed = [str(item) for item in config.get("allowed_paths", [])]
         kind = state.get("promotion_kind")
         trusted = self._trusted(state)
-        contract_paths: list[str] = []
+        effective_allowed, version_effective, sha_effective, contract_paths = (
+            self._contract_scope(kind, state, config, allowed)
+        )
         if kind == "contract":
             version = str(state.get("contract_version") or "")
             contract_sha = str(state.get("contract_sha256") or "")
-            contract = state.get("contract") or {}
-            wanted = {
-                f"automation/gfx_contracts/{version}.py",
-                f"automation/gfx_contracts/{version}.spec.json",
-                f"tests/test_gfx_contract_{version}.py",
-            }
-            contract_paths = [
-                path for path in (contract.get("changed_paths") or [])
-                if path in wanted
-                or path.startswith(f"analysis/gfx-draw/v0/l32b/contracts/{version}/")
-            ]
             module = f"automation/gfx_contracts/{version}.py"
             actual = subprocess.run(
                 ["git", "-C", str(self.repo), "show", f"{commit}:{module}"],
@@ -933,12 +950,6 @@ class L32bHooks:
                     "checker": "fail",
                     "detail": "qualified contract module differs at the integration commit",
                 }
-            version_effective = version
-            sha_effective = contract_sha
-        else:
-            version_effective = str(trusted.get("contract_version", "v0"))
-            sha_effective = trusted.get("contract_sha256")
-        effective_allowed = allowed + contract_paths
         from automation.gfx_draw_accept_v2 import path_allowed
 
         outside = [path for path in changed if not path_allowed(path, effective_allowed)]
