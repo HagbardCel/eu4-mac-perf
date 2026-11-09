@@ -461,6 +461,12 @@ state writes, and `run_accept` as the single runner dependency.
   `includeDefaultRoots: false`, so the catalog is exactly the project root's
   skills -- measured after the change: 1 skill.
 
+- **`smoke-boot.sh` emitted invalid JSON.** It hand-escaped the nested proof
+  object, so every quote became `\"` inside an object literal and the output
+  could not be parsed -- I had read it as text in round 5 and not noticed. The
+  script now composes its output with the interpreter; verified by parsing it:
+  `ok: true`, 3 tools, 1 guard.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

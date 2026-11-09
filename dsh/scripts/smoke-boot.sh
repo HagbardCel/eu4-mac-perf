@@ -50,12 +50,30 @@ mounted_line=$(grep -m1 '\[eu4-goal\] mounted' "$LOG" | sed 's/"/\\"/g' || true)
 proof=$(tr -d '\n' < "$PROOF" 2>/dev/null | sed 's/"/\\"/g' || true)
 url=$(grep -oE "http://[^ ]+" "$LOG" | head -1 || true)
 
-if [ "$mounted" = true ]; then
-  printf '{"ok":true,"mounted":true,"url":"%s","plugin":"%s","fatal":"%s","proof":%s}\n' \
-    "${url:-}" "${mounted_line:-}" "${fatal:-}" "${proof:-null}"
-  exit 0
-fi
+# Compose the JSON with the interpreter: hand-escaping a nested object produced
+# invalid output, which any automated consumer would reject.
+"$EU4_DSH_PYTHON" - "$mounted" "$PROOF" "${url:-}" "${fatal:-}" "$LOG" <<'PY'
+import json, sys
 
-printf '{"ok":false,"mounted":false,"url":"%s","fatal":"%s","log_tail":"%s"}\n' \
-  "${url:-}" "${fatal:-}" "$(tail -5 "$LOG" | tr '\n' ' ' | sed 's/"/\\"/g')"
-exit 1
+mounted, proof_path, url, fatal, log_path = sys.argv[1:6]
+proof = None
+try:
+    with open(proof_path, encoding="utf-8") as handle:
+        proof = json.load(handle)
+except (OSError, ValueError):
+    proof = None
+
+if mounted == "true" and proof is not None:
+    print(json.dumps({"ok": True, "mounted": True, "url": url,
+                      "fatal": fatal, "proof": proof}))
+    raise SystemExit(0)
+
+try:
+    with open(log_path, encoding="utf-8", errors="replace") as handle:
+        tail = [line.rstrip() for line in handle.readlines()[-5:]]
+except OSError:
+    tail = []
+print(json.dumps({"ok": False, "mounted": False, "url": url, "fatal": fatal,
+                  "log_tail": tail}))
+raise SystemExit(1)
+PY
