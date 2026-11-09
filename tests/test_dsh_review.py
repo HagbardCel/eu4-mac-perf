@@ -207,6 +207,65 @@ class ReviewPipelineTests(ReviewCase):
         self.assertEqual(finalize["kind"], "review_required")
         self.assertTrue(any("scripted" in p for p in [finalize.get("detail", "")]))
 
+    def test_a_seed_candidate_cannot_be_reviewed(self) -> None:
+        """A seed candidate has no commit for a reviewer to check out."""
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["goal"] = {"max_rounds": 4, "require_checker_pass": True,
+                        "require_independent_review": True}
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        for operation in ("review-preflight", "review-run"):
+            with self.subTest(operation=operation):
+                code, out = self.run_bridge(operation, sidecar)
+                self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+                self.assertEqual(out["kind"], "review_needs_commit")
+                self.assertIn("no commit", out["detail"])
+
+    def test_an_unexpected_exception_still_emits_json(self) -> None:
+        """The CLI contract is fail-closed JSON, never a traceback on stdout."""
+        import io
+        import contextlib
+
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        original = dsh_bridge.OPERATIONS["status"]
+
+        def explode(_args):
+            raise RuntimeError("synthetic failure")
+
+        dsh_bridge.OPERATIONS["status"] = explode
+        self.addCleanup(dsh_bridge.OPERATIONS.__setitem__, "status", original)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = dsh_bridge.main(["status", "--sidecar", str(sidecar)])
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        payload = json.loads(buffer.getvalue())
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["classification"], "infrastructure_error")
+        self.assertEqual(payload["kind"], "internal_error")
+        self.assertIn("synthetic failure", payload["detail"])
+
+    def test_a_reviewer_that_never_answers_is_an_infrastructure_error(self) -> None:
+        """A timeout proves nothing about the candidate, so it is not a refusal."""
+        sidecar = self.review_sidecar(review_required=True)
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        self.run_bridge("review-preflight", sidecar)
+        slow = self.root / "slow.sh"
+        slow.write_text("#!/bin/sh\nsleep 5\n", encoding="utf-8")
+        slow.chmod(0o755)
+        code, out = self.run_bridge(
+            "review-run", sidecar, reviewer_cmd=str(slow), timeout=1
+        )
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["classification"], "infrastructure_error")
+        self.assertEqual(out["kind"], "review_failed")
+        self.assertEqual(out["goal_policy"], "unavailable")
+        self.assertFalse(
+            (Path(self.run_root) / "review" / "review.json").exists()
+        )
+
     def test_review_is_refused_without_a_passing_validation(self) -> None:
         sidecar = self.review_sidecar(review_required=True)
         self.run_bridge("prepare", sidecar)

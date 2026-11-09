@@ -933,6 +933,12 @@ def op_review_preflight(args) -> int:
         _check_anchor(_prepared_identities(sidecar), current)
 
         frozen = _freeze_once(sidecar, current)
+        if not frozen.get("commit"):
+            raise Refusal(
+                "review_needs_commit",
+                "independent review needs a worktree candidate pinned to a commit; "
+                "a seed candidate has no commit for a reviewer to check out",
+            )
         paths = _review_paths(sidecar)
         paths["base"].mkdir(parents=True, exist_ok=True)
         if not paths["worktree"].exists():
@@ -987,6 +993,12 @@ def op_review_run(args) -> int:
         if receipt is None or (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
             raise Refusal("not_qualified", "no passing validation to review")
         frozen = _freeze_once(sidecar, current)
+        if not frozen.get("commit"):
+            raise Refusal(
+                "review_needs_commit",
+                "independent review needs a worktree candidate pinned to a commit; "
+                "a seed candidate has no commit for a reviewer to check out",
+            )
         paths = _review_paths(sidecar)
         paths["base"].mkdir(parents=True, exist_ok=True)
         if not paths["worktree"].exists():
@@ -1018,9 +1030,29 @@ def op_review_run(args) -> int:
         )
         command = review.reviewer_command(args.reviewer_cmd, task)
         mode = "scripted" if args.reviewer_cmd else "live"
-        outcome = review.run_reviewer(
-            command, cwd=paths["worktree"], timeout=args.timeout
-        )
+        try:
+            outcome = review.run_reviewer(
+                command, cwd=paths["worktree"], timeout=args.timeout
+            )
+        except review.ReviewError as exc:
+            # Not an integrity refusal: nothing was proven about the candidate,
+            # the reviewer simply could not produce a result. Report it on the
+            # infrastructure axis so the goal pauses instead of being blocked.
+            receipts.append_journal(sidecar.run_root, {
+                "kind": "review_failed", "campaign_id": sidecar.campaign_id,
+                "candidate": frozen["commit"], "detail": str(exc)[:300],
+            })
+            emit({
+                "ok": False,
+                "operation": "review-run",
+                "campaign_id": sidecar.campaign_id,
+                "classification": "infrastructure_error",
+                "kind": "review_failed",
+                "goal_policy": "unavailable",
+                "detail": str(exc),
+                "candidate_commit": frozen["commit"],
+            })
+            return EXIT_OK
         if outcome["exit_code"] != 0:
             raise Refusal(
                 "review_failed",
@@ -1491,6 +1523,21 @@ def main(argv: list[str] | None = None) -> int:
         emit({"ok": False, "operation": args.operation,
               "classification": "integrity_refusal", "kind": exc.kind,
               "detail": exc.detail or str(exc)})
+        return EXIT_INTEGRITY
+    except Exception as exc:  # noqa: BLE001 - the CLI contract is "always JSON"
+        # A caller (the DSH plugin) treats non-JSON as an infrastructure error,
+        # so a traceback on stdout would be a silent fail-open risk. Report the
+        # failure as a refusal and keep the traceback on stderr for debugging.
+        import traceback
+
+        traceback.print_exc(file=sys.stderr)
+        emit({
+            "ok": False,
+            "operation": args.operation,
+            "classification": "infrastructure_error",
+            "kind": "internal_error",
+            "detail": f"{type(exc).__name__}: {exc}",
+        })
         return EXIT_INTEGRITY
 
 

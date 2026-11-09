@@ -490,6 +490,41 @@ neither budget stop had ever been reached.
 - Recovery is now also tested for an interrupted **finalization** (a different
   intent prefix): it is quarantined and the passing receipt survives untouched.
 
+## Round 10 -- the live reviewer path, and what it exposed
+
+I executed the reviewer's *default* command (`dsh --profile headless --json`) for
+the first time, believing no credentials were present and so no cost. That was
+wrong: the first attempt completed and wrote a **live** review receipt
+(`qualification_mode: live`), so a real model call happened. I had already deleted
+the temporary run root before inspecting it, so its outcome and receipt were lost;
+**that was an unintended spend and an unrecorded result.**
+
+The second attempt timed out at 300s, and exposed two real defects:
+
+- `ReviewError` was not caught, so a reviewer timeout surfaced as
+  `integrity_refusal`/`internal_error` -- the wrong axis. A reviewer that cannot
+  answer has proven nothing about the candidate, so it is now
+  `infrastructure_error`/`review_failed` with goal policy `unavailable`, and a
+  journal entry records it.
+- The CLI's catch-all reported unexpected exceptions as `integrity_refusal` too;
+  an unhandled exception is an infrastructure condition, not evidence of
+  tampering, so it is now `infrastructure_error`/`internal_error`.
+
+Both are covered: a reviewer script that sleeps past a one-second budget is
+asserted to produce `infrastructure_error`/`review_failed`/`unavailable` with no
+report written, and a synthetic exception is asserted to emit JSON rather than a
+traceback on stdout.
+
+Also found while exercising this path: **review of a seed candidate crashed**
+(`git worktree add` with a `None` commit) instead of refusing. Seed candidates
+have no commit to check out, so `review-preflight` and `review-run` now refuse
+`review_needs_commit` -- previously the smoke campaign, which is seed mode, could
+not be reviewed at all and failed with a traceback.
+
+The live reviewer path is therefore **proven to work** (one run qualified and
+wrote a live receipt) and **not yet captured**: a deliberate run with a longer
+timeout is needed to record the outcome and receipt as evidence.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not
