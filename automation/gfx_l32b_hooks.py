@@ -11,6 +11,7 @@ live EU4 capture; the production path uses the trusted v2 checker.
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import os
@@ -477,28 +478,37 @@ class L32bHooks:
             extra={"capture_requirement": requirement},
         )
         self._run(campaign)
-        captures = campaign["run_root"] / "captures"
-        receipt = campaign["run_root"] / "live-launch.json"
-        if not captures.is_dir() or not receipt.is_file():
-            return {"detail": "capture campaign produced no authenticated capture"}
-        directories = sorted(
-            (path for path in captures.iterdir() if path.is_dir()),
-            key=lambda path: path.stat().st_mtime,
+        run_root = campaign["run_root"]
+        receipt = run_root / "live-launch.json"
+        try:
+            pointer = launch_ledger.read_pointer(run_root)
+        except launch_ledger.LedgerError as exc:
+            return {"detail": f"capture ledger pointer is invalid: {exc}"}
+        if pointer is None:
+            return {"detail": "capture ledger pointer is missing"}
+        try:
+            ledger = launch_ledger.load_ledger(Path(pointer["ledger"]))
+        except launch_ledger.LedgerError as exc:
+            return {"detail": f"capture ledger is invalid: {exc}"}
+        records = launch_ledger.campaign_receipts(
+            ledger, run_root.name, status="completed"
         )
-        if not directories:
-            return {"detail": "capture campaign produced no capture directory"}
-        capture = directories[-1]
-        reference, problem = self._verify_capture(
-            campaign["run_root"], capture, receipt
-        )
-        if problem:
-            return {"detail": problem}
-        return {
-            "capture": str(capture),
-            "capture_receipt": str(receipt),
-            "capture_reference": reference,
-            "candidate_commit": commit,
-        }
+        last_problem = "no completed authenticated capture"
+        for record in reversed(records):
+            capture = Path(str(record.get("output") or ""))
+            if not capture.is_dir():
+                continue
+            reference, problem = self._verify_capture(run_root, capture, receipt)
+            if problem:
+                last_problem = problem
+                continue
+            return {
+                "capture": str(capture),
+                "capture_receipt": str(receipt),
+                "capture_reference": reference,
+                "candidate_commit": commit,
+            }
+        return {"detail": last_problem}
 
     def _verify_capture(
         self, run_root: Path, capture: Path, receipt_path: Path
@@ -629,6 +639,7 @@ class L32bHooks:
                 "candidate_commit": candidate_commit,
                 "contract_commit": contract_commit,
                 "base_head": base,
+                "staged_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                 "status": "prepared",
             }
             atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
@@ -802,15 +813,6 @@ class L32bHooks:
             or (state.get("integration") or {}).get("base_head")
             or self._trusted(state).get("commit")
         )
-        capture = state.get("capture")
-        receipt = state.get("capture_receipt")
-        if not capture or not receipt:
-            return {
-                "status": "pending_capture",
-                "commit": commit,
-                "base_head": base,
-                "capture_required": True,
-            }
         worktree = self.run_root / "requalification" / commit
         if not worktree.exists():
             worktree.parent.mkdir(parents=True, exist_ok=True)
@@ -836,9 +838,14 @@ class L32bHooks:
         checker_commit = str(
             state.get("checker_freeze_commit")
             or self.workflow.get("checker_freeze_commit")
-            or self._trusted(state).get("commit")
-            or self.workflow.get("baseline_commit")
+            or ""
         )
+        if not checker_commit:
+            return {
+                "status": "failed",
+                "checker": "fail",
+                "detail": "checker freeze commit is missing",
+            }
         for rel in (
             "automation/gfx_draw_accept_v2.py",
             "automation/gfx_contracts/api.py",
@@ -914,6 +921,42 @@ class L32bHooks:
         candidate_sha, failure = build_candidate(worktree)
         if failure:
             return {"status": "failed", "checker": failure.get("verdict", "fail")}
+        from automation.gfx_draw_accept_v2 import run_candidate_tests, run_frozen_host
+
+        failure = run_frozen_host(worktree, template)
+        if failure:
+            return {"status": "failed", "checker": failure.get("verdict", "fail"),
+                    "detail": "frozen host test failed offline"}
+        failure = run_candidate_tests(
+            worktree, [str(item) for item in config.get("test_modules", [])]
+        )
+        if failure:
+            return {"status": "failed", "checker": failure.get("verdict", "fail"),
+                    "detail": "candidate tests failed offline"}
+        reference = state.get("capture_reference") or {}
+        capture = reference.get("capture") or state.get("capture")
+        if not capture:
+            checkpoint_receipt = (
+                (state.get("last_implementer") or {}).get("qualification_receipt")
+                or (state.get("last_implementer") or {}).get("checkpoint")
+            )
+            if checkpoint_receipt and Path(str(checkpoint_receipt)).is_file():
+                try:
+                    document = _json(Path(str(checkpoint_receipt)))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    document = {}
+                checkpoint_capture = document.get("capture") or {}
+                if isinstance(checkpoint_capture, dict):
+                    capture = checkpoint_capture.get("capture_dir")
+                    reference = checkpoint_capture
+        if not capture:
+            return {
+                "status": "pending_capture",
+                "commit": commit,
+                "base_head": base,
+                "capture_required": True,
+                "observer_library_sha256": candidate_sha,
+            }
         request_path = Path(str(capture)) / "capture-request.json"
         if not request_path.is_file():
             return {"status": "failed", "detail": "capture request is missing"}
@@ -1022,7 +1065,15 @@ class L32bHooks:
         contract_commit: str | None,
         contract_parent: str | None,
         integration_id: str,
+        staged_at: str = "",
     ) -> str:
+        ref = f"refs/gfx-staging/{integration_id}"
+        existing = subprocess.run(
+            ["git", "-C", str(self.repo), "rev-parse", "--verify", ref],
+            capture_output=True, text=True, check=False,
+        )
+        if existing.returncode == 0 and existing.stdout.strip():
+            return existing.stdout.strip()
         staging = self.run_root / "integration" / integration_id
         if staging.exists():
             raise HookError(f"staging worktree already exists: {staging}")
@@ -1078,6 +1129,9 @@ class L32bHooks:
                 "GIT_COMMITTER_NAME": "gfx-integration",
                 "GIT_COMMITTER_EMAIL": "gfx-integration@local",
             }
+            if staged_at:
+                env["GIT_AUTHOR_DATE"] = staged_at
+                env["GIT_COMMITTER_DATE"] = staged_at
             commit = subprocess.run(
                 ["git", "-C", str(self.repo), "commit-tree", tree.stdout.strip(),
                  "-p", base, "-m", f"L3.2b integration {integration_id}"],
@@ -1088,7 +1142,12 @@ class L32bHooks:
             )
             if commit.returncode != 0:
                 raise HookError(commit.stderr.strip() or "integration commit failed")
-            return commit.stdout.strip()
+            created = commit.stdout.strip()
+            subprocess.run(
+                ["git", "-C", str(self.repo), "update-ref", ref, created],
+                capture_output=True, check=False,
+            )
+            return created
         finally:
             subprocess.run(
                 ["git", "-C", str(self.repo), "worktree", "remove", "--force", str(staging)],
