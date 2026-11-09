@@ -69,7 +69,7 @@
     {
       "path": "automation/gfx_l32b_hooks.py",
       "role": "checker",
-      "sha256": "11564a67e170d66c69424e54c2729876fd10d4b828c09c8e9a22bc434e8d23b5"
+      "sha256": "9c6d44bdfffa1c7fecf3a4a6108a6fd4bedd5d115806d92b4ca49c158cb675cf"
     },
     {
       "path": "automation/gfx_reviewer_v2.py",

@@ -690,6 +690,8 @@ class L32bHooks:
                     "ok": True,
                     "commit": commit,
                     "verification": verification,
+                    "integration_id": integration_id,
+                    "base_head": base,
                     "published": False,
                 }
             if status != "verified":
@@ -764,12 +766,28 @@ class L32bHooks:
             raise HookError("staged integration commit differs")
         if journal.get("base_head") != base_head:
             raise HookError("staged integration base differs")
-        if journal.get("status") not in ("verified_staged", "reviewed"):
+        if journal.get("status") not in ("verified_staged", "reviewed", "verified"):
             raise HookError("staged integration is not verified")
+        verification = journal.get("verification") or {}
+        if verification.get("commit") != expected_commit:
+            raise HookError("journal verification is not bound to the staged commit")
         review = Path(review_receipt)
         qualification = Path(qualification_receipt)
         if not review.is_file() or not qualification.is_file():
             raise HookError("final review or qualification receipt is missing")
+        try:
+            review_doc = json.loads(review.read_text(encoding="utf-8"))
+            qualification_doc = json.loads(qualification.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise HookError(f"final review or receipt is unreadable: {exc}") from exc
+        if review_doc.get("candidate_commit") != expected_commit:
+            raise HookError("final review is not bound to the staged commit")
+        if review_doc.get("outcome") != "qualified":
+            raise HookError("final review did not qualify the staged commit")
+        if qualification_doc.get("trusted_contract_commit") != expected_commit:
+            raise HookError("qualification receipt is not bound to the staged commit")
+        if qualification_doc.get("candidate_digest") != verification.get("candidate_digest"):
+            raise HookError("qualification receipt candidate digest differs")
         journal["status"] = "reviewed"
         journal["review_receipt_sha256"] = _sha(review)
         journal["qualification_receipt_sha256"] = _sha(qualification)
@@ -781,6 +799,18 @@ class L32bHooks:
             capture_output=True, text=True, check=False,
         )
         current_commit = current.stdout.strip() if current.returncode == 0 else ""
+        if current_commit == expected_commit:
+            journal["status"] = "verified"
+            journal["published"] = True
+            atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
+            return {
+                "ok": True,
+                "commit": expected_commit,
+                "verification": journal.get("verification"),
+                "integration_id": integration_id,
+                "base_head": base_head,
+                "published": True,
+            }
         if current_commit != base_head:
             raise HookError("integration branch is not at the staged base")
         updated = subprocess.run(
