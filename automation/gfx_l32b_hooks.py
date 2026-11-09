@@ -71,6 +71,7 @@ class L32bHooks:
         agent_factory: Callable[[str], object] | None = None,
         checker_runner: Callable[[Path, dict], dict] | None = None,
         model: str | None = None,
+        templates: Path | None = None,
     ):
         self.repo = Path(repo).resolve()
         self.workflow = workflow
@@ -79,7 +80,8 @@ class L32bHooks:
         self.agent_factory = agent_factory or self._opencode_agent
         self.checker_runner = checker_runner or self._post_integration
         self.model = model or str(workflow.get("model", "opencode/big-pickle"))
-        self.templates = self.repo / "campaigns"
+        self.templates = Path(templates) if templates is not None \
+            else self.repo / "campaigns"
 
     def _opencode_agent(self, model: str):
         return OpenCodeAgent(
@@ -236,6 +238,7 @@ class L32bHooks:
             "missing": diag.get("missing") or [],
             "provisional": diag.get("provisional") or [],
             "diagnostics": diag,
+            "last_diagnostics": state.get("last_diagnostics"),
         }
         if state.get("pause_reason") == "checkpoint_yield" \
                 and diag.get("reason") == "unsupported_evidence_contract":

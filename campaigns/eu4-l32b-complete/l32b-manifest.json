@@ -7,6 +7,11 @@
       "sha256": "d04e799efb52ae9cf4a18d6e0ccb9dfc5a8ad35e7a2e510eec6f2aec2c310058"
     },
     {
+      "path": "campaigns/eu4-l32b-complete/capture-objective.md",
+      "role": "campaign",
+      "sha256": "f76db4d0697d118e3dbcce9ed3b96af29637f33cd51896aea05336becfefc3be"
+    },
+    {
       "path": "campaigns/eu4-l32b-complete/l32b.json",
       "role": "campaign",
       "sha256": "64c86702b11e353aba46cd883ff42edc4ef6ca303c3949fe84be873a9f23a309"
@@ -69,7 +74,7 @@
     {
       "path": "automation/gfx_l32b_hooks.py",
       "role": "checker",
-      "sha256": "a5a8c081c2d677e70d5f82d391f6909f7f39db70e5bb1012af0a66ddb9a66be7"
+      "sha256": "0bb7bd74ee62abf4f44faf6352f62e24db059d9f0fc6ce958a7ffcea8916147f"
     },
     {
       "path": "automation/gfx_reviewer_v2.py",
