@@ -230,7 +230,7 @@ class Coordinator:
         if current == "researching":
             return self._research(state)
         if current == "final_capture":
-            return self._implementer(state)
+            return self._final_capture(state)
         raise WorkflowError(f"unknown coordinator state: {current}")
 
     def run(self, state: dict | None = None) -> dict:
@@ -420,8 +420,7 @@ class Coordinator:
             if required <= set(result.get("established") or []):
                 state["stage"] = "final"
             if state["stage"] == "final":
-                state["promotion_kind"] = "final_candidate"
-                state["state"] = "promote"
+                state["state"] = "final_capture"
             else:
                 state["review_target"] = "candidate"
                 state["state"] = "reviewing"
@@ -533,6 +532,7 @@ class Coordinator:
             return state
         if outcome == "qualified":
             if target_key == "contract":
+                state["contract_review_path"] = str(path)
                 qualification_errors = self._qualify_contract(state, path)
                 if qualification_errors:
                     state["state"] = "blocked"
@@ -542,11 +542,17 @@ class Coordinator:
                     }
                     return state
                 state["promotion_kind"] = "contract"
-                state["state"] = "promote"
+                state["combined_promotion"] = True
+                state["review_target"] = "candidate"
+                state["state"] = "reviewing"
             elif target_key == "candidate":
                 state["candidate_review"] = self._candidate_receipt(state, path)
-                state["promotion_kind"] = "implementation"
-                state["state"] = "promote"
+                if state.get("combined_promotion"):
+                    state["promotion_kind"] = "contract"
+                    state["state"] = "promote"
+                else:
+                    state["promotion_kind"] = "implementation"
+                    state["state"] = "promote"
             elif target_key == "final":
                 final_errors = self._final_receipt(state, path)
                 if final_errors:
@@ -902,7 +908,11 @@ class Coordinator:
             checkpoint = Path(str(state.get("contract_checkpoint") or state.get("checkpoint") or ""))
             if not checkpoint.is_file() or receipt.get("checkpoint_sha256") != _file_sha(checkpoint):
                 return ["contract receipt checkpoint is stale"]
-            report = Path(str((state.get("review") or {}).get("path") or ""))
+            report = Path(str(
+                state.get("contract_review_path")
+                or (state.get("review") or {}).get("path")
+                or ""
+            ))
             if not report.is_file() or receipt.get("reviewer_report_sha256") != _file_sha(report):
                 return ["contract reviewer report changed after qualification"]
             cases = Path(str(state.get("adversarial_cases") or ""))
@@ -910,6 +920,13 @@ class Coordinator:
                 return ["adversarial cases changed after qualification"]
             if receipt.get("positive_ok") is not True or receipt.get("negative_ok") is not True:
                 return ["adversarial qualification did not pass"]
+            candidate = state.get("candidate") or {}
+            if _candidate_commit(candidate):
+                candidate_receipt = state.get("candidate_review")
+                if not isinstance(candidate_receipt, dict):
+                    return ["combined contract promotion requires an implementation review"]
+                if candidate_receipt.get("candidate_commit") != _candidate_commit(candidate):
+                    return ["implementation review does not match the contract candidate"]
             if receipt.get("runner_report_sha256") != _canonical_sha(
                 state.get("adversarial_report") or {}
             ):
@@ -962,8 +979,8 @@ class Coordinator:
                 return ["final receipt does not match the integrated commit"]
             if receipt.get("checker_verdict") != "pass":
                 return ["final checker did not pass"]
-            implementer = state.get("last_implementer") or {}
-            qualification = Path(str(implementer.get("qualification_receipt") or ""))
+            candidate = state.get("final_candidate") or {}
+            qualification = Path(str(candidate.get("qualification_receipt") or ""))
             if not qualification.is_file()                     or receipt.get("qualification_receipt_sha256") != _file_sha(qualification):
                 return ["final qualification receipt changed after review"]
             report = Path(str((state.get("review") or {}).get("path") or ""))
@@ -1041,6 +1058,62 @@ class Coordinator:
         except (OSError, RuntimeError, KeyError) as exc:
             state["state"] = "blocked"
             state["blocker"] = {"reason": "remediation_snapshot_failed", "detail": str(exc)}
+        return state
+
+    def _final_capture(self, state: dict) -> dict:
+        implementer = state.get("last_implementer") or {}
+        if implementer.get("last_verdict") != "pass":
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "final_capture_checker_not_pass"}
+            return state
+        receipt = Path(str(implementer.get("qualification_receipt") or ""))
+        if not receipt.is_file():
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "final_capture_receipt_missing"}
+            return state
+        try:
+            document = json.loads(receipt.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "final_capture_receipt_unreadable",
+                                "detail": str(exc)}
+            return state
+        required = set(self.workflow.get("required_inputs") or [])
+        fields = document.get("fields")
+        names = {
+            row.get("name") for row in fields or []
+            if isinstance(row, dict) and row.get("state") == "validated"
+        }
+        if required and not required <= names:
+            state["state"] = "blocked"
+            state["blocker"] = {
+                "reason": "final_capture_incomplete",
+                "missing": sorted(required - names),
+            }
+            return state
+        capture = document.get("capture") or {}
+        if not isinstance(capture, dict) or not capture.get("session") \
+                or not capture.get("library_sha256"):
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "final_capture_provenance_missing"}
+            return state
+        observer = str(document.get("observer_library_sha256") or "")
+        if observer and observer != capture.get("library_sha256"):
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "final_capture_observer_mismatch"}
+            return state
+        campaign_id = implementer.get("campaign_id")
+        if campaign_id and document.get("campaign_id") \
+                and document.get("campaign_id") != campaign_id:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "final_capture_campaign_mismatch"}
+            return state
+        if document.get("packet_ready") is not True:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "final_capture_not_packet_ready"}
+            return state
+        state["promotion_kind"] = "final_candidate"
+        state["state"] = "promote"
         return state
 
     def _capture_required(self, state: dict) -> dict:

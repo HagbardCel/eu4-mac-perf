@@ -559,6 +559,7 @@ class L32bHooks:
             return None, "capture request has no observer identity"
         if not (capture / "operations-summary.json").is_file():
             return None, "capture summary is missing"
+        plan = capture / "capture-plan.json"
         return {
             "token": record.get("token"),
             "capture": str(capture),
@@ -567,8 +568,8 @@ class L32bHooks:
             "library_sha256": document.get("library_sha256"),
             "selection": {
                 "receipt": record,
-                "plan_path": str(capture / "capture-plan.json"),
-                "plan_sha256": None,
+                "plan_path": str(plan),
+                "plan_sha256": _sha(plan) if plan.is_file() else None,
             },
         }, None
 
@@ -654,6 +655,7 @@ class L32bHooks:
                 contract_commit=contract_commit,
                 contract_parent=(contract or {}).get("pin_commit"),
                 integration_id=integration_id,
+                staged_at=str(journal.get("staged_at") or ""),
             )
             journal["new_commit"] = commit
             journal["status"] = "staged"
@@ -661,20 +663,21 @@ class L32bHooks:
         if self.checker_runner is None:
             raise HookError("post-integration checker is not configured")
         verification = None
-        if journal.get("status") in ("verified_staged", "pending_capture"):
+        if journal.get("status") == "verified_staged":
             verification = journal.get("verification")
-            if journal.get("status") == "pending_capture" \
-                    and not state.get("capture_receipt"):
+        elif journal.get("status") == "pending_capture":
+            if not state.get("capture_receipt"):
                 return {
                     "ok": True,
                     "commit": commit,
-                    "verification": verification,
+                    "verification": journal.get("verification"),
                     "integration_id": integration_id,
                     "base_head": base,
                     "published": False,
                 }
-            if journal.get("status") == "verified_staged":
-                verification = journal.get("verification")
+            # A pending capture is unverified. Never reuse the old
+            # pending_capture verification; rerun the committed-tree checker.
+            verification = None
         if verification is None:
             verification = self.checker_runner(Path(commit), state)
             if not isinstance(verification, dict):
@@ -1246,10 +1249,12 @@ class L32bHooks:
             if commit.returncode != 0:
                 raise HookError(commit.stderr.strip() or "integration commit failed")
             created = commit.stdout.strip()
-            subprocess.run(
+            updated = subprocess.run(
                 ["git", "-C", str(self.repo), "update-ref", ref, created],
                 capture_output=True, check=False,
             )
+            if updated.returncode != 0:
+                raise HookError(updated.stderr.decode() or "staging ref update failed")
             return created
         finally:
             subprocess.run(

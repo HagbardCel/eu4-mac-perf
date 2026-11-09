@@ -68,7 +68,13 @@ def _commit_candidate(
     )
     if existing.returncode == 0 and existing.stdout.strip():
         commit = existing.stdout.strip()
-        return commit, source_tree_digest_at_commit(repo, commit, paths)
+        committed = source_tree_digest_at_commit(repo, commit, paths)
+        current = source_tree_digest(workspace, paths)
+        if committed != current:
+            raise SnapshotError(
+                "existing candidate ref does not match the current workspace"
+            )
+        return commit, committed
     fd, index_name = tempfile.mkstemp(prefix=f"gfx-candidate-{uuid.uuid4().hex[:8]}-")
     os.close(fd)
     index_file = Path(index_name)

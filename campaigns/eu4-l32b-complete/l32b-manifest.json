@@ -64,12 +64,12 @@
     {
       "path": "automation/gfx_l32b_complete.py",
       "role": "checker",
-      "sha256": "06e4eb81b7a07ff6a691fdc436371980174284901733e1efca503ba05daabe02"
+      "sha256": "cec6e140e6a5d9435eb1844527d798856959f9914499a65ac96ec24228c6ed18"
     },
     {
       "path": "automation/gfx_l32b_hooks.py",
       "role": "checker",
-      "sha256": "9c6d44bdfffa1c7fecf3a4a6108a6fd4bedd5d115806d92b4ca49c158cb675cf"
+      "sha256": "89198825c20ad99187f98fe199256441dbfaaf0fe8a10173a7202a384c66b3e5"
     },
     {
       "path": "automation/gfx_reviewer_v2.py",
@@ -79,7 +79,7 @@
     {
       "path": "automation/gfx_snapshot_v2.py",
       "role": "checker",
-      "sha256": "e49eefa66e7b193fcfb48c45466d0d2cb21c7249385be536e83270c390d7f6ac"
+      "sha256": "0f0751f401a98848d78e632f8748c02ff34e834185cfd6d44be55731c2fc1af0"
     },
     {
       "path": "automation/launch_ledger.py",
