@@ -15,7 +15,7 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
 | M6 independent reviewer | pipeline done; live model run pending |
 | M7 genuine qualification (A0 qualified; frozen pilot preflighted) | done |
 | M8 launch-safety verification | done (live capture stays disabled) |
-| M9 docs and PR | not started |
+| M9 docs and PR | done (draft PR #181, not merged) |
 
 ## M1 -- established
 
@@ -367,6 +367,40 @@ pin), which is why the worktree count is 35 rather than 34.
   cannot be guaranteed cluster-wide regardless of what DSH does. That is why
   this PR keeps DSH capture disabled instead of shipping a coordination story it
   cannot enforce.
+
+## M9 -- documentation and PR
+
+- `docs/dsh-native-goal.md` covers the architecture, the two-axis verdict model, the
+  checker-aware retry policy, completion and the guard, candidate snapshots and the
+  journal, the execution roots and their assertions, the reviewer channel, the Ghidra
+  replica, the launch-ledger limits, the threat model, and the operator commands.
+- `dsh/README.md` covers the profile and scripts; `automation/README.md` gained a pointer.
+- The branch was rebased onto `main` (`606223b`) after the base landed as PR #179, so the
+  PR is not stacked. Everything was re-verified after the rebase: 75 DSH tests, 86 OpenCode
+  tests, 11 node tests, compileall, preflight.
+- Draft PR: https://github.com/HagbardCel/eu4-mac-perf/pull/181 -- opened, deliberately not
+  merged.
+
+## Remaining work (operator-gated, not autonomous)
+
+Three acceptance items need a human or spend, and are scripted and documented but not
+executed here:
+
+1. **Live autonomous `/goal` smoke run.** `create_goal` requires direct-human authority, so
+   the loop cannot be started from a script. `dsh/scripts/smoke-goal.sh` prints the exact
+   `/goal` objective; the expected sequence is round 1 validate-fail, native continuation,
+   the model writes `ready`, round 2 validate-pass, and completion only through
+   `eu4_finalize_candidate`.
+2. **Live reviewer run.** `review-run` without `--reviewer-cmd` invokes
+   `dsh --profile headless --json`, which needs provider credentials and spends tokens. The
+   host-mediated channel, schema validation and receipt writing are all tested with a
+   scripted reviewer; only the model call is missing.
+3. **A reconstruction campaign reaching `qualified`.** A0 is a genuine evidence-backed
+   qualification (repaired against the frozen instruction-static oracle), but it is a
+   trusted-validation campaign, not a reconstruction. The frozen reconstruction pilot
+   (`eu4-vertex-buffer-multiple`) is honestly blocked at "research note is missing" because
+   this milestone deliberately does not implement the renderer. Closing this needs a
+   campaign run by the DSH agent, which depends on item 1.
 
 ## Pending / caveats
 
