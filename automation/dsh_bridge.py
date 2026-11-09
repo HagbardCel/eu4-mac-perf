@@ -32,7 +32,7 @@ from automation.dsh_campaign import (
     load_sidecar,
     path_allowed,
 )
-from automation.runner import run_accept
+from automation.acceptance import run_accept
 from automation.state import campaign_lock, ensure_workspace, require_worktree
 from automation.verification_manifest import (
     digest_manifest,
@@ -81,7 +81,7 @@ def _git(path: Path, *args: str) -> str:
 
 
 class _AcceptShim:
-    """The three attributes ``automation.runner.run_accept`` reads.
+    """The three attributes ``automation.acceptance.run_accept`` reads.
 
     Reusing the runner's execution and verdict parsing keeps one source of truth
     for timeout handling, the output cap and the verdict vocabulary.

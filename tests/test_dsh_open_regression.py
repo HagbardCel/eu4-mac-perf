@@ -4,9 +4,10 @@ The plan requires the infrastructure PR to be reviewed for accidental OpenCode
 dependency, duplicated validation logic and unnecessary privilege. These are the
 mechanical parts of that review, encoded so they cannot regress silently.
 
-Reusing `automation.runner.run_accept` is deliberate: the verdict vocabulary and
-timeout handling have one source of truth. Reusing the OpenCode *adapter* or its
-campaign loop is not.
+Checker execution now lives in `automation.acceptance`, shared by the OpenCode
+runner and the DSH bridge, so neither backend owns a private copy of the verdict
+vocabulary. Depending on the OpenCode *adapter* or its campaign loop is still
+forbidden.
 """
 
 import ast
@@ -45,17 +46,21 @@ class OpenCodeIndependenceTests(unittest.TestCase):
                     for alias in node.names:
                         self.assertNotIn(alias.name, FORBIDDEN_IMPORTS, path.name)
 
-    def test_the_only_runner_dependency_is_the_verdict_helper(self) -> None:
-        """The bridge reuses run_accept; it must not reach for the Runner loop."""
-        found = []
+    def test_no_dsh_module_imports_the_opencode_runner(self) -> None:
+        """Acceptance moved to a shared module, so the bridge needs no runner."""
         for path in DSH_MODULES:
             for node in imports_of(path):
-                if isinstance(node, ast.ImportFrom) and node.module == "automation.runner":
-                    found.append((path.name, sorted(a.name for a in node.names)))
-        self.assertTrue(found, "the bridge is expected to reuse run_accept")
-        for name, aliases in found:
-            self.assertEqual(aliases, ["run_accept"],
-                             f"{name} imports more of the OpenCode runner than run_accept")
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    self.assertNotEqual(node.module, "automation.runner", path.name)
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        self.assertNotEqual(alias.name, "automation.runner", path.name)
+
+    def test_both_backends_run_the_same_acceptance_function(self) -> None:
+        from automation import acceptance
+        from automation import runner
+
+        self.assertIs(runner.run_accept, acceptance.run_accept)
 
     def test_no_dsh_module_spawns_a_shell(self) -> None:
         """Every subprocess is argv-based: no shell interpolation of model text."""

@@ -24,6 +24,7 @@ from automation.state import (
     save_state,
 )
 from automation.telemetry import append, redact
+from automation.acceptance import run_accept  # noqa: F401  (re-exported)
 from automation.verification_manifest import (
     digest_manifest,
     load_manifest,
@@ -31,7 +32,6 @@ from automation.verification_manifest import (
 )
 
 _INSTRUCTIONS = (Path(__file__).parent / "prompts" / "agent.md").read_text(encoding="utf-8")
-_OUTPUT_CAP = 65536
 _SKILL_REL = ".opencode/skills/opengl-metal-reconstruction/SKILL.md"
 _SKILL_ID = "opengl-metal-reconstruction"
 
@@ -475,48 +475,6 @@ class Runner:
         }
         record.update(data)
         append(self.log_path, [record])
-
-
-def run_accept(campaign: Campaign, workspace: Path) -> dict:
-    env = os.environ.copy()
-    env.pop("OPENCODE_SERVER_PASSWORD", None)
-    env.pop("OPENCODE_SERVER_USERNAME", None)
-    try:
-        completed = subprocess.run(
-            [*campaign.accept, str(workspace)],
-            cwd=campaign.root,
-            env=env,
-            capture_output=True,
-            timeout=campaign.accept_timeout,
-            shell=False,
-        )
-    except subprocess.TimeoutExpired:
-        return _bad(None, "timeout")
-    # shortcut: the process can emit more than the cap before we notice; the tail is not logged
-    if len(completed.stdout) > _OUTPUT_CAP:
-        return _bad(completed.returncode, "truncated")
-    try:
-        payload = json.loads(completed.stdout.decode())
-    except (json.JSONDecodeError, UnicodeError):
-        return _bad(completed.returncode, "unreadable")
-    verdict = payload.get("verdict") if isinstance(payload, dict) else None
-    diagnostics = ""
-    if isinstance(payload, dict) and payload.get("diagnostics") is not None:
-        diagnostics = str(payload["diagnostics"])
-    if verdict not in ("pass", "fail", "inconclusive", "blocked", "unavailable"):
-        return _bad(completed.returncode, diagnostics or "unreadable")
-    if verdict == "pass" and completed.returncode != 0:
-        return _bad(completed.returncode, diagnostics)
-    return {
-        "ok": True,
-        "verdict": verdict,
-        "exit_code": completed.returncode,
-        "diagnostics": diagnostics,
-    }
-
-
-def _bad(exit_code, diagnostics: str) -> dict:
-    return {"ok": False, "verdict": None, "exit_code": exit_code, "diagnostics": diagnostics}
 
 
 def json_text(value) -> str:
