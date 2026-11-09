@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from automation.campaign_contract import read_contract
+
 
 @dataclass
 class Campaign:
@@ -35,6 +37,7 @@ class Campaign:
 
 
 def load_campaign(path: Path) -> Campaign:
+    """OpenCode's campaign loader: the shared contract plus its own fields."""
     path = Path(path).resolve()
     data = json.loads(path.read_text(encoding="utf-8"))
     required = (
@@ -49,9 +52,10 @@ def load_campaign(path: Path) -> Campaign:
     model = str(data["model"])
     if "/" not in model:
         raise ValueError("model must be provider/id")
-    root = path.parent
-    checker = _checker_file(root, data["accept"])
-    seed, worktree, commit = _workspace(root, data["workspace"])
+
+    # Everything both backends need is resolved once, in the shared reader.
+    contract = read_contract(path)
+
     live_limit = None
     live_deadline = None
     raw_live = data.get("live_observation")
@@ -68,42 +72,25 @@ def load_campaign(path: Path) -> Campaign:
                 raise ValueError(
                     "live_observation.deadline_seconds must be 1..600"
                 )
-    manifest = None
-    raw_manifest = data.get("verification_manifest")
-    if raw_manifest:
-        candidate = Path(str(raw_manifest))
-        if not candidate.is_absolute():
-            candidate = (root / candidate).resolve()
-        manifest = candidate
     return Campaign(
-        id=str(data["id"]),
-        root=root,
-        objective_text=(root / data["objective"]).read_text(encoding="utf-8"),
+        id=contract.id,
+        root=contract.root,
+        objective_text=contract.objective_text,
         runtime=data["runtime"],
         model=model,
         opencode_version=str(data["opencode_version"]),
-        seed=seed,
-        worktree=worktree,
-        worktree_commit=commit,
-        accept=[str(part) for part in data["accept"]],
-        checker=checker,
+        seed=contract.seed,
+        worktree=contract.worktree,
+        worktree_commit=contract.baseline_commit,
+        accept=list(contract.accept),
+        checker=contract.checker,
         max_rounds=int(data["max_rounds"]),
         max_seconds=float(data["max_seconds"]),
-        accept_timeout=float(data["accept_timeout_seconds"]),
-        verification_manifest=manifest,
+        accept_timeout=contract.accept_timeout,
+        verification_manifest=contract.verification_manifest,
         live_launch_limit=live_limit,
         live_deadline_seconds=live_deadline,
     )
-
-
-def _checker_file(root: Path, accept: list) -> Path:
-    for part in accept:
-        candidate = Path(str(part))
-        if not candidate.is_absolute():
-            candidate = root / candidate
-        if candidate.is_file():
-            return candidate.resolve()
-    raise ValueError("accept command does not name a checker file")
 
 
 def file_sha256(path: Path) -> str:
@@ -125,19 +112,6 @@ def load_state(path: Path) -> dict | None:
 
 def save_state(path: Path, state: dict) -> None:
     atomic_write(path, json.dumps(state, indent=2, sort_keys=True) + "\n")
-
-
-def _workspace(campaign_dir: Path, spec) -> tuple[Path | None, Path | None, str | None]:
-    if isinstance(spec, str):
-        return (campaign_dir / spec).resolve(), None, None
-    if not isinstance(spec, dict) or spec.get("mode") != "worktree":
-        raise ValueError("workspace must be a seed path or a worktree object")
-    raw = Path(str(spec["path"]))
-    live = raw if raw.is_absolute() else repo_root(campaign_dir) / raw
-    commit = str(spec["commit"])
-    if not commit:
-        raise ValueError("worktree commit is required")
-    return None, live.resolve(), commit
 
 
 def git_common_dir(path: Path) -> Path:

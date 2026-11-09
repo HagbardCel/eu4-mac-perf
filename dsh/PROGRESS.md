@@ -783,6 +783,34 @@ run:
   that the *validate* result does not carry. The binding is now written from the
   `prepare` result, and kept in memory when it cannot be persisted.
 
+## Phase 2B -- one campaign contract, two readers
+
+`automation/campaign_contract.py` now resolves the fields both backends need:
+objective and its digest, the accept command and the trusted checker it names,
+the optional verification manifest, the candidate workspace mode with its seed or
+pinned baseline, and the checker timeout. The OpenCode loader and the DSH sidecar
+reader both consume it, so there is no second campaign schema.
+
+What stayed backend-specific, deliberately:
+
+- the OpenCode loader keeps `runtime`, `model`, `opencode_version`, round and
+  time limits, and its live-observation parsing;
+- the DSH sidecar keeps its run root, orchestration limits, retry policy and
+  candidate policy.
+
+Containment turned out to be a **policy**, not a shared rule: existing OpenCode
+fixtures legitimately reuse a checker from a sibling directory, so the shared
+reader only resolves what the campaign states and the DSH reader keeps its own
+"checker and seed must live inside the campaign" checks. Enforcing containment
+in the contract broke 24 OpenCode tests, which is exactly the kind of assertion
+that belongs to one backend.
+
+Deleted from `dsh_campaign.py`: the duplicated objective, accept, manifest and
+seed loaders (roughly 60 lines), replaced by thin adapters over the contract.
+
+Verified: 86 OpenCode tests, 109 DSH tests, 23 node tests, compileall clean, and
+the prepared campaign still reports `current: true` with the pass receipt.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

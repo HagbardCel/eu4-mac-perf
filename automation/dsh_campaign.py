@@ -19,6 +19,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from automation.campaign_contract import CampaignContractError, read_contract
 from automation.verification_manifest import canonical_json, digest_text
 
 SCHEMA = "eu4-dsh-campaign/v1"
@@ -138,16 +139,21 @@ def load_sidecar(path: Path, *, infra: Path | None = None) -> Sidecar:
     if "/" in campaign_id or campaign_id in (".", ".."):
         raise SidecarError("campaign_id must be a plain identifier")
 
-    source_campaign, campaign = _load_source(data, infra)
-    campaign_root = source_campaign.parent
+    source_campaign = _source_campaign(data, infra)
+    contract = _contract(source_campaign)
+    campaign_root = contract.campaign_root
+    campaign = contract.raw
+    _require_policy_containment(contract)
 
-    objective_text, objective_digest = _load_objective(campaign, campaign_root)
-    accept, checker = _load_accept(campaign, campaign_root)
-    manifest = _load_manifest_path(campaign, campaign_root)
+    objective_text = contract.objective_text
+    objective_digest = contract.objective_digest
+    accept = contract.accept
+    checker = contract.checker
+    manifest = contract.verification_manifest
+    if manifest is not None and not manifest.is_file():
+        raise SidecarError(f"verification manifest not found: {manifest}")
 
-    mode, workspace_raw, seed, baseline = _load_candidate(
-        data, campaign, campaign_root
-    )
+    mode, workspace_raw, seed, baseline = _load_candidate(data, contract)
     run_root = _load_run_root(data, infra, campaign_id)
     workspace = _load_workspace(workspace_raw, run_root)
     if run_root == workspace or _inside(run_root, workspace):
@@ -202,80 +208,61 @@ def load_sidecar(path: Path, *, infra: Path | None = None) -> Sidecar:
     )
 
 
-def _load_source(data: dict, infra: Path) -> tuple[Path, dict]:
+def _source_campaign(data: dict, infra: Path) -> Path:
     raw = data.get("source_campaign")
     if not raw:
         raise SidecarError("source_campaign is required")
     source = _resolve(infra, raw)
     if not source.is_file():
         raise SidecarError(f"source campaign not found: {source}")
-    try:
-        campaign = json.loads(source.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise SidecarError(f"source campaign is not valid JSON: {exc}") from exc
-    if not isinstance(campaign, dict):
-        raise SidecarError("source campaign must be a JSON object")
     if not _inside(source.parent, infra):
         raise SidecarError(
             "campaign root must live inside the trusted checkout: " + str(source.parent)
         )
-    return source, campaign
+    return source
 
 
-def _load_objective(campaign: dict, campaign_root: Path) -> tuple[str, str]:
-    raw = campaign.get("objective")
-    if not raw:
-        raise SidecarError("source campaign declares no objective")
-    path = _resolve(campaign_root, raw)
-    if not _inside(path, campaign_root):
-        raise SidecarError("objective must live inside the campaign directory")
-    if not path.is_file():
-        raise SidecarError(f"objective not found: {path}")
-    text = path.read_text(encoding="utf-8")
-    return text, digest_text(text)
+class _Contract:
+    """The shared campaign contract plus the fields this reader needs."""
+
+    def __init__(self, contract, source: Path):
+        self.campaign_root = source.parent
+        self.raw = contract.raw
+        self.objective_text = contract.objective_text
+        self.objective_digest = contract.objective_digest
+        self.accept = contract.accept
+        self.checker = contract.checker
+        self.verification_manifest = contract.verification_manifest
+        self.seed = contract.seed
+        self.baseline_commit = contract.baseline_commit
 
 
-def _load_accept(campaign: dict, campaign_root: Path) -> tuple[tuple[str, ...], Path]:
-    raw = campaign.get("accept")
-    if not isinstance(raw, list) or not raw:
-        raise SidecarError("source campaign accept must be a non-empty list")
-    accept = [str(part) for part in raw]
-    checker = None
-    for part in accept:
-        candidate = _resolve(campaign_root, part)
-        if candidate.is_file():
-            checker = candidate
-            break
-    if checker is None:
-        raise SidecarError("accept command does not name a checker file")
-    if not _inside(checker, campaign_root):
-        raise SidecarError("checker must live inside the campaign directory")
-    return tuple(accept), checker
+def _contract(source: Path) -> _Contract:
+    try:
+        return _Contract(read_contract(source), source)
+    except CampaignContractError as exc:
+        raise SidecarError(str(exc)) from exc
 
 
-def _load_manifest_path(campaign: dict, campaign_root: Path) -> Path | None:
-    raw = campaign.get("verification_manifest")
-    if not raw:
-        return None
-    path = _resolve(campaign_root, raw)
-    if not path.is_file():
-        raise SidecarError(f"verification manifest not found: {path}")
-    return path
+def _require_policy_containment(contract: _Contract) -> None:
+    """A sidecar may only reference trusted material inside its campaign."""
+    try:
+        contract.checker.relative_to(contract.campaign_root)
+    except ValueError as exc:
+        raise SidecarError("checker must live inside the campaign directory") from exc
+    if contract.seed is not None and not contract.seed.is_dir():
+        raise SidecarError(f"seed workspace not found: {contract.seed}")
 
 
-def _load_candidate(data: dict, campaign: dict, campaign_root: Path):
+def _load_candidate(data: dict, contract: _Contract):
     candidate = _require_object(data.get("candidate"), "candidate")
     mode = str(candidate.get("mode") or "")
     if mode not in MODES:
         raise SidecarError("candidate.mode must be seed or worktree")
 
     declared = data.get("candidate_baseline_commit")
-    campaign_pin = None
-    workspace_spec = campaign.get("workspace")
-    if isinstance(workspace_spec, dict) and workspace_spec.get("mode") == "worktree":
-        campaign_pin = str(workspace_spec.get("commit") or "") or None
-    baseline = str(declared) if declared else campaign_pin
-    if declared and campaign_pin and str(declared) != campaign_pin:
+    baseline = str(declared) if declared else contract.baseline_commit
+    if declared and contract.baseline_commit and str(declared) != contract.baseline_commit:
         raise SidecarError(
             "candidate_baseline_commit does not match the source campaign pin; "
             "these are different identities and must not be substituted"
@@ -289,13 +276,11 @@ def _load_candidate(data: dict, campaign: dict, campaign_root: Path):
         if not baseline:
             raise SidecarError("worktree mode requires a candidate_baseline_commit")
     else:
-        if not isinstance(workspace_spec, (str, Path)):
+        if contract.seed is None:
             raise SidecarError(
                 "seed mode requires the source campaign to declare a seed workspace"
             )
-        seed = _resolve(campaign_root, workspace_spec)
-        if not seed.is_dir():
-            raise SidecarError(f"seed workspace not found: {seed}")
+        seed = contract.seed
     return mode, workspace_raw, seed, baseline
 
 
