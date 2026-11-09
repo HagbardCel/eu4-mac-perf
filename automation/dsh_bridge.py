@@ -679,18 +679,23 @@ def _freeze(sidecar: Sidecar) -> dict:
     }
 
 
-def _oracle_digest(identities: dict) -> str:
+def _oracle_digest(sidecar: Sidecar, identities: dict) -> str:
     """What the reviewer must hold the candidate to.
 
     A campaign with a verification manifest uses its digest. One without uses
-    the sealed evidence-input digest, because ``eu4-review/v1`` requires a
-    64-hex oracle identity and inventing a constant would be worse.
+    the sealed evidence-input digest -- but only when the sidecar actually
+    declares evidence. Without that, ``evidence_inputs_digest`` is the digest of
+    an empty list: a meaningless identity dressed up as an oracle. A live
+    reviewer caught exactly this and returned ``unresolved`` naming it, so an
+    undeclared evidence identity now refuses the review instead of being passed
+    off as one.
     """
-    return (
-        identities.get("verification_manifest_digest")
-        or identities.get("evidence_inputs_digest")
-        or ""
-    )
+    manifest = identities.get("verification_manifest_digest")
+    if manifest:
+        return manifest
+    if sidecar.evidence_paths:
+        return identities.get("evidence_inputs_digest") or ""
+    return ""
 
 
 def _freeze_once(sidecar: Sidecar, identities: dict) -> dict:
@@ -736,7 +741,10 @@ def _review_problem(sidecar: Sidecar, frozen: dict, *, require_live: bool = True
         report = json.loads(paths["report"].read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         return [f"review report unreadable: {exc}"]
-    oracle = _oracle_digest((receipts.load_current_receipt(sidecar.run_root) or {}).get("identities") or {})
+    oracle = _oracle_digest(
+        sidecar,
+        (receipts.load_current_receipt(sidecar.run_root) or {}).get("identities") or {},
+    )
     problems = validate_review(
         report,
         expected_candidate_commit=frozen.get("commit") or None,
@@ -933,6 +941,12 @@ def op_review_preflight(args) -> int:
         _check_anchor(_prepared_identities(sidecar), current)
 
         frozen = _freeze_once(sidecar, current)
+        if not _oracle_digest(sidecar, current):
+            raise Refusal(
+                "review_identity_missing",
+                "this campaign declares no verification manifest and no evidence "
+                "paths, so a review could not be bound to any oracle identity",
+            )
         if not frozen.get("commit"):
             raise Refusal(
                 "review_needs_commit",
@@ -945,7 +959,7 @@ def op_review_preflight(args) -> int:
             review.prepare_worktree(
                 infra_root().resolve(), paths["worktree"], frozen["commit"]
             )
-        oracle = _oracle_digest(current)
+        oracle = _oracle_digest(sidecar, current)
         handoff_primitives.write_reviewer_invocation(
             paths["invocation"],
             campaign_id=sidecar.campaign_id,
@@ -993,6 +1007,12 @@ def op_review_run(args) -> int:
         if receipt is None or (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
             raise Refusal("not_qualified", "no passing validation to review")
         frozen = _freeze_once(sidecar, current)
+        if not _oracle_digest(sidecar, current):
+            raise Refusal(
+                "review_identity_missing",
+                "this campaign declares no verification manifest and no evidence "
+                "paths, so a review could not be bound to any oracle identity",
+            )
         if not frozen.get("commit"):
             raise Refusal(
                 "review_needs_commit",
@@ -1005,7 +1025,7 @@ def op_review_run(args) -> int:
             review.prepare_worktree(
                 infra_root().resolve(), paths["worktree"], frozen["commit"]
             )
-        oracle = _oracle_digest(current)
+        oracle = _oracle_digest(sidecar, current)
         handoff_primitives.write_reviewer_invocation(
             paths["invocation"],
             campaign_id=sidecar.campaign_id,

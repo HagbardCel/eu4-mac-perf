@@ -521,9 +521,35 @@ have no commit to check out, so `review-preflight` and `review-run` now refuse
 `review_needs_commit` -- previously the smoke campaign, which is seed mode, could
 not be reviewed at all and failed with a traceback.
 
-The live reviewer path is therefore **proven to work** (one run qualified and
-wrote a live receipt) and **not yet captured**: a deliberate run with a longer
-timeout is needed to record the outcome and receipt as evidence.
+### Deliberate live capture (recorded)
+
+Approved by the operator after the unintended run above. A headless reviewer
+completed in 334s against a worktree candidate:
+
+| field | value |
+|---|---|
+| outcome | **`unresolved`** (not qualified) |
+| qualification_mode | `live` |
+| reviewer session | `session-ab907543-6ca8-4901-bac0-3bbc1dd0e9aa` |
+| findings | 1 (P1, `evidence_gap`) |
+| receipt | `eu4-reviewer-receipt/v1`, report sha256 `2c0cb46b…` |
+| strict `review-verify` | not qualified -- "review outcome was unresolved" |
+| `finalize` | refused `review_required` |
+
+The reviewer did not accept a thin candidate, which is the behaviour the design
+wants. Its finding was also substantively correct and found a real flaw:
+
+> "The candidate delta against aa16c30 is only an added candidate.txt … it makes
+> no migration change. The oracle identity 37517e5f… is exactly sha256 of the
+> canonical empty evidence list."
+
+That is true. `_oracle_digest` fell back to `evidence_inputs_digest`, which for a
+campaign with no manifest and no declared evidence is the digest of an empty
+list -- a meaningless identity presented as an oracle. `eu4-review/v1` requires a
+64-hex oracle, and I had chosen the empty-list digest over "inventing a
+constant"; the reviewer showed that is the same mistake wearing a hash. Review
+now refuses `review_identity_missing` unless the campaign declares a verification
+manifest or evidence paths, so a reviewer is never handed a fake oracle.
 
 ## Remaining work (operator-gated, not autonomous)
 

@@ -115,6 +115,9 @@ class ReviewCase(BridgeTestCase):
             "policy": {"allowed_paths": ["candidate.txt"]},
         }
         data["candidate_baseline_commit"] = self.base
+        # A review must be bound to a declared evidence identity; README.md is
+        # untouched by these tests, so it is stable across rounds.
+        data["evidence"] = {"paths": ["README.md"]}
         data["goal"] = {"max_rounds": 4, "require_checker_pass": True,
                         "require_independent_review": review_required}
         sidecar.write_text(json.dumps(data), encoding="utf-8")
@@ -213,6 +216,7 @@ class ReviewPipelineTests(ReviewCase):
         data = json.loads(sidecar.read_text(encoding="utf-8"))
         data["goal"] = {"max_rounds": 4, "require_checker_pass": True,
                         "require_independent_review": True}
+        data["evidence"] = {"paths": ["marker.txt"]}
         sidecar.write_text(json.dumps(data), encoding="utf-8")
         self.run_bridge("prepare", sidecar)
         self.run_bridge("validate", sidecar)
@@ -222,6 +226,21 @@ class ReviewPipelineTests(ReviewCase):
                 self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
                 self.assertEqual(out["kind"], "review_needs_commit")
                 self.assertIn("no commit", out["detail"])
+
+    def test_a_campaign_without_an_evidence_identity_cannot_be_reviewed(self) -> None:
+        """A live reviewer called the empty-evidence digest a gap; do not offer it."""
+        sidecar = self.review_sidecar(review_required=True)
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data.pop("evidence", None)
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        for operation in ("review-preflight", "review-run"):
+            with self.subTest(operation=operation):
+                code, out = self.run_bridge(operation, sidecar)
+                self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+                self.assertEqual(out["kind"], "review_identity_missing")
+                self.assertIn("no evidence", out["detail"])
 
     def test_an_unexpected_exception_still_emits_json(self) -> None:
         """The CLI contract is fail-closed JSON, never a traceback on stdout."""
