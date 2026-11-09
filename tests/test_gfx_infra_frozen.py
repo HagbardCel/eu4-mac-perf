@@ -842,6 +842,108 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(launch_ledger.load_ledger(ledger)["used"], 6)
 
 
+class CheckerFreezeTests(unittest.TestCase):
+    def test_frozen_boundary_rejects_a_modified_trusted_dependency(self):
+        import json
+        import subprocess
+        from automation.gfx_l32b_hooks import L32bHooks
+
+        head = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        frozen = subprocess.run(
+            ["git", "-C", str(ROOT), "show",
+             f"{head}:campaigns/eu4-l32b-complete/l32b-manifest.json"],
+            capture_output=True, check=True,
+        ).stdout
+        manifest_sha = hashlib.sha256(frozen).hexdigest()
+        with tempfile.TemporaryDirectory() as raw:
+            worktree = Path(raw) / "worktree"
+            subprocess.run(
+                ["git", "-C", str(ROOT), "worktree", "add", "--detach",
+                 str(worktree), head],
+                check=True, capture_output=True,
+            )
+            try:
+                workflow = json.loads(
+                    (ROOT / "campaigns/eu4-l32b-complete/workflow.json").read_text()
+                )
+                hooks = L32bHooks(
+                    repo=ROOT, workflow=workflow, run_root=Path(raw) / "run"
+                )
+                target = worktree / "automation" / "gfx_evidence_policy.py"
+                target.write_text(target.read_text() + "\n# tampered\n")
+                problem = hooks._verify_frozen_boundary(worktree, head, manifest_sha)
+                self.assertIsNotNone(problem)
+                self.assertIn("trusted checker modified", problem)
+                target.write_bytes(
+                    subprocess.run(
+                        ["git", "-C", str(ROOT), "show",
+                         f"{head}:automation/gfx_evidence_policy.py"],
+                        capture_output=True, check=True,
+                    ).stdout
+                )
+                self.assertIsNone(
+                    hooks._verify_frozen_boundary(worktree, head, manifest_sha)
+                )
+            finally:
+                subprocess.run(
+                    ["git", "-C", str(ROOT), "worktree", "remove", "--force",
+                     str(worktree)],
+                    check=False, capture_output=True,
+                )
+
+
+class CaptureProvenanceTests(unittest.TestCase):
+    def test_capture_requires_a_completed_ledger_entry(self):
+        import json
+        from automation import launch_ledger
+        from automation.gfx_l32b_hooks import L32bHooks
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            run_root = tmp / "campaign"
+            capture = run_root / "captures" / "s1"
+            capture.mkdir(parents=True)
+            (capture / "capture-request.json").write_text(
+                json.dumps({"library_sha256": "a" * 64})
+            )
+            (capture / "operations-summary.json").write_text("{}")
+            ledger = tmp / "ledger.json"
+            launch_ledger.create_ledger(
+                ledger, workflow_id="wf", limit=6, deadline_seconds=120
+            )
+            launch_ledger.register_campaign(ledger, run_root.name, 3)
+            token = launch_ledger.claim(
+                ledger,
+                campaign_id=run_root.name,
+                run_root=run_root,
+                output=capture,
+                targets=["_GfxDraw"],
+                requested_timeout=120,
+            )
+            launch_ledger.finish(ledger, token, pid=1, status="completed")
+            launch_ledger.write_pointer(
+                run_root, workflow_id="wf", ledger_path=ledger, limit=6
+            )
+            workflow = json.loads(
+                (ROOT / "campaigns/eu4-l32b-complete/workflow.json").read_text()
+            )
+            hooks = L32bHooks(repo=ROOT, workflow=workflow, run_root=tmp / "run")
+            reference, problem = hooks._verify_capture(
+                run_root, capture, run_root / "live-launch.json"
+            )
+            self.assertIsNone(problem)
+            self.assertEqual(reference["token"], token)
+            self.assertEqual(reference["library_sha256"], "a" * 64)
+            launch_ledger.finish(ledger, token, pid=1, status="failed")
+            _reference, problem = hooks._verify_capture(
+                run_root, capture, run_root / "live-launch.json"
+            )
+            self.assertIsNotNone(problem)
+
+
 class LedgerPolicyTests(unittest.TestCase):
     def test_contract_campaign_is_denied_without_charging_the_ledger(self):
         from automation import launch_ledger

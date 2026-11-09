@@ -34,5 +34,7 @@
     "contract_version": "v0",
     "contract_sha256": "a8c8154c72f15301626ecc9a5ec5069617c62871224c86a1da99ed67854fc5f4",
     "manifest": "campaigns/eu4-l32b-complete/l32b-manifest.json"
-  }
+  },
+  "checker_freeze_commit": "PIN_AT_RUNTIME",
+  "checker_freeze_manifest_sha256": null
 }

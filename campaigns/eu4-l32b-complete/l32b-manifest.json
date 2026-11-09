@@ -19,7 +19,7 @@
     {
       "path": "campaigns/eu4-l32b-complete/workflow.json",
       "role": "campaign",
-      "sha256": "d8429ac649ab65509c60f170d064a16ad75893cd149d02c41c8a6fd2e0225a77"
+      "sha256": "39d8c6c12e9b570658426532e5c3576bb54d4cb2c3afc3084e467fa0b3ee4df3"
     },
     {
       "path": "automation/gfx_adversarial.py",
@@ -64,12 +64,12 @@
     {
       "path": "automation/gfx_l32b_complete.py",
       "role": "checker",
-      "sha256": "69d26f1fb650b91bbc1153fdcffcb43aca1a78f192970c70aebbfcfdcd45c195"
+      "sha256": "06e4eb81b7a07ff6a691fdc436371980174284901733e1efca503ba05daabe02"
     },
     {
       "path": "automation/gfx_l32b_hooks.py",
       "role": "checker",
-      "sha256": "4673b27c5c5bb6f5c58a7f0079373c00547affd7a25e1bfa428d86cb27fd4751"
+      "sha256": "c1a2b134ffb8308ac11048c786151ba7cbe7161f043a29ccbb943179cca9d2a9"
     },
     {
       "path": "automation/gfx_reviewer_v2.py",

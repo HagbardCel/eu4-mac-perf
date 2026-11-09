@@ -802,6 +802,42 @@ class L32bHooks:
             "published": True,
         }
 
+    def _verify_frozen_boundary(
+        self, worktree: Path, freeze_commit: str, expected_manifest: str | None
+    ) -> str | None:
+        manifest_path = "campaigns/eu4-l32b-complete/l32b-manifest.json"
+        frozen_manifest = subprocess.run(
+            ["git", "-C", str(self.repo), "show",
+             f"{freeze_commit}:{manifest_path}"],
+            capture_output=True, check=False,
+        )
+        if frozen_manifest.returncode != 0:
+            return "frozen manifest is missing at the checker freeze commit"
+        actual_manifest = hashlib.sha256(frozen_manifest.stdout).hexdigest()
+        if expected_manifest and actual_manifest != expected_manifest:
+            return "frozen manifest digest differs from the checker freeze pin"
+        try:
+            manifest = json.loads(frozen_manifest.stdout.decode())
+        except (json.JSONDecodeError, UnicodeError):
+            return "frozen manifest is unreadable"
+        for member in manifest.get("members") or []:
+            if not isinstance(member, dict):
+                return "frozen manifest member is invalid"
+            if member.get("role") not in ("checker", "frozen_test"):
+                continue
+            rel = str(member.get("path") or "")
+            if not rel:
+                return "frozen manifest member has no path"
+            frozen = subprocess.run(
+                ["git", "-C", str(self.repo), "show", f"{freeze_commit}:{rel}"],
+                capture_output=True, check=False,
+            )
+            current = worktree / rel
+            if frozen.returncode != 0 or not current.is_file() \
+                    or current.read_bytes() != frozen.stdout:
+                return f"trusted checker modified: {rel}"
+        return None
+
     def _post_integration(self, commit: Path, state: dict) -> dict:
         from automation.gfx_checkpoint import source_tree_digest_at_commit
         from automation.gfx_draw_accept_v2 import build_candidate
@@ -846,23 +882,19 @@ class L32bHooks:
                 "checker": "fail",
                 "detail": "checker freeze commit is missing",
             }
-        for rel in (
-            "automation/gfx_draw_accept_v2.py",
-            "automation/gfx_contracts/api.py",
-            "campaigns/eu4-l32b-complete/accept.py",
-        ):
-            frozen = subprocess.run(
-                ["git", "-C", str(self.repo), "show", f"{checker_commit}:{rel}"],
-                capture_output=True, check=False,
-            )
-            current = (worktree / rel)
-            if frozen.returncode != 0 or not current.is_file() \
-                    or current.read_bytes() != frozen.stdout:
-                return {
-                    "status": "failed",
-                    "checker": "fail",
-                    "detail": f"trusted checker modified: {rel}",
-                }
+        expected_manifest = (
+            state.get("checker_freeze_manifest_sha256")
+            or self.workflow.get("checker_freeze_manifest_sha256")
+        )
+        problem = self._verify_frozen_boundary(
+            worktree, checker_commit, expected_manifest
+        )
+        if problem:
+            return {
+                "status": "failed",
+                "checker": "fail",
+                "detail": problem,
+            }
         diff = subprocess.run(
             ["git", "-C", str(self.repo), "diff", "--name-only", base, commit],
             capture_output=True, text=True, check=False,
@@ -948,7 +980,22 @@ class L32bHooks:
                 checkpoint_capture = document.get("capture") or {}
                 if isinstance(checkpoint_capture, dict):
                     capture = checkpoint_capture.get("capture_dir")
-                    reference = checkpoint_capture
+                    if capture:
+                        capture_root = Path(str(capture)).parent.parent
+                        verified, problem = self._verify_capture(
+                            capture_root, Path(str(capture)),
+                            capture_root / "live-launch.json",
+                        )
+                        if problem:
+                            return {
+                                "status": "pending_capture",
+                                "commit": commit,
+                                "base_head": base,
+                                "capture_required": True,
+                                "observer_library_sha256": candidate_sha,
+                                "detail": problem,
+                            }
+                        reference = verified
         if not capture:
             return {
                 "status": "pending_capture",

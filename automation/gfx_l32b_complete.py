@@ -93,6 +93,10 @@ def default_state(workflow: dict) -> dict:
         "candidate_review": None,
         "final_review": None,
         "trusted_contract": workflow.get("trusted_contract"),
+        "checker_freeze_commit": workflow.get("checker_freeze_commit"),
+        "checker_freeze_manifest_sha256": workflow.get(
+            "checker_freeze_manifest_sha256"
+        ),
         "oracle_manifest_sha256": workflow.get("oracle_manifest_sha256"),
         "contract_workspace": None,
         "contract_version": None,
@@ -281,6 +285,28 @@ class Coordinator:
                 state["blocker"] = {"reason": "trusted_contract_pin_unresolved"}
                 return state
             trusted["commit"] = completed.stdout.strip()
+        freeze = state.get("checker_freeze_commit")
+        if freeze == "PIN_AT_RUNTIME":
+            completed = subprocess.run(
+                ["git", "-C", str(self.repo), "rev-parse", "HEAD"],
+                capture_output=True, text=True, check=False,
+            )
+            if completed.returncode != 0 or not completed.stdout.strip():
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "checker_freeze_unresolved"}
+                return state
+            state["checker_freeze_commit"] = completed.stdout.strip()
+            freeze = state["checker_freeze_commit"]
+        if freeze and not state.get("checker_freeze_manifest_sha256"):
+            manifest = subprocess.run(
+                ["git", "-C", str(self.repo), "show",
+                 f"{freeze}:campaigns/eu4-l32b-complete/l32b-manifest.json"],
+                capture_output=True, check=False,
+            )
+            if manifest.returncode == 0:
+                state["checker_freeze_manifest_sha256"] = hashlib.sha256(
+                    manifest.stdout
+                ).hexdigest()
         if not state.get("oracle_manifest_sha256"):
             trusted = state.get("trusted_contract") or {}
             manifest = trusted.get("manifest")
