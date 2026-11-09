@@ -29,13 +29,15 @@ function harness(results) {
     agents: {},
     _state: state,
   }
-  const bridge = async (_infra, _python, operation) => {
+  const calls = []
+  const bridge = async (_infra, _python, operation, _sidecar, extra) => {
     ops.push(operation)
+    if (extra && extra.length) calls.push([operation, ...extra])
     const value = results[operation]
     return typeof value === 'function' ? value() : value
   }
   apply(ctx, { sidecar: '/tmp/campaign.json', infra: INFRA, bridge })
-  return { ctx, ops }
+  return { ctx, ops, calls }
 }
 
 function tool(ctx, name) {
@@ -120,4 +122,27 @@ test('an unavailable session cwd is refused rather than assumed', async () => {
   )
   assert.equal(result.kind, 'workspace_mismatch')
   assert.match(result.detail, /session working directory is unavailable/)
+})
+
+test('the session identity comes from the harness object, not argv', async () => {
+  const { ctx, calls } = harness({
+    prepare: { ok: true, workspace: '/tmp/ws' },
+    status: { ok: true, run_root: '/tmp/run', workspace: '/tmp/ws' },
+    validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
+  })
+  // `agent.sessionId` is absent in headless; the id lives on the session.
+  const headlessAgent = { id: 'agent-1', session: { id: 'sess-1', header: { cwd: '/tmp' } } }
+  await tool(ctx, 'eu4_validate_candidate').execute({}, { agent: headlessAgent })
+  assert.deepEqual(calls, [['validate', '--session-id', 'sess-1']])
+})
+
+test('an agent with no session identity does not send the flag at all', async () => {
+  const { ctx, calls } = harness({
+    prepare: { ok: true, workspace: '/tmp/ws' },
+    validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
+  })
+  await tool(ctx, 'eu4_validate_candidate').execute(
+    {}, { agent: { session: { header: { cwd: '/tmp' } } } }
+  )
+  assert.deepEqual(calls, [], 'no --session-id with a missing identity')
 })

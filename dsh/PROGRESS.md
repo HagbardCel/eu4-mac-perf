@@ -719,6 +719,45 @@ workspace in the UI and create the session there -- then paste the printed
 objective. Until that session exists, every later phase stays blocked by the
 directive's own gate.
 
+## Phase 0 -- gate PASSED (genuine autonomous run)
+
+Run with `dsh/scripts/run-campaign.sh dsh/campaigns/offline-smoke.json --json`,
+which binds the session workspace *before* DSH starts: it prepares the campaign,
+resolves the workspace, generates a `--patch` overlay mounting this checkout's
+plugin and skill root into the shipped `headless` profile, `cd`s to the workspace
+and launches. No Python process drives the loop; the shipped goal-round driver
+owns it.
+
+Evidence from that run:
+
+| item | value |
+|---|---|
+| session | `session-f7427783-9fe5-499a-80a8-de11071ae8f9` |
+| session cwd | `<checkout>/.local/dsh/dsh-offline-smoke/workspace` (the campaign workspace) |
+| goal | `goal-05f2a045-9df4-4ff6-8847-9b9d1fc706be`, phase `complete` |
+| tool order | `create_goal`, status, bash/read, write, edit, bash, **validate (fail)**, **validate (pass)**, **finalize (pass)**, `get_goal` |
+| receipts | `b0685081-r1.json` (fail), `b0685081-r2.json` (pass) |
+| finalization | `fresh_verdict: pass`, frozen seed digest `b0685081…`, 2 entries |
+| journal | 4 entries `receipt, receipt, freeze, finalization`, chain intact |
+| candidate | `marker.txt` = `ready` with no trailing newline; `progress.md` keeps one `## Next` heading |
+
+The model created its own goal from the task text (direct-human authority), fixed
+the candidate, took the checker from `fail` to `pass`, and completed through
+`eu4_finalize_candidate` -- the guard never let it self-certify.
+
+Two honest observations:
+
+1. The whole campaign completed in **one** headless turn. The goal-round driver
+   was not needed for multi-turn continuation here, so `fail → pass` was driven by
+   the model calling the checker twice in one turn, not by a scheduled round. A
+   campaign that needs several rounds still has to be observed.
+2. The run exposed a real defect: the finalization record says
+   `session_id: "undefined"` and the plugin binding has no `session_id` at all.
+   `agent.sessionId` does not exist on the headless runtime agent -- the id lives
+   on `agent.session.id` -- so the missing value was stringified into argv. Fixed
+   with an ordered identity chain and covered by tests; the record from this run
+   is left as-is because it is the evidence that found the bug.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not

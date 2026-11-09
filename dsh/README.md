@@ -33,6 +33,7 @@ Two deliberate deviations from the shipped web profile:
 ./dsh/scripts/skill-catalog.sh      # prove the agent's catalog has the skill
 ./dsh/scripts/run.sh                # boot the profile on a free port
 ./dsh/scripts/smoke-goal.sh [sidecar]  # print the exact /goal objective
+./dsh/scripts/run-campaign.sh <sidecar>  # start an autonomous campaign (headless, workspace-bound)
 ./dsh/scripts/ghidra-probe.sh       # reproduce the shared-project lock failure
 ./dsh/scripts/ghidra-replica.sh --check|--create  # private Ghidra replica
 ```

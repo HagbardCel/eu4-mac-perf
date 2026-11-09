@@ -165,6 +165,22 @@ export function apply(ctx, config = {}) {
     ctx.logger?.warn?.('[eu4-goal] no sidecar configured; campaign tools are unavailable')
   }
 
+  /**
+   * The session identity, from the harness object rather than argv.
+   *
+   * `agent.sessionId` is absent on the runtime agent in headless runs, where the
+   * session id lives on the session itself; passing the missing value through
+   * argv produced the literal string "undefined" in a finalization record. The
+   * chain is ordered so a real session id always wins over the agent id.
+   */
+  function sessionIdentity(agent) {
+    const candidates = [agent && agent.session && agent.session.id, agent && agent.sessionId, agent && agent.id]
+    for (const value of candidates) {
+      if (typeof value === 'string' && value) return value
+    }
+    return ''
+  }
+
   /** The harness's validated session working directory; never an env var. */
   function sessionCwd(agent) {
     const header = agent && agent.session && agent.session.header
@@ -242,7 +258,7 @@ export function apply(ctx, config = {}) {
         'current receipt, and whether it is stale relative to the candidate.',
       async (_args, exec) => {
         requireSidecar()
-        const sessionId = exec?.agent?.sessionId ?? 'unknown'
+        const sessionId = sessionIdentity(exec?.agent) || 'unknown'
         const goal = exec?.agent ? ctx.goals.get(exec.agent) : undefined
         const result = await bridge(infra, python, 'status', sidecar)
         if (result && result.run_root) {
@@ -261,7 +277,7 @@ export function apply(ctx, config = {}) {
         'sufficient: completion also requires eu4_finalize_candidate.',
       async (_args, exec) => {
         requireSidecar()
-        const sessionId = exec?.agent?.sessionId ?? 'unknown'
+        const sessionId = sessionIdentity(exec?.agent) || 'unknown'
         const goal = exec?.agent ? ctx.goals.get(exec.agent) : undefined
         // `validate` refuses an unprepared campaign and the model has no tool
         // to prepare one, so a fresh goal would stall here. `prepare` is
@@ -279,10 +295,8 @@ export function apply(ctx, config = {}) {
             detail: mismatch,
           }
         }
-        const result = await bridge(infra, python, 'validate', sidecar, [
-          '--session-id',
-          sessionId,
-        ])
+        const validateArgs = sessionId === 'unknown' ? [] : ['--session-id', sessionId]
+        const result = await bridge(infra, python, 'validate', sidecar, validateArgs)
         if (result && result.run_root) {
           persistBiding(sessionId, exec?.agent?.id, goal, result.run_root)
         }
@@ -301,7 +315,7 @@ export function apply(ctx, config = {}) {
         requireSidecar()
         const agent = exec?.agent
         if (!agent) throw new Error('finalization requires an owning agent')
-        const sessionId = agent.sessionId
+        const sessionId = sessionIdentity(agent)
         const live = ctx.goals.get(agent)
         const status = await bridge(infra, python, 'status', sidecar)
         const runRoot = status && status.run_root
@@ -335,10 +349,8 @@ export function apply(ctx, config = {}) {
             detail: mismatch,
           }
         }
-        const result = await bridge(infra, python, 'finalize', sidecar, [
-          '--session-id',
-          sessionId,
-        ])
+        const finalizeArgs = sessionId ? ['--session-id', sessionId] : []
+        const result = await bridge(infra, python, 'finalize', sidecar, finalizeArgs)
         const refusal = qualificationRefusal(result)
         if (refusal) {
           return { ...result, completion: 'refused', reason: refusal }
