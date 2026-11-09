@@ -230,6 +230,24 @@ legacy `busy` outcome covers only a transient campaign-local counter. DSH captur
 therefore stays disabled (`live_capture.enabled: true` is refused) until a
 host-wide process lease exists and every launch path adopts it.
 
+## What the ledger does and does not guarantee
+
+`automation.launch_ledger` is authoritative **accounting**: it refuses a claim
+when the budget is spent, and a started reservation stays charged through
+reconciliation. It is not mutual exclusion — `claim()` checks only the total, so
+two callers under a limit of three both receive valid reservations. The tests in
+`tests/test_dsh_launch_safety.py` pin that down so neither path can describe the
+ledger as a concurrency control.
+
+If host-wide exclusion is ever added, it belongs in a separate lease keyed by the
+executable SHA and the capture output, acquired before the launch and held for
+the lifetime of the game process, adopted by every launcher. Making the ledger's
+lock long-lived would convert an accounting record into a lock file and break its
+reconcile-without-refund semantics.
+
+Until then DSH capture stays disabled, and the DSH bridge is asserted to import
+no launch path at all.
+
 ## Threat model
 
 The qualification receipt is a record, not authority. Authority comes from a

@@ -14,7 +14,7 @@ Plan: rev. 3 (approved). Branch `dsh/native-goal`, base `6fa1888`
 | M5 recovery, limits, isolation | done |
 | M6 independent reviewer | pipeline done; live model run pending |
 | M7 genuine qualification (A0 qualified; frozen pilot preflighted) | done |
-| M8 launch-safety verification | not started |
+| M8 launch-safety verification | done (live capture stays disabled) |
 | M9 docs and PR | not started |
 
 ## M1 -- established
@@ -342,6 +342,31 @@ Two bugs were found by these runs and fixed:
 The frozen pilot's candidate worktree is intentionally materialized at
 `~/.local/share/eu4-dsh/state/dsh-frozen-offline/workspace` (detached at the
 pin), which is why the worktree count is 35 rather than 34.
+
+## M8 -- launch safety, stated precisely
+
+- `tests/test_dsh_launch_safety.py` pins the real semantics rather than a
+  convenient reading: the budget is enforced (a fourth claim under a limit of
+  three is refused `exhausted`), and **accounting is not mutual exclusion** --
+  two claims coexist as `reserved` while budget remains, because `claim()`
+  checks only the total. A started reservation stays charged through
+  reconciliation.
+- The DSH bridge is asserted to import no launch path at all: a source scan
+  rejects `live_gfx`, `launch_ledger` and `launch_counter_path`, so the DSH path
+  cannot start an original-EU4 launch even by accident.
+- A sidecar that tries to enable live capture is rejected with `unavailable`-grade
+  failure before anything runs.
+- Where a process lease belongs, if it is ever added: a host-wide lease keyed by
+  the executable SHA and the capture output, acquired before the launch and held
+  for the lifetime of the game process, adopted by *every* launcher. It must stay
+  separate from the ledger, whose job is accounting; making the ledger's lock
+  long-lived would turn an accounting record into a lock file and break the
+  reconcile/no-refund semantics the existing tests rely on.
+- Residual compatibility gap, unchanged: worktrees pinned before the ledger
+  existed cannot participate in any shared mechanism, so "at most one EU4"
+  cannot be guaranteed cluster-wide regardless of what DSH does. That is why
+  this PR keeps DSH capture disabled instead of shipping a coordination story it
+  cannot enforce.
 
 ## Pending / caveats
 
