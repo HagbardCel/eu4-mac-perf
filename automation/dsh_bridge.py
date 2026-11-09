@@ -12,8 +12,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
-import uuid
 import sys
 import time
 from datetime import datetime, timezone
@@ -378,6 +378,7 @@ def op_prepare(args) -> int:
         "operation": "prepare",
         "campaign_id": sidecar.campaign_id,
         "objective": sidecar.objective_text,
+        "require_independent_review": sidecar.require_independent_review,
         "execution_roots": roots,
         "workspace": str(sidecar.workspace),
         "run_root": str(sidecar.run_root),
@@ -539,6 +540,17 @@ def _freeze_once(sidecar: Sidecar, identities: dict) -> dict:
     return frozen
 
 
+def _drop_worktree(worktree: Path) -> None:
+    if not worktree.exists():
+        return
+    subprocess.run(
+        ["git", "-C", str(infra_root()), "worktree", "remove", "--force",
+         "--force", str(worktree)],
+        capture_output=True, text=True, check=False,
+    )
+    shutil.rmtree(worktree, ignore_errors=True)
+
+
 def _review_paths(sidecar: Sidecar) -> dict:
     base = sidecar.run_root / "review"
     report = base / "review.json"
@@ -637,7 +649,6 @@ def op_checker_compat(args) -> int:
     This records the checker's identity, the helpers it actually imports, and a
     baseline run against a pristine copy of the seed.
     """
-    import shutil
     import tempfile
 
     sidecar = load_sidecar(Path(args.sidecar))
@@ -734,75 +745,6 @@ def op_checker_compat(args) -> int:
     return EXIT_OK if compat == "ok" else EXIT_INTEGRITY
 
 
-def op_review_preflight(args) -> int:
-    sidecar = load_sidecar(Path(args.sidecar))
-    _roots(sidecar)
-    stored = _setup(sidecar.run_root)
-    try:
-        lock = campaign_lock(stored.lock)
-        lock.__enter__()
-    except RuntimeError as exc:
-        emit({"ok": True, "operation": "review-preflight",
-              "campaign_id": sidecar.campaign_id, "classification": "policy_stop",
-              "kind": "busy", "detail": str(exc)})
-        return EXIT_OK
-    try:
-        current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
-        _check_anchor(_prepared_identities(sidecar), current)
-        receipt = receipts.load_current_receipt(sidecar.run_root)
-        if receipt is None or (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
-            raise Refusal("not_qualified", "no passing validation to review")
-        _check_anchor(_prepared_identities(sidecar), current)
-
-        frozen = _freeze_once(sidecar, current)
-        if not _oracle_digest(sidecar, current):
-            raise Refusal(
-                "review_identity_missing",
-                "this campaign declares no verification manifest and no evidence "
-                "paths, so a review could not be bound to any oracle identity",
-            )
-        if not frozen.get("commit"):
-            raise Refusal(
-                "review_needs_commit",
-                "independent review needs a worktree candidate pinned to a commit; "
-                "a seed candidate has no commit for a reviewer to check out",
-            )
-        paths = _review_paths(sidecar)
-        paths["base"].mkdir(parents=True, exist_ok=True)
-        if not paths["worktree"].exists():
-            review.prepare_worktree(
-                infra_root().resolve(), paths["worktree"], frozen["commit"]
-            )
-        oracle = _oracle_digest(sidecar, current)
-        handoff_primitives.write_reviewer_invocation(
-            paths["invocation"],
-            campaign_id=sidecar.campaign_id,
-            candidate_commit=frozen["commit"],
-            oracle_digest=oracle,
-            report_path=paths["report"],
-            worktree=paths["worktree"],
-        )
-        task = review.build_task(
-            frozen["commit"], oracle or None,
-            "Review the candidate for correctness against the pinned evidence. "
-            "Reject it if it modifies protected evidence, invents observations, "
-            "or claims more than its checker establishes.",
-        )
-        emit({
-            "ok": True, "operation": "review-preflight",
-            "campaign_id": sidecar.campaign_id,
-            "frozen": frozen,
-            "oracle_digest": oracle,
-            "worktree": str(paths["worktree"]),
-            "report": str(paths["report"]),
-            "task": task,
-            "command": ["dsh", "--profile", "headless", "--json", task],
-        })
-        return EXIT_OK
-    finally:
-        lock.__exit__(None, None, None)
-
-
 def op_review_run(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
@@ -835,10 +777,12 @@ def op_review_run(args) -> int:
             )
         paths = _review_paths(sidecar)
         paths["base"].mkdir(parents=True, exist_ok=True)
-        if not paths["worktree"].exists():
-            review.prepare_worktree(
-                infra_root().resolve(), paths["worktree"], frozen["commit"]
-            )
+        # The reviewer worktree lives and dies with this operation: no separate
+        # preparation or cleanup step, and no stale checkout between attempts.
+        _drop_worktree(paths["worktree"])
+        review.prepare_worktree(
+            infra_root().resolve(), paths["worktree"], frozen["commit"]
+        )
         oracle = _oracle_digest(sidecar, current)
         handoff_primitives.write_reviewer_invocation(
             paths["invocation"],
@@ -848,14 +792,6 @@ def op_review_run(args) -> int:
             report_path=paths["report"],
             worktree=paths["worktree"],
         )
-        if paths["report"].exists():
-            # A report that predates this invocation was not produced for it.
-            raise Refusal(
-                "review_stale",
-                "a review report already exists for this candidate; use "
-                "review-verify or clear the review directory",
-            )
-
         task = review.build_task(
             frozen["commit"], oracle or None,
             "Review the candidate for correctness against the pinned evidence. "
@@ -928,6 +864,9 @@ def op_review_run(args) -> int:
             report_sha256=report_sha,
             qualification_mode=mode,
         )
+        # The report and receipt live outside the worktree, so the checkout is
+        # no longer needed.
+        _drop_worktree(paths["worktree"])
         emit({
             "ok": True, "operation": "review-run",
             "campaign_id": sidecar.campaign_id,
@@ -941,48 +880,6 @@ def op_review_run(args) -> int:
             # A completed review task is not the same as a qualified candidate.
             "qualified": payload.get("outcome") == "qualified",
         })
-        return EXIT_OK
-    finally:
-        lock.__exit__(None, None, None)
-
-
-def op_review_clean(args) -> int:
-    """Remove the reviewer worktree once its evidence is no longer needed.
-
-    The worktree is deliberately kept while a review is live so the report,
-    receipt and invocation can be reconciled against it. It is also a registered
-    git worktree, so leaving it forever accumulates registry entries and disk;
-    this op is the explicit way to drop it, and it never deletes the report.
-    """
-    sidecar = load_sidecar(Path(args.sidecar))
-    _roots(sidecar)
-    stored = _setup(sidecar.run_root)
-    paths = _review_paths(sidecar)
-    worktree = paths["worktree"]
-    if not worktree.exists():
-        emit({"ok": True, "operation": "review-clean",
-              "campaign_id": sidecar.campaign_id, "removed": False,
-              "detail": "no reviewer worktree"})
-        return EXIT_OK
-    try:
-        lock = campaign_lock(stored.lock)
-        lock.__enter__()
-    except RuntimeError as exc:
-        emit({"ok": True, "operation": "review-clean",
-              "campaign_id": sidecar.campaign_id, "classification": "policy_stop",
-              "kind": "busy", "detail": str(exc)})
-        return EXIT_OK
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(infra_root()), "worktree", "remove",
-             "--force", "--force", str(worktree)],
-            capture_output=True, text=True, check=False,
-        )
-        if completed.returncode != 0 and worktree.exists():
-            raise Refusal("worktree", completed.stderr.strip() or "worktree removal failed")
-        emit({"ok": True, "operation": "review-clean",
-              "campaign_id": sidecar.campaign_id, "removed": True,
-              "worktree": str(worktree)})
         return EXIT_OK
     finally:
         lock.__exit__(None, None, None)
@@ -1125,7 +1022,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="operation", required=True)
 
     for name in ("prepare", "validate", "finalize", "checker-compat",
-                 "review-preflight", "review-run", "review-verify", "review-clean"):
+                 "review-run", "review-verify"):
         child = sub.add_parser(name)
         child.add_argument("--sidecar", required=True)
         if name in ("validate", "finalize"):
@@ -1142,10 +1039,8 @@ OPERATIONS = {
     "prepare": op_prepare,
     "validate": op_validate,
     "finalize": op_finalize,
-    "review-preflight": op_review_preflight,
     "review-run": op_review_run,
     "review-verify": op_review_verify,
-    "review-clean": op_review_clean,
     "checker-compat": op_checker_compat,
 }
 

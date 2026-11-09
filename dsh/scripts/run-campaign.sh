@@ -36,6 +36,9 @@ PREPARE=$("$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --sidecar "$EU4_DSH
 WORKSPACE=$(printf '%s' "$PREPARE" | "$EU4_DSH_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["workspace"])')
 [ -d "$WORKSPACE" ] || { echo "run-campaign: workspace missing: $WORKSPACE" >&2; exit 1; }
 
+REQUIRE_REVIEW=$(printf '%s' "$PREPARE" |
+  "$EU4_DSH_PYTHON" -c 'import json,sys; print(str(bool(json.load(sys.stdin)["require_independent_review"])).lower())')
+
 OBJECTIVE=$(printf '%s' "$PREPARE" |
   "$EU4_DSH_PYTHON" -c 'import json,sys; print(json.load(sys.stdin)["objective"])')
 
@@ -56,6 +59,7 @@ cat > "$OVERLAY" <<PATCH
       config:
         sidecar: $EU4_DSH_SIDECAR
         python: $EU4_DSH_PYTHON
+        requireReview: $REQUIRE_REVIEW
 PATCH
 
 TASK="Create a goal for the objective below, then pursue it in this session using the

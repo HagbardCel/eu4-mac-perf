@@ -73,3 +73,20 @@ test('tools declare a JSON-schema parameter object and a renderer', () => {
     assert.match(blocks[0].text, /"ok": true/)
   }
 })
+
+test('the review tool is registered only when the campaign requires review', () => {
+  const without = fakeContext()
+  apply(without, { sidecar: '/tmp/x.json', infra: INFRA, python: '/bin/false' })
+  assert.ok(!without._state.tools.some((t) => t.name === 'eu4_review_candidate'))
+
+  const withReview = fakeContext()
+  apply(withReview, {
+    sidecar: '/tmp/x.json', infra: INFRA, python: '/bin/false', requireReview: true,
+  })
+  const names = withReview._state.tools.map((t) => t.name).sort()
+  assert.deepEqual(names, [
+    'eu4_finalize_candidate',
+    'eu4_review_candidate',
+    'eu4_validate_candidate',
+  ])
+})

@@ -350,6 +350,36 @@ export function apply(ctx, config = {}) {
     )
   )
 
+  if (config.requireReview) {
+    register(
+      tool(
+        'eu4_review_candidate',
+        'Request an independent review of the frozen candidate. Returns the ' +
+          'reviewer outcome and findings; a rejection means the candidate needs ' +
+          'repair before finalization can succeed.',
+        async (_args, exec) => {
+          requireSidecar()
+          const agent = exec?.agent
+          const prepared = await bridge(infra, python, 'prepare', sidecar)
+          if (prepared && prepared.ok === false) return prepared
+          const mismatch = workspaceProblem(agent, prepared && prepared.workspace)
+          if (mismatch) {
+            return {
+              ok: false,
+              operation: 'review',
+              classification: 'refused',
+              kind: 'workspace_mismatch',
+              detail: mismatch,
+            }
+          }
+          // The reviewer runs as its own headless session; the bridge freezes
+          // the candidate, validates the report and writes the receipt.
+          return await bridge(infra, python, 'review-run', sidecar)
+        }
+      )
+    )
+  }
+
   // Opt-in proof that the plugin mounted AND registered. The web app does not
   // surface plugin INFO logs, so composition-level checks cannot tell "row
   // present" from "guards and tools installed"; with EU4_DSH_BOOT_PROOF set the

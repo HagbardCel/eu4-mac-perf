@@ -155,8 +155,13 @@ With `require_independent_review`, finalization additionally requires a
 live. A scripted test double is marked `qualification_mode: scripted` and can
 never authorize completion.
 
-`review-clean` removes the reviewer worktree once its evidence is no longer
-needed; the report, receipt and invocation live outside it and survive.
+The reviewer worktree belongs to the review operation: `review-run` replaces a
+stale checkout, runs the reviewer in it, and removes it afterwards. The report,
+receipt and invocation live outside it and survive; there is no separate
+preparation or cleanup step.
+
+The plugin exposes the review as `eu4_review_candidate`, and only when the
+campaign contract sets `require_independent_review`.
 
 ## Campaign compatibility
 
@@ -311,8 +316,6 @@ usage error, and `3` is a refusal before the checker ran.
 | `prepare` | validate the sidecar, seed or verify the workspace, record the identity anchor |
 | `validate` | run the trusted checker under the retry policy and write a receipt |
 | `finalize` | re-run the checker and complete the goal only on a fresh pass |
-| `review-preflight` | freeze the candidate and create the reviewer worktree |
-| `review-run` | spawn the reviewer, validate its report, write the receipt |
+| `review-run` | freeze the candidate, run the reviewer in its own worktree, validate the report and write the receipt |
 | `review-verify` | re-check an existing report and receipt against the frozen candidate |
-| `review-clean` | remove the reviewer worktree, keeping its evidence |
 | `checker-compat` | screen a checker before relying on it |

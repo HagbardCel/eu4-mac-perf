@@ -852,6 +852,30 @@ receipt layout from the Phase 0 evidence, so `finalize` needs a fresh `validate`
 before it will qualify again. The old records are left in place deliberately --
 they are the Phase 0 evidence.
 
+## Phase 4/5 -- review is one operation and one tool
+
+`review-preflight` and `review-clean` are gone. The reviewer worktree belonged to
+no operation in particular, which is why it leaked once; it now lives and dies
+inside `review-run`, which replaces a stale checkout, runs the reviewer, and
+removes it while keeping the report, receipt and invocation outside it.
+
+The plugin exposes `eu4_review_candidate` as its third tool, and only when the
+contract sets `require_independent_review`: the launcher reads that flag from
+`prepare` before DSH starts and writes it into the overlay, so a campaign without
+review never sees the tool.
+
+The bridge is now six operations -- `prepare`, `validate`, `finalize`,
+`checker-compat`, `review-run`, `review-verify` -- and 1079 lines from the
+original 1573.
+
+The review tests no longer need a preflight step to learn the frozen commit: the
+scripted reviewer reads the commit and oracle out of its own task text, which is
+also what a real reviewer does. 12 review tests, including that a review leaves no
+worktree behind while its report and receipt survive.
+
+Verified: 91 DSH tests, 24 node tests, 86 OpenCode tests, doc links and compileall
+clean.
+
 ## Remaining work (operator-gated, not autonomous)
 
 Three acceptance items need a human or spend, and are scripted and documented but not
