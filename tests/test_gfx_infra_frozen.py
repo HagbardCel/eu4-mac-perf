@@ -751,7 +751,7 @@ class IntegrationVerificationTests(unittest.TestCase):
             coordinator = self._coordinator(tmp)
             receipt = tmp / "receipt.json"
             receipt.write_text("{}")
-            state = {"last_implementer": {"qualification_receipt": str(receipt)}}
+            state = {"final_candidate": {"qualification_receipt": str(receipt)}}
             result = self._result(
                 "final",
                 checker="pass",
@@ -761,6 +761,7 @@ class IntegrationVerificationTests(unittest.TestCase):
                     receipt.read_bytes()
                 ).hexdigest(),
             )
+            result["qualification_receipt"] = str(receipt)
             errors = coordinator._validate_integration_verification(
                 state, result, "final"
             )
@@ -1285,7 +1286,11 @@ class CoordinatorTests(unittest.TestCase):
 
         def reviewer(target, state):
             report_calls["n"] += 1
-            target_commit = (target or {}).get("commit", "c" * 40)
+            target_commit = (
+                (target or {}).get("commit")
+                or (target or {}).get("candidate_commit")
+                or "c" * 40
+            )
             path = tmp / f"review-{report_calls['n']}.json"
             outcome = "qualified"
             if contract_reject_once and report_calls["n"] == 1:
@@ -1299,7 +1304,7 @@ class CoordinatorTests(unittest.TestCase):
         def adversarial(checkpoint_path, contract, cases_path, state):
             return {"ok": True, "positive_ok": True, "negative_ok": True, "cases": []}
 
-        def integrate(candidate, contract, state, kind=None):
+        def integrate(candidate, contract, state, kind=None, publish=True):
             commit = "e" * 40
             if kind == "final":
                 receipt = Path(str((state.get("last_implementer") or {}).get(
@@ -1311,6 +1316,7 @@ class CoordinatorTests(unittest.TestCase):
                     "build_ok": True,
                     "tests_ok": True,
                     "checker": "pass",
+                    "candidate_digest": "9" * 64,
                     "established_fields": ["draw_invocation"],
                     "unresolved_fields": [],
                     "regressions": [],
@@ -1319,6 +1325,7 @@ class CoordinatorTests(unittest.TestCase):
                         hashlib.sha256(receipt.read_bytes()).hexdigest()
                         if receipt.is_file() else None
                     ),
+                    "qualification_receipt": str(receipt),
                 }
             else:
                 verification = {
@@ -1337,6 +1344,18 @@ class CoordinatorTests(unittest.TestCase):
             return {
                 "ok": True, "commit": commit, "kind": kind,
                 "verification": verification,
+                "integration_id": "integration-1",
+                "base_head": "b" * 40,
+                "published": False if kind == "final" else True,
+                "qualification_receipt": verification.get("qualification_receipt"),
+            }
+
+        def publish(*args, **kwargs):
+            return {
+                "ok": True,
+                "commit": "e" * 40,
+                "verification": {},
+                "published": True,
             }
 
         def remediation(state):
@@ -1355,6 +1374,7 @@ class CoordinatorTests(unittest.TestCase):
             snapshot_contract=snapshot_contract,
             run_adversarial_cases=adversarial,
             run_remediation=remediation,
+            publish=publish,
         )
 
     def _workflow(self):
@@ -1363,7 +1383,7 @@ class CoordinatorTests(unittest.TestCase):
             "workflow_id": "wf",
             "baseline_commit": "a" * 40,
             "oracle_manifest_sha256": "d" * 64,
-            "trusted_contract": {"commit": "t1", "version": "v0", "sha256": "2" * 64},
+            "trusted_contract": {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64},
         }
 
     def test_fake_path_reaches_awaiting_merge(self):
@@ -1387,7 +1407,7 @@ class CoordinatorTests(unittest.TestCase):
                 state = coordinator.run()
             self.assertEqual(state["state"], "awaiting_merge")
             kinds = [row.get("kind") for row in state["history"] if row["event"] == "integrated"]
-            self.assertEqual(kinds, ["contract", "final"])
+            self.assertEqual(kinds, ["contract", "final_candidate", "final"])
 
     def test_contract_rejection_remediates_contract_not_candidate(self):
         from automation.gfx_l32b_complete import Coordinator
@@ -1411,7 +1431,7 @@ class CoordinatorTests(unittest.TestCase):
             self.assertEqual(state["state"], "awaiting_merge")
             self.assertEqual(state["contract"]["commit"], "e" * 40)
             kinds = [row.get("kind") for row in state["history"] if row["event"] == "integrated"]
-            self.assertEqual(kinds, ["contract", "final"])
+            self.assertEqual(kinds, ["contract", "final_candidate", "final"])
 
     def test_implementation_continuation_does_not_require_contract(self):
         from automation.gfx_l32b_complete import Coordinator
@@ -1588,7 +1608,13 @@ class CoordinatorTests(unittest.TestCase):
             state = coordinator.load_or_init()
             state["state"] = "final_review"
             state["review_target"] = "final"
-            state["candidate"] = {"commit": "c" * 40, "candidate_digest": "9" * 64}
+            state["final_candidate"] = {
+                "candidate_commit": "c" * 40,
+                "candidate_digest": "9" * 64,
+                "campaign_id": "final",
+                "campaign_dir": str(tmp),
+                "oracle_manifest_sha256": "a" * 64,
+            }
             with mock.patch.object(
                 hooks, "run_reviewer", lambda target, state: {"path": str(report)}
             ):
@@ -1612,9 +1638,11 @@ class CoordinatorTests(unittest.TestCase):
             state = coordinator.load_or_init()
             receipt = tmp / "receipt.json"
             receipt.write_text("{}")
-            state["last_implementer"] = {
-                "last_verdict": "pass",
+            state["final_candidate"] = {
+                "candidate_commit": "c" * 40,
+                "candidate_digest": "9" * 64,
                 "qualification_receipt": str(receipt),
+                "verification": {"checker": "pass"},
             }
             state["trusted_contract"] = {"commit": "t1", "contract_version": "v0", "contract_sha256": "2" * 64}
             state["candidate"] = {"commit": "c" * 40, "candidate_digest": "9" * 64}

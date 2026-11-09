@@ -64,12 +64,12 @@
     {
       "path": "automation/gfx_l32b_complete.py",
       "role": "checker",
-      "sha256": "58ed4cbf047d2adb0ac6c09cdf021203fbe3fbfdad40ab8078865526fab11e55"
+      "sha256": "69d26f1fb650b91bbc1153fdcffcb43aca1a78f192970c70aebbfcfdcd45c195"
     },
     {
       "path": "automation/gfx_l32b_hooks.py",
       "role": "checker",
-      "sha256": "253822691bc8a682d595ba64647e29c38b3cae611a00dba72bfcef17e5460bcc"
+      "sha256": "bbaa39c1aabe5eabed47671fac365548ac4cf1f447d0e7a2cb7f742fd55537a2"
     },
     {
       "path": "automation/gfx_reviewer_v2.py",

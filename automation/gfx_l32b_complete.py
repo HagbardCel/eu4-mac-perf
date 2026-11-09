@@ -57,6 +57,7 @@ class Hooks:
     run_research: Callable[[dict], dict] | None = None
     run_remediation: Callable[[dict], dict] | None = None
     run_capture: Callable[[dict], dict] | None = None
+    publish: Callable[..., dict] | None = None
 
 
 def load_workflow(path: Path) -> dict:
@@ -393,8 +394,8 @@ class Coordinator:
             if required <= set(result.get("established") or []):
                 state["stage"] = "final"
             if state["stage"] == "final":
-                state["review_target"] = "final"
-                state["state"] = "final_review"
+                state["promotion_kind"] = "final_candidate"
+                state["state"] = "promote"
             else:
                 state["review_target"] = "candidate"
                 state["state"] = "reviewing"
@@ -469,8 +470,12 @@ class Coordinator:
             "contract" if state["state"] == "qualifying_review"
             else ("final" if state["state"] == "final_review" else "candidate")
         )
-        target = state.get("candidate") if target_key in ("candidate", "final") \
-            else state.get("contract")
+        if target_key == "candidate":
+            target = state.get("candidate")
+        elif target_key == "final":
+            target = state.get("final_candidate")
+        else:
+            target = state.get("contract")
         if not state.get("oracle_manifest_sha256"):
             state["state"] = "blocked"
             state["blocker"] = {"reason": "oracle_manifest_missing"}
@@ -611,32 +616,33 @@ class Coordinator:
         }
 
     def _final_receipt(self, state: dict, report_path: Path) -> list[str]:
-        implementer = state.get("last_implementer") or {}
-        if implementer.get("last_verdict") != "pass":
-            return ["final checker did not pass"]
-        receipt = implementer.get("qualification_receipt")
+        final_candidate = state.get("final_candidate") or {}
+        verification = final_candidate.get("verification") or {}
+        if verification.get("checker") != "pass":
+            return ["final integrated checker did not pass"]
+        receipt = final_candidate.get("qualification_receipt")
         if not receipt or not Path(str(receipt)).is_file():
-            return ["final qualification receipt is missing"]
+            return ["final integrated qualification receipt is missing"]
         try:
             document = json.loads(Path(str(receipt)).read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             return [f"final qualification receipt is unreadable: {exc}"]
         if document.get("schema") != "eu4-gfx-qualification-receipt/v1":
             return ["final qualification receipt has the wrong schema"]
-        trusted = state.get("trusted_contract") or {}
-        if not trusted.get("commit") or not trusted.get("contract_sha256"):
-            return ["final trusted contract identity is missing"]
-        if document.get("trusted_contract_commit") != trusted.get("commit"):
+        trusted_commit = str(final_candidate.get("candidate_commit") or "")
+        if not trusted_commit:
+            return ["final integrated commit is missing"]
+        if document.get("trusted_contract_commit") != trusted_commit:
             return ["final receipt trusted contract differs"]
         if not report_path.is_file():
             return ["final reviewer report is missing"]
         checker = _git_blob_sha(
-            self.repo, str(trusted.get("commit")),
+            self.repo, trusted_commit,
             "automation/gfx_draw_accept_v2.py",
         )
         if checker is None or document.get("checker_sha256") != checker:
             return ["final receipt checker identity differs"]
-        candidate = state.get("candidate") or {}
+        candidate = final_candidate
         candidate_digest = candidate.get("candidate_digest")
         if not candidate_digest and _candidate_commit(candidate) \
                 and isinstance(candidate.get("changed_paths"), list):
@@ -659,7 +665,7 @@ class Coordinator:
         if any(not isinstance(row, dict) or row.get("state") != "validated" for row in fields):
             return ["final receipt has unvalidated fields"]
         state["final_review"] = {
-            "candidate_commit": _candidate_commit(state["candidate"]),
+            "candidate_commit": final_candidate.get("candidate_commit"),
             "reviewer_report_sha256": _file_sha(report_path),
             "qualification_receipt_sha256": _file_sha(Path(str(receipt))),
             "checker_verdict": "pass",
@@ -676,7 +682,7 @@ class Coordinator:
             return state
         if kind == "contract":
             contract = state["contract"]
-        elif kind in ("implementation", "final"):
+        elif kind in ("implementation", "final", "final_candidate"):
             contract = state.get("trusted_contract")
             if not isinstance(contract, dict) or not _candidate_commit(contract) \
                     or not (contract.get("contract_sha256") or contract.get("sha256")):
@@ -687,9 +693,36 @@ class Coordinator:
             state["state"] = "blocked"
             state["blocker"] = {"reason": "unknown_promotion_kind"}
             return state
-        result = self.hooks.integrate(
-            state["candidate"], contract, state, kind=kind
-        )
+        if kind == "final_candidate":
+            result = self.hooks.integrate(
+                state["candidate"], contract, state, kind="final", publish=False
+            )
+        elif kind == "final":
+            candidate = state.get("final_candidate") or {}
+            review = state.get("review") or {}
+            if self.hooks.publish is None:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "publish_hook_missing"}
+                return state
+            try:
+                result = self.hooks.publish(
+                    str(candidate.get("integration_id")),
+                    str(candidate.get("candidate_commit")),
+                    str(candidate.get("base_head")),
+                    review_receipt=str(review.get("path")),
+                    qualification_receipt=str(candidate.get("qualification_receipt")),
+                )
+            except (OSError, RuntimeError, KeyError, ValueError) as exc:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "publish_failed", "detail": str(exc)}
+                return state
+            result["commit"] = candidate.get("candidate_commit")
+            result["verification"] = candidate.get("verification")
+            result["qualification_receipt"] = candidate.get("qualification_receipt")
+        else:
+            result = self.hooks.integrate(
+                state["candidate"], contract, state, kind=kind
+            )
         if not result.get("ok"):
             state["state"] = "blocked"
             state["blocker"] = {
@@ -720,7 +753,7 @@ class Coordinator:
         state["integration"] = result
         state["pending_integration"] = None
         verification_errors = self._validate_integration_verification(
-            state, result, kind
+            state, result, "final" if kind == "final_candidate" else kind
         )
         if verification_errors:
             state["state"] = "blocked"
@@ -735,6 +768,32 @@ class Coordinator:
                 result["verification"].get("unresolved_fields") or []
             )
         _note(state, "integrated", commit=result.get("commit"), kind=kind)
+        if kind == "final_candidate":
+            verification = result.get("verification") or {}
+            candidate = state.get("candidate") or {}
+            state["final_candidate"] = {
+                "candidate_commit": result.get("commit"),
+                "candidate_digest": verification.get("candidate_digest"),
+                "campaign_id": candidate.get("campaign_id")
+                                or (state.get("last_implementer") or {}).get("campaign_id"),
+                "campaign_dir": state.get("campaign_dir"),
+                "oracle_manifest_sha256": state.get("oracle_manifest_sha256"),
+                "qualification_receipt": result.get("qualification_receipt"),
+                "verification": verification,
+                "integration_id": result.get("integration_id"),
+                "base_head": result.get("base_head"),
+            }
+            state["integration_verification"] = verification
+            state["review_target"] = "final"
+            state["state"] = "final_review"
+            return state
+        if kind == "final":
+            state["integration"] = result
+            state["integration_verification"] = (
+                (state.get("final_candidate") or {}).get("verification")
+            )
+            state["state"] = "awaiting_merge"
+            return state
         if kind == "contract":
             state["trusted_contract"] = {
                 "commit": result.get("commit"),
@@ -794,10 +853,9 @@ class Coordinator:
                 return ["final integration did not establish packet_ready"]
             if verification.get("unresolved_fields"):
                 return ["final integration still has unresolved fields"]
-            implementer = state.get("last_implementer") or {}
-            receipt = Path(str(implementer.get("qualification_receipt") or ""))
+            receipt = Path(str(result.get("qualification_receipt") or ""))
             if not receipt.is_file():
-                return ["final qualification receipt is missing"]
+                return ["final integration qualification receipt is missing"]
             if verification.get("qualification_receipt_sha256") != _file_sha(receipt):
                 return ["final integration receipt hash differs"]
             return []
@@ -852,6 +910,20 @@ class Coordinator:
             if not report.is_file() or receipt.get("reviewer_report_sha256") != _file_sha(report):
                 return ["implementation reviewer report changed after qualification"]
             return []
+        if kind == "final_candidate":
+            implementer = state.get("last_implementer") or {}
+            if implementer.get("last_verdict") != "pass":
+                return ["final candidate checker did not pass"]
+            receipt = Path(str(implementer.get("qualification_receipt") or ""))
+            if not receipt.is_file():
+                return ["final candidate receipt is missing"]
+            candidate = state.get("candidate") or {}
+            if not _candidate_commit(candidate):
+                return ["final candidate snapshot is missing"]
+            required = set(self.workflow.get("required_inputs") or [])
+            if required and not required <= set(implementer.get("established") or []):
+                return ["final candidate does not establish all required fields"]
+            return []
         if kind == "final":
             trusted = state.get("trusted_contract") or {}
             if not trusted.get("commit") or not trusted.get("contract_sha256"):
@@ -859,9 +931,9 @@ class Coordinator:
             receipt = state.get("final_review")
             if not isinstance(receipt, dict):
                 return ["final review receipt is missing"]
-            candidate = state.get("candidate") or {}
-            if receipt.get("candidate_commit") != _candidate_commit(candidate):
-                return ["final receipt does not match the candidate commit"]
+            candidate = state.get("final_candidate") or {}
+            if receipt.get("candidate_commit") != candidate.get("candidate_commit"):
+                return ["final receipt does not match the integrated commit"]
             if receipt.get("checker_verdict") != "pass":
                 return ["final checker did not pass"]
             implementer = state.get("last_implementer") or {}
@@ -928,8 +1000,15 @@ class Coordinator:
                 snapshot = self.hooks.snapshot(Path(workspace), state)
                 _absorb_snapshot(state, snapshot)
                 state["candidate"] = snapshot
-                state["review_target"] = target
-                state["state"] = "reviewing" if target == "candidate" else "final_review"
+                state["final_candidate"] = None
+                state["final_review"] = None
+                if target == "final":
+                    state["stage"] = "final"
+                    state["promotion_kind"] = "final_candidate"
+                    state["state"] = "promote"
+                else:
+                    state["review_target"] = "candidate"
+                    state["state"] = "reviewing"
             else:
                 state["state"] = "blocked"
                 state["blocker"] = {"reason": "remediation_target_missing"}

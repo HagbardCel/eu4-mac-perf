@@ -100,6 +100,7 @@ class L32bHooks:
             run_research=self.run_research,
             run_capture=self.run_capture,
             integrate=self.integrate,
+            publish=self.publish,
         )
 
     # ---- campaign materialization -------------------------------------
@@ -583,7 +584,10 @@ class L32bHooks:
 
     # ---- integration --------------------------------------------------
 
-    def integrate(self, candidate: dict, contract: dict, state: dict, kind=None) -> dict:
+    def integrate(
+        self, candidate: dict, contract: dict, state: dict, kind=None,
+        publish: bool = True,
+    ) -> dict:
         candidate_commit = candidate.get("candidate_commit")
         contract_commit = (contract or {}).get("candidate_commit") if isinstance(contract, dict) else None
         pending = state.get("pending_integration") or {}
@@ -608,6 +612,7 @@ class L32bHooks:
                 ).encode("utf-8")
             ).hexdigest()
         state["_integration_base"] = base
+        state["_integration_kind"] = kind
         journal_path = self.run_root / "integrations" / f"{integration_id}.json"
         journal = _json(journal_path) if journal_path.is_file() else None
         if journal and journal.get("status") == "verified":
@@ -684,6 +689,16 @@ class L32bHooks:
             journal["status"] = "verified_staged"
             journal["verification"] = verification
             atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
+        if not publish:
+            return {
+                "ok": True,
+                "commit": commit,
+                "verification": verification,
+                "integration_id": integration_id,
+                "base_head": base,
+                "published": False,
+                "qualification_receipt": verification.get("qualification_receipt"),
+            }
         current = subprocess.run(
             ["git", "-C", str(self.repo), "rev-parse", "--verify", ref],
             capture_output=True,
@@ -717,6 +732,62 @@ class L32bHooks:
             "verification": verification,
             "integration_id": integration_id,
             "base_head": base,
+            "published": True,
+            "qualification_receipt": verification.get("qualification_receipt"),
+        }
+
+    def publish(
+        self,
+        integration_id: str,
+        expected_commit: str,
+        base_head: str,
+        *,
+        review_receipt: str,
+        qualification_receipt: str,
+    ) -> dict:
+        journal_path = self.run_root / "integrations" / f"{integration_id}.json"
+        if not journal_path.is_file():
+            raise HookError("integration journal is missing")
+        journal = _json(journal_path)
+        if journal.get("new_commit") != expected_commit:
+            raise HookError("staged integration commit differs")
+        if journal.get("base_head") != base_head:
+            raise HookError("staged integration base differs")
+        if journal.get("status") not in ("verified_staged", "reviewed"):
+            raise HookError("staged integration is not verified")
+        review = Path(review_receipt)
+        qualification = Path(qualification_receipt)
+        if not review.is_file() or not qualification.is_file():
+            raise HookError("final review or qualification receipt is missing")
+        journal["status"] = "reviewed"
+        journal["review_receipt_sha256"] = _sha(review)
+        journal["qualification_receipt_sha256"] = _sha(qualification)
+        atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
+        branch = str(self.workflow.get("integration_branch") or "l32b/autonomous-completion")
+        ref = f"refs/heads/{branch}"
+        current = subprocess.run(
+            ["git", "-C", str(self.repo), "rev-parse", "--verify", ref],
+            capture_output=True, text=True, check=False,
+        )
+        current_commit = current.stdout.strip() if current.returncode == 0 else ""
+        if current_commit != base_head:
+            raise HookError("integration branch is not at the staged base")
+        updated = subprocess.run(
+            ["git", "-C", str(self.repo), "update-ref", ref,
+             expected_commit, base_head],
+            capture_output=True, text=True, check=False,
+        )
+        if updated.returncode != 0:
+            raise HookError(updated.stderr.strip() or "integration publish failed")
+        journal["status"] = "verified"
+        journal["published"] = True
+        atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
+        return {
+            "ok": True,
+            "commit": expected_commit,
+            "verification": journal.get("verification"),
+            "integration_id": integration_id,
+            "base_head": base_head,
             "published": True,
         }
 
@@ -927,14 +998,16 @@ class L32bHooks:
             "status": "verified",
             "schema": "eu4-l32b-integration-verification/v1",
             "commit": commit,
-            "kind": state.get("promotion_kind"),
+            "kind": state.get("_integration_kind") or state.get("promotion_kind"),
             "build_ok": True,
             "tests_ok": True,
             "checker": verdict,
+            "candidate_digest": digest,
             "established_fields": established,
             "unresolved_fields": unresolved,
             "regressions": regressions,
             "packet_ready": bool(diagnostics.get("packet_ready")),
+            "qualification_receipt": str(receipt_path) if receipt_path else None,
             "qualification_receipt_sha256": (
                 _sha(Path(str(receipt_path))) if receipt_path else None
             ),
