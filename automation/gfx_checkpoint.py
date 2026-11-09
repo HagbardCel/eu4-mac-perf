@@ -288,6 +288,94 @@ def write_checkpoint(
     }
 
 
+def validate_qualified_bundle(
+    bundle_dir: Path,
+    *,
+    expected_candidate_digest: str | None = None,
+    expected_checker_sha256: str | None = None,
+    expected_trusted_commit: str | None = None,
+    expected_fields: set[str] | None = None,
+    require_packet_ready: bool = True,
+) -> list[str]:
+    """Validate a persisted qualified bundle and its receipt."""
+    bundle = Path(bundle_dir)
+    receipt_path = bundle / "qualification-receipt.json"
+    manifest_path = bundle / "bundle-manifest.json"
+    errors: list[str] = []
+    if not receipt_path.is_file():
+        return ["qualified receipt is missing"]
+    if not manifest_path.is_file():
+        return ["qualified bundle manifest is missing"]
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return [f"qualified bundle is unreadable: {exc}"]
+    if receipt.get("schema") != "eu4-gfx-qualification-receipt/v1":
+        errors.append("qualified receipt has the wrong schema")
+    if receipt.get("bundle_manifest_sha256") != _sha(manifest_path):
+        errors.append("qualified receipt manifest hash differs")
+    if expected_candidate_digest is not None \
+            and receipt.get("candidate_digest") != expected_candidate_digest:
+        errors.append("qualified receipt candidate digest differs")
+    if expected_checker_sha256 is not None \
+            and receipt.get("checker_sha256") != expected_checker_sha256:
+        errors.append("qualified receipt checker identity differs")
+    if expected_trusted_commit is not None \
+            and receipt.get("trusted_contract_commit") != expected_trusted_commit:
+        errors.append("qualified receipt trusted contract differs")
+    packet = receipt.get("packet") or {}
+    if require_packet_ready and packet.get("packet_ready") is not True:
+        errors.append("qualified receipt does not establish packet_ready")
+    fields = receipt.get("fields")
+    if not isinstance(fields, list) or not fields:
+        errors.append("qualified receipt has no field results")
+    else:
+        names = set()
+        for row in fields:
+            if not isinstance(row, dict):
+                errors.append("qualified receipt field is not an object")
+                continue
+            names.add(row.get("name"))
+            if row.get("state") != "validated":
+                errors.append(f"qualified field {row.get('name')} is not validated")
+        if expected_fields is not None and not expected_fields <= names:
+            errors.append(
+                "qualified receipt omits fields: "
+                + ", ".join(sorted(expected_fields - names))
+            )
+    capture = receipt.get("capture")
+    if not isinstance(capture, dict) or not capture.get("session") \
+            or not capture.get("library_sha256"):
+        errors.append("qualified receipt capture identity is incomplete")
+    files = manifest.get("files")
+    if not isinstance(files, list) or not files:
+        errors.append("qualified bundle manifest has no files")
+    else:
+        for item in files:
+            if not isinstance(item, dict):
+                errors.append("qualified bundle manifest entry is invalid")
+                continue
+            rel = item.get("path")
+            if not isinstance(rel, str) or rel.startswith("/") or ".." in Path(rel).parts:
+                errors.append(f"qualified bundle path is invalid: {rel!r}")
+                continue
+            member = bundle / rel
+            if not member.is_file():
+                errors.append(f"qualified bundle member is missing: {rel}")
+                continue
+            if member.stat().st_size != item.get("size"):
+                errors.append(f"qualified bundle member size differs: {rel}")
+            if _sha(member) != item.get("sha256"):
+                errors.append(f"qualified bundle member hash differs: {rel}")
+    packet_member = bundle / str(packet.get("path") or "")
+    if not packet_member.is_file():
+        errors.append("qualified packet is missing from the bundle")
+    elif _sha(packet_member) != packet.get("sha256"):
+        errors.append("qualified packet hash differs")
+    return errors
+
+
 def write_qualified_bundle(
     run_root: Path,
     *,
@@ -312,13 +400,27 @@ def write_qualified_bundle(
     final = root / f"{session}-{candidate_digest}"
     receipt_path = final / "qualification-receipt.json"
     if final.exists():
-        if receipt_path.is_file():
-            return {
-                "bundle": str(final),
-                "receipt": str(receipt_path),
-                "receipt_sha256": _sha(receipt_path),
-            }
-        raise CheckpointError("existing qualified bundle has no receipt")
+        errors = validate_qualified_bundle(
+            final,
+            expected_candidate_digest=candidate_digest,
+            expected_checker_sha256=receipt_fields.get("checker_sha256"),
+            expected_trusted_commit=receipt_fields.get("trusted_contract_commit"),
+            expected_fields={
+                str(row.get("name"))
+                for row in fields
+                if isinstance(row, dict) and row.get("state") == "validated"
+            },
+            require_packet_ready=bool(packet.get("packet_ready")),
+        )
+        if errors:
+            raise CheckpointError(
+                "existing qualified bundle does not match: " + "; ".join(errors[:6])
+            )
+        return {
+            "bundle": str(final),
+            "receipt": str(receipt_path),
+            "receipt_sha256": _sha(receipt_path),
+        }
     root.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix="qualified-", dir=str(root)))
     try:

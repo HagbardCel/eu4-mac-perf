@@ -24,7 +24,7 @@
     {
       "path": "automation/gfx_checkpoint.py",
       "role": "checker",
-      "sha256": "fa439759006df285f7e6f67247639259d6b82fde70c67532cec23cfbce05de28"
+      "sha256": "3489bb1cdb53bcd884bfbfeff23a20623efdece0b4e1783f1854af413f079691"
     },
     {
       "path": "automation/gfx_contract_accept.py",
@@ -59,7 +59,7 @@
     {
       "path": "campaigns/eu4-l32b-contract/accept.py",
       "role": "checker",
-      "sha256": "00f77021c2a6186ab6c92b250343ff9cd260b7037261c351d3d1f16fe58aac14"
+      "sha256": "3b631bb615b4005b15339b4e36904bf062606602b4b65998ac1b4c577530289c"
     },
     {
       "path": "reverse_engineering/target.json",

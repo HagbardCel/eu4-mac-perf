@@ -816,6 +816,7 @@ class LedgerTests(unittest.TestCase):
                 ledger, workflow_id="wf", limit=6, deadline_seconds=120
             )
             for index in range(6):
+                launch_ledger.register_campaign(ledger, f"campaign-{index}", 6)
                 launch_ledger.claim(
                     ledger,
                     campaign_id=f"campaign-{index}",
@@ -840,6 +841,29 @@ class LedgerTests(unittest.TestCase):
             self.assertEqual(launch_ledger.load_ledger(ledger)["used"], 6)
 
 
+class LedgerPolicyTests(unittest.TestCase):
+    def test_contract_campaign_is_denied_without_charging_the_ledger(self):
+        from automation import launch_ledger
+
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            ledger = tmp / "ledger.json"
+            launch_ledger.create_ledger(
+                ledger, workflow_id="wf", limit=6, deadline_seconds=120
+            )
+            launch_ledger.register_campaign(ledger, "contract", 0)
+            with self.assertRaises(launch_ledger.LedgerError):
+                launch_ledger.claim(
+                    ledger,
+                    campaign_id="contract",
+                    run_root=tmp / "contract",
+                    output=tmp / "out",
+                    targets=["_GfxDraw"],
+                    requested_timeout=120,
+                )
+            self.assertEqual(launch_ledger.load_ledger(ledger)["used"], 0)
+
+
 class LedgerSelectionTests(unittest.TestCase):
     def test_completed_capture_is_found_without_the_campaign_mirror(self):
         from automation import launch_ledger
@@ -861,6 +885,7 @@ class LedgerSelectionTests(unittest.TestCase):
             launch_ledger.create_ledger(
                 ledger, workflow_id="wf", limit=6, deadline_seconds=120
             )
+            launch_ledger.register_campaign(ledger, "campaign", 6)
             token = launch_ledger.claim(
                 ledger,
                 campaign_id="campaign",
@@ -1189,25 +1214,45 @@ class CoordinatorTests(unittest.TestCase):
             impl_calls["n"] += 1
             if impl_calls["n"] > 1:
                 state["stage"] = "final"
-                receipt = tmp / "qualification.json"
+                from automation.gfx_checkpoint import write_qualified_bundle
+
                 trusted = state.get("trusted_contract") or {}
-                receipt.write_text(
-                    json.dumps(
-                        {
-                            "schema": "eu4-gfx-qualification-receipt/v1",
-                            "trusted_contract_commit": trusted.get("commit"),
-                            "checker_sha256": "1" * 64,
-                            "candidate_digest": "9" * 64,
-                            "packet": {"packet_ready": True},
-                            "fields": [{"name": "draw_invocation", "state": "validated"}],
-                        }
-                    )
+                packet_dir = tmp / "final-packet"
+                packet_dir.mkdir(parents=True, exist_ok=True)
+                packet = {
+                    "schema": packet_mod.SCHEMA,
+                    "packet_ready": True,
+                    "inputs": {},
+                }
+                (packet_dir / "draw-packet.json").write_text(
+                    json.dumps(packet), encoding="utf-8"
+                )
+                capture_dir = tmp / "final-capture"
+                capture_dir.mkdir(parents=True, exist_ok=True)
+                bundle = write_qualified_bundle(
+                    tmp,
+                    campaign_id="c1",
+                    candidate_digest="9" * 64,
+                    capture={"session": "session", "pid": 1,
+                             "library_sha256": "f" * 64},
+                    packet=packet,
+                    packet_dir=packet_dir,
+                    capture_dir=capture_dir,
+                    target={"call_id": 11, "caller_rva": "0xedfcd1",
+                            "mode": 5, "effective_count": 4},
+                    fields=[{"name": "draw_invocation", "state": "validated"}],
+                    receipt_fields={
+                        "checker_sha256": "1" * 64,
+                        "trusted_contract_commit": trusted.get("commit"),
+                        "candidate_digest": "9" * 64,
+                        "packet_ready": True,
+                    },
                 )
                 return {
                     "status": "complete",
                     "last_verdict": "pass",
                     "workspace": str(tmp),
-                    "qualification_receipt": str(receipt),
+                    "qualification_receipt": bundle["receipt"],
                 }
             return {
                 "status": "paused",

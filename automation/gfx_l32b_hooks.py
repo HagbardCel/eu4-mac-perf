@@ -98,6 +98,7 @@ class L32bHooks:
             run_adversarial_cases=self.run_adversarial_cases,
             run_remediation=self.run_remediation,
             run_research=self.run_research,
+            run_capture=self.run_capture,
             integrate=self.integrate,
         )
 
@@ -119,12 +120,12 @@ class L32bHooks:
         *,
         kind: str,
         base: str,
-        round_id: int,
+        operation_id: str,
         template: Path,
         trusted: dict,
         extra: dict | None = None,
     ) -> dict:
-        campaign_id = f"eu4-l32b-{kind}-{self.workflow_id}-r{round_id}"
+        campaign_id = f"eu4-l32b-{kind}-{self.workflow_id}-{operation_id}"
         runner_root = self.repo / ".local" / "automation" / campaign_id
         campaign_dir = self.run_root / "campaigns" / campaign_id
         campaign_dir.mkdir(parents=True, exist_ok=True)
@@ -154,13 +155,13 @@ class L32bHooks:
             "model": self.model,
             "opencode_version": "2.2.5",
             "workspace": {"mode": "worktree", "path": str(workspace), "commit": base},
-            "accept": ["python3", str(template / "accept.py")],
+            "accept": ["python3", str(template / "accept.py"), "--campaign-dir", str(campaign_dir)],
             "max_rounds": int(self.workflow.get("max_rounds", 8)),
             "max_seconds": float(self.workflow.get("max_seconds", 7200)),
             "accept_timeout_seconds": float(self.workflow.get("accept_timeout_seconds", 900)),
             "verification_manifest": str(template / self._manifest_name(kind)),
             "live_observation": {
-                "launch_limit": int(self.workflow.get("per_campaign_launch_limit", 3)),
+                "launch_limit": self._launch_limit(kind),
                 "deadline_seconds": float(self.workflow.get("launch_deadline_seconds", 120)),
             },
             "template": str(template),
@@ -170,6 +171,13 @@ class L32bHooks:
             campaign_json.update(extra)
         atomic_write(campaign_dir / "campaign.json", json.dumps(campaign_json, indent=2) + "\n")
         ledger = self.run_root / "live-launch-ledger.json"
+        launch_ledger.create_ledger(
+            ledger,
+            workflow_id=self.workflow_id,
+            limit=int(self.workflow.get("global_launch_limit", 6)),
+            deadline_seconds=float(self.workflow.get("launch_deadline_seconds", 120)),
+        )
+        launch_ledger.register_campaign(ledger, campaign_id, self._launch_limit(kind))
         prepare_campaign_run_root(
             runner_root,
             workflow_id=self.workflow_id,
@@ -187,8 +195,15 @@ class L32bHooks:
             "trusted": trusted,
         }
 
+    def _launch_limit(self, kind: str) -> int:
+        if kind in ("contract", "contract-fix", "reviewer"):
+            return 0
+        if kind == "capture":
+            return 1
+        return int(self.workflow.get("per_campaign_launch_limit", 3))
+
     def _manifest_name(self, kind: str) -> str:
-        return "contract-manifest.json" if kind == "contract" else "l32b-manifest.json"
+        return "contract-manifest.json" if kind in ("contract", "contract-fix") else "l32b-manifest.json"
 
     def _run(self, campaign: dict) -> dict:
         loaded = load_campaign(campaign["campaign_json"])
@@ -232,11 +247,14 @@ class L32bHooks:
             or trusted.get("commit")
             or self.workflow.get("baseline_commit")
         )
-        round_id = int(state.get("round", 0)) + 1
+        operation_id = str(
+            (state.get("active_campaign") or {}).get("operation_id")
+            or f"impl-{int(state.get('campaign_sequence', 0)) + 1}"
+        )
         campaign = self._materialize(
             kind="impl",
             base=str(base),
-            round_id=round_id,
+            operation_id=operation_id,
             template=self.templates / "eu4-l32b-complete",
             trusted=trusted,
         )
@@ -252,15 +270,44 @@ class L32bHooks:
 
     # ---- contract -----------------------------------------------------
 
+    def _write_contract_config(
+        self,
+        campaign: dict,
+        template: Path,
+        version: str,
+        base_version: str,
+        checkpoint: str,
+    ) -> None:
+        contract = _json(template / "contract.json")
+        contract.update(
+            {
+                "candidate_version": version,
+                "base_contract_version": base_version,
+                "checkpoint": checkpoint,
+            }
+        )
+        atomic_write(
+            campaign["campaign_dir"] / "contract.json",
+            json.dumps(contract, indent=2) + "\n",
+        )
+        manifest = template / "contract-manifest.json"
+        if manifest.is_file():
+            (campaign["campaign_dir"] / "contract-manifest.json").write_bytes(
+                manifest.read_bytes()
+            )
+
     def run_contract(self, checkpoint: str, state: dict) -> dict:
         trusted = self._trusted(state)
         version = _next_version(str(trusted.get("version", "v0")))
-        round_id = int(state.get("round", 0)) + 1
+        operation_id = str(
+            (state.get("active_campaign") or {}).get("operation_id")
+            or f"contract-{int(state.get('campaign_sequence', 0)) + 1}"
+        )
         template = self.templates / "eu4-l32b-contract"
         campaign = self._materialize(
             kind="contract",
             base=str(trusted.get("commit")),
-            round_id=round_id,
+            operation_id=operation_id,
             template=template,
             trusted=trusted,
             extra={
@@ -269,26 +316,16 @@ class L32bHooks:
                 "checkpoint": checkpoint,
             },
         )
-        contract = _json(template / "contract.json")
-        contract.update(
-            {
-                "candidate_version": version,
-                "base_contract_version": trusted.get("version", "v0"),
-                "checkpoint": checkpoint,
-            }
+        self._write_contract_config(
+            campaign, template, version,
+            str(trusted.get("version", "v0")), checkpoint,
         )
-        atomic_write(campaign["campaign_dir"] / "contract.json",
-                     json.dumps(contract, indent=2) + "\n")
-        manifest = template / "contract-manifest.json"
-        if manifest.is_file():
-            (campaign["campaign_dir"] / "contract-manifest.json").write_bytes(
-                manifest.read_bytes()
-            )
         runner_state = self._run(campaign)
         result = self._normalize(runner_state, campaign)
         if runner_state.get("last_verdict") == "pass":
             snapshot = snapshot_contract_v1(
-                campaign["workspace"], campaign["campaign_dir"], round_id
+                campaign["workspace"], campaign["campaign_dir"],
+                int(state.get("campaign_sequence", 0)) or 1,
             )
             snapshot["campaign_dir"] = str(campaign["campaign_dir"])
             result["candidate"] = snapshot
@@ -326,6 +363,20 @@ class L32bHooks:
             raise HookError("reviewer source campaign directory is missing")
         round_id = int(state.get("round", 0)) + 1
         review = materialize_reviewer(campaign_dir, target, round_id)
+        ledger = self.run_root / "live-launch-ledger.json"
+        launch_ledger.create_ledger(
+            ledger,
+            workflow_id=self.workflow_id,
+            limit=int(self.workflow.get("global_launch_limit", 6)),
+            deadline_seconds=float(self.workflow.get("launch_deadline_seconds", 120)),
+        )
+        launch_ledger.register_campaign(ledger, review["review_id"], 0)
+        prepare_campaign_run_root(
+            self.repo / ".local" / "automation" / review["review_id"],
+            workflow_id=self.workflow_id,
+            ledger_path=ledger,
+            limit=int(self.workflow.get("global_launch_limit", 6)),
+        )
         for key, value in review["env"].items():
             os.environ[key] = value
         loaded = load_campaign(Path(review["campaign"]))
@@ -346,6 +397,10 @@ class L32bHooks:
     def run_remediation(self, state: dict) -> dict:
         target = state.get("remediation_target")
         trusted = self._trusted(state)
+        operation_id = str(
+            (state.get("active_campaign") or {}).get("operation_id")
+            or f"remediation-{int(state.get('campaign_sequence', 0)) + 1}"
+        )
         if target == "contract":
             rejected = state.get("contract") or {}
             base = rejected.get("candidate_commit")
@@ -354,7 +409,7 @@ class L32bHooks:
             campaign = self._materialize(
                 kind="contract-fix",
                 base=str(base),
-                round_id=int(state.get("round", 0)) + 1,
+                operation_id=operation_id,
                 template=template,
                 trusted=trusted,
                 extra={
@@ -363,17 +418,60 @@ class L32bHooks:
                     "checkpoint": state.get("contract_checkpoint"),
                 },
             )
+            self._write_contract_config(
+                campaign, template, version,
+                str(trusted.get("version", "v0")),
+                str(state.get("contract_checkpoint")),
+            )
         else:
             rejected = state.get("candidate") or {}
             base = rejected.get("candidate_commit")
             campaign = self._materialize(
                 kind="impl-fix",
                 base=str(base),
-                round_id=int(state.get("round", 0)) + 1,
+                operation_id=operation_id,
                 template=self.templates / "eu4-l32b-complete",
                 trusted=trusted,
             )
         return self._normalize(self._run(campaign), campaign)
+
+    def run_capture(self, state: dict) -> dict:
+        requirement = state.get("capture_requirement") or {}
+        commit = str(
+            (state.get("integration") or {}).get("commit")
+            or requirement.get("commit")
+            or ""
+        )
+        if not commit:
+            return {"detail": "capture requirement has no staged commit"}
+        operation_id = str(
+            (state.get("active_campaign") or {}).get("operation_id")
+            or f"capture-{int(state.get('campaign_sequence', 0)) + 1}"
+        )
+        campaign = self._materialize(
+            kind="capture",
+            base=commit,
+            operation_id=operation_id,
+            template=self.templates / "eu4-l32b-complete",
+            trusted=self._trusted(state),
+            extra={"capture_requirement": requirement},
+        )
+        self._run(campaign)
+        captures = campaign["run_root"] / "captures"
+        receipt = campaign["run_root"] / "live-launch.json"
+        if not captures.is_dir() or not receipt.is_file():
+            return {"detail": "capture campaign produced no authenticated capture"}
+        directories = sorted(
+            (path for path in captures.iterdir() if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+        )
+        if not directories:
+            return {"detail": "capture campaign produced no capture directory"}
+        return {
+            "capture": str(directories[-1]),
+            "capture_receipt": str(receipt),
+            "candidate_commit": commit,
+        }
 
     def run_research(self, state: dict) -> dict:
         trusted = self._trusted(state)
@@ -382,10 +480,14 @@ class L32bHooks:
             or trusted.get("commit")
             or self.workflow.get("baseline_commit")
         )
+        operation_id = str(
+            (state.get("active_campaign") or {}).get("operation_id")
+            or f"research-{int(state.get('campaign_sequence', 0)) + 1}"
+        )
         campaign = self._materialize(
             kind="research",
             base=str(base),
-            round_id=int(state.get("round", 0)) + 1,
+            operation_id=operation_id,
             template=self.templates / "eu4-l32b-complete",
             trusted=trusted,
         )
@@ -433,53 +535,83 @@ class L32bHooks:
             atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
         branch = str(self.workflow.get("integration_branch") or "l32b/autonomous-completion")
         ref = f"refs/heads/{branch}"
-        if journal["status"] in ("prepared", "staged"):
-            commit = journal.get("new_commit")
-            if not commit:
-                commit = self._staged_commit(
-                    base=base,
-                    candidate_commit=candidate_commit,
-                    contract_commit=contract_commit,
-                    integration_id=integration_id,
-                )
-                journal["new_commit"] = commit
-                journal["status"] = "staged"
+        commit = journal.get("new_commit")
+        if not commit:
+            commit = self._staged_commit(
+                base=base,
+                candidate_commit=candidate_commit,
+                candidate_parent=(candidate or {}).get("pin_commit"),
+                contract_commit=contract_commit,
+                contract_parent=(contract or {}).get("pin_commit"),
+                integration_id=integration_id,
+            )
+            journal["new_commit"] = commit
+            journal["status"] = "staged"
+            atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
+        if self.checker_runner is None:
+            raise HookError("post-integration checker is not configured")
+        verification = None
+        if journal.get("status") in ("verified_staged", "pending_capture"):
+            verification = journal.get("verification")
+            if journal.get("status") == "pending_capture" \
+                    and not state.get("capture_receipt"):
+                return {
+                    "ok": True,
+                    "commit": commit,
+                    "verification": verification,
+                    "published": False,
+                }
+            if journal.get("status") == "verified_staged":
+                verification = journal.get("verification")
+        if verification is None:
+            verification = self.checker_runner(Path(commit), state)
+            if not isinstance(verification, dict):
+                raise HookError("post-integration checker returned no verification")
+            verification.setdefault("commit", commit)
+            verification.setdefault("kind", kind)
+            status = verification.get("status") or "verified"
+            if status == "pending_capture":
+                journal["status"] = "pending_capture"
+                journal["verification"] = verification
                 atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
-            current = subprocess.run(
-                ["git", "-C", str(self.repo), "rev-parse", "--verify", ref],
+                return {
+                    "ok": True,
+                    "commit": commit,
+                    "verification": verification,
+                    "published": False,
+                }
+            if status != "verified":
+                journal["status"] = "failed"
+                journal["verification"] = verification
+                atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
+                raise HookError("post-integration verification failed")
+            journal["status"] = "verified_staged"
+            journal["verification"] = verification
+            atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
+        current = subprocess.run(
+            ["git", "-C", str(self.repo), "rev-parse", "--verify", ref],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        current_commit = current.stdout.strip() if current.returncode == 0 else ""
+        if current_commit == commit:
+            pass
+        elif current_commit == base:
+            updated = subprocess.run(
+                ["git", "-C", str(self.repo), "update-ref", ref, commit, base],
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            current_commit = current.stdout.strip() if current.returncode == 0 else ""
-            if current_commit == commit:
-                journal["status"] = "committed"
-                atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
-            elif current_commit == base:
-                updated = subprocess.run(
-                    ["git", "-C", str(self.repo), "update-ref", ref, commit, base],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if updated.returncode != 0:
-                    raise HookError(
-                        updated.stderr.strip() or "integration ref update failed"
-                    )
-                journal["status"] = "committed"
-                atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
-            else:
+            if updated.returncode != 0:
                 raise HookError(
-                    "integration branch moved; refusing to reinterpret the new HEAD"
+                    updated.stderr.strip() or "integration ref update failed"
                 )
-        commit = journal["new_commit"]
-        if self.checker_runner is None:
-            raise HookError("post-integration checker is not configured")
-        verification = self.checker_runner(Path(commit), state)
-        if not isinstance(verification, dict):
-            raise HookError("post-integration checker returned no verification")
-        verification.setdefault("commit", commit)
-        verification.setdefault("kind", kind)
+        else:
+            raise HookError(
+                "integration branch moved; refusing to reinterpret the new HEAD"
+            )
         journal["status"] = "verified"
         journal["verification"] = verification
         atomic_write(journal_path, json.dumps(journal, indent=2) + "\n")
@@ -490,7 +622,9 @@ class L32bHooks:
         *,
         base: str,
         candidate_commit: str | None,
+        candidate_parent: str | None,
         contract_commit: str | None,
+        contract_parent: str | None,
         integration_id: str,
     ) -> str:
         staging = self.run_root / "integration" / integration_id
@@ -507,11 +641,15 @@ class L32bHooks:
         if completed.returncode != 0:
             raise HookError(completed.stderr.strip() or "staging worktree failed")
         try:
-            for commit in (candidate_commit, contract_commit):
+            for commit, parent in (
+                (candidate_commit, candidate_parent),
+                (contract_commit, contract_parent),
+            ):
                 if not commit:
                     continue
                 diff = subprocess.run(
-                    ["git", "-C", str(self.repo), "diff", "--binary", base, commit],
+                    ["git", "-C", str(self.repo), "diff", "--binary",
+                     str(parent or base), commit],
                     capture_output=True,
                     check=False,
                 )

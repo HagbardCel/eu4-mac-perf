@@ -29,7 +29,7 @@
     {
       "path": "automation/gfx_checkpoint.py",
       "role": "checker",
-      "sha256": "fa439759006df285f7e6f67247639259d6b82fde70c67532cec23cfbce05de28"
+      "sha256": "3489bb1cdb53bcd884bfbfeff23a20623efdece0b4e1783f1854af413f079691"
     },
     {
       "path": "automation/gfx_contracts/__init__.py",
@@ -57,9 +57,24 @@
       "sha256": "fefaec0e84d7f5d171419cd6dd1fe7e4f7ff6fd186b05c2581e9e4709be68d18"
     },
     {
+      "path": "automation/gfx_l32b_complete.py",
+      "role": "checker",
+      "sha256": "a5794ae4a31c39d407e5ed02c9eda605f461c818ad272bab1a9d07bdb67af242"
+    },
+    {
+      "path": "automation/gfx_l32b_hooks.py",
+      "role": "checker",
+      "sha256": "a1c9c963b94b8ec8450978d0cc63d49e82401c010d1e2d3d07f0632ee72800c0"
+    },
+    {
+      "path": "automation/gfx_snapshot_v2.py",
+      "role": "checker",
+      "sha256": "e49eefa66e7b193fcfb48c45466d0d2cb21c7249385be536e83270c390d7f6ac"
+    },
+    {
       "path": "automation/launch_ledger.py",
       "role": "checker",
-      "sha256": "4725ce0cfad3307d419042502847b091273dade09498020d9d9c7d84559c616c"
+      "sha256": "b6393210b1c8563f8597c0e58312d58f9a5763fe903674626439aed8458b0938"
     },
     {
       "path": "automation/manifest_revision.py",
@@ -67,9 +82,14 @@
       "sha256": "1264608587cdd3670fd9d313436093ce3493a57b83f9246f5e9c6e2fe1a660ab"
     },
     {
+      "path": "automation/runner.py",
+      "role": "checker",
+      "sha256": "c158f3a9ae02c0da73932a083cf8fe4fcf0cf0ccc9fe712edc10f472deb9195d"
+    },
+    {
       "path": "campaigns/eu4-l32b-complete/accept.py",
       "role": "checker",
-      "sha256": "739544950e0177aeaad0e15c4f4998708f56110fb0578371db3429d924bc7f0a"
+      "sha256": "0e19e5713a8d9b9cce122acaa69226c92e31d58605ed61622d079761be69fdaf"
     },
     {
       "path": "campaigns/eu4-l32b-complete/frozen/gfx_startup_trace_host.c",

@@ -29,6 +29,7 @@ from automation.gfx_checkpoint import (  # noqa: E402
     CheckpointError,
     source_tree_digest_at_commit,
     validate_checkpoint,
+    validate_qualified_bundle,
 )
 from automation.review_result import load_review, validate_review  # noqa: E402
 from automation.state import atomic_write, load_campaign, repo_root  # noqa: E402
@@ -55,6 +56,7 @@ class Hooks:
     run_adversarial_cases: Callable[[dict, dict, Path, dict], dict] | None = None
     run_research: Callable[[dict], dict] | None = None
     run_remediation: Callable[[dict], dict] | None = None
+    run_capture: Callable[[dict], dict] | None = None
 
 
 def load_workflow(path: Path) -> dict:
@@ -76,6 +78,8 @@ def default_state(workflow: dict) -> dict:
         "state": "preflight",
         "stage": str(workflow.get("initial_stage", "investigation")),
         "round": 0,
+        "campaign_sequence": 0,
+        "active_campaign": None,
         "checkpoint": None,
         "candidate": None,
         "contract": None,
@@ -287,7 +291,24 @@ class Coordinator:
         state["state"] = "investigating"
         return state
 
+    def _begin_operation(self, state: dict, kind: str) -> dict:
+        active = state.get("active_campaign")
+        if isinstance(active, dict) and active.get("kind") == kind \
+                and active.get("resumable"):
+            return active
+        sequence = int(state.get("campaign_sequence", 0)) + 1
+        state["campaign_sequence"] = sequence
+        active = {
+            "operation_id": f"{kind}-{sequence}",
+            "kind": kind,
+            "resumable": True,
+        }
+        state["active_campaign"] = active
+        save_state(self.state_path, state)
+        return active
+
     def _implementer(self, state: dict) -> dict:
+        self._begin_operation(state, "implementer")
         result = self.hooks.run_implementer(state)
         state["last_implementer"] = result
         checkpoint = result.get("checkpoint")
@@ -325,6 +346,7 @@ class Coordinator:
                 state["state"] = "blocked"
                 state["blocker"] = {"reason": "snapshot_failed", "detail": str(exc)}
                 return state
+            state["active_campaign"] = None
             _note(state, "checkpoint", checkpoint=checkpoint)
             state["state"] = "checkpoint_ready"
             return state
@@ -340,6 +362,33 @@ class Coordinator:
                 state["state"] = "blocked"
                 state["blocker"] = {"reason": "snapshot_failed", "detail": str(exc)}
                 return state
+            state["active_campaign"] = None
+            required = set(self.workflow.get("required_inputs") or [])
+            receipt = result.get("qualification_receipt")
+            trusted = state.get("trusted_contract") or {}
+            if not receipt or not Path(str(receipt)).is_file():
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "final_receipt_invalid",
+                                    "detail": "qualification receipt is missing"}
+                return state
+            checker = _git_blob_sha(
+                self.repo, str(trusted.get("commit")),
+                "automation/gfx_draw_accept_v2.py",
+            )
+            errors = validate_qualified_bundle(
+                Path(str(receipt)).parent,
+                expected_candidate_digest=(snapshot or {}).get("candidate_digest"),
+                expected_checker_sha256=checker,
+                expected_trusted_commit=trusted.get("commit"),
+                expected_fields=required,
+            )
+            if errors:
+                state["state"] = "blocked"
+                state["blocker"] = {"reason": "final_receipt_invalid",
+                                    "errors": errors}
+                return state
+            if required <= set(result.get("established") or []):
+                state["stage"] = "final"
             if state["stage"] == "final":
                 state["review_target"] = "final"
                 state["state"] = "final_review"
@@ -356,6 +405,7 @@ class Coordinator:
                 "detail": result.get("last_diagnostics"),
             }
             return state
+        state["active_campaign"] = None
         state["state"] = "blocked"
         state["blocker"] = {
             "reason": result.get("pause_reason") or "implementer_incomplete",
@@ -364,6 +414,7 @@ class Coordinator:
         return state
 
     def _contract(self, state: dict) -> dict:
+        self._begin_operation(state, "contract")
         result = self.hooks.run_contract(state["checkpoint"], state)
         state["last_contract"] = result
         if result.get("status") != "complete" or result.get("last_verdict") != "pass":
@@ -405,6 +456,7 @@ class Coordinator:
                 result.get("contract_sha256") or contract.get("contract_sha256")
             )
         state["contract_checkpoint"] = result.get("checkpoint") or state["checkpoint"]
+        state["active_campaign"] = None
         state["review_target"] = "contract"
         state["state"] = "qualifying_review"
         return state
@@ -641,6 +693,12 @@ class Coordinator:
                 "detail": result.get("detail"),
             }
             return state
+        verification = result.get("verification") or {}
+        if verification.get("status") == "pending_capture" \
+                and not result.get("published"):
+            state["state"] = "capture_required"
+            state["capture_requirement"] = verification
+            return state
         verification_errors = self._validate_integration_verification(
             state, result, kind
         )
@@ -659,10 +717,12 @@ class Coordinator:
         _note(state, "integrated", commit=result.get("commit"), kind=kind)
         if kind == "contract":
             state["trusted_contract"] = {
-                "commit": _candidate_commit(state["contract"]),
+                "commit": result.get("commit"),
                 "version": state.get("contract_version"),
                 "sha256": state.get("contract_sha256"),
             }
+            if isinstance(state.get("contract_review"), dict):
+                state["contract_review"]["integration_commit"] = result.get("commit")
             state["state"] = "continuation"
         elif kind == "implementation":
             state["state"] = "continuation"
@@ -798,6 +858,7 @@ class Coordinator:
             state["state"] = "blocked"
             state["blocker"] = {"reason": "remediation_unavailable"}
             return state
+        self._begin_operation(state, "remediation")
         result = self.hooks.run_remediation(state)
         state["last_implementer"] = result
         if result.get("status") != "complete" or result.get("last_verdict") != "pass":
@@ -813,6 +874,7 @@ class Coordinator:
             state["blocker"] = {"reason": "remediation_workspace_missing"}
             return state
         target = state.get("remediation_target")
+        state["active_campaign"] = None
         state["campaign_dir"] = result.get("campaign_dir")
         state["contract_campaign_dir"] = result.get("campaign_dir")
         try:
@@ -855,12 +917,33 @@ class Coordinator:
             state["blocker"] = {"reason": "remediation_snapshot_failed", "detail": str(exc)}
         return state
 
+    def _capture_required(self, state: dict) -> dict:
+        if self.hooks.run_capture is None:
+            state["state"] = "blocked"
+            state["blocker"] = {"reason": "capture_hook_missing"}
+            return state
+        result = self.hooks.run_capture(state)
+        receipt = result.get("capture_receipt")
+        if not receipt:
+            state["state"] = "blocked"
+            state["blocker"] = {
+                "reason": "capture_failed",
+                "detail": result.get("detail") or "no capture receipt",
+            }
+            return state
+        state["capture_receipt"] = receipt
+        state["capture"] = result.get("capture")
+        _note(state, "capture", receipt=receipt)
+        return self._promote(state)
+
     def _research(self, state: dict) -> dict:
         if self.hooks.run_research is None:
             state["state"] = "blocked"
             state["blocker"] = {"reason": "research_unavailable"}
             return state
+        self._begin_operation(state, "research")
         result = self.hooks.run_research(state)
+        state["active_campaign"] = None
         state["last_implementer"] = result
         state["state"] = "investigating" if result.get("status") == "complete" else "blocked"
         return state
