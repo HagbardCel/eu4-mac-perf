@@ -12,14 +12,14 @@ contract, the trusted checker and the qualification record. OpenCode is untouche
 
 | Phase | State |
 |---|---|
-| 0 -- genuine autonomous run | **passed** (single turn; see limitations) |
+| 0 -- genuine autonomous run | **passed** (headless, single turn) |
 | 1 -- native services, profile, provisioning | done |
 | 2 -- shared acceptance and campaign contract | done |
 | 3 -- bridge as an interface | done (6 operations) |
 | 4 -- thin plugin | done (2 tools + 1 conditional) |
 | 5 -- one snapshot implementation | done |
 | 6 -- removal and documentation | done |
-| 7 -- full matrix and live multi-round test | partially: matrix green, multi-round and live review outstanding |
+| 7 -- full matrix and live multi-round test | matrix green; multi-round **proven**; Web completion and live review outstanding |
 
 ## What is shared, not duplicated
 
@@ -38,6 +38,24 @@ Byte-for-byte preservation was not a goal -- semantic preservation was, and the
 OpenCode suite is the evidence: 86 tests, unchanged in behaviour throughout.
 
 ## Measured evidence
+
+**Native multi-round continuation, live Web session** (the Phase C result):
+session `session-317a33be-9418-4347-bb4f-d850b5755137`, goal
+`goal-f46ca1cf-3b06-4d67-b4ff-c604b5c41fd8`, created by a human-typed `/goal` and
+then driven entirely by the goal-round driver: **rounds 1, 2 and 3 were injected
+in the same session with no prompt from the operator between them**
+(`roundsStarted: 3`). The agent ran tool calls and called `eu4_validate_candidate`
+twice. The goal ended `blocked`, and the reason is a real defect this run exposed:
+the Web session had been created in `~/Documents/deepseek-harness/default-workspace`,
+so the campaign workspace inside the checkout was outside the sandbox and the
+plugin refused it (`workspace_mismatch`). A DSH Web session takes its working
+directory from the workspace registry, not from the process cwd.
+
+`run.sh --campaign` now registers the checkout in that registry and makes it the
+default, which is what the UI's "open folder" does, so the operator does not have
+to pick a workspace. Verified idempotent and that the default resolves to the
+checkout. **Not yet re-run live**: a Web campaign that reaches a checker pass and
+finalization. The headless path has completed one end to end (below).
 
 **Autonomous smoke campaign** (`dsh/scripts/run-campaign.sh`, headless):
 session `session-f7427783-9fe5-499a-80a8-de11071ae8f9`, cwd equal to the campaign
@@ -81,6 +99,14 @@ query and a replica query run concurrently, both exit 0, identical evidence.
 is accounting, not mutual exclusion (two callers under a limit of three both get
 reservations); the DSH bridge imports no launch path at all.
 
+**Runtime**: requalified on DSH `0.2.2-rc.1`, which the environment upgraded to.
+Downgrading a global install the running Web GUI depends on is not this PR's call,
+so `runtime.json` was repinned after verifying what the integration actually uses:
+the goal service, `ctx.tools.guard` with the same denial-only `ToolGuard` contract,
+the headless `--json` event types, `skill-filesystem` configuration and the session
+header `cwd`. Profile checks pass: 2 tools and 1 guard, or 3 tools when the
+campaign requires review; one skill in the catalog.
+
 **Tests and CI**: 82 DSH tests, 24 node tests, 86 OpenCode tests, full repository
 discovery green, CI green on Python 3.10 and 3.14.
 
@@ -88,10 +114,12 @@ discovery green, CI green on Python 3.10 and 3.14.
 
 - **`dsh --profile headless` answers one turn.** Measured: a goal created in that
   turn gets no further round. `run-campaign.sh` is therefore for campaigns that
-  finish in one turn; a multi-round campaign needs a live session (`run.sh`, goal
-  created in the UI, workspace selected in the browser).
-- **No multi-round campaign has been run.** Phase 0 completed in one turn and the
-  staged experiment confirmed why. Native continuation across rounds is unproven.
+  finish in one turn; multi-round campaigns use the Web path.
+- **Multi-round continuation works** (3 rounds in one live session, no prompt
+  between them), but the run that proved it ended `blocked` on a workspace
+  binding defect rather than on the checker. The binding is fixed and the fix is
+  unverified live: no Web campaign has yet reached a checker pass and
+  finalization, and no Web goal has reached `complete`.
 - **No live reviewer rejection/remediation loop.** The channel, the schema
   validation and the receipt writing are exercised with a scripted reviewer; the
   live reviewer was run once and returned `unresolved`.

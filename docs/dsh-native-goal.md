@@ -284,10 +284,25 @@ action; `smoke-goal.sh` only prints what to paste.
 
 `run-campaign.sh` drives the shipped `headless` profile, which answers **one
 turn** and exits: measured, a goal created in that turn gets no further rounds.
-Use it for a campaign that finishes in one turn. A campaign that needs several
-rounds needs a live session -- `run.sh`, with the session created in this
-checkout so the campaign workspace is inside the sandbox, and the goal created in
-the UI.
+Use it for a campaign that finishes in one turn.
+
+For a campaign that needs several rounds use the Web profile:
+
+```sh
+./dsh/scripts/run.sh --campaign dsh/campaigns/<sidecar>.json
+```
+
+The launcher resolves the sidecar, runs `prepare`, registers this checkout in the
+DSH workspace registry as the default and boots the profile. A Web session takes
+its working directory from that registry, not from the process cwd, so the default
+is what makes the campaign workspace reachable; a session created elsewhere gets a
+clear `workspace_mismatch` refusal instead of failing silently.
+
+Then one human action is required, because DSH authorizes goal creation from a
+human turn: open the printed URL, start a session, and send `/goal <objective>`.
+The objective is printed by the launcher and stored in the campaign's
+`objective.md`. From there the goal-round driver continues on its own; measured at
+three rounds in one session with no prompt between them.
 
 `run.sh` binds an OS-chosen port unless you pass `--port` or set `EU4_DSH_PORT`.
 The composed web default is `127.0.0.1:3080`, which is where an ordinary DSH GUI

@@ -74,6 +74,50 @@ case "$WORKSPACE" in
   *) SESSION_DIR=$(dirname -- "$WORKSPACE") ;;
 esac
 
+# A DSH Web session takes its working directory from the workspace registry, not
+# from the process cwd, and the sandbox confines writes to that directory. A
+# session created in the first-use workspace therefore cannot reach a campaign
+# workspace inside this checkout: measured, the goal ended blocked with a
+# workspace mismatch. Registering the checkout and making it the default removes
+# that step from the operator's side; it is what the UI's "open folder" does.
+"$EU4_DSH_PYTHON" - "$DSH_HOME/storages/workspace.json" "$SESSION_DIR" <<'PYREG'
+import datetime, json, os, sys, uuid
+
+reg_path, directory = sys.argv[1], sys.argv[2]
+if not os.path.isdir(directory):
+    raise SystemExit(0)
+try:
+    reg = json.load(open(reg_path))
+except (OSError, ValueError):
+    raise SystemExit(0)  # DSH creates its own registry; do not invent one
+
+workspaces = reg.setdefault("tables", {}).setdefault("workspaces", {})
+wide = reg.setdefault("global", {})
+ids = wide.setdefault("workspaceIds", [])
+
+found = next((wid for wid, ws in workspaces.items() if ws.get("path") == directory), None)
+if found is None:
+    found = str(uuid.uuid4())
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    workspaces[found] = {
+        "path": directory,
+        "title": os.path.basename(directory.rstrip("/")) or directory,
+        "sessionIds": [],
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    ids.append(found)
+wide["defaultWorkspaceId"] = found
+
+temporary = reg_path + ".tmp"
+with open(temporary, "w") as handle:
+    json.dump(reg, handle, indent=2)
+    handle.write("\n")
+os.replace(temporary, reg_path)
+print(f"run: default DSH workspace is {directory}", file=sys.stderr)
+PYREG
+
+
 cat >&2 <<INFO
 
 Campaign prepared: $EU4_DSH_SIDECAR
