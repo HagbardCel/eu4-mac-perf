@@ -112,8 +112,9 @@ def _roots(sidecar: Sidecar) -> dict:
         )
     if not inside(campaign, infra):
         problems.append("campaign root is outside the infrastructure root")
-    if not inside(sidecar.checker, campaign):
-        problems.append("checker is outside the campaign root")
+    # The checker is not required to live inside the campaign directory: the
+    # campaign itself states the accept command, so a sidecar cannot inject one,
+    # and campaigns legitimately reuse a shared checker.
     # Anti-shadowing is a property of what Python actually imported, not of
     # what files exist: a candidate worktree of this very repository legitimately
     # contains automation/dsh_bridge.py. What must never happen is the bridge

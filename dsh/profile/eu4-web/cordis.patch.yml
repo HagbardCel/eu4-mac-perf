@@ -50,3 +50,4 @@
       config:
         sidecar: !!js process.env.EU4_DSH_SIDECAR ?? ""
         python: !!js process.env.EU4_DSH_PYTHON ?? ""
+        requireReview: !!js process.env.EU4_DSH_REQUIRE_REVIEW === 'true'

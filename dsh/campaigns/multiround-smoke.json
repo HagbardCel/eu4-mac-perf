@@ -1,0 +1,24 @@
+{
+  "schema": "eu4-dsh-campaign/v1",
+  "campaign_id": "dsh-multiround-smoke",
+  "source_campaign": "dsh/campaigns/multiround/campaign.json",
+  "candidate": {
+    "mode": "seed",
+    "workspace_base": "infra",
+    "workspace": ".local/dsh/dsh-multiround-smoke/workspace",
+    "policy": {
+      "allowed_paths": ["marker.txt", "progress.md"]
+    }
+  },
+  "goal": {
+    "max_rounds": 6,
+    "require_checker_pass": true,
+    "require_independent_review": false
+  },
+  "limits": {
+    "validation_timeout_seconds": 60
+  },
+  "live_capture": {
+    "enabled": false
+  }
+}

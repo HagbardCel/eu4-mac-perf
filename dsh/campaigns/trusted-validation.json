@@ -13,8 +13,12 @@
         "analysis/qualification/v0/primitive-lookup.candidate.json",
         "progress.md"
       ],
-      "forbidden_paths": ["analysis/qualification/v0/primitive-table.evidence.json"]
-    }
+      "forbidden_paths": [
+        "analysis/qualification/v0/primitive-table.evidence.json"
+      ]
+    },
+    "workspace_base": "infra",
+    "workspace": ".local/dsh/dsh-trusted-validation/workspace"
   },
   "goal": {
     "max_rounds": 6,

@@ -2,33 +2,40 @@
   "schema": "eu4-dsh-runtime/v1",
   "profile": "eu4-web",
   "dsh": {
-    "version": "0.2.0-rc.2",
-    "package_json_sha256": "0a85203e3e907dd2e3bec34324a2494758ca6cdee234b07090a7c8df0b11acac"
+    "version": "0.2.2-rc.1",
+    "package_json_sha256": "3e14837ceb3bbc0ba419ed08e9b5ba164338369b1268b93c3c25d89f7b1c9953"
   },
-  "node": { "version": "v26.13.0" },
-  "pnpm": { "version": "12.18.0" },
+  "node": {
+    "version": "v26.13.0"
+  },
+  "pnpm": {
+    "version": "12.18.0"
+  },
   "required_plugins": {
     "goal": {
       "name": "@deepseek-ai/dsh-goal",
-      "package_json_sha256": "652c79f11bba8eb891fe2e8ebe4de46d16cb3781df458b73f35dc31ed9eadb97"
+      "package_json_sha256": "7d3c20c27d07e563b08523682b22669bb837c630253856c014c0b94c4e6ca2a4"
     },
     "goal-round-driver": {
       "name": "@deepseek-ai/dsh-goal-round-driver",
-      "package_json_sha256": "9df8dbb3332dc317a758c8edc2666ba2c9ed48dcae4ee6089b42cb50722f49b6"
+      "package_json_sha256": "d5c8a215c464041e2933a8f0c6d39b9afe75bf2e79bd711eeba22c113d3851d8"
     },
     "tool-goal": {
       "name": "@deepseek-ai/dsh-tool-goal",
-      "package_json_sha256": "9b921fa34e7bb7858c973644dd1d87958e45df96d79d534f573e479297838c3d"
+      "package_json_sha256": "512cf8089d6bf680b28bb1a2c684d10ad3405aa3e883d4cec9454d02b246d8d2"
     },
     "command-goal": {
       "name": "@deepseek-ai/dsh-command-goal",
-      "package_json_sha256": "fb6c0b40eb1573c62b60bcee350fddfc50d05dbedd053e426ef076efb390995c"
+      "package_json_sha256": "53f5bd4c61a878e414287b27bf6b958c5cc4c31b054f9582059fa90cfb246286"
     },
     "skill-filesystem": {
       "name": "@deepseek-ai/dsh-skill-filesystem",
-      "package_json_sha256": "cdff73a6f1ce37b6209ac9ac31542f1e374e32a21f27b4cec3fb07837b9eb92a"
+      "package_json_sha256": "531e26bcb01b8e5d637580e3fd985e5814e24f2fdc451fafe06ac9949f04f98e"
     },
-    "eu4-goal": { "name": "@eu4/dsh-goal", "package_json_sha256": null }
+    "eu4-goal": {
+      "name": "@eu4/dsh-goal",
+      "package_json_sha256": "7d3c20c27d07e563b08523682b22669bb837c630253856c014c0b94c4e6ca2a4"
+    }
   },
   "skill": {
     "id": "opengl-metal-reconstruction",
@@ -41,5 +48,6 @@
     "root and the infrastructure checkout at run time and prints them.",
     "package_json_sha256 values pin the identity of the DSH release this profile was",
     "verified against; a mismatch is a preflight failure, not a warning."
-  ]
+  ],
+  "note": "Requalified on 0.2.2-rc.1: the environment upgraded the installed CLI, and downgrading a global install the running Web GUI depends on is not this PR's call. Verified against the installed package: goal service (get/create/complete), ctx.tools.guard with the same denial-only ToolGuard contract, headless --json events (session/final/text/status/thinking/tool_call/tool_result), skill-filesystem customSkillDirs/includeDefaultRoots, and the session header cwd. The live profile checks pass: 2 tools, 1 guard, 1 skill."
 }

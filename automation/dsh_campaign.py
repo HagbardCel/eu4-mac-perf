@@ -155,7 +155,8 @@ def load_sidecar(path: Path, *, infra: Path | None = None) -> Sidecar:
 
     mode, workspace_raw, seed, baseline = _load_candidate(data, contract)
     run_root = _load_run_root(data, infra, campaign_id)
-    workspace = _load_workspace(workspace_raw, run_root)
+    workspace_base = _load_workspace_base(data)
+    workspace = _load_workspace(workspace_raw, run_root, workspace_base, infra)
     if run_root == workspace or _inside(run_root, workspace):
         raise SidecarError("run_root must not be inside the candidate workspace")
     if _inside(run_root, infra / ".local" / "automation"):
@@ -245,11 +246,15 @@ def _contract(source: Path) -> _Contract:
 
 
 def _require_policy_containment(contract: _Contract) -> None:
-    """A sidecar may only reference trusted material inside its campaign."""
-    try:
-        contract.checker.relative_to(contract.campaign_root)
-    except ValueError as exc:
-        raise SidecarError("checker must live inside the campaign directory") from exc
+    """Validate the trusted material.
+
+    The checker is *not* required to live inside the campaign directory: a
+    campaign states its own accept command, so the sidecar cannot inject a
+    checker, and campaigns legitimately reuse a shared one. The seed is checked
+    because it is the directory the candidate is copied from.
+    """
+    if not contract.checker.is_file():
+        raise SidecarError(f"checker not found: {contract.checker}")
     if contract.seed is not None and not contract.seed.is_dir():
         raise SidecarError(f"seed workspace not found: {contract.seed}")
 
@@ -292,13 +297,32 @@ def _load_run_root(data: dict, infra: Path, campaign_id: str) -> Path:
     return (DEFAULT_STATE_ROOT.expanduser() / campaign_id).resolve()
 
 
-def _load_workspace(raw: str, run_root: Path) -> Path:
+WORKSPACE_BASES = ("run_root", "infra")
+
+
+def _load_workspace_base(data: dict) -> str:
+    candidate = _require_object(data.get("candidate"), "candidate")
+    base = str(candidate.get("workspace_base") or "run_root")
+    if base not in WORKSPACE_BASES:
+        raise SidecarError("candidate.workspace_base must be run_root or infra")
+    return base
+
+
+def _load_workspace(raw: str, run_root: Path, base: str, infra: Path) -> Path:
+    """Where the agent edits.
+
+    ``infra`` puts the candidate inside the trusted checkout, which is what the
+    DSH sandbox can reach, while the qualification records stay in the host state
+    root that the agent cannot write. ``run_root`` keeps them together for
+    throwaway experiments.
+    """
     if not raw:
-        return (run_root / "workspace").resolve()
+        return ((infra if base == "infra" else run_root) / "workspace").resolve()
     declared = Path(raw).expanduser()
     if declared.is_absolute():
         return declared.resolve()
-    return (run_root / declared).resolve()
+    root = infra if base == "infra" else run_root
+    return (root / declared).resolve()
 
 
 def _load_policy(data: dict, campaign_root: Path, mode: str, seed: Path | None):

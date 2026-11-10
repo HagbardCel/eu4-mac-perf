@@ -2,7 +2,6 @@
   "schema": "eu4-dsh-campaign/v1",
   "campaign_id": "dsh-offline-smoke",
   "source_campaign": "campaigns/automation-smoke/campaign.json",
-  "run_root": ".local/dsh/dsh-offline-smoke",
   "checker_retry": {
     "mode": "stateful",
     "confirmation_rounds": 1
@@ -10,8 +9,13 @@
   "candidate": {
     "mode": "seed",
     "policy": {
-      "allowed_paths": ["marker.txt", "progress.md"]
-    }
+      "allowed_paths": [
+        "marker.txt",
+        "progress.md"
+      ]
+    },
+    "workspace_base": "infra",
+    "workspace": ".local/dsh/dsh-offline-smoke/workspace"
   },
   "goal": {
     "max_rounds": 6,

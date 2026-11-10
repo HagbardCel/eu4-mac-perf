@@ -9,7 +9,7 @@
   },
   "candidate": {
     "mode": "worktree",
-    "workspace": "workspace",
+    "workspace": ".local/dsh/dsh-frozen-offline/workspace",
     "policy": {
       "allowed_paths": [
         "analysis/automation/pilot-gfx-update-vertex-buffer-multiple/note.md",
@@ -27,7 +27,8 @@
         "reverse_engineering/target.json",
         "analysis/reconstruction/gfx-semantic"
       ]
-    }
+    },
+    "workspace_base": "infra"
   },
   "goal": {
     "max_rounds": 8,

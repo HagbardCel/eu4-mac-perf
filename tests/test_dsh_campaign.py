@@ -183,3 +183,48 @@ class PathAllowlistTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkspaceBaseTests(unittest.TestCase):
+    """The candidate is agent-writable; the records must not be."""
+
+    def test_the_tracked_sidecars_split_candidate_from_records(self) -> None:
+        from automation.dsh_campaign import load_sidecar
+
+        for name in ("offline-smoke", "trusted-validation", "multiround-smoke"):
+            with self.subTest(sidecar=name):
+                sidecar = load_sidecar(REPO / "dsh" / "campaigns" / f"{name}.json")
+                self.assertEqual(sidecar.mode, "seed")
+                # candidate inside the trusted checkout, where the sandbox reaches
+                self.assertTrue(
+                    str(sidecar.workspace).startswith(str(REPO / ".local")),
+                    sidecar.workspace,
+                )
+                # qualification records outside it, in the host state root
+                self.assertTrue(
+                    str(sidecar.run_root).startswith(str(Path.home() / ".local" / "share")),
+                    sidecar.run_root,
+                )
+                self.assertFalse(
+                    str(sidecar.run_root).startswith(str(sidecar.workspace)),
+                    "records must not live under the candidate workspace",
+                )
+
+    def test_an_unknown_workspace_base_is_rejected(self) -> None:
+        import json
+        import tempfile
+
+        from automation.dsh_campaign import SidecarError, load_sidecar
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data = json.loads(
+                (REPO / "dsh" / "campaigns" / "offline-smoke.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            data["candidate"]["workspace_base"] = "elsewhere"
+            path = Path(tmp) / "sidecar.json"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(SidecarError) as caught:
+                load_sidecar(path)
+        self.assertIn("workspace_base", str(caught.exception))
