@@ -179,19 +179,24 @@ def snapshot_candidate(
         if not source.is_file():
             raise RuntimeError(f"candidate file is missing: {rel}")
         parent_blob = _blob_at(repo, parent_commit, rel)
+        live_mode = "100755" if source.stat().st_mode & 0o100 else "100644"
+        parent_mode = subprocess.run(
+            ["git", "-C", str(repo), "ls-tree", parent_commit, "--", rel],
+            capture_output=True, text=True, check=True,
+        ).stdout.split()[0] if parent_blob is not None else live_mode
         if parent_blob is not None:
             live = subprocess.run(
                 ["git", "-C", str(repo), "hash-object", "--", str(source)],
                 capture_output=True, text=True, check=True,
             ).stdout.strip()
-            if live == parent_blob:
+            if live == parent_blob and live_mode == parent_mode:
                 # Unchanged files carry no delta; including them would ask the
                 # snapshot to reproduce a change that does not exist.
                 continue
         # Report the mode the snapshot will actually carry: the shared builder
         # preserves the executable bit, and the round-trip check compares against
         # this value.
-        mode = "100755" if source.stat().st_mode & 0o100 else "100644"
+        mode = live_mode
         delta.append({
             "path": rel,
             # An untracked candidate file is an addition, not a modification.

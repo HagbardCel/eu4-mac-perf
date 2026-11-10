@@ -62,6 +62,9 @@ class BridgeTestCase(unittest.TestCase):
 
     def run_bridge(self, operation: str, sidecar: Path, **extra):
         argv = [operation, "--sidecar", str(sidecar)]
+        if operation == "prepare":
+            # Only the launcher creates the anchor; the plugin's prepare verifies.
+            argv.append("--create-anchor")
         for key, value in extra.items():
             flag = "--" + key.replace("_", "-")
             if value is True:

@@ -40,7 +40,7 @@ fi
 
 # Prepare first, so the workspace exists and the trusted anchor is recorded
 # before any model turn sees it.
-PREPARE=$("$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --sidecar "$EU4_DSH_SIDECAR" 2>&1) || {
+PREPARE=$("$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --create-anchor --sidecar "$EU4_DSH_SIDECAR" 2>&1) || {
   echo "run-campaign: prepare failed: $PREPARE" >&2
   exit 1
 }

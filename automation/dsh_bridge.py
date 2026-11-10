@@ -259,6 +259,9 @@ def _evidence_digest(sidecar: Sidecar) -> str:
 
 TRUSTED_MODULES = (
     "acceptance",
+    "dsh_bridge",
+    "dsh_receipts",
+    "dsh_review",
     "campaign_contract",
     "candidate_snapshot",
     "dsh_campaign",
@@ -345,6 +348,7 @@ def _goal_policy(classification: str, verdict: str | None) -> str:
 ANCHORED_IDENTITIES = (
     "checker_sha256",
     "trusted_modules_digest",
+    "infrastructure_commit",
     "sidecar_sha256",
     "source_campaign_sha256",
     "verification_manifest_digest",
@@ -411,6 +415,16 @@ def op_prepare(args) -> int:
 
     identities = _identity(sidecar, infra_commit)
     existing = receipts.read_json(stored.identity)
+    if existing is None and not getattr(args, "create_anchor", False):
+        # The plugin calls prepare before every check. If that call could create
+        # the anchor, a session started in the wrong directory could anchor
+        # whatever it had already edited. Only the launcher creates it.
+        raise Refusal(
+            "not_prepared",
+            "no identity anchor for this campaign; start the campaign through "
+            "dsh/scripts/run.sh --campaign (or run-campaign.sh) so the anchor is "
+            "created from a prepared state",
+        )
     if existing is not None:
         anchored = existing.get("identities") or {}
         _check_anchor(anchored, identities)
@@ -1086,6 +1100,8 @@ def build_parser() -> argparse.ArgumentParser:
         child.add_argument("--sidecar", required=True)
         if name in ("validate", "finalize"):
             child.add_argument("--session-id", default=None)
+        if name == "prepare":
+            child.add_argument("--create-anchor", action="store_true")
         if name == "review-verify":
             child.add_argument("--allow-scripted", action="store_true")
         if name == "review-run":

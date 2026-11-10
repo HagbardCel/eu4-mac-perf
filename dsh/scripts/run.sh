@@ -59,7 +59,7 @@ export EU4_DSH_SIDECAR=$(CDPATH= cd -- "$(dirname -- "$CAMPAIGN")" && pwd)/$(bas
 PLUGIN=$INFRA/dsh/eu4-goal-plugin/lib/index.js
 [ -f "$PLUGIN" ] || { echo "run: plugin missing at $PLUGIN" >&2; exit 1; }
 
-PREPARE=$("$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --sidecar "$EU4_DSH_SIDECAR" 2>&1) || {
+PREPARE=$("$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --create-anchor --sidecar "$EU4_DSH_SIDECAR" 2>&1) || {
   echo "run: prepare failed: $PREPARE" >&2
   exit 1
 }
@@ -106,6 +106,8 @@ if found is None:
         "updatedAt": now,
     }
     ids.append(found)
+# Always point the default at the candidate, even when it was registered before:
+# otherwise a previously registered checkout keeps winning.
 wide["defaultWorkspaceId"] = found
 
 temporary = reg_path + ".tmp"

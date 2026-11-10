@@ -114,7 +114,9 @@ def final_text(text: str) -> str | None:
             continue
         if isinstance(event, dict) and event.get("type") == "final":
             found = event.get("text")
-            return found if isinstance(found, str) else None
+            # "" rather than None: a final event must decide, even when its text
+            # is not a string, so the caller cannot fall back to stream scanning.
+            return found if isinstance(found, str) else ""
     return None
 
 
