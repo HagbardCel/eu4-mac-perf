@@ -157,9 +157,14 @@ def snapshot_candidate(
     parent_commit: str,
     message: str = "qualification candidate snapshot",
 ) -> dict:
-    """Full baseline + editable overlay only; parented commit in the original object store."""
-    import os
-    import tempfile
+    """Full baseline + editable overlay only; parented commit in the original object store.
+
+    The delta machinery is shared with the DSH path (``automation.candidate_snapshot``),
+    so there is one implementation of "reproduce exactly these changes on top of a
+    pinned baseline". What stays here is A0's policy: which files are editable, the
+    protected-evidence check, the ref namespace and the commit authorship.
+    """
+    from automation import candidate_snapshot
 
     rels = collect_candidate_rels(workspace)
     if not rels:
@@ -168,66 +173,49 @@ def snapshot_candidate(
         if not path_allowlisted(rel):
             raise RuntimeError(f"candidate path outside allowlist: {rel}")
 
-    fd, index_name = tempfile.mkstemp(prefix=f"qual-index-{workflow_id}-{round_id}-")
-    os.close(fd)
-    index_file = Path(index_name)
-    index_file.unlink()
-    env = {**os.environ, "GIT_INDEX_FILE": str(index_file)}
-    try:
-        # Start from pinned baseline tree (frozen evidence stays here)
-        subprocess.run(
-            ["git", "-C", str(repo), "read-tree", parent_commit],
-            check=True,
-            capture_output=True,
-            env=env,
-        )
-        for rel in rels:
-            src = workspace / rel
-            blob = subprocess.run(
-                ["git", "-C", str(repo), "hash-object", "-w", str(src)],
-                capture_output=True,
-                text=True,
-                check=True,
-                env=env,
+    delta = []
+    for rel in rels:
+        source = workspace / rel
+        if not source.is_file():
+            raise RuntimeError(f"candidate file is missing: {rel}")
+        parent_blob = _blob_at(repo, parent_commit, rel)
+        live_mode = "100755" if source.stat().st_mode & 0o100 else "100644"
+        parent_mode = subprocess.run(
+            ["git", "-C", str(repo), "ls-tree", parent_commit, "--", rel],
+            capture_output=True, text=True, check=True,
+        ).stdout.split()[0] if parent_blob is not None else live_mode
+        if parent_blob is not None:
+            live = subprocess.run(
+                ["git", "-C", str(repo), "hash-object", "--", str(source)],
+                capture_output=True, text=True, check=True,
             ).stdout.strip()
-            subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(repo),
-                    "update-index",
-                    "--add",
-                    "--cacheinfo",
-                    "100644",
-                    blob,
-                    rel,
-                ],
-                check=True,
-                capture_output=True,
-                env=env,
-            )
+            if live == parent_blob and live_mode == parent_mode:
+                # Unchanged files carry no delta; including them would ask the
+                # snapshot to reproduce a change that does not exist.
+                continue
+        # Report the mode the snapshot will actually carry: the shared builder
+        # preserves the executable bit, and the round-trip check compares against
+        # this value.
+        mode = live_mode
+        delta.append({
+            "path": rel,
+            # An untracked candidate file is an addition, not a modification.
+            "kind": "modify" if parent_blob is not None else "add",
+            "mode": mode,
+            "symlink": False,
+            "exists": True,
+        })
+    if not delta:
+        # Nothing differs from the parent. A0 produced a parent-equal commit
+        # here, so do the same rather than failing the round.
         tree = subprocess.run(
-            ["git", "-C", str(repo), "write-tree"],
-            capture_output=True,
-            text=True,
-            check=True,
-            env=env,
+            ["git", "-C", str(repo), "rev-parse", f"{parent_commit}^{{tree}}"],
+            capture_output=True, text=True, check=True,
         ).stdout.strip()
         commit = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(repo),
-                "commit-tree",
-                tree,
-                "-p",
-                parent_commit,
-                "-m",
-                f"{message} ({workflow_id} r{round_id})",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
+            ["git", "-C", str(repo), "commit-tree", tree, "-p", parent_commit,
+             "-m", f"{message} ({workflow_id} r{round_id})"],
+            capture_output=True, text=True, check=True,
             env={
                 **os.environ,
                 "GIT_AUTHOR_NAME": "qualification",
@@ -236,9 +224,35 @@ def snapshot_candidate(
                 "GIT_COMMITTER_EMAIL": "qualification@local",
             },
         ).stdout.strip()
-    finally:
-        if index_file.exists():
-            index_file.unlink()
+        ref = f"refs/qualification/{workflow_id}/r{round_id}"
+        subprocess.run(["git", "-C", str(repo), "update-ref", ref, commit],
+                       check=True, capture_output=True)
+        return {
+            "candidate_commit": commit,
+            "candidate_tree": tree,
+            "candidate_ref": ref,
+            "candidate_parent": parent_commit,
+            "changed_paths": [],
+        }
+
+    built = candidate_snapshot.build_candidate(
+        workspace, repo, parent_commit, delta,
+        message=f"{message} ({workflow_id} r{round_id})",
+        identity={
+            "GIT_AUTHOR_NAME": "qualification",
+            "GIT_AUTHOR_EMAIL": "qualification@local",
+            "GIT_COMMITTER_NAME": "qualification",
+            "GIT_COMMITTER_EMAIL": "qualification@local",
+        },
+    )
+    commit = built["candidate"]
+    tree = built["tree"]
+
+    problems = candidate_snapshot.verify_round_trip(repo, parent_commit, commit, delta)
+    if problems:
+        raise RuntimeError(
+            "snapshot does not reproduce the candidate: " + "; ".join(problems[:4])
+        )
 
     # Every diff vs parent must stay inside the editable allowlist
     diff = subprocess.run(

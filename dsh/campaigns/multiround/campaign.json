@@ -1,0 +1,12 @@
+{
+  "id": "dsh-multiround-smoke",
+  "objective": "objective.md",
+  "workspace": "seed",
+  "accept": [
+    "python3",
+    "../../../campaigns/automation-smoke/accept.py"
+  ],
+  "max_rounds": 6,
+  "max_seconds": 1800,
+  "accept_timeout_seconds": 60
+}

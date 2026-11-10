@@ -1,0 +1,53 @@
+# EU4 DSH profile overlay -- tracked authoritative copy.
+# Synced into $DSH_HOME/profiles/eu4-web/cordis.patch.yml by dsh/scripts/provision.sh.
+#
+# Two deliberate deviations from the shipped web profile:
+#
+# 1. skill-filesystem: the web-app bundle disables the host-plane row because its
+#    presets own local discovery. This profile needs a host-plane skill root that
+#    points at the repository's existing .opencode/skills tree, so the row is
+#    re-enabled with customSkillDirs instead of duplicating skill content.
+# 2. eu4-goal: the out-of-tree plugin that owns campaign binding, trusted
+#    validation and the completion guard. Patch entries address an EXISTING id,
+#    so a new row requires the top-level `insert` form.
+#
+# Absolute machine paths are never committed; both values arrive from the
+# environment that dsh/scripts/run.sh and preflight.sh export.
+
+# A dedicated migration profile: keep this repository's reconstruction skill and
+# exclude the operator's personal skill roots. Without this, the EU4 agent sees
+# every unrelated skill under ~/.agents/skills -- 22 of them on this machine,
+# which bloats context and invites the wrong skill for the task.
+- id: skill-filesystem
+  disabled: false
+  config:
+    includeDefaultRoots: false
+    customSkillDirs:
+      - !!js process.env.EU4_DSH_SKILL_ROOT
+
+# Provider and model. The shipped web bundle mounts `llm-pi-ai` without any
+# providers and leaves the base default model (deepseek-official/deepseek-flash)
+# in place, which this dedicated home has no credentials for -- so the UI asks
+# for an API key. These two rows mirror the host profile's own user layer, and
+# the secret itself is shared by provision.sh. Both are env-overridable so a
+# different provider can be used without editing tracked config.
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: !!js process.env.EU4_DSH_PROVIDER ?? 'opencode-go'
+    model: !!js process.env.EU4_DSH_MODEL ?? 'deepseek-v4.1-flash'
+
+- insert:
+    - id: eu4-goal
+      name: '@eu4/dsh-goal'
+      config:
+        sidecar: !!js process.env.EU4_DSH_SIDECAR ?? ""
+        python: !!js process.env.EU4_DSH_PYTHON ?? ""
+        requireReview: !!js process.env.EU4_DSH_REQUIRE_REVIEW === 'true'

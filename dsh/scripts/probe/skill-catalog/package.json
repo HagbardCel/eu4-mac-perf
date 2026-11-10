@@ -1,0 +1,8 @@
+{
+  "name": "@eu4/skill-catalog-probe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Boot-time probe that dumps the merged skill catalog for the eu4-web profile",
+  "type": "module",
+  "main": "lib/index.js"
+}

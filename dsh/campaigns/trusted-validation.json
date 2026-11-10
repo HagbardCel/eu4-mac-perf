@@ -1,0 +1,37 @@
+{
+  "schema": "eu4-dsh-campaign/v1",
+  "campaign_id": "dsh-trusted-validation",
+  "source_campaign": "campaigns/eu4-a01-trusted-validation/campaign.json",
+  "checker_retry": {
+    "mode": "deterministic",
+    "max_identical_retries": 0
+  },
+  "candidate": {
+    "mode": "seed",
+    "policy": {
+      "allowed_paths": [
+        "analysis/qualification/v0/primitive-lookup.candidate.json",
+        "progress.md"
+      ],
+      "forbidden_paths": [
+        "analysis/qualification/v0/primitive-table.evidence.json"
+      ]
+    },
+    "workspace_base": "infra",
+    "workspace": ".local/dsh/dsh-trusted-validation/workspace"
+  },
+  "goal": {
+    "max_rounds": 6,
+    "require_checker_pass": true,
+    "require_independent_review": false
+  },
+  "limits": {
+    "max_validations": 8,
+    "validation_timeout_seconds": 300,
+    "wall_clock_seconds": 3600,
+    "max_review_attempts": 2
+  },
+  "live_capture": {
+    "enabled": false
+  }
+}

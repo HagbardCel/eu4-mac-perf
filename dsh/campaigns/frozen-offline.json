@@ -1,0 +1,47 @@
+{
+  "schema": "eu4-dsh-campaign/v1",
+  "campaign_id": "dsh-frozen-offline",
+  "source_campaign": "campaigns/eu4-vertex-buffer-multiple/campaign.json",
+  "candidate_baseline_commit": "97ffb65d0e3f1e14332d7a53c84f9fa6f1155d41",
+  "checker_retry": {
+    "mode": "deterministic",
+    "max_identical_retries": 0
+  },
+  "candidate": {
+    "mode": "worktree",
+    "workspace": ".local/dsh/dsh-frozen-offline/workspace",
+    "policy": {
+      "allowed_paths": [
+        "analysis/automation/pilot-gfx-update-vertex-buffer-multiple/note.md",
+        "benchmark/eu4_gfx_buffers.h",
+        "benchmark/eu4_gfx_buffers.mm",
+        "benchmark/eu4_gfx_entries.def",
+        "tests/gfx_buffers_host.mm",
+        "tests/test_gfx_buffers.py",
+        "tests/test_gfx_entry_registry.py",
+        "progress.md"
+      ],
+      "forbidden_paths": [
+        "campaigns/eu4-vertex-buffer-multiple",
+        "automation/reconstruction_accept.py",
+        "reverse_engineering/target.json",
+        "analysis/reconstruction/gfx-semantic"
+      ]
+    },
+    "workspace_base": "infra"
+  },
+  "goal": {
+    "max_rounds": 8,
+    "require_checker_pass": true,
+    "require_independent_review": false
+  },
+  "limits": {
+    "max_validations": 10,
+    "validation_timeout_seconds": 900,
+    "wall_clock_seconds": 7200,
+    "max_review_attempts": 2
+  },
+  "live_capture": {
+    "enabled": false
+  }
+}
