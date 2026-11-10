@@ -188,16 +188,47 @@ def snapshot_candidate(
                 # Unchanged files carry no delta; including them would ask the
                 # snapshot to reproduce a change that does not exist.
                 continue
+        # Report the mode the snapshot will actually carry: the shared builder
+        # preserves the executable bit, and the round-trip check compares against
+        # this value.
+        mode = "100755" if source.stat().st_mode & 0o100 else "100644"
         delta.append({
             "path": rel,
             # An untracked candidate file is an addition, not a modification.
             "kind": "modify" if parent_blob is not None else "add",
-            "mode": "100644",
+            "mode": mode,
             "symlink": False,
             "exists": True,
         })
     if not delta:
-        raise RuntimeError("candidate has no changes to snapshot")
+        # Nothing differs from the parent. A0 produced a parent-equal commit
+        # here, so do the same rather than failing the round.
+        tree = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", f"{parent_commit}^{{tree}}"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        commit = subprocess.run(
+            ["git", "-C", str(repo), "commit-tree", tree, "-p", parent_commit,
+             "-m", f"{message} ({workflow_id} r{round_id})"],
+            capture_output=True, text=True, check=True,
+            env={
+                **os.environ,
+                "GIT_AUTHOR_NAME": "qualification",
+                "GIT_AUTHOR_EMAIL": "qualification@local",
+                "GIT_COMMITTER_NAME": "qualification",
+                "GIT_COMMITTER_EMAIL": "qualification@local",
+            },
+        ).stdout.strip()
+        ref = f"refs/qualification/{workflow_id}/r{round_id}"
+        subprocess.run(["git", "-C", str(repo), "update-ref", ref, commit],
+                       check=True, capture_output=True)
+        return {
+            "candidate_commit": commit,
+            "candidate_tree": tree,
+            "candidate_ref": ref,
+            "candidate_parent": parent_commit,
+            "changed_paths": [],
+        }
 
     built = candidate_snapshot.build_candidate(
         workspace, repo, parent_commit, delta,

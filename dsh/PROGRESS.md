@@ -110,6 +110,43 @@ campaign requires review; one skill in the catalog.
 **Tests and CI**: 82 DSH tests, 24 node tests, 86 OpenCode tests, full repository
 discovery green, CI green on Python 3.10 and 3.14.
 
+## Independent review, and what it changed
+
+An independent review of the full diff found one critical and four high-severity
+defects. All five are fixed here:
+
+- **The Web session workspace is the whole checkout**, so the agent could write
+  `automation/acceptance.py`, a campaign's checker or a sidecar, and the plugin
+  then re-ran `prepare` before every check -- which *rewrote* the identity anchor,
+  so the "anchored" trusted material matched whatever the agent had just edited.
+  `prepare` now creates the anchor once and afterwards verifies it: a changed
+  checker or sidecar refuses with `identity_modified` instead of being re-anchored.
+- **The identity covered only the commit, not the trusted machinery.** Uncommitted
+  edits to `acceptance.py`, `verification_manifest.py`, `handoff.py`, `state.py`
+  and the other modules this path executes were invisible. They are now digested
+  into `trusted_modules_digest`, part of the anchored identity.
+- **The `danger-full-access` refusal was dead code**: nothing exported the
+  variable it read. The check is gone and the documentation says so; what is
+  enforced is containment plus the module digests, and the honest statement is
+  that the bridge cannot observe DSH's sandbox mode.
+- **Review output could be spoofed by quoting**: if a `final` event existed but
+  held no review, the extractor scanned the rest of the stream, where a quoted
+  review-shaped object could be picked up. A final event now decides on its own.
+- **A reviewer that exited non-zero was reported as an integrity refusal**, which
+  invites "repairing" a candidate when the reviewer merely crashed. It is now an
+  infrastructure error.
+
+Two further review findings were fixed because they changed OpenCode's behaviour:
+the A0 snapshot hardcoded mode `100644` where the shared builder preserves the
+executable bit, and a round with no content change raised where the old code
+produced a parent-equal commit.
+
+Deferred, recorded as follow-ups rather than expanded into this PR: budgets and
+retry fields parsed but never enforced (now dead configuration), candidate
+identity not covering symlink targets and ignored files, `review-verify` and
+`prepare` not taking the run-root lock, goal binding not tied to the campaign
+objective text, and several stale documentation lines.
+
 ## Known limitations
 
 - **`dsh --profile headless` answers one turn.** Measured: a goal created in that

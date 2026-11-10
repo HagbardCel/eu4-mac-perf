@@ -135,12 +135,10 @@ def _roots(sidecar: Sidecar) -> dict:
         problems.append(
             f"declared DSH workspace {declared} is not the campaign workspace {candidate}"
         )
-    sandbox = os.environ.get("EU4_DSH_SANDBOX_MODE")
-    if sandbox == "danger-full-access":
-        problems.append(
-            "qualification requires workspace-write or stricter; "
-            "danger-full-access provides no boundary for qualification state"
-        )
+    # The bridge cannot observe DSH's sandbox mode: nothing exports it, and an
+    # environment variable would not be trustworthy anyway. What is enforced is
+    # containment (the candidate must be reachable) plus the trusted-module
+    # digests above, which detect edits to the machinery this path executes.
     if problems:
         raise Refusal("execution_root", "; ".join(problems))
     return {
@@ -259,6 +257,44 @@ def _evidence_digest(sidecar: Sidecar) -> str:
     return receipts.digest_text(receipts.canonical_json(rows))
 
 
+TRUSTED_MODULES = (
+    "acceptance",
+    "campaign_contract",
+    "candidate_snapshot",
+    "dsh_campaign",
+    "handoff",
+    "review_result",
+    "state",
+    "verification_manifest",
+)
+
+
+def _trusted_modules_digest() -> str:
+    """Digest the modules this path executes, from the running copies.
+
+    The infrastructure *commit* only pins what is committed. A session whose
+    workspace is the checkout can edit these files, and an uncommitted edit would
+    otherwise change what the "fresh trusted checker run" executes without any
+    identity drift.
+    """
+    import importlib.util
+
+    rows = []
+    for name in TRUSTED_MODULES:
+        try:
+            spec = importlib.util.find_spec(f"automation.{name}")
+        except (ImportError, AttributeError, ValueError):
+            rows.append({"module": name, "sha256": None})
+            continue
+        origin = Path(spec.origin).resolve() if spec and spec.origin else None
+        rows.append({
+            "module": name,
+            "sha256": receipts.digest_file(origin)
+            if origin is not None and origin.is_file() else None,
+        })
+    return receipts.digest_text(receipts.canonical_json(rows))
+
+
 def _identity(sidecar: Sidecar, infra_commit: str) -> dict:
     manifest_digest = None
     if sidecar.verification_manifest:
@@ -276,6 +312,7 @@ def _identity(sidecar: Sidecar, infra_commit: str) -> dict:
         "policy_digest": sidecar.policy_digest,
         "objective_digest": sidecar.objective_digest,
         "checker_sha256": receipts.digest_file(sidecar.checker),
+        "trusted_modules_digest": _trusted_modules_digest(),
         "verification_manifest_digest": manifest_digest,
         "evidence_inputs_digest": _evidence_digest(sidecar),
         "candidate": _candidate(sidecar),
@@ -307,6 +344,7 @@ def _goal_policy(classification: str, verdict: str | None) -> str:
 
 ANCHORED_IDENTITIES = (
     "checker_sha256",
+    "trusted_modules_digest",
     "sidecar_sha256",
     "source_campaign_sha256",
     "verification_manifest_digest",
@@ -351,6 +389,13 @@ def _workspace_ok(sidecar: Sidecar) -> bool | None:
 
 
 def op_prepare(args) -> int:
+    """Create the identity anchor once, then verify it on every later call.
+
+    The plugin calls this before each check so it can report the workspace, so it
+    must not re-anchor: rewriting identity.json on every call would compare the
+    current identity to itself and make the anchor meaningless. If an anchor
+    exists and the trusted material no longer matches it, this refuses.
+    """
     sidecar = load_sidecar(Path(args.sidecar))
     roots = _roots(sidecar)
     stored = _setup(sidecar.run_root)
@@ -365,15 +410,21 @@ def op_prepare(args) -> int:
         )
 
     identities = _identity(sidecar, infra_commit)
-    receipts.write_identity(sidecar.run_root, {
-        "schema": "eu4-dsh-identity/v1",
-        "campaign_id": sidecar.campaign_id,
-        "prepared_at": _now(),
-        "execution_roots": roots,
-        "identities": identities,
-        "workspace": str(sidecar.workspace),
-        "run_root": str(sidecar.run_root),
-    })
+    existing = receipts.read_json(stored.identity)
+    if existing is not None:
+        anchored = existing.get("identities") or {}
+        _check_anchor(anchored, identities)
+    else:
+        receipts.write_identity(sidecar.run_root, {
+            "schema": "eu4-dsh-identity/v1",
+            "campaign_id": sidecar.campaign_id,
+            "prepared_at": _now(),
+            "execution_roots": roots,
+            "identities": identities,
+            "workspace": str(sidecar.workspace),
+            "run_root": str(sidecar.run_root),
+        })
+
     emit({
         "ok": True,
         "operation": "prepare",
@@ -385,6 +436,7 @@ def op_prepare(args) -> int:
         "run_root": str(sidecar.run_root),
         "identities": identities,
         "identity_digest": receipts.identity_digest(identities),
+        "anchored_now": existing is None,
     })
     return EXIT_OK
 
@@ -739,6 +791,7 @@ def op_checker_compat(args) -> int:
         "compat_verdict": compat,
         "checker": str(sidecar.checker),
         "checker_sha256": receipts.digest_file(sidecar.checker),
+        "trusted_modules_digest": _trusted_modules_digest(),
         "imports": rows,
         "baseline": baseline,
         "problems": problems,
@@ -821,11 +874,16 @@ def op_review_run(args) -> int:
             })
             return EXIT_OK
         if outcome["exit_code"] != 0:
-            raise Refusal(
-                "review_failed",
-                f"the reviewer exited {outcome['exit_code']}: "
-                f"{outcome['stderr'][:400]}",
-            )
+            # The reviewer crashed; nothing was decided about the candidate.
+            emit({
+                "ok": False, "operation": "review-run",
+                "campaign_id": sidecar.campaign_id,
+                "classification": "infrastructure_error", "kind": "review_failed",
+                "goal_policy": "unavailable",
+                "detail": f"the reviewer exited {outcome['exit_code']}: "
+                          f"{outcome['stderr'][:400]}",
+            })
+            return EXIT_OK
         payload = review.extract_review_payload(outcome["stdout"])
         if payload is None:
             raise Refusal("review_unparseable",

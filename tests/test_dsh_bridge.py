@@ -190,14 +190,34 @@ class ExecutionRootTests(BridgeTestCase):
         self.assertEqual(out["kind"], "execution_root")
         self.assertIn("must live under .local/", out["detail"])
 
-    def test_danger_full_access_cannot_run_qualification(self) -> None:
-        sidecar = self.sidecar(self.campaign("smoke-campaign"))
-        os.environ["EU4_DSH_SANDBOX_MODE"] = "danger-full-access"
-        self.addCleanup(os.environ.pop, "EU4_DSH_SANDBOX_MODE", None)
-        code, out = self.run_bridge("prepare", sidecar)
-        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
-        self.assertEqual(out["kind"], "execution_root")
-        self.assertIn("danger-full-access", out["detail"])
+    def test_prepare_does_not_re_anchor_a_changed_checker(self) -> None:
+        """The plugin prepares before every check, so prepare must verify, not rewrite."""
+        campaign = self.campaign("smoke-campaign")
+        sidecar = self.sidecar(campaign)
+        code, first = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, first)
+        self.assertTrue(first["anchored_now"])
+
+        checker = campaign / "accept.py"
+        checker.write_text(checker.read_text(encoding="utf-8") + "\n# edited\n",
+                           encoding="utf-8")
+
+        code, second = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, second)
+        self.assertEqual(second["kind"], "identity_modified")
+        self.assertIn("checker_sha256", second["detail"])
+
+    def test_editing_a_trusted_module_is_refused(self) -> None:
+        """What the checker path executes is digested, not just the commit."""
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        original = dsh_bridge._trusted_modules_digest
+        dsh_bridge._trusted_modules_digest = lambda: "0" * 64
+        self.addCleanup(setattr, dsh_bridge, "_trusted_modules_digest", original)
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "identity_modified")
+        self.assertIn("trusted_modules_digest", out["detail"])
 
     def test_a_declared_workspace_mismatch_is_refused(self) -> None:
         sidecar = self.sidecar(self.campaign("smoke-campaign"))

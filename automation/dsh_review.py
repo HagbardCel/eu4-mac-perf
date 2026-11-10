@@ -137,6 +137,11 @@ def extract_review_payload(text: str) -> dict | None:
                 continue
             if isinstance(value, dict) and value.get("schema") == REVIEW_SCHEMA:
                 return value
+        # A final event exists and is not a review. Do not scan the rest of the
+        # stream: the reviewer knows the task text, hence the candidate and oracle
+        # identities, so a review-shaped object quoted in its reasoning or in a
+        # tool result must not be mistaken for its answer.
+        return None
     haystack = "\n".join(_json_strings(text))
     for candidate in reversed(_balanced_objects(haystack)):
         if REVIEW_SCHEMA not in candidate:
