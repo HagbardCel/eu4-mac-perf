@@ -44,7 +44,7 @@ function tool(ctx, name) {
   return ctx._state.tools.find((entry) => entry.name === name)
 }
 
-const agent = { sessionId: 's1', id: 'a1', session: { header: { cwd: '/tmp' } } }
+const agent = { sessionId: 's1', id: 'a1', session: { header: { cwd: '/tmp/ws' } } }
 
 test('validate prepares the campaign first', async () => {
   const { ctx, ops } = harness({
@@ -109,7 +109,7 @@ test('a session rooted outside the campaign workspace is refused', async () => {
   const result = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
   assert.deepEqual(ops, ['prepare'])
   assert.equal(result.kind, 'workspace_mismatch')
-  assert.match(result.detail, /outside the session workspace/)
+  assert.match(result.detail, /is not the campaign workspace/)
 })
 
 test('an unavailable session cwd is refused rather than assumed', async () => {
@@ -130,7 +130,7 @@ test('the session identity comes from the harness object, not argv', async () =>
     validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
   })
   // `agent.sessionId` is absent in headless; the id lives on the session.
-  const headlessAgent = { id: 'agent-1', session: { id: 'sess-1', header: { cwd: '/tmp' } } }
+  const headlessAgent = { id: 'agent-1', session: { id: 'sess-1', header: { cwd: '/tmp/ws' } } }
   await tool(ctx, 'eu4_validate_candidate').execute({}, { agent: headlessAgent })
   assert.deepEqual(calls, [['validate', '--session-id', 'sess-1']])
 })
@@ -141,7 +141,7 @@ test('an agent with no session identity does not send the flag at all', async ()
     validate: { ok: true, classification: 'verdict', checker_verdict: 'pass' },
   })
   await tool(ctx, 'eu4_validate_candidate').execute(
-    {}, { agent: { session: { header: { cwd: '/tmp' } } } }
+    {}, { agent: { session: { header: { cwd: '/tmp/ws' } } } }
   )
   assert.deepEqual(calls, [], 'no --session-id with a missing identity')
 })

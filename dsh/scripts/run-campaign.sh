@@ -27,6 +27,17 @@ PLUGIN=$INFRA/dsh/eu4-goal-plugin/lib/index.js
 
 [ -f "$PLUGIN" ] || { echo "run-campaign: plugin missing at $PLUGIN" >&2; exit 1; }
 
+# dsh 'headless' does not mount the credentials service on 0.2.2-rc.1, so the
+# provider can only authenticate from the environment. Fail before spending a turn
+# rather than after a MISSING_CREDENTIAL error.
+if [ -z "${OPENCODE_GO_API_KEY:-}" ] && [ -z "${DEEPSEEK_API_KEY:-}" ]; then
+  echo "run-campaign: no provider key in the environment." >&2
+  echo "  The one-shot profile cannot read the stored credentials, so export" >&2
+  echo "  OPENCODE_GO_API_KEY (or use the Web profile, which can):" >&2
+  echo "    OPENCODE_GO_API_KEY=... ./dsh/scripts/run-campaign.sh <sidecar>" >&2
+  exit 1
+fi
+
 # Prepare first, so the workspace exists and the trusted anchor is recorded
 # before any model turn sees it.
 PREPARE=$("$EU4_DSH_PYTHON" -m automation.dsh_bridge prepare --sidecar "$EU4_DSH_SIDECAR" 2>&1) || {

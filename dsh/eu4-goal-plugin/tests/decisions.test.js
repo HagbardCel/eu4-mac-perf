@@ -56,19 +56,19 @@ test('only a fresh passing finalize may authorize completion', () => {
   assert.ok(qualificationRefusal(undefined))
 })
 
-test('a campaign workspace inside the session workspace is reachable', () => {
-  assert.equal(workspaceRefusal('/repo', '/repo/.local/dsh/x/workspace'), undefined)
-  assert.equal(workspaceRefusal('/repo/', '/repo/.local/'), undefined)
-  assert.equal(workspaceRefusal('/repo', '/repo'), undefined)
+test('only the campaign workspace itself is an acceptable session root', () => {
+  assert.equal(workspaceRefusal('/repo/.local/dsh/x/workspace',
+                                '/repo/.local/dsh/x/workspace'), undefined)
+  assert.equal(workspaceRefusal('/repo/.local/dsh/x/workspace/', '/repo/.local/dsh/x/workspace'), undefined)
 })
 
-test('a campaign workspace outside the sandbox is refused with a reason', () => {
-  const reason = workspaceRefusal('/repo', '/Users/someone/.local/share/state/x/workspace')
-  assert.match(reason, /outside the session workspace/)
-})
-
-test('a sibling with a shared prefix is not mistaken for a child', () => {
-  assert.ok(workspaceRefusal('/repo', '/repo-other/workspace'))
+test('a parent or child of the candidate is refused', () => {
+  const parent = workspaceRefusal('/repo', '/repo/.local/dsh/x/workspace')
+  assert.match(parent, /is not the campaign workspace/)
+  const child = workspaceRefusal('/repo/.local/dsh/x/workspace', '/repo')
+  assert.match(child, /is not the campaign workspace/)
+  // A sibling with a shared prefix must not be treated as equal either.
+  assert.ok(workspaceRefusal('/repo-other', '/repo'))
 })
 
 test('an unknown session cwd or campaign workspace is refused', () => {

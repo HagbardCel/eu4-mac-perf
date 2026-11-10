@@ -69,17 +69,16 @@ RUN_ROOT=$(printf '%s' "$PREPARE" | "$EU4_DSH_PYTHON" -c 'import json,sys; print
 REQUIRE_REVIEW=$(printf '%s' "$PREPARE" | "$EU4_DSH_PYTHON" -c 'import json,sys; print(str(bool(json.load(sys.stdin)["require_independent_review"])).lower())')
 export EU4_DSH_REQUIRE_REVIEW=$REQUIRE_REVIEW
 
-case "$WORKSPACE" in
-  "$INFRA"/*) SESSION_DIR=$INFRA ;;
-  *) SESSION_DIR=$(dirname -- "$WORKSPACE") ;;
-esac
+# The session workspace is the candidate itself, not the checkout. DSH confines
+# writes to the session workspace, so a session rooted at the checkout would let
+# the agent edit the trusted checker, the shared acceptance code and the sidecars.
+# Rooting it at the candidate keeps every trusted path outside the sandbox.
+SESSION_DIR=$WORKSPACE
 
 # A DSH Web session takes its working directory from the workspace registry, not
-# from the process cwd, and the sandbox confines writes to that directory. A
-# session created in the first-use workspace therefore cannot reach a campaign
-# workspace inside this checkout: measured, the goal ended blocked with a
-# workspace mismatch. Registering the checkout and making it the default removes
-# that step from the operator's side; it is what the UI's "open folder" does.
+# from the process cwd. Registering the candidate and making it the default means
+# a new session lands on it without the operator picking anything; it is what the
+# UI's "open folder" does.
 "$EU4_DSH_PYTHON" - "$DSH_HOME/storages/workspace.json" "$SESSION_DIR" <<'PYREG'
 import datetime, json, os, sys, uuid
 

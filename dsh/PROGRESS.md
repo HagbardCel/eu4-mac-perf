@@ -51,11 +51,16 @@ so the campaign workspace inside the checkout was outside the sandbox and the
 plugin refused it (`workspace_mismatch`). A DSH Web session takes its working
 directory from the workspace registry, not from the process cwd.
 
-`run.sh --campaign` now registers the checkout in that registry and makes it the
-default, which is what the UI's "open folder" does, so the operator does not have
-to pick a workspace. Verified idempotent and that the default resolves to the
-checkout. **Not yet re-run live**: a Web campaign that reaches a checker pass and
-finalization. The headless path has completed one end to end (below).
+`run.sh --campaign` now registers the **candidate workspace** in that registry and
+makes it the default, so the operator never picks a workspace. Registering the
+checkout instead -- the first attempt -- was wrong: DSH confines writes to the
+session workspace, so a session rooted at the checkout let the agent edit the
+trusted checker, `automation/` and the sidecars. The plugin now requires the
+session workspace to *be* the campaign workspace (exact match, not ancestor
+containment), which puts every trusted path outside the sandbox. Verified: the
+registry default resolves to the candidate, registering twice does not duplicate
+it, and the profile still finds the reconstruction skill through the absolute
+skill root.
 
 **Autonomous smoke campaign** (`dsh/scripts/run-campaign.sh`, headless):
 session `session-f7427783-9fe5-499a-80a8-de11071ae8f9`, cwd equal to the campaign
@@ -152,6 +157,12 @@ objective text, and several stale documentation lines.
 - **`dsh --profile headless` answers one turn.** Measured: a goal created in that
   turn gets no further round. `run-campaign.sh` is therefore for campaigns that
   finish in one turn; multi-round campaigns use the Web path.
+- **The one-shot profile cannot read stored credentials on DSH 0.2.2-rc.1**: it
+  does not mount the credentials service, so it needs `OPENCODE_GO_API_KEY` (or
+  `DEEPSEEK_API_KEY`) in the environment. `run-campaign.sh` refuses early with
+  that message rather than spending a turn on `MISSING_CREDENTIAL`. The Web
+  profile resolves the stored credential normally, which is what the live runs
+  used.
 - **Multi-round continuation works** (3 rounds in one live session, no prompt
   between them), but the run that proved it ended `blocked` on a workspace
   binding defect rather than on the checker. The binding is fixed and the fix is

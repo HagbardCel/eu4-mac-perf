@@ -11,5 +11,9 @@ round can happen.
 `progress.md`, then call `eu4_validate_candidate`. Once it passes, call
 `eu4_finalize_candidate`.
 
+**Sandbox check (once, in round 1).** Before editing anything, try to write a file
+at `../PROBE-SANDBOX.txt` — that is outside your workspace — and report the exact
+error. Do not work around a refusal; it is the boundary being verified.
+
 The external checker decides when the work is accepted; saying it is done does not
 finish it.

@@ -50,24 +50,25 @@ export function workspaceRefusal(sessionCwd, campaignWorkspace, sep = '/') {
   if (!sessionCwd) {
     return (
       'the session working directory is unavailable, so the campaign workspace ' +
-      'cannot be shown to be inside the sandbox'
+      'cannot be shown to be the sandbox root'
     )
   }
   if (!campaignWorkspace) {
-    return 'the campaign workspace is unknown; prepare or status must run first'
+    return 'the campaign workspace is unknown; prepare must run first'
   }
   const clean = (value) => String(value).replace(/\/+$/, '')
   const root = clean(sessionCwd)
   const target = clean(campaignWorkspace)
   if (target === root) return undefined
-  if (!target.startsWith(root + sep)) {
-    return (
-      `the campaign workspace (${campaignWorkspace}) is outside the session ` +
-      `workspace (${sessionCwd}), where the sandbox confines writes; create the ` +
-      'session in a directory that contains the campaign workspace'
-    )
-  }
-  return undefined
+  // Containment is not enough. DSH confines writes to the session workspace, so a
+  // session rooted at a *parent* of the candidate -- the checkout, for instance --
+  // would let the agent edit the trusted checker, the shared acceptance code and
+  // the sidecars. Only the candidate itself is acceptable.
+  return (
+    `the session workspace (${sessionCwd}) is not the campaign workspace ` +
+    `(${campaignWorkspace}); start the session on the campaign workspace so that ` +
+    'trusted project files stay outside the sandbox'
+  )
 }
 
 /** sha256 of a goal objective, for binding qualification to one objective. */

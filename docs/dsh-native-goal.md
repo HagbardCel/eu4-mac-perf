@@ -36,8 +36,8 @@ and are unaffected, so pausing or clearing a goal remains an operator control.
 ## Trusted bridge
 
 `python3 -m automation.dsh_bridge {prepare,validate,finalize} --sidecar <path>`
-does the deterministic project work and nothing else. It reuses
-`automation.runner.run_accept` for execution and verdict parsing, so the checker
+does the deterministic project work and nothing else. It runs the checker through
+`automation.acceptance`, the same function the OpenCode runner uses, so the checker
 vocabulary has one source of truth, and it never invents a verdict.
 
 Two axes are reported separately:
@@ -49,8 +49,7 @@ Two axes are reported separately:
 
 A timeout, truncated output, unreadable JSON, an invalid verdict enum or `pass`
 with a non-zero exit is an `infrastructure_error` mapped to goal policy
-`unavailable` — never a pass and never a remediable `fail`. Exhausting the retry
-allowance is `policy_stop`/`no_progress`, which is not a checker `blocked`.
+`unavailable` — never a pass and never a remediable `fail`.
 
 The retry policy is checker-aware, because some checkers legitimately depend on
 trusted external state across runs:
@@ -60,11 +59,10 @@ trusted external state across runs:
 ```
 
 `campaigns/automation-smoke/accept.py` is exactly that case: it deliberately
-fails once even when the candidate is already correct, so its DSH sidecar
-declares `stateful` with one confirmation round. A deterministic checker declares
-`mode: "deterministic"` and is refused on an identical repeat. An identical
-verified `pass` is reused rather than re-run — idempotency applies to success,
-not to failure.
+fails once even when the candidate is already correct. There is no retry scheduler
+and no allowance to configure: every `validate` runs the checker once, so an agent
+that wants another check simply asks again, which is what the smoke campaign's
+confirmation round is.
 
 `prepare` records an anchor of the trusted material (checker, sidecar, source
 campaign, verification manifest, policy, objective, candidate baseline). Every
@@ -95,44 +93,38 @@ digest are recorded per session in `<run-root>/plugin-binding.json`; editing or
 replacing the goal invalidates prior qualification instead of authorizing a
 different objective.
 
-## Candidate snapshots and the journal
+## Candidate snapshots and the qualification record
 
 A candidate is identified by its complete delta against the pinned baseline, not
 by a list of filenames: additions, deletions, renames, mode changes, typechanges
 and symlinks are enumerated from porcelain v2 and every one of them must be
-permitted by the campaign policy. The snapshot is then rebuilt from the baseline
-and re-diffed, and the rebuild must reproduce the intended delta exactly — no
-missing change and no unintended one — before it is accepted. Finalization
-freezes that commit, so review evidence always describes the candidate the
-passing run actually saw.
+permitted by the campaign policy. The snapshot is rebuilt from the baseline and
+re-diffed, and the rebuild must reproduce the intended delta exactly before it is
+accepted. Finalization freezes that commit, so review evidence describes the
+candidate the passing run actually saw.
 
-Receipts are written through an append-only hash-chained journal, and
-finalization refuses when the current receipt is not the journalled one. That is
-tamper evidence, not authority: authority remains the fresh checker run, which
-is why a forged receipt *and* a rebuilt journal chain still cannot authorize
-completion.
+Validation writes **one** qualification record per campaign, replacing the
+previous one. It is a record, not authority: finalization re-runs the checker and
+only that result completes a goal. There is no journal, no per-attempt history and
+no retry scheduler -- DSH owns the session history and its round cap bounds the
+campaign.
 
-Before any run the bridge asserts its execution roots: the candidate may not be
-the infrastructure root or nested inside it, the campaign and checker must live
-in the trusted checkout, a candidate may not ship `automation/dsh_bridge.py`, a
-declared `EU4_DSH_WORKSPACE` must equal the campaign workspace, and
-`danger-full-access` refuses qualification outright because it provides no
-boundary for qualification state.
+Before any run the bridge asserts its execution roots. The boundary between the
+candidate and the trusted checkout is the **session workspace**: the plugin
+requires the session's working directory to *be* the campaign workspace, so the
+DSH sandbox keeps `automation/`, `campaigns/` and the sidecars outside it. The
+candidate may not be the infrastructure root, and it may not ship
+`automation/dsh_bridge.py`. The trusted modules this path executes are digested
+into the anchored identity, so an uncommitted edit to the checker's supporting
+code is refused rather than run. The bridge cannot observe DSH's sandbox mode and
+does not claim to.
+## Restart and resumption
 
-## Interruption and recovery
-
-A validation records an intent before the checker starts and clears it only once
-the receipt is durable. `recover` quarantines any surviving intent and reports
-whether the current receipt still describes the current candidate; it never
-writes a receipt, so recovery cannot manufacture a pass. Limits (validation
-count, wall clock, retry allowance, finalization confirmations) are counted in
-the run root rather than in the session, so restarting or forking a session
-cannot reset them.
-
-DSH disarms an active goal on session restart, and nothing in this
-infrastructure re-arms it: continuation after a restart is an explicit operator
-decision.
-
+DSH persists the goal in its session log and deliberately disarms an active goal
+when a session starts, so continuation after a restart is an explicit operator
+action: resuming the goal in the UI. The project side keeps no recovery state; an
+interrupted validation simply leaves no record, which is already safe, and the next
+`validate` replaces whatever a previous run left behind.
 ## Independent review
 
 The reviewer is a separate `dsh --profile headless` process in a detached
