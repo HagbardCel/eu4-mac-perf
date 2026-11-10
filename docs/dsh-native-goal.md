@@ -293,8 +293,17 @@ clear `workspace_mismatch` refusal instead of failing silently.
 Then one human action is required, because DSH authorizes goal creation from a
 human turn: open the printed URL, start a session, and send `/goal <objective>`.
 The objective is printed by the launcher and stored in the campaign's
-`objective.md`. From there the goal-round driver continues on its own; measured at
-three rounds in one session with no prompt between them.
+`objective.md`. From there the goal-round driver continues on its own.
+
+Measured end to end: a supervised campaign ran rounds 1 and 2 in one session, the
+agent's write outside the candidate workspace was refused by the sandbox, the
+checker failed once and then passed, and `eu4_finalize_candidate` confirmed it with
+a fresh run and completed the goal.
+
+Open the URL with its `token` intact. A browser that already holds a cookie for
+`127.0.0.1` from another DSH instance will be rejected with "dsh web authentication
+required" -- cookies ignore ports -- so use a private window for the campaign
+instance.
 
 `run.sh` binds an OS-chosen port unless you pass `--port` or set `EU4_DSH_PORT`.
 The composed web default is `127.0.0.1:3080`, which is where an ordinary DSH GUI

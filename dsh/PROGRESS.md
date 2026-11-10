@@ -19,7 +19,7 @@ contract, the trusted checker and the qualification record. OpenCode is untouche
 | 4 -- thin plugin | done (2 tools + 1 conditional) |
 | 5 -- one snapshot implementation | done |
 | 6 -- removal and documentation | done |
-| 7 -- full matrix and live multi-round test | matrix green; multi-round **proven**; Web completion and live review outstanding |
+| 7 -- full matrix and live multi-round test | matrix green; Web multi-round **and completion proven**; live review outstanding |
 
 ## What is shared, not duplicated
 
@@ -51,7 +51,27 @@ so the campaign workspace inside the checkout was outside the sandbox and the
 plugin refused it (`workspace_mismatch`). A DSH Web session takes its working
 directory from the workspace registry, not from the process cwd.
 
-`run.sh --campaign` now registers the **candidate workspace** in that registry and
+### Supervised Web campaign: complete
+
+Session `session-a78e35c9`, goal `goal-0f6c7a76-c9d5`, session cwd equal to the
+campaign workspace. The operator authorised the goal with one `/goal` message and
+supplied nothing after it:
+
+| step | observed |
+|---|---|
+| goal | created `active` (rev 1) |
+| rounds | **1 and 2**, round 2 started by the goal-round driver |
+| sandbox probe | a write to `../PROBE-SANDBOX.txt` produced no file: the sandbox refused it |
+| checker | `eu4_validate_candidate` → `fail` (the smoke checker's design), then `pass` |
+| candidate | `marker.txt` `todo` → `ready`, `## Next` heading preserved |
+| finalization | `eu4_finalize_candidate` → fresh run `pass`, frozen digest `08ef3a11…` |
+| goal | `complete` (rev 2) |
+
+Tool order in the session: `get_goal`, `eu4_validate_candidate`,
+`eu4_validate_candidate`, `eu4_finalize_candidate`, `get_goal` — 14 tool calls in
+total. Nothing outside the candidate was written, and no store was edited.
+
+`run.sh --campaign` registers the **candidate workspace** in that registry and
 makes it the default, so the operator never picks a workspace. Registering the
 checkout instead -- the first attempt -- was wrong: DSH confines writes to the
 session workspace, so a session rooted at the checkout let the agent edit the
@@ -163,11 +183,9 @@ objective text, and several stale documentation lines.
   that message rather than spending a turn on `MISSING_CREDENTIAL`. The Web
   profile resolves the stored credential normally, which is what the live runs
   used.
-- **Multi-round continuation works** (3 rounds in one live session, no prompt
-  between them), but the run that proved it ended `blocked` on a workspace
-  binding defect rather than on the checker. The binding is fixed and the fix is
-  unverified live: no Web campaign has yet reached a checker pass and
-  finalization, and no Web goal has reached `complete`.
+- **Multi-round continuation and completion both work on the Web path**: a
+  supervised campaign ran two goal rounds and reached `complete` through a fresh
+  checker pass, with the sandbox refusing a write outside the candidate.
 - **No live reviewer rejection/remediation loop.** The channel, the schema
   validation and the receipt writing are exercised with a scripted reviewer; the
   live reviewer was run once and returned `unresolved`.
