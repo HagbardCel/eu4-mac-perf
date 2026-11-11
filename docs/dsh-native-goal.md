@@ -116,8 +116,78 @@ DSH sandbox keeps `automation/`, `campaigns/` and the sidecars outside it. The
 candidate may not be the infrastructure root, and it may not ship
 `automation/dsh_bridge.py`. The trusted modules this path executes are digested
 into the anchored identity, so an uncommitted edit to the checker's supporting
-code is refused rather than run. The bridge cannot observe DSH's sandbox mode and
-does not claim to.
+code is refused rather than run. The bridge cannot observe DSH's sandbox mode, so
+it does not claim to enforce one; see the threat model for what is and is not
+guaranteed.
+## Qualification hardening
+
+Four boundaries were tightened after the first end-to-end campaign.
+
+**Goal binding is established once.** `validate` binds the session to the live
+goal on its first call and afterwards compares instead of replacing, so editing
+the objective and validating again refuses with `goal_binding` rather than
+inheriting the earlier qualification. `finalize` compares too, and never rebinds.
+
+**A checker never sees provider credentials.** `automation.acceptance` runs every
+checker with a scrubbed environment: anything shaped like a provider credential
+(`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, and `OPENCODE_`/`DEEPSEEK_`/
+`OPENAI_`/`ANTHROPIC_`-prefixed names) is removed, while toolchain and build
+settings pass through. A checker runs candidate-authored tests, so anything it can
+read is effectively available to the candidate; the reviewer, which legitimately
+needs a key, is spawned separately with an explicit environment.
+
+**The reviewer runs isolated and read-only.** The plugin hands the bridge an
+explicit environment allowlist (`PATH`, `HOME`, `TMPDIR`, `LANG`, `DSH_HOME`,
+the provider keys) instead of `process.env`. The reviewer is spawned with
+`DSH_PERMISSION_MODE=read-only` and a cwd inside its own worktree, so it cannot
+modify the candidate even if it tries; without `DSH_HOME` the run refuses
+`review_environment` rather than silently using the operator's installation, and it
+refuses the same way when no provider key is in the environment, because the
+one-shot profile cannot read the stored credential. After
+it exits, the worktree is fingerprinted again and any change refuses
+`review_worktree_modified`, dropping the checkout and keeping the changed paths in
+the refusal.
+
+**The trusted identity covers what the checker executes.** `trusted_modules_digest`
+combines the modules this path runs with the **transitive** `automation.*` closure
+the checker reaches -- the same analysis `checker-compat` reports, so the two
+cannot drift. The walk parses imports rather than matching text, keeps full dotted
+paths (`automation.gfx_contracts.api` and `automation.gfx_contracts` are different
+files), follows what each discovered module imports in turn, and understands both
+`import automation.x` and `from automation import x`. A package is digested module
+by module, because `gfx_contracts` selects its validator version at runtime with
+`importlib.import_module`: which version cannot be seen statically, so every
+version in the package is covered. An unresolvable name refuses
+`checker_dependency_unresolved` instead of anchoring a `null`.
+
+**The candidate identity is complete, and finalization replays.** Symlink rows
+carry a digest of their target, so a retarget is a change. Gitignored inputs --
+including the contents of ignored *directories*, which git reports as a single
+record -- are inventoried under a file and byte bound, digested at validation and
+compared again at finalization; a change refuses `inputs_changed`. Files are
+hashed in chunks and skipped above a per-file cap, and a truncated inventory
+refuses `inputs_incomplete` unless the campaign sets `allow_incomplete_inputs` --
+an inventory that cannot cover everything must not be presented as evidence. Finalization
+freezes the candidate and then replays it as a **working-tree delta over the pinned
+baseline**: a worktree at the baseline commit with the frozen delta applied on top.
+Reconstruction checkers require `HEAD` to stay at the pin, so replaying from the
+frozen commit itself would fail a valid candidate for a reason that has nothing to
+do with the candidate. State the checker reads from *beside* the workspace -- a reconstruction
+checkpoint, for instance -- is declared with `replay_inputs`, digested when a
+validation passes, compared before replay (`replay_inputs_changed`), and
+reproduced next to the replay; a declared input that is missing refuses
+`replay_inputs_missing`. A frozen tree that does not reproduce the accepted result
+refuses `frozen_mismatch`.
+
+**Terminal verdicts move the goal.** The values are `GOAL_POLICY`'s alone:
+`unavailable` -- including a checker that timed out or printed something
+unreadable -- pauses the goal, and a `blocked` verdict blocks it, both through the
+native goal service; `fail` and `inconclusive` leave it
+active so the round driver keeps going. The model still has no tool that changes
+the goal phase, and a transition the goal service rejects is reported as
+`goal_transition_failed` rather than returning the bare verdict as if the policy
+had been applied.
+
 ## Restart and resumption
 
 DSH persists the goal in its session log and deliberately disarms an active goal
@@ -245,19 +315,36 @@ reconcile-without-refund semantics.
 Until then DSH capture stays disabled, and the DSH bridge is asserted to import
 no launch path at all.
 
-## Threat model
+## Threat model and accepted trust assumption
 
-The qualification receipt is a record, not authority. Authority comes from a
-fresh checker run by trusted tooling at completion time, so a forged `pass`
-receipt cannot authorize completion.
+**Project decision: generated reconstruction code and candidate-authored tests are
+trusted code.** This integration is for local, operator-controlled offline
+experiments. When the trusted checker executes candidate tests, those tests run as
+ordinary host subprocesses with the operator's own filesystem permissions. There is
+no sandbox, container or separate user around them, and this is intentional.
+
+That assumption is what makes the guarantees below meaningful. It is appropriate
+for these experiments and **not sufficient for arbitrary untrusted third-party
+code**.
+
+### What each layer actually guarantees
+
+| Layer | Guarantee |
+|---|---|
+| **DSH agent tools** | The agent's file-editing and shell tools are confined to its session workspace, and the plugin requires that workspace to *be* the campaign workspace. This constrains the agent, not the programs it starts. |
+| **Checker and candidate execution** | The checker and any candidate-authored tests it runs are native host processes with the operator's privileges. No independent filesystem or network isolation is claimed for them. |
+| **Qualification integrity** | Goal binding, trusted-module identity, deterministic checker execution, frozen replay and the independent-review requirement prevent *accidental* or *unauthorized qualification*: a model cannot complete a goal, a stored pass is not authority, and an edited checker, contract or checkpoint is refused. They do not defend against code that is already running with the operator's permissions. |
+| **Credential filtering** | `automation.acceptance` removes provider-shaped credentials (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, and the `OPENCODE_`/`DEEPSEEK_`/`OPENAI_`/`ANTHROPIC_` prefixes) from a checker's environment. This is defense in depth against an ordinary checker or test that echoes its environment. It is **not** a security boundary: a process with the operator's privileges can read anything that user can read. |
+| **Offline operation** | "Offline" means the campaign neither launches nor captures the original EU4 process. It does **not** mean the network is isolated, and it does not restrict what a checker may do. |
 
 | Threat | Defended | How |
 |---|---|---|
-| Model declares success | yes | completion denied; only finalize completes |
-| Receipt edited to `pass` | yes | finalize re-runs the checker |
-| Stale candidate/checker/evidence | yes | identities re-verified before and after every run |
-| Accidental state drift | yes | state root outside the workspace, atomic writes, journal |
-| Agent with the operator's full privileges | **no** | no local integrity mechanism is sound; qualification runs are refused under `danger-full-access` |
+| Model declares success | yes | every model-initiated completion is denied; only finalize completes, after a fresh pass |
+| Receipt edited to `pass` | yes | finalize re-runs the checker; the record is not authority |
+| Stale candidate, checker or checkpoint | yes | identities re-verified before and after every run; replay inputs bound at validation |
+| Accidental state drift | yes | state root outside the workspace, atomic writes, one record per campaign |
+| Checker or guest test exfiltrating a provider key it sees | partially | keys are removed from the checker environment, but a privileged process can read them elsewhere |
+| **Malicious candidate code with the operator's privileges** | **no** | accepted: candidate code is trusted. Qualification integrity does not survive it, and no local mechanism would |
 
 ## Operator commands
 

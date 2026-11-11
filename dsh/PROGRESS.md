@@ -172,6 +172,19 @@ identity not covering symlink targets and ignored files, `review-verify` and
 `prepare` not taking the run-root lock, goal binding not tied to the campaign
 objective text, and several stale documentation lines.
 
+## Corrective pass: qualification hardening
+
+A post-merge review found five gaps in the qualification pathway. All five are
+addressed: the reviewer now runs read-only in an explicit environment with its
+worktree fingerprinted before and after; the goal binding is established once and
+compared thereafter; the trusted identity includes the checker's own import
+closure; symlink targets and ignored inputs are covered and finalization replays
+the accepted result from the frozen tree; and `unavailable`/`blocked` verdicts
+pause or block the native goal instead of leaving it running.
+
+Verified: 88 DSH tests, 27 node tests, 86 OpenCode tests, compileall and doc links
+clean.
+
 ## Known limitations
 
 - **`dsh --profile headless` answers one turn.** Measured: a goal created in that
@@ -196,8 +209,10 @@ objective text, and several stale documentation lines.
   (`<checkout>/.local/dsh/...`). Authority is unaffected -- completion requires a
   fresh checker run -- but production campaigns should keep records in the trusted
   state root, which needs a run-root/receipt-root split.
-- **`danger-full-access` refuses qualification** by design; workspace-write is
-  asserted from the harness's session header, not from an environment variable.
+- **The agent's tools are confined to the session workspace; the programs it runs
+  are not.** Candidate code is trusted by project decision -- see the threat model
+  in `docs/dsh-native-goal.md`. Credential filtering in the acceptance runner is
+  defense in depth, not a sandbox.
 
 ## Deferred deliberately
 

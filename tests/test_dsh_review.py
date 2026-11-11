@@ -227,6 +227,21 @@ class ReviewPipelineTests(ReviewCase):
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
         self.assertEqual(out["kind"], "review_identity_missing")
 
+    def test_a_live_review_without_a_provider_key_is_refused(self) -> None:
+        """The one-shot profile cannot read the stored credential."""
+        import os
+        from unittest import mock
+
+        sidecar = self.review_sidecar()
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        with mock.patch.dict(os.environ, {"DSH_HOME": os.environ.get("DSH_HOME", "/tmp")},
+                             clear=True):
+            code, out = self.run_bridge("review-run", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "review_environment")
+        self.assertIn("API key", out["detail"])
+
     def test_a_reviewer_without_a_session_identity_is_refused(self) -> None:
         sidecar = self.review_sidecar()
         self.run_bridge("prepare", sidecar)
@@ -251,7 +266,9 @@ class ReviewPipelineTests(ReviewCase):
         self.assertEqual(code, dsh_bridge.EXIT_OK, out)
         self.assertEqual(out["classification"], "infrastructure_error")
         self.assertEqual(out["kind"], "review_failed")
-        self.assertEqual(out["goal_policy"], "unavailable")
+        # Unavailable infrastructure asks for the canonical pause policy.
+        self.assertEqual(out["goal_policy"], dsh_bridge.GOAL_POLICY["unavailable"])
+        self.assertEqual(out["goal_policy"], "pause")
 
     def test_unparseable_reviewer_output_is_refused(self) -> None:
         sidecar = self.review_sidecar()
@@ -268,3 +285,51 @@ class ReviewPipelineTests(ReviewCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewerEnvironmentTests(unittest.TestCase):
+    def test_the_reviewer_inherits_only_what_it_needs(self) -> None:
+        from automation import dsh_review as review
+
+        env = review.reviewer_env({
+            "PATH": "/bin",
+            "HOME": "/home/x",
+            "DSH_HOME": "/dedicated",
+            "OPENCODE_GO_API_KEY": "k",
+            "AWS_SECRET_ACCESS_KEY": "no",
+            "SOMETHING_ELSE": "no",
+        })
+        self.assertEqual(env["DSH_HOME"], "/dedicated")
+        self.assertEqual(env["OPENCODE_GO_API_KEY"], "k")
+        self.assertNotIn("AWS_SECRET_ACCESS_KEY", env)
+        self.assertNotIn("SOMETHING_ELSE", env)
+        # Read-only is enforcement, not an instruction in the task text.
+        self.assertEqual(env["DSH_PERMISSION_MODE"], "read-only")
+
+
+class ReviewerWorktreeTests(ReviewCase):
+    def test_a_reviewer_that_modifies_its_worktree_is_refused(self) -> None:
+        sidecar = self.review_sidecar()
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+
+        script = self.root / "dirty_reviewer.py"
+        script.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, pathlib, re, sys\n"
+            "task = sys.argv[1]\n"
+            "commit = re.search(r'Candidate commit: ([0-9a-f]{40})', task).group(1)\n"
+            "oracle = re.search(r'Oracle manifest digest: ([0-9a-f]{64})', task).group(1)\n"
+            "pathlib.Path('reviewer-was-here.txt').write_text('x')\n"
+            "payload = {'schema': 'eu4-review/v1', 'candidate_commit': commit,\n"
+            "           'oracle_manifest_sha256': oracle, 'outcome': 'qualified',\n"
+            "           'findings': []}\n"
+            "print(json.dumps({'type': 'session', 'sessionId': 'rev-dirty'}))\n"
+            "print(json.dumps({'type': 'final', 'text': json.dumps(payload)}))\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
+        code, out = self.run_bridge("review-run", sidecar, reviewer_cmd=str(script))
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "review_worktree_modified")
+        self.assertFalse((Path(self.run_root) / "review" / "worktree").exists())

@@ -45,6 +45,15 @@ EXIT_USAGE = 2
 EXIT_INTEGRITY = 3
 INFRA_ERROR_KINDS = ("timeout", "truncated", "unreadable")
 
+# Refusals an operator or candidate can resolve without ending the campaign.
+# Everything else is terminal: the campaign cannot safely proceed, so the plugin
+# pauses the goal through the native goal service.
+REMEDIABLE_REFUSALS = frozenset({
+    "fresh_validation_failed",  # the checker said no again; repair and retry
+    "not_qualified",            # a validation has to run first
+    "stale",                    # the qualification no longer matches; re-validate
+})
+
 GOAL_POLICY = {
     "pass": "qualified",
     "fail": "remediate",
@@ -208,6 +217,13 @@ def _candidate(sidecar: Sidecar) -> dict:
                     if entry["exists"] and not entry["symlink"]
                     else None
                 ),
+                # A retargeted symlink keeps its path and mode, so the target
+                # itself has to be part of the identity.
+                "target_sha256": (
+                    receipts.digest_text(os.readlink(sidecar.workspace / entry["path"]))
+                    if entry["exists"] and entry["symlink"]
+                    else None
+                ),
             }
             for entry in delta
         ]
@@ -272,33 +288,51 @@ TRUSTED_MODULES = (
 )
 
 
-def _trusted_modules_digest() -> str:
-    """Digest the modules this path executes, from the running copies.
-
-    The infrastructure *commit* only pins what is committed. A session whose
-    workspace is the checkout can edit these files, and an uncommitted edit would
-    otherwise change what the "fresh trusted checker run" executes without any
-    identity drift.
-    """
+def _module_row(name: str) -> dict:
     import importlib.util
 
-    rows = []
-    for name in TRUSTED_MODULES:
-        try:
-            spec = importlib.util.find_spec(f"automation.{name}")
-        except (ImportError, AttributeError, ValueError):
-            rows.append({"module": name, "sha256": None})
+    try:
+        spec = importlib.util.find_spec(f"automation.{name}")
+    except (ImportError, AttributeError, ValueError):
+        return {"module": name, "sha256": None}
+    origin = Path(spec.origin).resolve() if spec and spec.origin else None
+    return {
+        "module": name,
+        "sha256": receipts.digest_file(origin)
+        if origin is not None and origin.is_file() else None,
+    }
+
+
+def _trusted_modules_digest(checker: Path, strict: bool = True) -> tuple[str, list[dict]]:
+    """Digest everything the checker path executes.
+
+    Two sources, so there is no second allowlist to maintain: the modules this
+    path runs unconditionally, and the closure the checker itself names. The
+    closure is what ``checker-compat`` reports, so the analysis and the anchor
+    cannot drift apart.
+    """
+    rows: list[dict] = [ _module_row(name) for name in TRUSTED_MODULES ]
+    seen = {row["module"] for row in rows}
+    imported, _outside = _checker_imports(checker)
+    for entry in imported:
+        if entry["module"] in seen:
             continue
-        origin = Path(spec.origin).resolve() if spec and spec.origin else None
+        seen.add(entry["module"])
         rows.append({
-            "module": name,
-            "sha256": receipts.digest_file(origin)
-            if origin is not None and origin.is_file() else None,
+            "module": entry["module"],
+            "sha256": entry.get("sha256"),
+            "source": "checker-import",
         })
-    return receipts.digest_text(receipts.canonical_json(rows))
+    missing = sorted(row["module"] for row in rows if not row.get("sha256"))
+    if missing and strict:
+        # A module we cannot digest is a module we cannot vouch for.
+        raise Refusal("checker_dependency_unresolved", ", ".join(missing[:6]))
+    rows.sort(key=lambda row: row["module"])
+    return receipts.digest_text(receipts.canonical_json(rows)), rows
 
 
 def _identity(sidecar: Sidecar, infra_commit: str) -> dict:
+    modules_digest, modules_rows = _trusted_modules_digest(sidecar.checker)
     manifest_digest = None
     if sidecar.verification_manifest:
         manifest = load_manifest(sidecar.verification_manifest)
@@ -315,7 +349,8 @@ def _identity(sidecar: Sidecar, infra_commit: str) -> dict:
         "policy_digest": sidecar.policy_digest,
         "objective_digest": sidecar.objective_digest,
         "checker_sha256": receipts.digest_file(sidecar.checker),
-        "trusted_modules_digest": _trusted_modules_digest(),
+        "trusted_modules_digest": modules_digest,
+        "trusted_modules": modules_rows,
         "verification_manifest_digest": manifest_digest,
         "evidence_inputs_digest": _evidence_digest(sidecar),
         "candidate": _candidate(sidecar),
@@ -340,9 +375,15 @@ def classify(outcome: dict) -> tuple[str, str | None, str | None]:
 
 
 def _goal_policy(classification: str, verdict: str | None) -> str:
+    """The goal policy the plugin acts on.
+
+    The values are GOAL_POLICY's, never the classification or verdict names:
+    an infrastructure failure (timeout, unreadable output, a checker that could
+    not run) pauses the goal, and a checker `blocked` verdict maps to "block".
+    """
     if classification == "verdict":
-        return GOAL_POLICY.get(str(verdict), "pause")
-    return "unavailable"
+        return GOAL_POLICY.get(str(verdict), GOAL_POLICY["unavailable"])
+    return GOAL_POLICY["unavailable"]
 
 
 ANCHORED_IDENTITIES = (
@@ -404,7 +445,22 @@ def op_prepare(args) -> int:
     roots = _roots(sidecar)
     stored = _setup(sidecar.run_root)
     infra_commit = _git(infra_root(), "rev-parse", "HEAD")
+    try:
+        lock = campaign_lock(stored.lock)
+        lock.__enter__()
+    except RuntimeError as exc:
+        emit({"ok": False, "operation": "prepare",
+              "campaign_id": sidecar.campaign_id,
+              "classification": "policy_stop", "kind": "busy",
+              "goal_policy": GOAL_POLICY["unavailable"], "detail": str(exc)})
+        return EXIT_OK
+    try:
+        return _prepare_locked(args, sidecar, roots, stored, infra_commit)
+    finally:
+        lock.__exit__(None, None, None)
 
+
+def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
     if sidecar.mode == "seed":
         ensure_workspace(sidecar.seed, sidecar.workspace)
     else:
@@ -445,6 +501,7 @@ def op_prepare(args) -> int:
         "campaign_id": sidecar.campaign_id,
         "objective": sidecar.objective_text,
         "require_independent_review": sidecar.require_independent_review,
+        "checker_timeout_seconds": sidecar.validation_timeout_seconds,
         "execution_roots": roots,
         "workspace": str(sidecar.workspace),
         "run_root": str(sidecar.run_root),
@@ -470,7 +527,7 @@ def op_validate(args) -> int:
     except RuntimeError as exc:
         emit({"ok": True, "operation": "validate", "campaign_id": sidecar.campaign_id,
               "classification": "policy_stop", "kind": "busy",
-              "goal_policy": "unavailable", "detail": str(exc)})
+              "goal_policy": GOAL_POLICY["unavailable"], "detail": str(exc)})
         return EXIT_OK
     try:
         infra_commit = _git(infra_root(), "rev-parse", "HEAD")
@@ -489,6 +546,15 @@ def op_validate(args) -> int:
                           "identity changed during the checker run: " + ", ".join(changed))
 
         classification, kind, verdict = classify(outcome)
+        if verdict == "pass" and not sidecar.allow_incomplete_inputs:
+            inventory = snapshot.ignored_inputs(sidecar.workspace)
+            if inventory["truncated"]:
+                raise Refusal(
+                    "inputs_incomplete",
+                    "the ignored-input inventory was truncated, so the evidence "
+                    "cannot be shown to cover everything the checker read; declare "
+                    "allow_incomplete_inputs on the campaign to accept that",
+                )
         diagnostics = str(outcome.get("diagnostics") or "")
         receipt = {
             "schema": receipts.SCHEMA,
@@ -501,6 +567,11 @@ def op_validate(args) -> int:
                 "diagnostics_excerpt": diagnostics[:2000],
                 "exit_code": outcome.get("exit_code"),
                 "duration_ms": duration_ms,
+                # What the checker saw beyond the tracked candidate: generated
+                # inputs and the declared sibling inputs (a research checkpoint).
+                # Recorded here and re-checked at finalization.
+                "inputs_digest": snapshot.ignored_digest(sidecar.workspace),
+                "replay_inputs": _replay_inputs_rows(sidecar),
             },
             "session": {"session_id": args.session_id or None},
             "created_at": _now(),
@@ -568,6 +639,105 @@ def _freeze(sidecar: Sidecar) -> dict:
         "ref": ref,
         "paths": built["paths"],
     }
+
+
+def _replay_inputs_rows(sidecar: Sidecar) -> list[dict]:
+    """Digests of the declared sibling inputs the checker also reads.
+
+    Bound when a validation passes and compared before replay: a checkpoint that
+    changed after the passing run must not be silently replayed as if it were the
+    one the checker accepted.
+    """
+    rows: list[dict] = []
+    for name in sidecar.replay_inputs:
+        path = sidecar.workspace.resolve().parent / name
+        rows.append({
+            "path": name,
+            "sha256": receipts.digest_file(path) if path.is_file() else None,
+        })
+    return rows
+
+
+def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
+    """Run the checker against the frozen candidate rebuilt over its baseline.
+
+    The replay worktree stays at the *pinned baseline*, with the frozen delta
+    materialized as uncommitted changes. Reconstruction checkers deliberately
+    require ``HEAD`` to still be the pin -- a worktree at the frozen commit would
+    look like a rewritten history to them -- so moving HEAD here would break
+    valid candidates for reasons that have nothing to do with the candidate.
+    """
+    commit = frozen.get("commit")
+    if not commit:
+        # Seed candidates have no commit; the digest already describes the tree
+        # the checker just accepted.
+        return {"mode": "seed", "verdict": "skipped"}
+
+    baseline = frozen.get("baseline") or sidecar.candidate_baseline_commit or ""
+    if not baseline:
+        raise Refusal("frozen_mismatch", "the frozen candidate has no pinned baseline")
+    infra = infra_root().resolve()
+    replay_root = sidecar.run_root / "replay"
+    _drop_worktree(replay_root)
+    subprocess.run(
+        ["git", "-C", str(infra), "worktree", "add", "--detach",
+         str(replay_root), baseline],
+        check=True, capture_output=True,
+    )
+    # Checker-relevant state that lives *outside* the candidate tree -- the
+    # research checkpoint a reconstruction checker reads -- has to be reproduced
+    # beside the replay, or a finished candidate looks unfinished to it.
+    inputs: list[dict] = []
+    try:
+        for name in sidecar.replay_inputs:
+            source = sidecar.workspace.resolve().parent / name
+            if not source.is_file():
+                raise Refusal(
+                    "replay_inputs_missing",
+                    f"the campaign declares {name} as a replay input, but it is "
+                    "missing beside the candidate workspace",
+                )
+            destination = replay_root.parent / name
+            shutil.copyfile(source, destination)
+            inputs.append({"path": name, "sha256": receipts.digest_file(destination)})
+
+        patch = subprocess.run(
+            ["git", "-C", str(infra), "diff", "--binary", baseline, commit],
+            capture_output=True, check=True,
+        ).stdout
+        if patch:
+            applied = subprocess.run(
+                ["git", "-C", str(replay_root), "apply", "--binary", "--index", "-"],
+                input=patch, capture_output=True,
+            )
+            if applied.returncode != 0:
+                raise Refusal(
+                    "frozen_mismatch",
+                    "the frozen delta does not apply to the pinned baseline: "
+                    + applied.stderr.decode("utf-8", "replace")[:300],
+                )
+        head = subprocess.run(
+            ["git", "-C", str(replay_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if head != baseline:
+            raise Refusal(
+                "frozen_mismatch",
+                f"the replay worktree is at {head[:12]}, not the pinned baseline",
+            )
+        outcome = run_accept(_AcceptShim(sidecar), replay_root)
+    finally:
+        _drop_worktree(replay_root)
+
+    classification, kind, verdict = classify(outcome)
+    if classification != "verdict" or verdict != "pass":
+        raise Refusal(
+            "frozen_mismatch",
+            "the frozen candidate does not reproduce the accepted result: "
+            f"{verdict or classification}/{kind}",
+        )
+    return {"mode": "worktree", "commit": commit, "baseline": baseline,
+            "head": head, "verdict": verdict, "inputs": inputs}
 
 
 def _oracle_digest(sidecar: Sidecar, identities: dict) -> str:
@@ -672,39 +842,104 @@ def _review_problem(sidecar: Sidecar, frozen: dict, *, require_live: bool = True
 CHECKER_IMPORT_RE = None
 
 
-def _checker_imports(checker: Path) -> tuple[list[dict], list[str]]:
-    """Which ``automation.*`` modules the checker will actually resolve.
+def _imported_modules(source: Path) -> set[str]:
+    """``automation.*`` modules a file names, including the ``from`` forms."""
+    import ast
 
-    The checker runs from the trusted campaign root, so it imports the modern
-    helpers rather than the ones from its own historical commit. That is a real
-    semantic difference for an old campaign, so it is recorded rather than
-    assumed harmless.
+    try:
+        tree = ast.parse(source.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:
+        return set()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("automation."):
+                    # Full path: `automation.gfx_contracts.api` and
+                    # `automation.gfx_contracts` are different files.
+                    names.add(alias.name.split(".", 1)[1])
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module.startswith("automation."):
+                names.add(module.split(".", 1)[1])
+            elif module == "automation":
+                # `from automation import gfx_checkpoint` names no submodule in
+                # ``module``, so the imported names themselves are the modules.
+                for alias in node.names:
+                    names.add(alias.name.split(".")[0])
+    return names
+
+
+def _checker_imports(checker: Path) -> tuple[list[dict], list[str]]:
+    """The ``automation.*`` closure the checker will actually execute.
+
+    The walk follows imports transitively, because a checker that imports
+    ``automation.gfx_draw_accept_v2`` also executes everything that module
+    imports. Package contents are included too: ``automation.gfx_contracts``
+    selects a validator version with ``importlib.import_module`` at runtime, so
+    the modules inside the package are digested rather than guessing which one.
+
+    The walk is static. A dynamic import that builds a name from data cannot be
+    seen here, which is why an unresolvable name refuses instead of being ignored.
     """
     import importlib.util
-    import re
 
-    pattern = re.compile(r"automation[./]([a-zA-Z_][a-zA-Z0-9_]*)")
-    text = checker.read_text(encoding="utf-8", errors="replace")
-    names = sorted(set(pattern.findall(text)))
+    infra = infra_root().resolve()
     rows: list[dict] = []
     outside: list[str] = []
-    infra = infra_root().resolve()
-    for name in names:
+    seen: set[str] = set()
+
+    def record(name: str) -> Path | None:
         try:
             spec = importlib.util.find_spec(f"automation.{name}")
         except (ImportError, AttributeError, ValueError):
-            rows.append({"module": name, "resolved": None, "sha256": None})
-            outside.append(name)
-            continue
+            spec = None
         origin = Path(spec.origin).resolve() if spec and spec.origin else None
         rows.append({
             "module": name,
             "resolved": str(origin) if origin else None,
-            "sha256": receipts.digest_file(origin) if origin and origin.is_file() else None,
+            "sha256": receipts.digest_file(origin)
+            if origin is not None and origin.is_file() else None,
             "inside_infrastructure": bool(origin) and inside(origin, infra),
         })
-        if origin and not inside(origin, infra):
+        if origin is None or not inside(origin, infra):
             outside.append(name)
+        return origin
+
+    queue: list[Path] = [checker]
+    while queue:
+        source = queue.pop()
+        for name in sorted(_imported_modules(source)):
+            # `a.b.c` implies its parents: the package module runs too, and its
+            # __init__ is where the versioned validator is selected.
+            parts = name.split(".")
+            for index in range(len(parts)):
+                prefix = ".".join(parts[: index + 1])
+                if prefix in seen:
+                    continue
+                seen.add(prefix)
+                origin = record(prefix)
+                if origin is None or origin.suffix != ".py":
+                    continue
+                queue.append(origin)
+                if origin.name == "__init__.py":
+                    package = origin.parent
+                    for candidate in sorted(package.rglob("*.py")):
+                        dotted = ".".join(
+                            candidate.relative_to(package.parent).with_suffix("").parts
+                        )
+                        if dotted.endswith(".__init__"):
+                            dotted = dotted[: -len(".__init__")]
+                        if dotted in seen:
+                            continue
+                        seen.add(dotted)
+                        rows.append({
+                            "module": dotted,
+                            "resolved": str(candidate),
+                            "sha256": receipts.digest_file(candidate),
+                            "inside_infrastructure": inside(candidate, infra),
+                        })
+    rows.sort(key=lambda row: row["module"])
     return rows, outside
 
 
@@ -805,7 +1040,9 @@ def op_checker_compat(args) -> int:
         "compat_verdict": compat,
         "checker": str(sidecar.checker),
         "checker_sha256": receipts.digest_file(sidecar.checker),
-        "trusted_modules_digest": _trusted_modules_digest(),
+        # Reporting mode: an unresolvable dependency is what compat is for, so
+        # do not refuse the analysis that names it.
+        "trusted_modules_digest": _trusted_modules_digest(sidecar.checker, strict=False)[0],
         "imports": rows,
         "baseline": baseline,
         "problems": problems,
@@ -868,9 +1105,30 @@ def op_review_run(args) -> int:
         )
         command = review.reviewer_command(args.reviewer_cmd, task)
         mode = "scripted" if args.reviewer_cmd else "live"
+        runner_env = review.reviewer_env(os.environ)
+        if mode == "live":
+            if not runner_env.get("DSH_HOME"):
+                raise Refusal(
+                    "review_environment",
+                    "the reviewer needs DSH_HOME so it uses this campaign's DSH "
+                    "home rather than the operator's default installation",
+                )
+            if not (runner_env.get("OPENCODE_GO_API_KEY")
+                    or runner_env.get("DEEPSEEK_API_KEY")):
+                # The shipped one-shot profile does not read the interactive
+                # credential store, so without a key in the environment the
+                # reviewer would launch and fail to authenticate.
+                raise Refusal(
+                    "review_environment",
+                    "the reviewer needs an API key in the environment: the "
+                    "one-shot profile cannot read the stored credential. Export "
+                    "OPENCODE_GO_API_KEY (or DEEPSEEK_API_KEY) before starting "
+                    "the campaign",
+                )
+        before = snapshot.fingerprint(paths["worktree"])
         try:
             outcome = review.run_reviewer(
-                command, cwd=paths["worktree"], timeout=args.timeout
+                command, cwd=paths["worktree"], timeout=args.timeout, env=runner_env
             )
         except review.ReviewError as exc:
             # Not an integrity refusal: nothing was proven about the candidate,
@@ -882,18 +1140,27 @@ def op_review_run(args) -> int:
                 "campaign_id": sidecar.campaign_id,
                 "classification": "infrastructure_error",
                 "kind": "review_failed",
-                "goal_policy": "unavailable",
+                "goal_policy": GOAL_POLICY["unavailable"],
                 "detail": str(exc),
                 "candidate_commit": frozen["commit"],
             })
             return EXIT_OK
+        moved = snapshot.recheck(paths["worktree"], before)
+        if moved:
+            # The changed paths go into the refusal; the checkout itself does not
+            # outlive the operation, so a rejected review leaves no stale tree.
+            _drop_worktree(paths["worktree"])
+            raise Refusal(
+                "review_worktree_modified",
+                "the reviewer changed its worktree: " + "; ".join(moved[:4]),
+            )
         if outcome["exit_code"] != 0:
             # The reviewer crashed; nothing was decided about the candidate.
             emit({
                 "ok": False, "operation": "review-run",
                 "campaign_id": sidecar.campaign_id,
                 "classification": "infrastructure_error", "kind": "review_failed",
-                "goal_policy": "unavailable",
+                "goal_policy": GOAL_POLICY["unavailable"],
                 "detail": f"the reviewer exited {outcome['exit_code']}: "
                           f"{outcome['stderr'][:400]}",
             })
@@ -961,7 +1228,22 @@ def op_review_run(args) -> int:
 def op_review_verify(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
-    _setup(sidecar.run_root)
+    stored = _setup(sidecar.run_root)
+    try:
+        lock = campaign_lock(stored.lock)
+        lock.__enter__()
+    except RuntimeError as exc:
+        emit({"ok": True, "operation": "review-verify",
+              "campaign_id": sidecar.campaign_id,
+              "classification": "policy_stop", "kind": "busy", "detail": str(exc)})
+        return EXIT_OK
+    try:
+        return _review_verify_locked(args, sidecar)
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def _review_verify_locked(args, sidecar) -> int:
     current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
     _check_anchor(_prepared_identities(sidecar), current)
     frozen = (_freeze_or_existing(sidecar, current))
@@ -1025,6 +1307,33 @@ def op_finalize(args) -> int:
         if (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
             raise Refusal("not_qualified", "the latest validation did not pass")
 
+        bound_replay_inputs = (receipt.get("outcome") or {}).get("replay_inputs")
+        if bound_replay_inputs is not None:
+            current_replay_inputs = _replay_inputs_rows(sidecar)
+            if current_replay_inputs != bound_replay_inputs:
+                changed = sorted(
+                    row["path"]
+                    for row, was in zip(current_replay_inputs, bound_replay_inputs)
+                    if row != was
+                )
+                raise Refusal(
+                    "replay_inputs_changed",
+                    "the declared replay inputs changed since the validated run"
+                    + (f": {', '.join(changed)}" if changed else "")
+                    + "; re-run validate",
+                )
+
+        bound_inputs = (receipt.get("outcome") or {}).get("inputs_digest")
+        if bound_inputs is not None:
+            current_inputs = snapshot.ignored_digest(sidecar.workspace)
+            if current_inputs != bound_inputs:
+                raise Refusal(
+                    "inputs_changed",
+                    "the checker inputs changed since the validated run; "
+                    "re-run validate",
+                )
+
+
         started = time.monotonic()
         outcome = run_accept(_AcceptShim(sidecar), sidecar.workspace)
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -1054,6 +1363,7 @@ def op_finalize(args) -> int:
             )
 
         frozen = _freeze_once(sidecar, current)
+        replay = _replay_frozen(sidecar, frozen)
         if sidecar.require_independent_review:
             problems = _review_problem(sidecar, frozen, require_live=True)
             if problems:
@@ -1064,6 +1374,8 @@ def op_finalize(args) -> int:
             "campaign_id": sidecar.campaign_id,
             "identity_digest": receipts.identity_digest(current),
             "frozen_candidate": frozen,
+            "replay": replay,
+            "ignored_inputs": snapshot.ignored_inputs(sidecar.workspace),
             "fresh_verdict": verdict,
             "duration_ms": duration_ms,
             "session": {"session_id": getattr(args, "session_id", None)},
@@ -1079,6 +1391,7 @@ def op_finalize(args) -> int:
             "checker_verdict": verdict,
             "goal_policy": "qualified",
             "frozen_candidate": frozen,
+            "replay": replay,
             "identity_digest": receipts.identity_digest(current),
             "finalization": record_path.name,
         })
@@ -1126,11 +1439,16 @@ def main(argv: list[str] | None = None) -> int:
         return OPERATIONS[args.operation](args)
     except SidecarError as exc:
         emit({"ok": False, "operation": args.operation, "classification": "integrity_refusal",
-              "kind": "sidecar", "detail": str(exc)})
+              "kind": "sidecar", "goal_policy": GOAL_POLICY["unavailable"],
+              "detail": str(exc)})
         return EXIT_INTEGRITY
     except Refusal as exc:
         emit({"ok": False, "operation": args.operation,
               "classification": "integrity_refusal", "kind": exc.kind,
+              "goal_policy": (
+                  GOAL_POLICY["fail"] if exc.kind in REMEDIABLE_REFUSALS
+                  else GOAL_POLICY["unavailable"]
+              ),
               "detail": exc.detail or str(exc)})
         return EXIT_INTEGRITY
     except Exception as exc:  # noqa: BLE001 - the CLI contract is "always JSON"
@@ -1145,6 +1463,7 @@ def main(argv: list[str] | None = None) -> int:
             "operation": args.operation,
             "classification": "infrastructure_error",
             "kind": "internal_error",
+            "goal_policy": GOAL_POLICY["unavailable"],
             "detail": f"{type(exc).__name__}: {exc}",
         })
         return EXIT_INTEGRITY

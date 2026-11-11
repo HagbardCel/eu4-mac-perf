@@ -3,7 +3,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { apply, resolveInfra } from '../lib/index.js'
+import { apply, bridgeTimeoutMs, resolveInfra } from '../lib/index.js'
 import { digestObjective } from '../lib/decisions.js'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -89,4 +89,12 @@ test('the review tool is registered only when the campaign requires review', () 
     'eu4_review_candidate',
     'eu4_validate_candidate',
   ])
+})
+
+test('finalization gets twice the checker budget, other operations do not', () => {
+  const single = bridgeTimeoutMs('validate', 900)
+  const both = bridgeTimeoutMs('finalize', 900)
+  assert.equal(single, 15 * 60 * 1000)
+  assert.ok(both > 2 * 900 * 1000, `finalize budget ${both} must cover two runs`)
+  assert.ok(both < 40 * 60 * 1000, 'and stay finite')
 })
