@@ -88,7 +88,8 @@ lifetimes. That wiring is intentionally out of scope for this PR.
 - The target must be a single-sample 2D BGRA8Unorm render target whose actual
   dimensions, device and declared viewport describe the same image. The texture
   must be a single-sample, sampleable 2D texture on the same device and must not
-  alias the target.
+  alias the target. The GL lower-left viewport origin is converted to Metal's
+  top-left origin (a no-op for the authentic full-attachment viewport).
 - A supplied command queue must belong to the same `MTLDevice`.
 - The 64-byte matrix is copied into a fresh shared buffer before encoding, so
   the engine's constant-object storage may be rewritten immediately after the
@@ -133,7 +134,7 @@ Direct run on the original asset (the test was executed, not skipped):
 ```
 texture=original-dds 2048x1536
 ok checked=1600 worst=0.0028 flip_differences=368 blend_bad=0 order_bad=0
-repeat_bad=0 repeat_differences=3694 worst_repeat=0.0031
+repeat_bad=0 repeat_differences=3694 worst_repeat=0.0031 first_bad=0
 done
 ```
 
@@ -153,9 +154,13 @@ clamped reference differs at 3694 of them, so the test is not vacuous.
 Range boundaries on the authentic four-vertex buffer: `first=0,count=4` and
 `first=1,count=3` are accepted; `first=1,count=4`, `first=-1`,
 `count=first=INT32_MAX` and `first=INT32_MAX,count=3` are refused as
-`EU4_GFX_SIMPLE_DRAW_VERTEX` without overflowing. A second linked shader with a
-non-Simple identity is refused with `EU4_GFX_SIMPLE_DRAW_SHADER`, which proves
-the encoder cannot hand the Simple vertex layout to an unrelated program.
+`EU4_GFX_SIMPLE_DRAW_VERTEX` without overflowing. A first=1,count=3 white-source
+draw covers only the lower-right triangle, so `first` reaches
+`drawPrimitives:vertexStart:` rather than being silently dropped. A second
+linked record carrying the Simple stages but relabelled with a non-Simple
+identity is refused with `EU4_GFX_SIMPLE_DRAW_SHADER`; this proves admission
+compares the registry identity, not that a second effect has been reconstructed.
+A mismatched declared target size and a target/texture alias also fail closed.
 
 Regression suite:
 

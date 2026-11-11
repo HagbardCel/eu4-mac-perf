@@ -260,7 +260,11 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command encoding failed");
     }
     [encoder setRenderPipelineState:pipeline];
-    [encoder setViewport:(MTLViewport){(double)inputs->viewport_x, (double)inputs->viewport_y,
+    /* The engine viewport (and glViewport) uses a lower-left origin; Metal uses
+       top-left. For the authentic full-attachment viewport this is a no-op. */
+    double viewport_y = (double)inputs->target_height -
+                        ((double)inputs->viewport_y + (double)inputs->viewport_height);
+    [encoder setViewport:(MTLViewport){(double)inputs->viewport_x, viewport_y,
                                        (double)inputs->viewport_width,
                                        (double)inputs->viewport_height, 0.0, 1.0}];
     [encoder setVertexBuffer:(__bridge id<MTLBuffer>)vertex_buffer

@@ -49,6 +49,9 @@ typedef struct {
     void *queue;
     uint32_t target_width;
     uint32_t target_height;
+    /* GL lower-left-origin viewport. The encoder converts y to Metal's
+       top-left origin; the authentic full-attachment viewport is 0,0 and is
+       unchanged by that conversion. */
     uint32_t viewport_x;
     uint32_t viewport_y;
     uint32_t viewport_width;
@@ -59,7 +62,8 @@ typedef struct {
 } eu4_gfx_simple_draw_inputs;
 
 /* Encodes, submits and waits for the draw. On non-OK, *reason (when non-null)
-   names the refused input. No Metal object is retained after return.
+   names the refused input. The draw retains no borrowed resource after return;
+   only the process-local sampler cache keeps its device and sampler alive.
 
    Submission boundary: the wait is an offline diagnostic contract, not the
    production engine contract. It lets this host read the target and report the

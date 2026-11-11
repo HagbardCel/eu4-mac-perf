@@ -368,7 +368,45 @@ static void test_repeat_addressing(uint8_t *master, const uint8_t *vb, const flo
         exit(1);
     }
     free(pixels);
-    printf("repeat_bad=0 repeat_differences=%d worst_repeat=%.4f\n", repeat_differences, worst);
+
+    /* Nonzero first must reach drawPrimitives: a three-vertex strip starting at
+       vertex 1 covers the lower-right half of the quad, not the upper-left half
+       that a dropped first (start 0) would cover. White source, black clear. */
+    uint8_t white[2 * 2 * 4];
+    memset(white, 0xff, sizeof white);
+    uint8_t white_header[0x44];
+    make_texture(2, 2, 0xb, white, white_header);
+    if (eu4_gfx_texture_for_header(white_header) == NULL) {
+        fail("white texture registry lookup");
+    }
+    if (eu4_gfx_configure_offscreen(master, size, size) != EU4_GFX_CLEAR_OK) {
+        fail("first target configure");
+    }
+    eu4_gfx_set_viewport(master, rect);
+    if (eu4_gfx_clear_checked(&ctx, 1, clear) != EU4_GFX_CLEAR_OK ||
+        eu4_gfx_complete_offscreen(master, &command_status) != EU4_GFX_CLEAR_OK ||
+        command_status != (int)MTLCommandBufferStatusCompleted) {
+        fail("first target clear");
+    }
+    void *white_pointer = white_header;
+    eu4_gfx_set_textures(&ctx, 1, &white_pointer, 1, 0, NULL);
+    inputs.texture = NULL;
+    inputs.target = (__bridge void *)backend.colorTarget;
+    if (eu4_gfx_simple_draw(&ctx, 3, 1, &inputs, &reason) != EU4_GFX_SIMPLE_DRAW_OK) {
+        fail("first=1 draw");
+    }
+    pixels = read_target(backend.colorTarget, size, size);
+    const uint8_t *upper = pixels + ((size_t)8 * size + 16) * 4;
+    const uint8_t *lower = pixels + ((size_t)56 * size + 48) * 4;
+    if (upper[0] > 3 || upper[1] > 3 || upper[2] > 3) {
+        fail("first=1 drew outside the intended triangle");
+    }
+    if (lower[0] < 252 || lower[1] < 252 || lower[2] < 252) {
+        fail("first=1 did not cover the intended triangle");
+    }
+    free(pixels);
+    printf("repeat_bad=0 repeat_differences=%d worst_repeat=%.4f first_bad=0\n",
+           repeat_differences, worst);
 }
 
 static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix, void *shader,
@@ -515,6 +553,18 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
         none.texture = NULL;
         if (eu4_gfx_simple_draw(&ctx, 0, first, &none, &reason) != EU4_GFX_SIMPLE_DRAW_TEXTURE) {
             fail("missing texture was not refused");
+        }
+        eu4_gfx_simple_draw_inputs wrong_size = inputs;
+        wrong_size.target_width = kScreenWidth - 1;
+        if (eu4_gfx_simple_draw(&ctx, 0, first, &wrong_size, &reason) !=
+            EU4_GFX_SIMPLE_DRAW_TARGET) {
+            fail("declared target size mismatch was not refused");
+        }
+        eu4_gfx_simple_draw_inputs aliased = inputs;
+        aliased.texture = (__bridge void *)target;
+        if (eu4_gfx_simple_draw(&ctx, 0, first, &aliased, &reason) !=
+            EU4_GFX_SIMPLE_DRAW_TEXTURE) {
+            fail("target/texture alias was not refused");
         }
     }
 

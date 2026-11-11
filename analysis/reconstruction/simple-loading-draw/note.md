@@ -137,7 +137,7 @@ change. The 38 installed `load_*.dds` files are all 2048×1536 BGR24.
 | `glUniform4fv(Matrix)` | `setVertexBuffer:uniforms atIndex:1` (`constant Uniforms &` in MSL) |
 | `glEnable(GL_BLEND)` + `glBlendFunc` | pipeline `blendingEnabled`, `SourceAlpha` / `OneMinusSourceAlpha` (RGB and alpha) |
 | `_GfxSetTextures` unit 0 | replacement records the engine header in the backend; the encoder resolves it to the retained `MTLTexture` and binds `setFragmentTexture:atIndex:0` with a linear/repeat sampler |
-| viewport `1728×1117` | `setViewport:` (the engine's viewport image is the encoder's input) |
+| viewport `1728×1117` | `setViewport:` (the engine's viewport image is the encoder's input; GL lower-left y is converted to Metal top-left) |
 | clear + draw | `loadAction Load` after `_GfxClear`; `storeAction Store`; the draw shares the backend `MTLCommandQueue` so it is ordered after the clear |
 | `glDrawArrays` | `drawPrimitives:vertexStart:vertexCount:` |
 
@@ -215,6 +215,10 @@ Implemented in `tests/gfx_simple_draw_host.mm`; each must fail closed:
 - `first = 1, count = 3` on a four-vertex buffer → accepted;
 - `first = 1, count = 4` → `EU4_GFX_SIMPLE_DRAW_VERTEX` (highest vertex is 5);
 - `first = -1` → `EU4_GFX_SIMPLE_DRAW_VERTEX`;
+- a first=1,count=3 white-source draw covers only the lower-right triangle,
+  proving `first` reaches `drawPrimitives:vertexStart:` and is not dropped;
+- a target whose declared size differs from the attachment, and a target/texture
+  alias, → fail closed;
 - `count = first = INT32_MAX` and `first = INT32_MAX, count = 3` →
   `EU4_GFX_SIMPLE_DRAW_VERTEX`, computed in unsigned 64-bit without overflow;
 - a linked non-Simple identity → `EU4_GFX_SIMPLE_DRAW_SHADER`;
@@ -238,6 +242,7 @@ resolves the same `MTLTexture`. Result on 2026-11-11:
 ```
 texture=original-dds 2048x1536
 ok checked=1600 worst=0.0028 flip_differences=368 blend_bad=0 order_bad=0
+repeat_bad=0 repeat_differences=3694 worst_repeat=0.0031 first_bad=0
 done
 ```
 
