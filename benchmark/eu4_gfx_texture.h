@@ -42,7 +42,8 @@ void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, c
 void *eu4_gfx_texture_for_header(void *header);
 
 /* Borrowed MTLTexture for the engine header bound to unit 0 by the replacement
-   _GfxSetTextures. NULL before any bind or when the header is unknown. */
+   _GfxSetTextures. A header substituted for a null entry (master+0x98) resolves
+   to backend.fallback; unknown headers return NULL. */
 void *eu4_gfx_bound_texture(void);
 
 /* Forces the BC3 capability check to fail. The host sets it back to 0. */

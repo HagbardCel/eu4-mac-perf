@@ -136,7 +136,7 @@ change. The 38 installed `load_*.dds` files are all 2048×1536 BGR24.
 | `master+0x130/0x150/0x160` | `setVertexBuffer:offset:atIndex:0` |
 | `glUniform4fv(Matrix)` | `setVertexBuffer:uniforms atIndex:1` (`constant Uniforms &` in MSL) |
 | `glEnable(GL_BLEND)` + `glBlendFunc` | pipeline `blendingEnabled`, `SourceAlpha` / `OneMinusSourceAlpha` (RGB and alpha) |
-| `_GfxSetTextures` unit 0 | replacement records the engine header in the backend; the encoder resolves it to the retained `MTLTexture` and binds `setFragmentTexture:atIndex:0` with a linear/repeat sampler |
+| `_GfxSetTextures` unit 0 | replacement records the engine header in the backend; the encoder resolves registry textures to the retained `MTLTexture`, the default `+0x98` header to `backend.fallback`, and binds `setFragmentTexture:atIndex:0` with a linear/repeat sampler |
 | viewport `1728×1117` | `setViewport:` (the engine's viewport image is the encoder's input; GL lower-left y is converted to Metal top-left) |
 | clear + draw | `loadAction Load` after `_GfxClear`; `storeAction Store`; the draw shares the backend `MTLCommandQueue` so it is ordered after the clear |
 | `glDrawArrays` | `drawPrimitives:vertexStart:vertexCount:` |
@@ -227,6 +227,9 @@ Implemented in `tests/gfx_simple_draw_host.mm`; each must fail closed:
   plus the flip discriminator;
 - a 50 %-alpha source over a cleared blue target → `SRC_ALPHA/INV_SRC_ALPHA`
   readback `(127,0,128)` within 3/255 on all 4096 pixels of a 64×64 target;
+- a null unit-0 entry is replaced by the master's default `+0x98` header and
+  resolves to `backend.fallback`; the encoder accepts it, and the test restores
+  the previous binding;
 - **synthetic, not original-game evidence:** the authentic quad and matrix with
   UVs spanning `[-1,2]` over a 4×4 texture. All 4096 pixels match the wrapping
   CPU bilinear reference (`repeat_bad=0`), while 3694 differ from a clamped

@@ -252,20 +252,19 @@ static uint8_t *read_target(id<MTLTexture> texture, uint32_t width, uint32_t hei
 static void test_repeat_addressing(uint8_t *master, const uint8_t *vb, const float *matrix,
                                    EU4GfxBackend *backend) {
     const uint32_t size = 64;
-    uint8_t pattern[4 * 4 * 4];
-    uint8_t bgr_pattern[4 * 4 * 3];
+    uint8_t pattern[4 * 4 * 3];
     for (int y = 0; y < 4; y++) {
         for (int x = 0; x < 4; x++) {
-            uint8_t *px = pattern + ((size_t)y * 4 + x) * 4;
-            uint8_t *bgr_px = bgr_pattern + ((size_t)y * 4 + x) * 3;
-            px[0] = bgr_px[0] = (uint8_t)(x * 60 + 12);      /* B */
-            px[1] = bgr_px[1] = (uint8_t)(y * 60 + 12);      /* G */
-            px[2] = bgr_px[2] = (uint8_t)(x * 37 + y * 53);  /* R */
-            px[3] = 255;
+            uint8_t *px = pattern + ((size_t)y * 4 + x) * 3;
+            px[0] = (uint8_t)(x * 60 + 12);      /* B */
+            px[1] = (uint8_t)(y * 60 + 12);      /* G */
+            px[2] = (uint8_t)(x * 37 + y * 53);  /* R */
         }
     }
     uint8_t repeat_header[0x44];
-    make_texture(4, 4, 0xb, pattern, repeat_header);
+    /* Format 9 uploads BGR24 and expands to RGBA8, so the CPU reference and the
+       uploaded image share one array. */
+    make_texture(4, 4, 9, pattern, repeat_header);
     void *repeat_texture = eu4_gfx_texture_for_header(repeat_header);
     if (repeat_texture == NULL) {
         fail("repeat texture registry lookup");
@@ -322,19 +321,17 @@ static void test_repeat_addressing(uint8_t *master, const uint8_t *vb, const flo
     }
 
     uint8_t *pixels = read_target(target, size, size);
-    cpu_image image = {4, 4, bgr_pattern};
+    cpu_image image = {4, 4, pattern};
     int checked = 0;
     int repeat_bad = 0;
     int repeat_differences = 0;
     double worst = 0.0;
     for (uint32_t py = 0; py < size; py++) {
         for (uint32_t px = 0; px < size; px++) {
-            double ndc_x = ((double)px + 0.5) / size * 2.0 - 1.0;
-            double ndc_y = 1.0 - ((double)py + 0.5) / size * 2.0;
-            double world_x = ndc_x / matrix[0];
-            double world_y = ndc_y / matrix[5];
-            double u = (world_x + 512.0) / 1024.0 * 3.0 - 1.0;
-            double v = (384.0 - world_y) / 768.0 * 3.0 - 1.0;
+            double u = 0.0, v = 0.0;
+            expected_uv((int)px, (int)py, size, size, matrix, &u, &v);
+            u = u * 3.0 - 1.0;
+            v = v * 3.0 - 1.0;
             double want[3], clamped[3];
             cpu_bilinear_repeat(&image, u, v, want);
             cpu_bilinear(&image, u, v, clamped);
@@ -677,6 +674,23 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
         exit(1);
     }
     free(pixels);
+
+    /* Default-texture boundary: a null unit-0 entry makes _GfxSetTextures
+       substitute the master's +0x98 header, which must resolve to the backend's
+       white fallback rather than an unregistered lookup. Restore the authentic
+       binding afterwards. */
+    void *null_entry = NULL;
+    eu4_gfx_set_textures(&ctx, 1, &null_entry, 1, 0, NULL);
+    if (eu4_gfx_bound_texture() != (__bridge void *)backend.fallback) {
+        fail("default texture header did not resolve to the backend fallback");
+    }
+    if (eu4_gfx_simple_draw(&ctx, 0, first, &inputs, &reason) != EU4_GFX_SIMPLE_DRAW_OK) {
+        fail("Simple encoder refused the default fallback texture");
+    }
+    eu4_gfx_set_textures(&ctx, 1, &texture_pointer, 1, 0, NULL);
+    if (eu4_gfx_bound_texture() != texture) {
+        fail("previous unit-0 texture binding was not restored");
+    }
 
     /* Blend boundary: same geometry and shader, opaque 50%-alpha source over a
        cleared blue target. Contract: SRC_ALPHA / ONE_MINUS_SRC_ALPHA. */

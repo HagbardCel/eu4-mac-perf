@@ -50,11 +50,11 @@ blend, sampler and viewport into one encoded draw.
 | --- | --- |
 | `benchmark/eu4_gfx_shader.mm` | Decode the MSL position as `float3` and build the implicit `w = 1`; vertex descriptor now `Float3@0`, `Float2@12`, `UChar4Normalized@20`, stride 24 (was `Float4@0`, `Float2@16`, `Float4@24`, stride 40). |
 | `benchmark/eu4_gfx_buffers.h/.mm` | `eu4_gfx_vertex_buffer_for_header()` — borrowed `MTLBuffer` for an engine vertex header. |
-| `benchmark/eu4_gfx_texture.h/.mm` | `eu4_gfx_texture_for_header()` — borrowed `MTLTexture` retained by `_GfxInitializeTexture`; `_GfxSetTextures` now records the unit-0 engine header in the backend (falling back to the master's `+0x98` default), and `eu4_gfx_bound_texture()` resolves it for the encoder. |
+| `benchmark/eu4_gfx_texture.h/.mm` | `eu4_gfx_texture_for_header()` — borrowed `MTLTexture` retained by `_GfxInitializeTexture`; `_GfxSetTextures` records the unit-0 engine header in the backend (falling back to the master's `+0x98` default). `eu4_gfx_bound_texture()` resolves registry textures normally, and resolves that default header to `backend.fallback` (the white 4×4 texture created by `_GfxInit`). |
 | `benchmark/eu4_gfx_simple_draw.h/.mm` | New encoder: reads the engine master (`mode`, `count`, `shader`, slot-0 vertex header/offset/stride, constant slot 2), refuses unsupported inputs, creates the `Simple` pipeline through the shader registry, copies the matrix, binds vertex/uniform buffers, fragment texture and sampler, sets the viewport, and submits a BGRA8Unorm pass. It accepts the backend command queue so the draw is ordered after `_GfxClear`. Vertex-range validation uses the highest vertex the draw actually reads (`offset + (first + count) * stride`), rejects negative `first`, and does the arithmetic in unsigned 64-bit. Shader admission now requires the registry's exact `simple-lua-Simple/asset-maincode-v0` identity, not merely a non-null linked shader. |
 | `benchmark/eu4_gfx_init.h` | Backend property for the current unit-0 texture header. |
 | `benchmark/eu4_metal_boot.py` | The new module is compiled into `libeu4_metal_boot.dylib`. |
-| `tests/gfx_simple_draw_host.mm` | Real-Metal host: authentic packet + optional original DDS, CPU reference sampling, flip discriminator, alpha-blend boundary, fail-closed cases, `first`/`count` range boundaries, a non-Simple identity rejection, and a synthetic repeated-UV boundary. Vertex state is established through the replacement `_GfxSetVertexBuffers`; the test asserts that `_GfxSetShader` itself published the shader instead of rewriting `master+0x70` by hand. |
+| `tests/gfx_simple_draw_host.mm` | Real-Metal host: authentic packet + optional original DDS, CPU reference sampling, flip discriminator, alpha-blend boundary, fail-closed cases, `first`/`count` range boundaries, a non-Simple identity rejection, a null-entry default-texture bind resolved to `backend.fallback` (with the previous binding restored), and a synthetic repeated-UV boundary. Vertex state is established through the replacement `_GfxSetVertexBuffers`; the test asserts that `_GfxSetShader` itself published the shader instead of rewriting `master+0x70` by hand. |
 | `tests/test_gfx_simple_draw.py` | Binds the packet hashes, builds/runs the host, covers original-DDS and hermetic-synthetic paths. |
 | `analysis/reconstruction/simple-loading-draw/note.md` | Evidence-labeled reconstruction note. |
 
@@ -83,7 +83,8 @@ lifetimes. That wiring is intentionally out of scope for this PR.
   used while the synchronous command is in flight; no pointer is retained after
   return.
 - Unit-0 texture resolution still goes through `_GfxSetTextures` →
-  `eu4_gfx_bound_texture()` → the texture registry; a missing or replaced header
+  `eu4_gfx_bound_texture()` → the texture registry; only the engine's default
+  `+0x98` header resolves to `backend.fallback`, and any other missing header
   fails closed.
 - The target must be a single-sample 2D BGRA8Unorm render target whose actual
   dimensions, device and declared viewport describe the same image. The texture
@@ -160,7 +161,10 @@ draw covers only the lower-right triangle, so `first` reaches
 linked record carrying the Simple stages but relabelled with a non-Simple
 identity is refused with `EU4_GFX_SIMPLE_DRAW_SHADER`; this proves admission
 compares the registry identity, not that a second effect has been reconstructed.
-A mismatched declared target size and a target/texture alias also fail closed.
+A mismatched declared target size and a target/texture alias also fail closed. A
+null unit-0 entry binds the master's default header, resolves to
+`backend.fallback`, and is accepted by the encoder; the previous binding is
+restored after the check.
 
 Regression suite:
 

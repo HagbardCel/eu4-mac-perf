@@ -459,5 +459,16 @@ void *eu4_gfx_bound_texture(void) {
     if (backend == nil || backend.boundTexture0 == NULL) {
         return NULL;
     }
-    return eu4_gfx_texture_for_header(backend.boundTexture0);
+    void *texture = eu4_gfx_texture_for_header(backend.boundTexture0);
+    if (texture != NULL) {
+        return texture;
+    }
+    /* _GfxSetTextures substitutes the master's default header (+0x98) for a
+       null unit-0 entry. That header is not created by _GfxInitializeTexture;
+       its Metal texture is the backend's white fallback. A registry lookup
+       still wins for every real texture header. */
+    if (backend.boundTexture0 == backend.textureHeader) {
+        return (__bridge void *)backend.fallback;
+    }
+    return NULL;
 }
