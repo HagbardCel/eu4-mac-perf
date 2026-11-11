@@ -157,5 +157,6 @@ cd benchmark && python3 -c "import eu4_metal_boot as m; m.build_library()"
 
 Draft PR: https://github.com/HagbardCel/eu4-mac-perf/pull/183
 Branch: `experiment/dsh-full-reconstruction`
-Commits: `4d43139` (draw, layout, validation) and `fffac3b` (unit-0 texture
-binding through `_GfxSetTextures`, docs). Not merged.
+Commits on the branch: `4d43139` (draw, layout, validation), `fffac3b` (unit-0
+texture binding through `_GfxSetTextures`), `5c5df4a` (report), `7d11de2`
+(backend-queue ordering). Head: `7d11de2`. Not merged.
