@@ -560,8 +560,25 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
             EU4_GFX_SIMPLE_DRAW_TARGET) {
             fail("declared target size mismatch was not refused");
         }
+        /* A sampleable render target, so the alias check itself is reached
+           instead of failing earlier on the texture's usage. */
+        MTLTextureDescriptor *alias_desc =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm
+                                                               width:4
+                                                              height:4
+                                                           mipmapped:NO];
+        alias_desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        id<MTLTexture> sampleable = [backend.device newTextureWithDescriptor:alias_desc];
+        if (sampleable == nil) {
+            fail("sampleable alias target allocation");
+        }
         eu4_gfx_simple_draw_inputs aliased = inputs;
-        aliased.texture = (__bridge void *)target;
+        aliased.target = (__bridge void *)sampleable;
+        aliased.texture = (__bridge void *)sampleable;
+        aliased.target_width = 4;
+        aliased.target_height = 4;
+        aliased.viewport_width = 4;
+        aliased.viewport_height = 4;
         if (eu4_gfx_simple_draw(&ctx, 0, first, &aliased, &reason) !=
             EU4_GFX_SIMPLE_DRAW_TEXTURE) {
             fail("target/texture alias was not refused");
