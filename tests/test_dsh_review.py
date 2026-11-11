@@ -266,7 +266,9 @@ class ReviewPipelineTests(ReviewCase):
         self.assertEqual(code, dsh_bridge.EXIT_OK, out)
         self.assertEqual(out["classification"], "infrastructure_error")
         self.assertEqual(out["kind"], "review_failed")
-        self.assertEqual(out["goal_policy"], "unavailable")
+        # Unavailable infrastructure asks for the canonical pause policy.
+        self.assertEqual(out["goal_policy"], dsh_bridge.GOAL_POLICY["unavailable"])
+        self.assertEqual(out["goal_policy"], "pause")
 
     def test_unparseable_reviewer_output_is_refused(self) -> None:
         sidecar = self.review_sidecar()
