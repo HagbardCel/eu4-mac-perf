@@ -23,6 +23,29 @@ from typing import Protocol, Sequence
 VERDICTS = ("pass", "fail", "inconclusive", "blocked", "unavailable")
 OUTPUT_CAP = 65536
 
+# A checker runs candidate-authored tests, so anything in its environment is
+# effectively available to the candidate. Provider credentials belong to the
+# reviewer, which is spawned separately with an explicit environment.
+CREDENTIAL_SUFFIXES = ("_API_KEY", "_TOKEN", "_SECRET", "_PASSWORD")
+CREDENTIAL_PREFIXES = (
+    "OPENCODE_", "DEEPSEEK_", "OPENAI_", "ANTHROPIC_", "GEMINI_", "MISTRAL_", "GROQ_",
+)
+
+
+def checker_environment(base: dict | None = None) -> dict:
+    """The environment a checker and its subprocesses may inherit.
+
+    Toolchain and build settings (``PATH``, ``SDKROOT``, ``DEVELOPER_DIR``,
+    ``CC``, ``CXX`` and friends) pass through untouched: a checker that builds
+    or runs host tests needs them. Credentials do not.
+    """
+    env = dict(os.environ if base is None else base)
+    for key in list(env):
+        upper = key.upper()
+        if upper.startswith(CREDENTIAL_PREFIXES) or upper.endswith(CREDENTIAL_SUFFIXES):
+            env.pop(key, None)
+    return env
+
 
 class CheckerBinding(Protocol):
     """The three facts running a checker needs, and nothing more."""
@@ -34,9 +57,7 @@ class CheckerBinding(Protocol):
 
 def run_accept(campaign: CheckerBinding, workspace: Path) -> dict:
     """Run one checker against *workspace* and classify what it printed."""
-    env = os.environ.copy()
-    env.pop("OPENCODE_SERVER_PASSWORD", None)
-    env.pop("OPENCODE_SERVER_USERNAME", None)
+    env = checker_environment()
     try:
         completed = subprocess.run(
             [*campaign.accept, str(workspace)],

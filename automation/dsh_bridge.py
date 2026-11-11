@@ -366,9 +366,15 @@ def classify(outcome: dict) -> tuple[str, str | None, str | None]:
 
 
 def _goal_policy(classification: str, verdict: str | None) -> str:
+    """The goal policy the plugin acts on.
+
+    The values are GOAL_POLICY's, never the classification or verdict names:
+    an infrastructure failure (timeout, unreadable output, a checker that could
+    not run) pauses the goal, and a checker `blocked` verdict maps to "block".
+    """
     if classification == "verdict":
-        return GOAL_POLICY.get(str(verdict), "pause")
-    return "unavailable"
+        return GOAL_POLICY.get(str(verdict), GOAL_POLICY["unavailable"])
+    return GOAL_POLICY["unavailable"]
 
 
 ANCHORED_IDENTITIES = (
@@ -553,8 +559,10 @@ def op_validate(args) -> int:
                 "exit_code": outcome.get("exit_code"),
                 "duration_ms": duration_ms,
                 # What the checker saw beyond the tracked candidate: generated
-                # inputs. Recorded here and re-checked at finalization.
+                # inputs and the declared sibling inputs (a research checkpoint).
+                # Recorded here and re-checked at finalization.
                 "inputs_digest": snapshot.ignored_digest(sidecar.workspace),
+                "replay_inputs": _replay_inputs_rows(sidecar),
             },
             "session": {"session_id": args.session_id or None},
             "created_at": _now(),
@@ -622,6 +630,23 @@ def _freeze(sidecar: Sidecar) -> dict:
         "ref": ref,
         "paths": built["paths"],
     }
+
+
+def _replay_inputs_rows(sidecar: Sidecar) -> list[dict]:
+    """Digests of the declared sibling inputs the checker also reads.
+
+    Bound when a validation passes and compared before replay: a checkpoint that
+    changed after the passing run must not be silently replayed as if it were the
+    one the checker accepted.
+    """
+    rows: list[dict] = []
+    for name in sidecar.replay_inputs:
+        path = sidecar.workspace.resolve().parent / name
+        rows.append({
+            "path": name,
+            "sha256": receipts.digest_file(path) if path.is_file() else None,
+        })
+    return rows
 
 
 def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
@@ -1272,6 +1297,22 @@ def op_finalize(args) -> int:
                           "re-run validate")
         if (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
             raise Refusal("not_qualified", "the latest validation did not pass")
+
+        bound_replay_inputs = (receipt.get("outcome") or {}).get("replay_inputs")
+        if bound_replay_inputs is not None:
+            current_replay_inputs = _replay_inputs_rows(sidecar)
+            if current_replay_inputs != bound_replay_inputs:
+                changed = sorted(
+                    row["path"]
+                    for row, was in zip(current_replay_inputs, bound_replay_inputs)
+                    if row != was
+                )
+                raise Refusal(
+                    "replay_inputs_changed",
+                    "the declared replay inputs changed since the validated run"
+                    + (f": {', '.join(changed)}" if changed else "")
+                    + "; re-run validate",
+                )
 
         bound_inputs = (receipt.get("outcome") or {}).get("inputs_digest")
         if bound_inputs is not None:

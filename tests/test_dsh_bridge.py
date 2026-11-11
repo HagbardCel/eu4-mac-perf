@@ -103,7 +103,9 @@ class ClassificationTests(BridgeTestCase):
         self.assertEqual(out["classification"], "infrastructure_error")
         self.assertEqual(out["kind"], "unreadable")
         self.assertIsNone(out["checker_verdict"])
-        self.assertEqual(out["goal_policy"], "unavailable")
+        # The unified vocabulary: infrastructure failures ask for native pause.
+        self.assertEqual(out["goal_policy"], dsh_bridge.GOAL_POLICY["unavailable"])
+        self.assertEqual(out["goal_policy"], "pause")
         # The run is recorded for audit, but it never becomes a usable pass:
         # the receipt carries no checker verdict for anything to qualify on.
         stored = receipts.load_current_receipt(self.run_root)
@@ -615,3 +617,145 @@ class ContractPackageTests(BridgeTestCase):
         finally:
             target.write_bytes(original)
         self.assertNotEqual(before, after)
+
+
+class CredentialIsolationTests(BridgeTestCase):
+    """A checker, and the tests it runs, must not see provider credentials."""
+
+    def test_a_checker_cannot_read_provider_credentials(self) -> None:
+        import os
+        from unittest import mock
+
+        campaign = self.campaign("pass-campaign")
+        observed = campaign / "observed-env.json"
+        checker = campaign / "accept.py"
+        checker.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            "from pathlib import Path\n"
+            "keys = sorted(os.environ)\n"
+            "Path(__file__).with_name('observed-env.json').write_text(json.dumps(keys))\n"
+            "print(json.dumps({'verdict': 'pass', 'diagnostics': 'env recorded'}))\n",
+            encoding="utf-8",
+        )
+        sidecar = self.sidecar(campaign)
+        self.run_bridge("prepare", sidecar)
+        with mock.patch.dict(os.environ, {
+            "OPENCODE_GO_API_KEY": "secret-value",
+            "DEEPSEEK_API_KEY": "secret-value",
+            "SOME_SERVICE_TOKEN": "secret-value",
+        }):
+            code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        seen = json.loads(observed.read_text(encoding="utf-8"))
+        for name in ("OPENCODE_GO_API_KEY", "DEEPSEEK_API_KEY", "SOME_SERVICE_TOKEN"):
+            self.assertNotIn(name, seen)
+        # Toolchain settings still pass through.
+        self.assertIn("PATH", seen)
+
+
+class InfrastructurePolicyTests(BridgeTestCase):
+    """The policy the plugin acts on must come from real bridge responses."""
+
+    def _policy_for(self, checker_body: str, *, timeout: int = 30) -> dict:
+        campaign = self.campaign("pass-campaign")
+        (campaign / "accept.py").write_text(checker_body, encoding="utf-8")
+        sidecar = self.sidecar(campaign)
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["limits"]["validation_timeout_seconds"] = timeout
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        self.run_bridge("prepare", sidecar)
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        return out
+
+    def test_unreadable_output_requests_pause(self) -> None:
+        out = self._policy_for(
+            "#!/usr/bin/env python3\nprint('this is not json')\n"
+        )
+        self.assertEqual(out["goal_policy"], "pause")
+        self.assertEqual(out["classification"], "infrastructure_error")
+
+    def test_a_timeout_requests_pause(self) -> None:
+        out = self._policy_for(
+            "#!/usr/bin/env python3\nimport time\ntime.sleep(10)\n", timeout=1
+        )
+        self.assertEqual(out["goal_policy"], "pause")
+        self.assertIn("timeout", out["kind"])
+
+    def test_a_blocked_verdict_requests_block(self) -> None:
+        out = self._policy_for(
+            "#!/usr/bin/env python3\nimport json\n"
+            "print(json.dumps({'verdict': 'blocked', 'diagnostics': 'pin mismatch'}))\n"
+        )
+        self.assertEqual(out["goal_policy"], "block")
+
+    def test_a_failing_verdict_stays_remediable(self) -> None:
+        out = self._policy_for(
+            "#!/usr/bin/env python3\nimport json\n"
+            "print(json.dumps({'verdict': 'fail', 'diagnostics': 'not ready'}))\n"
+        )
+        self.assertEqual(out["goal_policy"], "remediate")
+
+
+class ReplayInputBindingTests(BridgeTestCase):
+    def _fixture(self) -> Path:
+        baseline = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        campaign = REPO / ".local" / "dsh-test" / f"replayin-{uuid.uuid4().hex[:8]}"
+        (campaign / "seed").mkdir(parents=True)
+        (campaign / "objective.md").write_text("# Objective\n\nready\n", encoding="utf-8")
+        (campaign / "campaign.json").write_text(json.dumps({
+            "id": f"replayin-{uuid.uuid4().hex[:6]}",
+            "objective": "objective.md",
+            "workspace": "seed",
+            "accept": ["python3", "accept.py"],
+            "accept_timeout_seconds": 60,
+        }), encoding="utf-8")
+        (campaign / "accept.py").write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "checkpoint = Path(sys.argv[1]).resolve().parent / 'research-checkpoint.md'\n"
+            "if not checkpoint.is_file():\n"
+            "    print(json.dumps({'verdict': 'fail', 'diagnostics': 'no checkpoint'}))\n"
+            "    raise SystemExit(0)\n"
+            "print(json.dumps({'verdict': 'pass', 'diagnostics': 'checkpoint present'}))\n",
+            encoding="utf-8",
+        )
+        self.addCleanup(shutil.rmtree, campaign, ignore_errors=True)
+
+        worktree = self.root / "candidate-wt"
+        subprocess.run(
+            ["git", "-C", str(REPO), "worktree", "add", "--detach", str(worktree), baseline],
+            capture_output=True, check=True,
+        )
+        self.addCleanup(subprocess.run, ["git", "-C", str(REPO), "worktree", "remove",
+                                         "--force", "--force", str(worktree)],
+                        capture_output=True)
+        (worktree / "candidate.txt").write_text("ready\n", encoding="utf-8")
+        (self.root / "research-checkpoint.md").write_text("# Research\n", encoding="utf-8")
+
+        sidecar = self.sidecar(campaign, allowed=("candidate.txt",))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["candidate"] = {"mode": "worktree", "workspace": str(worktree),
+                             "policy": {"allowed_paths": ["candidate.txt"]}}
+        data["candidate_baseline_commit"] = baseline
+        data["replay_inputs"] = ["research-checkpoint.md"]
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        return sidecar
+
+    def test_a_checkpoint_changed_after_validation_refuses_finalization(self) -> None:
+        sidecar = self._fixture()
+        self.assertEqual(self.run_bridge("prepare", sidecar)[0], dsh_bridge.EXIT_OK)
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["checker_verdict"], "pass")
+
+        (self.root / "research-checkpoint.md").write_text("# Research\n\nrewritten\n",
+                                                          encoding="utf-8")
+        code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "replay_inputs_changed")

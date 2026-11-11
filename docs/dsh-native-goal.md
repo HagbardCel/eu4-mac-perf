@@ -127,6 +127,14 @@ goal on its first call and afterwards compares instead of replacing, so editing
 the objective and validating again refuses with `goal_binding` rather than
 inheriting the earlier qualification. `finalize` compares too, and never rebinds.
 
+**A checker never sees provider credentials.** `automation.acceptance` runs every
+checker with a scrubbed environment: anything shaped like a provider credential
+(`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`, and `OPENCODE_`/`DEEPSEEK_`/
+`OPENAI_`/`ANTHROPIC_`-prefixed names) is removed, while toolchain and build
+settings pass through. A checker runs candidate-authored tests, so anything it can
+read is effectively available to the candidate; the reviewer, which legitimately
+needs a key, is spawned separately with an explicit environment.
+
 **The reviewer runs isolated and read-only.** The plugin hands the bridge an
 explicit environment allowlist (`PATH`, `HOME`, `TMPDIR`, `LANG`, `DSH_HOME`,
 the provider keys) instead of `process.env`. The reviewer is spawned with
@@ -164,13 +172,16 @@ baseline**: a worktree at the baseline commit with the frozen delta applied on t
 Reconstruction checkers require `HEAD` to stay at the pin, so replaying from the
 frozen commit itself would fail a valid candidate for a reason that has nothing to
 do with the candidate. State the checker reads from *beside* the workspace -- a reconstruction
-checkpoint, for instance -- is declared with `replay_inputs` and reproduced next
-to the replay, with its digest recorded; a declared input that is missing refuses
+checkpoint, for instance -- is declared with `replay_inputs`, digested when a
+validation passes, compared before replay (`replay_inputs_changed`), and
+reproduced next to the replay; a declared input that is missing refuses
 `replay_inputs_missing`. A frozen tree that does not reproduce the accepted result
 refuses `frozen_mismatch`.
 
-**Terminal verdicts move the goal.** `unavailable` pauses the goal and `blocked`
-blocks it through the native goal service; `fail` and `inconclusive` leave it
+**Terminal verdicts move the goal.** The values are `GOAL_POLICY`'s alone:
+`unavailable` -- including a checker that timed out or printed something
+unreadable -- pauses the goal, and a `blocked` verdict blocks it, both through the
+native goal service; `fail` and `inconclusive` leave it
 active so the round driver keeps going. The model still has no tool that changes
 the goal phase, and a transition the goal service rejects is reported as
 `goal_transition_failed` rather than returning the bare verdict as if the policy
