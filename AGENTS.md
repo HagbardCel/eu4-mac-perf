@@ -12,6 +12,24 @@ For cohesive reconstruction or migration of EU4 functionality—especially `_Gfx
 
 See [automation/README.md](automation/README.md) for the runner, worktree pin, and session contract. Campaign layout lives under `campaigns/`. A checker `pass` is offline qualification only; independent PR review remains the merge gate.
 
+### Reusable reconstruction capabilities
+
+All new graphics reconstruction and migration work should strengthen the autonomous investigation, implementation and validation workflow.
+
+Prefer functionality that is independently usable by DSH and OpenCode through existing command-line tools.
+
+When implementing a new rendering capability:
+
+- Reuse existing graphics-state reconstruction, backend lifecycle, evidence capture, replay and validation.
+- Separate game-independent mechanisms from function-specific semantic knowledge.
+- Make new observation or validation functionality reusable across graphics operations.
+- Demonstrate reuse with an existing second case when practical.
+- Avoid one-off launchers, capture scripts, agent orchestration and duplicate rendering implementations.
+- Do not generalize speculative future requirements. Extend shared abstractions only where a real use case requires them.
+- Preserve explicit evidence provenance, unsupported-state diagnostics and independently reviewable outcomes.
+
+The objective is not to maximize tooling. It is to minimize the engineering required for each subsequent authentic graphics reconstruction.
+
 ## L3.2b completion
 
 For the L3.2b-II draw-packet completion campaign, do not pre-assign `_Gfx*`
