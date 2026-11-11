@@ -415,12 +415,60 @@ void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, c
     backend.textures[[NSValue valueWithPointer:header]] = taken;
 }
 
+void *eu4_gfx_texture_for_header(void *header) {
+    if (header == NULL) {
+        return NULL;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.textures == nil) {
+        return NULL;
+    }
+    id texture = backend.textures[[NSValue valueWithPointer:header]];
+    return texture != nil ? (__bridge void *)texture : NULL;
+}
+
 void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned flags,
                           unsigned base_unit, void *samplers) {
-    (void)handle;
-    (void)count;
-    (void)textures;
-    (void)flags;
-    (void)base_unit;
     (void)samplers;
+    if (handle == NULL || textures == NULL || count == 0 || (flags & 1u) == 0 ||
+        base_unit != 0) {
+        return;
+    }
+    void *master = NULL;
+    memcpy(&master, handle, sizeof master);
+    if (master == NULL) {
+        return;
+    }
+    __unsafe_unretained EU4GfxBackend *backend = nil;
+    memcpy(&backend, (uint8_t *)master + 0x180, sizeof backend);
+    if (backend == nil) {
+        return;
+    }
+    void *header = NULL;
+    memcpy(&header, textures, sizeof header);
+    if (header == NULL) {
+        /* The original substitutes the master's default texture at +0x98. */
+        memcpy(&header, (uint8_t *)master + 0x98, sizeof header);
+    }
+    backend.boundTexture0 = header;
+}
+
+void *eu4_gfx_bound_texture(void) {
+    __unsafe_unretained EU4GfxBackend *backend =
+        (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.boundTexture0 == NULL) {
+        return NULL;
+    }
+    void *texture = eu4_gfx_texture_for_header(backend.boundTexture0);
+    if (texture != NULL) {
+        return texture;
+    }
+    /* _GfxSetTextures substitutes the master's default header (+0x98) for a
+       null unit-0 entry. That header is not created by _GfxInitializeTexture;
+       its Metal texture is the backend's white fallback. A registry lookup
+       still wins for every real texture header. */
+    if (backend.boundTexture0 == backend.textureHeader) {
+        return (__bridge void *)backend.fallback;
+    }
+    return NULL;
 }

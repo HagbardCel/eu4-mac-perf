@@ -17,7 +17,11 @@ static const char kSimpleMSL[] = R"(
 using namespace metal;
 
 struct VSIn {
-    float4 position [[attribute(0)]];
+    /* Authentic Simple vertex buffer: stride 24, float3 position at +0,
+       float2 texcoord at +12, normalized uchar4 color at +20
+       (L3.2b-I packet payloads/vb_3.bin).  The GLSL declares float4 but the
+       engine binds three components for POSITION, so w is implicit 1. */
+    float3 position [[attribute(0)]];
     float2 texcoord [[attribute(1)]];
     float4 color    [[attribute(2)]];
 };
@@ -37,7 +41,7 @@ vertex VSOut simple_vs(VSIn in [[stage_in]],
     float4x4 Matrix = float4x4(u.UNIFORM0[0], u.UNIFORM0[1],
                                u.UNIFORM0[2], u.UNIFORM0[3]);
     VSOut out;
-    out.position = Matrix * in.position;
+    out.position = Matrix * float4(in.position, 1.0);
     out.texcoord = in.texcoord;
     out.color = in.color;
     return out;
@@ -232,7 +236,7 @@ static int compile_simple_library(EU4ShaderRecord *record) {
     record.library = library;
     record.vertexFunction = vs;
     record.fragmentFunction = fs;
-    record.identity = @"simple-lua-Simple/asset-maincode-v0";
+    record.identity = @EU4_GFX_SHADER_SIMPLE_IDENTITY;
     return 1;
 }
 
@@ -256,6 +260,21 @@ void eu4_gfx_shader_test_reset(void) {
        Engine path never calls this; default remains off. */
     g_allow_transitional_markers = 1;
     pthread_mutex_unlock(&g_lock);
+}
+
+int eu4_gfx_shader_test_set_identity(void *shader, const char *identity) {
+    if (shader == NULL || identity == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    int ok = 0;
+    if (record != nil) {
+        record.identity = [NSString stringWithUTF8String:identity];
+        ok = record.identity != nil;
+    }
+    pthread_mutex_unlock(&g_lock);
+    return ok;
 }
 
 uint64_t eu4_gfx_shader_lifetime_id(const void *shader) {
@@ -545,17 +564,20 @@ void *eu4_gfx_shader_pipeline_for_key(const void *shader, void *mtl_device,
         return out;
     }
 
+    /* Authentic Simple layout from the L3.2b-I draw: stride 24, POSITION is
+       three floats, TEXCOORD0 two floats, PDX_COLOR four normalized bytes.
+       A float4 POSITION here would consume the texcoord and corrupt the quad. */
     MTLVertexDescriptor *vertex = [[MTLVertexDescriptor alloc] init];
-    vertex.attributes[0].format = MTLVertexFormatFloat4;
+    vertex.attributes[0].format = MTLVertexFormatFloat3;
     vertex.attributes[0].offset = 0;
     vertex.attributes[0].bufferIndex = 0;
     vertex.attributes[1].format = MTLVertexFormatFloat2;
-    vertex.attributes[1].offset = 16;
+    vertex.attributes[1].offset = 12;
     vertex.attributes[1].bufferIndex = 0;
-    vertex.attributes[2].format = MTLVertexFormatFloat4;
-    vertex.attributes[2].offset = 24;
+    vertex.attributes[2].format = MTLVertexFormatUChar4Normalized;
+    vertex.attributes[2].offset = 20;
     vertex.attributes[2].bufferIndex = 0;
-    vertex.layouts[0].stride = 40;
+    vertex.layouts[0].stride = 24;
     vertex.layouts[0].stepFunction = MTLVertexStepFunctionPerVertex;
 
     MTLRenderPipelineDescriptor *desc = [[MTLRenderPipelineDescriptor alloc] init];

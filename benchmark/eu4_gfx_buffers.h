@@ -50,6 +50,10 @@ int eu4_gfx_vertex_gpus(void);
 size_t eu4_gfx_vertex_buffer_length(void *header);
 int eu4_gfx_vertex_buffer_read(void *header, void *dest, size_t n);
 int eu4_gfx_vertex_buffer_shared(void *header);
+/* Borrowed MTLBuffer for an engine vertex header, resolved through the
+   replacement registry. NULL when the header was not created by the
+   replacement or its Metal buffer has been released. */
+void *eu4_gfx_vertex_buffer_for_header(void *header);
 
 void eu4_gfx_buffer_test_fail_metal(int on);
 void eu4_gfx_buffer_test_fail_metal_throw(int on);

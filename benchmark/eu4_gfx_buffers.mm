@@ -460,6 +460,14 @@ int eu4_gfx_vertex_buffer_shared(void *header) {
     return entry != nil && entry.buffer != nil && entry.buffer.storageMode == MTLStorageModeShared;
 }
 
+void *eu4_gfx_vertex_buffer_for_header(void *header) {
+    EU4VertexBuffer *entry = find_entry(header);
+    if (entry == nil || entry.buffer == nil) {
+        return NULL;
+    }
+    return (__bridge void *)entry.buffer;
+}
+
 static void *new_index_header(const void *caller, int *recycled) {
     if (g_fail_header) {
         eu4_gfx_stop("_GfxCreateIndexBuffer", "header", caller);

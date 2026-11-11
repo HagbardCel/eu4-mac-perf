@@ -19,6 +19,11 @@ extern "C" {
 #define EU4_GFX_SHADER_SIMPLE_VS_MARKER "EU4_METAL_SIMPLE_VS_V0"
 #define EU4_GFX_SHADER_SIMPLE_PS_MARKER "EU4_METAL_SIMPLE_PS_V0"
 
+/* The registry identity assigned to the admitted Simple effect
+   (asset-maincode-v0). Admission compares this exact string; it is not a
+   prefix or substring match. */
+#define EU4_GFX_SHADER_SIMPLE_IDENTITY "simple-lua-Simple/asset-maincode-v0"
+
 /* Max number of exact source hashes admitted for Simple (VS+PS variants). */
 #define EU4_GFX_SHADER_MAX_QUALIFIED_HASHES 8
 
@@ -82,6 +87,11 @@ int eu4_gfx_shader_is_linked(const void *shader);
 const char *eu4_gfx_shader_identity(const void *shader);
 void *eu4_gfx_shader_pipeline(const void *shader, void *mtl_device);
 void eu4_gfx_shader_test_reset(void);
+
+/* Offline/test only: relabel one registry record so admission logic can be
+   exercised with a linked shader that is not the Simple effect. This does not
+   admit a new stage source or widen the Simple registry. */
+int eu4_gfx_shader_test_set_identity(void *shader, const char *identity);
 
 /* Capture / GPU-trace helpers are diagnostic-only and must not gate admission. */
 
