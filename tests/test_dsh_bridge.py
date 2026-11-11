@@ -759,3 +759,32 @@ class ReplayInputBindingTests(BridgeTestCase):
         code, out = self.run_bridge("finalize", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
         self.assertEqual(out["kind"], "replay_inputs_changed")
+
+
+class ExitPolicyTests(BridgeTestCase):
+    """Every bridge exit says what the goal should do, in GOAL_POLICY's words."""
+
+    def test_a_terminal_refusal_asks_for_pause(self) -> None:
+        campaign = self.campaign("pass-campaign")
+        sidecar = self.sidecar(campaign)
+        self.run_bridge("prepare", sidecar)
+        # Tamper with the checker after the anchor exists.
+        checker = campaign / "accept.py"
+        checker.write_text(checker.read_text(encoding="utf-8") + "\n# edited\n",
+                           encoding="utf-8")
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "identity_modified")
+        self.assertEqual(out["goal_policy"], dsh_bridge.GOAL_POLICY["unavailable"])
+        self.assertEqual(out["goal_policy"], "pause")
+
+    def test_a_remediable_refusal_does_not_pause(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        # Finalizing before any validation: nothing is wrong with the campaign,
+        # the candidate simply has not been checked yet.
+        code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY)
+        self.assertEqual(out["kind"], "not_qualified")
+        self.assertEqual(out["goal_policy"], dsh_bridge.GOAL_POLICY["fail"])
+        self.assertNotEqual(out["goal_policy"], "pause")

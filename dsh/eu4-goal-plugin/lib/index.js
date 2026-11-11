@@ -332,7 +332,16 @@ export function apply(ctx, config = {}) {
   // --- model-facing tools --------------------------------------------------
   const register = (definition) =>
     ctx.effect(() => {
-      const dispose = ctx.tools.register(definition)
+      // Every tool result goes through the goal policy exactly once, including
+      // early returns such as a failed prepare or a workspace mismatch: those are
+      // terminal conditions too, and silently leaving the goal active would let a
+      // campaign continue on a bridge that cannot serve it.
+      const wrapped = {
+        ...definition,
+        execute: async (args, exec) =>
+          applyGoalPolicy(ctx, exec && exec.agent, await definition.execute(args, exec)),
+      }
+      const dispose = ctx.tools.register(wrapped)
       registeredTools += 1
       return dispose
     })
@@ -359,7 +368,7 @@ export function apply(ctx, config = {}) {
             operation: 'validate',
             classification: 'refused',
             kind: 'workspace_mismatch',
-            goal_policy: 'unavailable',
+            goal_policy: 'pause',
             detail: mismatch,
           }
         }
@@ -377,7 +386,7 @@ export function apply(ctx, config = {}) {
             operation: 'validate',
             classification: 'refused',
             kind: 'goal_binding',
-            goal_policy: 'unavailable',
+            goal_policy: 'pause',
             detail: problems.join('; '),
           }
         }
@@ -389,7 +398,7 @@ export function apply(ctx, config = {}) {
         if (!bound) {
           persistBiding(sessionId, exec?.agent?.id, goal, runRoot || (result && result.run_root))
         }
-        return applyGoalPolicy(ctx, exec?.agent, result)
+        return result
       }
     )
   )

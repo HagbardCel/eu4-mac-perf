@@ -209,8 +209,10 @@ clean.
   (`<checkout>/.local/dsh/...`). Authority is unaffected -- completion requires a
   fresh checker run -- but production campaigns should keep records in the trusted
   state root, which needs a run-root/receipt-root split.
-- **`danger-full-access` refuses qualification** by design; workspace-write is
-  asserted from the harness's session header, not from an environment variable.
+- **The agent's tools are confined to the session workspace; the programs it runs
+  are not.** Candidate code is trusted by project decision -- see the threat model
+  in `docs/dsh-native-goal.md`. Credential filtering in the acceptance runner is
+  defense in depth, not a sandbox.
 
 ## Deferred deliberately
 

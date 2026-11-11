@@ -232,3 +232,55 @@ test('a rejected goal transition is reported, not swallowed', async () => {
   assert.equal(result.goal_policy_applied, false)
   assert.match(result.detail, /refused the transition/)
 })
+
+test('a failed prepare pauses instead of leaving the campaign running', async () => {
+  const { ctx } = harness({
+    prepare: { ok: false, kind: 'identity_modified', goal_policy: 'pause',
+               detail: 'protected material changed' },
+  })
+  const result = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.equal(result.kind, 'identity_modified')
+  assert.equal(ctx._state.paused.length, 1)
+  assert.equal(ctx._state.completed.length, 0)
+})
+
+test('lock contention pauses the goal rather than continuing', async () => {
+  const { ctx } = harness({
+    // The shape the bridge actually returns for a contended run.
+    prepare: { ok: false, classification: 'policy_stop', kind: 'busy',
+               goal_policy: 'pause', detail: 'another run holds the lock' },
+  })
+  const result = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.equal(result.kind, 'busy')
+  assert.equal(ctx._state.paused.length, 1)
+})
+
+test('a workspace mismatch pauses the goal', async () => {
+  const { ctx } = harness({ prepare: PREPARED })
+  const elsewhere = { sessionId: 's1', id: 'a1', session: { header: { cwd: '/tmp/other' } } }
+  const result = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent: elsewhere })
+  assert.equal(result.kind, 'workspace_mismatch')
+  assert.equal(ctx._state.paused.length, 1)
+})
+
+test('a goal-binding failure pauses and cannot be bypassed by validating again', async () => {
+  const { ctx } = harness({ prepare: PREPARED, validate: { ok: true, checker_verdict: 'pass' } })
+  await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  ctx._state.liveGoal = { id: 'g1', revision: 2, objective: 'different work' }
+
+  const second = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.equal(second.kind, 'goal_binding')
+  assert.equal(ctx._state.paused.length, 1)
+
+  const third = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.equal(third.kind, 'goal_binding')
+  assert.equal(ctx._state.completed.length, 0)
+})
+
+test('a passing validation never completes the goal by itself', async () => {
+  const { ctx } = harness({ prepare: PREPARED, validate: { ok: true, checker_verdict: 'pass' } })
+  const result = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.equal(result.checker_verdict, 'pass')
+  assert.equal(ctx._state.completed.length, 0)
+  assert.equal(ctx._state.paused.length, 0)
+})

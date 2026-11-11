@@ -45,6 +45,15 @@ EXIT_USAGE = 2
 EXIT_INTEGRITY = 3
 INFRA_ERROR_KINDS = ("timeout", "truncated", "unreadable")
 
+# Refusals an operator or candidate can resolve without ending the campaign.
+# Everything else is terminal: the campaign cannot safely proceed, so the plugin
+# pauses the goal through the native goal service.
+REMEDIABLE_REFUSALS = frozenset({
+    "fresh_validation_failed",  # the checker said no again; repair and retry
+    "not_qualified",            # a validation has to run first
+    "stale",                    # the qualification no longer matches; re-validate
+})
+
 GOAL_POLICY = {
     "pass": "qualified",
     "fail": "remediate",
@@ -443,7 +452,7 @@ def op_prepare(args) -> int:
         emit({"ok": False, "operation": "prepare",
               "campaign_id": sidecar.campaign_id,
               "classification": "policy_stop", "kind": "busy",
-              "goal_policy": "unavailable", "detail": str(exc)})
+              "goal_policy": GOAL_POLICY["unavailable"], "detail": str(exc)})
         return EXIT_OK
     try:
         return _prepare_locked(args, sidecar, roots, stored, infra_commit)
@@ -518,7 +527,7 @@ def op_validate(args) -> int:
     except RuntimeError as exc:
         emit({"ok": True, "operation": "validate", "campaign_id": sidecar.campaign_id,
               "classification": "policy_stop", "kind": "busy",
-              "goal_policy": "unavailable", "detail": str(exc)})
+              "goal_policy": GOAL_POLICY["unavailable"], "detail": str(exc)})
         return EXIT_OK
     try:
         infra_commit = _git(infra_root(), "rev-parse", "HEAD")
@@ -1131,7 +1140,7 @@ def op_review_run(args) -> int:
                 "campaign_id": sidecar.campaign_id,
                 "classification": "infrastructure_error",
                 "kind": "review_failed",
-                "goal_policy": "unavailable",
+                "goal_policy": GOAL_POLICY["unavailable"],
                 "detail": str(exc),
                 "candidate_commit": frozen["commit"],
             })
@@ -1151,7 +1160,7 @@ def op_review_run(args) -> int:
                 "ok": False, "operation": "review-run",
                 "campaign_id": sidecar.campaign_id,
                 "classification": "infrastructure_error", "kind": "review_failed",
-                "goal_policy": "unavailable",
+                "goal_policy": GOAL_POLICY["unavailable"],
                 "detail": f"the reviewer exited {outcome['exit_code']}: "
                           f"{outcome['stderr'][:400]}",
             })
@@ -1430,11 +1439,16 @@ def main(argv: list[str] | None = None) -> int:
         return OPERATIONS[args.operation](args)
     except SidecarError as exc:
         emit({"ok": False, "operation": args.operation, "classification": "integrity_refusal",
-              "kind": "sidecar", "detail": str(exc)})
+              "kind": "sidecar", "goal_policy": GOAL_POLICY["unavailable"],
+              "detail": str(exc)})
         return EXIT_INTEGRITY
     except Refusal as exc:
         emit({"ok": False, "operation": args.operation,
               "classification": "integrity_refusal", "kind": exc.kind,
+              "goal_policy": (
+                  GOAL_POLICY["fail"] if exc.kind in REMEDIABLE_REFUSALS
+                  else GOAL_POLICY["unavailable"]
+              ),
               "detail": exc.detail or str(exc)})
         return EXIT_INTEGRITY
     except Exception as exc:  # noqa: BLE001 - the CLI contract is "always JSON"
@@ -1449,6 +1463,7 @@ def main(argv: list[str] | None = None) -> int:
             "operation": args.operation,
             "classification": "infrastructure_error",
             "kind": "internal_error",
+            "goal_policy": GOAL_POLICY["unavailable"],
             "detail": f"{type(exc).__name__}: {exc}",
         })
         return EXIT_INTEGRITY
