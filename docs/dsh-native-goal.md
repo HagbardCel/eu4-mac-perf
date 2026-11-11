@@ -140,9 +140,15 @@ it exits, the worktree is fingerprinted again and any change refuses
 the refusal.
 
 **The trusted identity covers what the checker executes.** `trusted_modules_digest`
-combines the modules this path runs with the **transitive** `automation.*` import
-closures the checker reaches -- the same analysis `checker-compat` reports, so the two
-cannot drift. A module that cannot be resolved refuses
+combines the modules this path runs with the **transitive** `automation.*` closure
+the checker reaches -- the same analysis `checker-compat` reports, so the two
+cannot drift. The walk parses imports rather than matching text, keeps full dotted
+paths (`automation.gfx_contracts.api` and `automation.gfx_contracts` are different
+files), follows what each discovered module imports in turn, and understands both
+`import automation.x` and `from automation import x`. A package is digested module
+by module, because `gfx_contracts` selects its validator version at runtime with
+`importlib.import_module`: which version cannot be seen statically, so every
+version in the package is covered. An unresolvable name refuses
 `checker_dependency_unresolved` instead of anchoring a `null`.
 
 **The candidate identity is complete, and finalization replays.** Symlink rows
