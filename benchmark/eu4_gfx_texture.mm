@@ -415,6 +415,18 @@ void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, c
     backend.textures[[NSValue valueWithPointer:header]] = taken;
 }
 
+void *eu4_gfx_texture_for_header(void *header) {
+    if (header == NULL) {
+        return NULL;
+    }
+    EU4GfxBackend *backend = (__bridge EU4GfxBackend *)eu4_gfx_backend_token();
+    if (backend == nil || backend.textures == nil) {
+        return NULL;
+    }
+    id texture = backend.textures[[NSValue valueWithPointer:header]];
+    return texture != nil ? (__bridge void *)texture : NULL;
+}
+
 void eu4_gfx_set_textures(void *handle, unsigned count, void *textures, unsigned flags,
                           unsigned base_unit, void *samplers) {
     (void)handle;

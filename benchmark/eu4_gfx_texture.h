@@ -37,6 +37,10 @@ int eu4_gfx_texture_make(void *device, void *header, const void *desc, const voi
 void eu4_gfx_initialize_texture(void *ignored, void *header, const void *desc, const void *images,
                                 uint32_t count);
 
+/* Borrowed MTLTexture retained by the backend for this engine header after a
+   successful _GfxInitializeTexture. NULL when the header is unknown. */
+void *eu4_gfx_texture_for_header(void *header);
+
 /* Forces the BC3 capability check to fail. The host sets it back to 0. */
 void eu4_gfx_test_no_bc(int on);
 

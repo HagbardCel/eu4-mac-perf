@@ -27,6 +27,7 @@ DRAW_C = SOURCE.with_name("eu4_gfx_draw_capture.c")
 DRAW_S = SOURCE.with_name("eu4_gfx_draw_entry.S")
 TEXTURE = SOURCE.with_name("eu4_gfx_texture.mm")
 SHADER = SOURCE.with_name("eu4_gfx_shader.mm")
+SIMPLE_DRAW = SOURCE.with_name("eu4_gfx_simple_draw.mm")
 LIBRARY = SOURCE.parent / ".build/libeu4_metal_boot.dylib"
 HOST_SOURCE = SOURCE.parents[1] / "tests/metal_boot_host.c"
 HOST = SOURCE.parent / ".build/metal_boot_host"
@@ -45,6 +46,7 @@ def build_library(arch: str = "x86_64") -> Path:
         "-framework", "QuartzCore", "-framework", "OpenGL",
         "-o", str(output), str(SOURCE), str(PATCH), str(ENTRY), str(EVENTS), str(GL_DIAG), str(GFX),
         str(BUFFERS), str(DRAW_C), str(DRAW_S), str(TEXTURE), str(SHADER),
+        str(SIMPLE_DRAW),
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
