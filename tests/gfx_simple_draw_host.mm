@@ -170,6 +170,37 @@ static void cpu_texel(const cpu_image *image, int x, int y, double out[3]) {
     out[2] = px[0] / 255.0;
 }
 
+static void cpu_texel_repeat(const cpu_image *image, int x, int y, double out[3]) {
+    int width = (int)image->width;
+    int height = (int)image->height;
+    x %= width;
+    if (x < 0) x += width;
+    y %= height;
+    if (y < 0) y += height;
+    cpu_texel(image, x, y, out);
+}
+
+/* Same bilinear filter, but with the sampler's Repeat address mode instead of
+   the edge clamp used by the authentic 0..1 quad reference. */
+static void cpu_bilinear_repeat(const cpu_image *image, double u, double v, double out[3]) {
+    double fx = u * image->width - 0.5;
+    double fy = v * image->height - 0.5;
+    int x0 = (int)floor(fx);
+    int y0 = (int)floor(fy);
+    double tx = fx - x0;
+    double ty = fy - y0;
+    double p00[3], p10[3], p01[3], p11[3];
+    cpu_texel_repeat(image, x0, y0, p00);
+    cpu_texel_repeat(image, x0 + 1, y0, p10);
+    cpu_texel_repeat(image, x0, y0 + 1, p01);
+    cpu_texel_repeat(image, x0 + 1, y0 + 1, p11);
+    for (int c = 0; c < 3; c++) {
+        double top = p00[c] * (1 - tx) + p10[c] * tx;
+        double bottom = p01[c] * (1 - tx) + p11[c] * tx;
+        out[c] = top * (1 - ty) + bottom * ty;
+    }
+}
+
 static void cpu_bilinear(const cpu_image *image, double u, double v, double out[3]) {
     double fx = u * image->width - 0.5;
     double fy = v * image->height - 0.5;
@@ -214,6 +245,132 @@ static uint8_t *read_target(id<MTLTexture> texture, uint32_t width, uint32_t hei
     return bytes;
 }
 
+/* Synthetic boundary (not an original-game observation): the same quad and
+   matrix carry texcoords outside [0,1] against a 4x4 texture. The sampler
+   contract is Repeat, so the CPU reference wraps and the clamped reference must
+   disagree on a meaningful fraction of the target. */
+static void test_repeat_addressing(uint8_t *master, const uint8_t *vb, const float *matrix,
+                                   EU4GfxBackend *backend) {
+    const uint32_t size = 64;
+    uint8_t pattern[4 * 4 * 4];
+    uint8_t bgr_pattern[4 * 4 * 3];
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            uint8_t *px = pattern + ((size_t)y * 4 + x) * 4;
+            uint8_t *bgr_px = bgr_pattern + ((size_t)y * 4 + x) * 3;
+            px[0] = bgr_px[0] = (uint8_t)(x * 60 + 12);      /* B */
+            px[1] = bgr_px[1] = (uint8_t)(y * 60 + 12);      /* G */
+            px[2] = bgr_px[2] = (uint8_t)(x * 37 + y * 53);  /* R */
+            px[3] = 255;
+        }
+    }
+    uint8_t repeat_header[0x44];
+    make_texture(4, 4, 0xb, pattern, repeat_header);
+    void *repeat_texture = eu4_gfx_texture_for_header(repeat_header);
+    if (repeat_texture == NULL) {
+        fail("repeat texture registry lookup");
+    }
+
+    uint8_t repeated_vb[96];
+    memcpy(repeated_vb, vb, sizeof repeated_vb);
+    const float uvs[4][2] = {{-1.0f, -1.0f}, {2.0f, -1.0f}, {-1.0f, 2.0f}, {2.0f, 2.0f}};
+    for (int i = 0; i < 4; i++) {
+        memcpy(repeated_vb + (size_t)i * EU4_GFX_SIMPLE_VERTEX_STRIDE + 12, uvs[i],
+               sizeof uvs[i]);
+    }
+    void *repeat_vertex = eu4_gfx_create_vertex_buffer(NULL, repeated_vb, 4,
+                                                       EU4_GFX_SIMPLE_VERTEX_STRIDE, 0);
+    if (repeat_vertex == NULL) {
+        fail("repeat vertex buffer create");
+    }
+
+    struct {
+        void *master;
+    } ctx = {master};
+    void *headers[1] = {repeat_vertex};
+    eu4_gfx_set_vertex_buffers(&ctx, 1, headers, 0, NULL, NULL);
+    if (eu4_gfx_configure_offscreen(master, size, size) != EU4_GFX_CLEAR_OK) {
+        fail("repeat target configure");
+    }
+    uint32_t rect[6] = {size, size, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(master, rect);
+    const float clear[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    int command_status = 0;
+    if (eu4_gfx_clear_checked(&ctx, 1, clear) != EU4_GFX_CLEAR_OK ||
+        eu4_gfx_complete_offscreen(master, &command_status) != EU4_GFX_CLEAR_OK ||
+        command_status != (int)MTLCommandBufferStatusCompleted) {
+        fail("repeat target clear");
+    }
+
+    void *texture_pointer = repeat_header;
+    eu4_gfx_set_textures(&ctx, 1, &texture_pointer, 1, 0, NULL);
+    if (eu4_gfx_bound_texture() != repeat_texture) {
+        fail("repeat texture binding was not recorded");
+    }
+    id<MTLTexture> target = backend.colorTarget;
+    eu4_gfx_simple_draw_inputs inputs = {};
+    inputs.device = (__bridge void *)backend.device;
+    inputs.target = (__bridge void *)target;
+    inputs.target_width = size;
+    inputs.target_height = size;
+    inputs.viewport_width = size;
+    inputs.viewport_height = size;
+    inputs.queue = (__bridge void *)backend.queue;
+    const char *reason = NULL;
+    if (eu4_gfx_simple_draw(&ctx, 0, 0, &inputs, &reason) != EU4_GFX_SIMPLE_DRAW_OK) {
+        fail("repeat draw");
+    }
+
+    uint8_t *pixels = read_target(target, size, size);
+    cpu_image image = {4, 4, bgr_pattern};
+    int checked = 0;
+    int repeat_bad = 0;
+    int repeat_differences = 0;
+    double worst = 0.0;
+    for (uint32_t py = 0; py < size; py++) {
+        for (uint32_t px = 0; px < size; px++) {
+            double ndc_x = ((double)px + 0.5) / size * 2.0 - 1.0;
+            double ndc_y = 1.0 - ((double)py + 0.5) / size * 2.0;
+            double world_x = ndc_x / matrix[0];
+            double world_y = ndc_y / matrix[5];
+            double u = (world_x + 512.0) / 1024.0 * 3.0 - 1.0;
+            double v = (384.0 - world_y) / 768.0 * 3.0 - 1.0;
+            double want[3], clamped[3];
+            cpu_bilinear_repeat(&image, u, v, want);
+            cpu_bilinear(&image, u, v, clamped);
+            const uint8_t *pixel = pixels + ((size_t)py * size + px) * 4;
+            double got[3] = {pixel[2] / 255.0, pixel[1] / 255.0, pixel[0] / 255.0};
+            double clamp_delta = 0.0;
+            for (int c = 0; c < 3; c++) {
+                double delta = fabs(got[c] - want[c]);
+                if (delta > worst) {
+                    worst = delta;
+                }
+                if (delta > 8.0 / 255.0) {
+                    repeat_bad++;
+                }
+                clamp_delta += fabs(got[c] - clamped[c]);
+            }
+            if (clamp_delta > 24.0 / 255.0) {
+                repeat_differences++;
+            }
+            checked++;
+        }
+    }
+    if (repeat_bad != 0) {
+        fprintf(stderr, "FAIL: repeat addressing %d/%d pixels, worst %.4f\n", repeat_bad,
+                checked, worst);
+        exit(1);
+    }
+    if (repeat_differences < checked / 4) {
+        fprintf(stderr, "FAIL: repeat boundary indistinguishable from clamp (%d/%d)\n",
+                repeat_differences, checked);
+        exit(1);
+    }
+    free(pixels);
+    printf("repeat_bad=0 repeat_differences=%d worst_repeat=%.4f\n", repeat_differences, worst);
+}
+
 static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix, void *shader,
                            const uint8_t *bgr, uint32_t image_width, uint32_t image_height) {
     if (vb_len != 96) {
@@ -247,24 +404,29 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
         fail("backend token");
     }
 
-    /* The real immediate-context master from _GfxInit: backend APIs require it,
-       and the pre-draw fields are the ones the engine would have set. */
+    /* The real immediate-context master from _GfxInit: backend APIs require it.
+       Established through replacement functions where one exists:
+         - slot 0 header/offset/stride/count: eu4_gfx_set_vertex_buffers
+           (this is the replacement for _GfxSetVertexBuffers);
+         - current shader: eu4_gfx_set_shader (_GfxSetShader), asserted below;
+         - viewport image: eu4_gfx_set_viewport (_GfxSetViewport image form).
+       Still synthesized directly because no replacement API exists:
+         - primitive mode +0x08 (the engine reaches mode 5 through
+           _GfxSetPrimitiveType, which is not reconstructed here);
+         - constant-buffer object +0xf0 (only the capture/observer path exists);
+         - colour write mask +0x2c (read by _GfxClear, no setter replacement). */
     uint8_t *master = (uint8_t *)g_master;
-    int32_t mode = 5, count = 4, first = 0;
+    int32_t mode = 5, first = 0;
     memcpy(master + EU4_GFX_MASTER_MODE, &mode, 4);
-    memcpy(master + EU4_GFX_MASTER_COUNT, &count, 4);
     struct {
         void *master;
     } ctx = {master};
+    void *headers[1] = {vertex_header};
+    eu4_gfx_set_vertex_buffers(&ctx, 1, headers, 0, NULL, NULL);
     eu4_gfx_set_shader(&ctx, shader);
-    void *shader_ptr = shader;
-    memcpy(master + EU4_GFX_MASTER_SHADER, &shader_ptr, sizeof shader_ptr);
-    void *vb_ptr = vertex_header;
-    memcpy(master + EU4_GFX_MASTER_VERTEX_HEADER, &vb_ptr, sizeof vb_ptr);
-    int32_t offset = 0;
-    memcpy(master + EU4_GFX_MASTER_VERTEX_OFFSET, &offset, 4);
-    int32_t stride = EU4_GFX_SIMPLE_VERTEX_STRIDE;
-    memcpy(master + EU4_GFX_MASTER_VERTEX_STRIDE, &stride, 4);
+    if (!eu4_gfx_shader_is_current(&ctx, shader)) {
+        fail("_GfxSetShader did not establish the current shader");
+    }
     void *cb = constant;
     memcpy(master + EU4_GFX_MASTER_CONSTANT_SLOT2, &cb, sizeof cb);
     /* CGraphics::Setup2dGraphics viewport image for 1728x1117 and the default
@@ -318,15 +480,68 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
         if (eu4_gfx_simple_draw(&ctx, 0, first, &inputs, &reason) != EU4_GFX_SIMPLE_DRAW_VERTEX) {
             fail("stride boundary was not refused");
         }
+        int32_t stride = EU4_GFX_SIMPLE_VERTEX_STRIDE;
         memcpy(master + EU4_GFX_MASTER_VERTEX_STRIDE, &stride, 4);
         if (eu4_gfx_simple_draw(&ctx, 2, first, &inputs, &reason) != EU4_GFX_SIMPLE_DRAW_COUNT) {
             fail("count boundary was not refused");
+        }
+        /* Highest referenced vertex, not just count * stride. A four-vertex
+           buffer accepts first=1,count=3 and rejects first=1,count=4. */
+        if (eu4_gfx_simple_draw(&ctx, 4, 0, &inputs, &reason) !=
+            EU4_GFX_SIMPLE_DRAW_OK) {
+            fail("first=0,count=4 was refused");
+        }
+        if (eu4_gfx_simple_draw(&ctx, 3, 1, &inputs, &reason) !=
+            EU4_GFX_SIMPLE_DRAW_OK) {
+            fail("first=1,count=3 was refused");
+        }
+        if (eu4_gfx_simple_draw(&ctx, 4, 1, &inputs, &reason) !=
+            EU4_GFX_SIMPLE_DRAW_VERTEX) {
+            fail("first=1,count=4 exceeded the buffer but was accepted");
+        }
+        if (eu4_gfx_simple_draw(&ctx, 4, -1, &inputs, &reason) !=
+            EU4_GFX_SIMPLE_DRAW_VERTEX) {
+            fail("negative first was accepted");
+        }
+        if (eu4_gfx_simple_draw(&ctx, INT32_MAX, INT32_MAX, &inputs, &reason) !=
+            EU4_GFX_SIMPLE_DRAW_VERTEX) {
+            fail("oversized vertex range was accepted or overflowed");
+        }
+        if (eu4_gfx_simple_draw(&ctx, 3, INT32_MAX, &inputs, &reason) !=
+            EU4_GFX_SIMPLE_DRAW_VERTEX) {
+            fail("oversized starting vertex was accepted or overflowed");
         }
         eu4_gfx_simple_draw_inputs none = inputs;
         none.texture = NULL;
         if (eu4_gfx_simple_draw(&ctx, 0, first, &none, &reason) != EU4_GFX_SIMPLE_DRAW_TEXTURE) {
             fail("missing texture was not refused");
         }
+    }
+
+    /* Shader identity boundary: a linked shader that is not the admitted Simple
+       effect must not receive the Simple vertex layout or pipeline. */
+    {
+        void *other = eu4_gfx_create_shader();
+        if (other == NULL ||
+            eu4_gfx_add_vertex_shader(NULL, other, eu4_gfx_simple_vertex_source()) != 1 ||
+            eu4_gfx_add_pixel_shader(NULL, other, eu4_gfx_simple_pixel_source()) != 1 ||
+            eu4_gfx_link_shader(NULL, other) != 1 ||
+            !eu4_gfx_shader_test_set_identity(other, "test/other-linked-effect")) {
+            fail("other linked shader setup");
+        }
+        eu4_gfx_set_shader(&ctx, other);
+        if (!eu4_gfx_shader_is_current(&ctx, other)) {
+            fail("_GfxSetShader did not establish the other shader");
+        }
+        if (eu4_gfx_simple_draw(&ctx, 4, first, &inputs, &reason) !=
+            EU4_GFX_SIMPLE_DRAW_SHADER) {
+            fail("non-Simple linked shader was admitted");
+        }
+        eu4_gfx_set_shader(&ctx, shader);
+        if (!eu4_gfx_shader_is_current(&ctx, shader)) {
+            fail("Simple shader was not restored as current");
+        }
+        eu4_gfx_destroy_shader(other);
     }
 
     /* Bind through the replacement _GfxSetTextures, then let the encoder
@@ -492,8 +707,15 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
         exit(1);
     }
     free(order_pixels);
+    /* The ordering case intentionally left its clear pending. The draw waited
+       on the shared queue, but the backend still owns the pending record. */
+    if (eu4_gfx_complete_offscreen(master, &command_status) != EU4_GFX_CLEAR_OK ||
+        command_status != (int)MTLCommandBufferStatusCompleted) {
+        fail("order clear completion");
+    }
     printf("ok checked=%d worst=%.4f flip_differences=%d blend_bad=%d order_bad=0\n", checked,
            worst, flip_differences, blend_bad);
+    test_repeat_addressing(master, vb, matrix, backend);
 }
 
 static void parse_args(int argc, char **argv, const char **vb_path, const char **matrix_path,

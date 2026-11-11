@@ -51,10 +51,10 @@ blend, sampler and viewport into one encoded draw.
 | `benchmark/eu4_gfx_shader.mm` | Decode the MSL position as `float3` and build the implicit `w = 1`; vertex descriptor now `Float3@0`, `Float2@12`, `UChar4Normalized@20`, stride 24 (was `Float4@0`, `Float2@16`, `Float4@24`, stride 40). |
 | `benchmark/eu4_gfx_buffers.h/.mm` | `eu4_gfx_vertex_buffer_for_header()` — borrowed `MTLBuffer` for an engine vertex header. |
 | `benchmark/eu4_gfx_texture.h/.mm` | `eu4_gfx_texture_for_header()` — borrowed `MTLTexture` retained by `_GfxInitializeTexture`; `_GfxSetTextures` now records the unit-0 engine header in the backend (falling back to the master's `+0x98` default), and `eu4_gfx_bound_texture()` resolves it for the encoder. |
-| `benchmark/eu4_gfx_simple_draw.h/.mm` | New encoder: reads the engine master (`mode`, `count`, `shader`, slot-0 vertex header/offset/stride, constant slot 2), refuses unsupported inputs, creates the `Simple` pipeline through the shader registry, copies the matrix, binds vertex/uniform buffers, fragment texture and sampler, sets the viewport, and submits a BGRA8Unorm pass. It accepts the backend command queue so the draw is ordered after `_GfxClear`. |
+| `benchmark/eu4_gfx_simple_draw.h/.mm` | New encoder: reads the engine master (`mode`, `count`, `shader`, slot-0 vertex header/offset/stride, constant slot 2), refuses unsupported inputs, creates the `Simple` pipeline through the shader registry, copies the matrix, binds vertex/uniform buffers, fragment texture and sampler, sets the viewport, and submits a BGRA8Unorm pass. It accepts the backend command queue so the draw is ordered after `_GfxClear`. Vertex-range validation uses the highest vertex the draw actually reads (`offset + (first + count) * stride`), rejects negative `first`, and does the arithmetic in unsigned 64-bit. Shader admission now requires the registry's exact `simple-lua-Simple/asset-maincode-v0` identity, not merely a non-null linked shader. |
 | `benchmark/eu4_gfx_init.h` | Backend property for the current unit-0 texture header. |
 | `benchmark/eu4_metal_boot.py` | The new module is compiled into `libeu4_metal_boot.dylib`. |
-| `tests/gfx_simple_draw_host.mm` | Real-Metal host: authentic packet + optional original DDS, CPU reference sampling, flip discriminator, alpha-blend boundary, fail-closed cases. |
+| `tests/gfx_simple_draw_host.mm` | Real-Metal host: authentic packet + optional original DDS, CPU reference sampling, flip discriminator, alpha-blend boundary, fail-closed cases, `first`/`count` range boundaries, a non-Simple identity rejection, and a synthetic repeated-UV boundary. Vertex state is established through the replacement `_GfxSetVertexBuffers`; the test asserts that `_GfxSetShader` itself published the shader instead of rewriting `master+0x70` by hand. |
 | `tests/test_gfx_simple_draw.py` | Binds the packet hashes, builds/runs the host, covers original-DDS and hermetic-synthetic paths. |
 | `analysis/reconstruction/simple-loading-draw/note.md` | Evidence-labeled reconstruction note. |
 
@@ -66,6 +66,35 @@ backend binding, and the encoder. Blend state is
 repeat addressing (both from the installed `simple.shader`).
 The render target is `BGRA8Unorm` (project-derived P5.1 default), the viewport
 is `0,0,1728,1117`, and no depth attachment is used.
+
+### Submission boundary (decision)
+
+The encoder commits its command buffer and calls `waitUntilCompleted`. That is
+retained deliberately for this offline diagnostic entry point: it makes the
+readback and the refusal reason deterministic, and it keeps the borrowed vertex
+buffer, texture, target and uniform bytes alive until the GPU is finished. It is
+**not** the production submission contract. A live `_GfxDraw` must not wait after
+every draw; it needs the backend scheduler to own the command-buffer and resource
+lifetimes. That wiring is intentionally out of scope for this PR.
+
+### Focused correctness review
+
+- Borrowed `MTLBuffer`, vertex headers, textures and drawable targets are only
+  used while the synchronous command is in flight; no pointer is retained after
+  return.
+- Unit-0 texture resolution still goes through `_GfxSetTextures` →
+  `eu4_gfx_bound_texture()` → the texture registry; a missing or replaced header
+  fails closed.
+- The target must be a single-sample 2D BGRA8Unorm render target whose actual
+  dimensions, device and declared viewport describe the same image. The texture
+  must be a single-sample, sampleable 2D texture on the same device and must not
+  alias the target.
+- A supplied command queue must belong to the same `MTLDevice`.
+- The 64-byte matrix is copied into a fresh shared buffer before encoding, so
+  the engine's constant-object storage may be rewritten immediately after the
+  call.
+- The sampler cache now holds its `MTLDevice` strongly. A recycled raw device
+  pointer can no longer return a sampler created by a destroyed device.
 
 ## Tests
 
@@ -84,6 +113,10 @@ is `0,0,1728,1117`, and no depth attachment is used.
 5. The flip discriminator failed on the original image with a 5×5 grid (the
    image is locally smooth); replaced it with a 40×40 grid and a
    `flip_differences` threshold.
+6. The first repeated-UV boundary attempt called `eu4_gfx_configure_offscreen`
+   while the ordering case still owned a pending clear. The test now drains that
+   clear through `eu4_gfx_complete_offscreen` before reconfiguring, which also
+   exercises the backend's pending-clear ownership.
 
 ### Passing
 
@@ -95,11 +128,12 @@ test_original_loading_screen_draw ... ok
 Ran 3 tests ... OK
 ```
 
-Direct run on the original asset:
+Direct run on the original asset (the test was executed, not skipped):
 
 ```
 texture=original-dds 2048x1536
 ok checked=1600 worst=0.0028 flip_differences=368 blend_bad=0 order_bad=0
+repeat_bad=0 repeat_differences=3694 worst_repeat=0.0031
 done
 ```
 
@@ -110,6 +144,18 @@ The 64×64 alpha-blend pass reads `(127,0,128)` within 3/255 on all 4096 pixels.
 A clear/draw ordering case commits a green clear without waiting and then draws
 50 % red on the backend queue; the readback `(127,127,0)` proves the draw is
 ordered after the clear (`order_bad=0`).
+
+Synthetic boundary (not an original-game observation): the same quad and matrix
+with texcoords spanning `[-1, 2]` over a 4×4 texture. The Repeat sampler contract
+matches the wrapping CPU reference on all 4096 pixels (`repeat_bad=0`), and the
+clamped reference differs at 3694 of them, so the test is not vacuous.
+
+Range boundaries on the authentic four-vertex buffer: `first=0,count=4` and
+`first=1,count=3` are accepted; `first=1,count=4`, `first=-1`,
+`count=first=INT32_MAX` and `first=INT32_MAX,count=3` are refused as
+`EU4_GFX_SIMPLE_DRAW_VERTEX` without overflowing. A second linked shader with a
+non-Simple identity is refused with `EU4_GFX_SIMPLE_DRAW_SHADER`, which proves
+the encoder cannot hand the Simple vertex layout to an unrelated program.
 
 Regression suite:
 
@@ -138,6 +184,12 @@ Ran 56 tests ... OK
   routed to it. Enabling it live needs an authorized original launch and
   validation of game-backbuffer/present ordering (the `_GfxClear` command buffer
   is submitted separately). Until then the engine path still skips the draw.
+- The synchronous `commit` + `waitUntilCompleted` is an offline-host contract
+  only (see “Submission boundary”); it is not evidence for a production
+  submission strategy.
+- The repeated-UV case is synthetic. It proves the encoder's sampler contract
+  (Repeat/Linear), not that the captured original frame used UVs outside
+  `[0,1]`; the captured packet's UVs are 0/1.
 - `ShowBasicLoadText`'s text (font) draws are a separate path and are not part
   of this experiment; this covers the `Simple` background draw at `0xedfcd1`.
 

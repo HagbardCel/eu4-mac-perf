@@ -236,7 +236,7 @@ static int compile_simple_library(EU4ShaderRecord *record) {
     record.library = library;
     record.vertexFunction = vs;
     record.fragmentFunction = fs;
-    record.identity = @"simple-lua-Simple/asset-maincode-v0";
+    record.identity = @EU4_GFX_SHADER_SIMPLE_IDENTITY;
     return 1;
 }
 
@@ -260,6 +260,21 @@ void eu4_gfx_shader_test_reset(void) {
        Engine path never calls this; default remains off. */
     g_allow_transitional_markers = 1;
     pthread_mutex_unlock(&g_lock);
+}
+
+int eu4_gfx_shader_test_set_identity(void *shader, const char *identity) {
+    if (shader == NULL || identity == NULL) {
+        return 0;
+    }
+    pthread_mutex_lock(&g_lock);
+    EU4ShaderRecord *record = find_record(shader);
+    int ok = 0;
+    if (record != nil) {
+        record.identity = [NSString stringWithUTF8String:identity];
+        ok = record.identity != nil;
+    }
+    pthread_mutex_unlock(&g_lock);
+    return ok;
 }
 
 uint64_t eu4_gfx_shader_lifetime_id(const void *shader) {

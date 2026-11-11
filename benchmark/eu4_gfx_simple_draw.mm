@@ -11,9 +11,13 @@
    AddressU/V = Wrap, Min/Mag/Mip = Linear. The engine sampler object is not
    decoded yet, so the asset is the only admitted source. */
 static id<MTLSamplerState> simple_sampler(id<MTLDevice> device) {
+    /* Hold the device strongly alongside its sampler. A raw device pointer can
+       be recycled after the device is released, which would hand a new device a
+       sampler created by the old one. The sampler cache is process-local and
+       bounded by the number of live devices. */
     static id<MTLSamplerState> cached;
-    static void *cached_device;
-    if (cached != nil && cached_device == (__bridge void *)device) {
+    static id<MTLDevice> cached_device;
+    if (cached != nil && cached_device == device) {
         return cached;
     }
     MTLSamplerDescriptor *desc = [MTLSamplerDescriptor new];
@@ -23,9 +27,12 @@ static id<MTLSamplerState> simple_sampler(id<MTLDevice> device) {
     desc.sAddressMode = MTLSamplerAddressModeRepeat;
     desc.tAddressMode = MTLSamplerAddressModeRepeat;
     desc.rAddressMode = MTLSamplerAddressModeRepeat;
-    cached = [device newSamplerStateWithDescriptor:desc];
-    cached_device = (__bridge void *)device;
-    return cached;
+    id<MTLSamplerState> sampler = [device newSamplerStateWithDescriptor:desc];
+    if (sampler != nil) {
+        cached = sampler;
+        cached_device = device;
+    }
+    return sampler;
 }
 
 const char *eu4_gfx_simple_draw_status_name(eu4_gfx_simple_draw_status status) {
@@ -92,9 +99,11 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
     }
 
     void *shader = load_ptr(master, EU4_GFX_MASTER_SHADER);
-    if (shader == NULL || !eu4_gfx_shader_is_linked(shader) ||
-        eu4_gfx_shader_identity(shader) == NULL) {
-        return refuse(EU4_GFX_SIMPLE_DRAW_SHADER, reason, "no linked Simple shader");
+    const char *identity = shader != NULL ? eu4_gfx_shader_identity(shader) : NULL;
+    if (shader == NULL || !eu4_gfx_shader_is_linked(shader) || identity == NULL ||
+        strcmp(identity, EU4_GFX_SHADER_SIMPLE_IDENTITY) != 0) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_SHADER, reason,
+                      "current shader is not the admitted Simple effect");
     }
 
     if ((int32_t)load_u32(master, EU4_GFX_MASTER_MODE) != 5) {
@@ -123,8 +132,24 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
         return refuse(EU4_GFX_SIMPLE_DRAW_VERTEX, reason, "slot 0 has no Metal buffer");
     }
     size_t vertex_length = eu4_gfx_vertex_buffer_length(vertex_header);
-    uint64_t needed = (uint64_t)vertex_offset + (uint64_t)count * vertex_stride;
-    if (needed > vertex_length) {
+    if (first < 0) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_VERTEX, reason, "negative first vertex");
+    }
+    /* glDrawArrays(mode, first, count) reads [first, first + count). Compute the
+       highest referenced byte offset in unsigned arithmetic and reject before
+       any cast to a signed width or pointer arithmetic. */
+    uint64_t start = (uint64_t)(uint32_t)first;
+    uint64_t vertices = (uint64_t)(uint32_t)count;
+    uint64_t stride = (uint64_t)vertex_stride;
+    if (start > UINT64_MAX - vertices) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_VERTEX, reason, "vertex range overflows");
+    }
+    uint64_t end = start + vertices;
+    if (end > (UINT64_MAX - (uint64_t)vertex_offset) / stride) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_VERTEX, reason, "vertex range overflows");
+    }
+    uint64_t needed = (uint64_t)vertex_offset + end * stride;
+    if (needed > (uint64_t)vertex_length) {
         return refuse(EU4_GFX_SIMPLE_DRAW_VERTEX, reason,
                       "vertex range exceeds the buffer length");
     }
@@ -159,6 +184,27 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
     if (target.pixelFormat != MTLPixelFormatBGRA8Unorm) {
         return refuse(EU4_GFX_SIMPLE_DRAW_TARGET, reason, "target is not BGRA8Unorm");
     }
+    /* The pipeline is fixed at one sample and a 2D BGRA8 target. Declared
+       dimensions must agree with the attachment, otherwise the viewport and
+       readback contract would describe different images. */
+    if (target.textureType != MTLTextureType2D || target.sampleCount != 1 ||
+        target.width != inputs->target_width || target.height != inputs->target_height ||
+        (target.usage & MTLTextureUsageRenderTarget) == 0) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_TARGET, reason,
+                      "target is not a single-sample 2D render target of the declared size");
+    }
+    if (target.device != device) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_TARGET, reason, "target belongs to another device");
+    }
+    if (texture.textureType != MTLTextureType2D || texture.sampleCount != 1 ||
+        (texture.usage & MTLTextureUsageShaderRead) == 0) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_TEXTURE, reason,
+                      "texture is not a single-sample sampleable 2D texture");
+    }
+    if (texture.device != device || texture == target) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_TEXTURE, reason,
+                      "texture is on another device or aliases the render target");
+    }
 
     EU4GfxPipelineKey key = {};
     key.mtl_device = inputs->device;
@@ -192,6 +238,10 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
     if (uniforms == nil || queue == nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "Metal allocation failed");
     }
+    if (queue.device != device) {
+        return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason,
+                      "command queue belongs to another device");
+    }
 
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
     pass.colorAttachments[0].texture = target;
@@ -223,9 +273,14 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
                 vertexStart:(NSUInteger)first
                 vertexCount:(NSUInteger)count];
     [encoder endEncoding];
+    /* Offline reconstruction boundary: this diagnostic entry point commits and
+       blocks so callers can read the target and report a concrete failure. It is
+       deliberately NOT the production submission contract; live _GfxDraw wiring
+       must not wait after every draw. Buffers and textures are borrowed, so the
+       wait also keeps every resource alive until the GPU is done with it. */
     [command commit];
     [command waitUntilCompleted];
-    if (command.status != MTLCommandBufferStatusCompleted) {
+    if (command.status != MTLCommandBufferStatusCompleted || command.error != nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "command buffer did not complete");
     }
     return EU4_GFX_SIMPLE_DRAW_OK;

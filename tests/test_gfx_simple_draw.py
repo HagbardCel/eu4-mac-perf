@@ -82,6 +82,7 @@ class GfxSimpleDrawTests(unittest.TestCase):
         self.assertIn("ok checked=1600", stdout)
         self.assertIn("blend_bad=0", stdout)
         self.assertIn("order_bad=0", stdout)
+        self.assertIn("repeat_bad=0", stdout)
         self.assertNotIn("mismatches", stdout)
         self.assertIn("done", stdout)
 
@@ -91,6 +92,7 @@ class GfxSimpleDrawTests(unittest.TestCase):
         self.assertIn("ok checked=1600", stdout)
         self.assertIn("blend_bad=0", stdout)
         self.assertIn("order_bad=0", stdout)
+        self.assertIn("repeat_bad=0", stdout)
         self.assertNotIn("mismatches", stdout)
 
 

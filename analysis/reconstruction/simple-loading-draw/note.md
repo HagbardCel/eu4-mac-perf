@@ -132,7 +132,7 @@ change. The 38 installed `load_*.dds` files are all 2048×1536 BGR24.
 | --- | --- |
 | `master+0x08` mode 5 | `MTLPrimitiveTypeTriangleStrip` (other modes refused) |
 | `master+0x64` count, `edx` first | `vertexStart:first`, `vertexCount:count` |
-| `master+0x70` + `_GfxSetShader` | linked `Simple` record → `MTLRenderPipelineState` |
+| `master+0x70` + `_GfxSetShader` | linked `Simple` record with the exact `simple-lua-Simple/asset-maincode-v0` identity → `MTLRenderPipelineState`; any other linked identity is refused |
 | `master+0x130/0x150/0x160` | `setVertexBuffer:offset:atIndex:0` |
 | `glUniform4fv(Matrix)` | `setVertexBuffer:uniforms atIndex:1` (`constant Uniforms &` in MSL) |
 | `glEnable(GL_BLEND)` + `glBlendFunc` | pipeline `blendingEnabled`, `SourceAlpha` / `OneMinusSourceAlpha` (RGB and alpha) |
@@ -144,6 +144,13 @@ change. The 38 installed `load_*.dds` files are all 2048×1536 BGR24.
 Vertex descriptor: `Float3` at 0, `Float2` at 12, `UChar4Normalized` at 20,
 stride 24. MSL takes `float3 position` and supplies the implicit `w = 1` that GL
 provides for a three-component `float4` attribute.
+
+The encoder fails closed on a target whose actual dimensions, device, sample
+count, texture type or render-target usage disagree with the declared viewport
+image, on a texture that is not sampleable on the same device, on a
+target/texture alias, and on a command queue that belongs to another device. The
+matrix is copied before encoding, and the sampler cache holds its device
+strongly so a recycled device pointer cannot reuse a destroyed device's sampler.
 
 ## Semantic mismatches handled or left open
 
@@ -171,11 +178,22 @@ provides for a three-component `float4` attribute.
 - **Sampler object.** The asset's wrap/linear contract is used; the engine
   `SSamplerStateOpenGL` object reached through `r9` is not decoded.
   **Unresolved**.
-- **Submission order.** `_GfxClear` and `_GfxPresent` commit on
+- **Submission boundary.** `_GfxClear` and `_GfxPresent` commit on
   `backend.queue`; a draw on a private queue could overtake them. The encoder
   takes an optional queue and the host passes the backend queue. A boundary test
   commits a green clear without waiting, draws 50 % red on the same queue, and
   requires `(127,127,0)`; a private queue would leave the target green.
+  The encoder then commits and calls `waitUntilCompleted`. That wait is an
+  offline diagnostic contract: it makes readback and error reporting
+  deterministic and keeps borrowed resources alive. It is **not** the production
+  submission contract; live `_GfxDraw` must return ownership of a command buffer
+  to the backend instead of blocking after every draw. (Decision recorded here,
+  not implemented.)
+- **Shader identity.** `eu4_gfx_shader_identity()` is the registry's established
+  identity. The encoder compares it exactly with
+  `EU4_GFX_SHADER_SIMPLE_IDENTITY` (`simple-lua-Simple/asset-maincode-v0`).
+  A linked shader with another identity cannot receive the Simple vertex
+  descriptor, pipeline key, sampler or texture binding.
 - **Loading-screen index.** The runtime index is randomised; the capture kept
   only texture identity, not contents. The test can use the installed
   `load_0.dds` (a real asset) or a deterministic synthetic image; neither is the
@@ -193,11 +211,22 @@ Implemented in `tests/gfx_simple_draw_host.mm`; each must fail closed:
 - mode 4 instead of 5 → `EU4_GFX_SIMPLE_DRAW_PRIMITIVE`;
 - stride 40 instead of the admitted 24 → `EU4_GFX_SIMPLE_DRAW_VERTEX`;
 - `count = 2` → `EU4_GFX_SIMPLE_DRAW_COUNT`;
+- `first = 0, count = 4` → accepted (the authentic draw);
+- `first = 1, count = 3` on a four-vertex buffer → accepted;
+- `first = 1, count = 4` → `EU4_GFX_SIMPLE_DRAW_VERTEX` (highest vertex is 5);
+- `first = -1` → `EU4_GFX_SIMPLE_DRAW_VERTEX`;
+- `count = first = INT32_MAX` and `first = INT32_MAX, count = 3` →
+  `EU4_GFX_SIMPLE_DRAW_VERTEX`, computed in unsigned 64-bit without overflow;
+- a linked non-Simple identity → `EU4_GFX_SIMPLE_DRAW_SHADER`;
 - no texture → `EU4_GFX_SIMPLE_DRAW_TEXTURE`;
 - 1600-pixel grid comparison against CPU bilinear sampling of the same image,
   plus the flip discriminator;
 - a 50 %-alpha source over a cleared blue target → `SRC_ALPHA/INV_SRC_ALPHA`
-  readback `(127,0,128)` within 3/255 on all 4096 pixels of a 64×64 target.
+  readback `(127,0,128)` within 3/255 on all 4096 pixels of a 64×64 target;
+- **synthetic, not original-game evidence:** the authentic quad and matrix with
+  UVs spanning `[-1,2]` over a 4×4 texture. All 4096 pixels match the wrapping
+  CPU bilinear reference (`repeat_bad=0`), while 3694 differ from a clamped
+  reference, so Repeat addressing is actually exercised.
 
 ## Validation (real Metal)
 
