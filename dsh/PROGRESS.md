@@ -185,6 +185,29 @@ pause or block the native goal instead of leaving it running.
 Verified: 88 DSH tests, 27 node tests, 86 OpenCode tests, compileall and doc links
 clean.
 
+## Offline reconstruction workspace
+
+`run.sh --workspace <dir>` now closes the gap between "started from this
+terminal" and "new Web session runs here". It canonicalizes and verifies the Git
+worktree root, registers it in DSH's own workspace registry (creating the v2
+record if DSH has not yet), makes it the default for new sessions, derives
+`EU4_DSH_SKILL_ROOT` from that worktree when unset, and fails rather than
+falling back. Repeated launches reuse the record. The `--campaign` path keeps
+its existing preparation, candidate registration and `eu4-goal` binding.
+
+`dsh/profile/offline-reconstruction.patch.yml` disables only the campaign
+`eu4-goal` plugin, so a native `/goal` experiment has the goal service, round
+driver, tools, configured model and reconstruction skill without campaign
+finalization rules.
+
+Validated 2026-11-11 with a fresh isolated `DSH_HOME`: a new Web session's cwd
+was the requested worktree, read/write inside it needed no approval, a write to
+its parent was refused by the workspace sandbox, the skill catalog contained
+`opengl-metal-reconstruction` from that worktree, the default model was
+`opencode-go/deepseek-v4.1-flash`, and a `/goal` completed in one round through
+`update_goal` with no `eu4-goal` plugin. Campaign-mode `preflight.sh` still
+passes against the same profile.
+
 ## Known limitations
 
 - **`dsh --profile headless` answers one turn.** Measured: a goal created in that
