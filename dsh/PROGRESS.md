@@ -191,9 +191,11 @@ clean.
 terminal" and "new Web session runs here". It canonicalizes and verifies the Git
 worktree root, registers it in DSH's own workspace registry (creating the v2
 record if DSH has not yet), makes it the default for new sessions, derives
-`EU4_DSH_SKILL_ROOT` from that worktree when unset, and fails rather than
-falling back. Repeated launches reuse the record. The `--campaign` path keeps
-its existing preparation, candidate registration and `eu4-goal` binding.
+`EU4_DSH_SKILL_ROOT` from that worktree when unset, applies the offline
+overlay, and fails rather than falling back. Repeated launches reuse the record.
+The `--campaign` path keeps its existing preparation, candidate registration and
+`eu4-goal` binding. Empty `--workspace=`/`--campaign=` values are rejected before
+DSH starts.
 
 `dsh/profile/offline-reconstruction.patch.yml` disables only the campaign
 `eu4-goal` plugin, so a native `/goal` experiment has the goal service, round

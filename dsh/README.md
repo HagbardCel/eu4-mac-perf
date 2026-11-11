@@ -53,27 +53,25 @@ profile and its local configuration.
 ## Offline reconstruction experiments
 
 Campaign mode and ordinary reconstruction experiments are different modes. For
-an offline experiment launched from one worktree, use the workspace flag and the
-offline overlay:
+an offline experiment launched from one worktree:
 
 ```sh
 cd /absolute/path/to/eu4-dsh-full-reconstruction
-export EU4_DSH_SKILL_ROOT="$PWD/.opencode/skills"
-
-./dsh/scripts/run.sh \
-  --workspace "$PWD" \
-  --patch "$PWD/dsh/profile/offline-reconstruction.patch.yml"
+./dsh/scripts/run.sh --workspace "$PWD"
 ```
+
+`--workspace` also applies
+[offline-reconstruction.patch.yml](profile/offline-reconstruction.patch.yml);
+no extra `--patch` is needed for the standard workflow.
 
 `--workspace` resolves the path to its canonical worktree root, registers it as
 the default workspace for newly created Web sessions, and fails instead of
 falling back to another workspace. It also derives `EU4_DSH_SKILL_ROOT` from that
 worktree when the variable is unset and refuses a skill root from another
-checkout. The overlay disables only the campaign
-`eu4-goal` plugin; native `/goal`, `goal-round-driver`, the terminal/filesystem/
-search tools, the configured DeepSeek model and `opengl-metal-reconstruction`
-remain mounted. `--campaign` is unchanged and still installs the campaign
-binding.
+checkout. The overlay disables only the campaign `eu4-goal` plugin; native
+`/goal`, `goal-round-driver`, the terminal/filesystem/search tools, the configured
+DeepSeek model and `opengl-metal-reconstruction` remain mounted. `--campaign` is
+unchanged and still installs the campaign binding.
 
 After the URL is printed, create a **new** session (do not continue an older
 smoke-test session) and confirm the session's working directory is the worktree

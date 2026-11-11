@@ -40,6 +40,10 @@ while [ $# -gt 0 ]; do
       CAMPAIGN=${2:?--campaign needs a sidecar path}
       shift 2
       ;;
+    --campaign=)
+      echo "run: --campaign needs a sidecar path" >&2
+      exit 2
+      ;;
     --campaign=*)
       CAMPAIGN=${1#--campaign=}
       shift
@@ -47,6 +51,10 @@ while [ $# -gt 0 ]; do
     --workspace)
       WORKSPACE=${2:?--workspace needs a directory}
       shift 2
+      ;;
+    --workspace=)
+      echo "run: --workspace needs a directory" >&2
+      exit 2
       ;;
     --workspace=*)
       WORKSPACE=${1#--workspace=}
@@ -224,17 +232,25 @@ if [ "$seen_port" -eq 0 ] && [ "$launcher_only" -eq 0 ]; then
 fi
 
 if [ -n "$WORKSPACE" ]; then
+  OFFLINE_PATCH=$INFRA/dsh/profile/offline-reconstruction.patch.yml
+  [ -f "$OFFLINE_PATCH" ] || {
+    echo "run: offline reconstruction overlay missing at $OFFLINE_PATCH" >&2
+    exit 1
+  }
   register_workspace "$WORKSPACE" 1
   cat >&2 <<INFO
 
 Offline reconstruction workspace: $WORKSPACE
   skill root : $EU4_DSH_SKILL_ROOT
+  overlay    : $OFFLINE_PATCH
 Create a NEW session (do not continue the previous one); its cwd will be:
   $WORKSPACE
 The workspace registry's default is already set to that directory.
 INFO
+  # The workspace mode always carries the offline overlay; an extra --patch is
+  # applied after it, so an operator overlay can still override individual rows.
   # shellcheck disable=SC2086  # PORT_ARGS is a deliberate two-word flag pair
-  exec dsh --profile eu4-web "$@" $PORT_ARGS
+  exec dsh --profile eu4-web --patch "$OFFLINE_PATCH" "$@" $PORT_ARGS
 fi
 
 if [ -z "$CAMPAIGN" ]; then
