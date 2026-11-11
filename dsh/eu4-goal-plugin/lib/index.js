@@ -52,6 +52,29 @@ export function resolveInfra(config = {}) {
  * DSH's effective workspace or sandbox, so the bridge records the assertion as
  * unverified rather than reporting a workspace the plugin merely guessed.
  */
+/** Env vars the bridge and the reviewer it spawns are allowed to see. */
+const BRIDGE_ENV_ALLOWED = [
+  'PATH',
+  'HOME',
+  'TMPDIR',
+  'LANG',
+  'LC_ALL',
+  'DSH_HOME',
+  'EU4_DSH_HOME',
+  'OPENCODE_GO_API_KEY',
+  'DEEPSEEK_API_KEY',
+]
+
+export function bridgeEnvironment(infra, base = process.env) {
+  const env = { PYTHONPATH: infra, PYTHONNOUSERSITE: '1' }
+  for (const key of BRIDGE_ENV_ALLOWED) {
+    const value = base[key]
+    if (typeof value === 'string' && value) env[key] = value
+  }
+  if (!env.TMPDIR) env.TMPDIR = '/tmp'
+  return env
+}
+
 export function bridgeInvocation(infra, python, operation, sidecar, extra = []) {
   return {
     command: python,
@@ -62,13 +85,11 @@ export function bridgeInvocation(infra, python, operation, sidecar, extra = []) 
     args: ['-m', 'automation.dsh_bridge', operation, '--sidecar', sidecar, ...extra],
     options: {
       cwd: infra,
-      env: {
-        PATH: process.env.PATH ?? '',
-        HOME: process.env.HOME ?? '',
-        TMPDIR: process.env.TMPDIR ?? '/tmp',
-        PYTHONPATH: infra,
-        PYTHONNOUSERSITE: '1',
-      },
+      // An explicit allowlist, not process.env: the bridge is trusted host code
+      // and needs the campaign's DSH home plus a provider credential so the
+      // reviewer it spawns authenticates against the same installation. Anything
+      // else stays out of the child.
+      env: bridgeEnvironment(infra),
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   }
@@ -199,6 +220,33 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  /**
+   * Turn a terminal checker verdict into a native goal transition.
+   *
+   * `unavailable` means the infrastructure could not answer and `blocked` means
+   * the checker says the work cannot proceed; both end the campaign. `fail` and
+   * `inconclusive` stay active so the round driver keeps going.
+   */
+  function applyGoalPolicy(ctx, agent, result) {
+    if (!agent || !result || typeof result !== 'object') return result
+    const policy = result.goal_policy
+    if (policy !== 'unavailable' && policy !== 'blocked') return result
+    const live = ctx.goals.get(agent)
+    if (!live) return result
+    const ref = { id: live.id, revision: live.revision }
+    const detail = String(result.detail || result.kind || policy).slice(0, 400)
+    try {
+      if (policy === 'blocked') {
+        ctx.goals.block(agent, ref, { code: 'checker-blocked', message: detail })
+      } else {
+        ctx.goals.pause(agent, ref)
+      }
+    } catch {
+      // A phase transition is best effort; the verdict stays authoritative.
+    }
+    return result
+  }
+
   function persistBiding(sessionId, agentId, goal, runRoot) {
     // Persistence is best-effort; the in-memory binding is what the current
     // finalization compares against. Dropping it because the run root could not
@@ -281,15 +329,30 @@ export function apply(ctx, config = {}) {
             detail: mismatch,
           }
         }
+        const runRoot = (prepared && prepared.run_root) || undefined
+        const bound = bindingFor(sessionId, runRoot)
+        // No binding yet is the normal first validate; only an existing binding
+        // can conflict with the live goal.
+        const problems = bound ? goalBindingProblems(bound, goal) : []
+        if (problems.length) {
+          // The binding is established once and then compared, never replaced:
+          // otherwise editing the goal and validating again would inherit the
+          // earlier qualification.
+          return {
+            ok: false,
+            operation: 'validate',
+            classification: 'refused',
+            kind: 'goal_binding',
+            goal_policy: 'unavailable',
+            detail: problems.join('; '),
+          }
+        }
         const validateArgs = sessionId === 'unknown' ? [] : ['--session-id', sessionId]
         const result = await bridge(infra, python, 'validate', sidecar, validateArgs)
-        persistBiding(
-          sessionId,
-          exec?.agent?.id,
-          goal,
-          (prepared && prepared.run_root) || (result && result.run_root),
-        )
-        return result
+        if (!bound) {
+          persistBiding(sessionId, exec?.agent?.id, goal, runRoot || (result && result.run_root))
+        }
+        return applyGoalPolicy(ctx, exec?.agent, result)
       }
     )
   )

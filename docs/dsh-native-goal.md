@@ -118,6 +118,44 @@ candidate may not be the infrastructure root, and it may not ship
 into the anchored identity, so an uncommitted edit to the checker's supporting
 code is refused rather than run. The bridge cannot observe DSH's sandbox mode and
 does not claim to.
+## Qualification hardening
+
+Four boundaries were tightened after the first end-to-end campaign.
+
+**Goal binding is established once.** `validate` binds the session to the live
+goal on its first call and afterwards compares instead of replacing, so editing
+the objective and validating again refuses with `goal_binding` rather than
+inheriting the earlier qualification. `finalize` compares too, and never rebinds.
+
+**The reviewer runs isolated and read-only.** The plugin hands the bridge an
+explicit environment allowlist (`PATH`, `HOME`, `TMPDIR`, `LANG`, `DSH_HOME`,
+the provider keys) instead of `process.env`. The reviewer is spawned with
+`DSH_PERMISSION_MODE=read-only` and a cwd inside its own worktree, so it cannot
+modify the candidate even if it tries; without `DSH_HOME` the run refuses
+`review_environment` rather than silently using the operator's installation. After
+it exits, the worktree is fingerprinted again and any change refuses
+`review_worktree_modified`, dropping the checkout and keeping the changed paths in
+the refusal.
+
+**The trusted identity covers what the checker executes.** `trusted_modules_digest`
+combines the modules this path runs with the closure of `automation.*` imports the
+checker itself names -- the same analysis `checker-compat` reports, so the two
+cannot drift. A module that cannot be resolved refuses
+`checker_dependency_unresolved` instead of anchoring a `null`.
+
+**The candidate identity is complete, and finalization replays.** Symlink rows
+carry a digest of their target, so a retarget is a change. Gitignored inputs are
+recorded in the finalization record as evidence (not in the anchored identity, so
+a checker writing an ignored temp file does not cause drift). Finalization freezes
+the candidate first and then re-runs the checker against a detached checkout of
+that commit: a frozen tree that does not reproduce the accepted result refuses
+`frozen_mismatch`.
+
+**Terminal verdicts move the goal.** `unavailable` pauses the goal and `blocked`
+blocks it through the native goal service; `fail` and `inconclusive` leave it
+active so the round driver keeps going. The model still has no tool that changes
+the goal phase.
+
 ## Restart and resumption
 
 DSH persists the goal in its session log and deliberately disarms an active goal

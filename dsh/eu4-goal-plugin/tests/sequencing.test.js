@@ -8,7 +8,7 @@ const INFRA = resolveInfra({})
 /** A context whose tools are captured, with a scripted bridge. */
 function harness(results) {
   const ops = []
-  const state = { tools: [], guards: [], completed: [] }
+  const state = { tools: [], guards: [], completed: [], paused: [], blocked: [] }
   const ctx = {
     logger: { warn() {}, info() {} },
     effect: (fn) => fn(),
@@ -23,8 +23,10 @@ function harness(results) {
       },
     },
     goals: {
-      get: () => ({ id: 'g1', revision: 1, objective: 'objective' }),
+      get: () => state.liveGoal ?? { id: 'g1', revision: 1, objective: 'objective' },
       complete: (agent, ref) => state.completed.push({ agent, ref }),
+      pause: (agent, ref) => state.paused.push({ agent, ref }),
+      block: (agent, ref, reason) => state.blocked.push({ agent, ref, reason }),
     },
     agents: {},
     _state: state,
@@ -162,4 +164,55 @@ test('an objective edited after binding cannot reuse the qualification', async (
   assert.equal(ctx._state.completed.length, 0)
   assert.ok(!calls.some((call) => call[0] === 'finalize'),
     'finalize must not reach the bridge once the goal changed')
+})
+
+const PREPARED = { ok: true, workspace: '/tmp/ws', run_root: '/tmp/run', objective: 'objective' }
+
+test('an unavailable verdict pauses the goal instead of leaving it active', async () => {
+  const { ctx } = harness({
+    prepare: PREPARED,
+    validate: { ok: false, kind: 'unavailable', goal_policy: 'unavailable', detail: 'checker broke' },
+  })
+  const result = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.equal(result.kind, 'unavailable')
+  assert.equal(ctx._state.paused.length, 1)
+  assert.deepEqual(ctx._state.paused[0].ref, { id: 'g1', revision: 1 })
+  assert.equal(ctx._state.blocked.length, 0)
+})
+
+test('a blocked verdict blocks the goal with the checker reason', async () => {
+  const { ctx } = harness({
+    prepare: PREPARED,
+    validate: { ok: false, kind: 'blocked', goal_policy: 'blocked', detail: 'pin mismatch' },
+  })
+  await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.equal(ctx._state.blocked.length, 1)
+  assert.equal(ctx._state.blocked[0].reason.code, 'checker-blocked')
+  assert.match(ctx._state.blocked[0].reason.message, /pin mismatch/)
+  assert.equal(ctx._state.paused.length, 0)
+})
+
+test('a remediable verdict leaves the goal active for the next round', async () => {
+  const { ctx } = harness({
+    prepare: PREPARED,
+    validate: { ok: false, kind: 'fail', goal_policy: 'remediate', detail: 'not ready' },
+  })
+  await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.equal(ctx._state.paused.length, 0)
+  assert.equal(ctx._state.blocked.length, 0)
+})
+
+test('an objective edited after binding cannot be revalidated into a new binding', async () => {
+  const { ctx } = harness({ prepare: PREPARED, validate: { ok: true, checker_verdict: 'pass' } })
+  await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+
+  ctx._state.liveGoal = { id: 'g1', revision: 2, objective: 'a different objective' }
+
+  const second = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.equal(second.kind, 'goal_binding')
+  assert.match(second.detail, /objective changed/)
+
+  const finalize = await tool(ctx, 'eu4_finalize_candidate').execute({}, { agent })
+  assert.equal(finalize.kind, 'goal_binding')
+  assert.equal(ctx._state.completed.length, 0)
 })

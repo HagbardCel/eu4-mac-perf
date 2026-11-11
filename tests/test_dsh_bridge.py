@@ -215,7 +215,7 @@ class ExecutionRootTests(BridgeTestCase):
         sidecar = self.sidecar(self.campaign("pass-campaign"))
         self.run_bridge("prepare", sidecar)
         original = dsh_bridge._trusted_modules_digest
-        dsh_bridge._trusted_modules_digest = lambda: "0" * 64
+        dsh_bridge._trusted_modules_digest = lambda *a, **k: ("0" * 64, [])
         self.addCleanup(setattr, dsh_bridge, "_trusted_modules_digest", original)
         code, out = self.run_bridge("validate", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
@@ -372,3 +372,32 @@ class ConfirmationRoundTests(BridgeTestCase):
         self.assertIsNotNone(record)
         self.assertEqual(receipts.verify_receipt_digest(record), [])
         self.assertEqual(len(list(Path(self.run_root).glob("*.json"))), 2)  # identity + record
+
+
+class TrustedClosureTests(BridgeTestCase):
+    def test_the_closure_covers_a_module_only_the_checker_imports(self) -> None:
+        """No second allowlist: whatever the checker imports is digested."""
+        campaign = self.campaign("pass-campaign")   # checker imports automation.*
+        checker = campaign / "accept.py"
+        checker.write_text(
+            checker.read_text(encoding="utf-8")
+            + "\nimport automation.verification_manifest  # noqa: F401,E402\n",
+            encoding="utf-8",
+        )
+        code, out = self.run_bridge("prepare", self.sidecar(campaign))
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        names = {row["module"] for row in out["identities"]["trusted_modules"]}
+        self.assertIn("verification_manifest", names)
+        self.assertIn("dsh_bridge", names)
+
+    def test_an_unresolvable_checker_import_refuses_rather_than_anchoring(self) -> None:
+        campaign = self.campaign("pass-campaign")
+        checker = campaign / "accept.py"
+        checker.write_text(
+            checker.read_text(encoding="utf-8")
+            + "\nimport automation.no_such_module  # noqa: F401,E402\n",
+            encoding="utf-8",
+        )
+        code, out = self.run_bridge("prepare", self.sidecar(campaign))
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "checker_dependency_unresolved")

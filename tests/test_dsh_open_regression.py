@@ -85,7 +85,11 @@ class OpenCodeIndependenceTests(unittest.TestCase):
     def test_the_plugin_has_no_opencode_reference(self) -> None:
         for path in PLUGIN_SOURCES:
             source = path.read_text(encoding="utf-8")
-            self.assertNotIn("opencode", source.lower(), path.name)
+            # The provider credential is named after the gateway it belongs to; that
+        # is a key name, not a dependency on OpenCode's runtime.
+        scrubbed = source.replace("OPENCODE_GO_API_KEY", "")
+        scrubbed = scrubbed.replace("opencode_go_api_key", "")
+        self.assertNotIn("opencode", scrubbed.lower(), path.name)
 
 
 class ExistingPolicyPreservedTests(unittest.TestCase):

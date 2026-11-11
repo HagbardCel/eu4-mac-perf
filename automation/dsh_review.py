@@ -184,6 +184,37 @@ def session_id_from(text: str) -> str | None:
     return None
 
 
+REVIEWER_ENV_ALLOWED = (
+    "DSH_HOME",
+    "EU4_DSH_HOME",
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "OPENCODE_GO_API_KEY",
+    "DEEPSEEK_API_KEY",
+)
+
+
+def reviewer_env(base: dict) -> dict:
+    """The environment a reviewer is allowed to inherit.
+
+    It needs its own DSH home and the provider credential, and it needs nothing
+    else from the parent process. Read-only is set here rather than asked for in
+    the task text: the reviewer is not supposed to touch the candidate, and an
+    instruction is not enforcement.
+    """
+    env = {
+        key: value
+        for key, value in base.items()
+        if key in REVIEWER_ENV_ALLOWED and value
+    }
+    env.setdefault("PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+    env["DSH_PERMISSION_MODE"] = "read-only"
+    return env
+
+
 def run_reviewer(
     command: list[str], *, cwd: Path, timeout: float, env: dict | None = None
 ) -> dict:

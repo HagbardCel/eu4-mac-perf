@@ -325,6 +325,46 @@ def verify_round_trip(
     return sorted(set(problems))
 
 
+def ignored_inputs(workspace: Path) -> list[dict]:
+    """Content digests for ignored files a checker might read.
+
+    Evidence, not policy: the campaign allowlist governs what the agent may
+    change, while this records the ignored state the checker actually saw, so a
+    checker that depends on generated inputs cannot quietly disagree with the
+    frozen candidate.
+    """
+    import hashlib
+    import os
+
+    try:
+        listing = _git(
+            workspace, "status", "--porcelain=v1", "-z",
+            "--untracked-files=all", "--ignored=matching",
+        )
+    except Exception:  # noqa: BLE001 - a seed workspace is not a repository
+        return []
+    rows: list[dict] = []
+    for record in listing.split("\0"):
+        if not record.startswith("!! "):
+            continue
+        relative = record[3:]
+        path = workspace / relative
+        if path.is_symlink():
+            rows.append({
+                "path": relative,
+                "target_sha256": hashlib.sha256(
+                    os.readlink(path).encode("utf-8", "surrogateescape")
+                ).hexdigest(),
+            })
+        elif path.is_file():
+            rows.append({
+                "path": relative,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            })
+    rows.sort(key=lambda row: row["path"])
+    return rows
+
+
 def fingerprint(workspace: Path) -> dict:
     """Cheap identity of the working tree, to detect edits during a snapshot."""
     rows = []

@@ -208,6 +208,13 @@ def _candidate(sidecar: Sidecar) -> dict:
                     if entry["exists"] and not entry["symlink"]
                     else None
                 ),
+                # A retargeted symlink keeps its path and mode, so the target
+                # itself has to be part of the identity.
+                "target_sha256": (
+                    receipts.digest_text(os.readlink(sidecar.workspace / entry["path"]))
+                    if entry["exists"] and entry["symlink"]
+                    else None
+                ),
             }
             for entry in delta
         ]
@@ -272,33 +279,51 @@ TRUSTED_MODULES = (
 )
 
 
-def _trusted_modules_digest() -> str:
-    """Digest the modules this path executes, from the running copies.
-
-    The infrastructure *commit* only pins what is committed. A session whose
-    workspace is the checkout can edit these files, and an uncommitted edit would
-    otherwise change what the "fresh trusted checker run" executes without any
-    identity drift.
-    """
+def _module_row(name: str) -> dict:
     import importlib.util
 
-    rows = []
-    for name in TRUSTED_MODULES:
-        try:
-            spec = importlib.util.find_spec(f"automation.{name}")
-        except (ImportError, AttributeError, ValueError):
-            rows.append({"module": name, "sha256": None})
+    try:
+        spec = importlib.util.find_spec(f"automation.{name}")
+    except (ImportError, AttributeError, ValueError):
+        return {"module": name, "sha256": None}
+    origin = Path(spec.origin).resolve() if spec and spec.origin else None
+    return {
+        "module": name,
+        "sha256": receipts.digest_file(origin)
+        if origin is not None and origin.is_file() else None,
+    }
+
+
+def _trusted_modules_digest(checker: Path, strict: bool = True) -> tuple[str, list[dict]]:
+    """Digest everything the checker path executes.
+
+    Two sources, so there is no second allowlist to maintain: the modules this
+    path runs unconditionally, and the closure the checker itself names. The
+    closure is what ``checker-compat`` reports, so the analysis and the anchor
+    cannot drift apart.
+    """
+    rows: list[dict] = [ _module_row(name) for name in TRUSTED_MODULES ]
+    seen = {row["module"] for row in rows}
+    imported, _outside = _checker_imports(checker)
+    for entry in imported:
+        if entry["module"] in seen:
             continue
-        origin = Path(spec.origin).resolve() if spec and spec.origin else None
+        seen.add(entry["module"])
         rows.append({
-            "module": name,
-            "sha256": receipts.digest_file(origin)
-            if origin is not None and origin.is_file() else None,
+            "module": entry["module"],
+            "sha256": entry.get("sha256"),
+            "source": "checker-import",
         })
-    return receipts.digest_text(receipts.canonical_json(rows))
+    missing = sorted(row["module"] for row in rows if not row.get("sha256"))
+    if missing and strict:
+        # A module we cannot digest is a module we cannot vouch for.
+        raise Refusal("checker_dependency_unresolved", ", ".join(missing[:6]))
+    rows.sort(key=lambda row: row["module"])
+    return receipts.digest_text(receipts.canonical_json(rows)), rows
 
 
 def _identity(sidecar: Sidecar, infra_commit: str) -> dict:
+    modules_digest, modules_rows = _trusted_modules_digest(sidecar.checker)
     manifest_digest = None
     if sidecar.verification_manifest:
         manifest = load_manifest(sidecar.verification_manifest)
@@ -315,7 +340,8 @@ def _identity(sidecar: Sidecar, infra_commit: str) -> dict:
         "policy_digest": sidecar.policy_digest,
         "objective_digest": sidecar.objective_digest,
         "checker_sha256": receipts.digest_file(sidecar.checker),
-        "trusted_modules_digest": _trusted_modules_digest(),
+        "trusted_modules_digest": modules_digest,
+        "trusted_modules": modules_rows,
         "verification_manifest_digest": manifest_digest,
         "evidence_inputs_digest": _evidence_digest(sidecar),
         "candidate": _candidate(sidecar),
@@ -404,7 +430,22 @@ def op_prepare(args) -> int:
     roots = _roots(sidecar)
     stored = _setup(sidecar.run_root)
     infra_commit = _git(infra_root(), "rev-parse", "HEAD")
+    try:
+        lock = campaign_lock(stored.lock)
+        lock.__enter__()
+    except RuntimeError as exc:
+        emit({"ok": False, "operation": "prepare",
+              "campaign_id": sidecar.campaign_id,
+              "classification": "policy_stop", "kind": "busy",
+              "goal_policy": "unavailable", "detail": str(exc)})
+        return EXIT_OK
+    try:
+        return _prepare_locked(args, sidecar, roots, stored, infra_commit)
+    finally:
+        lock.__exit__(None, None, None)
 
+
+def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
     if sidecar.mode == "seed":
         ensure_workspace(sidecar.seed, sidecar.workspace)
     else:
@@ -568,6 +609,41 @@ def _freeze(sidecar: Sidecar) -> dict:
         "ref": ref,
         "paths": built["paths"],
     }
+
+
+def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
+    """Run the checker again from the frozen tree, not from the live workspace.
+
+    Freezing rebuilds the candidate delta as a commit. If that commit does not
+    reproduce the accepted result, the qualification describes a filesystem state
+    nobody can reconstruct, which is exactly what review evidence must not do.
+    """
+    commit = frozen.get("commit")
+    if not commit:
+        # Seed candidates have no commit; the digest already describes the tree
+        # the checker just accepted.
+        return {"mode": "seed", "verdict": "skipped"}
+
+    infra = infra_root().resolve()
+    replay_root = sidecar.run_root / "replay"
+    _drop_worktree(replay_root)
+    subprocess.run(
+        ["git", "-C", str(infra), "worktree", "add", "--detach",
+         str(replay_root), commit],
+        check=True, capture_output=True,
+    )
+    try:
+        outcome = run_accept(_AcceptShim(sidecar), replay_root)
+    finally:
+        _drop_worktree(replay_root)
+    classification, kind, verdict = classify(outcome)
+    if classification != "verdict" or verdict != "pass":
+        raise Refusal(
+            "frozen_mismatch",
+            "the frozen candidate does not reproduce the accepted result: "
+            f"{verdict or classification}/{kind}",
+        )
+    return {"mode": "worktree", "commit": commit, "verdict": verdict}
 
 
 def _oracle_digest(sidecar: Sidecar, identities: dict) -> str:
@@ -805,7 +881,9 @@ def op_checker_compat(args) -> int:
         "compat_verdict": compat,
         "checker": str(sidecar.checker),
         "checker_sha256": receipts.digest_file(sidecar.checker),
-        "trusted_modules_digest": _trusted_modules_digest(),
+        # Reporting mode: an unresolvable dependency is what compat is for, so
+        # do not refuse the analysis that names it.
+        "trusted_modules_digest": _trusted_modules_digest(sidecar.checker, strict=False)[0],
         "imports": rows,
         "baseline": baseline,
         "problems": problems,
@@ -868,9 +946,17 @@ def op_review_run(args) -> int:
         )
         command = review.reviewer_command(args.reviewer_cmd, task)
         mode = "scripted" if args.reviewer_cmd else "live"
+        runner_env = review.reviewer_env(os.environ)
+        if mode == "live" and not runner_env.get("DSH_HOME"):
+            raise Refusal(
+                "review_environment",
+                "the reviewer needs DSH_HOME so it uses this campaign's DSH home "
+                "and credentials rather than the operator's default installation",
+            )
+        before = snapshot.fingerprint(paths["worktree"])
         try:
             outcome = review.run_reviewer(
-                command, cwd=paths["worktree"], timeout=args.timeout
+                command, cwd=paths["worktree"], timeout=args.timeout, env=runner_env
             )
         except review.ReviewError as exc:
             # Not an integrity refusal: nothing was proven about the candidate,
@@ -887,6 +973,15 @@ def op_review_run(args) -> int:
                 "candidate_commit": frozen["commit"],
             })
             return EXIT_OK
+        moved = snapshot.recheck(paths["worktree"], before)
+        if moved:
+            # The changed paths go into the refusal; the checkout itself does not
+            # outlive the operation, so a rejected review leaves no stale tree.
+            _drop_worktree(paths["worktree"])
+            raise Refusal(
+                "review_worktree_modified",
+                "the reviewer changed its worktree: " + "; ".join(moved[:4]),
+            )
         if outcome["exit_code"] != 0:
             # The reviewer crashed; nothing was decided about the candidate.
             emit({
@@ -961,7 +1056,22 @@ def op_review_run(args) -> int:
 def op_review_verify(args) -> int:
     sidecar = load_sidecar(Path(args.sidecar))
     _roots(sidecar)
-    _setup(sidecar.run_root)
+    stored = _setup(sidecar.run_root)
+    try:
+        lock = campaign_lock(stored.lock)
+        lock.__enter__()
+    except RuntimeError as exc:
+        emit({"ok": True, "operation": "review-verify",
+              "campaign_id": sidecar.campaign_id,
+              "classification": "policy_stop", "kind": "busy", "detail": str(exc)})
+        return EXIT_OK
+    try:
+        return _review_verify_locked(args, sidecar)
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def _review_verify_locked(args, sidecar) -> int:
     current = _identity(sidecar, _git(infra_root(), "rev-parse", "HEAD"))
     _check_anchor(_prepared_identities(sidecar), current)
     frozen = (_freeze_or_existing(sidecar, current))
@@ -1054,6 +1164,7 @@ def op_finalize(args) -> int:
             )
 
         frozen = _freeze_once(sidecar, current)
+        replay = _replay_frozen(sidecar, frozen)
         if sidecar.require_independent_review:
             problems = _review_problem(sidecar, frozen, require_live=True)
             if problems:
@@ -1064,6 +1175,8 @@ def op_finalize(args) -> int:
             "campaign_id": sidecar.campaign_id,
             "identity_digest": receipts.identity_digest(current),
             "frozen_candidate": frozen,
+            "replay": replay,
+            "ignored_inputs": snapshot.ignored_inputs(sidecar.workspace),
             "fresh_verdict": verdict,
             "duration_ms": duration_ms,
             "session": {"session_id": getattr(args, "session_id", None)},
@@ -1079,6 +1192,7 @@ def op_finalize(args) -> int:
             "checker_verdict": verdict,
             "goal_policy": "qualified",
             "frozen_candidate": frozen,
+            "replay": replay,
             "identity_digest": receipts.identity_digest(current),
             "finalization": record_path.name,
         })
