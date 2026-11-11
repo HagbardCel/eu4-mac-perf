@@ -81,6 +81,7 @@ class GfxSimpleDrawTests(unittest.TestCase):
         self.assertIn("texture=original-dds 2048x1536", stdout)
         self.assertIn("ok checked=1600", stdout)
         self.assertIn("blend_bad=0", stdout)
+        self.assertIn("order_bad=0", stdout)
         self.assertNotIn("mismatches", stdout)
         self.assertIn("done", stdout)
 
@@ -89,6 +90,7 @@ class GfxSimpleDrawTests(unittest.TestCase):
         self.assertIn("texture=synthetic-bgr 2048x1536", stdout)
         self.assertIn("ok checked=1600", stdout)
         self.assertIn("blend_bad=0", stdout)
+        self.assertIn("order_bad=0", stdout)
         self.assertNotIn("mismatches", stdout)
 
 

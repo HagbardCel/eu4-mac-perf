@@ -42,6 +42,10 @@ typedef struct {
     void *device;    /* id<MTLDevice>, borrowed */
     void *target;    /* id<MTLTexture>, BGRA8Unorm render target, borrowed */
     void *texture;   /* id<MTLTexture> bound as SimpleTexture, borrowed */
+    /* Optional id<MTLCommandQueue>. Supplying the backend queue preserves
+       submission order with _GfxClear/_GfxPresent; NULL creates a temporary
+       queue (host tests that clear and wait first). Not retained. */
+    void *queue;
     uint32_t target_width;
     uint32_t target_height;
     uint32_t viewport_x;

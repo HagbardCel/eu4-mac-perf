@@ -138,7 +138,7 @@ change. The 38 installed `load_*.dds` files are all 2048×1536 BGR24.
 | `glEnable(GL_BLEND)` + `glBlendFunc` | pipeline `blendingEnabled`, `SourceAlpha` / `OneMinusSourceAlpha` (RGB and alpha) |
 | `_GfxSetTextures` unit 0 | replacement records the engine header in the backend; the encoder resolves it to the retained `MTLTexture` and binds `setFragmentTexture:atIndex:0` with a linear/repeat sampler |
 | viewport `1728×1117` | `setViewport:` (the engine's viewport image is the encoder's input) |
-| clear + draw | `loadAction Load` after `_GfxClear`; `storeAction Store` |
+| clear + draw | `loadAction Load` after `_GfxClear`; `storeAction Store`; the draw shares the backend `MTLCommandQueue` so it is ordered after the clear |
 | `glDrawArrays` | `drawPrimitives:vertexStart:vertexCount:` |
 
 Vertex descriptor: `Float3` at 0, `Float2` at 12, `UChar4Normalized` at 20,
@@ -171,6 +171,11 @@ provides for a three-component `float4` attribute.
 - **Sampler object.** The asset's wrap/linear contract is used; the engine
   `SSamplerStateOpenGL` object reached through `r9` is not decoded.
   **Unresolved**.
+- **Submission order.** `_GfxClear` and `_GfxPresent` commit on
+  `backend.queue`; a draw on a private queue could overtake them. The encoder
+  takes an optional queue and the host passes the backend queue. A boundary test
+  commits a green clear without waiting, draws 50 % red on the same queue, and
+  requires `(127,127,0)`; a private queue would leave the target green.
 - **Loading-screen index.** The runtime index is randomised; the capture kept
   only texture identity, not contents. The test can use the installed
   `load_0.dds` (a real asset) or a deterministic synthetic image; neither is the
@@ -203,7 +208,7 @@ resolves the same `MTLTexture`. Result on 2026-11-11:
 
 ```
 texture=original-dds 2048x1536
-ok checked=1600 worst=0.0028 flip_differences=368 blend_bad=0
+ok checked=1600 worst=0.0028 flip_differences=368 blend_bad=0 order_bad=0
 done
 ```
 

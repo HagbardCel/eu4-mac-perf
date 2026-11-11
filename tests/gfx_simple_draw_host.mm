@@ -301,6 +301,7 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
     inputs.target_height = kScreenHeight;
     inputs.viewport_width = kScreenWidth;
     inputs.viewport_height = kScreenHeight;
+    inputs.queue = (__bridge void *)backend.queue;
 
     const char *reason = NULL;
     /* Fail-closed boundary cases before the real draw. */
@@ -455,8 +456,44 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
         exit(1);
     }
     free(blend_pixels);
-    printf("ok checked=%d worst=%.4f flip_differences=%d blend_bad=%d\n", checked, worst,
-           flip_differences, blend_bad);
+
+    /* Submission-order boundary: commit a green clear without waiting, then draw
+       the 50% red source on the same backend queue. The expected (127,127,0)
+       proves the draw is ordered after the clear; a private queue could run it
+       first and the later clear would leave the target green. */
+    const uint32_t order_size = 32;
+    if (eu4_gfx_configure_offscreen(master, order_size, order_size) != EU4_GFX_CLEAR_OK) {
+        fail("order target configure");
+    }
+    id<MTLTexture> order_target = backend.colorTarget;
+    uint32_t order_rect[6] = {order_size, order_size, 0x3f800000u, 0, 0, 0};
+    eu4_gfx_set_viewport(master, order_rect);
+    const float green[4] = {0.0f, 1.0f, 0.0f, 1.0f};
+    if (eu4_gfx_clear_checked(&ctx, 1, green) != EU4_GFX_CLEAR_OK) {
+        fail("order clear");
+    }
+    eu4_gfx_simple_draw_inputs order = inputs;
+    order.target = (__bridge void *)order_target;
+    order.texture = NULL; /* bound alpha texture */
+    order.target_width = order_size;
+    order.target_height = order_size;
+    order.viewport_width = order_size;
+    order.viewport_height = order_size;
+    if (eu4_gfx_simple_draw(&ctx, 0, first, &order, &reason) != EU4_GFX_SIMPLE_DRAW_OK) {
+        fail("order draw");
+    }
+    uint8_t *order_pixels = read_target(order_target, order_size, order_size);
+    const uint8_t *order_px = order_pixels + ((size_t)order_size / 2 * order_size +
+                                              order_size / 2) * 4;
+    if (abs(order_px[0] - 0) > 3 || abs(order_px[1] - 127) > 3 ||
+        abs(order_px[2] - 127) > 3) {
+        fprintf(stderr, "FAIL: clear/draw ordering (got %u,%u,%u)\n", order_px[0],
+                order_px[1], order_px[2]);
+        exit(1);
+    }
+    free(order_pixels);
+    printf("ok checked=%d worst=%.4f flip_differences=%d blend_bad=%d order_bad=0\n", checked,
+           worst, flip_differences, blend_bad);
 }
 
 static void parse_args(int argc, char **argv, const char **vb_path, const char **matrix_path,

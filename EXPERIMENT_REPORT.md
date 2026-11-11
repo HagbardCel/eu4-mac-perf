@@ -51,7 +51,7 @@ blend, sampler and viewport into one encoded draw.
 | `benchmark/eu4_gfx_shader.mm` | Decode the MSL position as `float3` and build the implicit `w = 1`; vertex descriptor now `Float3@0`, `Float2@12`, `UChar4Normalized@20`, stride 24 (was `Float4@0`, `Float2@16`, `Float4@24`, stride 40). |
 | `benchmark/eu4_gfx_buffers.h/.mm` | `eu4_gfx_vertex_buffer_for_header()` — borrowed `MTLBuffer` for an engine vertex header. |
 | `benchmark/eu4_gfx_texture.h/.mm` | `eu4_gfx_texture_for_header()` — borrowed `MTLTexture` retained by `_GfxInitializeTexture`; `_GfxSetTextures` now records the unit-0 engine header in the backend (falling back to the master's `+0x98` default), and `eu4_gfx_bound_texture()` resolves it for the encoder. |
-| `benchmark/eu4_gfx_simple_draw.h/.mm` | New encoder: reads the engine master (`mode`, `count`, `shader`, slot-0 vertex header/offset/stride, constant slot 2), refuses unsupported inputs, creates the `Simple` pipeline through the shader registry, copies the matrix, binds vertex/uniform buffers, fragment texture and sampler, sets the viewport, and submits a BGRA8Unorm pass. |
+| `benchmark/eu4_gfx_simple_draw.h/.mm` | New encoder: reads the engine master (`mode`, `count`, `shader`, slot-0 vertex header/offset/stride, constant slot 2), refuses unsupported inputs, creates the `Simple` pipeline through the shader registry, copies the matrix, binds vertex/uniform buffers, fragment texture and sampler, sets the viewport, and submits a BGRA8Unorm pass. It accepts the backend command queue so the draw is ordered after `_GfxClear`. |
 | `benchmark/eu4_gfx_init.h` | Backend property for the current unit-0 texture header. |
 | `benchmark/eu4_metal_boot.py` | The new module is compiled into `libeu4_metal_boot.dylib`. |
 | `tests/gfx_simple_draw_host.mm` | Real-Metal host: authentic packet + optional original DDS, CPU reference sampling, flip discriminator, alpha-blend boundary, fail-closed cases. |
@@ -99,7 +99,7 @@ Direct run on the original asset:
 
 ```
 texture=original-dds 2048x1536
-ok checked=1600 worst=0.0028 flip_differences=368 blend_bad=0
+ok checked=1600 worst=0.0028 flip_differences=368 blend_bad=0 order_bad=0
 done
 ```
 
@@ -107,6 +107,9 @@ done
 same DDS through the authentic matrix within 0.0028 (≈0.7/255); the vertically
 flipped reference differs at 368 samples, so orientation is actually tested.
 The 64×64 alpha-blend pass reads `(127,0,128)` within 3/255 on all 4096 pixels.
+A clear/draw ordering case commits a green clear without waiting and then draws
+50 % red on the backend queue; the readback `(127,127,0)` proves the draw is
+ordered after the clear (`order_bad=0`).
 
 Regression suite:
 

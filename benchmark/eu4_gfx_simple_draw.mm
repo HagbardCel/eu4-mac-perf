@@ -186,7 +186,9 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
                                                  length:sizeof matrix
                                                 options:MTLResourceStorageModeShared];
 
-    id<MTLCommandQueue> queue = [device newCommandQueue];
+    id<MTLCommandQueue> queue = inputs->queue != NULL
+                                    ? (__bridge id<MTLCommandQueue>)inputs->queue
+                                    : [device newCommandQueue];
     if (uniforms == nil || queue == nil) {
         return refuse(EU4_GFX_SIMPLE_DRAW_ENCODE, reason, "Metal allocation failed");
     }
