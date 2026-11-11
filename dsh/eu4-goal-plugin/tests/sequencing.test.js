@@ -217,3 +217,18 @@ test('an objective edited after binding cannot be revalidated into a new binding
   assert.equal(finalize.kind, 'goal_binding')
   assert.equal(ctx._state.completed.length, 0)
 })
+
+test('a rejected goal transition is reported, not swallowed', async () => {
+  const { ctx } = harness({
+    prepare: PREPARED,
+    validate: { ok: false, kind: 'unavailable', goal_policy: 'pause', detail: 'checker broke' },
+  })
+  ctx.goals.pause = () => {
+    throw new Error('goal service refused the transition')
+  }
+  const result = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
+  assert.equal(result.kind, 'goal_transition_failed')
+  assert.equal(result.ok, false)
+  assert.equal(result.goal_policy_applied, false)
+  assert.match(result.detail, /refused the transition/)
+})

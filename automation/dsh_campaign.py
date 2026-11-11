@@ -68,6 +68,8 @@ class Sidecar:
     wall_clock_seconds: float
     max_review_attempts: int
     run_root: Path
+    replay_inputs: tuple[str, ...] = ()
+    allow_incomplete_inputs: bool = False
 
 
 def path_allowed(rel: str, patterns) -> bool:
@@ -201,6 +203,8 @@ def load_sidecar(path: Path, *, infra: Path | None = None) -> Sidecar:
         max_rounds=max_rounds,
         require_checker_pass=require_pass,
         require_independent_review=require_review,
+        replay_inputs=_load_replay_inputs(data),
+        allow_incomplete_inputs=bool(data.get("allow_incomplete_inputs", False)),
         max_validations=max_validations,
         validation_timeout_seconds=timeout,
         wall_clock_seconds=wall,
@@ -298,6 +302,27 @@ def _load_run_root(data: dict, infra: Path, campaign_id: str) -> Path:
 
 
 WORKSPACE_BASES = ("run_root", "infra")
+
+
+def _load_replay_inputs(data: dict) -> tuple[str, ...]:
+    """Files beside the candidate workspace that the checker also reads.
+
+    A reconstruction checker keeps its research checkpoint next to the worktree,
+    not inside it, so replay has to reproduce that state or a finished candidate
+    looks unfinished. Declared, not guessed: this must never copy arbitrary
+    siblings into a replay directory.
+    """
+    raw = data.get("replay_inputs") or []
+    if not isinstance(raw, list):
+        raise SidecarError("replay_inputs must be a list of file names")
+    names: list[str] = []
+    for entry in raw:
+        if not isinstance(entry, str) or not entry.strip():
+            raise SidecarError("replay_inputs entries must be non-empty strings")
+        if "/" in entry or "\\" in entry or entry in (".", ".."):
+            raise SidecarError(f"replay_inputs must be plain file names: {entry!r}")
+        names.append(entry)
+    return tuple(names)
 
 
 def _load_workspace_base(data: dict) -> str:

@@ -149,18 +149,26 @@ cannot drift. A module that cannot be resolved refuses
 carry a digest of their target, so a retarget is a change. Gitignored inputs --
 including the contents of ignored *directories*, which git reports as a single
 record -- are inventoried under a file and byte bound, digested at validation and
-compared again at finalization; a change refuses `inputs_changed`. Finalization
+compared again at finalization; a change refuses `inputs_changed`. Files are
+hashed in chunks and skipped above a per-file cap, and a truncated inventory
+refuses `inputs_incomplete` unless the campaign sets `allow_incomplete_inputs` --
+an inventory that cannot cover everything must not be presented as evidence. Finalization
 freezes the candidate and then replays it as a **working-tree delta over the pinned
 baseline**: a worktree at the baseline commit with the frozen delta applied on top.
 Reconstruction checkers require `HEAD` to stay at the pin, so replaying from the
 frozen commit itself would fail a valid candidate for a reason that has nothing to
-do with the candidate. A frozen tree that does not reproduce the accepted result
+do with the candidate. State the checker reads from *beside* the workspace -- a reconstruction
+checkpoint, for instance -- is declared with `replay_inputs` and reproduced next
+to the replay, with its digest recorded; a declared input that is missing refuses
+`replay_inputs_missing`. A frozen tree that does not reproduce the accepted result
 refuses `frozen_mismatch`.
 
 **Terminal verdicts move the goal.** `unavailable` pauses the goal and `blocked`
 blocks it through the native goal service; `fail` and `inconclusive` leave it
 active so the round driver keeps going. The model still has no tool that changes
-the goal phase.
+the goal phase, and a transition the goal service rejects is reported as
+`goal_transition_failed` rather than returning the bare verdict as if the policy
+had been applied.
 
 ## Restart and resumption
 

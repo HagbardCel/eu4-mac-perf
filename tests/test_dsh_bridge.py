@@ -465,8 +465,9 @@ class ReplayTests(BridgeTestCase):
             "accept_timeout_seconds": 60,
         }), encoding="utf-8")
         # A checker in the shape of the real reconstruction ones: it insists the
-        # worktree HEAD is still the pinned commit and that the reconstruction is
-        # uncommitted work.
+        # worktree HEAD is still the pinned commit, that the reconstruction is
+        # uncommitted work, and that its research checkpoint sits beside the
+        # workspace -- the invariant that made the first replay revision fail.
         (campaign / "accept.py").write_text(
             """#!/usr/bin/env python3
 import json, subprocess, sys
@@ -481,6 +482,11 @@ dirty = subprocess.run(["git", "-C", str(workspace), "status", "--porcelain"],
 if head != expected:
     print(json.dumps({"verdict": "fail",
                       "diagnostics": f"worktree HEAD is not the pinned commit: {head}"}))
+    raise SystemExit(0)
+checkpoint = Path(workspace).resolve().parent / "research-checkpoint.md"
+if not checkpoint.is_file():
+    print(json.dumps({"verdict": "fail",
+                      "diagnostics": "replacement edited before the research checkpoint"}))
     raise SystemExit(0)
 if not dirty:
     print(json.dumps({"verdict": "fail", "diagnostics": "no uncommitted reconstruction"}))
@@ -501,6 +507,9 @@ print(json.dumps({"verdict": "pass", "diagnostics": "pinned baseline, uncommitte
                                          "remove", "--force", "--force", str(worktree)],
                         capture_output=True)
         (worktree / "candidate.txt").write_text("ready\n", encoding="utf-8")
+        (self.root / "research-checkpoint.md").write_text(
+            "# Research\n\nverified observations\n", encoding="utf-8"
+        )
 
         sidecar = self.sidecar(campaign, allowed=("candidate.txt",))
         data = json.loads(sidecar.read_text(encoding="utf-8"))
@@ -510,6 +519,7 @@ print(json.dumps({"verdict": "pass", "diagnostics": "pinned baseline, uncommitte
             "policy": {"allowed_paths": ["candidate.txt"]},
         }
         data["candidate_baseline_commit"] = baseline
+        data["replay_inputs"] = ["research-checkpoint.md"]
         sidecar.write_text(json.dumps(data), encoding="utf-8")
 
         code, prepared = self.run_bridge("prepare", sidecar)
@@ -524,6 +534,10 @@ print(json.dumps({"verdict": "pass", "diagnostics": "pinned baseline, uncommitte
         self.assertEqual(final.get("replay", {}).get("verdict"), "pass", final)
         self.assertEqual(final["replay"]["head"], baseline)
         self.assertEqual(final["replay"]["baseline"], baseline)
+        self.assertEqual(
+            [row["path"] for row in final["replay"]["inputs"]],
+            ["research-checkpoint.md"],
+        )
 
 
 class InputBindingTests(BridgeTestCase):
@@ -541,3 +555,63 @@ class InputBindingTests(BridgeTestCase):
         code, out = self.run_bridge("finalize", sidecar)
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
         self.assertEqual(out["kind"], "inputs_changed")
+
+
+class IncompleteInventoryTests(BridgeTestCase):
+    def test_a_truncated_inventory_refuses_a_pass(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        original = dsh_bridge.snapshot.ignored_inputs
+        dsh_bridge.snapshot.ignored_inputs = lambda ws: {"entries": [], "truncated": True}
+        self.addCleanup(setattr, dsh_bridge.snapshot, "ignored_inputs", original)
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "inputs_incomplete")
+
+    def test_the_campaign_can_accept_an_incomplete_inventory(self) -> None:
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["allow_incomplete_inputs"] = True
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+        self.run_bridge("prepare", sidecar)
+        original = dsh_bridge.snapshot.ignored_inputs
+        dsh_bridge.snapshot.ignored_inputs = lambda ws: {"entries": [], "truncated": True}
+        self.addCleanup(setattr, dsh_bridge.snapshot, "ignored_inputs", original)
+        code, out = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        self.assertEqual(out["checker_verdict"], "pass")
+
+
+class ContractPackageTests(BridgeTestCase):
+    def test_the_closure_covers_the_contract_package_modules(self) -> None:
+        """`gfx_contracts` picks a validator version at runtime."""
+        campaign = self.campaign("pass-campaign")
+        checker = campaign / "accept.py"
+        checker.write_text(
+            checker.read_text(encoding="utf-8")
+            + "\nfrom automation.gfx_contracts.api import *  # noqa: F401,F403,E402\n",
+            encoding="utf-8",
+        )
+        code, out = self.run_bridge("prepare", self.sidecar(campaign))
+        self.assertEqual(code, dsh_bridge.EXIT_OK, out)
+        names = {row["module"] for row in out["identities"]["trusted_modules"]}
+        self.assertIn("gfx_contracts.api", names)
+        self.assertIn("gfx_contracts.v0", names)
+
+    def test_editing_a_dynamically_loaded_contract_changes_the_digest(self) -> None:
+        campaign = self.campaign("pass-campaign")
+        checker = campaign / "accept.py"
+        checker.write_text(
+            checker.read_text(encoding="utf-8")
+            + "\nimport automation.gfx_contracts  # noqa: F401,E402\n",
+            encoding="utf-8",
+        )
+        before = dsh_bridge._trusted_modules_digest(checker)[0]
+        target = REPO / "automation" / "gfx_contracts" / "v0.py"
+        original = target.read_bytes()
+        try:
+            target.write_bytes(original + b"\n# probe\n")
+            after = dsh_bridge._trusted_modules_digest(checker)[0]
+        finally:
+            target.write_bytes(original)
+        self.assertNotEqual(before, after)

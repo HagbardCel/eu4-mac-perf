@@ -327,6 +327,21 @@ def verify_round_trip(
 
 IGNORED_FILE_LIMIT = 2000
 IGNORED_BYTE_LIMIT = 64 * 1024 * 1024
+IGNORED_FILE_BYTE_LIMIT = 16 * 1024 * 1024
+
+
+def _digest_path(path: Path) -> str:
+    """Hash a file in chunks, without loading it into memory."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            block = handle.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def ignored_inputs(workspace: Path) -> dict:
@@ -369,9 +384,14 @@ def ignored_inputs(workspace: Path) -> dict:
             })
             continue
         if root.is_file():
+            if root.stat().st_size > IGNORED_FILE_BYTE_LIMIT:
+                # Record the omission instead of reading a huge file: the
+                # inventory is evidence, and an incomplete one must say so.
+                truncated = True
+                continue
             rows.append({
                 "path": str(root.relative_to(workspace)),
-                "sha256": hashlib.sha256(root.read_bytes()).hexdigest(),
+                "sha256": _digest_path(root),
             })
             continue
         if not root.is_dir():
@@ -397,10 +417,13 @@ def ignored_inputs(workspace: Path) -> dict:
                 if not path.is_file():
                     continue
                 size = path.stat().st_size
+                if size > IGNORED_FILE_BYTE_LIMIT or total + size > IGNORED_BYTE_LIMIT:
+                    truncated = True
+                    break
                 total += size
                 rows.append({
                     "path": str(path.relative_to(workspace)),
-                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "sha256": _digest_path(path),
                     "size": size,
                 })
             if truncated:

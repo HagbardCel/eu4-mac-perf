@@ -264,10 +264,21 @@ export function apply(ctx, config = {}) {
       } else {
         ctx.goals.pause(agent, ref)
       }
-    } catch {
-      // A phase transition is best effort; the verdict stays authoritative.
+    } catch (error) {
+      // Never claim a policy was applied when it was not: the goal is still
+      // active, so report the failed transition instead of the bare verdict.
+      return {
+        ...result,
+        ok: false,
+        classification: 'infrastructure_error',
+        kind: 'goal_transition_failed',
+        goal_policy_applied: false,
+        detail:
+          `the ${policy} policy could not be applied to the goal: ` +
+          `${error && error.message ? error.message : error}`,
+      }
     }
-    return result
+    return { ...result, goal_policy_applied: true }
   }
 
   function persistBiding(sessionId, agentId, goal, runRoot) {

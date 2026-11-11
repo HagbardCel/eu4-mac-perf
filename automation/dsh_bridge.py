@@ -531,6 +531,15 @@ def op_validate(args) -> int:
                           "identity changed during the checker run: " + ", ".join(changed))
 
         classification, kind, verdict = classify(outcome)
+        if verdict == "pass" and not sidecar.allow_incomplete_inputs:
+            inventory = snapshot.ignored_inputs(sidecar.workspace)
+            if inventory["truncated"]:
+                raise Refusal(
+                    "inputs_incomplete",
+                    "the ignored-input inventory was truncated, so the evidence "
+                    "cannot be shown to cover everything the checker read; declare "
+                    "allow_incomplete_inputs on the campaign to accept that",
+                )
         diagnostics = str(outcome.get("diagnostics") or "")
         receipt = {
             "schema": receipts.SCHEMA,
@@ -641,7 +650,23 @@ def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
          str(replay_root), baseline],
         check=True, capture_output=True,
     )
+    # Checker-relevant state that lives *outside* the candidate tree -- the
+    # research checkpoint a reconstruction checker reads -- has to be reproduced
+    # beside the replay, or a finished candidate looks unfinished to it.
+    inputs: list[dict] = []
     try:
+        for name in sidecar.replay_inputs:
+            source = sidecar.workspace.resolve().parent / name
+            if not source.is_file():
+                raise Refusal(
+                    "replay_inputs_missing",
+                    f"the campaign declares {name} as a replay input, but it is "
+                    "missing beside the candidate workspace",
+                )
+            destination = replay_root.parent / name
+            shutil.copyfile(source, destination)
+            inputs.append({"path": name, "sha256": receipts.digest_file(destination)})
+
         patch = subprocess.run(
             ["git", "-C", str(infra), "diff", "--binary", baseline, commit],
             capture_output=True, check=True,
@@ -678,7 +703,7 @@ def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
             f"{verdict or classification}/{kind}",
         )
     return {"mode": "worktree", "commit": commit, "baseline": baseline,
-            "head": head, "verdict": verdict}
+            "head": head, "verdict": verdict, "inputs": inputs}
 
 
 def _oracle_digest(sidecar: Sidecar, identities: dict) -> str:
@@ -796,11 +821,13 @@ def _imported_modules(source: Path) -> set[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name.startswith("automation."):
-                    names.add(alias.name.split(".", 1)[1].split(".")[0])
+                    # Full path: `automation.gfx_contracts.api` and
+                    # `automation.gfx_contracts` are different files.
+                    names.add(alias.name.split(".", 1)[1])
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
             if module.startswith("automation."):
-                names.add(module.split(".", 1)[1].split(".")[0])
+                names.add(module.split(".", 1)[1])
             elif module == "automation":
                 # `from automation import gfx_checkpoint` names no submodule in
                 # ``module``, so the imported names themselves are the modules.
@@ -814,8 +841,12 @@ def _checker_imports(checker: Path) -> tuple[list[dict], list[str]]:
 
     The walk follows imports transitively, because a checker that imports
     ``automation.gfx_draw_accept_v2`` also executes everything that module
-    imports. It is static: a dynamic ``importlib.import_module`` cannot be seen
-    here, which is why an unresolvable name refuses instead of being ignored.
+    imports. Package contents are included too: ``automation.gfx_contracts``
+    selects a validator version with ``importlib.import_module`` at runtime, so
+    the modules inside the package are digested rather than guessing which one.
+
+    The walk is static. A dynamic import that builds a name from data cannot be
+    seen here, which is why an unresolvable name refuses instead of being ignored.
     """
     import importlib.util
 
@@ -823,32 +854,57 @@ def _checker_imports(checker: Path) -> tuple[list[dict], list[str]]:
     rows: list[dict] = []
     outside: list[str] = []
     seen: set[str] = set()
+
+    def record(name: str) -> Path | None:
+        try:
+            spec = importlib.util.find_spec(f"automation.{name}")
+        except (ImportError, AttributeError, ValueError):
+            spec = None
+        origin = Path(spec.origin).resolve() if spec and spec.origin else None
+        rows.append({
+            "module": name,
+            "resolved": str(origin) if origin else None,
+            "sha256": receipts.digest_file(origin)
+            if origin is not None and origin.is_file() else None,
+            "inside_infrastructure": bool(origin) and inside(origin, infra),
+        })
+        if origin is None or not inside(origin, infra):
+            outside.append(name)
+        return origin
+
     queue: list[Path] = [checker]
     while queue:
         source = queue.pop()
         for name in sorted(_imported_modules(source)):
-            if name in seen:
-                continue
-            seen.add(name)
-            try:
-                spec = importlib.util.find_spec(f"automation.{name}")
-            except (ImportError, AttributeError, ValueError):
-                spec = None
-            origin = Path(spec.origin).resolve() if spec and spec.origin else None
-            rows.append({
-                "module": name,
-                "resolved": str(origin) if origin else None,
-                "sha256": receipts.digest_file(origin)
-                if origin is not None and origin.is_file() else None,
-                "inside_infrastructure": bool(origin) and inside(origin, infra),
-            })
-            if origin is None:
-                outside.append(name)
-            elif not inside(origin, infra):
-                outside.append(name)
-            elif origin.suffix == ".py":
-                # Transitive step: whatever this module imports is executed too.
+            # `a.b.c` implies its parents: the package module runs too, and its
+            # __init__ is where the versioned validator is selected.
+            parts = name.split(".")
+            for index in range(len(parts)):
+                prefix = ".".join(parts[: index + 1])
+                if prefix in seen:
+                    continue
+                seen.add(prefix)
+                origin = record(prefix)
+                if origin is None or origin.suffix != ".py":
+                    continue
                 queue.append(origin)
+                if origin.name == "__init__.py":
+                    package = origin.parent
+                    for candidate in sorted(package.rglob("*.py")):
+                        dotted = ".".join(
+                            candidate.relative_to(package.parent).with_suffix("").parts
+                        )
+                        if dotted.endswith(".__init__"):
+                            dotted = dotted[: -len(".__init__")]
+                        if dotted in seen:
+                            continue
+                        seen.add(dotted)
+                        rows.append({
+                            "module": dotted,
+                            "resolved": str(candidate),
+                            "sha256": receipts.digest_file(candidate),
+                            "inside_infrastructure": inside(candidate, infra),
+                        })
     rows.sort(key=lambda row: row["module"])
     return rows, outside
 

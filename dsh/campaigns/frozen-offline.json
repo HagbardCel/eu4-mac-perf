@@ -43,5 +43,8 @@
   },
   "live_capture": {
     "enabled": false
-  }
+  },
+  "replay_inputs": [
+    "research-checkpoint.md"
+  ]
 }
