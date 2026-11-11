@@ -6,6 +6,8 @@ For cohesive reconstruction or migration of EU4 functionality—especially `_Gfx
 
 **Default path:** run an OpenCode campaign through `python3 -m automation.cli` with the appropriate skill (load `opengl-metal-reconstruction` when replacing OpenGL graphics calls) and an independent campaign checker under `campaigns/`.
 
+**Native DSH exception:** when the operator starts a `/goal` reconstruction experiment through DSH Web, DSH owns orchestration. Work directly in the session's authorized worktree; do not launch the OpenCode runner and do not build a replacement agent loop. OpenCode remains the supported default for campaign-run work.
+
 **Interactive / human focus:** semantic constraints, acceptance criteria, evidence review, and deciding genuine ambiguities or `BLOCKER:` lines.
 
 See [automation/README.md](automation/README.md) for the runner, worktree pin, and session contract. Campaign layout lives under `campaigns/`. A checker `pass` is offline qualification only; independent PR review remains the merge gate.

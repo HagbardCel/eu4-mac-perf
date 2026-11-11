@@ -1,0 +1,14 @@
+# Offline reconstruction overlay for the eu4-web profile.
+#
+# A native DSH /goal reconstruction experiment has no trusted campaign checker,
+# so the eu4-goal plugin's campaign binding, completion guard and finalize tool
+# do not apply. Disable only that plugin; the native goal service,
+# goal-round-driver, tool/terminal/filesystem/search plugins, the configured
+# DeepSeek provider/model and the reconstruction skill all remain in place.
+#
+# Apply after the profile layer:
+#   dsh --profile eu4-web --patch dsh/profile/offline-reconstruction.patch.yml
+#
+# Do not uninstall or globally disable @eu4/dsh-goal: campaign mode still uses it.
+- id: eu4-goal
+  disabled: true
