@@ -159,4 +159,5 @@ Draft PR: https://github.com/HagbardCel/eu4-mac-perf/pull/183
 Branch: `experiment/dsh-full-reconstruction`
 Commits on the branch: `4d43139` (draw, layout, validation), `fffac3b` (unit-0
 texture binding through `_GfxSetTextures`), `5c5df4a` (report), `7d11de2`
-(backend-queue ordering). Head: `7d11de2`. Not merged.
+(backend-queue ordering), followed by documentation updates on the same branch.
+Not merged.
