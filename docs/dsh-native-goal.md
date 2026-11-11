@@ -146,17 +146,16 @@ cannot drift. A module that cannot be resolved refuses
 `checker_dependency_unresolved` instead of anchoring a `null`.
 
 **The candidate identity is complete, and finalization replays.** Symlink rows
-carry a digest of their target, so a retarget is a change. Gitignored inputs are
-recorded in the finalization record as evidence (not in the anchored identity, so
-a checker writing an ignored temp file does not cause drift). Finalization freezes
-the candidate first and then re-runs the checker against a detached checkout of
-that commit: a frozen tree that does not reproduce the accepted result refuses
-`frozen_mismatch`. A rebuilding replay belongs at the baseline rather than at the
-frozen commit: reconstruction checkers require `HEAD` to stay at the pin, so
-checking out the frozen commit would fail a valid candidate for a reason that has
-nothing to do with the candidate. Gitignored inputs, including the contents of
-ignored directories, are inventoried under a file and byte bound and digested at
-validation, then compared at finalization -- a change refuses `inputs_changed`.
+carry a digest of their target, so a retarget is a change. Gitignored inputs --
+including the contents of ignored *directories*, which git reports as a single
+record -- are inventoried under a file and byte bound, digested at validation and
+compared again at finalization; a change refuses `inputs_changed`. Finalization
+freezes the candidate and then replays it as a **working-tree delta over the pinned
+baseline**: a worktree at the baseline commit with the frozen delta applied on top.
+Reconstruction checkers require `HEAD` to stay at the pin, so replaying from the
+frozen commit itself would fail a valid candidate for a reason that has nothing to
+do with the candidate. A frozen tree that does not reproduce the accepted result
+refuses `frozen_mismatch`.
 
 **Terminal verdicts move the goal.** `unavailable` pauses the goal and `blocked`
 blocks it through the native goal service; `fail` and `inconclusive` leave it
