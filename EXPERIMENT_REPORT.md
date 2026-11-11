@@ -223,5 +223,6 @@ validation), `fffac3b` (unit-0 texture binding through `_GfxSetTextures`),
 `5c5df4a` (report), `7d11de2` (backend-queue ordering), `96a6c9f` (report
 commit list), then this correction pass: `b20b64a` (range/identity/admission
 boundaries and the offline submission contract), `d2c7724` (viewport origin,
-nonzero-first readback and review-driven refusals), and `8b69907` (sampleable
-alias coverage). Not merged.
+nonzero-first readback and review-driven refusals), `8b69907` (sampleable alias
+coverage), and `ee0fb1d` (default texture header → `backend.fallback`). Not
+merged.
