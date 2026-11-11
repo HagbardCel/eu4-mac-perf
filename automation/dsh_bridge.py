@@ -486,6 +486,7 @@ def _prepare_locked(args, sidecar, roots, stored, infra_commit) -> int:
         "campaign_id": sidecar.campaign_id,
         "objective": sidecar.objective_text,
         "require_independent_review": sidecar.require_independent_review,
+        "checker_timeout_seconds": sidecar.validation_timeout_seconds,
         "execution_roots": roots,
         "workspace": str(sidecar.workspace),
         "run_root": str(sidecar.run_root),
@@ -542,6 +543,9 @@ def op_validate(args) -> int:
                 "diagnostics_excerpt": diagnostics[:2000],
                 "exit_code": outcome.get("exit_code"),
                 "duration_ms": duration_ms,
+                # What the checker saw beyond the tracked candidate: generated
+                # inputs. Recorded here and re-checked at finalization.
+                "inputs_digest": snapshot.ignored_digest(sidecar.workspace),
             },
             "session": {"session_id": args.session_id or None},
             "created_at": _now(),
@@ -612,11 +616,13 @@ def _freeze(sidecar: Sidecar) -> dict:
 
 
 def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
-    """Run the checker again from the frozen tree, not from the live workspace.
+    """Run the checker against the frozen candidate rebuilt over its baseline.
 
-    Freezing rebuilds the candidate delta as a commit. If that commit does not
-    reproduce the accepted result, the qualification describes a filesystem state
-    nobody can reconstruct, which is exactly what review evidence must not do.
+    The replay worktree stays at the *pinned baseline*, with the frozen delta
+    materialized as uncommitted changes. Reconstruction checkers deliberately
+    require ``HEAD`` to still be the pin -- a worktree at the frozen commit would
+    look like a rewritten history to them -- so moving HEAD here would break
+    valid candidates for reasons that have nothing to do with the candidate.
     """
     commit = frozen.get("commit")
     if not commit:
@@ -624,18 +630,46 @@ def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
         # the checker just accepted.
         return {"mode": "seed", "verdict": "skipped"}
 
+    baseline = frozen.get("baseline") or sidecar.candidate_baseline_commit or ""
+    if not baseline:
+        raise Refusal("frozen_mismatch", "the frozen candidate has no pinned baseline")
     infra = infra_root().resolve()
     replay_root = sidecar.run_root / "replay"
     _drop_worktree(replay_root)
     subprocess.run(
         ["git", "-C", str(infra), "worktree", "add", "--detach",
-         str(replay_root), commit],
+         str(replay_root), baseline],
         check=True, capture_output=True,
     )
     try:
+        patch = subprocess.run(
+            ["git", "-C", str(infra), "diff", "--binary", baseline, commit],
+            capture_output=True, check=True,
+        ).stdout
+        if patch:
+            applied = subprocess.run(
+                ["git", "-C", str(replay_root), "apply", "--binary", "--index", "-"],
+                input=patch, capture_output=True,
+            )
+            if applied.returncode != 0:
+                raise Refusal(
+                    "frozen_mismatch",
+                    "the frozen delta does not apply to the pinned baseline: "
+                    + applied.stderr.decode("utf-8", "replace")[:300],
+                )
+        head = subprocess.run(
+            ["git", "-C", str(replay_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if head != baseline:
+            raise Refusal(
+                "frozen_mismatch",
+                f"the replay worktree is at {head[:12]}, not the pinned baseline",
+            )
         outcome = run_accept(_AcceptShim(sidecar), replay_root)
     finally:
         _drop_worktree(replay_root)
+
     classification, kind, verdict = classify(outcome)
     if classification != "verdict" or verdict != "pass":
         raise Refusal(
@@ -643,7 +677,8 @@ def _replay_frozen(sidecar: Sidecar, frozen: dict) -> dict:
             "the frozen candidate does not reproduce the accepted result: "
             f"{verdict or classification}/{kind}",
         )
-    return {"mode": "worktree", "commit": commit, "verdict": verdict}
+    return {"mode": "worktree", "commit": commit, "baseline": baseline,
+            "head": head, "verdict": verdict}
 
 
 def _oracle_digest(sidecar: Sidecar, identities: dict) -> str:
@@ -748,39 +783,73 @@ def _review_problem(sidecar: Sidecar, frozen: dict, *, require_live: bool = True
 CHECKER_IMPORT_RE = None
 
 
-def _checker_imports(checker: Path) -> tuple[list[dict], list[str]]:
-    """Which ``automation.*`` modules the checker will actually resolve.
+def _imported_modules(source: Path) -> set[str]:
+    """``automation.*`` modules a file names, including the ``from`` forms."""
+    import ast
 
-    The checker runs from the trusted campaign root, so it imports the modern
-    helpers rather than the ones from its own historical commit. That is a real
-    semantic difference for an old campaign, so it is recorded rather than
-    assumed harmless.
+    try:
+        tree = ast.parse(source.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:
+        return set()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("automation."):
+                    names.add(alias.name.split(".", 1)[1].split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module.startswith("automation."):
+                names.add(module.split(".", 1)[1].split(".")[0])
+            elif module == "automation":
+                # `from automation import gfx_checkpoint` names no submodule in
+                # ``module``, so the imported names themselves are the modules.
+                for alias in node.names:
+                    names.add(alias.name.split(".")[0])
+    return names
+
+
+def _checker_imports(checker: Path) -> tuple[list[dict], list[str]]:
+    """The ``automation.*`` closure the checker will actually execute.
+
+    The walk follows imports transitively, because a checker that imports
+    ``automation.gfx_draw_accept_v2`` also executes everything that module
+    imports. It is static: a dynamic ``importlib.import_module`` cannot be seen
+    here, which is why an unresolvable name refuses instead of being ignored.
     """
     import importlib.util
-    import re
 
-    pattern = re.compile(r"automation[./]([a-zA-Z_][a-zA-Z0-9_]*)")
-    text = checker.read_text(encoding="utf-8", errors="replace")
-    names = sorted(set(pattern.findall(text)))
+    infra = infra_root().resolve()
     rows: list[dict] = []
     outside: list[str] = []
-    infra = infra_root().resolve()
-    for name in names:
-        try:
-            spec = importlib.util.find_spec(f"automation.{name}")
-        except (ImportError, AttributeError, ValueError):
-            rows.append({"module": name, "resolved": None, "sha256": None})
-            outside.append(name)
-            continue
-        origin = Path(spec.origin).resolve() if spec and spec.origin else None
-        rows.append({
-            "module": name,
-            "resolved": str(origin) if origin else None,
-            "sha256": receipts.digest_file(origin) if origin and origin.is_file() else None,
-            "inside_infrastructure": bool(origin) and inside(origin, infra),
-        })
-        if origin and not inside(origin, infra):
-            outside.append(name)
+    seen: set[str] = set()
+    queue: list[Path] = [checker]
+    while queue:
+        source = queue.pop()
+        for name in sorted(_imported_modules(source)):
+            if name in seen:
+                continue
+            seen.add(name)
+            try:
+                spec = importlib.util.find_spec(f"automation.{name}")
+            except (ImportError, AttributeError, ValueError):
+                spec = None
+            origin = Path(spec.origin).resolve() if spec and spec.origin else None
+            rows.append({
+                "module": name,
+                "resolved": str(origin) if origin else None,
+                "sha256": receipts.digest_file(origin)
+                if origin is not None and origin.is_file() else None,
+                "inside_infrastructure": bool(origin) and inside(origin, infra),
+            })
+            if origin is None:
+                outside.append(name)
+            elif not inside(origin, infra):
+                outside.append(name)
+            elif origin.suffix == ".py":
+                # Transitive step: whatever this module imports is executed too.
+                queue.append(origin)
+    rows.sort(key=lambda row: row["module"])
     return rows, outside
 
 
@@ -947,12 +1016,25 @@ def op_review_run(args) -> int:
         command = review.reviewer_command(args.reviewer_cmd, task)
         mode = "scripted" if args.reviewer_cmd else "live"
         runner_env = review.reviewer_env(os.environ)
-        if mode == "live" and not runner_env.get("DSH_HOME"):
-            raise Refusal(
-                "review_environment",
-                "the reviewer needs DSH_HOME so it uses this campaign's DSH home "
-                "and credentials rather than the operator's default installation",
-            )
+        if mode == "live":
+            if not runner_env.get("DSH_HOME"):
+                raise Refusal(
+                    "review_environment",
+                    "the reviewer needs DSH_HOME so it uses this campaign's DSH "
+                    "home rather than the operator's default installation",
+                )
+            if not (runner_env.get("OPENCODE_GO_API_KEY")
+                    or runner_env.get("DEEPSEEK_API_KEY")):
+                # The shipped one-shot profile does not read the interactive
+                # credential store, so without a key in the environment the
+                # reviewer would launch and fail to authenticate.
+                raise Refusal(
+                    "review_environment",
+                    "the reviewer needs an API key in the environment: the "
+                    "one-shot profile cannot read the stored credential. Export "
+                    "OPENCODE_GO_API_KEY (or DEEPSEEK_API_KEY) before starting "
+                    "the campaign",
+                )
         before = snapshot.fingerprint(paths["worktree"])
         try:
             outcome = review.run_reviewer(
@@ -1134,6 +1216,17 @@ def op_finalize(args) -> int:
                           "re-run validate")
         if (receipt.get("outcome") or {}).get("checker_verdict") != "pass":
             raise Refusal("not_qualified", "the latest validation did not pass")
+
+        bound_inputs = (receipt.get("outcome") or {}).get("inputs_digest")
+        if bound_inputs is not None:
+            current_inputs = snapshot.ignored_digest(sidecar.workspace)
+            if current_inputs != bound_inputs:
+                raise Refusal(
+                    "inputs_changed",
+                    "the checker inputs changed since the validated run; "
+                    "re-run validate",
+                )
+
 
         started = time.monotonic()
         outcome = run_accept(_AcceptShim(sidecar), sidecar.workspace)

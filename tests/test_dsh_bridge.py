@@ -375,20 +375,41 @@ class ConfirmationRoundTests(BridgeTestCase):
 
 
 class TrustedClosureTests(BridgeTestCase):
-    def test_the_closure_covers_a_module_only_the_checker_imports(self) -> None:
-        """No second allowlist: whatever the checker imports is digested."""
-        campaign = self.campaign("pass-campaign")   # checker imports automation.*
+    def _campaign_importing(self, module: str) -> Path:
+        campaign = self.campaign("pass-campaign")
         checker = campaign / "accept.py"
         checker.write_text(
             checker.read_text(encoding="utf-8")
-            + "\nimport automation.verification_manifest  # noqa: F401,E402\n",
+            + f"\nfrom automation import {module}  # noqa: F401,E402\n",
             encoding="utf-8",
         )
+        return campaign
+
+    def test_the_closure_follows_transitive_checker_imports(self) -> None:
+        """A checker that imports one module also executes what *it* imports."""
+        campaign = self._campaign_importing("gfx_draw_accept_v2")
         code, out = self.run_bridge("prepare", self.sidecar(campaign))
         self.assertEqual(code, dsh_bridge.EXIT_OK, out)
         names = {row["module"] for row in out["identities"]["trusted_modules"]}
-        self.assertIn("verification_manifest", names)
-        self.assertIn("dsh_bridge", names)
+        # None of these are in the fixed list; they are reached through the
+        # checker's own import graph.
+        for expected in ("gfx_draw_accept_v2", "gfx_checkpoint", "gfx_contracts",
+                         "gfx_evidence_policy", "launch_ledger"):
+            self.assertIn(expected, names)
+            self.assertNotIn(expected, dsh_bridge.TRUSTED_MODULES)
+
+    def test_editing_a_transitive_dependency_changes_the_digest(self) -> None:
+        campaign = self._campaign_importing("gfx_draw_accept_v2")
+        checker = campaign / "accept.py"
+        before = dsh_bridge._trusted_modules_digest(checker)[0]
+        target = REPO / "automation" / "gfx_evidence_policy.py"
+        original = target.read_bytes()
+        try:
+            target.write_bytes(original + b"\n# probe\n")
+            after = dsh_bridge._trusted_modules_digest(checker)[0]
+        finally:
+            target.write_bytes(original)
+        self.assertNotEqual(before, after)
 
     def test_an_unresolvable_checker_import_refuses_rather_than_anchoring(self) -> None:
         campaign = self.campaign("pass-campaign")
@@ -401,3 +422,122 @@ class TrustedClosureTests(BridgeTestCase):
         code, out = self.run_bridge("prepare", self.sidecar(campaign))
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
         self.assertEqual(out["kind"], "checker_dependency_unresolved")
+
+
+class GoalPolicyContractTests(unittest.TestCase):
+    """The plugin must act on the bridge's vocabulary, not a guessed one."""
+
+    def test_the_plugin_handles_exactly_the_terminal_bridge_policies(self) -> None:
+        source = (REPO / "dsh" / "eu4-goal-plugin" / "lib" / "index.js").read_text(
+            encoding="utf-8"
+        )
+        terminal = {
+            dsh_bridge.GOAL_POLICY["blocked"],
+            dsh_bridge.GOAL_POLICY["unavailable"],
+        }
+        self.assertEqual(terminal, {"block", "pause"})
+        for value in terminal:
+            self.assertIn(f"policy !== '{value}'", source)
+        # The non-terminal policies must not be treated as terminal.
+        for verdict in ("pass", "fail", "inconclusive"):
+            self.assertNotIn(
+                f"policy !== '{dsh_bridge.GOAL_POLICY[verdict]}'", source
+            )
+
+
+class ReplayTests(BridgeTestCase):
+    """Finalization replays the frozen candidate over its pinned baseline."""
+
+    def test_replay_keeps_head_at_the_pin_for_a_baseline_sensitive_checker(self) -> None:
+        baseline = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        campaign = REPO / ".local" / "dsh-test" / f"replay-{uuid.uuid4().hex[:8]}"
+        (campaign / "seed").mkdir(parents=True)
+        (campaign / "baseline.txt").write_text(baseline + "\n", encoding="utf-8")
+        (campaign / "objective.md").write_text("# Objective\n\nready\n", encoding="utf-8")
+        (campaign / "campaign.json").write_text(json.dumps({
+            "id": f"replay-{uuid.uuid4().hex[:6]}",
+            "objective": "objective.md",
+            "workspace": "seed",
+            "accept": ["python3", "accept.py"],
+            "accept_timeout_seconds": 60,
+        }), encoding="utf-8")
+        # A checker in the shape of the real reconstruction ones: it insists the
+        # worktree HEAD is still the pinned commit and that the reconstruction is
+        # uncommitted work.
+        (campaign / "accept.py").write_text(
+            """#!/usr/bin/env python3
+import json, subprocess, sys
+from pathlib import Path
+
+workspace = Path(sys.argv[1])
+expected = (Path(__file__).parent / "baseline.txt").read_text().strip()
+head = subprocess.run(["git", "-C", str(workspace), "rev-parse", "HEAD"],
+                      capture_output=True, text=True).stdout.strip()
+dirty = subprocess.run(["git", "-C", str(workspace), "status", "--porcelain"],
+                       capture_output=True, text=True).stdout.strip()
+if head != expected:
+    print(json.dumps({"verdict": "fail",
+                      "diagnostics": f"worktree HEAD is not the pinned commit: {head}"}))
+    raise SystemExit(0)
+if not dirty:
+    print(json.dumps({"verdict": "fail", "diagnostics": "no uncommitted reconstruction"}))
+    raise SystemExit(0)
+print(json.dumps({"verdict": "pass", "diagnostics": "pinned baseline, uncommitted delta"}))
+""",
+            encoding="utf-8",
+        )
+        self.addCleanup(shutil.rmtree, campaign, ignore_errors=True)
+
+        worktree = self.root / "candidate-wt"
+        subprocess.run(
+            ["git", "-C", str(REPO), "worktree", "add", "--detach",
+             str(worktree), baseline],
+            capture_output=True, check=True,
+        )
+        self.addCleanup(subprocess.run, ["git", "-C", str(REPO), "worktree",
+                                         "remove", "--force", "--force", str(worktree)],
+                        capture_output=True)
+        (worktree / "candidate.txt").write_text("ready\n", encoding="utf-8")
+
+        sidecar = self.sidecar(campaign, allowed=("candidate.txt",))
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        data["candidate"] = {
+            "mode": "worktree",
+            "workspace": str(worktree),
+            "policy": {"allowed_paths": ["candidate.txt"]},
+        }
+        data["candidate_baseline_commit"] = baseline
+        sidecar.write_text(json.dumps(data), encoding="utf-8")
+
+        code, prepared = self.run_bridge("prepare", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, prepared)
+        code, validated = self.run_bridge("validate", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, validated)
+        self.assertEqual(validated["checker_verdict"], "pass")
+
+        code, final = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_OK, final)
+        self.assertEqual(final.get("checker_verdict"), "pass", final)
+        self.assertEqual(final.get("replay", {}).get("verdict"), "pass", final)
+        self.assertEqual(final["replay"]["head"], baseline)
+        self.assertEqual(final["replay"]["baseline"], baseline)
+
+
+class InputBindingTests(BridgeTestCase):
+    def test_inputs_that_changed_after_validation_refuse_finalization(self) -> None:
+        """Generated inputs are bound at validation and compared at finalization."""
+        sidecar = self.sidecar(self.campaign("pass-campaign"))
+        self.run_bridge("prepare", sidecar)
+        self.assertEqual(self.run_bridge("validate", sidecar)[0], dsh_bridge.EXIT_OK)
+
+        original = dsh_bridge.snapshot.ignored_digest
+        values = iter(["a" * 64, "b" * 64])
+        dsh_bridge.snapshot.ignored_digest = lambda workspace: next(values, "b" * 64)
+        self.addCleanup(setattr, dsh_bridge.snapshot, "ignored_digest", original)
+
+        code, out = self.run_bridge("finalize", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "inputs_changed")

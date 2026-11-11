@@ -132,14 +132,16 @@ explicit environment allowlist (`PATH`, `HOME`, `TMPDIR`, `LANG`, `DSH_HOME`,
 the provider keys) instead of `process.env`. The reviewer is spawned with
 `DSH_PERMISSION_MODE=read-only` and a cwd inside its own worktree, so it cannot
 modify the candidate even if it tries; without `DSH_HOME` the run refuses
-`review_environment` rather than silently using the operator's installation. After
+`review_environment` rather than silently using the operator's installation, and it
+refuses the same way when no provider key is in the environment, because the
+one-shot profile cannot read the stored credential. After
 it exits, the worktree is fingerprinted again and any change refuses
 `review_worktree_modified`, dropping the checkout and keeping the changed paths in
 the refusal.
 
 **The trusted identity covers what the checker executes.** `trusted_modules_digest`
-combines the modules this path runs with the closure of `automation.*` imports the
-checker itself names -- the same analysis `checker-compat` reports, so the two
+combines the modules this path runs with the **transitive** `automation.*` import
+closures the checker reaches -- the same analysis `checker-compat` reports, so the two
 cannot drift. A module that cannot be resolved refuses
 `checker_dependency_unresolved` instead of anchoring a `null`.
 
@@ -149,7 +151,12 @@ recorded in the finalization record as evidence (not in the anchored identity, s
 a checker writing an ignored temp file does not cause drift). Finalization freezes
 the candidate first and then re-runs the checker against a detached checkout of
 that commit: a frozen tree that does not reproduce the accepted result refuses
-`frozen_mismatch`.
+`frozen_mismatch`. A rebuilding replay belongs at the baseline rather than at the
+frozen commit: reconstruction checkers require `HEAD` to stay at the pin, so
+checking out the frozen commit would fail a valid candidate for a reason that has
+nothing to do with the candidate. Gitignored inputs, including the contents of
+ignored directories, are inventoried under a file and byte bound and digested at
+validation, then compared at finalization -- a change refuses `inputs_changed`.
 
 **Terminal verdicts move the goal.** `unavailable` pauses the goal and `blocked`
 blocks it through the native goal service; `fail` and `inconclusive` leave it

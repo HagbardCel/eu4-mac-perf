@@ -227,6 +227,21 @@ class ReviewPipelineTests(ReviewCase):
         self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
         self.assertEqual(out["kind"], "review_identity_missing")
 
+    def test_a_live_review_without_a_provider_key_is_refused(self) -> None:
+        """The one-shot profile cannot read the stored credential."""
+        import os
+        from unittest import mock
+
+        sidecar = self.review_sidecar()
+        self.run_bridge("prepare", sidecar)
+        self.run_bridge("validate", sidecar)
+        with mock.patch.dict(os.environ, {"DSH_HOME": os.environ.get("DSH_HOME", "/tmp")},
+                             clear=True):
+            code, out = self.run_bridge("review-run", sidecar)
+        self.assertEqual(code, dsh_bridge.EXIT_INTEGRITY, out)
+        self.assertEqual(out["kind"], "review_environment")
+        self.assertIn("API key", out["detail"])
+
     def test_a_reviewer_without_a_session_identity_is_refused(self) -> None:
         sidecar = self.review_sidecar()
         self.run_bridge("prepare", sidecar)

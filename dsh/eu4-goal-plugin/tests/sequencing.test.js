@@ -171,7 +171,8 @@ const PREPARED = { ok: true, workspace: '/tmp/ws', run_root: '/tmp/run', objecti
 test('an unavailable verdict pauses the goal instead of leaving it active', async () => {
   const { ctx } = harness({
     prepare: PREPARED,
-    validate: { ok: false, kind: 'unavailable', goal_policy: 'unavailable', detail: 'checker broke' },
+    // Exactly what the bridge returns for an unavailable verdict.
+    validate: { ok: false, kind: 'unavailable', goal_policy: 'pause', detail: 'checker broke' },
   })
   const result = await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
   assert.equal(result.kind, 'unavailable')
@@ -183,7 +184,7 @@ test('an unavailable verdict pauses the goal instead of leaving it active', asyn
 test('a blocked verdict blocks the goal with the checker reason', async () => {
   const { ctx } = harness({
     prepare: PREPARED,
-    validate: { ok: false, kind: 'blocked', goal_policy: 'blocked', detail: 'pin mismatch' },
+    validate: { ok: false, kind: 'blocked', goal_policy: 'block', detail: 'pin mismatch' },
   })
   await tool(ctx, 'eu4_validate_candidate').execute({}, { agent })
   assert.equal(ctx._state.blocked.length, 1)

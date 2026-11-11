@@ -30,6 +30,16 @@ export const name = 'eu4-goal'
 export const inject = ['tools', 'goals', 'agents']
 
 const BRIDGE_TIMEOUT_MS = 15 * 60 * 1000
+
+/**
+ * Finalization runs the checker twice -- the live candidate and its frozen
+ * replay -- so one timeout for every operation would fail a valid candidate.
+ */
+export function bridgeTimeoutMs(operation, checkerSeconds) {
+  if (operation !== 'finalize') return BRIDGE_TIMEOUT_MS
+  const budget = Number.isFinite(checkerSeconds) && checkerSeconds > 0 ? checkerSeconds : 900
+  return Math.ceil((budget * 2 + 120) * 1000)
+}
 const BRIDGE_OUTPUT_CAP = 1_000_000
 const BINDING_FILE = 'plugin-binding.json'
 
@@ -96,7 +106,7 @@ export function bridgeInvocation(infra, python, operation, sidecar, extra = []) 
 }
 
 /** Run one bridge operation and return its parsed result, never throwing. */
-export function runBridge(infra, python, operation, sidecar, extra = []) {
+export function runBridge(infra, python, operation, sidecar, extra = [], timeoutMs) {
   const { command, args, options } = bridgeInvocation(
     infra, python, operation, sidecar, extra
   )
@@ -117,9 +127,13 @@ export function runBridge(infra, python, operation, sidecar, extra = []) {
     }
     let stdout = ''
     let stderr = ''
+    let timedOut = false
     const timer = setTimeout(() => {
+      // Killed by us, not by the operation: say so rather than reporting the
+      // absence of output as if the checker had produced none.
+      timedOut = true
       child.kill('SIGKILL')
-    }, BRIDGE_TIMEOUT_MS)
+    }, timeoutMs || BRIDGE_TIMEOUT_MS)
     child.stdout.on('data', (chunk) => {
       stdout += chunk
       if (stdout.length > BRIDGE_OUTPUT_CAP) child.kill('SIGKILL')
@@ -134,6 +148,12 @@ export function runBridge(infra, python, operation, sidecar, extra = []) {
     })
     child.on('close', (code) => {
       clearTimeout(timer)
+      if (timedOut) {
+        finish({ ok: false, operation, classification: 'infrastructure_error',
+                 kind: 'timeout', goal_policy: 'pause',
+                 detail: `the bridge operation exceeded its ${Math.round((timeoutMs || BRIDGE_TIMEOUT_MS) / 1000)}s budget` })
+        return
+      }
       const text = stdout.trim()
       if (!text) {
         finish({ ok: false, operation, classification: 'infrastructure_error',
@@ -230,13 +250,16 @@ export function apply(ctx, config = {}) {
   function applyGoalPolicy(ctx, agent, result) {
     if (!agent || !result || typeof result !== 'object') return result
     const policy = result.goal_policy
-    if (policy !== 'unavailable' && policy !== 'blocked') return result
+    // automation.dsh_bridge.GOAL_POLICY is the single source: a blocked verdict
+    // maps to "block", an unavailable one to "pause". "qualified", "remediate"
+    // and "investigate" leave the goal active for the round driver.
+    if (policy !== 'block' && policy !== 'pause') return result
     const live = ctx.goals.get(agent)
     if (!live) return result
     const ref = { id: live.id, revision: live.revision }
     const detail = String(result.detail || result.kind || policy).slice(0, 400)
     try {
-      if (policy === 'blocked') {
+      if (policy === 'block') {
         ctx.goals.block(agent, ref, { code: 'checker-blocked', message: detail })
       } else {
         ctx.goals.pause(agent, ref)
@@ -348,7 +371,10 @@ export function apply(ctx, config = {}) {
           }
         }
         const validateArgs = sessionId === 'unknown' ? [] : ['--session-id', sessionId]
-        const result = await bridge(infra, python, 'validate', sidecar, validateArgs)
+        const result = await bridge(
+          infra, python, 'validate', sidecar, validateArgs,
+          bridgeTimeoutMs('validate', prepared && prepared.checker_timeout_seconds)
+        )
         if (!bound) {
           persistBiding(sessionId, exec?.agent?.id, goal, runRoot || (result && result.run_root))
         }
@@ -402,7 +428,11 @@ export function apply(ctx, config = {}) {
           }
         }
         const finalizeArgs = sessionId ? ['--session-id', sessionId] : []
-        const result = await bridge(infra, python, 'finalize', sidecar, finalizeArgs)
+        const result = await bridge(
+          infra, python, 'finalize', sidecar, finalizeArgs,
+          // Two checker runs, so the budget has to cover both.
+          bridgeTimeoutMs('finalize', prepared && prepared.checker_timeout_seconds)
+        )
         const refusal = qualificationRefusal(result)
         if (refusal) {
           return { ...result, completion: 'refused', reason: refusal }

@@ -325,13 +325,20 @@ def verify_round_trip(
     return sorted(set(problems))
 
 
-def ignored_inputs(workspace: Path) -> list[dict]:
+IGNORED_FILE_LIMIT = 2000
+IGNORED_BYTE_LIMIT = 64 * 1024 * 1024
+
+
+def ignored_inputs(workspace: Path) -> dict:
     """Content digests for ignored files a checker might read.
 
     Evidence, not policy: the campaign allowlist governs what the agent may
-    change, while this records the ignored state the checker actually saw, so a
-    checker that depends on generated inputs cannot quietly disagree with the
-    frozen candidate.
+    change, while this records the ignored state the checker actually saw.
+
+    Git reports an entirely ignored directory as one record (``!! .local/``), so
+    directories are expanded here. The walk is bounded -- a renderer workspace
+    holds large build and evidence trees, and hashing all of it would make every
+    validation expensive -- and says so when it stops early.
     """
     import hashlib
     import os
@@ -342,27 +349,75 @@ def ignored_inputs(workspace: Path) -> list[dict]:
             "--untracked-files=all", "--ignored=matching",
         )
     except Exception:  # noqa: BLE001 - a seed workspace is not a repository
-        return []
-    rows: list[dict] = []
+        return {"entries": [], "truncated": False}
+
+    roots: list[Path] = []
     for record in listing.split("\0"):
-        if not record.startswith("!! "):
-            continue
-        relative = record[3:]
-        path = workspace / relative
-        if path.is_symlink():
+        if record.startswith("!! "):
+            roots.append(workspace / record[3:].rstrip("/"))
+
+    rows: list[dict] = []
+    truncated = False
+    total = 0
+    for root in sorted(set(roots)):
+        if root.is_symlink():
             rows.append({
-                "path": relative,
+                "path": str(root.relative_to(workspace)),
                 "target_sha256": hashlib.sha256(
-                    os.readlink(path).encode("utf-8", "surrogateescape")
+                    os.readlink(root).encode("utf-8", "surrogateescape")
                 ).hexdigest(),
             })
-        elif path.is_file():
+            continue
+        if root.is_file():
             rows.append({
-                "path": relative,
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "path": str(root.relative_to(workspace)),
+                "sha256": hashlib.sha256(root.read_bytes()).hexdigest(),
             })
+            continue
+        if not root.is_dir():
+            continue
+        for directory, subdirectories, files in os.walk(root):
+            subdirectories[:] = [
+                name for name in subdirectories
+                if name != ".git"
+            ]
+            for name in sorted(files):
+                path = Path(directory) / name
+                if len(rows) >= IGNORED_FILE_LIMIT or total >= IGNORED_BYTE_LIMIT:
+                    truncated = True
+                    break
+                if path.is_symlink():
+                    rows.append({
+                        "path": str(path.relative_to(workspace)),
+                        "target_sha256": hashlib.sha256(
+                            os.readlink(path).encode("utf-8", "surrogateescape")
+                        ).hexdigest(),
+                    })
+                    continue
+                if not path.is_file():
+                    continue
+                size = path.stat().st_size
+                total += size
+                rows.append({
+                    "path": str(path.relative_to(workspace)),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "size": size,
+                })
+            if truncated:
+                break
+        if truncated:
+            break
     rows.sort(key=lambda row: row["path"])
-    return rows
+    return {"entries": rows, "truncated": truncated}
+
+
+def ignored_digest(workspace: Path) -> str:
+    """Stable digest of the ignored-input inventory."""
+    import hashlib
+    import json
+
+    payload = json.dumps(ignored_inputs(workspace), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def fingerprint(workspace: Path) -> dict:

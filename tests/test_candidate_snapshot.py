@@ -139,3 +139,35 @@ class FingerprintTests(RepoCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IgnoredInputTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name)
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / ".gitignore").write_text("build/\n", encoding="utf-8")
+        (self.repo / "build" / "nested").mkdir(parents=True)
+        (self.repo / "build" / "nested" / "generated.bin").write_bytes(b"one")
+        subprocess.run(["git", "-C", str(self.repo), "add", ".gitignore"], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.repo), "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-qm", "init"], check=True,
+        )
+
+    def test_files_inside_an_ignored_directory_are_inventoried(self) -> None:
+        from automation import candidate_snapshot as snapshot
+
+        inventory = snapshot.ignored_inputs(self.repo)
+        paths = {row["path"] for row in inventory["entries"]}
+        # Git reports "build/" as one record; the contents still have to appear.
+        self.assertIn("build/nested/generated.bin", paths)
+        self.assertFalse(inventory["truncated"])
+
+    def test_changing_an_ignored_input_changes_the_digest(self) -> None:
+        from automation import candidate_snapshot as snapshot
+
+        before = snapshot.ignored_digest(self.repo)
+        (self.repo / "build" / "nested" / "generated.bin").write_bytes(b"two")
+        self.assertNotEqual(before, snapshot.ignored_digest(self.repo))
