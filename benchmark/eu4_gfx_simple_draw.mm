@@ -2,6 +2,7 @@
 
 #import "eu4_gfx_buffers.h"
 #import "eu4_gfx_shader.h"
+#import "eu4_gfx_texture.h"
 
 #import <Metal/Metal.h>
 #import <string.h>
@@ -139,7 +140,9 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
                       "constant slot 2 does not hold a 4x4 matrix");
     }
 
-    if (inputs->texture == NULL) {
+    void *texture_binding =
+        inputs->texture != NULL ? inputs->texture : eu4_gfx_bound_texture();
+    if (texture_binding == NULL) {
         return refuse(EU4_GFX_SIMPLE_DRAW_TEXTURE, reason, "no SimpleTexture image");
     }
     if (inputs->device == NULL || inputs->target == NULL || inputs->target_width == 0 ||
@@ -152,7 +155,7 @@ eu4_gfx_simple_draw_status eu4_gfx_simple_draw(const void *immediate_context, in
 
     id<MTLDevice> device = (__bridge id<MTLDevice>)inputs->device;
     id<MTLTexture> target = (__bridge id<MTLTexture>)inputs->target;
-    id<MTLTexture> texture = (__bridge id<MTLTexture>)inputs->texture;
+    id<MTLTexture> texture = (__bridge id<MTLTexture>)texture_binding;
     if (target.pixelFormat != MTLPixelFormatBGRA8Unorm) {
         return refuse(EU4_GFX_SIMPLE_DRAW_TARGET, reason, "target is not BGRA8Unorm");
     }

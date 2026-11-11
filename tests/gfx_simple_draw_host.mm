@@ -328,6 +328,15 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
         }
     }
 
+    /* Bind through the replacement _GfxSetTextures, then let the encoder
+       resolve unit 0 from the backend instead of passing a Metal pointer. */
+    void *texture_pointer = texture_header;
+    eu4_gfx_set_textures(&ctx, 1, &texture_pointer, 1, 0, NULL);
+    if (eu4_gfx_bound_texture() != texture) {
+        fail("unit-0 texture binding was not recorded");
+    }
+    inputs.texture = NULL;
+
     eu4_gfx_simple_draw_status status = eu4_gfx_simple_draw(&ctx, 0, first, &inputs, &reason);
     if (status != EU4_GFX_SIMPLE_DRAW_OK) {
         fprintf(stderr, "FAIL: draw refused: %s (%s)\n",
@@ -397,8 +406,7 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
     }
     uint8_t alpha_header[0x44];
     make_texture(4, 4, 0xb, source, alpha_header);
-    void *alpha_texture = eu4_gfx_texture_for_header(alpha_header);
-    if (alpha_texture == NULL) {
+    if (eu4_gfx_texture_for_header(alpha_header) == NULL) {
         fail("alpha texture registry lookup");
     }
     const uint32_t small = 64;
@@ -416,9 +424,14 @@ static void test_authentic(const uint8_t *vb, size_t vb_len, const float *matrix
         eu4_gfx_complete_offscreen(master, &command_status) != EU4_GFX_CLEAR_OK) {
         fail("blend target clear");
     }
+    void *alpha_pointer = alpha_header;
+    eu4_gfx_set_textures(&ctx, 1, &alpha_pointer, 1, 0, NULL);
+    if (eu4_gfx_bound_texture() != eu4_gfx_texture_for_header(alpha_header)) {
+        fail("alpha texture binding was not recorded");
+    }
     eu4_gfx_simple_draw_inputs blend = inputs;
     blend.target = (__bridge void *)small_target;
-    blend.texture = alpha_texture;
+    blend.texture = NULL;
     blend.target_width = small;
     blend.target_height = small;
     blend.viewport_width = small;

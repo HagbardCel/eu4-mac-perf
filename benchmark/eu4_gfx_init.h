@@ -21,6 +21,9 @@
 @property (nonatomic) void *textureHeader;
 /* Textures created by _GfxInitializeTexture. Released with the backend. */
 @property (nonatomic, strong) NSMutableDictionary *textures;
+/* Engine texture header currently bound to unit 0 by _GfxSetTextures.
+   Non-owning; resolved through the textures dictionary at draw time. */
+@property (nonatomic) void *boundTexture0;
 /* Optional offscreen clear target. Shared BGRA8Unorm render target. */
 @property (nonatomic, strong) id colorTarget;
 @property (nonatomic) uint32_t colorWidth;

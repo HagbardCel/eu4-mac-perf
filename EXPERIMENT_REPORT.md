@@ -50,15 +50,20 @@ blend, sampler and viewport into one encoded draw.
 | --- | --- |
 | `benchmark/eu4_gfx_shader.mm` | Decode the MSL position as `float3` and build the implicit `w = 1`; vertex descriptor now `Float3@0`, `Float2@12`, `UChar4Normalized@20`, stride 24 (was `Float4@0`, `Float2@16`, `Float4@24`, stride 40). |
 | `benchmark/eu4_gfx_buffers.h/.mm` | `eu4_gfx_vertex_buffer_for_header()` — borrowed `MTLBuffer` for an engine vertex header. |
-| `benchmark/eu4_gfx_texture.h/.mm` | `eu4_gfx_texture_for_header()` — borrowed `MTLTexture` retained by `_GfxInitializeTexture`. |
+| `benchmark/eu4_gfx_texture.h/.mm` | `eu4_gfx_texture_for_header()` — borrowed `MTLTexture` retained by `_GfxInitializeTexture`; `_GfxSetTextures` now records the unit-0 engine header in the backend (falling back to the master's `+0x98` default), and `eu4_gfx_bound_texture()` resolves it for the encoder. |
 | `benchmark/eu4_gfx_simple_draw.h/.mm` | New encoder: reads the engine master (`mode`, `count`, `shader`, slot-0 vertex header/offset/stride, constant slot 2), refuses unsupported inputs, creates the `Simple` pipeline through the shader registry, copies the matrix, binds vertex/uniform buffers, fragment texture and sampler, sets the viewport, and submits a BGRA8Unorm pass. |
+| `benchmark/eu4_gfx_init.h` | Backend property for the current unit-0 texture header. |
 | `benchmark/eu4_metal_boot.py` | The new module is compiled into `libeu4_metal_boot.dylib`. |
 | `tests/gfx_simple_draw_host.mm` | Real-Metal host: authentic packet + optional original DDS, CPU reference sampling, flip discriminator, alpha-blend boundary, fail-closed cases. |
 | `tests/test_gfx_simple_draw.py` | Binds the packet hashes, builds/runs the host, covers original-DDS and hermetic-synthetic paths. |
 | `analysis/reconstruction/simple-loading-draw/note.md` | Evidence-labeled reconstruction note. |
 
-Blend state is `SRC_ALPHA`/`ONE_MINUS_SOURCE_ALPHA`, sampler is linear/linear/
-linear with repeat addressing (both from the installed `simple.shader`).
+The resource chain is now exercised end to end: `_GfxCreateShader` →
+`_GfxAdd*Shader` → `_GfxLinkShader` → `_GfxSetShader`, `_GfxCreateVertexBuffer`
+→ master slot 0, the original constant-buffer objects, `_GfxSetTextures` →
+backend binding, and the encoder. Blend state is
+`SRC_ALPHA`/`ONE_MINUS_SOURCE_ALPHA`, sampler is linear/linear/linear with
+repeat addressing (both from the installed `simple.shader`).
 The render target is `BGRA8Unorm` (project-derived P5.1 default), the viewport
 is `0,0,1728,1117`, and no depth attachment is used.
 
@@ -147,4 +152,7 @@ cd benchmark && python3 -c "import eu4_metal_boot as m; m.build_library()"
 
 ## Commit / PR
 
-Commit and draft PR link are appended after publication.
+Draft PR: https://github.com/HagbardCel/eu4-mac-perf/pull/183
+Branch: `experiment/dsh-full-reconstruction`
+Commits: `4d43139` (draw, layout, validation) plus the follow-up commit that
+records the unit-0 texture binding and this report. Not merged.

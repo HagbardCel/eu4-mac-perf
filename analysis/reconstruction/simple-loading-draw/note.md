@@ -45,8 +45,11 @@ The installed SDK declares `MTLRenderPipelineDescriptor.vertexDescriptor` at
    `_GfxSetConstantBuffer(ctx, cb, 2, …)`.
 4. `_GfxSetVertexBuffers(ctx, 1, this+0x2c668, 0, 0, 0)`.
 5. `_GfxSetPrimitiveType(ctx, 4)` → GL mode 5 (`GL_TRIANGLE_STRIP`).
-6. `_GfxSetShader`, `_GfxSetTextures` (when `*(this+0x2c650)` is non-null),
-   `_GfxDraw(ctx, 0, 0)`.
+6. `_GfxSetShader`, `_GfxSetTextures(ctx, 1, this+0x2c650, 1, 0, effect+0x20)`
+   when `*(this+0x2c650)` is non-null, then `_GfxDraw(ctx, 0, 0)`. The
+   replacement stores the unit-0 engine header (or the master's default texture
+   at `+0x98` when the entry is null) in the backend; the encoder resolves that
+   header through the texture registry.
 7. `Render2dObjectsToScreen` / `EndScene` / `PresentScene`.
 
 `_GfxDraw` (`0x15ea789`) reads:
@@ -133,7 +136,7 @@ change. The 38 installed `load_*.dds` files are all 2048×1536 BGR24.
 | `master+0x130/0x150/0x160` | `setVertexBuffer:offset:atIndex:0` |
 | `glUniform4fv(Matrix)` | `setVertexBuffer:uniforms atIndex:1` (`constant Uniforms &` in MSL) |
 | `glEnable(GL_BLEND)` + `glBlendFunc` | pipeline `blendingEnabled`, `SourceAlpha` / `OneMinusSourceAlpha` (RGB and alpha) |
-| `_GfxSetTextures` unit 0 | `setFragmentTexture:atIndex:0`, sampler state linear/repeat |
+| `_GfxSetTextures` unit 0 | replacement records the engine header in the backend; the encoder resolves it to the retained `MTLTexture` and binds `setFragmentTexture:atIndex:0` with a linear/repeat sampler |
 | viewport `1728×1117` | `setViewport:` (the engine's viewport image is the encoder's input) |
 | clear + draw | `loadAction Load` after `_GfxClear`; `storeAction Store` |
 | `glDrawArrays` | `drawPrimitives:vertexStart:vertexCount:` |
@@ -194,7 +197,9 @@ Implemented in `tests/gfx_simple_draw_host.mm`; each must fail closed:
 ## Validation (real Metal)
 
 `tests/test_gfx_simple_draw.py` builds and runs the host on macOS with
-`MTL_DEBUG_LAYER=1`. Result on 2026-11-11:
+`MTL_DEBUG_LAYER=1`. The host binds the texture through the replacement
+`_GfxSetTextures` (not a direct Metal pointer) and checks that the backend
+resolves the same `MTLTexture`. Result on 2026-11-11:
 
 ```
 texture=original-dds 2048x1536
