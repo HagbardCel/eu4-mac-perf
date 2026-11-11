@@ -102,10 +102,25 @@ if [ -n "$WORKSPACE" ]; then
   : "${EU4_DSH_SKILL_ROOT:=$WORKSPACE/.opencode/skills}"
 fi
 export EU4_DSH_SKILL_ROOT=${EU4_DSH_SKILL_ROOT:-$INFRA/.opencode/skills}
-if [ -n "$WORKSPACE" ] && [ ! -f "$EU4_DSH_SKILL_ROOT/opengl-metal-reconstruction/SKILL.md" ]; then
-  echo "run: reconstruction skill missing under $EU4_DSH_SKILL_ROOT" >&2
-  echo "run: point EU4_DSH_SKILL_ROOT at this worktree's .opencode/skills" >&2
-  exit 1
+if [ -n "$WORKSPACE" ]; then
+  EXPECTED_SKILL_ROOT=$(CDPATH= cd -- "$WORKSPACE/.opencode/skills" 2>/dev/null && pwd -P) || {
+    echo "run: reconstruction skill directory missing under $WORKSPACE/.opencode/skills" >&2
+    exit 1
+  }
+  ACTUAL_SKILL_ROOT=$(CDPATH= cd -- "$EU4_DSH_SKILL_ROOT" 2>/dev/null && pwd -P) || {
+    echo "run: reconstruction skill root does not exist: $EU4_DSH_SKILL_ROOT" >&2
+    exit 1
+  }
+  [ "$ACTUAL_SKILL_ROOT" = "$EXPECTED_SKILL_ROOT" ] || {
+    echo "run: EU4_DSH_SKILL_ROOT does not belong to the requested worktree" >&2
+    echo "run: expected $EXPECTED_SKILL_ROOT" >&2
+    echo "run: found    $ACTUAL_SKILL_ROOT" >&2
+    exit 1
+  }
+  [ -f "$EU4_DSH_SKILL_ROOT/opengl-metal-reconstruction/SKILL.md" ] || {
+    echo "run: reconstruction skill missing under $EU4_DSH_SKILL_ROOT" >&2
+    exit 1
+  }
 fi
 
 # Register one directory in DSH's durable workspace registry and make it the

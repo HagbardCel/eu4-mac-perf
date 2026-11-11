@@ -68,7 +68,8 @@ export EU4_DSH_SKILL_ROOT="$PWD/.opencode/skills"
 `--workspace` resolves the path to its canonical worktree root, registers it as
 the default workspace for newly created Web sessions, and fails instead of
 falling back to another workspace. It also derives `EU4_DSH_SKILL_ROOT` from that
-worktree when the variable is unset. The overlay disables only the campaign
+worktree when the variable is unset and refuses a skill root from another
+checkout. The overlay disables only the campaign
 `eu4-goal` plugin; native `/goal`, `goal-round-driver`, the terminal/filesystem/
 search tools, the configured DeepSeek model and `opengl-metal-reconstruction`
 remain mounted. `--campaign` is unchanged and still installs the campaign
