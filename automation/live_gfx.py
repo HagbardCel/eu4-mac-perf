@@ -885,6 +885,16 @@ def probe(args: argparse.Namespace) -> int:
         reference["kind"] = "operator_provided_reference"
         if reference.get("status") == "compared":
             status["reference_matched"] = reference.get("mismatched_pixels") == 0
+    file_hashes = []
+    if output.is_dir():
+        for path in sorted(output.iterdir()):
+            if path.is_file() and path.suffix in (".json", ".bgra", ".png"):
+                try:
+                    file_hashes.append(
+                        {"path": path.name, "sha256": _file_sha256(path)}
+                    )
+                except OSError:
+                    continue
     overall = "unavailable"
     if status.get("pixels_captured"):
         overall = "captured"
@@ -931,6 +941,7 @@ def probe(args: argparse.Namespace) -> int:
             "route": status.get("route"),
             "clear": status.get("clear"),
             "stop": status.get("stop"),
+            "files": file_hashes,
         },
         "reference": reference,
         "error": error,
